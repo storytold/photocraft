@@ -34,7 +34,7 @@ fn display_image_matches_egui_unmultiplied_conversion() {
 
 /// #569: displays 1 (sRGB) and 4 (Display P3) side by side, and a document filled with an
 /// sRGB colour.
-fn app_on_two_displays() -> PhotocraftApp {
+fn app_on_two_displays() -> Box<PhotocraftApp> {
     use photocraft_engine::color_cmds::resolve_profile;
     use photocraft_engine::display_color::Display;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -80,35 +80,6 @@ fn composite_revision(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
 fn redrawn_since(app: &mut PhotocraftApp, ctx: &egui::Context, seen: Revision) -> Option<i64> {
     let prep = CompositePrep::new(app, ctx, 0, None, None).expect("an open document");
     prep.source(app).damage(seen).map(|r| i64::from(r.width()) * i64::from(r.height()))
-}
-
-#[test]
-fn gpu_display_luts_are_per_display() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    };
-    let mut app = app_on_two_displays();
-    app.set_wgpu(rs);
-    let doc = app.session.documents()[0].doc.clone();
-    let key = doc.id.0;
-    // sRGB on the sRGB display needs no LUT; on the P3 display it does.
-    assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
-    assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
-    let gpu = app.gpu.clone().unwrap();
-    let (s1, s4) = (gpu.display_lut_signature(key, 1).unwrap(), gpu.display_lut_signature(key, 4).unwrap());
-    assert_ne!(s1.0, s4.0);
-    assert!(gpu.has_display_lut(key, 4) && !gpu.has_display_lut(key, 1));
-    // Drawing one window leaves the other's LUT alone.
-    for _ in 0..3 {
-        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
-        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
-    }
-    assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
-    assert!(gpu.has_display_lut(key, 4));
-    // The shared texture's key is the same for both displays.
-    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
 }
 
 /// The GPU canvas texture of a Multichannel document is filled by the CPU compositor, so its
@@ -165,7 +136,7 @@ fn navigator_damage_updates_match_a_full_thumbnail() {
 }
 
 /// An app with a 64 × 64 white document, a clone source and the Clone Stamp at `size` px.
-fn clone_overlay_app(size: f32) -> PhotocraftApp {
+fn clone_overlay_app(size: f32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("cloneSource.set", json!({"source": [16, 16]})).unwrap();
@@ -688,6 +659,21 @@ fn a_secondary_canvas_hand_pans_while_a_transform_is_open() {
     assert_eq!(box_key(&app), box_before, "the drag didn't touch the box");
 }
 
+/// The canvas can paint a batch as a nested list, which keeps its place in egui's final paint order.
+fn flattened_paint_shapes(output: &egui::FullOutput) -> Vec<&egui::Shape> {
+    fn open<'a>(shape: &'a egui::Shape, into: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(list) => list.iter().for_each(|shape| open(shape, into)),
+            shape => into.push(shape),
+        }
+    }
+    let mut shapes = Vec::new();
+    for clipped in &output.shapes {
+        open(&clipped.shape, &mut shapes);
+    }
+    shapes
+}
+
 #[test]
 fn guides_draw_over_the_transform_preview_and_under_its_box() {
     // #5086: a guide crossing a layer under Free Transform was hidden behind the preview of
@@ -721,16 +707,7 @@ fn guides_draw_over_the_transform_preview_and_under_its_box() {
     // At 100 % centred on the document, screen and document coordinates coincide.
     let layer = Rect::from_min_max(pos2(100.0, 100.0), pos2(200.0, 160.0));
     let near = |r: Rect| (r.min - layer.min).length() < 1.0 && (r.max - layer.max).length() < 1.0;
-    fn open<'a>(shape: &'a egui::Shape, into: &mut Vec<&'a egui::Shape>) {
-        match shape {
-            egui::Shape::Vec(list) => list.iter().for_each(|shape| open(shape, into)),
-            shape => into.push(shape),
-        }
-    }
-    let mut shapes = Vec::new();
-    for clipped in &out.shapes {
-        open(&clipped.shape, &mut shapes);
-    }
+    let shapes = flattened_paint_shapes(&out);
     let position = |pred: &dyn Fn(&egui::Shape) -> bool| shapes.iter().position(|s| pred(s));
     // The moving pixels: the mesh that spans the layer's box.
     let preview = position(&|s| matches!(s, egui::Shape::Mesh(m) if near(m.calc_bounds())));
@@ -743,6 +720,74 @@ fn guides_draw_over_the_transform_preview_and_under_its_box() {
     };
     assert!(preview < guide, "the guide ({guide}) draws over the transform preview ({preview})");
     assert!(guide < frame, "the box ({frame}) draws over the guide ({guide})");
+}
+
+#[test]
+fn marching_ants_draw_over_a_guide_on_the_selection_edge() {
+    use craft::behavior::kurbo::Point;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = app.ctx().clone();
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.run("select.rect", json!({"x": 100, "y": 100, "width": 100, "height": 60})).unwrap();
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 100})).unwrap();
+    app.ui.tool = Tool::RectMarquee;
+    app.ui.extras.rulers = false;
+    app.ui.extras.grid = false;
+    app.ui.extras.guides = true;
+    app.ui.view.extras = true;
+    app.ui.view.show.canvas_guides = true;
+    app.ui.view.show.selection_edges = true;
+    app.sync_views();
+
+    let mut view = app.ui.views[0].clone();
+    view.zoom = 1.0;
+    view.center = [200.0, 150.0];
+    view.clear_pending();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+    let draw = |app: &mut PhotocraftApp| {
+        let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            canvas_view(app, ui, CanvasHost::main(0), rect, view.clone(), true);
+        });
+        output.textures_delta.clear();
+        output
+    };
+
+    let output = draw(&mut app);
+    let shown = active_view(&app).expect("the canvas view");
+    let edge = Rect::from_two_pos(shown.to_screen(Point::new(100.0, 100.0)), shown.to_screen(Point::new(100.0, 160.0)));
+    let pixel = output.pixels_per_point.recip();
+    let is_guide = |shape: &egui::Shape| {
+        let egui::Shape::LineSegment { points, .. } = shape else { return false };
+        points.iter().all(|p| (p.x - edge.left()).abs() <= pixel)
+            && points[0].y.min(points[1].y) < edge.top() - pixel
+            && points[0].y.max(points[1].y) > edge.bottom() + pixel
+    };
+    let is_ants = |shape: &egui::Shape| {
+        let bounds = match shape {
+            egui::Shape::Mesh(mesh) => mesh.calc_bounds(),
+            egui::Shape::Rect(rect) => rect.rect,
+            egui::Shape::LineSegment { points, .. } => Rect::from_two_pos(points[0], points[1]),
+            _ => return false,
+        };
+        // A strip or dash on the selection edge, allowing for the framework's device-pixel snap.
+        bounds.height() > 0.0
+            && bounds.width() <= 2.0 * pixel
+            && (bounds.center().x - edge.left()).abs() <= pixel
+            && bounds.top() >= edge.top() - pixel
+            && bounds.bottom() <= edge.bottom() + 2.0 * pixel
+    };
+    let shapes = flattened_paint_shapes(&output);
+    let guide = shapes.iter().position(|shape| is_guide(shape)).expect("the guide spanning the selection");
+    let ants = shapes.iter().position(|shape| is_ants(shape)).expect("the ants along the left edge");
+    assert!(guide < ants, "the guide ({guide}) paints before the ants ({ants})");
+
+    app.ui.view.show.selection_edges = false;
+    let output = draw(&mut app);
+    let shapes = flattened_paint_shapes(&output);
+    assert!(shapes.iter().any(|shape| is_guide(shape)), "hiding selection edges leaves the guide");
+    assert!(!shapes.iter().any(|shape| is_ants(shape)), "the edge paint belongs to the ants");
 }
 
 #[test]
@@ -870,7 +915,7 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
         assert_eq!(app.session.active_index(), Some(0), "{kind:?}: the floated page remains active");
         assert_eq!(main_canvas_document(&app), Some(1), "{kind:?}: the main canvas picks a docked page instead");
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(680.0, 480.0)).with_context(app.ctx().clone()).build_ui_state(
-            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
                     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 }
@@ -941,7 +986,7 @@ fn a_new_window_for_document_keeps_its_own_view() {
     let app_ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &app_ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+        |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
             if *ready {
                 egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 extra_windows(app, ui);
@@ -953,7 +998,7 @@ fn a_new_window_for_document_keeps_its_own_view() {
     h.run_steps(4);
     assert!(!h.state().0.ui.document_windows.floating.is_empty(), "the extra window is open");
     let window = first_window(&h.state().0);
-    let window_zoom = |h: &egui_kittest::Harness<'_, (PhotocraftApp, bool)>| h.state().0.ui.window_views[&window].zoom;
+    let window_zoom = |h: &egui_kittest::Harness<'_, (Box<PhotocraftApp>, bool)>| h.state().0.ui.window_views[&window].zoom;
     let before = window_zoom(&h);
     type_zoom(&mut h.state_mut().0.ui.views[0], 300.0);
     h.run_steps(3);
@@ -979,7 +1024,7 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
         let app_ctx = app.ctx().clone();
         crate::menus::invoke(&mut app, &app_ctx, &format!("window.arrange.{layout}"), json!({})).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
-            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
                     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
                 }
@@ -1024,7 +1069,7 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     // A Navigator in a column of icons shows in a flyout, which the click into the status bar closes: expand its column
     // so the panel stays while both fields are typed into.
     let navigator = "navigator".to_owned();
-    if h.state().ui.docking.layout.opens_in_flyout(&navigator) {
+    if h.state().ui.docking.layout().opens_in_flyout(&navigator) {
         crate::panel_docking::apply(h.state_mut(), vec![craft::behavior::dock::Action::set_iconic(navigator.clone(), false)]).unwrap();
         h.state_mut().ui.flyout = None;
         crate::panel_docking::show_panel(h.state_mut(), "navigator", Some(true)).unwrap();
@@ -1033,7 +1078,7 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     assert!(crate::panel_docking::is_front(h.state(), "navigator"), "the Navigator shows as a panel");
     assert_eq!(h.state().session.active_index(), Some(0), "the floating document is active");
     // The status bar's zoom field (bottom left) and the Navigator's.
-    let fields = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+    let fields = |h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
         // The fields are the nodes named Zoom that show the percentage as their value (a field's group and the Navigator's slider carry the name too).
         let mut f: Vec<egui::Rect> = h
             .query_all_by_label("Zoom")
@@ -1057,8 +1102,9 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text(typed.into()));
         h.key_press(egui::Key::Enter);
-        h.run_steps(2);
-        h.run_steps(58);
+        // The harness steps 1/4 s a frame, so 10 frames after Enter are 2.5 s: well past the 150 ms zoom ease, with
+        // frames after it in which the window could write its view back (60 frames, 15 s, before #15652).
+        h.run_steps(10);
         assert!(h.state().ui.window_views.is_empty(), "the window keeps no copy of the view");
         assert!(
             (h.state().ui.views[0].zoom - want).abs() < 1e-3,
@@ -1097,4 +1143,37 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, (rev, Some(moved))).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
+}
+
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn gpu_display_luts_are_per_display() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut app = app_on_two_displays();
+        app.set_wgpu(rs);
+        let doc = app.session.documents()[0].doc.clone();
+        let key = doc.id.0;
+        // sRGB on the sRGB display needs no LUT; on the P3 display it does.
+        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
+        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
+        let gpu = app.gpu.clone().unwrap();
+        let (s1, s4) = (gpu.display_lut_signature(key, 1).unwrap(), gpu.display_lut_signature(key, 4).unwrap());
+        assert_ne!(s1.0, s4.0);
+        assert!(gpu.has_display_lut(key, 4) && !gpu.has_display_lut(key, 1));
+        // Drawing one window leaves the other's LUT alone.
+        for _ in 0..3 {
+            assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
+            assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
+        }
+        assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
+        assert!(gpu.has_display_lut(key, 4));
+        // The shared texture's key is the same for both displays.
+        assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
+    }
 }

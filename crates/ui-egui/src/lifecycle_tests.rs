@@ -10,7 +10,7 @@ use egui::{Context, RawInput};
 use photocraft_engine::Session;
 use serde_json::json;
 
-fn app_with_doc() -> PhotocraftApp {
+fn app_with_doc() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).expect("a document");
     app
@@ -108,7 +108,7 @@ fn a_logic_tick_requests_a_hidden_paint_for_waiting_captures_and_queued_input() 
 pub(crate) fn app_harness(
     services: Services,
     documents: usize,
-) -> (egui_kittest::Harness<'static, PhotocraftApp>, std::sync::mpsc::Sender<crate::ControlRequest>) {
+) -> (egui_kittest::Harness<'static, Box<PhotocraftApp>>, std::sync::mpsc::Sender<crate::ControlRequest>) {
     let (transport, requests) = std::sync::mpsc::channel();
     let requests = std::cell::Cell::new(Some(requests));
     let services = std::cell::Cell::new(Some(services));
@@ -127,7 +127,7 @@ pub(crate) fn app_harness(
 
 /// Sends `method` over the harness's control channel and runs passes until it is answered.
 pub(crate) fn answered(
-    h: &mut egui_kittest::Harness<'static, PhotocraftApp>,
+    h: &mut egui_kittest::Harness<'static, Box<PhotocraftApp>>,
     transport: &std::sync::mpsc::Sender<crate::ControlRequest>,
     method: &str,
     params: serde_json::Value,

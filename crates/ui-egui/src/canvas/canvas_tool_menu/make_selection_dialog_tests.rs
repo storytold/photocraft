@@ -17,7 +17,7 @@ const MODES: [&str; 4] = ["replace", "add", "subtract", "intersect"];
 
 /// A document with the reference's closed triangle as the Work Path, with or without a selection
 /// (a rectangle the triangle overlaps).
-fn app(selection: bool) -> PhotocraftApp {
+fn app(selection: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 500})).unwrap();
     let knots = json!([[100, 300], [300, 300], [200, 450]]);
@@ -30,12 +30,12 @@ fn app(selection: bool) -> PhotocraftApp {
 }
 
 /// The app's dialog pass: the host draws the dialogs and the families take their answers.
-fn draw(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+fn draw(ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>) {
     crate::dialogs::run(app, ui);
 }
 
 /// The Pen canvas menu's Make Selection… dialog, drawn as the window shows it.
-fn dialog(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn dialog(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     choose_open(&mut app, "path.toSelection");
     assert!(dialog_open(&app), "Make Selection… opened its dialog");
     let ctx = app.ctx().clone();
@@ -45,7 +45,7 @@ fn dialog(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     h.get_by_label(label).click();
     h.run_steps(3);
 }
@@ -70,7 +70,7 @@ fn last_params(app: &PhotocraftApp) -> Value {
     params
 }
 
-fn enabled(h: &Harness<'_, PhotocraftApp>, label: &str) -> bool {
+fn enabled(h: &Harness<'_, Box<PhotocraftApp>>, label: &str) -> bool {
     !h.get_by_label(label).accesskit_node().is_disabled()
 }
 

@@ -14,7 +14,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// A pixel layer filled red, active, with `select` run first when given.
-fn pixel_layer(select: &[(&str, Value)]) -> PhotocraftApp {
+fn pixel_layer(select: &[(&str, Value)]) -> Box<PhotocraftApp> {
     let mut app = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
@@ -26,7 +26,7 @@ fn pixel_layer(select: &[(&str, Value)]) -> PhotocraftApp {
 }
 
 /// Right-click the middle of the canvas: the open menu's entries as `ui.inspect` lists them.
-fn right_click_entries(h: &mut Harness<'static, PhotocraftApp>) -> Vec<Value> {
+fn right_click_entries(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Vec<Value> {
     let center = h.state().last_canvas_rect.center();
     right_click(h, center, Modifiers::NONE);
     let inspected = crate::control::inspect(h.state(), &h.ctx);

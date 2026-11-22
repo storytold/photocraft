@@ -10,7 +10,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// The measured document: two boards, the 750 x 1334 one selected, the other one apart from it.
-fn app_with_selected_board() -> PhotocraftApp {
+fn app_with_selected_board() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.run("layer.new.artboard", json!({"rect": [2000, 0, 300, 300]})).unwrap();

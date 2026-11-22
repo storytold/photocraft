@@ -185,7 +185,7 @@ pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<Clon
         radius.to_bits(),
         brush_alpha.to_bits()
     );
-    let brush = overlay.clipped.then_some(&app.session.tools.brush);
+    let brush = overlay.clipped.then_some(&*app.session.tools.brush);
     if app.clone_preview.as_ref().is_none_or(|c| {
         let same_source = match (&c.source_document, &source_document) {
             (Some(a), Some(b)) => std::sync::Weak::ptr_eq(a, b),
@@ -704,7 +704,8 @@ pub(crate) fn finish(app: &mut PhotocraftApp, stroke: PaintStroke) {
     if live_retouch_command(d.tool).is_some() || crate::retouch_ui::dab_params(app, d.tool).is_some() || d.tool == Tool::ColorReplacement {
         app.live_stroke = None;
     }
-    let finished = crate::eraser_ui::finish_stroke(app, d.tool, &d.points, d.line)
+    let finished = crate::adjustment_brush::finish_stroke(app, d.tool, &d.points, d.line)
+        || crate::eraser_ui::finish_stroke(app, d.tool, &d.points, d.line)
         || crate::retouch_ui::finish_stroke_with(app, d.tool, &d.points, d.modifiers, d.line, d.history_params.clone());
     app.session.clear_live_stroke();
     if finished {

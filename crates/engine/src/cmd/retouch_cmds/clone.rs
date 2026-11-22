@@ -3,7 +3,7 @@ use super::heal::history_source;
 use super::sampling::{SampleLayers, sample_layers};
 use super::{
     BlendMode, BrushSettings, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleType, Session, Stroke, StrokePoint, Surface, Value,
-    alpha_index, apply_coverage, bad, blend_from_str, coverage, damage_json, flag, has_pixel_layer, json, parse_brush, pattern_stamp, periodic, point,
+    alpha_index, apply_coverage, bad, coverage, damage_json, flag, has_pixel_layer, json, parse_blend, parse_brush, pattern_stamp, periodic, point,
     reject_huge_stroke, run_stroke, to_rgba,
 };
 
@@ -212,7 +212,7 @@ pub(super) fn clone_result(dmg: Rect, off: (i32, i32), aligned: bool, p: &Value,
 pub(super) fn blend_param(p: &Value, cmd: &str) -> Result<BlendMode> {
     match p.get("mode").and_then(Value::as_str) {
         None => Ok(BlendMode::Normal),
-        Some(m) => blend_from_str(m).ok_or_else(|| bad(cmd, format!("unknown blend mode `{m}`"))),
+        Some(m) => parse_blend(m).ok_or_else(|| bad(cmd, format!("unknown blend mode `{m}`"))),
     }
 }
 

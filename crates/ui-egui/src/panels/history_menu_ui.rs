@@ -56,6 +56,21 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     ITEMS.iter().flatten().map(|&id| (CommandRef::new(id), CommandState::new().enabled(command_state(app, resolve(id, snapshot).0)))).collect()
 }
 
+/// What [`command_states`] reads: the rules (the Pen and Crop histories and an open Free Transform among them) and the
+/// snapshot selected in the panel.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    rules: crate::menus::facts::RuleFacts<'a>,
+    #[memo_props(hash = "a plain model id, a snapshot id and the history spot: plain values")]
+    snapshot: &'a Option<(photocraft_doc::DocId, u64, crate::panels::history::HistorySpot)>,
+}
+
+/// [`command_states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = StatesFacts { rules: crate::menus::facts::RuleFacts::of(app), snapshot: &app.ui.history_snapshot };
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
+}
+
 /// Runs the item `command` and reports whether it is one of this menu's. History Options… opens its
 /// dialog, as the menu bar's command does. Step Backward/Forward over a Pen path step it as Edit ›
 /// Undo/Redo do (`vector_ui::pen_history_step`).
@@ -81,7 +96,7 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: 
 mod tests {
     use super::*;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
@@ -163,9 +178,9 @@ mod tests {
     fn delete_removes_the_selected_snapshot() {
         let mut app = app();
         app.run("history.newSnapshot", json!({})).unwrap();
-        let snaps = |app: &PhotocraftApp| app.session.active().unwrap().snapshots.len();
+        let snaps = |app: &PhotocraftApp| app.session.active().unwrap().snapshots().len();
         let before = snaps(&app);
-        let id = app.session.active().unwrap().snapshots.last().unwrap().id;
+        let id = app.session.active().unwrap().snapshots().last().unwrap().id;
         crate::panels::select_snapshot(&mut app, id);
         let steps = states(&app);
         fire(&mut app, "history.deleteState");

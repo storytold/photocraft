@@ -152,6 +152,8 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
     cr.noise_luminance_detail = cr.noise_luminance_detail.clamp(0.0, 100.0);
     cr.noise_color = cr.noise_color.clamp(0.0, 100.0);
     cr.noise_color_detail = cr.noise_color_detail.clamp(0.0, 100.0);
+    // The legacy detail stage uses this value to set the bounds of a clamp.
+    cr.sharpen_detail = cr.sharpen_detail.clamp(0.0, 100.0);
     // `exposure` becomes `2^exposure`, which overflows f32 to infinity from 128 up (and then
     // writes inf/NaN into 32-bit layers). Clamp to the documented -5..5.
     cr.exposure = cr.exposure.clamp(-5.0, 5.0);
@@ -447,6 +449,24 @@ fn lens_batch(s: &mut Session, p: &Value) -> Result<Value> {
         scratch.execute(LENS, params.clone())?;
         Ok(())
     });
+    // Photoshop closes a listed source that is open in the app, as file.close does (#13991).
+    // Unsaved changes, failed sources and Folder mode were not measured, so those documents stay
+    // open; so does one a background job is editing, which closing would cancel.
+    if p.get("input").or_else(|| p.get("files")).is_some_and(Value::is_array) {
+        let failed: Vec<&str> = r["errors"].as_array().into_iter().flatten().filter_map(|e| e["file"].as_str()).collect();
+        let corrected: Vec<&String> = inputs.iter().filter(|input| !failed.contains(&input.as_str())).collect();
+        let sources: Vec<usize> = s
+            .documents()
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !d.is_dirty() && s.job_on(d.doc.id).is_none())
+            .filter(|(_, d)| d.path.as_deref().is_some_and(|path| corrected.iter().any(|input| crate::file_cmds::same_file(input, path))))
+            .map(|(i, _)| i)
+            .collect();
+        for i in sources.into_iter().rev() {
+            s.close(i);
+        }
+    }
     Ok(r)
 }
 
@@ -714,6 +734,14 @@ mod tests {
     }
 
     #[test]
+    fn camera_raw_settings_clamp_sharpen_detail_without_changing_valid_values() {
+        for (stored, expected) in [(-1.0, 0.0), (0.0, 0.0), (37.5, 37.5), (100.0, 100.0), (101.0, 100.0)] {
+            let params = raw_params(RAW, &json!({"sharpenDetail": stored})).unwrap();
+            assert_eq!(params.sharpen_detail, expected);
+        }
+    }
+
+    #[test]
     fn camera_raw_rejects_an_area_too_large_to_develop() {
         // #962: `area.width() * area.height()` overflowed u32 on a legal 65536×65536 canvas,
         // so `run` panicked and dispatch reported an internal error.
@@ -758,3 +786,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "lens_batch_close_tests.rs"]
+mod lens_batch_close_tests;

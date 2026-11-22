@@ -12,7 +12,7 @@ use serde_json::json;
 
 const NONE: Modifiers = Modifiers::NONE;
 
-fn app(depth: SampleType) -> PhotocraftApp {
+fn app(depth: SampleType) -> Box<PhotocraftApp> {
     let doc = Document::with_background("crop", Size::new(200, 100), ColorMode::Rgb, depth, Color::WHITE);
     let mut s = photocraft_engine::Session::new();
     s.add_document(doc, None);
@@ -205,7 +205,7 @@ fn history_jumps_wait_for_a_pending_crop() {
     let mut app = app(SampleType::U8);
     app.run("history.newSnapshot", json!({})).unwrap();
     app.run("image.canvasSize", json!({"width": 300, "height": 200})).unwrap();
-    let snapshot = app.session.active().unwrap().snapshots[0].id;
+    let snapshot = app.session.active().unwrap().snapshots()[0].id;
     let frame = boxed(220.0, 120.0, 290.0, 190.0, 0.0);
     // A pass first: the tool holds a frame for the document it was made for, which Discard drops.
     crate::canvas::testing::frame(&mut app);
@@ -381,7 +381,7 @@ fn another_tool_commits_a_drawn_frame_at_8_and_16_bit() {
 }
 
 /// A layer 300..350 × 200..260 on a 400 × 300 canvas: the snap target of the two snap trials.
-fn board() -> PhotocraftApp {
+fn board() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -416,4 +416,45 @@ fn drawing_a_new_crop_snaps_its_corner_not_the_default_frame() {
         let frame = crop_ui::frame(&app).unwrap();
         assert!((frame.rect.x1 - 300.0).abs() < 1e-6, "classic {classic}: {frame:?}");
     }
+}
+
+/// #16185: as in Photoshop, the pixels past the canvas show while a frame is edited in the default mode only; in Classic
+/// Mode the frame lies over the pasteboard and the layers stop at the canvas edge.
+#[test]
+fn classic_mode_shows_nothing_past_the_canvas() {
+    let mut app = app(SampleType::U8);
+    drag(&mut app, &[[10.0, 10.0], [50.0, 40.0]], NONE);
+    assert!(tool(&mut app).shows_beyond_canvas(), "the drawn frame is being edited");
+    assert!(!crop_ui::shows_beyond_canvas(&app), "Classic Mode: no preview past the canvas");
+    app.ui.tool_options.crop.shield.classic_mode = false;
+    assert!(crop_ui::shows_beyond_canvas(&app), "default mode: the canvas shows past its edges");
+}
+
+/// #16185: the area a crop adds past the canvas previews in the colour the commit fills a Background's new area with,
+/// and as transparency where the commit leaves it transparent.
+#[test]
+fn the_grown_area_previews_in_the_background_colour_the_crop_fills_it_with() {
+    let mut app = app(SampleType::U8);
+    app.ui.tool_options.crop.shield.classic_mode = false;
+    let red = [1.0, 0.0, 0.0, 1.0];
+    app.session.tools.background = red;
+    let doc = (*app.session.active().unwrap().doc).clone();
+    assert_eq!(crop_ui::grown_fill(&app, &doc), Some(red), "Delete Cropped Pixels on, Fill: Background");
+
+    app.ui.tool_options.crop.delete_pixels = false;
+    assert_eq!(crop_ui::grown_fill(&app, &doc), None, "Delete off turns the Background into a layer: transparency");
+    app.ui.tool_options.crop.delete_pixels = true;
+
+    app.ui.tool_options.crop.fill = CropFill::ContentAware;
+    assert_eq!(crop_ui::grown_fill(&app, &doc), None, "Content-Aware Fill makes its own pixels");
+    app.ui.tool_options.crop.fill = CropFill::Background;
+
+    let mut hidden = doc.clone();
+    hidden.layers[0].visible = false;
+    assert_eq!(crop_ui::grown_fill(&app, &hidden), None, "a hidden Background shows nothing");
+
+    app.session.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    let layered = (*app.session.active().unwrap().doc).clone();
+    assert!(layered.background().is_none());
+    assert_eq!(crop_ui::grown_fill(&app, &layered), None, "no Background: the other layers stay transparent there");
 }

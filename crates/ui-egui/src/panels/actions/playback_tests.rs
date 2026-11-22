@@ -11,7 +11,7 @@ fn names(app: &PhotocraftApp) -> Vec<String> {
 }
 
 /// `Three` makes layers A, B and C.
-fn app_with(performance: &str, seconds: u8, single: bool) -> PhotocraftApp {
+fn app_with(performance: &str, seconds: u8, single: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
     app.run("actions.setPlayback", json!({"performance": performance, "seconds": seconds, "singleState": single})).unwrap();
