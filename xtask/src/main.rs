@@ -30,6 +30,7 @@ usage: cargo xtask <command>
 
 commands:
   layers          enforce the crate dependency layering (docs/architecture.md §3)
+  io-ci-features  check that photocraft-io tests pin third-party features without pulling HEIF
   egui-fork       fail unless Cargo.lock takes every egui package from the craft framework's egui fork
   panel-commands  fail on a shell click handler that changes the document or session directly instead of
                   dispatching a command id (allowlist: xtask/src/panel_commands.rs)
@@ -39,7 +40,7 @@ commands:
                   one per optional web feature)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
   ci [lint | archive [--gpu-shard] | build | tests [--from <dir> [--shard <k>]] [--gpu | --no-gpu] | <step>]
-                  the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, panel-commands, scorecard --check,
+                  the CI gate: fmt --check, egui-fork, clippy -D warnings, layers, io-ci-features, panel-commands, scorecard --check,
                   tests (nextest --profile ci), panic_hunt, doctests, wasm and the i18n-report, with --locked
                   --features heif (stops at first failure). The gate splits it over its jobs: `lint` runs the
                   steps that need no test build; `archive` builds the tests into the nextest archive at
@@ -86,6 +87,7 @@ fn main() -> ExitCode {
     let rest: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     let result = match args.first().map(String::as_str) {
         Some("layers") => cmd_layers(),
+        Some("io-ci-features") => cmd_io_ci_features(),
         Some("egui-fork") => cmd_egui_fork(),
         Some("panel-commands") => panel_commands::run(&root()),
         Some("test-binaries") => test_binaries::run(&root()),
@@ -216,6 +218,13 @@ fn cmd_layers() -> Result<(), String> {
         }
         Err(format!("{} layering violation(s)", violations.len()))
     }
+}
+
+fn cmd_io_ci_features() -> Result<(), String> {
+    let script = root().join("scripts/check_io_ci_features.py");
+    let mut c = std::process::Command::new("python3");
+    c.current_dir(root()).arg(&script);
+    run(c, "python3 scripts/check_io_ci_features.py")
 }
 
 /// Workspace packages that must build for wasm32: all L0–L5 crates plus
@@ -350,11 +359,12 @@ type StepFn = fn(&CiOptions) -> Result<(), String>;
 type CiPlan = Vec<(&'static str, StepFn)>;
 
 /// The CI gate's steps, in the order `cargo xtask ci` runs them.
-const CI_STEPS: [(&str, Part, StepFn); 12] = [
+const CI_STEPS: [(&str, Part, StepFn); 13] = [
     ("fmt", Part::Lint, step_fmt),
     ("egui-fork", Part::Lint, |_| cmd_egui_fork()),
     ("clippy", Part::Lint, step_clippy),
     ("layers", Part::Lint, |_| cmd_layers()),
+    ("io-ci-features", Part::Lint, |_| cmd_io_ci_features()),
     ("panel-commands", Part::Lint, |_| panel_commands::run(&root())),
     ("test-binaries", Part::Lint, |_| test_binaries::run(&root())),
     ("scorecard", Part::Lint, |_| scorecard::run(&root(), &["--check"])),

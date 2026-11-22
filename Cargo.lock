@@ -6742,6 +6742,7 @@ dependencies = [
  "photocraft-doc",
  "photocraft-format",
  "photocraft-geom",
+ "photocraft-io-ci-features",
  "photocraft-paint",
  "photocraft-raster",
  "photocraft-raw",
@@ -6755,6 +6756,37 @@ dependencies = [
  "ttf-parser",
  "zune-core",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "photocraft-io-ci-features"
+version = "0.23.1"
+dependencies = [
+ "bitflags 2.13.2",
+ "chrono",
+ "digest 0.10.7",
+ "ecolor",
+ "either",
+ "emath",
+ "font-types 0.12.7",
+ "gpu-allocator",
+ "icu_collections",
+ "icu_normalizer",
+ "icu_properties",
+ "icu_provider_blob",
+ "indexmap",
+ "linux-raw-sys 0.12.1",
+ "naga",
+ "postcard",
+ "rustix 1.1.5",
+ "serde_json",
+ "skrifa 0.44.0",
+ "syn 3.0.10",
+ "toml",
+ "typenum",
+ "uuid",
+ "wayland-sys",
+ "wgpu-types",
 ]
 
 [[package]]
