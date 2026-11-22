@@ -1,6 +1,7 @@
 //! #12533: the Paint Bucket's Tolerance takes whole numbers 0..255 and Opacity whole percents
 //! 1..100; a value typed past either range becomes the closest one with the reference's "Closest
-//! value inserted" alert, and a typed fraction rounds without one. The seven controls carry the
+//! value inserted" alert. A typed fraction rounds to the closest whole number: in Tolerance with
+//! the same alert, in Opacity without one. The seven controls carry the
 //! reference's tooltips, and the Source dropdown has no "Fill" label. The Magic Wand and the Magic
 //! Eraser share Tolerance and keep their own behaviour.
 
@@ -101,6 +102,26 @@ fn tolerance_is_a_whole_number() {
         if !typed.contains('.') {
             assert!(alerts(&h).is_empty(), "{typed}: no alert, got {:?}", alerts(&h));
         }
+    }
+}
+
+#[test]
+fn a_fractional_tolerance_takes_the_closest_value_and_alerts() {
+    for (typed, want) in [("12.7", 13.0), ("12.4", 12.0), ("0.4", 0.0), ("254.6", 255.0)] {
+        let mut h = bar(Tool::PaintBucket);
+        type_into(&mut h, "Tolerance", typed);
+        assert_eq!(h.state().ui.tool_options.tolerance, want, "{typed}");
+        assert_eq!(alerts(&h), vec![TOLERANCE_ALERT.to_string()], "{typed}: one alert");
+    }
+}
+
+#[test]
+fn a_fractional_opacity_rounds_without_an_alert() {
+    for (typed, want) in [("50.5", 51.0), ("50.4", 50.0), ("1.4", 1.0), ("99.6", 100.0)] {
+        let mut h = bar(Tool::PaintBucket);
+        type_into(&mut h, "Opacity", typed);
+        assert_eq!(h.state().ui.tool_options.fill_opacity, want, "{typed}");
+        assert!(alerts(&h).is_empty(), "{typed}: no alert, got {:?}", alerts(&h));
     }
 }
 
