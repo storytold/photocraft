@@ -147,3 +147,50 @@ fn camera_raw_smart_filter_migrates_to_shared_develop_settings() {
     assert_eq!(migrated.settings.wb.tint, -12.0);
     assert_eq!(migrated.settings.vignette.style, craft_develop_model::VignetteStyle::HighlightPriority);
 }
+
+#[test]
+fn reopened_camera_raw_smart_filter_keeps_legacy_close_curve_knots() {
+    use std::sync::Arc;
+
+    use photocraft_color::{BlendMode, ColorMode, SampleType};
+    use photocraft_doc::{Document, Layer, Rect, Size, SmartFilter, SmartObject, SmartSource};
+    use photocraft_geom::Affine;
+    use photocraft_raster::Surface;
+
+    // Original synthetic neutral ramp, saved as real embedded PhotoCraft content.
+    let size = Size::new(5, 3);
+    let mut inner = Document::new("Gray ramp", size, ColorMode::Rgb, SampleType::U16);
+    let mut ramp = Surface::new(inner.pixel_format());
+    for (x, gray) in (0..5).zip([0.125, 0.25, 0.75, 0.875, 1.0]) {
+        ramp.fill_rect(Rect::new(x, 0, x + 1, 3), &[gray, gray, gray, 1.0]);
+    }
+    inner.layers.push(Layer::new("Ramp", LayerContent::Raster(ramp)));
+    let original = photocraft_format::save_to_bytes(&inner, &Default::default()).unwrap();
+    let mut smart = SmartObject::new(SmartSource::Embedded { file_name: "ramp.pcraft".into(), bytes: Arc::new(original) }, Affine::IDENTITY, None);
+    // The modern command rejects this small gap. Store the historical settings as a
+    // Smart Filter and drive production's lenient replay, not the new-edit validator.
+    let near = f32::from_bits(127.5_f32.to_bits() + 33);
+    let curve = [[0.0, 0.0], [127.5, 0.0], [near, 255.0], [255.0, 255.0]];
+    let params = json!({"pointCurve": curve});
+    smart.smart_filters.push(SmartFilter { command: "filter.cameraRaw".into(), params: params.clone(), blend: BlendMode::Normal, opacity: 1.0, visible: true });
+    let mut document = Document::new("Stored Camera Raw curve", size, ColorMode::Rgb, SampleType::U16);
+    document.layers.push(Layer::new("Stored filter", LayerContent::Smart(smart)));
+
+    let saved = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+    let LayerContent::Smart(smart) = &reopened.layers[0].content else { panic!("expected reopened Smart Object") };
+    let [filter] = smart.smart_filters.as_slice() else { panic!("expected one stored Camera Raw filter") };
+    assert_eq!(filter.params, params);
+    let SmartSource::Embedded { bytes, .. } = &smart.source else { panic!("expected embedded ramp") };
+    let placed = photocraft_format::load_from_bytes(bytes).unwrap();
+    let LayerContent::Raster(ramp) = &placed.layers[0].content else { panic!("expected decoded ramp pixels") };
+    assert!((ramp.rgba(2, 1)[0] - 0.75).abs() < 0.01);
+
+    // Identity placement: the embedded raster is already the placed input. This
+    // production entry point replays the stored stack without using layer cache pixels.
+    let rendered = photocraft_engine::smart_cmds::apply_smart_filters(ramp, smart, reopened.bounds()).unwrap();
+    let bright = rendered.rgba(2, 1);
+    assert!(bright[..3].iter().all(|&v| v > 0.9), "legacy close-knot step must brighten the upper midtone: {bright:?}");
+    let dark = rendered.rgba(1, 1);
+    assert!(dark[..3].iter().all(|&v| v < 0.1), "the lower midtone remains below the step: {dark:?}");
+}
