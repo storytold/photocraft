@@ -155,7 +155,7 @@ fn control_port_for(cli: Option<u16>, prefs: &photocraft_engine::prefs::Integrat
 }
 
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
-/// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
+/// when it still doesn't fit, `embed::before_ui`), centred on the main monitor. Without
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
 /// different offset every launch (#419). A later launch restores the saved position instead
 /// (`main` turns `centered` off, #4826). Wayland compositors place windows themselves.
@@ -713,6 +713,8 @@ fn main() -> eframe::Result {
             }
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // The physical primary button: it ends a floating document window's OS move by its title bar (#16415).
+            app.services.primary_down = cursor::primary_down_service();
             // The custom title bar's undecorated window must stay borderless, or its caption and
             // border offset the content and the pointer on some Windows systems (#2246).
             app.services.window_frame = window_frame::service(cc, integrated_frame);
