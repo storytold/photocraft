@@ -401,6 +401,17 @@ fn union_bounds<'a>(layers: impl IntoIterator<Item = &'a Layer>, canvas: Rect) -
     layers.into_iter().filter_map(crate::layer_multi_cmds::layer_bounds).reduce(|a, b| a.union(&b)).unwrap_or(canvas)
 }
 
+/// The start of a span `len` long centred on the span `start`, `start + span`: ceil(centre -
+/// len / 2), so a half pixel rounds right or down (#14568). `len == span` gives `start` back.
+/// Saturates: `board_rect` refuses anything past the 32-bit coordinates.
+fn centred(start: i64, span: i64, len: i64) -> i64 {
+    start.saturating_mul(2).saturating_add(span).saturating_sub(len).saturating_add(1).div_euclid(2)
+}
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_layers_centred_tests.rs"]
+mod from_layers_centred_tests;
+
 /// What Artboard from Layers' dialog opens with, as in the reference application: the name the
 /// board would get and the selected top-level layers' size (`None` without a document).
 pub fn from_layers_defaults(s: &Session) -> Option<(String, [i64; 2])> {
@@ -421,8 +432,9 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     if ["width", "height"].iter().any(|k| p.get(*k).and_then(Value::as_f64).is_some_and(|v| v < 0.0)) {
         return Err(bad(cmd, "the artboard width and height must not be negative"));
     }
-    // A size of the user's own (a post, a story…) from the layers' top left; 0 or none keeps
-    // their bounds on that axis (#9087).
+    // A size of the user's own (a post, a story…) centred on the layers, a half pixel on the
+    // left or top rounding up as in the reference application (#14568); 0 or none keeps their
+    // bounds on that axis (#9087).
     let size = [int(p, "width").filter(|v| *v != 0), int(p, "height").filter(|v| *v != 0)];
     let (gid, rect, shift) = s.edit("New Artboard From Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &sel);
@@ -434,7 +446,8 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
             children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
         }
         let [x, y, w, h] = xywh(union_bounds(&children, canvas));
-        let rect = board_rect(cmd, [x, y, size[0].unwrap_or(w), size[1].unwrap_or(h)])?;
+        let (bw, bh) = (size[0].unwrap_or(w), size[1].unwrap_or(h));
+        let rect = board_rect(cmd, [centred(x, w, bw), centred(y, h, bh), bw, bh])?;
         let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), children);
         set_artboard(&mut g, Artboard { rect, background, preset: String::new() });
         let gid = doc.insert_above(None, g);
@@ -445,6 +458,8 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![gid], Some(gid), Some(gid))?;
+    // The board as stored: a board past the origin moved with the document's shift.
+    let rect = s.active().and_then(|d| d.doc.layer(gid)).and_then(Layer::artboard).map_or(rect, |a| a.rect);
     Ok(json!({"layer": gid.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 
@@ -1397,7 +1412,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboardFromLayers",
             "Artboard from Layers…",
             &["Layer", "New"],
-            r##"{"name":text,"background":"white|black|transparent|custom"="white","color":color,"width":px=0,"height":px=0} (the selected layers; name: empty gives Artboard N; color: for custom; width, height: the board's size from the layers' top left, 0 keeps their bounds) → {layer, rect}"##,
+            r##"{"name":text,"background":"white|black|transparent|custom"="white","color":color,"width":px=0,"height":px=0} (the selected layers; name: empty gives Artboard N; color: for custom; width, height: the board's size centred on the layers, 0 keeps their bounds) → {layer, rect}"##,
             has_free_layers,
             artboard_from_layers
         ),

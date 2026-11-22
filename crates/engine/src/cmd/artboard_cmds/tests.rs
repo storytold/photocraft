@@ -887,15 +887,13 @@ fn new_document_with_an_artboard() {
     assert!(s.execute("file.new", json!({"artboard": "yes"})).is_err());
 }
 
-/// #9087: Artboard from Layers takes a size of the user's own, from the layers' top left; 0 or
-/// none keeps their bounds on that axis, and a negative size is refused.
+/// #9087: Artboard from Layers takes a size of the user's own, centred on the layers (#14568);
+/// 0 or none keeps their bounds on that axis, and a negative size is refused.
 #[test]
 fn artboard_from_layers_takes_a_custom_size() {
-    for (params, want) in [
-        (json!({"width": 108, "height": 135}), [10, 10, 108, 135]),
-        (json!({"width": 0, "height": 0}), [10, 10, 20, 20]),
-        (json!({"width": 60}), [10, 10, 60, 20]),
-    ] {
+    for (params, want) in
+        [(json!({"width": 16, "height": 12}), [12, 14, 16, 12]), (json!({"width": 0, "height": 0}), [10, 10, 20, 20]), (json!({"width": 14}), [13, 10, 14, 20])]
+    {
         let mut s = session(8);
         add_square(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
         let r = s.execute("layer.new.artboardFromLayers", params.clone()).unwrap();
