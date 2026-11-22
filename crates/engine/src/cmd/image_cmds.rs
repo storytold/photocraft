@@ -739,6 +739,18 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
         let canvas = doc.bounds();
         let old = Rect::from_xywh(dx, dy, ow as u32, oh as u32);
+        // A shrink cuts the Background to the new canvas, as the reference application does
+        // (#14538), so a later grow fills the whole new area with the extension colour instead of
+        // bringing the cut pixels back. Normal layers keep their pixels past the canvas. Artboard
+        // and Indexed Color documents were not measured and keep today's behaviour.
+        if (nw < ow as u32 || nh < oh as u32)
+            && doc.mode != ColorMode::Indexed
+            && doc.artboards().is_empty()
+            && let Some(bg) = doc.background_mut()
+            && let LayerContent::Raster(surf) = &mut bg.content
+        {
+            *surf = crop_surface(surf, canvas);
+        }
         // A Background cannot contain transparent pixels. When a transparent
         // extension adds canvas area, make it a normal paintable layer first.
         // A shrink or no-op resize must not silently convert the Background.
@@ -1317,6 +1329,10 @@ mod duplicate_selection_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "image_cmds/canvas_size_background_crop_tests.rs"]
+mod canvas_size_background_crop_tests;
 
 #[cfg(test)]
 mod canvas_size_selection_tests;
