@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use craft::imaging::ui::live_preview::{LivePreview, PreviewKey, PreviewLane, PreviewSession, settings_hash};
+use craft::ui::canvas::PixelRect;
 use photocraft_doc::{DocId, Document};
 use photocraft_geom::Rect;
 use serde_json::json;
@@ -13,8 +15,6 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-/// Preview keys of patch drags: `BASE + n`, one per offset shown (see `canvas::display_doc`).
-const BASE: u64 = 1 << 38;
 /// Cells of the preview's coarse solve: a 128² solve takes about 5 ms (`bench_retouch`), whatever
 /// the selection's size.
 const MAX_CELLS: u64 = 128 * 128;
@@ -22,9 +22,11 @@ const MAX_CELLS: u64 = 128 * 128;
 pub(crate) struct PatchPreview {
     doc: DocId,
     revision: u64,
-    mode: String,
-    /// Offsets shown so far, by preview key (`BASE + 1 + index`), with the area each changed.
-    offsets: Vec<([i32; 2], Rect)>,
+    /// The keys of this drag: its session is the document, revision and Patch mode; each offset shown is a key
+    /// recorded with the area its heal changed.
+    live: LivePreview,
+    /// Offsets shown so far with their keys, the latest last.
+    offsets: Vec<([i32; 2], PreviewKey)>,
     /// The document at the latest offset.
     shown: Option<Arc<Document>>,
 }
@@ -35,9 +37,13 @@ pub(crate) fn drag_offset(app: &mut PhotocraftApp) -> Option<[i32; 2]> {
     if app.ui.tool_options.patch_content_aware {
         return None;
     }
-    let d = app.drag.as_ref().filter(|d| d.tool == Tool::Patch)?;
-    let (start, mods) = (d.start, d.modifiers);
-    let end = crate::retouch_ui::patch_end(d, d.points.last().map_or(start, |p| [p[0], p[1]]));
+    if app.ui.tool != Tool::Patch {
+        return None;
+    }
+    let retouch = &app.canvas_tools.retouch;
+    let press = retouch.press()?;
+    let (start, mods) = (press.start, press.modifiers);
+    let end = crate::retouch_ui::patch_end(press, retouch.last_point(), retouch.shift());
     if !crate::retouch_ui::patch_drags_selection(app, start, mods) {
         return None;
     }
@@ -55,17 +61,21 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         return None;
     };
     let st = app.session.documents().get(idx)?;
-    let (doc_id, revision) = (st.doc.id, st.revision);
+    let (doc_id, revision, b) = (st.doc.id, st.revision, st.doc.bounds());
     let mode = app.ui.tool_options.patch_mode.clone();
-    let fresh = app.patch_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision && p.mode == mode);
+    let session = PreviewSession::new(doc_id.0, revision, 0).and(settings_hash(&[mode.as_bytes()]));
+    let fresh = app.patch_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision && p.live.session() == Some(session));
     if !fresh {
-        app.patch_preview = Some(PatchPreview { doc: doc_id, revision, mode: mode.clone(), offsets: Vec::new(), shown: None });
+        let mut live = LivePreview::new(PreviewLane::Tool);
+        live.begin(session, PixelRect::new(b.x0, b.y0, b.x1, b.y1));
+        app.patch_preview = Some(PatchPreview { doc: doc_id, revision, live, offsets: Vec::new(), shown: None });
     }
     if offset == [0, 0] {
         return None;
     }
     if app.patch_preview.as_ref()?.offsets.last().map(|o| o.0) != Some(offset) {
         let t0 = crate::gpu_canvas::now_ms();
+        let now_s = t0 / 1000.0;
         // Zoomed out, a finer colour fit than the screen shows is wasted.
         let min_step = (1.0 / app.point_zoom().max(1e-3)).floor().clamp(1.0, 64.0) as u32;
         let params = json!({"offset": offset, "mode": mode, "target": crate::canvas::paint_target(app)});
@@ -76,7 +86,9 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
                 // Duotone documents display through their inks.
                 let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
                 p.shown = Some(Arc::new(d));
-                p.offsets.push((offset, area));
+                let changed = PixelRect::new(area.x0, area.y0, area.x1, area.y1);
+                let key = p.live.key_in(settings_hash(&[&offset[0].to_le_bytes(), &offset[1].to_le_bytes()]), now_s, changed);
+                p.offsets.push((offset, key));
             }
             Err(_) => {
                 p.shown = None;
@@ -86,7 +98,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         app.perf.span("patch preview", crate::gpu_canvas::now_ms() - t0);
     }
     let p = app.patch_preview.as_ref()?;
-    Some((p.shown.clone()?, BASE + p.offsets.len() as u64))
+    Some((p.shown.clone()?, p.offsets.last()?.1.raw()))
 }
 
 /// What changed between preview (or document) key `seen` and `now` of the current Patch drag on
@@ -94,19 +106,13 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
 /// drag's (the canvas then recomposites everything).
 pub(crate) fn damage(app: &PhotocraftApp, doc: DocId, revision: u64, seen: u64, now: u64) -> Option<Rect> {
     let p = app.patch_preview.as_ref().filter(|p| p.doc == doc && p.revision == revision)?;
-    let ours = |k: u64| k == 0 || is_preview_key(k);
-    if seen == now || !ours(seen) || !ours(now) {
+    // The same key twice is the next rule's to decide (`textures::damage_since`); `changed` would damage the key's
+    // own area on every pass.
+    if seen == now {
         return None;
     }
-    let area = |k: u64| if k == 0 { Some(Rect::EMPTY) } else { p.offsets.get(usize::try_from(k - BASE - 1).ok()?).map(|o| o.1) };
-    let (a, b) = (area(seen)?, area(now)?);
-    Some(if a.is_empty() {
-        b
-    } else if b.is_empty() {
-        a
-    } else {
-        a.union(&b)
-    })
+    let r = p.live.changed(PreviewKey::from_raw(seen), PreviewKey::from_raw(now))?;
+    Some(Rect::new(r.x0, r.y0, r.x1, r.y1))
 }
 
 /// Whether the canvas shows a Patch drag's healed preview.
@@ -114,17 +120,13 @@ pub(crate) fn showing(app: &PhotocraftApp) -> bool {
     app.patch_preview.as_ref().is_some_and(|p| p.shown.is_some())
 }
 
-/// Whether `key` is a Patch drag preview key.
-pub(crate) fn is_preview_key(key: u64) -> bool {
-    key > BASE && key < BASE << 1
-}
-
 /// Release: after `paint.patch` at `offset` succeeded. If the canvas showed this very offset, its
 /// caches count the preview as the document, so the commit's damage rect (the same healed area,
 /// now solved exactly) refreshes only that area instead of everything.
 pub(crate) fn committed(app: &mut PhotocraftApp, preview: Option<PatchPreview>, offset: [i32; 2]) {
     let Some(p) = preview.filter(|p| p.shown.is_some() && p.offsets.last().map(|o| o.0) == Some(offset)) else { return };
-    crate::canvas::shown_as_document(app, p.doc, is_preview_key);
+    let live = &p.live;
+    crate::canvas::shown_as_document(app, p.doc, |k| k != 0 && live.owns(PreviewKey::from_raw(k)));
 }
 
 /// Take the preview off the app (at release, before the commit changes the document).
@@ -157,13 +159,15 @@ mod tests {
         assert!(display_doc(&mut app, 0).is_none());
         tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 30.0, pressure: 1.0 }, m);
         let (shown, k1) = display_doc(&mut app, 0).expect("a preview while dragging");
-        assert!(is_preview_key(k1) && showing(&app));
+        let owns = |app: &PhotocraftApp, k: u64| app.patch_preview.as_ref().is_some_and(|p| p.live.owns(PreviewKey::from_raw(k)));
+        assert!(k1 != 0 && owns(&app, k1) && showing(&app));
         assert!(!red_at(&shown, 71, 30), "the preview shows the blemish healed");
         assert!(red_at(&doc(&app), 71, 30), "the document is untouched until release");
         let a = damage(&app, id, rev, 0, k1).unwrap();
         assert!(a.contains(71, 30) && !a.contains(20, 30), "only the healed area recomposites: {a:?}");
         // Same offset: the same preview, no new solve.
         assert_eq!(display_doc(&mut app, 0).unwrap().1, k1);
+        assert_eq!(app.patch_preview.as_ref().unwrap().offsets.len(), 1);
         tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 30.0, pressure: 1.0 }, m);
         let k2 = display_doc(&mut app, 0).unwrap().1;
         assert!(k2 != k1 && damage(&app, id, rev, k1, k2).is_some_and(|r| r.contains(71, 30)));

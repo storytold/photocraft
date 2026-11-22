@@ -82,10 +82,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let selected = d.selected_layers();
     let layers = if as_flat {
         let mut out = Vec::new();
-        flat(&d.doc.layers, d, &selected, None, 0, &mut out);
+        flat(&d.doc.layers, d, selected, None, 0, &mut out);
         out
     } else {
-        tree(&d.doc.layers, d, &selected, 0)
+        tree(&d.doc.layers, d, selected, 0)
     };
     Ok(json!({"layers": layers, "activeLayer": d.active_layer.map(|l| l.0)}))
 }

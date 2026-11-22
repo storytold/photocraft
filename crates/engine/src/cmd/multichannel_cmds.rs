@@ -246,7 +246,7 @@ pub(crate) fn convert_from(s: &mut Session, mode: ColorMode, _p: &Value) -> Resu
         bg.locks.transparency = true;
         bg.locks.position = true;
         *active = Some(bg.id);
-        doc.layers = vec![bg];
+        doc.layers = vec![bg].into();
         doc.channels = others;
         Ok(if reinterpret { "channels" } else { "appearance" })
     })?;

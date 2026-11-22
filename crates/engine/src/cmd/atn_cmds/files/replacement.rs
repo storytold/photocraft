@@ -1,20 +1,25 @@
-//! Prepare the complete archive before publishing a whole Actions library.
+//! Replace Actions…: the whole library becomes every set of an ATN archive, prepared completely
+//! before the list changes.
 use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX, branch_id_field};
-use crate::actions_edit_cmds::{check_library_size, confirmed_idle, publish_library};
+use crate::actions_cmds::{ActionList, ActionsFile, PLAY_SHORTCUT_PREFIX};
+use crate::actions_edit_cmds::{confirmed_idle, publish_library};
+use crate::preset_import_cmds::UniqueNames;
 use crate::{Result, Session};
 
 use super::super::bad;
-use super::super::convert::{ReplacementSet, UniqueNames, Unsupported, import_sets};
+use super::super::convert::{ReplacementSet, Unsupported, import_sets};
 
 const COMMAND: &str = "actions.replace";
 
+/// The archive as one library: each set under a name unique among the archive's sets, each action
+/// under a name unique across the archive, and the calls between its actions pointed at those
+/// names, so the list takes them as they are.
 struct Replacement {
-    list: Vec<Action>,
-    rows: Vec<String>,
+    file: ActionsFile,
+    sets: Vec<String>,
     keys: BTreeMap<String, String>,
     warnings: Vec<String>,
     unsupported: Vec<Unsupported>,
@@ -22,31 +27,35 @@ struct Replacement {
 
 impl Replacement {
     fn parse(bytes: &[u8], encoding: Option<&str>) -> Result<Self> {
-        let mut list = Vec::new();
-        let mut rows = Vec::new();
+        let mut actions = Vec::new();
+        let mut sets = Vec::new();
         let mut keys = BTreeMap::new();
         let mut warnings = Vec::new();
         let mut unsupported = Vec::new();
-        let mut names = UniqueNames::new(std::iter::empty::<String>());
+        let mut set_names = UniqueNames::new_exact(std::iter::empty::<&str>());
+        let mut action_names = UniqueNames::new_exact(std::iter::empty::<&str>());
+        // Name the archive gave an action → the name it gets: the first of that name anywhere, the
+        // first in a set of the archive's naming, and the first in the same set.
         let mut first = HashMap::new();
         let mut scoped = HashMap::new();
         let mut local = HashMap::new();
-        let mut generated = HashMap::new();
+        // Each action's set in the archive, by its new name: (set index, set name in the archive).
+        let mut origin = Vec::new();
         for (ReplacementSet { mut imported, keys: function_keys }, unsupported_rows) in import_sets(bytes, encoding).map_err(|error| bad(COMMAND, error))? {
-            let slot = rows.len();
+            let slot = sets.len();
+            let set = set_names.unique(&imported.set);
             for action in &mut imported.actions {
-                let name = names.claim(&action.name);
+                let name = action_names.unique(&action.name);
                 let original = std::mem::replace(&mut action.name, name);
-                if original != action.name {
-                    generated.insert(action.name.clone(), imported.set.clone());
-                }
                 first.entry(original.clone()).or_insert_with(|| action.name.clone());
                 scoped.entry((imported.set.clone(), original.clone())).or_insert_with(|| action.name.clone());
                 local.entry((slot, original)).or_insert_with(|| action.name.clone());
-                action.set_slot = Some(slot);
+                action.set = Some(set.clone());
+                origin.push((slot, imported.set.clone()));
             }
             for (index, key) in function_keys {
                 if let Some(action) = imported.actions.get(index) {
+                    // A function key belongs to one action: the last the archive gives it.
                     keys.retain(|_, assigned| assigned != &key);
                     keys.insert(format!("{PLAY_SHORTCUT_PREFIX}{}", action.name), key);
                 }
@@ -54,59 +63,52 @@ impl Replacement {
             for (diagnostic, row) in imported.unsupported.iter_mut().zip(unsupported_rows) {
                 diagnostic.action.clone_from(&imported.actions[row].name);
             }
-            list.extend(imported.actions);
-            rows.push(imported.set);
+            actions.extend(imported.actions);
+            sets.push(set);
             warnings.extend(imported.warnings);
             unsupported.extend(imported.unsupported);
         }
-        for action in &mut list {
-            for (id, params) in &mut action.steps {
-                let named_automation = matches!(id.as_str(), "file.automate.batch" | "file.automate.createDroplet");
-                let fields: &[&str] = match id.as_str() {
-                    "actions.play" => &["action"],
-                    "actions.conditional" => &["then", "else"],
-                    _ if named_automation && params.get("steps").is_none() => &["action"],
+        let set_of: HashMap<String, Option<String>> = actions.iter().map(|action| (action.name.clone(), action.set.clone())).collect();
+        for (action, (slot, archive_set)) in actions.iter_mut().zip(&origin) {
+            for step in &mut action.steps {
+                let (id, params) = (step.command.as_str(), &mut step.params);
+                let named_automation = matches!(id, "file.automate.batch" | "file.automate.createDroplet");
+                let fields: &[(&str, &str)] = match id {
+                    "actions.play" => &[("action", "set")],
+                    "actions.conditional" => &[("then", "thenSet"), ("else", "elseSet")],
+                    _ if named_automation && params.get("steps").is_none() => &[("action", "set")],
                     _ => &[],
                 };
-                for field in fields {
+                for (field, scope_key) in fields {
                     let Some(name) = params.get(*field).and_then(Value::as_str) else { continue };
-                    let scope = match *field {
-                        "then" => params.get("thenSet").filter(|value| !value.is_null()),
-                        "else" => params.get("elseSet").filter(|value| !value.is_null()),
-                        _ => None,
-                    }
-                    .or_else(|| params.get("set").filter(|value| !value.is_null()));
-                    // An unqualified call in this archive first looks in its original folder.
-                    // Legacy callers outside this import still use their existing name lookup.
+                    let scope = params.get(*scope_key).filter(|value| !value.is_null()).or_else(|| params.get("set").filter(|value| !value.is_null()));
+                    // An unqualified call looks in its own set first, then anywhere in the archive.
                     let renamed = match scope {
-                        None => action.set_slot.and_then(|slot| local.get(&(slot, name.to_string()))).or_else(|| first.get(name)),
+                        None => local.get(&(*slot, name.to_owned())).or_else(|| first.get(name)),
                         Some(value) => value.as_str().and_then(|set| {
-                            let row = action.set_slot.filter(|_| action.set.as_deref() == Some(set));
-                            row.and_then(|slot| local.get(&(slot, name.to_string()))).or_else(|| scoped.get(&(set.to_string(), name.to_string())))
+                            let own = (set == archive_set).then(|| local.get(&(*slot, name.to_owned()))).flatten();
+                            own.or_else(|| scoped.get(&(set.to_owned(), name.to_owned())))
                         }),
                     };
-                    if let Some(renamed) = renamed {
-                        params[*field] = json!(renamed);
-                    } else if (!named_automation && scope.is_some())
-                        || generated.get(name).is_some_and(|set| !named_automation || scope.is_none_or(|requested| requested.as_str() == Some(set.as_str())))
+                    let Some(renamed) = renamed.cloned() else { continue };
+                    // The call names its target's set as the list now has it.
+                    if scope.is_some()
+                        && let Some(Some(set)) = set_of.get(&renamed)
                     {
-                        // An unresolved scoped call or generated caption must not fall back
-                        // to another action. Keep the displayed name and block playback.
-                        let identity = if *field == "action" { "actionId" } else { branch_id_field(field) };
-                        if params.get(identity).is_none() {
-                            params[identity] = Value::Null;
-                        }
+                        let key = if params.get(*scope_key).is_some_and(|value| !value.is_null()) { *scope_key } else { "set" };
+                        params[key] = json!(set);
                     }
+                    params[*field] = json!(renamed);
                 }
             }
         }
-        check_library_size(&list, &[], &rows, COMMAND)?;
-        Ok(Self { list, rows, keys, warnings, unsupported })
+        Ok(Self { file: ActionsFile::new(actions, Vec::new()), sets, keys, warnings, unsupported })
     }
 }
 
+/// The number of actions an archive would replace the library with, or why it can't.
 pub fn validate(bytes: &[u8]) -> std::result::Result<usize, String> {
-    Replacement::parse(bytes, None).map(|prepared| prepared.list.len()).map_err(|error| error.to_string())
+    Replacement::parse(bytes, None).map(|prepared| prepared.file.actions.len()).map_err(|error| error.to_string())
 }
 
 pub(in super::super) fn replace(s: &mut Session, p: &Value) -> Result<Value> {
@@ -121,12 +123,14 @@ pub(in super::super) fn replace(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(COMMAND, "encoding must be auto or a non-empty label")),
     };
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, COMMAND, ".atn file")?;
-    let Replacement { mut list, rows, keys, warnings, unsupported } = Replacement::parse(&bytes, encoding)?;
+    let Replacement { mut file, sets, keys, warnings, unsupported } = Replacement::parse(&bytes, encoding)?;
     // Whole-library imports keep their automation origin just as actions.load imports do.
-    for action in &mut list {
+    for action in &mut file.actions {
         action.automation = s.authorize.is_some();
     }
-    let result = json!({"sets":rows,"actions":list.iter().map(|a| &a.name).collect::<Vec<_>>(),"warnings":warnings,"unsupported":unsupported});
-    publish_library(s, list, Vec::new(), rows, Some(keys), "Undo Replace Actions", COMMAND)?;
-    Ok(result)
+    let names: Vec<String> = file.actions.iter().map(|action| action.name.clone()).collect();
+    // A set the archive holds with no action stays as an empty set.
+    file.sets = sets.iter().filter(|set| !file.actions.iter().any(|action| action.set.as_ref() == Some(*set))).cloned().collect();
+    publish_library(s, COMMAND, Some(keys), |list: &mut ActionList| list.replace_all(file, |_, _| {}))?;
+    Ok(json!({"sets": sets, "actions": names, "warnings": warnings, "unsupported": unsupported}))
 }
