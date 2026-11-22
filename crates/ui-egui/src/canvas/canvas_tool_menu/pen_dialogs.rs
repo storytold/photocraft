@@ -5,6 +5,7 @@
 //! remembered (#10527); every other row opens at its default.
 
 use craft::ui::contract::Bind;
+use craft::ui::dialog::Alert;
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use serde_json::{Value, json};
@@ -178,6 +179,15 @@ pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamRes
 /// it belongs to the step the command added.
 pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
     let Some(params) = command_params(app, result) else { return Ok(()) };
+    // An empty or spaces-only shape name: the "Shape Name" alert, over the dialog, which stays open (#14291). The Edit
+    // menu's dialog has this key too, so both openers come here.
+    if result.key == "edit.defineCustomShape"
+        && params.get("name").and_then(Value::as_str).and_then(photocraft_engine::edit_menu_cmds::custom_shape_name).is_none()
+    {
+        let message = tl!("You must specify a name for the shape.");
+        crate::dialogs::alerts::show(app, Alert::new(tl!("Shape Name"), message));
+        return Err(Label::from(message));
+    }
     let revision = app.session.active().map(|st| st.revision);
     app.run(result.key.as_str(), params.clone()).map_err(Label::from)?;
     if result.key == "path.toSelection" {
@@ -256,3 +266,7 @@ pub(crate) fn make_selection(app: &mut PhotocraftApp) -> Result<(), String> {
     open(app, "path.toSelection", &name);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "define_custom_shape_alert_tests.rs"]
+mod define_custom_shape_alert_tests;
