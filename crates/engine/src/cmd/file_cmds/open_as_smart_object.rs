@@ -5,7 +5,7 @@
 //! size and position `0, 0`) and put into the document before it is admitted, so the opening
 //! snapshot already shows it.
 
-use super::open::import_result_for_open;
+use super::open::decode_open_source;
 use super::paths::{file_name, read_file, stem, untitled_name};
 use super::{Affine, Arc, Document, Layer, LayerContent, Result, Session, SmartObject, SmartSource, Value, flattened_checked, json, str_param};
 use crate::layer_place::Place;
@@ -26,21 +26,25 @@ pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> 
     let opts = crate::jobs::import_options(s.prefs());
     // An interactive caller (the app) asks before opening a PSD that had damaged data, as File > Open does.
     let confirm_damage = p.get("confirmDamage").and_then(Value::as_bool).unwrap_or(false);
-    crate::jobs::run(
+    crate::jobs::run_open(
         s,
         &format!("Opening {name}"),
-        false,
         move |ctx| {
             ctx.progress(0.0, "Reading");
             let bytes = read_file(&path)?;
             ctx.check()?;
             ctx.progress(0.05, "Decoding");
-            let (r, damaged) = import_result_for_open(&name, &bytes, &opts)?;
+            let decoded = decode_open_source(&name, &bytes, &opts)?;
+            Ok((path, name, Arc::new(bytes), decoded))
+        },
+        move |ctx, (path, name, bytes, mut decoded)| {
+            super::recover_decoded_native_caches(&mut decoded, ctx)?;
             ctx.check()?;
             ctx.progress(0.9, "Flattening");
+            let r = decoded.imported;
             // The file as one image: the smart object's rendered contents.
-            let pixels = flattened_checked(&r.document, r.document.pixel_format(), CMD)?;
-            Ok((path, name, Arc::new(bytes), r, pixels, confirm_damage && damaged))
+            let pixels = crate::jobs::scratch_checked(Some(&r.document), || flattened_checked(&r.document, r.document.pixel_format(), CMD))?;
+            Ok((path, name, bytes, r, pixels, confirm_damage && decoded.damaged))
         },
         |s, (path, name, bytes, r, pixels, damaged)| apply(s, &path, &name, bytes, r, pixels, damaged),
     )

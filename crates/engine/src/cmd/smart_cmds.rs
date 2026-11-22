@@ -85,6 +85,17 @@ fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<
     crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
+/// Render the native source from the same recoverable PNG data as when it was opened.
+fn decode_source_for_render(file_name: &str, bytes: &[u8], svg: bool, ctx: &JobCtx) -> Result<Document> {
+    if svg {
+        return decode_source_classified(file_name, bytes, true);
+    }
+    crate::file_cmds::import_smart_source(file_name, bytes, ctx).map_err(|e| match e {
+        EngineError::Cancelled => e,
+        _ => other(format!("can't read smart object contents \"{file_name}\": {e}")),
+    })
+}
+
 fn base_name(path: &str) -> String {
     path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }
@@ -207,7 +218,7 @@ use rendering::refresh_or_fail;
 pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
-pub(crate) use rendering::{WarningRenderSources, render_with_warnings, render_with_warnings_using, source_box};
+pub(crate) use rendering::{WarningRenderSources, recover_raster_placement, render_with_warnings, render_with_warnings_using, source_box};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
 use source::svg_source_image_in;

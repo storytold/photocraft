@@ -298,6 +298,24 @@ mod tests {
         assert!(empty.ui.notices.iter().all(|notice| notice.title != CLIPBOARD_UNREADABLE));
     }
 
+    #[test]
+    fn reverting_a_native_document_shows_its_missing_cache_warning() {
+        use photocraft_doc::{Affine, ColorMode, Document, Layer, LayerContent, SampleType, Size, SmartObject, SmartSource};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.pcraft");
+        let source = SmartSource::Linked { path: "not-present.png".into() };
+        let mut doc = Document::new("Native fixture", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        doc.layers.push(Layer::new("Linked art", LayerContent::Smart(SmartObject::new(source, Affine::IDENTITY, None))));
+        std::fs::write(&path, photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap()).unwrap();
+
+        let mut session = Session::new();
+        session.add_document(doc, Some(path.to_str().unwrap().to_string()));
+        let mut app = PhotocraftApp::new(session, Services::default());
+        app.run("file.revert", serde_json::json!({})).unwrap();
+        assert!(app.ui.notices.iter().any(|notice| english(notice).contains("Linked art")));
+    }
+
     /// A notice's lines in English with their arguments filled in.
     fn english(notice: &Notice) -> String {
         let args: Vec<(&str, &str)> = notice.args.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();

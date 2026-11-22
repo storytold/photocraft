@@ -44,7 +44,7 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<Document> {
 /// [`import`] with the caller's import settings. Footage passes its PSD/layered-TIFF memory limit,
 /// so a frame import cannot bypass the admission the rest of the open path applies.
 pub(crate) fn import_with_options(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<Document> {
-    import_result_with(name, bytes, opts).map(|r| r.document)
+    import_result_for_open(name, bytes, opts, None).map(|(r, _)| r.document)
 }
 
 /// [`import`] for a file that becomes a document of its own (Revert, Load Files into Stack;
@@ -61,36 +61,58 @@ pub(super) fn import_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Resul
 /// [`import_at_raw_ppi`], also telling whether the source must not be replaced by a save
 /// (`ImportResult::source_read_only`: Affinity, Krita, XCF, PDN, whatever its extension says).
 pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<(Document, bool)> {
-    let r = import_result(name, bytes)?;
-    let mut doc = r.document;
-    raw_resolution(raw_ppi, &r.warnings, &mut doc);
-    Ok((doc, r.source_read_only))
+    let r = import_at_raw_ppi_with_warnings(raw_ppi, name, bytes)?;
+    Ok((r.document, r.source_read_only))
 }
 
-fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
-    import_result_with(name, bytes, &photocraft_io::ImportOptions::default())
+fn import_at_raw_ppi_with_warnings(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
+    let opts = photocraft_io::ImportOptions::default();
+    let (mut r, _) = import_result_for_open(name, bytes, &opts, Some(&crate::jobs::JobCtx::new()))?;
+    raw_resolution(raw_ppi, &r.warnings, &mut r.document);
+    Ok(r)
 }
 
-/// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
-/// dispatch through `photocraft_io::import_with_options`, typed memory refusals, and the
-/// preview-only refusal wherever the import came from.
-pub(super) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
-    import_result_for_open(name, bytes, opts).map(|(r, _)| r)
+/// Decode a complete source or document. The job context enables native cache recovery when the
+/// file is being opened as a document. Auxiliary source rendering keeps its direct decode path.
+pub(super) fn import_result_for_open(
+    name: &str,
+    bytes: &[u8],
+    opts: &photocraft_io::ImportOptions,
+    recover: Option<&crate::jobs::JobCtx>,
+) -> Result<(photocraft_io::ImportResult, bool)> {
+    let mut decoded = decode_open_source(name, bytes, opts)?;
+    if let Some(ctx) = recover {
+        super::recover_decoded_native_caches(&mut decoded, ctx)?;
+    }
+    Ok((decoded.imported, decoded.damaged))
 }
 
-/// [`import_result_with`], also telling whether a PSD/PSB had damaged data it recovered from, as
-/// File › Open's job learns it (`photocraft_io::import_for_open`), so an interactive caller can ask.
-pub(super) fn import_result_for_open(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(photocraft_io::ImportResult, bool)> {
+/// Decode the file before optional recovery, keeping its actual format and warnings.
+pub(super) fn decode_open_source(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::DecodedOpen> {
     crate::allocation::checkpoint("importing document")?;
-    let (r, damaged) = photocraft_io::import_for_open(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
+    let decoded =
+        photocraft_io::decode_for_open(name, bytes, None, opts, &photocraft_raster::Interrupt::NONE).map_err(|e| crate::error::io_open_error(name, e))?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
-    if r.preview_only {
+    if decoded.imported.preview_only {
         return Err(EngineError::Other(format!(
             "{name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
         )));
     }
-    Ok((r, damaged))
+    Ok(decoded)
+}
+
+/// A native bundle embedded as a Smart Object needs the same PNG caches at render time as at open.
+pub(crate) fn import_smart_source(name: &str, bytes: &[u8], ctx: &crate::jobs::JobCtx) -> Result<Document> {
+    let mut decoded = decode_open_source(name, bytes, &photocraft_io::ImportOptions::default())?;
+    let doc = &mut decoded.imported.document;
+    if decoded.native_pcraft {
+        super::recover_native_embedded_caches(doc, ctx)?;
+        if let Some(layer) = super::native_cache::unrestored_embedded_layer(doc) {
+            return Err(EngineError::Other(format!("couldn't rebuild the cache for \"{layer}\"")));
+        }
+    }
+    Ok(decoded.imported.document)
 }
 
 // ---------- close / revert / save a copy / open as ----------
@@ -123,7 +145,8 @@ pub(super) fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
 pub(super) fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
     let bytes = read_file(&path)?;
-    let fresh = import_opened(s, &file_name(&path), &bytes)?;
+    let photocraft_io::ImportResult { document: fresh, warnings, .. } =
+        import_at_raw_ppi_with_warnings(s.prefs().raw_defaults.resolution, &file_name(&path), &bytes)?;
     s.edit("Revert", |doc, active| {
         let (id, name) = (doc.id, doc.name.clone());
         *doc = fresh;
@@ -135,7 +158,7 @@ pub(super) fn revert(s: &mut Session) -> Result<Value> {
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     st.saved_revision = st.revision;
-    Ok(json!({"path": path, "layers": st.doc.layers.len()}))
+    Ok(json!({"path": path, "layers": st.doc.layers.len(), "warnings": warnings}))
 }
 
 /// Open a file's bytes, decoding them as the format `as_ext` (Open As) when given.
@@ -200,11 +223,13 @@ pub fn open_bytes_as_with_options(
     let (r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
-        let r = photocraft_io::import_with_options_as(&decode_name, bytes, as_ext, &opts).map_err(|e| match as_ext {
-            Some(ext) => crate::error::io_open_as_error(&file_name(name), ext, e),
-            None => crate::error::io_open_error(&decode_name, e),
-        })?;
-        (r, None)
+        let mut decoded =
+            photocraft_io::decode_for_open(&decode_name, bytes, as_ext, &opts, &photocraft_raster::Interrupt::NONE).map_err(|e| match as_ext {
+                Some(ext) => crate::error::io_open_as_error(&file_name(name), ext, e),
+                None => crate::error::io_open_error(&decode_name, e),
+            })?;
+        super::recover_decoded_native_caches(&mut decoded, &crate::jobs::JobCtx::new())?;
+        (decoded.imported, None)
     };
     if (s.batch_open.is_some() || s.batch_open_notices.is_some()) && r.preview_only {
         return Err(EngineError::Other(format!("{name}: only an embedded preview could be read; Batch cannot process it as the source")));
