@@ -669,3 +669,29 @@ fn data_set_commands_require_data_sets_to_be_enabled() {
     assert!(s.is_enabled("file.export.dataSetsAsFiles"));
     assert!(s.is_enabled("image.applyDataSet"));
 }
+
+/// A text-replacement variable drops Dynamic Text's solved lines: they are byte offsets into the
+/// old text, and one that still lands on a char boundary of the new text would break it mid-word.
+#[test]
+fn text_replacement_drops_solved_fit_lines() {
+    use photocraft_doc::text::{FitLine, TextFit};
+    let (mut s, _photo, _badge, title) = session();
+    s.edit("fit", |doc, _| {
+        if let Some(LayerContent::Text(t)) = doc.layer_mut(title).map(|l| &mut l.content) {
+            t.text = "Old wording".into();
+            t.shape = photocraft_doc::text::TextShape::Box { x: 0.0, y: 0.0, width: 60.0, height: 40.0 };
+            t.fit = Some(TextFit { lines: vec![FitLine { start: 0, scale: 1.0 }, FitLine { start: 4, scale: 1.5 }], ..Default::default() });
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.variables.define", json!({"defs": [{"name": "headline", "layer": title.0, "type": "textReplacement"}]})).unwrap();
+    s.execute("image.variables.dataSets", json!({"dataSets": [{"name": "A", "values": [{"variable": "headline", "kind": "text", "value": "Hello"}]}]}))
+        .unwrap();
+    s.execute("image.applyDataSet", json!({"name": "A"})).unwrap();
+    assert_eq!(text_of(&s, title), "Hello");
+    let LayerContent::Text(t) = &doc(&s).layer(title).unwrap().content else { panic!("not a text layer") };
+    // Dropped, or solved again for the new text where the refresh refits: never the old ones.
+    let stale = [FitLine { start: 0, scale: 1.0 }, FitLine { start: 4, scale: 1.5 }];
+    assert_ne!(t.fit.as_ref().unwrap().lines, stale, "stale solved lines survived");
+}

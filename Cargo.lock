@@ -6881,6 +6881,7 @@ dependencies = [
  "craft-plist",
  "craft-psd",
  "flate2",
+ "icu_properties",
  "parley",
  "photocraft-color",
  "photocraft-doc",
