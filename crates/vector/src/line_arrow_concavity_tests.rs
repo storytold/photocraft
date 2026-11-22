@@ -1,8 +1,8 @@
 //! Arrowhead Concavity is -50..50 % of the head's length, as in Photoshop (#13258): the middle of
 //! the head's rear edge bends toward the tip for a positive value and away from it for a negative
-//! one, and the shaft ends where that bent edge crosses the shaft's edge. Joining the shaft and
-//! the heads into one outline is #13260; these tests check the anchors the reference outline has
-//! and that the subpaths (each filled and combined, as the rasterizer does) cover what it covers.
+//! one, and the shaft ends where that bent edge crosses the shaft's edge. The shaft and the
+//! heads are one outline (#13260, `line_arrow_outline_tests.rs`); these tests check the anchors
+//! the reference outline has and that the outline covers what it covers.
 
 use super::*;
 
@@ -50,21 +50,16 @@ fn has_reference_anchors(p: &Path, reference: &[[f64; 2]]) {
 #[test]
 fn minus_fifty_bends_the_base_away_from_the_tip_and_the_shaft_ends_where_it_crosses() {
     let p = arrow(false, true, -50.0);
-    assert_eq!(p.subpaths.len(), 2);
-    same(&p.subpaths[0], &[[400.0, 302.0], [589.0, 302.0], [589.0, 298.0], [400.0, 298.0]], "shaft to 589");
-    // Tip, outer corners, and the base's middle 5 px (50 % of 10) behind the base at 590.
-    same(&p.subpaths[1], &[[600.0, 300.0], [590.0, 302.5], [585.0, 300.0], [590.0, 297.5]], "end head");
+    assert_eq!(p.subpaths.len(), 1);
+    // The shaft runs to 589, where the base (its middle 5 px behind the base at 590) crosses it.
+    same(&p.subpaths[0], &[[400.0, 302.0], [400.0, 298.0], [589.0, 298.0], [590.0, 297.5], [600.0, 300.0], [590.0, 302.5], [589.0, 302.0]], "outline");
     has_reference_anchors(&p, &[[400.0, 302.0], [400.0, 298.0], [589.0, 298.0], [590.0, 297.5], [600.0, 300.0], [590.0, 302.5], [589.0, 302.0]]);
 }
 
 #[test]
 fn fifty_bends_both_bases_toward_their_tips_by_five_px() {
     let p = arrow(true, true, 50.0);
-    assert_eq!(p.subpaths.len(), 3);
-    // The shaft's ends follow the bent bases to their middles, filling the wedge in front of them.
-    same(&p.subpaths[0], &[[409.0, 302.0], [591.0, 302.0], [595.0, 300.0], [591.0, 298.0], [409.0, 298.0], [405.0, 300.0]], "shaft 409..591");
-    same(&p.subpaths[1], &[[400.0, 300.0], [410.0, 302.5], [405.0, 300.0], [410.0, 297.5]], "start head");
-    same(&p.subpaths[2], &[[600.0, 300.0], [590.0, 302.5], [595.0, 300.0], [590.0, 297.5]], "end head");
+    assert_eq!(p.subpaths.len(), 1);
     has_reference_anchors(
         &p,
         &[
@@ -85,8 +80,10 @@ fn fifty_bends_both_bases_toward_their_tips_by_five_px() {
 #[test]
 fn zero_keeps_a_flat_base_and_the_shaft_ends_at_it() {
     let p = arrow(false, true, 0.0);
-    assert!(close(anchors(&p.subpaths[0])[1], [590.0, 302.0]));
-    assert!(close(anchors(&p.subpaths[1])[2], [590.0, 300.0]));
+    let outline = anchors(&p.subpaths[0]);
+    assert!(close(outline[2], [590.0, 298.0]) && close(outline[6], [590.0, 302.0]), "{outline:?}");
+    // The flat base's middle lies inside the outline, so it is no anchor.
+    assert!(!outline.iter().any(|a| close(*a, [590.0, 300.0])));
 }
 
 #[test]
@@ -101,7 +98,8 @@ fn values_past_fifty_draw_as_fifty_so_older_documents_still_open() {
 fn a_head_no_wider_than_the_shaft_meets_it_at_the_base_whatever_the_concavity() {
     for c in [-50.0, 0.0, 50.0] {
         let p = arrow_line((400.0, 300.0), (600.0, 300.0), 6.0, false, true, 5.0, 10.0, c);
-        assert!(close(anchors(&p.subpaths[0])[1], [590.0, 303.0]), "concavity {c}");
+        let outline = anchors(&p.subpaths[0]);
+        assert!(close(outline[2], [590.0, 297.0]) && close(outline[6], [590.0, 303.0]), "concavity {c}: {outline:?}");
     }
 }
 
@@ -133,6 +131,7 @@ fn a_base_bent_toward_the_tip_leaves_no_hole_and_nothing_past_the_flanks() {
 #[test]
 fn a_head_no_wider_than_the_shaft_still_fills_the_wedge_its_bent_base_leaves() {
     let p = arrow_line((400.0, 300.0), (600.0, 300.0), 6.0, false, true, 5.0, 10.0, 50.0);
-    same(&p.subpaths[0], &[[400.0, 303.0], [590.0, 303.0], [590.0, 302.5], [595.0, 300.0], [590.0, 297.5], [590.0, 297.0], [400.0, 297.0]], "shaft");
+    assert_eq!(p.subpaths.len(), 1);
+    same(&p.subpaths[0], &[[400.0, 303.0], [400.0, 297.0], [590.0, 297.0], [590.0, 297.5], [600.0, 300.0], [590.0, 302.5], [590.0, 303.0]], "outline");
     assert!(covers(&p, [592.0, 300.0]));
 }
