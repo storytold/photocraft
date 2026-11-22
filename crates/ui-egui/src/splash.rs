@@ -27,6 +27,9 @@ pub struct SplashState {
     pub duration: f64,
     /// Whether the splash screen has been explicitly dismissed by the user or system.
     pub dismissed: bool,
+    /// Last computed card rectangle during rendering (for scaling layout assertions in tests).
+    #[cfg(test)]
+    pub(crate) last_card_rect: Option<Rect>,
 }
 
 impl Default for SplashState {
@@ -39,7 +42,13 @@ impl Default for SplashState {
 impl SplashState {
     /// Creates a new startup splash screen state.
     pub fn new() -> Self {
-        Self { start_time: 0.0, duration: SPLASH_SAFETY_TIMEOUT, dismissed: false }
+        Self {
+            start_time: 0.0,
+            duration: SPLASH_SAFETY_TIMEOUT,
+            dismissed: false,
+            #[cfg(test)]
+            last_card_rect: None,
+        }
     }
 
     /// Ensures that `start_time` is initialized to the current time on the first tick before checks.
@@ -113,28 +122,52 @@ impl SplashState {
 
         let tokens = Env::of(ui).tokens.clone();
         let screen_rect = ctx.content_rect();
-        let card_rect = splash_card_rect(ctx, screen_rect);
+        let body_row = ui.text_style_height(&TextStyle::Body);
+        let font_ratio = if body_row.is_finite() && body_row > 0.0 { (body_row / 15.0).clamp(1.0, 1.8) } else { 1.0 };
+        let card_rect = splash_card_rect(ctx, screen_rect, font_ratio);
+        #[cfg(test)]
+        {
+            self.last_card_rect = Some(card_rect);
+        }
         paint_backdrop_and_card(ui.painter(), &tokens, screen_rect, card_rect);
 
-        let inner_rect = card_rect.shrink2(vec2(28.0, 20.0));
+        let pad = vec2(28.0_f32.min(card_rect.width() * 0.06), 20.0_f32.min(card_rect.height() * 0.06));
+        let inner_rect = card_rect.shrink2(pad);
         let mut inner_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner_rect));
         inner_ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
         paint_card_contents(&mut inner_ui, &tokens);
     }
 }
 
-/// Computes the centered card rectangle within the visible work area of the monitor.
-fn splash_card_rect(ctx: &egui::Context, screen_rect: Rect) -> Rect {
-    let card_size = vec2(520.0, 310.0);
+/// Computes the centered card rectangle within the visible work area of the monitor,
+/// scaling vertically for larger UI fonts and clamping cleanly within tight viewports.
+pub(crate) fn splash_card_rect(ctx: &egui::Context, screen_rect: Rect, font_ratio: f32) -> Rect {
+    let desired = vec2(520.0, (220.0 + 90.0 * font_ratio).max(310.0));
     let visible_area = ctx.input(|i| {
         let v = i.viewport();
         visible_part(screen_rect, v.monitor_size, v.inner_rect, WindowState::of(v))
     });
-    let center =
-        if visible_area.is_finite() && visible_area.width() > 100.0 && visible_area.height() > 100.0 { visible_area.center() } else { screen_rect.center() };
+    let bounds = if visible_area.is_finite() && visible_area.width() > 100.0 && visible_area.height() > 100.0 { visible_area } else { screen_rect };
+    let margin = 24.0;
+    let max_w = (bounds.width() - margin).max(160.0).min(bounds.width());
+    let max_h = (bounds.height() - margin).max(160.0).min(bounds.height());
+    let card_size = vec2(desired.x.min(max_w), desired.y.min(max_h));
     // Optical center: adjust 8pt upward for natural human visual balance.
-    let optical_center = egui::pos2(center.x, center.y - 8.0);
-    Rect::from_center_size(optical_center, card_size)
+    let optical_center = egui::pos2(bounds.center().x, bounds.center().y - 8.0);
+    let mut card = Rect::from_center_size(optical_center, card_size);
+    if card.min.x < bounds.min.x {
+        card = card.translate(vec2(bounds.min.x - card.min.x, 0.0));
+    }
+    if card.max.x > bounds.max.x {
+        card = card.translate(vec2(bounds.max.x - card.max.x, 0.0));
+    }
+    if card.min.y < bounds.min.y {
+        card = card.translate(vec2(0.0, bounds.min.y - card.min.y));
+    }
+    if card.max.y > bounds.max.y {
+        card = card.translate(vec2(0.0, bounds.max.y - card.max.y));
+    }
+    card
 }
 
 /// Paints the backdrop, elevation shadow, card surface, and top accent highlight from theme tokens.
@@ -173,16 +206,17 @@ fn paint_card_contents(ui: &mut Ui, tokens: &UiTokens) {
     let text_muted = rgba_color(tokens.color.text.muted);
     let text_faint = rgba_color(tokens.color.text.faint);
     let title_size = (TextStyle::Body.resolve(ui.style()).size * (26.0 / 12.0)).max(1.0);
+    let compact = ui.max_rect().height() < 260.0;
 
     ui.vertical_centered(|ui| {
-        ui.add_space(10.0);
+        ui.add_space(if compact { 2.0 } else { 10.0 });
 
-        // Brand icon (72 x 72 pt) - uses the app's clean-room brand mark texture.
-        let icon_size = 72.0;
-        let (rect, _) = ui.allocate_exact_size(vec2(icon_size, icon_size), egui::Sense::hover());
+        // Brand icon (72 x 72 pt, or 48 x 48 pt in compact viewports) - decorative mark.
+        let icon_size = if compact { 48.0 } else { 72.0 };
+        let (rect, _) = ui.allocate_exact_size(vec2(icon_size, icon_size), egui::Sense::empty());
         crate::panels::brand::paint_mark(ui, rect);
 
-        ui.add_space(8.0);
+        ui.add_space(if compact { 4.0 } else { 8.0 });
 
         // App Title
         ui.label(RichText::new("PhotoCraft").font(FontId::proportional(title_size)).color(text_normal).strong());
@@ -191,21 +225,21 @@ fn paint_card_contents(ui: &mut Ui, tokens: &UiTokens) {
         let version_text = crate::i18n::fmt(tl!("v{version}  ·  Open Source Native Image Editor"), &[("version", env!("CARGO_PKG_VERSION"))]);
         ui.label(RichText::new(version_text).text_style(TextStyle::Body).color(text_faint));
 
-        ui.add_space(16.0);
+        ui.add_space(if compact { 8.0 } else { 16.0 });
 
         let status_msg = tl!("Loading workspace & font assets…");
-        let bar_width = 340.0;
+        let bar_width = ui.available_width().clamp(80.0, 340.0);
         let bar_height = tokens.size.groove * 2.0;
         ui.allocate_ui(vec2(bar_width, bar_height), |ui| {
             let _ = Progress::indeterminate().label(status_msg).sizing(Sizing::FillWidth).show(ui);
         });
 
-        ui.add_space(8.0);
+        ui.add_space(if compact { 4.0 } else { 8.0 });
 
         // Status message
         ui.label(RichText::new(status_msg).text_style(TextStyle::Body).color(text_muted));
 
-        ui.add_space(10.0);
+        ui.add_space(if compact { 4.0 } else { 10.0 });
 
         // Skip hint
         ui.label(RichText::new(tl!("Click anywhere to skip")).text_style(TextStyle::Small).color(text_faint));

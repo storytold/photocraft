@@ -1501,3 +1501,130 @@ fn asynchronous_place_completion_displays_result_warnings() {
     super::finish_place(&mut app, &egui::Context::default(), place, photocraft_engine::jobs::JobOutcome::Done(json!({"frame":1,"warnings":[warning]})));
     assert!(app.ui.notices.iter().any(|notice| notice.lines.iter().any(|line| line == warning)));
 }
+
+/// Verifies the splash screen's AccessKit accessibility tree while active (indeterminate progress
+/// indicator, expected labels, and workspace controls hidden) and confirms clean restoration after dismissal.
+#[test]
+fn splash_accessibility_tree_exposes_indeterminate_progress_and_hides_workspace() {
+    use egui::accesskit::Role;
+
+    let mut h = app_harness();
+    let now = h.ctx.input(|i| i.time);
+    let mut splash = crate::splash::SplashState::new();
+    splash.start_time = now - crate::splash::SPLASH_APPEAR_DELAY - 0.1;
+    h.state_mut().splash = Some(splash);
+    h.state_mut().system_ready_override = Some(false);
+    h.run_steps(2);
+
+    // Indeterminate progress indicator must expose the status label without a fabricated numeric value.
+    let progress_nodes: Vec<_> = h.query_all_by_role(Role::ProgressIndicator).collect();
+    assert_eq!(progress_nodes.len(), 1, "expected exactly one splash ProgressIndicator node");
+    let progress_acc = progress_nodes[0].accesskit_node();
+    assert_eq!(progress_acc.label().as_deref(), Some("Loading workspace & font assets…"));
+    assert_eq!(progress_acc.numeric_value(), None, "indeterminate splash progress must not expose a fabricated numeric value");
+
+    // Expected splash copy must be present in the accessibility tree.
+    let expected_tagline = format!("v{}  ·  Open Source Native Image Editor", env!("CARGO_PKG_VERSION"));
+    let labels: Vec<String> = h
+        .query_all_by_role(Role::Label)
+        .filter_map(|n| {
+            let acc = n.accesskit_node();
+            acc.label().or_else(|| acc.value().map(|v| v.to_string()))
+        })
+        .collect();
+    for required in ["PhotoCraft", expected_tagline.as_str(), "Loading workspace & font assets…", "Click anywhere to skip"] {
+        assert!(labels.iter().any(|l| l == required), "missing splash accessibility label {required:?} in {labels:?}");
+        assert!(h.query_by_role_and_label(Role::Label, required).is_some(), "kittest role+label query did not find {required:?}");
+    }
+
+    // Main workspace menus/controls must not be exposed while splash replaces the workspace body.
+    assert!(h.query_by_label("File").is_none(), "workspace File menu must not appear while splash is active");
+
+    // Once system readiness completes, splash disappears from the tree and workspace menus return.
+    h.state_mut().system_ready_override = Some(true);
+    h.run_steps(3);
+    assert!(h.state().splash.is_none(), "splash must dismiss once system is ready");
+    assert_eq!(h.query_all_by_role(Role::ProgressIndicator).count(), 0, "splash progress must leave tree on dismissal");
+    assert!(h.query_by_label("Click anywhere to skip").is_none(), "skip hint must leave tree on dismissal");
+    assert!(h.query_by_label("File").is_some(), "workspace File menu must return after splash dismissal");
+}
+
+/// Verifies that splash layout and typography scale cleanly across DPI factors, `UiFontSize`
+/// settings, themes, and tight logical viewports without clipping or overlapping nodes.
+#[test]
+fn splash_visual_scaling_fits_within_viewport_and_card_across_dpi_and_font_sizes() {
+    use egui::accesskit::Role;
+
+    struct ScaleCase {
+        name: &'static str,
+        size: egui::Vec2,
+        native_ppp: f32,
+        ui_scale: &'static str,
+        ui_font_size: &'static str,
+        theme: &'static str,
+    }
+
+    let cases = [
+        ScaleCase { name: "100% Small Pro", size: vec2(1440.0, 900.0), native_ppp: 1.0, ui_scale: "auto", ui_font_size: "small", theme: "pro" },
+        ScaleCase { name: "150% Small Pro", size: vec2(1440.0, 900.0), native_ppp: 1.5, ui_scale: "auto", ui_font_size: "small", theme: "pro" },
+        ScaleCase { name: "200% Small Pro", size: vec2(1440.0, 900.0), native_ppp: 2.0, ui_scale: "auto", ui_font_size: "small", theme: "pro" },
+        ScaleCase { name: "100% Large StudioLight", size: vec2(1440.0, 900.0), native_ppp: 1.0, ui_scale: "100", ui_font_size: "large", theme: "studioLight" },
+        ScaleCase { name: "200% Large Pro", size: vec2(1440.0, 900.0), native_ppp: 2.0, ui_scale: "200", ui_font_size: "large", theme: "pro" },
+        ScaleCase { name: "Compact 640x360 @200%", size: vec2(640.0, 360.0), native_ppp: 2.0, ui_scale: "auto", ui_font_size: "small", theme: "pro" },
+        ScaleCase { name: "Narrow 500x300 Medium", size: vec2(500.0, 300.0), native_ppp: 1.5, ui_scale: "auto", ui_font_size: "medium", theme: "studio" },
+    ];
+
+    for case in cases {
+        let mut h = Harness::builder().with_size(case.size).with_pixels_per_point(case.native_ppp).with_max_steps(8).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let s = photocraft_engine::Session::new();
+            PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
+        });
+        h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(case.native_ppp);
+        h.state_mut()
+            .run(
+                "prefs.set",
+                json!({"values": {
+                    "interface.uiScale": case.ui_scale,
+                    "interface.uiFontSize": case.ui_font_size,
+                    "interface.theme": case.theme,
+                }}),
+            )
+            .unwrap();
+        h.run_steps(4);
+
+        let now = h.ctx.input(|i| i.time);
+        let mut splash = crate::splash::SplashState::new();
+        splash.start_time = now - crate::splash::SPLASH_APPEAR_DELAY - 0.1;
+        h.state_mut().splash = Some(splash);
+        h.state_mut().system_ready_override = Some(false);
+        h.run_steps(3);
+
+        let screen_rect = h.ctx.content_rect();
+        let card_rect = h.state().splash.as_ref().and_then(|s| s.last_card_rect).expect("splash card rect recorded");
+        assert!(screen_rect.expand(1.0).contains_rect(card_rect), "{}: card_rect {card_rect:?} escaped screen_rect {screen_rect:?}", case.name);
+
+        let mut vertical_rects = Vec::new();
+        for node in h.query_all_by_role(Role::Label).chain(h.query_all_by_role(Role::ProgressIndicator)) {
+            let r = node.rect();
+            let acc = node.accesskit_node();
+            let label = acc.label().or_else(|| acc.value().map(|v| v.to_string()));
+            assert!(r.is_finite() && r.width() > 0.0 && r.height() > 0.0, "{}: invalid rect {r:?}", case.name);
+            assert!(card_rect.expand(2.0).contains_rect(r), "{}: node {:?} rect {r:?} overflowed card_rect {card_rect:?}", case.name, label);
+            vertical_rects.push((r.min.y, r.max.y, label));
+        }
+        assert!(vertical_rects.len() >= 5, "{}: expected at least 5 splash content nodes, got {}", case.name, vertical_rects.len());
+        vertical_rects.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for pair in vertical_rects.windows(2) {
+            assert!(
+                pair[0].1 <= pair[1].0 + 1.0,
+                "{}: overlapping splash nodes {:?} (max_y={}) and {:?} (min_y={})",
+                case.name,
+                pair[0].2,
+                pair[0].1,
+                pair[1].2,
+                pair[1].0
+            );
+        }
+    }
+}

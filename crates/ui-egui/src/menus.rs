@@ -55,7 +55,7 @@ pub(crate) fn menu_gate(app: &PhotocraftApp) -> (Gate, ModalRules) {
 pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
     let ctx = app.ctx();
     if app.splash_shortcuts_blocked(ctx, ctx.input(|i| i.time)) {
-        return CommandGate::new(|_| false);
+        return CommandGate::new((), |_, _| false);
     }
     let (gate, rules) = menu_gate(app);
     // The refusals follow the rows' rules, so they are derived from the facts the menu model is built from.
