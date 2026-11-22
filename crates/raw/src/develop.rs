@@ -948,8 +948,8 @@ mod tests {
             assert_eq!((full.width, full.height), (fused.width, fused.height), "{what} {threads}");
             // Full-frame uses `craft_develop::sensor::demosaic` (`reflect` borders) while `fused`
             // uses `PAD` replicate borders; compare interior pixels where both border modes agree.
-            for y in 2..oh.saturating_sub(2) {
-                for x in 2..ow.saturating_sub(2) {
+            for y in PAD..oh.saturating_sub(PAD) {
+                for x in PAD..ow.saturating_sub(PAD) {
                     let i = (y * ow + x) * 3;
                     assert_eq!(full.rgb[i..i + 3], fused.rgb[i..i + 3], "{what} {threads} threads at ({x},{y}): fused output differs");
                 }

@@ -471,13 +471,44 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
     if px.is_empty() || w == 0 || h == 0 || p.is_identity() {
         return;
     }
-    let alphas: Vec<f32> = px.iter().map(|q| q[3]).collect();
-    let enc = Encoding::of(inputs.encoding_gamma);
     let mut ds = match serde_json::to_value(p).ok().and_then(|v| migrate_to_develop_settings(&craft_develop_model::DevelopSettings::default(), &v).ok()) {
         Some(m) => m.settings,
         None => craft_develop_model::DevelopSettings::default(),
     };
     ds.grain.seed = inputs.seed;
+
+    let ps = inputs.pixel_scale.clamp(0.01, 1.0);
+    let long = w.max(h) as f64;
+    let raw_sig = craft_develop::local::sharpen_sigma_raw(&ds, long, long) * ps;
+    let will_sharpen = ds.detail.sharpen_amount > 0.0 && raw_sig >= 0.3;
+    let cal_m = craft_develop::colorops::calibration_matrix(&ds.calibration);
+    let cal_tint = p.shadow_tint.clamp(-100.0, 100.0) / 100.0;
+    let need_wb_exp = ds.light.exposure != 0.0 || p.temperature != 0.0 || p.tint != 0.0;
+    let need_nr = ds.detail.nr_luminance > 0.0 || ds.detail.nr_color > 0.0;
+    let need_spatial =
+        ds.effects.dehaze != 0.0 || ds.light.shadows != 0.0 || ds.light.highlights != 0.0 || ds.effects.clarity != 0.0 || ds.effects.texture != 0.0;
+    let need_tone = ds.light.contrast != 0.0 || ds.light.whites != 0.0 || ds.light.blacks != 0.0;
+    let color_ops = craft_develop::colorops::ColorOps::new(&ds);
+    let has_par = !(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0);
+    let has_pts = !is_linear(&p.point_curve) || !is_linear(&p.point_curve_red) || !is_linear(&p.point_curve_green) || !is_linear(&p.point_curve_blue);
+    if !need_wb_exp
+        && cal_m.is_none()
+        && cal_tint == 0.0
+        && !need_nr
+        && !need_spatial
+        && !need_tone
+        && color_ops.is_identity()
+        && !will_sharpen
+        && !has_par
+        && !has_pts
+        && craft_develop::finish::vignette(&ds).is_none()
+        && craft_develop::finish::value_grain(&ds, long).is_none()
+    {
+        return;
+    }
+
+    let alphas: Vec<f32> = px.iter().map(|q| q[3]).collect();
+    let enc = Encoding::of(inputs.encoding_gamma);
 
     #[allow(clippy::excessive_precision)]
     const SRGB_TO_REC2020: [[f32; 3]; 3] =
@@ -590,11 +621,15 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
     }
 
     // 4. OkLCh Colour tools (vibrance, saturation, 8-band mixer, 3-way grading) in linear Rec.2020.
-    let color_ops = craft_develop::colorops::ColorOps::new(&ds);
     if !color_ops.is_identity() {
+        let full_desat = ds.color.saturation <= -100.0 && ds.grading.is_neutral();
         craft_develop::raster::par_rows(&mut img.data, w, |_, row| {
             for c in row.iter_mut() {
                 *c = color_ops.apply(*c, 0.0, 0.0);
+                if full_desat {
+                    let l = craft_develop::colorops::luminance_2020(*c).max(0.0);
+                    *c = [l, l, l];
+                }
             }
         });
     }
