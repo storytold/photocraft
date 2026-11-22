@@ -261,9 +261,14 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     h.hover_at(p);
     h.run_steps(2);
     let d0 = doc_at(&h, p);
+    // Frames after each notch (0.25 s each, the harness's default step): a notch lands within two (egui's wheel
+    // smoothing reaches 90 % in 0.1 s and takes the rest under one point at once), and the old clamp pulled the zoom
+    // back on every frame, so three show it: the zoom and centre
+    // after them are the ones the old thirty left.
+    const NOTCH_STEPS: usize = 3;
     for _ in 0..14 {
         wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(30);
+        h.run_steps(NOTCH_STEPS);
     }
     assert_eq!(zoom(&h), max_zoom(), "a notch past the limit lands on it exactly");
     let d1 = doc_at(&h, p);
@@ -271,13 +276,13 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     let c = h.state().ui.views[0].center;
     for _ in 0..4 {
         wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(30);
+        h.run_steps(NOTCH_STEPS);
     }
     assert_eq!(zoom(&h), max_zoom());
     assert_eq!(h.state().ui.views[0].center, c, "at the limit the image doesn't move");
     // One notch back: 12800 / 1.1, still around the pointer.
     wheel(&h, -1.0, Modifiers::ALT);
-    h.run_steps(30);
+    h.run_steps(NOTCH_STEPS);
     assert!((zoom(&h) - max_zoom() / 1.1).abs() < 1e-2, "{}", zoom(&h));
     let d2 = doc_at(&h, p);
     assert!((d2[0] - d0[0]).abs() < 0.02 && (d2[1] - d0[1]).abs() < 0.02, "{d0:?} -> {d2:?}");

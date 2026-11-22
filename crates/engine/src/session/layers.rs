@@ -10,17 +10,11 @@ impl Session {
         if st.doc.layer(id).is_none() {
             return Err(EngineError::NoLayer(id));
         }
-        st.active_layer = Some(id);
-        st.selected_layers = vec![id];
+        st.set_active_layer(Some(id));
+        *st.selection_mut() = vec![id];
         st.layer_anchor = Some(id);
         channel_cmds::fix_view(st);
-        // Selecting a layer is not an edit: keep a clean document clean.
-        let clean = st.saved_revision == st.revision;
-        st.revision += 1;
-        if clean {
-            st.saved_revision = st.revision;
-        }
-        st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        st.bump_selection_revision();
         self.note_layer_change(before);
         Ok(())
     }
@@ -37,17 +31,12 @@ impl Session {
         {
             return Err(EngineError::NoLayer(id));
         }
-        st.active_layer = active;
-        st.selected_layers = selected.to_vec();
+        st.set_active_layer(active);
+        *st.selection_mut() = selected.to_vec();
         st.layer_anchor = anchor.filter(|_| active.is_some());
         fix_selection(st);
         channel_cmds::fix_view(st);
-        let clean = st.saved_revision == st.revision;
-        st.revision += 1;
-        if clean {
-            st.saved_revision = st.revision;
-        }
-        st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+        st.bump_selection_revision();
         self.note_layer_change(before);
         Ok(())
     }
@@ -76,9 +65,9 @@ impl Session {
             // font arrived, so its type layers get the same refresh, or returning to it brings the
             // fallback-font pixels back. While it still is the open document, it shares the
             // refreshed one; once edited, it is refreshed on its own, layers the edit removed too.
-            let first_is_doc = st.snapshots.iter().any(|s| s.id == 0 && Arc::ptr_eq(&s.doc, &st.doc));
+            let first_is_doc = st.snapshots().iter().any(|s| s.id == 0 && Arc::ptr_eq(&s.doc, &st.doc));
             if !first_is_doc
-                && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0)
+                && let Some(first) = st.snapshots_mut().iter_mut().find(|s| s.id == 0)
                 && let Some(doc) = refresh_text_layers(&first.doc, &ids(true))
             {
                 first.doc = Arc::new(doc);
@@ -95,17 +84,19 @@ impl Session {
             }
             let Some(doc) = refresh_text_layers(&st.doc, &open) else { continue };
             let doc = Arc::new(doc);
-            if first_is_doc && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0) {
+            if first_is_doc && let Some(first) = st.snapshots_mut().iter_mut().find(|s| s.id == 0) {
                 first.doc = doc.clone();
             }
             let clean = st.saved_revision == st.revision;
-            let before = std::mem::replace(&mut st.doc, doc);
+            let before = std::mem::replace(st.doc_mut(), doc);
             st.revision += 1;
+            st.record_unknown_damage();
             if clean {
                 st.saved_revision = st.revision;
             }
             // Only the refreshed layers' caches changed: their changed tiles.
             st.last_damage = layer_multi_cmds::step_damage(&before, &st.doc);
+            st.record_damage();
         }
         busy
     }

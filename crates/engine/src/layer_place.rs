@@ -64,7 +64,7 @@ pub fn insertion_point(doc: &Document, anchor: Option<LayerId>, layer: &Layer, p
 pub fn insert_new(doc: &mut Document, anchor: Option<LayerId>, mut layer: Layer, place: Place) -> LayerId {
     let id = layer.id;
     let (parent, index) = insertion_point(doc, anchor, &layer, place);
-    let sib = if parent.is_empty() { Some(&mut doc.layers) } else { doc.layer_at_mut(&parent).and_then(Layer::children_mut) };
+    let sib = if parent.is_empty() { Some(&mut *doc.layers) } else { doc.layer_at_mut(&parent).and_then(Layer::children_mut) };
     if let Some(sib) = sib {
         let mut index = index.min(sib.len());
         if layer.artboard().is_some() {

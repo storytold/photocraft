@@ -82,3 +82,16 @@ fn the_menu_bar_follows_its_panel_flag() {
         assert!(h.query_all_by_label("Layers").next().is_some(), "the dock itself stays (menu bar {menu_bar})");
     }
 }
+
+/// The top bar holds the brand mark, the menus, the title and the caption buttons, and nothing at its far end, as in
+/// the reference application: no appearance button, no command search and no workspace switcher (#13577). Each of
+/// them stays in a menu: Window › Appearance, Edit › Search and Window › Workspace.
+#[test]
+fn the_top_bar_has_no_appearance_search_or_workspace_controls() {
+    let h = integrated_app(|_| {});
+    assert!(h.query_by_label("File").is_some(), "the menus are drawn");
+    assert!(h.query_by_label("Close").is_some(), "the caption buttons are drawn");
+    assert!(h.query_by_label("Appearance").is_none(), "no appearance button");
+    assert!(h.query_by_label_contains("Search commands").is_none(), "no command search button");
+    assert!(h.query_by_label("Choose a workspace").is_none(), "no workspace switcher");
+}

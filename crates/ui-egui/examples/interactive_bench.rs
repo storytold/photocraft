@@ -294,7 +294,7 @@ fn clipped_document(w: u32, h: u32, styled: bool) -> (Document, LayerId) {
     }
     above.clipped = true;
     above.opacity = 0.6;
-    doc.layers = vec![base, below, target, above];
+    doc.layers = vec![base, below, target, above].into();
     (doc, id)
 }
 
@@ -746,7 +746,7 @@ mod reporting_tests {
         if let Some(s) = photo.surface_mut() {
             s.fill_rect(doc.bounds(), &[0.4, 0.5, 0.6, 1.0]);
         }
-        doc.layers = vec![photo];
+        doc.layers = vec![photo].into();
         let psd = photocraft_io::export(&doc, "x.psd", &Default::default()).expect("export psd").bytes;
         let no_free_memory = photocraft_io::memory::MemorySnapshot { available_ram: Some(0), swap_free: None, commit_headroom: None };
         photocraft_io::memory::with_mock_memory(no_free_memory, || {

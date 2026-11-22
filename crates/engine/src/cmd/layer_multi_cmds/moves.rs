@@ -14,7 +14,7 @@ pub(super) fn recorded_move(s: &Session, mut p: Value, pre_selected: Option<&[La
     let moved = match p.get("layer") {
         None => st.active_layer,
         Some(v) => match v.as_u64().map(LayerId) {
-            Some(id) if pre_selected.map_or_else(|| st.selected_layers().as_slice() == [id], |sel| sel == [id]) => Some(id),
+            Some(id) if pre_selected.map_or_else(|| st.selected_layers() == [id], |sel| sel == [id]) => Some(id),
             _ => return p,
         },
     };

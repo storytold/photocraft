@@ -97,8 +97,9 @@ fn drag(h: &mut Harness<'_, Box<PhotocraftApp>>, from: Pos2, to: Pos2) {
     h.run_steps(1);
     h.drag_at(from);
     h.run_steps(1);
-    for i in 1..=6 {
-        h.hover_at(from + (to - from) * (i as f32 / 6.0));
+    // Three moves give the gesture several previews before its one commit, which is what the history check needs.
+    for i in 1..=3 {
+        h.hover_at(from + (to - from) * (i as f32 / 3.0));
         h.run_steps(1);
     }
     h.drop_at(to);
@@ -137,8 +138,21 @@ fn sliders(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<Rect> {
 #[test]
 fn every_adjustment_layer_edits_through_properties() {
     for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("gray", 8), ("cmyk", 8), ("lab", 16)] {
-        for kind in ALL_KINDS {
-            let mut h = app_harness(kind, mode, depth);
+        // One app per document setting, not one per kind: each kind deletes the previous kind's layer and adds its
+        // own over the same two-tone background, so its editor opens on the stack a fresh app had (the Properties
+        // session is per layer, `PropertiesAdjust::new`). Every kind still runs in every mode and depth: the
+        // composite of each adjustment differs per mode and depth, and no other test runs all of them.
+        let mut h = app_harness(ALL_KINDS[0], mode, depth);
+        for (i, kind) in ALL_KINDS.into_iter().enumerate() {
+            if i > 0 {
+                let (previous, _) = layer(&h);
+                h.state_mut().run("layer.delete", json!({"layer": previous.0})).unwrap();
+                h.state_mut().run(&format!("layer.newAdjustmentLayer.{kind}"), json!({})).unwrap();
+                // The Properties panel shows the new layer's editor on the next frame; the second leaves its widgets
+                // laid out for the queries below.
+                h.run_steps(2);
+            }
+            assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 2, "{kind} {mode}: the background and this kind's layer");
             let (_, before) = layer(&h);
             let steps = history_len(&h);
             let slider = sliders(&h).first().copied();
