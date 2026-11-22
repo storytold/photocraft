@@ -83,3 +83,6 @@ mod art_history_reset_tip_tests;
 
 #[cfg(test)]
 mod object_selection_not_found_tests;
+
+#[cfg(test)]
+mod options_bar_field_labels_tests;
