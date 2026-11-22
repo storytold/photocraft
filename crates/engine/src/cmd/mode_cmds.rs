@@ -7,9 +7,11 @@
 //! inks (`Document::duotone`), which display and flat export render through. Like Photoshop the
 //! conversions flatten (Indexed, Bitmap) and require a grayscale source (Bitmap, Duotone).
 
-use craft_cms::{ColorSpace, TransformOptions};
+use craft_cms::{Builtin, ColorSpace, TransformOptions};
+use photocraft_algo::palette_map::{AlphaMode, Palette};
 use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
+
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorIndices, ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
@@ -22,10 +24,6 @@ use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
-}
-
-fn num(p: &Value, key: &str, default: f32) -> f32 {
-    p.get(key).and_then(Value::as_f64).map_or(default, |v| v as f32)
 }
 
 /// A finite number param, `default` when absent or null; anything else is a bad-params error.
@@ -338,12 +336,12 @@ fn parse_forced(s: &str) -> Option<Forced> {
     })
 }
 
-fn parse_dither(s: &str) -> Option<Dither> {
+fn parse_dither(s: &str) -> Option<quantize::Dither> {
     Some(match s {
-        "none" => Dither::None,
-        "diffusion" => Dither::Diffusion,
-        "pattern" => Dither::Pattern,
-        "noise" => Dither::Noise,
+        "none" => quantize::Dither::None,
+        "diffusion" => quantize::Dither::Diffusion,
+        "pattern" => quantize::Dither::Pattern,
+        "noise" => quantize::Dither::Noise,
         _ => return None,
     })
 }
@@ -398,12 +396,82 @@ fn indexed_matte(s: &Session, p: &Value) -> Result<Option<[f32; 3]>> {
     Ok(Some(matte))
 }
 
-fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
+/// Stock Indexed Color accepts the legacy percentage amount. An explicit malformed value must
+/// remain an error instead of silently selecting the stock path.
+fn stock_amount(p: &Value, cmd: &str) -> Result<f32> {
+    for key in ["amount", "ditherAmount"] {
+        if let Some(value) = p.get(key).filter(|value| !value.is_null()) {
+            let amount = value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| bad(cmd, format!("{key} must be a finite number from 0 to 100")))?;
+            if !(0.0..=100.0).contains(&amount) {
+                return Err(bad(cmd, format!("{key} must be a finite number from 0 to 100")));
+            }
+        }
+    }
+    let value = p.get("amount").filter(|value| !value.is_null()).or_else(|| p.get("ditherAmount").filter(|value| !value.is_null()));
+    let Some(value) = value else {
+        return Ok(0.75);
+    };
+    let amount = value.as_f64().ok_or_else(|| bad(cmd, "amount must be a finite number from 0 to 100"))?;
+    Ok((amount as f32 / 100.0).clamp(0.0, 1.0))
+}
+
+/// Advanced mapping is opt-in: a serialized mapping, a palette snapshot/catalog entry, or a
+/// non-legacy palette-map method. Legacy dither values stay on the stock quantizer.
+fn custom_mapping_requested(p: &Value, cmd: &str) -> Result<bool> {
+    let object = p.as_object().ok_or_else(|| bad(cmd, "params must be a JSON object"))?;
+    let dither = match object.get("dither").filter(|value| !value.is_null()) {
+        None => None,
+        Some(value) => {
+            let dither = value.as_str().ok_or_else(|| bad(cmd, "dither must be none|diffusion|pattern|noise or a palette-map method"))?;
+            if parse_dither(dither).is_none() && photocraft_algo::palette_map::Method::from_id(dither).is_none() {
+                return Err(bad(cmd, "dither must be none|diffusion|pattern|noise or a palette-map method"));
+            }
+            Some(dither)
+        }
+    };
+    if ["mapping", "paletteId", "paletteSnapshot"].into_iter().any(|key| object.get(key).is_some_and(|value| !value.is_null())) {
+        return Ok(true);
+    }
+    Ok(dither.is_some_and(|value| parse_dither(value).is_none()))
+}
+
+fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
+    let params = if raw.is_null() { json!({}) } else { raw.clone() };
+    let p = &params;
     const CMD: &str = "image.mode.indexedColor";
-    let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
-        .ok_or_else(|| bad(CMD, "palette: exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive"))?;
-    let forced = parse_forced(str_or(p, "forced", "blackWhite")).ok_or_else(|| bad(CMD, "forced: none|blackWhite|primaries|web"))?;
-    let dither = parse_dither(str_or(p, "dither", "diffusion")).ok_or_else(|| bad(CMD, "dither: none|diffusion|pattern|noise"))?;
+    let transparent_hint = match p.get("transparentIndex") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(CMD, "transparentIndex must be a non-negative integer"))?),
+    };
+    // An explicit reserved slot must use the exclusion-aware renderer; the stock nearest-colour
+    // lookup considers every table entry, including that slot.
+    let advanced = custom_mapping_requested(p, CMD)? || transparent_hint.is_some();
+    let custom_palette = crate::palette_cmds::palette_from_snapshot_for_indexed(p)?;
+    let stock_amount_value = stock_amount(p, CMD)?;
+    let stock_dither =
+        if advanced { None } else { Some(parse_dither(str_or(p, "dither", "diffusion")).ok_or_else(|| bad(CMD, "dither: none|diffusion|pattern|noise"))?) };
+    let stock_amount = (!advanced).then_some(stock_amount_value);
+    let settings = if advanced {
+        Some(crate::palette_cmds::mapping_settings(p, "amount").map_err(|e| match e {
+            EngineError::BadParams { msg, .. } => bad(CMD, msg),
+            other => other,
+        })?)
+    } else {
+        None
+    };
+    let reduce = match p.get("reducePalette") {
+        None => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad(CMD, "reducePalette must be a boolean")),
+    };
+    let transparency = match p.get("transparency") {
+        None => true,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad(CMD, "transparency must be a boolean")),
+    };
+    if !transparency && transparent_hint.is_some() {
+        return Err(bad(CMD, "transparentIndex requires transparency=true"));
+    }
     let colors = match p.get("colors") {
         None => 256,
         Some(value) => {
@@ -414,10 +482,38 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
             value as usize
         }
     };
-    let amount = num(p, "amount", 75.0).clamp(0.0, 100.0) / 100.0;
-    let transparency = p.get("transparency").and_then(Value::as_bool).unwrap_or(true);
     let matte = indexed_matte(s, p)?;
-    let (pal_len, transparent) = s.edit("Indexed Color", |doc, active| {
+    let (kind, forced) = if custom_palette.is_none() {
+        let kind = PaletteKind::from_id(str_or(p, "palette", "selective"))
+            .ok_or_else(|| bad(CMD, "palette: blackWhite|exact|systemMac|systemWindows|web|uniform|perceptual|selective|adaptive"))?;
+        let forced = parse_forced(str_or(p, "forced", "blackWhite")).ok_or_else(|| bad(CMD, "forced: none|blackWhite|primaries|web"))?;
+        (Some(kind), Some(forced))
+    } else {
+        // A fixed palette is authoritative: generated-palette and forced-colour controls do not
+        // alter its order or entries.
+        (None, None)
+    };
+    let generated_black_white = custom_palette.is_none() && kind == Some(PaletteKind::BlackWhite);
+    if let Some(custom) = &custom_palette {
+        if let Some(index) = transparent_hint
+            && index >= custom.colors.len()
+        {
+            return Err(bad(CMD, format!("transparentIndex {index} is outside the {}-entry palette", custom.colors.len())));
+        }
+        if custom.colors.len() > 256 && !reduce {
+            return Err(bad(
+                CMD,
+                format!(
+                    "fixed palette has {} entries; Indexed Color supports at most 256 (including transparency). Enable reducePalette for deliberate reduction",
+                    custom.colors.len()
+                ),
+            ));
+        }
+    }
+    // Advanced palette-map comparisons use encoded sRGB, but stock Indexed Color stays in the
+    // document's encoded RGB coordinates and keeps its original profile.
+    let mapping_options = TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..TransformOptions::default() };
+    let (pal_len, transparent, palette_snapshot) = s.edit("Indexed Color", |doc, active| {
         let mut px = composite(doc, !transparency && matte.is_none());
         if let Some(matte) = matte {
             for pixel in &mut px {
@@ -433,28 +529,182 @@ fn indexed_color(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
-        let has_clear = transparency && px.iter().any(|q| q[3] < 0.5);
-        let mut pal = quantize::build_palette(&px, kind, if has_clear { colors.saturating_sub(1).max(2) } else { colors }, forced).map_err(|e| bad(CMD, e))?;
-        // Exact must reserve one palette slot for clear pixels.
-        if kind == PaletteKind::Exact && has_clear && pal.len() >= 256 {
-            return Err(bad(CMD, "Exact with transparency needs 255 or fewer opaque palette colours plus one transparent entry"));
+        let source_profile = crate::color_cmds::document_profile(doc);
+        let srgb = Builtin::Srgb.profile();
+        // Advanced palette-map comparisons are encoded sRGB. A grayscale document's pixels are
+        // gray-profile samples, so they reach that comparison through the compositor's RGB view
+        // of the profile (`composite_profile`), not as if gray samples were sRGB.
+        let comparison_profile = crate::color_cmds::composite_profile(doc);
+        let advanced_cms = advanced && !comparison_profile.same_bytes(srgb);
+        if advanced_cms {
+            let transform = craft_cms::transform::cached(&comparison_profile, srgb, mapping_options)
+                .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to sRGB: {e}")))?;
+            let mut converted = [0.0f32; 16];
+            for pixel in &mut px {
+                transform
+                    .eval(&pixel[..3], &mut converted)
+                    .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to sRGB: {e}")))?;
+                pixel[..3].copy_from_slice(&converted[..3]);
+            }
         }
-        let transparent = if has_clear && pal.len() < 256 {
-            pal.push([255, 255, 255]);
-            Some(pal.len() - 1)
+        let mut mapping = settings.clone().unwrap_or_default();
+        let custom = custom_palette.clone();
+        let mut palette = if let Some(custom) = custom {
+            custom
         } else {
-            None
+            let has_clear = transparency
+                && px.iter().any(|q| match mapping.alpha {
+                    AlphaMode::Dither => q[3] < 1.0,
+                    _ => q[3] < 0.5,
+                });
+            let requested = if generated_black_white {
+                // BlackWhite is a fixed two-opaque-entry preset. Its palette count is intentionally
+                // independent of the Indexed Color total-count field so transparency can add a
+                // third slot without reducing either required entry.
+                2
+            } else if has_clear {
+                colors.saturating_sub(1).max(2)
+            } else {
+                colors
+            };
+            let kind = kind.ok_or_else(|| bad(CMD, "generated palette kind is missing"))?;
+            let forced = forced.ok_or_else(|| bad(CMD, "generated forced-colour mode is missing"))?;
+            let pal = quantize::build_palette(&px, kind, requested, forced).map_err(|e| bad(CMD, e))?;
+            // Exact must reserve one palette slot for clear pixels: a built 256-entry opaque
+            // palette plus a transparent entry is one too many. Reject it here, before any
+            // reduction below can silently drop a colour and commit what Exact cannot represent.
+            // The rule is stock-only; advanced callers supply their own mapping.
+            if !advanced && kind == PaletteKind::Exact && has_clear && pal.len() >= 256 {
+                return Err(bad(CMD, "Exact with transparency needs 255 or fewer opaque palette colours plus one transparent entry"));
+            }
+            let mut generated = Palette { name: str_or(p, "palette", "selective").to_string(), colors: pal.into_iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
+            // The quantizer requires two samples, but a two-entry Indexed image with a
+            // transparency slot has capacity for exactly one opaque colour. Reduce that
+            // generated result algorithmically instead of silently exceeding `colors`; the
+            // explicit BlackWhite preset is the intentional two-opaque-entry exception.
+            if !generated_black_white && (advanced || kind != PaletteKind::Exact) && has_clear && colors == 2 {
+                generated = crate::palette_cmds::reduce_palette(&generated, 1).map_err(|e| match e {
+                    EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                    other => other,
+                })?;
+            }
+            generated
         };
-        let w = doc.size.width as usize;
-        let indices = quantize::quantize(&mut px, w, &pal, dither, amount, transparent);
+        let mut transparent = transparent_hint;
+        if custom_palette.is_some() {
+            let (mapped, slot) = crate::palette_cmds::indexed_palette(palette, reduce, transparent).map_err(|e| match e {
+                EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                other => other,
+            })?;
+            palette = mapped;
+            transparent = slot;
+        } else if let Some(index) = transparent
+            && index >= palette.colors.len()
+        {
+            return Err(bad(CMD, format!("transparentIndex {index} is outside the {}-entry palette", palette.colors.len())));
+        }
+        let needs_transparency = transparency
+            && transparent.is_none()
+            && px.iter().any(|q| match mapping.alpha {
+                AlphaMode::Dither => q[3] < 1.0,
+                _ => q[3] < 0.5,
+            });
+        if needs_transparency {
+            let room = if custom_palette.is_some() { 255 } else { colors.saturating_sub(1).max(1) };
+            // Stock Exact never reduces: it either fits beside the transparency entry or the
+            // 256-entry rule above rejected it. Fixed palettes keep their explicit reduction.
+            if !generated_black_white && (advanced || kind != Some(PaletteKind::Exact)) && palette.colors.len() > room {
+                if custom_palette.is_some() && !reduce {
+                    return Err(bad(CMD, format!("the fixed palette has {} opaque entries but Indexed Color allows {room} with a transparency slot; enable reducePalette for deliberate reduction", palette.colors.len())));
+                }
+                palette = crate::palette_cmds::reduce_palette(&palette, room).map_err(|e| match e {
+                    EngineError::BadParams { msg, .. } => bad(CMD, msg),
+                    other => other,
+                })?;
+            }
+        }
+        // Replayable snapshots contain the final opaque palette, never our reserved alpha slot.
+        let mut snapshot = palette.clone();
+        // Snapshots are a palette-map input, so they are encoded sRGB. Stock palettes are built
+        // in the document's encoded RGB coordinates; convert only this copy, leaving the document
+        // colour table and indexed pixel output in the document profile. Untagged and sRGB
+        // documents are already sRGB.
+        if !advanced && doc.icc_profile.is_some() && source_profile.color_space == ColorSpace::Rgb && !source_profile.same_bytes(srgb) {
+            let transform = craft_cms::transform::cached(&source_profile, srgb, mapping_options)
+                .map_err(|e| bad(CMD, format!("could not convert Indexed palette snapshot to sRGB: {e}")))?;
+            let mut converted = [0.0f32; 16];
+            for color in &mut snapshot.colors {
+                transform
+                    .eval(&color[..], &mut converted)
+                    .map_err(|e| bad(CMD, format!("could not convert Indexed palette snapshot to sRGB: {e}")))?;
+                // A snapshot is a palette-map input: keep entries in the 0..=1 range that replay
+                // validation requires.
+                color.copy_from_slice(&[converted[0].clamp(0.0, 1.0), converted[1].clamp(0.0, 1.0), converted[2].clamp(0.0, 1.0)]);
+            }
+        }
+        if needs_transparency {
+            transparent = if advanced {
+                crate::palette_cmds::append_transparency(&mut palette)
+            } else if palette.colors.len() < 256 {
+                palette.colors.push([1.0; 3]);
+                Some(palette.colors.len() - 1)
+            } else {
+                None
+            };
+        }
+        let indices: Vec<u8> = if advanced {
+            crate::palette_cmds::alpha_for_indexed(&mut mapping, transparent);
+            let w = doc.size.width as usize;
+            crate::palette_cmds::indexed_render(&mut px, w, &palette, &mapping, transparent)?.into_iter().map(|index| index as u8).collect()
+        } else {
+            let dither = stock_dither.ok_or_else(|| bad(CMD, "stock dither mode is missing"))?;
+            let amount = stock_amount.unwrap_or(0.75);
+            let pal: Vec<[u8; 3]> = palette.colors.iter().map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+            // The appended transparency entry is a reserved slot, not an opaque colour: an opaque
+            // pixel must match the opaque entries only. Clear pixels still take `transparent`.
+            let opaque = transparent.map_or(pal.len(), |index| index.min(pal.len()));
+            quantize::quantize(&mut px, doc.size.width as usize, &pal[..opaque], dither, amount, transparent)
+        };
+        if advanced_cms {
+            // The Indexed output returns to the document's own profile. A gray profile has one
+            // output channel; the expanded Indexed pixels replicate that gray into RGB.
+            let gray_output = source_profile.color_space == ColorSpace::Gray;
+            let transform = craft_cms::transform::cached(srgb, &source_profile, mapping_options)
+                .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to document RGB: {e}")))?;
+            let mut converted = [0.0f32; 16];
+            for pixel in &mut px {
+                transform
+                    .eval(&pixel[..3], &mut converted)
+                    .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to document RGB: {e}")))?;
+                if gray_output {
+                    let gray = converted[0];
+                    pixel[..3].copy_from_slice(&[gray; 3]);
+                } else {
+                    pixel[..3].copy_from_slice(&converted[..3]);
+                }
+            }
+            for color in &mut palette.colors {
+                transform
+                    .eval(&color[..], &mut converted)
+                    .map_err(|e| bad(CMD, format!("could not convert advanced Indexed palette to document RGB: {e}")))?;
+                if gray_output {
+                    let gray = converted[0];
+                    color.copy_from_slice(&[gray; 3]);
+                } else {
+                    color.copy_from_slice(&converted[..3]);
+                }
+            }
+        }
         single_layer(doc, active, ColorMode::Indexed, &px, if transparent.is_some() { "Index" } else { "Background" }, transparent.is_none());
-        doc.color_table = Some(ColorTable { colors: pal.clone(), transparent: transparent.map(|t| t as u8) });
-        // Each pixel's index is known here: keep it for Color Table (#14342).
+
+        let mut table = crate::palette_cmds::palette_to_color_table(&palette);
+        table.transparent = transparent.map(|index| index as u8);
+        doc.color_table = Some(table);
         let bounds = doc.bounds();
         doc.color_indices = doc.layers.first().and_then(|l| ColorIndices::new(l.id, l.surface()?, bounds, &indices));
-        Ok((pal.len(), transparent))
+        Ok((palette.colors.len(), transparent, snapshot))
     })?;
-    Ok(json!({"colors": pal_len, "transparentIndex": transparent}))
+    Ok(json!({"colors": pal_len, "transparentIndex": transparent, "paletteSnapshot": palette_snapshot}))
 }
 
 fn hex(c: [u8; 3]) -> String {
@@ -889,7 +1139,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0))"##,
+            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","paletteId":string?,"paletteSnapshot":json?,"colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"matte":color,"transparentIndex":integer?,"reducePalette":bool=false,"mapping":json?,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0); fixed palette controls override generated palette; automation also accepts palette=blackWhite, always two opaque entries with an optional transparency slot)"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],
@@ -952,3 +1202,110 @@ mod color_table_index_tests;
 #[cfg(test)]
 #[path = "rotate_canvas_interpolation_pref_tests.rs"]
 mod rotate_canvas_interpolation_pref_tests;
+
+/// Stock Indexed Color regressions kept beside the conversion they guard.
+#[cfg(test)]
+mod stock_indexed_regressions {
+    use super::*;
+
+    fn paint(s: &mut Session, f: impl Fn(i32) -> [f32; 4]) {
+        s.edit("setup", |doc, active| {
+            let b = doc.bounds();
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            let fmt = surf.format();
+            let mut data = Vec::new();
+            for _ in b.y0..b.y1 {
+                for x in b.x0..b.x1 {
+                    data.extend(photocraft_raster::from_rgba(&fmt, f(x)));
+                }
+            }
+            surf.write_region(b, &data);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    fn doc(s: &Session) -> &Document {
+        &s.active().unwrap().doc
+    }
+
+    #[test]
+    fn stock_black_white_keeps_opaque_white_out_of_the_transparency_slot() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 3, "height": 1, "background": "transparent"})).unwrap();
+        paint(&mut s, |x| match x {
+            0 => [0.0, 0.0, 0.0, 1.0],
+            1 => [1.0, 1.0, 1.0, 1.0],
+            _ => [0.0; 4],
+        });
+        let result = s.execute("image.mode.indexedColor", json!({"palette": "blackWhite", "colors": 2, "forced": "blackWhite", "dither": "none"})).unwrap();
+        assert_eq!(result["colors"], 3);
+        assert_eq!(result["transparentIndex"], 2);
+        let d = doc(&s);
+        let table = d.color_table.as_ref().unwrap();
+        assert_eq!(table.transparent, Some(2));
+        assert_eq!(d.layers[0].surface().unwrap().rgba(0, 0), [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(d.layers[0].surface().unwrap().rgba(1, 0), [1.0, 1.0, 1.0, 1.0]);
+        assert_eq!(d.layers[0].surface().unwrap().rgba(2, 0)[3], 0.0);
+        let indices = d.color_indices.as_ref().unwrap().indices.to_interleaved(d.bounds());
+        assert_eq!(indices, vec![0, 1, 2], "opaque white must use the opaque white entry, not the transparency slot");
+    }
+
+    #[test]
+    fn stock_opaque_near_white_does_not_take_the_synthetic_transparency_slot() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 1, "background": "transparent"})).unwrap();
+        paint(&mut s, |x| match x {
+            0 => [0.0, 0.0, 0.0, 1.0],
+            1 => [0.5, 0.5, 0.5, 1.0],
+            2 => [250.0 / 255.0, 250.0 / 255.0, 250.0 / 255.0, 1.0],
+            _ => [0.0; 4],
+        });
+        s.execute("image.mode.indexedColor", json!({"palette": "uniform", "colors": 3, "forced": "none", "dither": "none"})).unwrap();
+        let d = doc(&s);
+        let transparent = d.color_table.as_ref().unwrap().transparent.expect("transparency slot");
+        let indices = d.color_indices.as_ref().unwrap().indices.to_interleaved(d.bounds());
+        assert_ne!(indices[2], transparent, "an opaque near-white must match an opaque palette entry");
+        assert_eq!(indices[3], transparent, "a clear pixel still takes the transparency slot");
+    }
+
+    #[test]
+    fn stock_tagged_rgb_palette_snapshot_is_encoded_srgb() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 1, "height": 1, "depth": 8, "mode": "rgb", "profile": "display-p3", "background": "transparent"})).unwrap();
+        let p3 = craft_cms::Builtin::DisplayP3.profile();
+        let mut encoded = [0.0f32; 16];
+        craft_cms::Transform::new(craft_cms::Builtin::Srgb.profile(), p3, craft_cms::Intent::RelativeColorimetric, true)
+            .unwrap()
+            .eval(&[1.0, 0.0, 0.0], &mut encoded)
+            .unwrap();
+        paint(&mut s, |_| [encoded[0], encoded[1], encoded[2], 1.0]);
+        let result = s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "transparency": false})).unwrap();
+        // The document colour table stays in Display P3 (the pixels' own encoding)…
+        assert_eq!(doc(&s).color_table.as_ref().unwrap().colors.as_slice(), &[[234, 51, 35]]);
+        // …while the replayable snapshot, a palette-map input, is encoded sRGB.
+        let snapshot = result["paletteSnapshot"]["colors"][0].as_array().unwrap();
+        let rgb = [snapshot[0].as_f64().unwrap(), snapshot[1].as_f64().unwrap(), snapshot[2].as_f64().unwrap()];
+        assert!((rgb[0] - 1.0).abs() < 0.01 && rgb[1].abs() < 0.01 && rgb[2].abs() < 0.01, "snapshot must be encoded sRGB: {rgb:?}");
+    }
+
+    #[test]
+    fn advanced_mapping_on_grayscale_stays_gray() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 2, "height": 1, "mode": "grayscale", "background": "transparent"})).unwrap();
+        paint(&mut s, |x| if x == 0 { [0.5, 0.5, 0.5, 1.0] } else { [0.0; 4] });
+        // A deliberately non-gray palette: the Indexed output transform must return it to the
+        // grayscale document's profile, so neither the table nor the pixels stay coloured.
+        s.execute(
+            "image.mode.indexedColor",
+            json!({"paletteSnapshot": {"name": "rgb", "colors": [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]}, "mapping": {"method": "none"}, "transparency": true}),
+        )
+        .unwrap();
+        let d = doc(&s);
+        for color in &d.color_table.as_ref().unwrap().colors {
+            assert!(color[0] == color[1] && color[1] == color[2], "Indexed table must stay gray: {color:?}");
+        }
+        let pixel = d.layers[0].surface().unwrap().rgba(0, 0);
+        assert!(pixel[0] == pixel[1] && pixel[1] == pixel[2], "Indexed pixels must stay gray: {pixel:?}");
+    }
+}

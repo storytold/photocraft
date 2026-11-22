@@ -227,6 +227,12 @@ pub(crate) fn owns(key: &str) -> bool {
     photocraft_engine::commands::find(key).is_some()
 }
 
+/// Adapter-only settings must not alter the stock Indexed Color or Save for Web workflow.
+fn hidden_automation_field(command: &str, key: &str) -> bool {
+    matches!(command, "image.mode.indexedColor" | "file.export.saveForWebLegacy")
+        && matches!(key, "paletteId" | "paletteSnapshot" | "reducePalette" | "mapping" | "transparentIndex")
+}
+
 /// The byte offsets of the `:doc` markers of `spec`: parameters that name an open document.
 fn document_marks(spec: &str) -> Vec<usize> {
     spec.match_indices(":doc").map(|(at, _)| at).filter(|at| !spec[at + 4..].starts_with(|c: char| c.is_alphanumeric())).collect()
@@ -284,6 +290,7 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
     let installed = photocraft_engine::installed_profiles::installed();
     let mut list: Vec<Param> = Param::parse_list(&documents_as_text(spec))
         .into_iter()
+        .filter(|p| !hidden_automation_field(command, &p.key))
         // Optional parameters the generic dialog can't express keep their defaults.
         .filter(|p| {
             !(matches!(
