@@ -1588,7 +1588,7 @@ fn every_open_format_has_its_own_filter() {
     all.sort_unstable();
     assert_eq!(named, all, "the named filters cover All Formats exactly");
     let names: Vec<&str> = types.iter().map(|t| t.name.as_str()).collect();
-    for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET"] {
+    for name in ["Photoshop", "Affinity", "HEIF", "PNG", "JPEG", "TIFF", "Portable Bitmap", "OpenEXR", "Radiance HDR", "Paint.NET", "PDF"] {
         assert!(names.contains(&name), "{name}");
     }
     // A command's own list replaces them all.
@@ -1632,10 +1632,10 @@ fn save_as_offers_only_writable_formats_including_ico() {
         let subtype = name.rsplit('.').next().unwrap_or_default();
         assert!(!types.iter().any(|(_, exts)| exts.iter().any(|e| e == subtype)), "{name}: .{subtype} is offered");
     }
-    // File Open lists readable Save As formats in their own type. Export-only formats must
-    // stay absent from both Open filters rather than advertising an unavailable decoder.
+    // File Open lists readable Save As formats in their own type, PDF too (#16398). Export-only
+    // formats must stay absent from both Open filters rather than advertising an unavailable decoder.
     for (name, exts) in filters::SAVE_FILTERS {
-        for ext in exts.iter().filter(|e| **e != "pdf") {
+        for ext in exts.iter() {
             if photocraft_codecs::from_extension(ext).is_some_and(|format| !format.caps().read) {
                 assert!(!filters::OPEN_EXTS.contains(ext), "{name}: export-only .{ext} must not appear in All Formats");
                 assert!(!filters::OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: export-only .{ext} must not appear in an Open type");
