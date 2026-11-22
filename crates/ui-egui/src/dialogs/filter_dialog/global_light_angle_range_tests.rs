@@ -11,6 +11,8 @@ const CMD: &str = "layer.layerStyle.globalLight";
 fn a_scripted_global_light_angle_wraps_into_a_turn_and_keeps_180() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    // A document holding only the Background greys Global Light (#14681).
+    app.run("layer.new.layer", json!({})).unwrap();
     for (input, stored) in [(200.0, -160.0), (-200.0, 160.0), (359.0, -1.0), (360.0, 0.0), (180.0, 180.0), (-180.0, -180.0)] {
         app.run(CMD, json!({"angle": input})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.global_light.angle, stored, "script {input}");
