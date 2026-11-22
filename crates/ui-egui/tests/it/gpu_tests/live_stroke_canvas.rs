@@ -19,10 +19,15 @@ type Pixels = Vec<[u8; 4]>;
 fn raw_pointer_brush_and_mixer_pixels_appear_in_the_input_frame() {
     use photocraft_ui_egui::state::Tool;
     let _gpu = photocraft_testkit::gpu_lock();
+    // One harness for every case: each case closes what the last one left open and sets its own tool, view flip,
+    // brush and colours, so a fresh harness per case only repeated the wgpu setup.
+    let Some(mut h) = harness() else { return };
     for flip in [false, true] {
         for tool in [Tool::Brush, Tool::MixerBrush] {
-            let Some(mut h) = harness() else { return };
             let app = h.state_mut();
+            while app.session.active().is_some() {
+                app.run("file.close", json!({"discard": true})).unwrap();
+            }
             app.run("file.new", json!({"width":300,"height":200,"background":"white"})).unwrap();
             app.run("edit.fill", json!({"color":"#2040df"})).unwrap();
             app.run("tools.setColors", json!({"foreground":"#ef2000"})).unwrap();
@@ -71,6 +76,8 @@ fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 640.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            #[cfg(not(target_arch = "wasm32"))]
+            photocraft_raster::spill::use_test_volume_space();
             let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
                 app.set_wgpu(rs.clone());
@@ -202,11 +209,14 @@ fn the_canvas_shows_the_committed_stroke_part(part: usize) {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness() else { return };
     h.run_steps(4);
+    // Every zoom once, with every smoothing amount among them, rather than zoom x smoothing: the canvas branches on
+    // the zoom (reduced, 1:1 and magnified pictures) and only on whether smoothing is on (a held pointer repeats its
+    // point while smoothing catches up, `canvas/strokes.rs`); that the live stroke equals the commit at
+    // every zoom and smoothing amount is the engine's `live_stroke_equals_the_commit_at_every_zoom_with_smoothing`
+    // (`brush_cmds/tests.rs`). The zoom 4, smoothing 0.1 case is the base the cases after it change one thing of.
     let mut cases = Vec::new();
-    for zoom in [0.5, 1.0, 4.0, 12.0] {
-        for smoothing in [0.0, 0.1, 0.5] {
-            cases.push(Case { zoom, smoothing, hardness: 0.0, depth: 8, pressure: false, flip: false });
-        }
+    for (zoom, smoothing) in [(0.5, 0.5), (1.0, 0.0), (4.0, 0.1), (12.0, 0.0)] {
+        cases.push(Case { zoom, smoothing, hardness: 0.0, depth: 8, pressure: false, flip: false });
     }
     cases.push(Case { zoom: 4.0, smoothing: 0.1, hardness: 1.0, depth: 8, pressure: false, flip: false });
     cases.push(Case { zoom: 4.0, smoothing: 0.1, hardness: 0.0, depth: 16, pressure: false, flip: false });
@@ -214,7 +224,8 @@ fn the_canvas_shows_the_committed_stroke_part(part: usize) {
     cases.push(Case { zoom: 4.0, smoothing: 0.1, hardness: 0.0, depth: 8, pressure: false, flip: true });
     cases.push(Case { zoom: 12.0, smoothing: 0.5, hardness: 0.0, depth: 16, pressure: true, flip: true });
     let mut gpu_seen = false;
-    for c in cases.into_iter().skip(part).step_by(4) {
+    // One step per `_part_N` test, so every case runs in exactly one of them.
+    for c in cases.into_iter().skip(part).step_by(3) {
         let (before, drawing, done, gpu) = frames(&mut h, c);
         gpu_seen |= gpu;
         // The stroke is on screen while drawing (not a blank canvas compared with a blank one)…
@@ -248,60 +259,67 @@ fn the_canvas_shows_the_committed_stroke_part_2() {
 fn live_tool_camera_navigation_is_visible_in_the_input_frame() {
     use photocraft_ui_egui::state::Tool;
     let _gpu = photocraft_testkit::gpu_lock();
+    // Brush only: no stroke is drawn, and the canvas has no branch on the live tool before a press. Since the canvas
+    // moved onto the framework it always runs the tools, then shows the picture with the camera of this pass
+    // (`canvas/document_display.rs` `show`: "The tools run after the controls … and before the picture"); the Mixer
+    // Brush's own paths (`canvas/paint_tool.rs`, `canvas/strokes.rs`) start at a press, which
+    // `raw_pointer_brush_and_mixer_pixels_appear_in_the_input_frame` covers. The flip (CPU or GPU picture) and the
+    // input (pinch zoom or wheel pan) do reach different code, so they stay, on one harness.
+    let tool = Tool::Brush;
+    let Some(mut h) = harness() else { return };
     for flip in [false, true] {
-        for tool in [Tool::Brush, Tool::MixerBrush] {
-            for zoom in [false, true] {
-                let Some(mut h) = harness() else { return };
-                let app = h.state_mut();
-                app.run("file.new", json!({"width":300,"height":200,"background":"white"})).unwrap();
-                app.run("paint.stroke", json!({"points":[[40,40],[240,160]],"size":30,"hardness":1.0,"color":"#2050df"})).unwrap();
-                app.run("prefs.set", json!({"values":{"tools.overscroll":true,"general.animatedZoom":false,"general.zoomWithScrollWheel":false}})).unwrap();
-                app.ui.tool = tool;
-                app.ui.view.flip_horizontal = flip;
-                app.sync_views();
-                h.run_steps(4);
-                control(&mut h, "ui.set", json!({"zoom":1.0,"center":[150,100]}));
-                let at = h.state().last_canvas_rect.center() + egui::vec2(30.0, 10.0);
-                h.hover_at(at);
-                h.run_steps(2);
-                let before = h.state().ui.views[0].clone();
-                h.input_mut().events.push(if zoom {
-                    egui::Event::Zoom(1.25)
-                } else {
-                    egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: egui::vec2(30.0, 20.0),
-                        modifiers: egui::Modifiers::NONE,
-                        phase: egui::TouchPhase::Move,
-                        source: egui::MouseWheelSource::Unknown,
-                    }
-                });
-                h.step();
-                let moved = h.state().ui.views[0].clone();
-                assert!(if zoom { moved.zoom != before.zoom } else { moved.center != before.center }, "navigation was applied");
-                let immediate = h.render().unwrap();
-                let rect = h.state().last_canvas_rect.shrink(8.0);
-                h.step();
-                let settled = h.render().unwrap();
-                if tool == Tool::MixerBrush
-                    && flip
-                    && zoom
-                    && let Ok(path) = std::env::var("PHOTOCRAFT_NAV_SNAPSHOT")
-                {
-                    settled.save(path).unwrap();
-                }
-                assert_eq!(h.state().ui.views[0].zoom, moved.zoom);
-                assert_eq!(h.state().ui.views[0].center, moved.center);
-                let mut diff = 0;
-                for y in rect.top() as u32..rect.bottom() as u32 {
-                    for x in rect.left() as u32..rect.right() as u32 {
-                        for (a, b) in immediate.get_pixel(x, y).0.into_iter().zip(settled.get_pixel(x, y).0) {
-                            diff = diff.max(a.abs_diff(b));
-                        }
-                    }
-                }
-                assert!(diff <= 1, "{tool:?} flip={flip} zoom={zoom}: canvas changes {diff}/255 one frame after navigation");
+        for zoom in [false, true] {
+            let app = h.state_mut();
+            while app.session.active().is_some() {
+                app.run("file.close", json!({"discard": true})).unwrap();
             }
+            app.run("file.new", json!({"width":300,"height":200,"background":"white"})).unwrap();
+            app.run("paint.stroke", json!({"points":[[40,40],[240,160]],"size":30,"hardness":1.0,"color":"#2050df"})).unwrap();
+            app.run("prefs.set", json!({"values":{"tools.overscroll":true,"general.animatedZoom":false,"general.zoomWithScrollWheel":false}})).unwrap();
+            app.ui.tool = tool;
+            app.ui.view.flip_horizontal = flip;
+            app.sync_views();
+            h.run_steps(4);
+            control(&mut h, "ui.set", json!({"zoom":1.0,"center":[150,100]}));
+            let at = h.state().last_canvas_rect.center() + egui::vec2(30.0, 10.0);
+            h.hover_at(at);
+            h.run_steps(2);
+            let before = h.state().ui.views[0].clone();
+            h.input_mut().events.push(if zoom {
+                egui::Event::Zoom(1.25)
+            } else {
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(30.0, 20.0),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                }
+            });
+            h.step();
+            let moved = h.state().ui.views[0].clone();
+            assert!(if zoom { moved.zoom != before.zoom } else { moved.center != before.center }, "navigation was applied");
+            let immediate = h.render().unwrap();
+            let rect = h.state().last_canvas_rect.shrink(8.0);
+            h.step();
+            let settled = h.render().unwrap();
+            if flip
+                && zoom
+                && let Ok(path) = std::env::var("PHOTOCRAFT_NAV_SNAPSHOT")
+            {
+                settled.save(path).unwrap();
+            }
+            assert_eq!(h.state().ui.views[0].zoom, moved.zoom);
+            assert_eq!(h.state().ui.views[0].center, moved.center);
+            let mut diff = 0;
+            for y in rect.top() as u32..rect.bottom() as u32 {
+                for x in rect.left() as u32..rect.right() as u32 {
+                    for (a, b) in immediate.get_pixel(x, y).0.into_iter().zip(settled.get_pixel(x, y).0) {
+                        diff = diff.max(a.abs_diff(b));
+                    }
+                }
+            }
+            assert!(diff <= 1, "{tool:?} flip={flip} zoom={zoom}: canvas changes {diff}/255 one frame after navigation");
         }
     }
 }

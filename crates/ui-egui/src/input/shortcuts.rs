@@ -320,8 +320,8 @@ pub fn escape_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     handle_escape_and_view_keys(app, ctx);
 }
 
-/// Esc (reset a rotated view, else leave full screen, else deselect), the Delete Anchor Point and Path Selection Esc
-/// stages, and the `+` / `−` path operations.
+/// Esc (reset a rotated view, else leave full screen, else deselect), the Add and Delete Anchor Point and Path
+/// Selection Esc stages, and the `+` / `−` path operations.
 /// Runs last, so every state that owns Esc has already had its chance.
 fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A Properties Levels/Curves eyedropper: Esc disarms it.
@@ -366,12 +366,13 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         return;
     }
-    // Delete Anchor Point (#12773): Esc first hides the anchors of the saved path targeted in the
-    // Paths panel, then deselects that path, so clicks edit nothing. The first Esc leaves the path
-    // targeted whether or not an anchor was selected (#13072), and clears only anchors selected on
-    // that path, never another path's.
+    // Add (#12728) and Delete Anchor Point (#12773): Esc first hides the anchors of the saved path
+    // targeted in the Paths panel, then deselects that path, so clicks edit nothing. The first Esc
+    // leaves the path targeted whether or not an anchor was selected (#13072), and clears only
+    // anchors selected on that path, never another path's. The overlay keeps no Esc under these two
+    // tools, so it reaches this step.
     if !esc_taken
-        && app.ui.tool == Tool::DeleteAnchorPoint
+        && matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint)
         && let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app)
     {
         let ds = &app.ui.direct_selection;

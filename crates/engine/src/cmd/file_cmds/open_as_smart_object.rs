@@ -106,7 +106,7 @@ pub fn admit_as_smart_object(s: &mut Session, mut doc: Document) -> usize {
     // Untitled: no path, so Save asks where to save.
     let index = s.add_document(doc, None);
     if let Some(st) = s.active_mut() {
-        if let (Some(first), Some(name)) = (st.snapshots.iter_mut().find(|snap| snap.id == 0), layer_name) {
+        if let (Some(first), Some(name)) = (st.snapshots_mut().iter_mut().find(|snap| snap.id == 0), layer_name) {
             first.name = name;
         }
         st.history.set_current_label(LABEL);

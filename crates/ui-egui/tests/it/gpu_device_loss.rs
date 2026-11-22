@@ -142,6 +142,8 @@ mod gpu_tests {
     fn app_switches_to_the_cpu_canvas_and_keeps_the_documents() {
         let _gpu = gpu_lock();
         let Some(rs) = render_state() else { return };
+        #[cfg(not(target_arch = "wasm32"))]
+        photocraft_raster::spill::use_test_volume_space();
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
         app.set_wgpu(rs);
         app.run("file.new", json!({"width": 320, "height": 240})).unwrap();

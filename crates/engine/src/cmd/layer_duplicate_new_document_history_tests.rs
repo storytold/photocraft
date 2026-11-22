@@ -9,7 +9,7 @@ fn check_duplicate_history(s: &mut Session, source: &DocState) {
     assert!(dst.history.can_undo(), "the duplicate is undoable in the destination");
     assert_eq!(dst.history.entries(), ["Open", "Duplicate Layer"]);
     let with_copies = dst.doc.clone();
-    let selected = dst.selected_layers();
+    let selected = dst.selected_layers().to_vec();
     let active = dst.active_layer;
     let mut empty = (*with_copies).clone();
     empty.layers.clear();
@@ -51,9 +51,9 @@ fn duplicate_to_a_new_document_undoes_one_layer_at_each_depth() {
         let dst = s.active().unwrap();
         assert_eq!(dst.doc.layers.len(), 1);
         assert_eq!(dst.doc.layers[0].name, "Ink");
-        assert_eq!(dst.snapshots.len(), 1);
-        assert_eq!(dst.snapshots[0].name, dst.doc.name);
-        assert_eq!(*dst.snapshots[0].doc, *dst.doc);
+        assert_eq!(dst.snapshots().len(), 1);
+        assert_eq!(dst.snapshots()[0].name, dst.doc.name);
+        assert_eq!(*dst.snapshots()[0].doc, *dst.doc);
         check_duplicate_history(&mut s, &source);
     }
 }
@@ -73,7 +73,7 @@ fn duplicate_to_a_new_document_undoes_all_selected_layers_in_one_step() {
     let names: Vec<_> = dst.doc.layers.iter().map(|layer| layer.name.as_str()).collect();
     assert_eq!(names, ["Background", "Paint"]);
     assert_eq!(dst.selected_layers().len(), 2);
-    assert_eq!(dst.snapshots.len(), 1);
+    assert_eq!(dst.snapshots().len(), 1);
     check_duplicate_history(&mut s, &source);
 }
 
@@ -87,7 +87,7 @@ fn duplicate_to_a_new_document_undoes_a_group_without_a_first_snapshot() {
     let source = s.active().unwrap().clone();
     let r = s.execute("layer.duplicate", json!({"document": "new", "layer": group["layer"], "documentName": "Grayscale copy"})).unwrap();
     let dst = s.active().unwrap();
-    assert!(dst.snapshots.is_empty());
+    assert!(dst.snapshots().is_empty());
     assert_eq!(dst.doc.mode, ColorMode::Grayscale);
     assert_eq!(dst.doc.depth, SampleType::U16);
     assert_eq!(dst.doc.resolution_dpi, 300.0);
@@ -100,5 +100,5 @@ fn duplicate_to_a_new_document_undoes_a_group_without_a_first_snapshot() {
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].name, "Child");
     check_duplicate_history(&mut s, &source);
-    assert!(s.active().unwrap().snapshots.is_empty());
+    assert!(s.active().unwrap().snapshots().is_empty());
 }

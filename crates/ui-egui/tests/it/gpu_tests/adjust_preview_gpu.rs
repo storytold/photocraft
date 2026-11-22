@@ -229,40 +229,46 @@ fn clipped_target_preview_composites_on_the_gpu_like_the_command() {
     let Some((device, queue, mut comp)) = gpu() else { return };
     let (tol_gpu, tol_cmd) = (2.0 / 255.0, 2.5 / 255.0);
     let mut worst = 0.0f32;
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for selection in [false, true] {
-                let (doc, target) = clipped_document(mode, depth, selection);
-                for kind in photocraft_ui_egui::adjust_editors::KINDS {
-                    let params = sample(kind);
-                    let preview = match preview_document(&doc, target, kind, &params) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            // Only grayscale kinds that make colour keep the CPU proxy preview.
-                            assert_eq!(mode, ColorMode::Grayscale, "{kind}: {e}");
-                            assert!(GRAY_COLOUR.contains(&kind), "{kind} {mode:?}: unexpected preview error: {e}");
-                            continue;
-                        }
-                    };
-                    assert!(preview.layer(PREVIEW_LAYER).is_some());
-                    assert!(preview.layer(target).unwrap().is_group(), "the clipped target is isolated");
-                    let what = format!("{kind} {mode:?} {depth:?} selection {selection}");
-                    let b = preview.bounds();
-                    let skip = if matches!(kind, "threshold" | "posterize") && depth != SampleType::U8 { (b.width() * b.height()) as usize / 100 } else { 0 };
-                    let on_gpu = render_to_vec(&mut comp, &device, &queue, &preview, b).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                    let on_cpu = photocraft_compose::render(&preview, b).into_px();
-                    let d = max_diff(&on_gpu, &on_cpu, skip);
-                    assert!(d <= tol_gpu, "{what}: GPU vs CPU {:.2}/255", d * 255.0);
-                    let mut s = photocraft_engine::Session::new();
-                    s.add_document(doc.clone(), None);
-                    s.select_layer(target).unwrap();
-                    s.execute(&format!("image.adjustments.{kind}"), params.clone()).unwrap();
-                    let cmd = photocraft_compose::render(&s.active().unwrap().doc, b).into_px();
-                    let d = max_diff(&on_gpu, &cmd, skip);
-                    worst = worst.max(d);
-                    assert!(d <= tol_cmd, "{what}: GPU preview vs command {:.2}/255", d * 255.0);
+    // Each kind runs once per mode at one (depth, selection) pair, rather than kind x depth x selection: this test's
+    // own case is the isolating group, which `base_document` builds before it knows the kind (`with_settings` only
+    // swaps the preview layer's adjustment), and the GPU planner applies a clipped adjustment through the same
+    // `atop_any` / `adjust` passes whatever the group around it (`crates/gpu/src/plan/planner.rs`). The kind x depth x
+    // selection x mode matrix of those passes is `preview_layer_composites_on_the_gpu_like_the_command`. Cycling the
+    // pairs over the kinds still runs every depth with and without a selection in both modes (in Grayscale among the
+    // kinds that keep gray, too).
+    const PAIRS: [(SampleType, bool); 6] =
+        [(SampleType::U8, false), (SampleType::U16, true), (SampleType::F32, false), (SampleType::U8, true), (SampleType::U16, false), (SampleType::F32, true)];
+    for (mode, offset) in [(ColorMode::Rgb, 0), (ColorMode::Grayscale, 3)] {
+        for (i, kind) in photocraft_ui_egui::adjust_editors::KINDS.into_iter().enumerate() {
+            let (depth, selection) = PAIRS[(i + offset) % PAIRS.len()];
+            let (doc, target) = clipped_document(mode, depth, selection);
+            let params = sample(kind);
+            let preview = match preview_document(&doc, target, kind, &params) {
+                Ok(p) => p,
+                Err(e) => {
+                    // Only grayscale kinds that make colour keep the CPU proxy preview.
+                    assert_eq!(mode, ColorMode::Grayscale, "{kind}: {e}");
+                    assert!(GRAY_COLOUR.contains(&kind), "{kind} {mode:?}: unexpected preview error: {e}");
+                    continue;
                 }
-            }
+            };
+            assert!(preview.layer(PREVIEW_LAYER).is_some());
+            assert!(preview.layer(target).unwrap().is_group(), "the clipped target is isolated");
+            let what = format!("{kind} {mode:?} {depth:?} selection {selection}");
+            let b = preview.bounds();
+            let skip = if matches!(kind, "threshold" | "posterize") && depth != SampleType::U8 { (b.width() * b.height()) as usize / 100 } else { 0 };
+            let on_gpu = render_to_vec(&mut comp, &device, &queue, &preview, b).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            let on_cpu = photocraft_compose::render(&preview, b).into_px();
+            let d = max_diff(&on_gpu, &on_cpu, skip);
+            assert!(d <= tol_gpu, "{what}: GPU vs CPU {:.2}/255", d * 255.0);
+            let mut s = photocraft_engine::Session::new();
+            s.add_document(doc.clone(), None);
+            s.select_layer(target).unwrap();
+            s.execute(&format!("image.adjustments.{kind}"), params.clone()).unwrap();
+            let cmd = photocraft_compose::render(&s.active().unwrap().doc, b).into_px();
+            let d = max_diff(&on_gpu, &cmd, skip);
+            worst = worst.max(d);
+            assert!(d <= tol_cmd, "{what}: GPU preview vs command {:.2}/255", d * 255.0);
         }
     }
     eprintln!("worst clipped-target GPU preview vs command: {:.3}/255", worst * 255.0);

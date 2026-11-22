@@ -435,7 +435,7 @@ fn animated_gif_delay_follows_timelines_under_one_fps() {
     doc.timeline = Some(Timeline::new(2, f32::NAN));
     {
         let st = s.active_mut().unwrap();
-        st.doc = std::sync::Arc::new(doc);
+        *st.doc_mut() = std::sync::Arc::new(doc);
         st.revision += 1;
     }
     assert_eq!(rendered_gif_delays(&s), [3, 3]);
@@ -948,7 +948,7 @@ fn render_video_rejects_a_loaded_timeline_past_the_frame_cap() {
     doc.timeline = Some(Timeline::new(usize::MAX, 30.0));
     {
         let st = s.active_mut().unwrap();
-        st.doc = std::sync::Arc::new(doc);
+        *st.doc_mut() = std::sync::Arc::new(doc);
         st.revision += 1;
     }
     let err = s.execute("file.export.renderVideo", json!({"dir": tmpdir("overlong"), "format": "gif"})).unwrap_err();

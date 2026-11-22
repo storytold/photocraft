@@ -4,8 +4,7 @@ use photocraft_automation::workspace::authorize_desktop_engine_step;
 use photocraft_engine::{Session, smart_cmds};
 use serde_json::json;
 
-#[path = "../support/smart_filter_fixture.rs"]
-mod fixture;
+use crate::smart_filter_fixture as fixture;
 
 use fixture::{Fixture, assert_denied};
 

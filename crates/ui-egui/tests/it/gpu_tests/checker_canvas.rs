@@ -289,15 +289,31 @@ fn pixel_grid_does_not_flip_colour_across_mid_tones() {
     }
 }
 
+/// The depths [`pixel_grid_is_solid_and_visible_at_scale`] runs at. Both canvases draw the grid with the same
+/// `PixelGrid` over a CPU composite (`PhotoComposite`: compose's f32 render, `canvas/raster_source.rs` `read`; see
+/// `grid_prep` and "The grid is drawn over the picture" in `canvas/document_display.rs`), and the fills 0 and 1 are
+/// exact at every depth, so the grid reads the same pixels at 8, 16 and 32 bits. Depth reaches only the picture under
+/// it, which the `inside` assertion reads: on the GPU canvas its texture (`Rgba8Unorm` for 8-bit, `Rgba16Float` for
+/// 16/32-bit, see `canvas_16f.rs`). So every canvas and scale runs 8-bit, and the GPU canvas adds 16-bit at 1x and
+/// 32-bit at 2x.
+fn grid_depths(gpu: bool, ppp: f32) -> Vec<photocraft_color::SampleType> {
+    use photocraft_color::SampleType;
+    match (gpu, ppp > 1.0) {
+        (true, false) => vec![SampleType::U8, SampleType::U16],
+        (true, true) => vec![SampleType::U8, SampleType::F32],
+        (false, _) => vec![SampleType::U8],
+    }
+}
+
 fn pixel_grid_is_solid_and_visible_at_scale(gpu: bool, ppp: f32) {
     let _gpu = photocraft_testkit::gpu_lock();
-    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_color::{ColorMode, PixelFormat};
     use photocraft_doc::{Document, Layer, LayerContent, Size};
     use photocraft_geom::Rect;
     use photocraft_raster::Surface;
 
     let Some(mut h) = harness_with_scale(gpu, ppp) else { return };
-    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+    for depth in grid_depths(gpu, ppp) {
         for v in [0.0, 1.0] {
             let mut doc = Document::new("grid contrast", Size::new(32, 16), ColorMode::Rgb, depth);
             let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, depth, true));

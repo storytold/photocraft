@@ -8,7 +8,7 @@
 //!
 //! They drive the real app offscreen on wgpu with real egui pointer events (press, then a series
 //! of moves past the click distance), render the frame mid-drag and look at the pixels along the
-//! preview's edges on white and on black documents. They also check the preview follows every
+//! preview's edges on a mid-grey document, for both colours of the ants. They also check the preview follows every
 //! move (each move's frame shows the new outline) and that the animated ants keep frames coming
 //! while the pointer is held still. Skips when no GPU adapter exists (like `live_stroke_canvas.rs`).
 
@@ -169,11 +169,17 @@ fn coverage_along(img: &Image, ppp: f32, pts: &[Pos2], test: impl Fn(u8) -> bool
     hits as f32 / samples.max(1) as f32
 }
 
-/// Ink that contrasts with `background`: dark on white, light on black. The 1 px ants are half
-/// antialiasing where the curve crosses pixel columns, so a quarter of the luma range suffices.
-fn ink(background: &str) -> impl Fn(u8) -> bool {
-    let white = background == "white";
-    move |l| if white { l < 192 } else { l > 63 }
+/// The document the marquee tests drag over: the grey halfway between the ants' two colours (luma 102 and 255 in the
+/// default theme), so both contrast with it.
+const GREY: &str = "#b3b3b3";
+
+/// An ink's name and whether a luma shows it.
+type Ink = (&'static str, fn(u8) -> bool);
+
+/// The two inks of the ants over [`GREY`] (luma 179): darker and lighter. The 1 px ants are half antialiasing where
+/// the curve crosses pixel columns (luma 140 and 217 there), so the thresholds sit just past the grey either way.
+fn inks() -> [Ink; 2] {
+    [("dark", |l| l < 150), ("light", |l| l > 208)]
 }
 
 /// The four edges of the document rectangle `[x0, y0]`–`[x1, y1]` on screen.
@@ -186,22 +192,34 @@ fn edges(h: &Harness, a: [f32; 2], b: [f32; 2]) -> [(Pos2, Pos2); 4] {
 #[test]
 fn marquee_previews_show_while_dragging_on_white_and_black_at_1x_and_2x() {
     let _gpu = photocraft_testkit::gpu_lock();
-    for ppp in [1.0, 2.0] {
-        let Some(mut h) = harness(ppp) else { return };
+    // One mid-grey document instead of a white and a black one: the ants are a band of the marquee colour with dashes
+    // of the halo colour, fixed colours that never depend on the pixels under them (the framework's `marching_ants`,
+    // which the marquee tool paints through `ToolContext::marching_ants`). White on white (#253) hid the light ants
+    // and black would hide the dark ones; over grey the test sees both inks at once, so an outline missing either
+    // colour fails here as it failed on one of the two documents. (The name is the one CI's slow-test order lists.)
+    // One harness for both scales: the app derives its scale from the window's native one every frame
+    // (`prefs_ui/appearance.rs` `interface_zoom`), so the 2x pass sets that, as a move to a HiDPI display does.
+    let Some(mut h) = harness(1.0) else { return };
+    h.run_steps(4);
+    for ppp in [1.0f32, 2.0] {
+        if let Some(root) = h.input_mut().viewports.get_mut(&egui::ViewportId::ROOT) {
+            root.native_pixels_per_point = Some(ppp);
+        }
         h.run_steps(4);
+        assert_eq!(h.ctx.pixels_per_point(), ppp, "the harness runs at {ppp}x");
         for tool in ["rectMarquee", "ellipseMarquee"] {
-            for bg in ["white", "black"] {
-                setup(&mut h, bg, tool);
-                let (a, b) = ([100.0, 80.0], [300.0, 220.0]);
-                let before = render(&mut h);
-                drag_to(&mut h, a, b);
-                let img = render(&mut h);
+            setup(&mut h, GREY, tool);
+            let (a, b) = ([100.0, 80.0], [300.0, 220.0]);
+            let before = render(&mut h);
+            drag_to(&mut h, a, b);
+            let img = render(&mut h);
+            for (ink, test) in inks() {
                 if tool == "rectMarquee" {
                     for (i, (p, q)) in edges(&h, a, b).into_iter().enumerate() {
-                        let was = coverage(&before, ppp, p, q, ink(bg));
-                        let now = coverage(&img, ppp, p, q, ink(bg));
-                        // Ants: half the dashes contrast with the pixels under them.
-                        assert!(was < 0.05 && now > 0.3, "{tool} on {bg} @{ppp}x, edge {i}: {was:.2} → {now:.2} contrasting");
+                        let was = coverage(&before, ppp, p, q, test);
+                        let now = coverage(&img, ppp, p, q, test);
+                        // Ants: half the dashes are each ink.
+                        assert!(was < 0.05 && now > 0.3, "{tool} @{ppp}x, edge {i}: {was:.2} → {now:.2} {ink}");
                     }
                 } else {
                     // The ellipse touches its box at the edge midpoints. Walk the curve around
@@ -220,21 +238,24 @@ fn marquee_previews_show_while_dragging_on_white_and_black_at_1x_and_2x() {
                                 screen(&h, (cx as f64 + rx as f64 * t.cos()) as f32, (cy as f64 + ry as f64 * t.sin()) as f32)
                             })
                             .collect();
-                        let now = coverage_along(&img, ppp, &pts, ink(bg));
-                        assert!(now > 0.3, "{tool} on {bg} @{ppp}x at ({mx}, {my}): {now:.2} contrasting");
+                        let was = coverage_along(&before, ppp, &pts, test);
+                        let now = coverage_along(&img, ppp, &pts, test);
+                        assert!(was < 0.05 && now > 0.3, "{tool} @{ppp}x at ({mx}, {my}): {was:.2} → {now:.2} {ink}");
                     }
                 }
-                // Each move's frame shows the outline where the pointer is now (no stale frame).
-                pointer_move(&mut h, 340.0, 250.0);
-                let img = render(&mut h);
-                if tool == "rectMarquee" {
-                    let [top, right, ..] = edges(&h, a, [340.0, 250.0]);
-                    assert!(coverage(&img, ppp, top.0, top.1, ink(bg)) > 0.3, "{tool} {bg} @{ppp}x: top edge follows the pointer");
-                    assert!(coverage(&img, ppp, right.0, right.1, ink(bg)) > 0.3, "{tool} {bg} @{ppp}x: right edge follows the pointer");
-                }
-                button(&mut h, 340.0, 250.0, false);
-                h.run_steps(2);
             }
+            // Each move's frame shows the outline where the pointer is now (no stale frame).
+            pointer_move(&mut h, 340.0, 250.0);
+            let img = render(&mut h);
+            if tool == "rectMarquee" {
+                let [top, right, ..] = edges(&h, a, [340.0, 250.0]);
+                for (ink, test) in inks() {
+                    assert!(coverage(&img, ppp, top.0, top.1, test) > 0.3, "{tool} @{ppp}x: top edge follows the pointer ({ink})");
+                    assert!(coverage(&img, ppp, right.0, right.1, test) > 0.3, "{tool} @{ppp}x: right edge follows the pointer ({ink})");
+                }
+            }
+            button(&mut h, 340.0, 250.0, false);
+            h.run_steps(2);
         }
     }
 }

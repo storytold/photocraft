@@ -35,6 +35,7 @@ mod background_and_mask_depth;
 mod background_job_target;
 mod background_layer_consistency;
 mod brush_smoothing;
+mod camera_raw_baseline_pin;
 mod camera_raw_exposure_clamp;
 mod camera_raw_noise_clamp;
 mod canvas_artboard_crop;
@@ -133,3 +134,7 @@ mod vector_paste_options;
 mod wand_transparent_copy;
 mod working_rgb_profile;
 mod xmp_charref;
+
+// Shared by atn_shape_blur and csh_import.
+#[path = "../common/csh_fixture.rs"]
+mod csh_fixture;
