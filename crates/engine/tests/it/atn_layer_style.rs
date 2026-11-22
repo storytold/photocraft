@@ -79,7 +79,8 @@ fn scaled_shadow(s: &Session, source: LayerId, percent: f64) {
             _ => None,
         })
         .unwrap();
-    let factor = percent as f32 / 100.0;
+    // Scale Effects stores whole pixels, rounded half up (#14989): 1 % of 1 px is 0.
+    let factor = (percent as f32 / 100.0 + 0.5).floor();
     assert_eq!((shadow.distance, shadow.size), (factor, factor));
 }
 
