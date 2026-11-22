@@ -59,10 +59,11 @@ pub fn warp_bounds(doc: &Document, layer: &Layer) -> Rect {
     crate::transform_cmds::transform_bounds(doc, layer)
 }
 
-/// A smart object's stored warp expressed in document space (for editing), if it has one. A
-/// cylinder under a placement that only scales and moves stays a cylinder, with its seven values
-/// in document space, so Warp mode shows its own handles; under any other placement it is its
-/// mesh, a custom warp, like every other stored warp.
+/// A smart object's stored warp expressed in document space (for editing), if it has one. Under a
+/// placement that only scales and moves, a preset (Arc … Twist) stays that preset with its Bend,
+/// H, V and orientation over the placed box (#12491), and a cylinder stays a cylinder with its
+/// seven values in document space, so Warp mode shows their own handles and a commit stores the
+/// style again. Under any other placement it is its mesh, a custom warp, like a stored custom one.
 pub fn smart_warp_doc_space(layer: &Layer) -> Option<Warp> {
     let LayerContent::Smart(sm) = &layer.content else { return None };
     let w = sm.warp.as_ref()?;
@@ -72,8 +73,33 @@ pub fn smart_warp_doc_space(layer: &Layer) -> Option<Warp> {
     if let Some(c) = cylinder_through(w, &t, b) {
         return Some(c);
     }
+    if let Some(p) = preset_through(w, &t, b) {
+        return Some(p);
+    }
     let mesh = w.to_mesh(1, 1).map_points(|p| hom_apply(&t, p));
     Some(Warp::custom(mesh, b))
+}
+
+/// A stored preset warp `w` under a placement `h` that only scales and moves, over its placed box
+/// `b`: the same style, Bend, H, V and orientation, as a preset is defined relative to its box
+/// (#12491). `None` for Custom, None and Cylinder, and under any other placement.
+fn preset_through(w: &Warp, h: &Homography, b: [f64; 4]) -> Option<Warp> {
+    let m = h.0;
+    let axis_aligned = m[8] != 0.0 && m[1] == 0.0 && m[3] == 0.0 && m[6] == 0.0 && m[7] == 0.0;
+    let (sx, sy) = (m[0] / m[8], m[4] / m[8]);
+    if matches!(w.style, WarpStyle::None | WarpStyle::Custom | WarpStyle::Cylinder) || !axis_aligned || !(sx > 0.0 && sy > 0.0) {
+        return None;
+    }
+    // The arc family is defined by its box's aspect (it stays circular in pixels), so over an uneven
+    // scale the preset would be a different shape from the stored one drawn through the placement.
+    let arc_family = matches!(
+        w.style,
+        WarpStyle::Arc | WarpStyle::Arch | WarpStyle::Bulge | WarpStyle::ArcLower | WarpStyle::ArcUpper | WarpStyle::ShellLower | WarpStyle::ShellUpper
+    );
+    if arc_family && (sx - sy).abs() > 1e-9 * sx.max(sy) {
+        return None;
+    }
+    Some(Warp { bounds: b, mesh: None, values: Vec::new(), ..w.clone() })
 }
 
 /// Parses the warp params: a full `"warp"` object, or `"style"` (+ `"bend"`, `"hDistort"`,
