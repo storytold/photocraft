@@ -1,7 +1,7 @@
 use crate::cmd::{CommandSpec, Value, always, cmyk_param, color_param};
 
 /// Tool state: foreground and background colors.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
             "tools.setColors",

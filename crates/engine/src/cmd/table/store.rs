@@ -1,2 +1,2 @@
-pub(crate) mod file_menu;
-pub(crate) mod layer_menu;
+pub mod file_menu;
+pub mod layer_menu;

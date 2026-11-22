@@ -1,2 +1,2 @@
-pub(crate) mod adjustments;
-pub(crate) mod image_menu;
+pub mod adjustments;
+pub mod image_menu;

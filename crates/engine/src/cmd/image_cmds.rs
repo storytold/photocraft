@@ -257,7 +257,8 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
         ph = scaled_dimension(p, "height", scale, "image.imageSize")?;
     }
     // `percent` scales both sides (what a Photoshop action records as "200%"); an explicit side wins.
-    if let Some(pc) = p.get("percent") {
+    // A null `percent` is omitted, like a null side or resolution.
+    if let Some(pc) = p.get("percent").filter(|value| !value.is_null()) {
         let pc = pc.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(|| bad("image.imageSize", "`percent` must be a positive number"))?;
         pw = pw.or(Some(ow as f64 * pc / 100.0));
         ph = ph.or(Some(oh as f64 * pc / 100.0));
@@ -719,8 +720,9 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     if (nw, nh) == (ow as u32, oh as u32) {
         return Ok(json!({ "width": nw, "height": nh, "offset": [0, 0] }));
     }
-    let dx = ((nw as f64 - ow) * ax).round() as i32;
-    let dy = ((nh as f64 - oh) * ay).round() as i32;
+    // An odd change on a centred axis drops the half pixel toward zero, as the reference does (#14536).
+    let dx = ((nw as f64 - ow) * ax).trunc() as i32;
+    let dy = ((nh as f64 - oh) * ay).trunc() as i32;
     let ext = extension_color(s, p);
     s.set_sampler_map(photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
     s.edit("Canvas Size", |doc, _| {
@@ -1064,7 +1066,7 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
                 Ok(())
             })?;
         }
-        crate::mode_cmds::rotate_arbitrary_with(s, &json!({"angle": angle, "direction": "ccw"}), false)?;
+        crate::mode_cmds::rotate_arbitrary_with(s, &json!({"angle": angle, "direction": "ccw"}), false, false)?;
         // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
         s.set_sampler_map(crop_target.sampler_map(target));
         let extension = s.tools.background;
@@ -1325,3 +1327,6 @@ mod image_size_drops_selection_tests;
 
 #[cfg(test)]
 mod canvas_size_noop_history_tests;
+
+#[cfg(test)]
+mod canvas_size_center_offset_tests;

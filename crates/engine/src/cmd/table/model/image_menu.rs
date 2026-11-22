@@ -17,7 +17,7 @@ fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Val
 }
 
 /// Image menu: canvas rotations and flips.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!("image.imageRotation.flipCanvasHorizontal", "Flip Canvas Horizontal", ["Image", "Image Rotation"], None, "{}", has_doc, |s, _| {
             turn(s, "Flip Canvas Horizontal", crate::canvas_geom::Turn::FlipHorizontal)

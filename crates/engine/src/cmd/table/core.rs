@@ -1,5 +1,5 @@
-pub(crate) mod edit_menu;
-pub(crate) mod file_menu;
-pub(crate) mod queries;
-pub(crate) mod select_menu;
-pub(crate) mod tools;
+pub mod edit_menu;
+pub mod file_menu;
+pub mod queries;
+pub mod select_menu;
+pub mod tools;

@@ -1,7 +1,7 @@
 use crate::cmd::{CommandSpec, has_paintable};
 
 /// Painting: the stroke command.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "paint.stroke",
         "Brush Stroke",

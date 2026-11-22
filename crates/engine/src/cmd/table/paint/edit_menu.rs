@@ -1,7 +1,7 @@
 use crate::cmd::{CommandSpec, has_pixel_or_channel};
 
 /// Edit menu: Fill.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "edit.fill",
         "Fill…",

@@ -401,7 +401,7 @@ fn art_history_brush_starts_at_full_opacity() {
 fn each_tool_keeps_its_own_brush() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    let brush = |app: &PhotocraftApp| app.session.tools.brush.clone();
+    let brush = |app: &PhotocraftApp| (*app.session.tools.brush).clone();
     let size = |b: &BrushSettings| b.size;
     let hardness = |b: &BrushSettings| b.hardness;
     let opacity = |b: &BrushSettings| b.opacity;
@@ -545,7 +545,7 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
         let doc = &h.state().session.active().unwrap().doc;
         (doc.layers[0].id, doc.layers[1].id)
     };
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(bg);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(bg));
     for tool in [Tool::Brush, Tool::Pencil, Tool::PaintBucket] {
         open_tool_menu(&mut h, tool);
         assert!(!enabled(h.state(), Item::Clear), "{tool:?}");
@@ -562,7 +562,7 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
     }
     assert!(!enabled(h.state(), Item::Behind));
     // On a normal layer they are available again.
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(top);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(top));
     assert!(enabled(h.state(), Item::Behind) && enabled(h.state(), Item::Clear));
 }
 

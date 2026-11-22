@@ -14,7 +14,7 @@ use crate::commands::CommandSpec;
 use crate::{Result, Session};
 
 /// A stop colour: fixed, or the current foreground/background colour.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum StopColor {
     Foreground,
@@ -22,7 +22,7 @@ pub enum StopColor {
     Rgb([f32; 3]),
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct GradientPreset {
     pub name: String,
     /// Colour stops `(location 0..1, colour)`, sorted by location.

@@ -1,7 +1,7 @@
 use crate::cmd::{Color, ColorMode, CommandSpec, Document, EngineError, Layer, SampleType, Size, Value, always, json, parse_hex};
 
 /// File menu: New (new documents take their presets from the document preset store).
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![
         // File
         cmd!(

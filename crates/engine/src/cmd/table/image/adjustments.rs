@@ -1,7 +1,7 @@
 use crate::cmd::{CommandSpec, NEW_LAYER_PATH, Value, adjust_mode, destructive_adjust, doc_mode, has_doc, is_mask_target, new_adjustment};
 
 /// The adjustment layers and the Image › Adjustments commands, generated from one table.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     let mut v = Vec::new();
     // Adjustment layers + destructive adjustments, generated from one list.
     // Levels/Curves channel keys follow the document: red/green/blue (RGB), gray (Grayscale),

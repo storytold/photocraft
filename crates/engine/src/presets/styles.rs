@@ -16,7 +16,7 @@ use crate::commands::CommandSpec;
 use crate::layer_style::effect_from_params;
 use crate::{EngineError, Result, Session};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct StylePreset {
     pub name: String,
     pub effects: Vec<Effect>,

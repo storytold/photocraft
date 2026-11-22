@@ -1,7 +1,7 @@
 use crate::cmd::{CommandSpec, Value, has_pixel_or_channel, is_mask_target, layer_param};
 
 /// Edit menu: Clear (channel and mask targets).
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "edit.clear",
         "Clear",

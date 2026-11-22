@@ -1,7 +1,7 @@
 use crate::cmd::{CommandSpec, EngineError, Value, bad, has_doc};
 
 /// File menu: Close.
-pub(crate) fn specs() -> Vec<CommandSpec> {
+pub fn specs() -> Vec<CommandSpec> {
     vec![cmd!(
         "file.close",
         "Close",
