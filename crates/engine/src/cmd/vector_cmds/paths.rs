@@ -2,7 +2,7 @@ use super::params::{color, f64p, layer_id, op_from, parse_path, path_json};
 use super::shape::{map_path, map_shape, transform_shape, with_shape};
 use super::{
     Affine, BlendMode, ClippingPath, Color, Document, EngineError, LayerContent, LayerId, NamedPath, Path, Rect, Result, SelectionMode, Session, Value, bad,
-    blend_from_str, json, sel, vector,
+    json, parse_blend, sel, vector,
 };
 
 // ---------------------------------------------------------------------------
@@ -74,22 +74,22 @@ pub(super) fn paths_list(s: &Session) -> Result<Value> {
 }
 
 /// The tools that override these shared commands' normal History labels with their own name:
-/// Freeform Pen (#12829) and the Line tool (#13244).
-const TOOL_HISTORY_NAMES: [&str; 2] = ["Freeform Pen", "Line Tool"];
+/// Freeform Pen (#12829), Line (#13244), Triangle (#13354), and Ellipse (#13223).
+const TOOL_HISTORY_NAMES: [&str; 4] = ["Freeform Pen", "Line Tool", "Triangle Tool", "Ellipse Tool"];
 
 /// Validate before editing so malformed automation input cannot change the document.
 pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Result<&'a str> {
     match p.get("historyName") {
         None | Some(Value::Null) => Ok(default),
-        Some(v) => {
-            TOOL_HISTORY_NAMES.into_iter().find(|&n| v.as_str() == Some(n)).ok_or_else(|| bad(cmd, "`historyName` must be \"Freeform Pen\" or \"Line Tool\""))
-        }
+        Some(v) => TOOL_HISTORY_NAMES
+            .into_iter()
+            .find(|&n| v.as_str() == Some(n))
+            .ok_or_else(|| bad(cmd, "`historyName` must be \"Freeform Pen\", \"Line Tool\", \"Triangle Tool\" or \"Ellipse Tool\"")),
     }
 }
 
 /// Replaces the Work Path or a saved path, or appends subpaths with the requested operation.
-/// The optional Freeform Pen or Line Tool history label overrides the normal Work Path or Save
-/// Path label.
+/// An optional tool history label overrides the normal Work Path or Save Path label.
 pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.set";
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
@@ -443,7 +443,7 @@ pub(super) fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let rgb = c.to_rgb();
     let src = [rgb[0], rgb[1], rgb[2], c.alpha];
     let opacity = (f64p(p, "opacity").unwrap_or(100.0) / 100.0).clamp(0.0, 1.0) as f32;
-    let mode = p.get("mode").and_then(Value::as_str).and_then(blend_from_str).unwrap_or(BlendMode::Normal);
+    let mode = p.get("mode").and_then(Value::as_str).and_then(parse_blend).unwrap_or(BlendMode::Normal);
     let feather = f64p(p, "feather").unwrap_or(0.0) as f32;
     let aa = p.get("antiAlias").and_then(Value::as_bool).unwrap_or(true);
     let id = layer_id(s, p)?;
@@ -602,7 +602,7 @@ pub(super) fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let lines = vector::flatten_path(&path, 0.1);
         return stroke_with_command(s, p, cmd, &lines, simulate);
     }
-    let base = s.tools.brush.clone();
+    let base = (*s.tools.brush).clone();
     let fg = s.tools.foreground;
     let mut brush = photocraft_paint::BrushSettings {
         size: f64p(p, "size").map_or(base.size, |v| v as f32),

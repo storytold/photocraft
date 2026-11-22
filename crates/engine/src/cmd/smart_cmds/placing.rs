@@ -1,5 +1,5 @@
 use super::rendering::{refresh_or_fail, unapplied_filters};
-use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
+use super::source::{SourceImage, buffer_to_surface, cache_put, source_bytes, source_cache_key};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
     SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
@@ -236,7 +236,7 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     }
     let has_fx = layers.iter().any(|l| any_layer(l, &|x| x.effects.enabled && !x.effects.items.is_empty()));
     let region = layers.iter().map(|l| subtree_bounds(l, canvas)).fold(canvas, |a, b| a.union(&b)).inflate(if has_fx { 256 } else { 0 });
-    sub.layers = layers;
+    sub.layers = layers.into();
 
     let buf = photocraft_compose::render(&sub, region);
     let w = region.width() as usize;
@@ -258,8 +258,11 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     sub.layers.iter_mut().for_each(|l| shift_layer(l, -b.x0, -b.y0));
     sub.size = Size::new(b.width(), b.height());
     let bytes = encode_source(&sub)?;
-    // Seed the decode cache with the composite we already have.
-    cache_put(cache_key(&bytes, fmt), SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() });
+    // The encoded native document is non-SVG; match the classified render/bounds path.
+    cache_put(
+        source_cache_key(&sub.name, &bytes, fmt, Some(false)),
+        SourceImage { surface: Arc::new(translate_surface(&cache, -b.x0, -b.y0)), bounds: sub.bounds() },
+    );
 
     let source = SmartSource::Embedded { file_name: sub.name.clone(), bytes: Arc::new(bytes) };
     Ok(Layer::new(name, LayerContent::Smart(SmartObject::new(source, Affine::translate(b.x0 as f64, b.y0 as f64), Some(cache)))))

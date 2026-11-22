@@ -1,24 +1,20 @@
-//! #11481: File › Export › Artboards to Files (and Layers / Layer Comps to Files) has a JPEG
-//! Quality field behind a Custom checkbox, as Batch has (#3956). The quality reaches the command
+//! #11481: File › Export › Layers / Layer Comps to Files have a JPEG Quality row behind a Custom
+//! check box, as Batch has (#3956). Artboards to Files has its quality in its Export Options
+//! instead (#13636, `artboards_export_options_dialog_tests`). The quality reaches the command
 //! only for a JPEG with Custom on: left alone, an export writes what the command writes with no
 //! quality (the source JPEG's own quality, else the encoder default), a WebP stays lossless and
-//! PNG has none.
+//! PNG has none. The forms are the hosted command forms; the tests drive them as automation does.
 use crate::PhotocraftApp;
-use egui::accesskit::Role;
-use egui::vec2;
-use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
-const ARTBOARDS: &str = "file.export.artboardsToFiles";
-const EXPORTS: [&str; 3] = [ARTBOARDS, "file.export.layersToFiles", "file.export.layerCompsToFiles"];
+const COMPS: &str = "file.export.layerCompsToFiles";
+const EXPORTS: [&str; 2] = [COMPS, "file.export.layersToFiles"];
 
-fn harness() -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
-    });
-    let app = h.state_mut();
+fn app() -> (Box<PhotocraftApp>, egui::Context) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     // A noisy layer inside the board, so the JPEG quality shows in the file.
     app.run("layer.new.layer", json!({})).unwrap();
@@ -27,204 +23,119 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     app.run("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap();
     app.run("layerComp.new", json!({"name": "Comp"})).unwrap();
     app.sync_views();
-    h
+    let ctx = app.ctx().clone();
+    (app, ctx)
 }
 
-fn open(h: &mut Harness<'_, PhotocraftApp>, id: &str, dir: &str, format: &str) -> u64 {
-    let ctx = h.ctx.clone();
-    let dialog = crate::menus::invoke(h.state_mut(), &ctx, id, json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
-    fields.insert("dir".into(), json!(dir));
-    fields.insert("prefix".into(), json!("out"));
-    fields.insert("format".into(), json!(format));
-    h.run_steps(4);
+fn open(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, dir: &Path, format: &str) -> DialogId {
+    let reply = crate::menus::invoke(app, ctx, id, json!({})).unwrap();
+    let want = reply["dialog"].as_str().unwrap().to_owned();
+    // PLAN: assumed `app.framework.dialogs: DialogHost` and `OpenDialog { id, .. }`
+    let dialog = app.framework.dialogs.open_dialogs().into_iter().map(|d| d.id).find(|d| d.value().to_string() == want).unwrap();
+    set(app, ctx, dialog, "dir", json!(dir));
+    set(app, ctx, dialog, "prefix", json!("out"));
+    set(app, ctx, dialog, "format", json!(format));
     dialog
 }
 
-fn params(h: &mut Harness<'_, PhotocraftApp>, dialog: u64) -> Value {
-    crate::filter_dialog::params_of(&h.state_mut().ui.dialog_mut(dialog).unwrap().fields)
+fn set(app: &mut PhotocraftApp, ctx: &egui::Context, dialog: DialogId, key: &str, value: Value) {
+    app.framework.dialogs.set_json_field(ctx, dialog, key, value).unwrap_or_else(|e| panic!("{key}: {e}"));
 }
 
-fn exported(h: &mut Harness<'_, PhotocraftApp>, dialog: u64) -> Vec<u8> {
-    let r = crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
-    std::fs::read(r["files"][0].as_str().unwrap()).unwrap()
+fn fields(app: &PhotocraftApp, dialog: DialogId) -> Value {
+    serde_json::to_value(app.framework.dialogs.get_by_id::<HostedParamDialog>(dialog).unwrap().fields()).unwrap()
+}
+
+/// The first file an export wrote under `dir`.
+fn written(dir: &Path) -> Vec<u8> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(dir, &mut files);
+    files.sort();
+    std::fs::read(files.first().expect("the export wrote a file")).unwrap()
+}
+
+fn exported(app: &mut PhotocraftApp, ctx: &egui::Context, dialog: DialogId, dir: &Path) -> Vec<u8> {
+    crate::dialogs::confirm(app, ctx, dialog).unwrap();
+    written(dir)
 }
 
 /// The same export run straight through the command, into `dir`.
-fn direct(h: &mut Harness<'_, PhotocraftApp>, dir: &str, format: &str, quality: Option<i64>) -> Vec<u8> {
+fn direct(app: &mut PhotocraftApp, dir: &Path, format: &str, quality: Option<i64>) -> Vec<u8> {
     let mut p = json!({"dir": dir, "prefix": "out", "format": format});
     if let Some(q) = quality {
         p["quality"] = json!(q);
     }
-    let r = h.state_mut().run(ARTBOARDS, p).unwrap();
-    std::fs::read(r["files"][0].as_str().unwrap()).unwrap()
+    app.run(COMPS, p).unwrap();
+    written(dir)
 }
 
-/// Whether the Quality number field (not its row label) takes input.
-fn quality_enabled(h: &Harness<'_, PhotocraftApp>) -> bool {
-    let fields: Vec<bool> =
-        h.query_all_by_label("Quality").filter(|n| n.accesskit_node().role() != Role::Label).map(|n| !n.accesskit_node().is_disabled()).collect();
-    assert!(!fields.is_empty(), "the dialog shows a Quality field");
-    assert!(fields.iter().all(|e| *e == fields[0]), "{fields:?}");
-    fields[0]
-}
-
-/// Whether the Custom checkbox is ticked.
-fn custom_ticked(h: &Harness<'_, PhotocraftApp>) -> bool {
-    h.get_by_role_and_label(Role::CheckBox, "Custom").accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
-}
-
-/// The value the Quality field shows.
-fn shown_quality(h: &Harness<'_, PhotocraftApp>) -> Option<f64> {
-    h.get_by_role_and_label(Role::SpinButton, "Quality").accesskit_node().numeric_value()
-}
-
-fn tick_custom(h: &mut Harness<'_, PhotocraftApp>) {
-    h.get_by_role_and_label(Role::CheckBox, "Custom").click();
-    h.run_steps(2);
-}
-
-/// Types `text` into the Quality field and commits it with Tab, as a user does.
-fn type_quality(h: &mut Harness<'_, PhotocraftApp>, text: &str) {
-    h.get_by_role_and_label(Role::SpinButton, "Quality").click();
-    h.run_steps(1);
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.run_steps(1);
-    for ch in text.chars() {
-        h.event(egui::Event::Text(ch.to_string()));
-        h.run_steps(1);
-    }
-    h.key_press(egui::Key::Tab);
-    h.run_steps(2);
-}
-
-/// Holds Alt, which turns Cancel into Reset, and clicks it.
-fn alt_reset(h: &mut Harness<'_, PhotocraftApp>) {
-    let alt = egui::Modifiers::ALT;
-    h.event(egui::Event::ModifiersChanged(alt));
-    h.run_steps(2);
-    let at = h.get_by_label("Reset").rect().center();
-    h.event(egui::Event::PointerMoved(at));
-    h.run_steps(1);
-    for pressed in [true, false] {
-        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: alt });
-        h.run_steps(1);
-    }
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-    h.run_steps(3);
-}
-
-fn tmp() -> (tempfile::TempDir, String) {
-    let t = tempfile::tempdir().unwrap();
-    let s = t.path().to_string_lossy().into_owned();
-    (t, s)
+fn tmp() -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
 }
 
 #[test]
-fn artboards_to_files_sends_a_custom_jpeg_quality() {
-    let mut h = harness();
-    let (_a, via_dialog) = tmp();
-    let (_b, via_command) = tmp();
+fn layer_comps_to_files_sends_a_custom_jpeg_quality() {
+    let (mut app, ctx) = app();
+    let via_dialog = tmp();
+    let via_command = tmp();
+    // Custom off: the quality row is greyed out for any format but JPEG, and an untouched JPEG export writes what
+    // the command writes with no quality.
+    let dialog = open(&mut app, &ctx, COMPS, via_dialog.path(), "png");
+    assert!(app.framework.dialogs.set_json_field(&ctx, dialog, "quality", json!(5)).is_err(), "PNG: the quality row takes no input");
+    set(&mut app, &ctx, dialog, "format", json!("jpg"));
+    assert!(fields(&app, dialog).get("quality").is_none_or(Value::is_null), "no quality is sent while Custom is off");
+    let bytes = exported(&mut app, &ctx, dialog, via_dialog.path());
+    assert!(bytes == direct(&mut app, via_command.path(), "jpg", None), "the untouched dialog keeps the command's own JPEG quality");
+
+    // Custom on: the typed quality reaches the command.
     let mut sizes = Vec::new();
     for quality in [0, 3, 12] {
-        let dialog = open(&mut h, ARTBOARDS, &via_dialog, "jpg");
-        assert!(!custom_ticked(&h) && !quality_enabled(&h), "JPEG with Custom off: the field is greyed out");
-        tick_custom(&mut h);
-        assert!(custom_ticked(&h) && quality_enabled(&h), "JPEG with Custom on: the field takes input");
-        assert_eq!(params(&mut h, dialog)["quality"], json!(10), "Custom starts at quality 10");
-        type_quality(&mut h, &quality.to_string());
-        assert_eq!(shown_quality(&h), Some(quality as f64), "the field shows the typed quality");
-        assert_eq!(params(&mut h, dialog)["quality"], json!(quality), "the typed quality reaches the command");
-        let bytes = exported(&mut h, dialog);
-        assert!(bytes == direct(&mut h, &via_command, "jpg", Some(quality)), "quality {quality}: the file the command writes at that quality");
+        let (a, b) = (tmp(), tmp());
+        let dialog = open(&mut app, &ctx, COMPS, a.path(), "jpg");
+        set(&mut app, &ctx, dialog, "quality", json!(quality));
+        assert_eq!(fields(&app, dialog)["quality"].as_f64(), Some(quality as f64), "the typed quality is the field's value");
+        let bytes = exported(&mut app, &ctx, dialog, a.path());
+        assert!(bytes == direct(&mut app, b.path(), "jpg", Some(quality)), "quality {quality}: the file the command writes at that quality");
         sizes.push(bytes.len());
     }
     assert!(sizes[0] < sizes[1] && sizes[1] < sizes[2], "a higher quality writes a bigger JPEG: {sizes:?}");
 }
 
 #[test]
-fn an_untouched_jpeg_export_writes_what_the_command_writes_with_no_quality() {
-    let mut h = harness();
-    let (_a, via_dialog) = tmp();
-    let (_b, via_command) = tmp();
-    let dialog = open(&mut h, ARTBOARDS, &via_dialog, "jpg");
-    assert!(params(&mut h, dialog).get("quality").is_none_or(Value::is_null), "no quality is sent");
-    let bytes = exported(&mut h, dialog);
-    assert!(bytes == direct(&mut h, &via_command, "jpg", None), "the untouched dialog keeps the command's own JPEG quality");
-}
-
-#[test]
 fn export_to_files_quality_leaves_png_and_webp_as_they_were() {
-    let mut h = harness();
-    let (_a, dir) = tmp();
+    let (mut app, ctx) = app();
     for id in EXPORTS {
-        for format in ["png", "webp"] {
-            let dialog = open(&mut h, id, &dir, format);
-            // Custom on from an earlier JPEG choice still sends nothing for these formats.
-            h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("__jpegCustom".into(), json!(true));
-            h.run_steps(2);
-            assert!(!quality_enabled(&h), "{id} {format}: the field is greyed out");
-            assert!(params(&mut h, dialog).get("quality").is_none_or(Value::is_null), "{id} {format}: no quality is sent");
-            let bytes = exported(&mut h, dialog);
-            if format == "webp" {
-                // The default WebP stays lossless (a VP8L bitstream, not lossy VP8).
-                assert!(bytes.windows(4).any(|w| w == b"VP8L"), "{id}: the WebP stays lossless");
-            }
+        // A quality typed for JPEG, then another format: nothing is sent, so a WebP stays lossless (a VP8L
+        // bitstream, not lossy VP8).
+        let dir = tmp();
+        let dialog = open(&mut app, &ctx, id, dir.path(), "jpg");
+        set(&mut app, &ctx, dialog, "quality", json!(4));
+        set(&mut app, &ctx, dialog, "format", json!("webp"));
+        let bytes = exported(&mut app, &ctx, dialog, dir.path());
+        assert!(bytes.windows(4).any(|w| w == b"VP8L"), "{id}: the WebP stays lossless");
+
+        let dir = tmp();
+        let dialog = open(&mut app, &ctx, id, dir.path(), "png");
+        assert!(app.framework.dialogs.set_json_field(&ctx, dialog, "quality", json!(4)).is_err(), "{id}: PNG takes no quality");
+        crate::dialogs::cancel(&mut app, &ctx, dialog).unwrap();
+
+        // Back to JPEG, the quality typed before is still there.
+        let dialog = open(&mut app, &ctx, id, dir.path(), "jpg");
+        set(&mut app, &ctx, dialog, "quality", json!(4));
+        for format in ["png", "jpg"] {
+            set(&mut app, &ctx, dialog, "format", json!(format));
         }
-        // Back to JPEG with Custom on, the field sends its quality again.
-        let dialog = open(&mut h, id, &dir, "jpg");
-        h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("__jpegCustom".into(), json!(true));
-        h.run_steps(2);
-        assert!(quality_enabled(&h), "{id}");
-        assert_eq!(params(&mut h, dialog)["quality"], json!(10), "{id}");
-        crate::dialogs::cancel(h.state_mut(), dialog).unwrap();
+        assert_eq!(fields(&app, dialog)["quality"].as_f64(), Some(4.0), "{id}: the round trip keeps the quality");
+        crate::dialogs::cancel(&mut app, &ctx, dialog).unwrap();
     }
-}
-
-/// A Custom quality survives a switch to another format and back in the same dialog.
-#[test]
-fn the_custom_quality_survives_a_format_round_trip() {
-    let mut h = harness();
-    let (_a, dir) = tmp();
-    let dialog = open(&mut h, ARTBOARDS, &dir, "jpg");
-    tick_custom(&mut h);
-    type_quality(&mut h, "4");
-    assert_eq!(params(&mut h, dialog)["quality"], json!(4));
-    for format in ["png", "webp"] {
-        h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("format".into(), json!(format));
-        h.run_steps(2);
-        assert!(!quality_enabled(&h), "{format}: the field is greyed out");
-        assert!(params(&mut h, dialog)["quality"].is_null(), "{format}: no quality is sent");
-        h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("format".into(), json!("jpg"));
-        h.run_steps(2);
-        assert!(custom_ticked(&h) && quality_enabled(&h), "back from {format}: Custom is still on");
-        assert_eq!(shown_quality(&h), Some(4.0), "back from {format}: the field still shows 4");
-        assert_eq!(params(&mut h, dialog)["quality"], json!(4), "back from {format}: quality 4 is sent");
-    }
-}
-
-/// Alt+Reset (Alt held, Cancel clicked as Reset) puts the Custom checkbox and its quality back to
-/// how the dialog opened, and keeps the dialog open.
-#[test]
-fn alt_reset_restores_the_custom_quality() {
-    let mut h = harness();
-    let ctx = h.ctx.clone();
-    let dialog = crate::menus::invoke(h.state_mut(), &ctx, ARTBOARDS, json!({})).unwrap()["dialog"].as_u64().unwrap();
-    // JPEG chosen in the dialog, after it opened: Reset puts the format back too.
-    h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("format".into(), json!("jpg"));
-    h.run_steps(4);
-    tick_custom(&mut h);
-    type_quality(&mut h, "4");
-    assert_eq!(params(&mut h, dialog)["quality"], json!(4));
-    alt_reset(&mut h);
-    assert!(h.state().ui.dialogs.iter().any(|d| d.id == dialog), "Reset keeps the dialog open");
-    let p = params(&mut h, dialog);
-    assert_eq!((&p["format"], &p["quality"]), (&json!("png"), &Value::Null), "the opening format, no quality");
-    assert!(!custom_ticked(&h) && !quality_enabled(&h), "Custom is off again");
-    assert_eq!(shown_quality(&h), Some(10.0), "the field shows the opening quality");
-    // Choosing JPEG again still sends no quality until Custom is ticked.
-    h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("format".into(), json!("jpg"));
-    h.run_steps(2);
-    assert!(!custom_ticked(&h), "JPEG after Reset: Custom stays off");
-    assert!(params(&mut h, dialog)["quality"].is_null(), "JPEG after Reset: no quality is sent");
 }

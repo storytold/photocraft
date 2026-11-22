@@ -220,13 +220,15 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let mut d = (*st.doc).clone();
     f(&mut d);
-    st.doc = Arc::new(d);
+    *st.doc_mut() = Arc::new(d);
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
+    st.record_unknown_damage();
     if clean {
         st.saved_revision = st.revision;
     }
     st.last_damage = Some(Rect::EMPTY);
+    st.record_damage();
     Ok(())
 }
 
@@ -260,21 +262,23 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             // As in `Session::edit`: undo targets what was selected just before the step (#1356).
             st.history.set_current_layers(prior);
             st.history.record(label, before.clone(), st.layer_target());
-            st.history.add_current_visibility(&crate::visibility_changes(&before, &st.doc));
+            let changes = crate::visibility_changes(&before, &st.doc);
+            st.history.add_current_visibility(&changes);
             st.trim_history();
             st.coalesce = None;
             Ok(v)
         }
         Err(e) => {
-            let failed = std::mem::replace(&mut st.doc, before);
-            st.active_layer = prior.active;
-            st.selected_layers = prior.selected;
+            let failed = std::mem::replace(st.doc_mut(), before);
+            st.set_active_layer(prior.active);
+            *st.selection_mut() = prior.selected;
             st.layer_anchor = anchor;
             st.channel_view = channel_view;
             st.coalesce = coalesce;
             st.color_samplers = samplers;
             st.symmetry = symmetry;
             st.revision += 1;
+            st.record_unknown_damage();
             // A failed compound does not make an otherwise untouched document dirty.
             if was_clean {
                 st.saved_revision = st.revision;
@@ -282,6 +286,7 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             // This revision's damage; `Session::dispatch` reports the command's whole span (nothing,
             // when the inner commands had changed pixels and the restore took them back).
             st.last_damage = crate::layer_multi_cmds::step_damage(&failed, &st.doc);
+            st.record_damage();
             Err(e)
         }
     };
@@ -776,6 +781,15 @@ pub fn straighten_angle(r: &Ruler) -> f64 {
     a - 90.0 * (a / 90.0).round()
 }
 
+/// Is `sel` a plain rectangle: the pixels inside its bounds all fully selected?
+fn plain_rectangle(sel: &photocraft_raster::Surface) -> bool {
+    let bounds = sel.content_bounds();
+    // Row by row: a sparse selection over a big area is refused at its first gap, and only one row
+    // is ever read. Full coverage means exactly 1.0 (a partly selected edge pixel is not a plain
+    // rectangle, however close to 1).
+    !bounds.is_empty() && (bounds.y0..bounds.y1).all(|y| sel.read_region(Rect::new(bounds.x0, y, bounds.x1, y + 1)).iter().all(|v| *v >= 1.0))
+}
+
 fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
     let d = doc(s)?;
     let r = d.measurement.ruler.ok_or_else(|| EngineError::Other("no ruler line".into()))?;
@@ -802,7 +816,7 @@ fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(gate) = s.authorize {
                 gate("image.rotation.arbitrary", &rotation)?;
             }
-            crate::mode_cmds::rotate_arbitrary_with(s, &rotation, false)?;
+            crate::mode_cmds::rotate_arbitrary_with(s, &rotation, false, false)?;
             let nd = doc(s)?;
             let (cw, ch) = inscribed(w0, h0, rot.to_radians());
             let (nw, nh) = (f64::from(nd.size.width), f64::from(nd.size.height));
@@ -813,7 +827,24 @@ fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
             let (sn, cs) = rot.to_radians().sin_cos();
             // Clockwise on screen (y down) about the canvas centre.
             let m = [cs, sn, -sn, cs, cx - (cs * cx - sn * cy), cy - (sn * cx + cs * cy)];
+            // The whole layer turns even with a selection, which comes back as it was (#11993): the
+            // reference saves it, deselects, transforms and loads it again, all one step here.
+            // Only a plain rectangle (every pixel fully selected) is the measured case; an elliptical or
+            // feathered selection keeps today's behaviour (only its pixels turn).
+            let saved = doc(s)?.selection.clone().filter(plain_rectangle);
+            if saved.is_some() {
+                s.edit("Deselect", |doc, _| {
+                    doc.selection = None;
+                    Ok(())
+                })?;
+            }
             s.execute("edit.transform", json!({"matrix": m}))?;
+            if let Some(selection) = saved {
+                s.edit("Load Selection", move |doc, _| {
+                    doc.selection = Some(selection);
+                    Ok(())
+                })?;
+            }
         }
         // The ruler is cleared after straightening, as in Photoshop.
         set_quiet(s, |d| d.measurement.ruler = None)
@@ -1439,5 +1470,8 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "analysis_straighten_enabled_tests.rs"]
 mod analysis_straighten_enabled_tests;
+#[cfg(test)]
+#[path = "analysis_straighten_selection_tests.rs"]
+mod analysis_straighten_selection_tests;
 #[cfg(test)]
 mod tests;

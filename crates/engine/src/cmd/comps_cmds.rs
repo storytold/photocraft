@@ -7,7 +7,7 @@
 //! `"comp": id | name` and default to the comp applied (or created) last.
 
 use photocraft_doc::comps::{capture_states, layer_position, next_comp_id};
-use photocraft_doc::{CompLayerState, Document, LayerComp, LayerId};
+use photocraft_doc::{CompAppearance, CompLayerState, Document, LayerComp, LayerId};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -120,6 +120,7 @@ fn new_comp(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"comp": id}))
 }
 
+/// Refresh the requested comp property without capturing the properties it will retain.
 fn update_comp(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "layerComp.update";
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -136,7 +137,24 @@ fn update_comp(s: &mut Session, p: &Value) -> Result<Value> {
         _ => "Update Layer Comp",
     };
     s.edit(label, |doc, _| {
-        let now = capture_states(doc);
+        let now = if what == "all" {
+            capture_states(doc)
+        } else {
+            doc.walk()
+                .into_iter()
+                .map(|(_, _, l)| CompLayerState {
+                    layer: l.id,
+                    visible: (what == "visibility").then_some(l.visible),
+                    position: if what == "position" { layer_position(l) } else { None },
+                    appearance: (what == "appearance").then(|| CompAppearance {
+                        blend: l.blend,
+                        opacity: l.opacity,
+                        fill_opacity: l.fill_opacity,
+                        effects: l.effects.clone(),
+                    }),
+                })
+                .collect()
+        };
         for id in &ids {
             let Some(c) = doc.layer_comps.iter_mut().find(|c| c.id == *id) else { continue };
             if what == "all" {
@@ -457,8 +475,12 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         _ if flag(p, "selectedOnly", false) => vec![comp_param(&doc, &json!({}), cmd)?],
         _ => doc.layer_comps.iter().map(|c| c.id).collect(),
     };
+    let matching: Vec<(usize, &LayerComp)> = doc.layer_comps.iter().enumerate().filter(|(_, c)| chosen.contains(&c.id)).collect();
+    if matching.is_empty() {
+        return Err(bad(cmd, "no matching layer comps"));
+    }
     let mut files = Vec::new();
-    for (i, c) in doc.layer_comps.iter().enumerate().filter(|(_, c)| chosen.contains(&c.id)) {
+    for (i, c) in matching.iter().copied() {
         let mut one = (*doc).clone();
         apply_comp(&mut one, c, false);
         one.last_applied_comp = Some(c.id);
@@ -466,8 +488,11 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         save_doc(&one, &path, save)?;
         files.push(path);
     }
-    if files.is_empty() {
-        return Err(bad(cmd, "no matching layer comps"));
+    // Like the reference application, leave the document on the last exported comp, one "Apply Layer Comp" state each.
+    // A run that fails while writing returns before this point and leaves the document and its history as they were.
+    let ids: Vec<u32> = matching.iter().map(|(_, c)| c.id).collect();
+    for id in ids {
+        apply(s, id, "Apply Layer Comp")?;
     }
     Ok(json!({"files": files}))
 }
@@ -552,3 +577,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "comps_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "comps_cmds/layer_comps_to_files_history_tests.rs"]
+mod layer_comps_to_files_history_tests;
