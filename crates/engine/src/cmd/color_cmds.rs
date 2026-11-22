@@ -297,8 +297,10 @@ impl ColorState {
                 // 32-bit linear images (EXR/HDR are tagged linear sRGB or linear gray on import)
                 // stay linear, as Photoshop keeps 32-bit documents in a linear version of the
                 // working space.
-                let linear_hdr =
-                    doc.depth == SampleType::F32 && (emb.same_colors(Builtin::LinearSrgb.profile()) || emb.same_colors(craft_cms::builtin::linear_gray()));
+                let linear_hdr = doc.depth == SampleType::F32
+                    && (emb.same_colors(Builtin::LinearSrgb.profile())
+                        || emb.same_colors(craft_cms::builtin::linear_gray())
+                        || is_linear_variant_of(&emb, &working));
                 if !mismatch || linear_hdr {
                     return merge(base, json!({"action": "kept"}));
                 }
@@ -346,8 +348,10 @@ impl ColorState {
         let embedded = doc.icc_profile.as_ref().and_then(|b| profile_from_bytes(b).ok()).filter(|p| p.color_space == space);
         match embedded {
             Some(emb) => {
-                let linear_hdr =
-                    doc.depth == SampleType::F32 && (emb.same_colors(Builtin::LinearSrgb.profile()) || emb.same_colors(craft_cms::builtin::linear_gray()));
+                let linear_hdr = doc.depth == SampleType::F32
+                    && (emb.same_colors(Builtin::LinearSrgb.profile())
+                        || emb.same_colors(craft_cms::builtin::linear_gray())
+                        || is_linear_variant_of(&emb, &working));
                 if !self.settings.ask_on_mismatch || emb.same_colors(&working) || linear_hdr {
                     return None;
                 }
@@ -1056,7 +1060,7 @@ fn assign_profile(s: &mut Session, p: &Value) -> Result<Value> {
         if prof.color_space != mode_space(doc.mode) {
             return Err(EngineError::Other(format!("profile `{}` is {:?}; the document is {:?}", prof.description, prof.color_space, doc.mode)));
         }
-        Some(prof.to_bytes())
+        if doc.depth == SampleType::F32 { Some(linear_variant(&prof)?) } else { Some(prof.to_bytes()) }
     };
     let desc = match &bytes {
         Some(b) => profile_from_bytes(b).map(|p| p.description.clone()).unwrap_or_default(),
@@ -1067,6 +1071,95 @@ fn assign_profile(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({ "profile": desc }))
+}
+
+/// Whether a tone curve is linear: the identity, or any gamma, parametric or table form that evaluates as one
+/// (`Curve::is_identity` is false for every parametric curve above type 0, even `[1, 1, 0, 1, 0, 0, 0]`).
+fn curve_is_linear(c: &craft_cms::Curve) -> bool {
+    use craft_cms::Curve;
+    const EPS: f64 = 1e-9;
+    match c {
+        // Gamma 1, a type 0 curve with g = 1 and a table whose every entry is on the diagonal.
+        Curve::Identity | Curve::Gamma(_) | Curve::Table(_) => c.is_identity(),
+        Curve::Parametric { kind: 0, .. } => c.is_identity(),
+        // Types 1-4 are two branches split at `d` (types 1 and 2 at -b/a): the upper `(a x + b)^g + e`, the lower
+        // constant (1, 2) or `c x + f` (3, 4). Each branch that covers part of [0, 1] must itself be the identity; the
+        // branches are checked from their parameters, not by probing the curve, so a short piece can't hide.
+        Curve::Parametric { kind, p } => {
+            let [g, a, b, cc, d, e, f] = *p;
+            let (split, upper_offset) = match kind {
+                1 => (if a != 0.0 { -b / a } else { f64::INFINITY }, 0.0),
+                2 => (if a != 0.0 { -b / a } else { f64::INFINITY }, cc),
+                3 => (d, 0.0),
+                _ => (d, e),
+            };
+            let lower_len = split.clamp(0.0, 1.0);
+            let upper_len = 1.0 - split.clamp(0.0, 1.0);
+            // The evaluator clamps a power base at or below zero, so `a x + b` must stay nonnegative over the branch
+            // for the offsets to cancel: at its lower end, `a x + b` with `a = 1`.
+            let upper_start = split.clamp(0.0, 1.0);
+            let upper_ok = upper_len <= 0.0 || ((g - 1.0).abs() < EPS && (a - 1.0).abs() < EPS && (b + upper_offset).abs() < EPS && upper_start + b >= -EPS);
+            let lower_ok = lower_len <= 0.0 || (matches!(kind, 3 | 4) && (cc - 1.0).abs() < EPS && (if *kind == 4 { f } else { 0.0 }).abs() < EPS);
+            upper_ok && lower_ok
+        }
+    }
+}
+
+/// Whether `emb` is the linear variant of the working profile `working` (what a 32-bit document is tagged with after
+/// Assign Profile, #14239): such a document is kept as it is when reopened, not offered a conversion to the working space.
+fn is_linear_variant_of(emb: &Profile, working: &Profile) -> bool {
+    linear_variant(working).ok().and_then(|b| profile_from_bytes(&b).ok()).is_some_and(|v| emb.same_colors(&v))
+}
+
+/// The profile a 32-bit document is tagged with when `prof` is assigned (#14239): 32-bit samples are linear, so an
+/// RGB or Gray matrix/TRC profile becomes its linear variant (same primaries and white point, tone curves of gamma
+/// 1.0), named "<description> (Linear RGB Profile)" or "(Linear Grayscale Profile)". A profile that is already linear,
+/// or of another colour space, is kept as it is; an RGB or Gray profile with only lookup tables (no tone curves)
+/// can't be made linear and is refused.
+fn linear_variant(prof: &Profile) -> Result<Arc<Vec<u8>>> {
+    let suffix = match prof.color_space {
+        ColorSpace::Rgb => "Linear RGB Profile",
+        ColorSpace::Gray => "Linear Grayscale Profile",
+        _ => return Ok(prof.to_bytes()),
+    };
+    // The shaper of the profile's own colour space: matrix and curves for RGB, the grey curve for Gray. A stray tag of
+    // the other kind doesn't make a profile convertible (CodeRabbit on #16083).
+    let shaper = match prof.color_space {
+        ColorSpace::Rgb => prof.matrix.is_some() && prof.trc.is_some(),
+        _ => prof.gray_trc.is_some(),
+    };
+    if !shaper {
+        return Err(EngineError::Other(format!("profile `{}` is built from lookup tables and has no linear variant for a 32-bit document", prof.description)));
+    }
+    let curves: Vec<&craft_cms::Curve> = match prof.color_space {
+        ColorSpace::Rgb => prof.trc.iter().flatten().collect(),
+        _ => prof.gray_trc.iter().collect(),
+    };
+    // Already linear: kept as it is, unless lookup tables are present, which the conversion uses before the curves
+    // and which are removed below.
+    let has_tables = prof.a2b.iter().chain(prof.b2a.iter()).any(Option::is_some);
+    if !has_tables && curves.into_iter().all(curve_is_linear) {
+        return Ok(prof.to_bytes());
+    }
+    let mut linear = prof.clone();
+    if let Some(trc) = linear.trc.as_mut() {
+        *trc = std::array::from_fn(|_| craft_cms::Curve::Gamma(1.0));
+    }
+    if linear.gray_trc.is_some() {
+        linear.gray_trc = Some(craft_cms::Curve::Gamma(1.0));
+    }
+    // Tables made for the gamma-encoded curves would no longer match: the variant is matrix/TRC only.
+    linear.a2b = [None, None, None];
+    linear.b2a = [None, None, None];
+    linear.description = format!("{} ({suffix})", prof.description);
+    let linear = linear.with_encoded_bytes();
+    // The tables are gone, so the matrix has to carry both directions: a profile whose tables made it usable but whose
+    // matrix is singular must be refused before the tag changes (CodeRabbit on #16083).
+    let intent = Intent::RelativeColorimetric;
+    if linear.pcs_to_device(intent).is_err() || linear.device_to_pcs(intent).is_err() {
+        return Err(EngineError::Other(format!("profile `{}` has no usable linear variant for a 32-bit document", prof.description)));
+    }
+    Ok(linear.to_bytes())
 }
 
 /// Read opt-in destructive profile options without accepting malformed values as defaults.
