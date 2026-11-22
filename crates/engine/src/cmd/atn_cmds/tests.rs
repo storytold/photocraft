@@ -4969,7 +4969,7 @@ fn mapped_background_property_survives_export_and_playback() {
     assert_eq!(get_list(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor.as_ref().unwrap(), "null"), Some(&[r][..]));
     let mut s = Session::new();
     s.execute("file.new", json!({"width":4,"height":4,"background":"white"})).unwrap();
-    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layers[0].name = "Hintergrund".into();
+    std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layers[0].name = "Hintergrund".into();
     s.execute("layer.new.layer", json!({"name":"Background"})).unwrap();
     let ActionStep { command: id, params: p } = &loaded.actions[0].steps[0];
     s.execute(id, p.clone()).unwrap();
@@ -7046,6 +7046,19 @@ fn adjustment_layer_name_must_round_trip() {
             assert_eq!(step.command, PHOTOSHOP_STEP, "{name:?}");
         }
     }
+}
+
+/// #14417: an Image > Adjustments apply step without PrsL plays with Preserve Luminosity off;
+/// an explicit PrsL is honoured. (A layer edit's missing PrsL stays a merge, which the reset
+/// test pins on the setd path.)
+#[test]
+fn color_balance_event_defaults_preserve_luminosity_off() {
+    let e = event_for(&item("ClrB", "Color Balance", None).event).expect("ClrB is mapped");
+    let row = D::List(vec![long(10.0), long(0.0), long(0.0)]);
+    let Mapped::Steps(steps) = (e.from)(&desc("ClrB").with("MdtL", row.clone())) else { panic!("ClrB maps to a step") };
+    assert_eq!(steps[0].1, json!({"midtones": [10.0, 0.0, 0.0], "preserveLuminosity": false}), "no PrsL plays off");
+    let Mapped::Steps(on) = (e.from)(&desc("ClrB").with("MdtL", row).with("PrsL", D::Boolean(true))) else { panic!("ClrB maps to a step") };
+    assert_eq!(on[0].1["preserveLuminosity"], json!(true), "an explicit PrsL is honoured");
 }
 
 // Calls between the actions of a set keep reaching them through Save Actions… and Replace

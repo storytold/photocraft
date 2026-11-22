@@ -63,7 +63,7 @@ mod tests {
     use crate::PhotocraftApp;
     use crate::new_layer_ui::testing::set;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
@@ -95,7 +95,7 @@ mod tests {
             let id = super::open(&mut app).unwrap();
             set(&mut app, id, "name", json!(typed)).unwrap();
             crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
-            assert_eq!(app.session.active().unwrap().snapshots.last().unwrap().name, want);
+            assert_eq!(app.session.active().unwrap().snapshots().last().unwrap().name, want);
         }
         assert!(app.run(super::COMMAND, json!({"name": ""})).is_err(), "agents still get the error");
     }

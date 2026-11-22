@@ -1,5 +1,5 @@
 use craft::behavior::EditEvent;
-use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::dialog::{DialogId, DialogResult, StackDialog as _};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamKind};
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::runtime::requests::PathKind;
@@ -288,16 +288,26 @@ fn take_printer_lists(app: &mut PhotocraftApp) -> Vec<Printer> {
 /// Answers the dialog's request for a printer list. The list goes through a channel to
 /// `HostedPrint::listen`, so `State::poll`'s choice rule picks the printer. While another print holds the spooler the
 /// list is the cached one (or empty), and the dialog asks again on its next pass, after a short wait, so the real
-/// list arrives once the spooler is free.
+/// list arrives once the spooler is free. A cached list without the chosen printer is not sent, so the chosen
+/// printer and its driver settings stay, and Print stays unavailable, until a fresh list arrives. A fresh list
+/// without the chosen printer replaces it (an empty list leaves no printer chosen), and the driver settings of the
+/// replaced printer are dropped. With no printer chosen (the system's default), the driver settings stay.
 fn refresh_printers(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (list, listed) = match photocraft_engine::print_cmds::try_with_spooler(|| take_printer_lists(app)) {
         Some(list) => (list, true),
         None => (take_printer_lists(app), false),
     };
-    let (tx, rx) = std::sync::mpsc::channel();
-    let _ = tx.send(list);
     if let Some(dialog) = app.framework.dialogs.get_mut::<HostedPrint>() {
-        dialog.listen(rx);
+        let chosen = dialog.json_fields().and_then(|f| f.get("printer").and_then(Value::as_str).map(str::to_owned)).unwrap_or_default();
+        let missing = !chosen.is_empty() && !list.iter().any(|p| p.name == chosen);
+        let replaces = listed && missing;
+        if listed || !missing {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let _ = tx.send(list);
+            if dialog.listen(rx) && replaces {
+                dialog.fields_mut().remove("printerSettings");
+            }
+        }
         if !listed {
             dialog.request_refresh();
             ctx.request_repaint_after(std::time::Duration::from_millis(100));

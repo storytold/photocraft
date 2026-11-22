@@ -24,7 +24,7 @@ use photocraft_ui_egui::{PhotocraftApp, Services};
 use rayon::prelude::*;
 use serde_json::json;
 
-type H = egui_kittest::Harness<'static, PhotocraftApp>;
+type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())

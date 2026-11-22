@@ -8,7 +8,7 @@ use crate::PhotocraftApp;
 
 const FIT_IMAGE: &str = "file.automate.fitImage";
 
-fn app(width: u32, height: u32) -> PhotocraftApp {
+fn app(width: u32, height: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": width, "height": height})).unwrap();
     app

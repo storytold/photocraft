@@ -892,7 +892,7 @@ fn adjustment_layer_to(id: &str, p: &Value) -> Option<Descriptor> {
         None | Some(Value::Null) => None,
         Some(v) => {
             let label = v.as_str()?;
-            if crate::commands::blend_from_str(label)? == photocraft_doc::BlendMode::PassThrough {
+            if crate::commands::parse_blend(label)? == photocraft_doc::BlendMode::PassThrough {
                 return None;
             }
             Some(blend_ps(label)?)

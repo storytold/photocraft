@@ -24,7 +24,7 @@ pub fn dither_noise(x: i32, y: i32) -> f32 {
 use serde::{Deserialize, Serialize};
 
 /// Storage type of one channel sample.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum SampleType {
     U8,
     U16,
@@ -47,7 +47,7 @@ impl SampleType {
 }
 
 /// Document colour model (Photoshop "Image → Mode").
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum ColorMode {
     Bitmap,
     Grayscale,
@@ -74,7 +74,7 @@ impl ColorMode {
 }
 
 /// Layout of a pixel: colour model, sample type, and whether an alpha channel follows the colour channels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct PixelFormat {
     pub mode: ColorMode,
     pub sample: SampleType,
@@ -161,7 +161,7 @@ pub fn write_sample(bytes: &mut [u8], sample: SampleType, index: usize, v: f32) 
 }
 
 /// A colour value in the document's model with alpha, as normalised floats.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Color {
     pub mode: ColorMode,
     /// Up to 4 colour components (unused ones are 0) followed by nothing; alpha kept separately.

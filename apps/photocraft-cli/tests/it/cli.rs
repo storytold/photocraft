@@ -515,11 +515,11 @@ fn batch_applies_actions_to_directory() {
     .stdout;
     assert!(out.contains("2 succeeded, 0 failed"), "{out}");
     let clean_log = std::fs::read(&log).unwrap();
-    assert!(clean_log.starts_with(&[0xff, 0xfe]));
+    assert!(clean_log.starts_with(&[0xfe, 0xff]));
     let (pairs, remainder) = clean_log[2..].as_chunks::<2>();
     assert!(remainder.is_empty());
-    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
-    assert_eq!(body, "Batch Start\r\n\r\nBatch End\r\n");
+    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert_eq!(body, "Start Batch\r\n\r\nEnd Batch\r\n");
     for n in ["one", "two"] {
         let info = ok(bin().arg("info").arg(outp.join(format!("{n}.pcraft")))).stdout;
         let v: Value = serde_json::from_str(&info).unwrap();
@@ -557,11 +557,11 @@ fn batch_recursive_naming_stop_and_error_log() {
         assert!(output.join(file).is_file(), "{file}: {stdout}");
     }
     let bytes = std::fs::read(log).unwrap();
-    assert!(bytes.starts_with(&[0xff, 0xfe]));
+    assert!(bytes.starts_with(&[0xfe, 0xff]));
     let (pairs, remainder) = bytes[2..].as_chunks::<2>();
     assert!(remainder.is_empty());
-    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
-    assert!(errors.contains("Batch Start\r\n") && errors.contains("b.png") && errors.ends_with("Batch End\r\n"), "{errors}");
+    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert!(errors.contains("Start Batch\r\n") && errors.contains("b.png") && errors.ends_with("End Batch\r\n"), "{errors}");
 
     let stopped = root.join("stopped");
     let result = run(&stopped, &["--recursive", "--stop-on-error"]);

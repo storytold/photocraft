@@ -42,7 +42,7 @@ fn doc(depth: SampleType) -> Document {
     through_child.blend = BlendMode::LinearLight;
     through_child.locks.all = true;
     let through = Layer::group("Pass <&> \"through\"", vec![through_child]);
-    d.layers = vec![base, off, hidden, group, through];
+    d.layers = vec![base, off, hidden, group, through].into();
     d
 }
 
@@ -93,7 +93,7 @@ fn float_documents_save_as_16_bit() {
     let mut d = doc(SampleType::U16);
     d.depth = SampleType::F32;
     let fmt = PixelFormat::RGBA32F;
-    d.layers = vec![block("Float", fmt, 0, 0, 10, 10, 9)];
+    d.layers = vec![block("Float", fmt, 0, 0, 10, 10, 9)].into();
     let (back, warnings, _) = round_trip(&d);
     assert!(warnings.iter().any(|w| w.contains("16-bit")), "{warnings:?}");
     assert_eq!(back.depth, SampleType::U16);

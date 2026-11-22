@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 const FONTS: [&str; 2] = ["Inter", "JetBrains Mono"];
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 use super::commit_tests::ime;
 
@@ -66,17 +66,29 @@ fn surrender_focus(h: &mut H) {
 /// A text layer `content` in an edit session in `FONTS[pattern % 2]`; patterns 2 and 3 style characters 2..4 in the other font.
 /// The full app frame, so the options bar and the Character panel both show their family fields.
 fn fixture(pattern: usize, content: &str) -> (H, LayerId) {
-    let content = content.to_owned();
-    let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
+    let mut h = document();
+    let id = text_layer(&mut h, pattern, content);
+    (h, id)
+}
+
+/// [`fixture`]'s app with its document and the Type tool, before the text layer.
+fn document() -> H {
+    Harness::builder().with_size(vec2(1600.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
         app.session.edit_prefs(|p| p.type_.font_preview = photocraft_engine::prefs::FontPreview::Off);
         app.run("file.new", json!({"width": 240, "height": 160})).unwrap();
         app.sync_views();
         app.ui.tool = crate::state::Tool::Type;
-        app.run("type.create", json!({"text": content, "font": FONTS[pattern % 2], "size": 18})).unwrap();
         app
-    });
+    })
+}
+
+/// [`fixture`]'s text layer, made on `h` and edited.
+fn text_layer(h: &mut H, pattern: usize, content: &str) -> LayerId {
+    h.state_mut().run("type.create", json!({"text": content, "font": FONTS[pattern % 2], "size": 18})).unwrap();
+    // Settle as the harness does after its first frame.
+    let _ = h.run_ok();
     let id = h.state().session.active().unwrap().active_layer.unwrap();
     let ctx = h.ctx.clone();
     super::edit_active(h.state_mut(), &ctx).unwrap();
@@ -85,10 +97,26 @@ fn fixture(pattern: usize, content: &str) -> (H, LayerId) {
         h.state_mut().run("type.setStyle", json!({"layer": id.0, "range": [2, 4], "font": FONTS[1 - pattern % 2], "coalesce": key})).unwrap();
     }
     h.run_steps(3);
-    (h, id)
+    id
 }
 
-/// Picks `font` in the first family field: open it, type the name, Enter, as `accept` says.
+/// The past states of the document's history.
+fn past_len(h: &H) -> usize {
+    h.state().session.active().unwrap().history.past_len()
+}
+
+/// Undo back to `steps` past states: the document before the last case's text layer.
+fn undo_to(h: &mut H, steps: usize) {
+    while past_len(h) > steps {
+        let before = past_len(h);
+        h.state_mut().run("edit.undo", json!({})).unwrap_or_else(|e| panic!("undo: {e}"));
+        assert!(past_len(h) < before, "Undo takes back the last case");
+    }
+    let _ = h.run_ok();
+}
+
+/// Picks `font` in the first family field: open it, type the name, then accept it as `accept` says
+/// (Enter, ArrowDown then Enter, a click on its row, or a hover).
 fn choose(h: &mut H, font: &str, accept: &str) {
     h.query_all_by_label("Font family").next().unwrap().click();
     h.run();
@@ -96,6 +124,11 @@ fn choose(h: &mut H, font: &str, accept: &str) {
     h.run();
     match accept {
         "enter" => h.key_press(Key::Enter),
+        "arrow-enter" => {
+            h.key_press(Key::ArrowDown);
+            h.run();
+            h.key_press(Key::Enter);
+        }
         "click" => h.get_by_role_and_label(egui::accesskit::Role::TreeItem, font).click(),
         "hover" => h.get_by_role_and_label(egui::accesskit::Role::TreeItem, font).hover(),
         _ => panic!("unknown acceptance"),
@@ -111,19 +144,41 @@ fn checkmark(h: &mut H) {
 
 #[test]
 fn caret_font_choices_style_only_subsequent_typing_including_ime() {
-    for original in 0..2 {
+    // One app: each case's text layer goes with Undo before the next case makes its own.
+    // Every acceptance, as each reaches the caret's pending style by its own route through the
+    // family field (ArrowDown applies its row once per step). One original font, as it only decides
+    // which font is chosen, and the carets at both ends.
+    let mut h = document();
+    let base = past_len(&h);
+    let original = 0;
+    for accept in ["enter", "click", "arrow-enter"] {
         for text in ["abcdef", "AéB👩‍💻", "ab\ncdé"] {
-            let n = text.chars().count();
-            for caret in [0, n / 2, n] {
-                let (mut h, id) = fixture(original, text);
+            for caret in [0, text.chars().count()] {
+                let label = (accept, text, caret);
+                undo_to(&mut h, base);
+                let id = text_layer(&mut h, original, text);
                 select(&mut h, [caret, caret]);
                 h.run();
                 let before = saved(&h, id);
                 let steps = h.state().session.active().unwrap().history.entries().len();
-                let font = FONTS[1 - original];
-                choose(&mut h, font, "enter");
-                assert_eq!(saved(&h, id), before, "a font choice at a caret never restyles existing characters");
-                assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+                let requested = FONTS[1 - original];
+                choose(&mut h, requested, accept);
+                // ArrowDown steps to the row below the typed match, which depends on the installed fonts
+                // ("JetBrains Mono NL" where it is installed), so the pending font is the row it accepted.
+                let font = h
+                    .state()
+                    .ui
+                    .type_insertion_style
+                    .as_ref()
+                    .map(|s| s.style.font_family.clone())
+                    .unwrap_or_else(|| panic!("a pending font at the caret: {label:?}"));
+                let font = font.as_str();
+                assert!(font.starts_with(requested) && font != FONTS[original], "the accepted row matches the typed name: {font} {label:?}");
+                if accept != "arrow-enter" {
+                    assert_eq!(font, requested, "{label:?}");
+                }
+                assert_eq!(saved(&h, id), before, "a font choice at a caret never restyles existing characters: {label:?}");
+                assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "{label:?}");
                 crate::type_font_preview::set(h.state_mut(), font.into());
                 assert!(crate::type_font_preview::display_doc(h.state_mut(), 0).is_none());
                 // Two preedit replacements and the final commit keep the pending font.
@@ -138,11 +193,15 @@ fn caret_font_choices_style_only_subsequent_typing_including_ime() {
                 h.run();
                 let mut expected = families(&before);
                 expected.splice(caret..caret, std::iter::repeat_n(font.to_string(), 3));
-                assert_eq!(families(&saved(&h, id)), expected);
+                assert_eq!(families(&saved(&h, id)), expected, "{label:?}");
+                let mut expected_text: Vec<char> = text.chars().collect();
+                expected_text.splice(caret..caret, "éXZ".chars());
                 let typed = saved(&h, id);
+                assert_eq!(typed["text"], expected_text.into_iter().collect::<String>(), "the IME and typed text land at the caret: {label:?}");
+                assert!(h.state().ui.type_insertion_style.is_some(), "the pending font is still set before the commit: {label:?}");
                 checkmark(&mut h);
-                assert_eq!(saved(&h, id), typed);
-                assert!(h.state().ui.type_insertion_style.is_none());
+                assert_eq!(saved(&h, id), typed, "{label:?}");
+                assert!(h.state().ui.type_insertion_style.is_none(), "the commit clears the pending font: {label:?}");
             }
         }
     }

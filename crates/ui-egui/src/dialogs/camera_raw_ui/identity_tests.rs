@@ -33,7 +33,7 @@ impl Control {
     }
 }
 
-fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
+fn identity_app() -> (Box<PhotocraftApp>, RawOpen, Control) {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     session.execute("layer.new.layer", json!({})).unwrap();

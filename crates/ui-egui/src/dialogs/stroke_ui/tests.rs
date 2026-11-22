@@ -3,7 +3,7 @@ use serde_json::json;
 use super::*;
 use crate::smart_filter_dialog::tests::{cancel, confirm, newest, open_count, set};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 40, "height": 30, "background": "transparent"})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
@@ -154,4 +154,13 @@ fn stroke_choices_apply_on_confirm_and_cancel_does_not_modify_document() {
     assert_eq!(pixel(&app, 15, 15)[3], 0.0, "unselected interior unchanged");
     assert_eq!(pixel(&app, 9, 15)[3], 0.0, "outside unchanged for Inside location");
     assert_eq!(app.session.active().unwrap().history.past_len(), initial + 1);
+}
+
+/// #15539: Width shows px and Opacity % after their numbers.
+#[test]
+fn width_and_opacity_declare_their_units() {
+    let rows = rows([0.0, 0.0, 0.0]);
+    let unit = |key: &str| rows.iter().find(|p| p.key == key).and_then(|p| p.unit);
+    assert_eq!(unit("width"), Some(UnitKind::Pixels));
+    assert_eq!(unit("opacity"), Some(UnitKind::Percent));
 }

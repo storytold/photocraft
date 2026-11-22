@@ -9,7 +9,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// A 500 x 400 document with 100..200 square selected, the Patch tool active.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 500, "height": 400, "background": "white"})).unwrap();
     app.run("select.rect", json!({"x": 100, "y": 100, "width": 100, "height": 100, "mode": "replace"})).unwrap();

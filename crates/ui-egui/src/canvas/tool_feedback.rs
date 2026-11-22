@@ -102,7 +102,7 @@ mod tests {
         assert!(has_selection(&app), "nothing cached: scanned");
         assert_eq!(selection_op(Tool::Lasso, 0, ALT, has_selection(&app)), SelectionOperation::Subtract);
         let st = app.session.active().unwrap();
-        let (key, fingerprint) = (u64::MAX - st.doc.id.0, crate::surface_fingerprint(st.doc.selection.as_ref().unwrap()));
+        let (key, fingerprint) = (u64::MAX - st.doc.id.0, st.doc.selection.as_ref().unwrap().generation());
         // An empty box cached for this very selection is believed, so nothing is scanned.
         app.bounds_cache.insert(key, (fingerprint, photocraft_geom::Rect::EMPTY));
         assert!(!has_selection(&app), "the cached bounds are used");

@@ -180,7 +180,7 @@ mod tests {
 
     use super::*;
 
-    fn app(docs: usize) -> PhotocraftApp {
+    fn app(docs: usize) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         for _ in 0..docs {
             app.run("file.new", json!({"width": 8, "height": 8, "mode": "grayscale"})).unwrap();
@@ -213,7 +213,7 @@ mod tests {
     }
 
     /// Three grayscale documents filled black, mid gray and white, then the active one is `active`.
-    fn shaded(active: usize) -> PhotocraftApp {
+    fn shaded(active: usize) -> Box<PhotocraftApp> {
         let mut app = app(3);
         for (i, gray) in ["#000000", "#808080", "#ffffff"].into_iter().enumerate() {
             app.session.set_active(i);

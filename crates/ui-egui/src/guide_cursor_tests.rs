@@ -10,7 +10,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// The canvas at 100 % on a 400 × 300 document with `tool` and a vertical guide at x = 200.
-pub(crate) fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn harness(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -29,11 +29,11 @@ pub(crate) fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-pub(crate) fn screen(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
+pub(crate) fn screen(h: &Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
     crate::canvas::testing::to_screen(h.state(), [f64::from(x), f64::from(y)])
 }
 
-pub(crate) fn hover(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) -> egui::CursorIcon {
+pub(crate) fn hover(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) -> egui::CursorIcon {
     h.event(egui::Event::ModifiersChanged(m));
     let p = screen(h, x, y);
     h.event(egui::Event::PointerMoved(p));
@@ -41,7 +41,7 @@ pub(crate) fn hover(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: 
     h.output().platform_output.cursor_icon
 }
 
-fn drag(h: &mut Harness<'static, PhotocraftApp>, from: f32, to: f32, m: Modifiers) {
+fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, from: f32, to: f32, m: Modifiers) {
     let p = screen(h, from, 150.0);
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -84,16 +84,17 @@ const GUIDE: egui::CursorIcon = egui::CursorIcon::ResizeHorizontal;
 #[test]
 fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
     let takes = |tool, latched| (tool, false, latched, true);
+    // One tool per family (`canvas::tools::family`): whether the guides take ⌘ is decided by family
+    // (`rulers::moves_with_command`, `tools::takes_command_stand_in`), and the painting family refuses a ⌘ press the
+    // same way for all its tools (`PaintTool::takes`). Within it, one tool per kind of pointer (`cursor_policy`): the
+    // Brush's tip with its centre mark, the Clone Stamp's and Quick Selection's tips without one, the Paint Bucket's
+    // click-tool pointer. The Eraser, Dodge, Spot Healing Brush and Smudge are more Brush-like tips.
     let rows = [
         takes(Tool::Brush, false),
-        takes(Tool::Eraser, false),
         takes(Tool::Gradient, false),
         takes(Tool::PaintBucket, false),
         takes(Tool::CloneStamp, false),
         takes(Tool::Eyedropper, false),
-        takes(Tool::Dodge, false),
-        takes(Tool::SpotHealing, false),
-        takes(Tool::Smudge, false),
         takes(Tool::QuickSelection, false),
         takes(Tool::RectMarquee, false),
         takes(Tool::Lasso, false),
@@ -102,10 +103,8 @@ fn command_over_a_guide_takes_it_where_command_is_the_move_tool() {
         takes(Tool::Frame, false),
         takes(Tool::Artboard, false),
         takes(Tool::Brush, true),
-        takes(Tool::Eraser, true),
         takes(Tool::RectMarquee, true),
         (Tool::Brush, true, false, false),
-        (Tool::Eraser, true, false, false),
         (Tool::Frame, true, false, false),
         (Tool::Pen, false, false, false),
         (Tool::Hand, false, false, false),

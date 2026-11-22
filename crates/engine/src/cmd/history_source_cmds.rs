@@ -44,7 +44,7 @@ pub enum HistorySource {
 /// The document's History Brush source, `None` once the source state or snapshot is gone.
 pub fn source(st: &DocState) -> Option<HistorySource> {
     match st.source_snapshot.or_else(|| st.history.brush_source_snapshot()) {
-        Some(id) => st.snapshots.iter().any(|s| s.id == id).then_some(HistorySource::Snapshot(id)),
+        Some(id) => st.snapshots().iter().any(|s| s.id == id).then_some(HistorySource::Snapshot(id)),
         None => st.history.brush_source().map(HistorySource::State),
     }
 }
@@ -52,7 +52,7 @@ pub fn source(st: &DocState) -> Option<HistorySource> {
 fn source_of(st: &DocState, src: HistorySource) -> Option<Arc<Document>> {
     match src {
         HistorySource::State(i) => st.history.row_doc(i, &st.doc),
-        HistorySource::Snapshot(id) => st.snapshots.iter().find(|s| s.id == id).map(|s| s.doc.clone()),
+        HistorySource::Snapshot(id) => st.snapshots().iter().find(|s| s.id == id).map(|s| s.doc.clone()),
     }
 }
 
@@ -71,7 +71,7 @@ fn parse(st: &DocState, p: &Value, cmd: &str) -> Result<Option<HistorySource>> {
         }
         (None, Some(v)) => {
             let id = index("snapshot", v)?;
-            if !st.snapshots.iter().any(|s| s.id == id) {
+            if !st.snapshots().iter().any(|s| s.id == id) {
                 return Err(bad(format!("no snapshot {id}")));
             }
             Ok(Some(HistorySource::Snapshot(id)))
@@ -86,19 +86,40 @@ fn parse(st: &DocState, p: &Value, cmd: &str) -> Result<Option<HistorySource>> {
 /// Photoshop refuses too, "the current canvas size does not match that of the history state"
 /// (its message as users report it; Adobe's help doesn't document the case).
 pub(crate) fn paint_source(st: &DocState, p: &Value, cmd: &str) -> Result<Arc<Document>> {
+    checked_source(st, p, cmd)?.map_err(|why| {
+        EngineError::Other(match why {
+            SourceRefusal::NoSource => "the History Brush source was deleted: set a new source in the History panel".into(),
+            SourceRefusal::CanvasSize { source } => format!(
+                "the current canvas size ({}×{}) does not match that of the History Brush source ({}×{}): set a source of this size in the History panel",
+                st.doc.size.width, st.doc.size.height, source.width, source.height
+            ),
+        })
+    })
+}
+
+/// Why [`checked_source`] found no source to paint from, so each tool can word it (#12638).
+#[derive(Debug)]
+pub(crate) enum SourceRefusal {
+    /// No `state` or `snapshot` passed, and the History panel's source was deleted.
+    NoSource,
+    /// The source has another canvas size than the document.
+    CanvasSize { source: photocraft_geom::Size },
+}
+
+/// [`paint_source`] with the refusal left to the caller: bad params and a `state` or `snapshot`
+/// that is gone are errors, the two refusals the tools word themselves are the inner `Err`.
+pub(crate) fn checked_source(st: &DocState, p: &Value, cmd: &str) -> Result<std::result::Result<Arc<Document>, SourceRefusal>> {
     let doc = match parse(st, p, cmd)? {
         Some(src) => source_of(st, src).ok_or_else(|| EngineError::Other("that history state or snapshot is gone".into()))?,
-        None => source(st)
-            .and_then(|src| source_of(st, src))
-            .ok_or_else(|| EngineError::Other("the History Brush source was deleted: set a new source in the History panel".into()))?,
+        None => match source(st).and_then(|src| source_of(st, src)) {
+            Some(doc) => doc,
+            None => return Ok(Err(SourceRefusal::NoSource)),
+        },
     };
     if doc.size != st.doc.size {
-        return Err(EngineError::Other(format!(
-            "the current canvas size ({}×{}) does not match that of the History Brush source ({}×{}): set a source of this size in the History panel",
-            st.doc.size.width, st.doc.size.height, doc.size.width, doc.size.height
-        )));
+        return Ok(Err(SourceRefusal::CanvasSize { source: doc.size }));
     }
-    Ok(doc)
+    Ok(Ok(doc))
 }
 
 /// The History Brush's refusals after Image › Mode, with Photoshop's alert texts (#12842): only
@@ -147,7 +168,7 @@ pub fn source_json(st: &DocState) -> Value {
             json!({ "state": i, "label": label })
         }
         Some(HistorySource::Snapshot(id)) => {
-            json!({ "snapshot": id, "name": st.snapshots.iter().find(|s| s.id == id).map(|s| s.name.clone()) })
+            json!({ "snapshot": id, "name": st.snapshots().iter().find(|s| s.id == id).map(|s| s.name.clone()) })
         }
     }
 }

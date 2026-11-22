@@ -223,7 +223,7 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     }
 
     // Angle and Pressure for Size edit the tool's own brush (the shell swaps one in per tool).
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
     let mut angle = brush.angle;
     let angle_out = option_cells::number(tl!("Angle"), &mut angle, -180.0..=180.0)
@@ -274,7 +274,7 @@ mod tests {
 
     /// The app with a white 64x48 document in `mode` open and the Magic Eraser picked: a click on
     /// it would wipe the flat canvas out.
-    fn app_in(mode: ColorMode) -> PhotocraftApp {
+    fn app_in(mode: ColorMode) -> Box<PhotocraftApp> {
         let mut s = photocraft_engine::Session::new();
         s.add_document(Document::with_background("p", Size::new(64, 48), mode, SampleType::U8, Color::WHITE), None);
         let mut app = PhotocraftApp::new(s, crate::Services::default());

@@ -8,7 +8,7 @@ use super::*;
 use crate::control::{ControlRequest, Reply, handle};
 
 /// A 64 × 48 document with a second pixel layer (active) and one count marker at 20,20.
-fn app() -> (PhotocraftApp, egui::Context) {
+fn app() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.run("layer.new.layer", json!({"name": "Ink"})).unwrap();
