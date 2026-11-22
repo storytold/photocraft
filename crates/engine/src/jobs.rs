@@ -551,8 +551,8 @@ impl LayerSelection {
     }
 
     fn set(self, st: &mut crate::DocState) {
-        st.active_layer = self.active;
-        st.selected_layers = self.selected;
+        st.set_active_layer(self.active);
+        *st.selection_mut() = self.selected;
         st.layer_anchor = self.anchor;
         crate::channel_cmds::fix_view(st);
     }
@@ -1721,7 +1721,30 @@ impl Session {
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
         self.sync_scratch_state();
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        // A refused Exact conversion must also undo its automatic floating-selection drop.
+        let checkpoint = if id == "image.mode.indexedColor" && params.get("palette").and_then(Value::as_str) == Some("exact") {
+            self.active.and_then(|index| {
+                self.docs
+                    .get(index)
+                    .filter(|state| crate::float_cmds::floating(state).is_some())
+                    .map(|state| (index, state.clone(), self.action_history.clone()))
+            })
+        } else {
+            None
+        };
+        let result = self.dispatch_with_commit(id, params, background, live_commit);
+        if result.is_err()
+            && let Some((index, state, action_history)) = checkpoint
+            && self.docs.get(index).is_some_and(|current| current.doc.id == state.doc.id)
+        {
+            self.docs[index] = state;
+            self.action_history = action_history;
+        }
+        result
+    }
+
+    fn dispatch_with_commit(&mut self, id: &str, params: Value, background: bool, live_commit: Option<crate::brush_cmds::LiveCommit>) -> Result<Started> {
+        let spec = crate::registry::spec(id)?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
         if !(params.is_object() || params.is_null()) {
@@ -1763,6 +1786,12 @@ impl Session {
         }
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
+        // A command that may not run leaves a floating selection floating (#13169): it is refused
+        // before the piece drops, without a History step. One that may run is checked again
+        // below, once the piece has dropped, on the pixels and selection it will change.
+        if crate::float_cmds::drops_for(self, id) {
+            self.admit(id, spec, &params)?;
+        }
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
@@ -1795,7 +1824,7 @@ impl Session {
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
-        let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers()) } else { None };
+        let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers().to_vec()) } else { None };
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
@@ -1826,6 +1855,7 @@ impl Session {
             && let Some((doc, revision)) = &before
         {
             self.note_command_damage(id, doc, *revision);
+            self.note_pixel_change(doc.id, *revision);
         }
         // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
         // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
@@ -1890,10 +1920,15 @@ impl Session {
     /// keeps the damage it reported. Debug and test builds also count a whole-document redraw of
     /// a small change ([`Session::whole_redraws`]).
     pub(crate) fn note_command_damage(&mut self, id: &str, before: &Arc<Document>, from: u64) {
-        let Some(st) = self.active_mut().filter(|st| st.doc.id == before.id && st.revision > from) else { return };
+        // Read first: the borrow moves the document's `Tracked` revision, and this runs after every command.
+        if !self.active().is_some_and(|st| st.doc.id == before.id && st.revision > from) {
+            return;
+        }
+        let Some(st) = self.active_mut() else { return };
         if st.revision - from > 1 {
             st.last_damage = crate::layer_multi_cmds::step_damage(before, &st.doc);
             st.damage_span = Some((from, st.revision));
+            st.record_damage();
         }
         #[cfg(any(test, debug_assertions))]
         if st.last_damage.is_none()
@@ -1906,16 +1941,31 @@ impl Session {
         let _ = id;
     }
 
+    /// Counts the step that moved document `doc` past revision `from` in `DocState::pixel_revision` when its damage
+    /// is not empty (`None` is everything). A selection-only or view-only step reports empty damage and keeps it.
+    fn note_pixel_change(&mut self, doc: DocId, from: u64) {
+        if let Some(st) = self.docs.iter_mut().find(|st| st.doc.id == doc)
+            && st.revision > from
+            && st.last_damage != Some(photocraft_geom::Rect::EMPTY)
+        {
+            st.pixel_revision += 1;
+        }
+    }
+
     /// Grows the damage a command reported for the pixels it changed by what effects laid out
     /// over a layer's frame repaint when it moved ([`photocraft_compose::relayout_damage`]): a
     /// stroke on a layer with a Gradient Overlay reports the stroke, but the gradient is laid out
     /// again over the whole grown layer (#4053). `before` is the active document before.
     fn add_relayout_damage(&mut self, before: &Arc<Document>) {
-        let Some(st) = self.active_mut().filter(|st| st.doc.id == before.id && !Arc::ptr_eq(&st.doc, before)) else { return };
+        // Read first: the borrow moves the document's `Tracked` revision, and this runs after every command.
+        let Some(st) = self.active().filter(|st| st.doc.id == before.id && !Arc::ptr_eq(&st.doc, before)) else { return };
         let Some(d) = st.last_damage.filter(|d| !d.is_empty()) else { return };
         let extra = photocraft_compose::relayout_damage(before, &st.doc);
-        if !extra.is_empty() {
+        if !extra.is_empty()
+            && let Some(st) = self.active_mut()
+        {
             st.last_damage = Some(d.union(&extra));
+            st.record_damage();
         }
     }
 
@@ -1950,9 +2000,12 @@ impl Session {
         pre_selected: Option<&[LayerId]>,
         before: &crate::actions_record::Before,
     ) {
-        // A layer-mask view ends when another layer becomes active (#196).
-        if let Some(st) = self.active_mut() {
-            crate::mask_view_cmds::fix(st);
+        // A layer-mask view ends when another layer becomes active (#196). Borrowed to change only when it does: the
+        // borrow moves the document's `Tracked` revision, and this runs after every command.
+        if self.active().is_some_and(crate::mask_view_cmds::stale)
+            && let Some(st) = self.active_mut()
+        {
+            st.channel_view.layer_mask = None;
         }
         crate::edit_menu_cmds::after_command(self, id, &params, before);
         crate::automate_cmds::after_command(self, id);
@@ -2085,6 +2138,7 @@ impl Session {
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
         let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
+        let applied_from = target.and_then(|i| self.docs.get(i)).map(|st| (st.doc.id, st.revision));
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
@@ -2100,6 +2154,9 @@ impl Session {
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.
         if r.is_ok() {
+            if let Some((doc_id, from)) = applied_from {
+                self.note_pixel_change(doc_id, from);
+            }
             // The step is automation's when the job's own request was gated, not the caller
             // polling it now, and only for the recording that owns it: a foreign recording does
             // not get the step.

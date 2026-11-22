@@ -6,6 +6,12 @@ pub enum EngineError {
     /// Displays with the nearest registered ids, if any ([`command_hints`], #3674).
     #[error("unknown command `{id}`{hint}", id = .0, hint = command_hints::unknown_command_hint(.0))]
     UnknownCommand(String),
+    /// A session ran a command before the process installed any command tables.
+    #[error("no commands are installed in this process: create the session with `Session::new()`, which installs them")]
+    NotInstalled,
+    /// An install named other command tables than the one already in place; table `at` differs.
+    #[error("different command tables are already installed: table {at} is `{installed}`, not `{requested}`")]
+    InstallConflict { at: usize, installed: String, requested: String },
     #[error("command `{0}` is not available right now: {1}")]
     Disabled(String, String),
     #[error("invalid parameters for `{cmd}`: {msg}")]
@@ -76,7 +82,7 @@ fn memory_limit_for(is_wasm32: bool, is_32_bit: bool) -> BuildMemoryLimit {
 /// The text after "hard limit": where the limit comes from and, where another build could open
 /// the file, where to get it. Its sentences stand apart so the action isn't lost in the cause.
 fn build_limit_scope(limit: BuildMemoryLimit) -> String {
-    let releases = crate::updates_cmds::RELEASES;
+    let releases = crate::build_info::RELEASES;
     match limit {
         BuildMemoryLimit::Measured => " on this machine".to_owned(),
         BuildMemoryLimit::Desktop32Bit => format!(
@@ -199,7 +205,7 @@ mod tests {
     #[test]
     fn hard_budget_scope_text_per_build() {
         assert_eq!(build_limit_scope(BuildMemoryLimit::Measured), " on this machine");
-        let releases = crate::updates_cmds::RELEASES;
+        let releases = crate::build_info::RELEASES;
         assert_eq!(
             build_limit_scope(BuildMemoryLimit::Desktop32Bit),
             format!(

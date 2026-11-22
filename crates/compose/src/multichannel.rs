@@ -191,9 +191,14 @@ pub fn inks(doc: &Document, rect: Rect) -> Buffer {
     buf
 }
 
-/// The starting backdrop of a document render: the inks for Multichannel, else transparent.
-pub(crate) fn backdrop(doc: &Document, rect: Rect) -> Buffer {
-    if doc.mode == ColorMode::Multichannel { inks(doc, rect) } else { Buffer::transparent(rect) }
+pub(crate) fn backdrop_with<A: crate::BufferAlloc>(doc: &Document, rect: Rect, alloc: &A) -> Result<Buffer, A::Error> {
+    if doc.mode == ColorMode::Multichannel {
+        let mut buf = alloc.filled(rect, [1.0; 4])?;
+        overprint(&mut buf, doc, |_| true);
+        Ok(buf)
+    } else {
+        alloc.filled(rect, [0.0; 4])
+    }
 }
 
 /// [`crate::thumbnail_buffer`] of an RGB or CMYK document with its spot channels printed over it
