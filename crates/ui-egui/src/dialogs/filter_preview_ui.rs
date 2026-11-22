@@ -94,9 +94,10 @@ fn picture(app: &PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Option<Opt
 
     let cache_id = egui::Id::unique(("filter-preview-ui", id.value()));
     let mut cache: Cache = ctx.data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Cache>(cache_id)));
-    // Channel visibility and the active mask can change without a document revision. Both the
-    // original (press-and-hold) and filtered textures must follow the canvas's current view.
-    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer);
+    // Channel visibility and the active mask can change without a document revision, and so can a tile that fails
+    // to read and recovers (`crate::scratch_reads`). Both the original (press-and-hold) and filtered textures must
+    // follow the canvas's current view.
+    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer, crate::scratch_reads::generation());
     if cache.view.as_ref() != Some(&view) {
         cache = Cache { view: Some(view), ..Default::default() };
     }
@@ -221,7 +222,7 @@ struct CachedTex {
 struct Cache {
     filtered: Option<CachedTex>,
     original: Option<CachedTex>,
-    view: Option<(photocraft_engine::channel_cmds::ChannelView, bool, Option<photocraft_doc::LayerId>)>,
+    view: Option<(photocraft_engine::channel_cmds::ChannelView, bool, Option<photocraft_doc::LayerId>, u64)>,
 }
 
 #[cfg(test)]
@@ -356,6 +357,26 @@ mod tests {
         output.textures_delta.clear();
         assert_ne!(before, after, "press-and-hold must not reuse the old channel");
         assert!(pixels.unwrap().iter().all(|p| *p == Color32::BLACK));
+    }
+
+    /// A tile that fails to read and recovers moves no revision; the unfiltered texture still draws again then, so it
+    /// does not keep the zeros it read during the error.
+    #[test]
+    fn original_texture_refreshes_after_a_scratch_read_error_transition() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        let id = top_dialog(&app);
+        let ctx = app.ctx().clone();
+        let cache_id = egui::Id::unique(("filter-preview-ui", id.value()));
+        let original = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<Cache>(cache_id).unwrap().original.unwrap().tex.id());
+        ctx.run_ui(Default::default(), |ui| feed(&mut app, ui.ctx())).textures_delta.clear();
+        let before = original(&ctx);
+        ctx.run_ui(Default::default(), |ui| feed(&mut app, ui.ctx())).textures_delta.clear();
+        assert_eq!(original(&ctx), before, "an unchanged picture is not uploaded again");
+        crate::scratch_reads::tests::simulate_read_error_transition();
+        ctx.run_ui(Default::default(), |ui| feed(&mut app, ui.ctx())).textures_delta.clear();
+        assert_ne!(original(&ctx), before, "the picture draws again after the transition");
     }
 
     #[test]

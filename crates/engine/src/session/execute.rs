@@ -67,7 +67,7 @@ impl Session {
     /// Complete for the commands in [`PRECHECKED`]: there it accepts what `execute` accepts, but
     /// for the group nesting limit (a test holds the two together). For others it checks only what they share.
     pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
-        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        let spec = crate::registry::spec(id)?;
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
@@ -93,9 +93,10 @@ impl Session {
         self.admit(id, spec, params).map(|_| ())
     }
 
-    /// What `dispatch` checks once the params are valid and a floating selection has dropped:
-    /// the precondition (on a named layer for commands that take one), a job running on the
-    /// document, a hidden target. The run params (the Channels panel's target filled in) when it
+    /// What `dispatch` checks once the params are valid, before a floating selection drops (so a
+    /// refused command leaves it floating) and again after: the precondition (on a named layer
+    /// for commands that take one), a job running on the document, a hidden target, the Magic
+    /// Eraser's colour-mode alert. The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
@@ -110,6 +111,13 @@ impl Session {
         }
         // Painting on or moving a hidden layer is refused, as in Photoshop (#571).
         if let Some(why) = hidden_target::refusal(self, id, params) {
+            return Err(EngineError::Other(why.into()));
+        }
+        // The Magic Eraser's alert for an Indexed Color or Bitmap document (#12032), the same
+        // error its `run` gives: checked here too, so a floating selection stays floating (#13169).
+        if id == "paint.magicEraser"
+            && let Some(why) = self.active().and_then(|st| crate::eraser_cmds::magic_eraser_refusal(&st.doc))
+        {
             return Err(EngineError::Other(why.into()));
         }
         Ok(run_params)
@@ -135,7 +143,10 @@ impl Session {
 
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
-        let Some(spec) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
+        let spec = match crate::registry::spec(id) {
+            Ok(spec) => spec,
+            Err(e) => return Some(e.to_string()),
+        };
         self.spec_disabled_reason(spec, id, params)
     }
 
@@ -220,7 +231,8 @@ impl Session {
         if d.doc.layer(target).is_none() {
             return Ok(None);
         }
-        let active = d.active_layer.replace(target);
+        let active = d.active_layer;
+        d.set_active_layer(Some(target));
         // The checks see the resolved id: a relative ordinal (`Frwr`, `Bckw`) would otherwise
         // resolve again from the swapped-in active layer and land one layer further.
         let mut resolved = params.clone();
@@ -229,7 +241,7 @@ impl Session {
         }
         let r = self.precondition(spec, &resolved);
         if let Some(d) = self.active_mut() {
-            d.active_layer = active;
+            d.set_active_layer(active);
         }
         Ok(Some(r))
     }
@@ -288,11 +300,11 @@ impl Session {
         }
         if let Err(error) = photocraft_raster::spill::check_since(scratch_generation).and_then(|()| before.scratch_health()).and_then(|()| doc.scratch_health())
         {
-            st.active_layer = previous_active_layer;
+            st.set_active_layer(previous_active_layer);
             return Err(EngineError::Other(error));
         }
-        st.doc = Arc::new(doc);
-        st.active_layer = active;
+        *st.doc_mut() = Arc::new(doc);
+        st.set_active_layer(active);
         fix_selection(st);
         channel_cmds::fix_view(st);
         // A canvas-size change (crop, Canvas Size, Image Size, rotation) moves the Color Sampler
@@ -339,16 +351,19 @@ impl Session {
         } else if key.is_none() || st.coalesce != key || !st.history.can_undo() {
             st.history.set_current_layers(prior);
             st.history.record(label, before.clone(), layers);
-            st.history.add_current_visibility(&visibility_changes(&before, &st.doc));
+            let changes = visibility_changes(&before, &st.doc);
+            st.history.add_current_visibility(&changes);
             st.trim_history();
             st.coalesce = key;
         } else {
             st.history.set_current_layers(layers);
-            st.history.add_current_visibility(&visibility_changes(&before, &st.doc));
+            let changes = visibility_changes(&before, &st.doc);
+            st.history.add_current_visibility(&changes);
             st.coalesce = key;
         }
         st.bump_revision(keep_clean);
         st.last_damage = damage;
+        st.record_damage();
         self.samplers_removed += samplers_removed;
         #[cfg(any(test, debug_assertions))]
         {
@@ -385,6 +400,7 @@ impl Session {
         let Some(st) = self.active_mut() else { return };
         let rect = layer_multi_cmds::grow_hint(&st.doc, rect);
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
+        st.record_damage();
     }
 }
 

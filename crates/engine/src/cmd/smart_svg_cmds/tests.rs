@@ -89,7 +89,7 @@ fn valid_updates_repeat_at_all_depths_and_roundtrip_original_svg() {
 fn shared_instances_keep_placement_filters_masks_and_one_undo_transaction() {
     let (mut s, id) = session(8);
     let duplicate = {
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let mut layer = doc.layer(id).unwrap().duplicate();
         let LayerContent::Smart(sm) = &mut layer.content else { panic!("smart object") };
         sm.transform = Affine::translate(2.0, 3.0);
@@ -165,12 +165,12 @@ fn stale_hash_content_identity_wrong_parent_deleted_and_locked_reject() {
     let mut missing = params.clone();
     missing.as_object_mut().unwrap().remove("document");
     fails_without_edit(&mut s, missing);
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().locks = Locks { all: true, ..Default::default() };
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().locks = Locks { all: true, ..Default::default() };
     fails_without_edit(&mut s, params.clone());
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().locks = Default::default();
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().locks = Default::default();
     s.execute(UPDATE, params.clone()).unwrap();
     fails_without_edit(&mut s, params.clone());
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).remove(id).unwrap();
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).remove(id).unwrap();
     fails_without_edit(&mut s, params);
 }
 
@@ -184,7 +184,7 @@ fn linked_sources_and_internal_editor_conflicts_reject_without_reads() {
     fails_without_edit(&mut s, params.clone());
     assert!(s.execute(EXPORT, json!({"layer":id.0})).is_err());
     s.smart_links.clear();
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart object") };
     sm.source = SmartSource::Linked { path: "C:/not-authorized/source.svg".into() };
     fails_without_edit(&mut s, params);
@@ -196,14 +196,14 @@ fn inherited_shared_instance_lock_and_unbounded_placement_reject() {
     let (mut s, id) = session(8);
     let params = request(&mut s, id, BLUE);
     {
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let mut duplicate = doc.layer(id).unwrap().duplicate();
         duplicate.locks.pixels = true;
         doc.layers.push(duplicate);
     }
     fails_without_edit(&mut s, params.clone());
     {
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         doc.layers.pop();
         let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart object") };
         sm.transform = Affine { m: [10000.0, 0.0, 0.0, 10000.0, 0.0, 0.0] };
@@ -215,7 +215,7 @@ fn inherited_shared_instance_lock_and_unbounded_placement_reject() {
 fn diverged_shared_source_is_never_overwritten() {
     let (mut s, id) = session(8);
     let params = request(&mut s, id, BLUE);
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let mut duplicate = doc.layer(id).unwrap().duplicate();
     let LayerContent::Smart(sm) = &mut duplicate.content else { panic!("smart object") };
     sm.source = SmartSource::Embedded { file_name: "Other.svg".into(), bytes: Arc::new(GREEN.as_bytes().to_vec()) };
@@ -227,7 +227,7 @@ fn diverged_shared_source_is_never_overwritten() {
 fn failed_second_instance_render_does_not_commit_first_instance() {
     let (mut s, id) = session(8);
     {
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let mut duplicate = doc.layer(id).unwrap().duplicate();
         let LayerContent::Smart(sm) = &mut duplicate.content else { panic!("smart object") };
         sm.transform = Affine { m: [100.0, 0.0, 0.0, 0.001, 0.0, 0.0] };
@@ -244,7 +244,7 @@ fn failed_second_instance_render_does_not_commit_first_instance() {
 fn inherited_parent_lock_refuses_content_edits() {
     let (mut s, id) = session(8);
     let params = request(&mut s, id, BLUE);
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let layer = doc.remove(id).unwrap();
     let mut group =
         Layer::new("Locked parent", LayerContent::Group(photocraft_doc::Group { children: vec![layer], expanded: true, artboard: None, frame_stroke: None }));
@@ -257,7 +257,7 @@ fn inherited_parent_lock_refuses_content_edits() {
 fn perspective_and_warp_geometry_survive_an_update() {
     for warp in [false, true] {
         let (mut s, id) = session(8);
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart object") };
         sm.perspective = Some([1.0, 0.0, 12.0, 0.0, 1.0, 9.0, 0.01, 0.0, 1.0]);
         if warp {
@@ -278,7 +278,7 @@ fn perspective_and_warp_geometry_survive_an_update() {
 fn perspective_crossing_zero_is_rejected_before_rendering() {
     let (mut s, id) = session(8);
     let params = request(&mut s, id, BLUE);
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart object") };
     sm.perspective = Some([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -0.5, 0.0, 1.0]);
     fails_without_edit(&mut s, params);
@@ -303,7 +303,7 @@ fn embedded_pdf_ai_and_eps_update_shared_instances_without_reading_linked_paths(
             let (mut s, id) = session(depth);
             let duplicate;
             {
-                let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+                let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
                 let payload = photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile {
                     uuid: "owned-vector".into(),
                     file_name: name.into(),
@@ -352,7 +352,7 @@ fn vector_handoff_never_reads_a_linked_disk_path_or_accepts_disguised_raster() {
     for source in
         [SmartSource::Linked { path: "/dev/zero".into() }, SmartSource::Embedded { file_name: "Logo.ai".into(), bytes: Arc::new(b"not a vector".to_vec()) }]
     {
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart") };
         sm.source = source;
         let before = s.active().unwrap().doc.clone();
@@ -372,7 +372,7 @@ fn quick_mask_blocks_source_updates_without_mutating_the_document() {
 fn native_session(extension: &str, depth: u32) -> (Session, LayerId, Vec<u8>) {
     let (mut s, id) = session(depth);
     let bytes = if extension == "eps" { b"%!PS-Adobe-3.0 EPSF-3.0\noriginal".to_vec() } else { b"%PDF-1.7\noriginal".to_vec() };
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart") };
     sm.source = SmartSource::Embedded { file_name: format!("Logo.{extension}"), bytes: Arc::new(bytes.clone()) };
     (s, id, bytes)
@@ -476,13 +476,13 @@ fn native_saves_reject_wrong_formats_bad_previews_and_locks_without_editing() {
         assert!(s.execute(UPDATE_VECTOR, params).is_err());
         assert_eq!(s.active().unwrap().doc, before);
     }
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().locks.all = true;
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().locks.all = true;
     assert!(s.execute(UPDATE_VECTOR, valid.clone()).is_err());
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().locks.all = false;
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().locks.all = false;
     let mut duplicate = s.active().unwrap().doc.layer(id).unwrap().duplicate();
     let LayerContent::Smart(sm) = &mut duplicate.content else { panic!("smart") };
     sm.transform = Affine::translate(2.0, 3.0);
-    let duplicate_id = Arc::make_mut(&mut s.active_mut().unwrap().doc).insert_above(Some(id), duplicate);
+    let duplicate_id = Arc::make_mut(s.active_mut().unwrap().doc_mut()).insert_above(Some(id), duplicate);
     s.execute(UPDATE_VECTOR, valid).unwrap();
     assert_eq!(source(&s, duplicate_id), changed);
     assert!(
@@ -510,7 +510,7 @@ fn native_save_keeps_fractional_psd_frame_and_rejects_a_resized_preview() {
     };
     let sold = photocraft_io::smart_map::sold_bytes(None, &spec, &mut vec![]);
     let state = s.active_mut().unwrap();
-    let LayerContent::Smart(sm) = &mut Arc::make_mut(&mut state.doc).layer_mut(id).unwrap().content else { panic!("smart") };
+    let LayerContent::Smart(sm) = &mut Arc::make_mut(state.doc_mut()).layer_mut(id).unwrap().content else { panic!("smart") };
     sm.psd_raw = Some(Arc::new(sold));
     let changed = [original.as_slice(), b" changed"].concat();
     let mut params = native_request(&mut s, id, "ai", &changed);
@@ -532,7 +532,7 @@ fn shared_native_instances_check_one_preview_identity_once_and_keep_per_instance
     // 40 shared instances borrow one source and preview allocation; one more has an equal
     // preview in its own allocation, so it is a separate identity and checked separately.
     let template = s.active().unwrap().doc.layer(id).unwrap().clone();
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     for _ in 0..40 {
         doc.insert_above(Some(id), template.duplicate());
     }
@@ -562,7 +562,7 @@ fn shared_native_instances_check_one_preview_identity_once_and_keep_per_instance
     let LayerContent::Smart(sm) = &mut framed.content else { panic!("smart") };
     sm.vector_preview = None;
     sm.psd_raw = Some(Arc::new(sold));
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).insert_above(Some(id), framed);
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).insert_above(Some(id), framed);
     let params = native_request(&mut s, id, "ai", &[next.as_slice(), b" again"].concat());
     let before = s.active().unwrap().doc.clone();
     let error = s.execute(UPDATE_VECTOR, params).unwrap_err().to_string();
@@ -578,7 +578,7 @@ fn distinct_native_preview_metadata_exhausts_budget_without_editing_any_instance
     let params = native_request(&mut s, id, "ai", &first_save);
     s.execute(UPDATE_VECTOR, params).unwrap();
     let template = s.active().unwrap().doc.layer(id).unwrap().clone();
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let mut preview_length = 0;
     for n in 0..3 {
         let mut instance = template.duplicate();
@@ -614,7 +614,7 @@ fn distinct_native_preview_metadata_exhausts_budget_without_editing_any_instance
 fn native_save_refreshes_shared_caches_without_rehashing_the_native_payload_per_instance() {
     let (mut s, id, original) = native_session("eps", 8);
     let template = s.active().unwrap().doc.layer(id).unwrap().clone();
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     for _ in 1..100 {
         doc.insert_above(Some(id), template.duplicate());
     }
@@ -704,7 +704,7 @@ fn native_update_authorizes_filters_on_every_shared_instance_before_editing() {
         opacity: 1.0,
         visible: true,
     });
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).insert_above(Some(id), duplicate);
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).insert_above(Some(id), duplicate);
     let params = native_request(&mut s, id, "ai", &[original.as_slice(), b" changed"].concat());
     s.authorize =
         Some(|command, _| if command == "image.adjustments.colorLookup" { Err(EngineError::Other("denied stored native filter".into())) } else { Ok(()) });

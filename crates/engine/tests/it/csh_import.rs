@@ -48,12 +48,12 @@ fn csh_import_makes_an_original_shape_available_without_a_document() {
 fn csh_failed_import_preserves_existing_presets_and_revision() {
     let mut session = Session::new();
     let before = session.presets.to_json(&session);
-    let revision = session.presets.rev;
+    let revision = session.presets.revision();
     let bytes = triangle_csh();
     for end in [0, 11, bytes.len() - 1] {
         assert!(session.execute("shape.presets.importCsh", json!({"data": photocraft_paint::tile::b64_encode(&bytes[..end])})).is_err());
         assert_eq!(session.presets.to_json(&session), before);
-        assert_eq!(session.presets.rev, revision);
+        assert_eq!(session.presets.revision(), revision);
     }
     assert!(session.execute("shape.presets.importCsh", json!({"data": photocraft_paint::tile::b64_encode(&bytes), "group": 12})).is_err());
     assert_eq!(session.presets.to_json(&session), before);
@@ -70,10 +70,10 @@ fn csh_invalid_second_shape_does_not_partially_import_a_set() {
     let mut session = Session::new();
     session.execute("shape.presets.importCsh", json!({"data": photocraft_paint::tile::b64_encode(&triangle)})).unwrap();
     let before = session.presets.to_json(&session);
-    let revision = session.presets.rev;
+    let revision = session.presets.revision();
     assert!(session.execute("shape.presets.importCsh", json!({"data": photocraft_paint::tile::b64_encode(&set)})).is_err());
     assert_eq!(session.presets.to_json(&session), before);
-    assert_eq!(session.presets.rev, revision);
+    assert_eq!(session.presets.revision(), revision);
 }
 
 #[test]

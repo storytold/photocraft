@@ -1390,6 +1390,7 @@ pub const DEFAULT_TOOLBAR: &[&[&str]] = &[
     &["Eraser", "BackgroundEraser", "MagicEraser"],
     &["Gradient", "PaintBucket"],
     &["Blur", "Sharpen", "Smudge"],
+    &["AdjustmentBrush"],
     &["Dodge", "Burn", "Sponge"],
     &["Pen", "FreeformPen", "CurvaturePen", "AddAnchorPoint", "DeleteAnchorPoint", "ConvertPoint"],
     &["Type", "VerticalType", "VerticalTypeMask", "HorizontalTypeMask"],
@@ -1946,6 +1947,12 @@ impl Session {
         self.prefs.get()
     }
 
+    /// Revision of the framework preference section `key`: it moves when an edit changes that
+    /// section.
+    pub fn section_rev(&self, key: &str) -> u64 {
+        self.prefs.section_rev(key)
+    }
+
     /// Change preferences and apply the engine-side ones.
     pub fn edit_prefs<R>(&mut self, f: impl FnOnce(&mut Preferences) -> R) -> R {
         let r = self.prefs.edit(f);
@@ -1964,11 +1971,15 @@ impl Session {
         let bytes = self.prefs().performance.history_cap_bytes();
         let budget = self.prefs().performance.effect_cache_budget_bytes();
         let non_linear = self.prefs().history_options.allow_non_linear_history;
+        // A document is written only when its limits change: every write moves its `Tracked` revision.
         for st in &mut self.docs {
-            st.history.max_states = n;
-            st.history.max_bytes = bytes;
-            st.history.non_linear = non_linear;
-            st.trim_history();
+            let history = &st.history;
+            if (history.max_states, history.max_bytes, history.non_linear) != (n, bytes, non_linear) {
+                st.history.max_states = n;
+                st.history.max_bytes = bytes;
+                st.history.non_linear = non_linear;
+                st.trim_history();
+            }
         }
         photocraft_compose::set_effect_cache_budget(budget);
         crate::transform_cmds::set_budget(u64::from(self.prefs().performance.effective_memory_usage_mb()) << 20);

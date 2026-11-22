@@ -65,14 +65,19 @@ pub(crate) fn document(app: &PhotocraftApp) -> Option<CropDocument> {
     Some(CropDocument::new(CropDocKey::new(st.doc.id.0), size, f64::from(st.doc.resolution_dpi)).selection(bounds))
 }
 
-/// Maps what a pass of the tool reported to the app.
-pub(crate) fn finish(app: &mut PhotocraftApp, output: CropOutput) {
+/// Maps what a canvas pass reported and acknowledges the crop on the tool that emitted it.
+pub(crate) fn finish(app: &mut PhotocraftApp, tool: &mut CropTool, output: CropOutput) {
     for event in output.events {
-        handle_event(app, event);
+        if let CropEvent::Apply(commit) = event {
+            tool.applied(apply_commit(app, &commit));
+        } else {
+            handle_event(app, event);
+        }
     }
 }
 
-/// Runs once per pass: while another tool is current, a drawn frame is cropped as leaving the tool does.
+/// Runs once per pass: while another tool is current, a drawn frame is cropped as leaving the tool does, and the view
+/// is upright after it.
 pub(crate) fn each_pass(app: &mut PhotocraftApp) {
     if app.ui.tool == Tool::Crop {
         return;
@@ -81,7 +86,13 @@ pub(crate) fn each_pass(app: &mut PhotocraftApp) {
     let keeps_pending = app.stylus.tool_before_eraser == Some(Tool::Crop);
     let (settings, units) = (app.ui.tool_options.crop.clone(), units(app));
     let event = app.canvas_tools.crop.tool.leave(&settings, &document, &units, keeps_pending);
+    // The tool drives the view only while it is picked: the view a default-mode crop turned goes upright with the
+    // commit leaving the tool makes, accepted or refused, as Enter's does (#16330).
+    let commits = matches!(event, Some(CropEvent::Apply(_)));
     handle_event(app, event);
+    if commits {
+        upright_view(app, document.key);
+    }
 }
 
 /// The one commit: the menus, the bar, the task bar and the canvas menu call it. True when the document was cropped.
@@ -122,7 +133,11 @@ pub(crate) fn toggle_straighten(app: &mut PhotocraftApp) {
 /// Runs one event of the tool. True for an `Apply` that cropped the document.
 pub(super) fn handle_event(app: &mut PhotocraftApp, event: impl Into<Option<CropEvent>>) -> bool {
     match event.into() {
-        Some(CropEvent::Apply(commit)) => apply_commit(app, &commit),
+        Some(CropEvent::Apply(commit)) => {
+            let accepted = apply_commit(app, &commit);
+            app.canvas_tools.crop.tool.applied(accepted);
+            accepted
+        }
         Some(CropEvent::Discard(key)) => {
             upright_view(app, key);
             false
@@ -137,7 +152,7 @@ pub(super) fn handle_event(app: &mut PhotocraftApp, event: impl Into<Option<Crop
     }
 }
 
-/// `image.crop` for `commit`; the tool is told whether the document took it.
+/// Runs `image.crop` for `commit` and returns whether the document accepted it.
 fn apply_commit(app: &mut PhotocraftApp, commit: &CropCommit) -> bool {
     let rect = commit.frame.rect;
     let px = |v: f64| v.round().max(1.0) as u64;
@@ -164,13 +179,11 @@ fn apply_commit(app: &mut PhotocraftApp, commit: &CropCommit) -> bool {
             if let Some(view) = app.session.active_index().and_then(|i| app.ui.views.get_mut(i)) {
                 view.place(craft::ui::canvas::ViewCommands::FitOnScreen);
             }
-            app.canvas_tools.crop.tool.applied(true);
             true
         }
         Err(error) => {
             app.ui.status = error;
             app.ui.status_error = true;
-            app.canvas_tools.crop.tool.applied(false);
             false
         }
     }
@@ -217,9 +230,19 @@ pub fn frame(app: &PhotocraftApp) -> Option<CropBox> {
     app.canvas_tools.crop.tool.frame()
 }
 
-/// The canvas shows the pixels past its edges under the shield.
+/// The canvas shows the pixels past its edges under the shield. Default mode only: in Classic Mode the frame lies over
+/// the pasteboard and the layers stop at the canvas edge, as in Photoshop.
 pub(crate) fn shows_beyond_canvas(app: &PhotocraftApp) -> bool {
-    app.ui.tool == Tool::Crop && app.canvas_tools.crop.tool.shows_beyond_canvas()
+    app.ui.tool == Tool::Crop && app.ui.tool_options.crop.image_mode() && app.canvas_tools.crop.tool.shows_beyond_canvas()
+}
+
+/// The colour the area a crop adds past the canvas previews in (`shows_beyond_canvas`), as the commit fills it: the
+/// background colour on a visible Background with Delete Cropped Pixels on and Fill: Background. `None` previews
+/// transparency (Delete off turns the Background into a layer; Content-Aware Fill makes its own pixels).
+pub(crate) fn grown_fill(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f32; 4]> {
+    let crop = &app.ui.tool_options.crop;
+    let fills = crop.delete_pixels && crop.fill == CropFill::Background && doc.background().is_some_and(|layer| layer.visible);
+    fills.then_some(app.session.tools.background)
 }
 
 /// Show Cropped Area is off with the Crop tool showing a frame: nothing outside it shows.

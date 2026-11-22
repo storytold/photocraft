@@ -1,5 +1,6 @@
-//! #11481: File › Export › Artboards to Files (and Layers / Layer Comps to Files) has a JPEG
-//! Quality row behind a Custom check box, as Batch has (#3956). The quality reaches the command
+//! #11481: File › Export › Layers / Layer Comps to Files have a JPEG Quality row behind a Custom
+//! check box, as Batch has (#3956). Artboards to Files has its quality in its Export Options
+//! instead (#13636, `artboards_export_options_dialog_tests`). The quality reaches the command
 //! only for a JPEG with Custom on: left alone, an export writes what the command writes with no
 //! quality (the source JPEG's own quality, else the encoder default), a WebP stays lossless and
 //! PNG has none. The forms are the hosted command forms; the tests drive them as automation does.
@@ -9,8 +10,8 @@ use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-const ARTBOARDS: &str = "file.export.artboardsToFiles";
-const EXPORTS: [&str; 3] = [ARTBOARDS, "file.export.layersToFiles", "file.export.layerCompsToFiles"];
+const COMPS: &str = "file.export.layerCompsToFiles";
+const EXPORTS: [&str; 2] = [COMPS, "file.export.layersToFiles"];
 
 fn app() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -74,7 +75,7 @@ fn direct(app: &mut PhotocraftApp, dir: &Path, format: &str, quality: Option<i64
     if let Some(q) = quality {
         p["quality"] = json!(q);
     }
-    app.run(ARTBOARDS, p).unwrap();
+    app.run(COMPS, p).unwrap();
     written(dir)
 }
 
@@ -83,13 +84,13 @@ fn tmp() -> tempfile::TempDir {
 }
 
 #[test]
-fn artboards_to_files_sends_a_custom_jpeg_quality() {
+fn layer_comps_to_files_sends_a_custom_jpeg_quality() {
     let (mut app, ctx) = app();
     let via_dialog = tmp();
     let via_command = tmp();
     // Custom off: the quality row is greyed out for any format but JPEG, and an untouched JPEG export writes what
     // the command writes with no quality.
-    let dialog = open(&mut app, &ctx, ARTBOARDS, via_dialog.path(), "png");
+    let dialog = open(&mut app, &ctx, COMPS, via_dialog.path(), "png");
     assert!(app.framework.dialogs.set_json_field(&ctx, dialog, "quality", json!(5)).is_err(), "PNG: the quality row takes no input");
     set(&mut app, &ctx, dialog, "format", json!("jpg"));
     assert!(fields(&app, dialog).get("quality").is_none_or(Value::is_null), "no quality is sent while Custom is off");
@@ -100,7 +101,7 @@ fn artboards_to_files_sends_a_custom_jpeg_quality() {
     let mut sizes = Vec::new();
     for quality in [0, 3, 12] {
         let (a, b) = (tmp(), tmp());
-        let dialog = open(&mut app, &ctx, ARTBOARDS, a.path(), "jpg");
+        let dialog = open(&mut app, &ctx, COMPS, a.path(), "jpg");
         set(&mut app, &ctx, dialog, "quality", json!(quality));
         assert_eq!(fields(&app, dialog)["quality"].as_f64(), Some(quality as f64), "the typed quality is the field's value");
         let bytes = exported(&mut app, &ctx, dialog, a.path());

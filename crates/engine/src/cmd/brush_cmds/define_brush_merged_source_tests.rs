@@ -4,7 +4,7 @@ use photocraft_doc::Layer;
 const COMMANDS: [&str; 2] = ["edit.defineBrushPreset", "brush.defineFromSelection"];
 
 fn tip(s: &Session) -> &GrayTile {
-    let TipShape::Sampled(tip) = &s.tools.brush.tip else { panic!("expected a sampled tip") };
+    let TipShape::Sampled(tip) = &*s.tools.brush.tip else { panic!("expected a sampled tip") };
     tip
 }
 
@@ -164,15 +164,15 @@ fn a_hidden_black_source_over_white_or_transparency_is_empty_and_does_not_replac
             })
             .unwrap();
             s.execute("brush.presets.save", json!({"name": "Kept"})).unwrap();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
+            let brush = (*s.tools.brush).clone();
+            let presets = (*s.tools.presets).clone();
             let current = s.tools.current_preset.clone();
             let doc = s.active().unwrap().doc.clone();
             let history = s.active().unwrap().history.past_len();
             let err = s.execute(command, json!({"name": "Kept"})).unwrap_err();
             assert!(err.to_string().contains("contain no paint"), "{err}");
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
+            assert_eq!(*s.tools.brush, brush);
+            assert_eq!(*s.tools.presets, presets);
             assert_eq!(s.tools.current_preset, current);
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().history.past_len(), history);
@@ -234,8 +234,8 @@ fn composite_storage_is_counted_with_density_and_mask_before_any_allocation() {
             let height = (crate::allocation::MAX_DENSE_BYTES / (bytes * u64::from(WIDTH))) as u32;
             let mut s = sparse_budget_source(WIDTH, height, selected);
             let doc = s.active().unwrap().doc.clone();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
+            let brush = (*s.tools.brush).clone();
+            let presets = (*s.tools.presets).clone();
             let current = s.tools.current_preset.clone();
             let history = s.active().unwrap().history.past_len();
             crate::allocation::fail_next_for_test();
@@ -246,8 +246,8 @@ fn composite_storage_is_counted_with_density_and_mask_before_any_allocation() {
             assert!(unspent.is_err(), "budget refusal must precede the first allocation");
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().history.past_len(), history);
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
+            assert_eq!(*s.tools.brush, brush);
+            assert_eq!(*s.tools.presets, presets);
             assert_eq!(s.tools.current_preset, current);
         }
     }
@@ -263,8 +263,8 @@ fn compositor_allocation_boundary_failure_preserves_source_and_preset_state() {
             }
             let doc = s.active().unwrap().doc.clone();
             let history = s.active().unwrap().history.past_len();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
+            let brush = (*s.tools.brush).clone();
+            let presets = (*s.tools.presets).clone();
             let current = s.tools.current_preset.clone();
             crate::allocation::fail_after_for_test(if selected { 2 } else { 1 });
             let result = s.execute(command, json!({"name": "Compositor allocation failure"}));
@@ -273,8 +273,8 @@ fn compositor_allocation_boundary_failure_preserves_source_and_preset_state() {
             assert!(err.to_string().contains("not enough memory"), "{err}");
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().history.past_len(), history);
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
+            assert_eq!(*s.tools.brush, brush);
+            assert_eq!(*s.tools.presets, presets);
             assert_eq!(s.tools.current_preset, current);
         }
     }
@@ -294,8 +294,8 @@ fn a_banded_capture_that_fits_the_budget_is_not_charged_for_a_full_rgba_canvas()
             assert!(pixels * (sample_bytes + 16) > crate::allocation::MAX_DENSE_BYTES, "a full-plane estimate would incorrectly reject this fixture");
             let mut s = sparse_budget_source(WIDTH, height, selected);
             let doc = s.active().unwrap().doc.clone();
-            let brush = s.tools.brush.clone();
-            let presets = s.tools.presets.clone();
+            let brush = (*s.tools.brush).clone();
+            let presets = (*s.tools.presets).clone();
             // Refuse the first real allocation, after verifying that the budget allowed it.
             crate::allocation::fail_next_for_test();
             let result = s.execute(command, json!({"name": "Fits with bands"}));
@@ -304,8 +304,8 @@ fn a_banded_capture_that_fits_the_budget_is_not_charged_for_a_full_rgba_canvas()
             assert!(err.contains("not enough memory") && !err.contains("working memory"), "{err}");
             assert!(unspent.is_ok(), "the accepted budget must reach the first allocation");
             assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-            assert_eq!(s.tools.brush, brush);
-            assert_eq!(s.tools.presets, presets);
+            assert_eq!(*s.tools.brush, brush);
+            assert_eq!(*s.tools.presets, presets);
         }
     }
 }
@@ -386,8 +386,8 @@ fn selection_buffer_failure_preserves_source_and_preset_state() {
         s.execute("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 150})).unwrap();
         let doc = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.past_len();
-        let brush = s.tools.brush.clone();
-        let presets = s.tools.presets.clone();
+        let brush = (*s.tools.brush).clone();
+        let presets = (*s.tools.presets).clone();
         let current = s.tools.current_preset.clone();
         crate::allocation::fail_after_for_test(1);
         let result = s.execute(command, json!({"name": "Selection buffer failure"}));
@@ -396,8 +396,8 @@ fn selection_buffer_failure_preserves_source_and_preset_state() {
         assert!(err.to_string().contains("not enough memory"), "{err}");
         assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
         assert_eq!(s.active().unwrap().history.past_len(), history);
-        assert_eq!(s.tools.brush, brush);
-        assert_eq!(s.tools.presets, presets);
+        assert_eq!(*s.tools.brush, brush);
+        assert_eq!(*s.tools.presets, presets);
         assert_eq!(s.tools.current_preset, current);
     }
 }

@@ -244,6 +244,208 @@ pub fn fill_owned(
     fill_cow(w, h, ch, Cow::Owned(img), hole, source, opts, ctl)
 }
 
+/// The patch radius of the fill for the option set #14191 measured (Default colour adaptation,
+/// no rotation, no scale, no mirror). The straight features of its document are 10 px bands and
+/// 20 px stripes: the default 7x7 patch fits inside one stripe or inside one band gap, so it
+/// carries no phase information and the completion decides from colour alone and runs one region
+/// into the other. An 11x11 patch covers a feature and the one next to it, which is what keeps
+/// their phase through the hole. Every other option set, and a sampling area other than the
+/// Rectangular one, is marked "not measured" in #14191 and keeps [`CompleteParams`]' default radius.
+const MEASURED_STRUCTURE_PATCH_RADIUS: usize = 5;
+
+/// Whether `opts` holds the option set #14191 measured on its test document: Default colour
+/// adaptation, no rotation, no scale and no mirror.
+fn structure_measured(opts: &FillOptions) -> bool {
+    opts.color_adaptation == color_level("default") && opts.rotations.is_empty() && !opts.scale && !opts.mirror
+}
+
+/// Whether `source` is the Rectangular sampling area of the buffer: every pixel outside the hole.
+/// #14191 measured Rectangular, and Auto where it keeps that same area; Auto where its
+/// content-based choice differs (or any other area) is not measured.
+fn rectangular_area(hole: &[bool], source: &[bool]) -> bool {
+    hole.iter().zip(source).all(|(h, s)| *h || *s)
+}
+
+/// The variant specs of `opts`: mirror, the rotation set, the scaled pair.
+fn variant_specs(opts: &FillOptions) -> Vec<(f32, f32, bool)> {
+    let mut specs: Vec<(f32, f32, bool)> = Vec::new();
+    if opts.mirror {
+        specs.push((0.0, 1.0, true));
+    }
+    for &deg in &opts.rotations {
+        specs.push((deg, 1.0, false));
+    }
+    if opts.scale {
+        specs.push((0.0, 0.8, false));
+        specs.push((0.0, 1.25, false));
+    }
+    specs
+}
+
+/// The variants of `src` for `specs`, or none when none are asked for or their mosaic would not fit
+/// in the budget. The mosaic gap follows `params`, so they are built again for every attempt.
+fn mosaic_variants(src: Src, specs: &[(f32, f32, bool)], params: &CompleteParams, ctl: &Interrupt) -> Result<Vec<Variant>, Cancelled> {
+    if specs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let gap = 2 * params.patch_radius + 2;
+    let dims: Vec<(usize, usize)> = specs.iter().map(|&(deg, scale, _)| variant_dims(src.w, src.h, deg, scale)).collect();
+    if mosaic_size(src.w, src.h, gap, &dims).is_none() {
+        return Ok(Vec::new());
+    }
+    let mut extra = Vec::new();
+    for &(deg, scale, mirror) in specs {
+        extra.push(variant(src, deg, scale, mirror, ctl)?);
+    }
+    Ok(extra)
+}
+
+/// The roles of the window's pixels: the hole, what may be copied from, and the rest of the image.
+fn window_roles(hole: &[bool], ok: &[bool]) -> Vec<Px> {
+    par::map(hole.len(), true, |s| {
+        if hole[s] {
+            Px::Hole
+        } else if ok[s] {
+            Px::Source
+        } else {
+            Px::Known
+        }
+    })
+}
+
+/// The mosaic of the window and its variants: identity at the left, the variants in a column to its
+/// right, gaps that are no image. `None` when the mosaic spans more than the budget (the variants
+/// then go unused, as they did before they were built).
+#[allow(clippy::too_many_arguments)]
+fn mosaic_pixels(
+    w: usize,
+    h: usize,
+    ch: usize,
+    img: &[f32],
+    hole: &[bool],
+    ok: &[bool],
+    extra: &[Variant],
+    params: &CompleteParams,
+) -> Option<(usize, usize, Vec<f32>, Vec<Px>)> {
+    let gap = 2 * params.patch_radius + 2;
+    if extra.is_empty() {
+        return None;
+    }
+    let (mw, mh) = mosaic_size(w, h, gap, &extra.iter().map(|v| (v.w, v.h)).collect::<Vec<_>>())?;
+    let mut mimg = vec![0.0f32; mw * mh * ch];
+    let mut roles = vec![Px::Void; mw * mh];
+    for y in 0..h {
+        for x in 0..w {
+            let (s, d) = (y * w + x, y * mw + x);
+            mimg[d * ch..(d + 1) * ch].copy_from_slice(&img[s * ch..(s + 1) * ch]);
+            roles[d] = if hole[s] {
+                Px::Hole
+            } else if ok[s] {
+                Px::Source
+            } else {
+                Px::Known
+            };
+        }
+    }
+    let mut oy = 0;
+    for v in extra {
+        for y in 0..v.h {
+            for x in 0..v.w {
+                let (s, d) = (y * v.w + x, (oy + y) * mw + w + gap + x);
+                mimg[d * ch..(d + 1) * ch].copy_from_slice(&v.img[s * ch..(s + 1) * ch]);
+                if v.ok[s] {
+                    roles[d] = Px::Source;
+                }
+            }
+        }
+        oy += v.h + gap;
+    }
+    Some((mw, mh, mimg, roles))
+}
+
+/// One completion attempt: the variant mosaic to run it on, or the plain window when no variant was
+/// asked for or the mosaic would not fit the budget.
+struct Attempt {
+    /// The mosaic's dimensions (the window's own when there is no mosaic).
+    mw: usize,
+    mh: usize,
+    /// The mosaic pixels; empty when the attempt runs on the window itself.
+    mosaic: Vec<f32>,
+    /// The roles of the attempt's pixels (the window's own when there is no mosaic).
+    roles: Vec<Px>,
+}
+
+/// Build one attempt: variants first (their pixels are expensive, so the mosaic budget is settled
+/// on their dimensions before any variant is built), then the mosaic or the plain window's roles.
+/// The mosaic gap follows `params`, so an attempt is built for every patch radius.
+#[allow(clippy::too_many_arguments)]
+fn fill_attempt(
+    w: usize,
+    h: usize,
+    ch: usize,
+    pixels: &[f32],
+    hole: &[bool],
+    ok: &[bool],
+    specs: &[(f32, f32, bool)],
+    params: &CompleteParams,
+    ctl: &Interrupt,
+) -> Result<Attempt, Cancelled> {
+    let src = Src { w, h, ch, img: pixels, ok };
+    let extra = mosaic_variants(src, specs, params, ctl)?;
+    ctl.check()?;
+    match mosaic_pixels(w, h, ch, pixels, hole, ok, &extra, params) {
+        Some((mw, mh, mosaic, roles)) => Ok(Attempt { mw, mh, mosaic, roles }),
+        // No variant was asked for, or its mosaic would not fit the budget: complete the window.
+        None => Ok(Attempt { mw: w, mh: h, mosaic: Vec::new(), roles: window_roles(hole, ok) }),
+    }
+}
+
+/// The window's own pixels out of a finished mosaic (its left region, the variants and the gaps
+/// beside it are no answer).
+fn window_from_mosaic(w: usize, h: usize, ch: usize, mw: usize, mosaic: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0f32; w * h * ch];
+    for y in 0..h {
+        for x in 0..w {
+            let (s, d) = ((y * mw + x) * ch, (y * w + x) * ch);
+            out[d..d + ch].copy_from_slice(&mosaic[s..s + ch]);
+        }
+    }
+    out
+}
+
+/// The measured fill of #14191, asked again with today's radius when the 11x11 patch leaves no
+/// donor: an 11x11 window needs room inside the buffer, and a hole can also use up every window of
+/// a bigger one. Without that second attempt the fill would answer with the smooth membrane where
+/// today's 7x7 patch still copies pieces; #14191 measures a 600x400 document and keeps every other
+/// case on today's behaviour.
+#[allow(clippy::too_many_arguments)]
+fn fill_retry(
+    w: usize,
+    h: usize,
+    ch: usize,
+    img: &[f32],
+    hole: &[bool],
+    ok: &[bool],
+    specs: &[(f32, f32, bool)],
+    params: &mut CompleteParams,
+    inner: &Interrupt,
+    ctl: &Interrupt,
+) -> Result<Option<Vec<f32>>, Cancelled> {
+    let measured = params.patch_radius;
+    for radius in [measured, CompleteParams::default().patch_radius] {
+        params.patch_radius = radius;
+        let attempt = fill_attempt(w, h, ch, img, hole, ok, specs, params, ctl)?;
+        if attempt.mosaic.is_empty() {
+            if let Some(f) = complete_masked(w, h, ch, img, &attempt.roles, params, inner)? {
+                return Ok(Some(f));
+            }
+        } else if let Some(f) = complete_masked(attempt.mw, attempt.mh, ch, &attempt.mosaic, &attempt.roles, params, inner)? {
+            return Ok(Some(window_from_mosaic(w, h, ch, attempt.mw, &f)));
+        }
+    }
+    Ok(None)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fill_cow(
     w: usize,
@@ -261,111 +463,76 @@ fn fill_cow(
     if !hole.iter().any(|h| *h) {
         return Ok(img.into_owned());
     }
-    let params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
-    let gap = 2 * params.patch_radius + 2;
+    let mut params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    if structure_measured(opts) && rectangular_area(hole, source) {
+        params.patch_radius = MEASURED_STRUCTURE_PATCH_RADIUS;
+    }
     let ok: Vec<bool> = par::map(w * h, true, |i| !hole[i] && source[i]);
-    let src = Src { w, h, ch, img: &img, ok: &ok };
-    // Variants: the identity (which holds the hole) first, then the adaptations. Their pixels are
-    // expensive, so the mosaic budget is settled on their dimensions before any variant is built;
-    // when the variants would not fit, the image itself is completed without them.
-    let mut specs: Vec<(f32, f32, bool)> = Vec::new();
-    if opts.mirror {
-        specs.push((0.0, 1.0, true));
-    }
-    for &deg in &opts.rotations {
-        specs.push((deg, 1.0, false));
-    }
-    if opts.scale {
-        specs.push((0.0, 0.8, false));
-        specs.push((0.0, 1.25, false));
-    }
-    let dims: Vec<(usize, usize)> = specs.iter().map(|&(deg, scale, _)| variant_dims(w, h, deg, scale)).collect();
-    let size = if specs.is_empty() { None } else { mosaic_size(w, h, gap, &dims) };
-    let mut extra: Vec<Variant> = Vec::new();
-    if size.is_some() {
-        for &(deg, scale, mirror) in &specs {
-            extra.push(variant(src, deg, scale, mirror, ctl)?);
-        }
-    }
-    let role = |s: usize| {
-        if hole[s] {
-            Px::Hole
-        } else if ok[s] {
-            Px::Source
-        } else {
-            Px::Known
-        }
-    };
-    // Mosaic: identity at the left, variants in a column to its right, gaps that are no image.
-    // Without variants it is the image itself; so it is when the variants would not fit
-    // (`size` above is then None and `extra` is empty).
-    let (mw, mh, mosaic, roles): (usize, usize, Option<Vec<f32>>, Vec<Px>) = if let Some((mw, mh)) = size {
-        let mut mimg = vec![0.0f32; mw * mh * ch];
-        let mut roles = vec![Px::Void; mw * mh];
-        for y in 0..h {
-            for x in 0..w {
-                let (s, d) = (y * w + x, y * mw + x);
-                mimg[d * ch..(d + 1) * ch].copy_from_slice(&img[s * ch..(s + 1) * ch]);
-                roles[d] = role(s);
-            }
-        }
-        let mut oy = 0;
-        for v in &extra {
-            ctl.check()?;
-            for y in 0..v.h {
-                for x in 0..v.w {
-                    let (s, d) = (y * v.w + x, (oy + y) * mw + w + gap + x);
-                    mimg[d * ch..(d + 1) * ch].copy_from_slice(&v.img[s * ch..(s + 1) * ch]);
-                    if v.ok[s] {
-                        roles[d] = Px::Source;
-                    }
-                }
-            }
-            oy += v.h + gap;
-        }
-        (mw, mh, Some(mimg), roles)
-    } else {
-        (w, h, None, par::map(w * h, true, role))
-    };
-    drop((extra, ok));
-    ctl.check()?;
+    let specs = variant_specs(opts);
     // The completion is nearly all the work.
     let cancel = || ctl.cancelled();
     let progress = |f: f32| ctl.progress(f * 0.99);
     let inner = photocraft_raster::Interrupt::new(&cancel, &progress);
-    let out = match mosaic {
-        // Without variants the image itself is completed (it changes only in the hole).
-        None => {
-            let filled: Result<Vec<f32>, Cow<[f32]>> = match img {
-                Cow::Owned(v) => complete_masked_owned(w, h, ch, v, &roles, &params, &inner)?.map_err(Cow::Owned),
-                Cow::Borrowed(b) => complete_masked(w, h, ch, b, &roles, &params, &inner)?.ok_or(Cow::Borrowed(b)),
-            };
-            match filled {
+    // One completion for every option set but the measured one: it fills the caller's buffer in
+    // place when it owns one. The measured set may be asked a second time (see `fill_retry`).
+    if params.patch_radius != MEASURED_STRUCTURE_PATCH_RADIUS {
+        let mut pixels = img.into_owned();
+        let attempt = fill_attempt(w, h, ch, &pixels, hole, &ok, &specs, &params, ctl)?;
+        ctl.check()?;
+        let out = if attempt.mosaic.is_empty() {
+            match complete_masked_owned(w, h, ch, pixels, &attempt.roles, &params, &inner)? {
                 Ok(f) => f,
-                Err(img) => membrane_fill_with(w, h, ch, &img, hole, ctl)?,
+                // Nothing to copy from: the membrane, as today.
+                Err(v) => membrane_fill_with(w, h, ch, &v, hole, ctl)?,
             }
-        }
-        Some(mimg) => match complete_masked(mw, mh, ch, &mimg, &roles, &params, &inner)? {
-            Some(f) => {
-                let mut out = img.into_owned();
-                for y in 0..h {
-                    for x in 0..w {
-                        if hole[y * w + x] {
-                            let (s, d) = ((y * mw + x) * ch, (y * w + x) * ch);
-                            out[d..d + ch].copy_from_slice(&f[s..s + ch]);
+        } else {
+            match complete_masked(attempt.mw, attempt.mh, ch, &attempt.mosaic, &attempt.roles, &params, &inner)? {
+                Some(f) => {
+                    for y in 0..h {
+                        for x in 0..w {
+                            if hole[y * w + x] {
+                                let (s, d) = ((y * attempt.mw + x) * ch, (y * w + x) * ch);
+                                pixels[d..d + ch].copy_from_slice(&f[s..s + ch]);
+                            }
                         }
                     }
+                    pixels
                 }
-                out
+                None => membrane_fill_with(w, h, ch, &pixels, hole, ctl)?,
             }
-            None => membrane_fill_with(w, h, ch, &img, hole, ctl)?,
-        },
-    };
+        };
+        ctl.check()?;
+        ctl.progress(1.0);
+        return Ok(out);
+    }
+    let out = fill_cow_measured(w, h, ch, img.as_ref(), hole, &ok, &specs, &mut params, &inner, ctl)?;
     ctl.check()?;
     ctl.progress(1.0);
     Ok(out)
 }
 
+/// The measured fill (#14191): the window is read where it stands, so both attempts see the same
+/// pixels; the answer is a new buffer, as in [`fill_with`] (measured fills come from the command's
+/// own copy of the sampling window).
+#[allow(clippy::too_many_arguments)]
+fn fill_cow_measured(
+    w: usize,
+    h: usize,
+    ch: usize,
+    img: &[f32],
+    hole: &[bool],
+    ok: &[bool],
+    specs: &[(f32, f32, bool)],
+    params: &mut CompleteParams,
+    inner: &Interrupt,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Vec<f32>, Cancelled> {
+    match fill_retry(w, h, ch, img, hole, ok, specs, params, inner, ctl)? {
+        Some(f) => Ok(f),
+        // Nothing to copy from at either radius: the membrane, as today.
+        None => membrane_fill_with(w, h, ch, img, hole, ctl),
+    }
+}
 /// Box mean of radius `r` over a `w × h` plane (edge-clamped), by summed areas.
 fn box_mean(w: usize, h: usize, v: &[f32], r: usize) -> Vec<f32> {
     let w1 = w + 1;
@@ -722,5 +889,7 @@ pub fn default_brush_size(hole: Rect) -> f64 {
     (0.4 * (w * h).sqrt()).round()
 }
 
+#[cfg(test)]
+mod structure_continue_tests;
 #[cfg(test)]
 mod tests;
