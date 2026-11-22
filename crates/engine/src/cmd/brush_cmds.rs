@@ -1300,8 +1300,9 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut before = std::mem::replace(&mut *s.tools.brush, b);
     // A brush the call built anew holds a new tip source: when the tip is the one it had, it keeps its revision, so the
-    // views that show the tip replay.
-    if s.tools.brush.tip == before.tip {
+    // views that show the tip replay. A stored tip's equality ignores whether its full bitmap is loaded, so a tip that
+    // loaded only now keeps the new value: swapping the old one back would drop the bitmap (#16252).
+    if s.tools.brush.tip == before.tip && s.tools.brush.tip.is_loaded() == before.tip.is_loaded() {
         std::mem::swap(&mut s.tools.brush.tip, &mut before.tip);
     }
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.

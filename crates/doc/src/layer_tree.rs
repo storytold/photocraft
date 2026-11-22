@@ -135,6 +135,12 @@ impl DerefMut for LayerTree {
     }
 }
 
+// The index is a pure function of `layers`: every write goes through `DerefMut`, which drops it, `Clone` starts
+// without it, and every lookup answers the same whether it is built or not. Its one observable trace is
+// `LayerIndex::serial`, a rebuild probe for tests that no view reads. So a shared reference can't change what readers
+// see, and a `Tracked` document's revision covers the tree.
+impl craft_tracked::PlainData for LayerTree {}
+
 impl Clone for LayerTree {
     fn clone(&self) -> Self {
         Self { layers: self.layers.clone(), index: OnceLock::new() }

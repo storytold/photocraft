@@ -1667,3 +1667,31 @@ fn set_params_replace_drops_a_shape_blur_radius_it_leaves_out() {
     s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}, "replace": true})).unwrap();
     assert!(params(&s).get("radius").is_none(), "replaced: {}", params(&s));
 }
+
+/// A smart filter re-renders from its params alone, without the document's alpha channels (#7400): Lens Blur refuses an
+/// alpha channel as its depth on a Smart Object, both when it is applied and when a recorded filter's params are edited
+/// (merged or replaced), and the refused edit changes neither the filter nor the history.
+#[test]
+fn lens_blur_smart_filter_refuses_an_alpha_channel_depth_on_edit() {
+    let mut s = session(8);
+    paint(&mut s);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("select.saveSelection", json!({"name": "Depth"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("filter.convertForSmartFilters", json!({})).unwrap();
+    let channel = json!({"radius": 4, "depthMap": "channel", "depthChannel": 0});
+    let applied = s.execute("filter.blur.lensBlur", channel.clone()).unwrap_err().to_string();
+    assert!(applied.contains("rasterize the layer first"), "{applied}");
+    s.execute("filter.blur.lensBlur", json!({"radius": 4, "depthMap": "transparency"})).unwrap();
+    let recorded = active_smart(&s).smart_filters[0].params.clone();
+    let steps = s.active().unwrap().history.past_len();
+    for replace in [false, true] {
+        let e = s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": channel, "replace": replace})).unwrap_err().to_string();
+        assert!(e.contains("rasterize the layer first"), "replace={replace}: {e}");
+        assert_eq!(active_smart(&s).smart_filters[0].params, recorded, "replace={replace}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "replace={replace}");
+    }
+    // Sources that need no channel stay editable.
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"depthMap": "none"}})).unwrap();
+    assert_eq!(active_smart(&s).smart_filters[0].params["depthMap"], json!("none"));
+}

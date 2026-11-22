@@ -71,8 +71,8 @@ impl PhotocraftApp {
             texture_serials: Default::default(),
             menu_model: None,
             toolbar_slots: Default::default(),
-            layers_tree: None,
             dock_model: Default::default(),
+            preset_art: Default::default(),
             move_preview: None,
             move_hover: None,
             move_distance: None,
@@ -114,6 +114,8 @@ impl PhotocraftApp {
             filter_live: craft::imaging::ui::LivePreview::new(craft::imaging::ui::PreviewLane::Dialog),
             adjust_open: None,
             adjust_session: None,
+            properties_hidden: 0,
+            properties_tracked: false,
             dialog_dropper: None,
             layer_style_child: None,
             color_targets: HashMap::new(),
@@ -153,6 +155,7 @@ impl PhotocraftApp {
             layer_box: None,
             finished_pens: Vec::new(),
             hover_doc: None,
+            commands_run: 0,
             hover_layer: None,
             layers_rename: None,
             smart_filter_picks: HashMap::new(),
@@ -340,3 +343,6 @@ mod clipboard_tests;
 
 #[cfg(test)]
 mod apply_data_set_alert_tests;
+
+#[cfg(test)]
+mod apply_data_set_missing_file_tests;
