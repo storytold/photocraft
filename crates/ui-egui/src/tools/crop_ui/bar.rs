@@ -95,6 +95,17 @@ fn preset_outputs(app: &mut PhotocraftApp, ratio: Option<CropRatioChange>, new_p
     }
 }
 
+/// A key of what the bar shows of the Crop tool's frame: Straighten, Reset, the Selection entry and the ✓ and ⊘ cells.
+/// The task bar's Straighten and Cancel, the tool's keys and a drag of the frame change them without a command, so the
+/// options bar's content version holds this key beside the tool options.
+pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<(bool, bool, bool, bool)> {
+    if app.ui.tool != Tool::Crop {
+        return None;
+    }
+    let tool = &app.canvas_tools.crop.tool;
+    Some((tool.straighten_armed(), tool.modified(), tool.shows_selection_entry(&app.ui.tool_options.crop), commits_shown(app)))
+}
+
 /// The ✓ and ⊘ cells show while a crop is pending or the frame was edited.
 pub(crate) fn commits_shown(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::Crop && (super::pending(app) || app.canvas_tools.crop.tool.modified())
