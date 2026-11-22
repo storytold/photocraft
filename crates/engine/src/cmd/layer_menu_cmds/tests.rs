@@ -960,3 +960,10 @@ fn decontamination_alpha_keeps_missing_source_alpha_only_inside_bounds() {
         assert_eq!(alpha.sample_channel(x, y, 0), 0.0);
     }
 }
+
+#[test]
+fn layer_export_as_names_every_resample_method_in_the_presets_order() {
+    let spec = crate::install::command_specs().iter().find(|c| c.id == "layer.exportAs").unwrap();
+    let keys: Vec<&str> = crate::export_preset_cmds::RESAMPLE.iter().map(|(key, _)| *key).collect();
+    assert!(spec.params.contains(&format!("\"resample\":\"{}\"", keys.join("|"))), "{}", spec.params);
+}

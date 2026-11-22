@@ -433,6 +433,28 @@ fn pattern_groups_select_apply_and_sync() {
     assert!(crate::pattern_cmds::resolve(&s, "Weave").is_none());
 }
 
+/// #16221: syncing groups already in line with the library leaves the presets' revision alone (the Patterns panel
+/// syncs in every pass, and the menus rebuild on that revision); a library change still moves it.
+#[test]
+fn pattern_sync_writes_only_when_the_groups_change() {
+    let mut s = session(8);
+    super::patterns::sync(&mut s);
+    let settled = s.presets.revision();
+    super::patterns::sync(&mut s);
+    assert_eq!(s.presets.revision(), settled, "groups in line with the library are not written");
+    let mut extra = s.patterns.items[0].clone();
+    extra.id = "sync-test-extra".into();
+    s.patterns.items.push(extra);
+    super::patterns::sync(&mut s);
+    assert_ne!(s.presets.revision(), settled, "a new library pattern joins a group");
+    assert!(s.presets.pattern_groups.iter().any(|g| g.items.iter().any(|id| id == "sync-test-extra")));
+    let joined = s.presets.revision();
+    s.patterns.items.retain(|p| p.id != "sync-test-extra");
+    super::patterns::sync(&mut s);
+    assert_ne!(s.presets.revision(), joined, "a deleted pattern leaves its group");
+    assert!(!s.presets.pattern_groups.iter().any(|g| g.items.iter().any(|id| id == "sync-test-extra")));
+}
+
 #[test]
 fn pattern_batch_delete_keeps_the_library_when_one_name_is_missing() {
     let mut s = session(8);
@@ -668,7 +690,7 @@ fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
         let mut s = Session::new();
         s.execute("tools.setColors", json!({"foreground": [0.2, 0.4, 0.6, 0.8]})).unwrap();
         let color = s.tools.foreground;
-        let brush = s.tools.brush.clone();
+        let brush = (*s.tools.brush).clone();
         let brush_rev = s.tools.brush_rev;
         s.execute(
             "tool.presets.new",
@@ -679,7 +701,7 @@ fn tool_presets_reject_invalid_colors_before_applying_the_brush() {
         .unwrap();
         assert!(s.execute("tool.presets.select", json!({"preset": "Invalid"})).is_err(), "{values}");
         assert_eq!(s.tools.foreground, color, "{values}");
-        assert_eq!(s.tools.brush, brush, "{values}");
+        assert_eq!(*s.tools.brush, brush, "{values}");
         assert_eq!(s.tools.brush_rev, brush_rev, "{values}");
     }
 }
