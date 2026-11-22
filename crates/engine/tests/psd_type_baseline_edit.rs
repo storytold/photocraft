@@ -83,7 +83,9 @@ fn txt2_line_coordinates_must_fit_the_paragraph_baseline_guards() {
     let bottom = top + f64::from(height);
     let valid = top + f64::from(source.psd_first_baseline.as_ref().unwrap().offset_px);
     let mut cases = vec![
+        (valid, valid, true),
         (valid, valid + 0.019, true),
+        (valid, valid - 0.019, true),
         (valid, valid + 0.021, false),
         (valid, valid - 0.021, false),
         (top - 0.5, top - 0.5, true),
