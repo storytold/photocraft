@@ -363,53 +363,33 @@ pub(super) fn in_contents(
     };
     let doc = bezier_of(mesh);
     let contents = doc.map_points(|p| map(back, p));
-    // Past the perspective cap the picture and the grid are drawn through the capped map ([`shown_mesh`]): the press
-    // and the pointer go through it, so a pull grabs what is shown under the pointer.
-    let capped = capped_view(&to_doc.0, &contents);
-    let to_shown = |p: [f64; 2]| match &capped {
-        Some((fwd, _)) => {
-            let (x, y) = fwd(p[0], p[1]);
-            [x, y]
-        }
-        None => map(to_doc, p),
-    };
-    let bounds = contents.control_bounds();
-    let to_contents = |p: [f64; 2]| match &capped {
-        Some((_, inv)) => {
-            let (x, y) = inv(p[0], p[1]);
-            [x, y]
-        }
-        None => doc_to_contents(to_doc, back, bounds, p),
-    };
     // The press in the document, and where the pointer is now, both taken into the contents. A surface press is the
     // contents' point at its parameters (where [`grid_surface`] found the pointer) taken through the placement itself:
-    // under a perspective the carried mesh's point there lies elsewhere, and a pull from it moved too little.
+    // under a perspective the carried mesh's point there lies elsewhere, and a pull from it moved too little. The pull
+    // works through the plain map, held before its horizon ([`doc_to_contents`]), also where the grid is drawn through
+    // the capped one ([`shown_mesh`]): through the capped map's inverse a sideways pull after a long one took points
+    // behind the plain horizon, and the grid flipped through infinity (the sequence check, seed 967 of 4,000).
     let (press, by) = match edit {
-        RuleEdit::Point { index, by } => (to_shown(*contents.points.get(index)?), by),
-        RuleEdit::Surface { s, t, by } => (to_shown(contents.eval(s, t)), by),
+        RuleEdit::Point { index, by } => (doc.points.get(index).copied()?, by),
+        RuleEdit::Surface { s, t, by } => (map(to_doc, contents.eval(s, t)), by),
         RuleEdit::SplitOnePatch { .. } => return None,
     };
+    let bounds = contents.control_bounds();
     // A surface pull presses [`PULL_PRESS`] from the pointer in the document, at the contents' point found there; off
     // the surface it keeps the pointer's own.
     let (press, edit) = match edit {
         RuleEdit::Surface { by, .. } => {
             let q = [press[0] + PULL_PRESS[0], press[1] + PULL_PRESS[1]];
-            match on_surface(&contents, to_contents(q)) {
+            match on_surface(&contents, doc_to_contents(to_doc, back, bounds, q)) {
                 Some((s, t)) => (q, RuleEdit::Surface { s, t, by }),
                 None => (press, edit),
             }
         }
         _ => (press, edit),
     };
-    let (from, to) = (to_contents(press), to_contents([press[0] + by[0], press[1] + by[1]]));
+    let (from, to) = (doc_to_contents(to_doc, back, bounds, press), doc_to_contents(to_doc, back, bounds, [press[0] + by[0], press[1] + by[1]]));
     let by = [to[0] - from[0], to[1] - from[1]];
-    let scale = match &capped {
-        Some(_) => {
-            let (a, b) = (to_shown(from), to_shown([from[0] + 1.0, from[1]]));
-            (b[0] - a[0]).hypot(b[1] - a[1])
-        }
-        None => to_doc.local_scale(from[0], from[1]),
-    };
+    let scale = to_doc.local_scale(from[0], from[1]);
     let unit = if scale.is_finite() && scale > 1e-9 { unit / scale } else { unit };
     let mut moved = contents.clone();
     match edit {
