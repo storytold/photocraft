@@ -27,7 +27,7 @@ fn clipped_emission_uses_the_same_additive_rule_as_unclipped_emission() {
         let mut emitter = layer([0.5, 0.25, -0.125, EMISSIVE_ALPHA]);
         emitter.blend = mode;
         emitter.clipped = true;
-        doc.layers = vec![layer([0.2, 0.4, 0.6, 0.5]), emitter];
+        doc.layers = vec![layer([0.2, 0.4, 0.6, 0.5]), emitter].into();
         close(flatten(&doc).get(0, 0), [0.7, 0.65, 0.475, 0.5]);
     }
 }
@@ -69,7 +69,7 @@ fn emission_composite_overflow_keeps_representable_associated_light() {
     let mut doc = document();
     let light = f32::MAX / 2.0;
     let coverage = 1e-10;
-    doc.layers = vec![layer([light, 0.0, 0.0, EMISSIVE_ALPHA]), layer([0.0, 0.0, 0.0, coverage])];
+    doc.layers = vec![layer([light, 0.0, 0.0, EMISSIVE_ALPHA]), layer([0.0, 0.0, 0.0, coverage])].into();
     let pixel = flatten(&doc).get(0, 0);
     assert!(pixel[0].is_finite());
     let associated = f64::from(pixel[0]) * f64::from(pixel[3]);

@@ -149,7 +149,7 @@ fn hdr_emission_survives_group_opacity_masks_and_clipping() {
             let mut base = Layer::raster("base", PixelFormat::RGBA32F);
             base.surface_mut().unwrap().fill_rect(bounds, &[0.2, 0.4, 0.6, 0.5]);
             emitter.clipped = true;
-            doc.layers = vec![base, emitter];
+            doc.layers = vec![base, emitter].into();
         } else {
             let mut group = Layer::group("group", vec![emitter]);
             group.opacity = 0.5;
@@ -182,7 +182,7 @@ fn hdr_emission_overflow_retains_associated_light() {
         emitter.surface_mut().unwrap().fill_rect(bounds, &[red, 0.0, 0.0, photocraft_color::EMISSIVE_ALPHA]);
         let mut cover = Layer::raster("coverage", PixelFormat::RGBA32F);
         cover.surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 0.0, alpha]);
-        doc.layers = vec![emitter, cover];
+        doc.layers = vec![emitter, cover].into();
         let expected = f64::from(red) * f64::from(1.0 - alpha);
         for comp in [&mut g.comp, &mut g.paged] {
             let actual = render_to_vec(comp, &g.device, &g.queue, &doc, bounds).unwrap()[0];
