@@ -103,7 +103,7 @@ fn paint_pattern(s: &mut Session) {
     .unwrap();
 }
 
-const ALL: [&str; 24] = [
+const ALL: [&str; 25] = [
     "filter.blur.gaussianBlur",
     "filter.blur.boxBlur",
     "filter.blur.motionBlur",
@@ -118,6 +118,7 @@ const ALL: [&str; 24] = [
     "filter.stylize.emboss",
     "filter.stylize.findEdges",
     "filter.stylize.solarize",
+    "filter.stylize.solarizeThreshold",
     "filter.distort.twirl",
     "filter.distort.pinch",
     "filter.distort.spherize",
@@ -234,6 +235,26 @@ fn selection_limits_the_filter() {
         let j = (5 * 48 + 5) * 4;
         assert_ne!(after[j..j + 4], before[j..j + 4]);
     }
+}
+
+/// Solarize with Threshold refuses out-of-range and wrong-type thresholds with an error and leaves
+/// the document untouched; a missing threshold uses the default, 128.
+#[test]
+fn solarize_threshold_rejects_bad_params_without_changing_the_document() {
+    let mut s = session();
+    paint_pattern(&mut s);
+    let before = active_pixels(&s);
+    for bad in [json!({"threshold": -50}), json!({"threshold": 256}), json!({"threshold": "abc"}), json!({"threshold": null}), json!({"threshold": [1]})] {
+        assert!(s.execute("filter.stylize.solarizeThreshold", bad.clone()).is_err(), "{bad} must be refused");
+        assert_eq!(active_pixels(&s), before, "{bad} changed the document");
+    }
+    let r = s.execute("filter.stylize.solarizeThreshold", json!({})).unwrap();
+    assert!(r.get("filter").is_some());
+    let default_pixels = active_pixels(&s);
+    assert_ne!(default_pixels, before, "the default threshold changes the pattern");
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("filter.stylize.solarizeThreshold", json!({"threshold": 128})).unwrap();
+    assert_eq!(active_pixels(&s), default_pixels, "the default threshold is 128");
 }
 
 #[test]

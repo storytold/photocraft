@@ -297,6 +297,11 @@ pub enum FilterParams {
     },
     FindEdges,
     Solarize,
+    /// Solarize with Threshold: inverts the channels strictly lighter than `threshold` (0–255).
+    /// Plain Solarize splits at 127.5, so 128 differs from it only on a value of exactly 128.
+    SolarizeThreshold {
+        threshold: f32,
+    },
     Invert,
     Desaturate,
     /// Angle −999…999 degrees.
@@ -630,7 +635,7 @@ impl FilterParams {
             FilterParams::Mosaic { cell_size } => Halo::Radius((cell_size.max(1.0).ceil() as i32).saturating_add(1)),
             FilterParams::Emboss { height, .. } => Halo::Radius(height.abs().ceil() as i32 + 2),
             FilterParams::FindEdges => Halo::Radius(1),
-            FilterParams::AddNoise { .. } | FilterParams::Solarize | FilterParams::Invert | FilterParams::Desaturate => Halo::Radius(0),
+            FilterParams::AddNoise { .. } | FilterParams::Solarize | FilterParams::SolarizeThreshold { .. } | FilterParams::Invert | FilterParams::Desaturate => Halo::Radius(0),
             FilterParams::Average
             | FilterParams::RadialBlur { .. }
             | FilterParams::Offset { .. }
@@ -745,6 +750,7 @@ impl FilterParams {
             FilterParams::Emboss { .. } => "Emboss",
             FilterParams::FindEdges => "Find Edges",
             FilterParams::Solarize => "Solarize",
+            FilterParams::SolarizeThreshold { .. } => "Solarize with Threshold",
             FilterParams::Invert => "Invert",
             FilterParams::Desaturate => "Desaturate",
             FilterParams::Twirl { .. } => "Twirl",
@@ -892,6 +898,7 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         FilterParams::Emboss { angle, height, amount } => stylize::emboss(src, out, ctx, *angle, *height, *amount),
         FilterParams::FindEdges => stylize::find_edges(src, out, ctx),
         FilterParams::Solarize => stylize::solarize(src, out, ctx),
+        FilterParams::SolarizeThreshold { threshold } => stylize::solarize_threshold(src, out, ctx, *threshold / 255.0),
         FilterParams::Invert => stylize::per_pixel(src, out, ctx, |v| 1.0 - v),
         FilterParams::Desaturate => stylize::desaturate(src, out, ctx),
         FilterParams::Twirl { angle } => distort::twirl(src, out, ctx, *angle),
