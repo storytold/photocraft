@@ -74,7 +74,9 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id, st.revision, st.damage_from(), st.last_damage))?;
     let (doc, preview_key) = display_doc(app, idx);
     let (display, display_key) = canvas_display(app, &doc, None);
-    let preview_key = preview_key ^ display_key;
+    // A tile that fails to read and recovers keeps the snapshot and its revision: the picture and its partial updates
+    // follow the scratch read-error generation too (`crate::scratch_reads`).
+    let preview_key = crate::scratch_reads::with(preview_key ^ display_key);
     let cached = app.navigator_textures.get(&id).cloned();
     if let Some((r, p, _, t)) = &cached
         && r.ptr_eq(&snapshot)

@@ -160,9 +160,12 @@ type HeldPatterns = Arc<[Arc<photocraft_doc::Pattern>]>;
 type StylesStamp = (Revision, u64);
 
 /// A number for the library's patterns and their pixels: equal stamps mean the same patterns with the same pixels
-/// (`Surface::generation` names a pixel state, and is shared by clones).
+/// (`Surface::generation` names a pixel state, and is shared by clones). It also moves with the scratch read-error
+/// generation: a pattern tile that fails to read draws zeros and its pixels again once it reads, under the same
+/// generation (`crate::scratch_reads`), and the style thumbnails drawn over the patterns follow it through this.
 fn patterns_stamp(library: &PatternLibrary) -> u64 {
     let mut hasher = DefaultHasher::new();
+    crate::scratch_reads::generation().hash(&mut hasher);
     for pattern in &library.items {
         (&pattern.id, &pattern.name, pattern.surface.generation()).hash(&mut hasher);
     }
@@ -302,9 +305,9 @@ fn pattern_image(pattern: &photocraft_doc::Pattern) -> ColorImage {
 }
 
 /// The texture store key of `pattern`'s swatch: its id and its pixels, so a pattern replaced under the same id draws
-/// anew.
+/// anew, and a swatch drawn while a tile failed to read draws again once it reads (`crate::scratch_reads`).
 fn pattern_key(pattern: &photocraft_doc::Pattern) -> PictureKey {
-    ("pattern", pattern.id.clone(), pattern.surface.generation())
+    ("pattern", pattern.id.clone(), crate::scratch_reads::with(pattern.surface.generation()))
 }
 
 /// A texture of `pattern`'s swatch that its holder owns: it stays while the handle lives, where a cached texture
