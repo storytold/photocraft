@@ -158,7 +158,11 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         loaded = Some((f, base_name(path), Some(lut_source(format, bytes))));
     }
     if let Some((f, label, src)) = loaded {
-        if !f.domain_is_default() {
+        // A 3D `.cube`'s DOMAIN_MAX line is ignored, as in the reference application: the table
+        // applies over 0..1 (#14425). A raised DOMAIN_MIN, an input range and the other formats
+        // were not measured and still refuse.
+        let ignored = f.domain_min == [0.0; 3] && cube_domain_lines_only(src.as_ref());
+        if !f.domain_is_default() && !ignored {
             return Err(bad(
                 CMD,
                 format!(
@@ -185,6 +189,16 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         dither = b;
     }
     Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source })
+}
+
+/// Whether a loaded `.cube` takes its custom input domain only from `DOMAIN_MIN` / `DOMAIN_MAX`
+/// lines, with no `LUT_3D_INPUT_RANGE` / `LUT_1D_INPUT_RANGE` line. The reference application
+/// ignores those lines in a 3D `.cube` and applies the table over 0..1 (#14425); a 1D `.cube`
+/// already bakes its domain into the table, so it never reaches this check with a custom one.
+fn cube_domain_lines_only(src: Option<&LutSource>) -> bool {
+    let Some(src) = src.filter(|s| s.format == LutFormat::Cube) else { return false };
+    let text = String::from_utf8_lossy(&src.bytes);
+    !text.lines().map(str::trim_start).any(|l| l.starts_with("LUT_3D_INPUT_RANGE") || l.starts_with("LUT_1D_INPUT_RANGE"))
 }
 
 /// A loaded LUT file, tagged with the format [`craft_cms::lutfile::parse`] read it as.
