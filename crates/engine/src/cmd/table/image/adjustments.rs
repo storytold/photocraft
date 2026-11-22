@@ -16,7 +16,7 @@ pub fn specs() -> Vec<CommandSpec> {
         (
             "curves",
             "Curves…",
-            r##"{"points":json,"red":json,"green":json,"blue":json,"pencil":bool=false,"smooth":0..10=0,"eyedropper":json} (curves as [[in,out],…] in 0..255, 2..19 points: points = composite; red/green/blue, gray, cyan/magenta/yellow/black or lightness/a/b per channel; pencil = drawn curves (Draw to modify the curve): each curve is 256 output levels in 0..255 (point curves given are drawn in, and turning pencil off fits points to the drawing); smooth = Smooth passes over the drawn curves; eyedropper = the dialog's Set Black/Neutral Gray/White Point picker {"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1}, colour composites: RGB and Grayscale (no gray); Image adjustments targeting a mask, alpha or Quick Mask sample that gray plane in any document mode, applied over the given curves)"##,
+            r##"{"points":json,"red":json,"green":json,"blue":json,"pencil":bool=false,"smooth":0..10=0,"eyedropper":json} (curves as [[in,out],…] in 0..255, 2..16 points, fractions truncated: points = composite; red/green/blue, gray, cyan/magenta/yellow/black or lightness/a/b per channel; pencil = drawn curves (Draw to modify the curve): each curve is 256 output levels in 0..255 (point curves given are drawn in, and turning pencil off fits points to the drawing); smooth = Smooth passes over the drawn curves; eyedropper = the dialog's Set Black/Neutral Gray/White Point picker {"point":"black|gray|white","at":[x,y],"size":1..101=1} or {"point",…,"color":[r,g,b] 0..1}, colour composites: RGB and Grayscale (no gray); Image adjustments targeting a mask, alpha or Quick Mask sample that gray plane in any document mode, applied over the given curves)"##,
         ),
         ("exposure", "Exposure…", r##"{"exposure":-20..20=0,"offset":-0.5..0.5=0,"gamma":0.01..9.99=1}"##),
         ("vibrance", "Vibrance…", r##"{"vibrance":-100..100=0,"saturation":-100..100=0}"##),
@@ -75,7 +75,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
                 let adj = match eyedropped {
                     Some(adj) => adj,
-                    None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
+                    None => crate::adjust_params::from_command_params(&kind, p, None, doc_mode(s))?,
                 };
                 new_adjustment(s, adj, p, &format!("layer.newAdjustmentLayer.{kind}"))
             },
@@ -103,11 +103,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::destructive_eyedropper(s, &kind, p)? } else { None };
                 // A smart filter re-runs its params, so it records what an eyedropper resolved
-                // to, not the sample (#3127).
+                // to, not the sample (#3127). The pick is a point curve read without smoothing,
+                // so the recording drops `smooth` and `pencil` as the picker itself does.
                 let recorded = eyedropped.as_ref().map(|adj| {
                     let mut q = p.clone();
                     if let (Value::Object(q), Value::Object(resolved)) = (&mut q, crate::adjust_params::to_params(adj)) {
                         q.remove("eyedropper");
+                        q.remove("smooth");
+                        q.remove("pencil");
                         q.extend(resolved);
                     }
                     q
@@ -122,9 +125,23 @@ pub fn specs() -> Vec<CommandSpec> {
                         } else {
                             p.clone()
                         };
-                        crate::adjust_params::from_params(&kind, &tone, None, adjust_mode(s, p))?
+                        crate::adjust_params::from_command_params(&kind, &tone, None, adjust_mode(s, p))?
                     }
                 };
+                // A smart filter replays its params with the rules for adjustments a file carries,
+                // so it records the Levels or Curves the command read (whole levels, at most 16
+                // points), not the raw params: otherwise the replay keeps points the command merged.
+                // The curves it read are already smoothed, so `smooth` is not stored again.
+                let recorded = recorded.or_else(|| {
+                    matches!(kind.as_str(), "levels" | "curves").then(|| {
+                        let mut q = p.clone();
+                        if let (Value::Object(q), Value::Object(read)) = (&mut q, crate::adjust_params::to_params(&adj)) {
+                            q.remove("smooth");
+                            q.extend(read);
+                        }
+                        q
+                    })
+                });
                 let adj = if matches!(kind.as_str(), "levels" | "curves")
                     && let Some(colors) = crate::color_channels::target(s, p)?
                 {

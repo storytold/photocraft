@@ -86,6 +86,27 @@ pub fn gray_tone_params(p: &Value) -> Value {
     }
 }
 
+/// [`from_params`] for the params a command was given (a script, an action step or an MCP call): a
+/// Curves point array is first read by the reference's rules ([`CurveSource::Params`]: 2 to 16
+/// points, fractions truncated, the later of two equal inputs wins). Params the engine serialized
+/// itself go through [`from_params`] directly and keep their 17 to 19 points and hundredths.
+pub fn from_command_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: ColorMode) -> Result<Adjustment> {
+    if kind != "curves" {
+        return from_params(kind, p, base, mode);
+    }
+    let Some(obj) = p.as_object() else { return from_params(kind, p, base, mode) };
+    let mut obj = obj.clone();
+    let keys =
+        ["points", "gray"].into_iter().chain([ToneSpace::Rgb, ToneSpace::Cmyk, ToneSpace::Lab].into_iter().flat_map(|s| channel_keys(s).iter().copied()));
+    for key in keys {
+        // A pencil map (numbers) is not a point array and keeps its own reader.
+        let Some(v) = obj.get(key).filter(|v| v.as_array().and_then(|a| a.first()).is_some_and(Value::is_array)) else { continue };
+        let pts = parse_curve(&format!("{kind} adjustment"), key, v, CurveSource::Params)?;
+        obj.insert(key.to_string(), curve_arr(&pts));
+    }
+    from_params(kind, &Value::Object(obj), base, mode)
+}
+
 /// Reads the adjustment of `kind` from `p` over `base` (or the kind's defaults when `base` is
 /// None or of another kind). `mode` picks the Levels/Curves channel space when neither the params
 /// nor the base name one.
@@ -558,8 +579,13 @@ fn curve_arr(c: &[CurvePoint]) -> Value {
     )
 }
 
-/// Most points a curve may have (Photoshop allows 16; the PSD record holds 19).
+/// Most points a curve read from a file or edited by the engine may have (the PSD record holds 19;
+/// the command's own params take [`MAX_CURVE_PARAM_POINTS`], and Photoshop's dialog places 16).
 pub const MAX_CURVE_POINTS: usize = 19;
+
+/// Most points a Curves command accepts in its `points` and channel params (measured: the
+/// reference takes 2 to 16 and refuses 17). Curves a file carries keep [`MAX_CURVE_POINTS`].
+pub const MAX_CURVE_PARAM_POINTS: usize = 16;
 
 /// Points Photoshop's "Edit points to modify the curve" places on a pencil-drawn curve at most.
 const MAX_FITTED_POINTS: usize = 16;
@@ -646,7 +672,7 @@ pub enum CurvesEyedropper {
 
 /// Verify that serializing and parsing `points` keeps every point and the requested anchor.
 fn curve_round_trip_keeps_anchor(points: &[CurvePoint], input: f32, output: f32) -> bool {
-    let Ok(parsed) = parse_curve("curves eyedropper", "curve", &curve_arr(points)) else { return false };
+    let Ok(parsed) = parse_curve("curves eyedropper", "curve", &curve_arr(points), CurveSource::Serialized) else { return false };
     if parsed.len() != points.len() {
         return false;
     }
@@ -992,7 +1018,7 @@ pub fn layer_eyedropper(s: &crate::Session, layer: photocraft_doc::LayerId, p: &
     if let Some(o) = rest.as_object_mut() {
         o.remove("eyedropper");
     }
-    let current = if user_keys(&rest).is_empty() { adj.clone() } else { from_params(kind, &rest, Some(adj), d.doc.mode)? };
+    let current = if user_keys(&rest).is_empty() { adj.clone() } else { from_command_params(kind, &rest, Some(adj), d.doc.mode)? };
     let (picker, sample) = eyedropper_sample(&d.doc, Some(layer), e, None)?;
     adjustment_eyedropper(kind, &to_params(&current), picker, sample, d.doc.mode).map(Some)
 }
@@ -1072,25 +1098,65 @@ fn eyedropper_sample(
     Ok((picker, sample))
 }
 
-/// `[[in, out], …]` in 0..255: sorted by input, duplicates collapsed, 2..=19 points.
-pub fn parse_curve(cmd: &str, key: &str, v: &Value) -> Result<Vec<CurvePoint>> {
-    let err = || bad(cmd, format!("`{key}` must be an array of 2..={MAX_CURVE_POINTS} [input, output] pairs in 0..255"));
+/// Who wrote the `[[in, out], …]` array [`parse_curve`] is reading: points a command was given, or
+/// points the engine's own serializer wrote for a curve it holds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CurveSource {
+    /// Points named by a script, an action step or an MCP call: 2..=16 of them, as the reference.
+    Params,
+    /// Points [`curve_arr`] wrote for a curve the engine holds, read back to check that the curve
+    /// survives the round trip: those may run to [`MAX_CURVE_POINTS`], the limit of a curve a file
+    /// carries or the engine's own edits place.
+    Serialized,
+}
+
+/// `[[in, out], …]` in 0..255 as a command names them: sorted by input, the later of two points
+/// closer than half a level wins, 2..=16 points with fractions truncated to whole levels
+/// ([`CurveSource::Params`]) or 2..=19 points at the precision they were written
+/// ([`CurveSource::Serialized`], which [`curve_arr`] writes at hundredths of a level).
+pub fn parse_curve(cmd: &str, key: &str, v: &Value, source: CurveSource) -> Result<Vec<CurvePoint>> {
+    let limit = match source {
+        CurveSource::Params => MAX_CURVE_PARAM_POINTS,
+        CurveSource::Serialized => MAX_CURVE_POINTS,
+    };
+    let err = || bad(cmd, format!("`{key}` must be an array of 2..={limit} [input, output] pairs in 0..255"));
     let a = v.as_array().ok_or_else(err)?;
-    if a.len() < 2 || a.len() > 64 {
+    if a.len() < 2 || a.len() > limit {
         return Err(err());
     }
-    let mut pts = Vec::with_capacity(a.len());
+    let mut given: Vec<[f64; 2]> = Vec::with_capacity(a.len());
     for q in a {
         let q = q.as_array().filter(|q| q.len() == 2).ok_or_else(err)?;
         // Like Photoshop, a point outside 0..255 is refused rather than moved onto the edge.
         let level = |v: Option<&Value>| v.and_then(Value::as_f64).filter(|v| (-1e-6..=255.0 + 1e-6).contains(v));
-        let x = level(q.first()).ok_or_else(err)?;
-        let y = level(q.get(1)).ok_or_else(err)?;
-        pts.push(CurvePoint { input: (x as f32).clamp(0.0, 255.0) / 255.0, output: (y as f32).clamp(0.0, 255.0) / 255.0 });
+        given.push([level(q.first()).ok_or_else(err)?, level(q.get(1)).ok_or_else(err)?]);
     }
-    pts.sort_by(|a, b| a.input.total_cmp(&b.input));
-    pts.dedup_by(|later, earlier| (later.input - earlier.input).abs() < CURVE_POINT_DUPLICATE_DISTANCE);
-    if pts.len() < 2 || pts.len() > MAX_CURVE_POINTS {
+    let point = |p: &[f64; 2]| CurvePoint { input: (p[0] as f32).clamp(0.0, 255.0) / 255.0, output: (p[1] as f32).clamp(0.0, 255.0) / 255.0 };
+    // Sort by input - a stable sort keeps points at one input in the order they were given - and
+    // let each point replace its neighbour closer than half a level: the reference keeps the point
+    // given last at one input, so the later of two duplicates wins.
+    let collapse = |mut pairs: Vec<[f64; 2]>| {
+        pairs.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        let mut kept: Vec<[f64; 2]> = Vec::with_capacity(pairs.len());
+        for p in pairs {
+            match kept.last_mut() {
+                Some(last) if (point(&p).input - point(last).input).abs() < CURVE_POINT_DUPLICATE_DISTANCE => *last = p,
+                _ => kept.push(p),
+            }
+        }
+        kept
+    };
+    // The reference truncates fractional coordinates of what a command is given to whole levels:
+    // `127.5,160.4` acts as `127,160`. Points the engine wrote itself (an eyedropper's anchor sits at
+    // the sampled level, hundredths of a level) keep their precision.
+    if source == CurveSource::Params {
+        for p in &mut given {
+            *p = p.map(f64::trunc);
+        }
+    }
+    let given = collapse(given);
+    let pts = given.iter().map(point).collect::<Vec<_>>();
+    if pts.len() < 2 {
         return Err(err());
     }
     Ok(pts)
@@ -1112,7 +1178,10 @@ fn parse_curve_in(cmd: &str, key: &str, v: &Value, pencil: bool) -> Result<Vec<C
         let map = parse_map(cmd, key, v)?;
         Ok(if pencil { map } else { map_to_points(&map) })
     } else {
-        let pts = parse_curve(cmd, key, v)?;
+        // Both what a command names and what the engine serialized arrive here (`from_params` is
+        // also the inverse of `to_params`), so the wide limit and the written precision apply;
+        // [`from_command_params`] holds a command's own params to the reference's rules first.
+        let pts = parse_curve(cmd, key, v, CurveSource::Serialized)?;
         Ok(if pencil { points_to_map(&pts) } else { pts })
     }
 }
@@ -1249,5 +1318,7 @@ pub fn user_keys(p: &Value) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
+mod curves_point_params_tests;
 #[cfg(test)]
 mod tests;

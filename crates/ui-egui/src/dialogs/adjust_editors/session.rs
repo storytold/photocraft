@@ -132,6 +132,25 @@ pub fn layer_reset(app: &mut PhotocraftApp, id: LayerId, adj: &Adjustment) -> Va
     params
 }
 
+/// The keys of `values` that differ from the layer's `committed` settings. A Properties commit sends only
+/// these: the engine merges them over the layer's current adjustment, so a curve the user did not touch (a
+/// file's 17 to 19 points, or fractional coordinates) is never sent back through the command's own limits
+/// and rounding, which would refuse or truncate it.
+fn changed_keys(committed: &Value, values: &Value) -> Value {
+    match (committed.as_object(), values.as_object()) {
+        (Some(old), Some(new)) => {
+            Value::Object(new.iter().filter(|(key, value)| old.get(key.as_str()) != Some(*value)).map(|(key, value)| (key.clone(), value.clone())).collect())
+        }
+        _ => values.clone(),
+    }
+}
+
+/// The `layer.setAdjustment` settings of a Properties commit: only the keys `value` changed against the
+/// layer's `committed` value (see [`changed_keys`]).
+pub(super) fn commit_params(committed: &AdjustValue, value: &AdjustValue, vcx: &ValueCx) -> Value {
+    changed_keys(&values::to_params(committed, vcx, true), &values::to_params(value, vcx, true))
+}
+
 /// The Properties-panel editor of an adjustment layer: previews live (`app.live_adjust`) while a
 /// control moves and commits one `layer.setAdjustment` per gesture.
 ///
@@ -266,7 +285,7 @@ fn commit(
 ) {
     if value != committed {
         let rev = app.session.active().map(|s| s.revision);
-        let mut params = values::to_params(value, vcx, true);
+        let mut params = commit_params(committed, value, vcx);
         params["layer"] = json!(id.0);
         if let Some(key) = coalesce {
             params["coalesce"] = json!(key);

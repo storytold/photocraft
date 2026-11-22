@@ -364,7 +364,7 @@ fn adjustments() -> Vec<CommandSpec> {
                 } else if crate::adjust_params::user_keys(p).is_empty() {
                     crate::adjust_params::default_for(kind, mode)?
                 } else {
-                    crate::adjust_params::from_params(kind, p, Some(adj), mode)?
+                    crate::adjust_params::from_command_params(kind, p, Some(adj), mode)?
                 };
                 Ok(())
             })?;
