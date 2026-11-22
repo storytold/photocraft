@@ -111,6 +111,17 @@ fn a_long_very_thin_rectangle_is_stored() {
     assert_eq!(stored(&s), 1);
 }
 
+/// The same rectangle far from the origin: the tolerance is a few units in the last place of the coordinates, so it stays
+/// below a width of 5e-7 even at x = 1,000,000 (CodeRabbit on #16238).
+#[test]
+fn a_thin_rectangle_far_from_the_origin_is_stored() {
+    let x = 1_000_000.0;
+    let mut s = with_work_path(Path::new(vec![Subpath::polygon(&[(x, 0.0), (x + 1000.0, 0.0), (x + 1000.0, 0.000_000_5), (x, 0.000_000_5)])]));
+    assert_eq!(define_custom_shape_refusal(&s), None);
+    s.execute("edit.defineCustomShape", json!({"name": "Far"})).unwrap();
+    assert_eq!(stored(&s), 1);
+}
+
 /// Anchors on a line whose handles bulge enclose area, though the flattening keeps only the end points of a shallow curve
 /// (CodeRabbit on #16238).
 #[test]

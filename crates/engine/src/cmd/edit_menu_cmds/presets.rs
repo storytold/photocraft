@@ -89,10 +89,10 @@ fn refusal(path: &Path) -> Option<ShapeRefusal> {
     let len = (far.0 - p0.0).hypot(far.1 - p0.1);
     let off_line =
         if len <= 1e-9 { 0.0 } else { pts.iter().map(|p| ((p.0 - p0.0) * (far.1 - p0.1) - (p.1 - p0.1) * (far.0 - p0.0)).abs() / len).fold(0.0, f64::max) };
-    // Collinear to floating-point noise only, which grows with the size of the coordinates, not with the length of the
-    // line: a thin rectangle has area and is stored, however narrow and however long.
+    // Collinear to floating-point noise only: a few dozen units in the last place of the largest coordinate, which
+    // grows with the coordinates, not with the length of the line: a thin rectangle has area and is stored, however narrow and however long.
     let magnitude = pts.iter().fold(0.0_f64, |m, p| m.max(p.0.abs()).max(p.1.abs()));
-    (off_line <= 1e-12 * (1.0 + magnitude)).then_some(ShapeRefusal::Empty)
+    (off_line <= 64.0 * f64::EPSILON * (1.0 + magnitude)).then_some(ShapeRefusal::Empty)
 }
 
 /// What Define Custom Shape would refuse for the path it would use on the active document (the menu
