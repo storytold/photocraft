@@ -1,8 +1,8 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
     BlendMode, BrushSettings, ColorTable, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat,
-    Rect, Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn,
-    flag, from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
+    Rect, Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
+    from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
 };
 use photocraft_algo::retouch::sponge_rgb;
 use photocraft_color::{ColorMode, SampleType};
