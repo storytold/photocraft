@@ -127,7 +127,7 @@ fn type_unit(app: &PhotocraftApp) -> (f32, &'static str) {
             let dpi = app.session.active().map_or(72.0, |d| d.doc.resolution_dpi.max(1.0));
             (dpi / 72.0, "px")
         }
-        photocraft_engine::prefs::TypeUnit::Millimeters => (72.0 / 25.4, "mm"),
+        photocraft_engine::prefs::TypeUnit::Millimeters => (25.4 / 72.0, "mm"),
     }
 }
 
@@ -405,5 +405,31 @@ mod tests {
         assert_eq!(val["taskBar"]["enabled"], true);
         assert_eq!(val["taskBar"]["visible"], true);
         assert_eq!(val["taskBar"]["rect"], json!([10.0, 20.0, 110.0, 50.0]));
+    }
+
+    /// `type_unit` returns the correct factor and label for points, pixels, and millimeters.
+    #[test]
+    fn type_unit_conversion_factors() {
+        let mut app = app_with_doc();
+
+        // 1. Points (default)
+        let (factor, label) = type_unit(&app);
+        assert_eq!(factor, 1.0);
+        assert_eq!(label, "pt");
+
+        // 2. Pixels (default doc is 72 dpi so 72 / 72 = 1.0)
+        app.run("prefs.set", json!({"path": "unitsAndRulers.typeUnits", "value": "pixels"})).unwrap();
+        let (factor, label) = type_unit(&app);
+        assert_eq!(label, "px");
+        assert!((factor - 1.0).abs() < 1e-4);
+
+        // 3. Millimeters: 72 pt must equal 25.4 mm
+        app.run("prefs.set", json!({"path": "unitsAndRulers.typeUnits", "value": "mm"})).unwrap();
+        let (factor, label) = type_unit(&app);
+        assert_eq!(label, "mm");
+        let mm_for_72pt = 72.0 * factor;
+        assert!((mm_for_72pt - 25.4).abs() < 1e-4);
+        let pt_for_25_4mm = 25.4 / factor;
+        assert!((pt_for_25_4mm - 72.0).abs() < 1e-4);
     }
 }
