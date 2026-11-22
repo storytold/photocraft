@@ -549,7 +549,7 @@ jobs:
       - name: Compare exact outputs and release timings on 24 MP
         run: |
           set -o pipefail
-          cargo test --release -p photocraft-engine --lib color_range_release_comparison -- --ignored --nocapture | tee color-range-perf.txt
+          cargo test --release -p photocraft-engine-core --lib color_range_release_comparison -- --ignored --nocapture | tee color-range-perf.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -590,7 +590,7 @@ jobs:
       - name: Compare cropped command reads and writeback on 36 MP
         run: |
           set -o pipefail
-          cargo test --release -p photocraft-engine --lib sparse_modify_release_comparison -- --ignored --nocapture | tee -a selection-morphology-perf.txt
+          cargo test --release -p photocraft-engine-core --lib sparse_modify_release_comparison -- --ignored --nocapture | tee -a selection-morphology-perf.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
