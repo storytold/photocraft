@@ -10,6 +10,22 @@ use photocraft_raster::Surface;
 
 use crate::selection::Region;
 
+/// Whether `selection` covers any pixel of `region`: a Magic Eraser click whose region lies wholly
+/// outside the selection erases nothing, and records no history step (#11997).
+pub fn region_selected(region: &Region, selection: &Surface) -> bool {
+    let bbox = region.bbox;
+    let (bw, sc) = (bbox.width() as usize, selection.channels());
+    bbox.tiles().map(|tc| tc.rect().intersect(&bbox)).filter(|r| !r.is_empty()).any(|r| {
+        let (w, v) = (r.width() as usize, selection.read_region(r));
+        (r.y0..r.y1).any(|y| {
+            (r.x0..r.x1).any(|x| {
+                let c = region.mask.get((y - bbox.y0) as usize * bw + (x - bbox.x0) as usize).copied().unwrap_or(0);
+                c != 0 && v.get(((y - r.y0) as usize * w + (x - r.x0) as usize) * sc).is_some_and(|s| *s > 0.0)
+            })
+        })
+    })
+}
+
 /// Erases `region` from `target` at `amount` (0–1, the tool's opacity), weighted by the selection's
 /// coverage. With `lock_color` (native colour channels, e.g. the background colour converted to the
 /// surface's model) the pixels are painted toward that colour instead and alpha is kept, as
