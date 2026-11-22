@@ -300,7 +300,29 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     adapt_copies(s, &mut copies, &ddoc)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
     // the layers are in the source (default: the same canvas position).
-    let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
+    // `centerOutside`: copies that would land wholly off the destination's canvas are centred on it, the rest keep
+    // their place, as Duplicate Layer does (#14606); a half pixel rounds towards the top left.
+    // A shape's cache is clipped to the source canvas, so one lying wholly outside it has no pixel bounds: its place
+    // comes from its geometry, as Align and Distribute measure it (CodeRabbit on #16086).
+    // Measured only when `centerOutside` is asked for: it can render a shape again. The group is centred only when
+    // every copy lies wholly off the destination, by the joint bounds of the copies; if any copy meets the canvas,
+    // all keep their place (CodeRabbit on #16086).
+    let center_outside = p.get("centerOutside").and_then(Value::as_bool).unwrap_or(false);
+    let (placed, outside) = if center_outside {
+        let sample = sdoc.pixel_format().sample;
+        let each: Vec<Rect> = copies.layers.iter().filter_map(|l| crate::layer_multi_cmds::align_bounds(l, sdoc.bounds(), sample)).collect();
+        let joint = each.iter().fold(Rect::EMPTY, |a, b| a.union(b));
+        let placed = if joint.is_empty() { content } else { joint };
+        let dest = ddoc.bounds();
+        let all_off = if each.is_empty() { placed.intersect(&dest).is_empty() } else { each.iter().all(|r| r.intersect(&dest).is_empty()) };
+        (placed, all_off)
+    } else {
+        (content, false)
+    };
+    let (dx, dy) = if outside {
+        let (c, d) = (center(placed), center(ddoc.bounds()));
+        ((d[0] - c[0]).floor(), (d[1] - c[1]).floor())
+    } else if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
         let (c, d) = (center(content), center(ddoc.bounds()));
         (d[0] - c[0], d[1] - c[1])
     } else if let Some(at) = point(p, "at")? {
@@ -425,7 +447,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Copy Layers to Document",
         menu: &[],
         shortcut: None,
-        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
+        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selectionOnly":bool=false (copy selected pixels from one raster layer),"center":bool=false (centre on the destination's canvas),"centerOutside":bool=false (centre only copies that would land wholly off the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
         enabled,
         run: copy_to_document,
         journal: true,

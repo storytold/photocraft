@@ -77,6 +77,8 @@ pub mod image_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_css_cmds;
 #[cfg(test)]
+mod layer_duplicate_off_canvas_tests;
+#[cfg(test)]
 mod layer_from_background_name_tests;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
