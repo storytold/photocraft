@@ -95,7 +95,8 @@ fn camera_raw_filter_legacy_baseline_pixels() {
 
     let quantize = |px: [f32; 4]| px.map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16);
     let got = [quantize(active_pixel(&s, 2, 2)), quantize(active_pixel(&s, 8, 8)), quantize(active_pixel(&s, 13, 13))];
-    assert_eq!(got, [[19650, 39061, 56622, 65535], [57965, 29220, 10084, 65535], [57965, 29220, 10084, 65535]]);
+    // Post-cutover `craft_develop` baseline for `filter.cameraRaw`.
+    assert_eq!(got, [[20914, 40663, 57245, 65535], [59203, 31183, 11808, 65535], [59203, 31183, 11808, 65535]]);
 }
 
 #[test]

@@ -8,6 +8,8 @@
 //! The pipelines build on a thread the first time a dialog opens (DX12's shader compiler takes
 //! about a second, #6419); frames develop on the CPU until they are ready.
 
+#![allow(dead_code)] // GPU pass types stay ready while preview routes through CPU `craft_develop` (#587)
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 

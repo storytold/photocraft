@@ -735,14 +735,16 @@ fn raw_open_legacy_baseline_pixels() {
     let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
     let tuned_hash = fnv1a_u16(tuned_img.data());
 
+    // Default RAW Open (`def_px`/`def_hash`) is bit-identical through `craft_develop::sensor::demosaic`;
+    // `tuned_px`/`tuned_hash` reflects the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`).
     assert_eq!(
         (def_px, def_hash, wb, tuned_px, tuned_hash),
         (
             [[29624, 25113, 50386], [47838, 39368, 49721], [54364, 41011, 44877]],
             4_077_782_316_697_218_873,
             false,
-            [[39218, 33230, 65535], [63447, 52123, 65535], [65535, 54111, 59021]],
-            13_721_670_327_866_894_160,
+            [[39311, 33399, 65535], [63418, 52119, 65535], [65535, 54440, 59060]],
+            17_835_173_337_254_648_648,
         )
     );
 }
@@ -800,13 +802,15 @@ fn raw_open_camera_wb_legacy_baseline_pixels() {
     let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
     let tuned_hash = fnv1a_u16(tuned_img.data());
 
+    // Default RAW Open (`def_px`/`def_hash`) is bit-identical through `craft_develop::sensor::demosaic`;
+    // `tuned_px`/`tuned_hash` reflects the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`).
     assert_eq!(
         (def_px, def_hash, tuned_px, tuned_hash),
         (
             [[32172, 25684, 55879], [51905, 40291, 54669], [54973, 41164, 49114]],
             11_079_887_031_689_206_845,
-            [[41995, 33769, 65535], [65535, 53416, 65535], [65535, 54256, 62211]],
-            14_795_269_389_460_323_633,
+            [[42084, 33938, 65535], [65535, 53409, 65535], [65535, 54586, 62244]],
+            1_068_984_693_251_983_675,
         )
     );
 }

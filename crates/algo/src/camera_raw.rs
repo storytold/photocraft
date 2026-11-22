@@ -603,7 +603,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
     if ds.detail.sharpen_amount > 0.0 {
         let sig = craft_develop::local::sharpen_sigma(craft_develop::local::sharpen_sigma_raw(&ds, long, long) * ps);
         let log_l = craft_develop::raster::Plane { width: w, height: h, data: img.data.iter().map(|c| craft_develop::local::log_lum(*c)).collect() };
-        let blur = craft_develop::raster::blur::gaussian(&log_l, sig);
+        let blur = craft_develop::raster::blur::gaussian_taps(&log_l, &craft_develop::raster::blur::gauss_taps(sig));
         let limit = craft_develop::finish::sharpen_limit(ds.detail.sharpen_detail);
         let mask = (ds.detail.sharpen_masking / 100.0) as f32;
         let amt = (ds.detail.sharpen_amount / 150.0) as f32;
