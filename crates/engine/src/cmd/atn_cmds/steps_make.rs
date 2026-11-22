@@ -17,11 +17,17 @@ fn blend_mode(d: &Descriptor) -> Option<&'static str> {
     }
 }
 
+/// One recorded text that saves back unchanged: no unpaired surrogate replaced, no trailing
+/// NULs lost. [`exact_name`] is this check on the first `Nm  ` of a descriptor.
+fn exact_text(original: &UnicodeString) -> Option<String> {
+    let name = original.to_string_lossy();
+    (*original == UnicodeString::new_nul(&name) || *original == UnicodeString::new(&name)).then_some(name)
+}
+
 /// A `Nm  ` text that saves back unchanged: no unpaired surrogate replaced, no extra NULs lost.
 fn exact_name(d: &Descriptor) -> Option<String> {
     let D::Text(original) = d.get("Nm  ")? else { return None };
-    let name = original.to_string_lossy();
-    (*original == UnicodeString::new_nul(&name) || *original == UnicodeString::new(&name)).then_some(name)
+    exact_text(original)
 }
 
 /// A `patternLayer` descriptor's pattern, scale, angle and link as the params of
@@ -453,6 +459,14 @@ fn duplicate_layer_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     }
     Some(step("layer.duplicate", Value::Object(params)))
 }
+
+// A Make aimed at a whole document is not a document duplicate. Measured in the reference
+// application, `Mk  ` with a `Dcmn` target - the target ordinal with or without `Nm  ` and
+// `Mrgd`, the document by its recorded title, or the `Dcmn` class with `Usng` = the target
+// document - answers "The command Make is not currently available" and makes no copy, so
+// mapping it here would keep playing steps the reference never reaches. Those shapes fall
+// through to the kept Photoshop step below; only the `Dplc` event duplicates a document
+// (see `steps_layer::duplicate_from`, #15185).
 
 fn mask_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     let Some(D::Class(c)) = d.get("Nw  ") else { return None };
