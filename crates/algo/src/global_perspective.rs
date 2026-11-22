@@ -3,8 +3,8 @@
 //! No region ownership, blending of local maps, or mesh deformation is involved. In centered,
 //! isotropically normalized coordinates write u=(x+b*y)/w, v=(d*x+y)/w, w=g*x+h*y+1.
 //! A horizontal edge p--q supplies d*dx + (d*h-g)*(px*qy-qx*py) = -dy; a vertical
-//! edge supplies b*dy + (h-b*g)*(px*qy-qx*py) = -dx. Two robust 2-parameter line fits
-//! therefore estimate ALL guides' common directions, including vanishing points at infinity.
+//! edge supplies b*dy + (h-b*g)*(px*qy-qx*py) = -dx. A guide-count consensus followed by
+//! two weighted 2-parameter line fits estimates common directions, including vanishing points at infinity.
 //! Recover h=(kv-b*kh)/(1-b*d), g=d*h-kh. Axis scales preserve apparent unit lengths
 //! along the two architectural directions at the image center: true aspect is not observable
 //! from unknown rectangles alone. Optional aspect is an explicit user choice, not metrology.
@@ -20,7 +20,6 @@ use crate::transform::{Homography, convex_quad};
 
 pub const MAX_GUIDES: usize = 128;
 pub const MAX_OUTPUT_PIXELS: f64 = 67_108_864.0;
-const FIT_THRESHOLD: f64 = 0.035;
 const GUIDE_THRESHOLD_DEG: f64 = 3.0;
 
 fn yes() -> bool {
@@ -179,17 +178,9 @@ struct Row {
     target: f64,
     weight: f64,
 }
-impl Row {
-    fn error(self, x: [f64; 2]) -> f64 {
-        self.a * x[0] + self.b * x[1] - self.target
-    }
-}
-fn fit_rows(rows: &[Row], seed: Option<[f64; 2]>) -> Option<[f64; 2]> {
+fn fit_rows(rows: &[Row]) -> Option<[f64; 2]> {
     let (mut aa, mut ab, mut bb, mut at, mut bt) = (0.0, 0.0, 0.0, 0.0, 0.0);
     for r in rows {
-        if seed.is_some_and(|x| r.error(x).abs() > FIT_THRESHOLD) {
-            continue;
-        }
         aa += r.weight * r.a * r.a;
         ab += r.weight * r.a * r.b;
         bb += r.weight * r.b * r.b;
@@ -202,33 +193,6 @@ fn fit_rows(rows: &[Row], seed: Option<[f64; 2]>) -> Option<[f64; 2]> {
     }
     let x = [(at * bb - bt * ab) / det, (bt * aa - at * ab) / det];
     x.iter().all(|v| v.is_finite()).then_some(x)
-}
-fn robust_fit(rows: &[Row]) -> Result<[f64; 2], String> {
-    let mut best = fit_rows(rows, None).ok_or("insufficient spread of guide edges for a global perspective")?;
-    let score = |x: [f64; 2]| rows.iter().map(|r| r.weight * r.error(x).powi(2).min(FIT_THRESHOLD * FIT_THRESHOLD)).sum::<f64>();
-    let mut best_score = score(best);
-    // Bounded deterministic hypotheses: at most 64 representative edges, no random state.
-    let step = rows.len().div_ceil(64).max(1);
-    for (i, r) in rows.iter().enumerate().step_by(step) {
-        for t in rows.iter().take(i).step_by(step) {
-            let det = r.a * t.b - t.a * r.b;
-            if det.abs() < 1e-10 {
-                continue;
-            }
-            let x = [(r.target * t.b - t.target * r.b) / det, (t.target * r.a - r.target * t.a) / det];
-            let s = score(x);
-            if s.is_finite() && s < best_score {
-                best = x;
-                best_score = s;
-            }
-        }
-    }
-    for _ in 0..4 {
-        if let Some(x) = fit_rows(rows, Some(best)) {
-            best = x;
-        }
-    }
-    Ok(best)
 }
 fn rows(guides: &[&Guide], bounds: Rect, horizontal: bool) -> Vec<Row> {
     let cx = (bounds.x0 as f64 + bounds.x1 as f64) / 2.0;
@@ -301,6 +265,39 @@ fn residual(h: &Homography, guide: &Guide) -> f64 {
     worst
 }
 
+fn majority_fit(active: &[&Guide], bounds: Rect, aspect: f64) -> Result<Homography, String> {
+    let mut horizontal = rows(active, bounds, true);
+    let mut vertical = rows(active, bounds, false);
+    // Weights express confidence only within a compatible majority. They must not
+    // let a single high-weight outlier choose the initial model or its support.
+    for row in horizontal.iter_mut().chain(&mut vertical) {
+        row.weight = 1.0;
+    }
+    // One joint estimate plus one per guide: <=129 hypotheses and <=16512 guide
+    // residuals at MAX_GUIDES. Sorted guide ids make ties independent of input order.
+    let candidates = std::iter::once((fit_rows(&horizontal), fit_rows(&vertical)))
+        .chain(horizontal.chunks_exact(2).zip(vertical.chunks_exact(2)).map(|(h, v)| (fit_rows(h), fit_rows(v))));
+    let (mut best, mut best_count, mut best_error) = (None, 0, f64::INFINITY);
+    for (horizontal, vertical) in candidates {
+        let (Some(horizontal), Some(vertical)) = (horizontal, vertical) else { continue };
+        let Ok(h) = matrix_from_fits(horizontal, vertical, bounds, aspect) else { continue };
+        let (mut count, mut error) = (0, 0.0);
+        for guide in active {
+            let residual = residual(&h, guide);
+            if residual <= GUIDE_THRESHOLD_DEG {
+                count += 1;
+                error += residual * residual;
+            }
+        }
+        if count > active.len() / 2 && (count > best_count || (count == best_count && error < best_error)) {
+            best = Some(h);
+            best_count = count;
+            best_error = error;
+        }
+    }
+    best.ok_or_else(|| "incompatible guides: no majority supports a single global perspective; disable conflicting guides".into())
+}
+
 /// Solve globally; inconsistent guides are reported, not independently straightened.
 pub fn solve(guides: &[Guide], bounds: Rect, options: &Options) -> Result<Solution, String> {
     validate_guides(guides)?;
@@ -316,8 +313,8 @@ pub fn solve(guides: &[Guide], bounds: Rect, options: &Options) -> Result<Soluti
     // User-drawn guides are allowed to extend into the pasteboard beyond the
     // raster bounds. Finite/coherent quad checks precede this; validate_map
     // still protects the actual image domain against horizons or folds.
-    // Fit all guides robustly, then use a common inlier set for BOTH directions.
-    let mut h = matrix_from_fits(robust_fit(&rows(&active, bounds, true))?, robust_fit(&rows(&active, bounds, false))?, bounds, options.aspect)?;
+    // Select a majority before weighting, then refine BOTH directions on common inliers.
+    let mut h = majority_fit(&active, bounds, options.aspect)?;
     let mut used = Vec::new();
     for _ in 0..4 {
         let good: Vec<&Guide> = active.iter().copied().filter(|g| residual(&h, g) <= GUIDE_THRESHOLD_DEG).collect();
@@ -330,8 +327,8 @@ pub fn solve(guides: &[Guide], bounds: Rect, options: &Options) -> Result<Soluti
         }
         used = ids;
         h = matrix_from_fits(
-            fit_rows(&rows(&good, bounds, true), None).ok_or("horizontal guides are underconstrained")?,
-            fit_rows(&rows(&good, bounds, false), None).ok_or("vertical guides are underconstrained")?,
+            fit_rows(&rows(&good, bounds, true)).ok_or("horizontal guides are underconstrained")?,
+            fit_rows(&rows(&good, bounds, false)).ok_or("vertical guides are underconstrained")?,
             bounds,
             options.aspect,
         )?;
@@ -607,10 +604,12 @@ mod tests {
         assert!(solve(&g, r, &Options::default()).is_err());
         let many: Vec<_> = (0..129).map(|id| guide(id, [[10.0, 10.0], [40.0, 10.0], [40.0, 80.0], [10.0, 80.0]])).collect();
         assert!(solve(&many, r, &Options::default()).is_err());
+        g.last_mut().unwrap().corners[0][0] = -50.0;
         for guide in &mut g {
             guide.enabled = false;
         }
-        assert!(solve(&g, r, &Options::default()).is_err());
+        assert!(validate_guides(&g).is_ok());
+        assert!(solve(&g, r, &Options::default()).unwrap_err().contains("at least one enabled"));
     }
     #[test]
     fn enabled_guide_may_cross_image_border_without_changing_the_photo_domain() {
@@ -652,6 +651,37 @@ mod tests {
         assert_ne!(a.matrix, b.matrix);
         assert_eq!(a.used_guide_ids, b.used_guide_ids);
         assert!(b.guides[0].max_error_deg.unwrap() < a.guides[0].max_error_deg.unwrap());
+    }
+
+    #[test]
+    fn majority_precedes_extreme_weights_and_is_order_independent() {
+        let bounds = Rect::new(0, 0, 100, 100);
+        let square = |id, side: f64, angle: f64, weight| {
+            let (sn, cs) = angle.to_radians().sin_cos();
+            let half = side / 2.0;
+            let corners = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|p| [50.0 + cs * p[0] - sn * p[1], 50.0 + sn * p[0] + cs * p[1]]);
+            Guide { weight, ..guide(id, corners) }
+        };
+        let mut guides = vec![square(1, 40.0, 0.0, 0.05), square(2, 30.0, 0.0, 0.05), square(3, 40.0, 30.0, 20.0)];
+        let solution = solve(&guides, bounds, &Options::default()).unwrap();
+        assert_eq!(solution.used_guide_ids, vec![1, 2]);
+        assert_eq!(solution.rejected_guide_ids, vec![3]);
+        assert!(solution.homography().is_identity());
+        guides.reverse();
+        let reversed = solve(&guides, bounds, &Options::default()).unwrap();
+        assert_eq!(reversed.matrix, solution.matrix);
+        assert_eq!(reversed.used_guide_ids, solution.used_guide_ids);
+
+        // Exercise the supported maximum, including repeated identical geometry.
+        let mut many: Vec<_> = (0..MAX_GUIDES).map(|i| if i < 65 { square(i as u64, 40.0, 0.0, 0.05) } else { square(i as u64, 40.0, 30.0, 20.0) }).collect();
+        let majority = solve(&many, bounds, &Options::default()).unwrap();
+        assert_eq!(majority.used_guide_ids, (0..65).collect::<Vec<u64>>());
+        assert!(majority.homography().is_identity());
+        many.reverse();
+        assert_eq!(solve(&many, bounds, &Options::default()).unwrap().matrix, majority.matrix);
+        // With no strict majority, even the largest weight cannot authorize a fit.
+        many.retain(|g| g.id != 0 && g.id != 1);
+        assert!(solve(&many, bounds, &Options::default()).is_err());
     }
     #[test]
     fn nearly_affine_vanishing_points_need_no_division_by_infinity() {

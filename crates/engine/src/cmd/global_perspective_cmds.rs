@@ -75,6 +75,20 @@ fn validate_render_budget(bounds: Rect, h: &Homography, interp: Interp) -> Resul
     Ok(())
 }
 
+/// Only skip sub-pixel roundoff on the validated image domain. Projective coefficients
+/// alone cannot bound displacement: their effect grows with document coordinates.
+fn is_pixel_no_op(bounds: Rect, h: &Homography) -> bool {
+    const TOLERANCE_PX: f64 = 0.01;
+    let (x0, y0, x1, y1) = (bounds.x0 as f64, bounds.y0 as f64, bounds.x1 as f64, bounds.y1 as f64);
+    [x0, (x0 + x1) / 2.0, x1].into_iter().all(|x| {
+        [y0, (y0 + y1) / 2.0, y1].into_iter().all(|y| {
+            let (u, v) = h.apply(x, y);
+            let displacement = (u - x).hypot(v - y);
+            displacement.is_finite() && displacement <= TOLERANCE_PX
+        })
+    })
+}
+
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("guides").and_then(Value::as_array).is_some_and(|a| a.len() > photocraft_algo::global_perspective::MAX_GUIDES) {
         return Err(bad("too many guides (maximum 128)"));
@@ -89,12 +103,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let solution: Solution = solve(&params.guides, bounds, &params.options).map_err(bad)?;
     let doc_id = st.doc.id.0;
     let h = solution.homography();
+    let no_op = is_pixel_no_op(bounds, &h);
     // solveOnly must report the same pixel-budget eligibility as a real render.
     // Check the post-reduction bounds before warp_surface can allocate destination tiles.
-    if !h.is_identity() {
+    if !no_op {
         validate_render_budget(bounds, &h, params.interpolation)?;
     }
-    if params.solve_only || h.is_identity() {
+    if params.solve_only || no_op {
         return Ok(json!({"document":doc_id,"layer":id.0,"changed":false,"solved":true,"scope":"wholeRasterLayer","solution":solution}));
     }
     let surf = st.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("no raster pixels"))?;
@@ -168,6 +183,31 @@ mod tests {
         // Bilinear does not pre-reduce, so its actual footprint stays within budget.
         assert!(validate_render_budget(bounds, &h, Interp::Bilinear).is_ok());
         assert!(validate_render_budget(Rect::new(0, 0, 160, 140), &h, Interp::Bicubic).is_ok());
+    }
+
+    #[test]
+    fn projective_no_op_is_measured_in_document_pixels() {
+        let bounds = Rect::new(0, 0, 32768, 1024);
+        let h = Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5e-10, 0.0, 1.0]);
+        assert!(h.is_identity(), "reproduce the old coefficient-based false no-op");
+        let p = h.apply(32768.0, 1024.0);
+        assert!((p.0 - 32768.0).hypot(p.1 - 1024.0) > 0.2);
+        assert!(!is_pixel_no_op(bounds, &h));
+        assert!(is_pixel_no_op(bounds, &Homography::IDENTITY));
+        let roundoff = Homography([1.0, 0.0, 1e-12, 0.0, 1.0, -1e-12, 1e-15, 0.0, 1.0]);
+        assert!(is_pixel_no_op(bounds, &roundoff));
+        // A large translated domain must also use document coordinates, not just its size.
+        assert!(!is_pixel_no_op(Rect::new(900000, 0, 901024, 1024), &h));
+
+        // Endpoints alone miss projective displacement along a long, thin image.
+        let thin = Rect::new(0, 0, 32768, 1);
+        let curved = Homography([1.0 + 1e-7 * 32768.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1e-7, 0.0, 1.0]);
+        for (x, y) in [(0.0, 0.0), (32768.0, 0.0), (32768.0, 1.0), (0.0, 1.0)] {
+            let (u, v) = curved.apply(x, y);
+            assert!((u - x).hypot(v - y) < 0.01);
+        }
+        assert!((curved.apply(16384.0, 0.5).0 - 16384.0).abs() > 20.0);
+        assert!(!is_pixel_no_op(thin, &curved));
     }
 
     #[test]
