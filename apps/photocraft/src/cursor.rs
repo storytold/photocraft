@@ -96,7 +96,11 @@ mod platform {
     /// The physical left button (`GetAsyncKeyState`): a floating document window's title-bar move runs in the OS, which
     /// tells the app nothing when it ends (#16415).
     pub fn primary_down_service() -> Option<PrimaryDownFn> {
-        Some(Box::new(|| winsafe::GetAsyncKeyState(winsafe::co::VK::LBUTTON)))
+        // `GetAsyncKeyState` reads the physical button: with the buttons swapped, the primary one is the right.
+        Some(Box::new(|| {
+            let swapped = winsafe::GetSystemMetrics(winsafe::co::SM::SWAPBUTTON) != 0;
+            winsafe::GetAsyncKeyState(if swapped { winsafe::co::VK::RBUTTON } else { winsafe::co::VK::LBUTTON })
+        }))
     }
 
     pub fn service(_cc: &eframe::CreationContext<'_>) -> Option<CursorPosFn> {

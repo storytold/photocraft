@@ -25,6 +25,8 @@ use super::{PhotocraftApp, canvas_view};
 /// document (`layer_transfer`).
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if crate::jobs_ui::batch_preview(app, ui) {
+        // The preview replaces the tabs: a floating window dropped meanwhile docks nowhere (#16415).
+        app.dock_drop_rect = None;
         return;
     }
     crate::distort_ui::drop_foreign(app, ui.ctx());
@@ -145,6 +147,8 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     publish_shown(app);
     crate::cas_transform::tick(app, ui.ctx());
     if app.home_screen_up() {
+        // The Home screen hides the tabs: a floating window dropped on it docks nowhere (#16415).
+        app.dock_drop_rect = None;
         start_screen(app, ui);
         return;
     }

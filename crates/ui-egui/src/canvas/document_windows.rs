@@ -104,7 +104,8 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 .show(ui, |ui| crate::panels::document_window_status(app, ui, doc, shown))
                 .inner;
             if let Some(edited) = edited {
-                let ppp = app.canvas_ppp();
+                // The window's own scale, which its canvas builds its view with: it may sit on another display.
+                let ppp = ui.ctx().pixels_per_point();
                 view.set_from(&edited, ppp);
             }
             // A second run of the body in one pass continues from the first run's view; the wrap rule
@@ -126,7 +127,16 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         follow_os_window(app, ui.ctx(), id, output.response.id);
         if output.close_requested.is_some() {
-            closed.push(id);
+            if own {
+                // A New Window for Document is a second view: closing it leaves the document open.
+                closed.push(id);
+            } else {
+                // Closing a floating document closes the document, as in the reference application, through the
+                // guarded close the tab's × takes: a document with unsaved changes asks first, and the window stays
+                // until it is answered (#16415). The window goes with the document.
+                let doc_id = app.session.documents()[doc].doc.id;
+                super::tabs::close_document(app, ui.ctx(), doc_id);
+            }
         }
         if output.focus_gained && app.session.active_index() != Some(doc) {
             app.session.set_active(doc);
@@ -226,14 +236,16 @@ fn follow_os_window(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, c
     if facts.state != WindowState::Normal {
         return;
     }
-    let outer = facts.outer.unwrap_or(facts.inner);
-    if !outer.is_finite() || outer.width() <= 0.0 || outer.height() <= 0.0 {
+    // The outer origin with the inner size, as the framework places the window: it takes the rect's size as the inner
+    // size, so the outer size of a decorated window (the system's title bar) would grow it by its frame every pass.
+    let placed = Rect::from_min_size(facts.outer.unwrap_or(facts.inner).min, facts.inner.size());
+    if !placed.is_finite() || placed.width() <= 0.0 || placed.height() <= 0.0 {
         return;
     }
     if let Some((_, rect)) = app.ui.document_windows.floating.iter_mut().find(|(group, _)| group.id == window)
-        && *rect != outer
+        && *rect != placed
     {
-        *rect = outer;
+        *rect = placed;
     }
 }
 

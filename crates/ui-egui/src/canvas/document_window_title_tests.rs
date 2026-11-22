@@ -27,6 +27,8 @@ struct Host {
     time: f64,
     /// Where the OS has the floating window, once it moved from where it opened.
     moved: Option<Rect>,
+    /// The height of a system title bar over the floating window: its outer rect reaches that far above its inner rect.
+    decorated: f32,
 }
 
 impl Host {
@@ -44,7 +46,9 @@ impl Host {
             native_pixels_per_point: Some(1.0),
             ..Default::default()
         };
-        [(ViewportId::ROOT, info(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 700.0)), false)), (id, info(self.window_rect(), true))].into_iter().collect()
+        let mut window = info(self.window_rect(), true);
+        window.outer_rect = window.inner_rect.map(|inner| Rect::from_min_max(inner.min - vec2(0.0, self.decorated), inner.max));
+        [(ViewportId::ROOT, info(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 700.0)), false)), (id, window)].into_iter().collect()
     }
 
     fn render(host: &RefCell<Self>, ctx: &egui::Context, mut viewport: egui::ImmediateViewport<'_>) {
@@ -92,7 +96,12 @@ fn desktop() -> (Harness<'static, App>, Rc<RefCell<Host>>) {
     let shared = host.clone();
     egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| Host::render(&shared, ctx, viewport));
     let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(|cc| {
-        let decision = crate::window_policy::decide_for(crate::Prefix::new("PHOTOCRAFT"), crate::Backend::from_env(), crate::TitleBarPref::Integrated);
+        // The app's own frame with Windows' captions, whatever the OS or `PHOTOCRAFT_TITLEBAR`: the bar these tests drive
+        // has Minimize, Maximize and Close.
+        use craft::window::policy::{CaptionFamily, Captions, Decision, Desktop, DesktopKind, Frame};
+        let frame = Frame::Integrated(Captions { family: CaptionFamily::Windows, layout: craft::window::Layout::default() });
+        let desktop = Desktop { kind: DesktopKind::Other, ssd: None, gtk_theme: None, icon_theme: None };
+        let decision = Decision { frame, overridden: None, desktop };
         PhotocraftApp::setup_window(&cc.egui_ctx, crate::theme::AppTheme::pro(), decision);
         cc.egui_ctx.set_embed_viewports(false);
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -157,19 +166,35 @@ fn steps(h: &mut Harness<'static, App>, host: &RefCell<Host>, id: ViewportId, n:
     }
 }
 
-#[test]
-fn the_title_bar_close_closes_the_floating_window() {
-    let (mut h, host) = desktop();
-    let id = window(&host);
-    let close = close_button(&host, id).expect("the bar has a Close button").center();
+/// Clicks the floating window's title-bar Close.
+fn click_close(h: &mut Harness<'static, App>, host: &RefCell<Host>, id: ViewportId) {
+    let close = close_button(host, id).expect("the bar has a Close button").center();
     let press = |pressed| Event::PointerButton { pos: close, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     for events in [vec![Event::PointerMoved(close)], vec![press(true)], vec![press(false)]] {
         host.borrow_mut().events.insert(id, events);
-        steps(&mut h, &host, id, 1);
+        steps(h, host, id, 1);
     }
+    steps(h, host, id, 2);
+}
+
+/// Close in a floating window's title bar closes its document, as in the reference application: a saved one at once,
+/// with the window; one with unsaved changes asks first, and the window stays while it asks.
+#[test]
+fn the_title_bar_close_closes_the_floating_document() {
+    let (mut h, host) = desktop();
+    let id = window(&host);
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
     steps(&mut h, &host, id, 2);
-    assert!(h.state().ui.document_windows.floating.is_empty(), "Close in the bar closes the window");
-    assert_eq!(h.state().session.documents().len(), 1, "the document is kept, back in the tabs");
+    click_close(&mut h, &host, id);
+    assert!(h.state().dialog_open(), "a document with unsaved changes asks before it closes");
+    assert_eq!(h.state().session.documents().len(), 1, "the document stays while the prompt asks");
+    assert_eq!(h.state().ui.document_windows.floating.len(), 1, "and so does its window");
+
+    let (mut h, host) = desktop();
+    let id = window(&host);
+    click_close(&mut h, &host, id);
+    assert!(h.state().session.documents().is_empty(), "a saved document closes");
+    assert!(h.state().ui.document_windows.floating.is_empty(), "its window goes with it");
 }
 
 #[test]
@@ -302,4 +327,17 @@ fn a_floating_document_window_has_a_status_bar_with_its_documents_readout() {
     assert!(dims.is_some(), "the status bar names the document's 200 x 150 size: {labels:?}");
     let zoom = nodes.values().any(|n| n.label().is_some_and(|l| l.contains('%')) || n.value().is_some_and(|v| v.contains('%')));
     assert!(zoom, "the status bar has the zoom: {labels:?}");
+}
+
+/// #16415: a floating window with the system's title bar (its outer rect taller than its inner one) keeps its size: the
+/// app records the outer origin with the inner size, which the framework applies as the inner size again.
+#[test]
+fn a_decorated_floating_window_keeps_its_size() {
+    let (mut h, host) = desktop();
+    let id = window(&host);
+    host.borrow_mut().decorated = 30.0;
+    steps(&mut h, &host, id, 6);
+    let placed = h.state().ui.document_windows.floating.first().map(|(_, rect)| *rect).expect("the window floats");
+    assert!((placed.size() - window_rect().size()).length() < 0.5, "the stored size stays the inner size: {placed:?}");
+    assert!((placed.min.y - (window_rect().min.y - 30.0)).abs() < 0.5, "at the outer origin: {placed:?}");
 }
