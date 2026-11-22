@@ -94,11 +94,23 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 dock |= dropped_on_main(ui, id, bar.rect, dock_target);
                 bar_rect = Some(bar.rect);
             }
+            // The window's status bar along its bottom, before the canvas takes the rest; a zoom typed into it applies
+            // to the view the canvas draws this pass.
+            let host = CanvasHost { idx: doc, window: Some(id) };
+            let shown = ToolHost::shown_space(ui.ctx(), host.canvas_id()).map(|space| space.view);
+            let edited = egui::Panel::bottom(egui::IdSalt::new(("floating document status", id)))
+                .resizable(false)
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| crate::panels::document_window_status(app, ui, doc, shown))
+                .inner;
+            if let Some(edited) = edited {
+                let ppp = app.canvas_ppp();
+                view.set_from(&edited, ppp);
+            }
             // A second run of the body in one pass continues from the first run's view; the wrap rule
             // compares with the view the window started the pass with, so both runs file the same ask.
             let (after, canvas) = document_window_canvas(app, ui, id, doc, view.clone(), focused);
             // The view the window's canvas showed this pass, kept by the tool host that ran in it.
-            let host = CanvasHost { idx: doc, window: Some(id) };
             if wants_wrap(preference, &start, &after)
                 && let Some(drawn) = ToolHost::shown_space(ui.ctx(), host.canvas_id()).map(|space| space.view)
             {

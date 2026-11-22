@@ -76,6 +76,7 @@ pub(crate) use info::{SamplerReadouts, sampler_readouts};
 pub(crate) use layers::blend_options;
 pub(crate) use layers_tree::listed_filter;
 pub use options_bar::options_bar;
+pub(crate) use status_bar::document_window_status;
 pub use status_bar::status_bar;
 pub use title_bar::{title_bar, window_title};
 pub(crate) use toolbar::QUICK_MASK;

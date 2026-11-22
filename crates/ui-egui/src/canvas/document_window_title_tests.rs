@@ -288,3 +288,18 @@ fn an_os_move_of_the_floating_window_ending_over_the_tabs_docks_it() {
     assert_eq!(os_move(&mut h, over), 0, "an OS move ending on the tabs docks it");
     assert_eq!(h.state().session.documents().len(), 1, "the document stays open");
 }
+
+/// #16415: a floating document window has a status bar along its bottom with its own document's readout, as the
+/// reference application's floating windows do: the zoom and, by default, the document's dimensions.
+#[test]
+fn a_floating_document_window_has_a_status_bar_with_its_documents_readout() {
+    let (_h, host) = desktop();
+    let id = window(&host);
+    let host = host.borrow();
+    let nodes = host.nodes.get(&id).expect("the window's access tree");
+    let labels: Vec<&str> = nodes.values().filter_map(|n| n.label()).collect();
+    let dims = labels.iter().find(|l| l.contains("200") && l.contains("150")).copied();
+    assert!(dims.is_some(), "the status bar names the document's 200 x 150 size: {labels:?}");
+    let zoom = nodes.values().any(|n| n.label().is_some_and(|l| l.contains('%')) || n.value().is_some_and(|v| v.contains('%')));
+    assert!(zoom, "the status bar has the zoom: {labels:?}");
+}
