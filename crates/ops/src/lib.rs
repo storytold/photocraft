@@ -22,13 +22,13 @@ mod tiles;
 /// bring them back with the state's document, as the reference app does. Selecting layers is not
 /// a step of its own, so the session updates the current state's target with
 /// [`History::set_current_layers`] just before recording the next step (#1356).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub struct LayerTarget {
     pub active: Option<LayerId>,
     pub selected: Vec<LayerId>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct HistoryState {
     pub label: String,
     pub doc: Arc<Document>,
@@ -42,13 +42,13 @@ pub struct HistoryState {
 }
 
 /// The context in which a selected action row must remain available after it is folded away.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub enum ActionBrushSource {
     Current(HistoryState),
     Cleared(HistoryState),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct History {
     /// Past states; the last one is the state *before* the current document.
     undo: VecDeque<HistoryState>,
@@ -96,7 +96,7 @@ pub struct History {
 static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// What [`History::rollback`] needs to take the most recent [`History::record`] back.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 struct LastRecord {
     visibility_capture_before: Option<Arc<Vec<LayerId>>>,
     /// The document it replaced (the state a rollback makes current again).
@@ -113,7 +113,7 @@ struct LastRecord {
 
 /// The undo and redo states [`History::clear_states`] removed, and the History Brush source set
 /// before it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 struct Cleared {
     undo: VecDeque<HistoryState>,
     redo: Vec<HistoryState>,

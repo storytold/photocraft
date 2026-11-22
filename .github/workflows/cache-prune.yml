@@ -21,7 +21,7 @@ jobs:
     # A fork's pull request from a branch named main also matches `branches`.
     if: github.event.workflow_run.event != 'pull_request'
     timeout-minutes: 10
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-trusted' || 'ubuntu-24.04' }}
     permissions:
       actions: write
     steps:

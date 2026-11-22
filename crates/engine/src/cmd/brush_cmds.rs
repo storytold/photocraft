@@ -200,7 +200,7 @@ fn find_preset<'a>(s: &'a Session, name: &str, cmd: &str) -> Result<&'a BrushPre
 /// Resolve the brush for a stroke command: session brush ← `preset` ← `brush` ← legacy scalar
 /// params; colours from the session; seed from `seed` or the points.
 pub fn resolve_brush(s: &Session, p: &Value, cmd: &str) -> Result<BrushSettings> {
-    let mut b = s.tools.brush.clone();
+    let mut b = (*s.tools.brush).clone();
     if let Some(name) = p.get("preset").and_then(Value::as_str) {
         b = find_preset(s, name, cmd)?.picked_over(&s.tools.brush);
     }
@@ -455,7 +455,37 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
     b
 }
 
-/// `paint.stroke`: the Brush (and Eraser) tool.
+/// When a stroke gets its first dab only although its path reaches past that dab: the distance
+/// in pixels between dabs, as the paint crate steps them (`size × spacing` at the first point's
+/// pressure), is longer than the whole path. A large brush with a large `spacing` does that
+/// without any other sign (#8389). Returns that pitch and a warning naming it; `None` when the
+/// stroke keeps its coverage or Spacing is off (dabs then follow the stroke's speed, not a pitch).
+/// Whether the first dab covers the path is judged by that dab's own diameter, so a light first
+/// point that shrinks a pressure-sized dab still warns.
+fn spacing_warning(brush: &BrushSettings, pts: &[StrokePoint]) -> Option<(f64, String)> {
+    use photocraft_paint::dynamics::{DabBuilder, StepInput, apply_pose, base_diameter};
+    let brush = brush.bounded_for_render();
+    let first = pts.first()?;
+    if !brush.spacing_enabled {
+        return None;
+    }
+    let first = apply_pose(&brush, *first);
+    let pitch = DabBuilder::new(&brush).step_len(&first);
+    let step = StepInput { point: first, direction: 0.0, initial_direction: 0.0, step: 0 };
+    let diameter = base_diameter(&brush, &step).max(1.0);
+    let length: f64 = pts.windows(2).map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y)).filter(|d| d.is_finite()).sum();
+    (length > f64::from(diameter) / 2.0 && pitch > length).then(|| {
+        let dab = if (diameter - brush.size).abs() < 0.05 { format!("size {}", brush.size) } else { format!("the first dab's {diameter:.1} px (size {} at its pressure)", brush.size) };
+        let warning = format!(
+            "spacing {} × {dab} puts dabs {pitch:.1} px apart, more than the {length:.1} px path, so the stroke got only its first dab; lower `spacing` for a continuous stroke",
+            brush.spacing
+        );
+        (pitch, warning)
+    })
+}
+
+/// `paint.stroke`: the Brush (and Eraser) tool. When the spacing left the stroke with its first
+/// dab only, the result also has the dab `pitch` in pixels and `warnings` saying so (#8389).
 pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
@@ -463,7 +493,13 @@ pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     if flag(p, "fill", false) {
         return fill_region(s, p, label, brush, pts);
     }
-    stroke_with(s, "paint.stroke", p, label, brush, pts, false)
+    let warning = spacing_warning(&brush, &pts);
+    let mut r = stroke_with(s, "paint.stroke", p, label, brush, pts, false)?;
+    if let Some((pitch, warning)) = warning {
+        r["pitch"] = json!(pitch);
+        r["warnings"] = json!([warning]);
+    }
+    Ok(r)
 }
 
 /// `paint.stroke {fill: true}`: fill the region enclosed by `points` (their polygon) with the
@@ -960,7 +996,7 @@ fn presets_list(s: &mut Session, p: &Value) -> Result<Value> {
                 "builtin": pr.builtin,
                 "size": pr.brush.size,
                 "hardness": pr.brush.hardness,
-                "tip": match &pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) | TipShape::Stored(_) => "sampled" },
+                "tip": match &*pr.brush.tip { TipShape::Round => "round", TipShape::Sampled(_) | TipShape::Stored(_) => "sampled" },
             });
             if full {
                 // Full settings embed the bitmaps: load stored tips (a tip that can't be loaded
@@ -980,9 +1016,9 @@ fn name_param(p: &Value, cmd: &str) -> Result<String> {
 
 /// Replace the preset of that name, or append it at the end of the list.
 fn upsert(s: &mut Session, preset: BrushPreset) {
-    match std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().find(|x| x.name.eq_ignore_ascii_case(&preset.name)) {
+    match std::sync::Arc::make_mut(&mut *s.tools.presets).iter_mut().find(|x| x.name.eq_ignore_ascii_case(&preset.name)) {
         Some(x) => *x = preset,
-        None => std::sync::Arc::make_mut(&mut s.tools.presets).push(preset),
+        None => std::sync::Arc::make_mut(&mut *s.tools.presets).push(preset),
     }
     s.brush_presets_changed();
 }
@@ -992,7 +1028,7 @@ fn presets_save(s: &mut Session, p: &Value) -> Result<Value> {
     let name = name_param(p, cmd)?;
     let mut brush = match p.get("brush").filter(|v| v.is_object()) {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
-        None => s.tools.brush.clone(),
+        None => (*s.tools.brush).clone(),
     };
     // The New Brush Preset dialog's boxes; without them the preset captures what it always did.
     let captures = PresetCaptures { size: flag(p, "captureSize", true), tool_settings: flag(p, "toolSettings", true), color: flag(p, "color", false) };
@@ -1010,7 +1046,7 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.delete";
     let name = name_param(p, cmd)?;
     let before = s.tools.presets.len();
-    std::sync::Arc::make_mut(&mut s.tools.presets).retain(|x| !x.name.eq_ignore_ascii_case(&name));
+    std::sync::Arc::make_mut(&mut *s.tools.presets).retain(|x| !x.name.eq_ignore_ascii_case(&name));
     if s.tools.presets.len() == before {
         return Err(bad(cmd, format!("no brush preset named `{name}`")));
     }
@@ -1041,9 +1077,9 @@ fn presets_update(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let brush = match p.get("brush").filter(|v| v.is_object()) {
         Some(patch) => merge_brush(&s.tools.brush, patch, cmd)?,
-        None => s.tools.brush.clone(),
+        None => (*s.tools.brush).clone(),
     };
-    let pr = std::sync::Arc::make_mut(&mut s.tools.presets)
+    let pr = std::sync::Arc::make_mut(&mut *s.tools.presets)
         .iter_mut()
         .find(|x| x.name.eq_ignore_ascii_case(&name))
         .ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))?;
@@ -1176,7 +1212,7 @@ fn define_from_selection_with_renderer(
     }
     let (brush, tw, th) = sampled_brush(cmd, &v, w, h)?;
     upsert(s, BrushPreset { name: name.clone(), brush: brush.clone(), builtin: false, group: String::new(), folder: Vec::new(), captures: Default::default() });
-    s.tools.brush = brush;
+    *s.tools.brush = brush;
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
     Ok(json!({ "name": name, "width": tw, "height": th }))
@@ -1211,13 +1247,13 @@ pub(crate) fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<
         data.extend((x0..x1).map(|x| at(x, y)));
     }
     let tip = GrayTile::from_f32(tw, th, &data);
-    let brush = BrushSettings { tip: TipShape::Sampled(tip), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
+    let brush = BrushSettings { tip: TipShape::Sampled(tip).into(), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
     Ok((brush, tw, th))
 }
 
 pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "tools.setBrush";
-    let mut b = s.tools.brush.clone();
+    let mut b = (*s.tools.brush).clone();
     let mut picked = None;
     let mut picked_color = None;
     if let Some(name) = p.get("preset").and_then(Value::as_str) {
@@ -1262,7 +1298,13 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
             s.tools.foreground = c;
         }
     }
-    let before = std::mem::replace(&mut s.tools.brush, b);
+    let mut before = std::mem::replace(&mut *s.tools.brush, b);
+    // A brush the call built anew holds a new tip source: when the tip is the one it had, it keeps its revision, so the
+    // views that show the tip replay. A stored tip's equality ignores whether its full bitmap is loaded, so a tip that
+    // loaded only now keeps the new value: swapping the old one back would drop the bitmap (#16252).
+    if s.tools.brush.tip == before.tip && s.tools.brush.tip.is_loaded() == before.tip.is_loaded() {
+        std::mem::swap(&mut s.tools.brush.tip, &mut before.tip);
+    }
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());
     let continuing = |s: &Session, k: &str| {
@@ -1306,7 +1348,7 @@ fn remembered_brush(s: &Session) -> Option<Value> {
 pub fn remembered_settings(b: &BrushSettings) -> Option<Value> {
     let (tip, dual, pattern) = (ref_tip(&b.tip)?, ref_tip(&b.dual_brush.tip)?, ref_pattern(&b.texture.pattern)?);
     let mut c = b.clone();
-    (c.tip, c.dual_brush.tip, c.texture.pattern) = (tip, dual, pattern);
+    (c.tip, c.dual_brush.tip, c.texture.pattern) = (tip.into(), dual, pattern);
     serde_json::to_value(&c).ok()
 }
 
@@ -1337,7 +1379,7 @@ pub fn restored_settings(s: &Session, v: &Value) -> Option<BrushSettings> {
 pub fn restore_brush(s: &mut Session) {
     let v = s.prefs().last_brush.clone();
     let Some(b) = v.get("brush").and_then(|b| restored_settings(s, b)) else { return };
-    s.tools.brush = b;
+    *s.tools.brush = b;
     s.tools.current_preset = v.get("preset").and_then(Value::as_str).map(str::to_string);
     // What was just restored is exactly what the preferences hold: nothing new to write.
     s.tools.brush_saved_rev = s.tools.brush_rev;
@@ -1366,7 +1408,7 @@ fn ref_pattern(p: &Pattern) -> Option<Pattern> {
 fn light_json(b: &BrushSettings, skip: (bool, bool, bool)) -> Value {
     let mut c = b.clone();
     if skip.0 {
-        c.tip = TipShape::Round;
+        c.tip = TipShape::Round.into();
     }
     if skip.1 {
         c.dual_brush.tip = TipShape::Round;

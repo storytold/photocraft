@@ -26,6 +26,22 @@ fn stops_closer_than_one_lut_step_stay_on_the_cpu() {
 }
 
 #[test]
+fn grayscale_gradient_map_at_8_and_16_bits_falls_back_to_the_cpu() {
+    let adj = Adjustment::GradientMap { stops: vec![(0.0, [1.0, 0.0, 0.0]), (1.0, [0.0, 0.0, 1.0])], reverse: false, dither: false, source: None };
+    for depth in [SampleType::U8, SampleType::U16] {
+        let mut doc = Document::new("gray", Size::new(4, 4), ColorMode::Grayscale, depth);
+        doc.layers.push(Layer::new("map", LayerContent::Adjustment(adj.clone())));
+        assert!(plan(&doc).unwrap_err().0.contains("Grayscale"), "{depth:?}");
+        // RGB and 32-bit Grayscale keep the shader's plain stop-colour LUT.
+        doc.mode = ColorMode::Rgb;
+        assert!(plan(&doc).is_ok(), "{depth:?} in RGB");
+        doc.mode = ColorMode::Grayscale;
+        doc.depth = SampleType::F32;
+        assert!(plan(&doc).is_ok(), "32-bit Grayscale");
+    }
+}
+
+#[test]
 fn lab_channel_adjustments_defer_to_the_cpu_in_lab_documents() {
     let lab_rules = [
         Adjustment::Invert,
