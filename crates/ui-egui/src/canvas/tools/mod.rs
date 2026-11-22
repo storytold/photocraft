@@ -482,8 +482,6 @@ pub(crate) struct BodyShown {
     pub(crate) transform_snapped: Vec<SnapLine>,
     /// The open Free Transform's preview, which the body adds to the canvas's picture slot after the document.
     pub(crate) transform_picture: Vec<egui::Shape>,
-    /// The open Global Perspective Warp's preview mesh and guides, for the same slot.
-    pub(crate) global_picture: Vec<egui::Shape>,
 }
 
 /// Borrows a family tool as the host's `dyn`.

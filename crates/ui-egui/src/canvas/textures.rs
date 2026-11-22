@@ -1,6 +1,6 @@
 use craft::behavior::CanvasView;
 
-use super::display::{GPU_OUTPUT, LiveProposal, canvas_display, display_doc_live, texture_key};
+use super::display::{GPU_OUTPUT, LiveProposal, canvas_display, display_doc_live, display_doc_live_for_output, texture_key};
 use super::filter_preview::filter_channel_preview;
 use super::navigator::navigator_waits_for_drag;
 use super::strokes::live_stroke;
@@ -78,7 +78,7 @@ pub(crate) fn canvas_picture(
         let reach = |r: DRect| if r.is_empty() { r } else { r.inflate(effect_reach(&st.doc.layers)) };
         (st.revision, (st.damage_from(), st.last_damage.map(reach)), st.doc.id, st.doc.bounds())
     };
-    let (mut doc, mut preview_key) = display_doc_live(app, idx, live);
+    let (mut doc, mut preview_key) = display_doc_live_for_output(app, idx, live, output);
     // A filter dialog's live preview: the GPU canvas draws it from its own texture, but the CPU canvas (no usable
     // GPU, a flipped or pixel-aspect-corrected view, a GPU fallback) and the raster sources draw its result, as the
     // channel views draw it. A preview reduced for a zoomed-out view (a proxy, factor `k`) covers the whole document

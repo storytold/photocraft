@@ -287,6 +287,11 @@ fn flag_param(p: &Value, cur: bool) -> bool {
 }
 
 fn run(app: &mut PhotocraftApp, id: &str, p: &Value) -> Result<Value, String> {
+    if id == "view.patternPreview"
+        && let Some(why) = crate::global_perspective_ui::refuses(app, id)
+    {
+        return Err(why);
+    }
     if id == "view.rotateView" {
         return rotate_command(app, p);
     }

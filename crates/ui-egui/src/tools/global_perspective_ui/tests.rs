@@ -415,6 +415,8 @@ fn competing_transformations_cannot_replace_the_editor() {
     }
     for id in [
         "edit.freeTransform",
+        "edit.freeTransformCopy",
+        "layer.smartObjects.warp",
         "edit.puppetWarp",
         "filter.liquify",
         "filter.filterGallery",
@@ -424,6 +426,9 @@ fn competing_transformations_cannot_replace_the_editor() {
     ] {
         let error = crate::menus::invoke(&mut a, &ctx, id, json!({})).unwrap_err();
         assert!(error.contains("Global Perspective Warp"), "{id}: {error}");
+    }
+    for start in [crate::transform_tool::begin, crate::transform_tool::begin_copy, crate::transform_tool::begin_warp] {
+        assert!(start(&mut a, &ctx).unwrap_err().contains("Global Perspective Warp"));
     }
     assert!(a.ui.transform.is_none() && a.distort.puppet.is_none() && a.distort.perspective.is_none());
     assert_eq!(session(&a).key, key);
@@ -441,6 +446,128 @@ fn another_session_blocks_opening_the_editor() {
     crate::distort_ui::menu(&mut a, &ctx, "edit.perspectiveWarp", &json!({})).unwrap().unwrap();
     assert!(begin(&mut a, &ctx).unwrap_err().contains("finish or cancel"));
     assert!(a.distort.global_perspective.is_none());
+}
+
+#[test]
+fn pattern_preview_is_refused_without_resetting_either_mode() {
+    let mut a = app();
+    let ctx = a.ctx().clone();
+    let idx = a.session.active_index().unwrap();
+    let before = control(&mut a, &json!({"guides":guides(),"solve":true})).unwrap();
+    let n = past(&a);
+    assert!(!crate::menus::is_enabled(&a, "view.patternPreview"));
+    assert!(crate::menus::invoke(&mut a, &ctx, "view.patternPreview", json!({"on":true})).is_err());
+    assert!(crate::view_cmds::invoke(&mut a, &ctx, "view.patternPreview", &json!({"on":true})).unwrap().is_err(), "direct shell dispatch also refuses");
+    assert!(!a.ui.view.pattern_preview);
+    assert_eq!(session(&a).describe(), before);
+    // Even a direct state write must not tile a composite with the source layer missing.
+    a.ui.view.pattern_preview = true;
+    assert!(canvas_shapes(&mut a, &ctx, &view(), idx, None).is_empty());
+    assert!(crate::distort_ui::display_doc(&a, idx).is_none());
+    assert_eq!(session(&a).describe(), before);
+    assert_eq!(past(&a), n);
+    cancel(&mut a);
+    assert!(a.ui.view.pattern_preview, "cancel does not reset the user's view preference");
+    assert!(begin(&mut a, &ctx).is_err(), "an already repeating view cannot open the editor");
+    assert!(crate::menus::is_enabled(&a, "view.patternPreview"));
+    crate::view_cmds::invoke(&mut a, &ctx, "view.patternPreview", &json!({"on":false})).unwrap().unwrap();
+    assert!(!a.ui.view.pattern_preview);
+    crate::view_cmds::invoke(&mut a, &ctx, "view.patternPreview", &json!({"on":true})).unwrap().unwrap();
+    assert!(a.ui.view.pattern_preview);
+}
+
+#[test]
+fn nearest_corner_wins_over_overlapping_hit_circles_and_edges() {
+    let mut a = app();
+    control(
+        &mut a,
+        &json!({"guides":[
+        {"id":1,"corners":[[20,20],[90,20],[90,90],[20,90]]},
+        {"id":2,"corners":[[24,20],[94,20],[94,90],[24,90]]}
+    ],"selectedGuide":1}),
+    )
+    .unwrap();
+    assert_eq!(hit_handle(session(&a), [20.0, 20.0], TOL), Some(Handle::Corner { id: 1, corner: 0 }));
+    assert_eq!(hit_handle(session(&a), [24.0, 20.0], TOL), Some(Handle::Corner { id: 2, corner: 0 }));
+    assert_eq!(hit_handle(session(&a), [22.0, 20.0], TOL), Some(Handle::Corner { id: 1, corner: 0 }));
+    a.distort.global_perspective.as_mut().unwrap().selected = None;
+    assert_eq!(hit_handle(session(&a), [22.0, 20.0], TOL), Some(Handle::Corner { id: 2, corner: 0 }));
+    assert!(down(&mut a, [20.0, 20.0], none()));
+    pointer_up(&mut a, [17.0, 17.0], none());
+    assert_eq!(corners(&a)[0], [17.0, 17.0]);
+    assert_eq!(session(&a).guides[1].corners[0], [24.0, 20.0]);
+}
+
+#[test]
+fn no_movement_corner_and_edge_clicks_keep_the_solution_committable() {
+    for keys in [none(), ctrl(), shift(), both()] {
+        for edge in [false, true] {
+            let mut a = app();
+            control(&mut a, &json!({"guides":guides(),"solve":true})).unwrap();
+            let before = control(&mut a, &json!({"mode":"layout"})).unwrap();
+            let q = corners(&a);
+            let p = if edge { [(q[0][0] + q[1][0]) * 0.5, (q[0][1] + q[1][1]) * 0.5] } else { q[0] };
+            let ctx = a.ctx().clone();
+            let idx = a.session.active_index().unwrap();
+            let mesh = mesh_of(&canvas_shapes(&mut a, &ctx, &view(), idx, None));
+            assert!(down(&mut a, p, keys));
+            pointer_move(&mut a, p, keys);
+            pointer_up(&mut a, p, keys);
+            assert_eq!(session(&a).describe(), before, "edge={edge}, keys={keys:?}");
+            assert!(Arc::ptr_eq(&mesh, &mesh_of(&canvas_shapes(&mut a, &ctx, &view(), idx, None))));
+            assert_eq!(commit(&mut a).unwrap()["committed"], true);
+        }
+    }
+}
+
+#[test]
+fn hover_only_offers_drawing_where_a_new_guide_can_start() {
+    let mut a = app();
+    assert_eq!(hover(&a, [150.0, 130.0], TOL), Hover::Draw);
+    for p in [[-20.0, 70.0], [180.0, 70.0], [80.0, -20.0], [80.0, 160.0]] {
+        assert_eq!(hover(&a, p, TOL), Hover::Idle);
+        assert!(!down(&mut a, p, none()));
+    }
+    let guides: Vec<Guide> = (1..=MAX_GUIDES)
+        .map(|id| Guide { id: id as u64, corners: [[-20.0, 20.0], [60.0, 20.0], [60.0, 80.0], [-20.0, 80.0]], enabled: true, weight: 1.0 })
+        .collect();
+    control(&mut a, &json!({"guides":guides})).unwrap();
+    assert_eq!(hover(&a, [150.0, 130.0], TOL), Hover::Idle);
+    assert!(!down(&mut a, [150.0, 130.0], none()));
+    assert_eq!(hover(&a, [-20.0, 20.0], TOL), Hover::Handle, "off-image handles remain editable at the guide limit");
+    assert!(down(&mut a, [-20.0, 20.0], none()));
+    pointer_up(&mut a, [-25.0, 15.0], none());
+    assert_eq!(session(&a).guides.last().unwrap().corners[0], [-25.0, 15.0]);
+}
+
+#[test]
+fn each_canvas_gates_the_raw_preview_on_its_actual_monitor() {
+    let mut a = closed();
+    let displays = [craft::cms::Builtin::Srgb, craft::cms::Builtin::DisplayP3, craft::cms::Builtin::Srgb]
+        .into_iter()
+        .enumerate()
+        .map(|(index, profile)| photocraft_engine::display_color::Display {
+            id: index as u32 + 1,
+            name: format!("Test display {index}"),
+            frame: [index as f64 * 400.0, 0.0, 400.0, 300.0],
+            profile_name: None,
+            icc: Some(Arc::new(profile.profile().to_bytes().to_vec())),
+        })
+        .collect();
+    a.session.color.set_displays(Ok(displays));
+    a.session.color.main_display = Some(1);
+    let ctx = a.ctx().clone();
+    begin(&mut a, &ctx).unwrap();
+    let idx = a.session.active_index().unwrap();
+    let before = session(&a).describe();
+    assert!(Screen::of(&a, &session(&a).source_doc, Some(2)).transform.is_some());
+    assert!(canvas_shapes(&mut a, &ctx, &view(), idx, Some(2)).is_empty());
+    assert!(crate::distort_ui::display_doc_for_output(&a, idx, Some(2)).is_none(), "the incompatible canvas must retain the source layer");
+    for output in [None, Some(1), Some(3)] {
+        assert!(!canvas_shapes(&mut a, &ctx, &view(), idx, output).is_empty());
+        assert!(crate::distort_ui::display_doc_for_output(&a, idx, output).is_some());
+    }
+    assert_eq!(session(&a).describe(), before, "a secondary monitor never cancels the primary session");
 }
 
 // ------------------------------------------------------------------------------------------ guides and axes
@@ -803,11 +930,11 @@ fn every_canvas_gets_its_own_mesh_and_a_geometry_change_rebuilds_them() {
     let idx = a.session.active_index().unwrap();
     let main = view();
     let window = CanvasView::new(egui::Rect::from_min_size(Pos2::new(10.0, 10.0), egui::vec2(200.0, 150.0)), Point::new(80.0, 70.0), 2.0);
-    let first = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx));
-    let second = mesh_of(&canvas_shapes(&mut a, &ctx, &window, idx));
+    let first = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None));
+    let second = mesh_of(&canvas_shapes(&mut a, &ctx, &window, idx, None));
     assert!(!Arc::ptr_eq(&first, &second), "a window with another view needs its own mesh");
     // Drawing the main canvas again does not rebuild what the window's pass left beside it.
-    assert!(Arc::ptr_eq(&first, &mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx))));
+    assert!(Arc::ptr_eq(&first, &mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None))));
     assert_eq!(session(&a).meshes.len(), 2);
     let n = (GRID + 1) * (GRID + 1);
     assert!(first.vertices.len() >= n, "the grid was refined, never coarsened");
@@ -816,7 +943,7 @@ fn every_canvas_gets_its_own_mesh_and_a_geometry_change_rebuilds_them() {
     assert_eq!(session(&a).meshes.len(), 2);
     control(&mut a, &json!({"guides":guides()})).unwrap();
     assert!(session(&a).meshes.is_empty());
-    let rebuilt = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx));
+    let rebuilt = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None));
     assert!(!Arc::ptr_eq(&first, &rebuilt));
 }
 
@@ -825,12 +952,12 @@ fn a_stale_or_foreign_canvas_shows_no_preview() {
     let mut a = app();
     let ctx = a.ctx().clone();
     let idx = a.session.active_index().unwrap();
-    assert!(!canvas_shapes(&mut a, &ctx, &view(), idx).is_empty());
-    assert!(canvas_shapes(&mut a, &ctx, &view(), idx + 1).is_empty(), "no canvas of another document shows it");
+    assert!(!canvas_shapes(&mut a, &ctx, &view(), idx, None).is_empty());
+    assert!(canvas_shapes(&mut a, &ctx, &view(), idx + 1, None).is_empty(), "no canvas of another document shows it");
     let source = a.session.active().unwrap().doc.id;
     a.session.execute("layer.new.layer", json!({})).unwrap();
     assert_eq!(a.session.active().unwrap().doc.id, source);
-    assert!(canvas_shapes(&mut a, &ctx, &view(), idx).is_empty(), "the source changed: the old snapshot must not paint over it");
+    assert!(canvas_shapes(&mut a, &ctx, &view(), idx, None).is_empty(), "the source changed: the old snapshot must not paint over it");
     assert!(crate::distort_ui::display_doc(&a, idx).is_none());
     assert!(!owns_pointer(&a, idx));
     assert!(commit(&mut a).is_err());

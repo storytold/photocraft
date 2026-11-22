@@ -49,6 +49,42 @@ fn app_on_two_displays() -> Box<PhotocraftApp> {
 }
 
 #[test]
+fn global_warp_fallback_keeps_the_source_pixels_on_an_incompatible_display_or_repeating_view() {
+    use super::textures::{ProxyPreview, canvas_picture};
+    let mut app = app_on_two_displays();
+    app.run("file.new", json!({"width":16,"height":16,"depth":8,"background":"transparent"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color":"#cc8040"})).unwrap();
+    app.session.color.main_display = Some(1);
+    app.sync_views();
+    let idx = app.session.active_index().unwrap();
+    let ctx = app.ctx().clone();
+    let original = app.session.active().unwrap().doc.clone();
+    let region = PixelRect::new(0, 0, 16, 16);
+    let read = |app: &mut PhotocraftApp, output| {
+        let prep = CompositePrep::new(app, &ctx, idx, output, None).unwrap();
+        let mut pixels = egui::ColorImage::filled([16, 16], Color32::TRANSPARENT);
+        prep.source(app).read(region, 1, &mut pixels);
+        pixels.pixels
+    };
+    let main = read(&mut app, Some(1));
+    let secondary = read(&mut app, Some(4));
+    assert_ne!(main, secondary, "the secondary monitor actually needs color conversion");
+    crate::global_perspective_ui::begin(&mut app, &ctx).unwrap();
+    assert_ne!(read(&mut app, Some(1)), main, "the compatible canvas hides the source under its mesh");
+    assert_eq!(read(&mut app, Some(4)), secondary, "the incompatible canvas retains the complete color-corrected document");
+    let picture = canvas_picture(&mut app, &ctx, idx, Some(4), ProxyPreview::Document, None).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&picture.doc, &original));
+    assert_eq!(picture.preview_key, 0);
+    // A bypassed menu guard must restore the full repeated image on the primary too.
+    app.ui.view.pattern_preview = true;
+    assert_eq!(read(&mut app, Some(1)), main);
+    assert_eq!(read(&mut app, Some(4)), secondary);
+    app.ui.view.pattern_preview = false;
+    assert_ne!(read(&mut app, Some(1)), main, "the session remains usable after the view is restored");
+}
+
+#[test]
 fn closed_documents_release_navigator_and_canvas_records() {
     let mut app = app_on_two_displays();
     let ctx = app.ctx().clone();

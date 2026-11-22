@@ -66,6 +66,11 @@ pub(crate) struct GpuPicture {
 /// `None` when the GPU canvas cannot show it (no GPU canvas, a device fault), and the CPU canvas draws it.
 pub(crate) fn gpu_picture(app: &mut PhotocraftApp, req: &GpuRequest<'_>) -> Option<GpuPicture> {
     let (ctx, idx, doc, output) = (req.ctx, req.idx, req.doc, req.output);
+    // GPU document textures are shared across monitors. A canvas that cannot show the raw warp
+    // must use its own CPU composite with the source layer present, not the primary's hidden-layer texture.
+    if crate::global_perspective_ui::owns_pointer(app, idx) && !crate::global_perspective_ui::preview_visible(app, idx, output) {
+        return None;
+    }
     let doc_size = [doc.size.width, doc.size.height];
     let base = |doc_key: u64, size: [u32; 2], view_key: u64, display: u8, hdr: Option<[f32; 2]>| ViewParams {
         doc: doc_key,

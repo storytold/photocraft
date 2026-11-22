@@ -209,13 +209,20 @@ fn distance_to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 
 /// Test corners first so an endpoint never accidentally selects its adjoining edge.
 fn hit_handle(s: &GlobalSession, p: [f64; 2], tol: f64) -> Option<Handle> {
+    let mut nearest: Option<(f64, bool, Handle)> = None;
     for g in s.guides.iter().rev() {
         let Some(corners) = s.display_corners(g) else { continue };
         for (corner, q) in corners.iter().enumerate() {
-            if (q[0] - p[0]).hypot(q[1] - p[1]) <= tol {
-                return Some(Handle::Corner { id: g.id, corner });
+            let distance = (q[0] - p[0]).hypot(q[1] - p[1]);
+            let selected = s.selected == Some(g.id);
+            // Equal distances prefer the selected guide, then the topmost drawn guide.
+            if distance <= tol && nearest.is_none_or(|(best, was_selected, _)| distance < best || (distance == best && selected && !was_selected)) {
+                nearest = Some((distance, selected, Handle::Corner { id: g.id, corner }));
             }
         }
+    }
+    if let Some((_, _, handle)) = nearest {
+        return Some(handle);
     }
     for g in s.guides.iter().rev() {
         let Some(corners) = s.display_corners(g) else { continue };
@@ -362,6 +369,9 @@ impl GlobalSession {
         let mut next = guide.clone();
         let Some(c) = next.corners.get_mut(index) else { return };
         *c = p;
+        if next.corners == guide.corners {
+            return;
+        }
         if validate_guides(std::slice::from_ref(&next)).is_ok() {
             if let Some(guide) = self.guides.iter_mut().find(|g| g.id == id) {
                 *guide = next;
@@ -378,6 +388,9 @@ impl GlobalSession {
         // Both endpoints share the exact delta; invalid quads are rejected atomically.
         for corner in [edge, neighbor] {
             next.corners[corner] = [original[corner][0] + delta[0], original[corner][1] + delta[1]];
+        }
+        if next.corners == guide.corners {
+            return;
         }
         if validate_guides(std::slice::from_ref(&next)).is_ok() {
             if let Some(guide) = self.guides.iter_mut().find(|g| g.id == id) {
@@ -436,6 +449,17 @@ pub(crate) fn bound_to_active_document(app: &PhotocraftApp, s: &GlobalSession) -
         && Screen::key(app, &s.source_doc, None) == s.display_key
 }
 
+/// The raw mesh and the document with its source layer hidden must use the same admission rule.
+/// Other canvases keep the committed document when their monitor needs a color conversion.
+pub(crate) fn preview_visible(app: &PhotocraftApp, idx: usize, output: Option<u32>) -> bool {
+    let Some(s) = app.distort.global_perspective.as_ref() else { return false };
+    if app.ui.view.pattern_preview || app.session.documents().get(idx).is_none_or(|st| st.doc.id != s.document) || !bound_to_active_document(app, s) {
+        return false;
+    }
+    let screen = Screen::of(app, &s.source_doc, output);
+    !screen.encode_srgb && screen.transform.is_none()
+}
+
 /// Why the open session cannot act now, or the session's reason to stay editable.
 fn validate_session(app: &PhotocraftApp) -> Result<(), String> {
     let s = app.distort.global_perspective.as_ref().ok_or(tl!("Global Perspective Warp is not active"))?;
@@ -474,6 +498,9 @@ fn fail(app: &mut PhotocraftApp, error: String) -> String {
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     if app.ui.transform.is_some() || app.ui.symmetry_transform.is_some() || app.distort.active() || crate::distort_ui::modal_workspace(app).is_some() {
         return Err(tl!("finish or cancel the current transformation first").into());
+    }
+    if app.ui.view.pattern_preview {
+        return Err(tl!("Turn off Pattern Preview before starting Global Perspective Warp").into());
     }
     let (layer, surface, _) = crate::distort_ui::active_pixels(app)?;
     let bounds = validate_target(&app.session, layer)?;
@@ -678,12 +705,17 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
 }
 
 /// The reason command `id` cannot start while the session is open, if it is one that would strand or invalidate it.
-/// The session's own controls, undo and view commands stay available.
+/// The session's own controls, undo and navigation stay available; Pattern Preview cannot tile the raw mesh.
 pub(crate) fn refuses(app: &PhotocraftApp, id: &str) -> Option<String> {
     app.distort.global_perspective.as_ref()?;
+    if id == "view.patternPreview" {
+        return Some(tl!("Finish or cancel Global Perspective Warp before changing Pattern Preview").into());
+    }
     let blocked = matches!(
         id,
         "edit.freeTransform"
+            | "edit.freeTransformCopy"
+            | "layer.smartObjects.warp"
             | "edit.contentAwareScale"
             | "edit.puppetWarp"
             | "layer.smartObjects.puppetWarp"
@@ -699,6 +731,15 @@ pub(crate) fn refuses(app: &PhotocraftApp, id: &str) -> Option<String> {
 }
 
 // ------------------------------------------------------------------------------------------------ pointer
+
+fn can_create_guide(s: &GlobalSession, p: [f64; 2]) -> bool {
+    !s.show_result
+        && s.guides.len() < MAX_GUIDES
+        && p[0] >= f64::from(s.bounds.x0)
+        && p[0] <= f64::from(s.bounds.x1)
+        && p[1] >= f64::from(s.bounds.y0)
+        && p[1] <= f64::from(s.bounds.y1)
+}
 
 /// A press at document point `p`, `tol` document units from a handle being a hit. True when it began a drag; the press is
 /// the session's either way (a click selects a guide, a click on the result starts nothing).
@@ -756,13 +797,7 @@ pub(crate) fn pointer_down(app: &mut PhotocraftApp, p: [f64; 2], tol: f64, keys:
         && let Some(g) = s.guides.iter().rev().find(|g| s.display_corners(g).is_some_and(|corners| inside(p, &corners)))
     {
         s.selected = Some(g.id);
-    } else if !s.show_result
-        && s.guides.len() < MAX_GUIDES
-        && x >= f64::from(s.bounds.x0)
-        && x <= f64::from(s.bounds.x1)
-        && y >= f64::from(s.bounds.y0)
-        && y <= f64::from(s.bounds.y1)
-    {
+    } else if can_create_guide(s, p) {
         s.drag = Some(Drag::New { start: p, current: p });
     }
     s.drag.is_some()
@@ -825,18 +860,18 @@ pub(crate) fn hover(app: &PhotocraftApp, p: [f64; 2], tol: f64) -> Hover {
     }
     match hit_handle(s, p, tol) {
         Some(_) => Hover::Handle,
-        None => Hover::Draw,
+        None if can_create_guide(s, p) => Hover::Draw,
+        None => Hover::Idle,
     }
 }
 
 // ------------------------------------------------------------------------------------------------ canvas
 
 /// The preview and the guides as shapes in the canvas's picture slot, for the canvas of document `idx` showing it through
-/// `view`. A session that does not belong to the active document, as the same snapshot, or a canvas of another document,
-/// shows nothing.
-pub(crate) fn canvas_shapes(app: &mut PhotocraftApp, ctx: &egui::Context, view: &CanvasView, idx: usize) -> Vec<Shape> {
-    let shown = app.session.documents().get(idx).map(|st| st.doc.id);
-    if !app.distort.global_perspective.as_ref().is_some_and(|s| Some(s.document) == shown && bound_to_active_document(app, s)) {
+/// `view` on `output` (`None`: the main display). Foreign/stale sessions and incompatible displays or repeating views
+/// show nothing and keep the source layer in the base composite.
+pub(crate) fn canvas_shapes(app: &mut PhotocraftApp, ctx: &egui::Context, view: &CanvasView, idx: usize, output: Option<u32>) -> Vec<Shape> {
+    if !preview_visible(app, idx, output) {
         return Vec::new();
     }
     let Some(s) = app.distort.global_perspective.as_mut() else { return Vec::new() };

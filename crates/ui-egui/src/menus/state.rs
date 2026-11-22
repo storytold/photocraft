@@ -4,6 +4,9 @@ use super::invoke::{panel_alias, proof_preset, workspace_id};
 use super::{DOCUMENT_ITEM, PhotocraftApp, Value};
 
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
+    if id == "view.patternPreview" && crate::global_perspective_ui::refuses(app, id).is_some() {
+        return false;
+    }
     // Shortcut-only: the tool host owns presses during a gesture.
     if id == "layer.selectUnderCursor" {
         return app.session.active().is_some() && !app.brush_resize.active();

@@ -250,6 +250,11 @@ pub fn cancel_stale(app: &mut PhotocraftApp) {
 
 /// The document shown on the canvas while Puppet or Perspective Warp previews a layer.
 pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    display_doc_for_output(app, idx, None)
+}
+
+/// The host display also decides whether Global Perspective Warp may hide its source layer.
+pub(crate) fn display_doc_for_output(app: &PhotocraftApp, idx: usize, output: Option<u32>) -> Option<(Arc<Document>, u64)> {
     if app.session.active_index() != Some(idx) {
         return None;
     }
@@ -267,7 +272,7 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
     // A session whose snapshot or colour display no longer matches shows the real document, not a stale preview.
     if let Some(p) = &app.distort.global_perspective
         && p.document == id
-        && crate::global_perspective_ui::bound_to_active_document(app, p)
+        && crate::global_perspective_ui::preview_visible(app, idx, output)
     {
         return Some((p.preview_doc.clone(), (1 << 42) + p.key));
     }

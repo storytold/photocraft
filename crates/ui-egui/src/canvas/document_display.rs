@@ -338,7 +338,6 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         let live = canvas_controls(app, ui, body.rect, host, &space, &mut turned, &mut body_shown);
         // The Free Transform preview joins the picture slot after the document, which is prepared after the tools.
         let transform_picture = std::mem::take(&mut body_shown.transform_picture);
-        let global_picture = std::mem::take(&mut body_shown.global_picture);
         // The body can run more than once in a frame; a report from any of its runs counts.
         if let Some(context) = body_shown.crop.as_mut().and_then(craft::draw::ui::CropShown::take_context) {
             overlay_context = Some(context);
@@ -357,6 +356,9 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
             }
             hosted = Some(tools::run(app, ui, host, &input, body_shown));
         }
+        // Escape/Enter and guide edits must be reconciled before building this pass's overlay.
+        // Use the body's actual view, including canvas navigation and ruler insets.
+        let global_picture = crate::global_perspective_ui::canvas_shapes(app, ctx, &space.view, idx, output);
         // The picture shows the document as the tools left it: a commit (a crop) can replace it.
         let current = app.session.documents().get(idx).map(|state| std::sync::Arc::clone(&state.doc));
         let doc = current.as_ref().unwrap_or(doc);
@@ -506,9 +508,6 @@ fn canvas_controls(
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let now = ui.input(|i| i.time);
     crate::distort_ui::show_in_canvas(app, ui, rect);
-    // Global Perspective Warp's mesh and guides, which the body paints into the picture slot (every canvas of the
-    // document shows them through its own view; only the document's own canvas takes the pointer).
-    reported.global_picture = crate::global_perspective_ui::canvas_shapes(app, ui.ctx(), &space.view, host.idx);
     crate::blur_pins::overlay(app, ui, rect);
     let doc = app.session.documents()[host.idx].doc.id;
     if let Some(shown) = crate::vector_ui::overlay::show_paths(app, ui, rect, doc) {
