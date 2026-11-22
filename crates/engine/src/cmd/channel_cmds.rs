@@ -28,6 +28,8 @@ mod apply_image_darker_lighter_tests;
 #[cfg(test)]
 mod apply_image_lock_transparency_tests;
 #[cfg(test)]
+mod apply_image_scale_rounding_tests;
+#[cfg(test)]
 mod tests;
 
 // ---------------------------------------------------------------------------------------------
