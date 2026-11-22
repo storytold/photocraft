@@ -152,9 +152,9 @@ impl Grain {
 /// Develop's per-pixel stages for one image and settings, in order. `None` stages are off.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PerPixel {
-    /// 1. White balance gains in linear light (sRGB-decoded values). Always `None` now: Temperature
-    ///    and Tint are per-channel curves, developed on the CPU.
-    pub gains: Option<[f32; 3]>,
+    /// 1. White balance: Temperature, then Tint, each per-channel curves with a measured
+    ///    correction (see `white_balance`); empty when both are 0.
+    pub white_balance: Vec<super::white_balance::BalanceStep>,
     /// Exposure (after white balance): a curve over sRGB-encoded grey levels 0, 1/64, …, 1
     /// (input and output), hue-preserving in linear ProPhoto.
     pub exposure: Option<[f32; TONE_STEPS]>,
@@ -233,7 +233,8 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw, in
 
 /// Develop's stages for settings without spatial stages, on a `w × h` image; `points` are the
 /// image's [`white_black_points`]. `None` when `p` needs a spatial stage or Calibration (these
-/// stages don't run it), Temperature or Tint, or Contrast or a raised Whites has no `points`. The points themselves
+/// stages don't run it), Contrast or a raised Whites has no `points`, or a measured colour
+/// correction (Whites down, Temperature, Tint) would read a document outside sRGB's primaries. The points themselves
 /// leave Calibration out, so a caller may cache them across Calibration changes.
 pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, float: bool, points: Option<TonePoints>) -> Option<PerPixel> {
     if spatial(p) || !calibration_neutral(p) {
@@ -243,14 +244,9 @@ pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, floa
     if (p.whites > 0.0 || p.contrast != 0.0) && points.is_none() {
         return None;
     }
-    // Temperature and Tint are per-channel curves with measured colour corrections (see
-    // `white_balance`), which these stages don't run.
-    if p.temperature != 0.0 || p.tint != 0.0 {
-        return None;
-    }
-    // Whites down's measured correction reads the colour in sRGB's primaries; these stages look
+    // Whites down's and white balance's measured corrections read the colour in sRGB's primaries; these stages look
     // it up in the document's own, so a document in other primaries develops on the CPU.
-    if p.whites < 0.0 && !inputs.encoding().srgb_primaries() {
+    if (p.whites < 0.0 || p.temperature != 0.0 || p.tint != 0.0) && !inputs.encoding().srgb_primaries() {
         return None;
     }
     let (whites, blacks) = (whites_blacks::whites_row(p.whites, points.map(|t| t[1])), whites_blacks::blacks_row(p.blacks));
@@ -261,7 +257,7 @@ pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, floa
     let parametric_on = !(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0);
     let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, CURVE_LUT));
     Some(PerPixel {
-        gains: None,
+        white_balance: super::white_balance::steps(p.temperature, p.tint),
         exposure: (p.exposure != 0.0).then(|| exposure::row(p.exposure)),
         contrast: (p.contrast != 0.0).then(|| contrast::adaptive_row(p.contrast, points.map(|t| t[0]))),
         to_prophoto,

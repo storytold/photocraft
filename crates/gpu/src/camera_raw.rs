@@ -11,7 +11,9 @@
 //! The pipeline is built on demand ([`CameraRawDevelop::new`]), not with the compositor (#6419).
 //! It renders into `Rgba32Float`; [`CameraRawDevelop::supported`] says whether the adapter can.
 
-use photocraft_algo::camera_raw::{CURVE_LUT, FIX_GRID, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, RowOn, TONE_STEPS, VignetteStyle};
+use photocraft_algo::camera_raw::{
+    BalanceStep, CURVE_LUT, FIX_GRID, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, RowOn, TONE_STEPS, VignetteStyle,
+};
 
 use crate::Unsupported;
 
@@ -23,8 +25,9 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const PARAMS_SIZE: u64 = 18 * 16;
 /// Rows of the table texture: parametric, master, red, green, blue curves; Whites, Blacks;
 /// Exposure, Contrast; then from [`WHITES_FIX_ROW`] Whites down's correction grid, from
-/// [`MIXER_ROW`] the Color Mixer tables and from [`PRESENCE_ROW`] Saturation's and Vibrance's.
-const LUT_ROWS: u32 = PRESENCE_ROW + PRESENCE_ROWS;
+/// [`MIXER_ROW`] the Color Mixer tables, from [`PRESENCE_ROW`] Saturation's and Vibrance's, and
+/// from [`BALANCE_ROW`] the two white-balance steps.
+const LUT_ROWS: u32 = BALANCE_ROW + 2 * BALANCE_ROWS;
 const LUT_WIDTH: u32 = CURVE_LUT as u32;
 /// Values of Whites down's correction grid (RGB per node) and the rows they take.
 const FIX_VALUES: usize = FIX_GRID * FIX_GRID * FIX_GRID * 3;
@@ -42,6 +45,10 @@ const MIXER_ROWS: u32 = MIXER_VALUES.div_ceil(CURVE_LUT) as u32;
 const PRESENCE_ROW: u32 = MIXER_ROW + MIXER_ROWS;
 const PRESENCE_VALUES: usize = PRESENCE_KINDS * PRESENCE_GRID[0] * PRESENCE_GRID[1] * PRESENCE_GRID[2] * 3;
 const PRESENCE_ROWS: u32 = PRESENCE_VALUES.div_ceil(CURVE_LUT) as u32;
+/// The first row of the white-balance steps (`BALANCE_ROW` in the shader): per step (Temperature,
+/// then Tint) the red, green and blue curves, then its correction grid.
+const BALANCE_ROW: u32 = PRESENCE_ROW + PRESENCE_ROWS;
+const BALANCE_ROWS: u32 = 3 + FIX_ROWS;
 const BYTES_PER_PIXEL: u32 = 16;
 
 struct Image {
@@ -346,7 +353,8 @@ fn check_size(device: &wgpu::Device, source: &[[f32; 4]], [w, h]: [u32; 2]) -> R
 fn flags(s: &PerPixel) -> u32 {
     let wb = s.whites_blacks.as_ref();
     let on = [
-        s.gains.is_some(),
+        // 0: unused (was the white-balance gains).
+        false,
         s.contrast.is_some(),
         wb.is_some_and(|w| w.whites.is_some()),
         wb.is_some_and(|w| w.blacks.is_some()),
@@ -367,20 +375,30 @@ fn flags(s: &PerPixel) -> u32 {
         // 18: unused (was Vibrance's and Saturation's correction grid).
         false,
         wb.is_some_and(|w| w.whites.is_some() && w.whites_fix.as_ref().is_some_and(|g| g.len() * 3 == FIX_VALUES)),
+        // 20–23: the white-balance steps and their correction grids.
+        s.white_balance.first().is_some(),
+        s.white_balance.first().is_some_and(fix_fits),
+        s.white_balance.get(1).is_some(),
+        s.white_balance.get(1).is_some_and(fix_fits),
     ];
     on.iter().enumerate().fold(0, |f, (bit, on)| if *on { f | 1 << bit } else { f })
 }
 
+/// A white-balance step's correction grid that fills its rows.
+fn fix_fits(step: &BalanceStep) -> bool {
+    step.fix.as_ref().is_some_and(|g| g.len() * 3 == FIX_VALUES)
+}
+
 /// The shader's `Params` for a `size` image.
 fn params(size: [u32; 2], s: &PerPixel) -> Vec<u8> {
-    let g = s.gains.unwrap_or([1.0; 3]);
     let grade = s.grade.as_ref();
     let vig = s.vignette.as_ref();
     let grain = s.grain.as_ref();
     let mut out: Vec<u8> = Vec::with_capacity(PARAMS_SIZE as usize);
     out.extend([size[0], size[1], flags(s)].iter().flat_map(|v| v.to_le_bytes()).chain(s.encoding.to_le_bytes()));
     let mut f = |v: [f32; 4]| out.extend(v.iter().flat_map(|x| x.to_le_bytes()));
-    f([g[0], g[1], g[2], 0.0]);
+    // Formerly the white-balance gains; kept so the layout stays.
+    f([1.0, 1.0, 1.0, 0.0]);
     for m in [s.to_prophoto, s.from_prophoto] {
         for r in m {
             f([r[0], r[1], r[2], 0.0]);
@@ -439,8 +457,22 @@ fn tables(s: &PerPixel) -> Vec<f32> {
             put(6, r);
         }
     }
+    let mut balance_fix = [None, None];
+    for (k, step) in s.white_balance.iter().take(2).enumerate() {
+        let row = (BALANCE_ROW + k as u32 * BALANCE_ROWS) as usize;
+        for (c, r) in step.rows.iter().enumerate() {
+            put(row + c, r);
+        }
+        balance_fix[k] = step.fix.as_ref();
+    }
     let whites_fix = s.whites_blacks.as_ref().and_then(|w| w.whites_fix.as_ref());
-    let grids = [(WHITES_FIX_ROW, whites_fix, FIX_VALUES), (MIXER_ROW, s.hsl.as_ref(), MIXER_VALUES), (PRESENCE_ROW, s.presence.as_ref(), PRESENCE_VALUES)];
+    let grids = [
+        (WHITES_FIX_ROW, whites_fix, FIX_VALUES),
+        (MIXER_ROW, s.hsl.as_ref(), MIXER_VALUES),
+        (PRESENCE_ROW, s.presence.as_ref(), PRESENCE_VALUES),
+        (BALANCE_ROW + 3, balance_fix[0], FIX_VALUES),
+        (BALANCE_ROW + BALANCE_ROWS + 3, balance_fix[1], FIX_VALUES),
+    ];
     for (row, grid, values) in grids {
         if let Some(g) = grid.filter(|g| g.len() * 3 == values) {
             let start = row as usize * LUT_WIDTH as usize;
@@ -460,3 +492,4 @@ const _: () = assert!(TONE_STEPS <= CURVE_LUT);
 const _: () = assert!(FIX_GRID == 17 && WHITES_FIX_ROW == 9);
 const _: () = assert!(MIXER_ROW == 24 && MIXER_GRID[0] == 72 && MIXER_GRID[1] == 9 && MIXER_GRID[2] == 9 && MIXER_KINDS == 3);
 const _: () = assert!(PRESENCE_ROW == 76 && PRESENCE_GRID[0] == 48 && PRESENCE_GRID[1] == 21 && PRESENCE_GRID[2] == 21 && PRESENCE_KINDS == 2);
+const _: () = assert!(BALANCE_ROW == 76 + PRESENCE_ROWS && BALANCE_ROWS == 18);

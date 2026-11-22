@@ -188,9 +188,23 @@ fn exposure() {
             case(cr! { exposure: 5.0 }, DevelopInputs::default()),
         ],
     );
-    // Temperature and Tint are per-channel curves the pass does not run: the CPU develops them.
-    assert!(per_pixel(&cr! { temperature: 40.0 }, 8, 8, false, None).is_none());
-    assert!(per_pixel(&cr! { tint: -25.0 }, 8, 8, false, None).is_none());
+}
+
+#[test]
+fn white_balance() {
+    check(
+        "white balance",
+        &[
+            case(cr! { temperature: 40.0 }, DevelopInputs::default()),
+            case(cr! { tint: -25.0 }, DevelopInputs::default()),
+            case(cr! { temperature: -70.0, tint: 30.0 }, DevelopInputs::default()),
+            case(cr! { temperature: 100.0, tint: -100.0, exposure: 0.4 }, DevelopInputs::default()),
+            case(cr! { temperature: -12.5, contrast: 30.0, whites: -40.0 }, DevelopInputs::default()),
+        ],
+    );
+    // The measured corrections read sRGB's primaries: a document in others develops on the CPU.
+    let p3 = DevelopInputs { document_primaries: Some([[0.5151, 0.2920, 0.1571], [0.2412, 0.6922, 0.0666], [-0.0011, 0.0419, 0.7843]]), ..Default::default() };
+    assert!(photocraft_algo::camera_raw::per_pixel(&cr! { tint: 20.0 }, &p3, 8, 8, false, None).is_none());
 }
 
 #[test]

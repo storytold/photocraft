@@ -56,6 +56,20 @@ pub(crate) fn curves(temperature: f32, tint: f32) -> Option<Balance> {
     (!v.is_empty()).then_some(Balance(v))
 }
 
+/// One step of Temperature or Tint as a per-pixel pass reads it: each channel's curve over
+/// sRGB-encoded levels 0, 1/64, …, 1 (as [`exposure::curve`](super::exposure::curve) reads it)
+/// and the measured correction grid on top, if any.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BalanceStep {
+    pub rows: [[f32; STEPS]; 3],
+    pub fix: Option<Vec<[f32; 3]>>,
+}
+
+/// Temperature then Tint as [`BalanceStep`]s (empty when both are 0), for a per-pixel pass.
+pub(crate) fn steps(temperature: f32, tint: f32) -> Vec<BalanceStep> {
+    curves(temperature, tint).map_or_else(Vec::new, |b| b.0.into_iter().map(|(rows, fix)| BalanceStep { rows, fix: fix.map(|c| c.grid().to_vec()) }).collect())
+}
+
 /// One straight pixel encoded with `enc` through the curves (each channel its own) and the
 /// corrections.
 pub(crate) fn pixel(mut q: [f32; 4], b: &Balance, enc: Encoding) -> [f32; 4] {

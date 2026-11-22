@@ -7,7 +7,7 @@ struct Params {
     flags: u32,
     // The document's transfer curve: 0 for sRGB's, else a power-law gamma.
     encoding: f32,
-    // White balance gains (rgb).
+    // Unused (formerly the white-balance gains).
     gains: vec4<f32>,
     // Linear RGB to linear ProPhoto (rows) and back.
     to_prophoto: array<vec4<f32>, 3>,
@@ -33,7 +33,6 @@ struct Params {
 // shift, saturation and log-value change per node of hue x saturation x value).
 @group(0) @binding(2) var luts: texture_2d<f32>;
 
-const GAINS: u32 = 0u;
 const CONTRAST: u32 = 1u;
 const WHITES: u32 = 2u;
 const BLACKS: u32 = 3u;
@@ -50,10 +49,18 @@ const CLAMP: u32 = 15u;
 const EXPOSURE: u32 = 16u;
 const BLACKS_CHANNELS: u32 = 17u;
 const WHITES_FIX: u32 = 19u;
+// The white-balance steps (Temperature, then Tint) and their correction grids.
+const BALANCE_1: u32 = 20u;
+const BALANCE_1_FIX: u32 = 21u;
+const BALANCE_2: u32 = 22u;
+const BALANCE_2_FIX: u32 = 23u;
 
 const WHITES_FIX_ROW: i32 = 9;
 const MIXER_ROW: i32 = 24;
 const PRESENCE_ROW: i32 = 76;
+// Per white-balance step: the red, green and blue curves, then its correction grid.
+const BALANCE_ROW: i32 = 201;
+const BALANCE_ROWS: i32 = 18;
 const PRESENCE_H: i32 = 48;
 const PRESENCE_S: i32 = 21;
 const PRESENCE_V: i32 = 21;
@@ -254,6 +261,16 @@ fn luminance_pixel(row: i32, q: vec3<f32>) -> vec3<f32> {
     return vec3(encode(lin.x * k), encode(lin.y * k), encode(lin.z * k));
 }
 
+// `white_balance::pixel` for one step: each channel through its own curve (rows `row` … `row + 2`),
+// then the step's correction grid (from `row + 3`) when `fix`.
+fn balance_step(row: i32, fix: bool, q: vec3<f32>) -> vec3<f32> {
+    let base = vec3(encode(tone_curve(row, decode(q.x))), encode(tone_curve(row + 1, decode(q.y))), encode(tone_curve(row + 2, decode(q.z))));
+    if fix {
+        return grid_fix(row + 3, q, base);
+    }
+    return base;
+}
+
 // `whites_blacks::row_pixel`: row 5 Whites, 6 Blacks, on each channel or the luminance.
 fn white_black_pixel(row: i32, channels: bool, q: vec3<f32>) -> vec3<f32> {
     if channels {
@@ -432,10 +449,11 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let q = textureLoad(src, p, 0);
     var c = q.rgb;
     // 1. White balance, then Exposure and Contrast.
-    if on(GAINS) {
-        for (var i = 0; i < 3; i++) {
-            c[i] = linear_to_srgb(max(srgb_to_linear(c[i]) * P.gains[i], 0.0));
-        }
+    if on(BALANCE_1) {
+        c = balance_step(BALANCE_ROW, on(BALANCE_1_FIX), c);
+    }
+    if on(BALANCE_2) {
+        c = balance_step(BALANCE_ROW + BALANCE_ROWS, on(BALANCE_2_FIX), c);
     }
     if on(EXPOSURE) {
         c = tone_pixel(7, c);

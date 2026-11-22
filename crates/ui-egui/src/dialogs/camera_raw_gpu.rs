@@ -307,8 +307,9 @@ mod tests {
                 eprintln!("skipping: the device can't run the RAW Develop pass");
                 return;
             }
-            // (Temperature and Tint are per-channel curves the CPU develops.)
             let per_pixel = cr! {
+                temperature: 20.0,
+                tint: -10.0,
                 exposure: 0.4,
                 contrast: 30.0,
                 whites: 25.0,
