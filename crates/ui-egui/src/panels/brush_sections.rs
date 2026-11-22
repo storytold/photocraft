@@ -363,6 +363,8 @@ impl Pane<'_> {
             self.check(ui, tl!("Flip Y Jitter"), &mut sd.flip_y_jitter);
         });
         self.check(ui, tl!("Brush Projection"), &mut sd.brush_projection);
+        // Not in Photoshop: a curve through the pen's points instead of straight segments.
+        self.check(ui, tl!("Smooth Curves"), &mut b.smooth_curves);
     }
 
     fn scattering(&mut self, ui: &mut Ui, b: &mut BrushSettings, d: &BrushSettings) {

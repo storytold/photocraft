@@ -630,6 +630,10 @@ pub struct BrushSettings {
     /// Build-up rate in dabs per second.
     pub build_up_rate: f32,
     pub smoothing: Smoothing,
+    /// Smooth Curves: the stroke follows a curve through its input points instead of straight
+    /// segments ([`crate::stroke_curve`]). A tool option like Smoothing: it stays when another
+    /// preset is picked.
+    pub smooth_curves: bool,
     /// Keep the current texture (pattern + scale) when switching to another textured preset.
     pub protect_texture: bool,
     /// Sections whose settings stay when another preset is picked (tool state, like Photoshop's locks).
@@ -678,6 +682,7 @@ impl Default for BrushSettings {
             // About ten dabs a second while held still, Photoshop's Airbrush rate (#11886).
             build_up_rate: 10.0,
             smoothing: Smoothing::default(),
+            smooth_curves: false,
             protect_texture: false,
             locks: SectionLocks::default(),
             mixer: MixerSettings::default(),
@@ -741,6 +746,7 @@ impl BrushSettings {
     pub fn picked_over(self, current: &BrushSettings) -> Self {
         let mut b = self.with_protected_texture(current);
         b.smoothing = current.smoothing.clone();
+        b.smooth_curves = current.smooth_curves;
         let l = &current.locks;
         if l.shape_dynamics {
             b.shape_dynamics = current.shape_dynamics.clone();
