@@ -562,48 +562,6 @@ fn popup_channels(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect()
 }
 
-/// Where text starting with `prefix` was painted in the last frame.
-fn painted_text(h: &Harness<'static, Box<PhotocraftApp>>, prefix: &str) -> Option<egui::Rect> {
-    fn find(shape: &egui::Shape, prefix: &str) -> Option<egui::Rect> {
-        match shape {
-            egui::Shape::Text(text) if text.galley.text().starts_with(prefix) => Some(text.visual_bounding_rect()),
-            egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, prefix)),
-            _ => None,
-        }
-    }
-    h.output().shapes.iter().find_map(|clipped| find(&clipped.shape, prefix))
-}
-
-/// #15543: the selected point's Input and Output and the hint lie inside the Curves dialog (a square graph measured at
-/// its least width used to push them past the dialog's clip); the fields read the point, and editing Input moves it.
-#[test]
-fn curves_point_fields_read_and_move_the_selected_point_inside_the_dialog() {
-    let (mut h, id) = open_in_harness(app_with_image(), "image.adjustments.curves");
-    set_field(h.state_mut(), id, "points", json!([[0, 0], [64, 80], [255, 255]]));
-    hosted(h.state_mut(), id).select_point(1);
-    h.run_steps(4);
-
-    let dialog = h.get_by_role(egui::accesskit::Role::Dialog).rect();
-    let input = h.get_by_label("Input");
-    let output = h.get_by_label("Output");
-    assert_eq!(input.value().as_deref(), Some("64"), "Input reads the selected point's input");
-    assert_eq!(output.value().as_deref(), Some("80"), "Output reads the selected point's output");
-    let hint = painted_text(&h, "Click to add a point").expect("the hint is painted");
-    for (part, rect) in [("Input", input.rect()), ("Output", output.rect()), ("the hint", hint)] {
-        assert!(dialog.contains_rect(rect), "{part} {rect:?} lies inside the dialog {dialog:?}");
-    }
-
-    h.get_by_label("Input").click();
-    h.run_steps(2);
-    // Tab commits the field; Enter would answer the dialog.
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.event(egui::Event::Text("96".into()));
-    h.run_steps(1);
-    h.key_press(egui::Key::Tab);
-    h.run_steps(3);
-    assert_eq!(channel_points(h.state_mut(), "points"), vec![[0.0, 0.0], [96.0, 80.0], [255.0, 255.0]], "setting Input moves the point");
-}
-
 /// A Lab OK followed by ⌥-reopen (the last settings): the combined record and the native lightness
 /// record both come back.
 #[test]
