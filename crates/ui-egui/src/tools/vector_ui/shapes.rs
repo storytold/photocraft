@@ -187,7 +187,8 @@ fn box_of(rect: &Rect) -> [f64; 4] {
 
 /// `shape.create` params of `geometry` without fill and stroke: the one builder of the command's
 /// geometry. The arrowheads come from the tool options, which `ShapeGeometry` does not carry.
-fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind) -> Result<Value, String> {
+/// `regular` is a ⇧-constrained drag, whose polygon stays regular (inscribed in a circle) instead of filling its box.
+fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind, regular: bool) -> Result<Value, String> {
     let o = &app.ui.tool_options;
     Ok(match geometry {
         ShapeGeometry::Rect { rect, radii } if radii.iter().any(|r| *r > 0.0) => json!({"kind": "roundedRect", "rect": box_of(rect), "radii": radii}),
@@ -199,6 +200,10 @@ fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKin
             let mut p = json!({"kind": if kind == ShapeKind::Star { "star" } else { "polygon" }, "rect": box_of(rect), "sides": sides});
             if kind == ShapeKind::Star || *star_ratio < 1.0 {
                 p["starRatio"] = json!(star_ratio);
+            }
+            // The Polygon tool's polygon fills its box (#13298); the Star tool keeps its geometry for now.
+            if kind == ShapeKind::Polygon && !regular {
+                p["fillsBox"] = json!(true);
             }
             p
         }
@@ -214,8 +219,8 @@ fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKin
 }
 
 /// `shape.create` params with the options bar's fill and stroke.
-fn create_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind) -> Result<Value, String> {
-    let mut p = geometry_params(app, geometry, kind)?;
+fn create_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind, regular: bool) -> Result<Value, String> {
+    let mut p = geometry_params(app, geometry, kind, regular)?;
     p["fill"] = fill_param(app);
     p["stroke"] = stroke_param(app);
     Ok(p)
@@ -233,7 +238,7 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
     let Some(geometry) = snapped(geometry, mods.shift, snaps_to_pixels(app, kind)) else { return };
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
-        let Some(outline) = outline_of(app, kind, &geometry) else { return };
+        let Some(outline) = outline_of(app, kind, &geometry, mods.shift) else { return };
         // Appended here rather than with `path.set`'s `op`, which would turn a custom shape's
         // subtracted subpaths (holes) into combined ones; the shape goes in as one component.
         // A new work path takes the outline's fill rule.
@@ -264,7 +269,7 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
         // component, its holes joined to it as in Path mode.
         if let Some(op) = drag_path_op(app)
             && let Some(id) = super::options::selected_shape(&app.session)
-            && let Some(outline) = outline_of(app, kind, &geometry)
+            && let Some(outline) = outline_of(app, kind, &geometry, mods.shift)
         {
             // `shape.create` gives every component the operation, so a shape of several components
             // that can't be made one (its parts intersect or exclude) would change: refuse it.
@@ -288,7 +293,7 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
         }
         return;
     }
-    let mut p = match create_params(app, &geometry, kind) {
+    let mut p = match create_params(app, &geometry, kind, mods.shift) {
         Ok(p) => p,
         Err(e) => return report(app, e),
     };
@@ -339,7 +344,7 @@ pub(super) fn fill_param(app: &PhotocraftApp) -> Value {
 /// step named `history` (the commands' own name without one): the Create Rectangle / Ellipse / …
 /// dialogs' OK (`shape_dialog`). The geometry is used as given, with no pixel rounding.
 pub fn create_geometry(app: &mut PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind, history: Option<&str>) -> Result<Value, String> {
-    let mut p = create_params(app, geometry, kind)?;
+    let mut p = create_params(app, geometry, kind, false)?;
     if let Some(name) = history {
         p["historyName"] = json!(name);
     }
@@ -389,19 +394,19 @@ fn as_one_component(outline: &photocraft_doc::vector::Path, rule: photocraft_doc
 }
 
 /// The outline of an already snapped geometry, as a path (a custom shape fitted to its box).
-fn outline_of(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) -> Option<photocraft_doc::vector::Path> {
+fn outline_of(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, regular: bool) -> Option<photocraft_doc::vector::Path> {
     if let ShapeGeometry::Custom { rect, keep_proportions } = geometry {
         let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, box_of(rect), *keep_proportions))
     } else {
-        photocraft_engine::vector_cmds::shape_path(&geometry_params(app, geometry, kind).ok()?).ok()
+        photocraft_engine::vector_cmds::shape_path(&geometry_params(app, geometry, kind, regular).ok()?).ok()
     }
 }
 
 /// The outline a Shape-tool drag draws for `geometry`, as the commit makes it.
 fn shape_outline(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, keep_angle: bool) -> Option<photocraft_doc::vector::Path> {
-    outline_of(app, kind, &snapped(geometry, keep_angle, snaps_to_pixels(app, kind))?)
+    outline_of(app, kind, &snapped(geometry, keep_angle, snaps_to_pixels(app, kind))?, keep_angle)
 }
 
 /// The preview and command both use the full float tool colours, including transparent paint.

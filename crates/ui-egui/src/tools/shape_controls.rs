@@ -294,12 +294,12 @@ fn corner_target(layer: u64, live: &LiveShape) -> Option<CornerTarget> {
             let corners = (0..4).map(|i| CornerPoint::new(at(v[i]), at(v[(i + 3) % 4]), at(v[(i + 1) % 4]), radii[i], CornerKind::Round)).collect();
             Some(CornerTarget::new(layer, corners, true))
         }
-        LiveShape::Polygon { rect, sides, star_ratio, corner_radius } => {
+        LiveShape::Polygon { rect, sides, star_ratio, corner_radius, fills_box } => {
             let [x, y, w, h] = normal_rect(rect)?;
             if !(star_ratio.is_finite() && corner_radius.is_finite()) {
                 return None;
             }
-            let sharp = shapes::polygon(x, y, w, h, sides, star_ratio);
+            let sharp = shapes::regular_polygon(x, y, w, h, sides, star_ratio, fills_box);
             let vertices: Vec<[f64; 2]> = sharp.subpaths.first()?.knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
             let n = vertices.len();
             // A star's inner points stay sharp, so they have no widget.
@@ -356,9 +356,9 @@ fn rounded_path(live: &LiveShape, radii: &[f64]) -> Option<Path> {
             let at = |i: usize| radii.get(i).copied().unwrap_or(0.0);
             Some(shapes::rounded_rect(x, y, w, h, [at(0), at(1), at(2), at(3)]))
         }
-        LiveShape::Polygon { rect, sides, star_ratio, .. } => {
+        LiveShape::Polygon { rect, sides, star_ratio, fills_box, .. } => {
             let corner_radius = radii.first().copied().unwrap_or(0.0);
-            Some(shapes::live_path(&LiveShape::Polygon { rect, sides, star_ratio, corner_radius }))
+            Some(shapes::live_path(&LiveShape::Polygon { rect, sides, star_ratio, corner_radius, fills_box }))
         }
         LiveShape::Triangle { rect, .. } => Some(shapes::live_path(&LiveShape::Triangle { rect, corner_radius: radii.first().copied().unwrap_or(0.0) })),
         LiveShape::Ellipse { .. } | LiveShape::Line { .. } | LiveShape::ArrowLine { .. } => None,

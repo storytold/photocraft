@@ -4,7 +4,7 @@
 use super::*;
 
 fn star(corner_radius: f64) -> Path {
-    live_path(&LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 0.5, corner_radius })
+    live_path(&LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 0.5, corner_radius, fills_box: false })
 }
 
 fn has_handles(k: &Knot) -> bool {
@@ -42,7 +42,7 @@ fn an_outer_point_is_rounded_by_the_arc_the_radius_asks_for() {
 #[test]
 fn a_plain_polygon_still_rounds_every_vertex() {
     for star_ratio in [1.0, 0.0, 1.5] {
-        let p = live_path(&LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio, corner_radius: 10.0 });
+        let p = live_path(&LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio, corner_radius: 10.0, fills_box: false });
         assert_eq!(p, round_corners(polygon(400.0, 300.0, 200.0, 100.0, 5, star_ratio), 10.0), "star ratio {star_ratio}");
         assert_eq!(p.subpaths[0].knots.len(), 10);
         assert!(p.subpaths[0].knots.iter().all(has_handles));
