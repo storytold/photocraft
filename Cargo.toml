@@ -69,6 +69,8 @@ craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "77c7c
 craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "77c7c62345c1f4213f59a07d9fdc156ecde0b540" }
 # Reads .vectorcraft files (photocraft-io's `vectorcraft`).
 craft-doc = { git = "https://github.com/storytold/craft-libs", rev = "77c7c62345c1f4213f59a07d9fdc156ecde0b540" }
+craft-develop = { git = "https://github.com/storytold/craft-libs", rev = "c42c34bfa127b095fb0a8d5ccaba0c168c254062" }
+craft-develop-model = { git = "https://github.com/storytold/craft-libs", rev = "c42c34bfa127b095fb0a8d5ccaba0c168c254062" }
 # Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
 # catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
 # the commit in `craft-i18n.rev`). Already in the tree through craft.
