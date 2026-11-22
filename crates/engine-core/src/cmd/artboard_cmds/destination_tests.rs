@@ -3,7 +3,7 @@ use super::*;
 const EXPORT: &str = "file.export.artboardsToFiles";
 
 fn session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 32, "height": 16})).unwrap();
     for (name, x) in [("Red", 0), ("Blue", 16)] {
         s.execute("layer.new.artboard", json!({"name": name, "rect": [x, 0, 16, 16]})).unwrap();
