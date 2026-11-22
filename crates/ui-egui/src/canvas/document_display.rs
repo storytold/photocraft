@@ -354,8 +354,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
                 let (tool, active) = (app.ui.tool, !app.dialog_open());
                 crate::alt_grab::watch(app, ui.ctx(), egui::Id::unique(("pc-alt-grab", host.idx)), input.rect, tool, active);
             }
-            hosted = Some(tools::run(app, ui, host, &input, body_shown));
+            hosted = Some(tools::run(app, ui, host, output, &input, body_shown));
         }
+        // Escape/Enter and guide edits must be reconciled before building this pass's overlay.
+        // Use the body's actual view, including canvas navigation and ruler insets.
+        let global_picture = crate::global_perspective_ui::canvas_shapes(app, ctx, &space.view, idx, output);
         // The picture shows the document as the tools left it: a commit (a crop) can replace it.
         let current = app.session.documents().get(idx).map(|state| std::sync::Arc::clone(&state.doc));
         let doc = current.as_ref().unwrap_or(doc);
@@ -426,6 +429,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         // The moving pixels over the document, which hides the layer they come from, and under the controls.
         space.paint_picture(ctx, transform_picture);
         space.paint_picture(ctx, clipping);
+        space.paint_picture(ctx, global_picture);
         // The grid is drawn over the picture.
         if app.ui.view.shows(app.ui.view.show.pixel_grid) {
             let own = grid_prep.map(|prep| prep.source(app));

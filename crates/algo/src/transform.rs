@@ -313,6 +313,39 @@ pub fn warp_output_bounds(src_rect: Rect, h: &Homography) -> Option<Rect> {
     corner_bounds(&warp_corners(src_rect, h)?)
 }
 
+/// The exact Bicubic pre-reduction geometry used by the renderer and its output budget.
+/// Outward rounding of an offset source rectangle can add destination rows/columns.
+fn bicubic_reduction(src_rect: Rect, h: &Homography, interp: Interp, cx: f64, cy: f64) -> Option<(f64, Rect, Homography)> {
+    let scale = h.local_scale(cx, cy);
+    if interp != Interp::Bicubic || !(scale < 0.999 && scale > 0.0) {
+        return None;
+    }
+    let f = scale.max(1.0 / 64.0);
+    let reduced_rect = crate::resample::scaled_rect(src_rect, f, f);
+    let reduced_h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
+    let ws = [(reduced_rect.x0, reduced_rect.y0), (reduced_rect.x1, reduced_rect.y0), (reduced_rect.x1, reduced_rect.y1), (reduced_rect.x0, reduced_rect.y1)]
+        .map(|(x, y)| reduced_h.w(x as f64, y as f64));
+    // Outward rounding enlarges the source domain. Its affine denominator must keep
+    // one strict sign at every corner, or the new domain touches/crosses the horizon.
+    // Reject before resizing so both rendering and budgeting fall back to the original.
+    if !ws.iter().all(|w| w.is_finite()) || !(ws.iter().all(|w| *w > 0.0) || ws.iter().all(|w| *w < 0.0)) {
+        return None;
+    }
+    Some((f, reduced_rect, reduced_h))
+}
+
+/// The allocation-sized rectangle that `warp_surface` will render with this interpolation.
+/// Unlike `warp_output_size`, this accounts for Bicubic pre-reduction and its outward-rounded
+/// source bounds. This is a pure geometric estimate and allocates no source or destination pixels.
+pub fn warp_rendered_output_size(src_rect: Rect, h: &Homography, interp: Interp) -> Option<(u64, u64)> {
+    let cx = (f64::from(src_rect.x0) + f64::from(src_rect.x1)) / 2.0;
+    let cy = (f64::from(src_rect.y0) + f64::from(src_rect.y1)) / 2.0;
+    match bicubic_reduction(src_rect, h, interp, cx, cy) {
+        Some((_, reduced_rect, reduced_h)) => warp_output_size(reduced_rect, &reduced_h),
+        None => warp_output_size(src_rect, h),
+    }
+}
+
 /// Unclipped output dimensions, including the same filter support as [`warp_output_bounds`].
 /// Position does not affect the price, so translating a small layer far away stays cheap.
 /// Unrepresentable or non-finite dimensions saturate at `u64::MAX`, allowing a caller to refuse
@@ -399,18 +432,14 @@ fn warp(
         Some((c, inv)) => inv.apply((c.x0 as f64 + c.x1 as f64) / 2.0, (c.y0 as f64 + c.y1 as f64) / 2.0),
         None => ((f64::from(src_rect.x0) + f64::from(src_rect.x1)) / 2.0, (f64::from(src_rect.y0) + f64::from(src_rect.y1)) / 2.0),
     };
-    let scale = h.local_scale(cx, cy);
     let reduced;
-    // Photoshop reduces with its Bicubic widened by 1 / scale (as Image Size does), so the source is
-    // brought down by the whole local scale first and the warp samples it at about 1:1; a plain
-    // 4×4 kernel at 50 % aliased (Photoshop 27.11 Free Transform, 50 % of an impulse image).
-    // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
-    if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
-        let f = scale.max(1.0 / 64.0);
+    // Photoshop reduces with Bicubic widened by 1 / scale. Share the exact rounded
+    // pre-reduction bounds with the allocation-budget estimate; Bilinear is not pre-reduced.
+    if let Some((f, reduced_rect, reduced_h)) = bicubic_reduction(src_rect, &h, interp, cx, cy) {
         reduced = resize_surface(src, f, f, Resample::Bicubic);
         src = &reduced;
-        h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
-        src_rect = crate::resample::scaled_rect(src_rect, f, f);
+        h = reduced_h;
+        src_rect = reduced_rect;
     }
     let Some(inv) = h.inverse() else { return Ok(out) };
     // Destination bounds: the warped corners (plus a pixel for filter support).
@@ -629,3 +658,48 @@ fn warp(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod reduction_regressions {
+    use super::*;
+
+    #[test]
+    fn bicubic_rounding_must_not_introduce_a_horizon() {
+        let bounds = Rect::new(1, 0, 3, 64);
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        src.fill_rect(bounds, &[0.25, 0.5, 0.75, 1.0]);
+        for horizon in [0.0, 1e-6] {
+            let h = Homography([0.0, 0.0, -2.0, 0.0, 0.03125, 0.0, 1.0, 0.0, -horizon]);
+            assert!(crate::global_perspective::validate_map(&h, bounds).is_ok());
+            let scale = h.local_scale(2.0, 32.0);
+            assert!(scale > 0.0 && scale < 0.999, "fixture must trigger pre-reduction");
+            let f = scale.max(1.0 / 64.0);
+            let rounded = crate::resample::scaled_rect(bounds, f, f);
+            assert!(h.w(rounded.x0 as f64 / f, rounded.y0 as f64 / f) <= 0.0);
+            assert!(h.w(rounded.x1 as f64 / f, rounded.y1 as f64 / f) > 0.0);
+            // Fail before rendering on the old implementation: its rounded domain is unsafe.
+            assert!(bicubic_reduction(bounds, &h, Interp::Bicubic, 2.0, 32.0).is_none());
+            let size = warp_rendered_output_size(bounds, &h, Interp::Bicubic).unwrap();
+            assert_eq!(Some(size), warp_output_size(bounds, &h));
+            assert!(size.0 * size.1 < 64, "original footprint must remain small");
+            let out = warp_surface(&src, bounds, &h, Interp::Bicubic).unwrap();
+            let expected = warp_output_bounds(bounds, &h).unwrap();
+            let actual = out.content_bounds();
+            assert!(!actual.is_empty(), "fallback must render pixels");
+            assert_eq!(actual.intersect(&expected), actual);
+            assert!(out.tile_count() <= expected.tiles().count());
+        }
+    }
+
+    #[test]
+    fn bicubic_keeps_safe_outward_rounded_reduction_on_either_side() {
+        let bounds = Rect::new(1, 1, 65, 65);
+        for sign in [1.0, -1.0] {
+            let h = Homography([0.25, 0.0, 0.0, 0.0, 0.25, 0.0, 0.0, 0.0, 1.0].map(|v| sign * v));
+            let (_, reduced, reduced_h) = bicubic_reduction(bounds, &h, Interp::Bicubic, 33.0, 33.0).expect("safe reduction retained");
+            assert!(reduced.width() < bounds.width());
+            assert_eq!(warp_rendered_output_size(bounds, &h, Interp::Bicubic), warp_output_size(reduced, &reduced_h));
+            assert!(bicubic_reduction(bounds, &h, Interp::Bilinear, 33.0, 33.0).is_none());
+        }
+    }
+}

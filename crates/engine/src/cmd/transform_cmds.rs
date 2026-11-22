@@ -361,7 +361,7 @@ pub fn budget() -> u64 {
 
 /// What [`check_budget`] holds a result to: [`budget`].
 #[cfg(not(test))]
-fn active_budget() -> u64 {
+pub(crate) fn active_budget() -> u64 {
     budget()
 }
 
@@ -369,7 +369,7 @@ fn active_budget() -> u64 {
 /// 2²⁰ px of the widest format (32-bit CMYK with alpha, 20 MB), so a result within the old 2²⁰ px
 /// test limit still fits at any depth.
 #[cfg(test)]
-fn active_budget() -> u64 {
+pub(crate) fn active_budget() -> u64 {
     (1 << 20) * PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true).bytes_per_pixel() as u64
 }
 
@@ -384,6 +384,18 @@ pub(crate) fn check_budget(src: Rect, h: &Homography, what: &str, format: PixelF
 /// [`check_budget`] against `budget` bytes (the tests price the production budget with it).
 fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, format: PixelFormat, budget: u64) -> Result<()> {
     let Some((w, ht)) = warp_output_size(src, h) else { return Ok(()) };
+    check_output_budget((w, ht), what, format, budget)?;
+    if warp_output_clipped(src, h) {
+        return Err(EngineError::Other(format!(
+            "too large to transform: the transformed {what} would reach past ±{WARP_REACH} px, the farthest a transform places pixels; the document was not changed"
+        )));
+    }
+    Ok(())
+}
+
+/// Price the caller's output dimensions against Memory Usage, including the alpha the warp adds.
+/// Keep geometry separate so callers can supply the renderer's post-reduction dimensions.
+pub(crate) fn check_output_budget((w, ht): (u64, u64), what: &str, format: PixelFormat, budget: u64) -> Result<()> {
     // The warp writes each tile into the result as it goes, so the result is what it holds; it
     // adds alpha to a format without it.
     let bpp = PixelFormat::new(format.mode, format.sample, true).bytes_per_pixel() as u64;
@@ -394,11 +406,6 @@ fn check_budget_with_limit(src: Rect, h: &Homography, what: &str, format: PixelF
             "too large to transform: the transformed {what} would be {w} x {ht} px ({} MB), more than the {} MB Memory Usage allows (Preferences › Performance); the document was not changed",
             mb(bytes),
             budget >> 20
-        )));
-    }
-    if warp_output_clipped(src, h) {
-        return Err(EngineError::Other(format!(
-            "too large to transform: the transformed {what} would reach past ±{WARP_REACH} px, the farthest a transform places pixels; the document was not changed"
         )));
     }
     Ok(())

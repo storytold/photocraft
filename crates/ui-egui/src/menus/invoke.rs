@@ -123,6 +123,12 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
         crate::paint_mouse::sync_tool_brush(app);
         return Some(Ok(json!({"tool": tool})));
     }
+    // Global Perspective Warp owns the canvas and its document snapshot: refuse what would strand or stale it.
+    if let Some(why) = crate::global_perspective_ui::refuses(app, id) {
+        app.ui.status = why.clone();
+        app.ui.status_error = true;
+        return Some(Err(why));
+    }
     if id == "layer.frame.convert" && params.as_object().is_none_or(|o| o.is_empty()) {
         return Some(frame_convert_dialog(app, id));
     }

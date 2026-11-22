@@ -1,4 +1,4 @@
-//! Puppet Warp and Perspective Warp (on-canvas modes) and the lookup of the open full-window workspace.
+//! Puppet Warp, Perspective Warp and Global Perspective Warp (on-canvas modes) and the lookup of the open full-window workspace.
 //!
 //! The two warps are previews over plain data (pins, planes); committing runs the engine command with that data
 //! (`edit.puppetWarp`, `edit.perspectiveWarp`, or the smart-object twins), so the result is one history step and
@@ -40,14 +40,16 @@ pub struct Distort {
     pub puppet: Option<crate::puppet_ui::PuppetSession>,
     /// Perspective Warp's session.
     pub perspective: Option<crate::perspective_ui::PerspSession>,
+    /// Global Perspective Warp's session.
+    pub global_perspective: Option<crate::global_perspective_ui::GlobalSession>,
     /// The document the open sessions belong to, noted by [`drop_foreign`] on the first frame they are open.
     owner: Option<photocraft_doc::DocId>,
 }
 
 impl Distort {
-    /// Whether Puppet Warp or Perspective Warp is open.
+    /// Whether Puppet Warp, Perspective Warp or Global Perspective Warp is open.
     pub fn active(&self) -> bool {
-        self.puppet.is_some() || self.perspective.is_some()
+        self.puppet.is_some() || self.perspective.is_some() || self.global_perspective.is_some()
     }
 
     /// Short description for `ui.inspect`.
@@ -55,6 +57,7 @@ impl Distort {
         json!({
             "puppet": self.puppet.as_ref().map(|p| p.describe()),
             "perspective": self.perspective.as_ref().map(|p| p.describe()),
+            "globalPerspective": self.global_perspective.as_ref().map(|p| p.describe()),
         })
     }
 }
@@ -240,10 +243,18 @@ pub fn cancel_stale(app: &mut PhotocraftApp) {
     if app.distort.perspective.as_ref().is_some_and(|p| Some(p.document) != active) {
         app.distort.perspective = None;
     }
+    if app.distort.global_perspective.as_ref().is_some_and(|p| Some(p.document) != active) {
+        app.distort.global_perspective = None;
+    }
 }
 
 /// The document shown on the canvas while Puppet or Perspective Warp previews a layer.
 pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
+    display_doc_for_output(app, idx, None)
+}
+
+/// The host display also decides whether Global Perspective Warp may hide its source layer.
+pub(crate) fn display_doc_for_output(app: &PhotocraftApp, idx: usize, output: Option<u32>) -> Option<(Arc<Document>, u64)> {
     if app.session.active_index() != Some(idx) {
         return None;
     }
@@ -258,6 +269,13 @@ pub fn display_doc(app: &PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u6
     {
         return Some((p.preview_doc.clone(), (1 << 42) + p.key));
     }
+    // A session whose snapshot or colour display no longer matches shows the real document, not a stale preview.
+    if let Some(p) = &app.distort.global_perspective
+        && p.document == id
+        && crate::global_perspective_ui::preview_visible(app, idx, output)
+    {
+        return Some((p.preview_doc.clone(), (1 << 42) + p.key));
+    }
     None
 }
 
@@ -269,7 +287,17 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     let ui = params.get("ui");
     #[cfg(not(target_arch = "wasm32"))]
     let hosted = |app: &mut PhotocraftApp, key: &str, ui: &Value| crate::control::dialogs::workspace_ui(app, ctx, key, ui);
+    // Opening a second warp while Global Perspective Warp owns the canvas would strand one preview behind the other.
+    // Its controls and Cancel stay available.
+    if empty
+        && app.distort.global_perspective.is_some()
+        && matches!(id, "edit.puppetWarp" | "layer.smartObjects.puppetWarp" | "edit.perspectiveWarp" | "layer.smartObjects.perspectiveWarp")
+    {
+        return Some(Err(tl!("Finish or cancel Global Perspective Warp before starting another transformation").into()));
+    }
     match id {
+        // `{}` opens the editor; `{"ui": {...}}` is its control channel (`engine.execute` runs the command headless).
+        photocraft_engine::global_perspective_cmds::COMMAND => Some(global_perspective_menu(app, ctx, params)),
         "filter.filterGallery" if empty => Some(crate::gallery_ui::open(app).map(|_| json!({"gallery": crate::gallery_ui::describe(app)}))),
         #[cfg(not(target_arch = "wasm32"))]
         "filter.filterGallery" if ui.is_some() && workspace_open(app, id) => Some(hosted(app, id, ui.unwrap_or(&Value::Null))),
@@ -303,6 +331,19 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         "filter.filterGallery" | "filter.liquify" | "filter.vanishingPoint" if ui.is_some() => Some(Err(format!("{id} is not open"))),
         _ => None,
     }
+}
+
+/// `edit.perspectiveWarpGlobal` from the menu or the control channel: empty parameters open the editor, `{"ui": …}`
+/// drives the open one. Anything else is the headless command's, which the shell does not run on the canvas.
+fn global_perspective_menu(app: &mut PhotocraftApp, ctx: &egui::Context, params: &Value) -> Result<Value, String> {
+    let object = params.as_object().ok_or(tl!("global perspective parameters must be an object"))?;
+    if object.is_empty() {
+        return crate::global_perspective_ui::begin(app, ctx).map(|()| json!({"globalPerspective": app.distort.describe()["globalPerspective"]}));
+    }
+    if object.len() != 1 || !object.contains_key("ui") {
+        return Err(tl!("interactive global perspective expects only the ui field; use engine.execute for direct execution").into());
+    }
+    crate::global_perspective_ui::control(app, &params["ui"])
 }
 
 /// Keyboard while a warp is open. Puppet Warp takes ⌘Z and ⇧⌘Z for its own pin history; Enter, Esc and Delete are
@@ -345,6 +386,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
         crate::perspective_ui::options_bar(app, ui);
         return true;
     }
+    if app.distort.global_perspective.is_some() {
+        // Even a session whose source changed keeps its message here, and its Cancel on the bar.
+        crate::global_perspective_ui::options_bar(app, ui);
+        return true;
+    }
     false
 }
 
@@ -362,6 +408,7 @@ pub fn drop_foreign(app: &mut PhotocraftApp, ctx: &egui::Context) {
     } else if app.distort.owner != current {
         app.distort.puppet = None;
         app.distort.perspective = None;
+        app.distort.global_perspective = None;
         for key in WORKSPACES.into_iter().filter(|key| *key != RAW_DEVELOP) {
             app.framework.dialogs.cancel_by_id(ctx, dialog_id(key));
         }

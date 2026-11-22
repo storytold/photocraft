@@ -509,6 +509,11 @@ impl PhotocraftApp {
     /// files dropped on a document in another tab wait until it is back in view, and are discarded
     /// (with a message) when it is closed.
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
+        // Queued drops predate the editor or belong to another document. Keep them until
+        // it closes, before consuming a drop or starting either the path or bytes job.
+        if crate::global_perspective_ui::refuses(self, "file.placeEmbedded").is_some() {
+            return;
+        }
         // Leave the closed-document notice up for this frame: starting the next queued placement
         // would clear the status bar. The next frame retries the queue, so ask for one at once:
         // another document's files would otherwise wait for the next input event.
@@ -590,6 +595,14 @@ impl PhotocraftApp {
     /// bounded: files dropped on a document in another tab wait here, and a browser drop carries
     /// its whole file. A path drop holds no contents, so any number of them queue.
     fn queue_drop(&mut self, doc: DocId, place: DropPlace) {
+        // Refuse new drops on the edited document, including delayed browser deliveries.
+        // Other documents' drops keep their destination and their place in the queue.
+        if self.distort.global_perspective.as_ref().is_some_and(|s| s.document == doc)
+            && let Some(why) = crate::global_perspective_ui::refuses(self, "file.placeEmbedded")
+        {
+            self.failed(why);
+            return;
+        }
         let held = self.drop_places.iter().filter(|(_, p)| p.holds_bytes()).count();
         let bytes = self.drop_places.iter().fold(0usize, |sum, (_, p)| sum.saturating_add(p.queued_bytes()));
         if place.holds_bytes() && !queue_takes_drop(held, bytes, place.queued_bytes()) {
@@ -627,6 +640,9 @@ impl PhotocraftApp {
     /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where
     /// places run in the background, else synchronously.
     fn place_bytes_with(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        if let Some(why) = crate::global_perspective_ui::refuses(self, if linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" }) {
+            return Err(why);
+        }
         let r = if crate::jobs_ui::place_in_background(self) {
             crate::jobs_ui::start_place_bytes(self, name, bytes, linked, params)
         } else {

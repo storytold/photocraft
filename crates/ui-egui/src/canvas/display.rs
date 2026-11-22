@@ -108,6 +108,11 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
 
 /// [`display_doc`] with the gradient `live` a tool proposes this pass. Nothing is kept for the next pass.
 pub(crate) fn display_doc_live(app: &mut PhotocraftApp, idx: usize, live: LiveProposal<'_>) -> (std::sync::Arc<Document>, u64) {
+    display_doc_live_for_output(app, idx, live, None)
+}
+
+/// A canvas on another monitor must hide the source layer only when its raw warp mesh can also be shown.
+pub(crate) fn display_doc_live_for_output(app: &mut PhotocraftApp, idx: usize, live: LiveProposal<'_>, output: Option<u32>) -> (std::sync::Arc<Document>, u64) {
     if let Some(shown) = crate::frame_tool::display_doc(app, idx) {
         return shown;
     }
@@ -140,7 +145,7 @@ pub(crate) fn display_doc_live(app: &mut PhotocraftApp, idx: usize, live: LivePr
         return shown;
     }
     // Puppet / Perspective Warp previews hide the layer they draw on a mesh.
-    if let Some(shown) = crate::distort_ui::display_doc(app, idx) {
+    if let Some(shown) = crate::distort_ui::display_doc_for_output(app, idx, output) {
         return shown;
     }
     // Image › Adjustments dialog: a temporary adjustment layer clipped to the target.

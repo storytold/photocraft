@@ -217,6 +217,7 @@ filter.gallery.mosaicTiles
 filter.gallery.patchwork
 filter.gallery.stainedGlass
 filter.gallery.texturizer
+edit.perspectiveWarpGlobal
 gradient.fill.create
 gradient.fill.set
 gradient.fill.stop

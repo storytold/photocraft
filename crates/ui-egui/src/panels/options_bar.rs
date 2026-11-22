@@ -56,6 +56,8 @@ pub(crate) enum End {
     Retouch,
     /// The text being typed.
     Type,
+    /// The Global Perspective Warp session.
+    GlobalPerspective,
 }
 
 /// The commit and cancel buttons of the bar and what they end.
@@ -76,6 +78,10 @@ fn ending(app: &PhotocraftApp, tool: Tool) -> Option<Ending> {
         return None;
     }
     let pair = |end, commit: &str, cancel: &str| Some(Ending { end, commit: commit.to_owned().into(), cancel: cancel.to_owned().into() });
+    // The session's Cancel stays even when its source changed; its Commit then reports why it cannot run.
+    if app.distort.global_perspective.is_some() {
+        return pair(End::GlobalPerspective, tl!("Commit global rectification"), tl!("Cancel"));
+    }
     if crate::symmetry_ui::is_open(app) {
         return pair(End::Symmetry, tl!("Commit"), tl!("Cancel"));
     }
@@ -114,6 +120,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// Runs the ending the bar's commit or cancel button asked for.
 fn answer(app: &mut PhotocraftApp, ui: &egui::Ui, tool: Tool, end: End, out: &BarOutput) {
     match end {
+        End::GlobalPerspective => {
+            if out.committed {
+                if let Err(error) = crate::global_perspective_ui::commit(app) {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                }
+            } else if out.cancelled {
+                crate::global_perspective_ui::cancel(app);
+            }
+        }
         End::Symmetry => {
             if out.committed {
                 crate::symmetry_ui::commit(app);
