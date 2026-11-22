@@ -16,7 +16,7 @@ fn session() -> (Session, LayerId) {
     s.execute("file.new", json!({"width": 200, "height": 150})).unwrap();
     {
         let st = s.active_mut().unwrap();
-        let doc = std::sync::Arc::make_mut(&mut st.doc);
+        let doc = std::sync::Arc::make_mut(st.doc_mut());
         let surface = doc.layers[0].surface_mut().unwrap();
         let red = photocraft_raster::from_rgba(&surface.format(), RED);
         surface.fill_rect(Rect::new(0, 0, 100, 150), &red);
@@ -28,7 +28,7 @@ fn session() -> (Session, LayerId) {
 
 fn edit(s: &mut Session, f: impl FnOnce(&mut Document)) {
     let st = s.active_mut().unwrap();
-    f(std::sync::Arc::make_mut(&mut st.doc));
+    f(std::sync::Arc::make_mut(st.doc_mut()));
 }
 
 /// A filled 200 x 150 green pixel layer at `opacity`.

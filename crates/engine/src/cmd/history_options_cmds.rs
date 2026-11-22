@@ -173,10 +173,12 @@ pub(crate) fn delete_state(s: &mut Session, i: usize, current: usize) -> Result<
         crate::carry_visibility(&st.doc, &mut d, &changed);
     }
     let damage = crate::layer_multi_cmds::step_damage(&d, &st.doc);
-    st.doc = d;
+    *st.doc_mut() = d;
     crate::restore_target(st, layers);
     st.revision += 1;
+    st.record_unknown_damage();
     st.last_damage = damage;
+    st.record_damage();
     Ok(())
 }
 
@@ -494,7 +496,7 @@ mod tests {
 
         s.execute(CMD, json!({"automaticallyCreateNewSnapshotWhenSaving": true})).unwrap();
         s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-        s.active_mut().unwrap().saved_to("saved.psd".into());
+        s.saved_to("saved.psd".into());
         let states = entries(&s);
         let id = snapshot_on_save(&mut s).unwrap();
         let st = s.active().unwrap();
@@ -564,7 +566,7 @@ mod tests {
         let red = |s: &Session| s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().surface().unwrap().pixel(1, 1)[1] < 0.5;
         s.execute(CMD, json!({"makeLayerVisibilityChangesUndoable": false, "automaticallyCreateNewSnapshotWhenSaving": true})).unwrap();
         s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-        s.active_mut().unwrap().saved_to("saved.psd".into());
+        s.saved_to("saved.psd".into());
         let saved = snapshot_on_save(&mut s).unwrap();
         // The eye hides the layer: no state.
         s.execute("layer.setProps", json!({"layer": id, "visible": false})).unwrap();

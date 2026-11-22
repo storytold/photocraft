@@ -53,7 +53,7 @@ fn document_with(d: &DocState, detail: bool) -> Value {
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),
         "hasSelection": doc.selection.is_some(),
         "selectionBounds": doc.selection.as_ref().map(|s| { let r = s.content_bounds(); [r.x0, r.y0, r.width() as i32, r.height() as i32] }),
-        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, &selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>(),
+        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>(),
         "history": d.history.entries(),
         "historySource": crate::history_source_cmds::source_json(d),
         "snapshots": d.snapshots().iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),

@@ -398,7 +398,7 @@ pub(super) fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(out)
     } else if scope == "selected" {
-        Some(d.selected_layers())
+        Some(d.selected_layers().to_vec())
     } else {
         None
     };

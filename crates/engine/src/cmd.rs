@@ -19,6 +19,9 @@ pub mod actions_cmds;
 pub mod actions_edit_cmds;
 pub mod adjust_cmds;
 mod adjust_params;
+pub mod adjustment_brush_cmds;
+#[cfg(test)]
+mod adjustment_brush_cmds_tests;
 pub mod align_cmds;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
@@ -73,6 +76,8 @@ pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_css_cmds;
+#[cfg(test)]
+mod layer_from_background_name_tests;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
