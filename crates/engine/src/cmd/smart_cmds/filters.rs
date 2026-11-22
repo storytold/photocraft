@@ -102,8 +102,12 @@ pub(crate) fn add_smart_filter_in(
 /// a long filter stack recomputes.
 pub(super) fn edit_filters(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut SmartObject) -> Result<()>) -> Result<Value> {
     let id = layer_param(s, p)?;
-    let mut edited = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?.clone();
+    let current = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    let mut edited = current.clone();
     f(&mut edited)?;
+    if let Some(name) = kept_filter_left(current, &edited) {
+        return Err(other(format!("the {name} smart filter is not supported, so changing the smart filters would lose its effect; delete it first")));
+    }
     crate::jobs::edit_job(
         s,
         label,
@@ -113,6 +117,19 @@ pub(super) fn edit_filters(s: &mut Session, p: &Value, label: &str, f: impl FnOn
         },
         move |()| json!({"layer": id.0}),
     )
+}
+
+/// A filter this build can't apply that shows now and that `edited` still holds. Its effect lives
+/// only in the pixels the file came with, and a re-render skips it, so it would be lost for good,
+/// also once shown again (#15448). Only an edit that removes it may re-render the object.
+fn kept_filter_left(current: &SmartObject, edited: &SmartObject) -> Option<String> {
+    let held = |f: &photocraft_doc::SmartFilter| edited.smart_filters.iter().any(|e| e.command == f.command && e.params == f.params);
+    current
+        .smart_filters
+        .iter()
+        .filter(|f| current.filters_enabled && f.visible && crate::commands::find(&f.command).is_none() && held(f))
+        .map(|f| f.params.get("name").and_then(Value::as_str).unwrap_or(&f.command).to_string())
+        .next()
 }
 
 fn filter_index(cmd: &str, p: &Value, sm: &SmartObject) -> Result<usize> {
@@ -209,7 +226,7 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         let i = filter_index(CMD, p, sm)?;
         let f = &mut sm.smart_filters[i];
         if f.command == photocraft_io::smart_map::UNSUPPORTED_FILTER {
-            return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
+            return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can only be deleted)"));
         }
         if let Some(params) = shape_params {
             f.params = params;
