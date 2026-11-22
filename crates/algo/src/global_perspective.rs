@@ -273,10 +273,18 @@ fn majority_fit(active: &[&Guide], bounds: Rect, aspect: f64) -> Result<Homograp
     for row in horizontal.iter_mut().chain(&mut vertical) {
         row.weight = 1.0;
     }
-    // One joint estimate plus one per guide: <=129 hypotheses and <=16512 guide
-    // residuals at MAX_GUIDES. Sorted guide ids make ties independent of input order.
+    // A compatible pair can straddle the threshold of either individual fit.
+    // Include equal-weight pair compromises: <=8257 hypotheses and <=1056896
+    // guide residuals at MAX_GUIDES, with no per-pair allocation. Sorted guide
+    // ids make ties independent of input order.
+    let pairs = (0..active.len()).flat_map(|i| ((i + 1)..active.len()).map(move |j| (i, j))).map(|(i, j)| {
+        let h = [horizontal[2 * i], horizontal[2 * i + 1], horizontal[2 * j], horizontal[2 * j + 1]];
+        let v = [vertical[2 * i], vertical[2 * i + 1], vertical[2 * j], vertical[2 * j + 1]];
+        (fit_rows(&h), fit_rows(&v))
+    });
     let candidates = std::iter::once((fit_rows(&horizontal), fit_rows(&vertical)))
-        .chain(horizontal.chunks_exact(2).zip(vertical.chunks_exact(2)).map(|(h, v)| (fit_rows(h), fit_rows(v))));
+        .chain(horizontal.chunks_exact(2).zip(vertical.chunks_exact(2)).map(|(h, v)| (fit_rows(h), fit_rows(v))))
+        .chain(pairs);
     let (mut best, mut best_count, mut best_error) = (None, 0, f64::INFINITY);
     for (horizontal, vertical) in candidates {
         let (Some(horizontal), Some(vertical)) = (horizontal, vertical) else { continue };
@@ -326,12 +334,18 @@ pub fn solve(guides: &[Guide], bounds: Rect, options: &Options) -> Result<Soluti
             break;
         }
         used = ids;
-        h = matrix_from_fits(
+        let refined = matrix_from_fits(
             fit_rows(&rows(&good, bounds, true)).ok_or("horizontal guides are underconstrained")?,
             fit_rows(&rows(&good, bounds, false)).ok_or("vertical guides are underconstrained")?,
             bounds,
             options.aspect,
         )?;
+        // Confidence weights may pull a valid compromise past an inlier's
+        // threshold. Keep the last majority-supported map in that case.
+        if active.iter().filter(|g| residual(&refined, g) <= GUIDE_THRESHOLD_DEG).count() <= active.len() / 2 {
+            break;
+        }
+        h = refined;
     }
     // Classify final fit afresh. Never label an above-threshold guide as accepted.
     used = active.iter().filter(|g| residual(&h, g) <= GUIDE_THRESHOLD_DEG).map(|g| g.id).collect();
@@ -409,6 +423,12 @@ mod tests {
     use super::*;
     fn guide(id: u64, q: [[f64; 2]; 4]) -> Guide {
         Guide { id, corners: q, enabled: true, weight: 1.0 }
+    }
+    fn square(id: u64, side: f64, angle: f64, weight: f64) -> Guide {
+        let (sn, cs) = angle.to_radians().sin_cos();
+        let half = side / 2.0;
+        let corners = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|p| [50.0 + cs * p[0] - sn * p[1], 50.0 + sn * p[0] + cs * p[1]]);
+        Guide { weight, ..guide(id, corners) }
     }
 
     /// An enabled off-canvas guide must not score as a perfect inlier when
@@ -656,12 +676,6 @@ mod tests {
     #[test]
     fn majority_precedes_extreme_weights_and_is_order_independent() {
         let bounds = Rect::new(0, 0, 100, 100);
-        let square = |id, side: f64, angle: f64, weight| {
-            let (sn, cs) = angle.to_radians().sin_cos();
-            let half = side / 2.0;
-            let corners = [[-half, -half], [half, -half], [half, half], [-half, half]].map(|p| [50.0 + cs * p[0] - sn * p[1], 50.0 + sn * p[0] + cs * p[1]]);
-            Guide { weight, ..guide(id, corners) }
-        };
         let mut guides = vec![square(1, 40.0, 0.0, 0.05), square(2, 30.0, 0.0, 0.05), square(3, 40.0, 30.0, 20.0)];
         let solution = solve(&guides, bounds, &Options::default()).unwrap();
         assert_eq!(solution.used_guide_ids, vec![1, 2]);
@@ -682,6 +696,57 @@ mod tests {
         // With no strict majority, even the largest weight cannot authorize a fit.
         many.retain(|g| g.id != 0 && g.id != 1);
         assert!(solve(&many, bounds, &Options::default()).is_err());
+    }
+    #[test]
+    fn pair_compromise_recovers_a_majority_missed_by_individual_and_joint_fits() {
+        let bounds = Rect::new(0, 0, 100, 100);
+        let mut guides = vec![square(1, 40.0, -2.9, 1.0), square(2, 40.0, 2.9, 1.0), square(3, 40.0, 30.0, 1.0)];
+        let active: Vec<_> = guides.iter().collect();
+        let support = |h: &Homography| active.iter().filter(|g| residual(h, g) <= GUIDE_THRESHOLD_DEG).count();
+        assert_eq!(support(&Homography::IDENTITY), 2, "a valid majority exists");
+        for subset in [active.clone(), vec![active[0]], vec![active[1]], vec![active[2]]] {
+            let h = matrix_from_fits(fit_rows(&rows(&subset, bounds, true)).unwrap(), fit_rows(&rows(&subset, bounds, false)).unwrap(), bounds, 1.0).unwrap();
+            assert!(support(&h) <= active.len() / 2, "the old hypotheses miss the compromise");
+        }
+        let solution = solve(&guides, bounds, &Options::default()).unwrap();
+        assert_eq!(solution.used_guide_ids, vec![1, 2]);
+        assert_eq!(solution.rejected_guide_ids, vec![3]);
+        assert!(solution.max_used_error_deg <= GUIDE_THRESHOLD_DEG);
+        assert!(solution.homography().is_identity());
+        guides.push(Guide { enabled: false, ..square(4, 40.0, -30.0, 20.0) });
+        guides.reverse();
+        let reversed = solve(&guides, bounds, &Options::default()).unwrap();
+        assert_eq!(reversed.matrix, solution.matrix);
+        assert_eq!(reversed.used_guide_ids, solution.used_guide_ids);
+        assert_eq!(reversed.rejected_guide_ids, solution.rejected_guide_ids);
+        assert!(!reversed.guides[3].used);
+        assert!(reversed.guides[3].max_error_deg.is_none());
+        assert!(reversed.guides[3].transformed_corners.is_none());
+    }
+    #[test]
+    fn weighted_refinement_is_adopted_only_while_it_retains_a_strict_majority() {
+        let bounds = Rect::new(0, 0, 100, 100);
+        let options = Options { fit_canvas: false, ..Options::default() };
+        for (weight, retains_majority) in [(20.0, false), (0.051, true)] {
+            let mut guides = vec![square(1, 40.0, -2.9, weight), square(2, 40.0, 0.0, 0.05), square(3, 40.0, 2.9, 0.05), square(4, 40.0, 30.0, 1.0)];
+            let active: Vec<_> = guides.iter().collect();
+            let initial = majority_fit(&active, bounds, options.aspect).unwrap();
+            let good: Vec<_> = active.iter().copied().filter(|g| residual(&initial, g) <= GUIDE_THRESHOLD_DEG).collect();
+            assert_eq!(good.iter().map(|g| g.id).collect::<Vec<_>>(), vec![1, 2, 3]);
+            let refined =
+                matrix_from_fits(fit_rows(&rows(&good, bounds, true)).unwrap(), fit_rows(&rows(&good, bounds, false)).unwrap(), bounds, options.aspect)
+                    .unwrap();
+            assert_ne!(initial.0, refined.0, "the weights must change the proposed map");
+            let support = active.iter().filter(|g| residual(&refined, g) <= GUIDE_THRESHOLD_DEG).count();
+            assert_eq!(support, if retains_majority { 3 } else { 2 });
+            let solution = solve(&guides, bounds, &options).unwrap();
+            assert_eq!(solution.matrix, if retains_majority { refined.0 } else { initial.0 });
+            assert_eq!(solution.used_guide_ids, vec![1, 2, 3]);
+            assert_eq!(solution.rejected_guide_ids, vec![4]);
+            assert!(solution.max_used_error_deg <= GUIDE_THRESHOLD_DEG);
+            guides.reverse();
+            assert_eq!(solve(&guides, bounds, &options).unwrap().matrix, solution.matrix);
+        }
     }
     #[test]
     fn nearly_affine_vanishing_points_need_no_division_by_infinity() {
