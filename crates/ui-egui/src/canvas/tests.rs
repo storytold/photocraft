@@ -1045,8 +1045,8 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
 
 /// #11276: a document floating in its own window zooms from the zoom typed into the status bar
 /// and into the Navigator, as a tabbed one does; the window doesn't keep or write back an older
-/// copy of the view. Only the typed zoom fields are driven here, not the Navigator's slider or
-/// zoom buttons.
+/// copy of the view. #16415: so does the zoom typed into the floating window's own status bar.
+/// Only the typed zoom fields are driven here, not the Navigator's slider or zoom buttons.
 #[test]
 fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     use egui_kittest::kittest::{NodeT, Queryable};
@@ -1092,9 +1092,20 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         f.sort_by(|a, b| a.left().total_cmp(&b.left()));
         f
     };
-    assert_eq!(fields(&h).len(), 2, "the status bar's and the Navigator's zoom fields");
-    for (field, typed, want) in [(0, "200", 2.0), (1, "50", 0.5), (0, "300", 3.0), (1, "100", 1.0)] {
-        let at = fields(&h)[field].center();
+    // The main status bar's field lies lowest, the Navigator's furthest right, the floating window's status bar's is the
+    // third.
+    let pick = |f: &[egui::Rect], which: &str| -> egui::Rect {
+        let lowest = f.iter().copied().max_by(|a, b| a.bottom().total_cmp(&b.bottom())).unwrap_or(egui::Rect::NOTHING);
+        let right = f.iter().copied().max_by(|a, b| a.left().total_cmp(&b.left())).unwrap_or(egui::Rect::NOTHING);
+        match which {
+            "status" => lowest,
+            "navigator" => right,
+            _ => f.iter().copied().find(|r| *r != lowest && *r != right).unwrap_or(egui::Rect::NOTHING),
+        }
+    };
+    assert_eq!(fields(&h).len(), 3, "the status bar's, the Navigator's and the floating window's zoom fields");
+    for (field, typed, want) in [("status", "200", 2.0), ("navigator", "50", 0.5), ("window", "300", 3.0), ("navigator", "100", 1.0)] {
+        let at = pick(&fields(&h), field).center();
         h.event(egui::Event::PointerMoved(at));
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
