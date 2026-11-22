@@ -316,7 +316,7 @@ impl GlobalSession {
     }
 
     fn invalidate_mesh(&mut self) {
-        // Geometry changes invalidate the screen meshes. No second dense document-space grid is kept.
+        // Mapping or tessellation changes invalidate every view's mesh.
         self.meshes.clear();
     }
 
@@ -356,10 +356,13 @@ impl GlobalSession {
     }
 
     fn invalidate(&mut self) {
+        // Layout guide edits do not change the identity mapping of the photo.
+        if self.show_result || self.grid_size != GRID {
+            self.invalidate_mesh();
+        }
         self.solution = None;
         self.show_result = false;
         self.grid_size = GRID;
-        self.invalidate_mesh();
     }
 
     fn move_corner(&mut self, id: u64, index: usize, p: [f64; 2]) {

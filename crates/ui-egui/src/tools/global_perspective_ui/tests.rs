@@ -449,6 +449,130 @@ fn another_session_blocks_opening_the_editor() {
 }
 
 #[test]
+fn place_bytes_refuses_before_decode_or_job_and_works_after_cancel() {
+    for background in [false, true] {
+        let mut a = app();
+        a.background_jobs = background;
+        let original = a.session.active().unwrap().doc.clone();
+        let history = a.session.active().unwrap().history.entries();
+        let source = session(&a).source_doc.clone();
+        let described = session(&a).describe();
+        let bytes = photocraft_io::export(&original, "place.png", &Default::default()).unwrap().bytes;
+        for linked in [None, Some("place.png".to_string())] {
+            for input in [bytes.clone(), b"not an image".to_vec()] {
+                let error = a.place_bytes("place.png", input, linked.clone()).unwrap_err();
+                assert!(error.contains("Global Perspective Warp"), "{error}");
+                assert!(Arc::ptr_eq(&original, &a.session.active().unwrap().doc));
+                assert_eq!(a.session.active().unwrap().doc.layers.len(), original.layers.len());
+                assert_eq!(a.session.active().unwrap().history.entries(), history);
+                assert!(Arc::ptr_eq(&source, &session(&a).source_doc));
+                assert_eq!(session(&a).describe(), described);
+                assert!(a.session.jobs().is_empty() && a.jobs.place.is_none() && a.jobs.last_started.is_none());
+                assert!(a.ui.transform.is_none());
+            }
+        }
+        cancel(&mut a);
+        a.background_jobs = false;
+        a.place_bytes("place.png", bytes, None).unwrap();
+        let ctx = a.ctx().clone();
+        crate::transform_tool::begin_placed(&mut a, &ctx).unwrap();
+        assert!(a.ui.transform.is_some());
+        assert!(!Arc::ptr_eq(&original, &a.session.active().unwrap().doc));
+        assert_eq!(a.session.active().unwrap().doc.layers.len(), original.layers.len() + 1);
+        assert!(a.session.active().unwrap().history.entries().len() > history.len());
+    }
+}
+
+#[test]
+fn native_and_web_drops_refuse_the_edited_document_and_keep_foreign_drops() {
+    use crate::file_open::{DropPlace, DropTo};
+    use craft::ui::runtime::drag::OsFile;
+
+    for background in [false, true] {
+        let mut a = closed();
+        a.session.execute("file.new", json!({"width":16,"height":16,"depth":8})).unwrap();
+        let other = a.session.active().unwrap().doc.clone();
+        a.session.set_active(0);
+        a.sync_views();
+        let ctx = a.ctx().clone();
+        begin(&mut a, &ctx).unwrap();
+        a.background_jobs = background;
+        let source = session(&a).source_doc.clone();
+        let described = session(&a).describe();
+        let history = a.session.active().unwrap().history.entries();
+        a.drop_places.push_back((other.id, DropPlace::Bytes("waiting.png".into(), vec![1])));
+        let path = std::env::temp_dir().join("photocraft-refused-global-guide-drop.png");
+        let file = OsFile { name: "native.png".into(), path: Some(path), ..Default::default() };
+        a.open_dropped(&ctx, vec![file], DropTo::Canvas { at: None });
+        assert!(a.ui.status_error && a.ui.status.contains("Global Perspective Warp"));
+        assert!(a.ui.notices.iter().any(|n| n.title.contains("Global Perspective Warp")));
+        // Delayed browser deliveries retain their original document, even if another is active.
+        a.services.place_inbox =
+            Some(Arc::new(std::sync::Mutex::new(vec![(source.id, "refused.png".into(), vec![2]), (other.id, "later.png".into(), vec![3])])));
+        a.queue_web_places();
+        a.place_next_dropped(&ctx);
+        let queued: Vec<_> = a
+            .drop_places
+            .iter()
+            .map(|(doc, p)| match p {
+                DropPlace::Bytes(name, bytes) => (*doc, name.as_str(), bytes.as_slice()),
+                _ => panic!("only the foreign byte drops should remain"),
+            })
+            .collect();
+        assert_eq!(queued, [(other.id, "waiting.png", &[1][..]), (other.id, "later.png", &[3][..])]);
+        assert!(Arc::ptr_eq(&source, &a.session.active().unwrap().doc));
+        assert_eq!(a.session.active().unwrap().doc.layers.len(), source.layers.len());
+        assert_eq!(a.session.active().unwrap().history.entries(), history);
+        assert!(Arc::ptr_eq(&source, &session(&a).source_doc));
+        assert_eq!(session(&a).describe(), described);
+        assert!(Arc::ptr_eq(&other, &a.session.documents()[1].doc));
+        assert!(a.session.jobs().is_empty() && a.jobs.place.is_none() && a.jobs.last_started.is_none());
+        assert!(a.ui.transform.is_none());
+    }
+}
+
+#[test]
+fn queued_path_drop_waits_before_starting_a_job_until_the_editor_is_cancelled() {
+    use crate::file_open::{DropPlace, DropTo};
+    use craft::ui::runtime::drag::OsFile;
+
+    let mut a = closed();
+    let ctx = a.ctx().clone();
+    let source = a.session.active().unwrap().doc.clone();
+    let history = a.session.active().unwrap().history.entries();
+    let path = std::env::temp_dir().join(format!("photocraft-global-guide-queued-{}.png", std::process::id()));
+    let bytes = photocraft_io::export(&source, "place.png", &Default::default()).unwrap().bytes;
+    std::fs::write(&path, bytes).unwrap();
+    let file = OsFile { name: "queued.png".into(), path: Some(path.clone()), ..Default::default() };
+    a.open_dropped(&ctx, vec![file], DropTo::Canvas { at: None });
+    begin(&mut a, &ctx).unwrap();
+    let described = session(&a).describe();
+    for background in [false, true] {
+        a.background_jobs = background;
+        a.place_next_dropped(&ctx);
+        assert_eq!(a.drop_places.len(), 1);
+        let (doc, DropPlace::At { source: queued, .. }) = &a.drop_places[0] else { panic!("lost queued path") };
+        let DropPlace::File(file) = queued.as_ref() else { panic!("changed queued source") };
+        assert_eq!(*doc, source.id);
+        assert_eq!(file.path.as_ref(), Some(&path));
+        assert!(Arc::ptr_eq(&source, &a.session.active().unwrap().doc));
+        assert_eq!(a.session.active().unwrap().doc.layers.len(), source.layers.len());
+        assert_eq!(a.session.active().unwrap().history.entries(), history);
+        assert!(Arc::ptr_eq(&source, &session(&a).source_doc));
+        assert_eq!(session(&a).describe(), described);
+        assert!(a.session.jobs().is_empty() && a.jobs.place.is_none() && a.jobs.last_started.is_none());
+        assert!(a.ui.transform.is_none());
+    }
+    cancel(&mut a);
+    a.background_jobs = false;
+    a.place_next_dropped(&ctx);
+    assert!(a.drop_places.is_empty() && a.ui.transform.is_some());
+    assert_eq!(a.session.active().unwrap().doc.layers.len(), source.layers.len() + 1);
+    assert!(a.session.active().unwrap().history.entries().len() > history.len());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn pattern_preview_is_refused_without_resetting_either_mode() {
     let mut a = app();
     let ctx = a.ctx().clone();
@@ -947,6 +1071,67 @@ fn every_canvas_gets_its_own_mesh_and_a_geometry_change_rebuilds_them() {
     assert!(session(&a).meshes.is_empty());
     let rebuilt = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None));
     assert!(!Arc::ptr_eq(&first, &rebuilt));
+}
+
+#[test]
+fn layout_corner_and_edge_drags_reuse_each_views_identity_mesh() {
+    let mut a = app();
+    control(&mut a, &json!({"guides":guides()})).unwrap();
+    let ctx = a.ctx().clone();
+    let idx = a.session.active_index().unwrap();
+    let main = view();
+    let rect = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 300.0));
+    let window = CanvasView::new(rect, Point::new(90.0, 80.0), 2.0);
+    let views = [main, window];
+    let meshes = views.map(|v| mesh_of(&canvas_shapes(&mut a, &ctx, &v, idx, None)));
+    for edge in [false, true] {
+        let before = corners(&a);
+        let start = if edge { [(before[0][0] + before[1][0]) * 0.5, (before[0][1] + before[1][1]) * 0.5] } else { before[0] };
+        assert!(down(&mut a, start, none()));
+        assert_eq!(matches!(&session(&a).drag, Some(Drag::Edge { .. })), edge);
+        for delta in [1.0, 2.0, 3.0] {
+            pointer_move(&mut a, [start[0] + delta, start[1] + delta], none());
+            assert_ne!(corners(&a), before);
+            for (v, mesh) in views.iter().zip(&meshes) {
+                assert!(Arc::ptr_eq(mesh, &mesh_of(&canvas_shapes(&mut a, &ctx, v, idx, None))));
+            }
+        }
+        pointer_up(&mut a, [start[0] + 3.0, start[1] + 3.0], none());
+    }
+    let zoomed = CanvasView::new(rect, Point::new(80.0, 70.0), 3.0);
+    let changed_view = mesh_of(&canvas_shapes(&mut a, &ctx, &zoomed, idx, None));
+    assert!(!Arc::ptr_eq(&meshes[0], &changed_view));
+    assert_ne!(meshes[0].vertices[0].pos, changed_view.vertices[0].pos);
+    for _ in 0..2 {
+        let before = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None));
+        control(&mut a, &json!({"solve":true})).unwrap();
+        assert!(!Arc::ptr_eq(&before, &mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None))));
+    }
+    let result = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None));
+    a.distort.global_perspective.as_mut().unwrap().move_corner(1, 0, [30.0, 25.0]);
+    assert!(!session(&a).show_result && session(&a).solution.is_none());
+    assert!(!Arc::ptr_eq(&result, &mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None))));
+    // Reopening uploads a new texture and starts with no mesh from the old session.
+    let layout = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None));
+    cancel(&mut a);
+    begin(&mut a, &ctx).unwrap();
+    let reopened = mesh_of(&canvas_shapes(&mut a, &ctx, &main, idx, None));
+    assert!(!Arc::ptr_eq(&layout, &reopened));
+    assert_ne!(layout.texture_id, reopened.texture_id);
+}
+
+#[test]
+fn layout_edit_rebuilds_a_nonstandard_grid_at_the_identity_resolution() {
+    let mut a = app();
+    control(&mut a, &json!({"guides":guides()})).unwrap();
+    let s = a.distort.global_perspective.as_mut().unwrap();
+    s.grid_size = GRID * 2;
+    let refined = s.preview_mesh(&view());
+    s.move_corner(1, 0, [26.0, 21.0]);
+    let layout = s.preview_mesh(&view());
+    assert!(!Arc::ptr_eq(&refined, &layout));
+    assert!(layout.vertices.len() < refined.vertices.len());
+    assert!(Arc::ptr_eq(&layout, &s.preview_mesh(&view())));
 }
 
 #[test]
