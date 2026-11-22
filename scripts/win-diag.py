@@ -46,6 +46,13 @@ user32.GetDC.restype = wt.HDC
 gdi32.CreateCompatibleDC.restype = wt.HDC
 gdi32.CreateCompatibleBitmap.restype = wt.HBITMAP
 gdi32.SelectObject.restype = wt.HGDIOBJ
+# 64-bit handles overflow ctypes' default int arguments (round 2's fast-drag sampler died on it).
+gdi32.SelectObject.argtypes = [wt.HDC, wt.HGDIOBJ]
+gdi32.BitBlt.argtypes = [wt.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.HDC, ctypes.c_int, ctypes.c_int, wt.DWORD]
+gdi32.GetDIBits.argtypes = [wt.HDC, wt.HBITMAP, wt.UINT, wt.UINT, ctypes.c_void_p, ctypes.c_void_p, wt.UINT]
+gdi32.DeleteObject.argtypes = [wt.HGDIOBJ]
+gdi32.DeleteDC.argtypes = [wt.HDC]
+user32.ReleaseDC.argtypes = [wt.HWND, wt.HDC]
 EnumWindowsProc = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
 
 ULONG_PTR = ctypes.c_size_t
@@ -313,8 +320,13 @@ def _corner_drags(hwnd, tag):
             share = b / total if total else 0.0
             shares.append(share)
             say(f"resize {tag} {name} #{k} t={t * 1000:.0f}ms grab_took={took * 1000:.0f}ms window={window} cursor={pos} new_px={total} black_px={b} black_share={share:.3f}")
-        # The three grabs with the largest black share; ties go to the earliest.
-        for k in sorted(range(len(grabs)), key=lambda k: (-shares[k], k))[:3]:
+        # The three grabs with the largest black share; with no black anywhere, the first grab
+        # after each of the first three window-rect changes (the new area as first shown).
+        if any(shares):
+            picks = sorted(range(len(grabs)), key=lambda k: (-shares[k], k))[:3]
+        else:
+            picks = [k for k in range(1, len(grabs)) if grabs[k][1] != grabs[k - 1][1]][:3]
+        for k in picks:
             print_png(f"{tag}-{name}-{k}-black{shares[k]:.3f}", grabs[k][3], w, h)
         mouse_to(SCREEN_W // 2, 10)
 
@@ -548,6 +560,14 @@ def round_(exe, label, scale, drags=False):
             say("no window found for the app")
         ui = app.conn.call("ui.inspect", {}).get("result") or {}
         say(f"{label}: window={ui.get('window')}")
+        if ui.get("dialogs"):
+            # A first launch on WARP opens the GPU fallback notice ("Switched to CPU rendering"),
+            # which blocks every case; Enter keeps its default answer.
+            say(f"{label}: closing launch prompt {ui.get('dialogs')}")
+            app.call("ui.key", {"key": "Enter"})
+            time.sleep(1.0)
+            ui = app.conn.call("ui.inspect", {}).get("result") or {}
+            say(f"{label}: dialogs after Enter={ui.get('dialogs')}")
         case(app, "a file.new", lambda: app.call("engine.execute", {"command": "file.new", "params": {"width": 600, "height": 400, "background": "#ffffff"}}))
         time.sleep(1.0)
         if drags and app.hwnd:
