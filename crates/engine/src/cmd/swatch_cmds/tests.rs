@@ -84,11 +84,11 @@ fn using_a_cmyk_swatch_remembers_its_inks() {
 fn rename_delete_move_and_groups() {
     let mut s = Session::new();
     // A group moves to an index, clamped to the list, and the change is saved with the prefs.
-    let rev = s.presets.rev;
+    let rev = s.presets.revision();
     let r = s.execute("swatches.moveGroup", json!({"group": "Dark", "to": 0})).unwrap();
     assert_eq!(r, json!({"group": "Dark", "position": 0}));
     assert_eq!(s.presets.swatches[0].name, "Dark");
-    assert!(s.presets.rev > rev, "a group move is a preset change");
+    assert_ne!(s.presets.revision(), rev, "a group move is a preset change");
     let r = s.execute("swatches.moveGroup", json!({"group": "Dark", "to": 999})).unwrap();
     assert_eq!(r["position"], 4);
     assert_eq!(s.presets.swatches[4].name, "Dark");

@@ -64,7 +64,7 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
 fn history_brush_params_with(app: &PhotocraftApp, erase_to_history: bool) -> Value {
     // The tool's tip goes in the params: the session's brush changes with the tool, if a tool key
     // is pressed mid-stroke.
-    let brush = &app.session.tools.brush;
+    let brush = &*app.session.tools.brush;
     let mut p = json!({
         "mode": brush.mode.label(),
         "opacity": brush.opacity * 100.0,
@@ -270,6 +270,7 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
     // The layer mask, an alpha channel or the Quick Mask when targeted, as the Brush paints.
     p["target"] = crate::canvas::paint_target(app);
     crate::canvas::unsmoothed_line(&mut p, line);
+    let pixels = crate::brush_refusal::pixels_target(&p["target"]);
     let result = app.run(cmd, p);
     app.retouch_from_live = matches!(&result, Ok(r) if r.get("fromLive").and_then(Value::as_bool) == Some(true));
     match result {
@@ -282,8 +283,9 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         }
         Ok(_) => {}
         // The Art History Brush's source refusals are alerts with OK, as the press-time ones, and
-        // not in the status bar as well (#12638).
-        Err(e) if tool == Tool::ArtHistoryBrush && e.starts_with("Could not use the art history brush because") => {
+        // not in the status bar as well (#12638). They were measured on a layer's pixels only: a
+        // mask or channel target keeps the status bar.
+        Err(e) if tool == Tool::ArtHistoryBrush && pixels && e.starts_with("Could not use the art history brush because") => {
             app.ui.status.clear();
             app.ui.status_error = false;
             let _ = crate::dialogs::alerts::alert(app, tl!(&e).to_owned());
@@ -332,7 +334,7 @@ pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
     let b = &app.session.tools.brush;
     let entry = json!({"points": points, "size": b.size, "hardness": b.hardness * 100.0, "spacing": b.spacing * 100.0});
     let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &entry);
-    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(size)).feed_stroke_reach(points, brush);
+    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(&mut app.texture_serials, size)).feed_stroke_reach(points, brush);
     app.remove_pending.push(entry);
     app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
     app.ui.status_error = false;

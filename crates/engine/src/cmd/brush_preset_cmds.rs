@@ -120,7 +120,7 @@ pub(crate) fn rename_at(s: &mut Session, i: usize, new: &str, cmd: &str) -> Resu
     if index_of(&s.tools.presets, new).is_some_and(|j| j != i) {
         return Err(bad(cmd, format!("a brush preset named `{new}` already exists")));
     }
-    let pr = std::sync::Arc::make_mut(&mut s.tools.presets).get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
+    let pr = std::sync::Arc::make_mut(&mut *s.tools.presets).get_mut(i).ok_or_else(|| bad(cmd, "no such preset"))?;
     if pr.name != new {
         let was_current = s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&pr.name));
         pr.name = new.to_string();
@@ -153,7 +153,7 @@ fn move_preset(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let folder = folder_param(p, cmd)?;
     let group = group_param(p, "group", cmd)?;
-    let lib = std::sync::Arc::make_mut(&mut s.tools.presets);
+    let lib = std::sync::Arc::make_mut(&mut *s.tools.presets);
     let (Some(moving), before_pr) = (lib.get(i), before.and_then(|b| lib.get(b))) else {
         return Err(bad(cmd, "no such preset"));
     };
@@ -252,7 +252,7 @@ fn move_folder(s: &mut Session, p: &Value, g: String, f: Vec<String>, cmd: &str)
     let tail = rest.split_off(pos.min(rest.len()));
     rest.extend(block);
     rest.extend(tail);
-    s.tools.presets = std::sync::Arc::new(rest);
+    *s.tools.presets = std::sync::Arc::new(rest);
     s.brush_presets_changed();
     let at = subfolder_order(&s.tools.presets, &g, parent).iter().position(|x| x == leaf).unwrap_or(0);
     Ok(json!({ "group": g, "folder": f, "index": at }))
@@ -352,7 +352,7 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
     let tail = rest.split_off(pos.unwrap_or(rest.len()).min(rest.len()));
     rest.extend(block);
     rest.extend(tail);
-    s.tools.presets = std::sync::Arc::new(rest);
+    *s.tools.presets = std::sync::Arc::new(rest);
     s.brush_presets_changed();
     let folder = new_prefix.get(..new_prefix.len().saturating_sub(1)).unwrap_or_default();
     let at = match &dest {
@@ -394,7 +394,7 @@ fn move_group(s: &mut Session, p: &Value) -> Result<Value> {
     let tail = rest.split_off(pos.min(rest.len()));
     rest.extend(block);
     rest.extend(tail);
-    s.tools.presets = std::sync::Arc::new(rest);
+    *s.tools.presets = std::sync::Arc::new(rest);
     s.brush_presets_changed();
     let at = group_order(&s.tools.presets).iter().position(|x| *x == g).unwrap_or(0);
     Ok(json!({ "group": g, "index": at }))
@@ -410,7 +410,7 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad(cmd, format!("a folder named `{new}` already exists there")));
             }
             let depth = parent.len();
-            for x in std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().filter(|x| in_folder(x, &g, &f)) {
+            for x in std::sync::Arc::make_mut(&mut *s.tools.presets).iter_mut().filter(|x| in_folder(x, &g, &f)) {
                 if let Some(n) = x.folder.get_mut(depth) {
                     n.clone_from(&new);
                 }
@@ -426,7 +426,7 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, format!("a group named `{new}` already exists")));
     }
     if new != g {
-        for x in std::sync::Arc::make_mut(&mut s.tools.presets).iter_mut().filter(|x| x.group == g) {
+        for x in std::sync::Arc::make_mut(&mut *s.tools.presets).iter_mut().filter(|x| x.group == g) {
             x.group = new.clone();
             x.builtin = false;
         }
@@ -439,7 +439,7 @@ fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.deleteGroup";
     let (g, f) = target_folder(s, p, cmd)?;
     let before = s.tools.presets.len();
-    std::sync::Arc::make_mut(&mut s.tools.presets).retain(|x| !in_folder(x, &g, &f));
+    std::sync::Arc::make_mut(&mut *s.tools.presets).retain(|x| !in_folder(x, &g, &f));
     if s.tools.current_preset.as_ref().is_some_and(|c| !s.tools.presets.iter().any(|x| x.name.eq_ignore_ascii_case(c))) {
         s.tools.current_preset = None;
         s.tools.brush_changed();

@@ -164,7 +164,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         let Prepared { plan, above, image: (image, uv) } = prepared;
         let above = Above::from_plan(max_side, plan, above);
         app.transform_area = area.map(|area| super::OpenArea { doc: doc.id, key: super::preview_key(session), revision, area });
-        let textures = PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(image, uv));
+        let textures = PreviewTextures::new(&mut app.texture_serials, format!("transform-{session}"), PreviewPixels::new(image, uv));
         let shown = if frame_only { doc.clone() } else { Arc::new(pd) };
         app.transform_preview = Some(OpenPreview {
             opacity,
@@ -343,7 +343,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
     // Opacity, fill, masks and styles are in the composite already.
     let mut several =
         Several { name: format!("transform-{session}"), max_side, moving: Several::shown(&doc, &ids, &lifted), lifted, ids: ids.clone(), frame: b, rect: b };
-    let textures = several.render();
+    let textures = several.render(&mut app.texture_serials);
     app.transform_preview = Some(OpenPreview {
         above: Some(above),
         follow: Some(Follow { revision, hidden, selected: selected_now(app) }),
@@ -482,7 +482,7 @@ pub(crate) fn begin_content_aware(
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
     let above = Above::new(&doc, id, max_side);
     above.hide_in(&mut pd.layers);
-    let textures = PreviewTextures::new(format!("transform-{session}"), super::preview::read_surface(surf, region, max_side));
+    let textures = PreviewTextures::new(&mut app.texture_serials, format!("transform-{session}"), super::preview::read_surface(surf, region, max_side));
     app.transform_preview = Some(OpenPreview {
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
@@ -589,7 +589,7 @@ fn begin_lone(
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
     let session = app.ui.alloc_id();
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let textures = PreviewTextures::new(format!("transform-{session}"), super::preview::read_surface(&lifted, b, max_side));
+    let textures = PreviewTextures::new(&mut app.texture_serials, format!("transform-{session}"), super::preview::read_surface(&lifted, b, max_side));
     app.transform_preview = Some(OpenPreview { opacity: 0.6, ..OpenPreview::new(session, Arc::new(pd), textures, app.ui.tool) });
     // A lone mask or channel keeps the box: it does not warp.
     app.ui.transform = Some(FreeTransform {
@@ -617,8 +617,11 @@ fn begin_path(app: &mut PhotocraftApp, params: serde_json::Value, path: photocra
     // A straight horizontal or vertical path still gets a box to turn.
     let rect = [x0, y0, x1.max(x0 + 1.0), y1.max(y0 + 1.0)];
     let session = app.ui.alloc_id();
-    let textures =
-        PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]));
+    let textures = PreviewTextures::new(
+        &mut app.texture_serials,
+        format!("transform-{session}"),
+        PreviewPixels::new(egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]),
+    );
     app.transform_preview = Some(OpenPreview { path: Some(path), ..OpenPreview::new(session, doc, textures, app.ui.tool) });
     app.ui.transform = Some(FreeTransform {
         session: open_session(app, rect, BoxAllow::default(), true),
@@ -676,7 +679,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<
         }
     }
     let uv = [w as f32 / (tw * k) as f32, h as f32 / (th * k) as f32];
-    let textures = PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(egui::ColorImage::new([tw, th], px), uv));
+    let textures = PreviewTextures::new(&mut app.texture_serials, format!("transform-{session}"), PreviewPixels::new(egui::ColorImage::new([tw, th], px), uv));
     let mut pd = (*doc).clone();
     pd.selection = None;
     app.transform_preview = Some(OpenPreview::new(session, Arc::new(pd), textures, app.ui.tool));
@@ -845,7 +848,7 @@ fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
     let Some(pv) = app.transform_preview.as_mut() else { return false };
     let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
-    let unwarped = PreviewTextures::new(format!("transform-{session}-unwarped"), PreviewPixels::new(image, uv));
+    let unwarped = PreviewTextures::new(&mut app.texture_serials, format!("transform-{session}-unwarped"), PreviewPixels::new(image, uv));
     pv.other_texels = Some(OtherTexels { texture: std::mem::replace(&mut pv.textures, unwarped), placed_warp: None });
     true
 }
@@ -894,7 +897,7 @@ fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
         // Read as the session's texels were: without the style when the box draws it itself.
         let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
-        pv.textures = PreviewTextures::new(format!("transform-{session}"), PreviewPixels::new(image, uv));
+        pv.textures = PreviewTextures::new(&mut app.texture_serials, format!("transform-{session}"), PreviewPixels::new(image, uv));
     }
     let warp =
         current.as_ref().and_then(|w| WarpStyle::parse(&w.style).filter(|s| s.is_preset()).map(|s| (w, s))).map_or(Warp::none(rect), |(w, style)| Warp {
@@ -1004,7 +1007,7 @@ fn enter_placed_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         return false;
     }
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let texture = PreviewTextures::new(format!("transform-{}-contents", t.id), super::preview::read_surface(&contents, b, max_side));
+    let texture = PreviewTextures::new(&mut app.texture_serials, format!("transform-{}-contents", t.id), super::preview::read_surface(&contents, b, max_side));
     let mesh = source.to_mesh(1, 1).map_points(|p| {
         let (x, y) = to_doc.apply(p[0], p[1]);
         [x, y]
@@ -1057,7 +1060,7 @@ pub fn hold_warp(app: &mut PhotocraftApp) {
 /// `held`, a smart object's warp held in the document, as one held in its contents: its points taken back through the
 /// smart object's placement, which becomes the held map to the document. `None` when the box hasn't moved from where
 /// the warp was held, the layer is no smart object, or the placement can't be inverted.
-fn contents_of_held(app: &PhotocraftApp, held: &super::HeldWarp, quad: [[f64; 2]; 4]) -> Option<super::HeldWarp> {
+fn contents_of_held(app: &mut PhotocraftApp, held: &super::HeldWarp, quad: [[f64; 2]; 4]) -> Option<super::HeldWarp> {
     if quad == held.start {
         return None;
     }
@@ -1087,7 +1090,7 @@ fn contents_of_held(app: &PhotocraftApp, held: &super::HeldWarp, quad: [[f64; 2]
 }
 
 /// The preview texels of a smart object's contents, unplaced, over its warp's box `source`.
-fn contents_texture(app: &PhotocraftApp, doc: &Document, layer: &photocraft_doc::Layer, source: &Warp, session: u64) -> Option<PreviewTextures> {
+fn contents_texture(app: &mut PhotocraftApp, doc: &Document, layer: &photocraft_doc::Layer, source: &Warp, session: u64) -> Option<PreviewTextures> {
     let (contents, k) = photocraft_engine::warp_cmds::smart_unplaced_contents(doc, layer)?;
     let d = source.bounds.map(|v| v * k);
     let b = photocraft_geom::Rect::new(d[0].floor() as i32, d[1].floor() as i32, d[2].ceil() as i32, d[3].ceil() as i32);
@@ -1095,12 +1098,12 @@ fn contents_texture(app: &PhotocraftApp, doc: &Document, layer: &photocraft_doc:
         return None;
     }
     let max_side = app.ctx().input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    Some(PreviewTextures::new(format!("transform-{session}-contents"), super::preview::read_surface(&contents, b, max_side)))
+    Some(PreviewTextures::new(&mut app.texture_serials, format!("transform-{session}-contents"), super::preview::read_surface(&contents, b, max_side)))
 }
 
 /// The stored warp of smart object `id` for the box's preview under a projective move ([`super::WarpedPreview`]);
 /// `None` for any other layer, an identity warp, or contents that can't be rendered.
-fn warped_preview(app: &PhotocraftApp, doc: &Document, id: LayerId, start: [[f64; 2]; 4], session: u64) -> Option<super::WarpedPreview> {
+fn warped_preview(app: &mut PhotocraftApp, doc: &Document, id: LayerId, start: [[f64; 2]; 4], session: u64) -> Option<super::WarpedPreview> {
     let layer = doc.layer(id)?;
     let LayerContent::Smart(sm) = &layer.content else { return None };
     if sm.warp.as_ref().is_none_or(|w| w.is_identity()) {

@@ -659,6 +659,21 @@ fn a_secondary_canvas_hand_pans_while_a_transform_is_open() {
     assert_eq!(box_key(&app), box_before, "the drag didn't touch the box");
 }
 
+/// The canvas can paint a batch as a nested list, which keeps its place in egui's final paint order.
+fn flattened_paint_shapes(output: &egui::FullOutput) -> Vec<&egui::Shape> {
+    fn open<'a>(shape: &'a egui::Shape, into: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(list) => list.iter().for_each(|shape| open(shape, into)),
+            shape => into.push(shape),
+        }
+    }
+    let mut shapes = Vec::new();
+    for clipped in &output.shapes {
+        open(&clipped.shape, &mut shapes);
+    }
+    shapes
+}
+
 #[test]
 fn guides_draw_over_the_transform_preview_and_under_its_box() {
     // #5086: a guide crossing a layer under Free Transform was hidden behind the preview of
@@ -692,16 +707,7 @@ fn guides_draw_over_the_transform_preview_and_under_its_box() {
     // At 100 % centred on the document, screen and document coordinates coincide.
     let layer = Rect::from_min_max(pos2(100.0, 100.0), pos2(200.0, 160.0));
     let near = |r: Rect| (r.min - layer.min).length() < 1.0 && (r.max - layer.max).length() < 1.0;
-    fn open<'a>(shape: &'a egui::Shape, into: &mut Vec<&'a egui::Shape>) {
-        match shape {
-            egui::Shape::Vec(list) => list.iter().for_each(|shape| open(shape, into)),
-            shape => into.push(shape),
-        }
-    }
-    let mut shapes = Vec::new();
-    for clipped in &out.shapes {
-        open(&clipped.shape, &mut shapes);
-    }
+    let shapes = flattened_paint_shapes(&out);
     let position = |pred: &dyn Fn(&egui::Shape) -> bool| shapes.iter().position(|s| pred(s));
     // The moving pixels: the mesh that spans the layer's box.
     let preview = position(&|s| matches!(s, egui::Shape::Mesh(m) if near(m.calc_bounds())));
@@ -714,6 +720,74 @@ fn guides_draw_over_the_transform_preview_and_under_its_box() {
     };
     assert!(preview < guide, "the guide ({guide}) draws over the transform preview ({preview})");
     assert!(guide < frame, "the box ({frame}) draws over the guide ({guide})");
+}
+
+#[test]
+fn marching_ants_draw_over_a_guide_on_the_selection_edge() {
+    use craft::behavior::kurbo::Point;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = app.ctx().clone();
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.run("select.rect", json!({"x": 100, "y": 100, "width": 100, "height": 60})).unwrap();
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 100})).unwrap();
+    app.ui.tool = Tool::RectMarquee;
+    app.ui.extras.rulers = false;
+    app.ui.extras.grid = false;
+    app.ui.extras.guides = true;
+    app.ui.view.extras = true;
+    app.ui.view.show.canvas_guides = true;
+    app.ui.view.show.selection_edges = true;
+    app.sync_views();
+
+    let mut view = app.ui.views[0].clone();
+    view.zoom = 1.0;
+    view.center = [200.0, 150.0];
+    view.clear_pending();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+    let draw = |app: &mut PhotocraftApp| {
+        let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            canvas_view(app, ui, CanvasHost::main(0), rect, view.clone(), true);
+        });
+        output.textures_delta.clear();
+        output
+    };
+
+    let output = draw(&mut app);
+    let shown = active_view(&app).expect("the canvas view");
+    let edge = Rect::from_two_pos(shown.to_screen(Point::new(100.0, 100.0)), shown.to_screen(Point::new(100.0, 160.0)));
+    let pixel = output.pixels_per_point.recip();
+    let is_guide = |shape: &egui::Shape| {
+        let egui::Shape::LineSegment { points, .. } = shape else { return false };
+        points.iter().all(|p| (p.x - edge.left()).abs() <= pixel)
+            && points[0].y.min(points[1].y) < edge.top() - pixel
+            && points[0].y.max(points[1].y) > edge.bottom() + pixel
+    };
+    let is_ants = |shape: &egui::Shape| {
+        let bounds = match shape {
+            egui::Shape::Mesh(mesh) => mesh.calc_bounds(),
+            egui::Shape::Rect(rect) => rect.rect,
+            egui::Shape::LineSegment { points, .. } => Rect::from_two_pos(points[0], points[1]),
+            _ => return false,
+        };
+        // A strip or dash on the selection edge, allowing for the framework's device-pixel snap.
+        bounds.height() > 0.0
+            && bounds.width() <= 2.0 * pixel
+            && (bounds.center().x - edge.left()).abs() <= pixel
+            && bounds.top() >= edge.top() - pixel
+            && bounds.bottom() <= edge.bottom() + 2.0 * pixel
+    };
+    let shapes = flattened_paint_shapes(&output);
+    let guide = shapes.iter().position(|shape| is_guide(shape)).expect("the guide spanning the selection");
+    let ants = shapes.iter().position(|shape| is_ants(shape)).expect("the ants along the left edge");
+    assert!(guide < ants, "the guide ({guide}) paints before the ants ({ants})");
+
+    app.ui.view.show.selection_edges = false;
+    let output = draw(&mut app);
+    let shapes = flattened_paint_shapes(&output);
+    assert!(shapes.iter().any(|shape| is_guide(shape)), "hiding selection edges leaves the guide");
+    assert!(!shapes.iter().any(|shape| is_ants(shape)), "the edge paint belongs to the ants");
 }
 
 #[test]

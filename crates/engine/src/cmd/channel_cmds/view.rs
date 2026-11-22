@@ -5,7 +5,7 @@ use super::{AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, 
 // View state
 
 /// What pixel commands edit (Channels panel click / ⌘2…⌘9).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase", tag = "kind", content = "index")]
 pub enum ChannelTarget {
     /// The layers (all colour channels). In Quick Mask mode this edits the Quick Mask.
@@ -22,7 +22,7 @@ pub enum ChannelTarget {
 }
 
 /// Per-document Channels panel state: the target and the eye toggles. Not part of history.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelView {
     pub target: ChannelTarget,
