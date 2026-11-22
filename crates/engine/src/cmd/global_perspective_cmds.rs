@@ -4,6 +4,7 @@
 
 use photocraft_algo::global_perspective::{Guide, MAX_OUTPUT_PIXELS, Options, Solution, solve};
 use photocraft_algo::transform::{Homography, Interp, warp_rendered_output_size, warp_surface};
+use photocraft_color::PixelFormat;
 use photocraft_doc::{LayerContent, LayerId};
 use photocraft_geom::Rect;
 use serde::Deserialize;
@@ -67,12 +68,12 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
 
 /// Price exactly the renderer's post-Bicubic-reduction output rectangle before allocating tiles.
 /// The solver's original-domain budget remains a separate geometry check.
-fn validate_render_budget(bounds: Rect, h: &Homography, interp: Interp) -> Result<()> {
+fn validate_render_budget(bounds: Rect, h: &Homography, interp: Interp, format: PixelFormat, budget: u64) -> Result<()> {
     let (width, height) = warp_rendered_output_size(bounds, h, interp).ok_or_else(|| bad("invalid global perspective render bounds"))?;
     if width.saturating_mul(height) > MAX_OUTPUT_PIXELS as u64 {
         return Err(bad("global rectification output exceeds the 64-megapixel safety budget"));
     }
-    Ok(())
+    crate::transform_cmds::check_output_budget((width, height), "global perspective layer", format, budget)
 }
 
 /// Only skip sub-pixel roundoff on the validated image domain. Projective coefficients
@@ -104,15 +105,15 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let doc_id = st.doc.id.0;
     let h = solution.homography();
     let no_op = is_pixel_no_op(bounds, &h);
-    // solveOnly must report the same pixel-budget eligibility as a real render.
+    let surf = st.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("no raster pixels"))?;
+    // solveOnly must report the same pixel and memory eligibility as a real render.
     // Check the post-reduction bounds before warp_surface can allocate destination tiles.
     if !no_op {
-        validate_render_budget(bounds, &h, params.interpolation)?;
+        validate_render_budget(bounds, &h, params.interpolation, surf.format(), crate::transform_cmds::active_budget())?;
     }
     if params.solve_only || no_op {
         return Ok(json!({"document":doc_id,"layer":id.0,"changed":false,"solved":true,"scope":"wholeRasterLayer","solution":solution}));
     }
-    let surf = st.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("no raster pixels"))?;
     // All validation and allocation happen before the transaction. A failure leaves history
     // and the document unchanged. The inverse homography renderer has no mesh seams.
     let out = warp_surface(surf, bounds, &h, params.interpolation)?;
@@ -179,10 +180,133 @@ mod tests {
         assert_eq!(warp_rendered_output_size(bounds, &h, Interp::Bicubic), Some((8194, 8194)));
         assert_eq!(8192_u64 * 8192_u64, MAX_OUTPUT_PIXELS as u64);
         assert_eq!(8194_u64 * 8194_u64 - MAX_OUTPUT_PIXELS as u64, 32_772);
-        assert!(validate_render_budget(bounds, &h, Interp::Bicubic).is_err());
+        let budget = MAX_OUTPUT_PIXELS as u64 * PixelFormat::RGBA8.bytes_per_pixel() as u64;
+        let error = validate_render_budget(bounds, &h, Interp::Bicubic, PixelFormat::RGBA8, budget).unwrap_err().to_string();
+        assert!(error.contains("64-megapixel"), "{error}");
         // Bilinear does not pre-reduce, so its actual footprint stays within budget.
-        assert!(validate_render_budget(bounds, &h, Interp::Bilinear).is_ok());
-        assert!(validate_render_budget(Rect::new(0, 0, 160, 140), &h, Interp::Bicubic).is_ok());
+        assert!(validate_render_budget(bounds, &h, Interp::Bilinear, PixelFormat::RGBA8, budget).is_ok());
+        assert!(validate_render_budget(Rect::new(0, 0, 160, 140), &h, Interp::Bicubic, PixelFormat::RGBA8, budget).is_ok());
+    }
+
+    #[test]
+    fn bicubic_memory_budget_prices_the_reduced_render_footprint() {
+        let bounds = Rect::new(1, 1, 1023, 4089);
+        let h = Homography([1.0, 0.0, 0.0, 0.0, 0.25, 1533.75, 0.0, 0.0, 1.0]);
+        let (w, hgt) = photocraft_algo::transform::warp_output_size(bounds, &h).unwrap();
+        let (rw, rh) = warp_rendered_output_size(bounds, &h, Interp::Bicubic).unwrap();
+        assert!(rw * rh > w * hgt);
+        assert!(rw * rh < MAX_OUTPUT_PIXELS as u64);
+        let format = PixelFormat::RGBA32F;
+        let budget = w * hgt * format.bytes_per_pixel() as u64;
+        assert!(validate_render_budget(bounds, &h, Interp::Bilinear, format, budget).is_ok());
+        let error = validate_render_budget(bounds, &h, Interp::Bicubic, format, budget).unwrap_err().to_string();
+        assert!(error.contains("Memory Usage"), "{error}");
+        // Raising only the byte limit admits the very same geometry.
+        let render_bytes = rw * rh * format.bytes_per_pixel() as u64;
+        assert!(validate_render_budget(bounds, &h, Interp::Bicubic, format, render_bytes).is_ok());
+    }
+
+    /// Two painted pixels bound a large output without allocating a large source raster.
+    fn sparse_session(mode: &str, depth: u32, alpha: bool) -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":16,"height":16,"mode":mode,"depth":depth})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("sparse fixture", |doc, id| {
+            let surface = doc.layer_mut(id.unwrap()).unwrap().surface_mut().unwrap();
+            let format = PixelFormat::new(surface.format().mode, surface.format().sample, alpha);
+            *surface = Surface::new(format);
+            let pixel = vec![0.5; format.channels()];
+            surface.write_pixel(0, 0, &pixel);
+            surface.write_pixel(1199, 1199, &pixel);
+            Ok(())
+        })
+        .unwrap();
+        s
+    }
+
+    fn rectangular_guides() -> Value {
+        json!({"guides":[{"id":1,"corners":[[20,20],[100,20],[100,120],[20,120]]}]})
+    }
+
+    #[test]
+    fn global_memory_admission_uses_output_format_and_preserves_history() {
+        // Unit tests use the shared fixed 20 MiB budget, independent of set_budget.
+        let budget = crate::transform_cmds::active_budget();
+        for (mode, depth, alpha, refused) in
+            [("rgb", 16, true, false), ("gray", 32, false, false), ("rgb", 32, true, true), ("rgb", 32, false, true), ("cmyk", 32, true, true)]
+        {
+            let mut s = sparse_session(mode, depth, alpha);
+            s.edit("redo sentinel", |doc, id| {
+                let surface = doc.layer_mut(id.unwrap()).unwrap().surface_mut().unwrap();
+                surface.write_pixel(600, 600, &vec![0.75; surface.format().channels()]);
+                Ok(())
+            })
+            .unwrap();
+            let redo_doc = s.active().unwrap().doc.clone();
+            assert!(s.undo());
+            let before_pixels = surf(&s);
+            let st = s.active().unwrap();
+            let (before, revision, steps) = (st.doc.clone(), st.revision, st.history.past_len());
+            assert!(st.history.can_redo());
+            let mut p = rectangular_guides();
+            p["options"] = json!({"fitCanvas":false,"aspect":4});
+            let parsed: Params = serde_json::from_value(p.clone()).unwrap();
+            let bounds = before_pixels.content_bounds();
+            let h = solve(&parsed.guides, bounds, &parsed.options).unwrap().homography();
+            assert!(!is_pixel_no_op(bounds, &h));
+            let format = before_pixels.format();
+            for interpolation in ["nearest", "bilinear", "bicubic"] {
+                p["interpolation"] = json!(interpolation);
+                let interp: Interp = serde_json::from_value(p["interpolation"].clone()).unwrap();
+                let (w, hgt) = warp_rendered_output_size(bounds, &h, interp).unwrap();
+                let pixels = w * hgt;
+                assert!(pixels < MAX_OUTPUT_PIXELS as u64);
+                let output_format = PixelFormat::new(format.mode, format.sample, true);
+                assert_eq!(pixels * output_format.bytes_per_pixel() as u64 > budget, refused);
+                if mode == "rgb" && !alpha {
+                    assert!(pixels * (format.bytes_per_pixel() as u64) < budget, "only the added output alpha takes this over budget");
+                }
+                for solve_only in [true, false] {
+                    // Exercise accepted preflight without rendering a dense passing control.
+                    if !refused && !solve_only {
+                        continue;
+                    }
+                    p["solveOnly"] = json!(solve_only);
+                    let result = s.execute(COMMAND, p.clone());
+                    if refused {
+                        let error = result.unwrap_err().to_string();
+                        assert!(error.contains("Memory Usage"), "{mode}/{depth}/{alpha}/{interpolation}/{solve_only}: {error}");
+                    } else {
+                        assert_eq!(result.unwrap()["changed"], false);
+                    }
+                    let st = s.active().unwrap();
+                    assert!(st.doc == before, "memory admission changed the document");
+                    assert_eq!(surf(&s), before_pixels);
+                    assert_eq!((st.revision, st.history.past_len()), (revision, steps));
+                    assert!(st.history.can_redo());
+                }
+            }
+            assert!(s.redo());
+            assert!(s.active().unwrap().doc == redo_doc, "memory admission changed the redo state");
+        }
+    }
+
+    #[test]
+    fn identity_above_memory_budget_remains_a_no_op() {
+        let mut s = sparse_session("rgb", 32, true);
+        let surface = surf(&s);
+        let (w, h) = warp_rendered_output_size(surface.content_bounds(), &Homography::IDENTITY, Interp::Bicubic).unwrap();
+        assert!(w * h * surface.format().bytes_per_pixel() as u64 > crate::transform_cmds::active_budget());
+        let st = s.active().unwrap();
+        let (before, revision, steps) = (st.doc.clone(), st.revision, st.history.past_len());
+        for solve_only in [false, true] {
+            let mut p = rectangular_guides();
+            p["solveOnly"] = json!(solve_only);
+            assert_eq!(s.execute(COMMAND, p).unwrap()["changed"], false);
+            let st = s.active().unwrap();
+            assert!(st.doc == before);
+            assert_eq!((st.revision, st.history.past_len()), (revision, steps));
+        }
     }
 
     #[test]
@@ -218,6 +342,45 @@ mod tests {
         assert!(spec.params.contains("WHOLE raster layer"));
         let s = session(8);
         assert!((spec.enabled)(&s).is_ok());
+    }
+
+    #[test]
+    fn legacy_then_global_warp_share_atomic_undo_redo_history() {
+        let mut s = session(8);
+        let original = surf(&s);
+        let steps = s.active().unwrap().history.past_len();
+        // One convex plane covering the raster, translated without folds or a horizon.
+        let src = [[0.0, 0.0], [160.0, 0.0], [160.0, 140.0], [0.0, 140.0]];
+        let dst = src.map(|p| [p[0] + 5.0, p[1] + 3.0]);
+        let result = s.execute(crate::distort_cmds::PERSPECTIVE, json!({"planes":[{"src":src,"dst":dst}],"interpolation":"bilinear"})).unwrap();
+        assert_eq!(result["changed"], true);
+        let legacy = surf(&s);
+        assert_ne!(legacy, original, "legacy warp must change the raster");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+
+        assert_eq!(s.execute(COMMAND, params()).unwrap()["changed"], true);
+        let global = surf(&s);
+        assert_ne!(global, legacy, "global warp must change the legacy result");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 2);
+        assert!(!s.active().unwrap().history.can_redo());
+
+        assert!(s.undo());
+        assert_eq!(surf(&s), legacy, "undo global restores the exact legacy raster");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+        assert!(s.active().unwrap().history.can_redo());
+        assert!(s.undo());
+        assert_eq!(surf(&s), original, "undo legacy restores the exact original raster");
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+        assert!(s.active().unwrap().history.can_redo());
+
+        assert!(s.redo());
+        assert_eq!(surf(&s), legacy);
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+        assert!(s.active().unwrap().history.can_redo());
+        assert!(s.redo());
+        assert_eq!(surf(&s), global);
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 2);
+        assert!(!s.active().unwrap().history.can_redo());
     }
 
     #[test]
