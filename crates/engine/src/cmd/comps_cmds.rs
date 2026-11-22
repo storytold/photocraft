@@ -7,7 +7,7 @@
 //! `"comp": id | name` and default to the comp applied (or created) last.
 
 use photocraft_doc::comps::{capture_states, layer_position, next_comp_id};
-use photocraft_doc::{CompLayerState, Document, LayerComp, LayerId};
+use photocraft_doc::{CompAppearance, CompLayerState, Document, LayerComp, LayerId};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -120,6 +120,7 @@ fn new_comp(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"comp": id}))
 }
 
+/// Refresh the requested comp property without capturing the properties it will retain.
 fn update_comp(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "layerComp.update";
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -136,7 +137,24 @@ fn update_comp(s: &mut Session, p: &Value) -> Result<Value> {
         _ => "Update Layer Comp",
     };
     s.edit(label, |doc, _| {
-        let now = capture_states(doc);
+        let now = if what == "all" {
+            capture_states(doc)
+        } else {
+            doc.walk()
+                .into_iter()
+                .map(|(_, _, l)| CompLayerState {
+                    layer: l.id,
+                    visible: (what == "visibility").then_some(l.visible),
+                    position: if what == "position" { layer_position(l) } else { None },
+                    appearance: (what == "appearance").then(|| CompAppearance {
+                        blend: l.blend,
+                        opacity: l.opacity,
+                        fill_opacity: l.fill_opacity,
+                        effects: l.effects.clone(),
+                    }),
+                })
+                .collect()
+        };
         for id in &ids {
             let Some(c) = doc.layer_comps.iter_mut().find(|c| c.id == *id) else { continue };
             if what == "all" {

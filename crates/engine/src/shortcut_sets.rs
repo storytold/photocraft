@@ -3,7 +3,7 @@
 //! reads); a set is a saved copy of them, `Preferences::shortcut_sets` keyed by name, and
 //! `Preferences::shortcut_set` names the one in use ("" for the defaults). The bindings differ
 //! from their set after an edit until it is saved ("modified", as Photoshop marks the set).
-//! A set saves to and loads from a `.kys` file (`crate::kys::write` / the import), and
+//! A set saves to and loads from a `.kys` file (craft-keymap's writer and parser, through [`crate::keymap_defs`]), and
 //! [`summarize`] writes the HTML table of Photoshop's Summarize button.
 //!
 //! `edit.keyboardShortcuts` takes the set parameters: `useSet` (load a set's bindings, before
@@ -29,8 +29,10 @@ pub const MAX_NAME: usize = 64;
 #[serde(default, rename_all = "camelCase")]
 pub struct ShortcutSet {
     /// Command id → main key; "" removes the default key.
+    #[serde(deserialize_with = "crate::prefs::theme_ids::command_keys")]
     pub shortcuts: BTreeMap<String, String>,
     /// Command id → further keys, replacing the defaults.
+    #[serde(deserialize_with = "crate::prefs::theme_ids::command_keys")]
     pub alternate_shortcuts: BTreeMap<String, Vec<String>>,
 }
 

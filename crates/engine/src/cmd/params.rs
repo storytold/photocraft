@@ -122,7 +122,7 @@ pub(super) fn set_clipped(s: &mut Session, p: &Value, clip: bool) -> Result<Valu
         vec![layer_param(s, p)?]
     } else {
         let selected = s.active().ok_or(EngineError::NoDocument)?.selected_layers();
-        match (clip, selected.as_slice()) {
+        match (clip, selected) {
             (_, []) => vec![layer_param(s, p)?],
             (_, [one]) => vec![*one],
             (true, [_base, rest @ ..]) => rest.to_vec(),

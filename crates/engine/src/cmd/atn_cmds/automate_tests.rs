@@ -3,6 +3,7 @@
 
 use super::steps_automate::{FIT_IMAGE, FIT_IMAGE_EVENT};
 use super::*;
+use crate::actions_cmds::ActionStep;
 
 const SOURCE: &str = "_atnFitImageDescriptor";
 
@@ -55,7 +56,7 @@ fn a_recorded_fit_image_step_loads_and_saves_back_unchanged() {
     ] {
         let (mut s, r) = load(vec![fit_item(d.clone())]);
         assert_eq!(r["unsupported"], json!([]), "{r}");
-        let (id, p) = &s.actions.list[0].steps[0];
+        let ActionStep { command: id, params: p } = &s.actions.list.actions()[0].steps[0];
         assert_eq!(id, FIT_IMAGE);
         assert_eq!((p["width"].as_f64(), p["height"].as_f64(), &p["dontEnlarge"]), (Some(width), Some(height), &json!(dont_enlarge)), "{p}");
         let back = saved(&mut s);
@@ -71,7 +72,7 @@ fn a_recorded_fit_image_step_loads_and_saves_back_unchanged() {
 #[test]
 fn the_canonical_form_carries_only_the_settings() {
     let (s, _) = load(vec![fit_item(recorded("", 300.0, 200.0, false))]);
-    assert_eq!(s.actions.list[0].steps[0].1, json!({"width": 300, "height": 200, "dontEnlarge": false}));
+    assert_eq!(s.actions.list.actions()[0].steps[0].params, json!({"width": 300, "height": 200, "dontEnlarge": false}));
     let item = export_item(FIT_IMAGE, &json!({"width": 300, "height": 200, "dontEnlarge": false}), "S").unwrap();
     assert_eq!(item.descriptor.map(|d| d.to_bytes()), Some(recorded("", 300.0, 200.0, false).to_bytes()));
 }
@@ -108,7 +109,7 @@ fn every_measured_message_form_maps_and_plays_alike() {
     {
         let (mut s, r) = load(vec![fit_item(d.clone())]);
         assert_eq!(r["unsupported"], json!([]), "{d:?}");
-        let (id, p) = &s.actions.list[0].steps[0];
+        let ActionStep { command: id, params: p } = &s.actions.list.actions()[0].steps[0];
         assert_eq!((id.as_str(), p["width"].as_f64(), p["height"].as_f64(), &p["dontEnlarge"]), (FIT_IMAGE, Some(250.0), Some(180.0), &json!(true)), "{d:?}");
         s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
         let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
@@ -175,7 +176,7 @@ fn other_forms_keep_the_photoshop_step() {
     for d in forms {
         let (mut s, r) = load(vec![fit_item(d.clone())]);
         assert_eq!(r["unsupported"].as_array().map(Vec::len), Some(1), "{d:?}");
-        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{d:?}");
         let back = saved(&mut s);
         assert_eq!((&back[0].event, back[0].descriptor.as_ref().map(Descriptor::to_bytes)), (&AtnEvent::name(FIT_IMAGE_EVENT), Some(d.to_bytes())));
     }
@@ -222,7 +223,7 @@ fn changed_settings_save_with_the_recorded_message() {
         (other_class, changed_other_class),
     ] {
         let (s, _) = load(vec![fit_item(original.clone())]);
-        let mut p = s.actions.list[0].steps[0].1.clone();
+        let mut p = s.actions.list.actions()[0].steps[0].params.clone();
         assert!(p.get(SOURCE).is_some(), "{p}");
         assert_eq!(export_item(FIT_IMAGE, &p, "S").and_then(|item| item.descriptor), Some(original));
         p["width"] = json!(500);
