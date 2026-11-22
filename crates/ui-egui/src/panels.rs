@@ -17,6 +17,7 @@ use crate::{PhotocraftApp, icons};
 pub mod actions;
 pub mod adjust_ui;
 pub mod apply_color;
+pub mod apply_data_set_ui;
 pub(crate) mod blend_preview;
 #[cfg(test)]
 mod blend_rows_tests;
@@ -59,7 +60,7 @@ mod properties;
 pub(crate) mod region_versions;
 pub(crate) mod registry;
 pub mod smart_ui;
-mod status_bar;
+pub(crate) mod status_bar;
 pub mod swatches_ui;
 pub(super) mod timeline_ui;
 pub(crate) mod title_bar;
@@ -151,7 +152,7 @@ mod swatch_type_tests {
         let mut h = Harness::builder()
             .with_context(app.ctx().clone())
             .with_size(vec2(300.0, 300.0))
-            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::panels::color::panel(app, ui), app);
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::panels::color::panel(app, ui), app);
         h.run_steps(4);
         assert_eq!(h.state().session.tools.foreground, fg);
         let st = h.state().session.active().unwrap();

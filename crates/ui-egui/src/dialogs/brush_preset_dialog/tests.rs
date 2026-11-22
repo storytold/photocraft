@@ -8,7 +8,7 @@ use serde_json::json;
 use super::*;
 use crate::new_layer_ui::testing::{fields, set};
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default())

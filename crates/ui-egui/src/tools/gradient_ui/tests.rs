@@ -1,7 +1,7 @@
 use super::*;
 use crate::canvas::ToolEvent;
 
-fn app_with_gradient(style: &str) -> PhotocraftApp {
+fn app_with_gradient(style: &str) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
     app.ui.tool = Tool::Gradient;

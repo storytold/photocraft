@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::*;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
@@ -22,7 +22,7 @@ fn the_saved_view_round_trips_through_the_prefs_and_old_keys_still_restore() {
     settings.search = false;
     save(&mut a, &settings);
     assert_ne!(a.session.prefs().brush_picker, Value::Null, "the view is in the prefs");
-    a.ui.brush_picker_state = BrushPickerState::new();
+    *a.ui.brush_picker_state = BrushPickerState::new();
     restore(&mut a);
     let st = &a.ui.brush_picker_state;
     assert!(st.parts.tip && !st.search);

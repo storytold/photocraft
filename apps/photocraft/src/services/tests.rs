@@ -172,7 +172,7 @@ const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 
 /// One app launch with crash recovery in `dir` (dropping it is the crash: background writes
 /// already queued finish, nothing else runs).
-fn launch(dir: &Path) -> PhotocraftApp {
+fn launch(dir: &Path) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), recovery_services(Some(dir.to_path_buf())));
     let ctx = app.ctx().clone();
     prefs_ui::tick(&mut app, &ctx, std::time::Instant::now());

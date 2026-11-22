@@ -338,6 +338,11 @@ pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// caller falls back to the bytes path for the zip form.
 pub type AutomationOpenPcraftFn = Box<dyn FnMut(&str) -> Result<Option<(String, Document)>, String>>;
 
+/// Where a path an automation read opened is on disk (absolute), for Open Recent: the person
+/// reopens it outside automation, where a root-relative request path names nothing. `None`
+/// when no read root holds it.
+pub type AutomationLocateFn = Box<dyn Fn(&str) -> Option<String>>;
+
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Same policy as [`AutomationCommandFn`] for each step a command runs (`actions.play`).
@@ -351,6 +356,7 @@ pub struct AutomationServices {
     pub read: Option<AutomationReadFn>,
     pub write: Option<AutomationWriteFn>,
     pub open_pcraft: Option<AutomationOpenPcraftFn>,
+    pub locate: Option<AutomationLocateFn>,
     pub save: Option<SaveFileFn>,
     pub command: Option<AutomationCommandFn>,
     pub authorize: Option<AutomationAuthorizeFn>,
@@ -508,8 +514,10 @@ pub struct Services {
     /// The file service the app's host answers file picks with (`HostBuilder::files`); `None` in tests that install none.
     pub files: Option<std::sync::Arc<dyn craft::host::Files>>,
     /// The main-thread side of the native file panels, pumped by the app.
+    #[cfg(not(target_arch = "wasm32"))]
     pub file_panels: Option<craft::dialogs::service::FilePanels>,
     /// The opened settings store and what opening it reported; `None` in the web build.
+    #[cfg(not(target_arch = "wasm32"))]
     pub settings: Option<(craft::settings::SettingsStore<photocraft_engine::prefs::SavedPrefs>, craft::settings::LoadReport)>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).
     pub import: Option<ImportFn>,
@@ -544,6 +552,9 @@ pub struct Services {
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
     pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
+    /// Where an automation open's file is on disk, for Open Recent. Without it an automation
+    /// open is not listed there.
+    pub automation_locate: Option<AutomationLocateFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
@@ -655,6 +666,7 @@ impl Services {
         self.automation_read = a.read;
         self.automation_write = a.write;
         self.automation_open_pcraft = a.open_pcraft;
+        self.automation_locate = a.locate;
         self.automation_save = a.save;
         self.automation_command = a.command;
         self.automation_authorize = a.authorize;

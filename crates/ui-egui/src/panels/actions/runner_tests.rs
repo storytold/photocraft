@@ -234,7 +234,7 @@ fn single_history_dialog_refuses_intervening_edit_or_document_switch() {
 }
 
 /// Prepare a real paused spelling step with a known document and history boundary, under either grouping policy.
-fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
+fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (Box<PhotocraftApp>, std::sync::Arc<photocraft_doc::Document>, usize) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":300,"height":100})).unwrap();
     app.run("type.create", json!({"x":10,"y":50,"text":"Teh brwon"})).unwrap();
@@ -602,7 +602,7 @@ fn recorded_save_as_and_save_replay_and_write_the_file() {
 
 /// An app with the real importer/exporter and writer whose file picks go to `files`, the test's
 /// scripted file service (the test keeps its own `Arc` to queue answers and read the requests).
-pub(super) fn disk_app(files: std::sync::Arc<craft::host::ScriptedFiles>) -> PhotocraftApp {
+pub(super) fn disk_app(files: std::sync::Arc<craft::host::ScriptedFiles>) -> Box<PhotocraftApp> {
     let services = crate::Services {
         import: Some(Box::new(|name, bytes, opts| {
             photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
@@ -1221,13 +1221,13 @@ fn equalize_step_with_a_selection_opens_its_choices() {
 
 /// An 8×6 document, a Child action whose first step (a blur) shows its dialog and whose
 /// second step adds a "Suffix" layer, and recording into Owner started.
-fn recording_with_dialog_child() -> PhotocraftApp {
+fn recording_with_dialog_child() -> Box<PhotocraftApp> {
     recording_with_dialog_child_using(crate::Services::default())
 }
 
 /// [`recording_with_dialog_child`] with the app built on `services`: the file service is the framework's from
 /// construction on.
-fn recording_with_dialog_child_using(services: crate::Services) -> PhotocraftApp {
+fn recording_with_dialog_child_using(services: crate::Services) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 8, "height": 6, "background": "#203040"})).unwrap();
     let mut child =
@@ -1405,7 +1405,7 @@ fn a_step_dialog_keeps_its_continuation_token() {
 }
 
 /// [`recording_with_dialog_child`] over a Displace step, whose map picker answers `answers` in turn.
-fn recording_with_displace_child(answers: impl IntoIterator<Item = craft::host::Picked>) -> PhotocraftApp {
+fn recording_with_displace_child(answers: impl IntoIterator<Item = craft::host::Picked>) -> Box<PhotocraftApp> {
     let services = crate::Services { files: Some(std::sync::Arc::new(craft::host::ScriptedFiles::answering(answers))), ..Default::default() };
     let mut app = recording_with_dialog_child_using(services);
     app.background_jobs = false;
@@ -1502,7 +1502,7 @@ fn deny_wide_blur(id: &str, params: &Value) -> photocraft_engine::Result<()> {
 }
 
 /// Build a two-tone raster whose blur changes pixels, with a real action step configured to open its dialog.
-fn gated_blur_fixture(single: bool, background: bool) -> PhotocraftApp {
+fn gated_blur_fixture(single: bool, background: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 16, "height": 16, "background": "#000000"})).unwrap();
     app.run("select.rect", json!({"x": 8, "y": 0, "width": 8, "height": 16})).unwrap();

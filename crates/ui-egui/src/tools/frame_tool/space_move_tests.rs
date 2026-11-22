@@ -6,7 +6,7 @@ use craft::keymap::Key;
 use craft::ui::runtime::windows::{Released, WindowHost};
 use egui::Modifiers;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":600,"height":400})).unwrap();
     app.sync_views();

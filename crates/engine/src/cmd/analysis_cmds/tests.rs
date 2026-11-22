@@ -19,7 +19,7 @@ fn failed_compound_restores_layer_target_history_and_journal() {
     let selected = s.active().unwrap().active_layer.unwrap();
     {
         let st = s.active_mut().unwrap();
-        st.selected_layers = vec![background, selected];
+        *st.selection_mut() = vec![background, selected];
         st.layer_anchor = Some(background);
         st.coalesce = Some("previous-gesture".into());
     }

@@ -17,7 +17,7 @@ fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// An app whose agent link keeps its files in a fresh folder, with `switch` as the launcher's
 /// switch. The policy it installs refuses commands, names a folder `/missing` as not used, and
 /// records the settings it was asked for.
-fn linked_app(switch: AgentSwitch) -> (PhotocraftApp, tempfile::TempDir, Arc<Mutex<Vec<AgentSettings>>>) {
+fn linked_app(switch: AgentSwitch) -> (Box<PhotocraftApp>, tempfile::TempDir, Arc<Mutex<Vec<AgentSettings>>>) {
     let (mut app, _) = app_with_store();
     let dir = tempfile::tempdir().unwrap();
     app.services.agent_link = Some(AgentLink::new(Some(dir.path().to_path_buf()), "PhotoCraft test"));

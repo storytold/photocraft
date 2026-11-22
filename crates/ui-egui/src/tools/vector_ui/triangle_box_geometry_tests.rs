@@ -9,7 +9,7 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn app(w: u32, h: u32) -> PhotocraftApp {
+fn app(w: u32, h: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": w, "height": h})).unwrap();
     app.sync_views();

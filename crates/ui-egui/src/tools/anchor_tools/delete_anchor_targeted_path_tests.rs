@@ -11,7 +11,7 @@ use crate::state::Tool;
 
 /// 800 x 600, white Background, pixel layer "Red" active, and a shape layer from (450,100) to
 /// (650,250) below it in the stack's activity (Red stays the active layer).
-pub(crate) fn setup(tool: Tool) -> (PhotocraftApp, u64) {
+pub(crate) fn setup(tool: Tool) -> (Box<PhotocraftApp>, u64) {
     let (mut app, shape) = setup_asking(tool);
     // These tests predate the live-shape question (#12768) and keep testing targeting and locks.
     crate::dialogs::alerts::remember_skip(&mut app, crate::dialogs::live_shape_prompt::PREF);
@@ -19,7 +19,7 @@ pub(crate) fn setup(tool: Tool) -> (PhotocraftApp, u64) {
 }
 
 /// [`setup`] with the live-shape question still on.
-pub(super) fn setup_asking(tool: Tool) -> (PhotocraftApp, u64) {
+pub(super) fn setup_asking(tool: Tool) -> (Box<PhotocraftApp>, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();

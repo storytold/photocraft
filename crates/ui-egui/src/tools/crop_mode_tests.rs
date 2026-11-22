@@ -12,7 +12,7 @@ use crate::{PhotocraftApp, crop_ui};
 const NONE: Modifiers = Modifiers::NONE;
 
 /// A 200 × 100 document with the Crop tool picked and its default frame shown.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let doc = Document::with_background("crop", Size::new(200, 100), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut s = photocraft_engine::Session::new();
     s.add_document(doc, None);
@@ -100,4 +100,20 @@ fn a_dropped_crop_turns_its_own_documents_view_upright() {
     frame(&mut app);
     assert!(!crop_ui::pending(&app), "the turned crop is dropped with its document");
     assert_eq!(app.ui.views[0].rotation, 0.0, "its own document's view is upright again");
+}
+
+/// Picking another tool commits a turned crop, and the view the crop turned goes upright with it: the turn is in the
+/// cropped pixels now, not in the view.
+#[test]
+fn another_tool_commits_a_turned_crop_and_turns_the_view_upright() {
+    let mut app = app();
+    turn_the_view(&mut app);
+    assert_ne!(app.ui.views[0].rotation, 0.0, "the view turned with the crop");
+    app.ui.tool = Tool::Brush;
+    frame(&mut app);
+    frame(&mut app);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.undo_label(), Some("Crop"), "leaving the tool commits the turned crop");
+    assert_ne!(st.doc.size, Size::new(200, 100));
+    assert_eq!(app.ui.views[0].rotation, 0.0, "the view is upright again");
 }

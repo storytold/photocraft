@@ -24,32 +24,35 @@ fn label_of(mode: PaintMode) -> String {
 /// "Threshold", as the reference does for the stamps in an Indexed Color document. Empty for a tool without a blend
 /// mode control.
 pub(crate) fn mode_entries(tool: Tool, behind_enabled: bool, threshold: bool) -> Vec<Entry<PaintMode>> {
-    let keyed: Vec<BlendKeyEntry<PaintMode>> = if tool == Tool::PatternStamp {
-        crate::brush_mode_menu::pattern_stamp_choices()
-            .into_iter()
-            .filter_map(|((mode, behind), _)| match (mode, behind) {
-                (Some(blend), false) => Some(crate::panels::blend_entry(PaintMode::Blend(blend), blend)),
-                (None, true) => Some(BlendKeyEntry::behind(PaintMode::Behind)),
-                _ => None,
-            })
-            .collect()
-    } else {
-        crate::blend_keys::tool_modes(tool)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|mode| match mode {
-                Some(blend) => crate::panels::blend_entry(PaintMode::Blend(blend), blend),
-                None => BlendKeyEntry::clear(PaintMode::Clear),
-            })
-            .collect()
-    };
-    blend_entries(&keyed, |entry| match entry.key {
-        PaintMode::Blend(BlendMode::Normal) if threshold => tl!("Threshold").to_owned().into(),
-        key => label_of(key).into(),
+    static CACHE: crate::i18n::LangCache<(Tool, bool, bool), Vec<Entry<PaintMode>>> = crate::i18n::LangCache::new();
+    CACHE.get_or_build((tool, behind_enabled, threshold), || {
+        let keyed: Vec<BlendKeyEntry<PaintMode>> = if tool == Tool::PatternStamp {
+            crate::brush_mode_menu::pattern_stamp_choices()
+                .into_iter()
+                .filter_map(|((mode, behind), _)| match (mode, behind) {
+                    (Some(blend), false) => Some(crate::panels::blend_entry(PaintMode::Blend(blend), blend)),
+                    (None, true) => Some(BlendKeyEntry::behind(PaintMode::Behind)),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            crate::blend_keys::tool_modes(tool)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|mode| match mode {
+                    Some(blend) => crate::panels::blend_entry(PaintMode::Blend(blend), blend),
+                    None => BlendKeyEntry::clear(PaintMode::Clear),
+                })
+                .collect()
+        };
+        blend_entries(&keyed, |entry| match entry.key {
+            PaintMode::Blend(BlendMode::Normal) if threshold => tl!("Threshold").to_owned().into(),
+            key => label_of(key).into(),
+        })
+        .into_iter()
+        .map(|entry| if entry.value() == Some(&PaintMode::Behind) { entry.enabled(behind_enabled) } else { entry })
+        .collect()
     })
-    .into_iter()
-    .map(|entry| if entry.value() == Some(&PaintMode::Behind) { entry.enabled(behind_enabled) } else { entry })
-    .collect()
 }
 
 /// The Mode select over `entries` (from [`mode_entries`]) and the bound `mode`.

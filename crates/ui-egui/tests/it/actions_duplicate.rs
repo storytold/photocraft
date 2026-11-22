@@ -35,7 +35,7 @@ fn duplicate_menu_selects_the_new_action_and_then_the_new_step() {
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(3);
     let ctx = h.ctx.clone();
-    let fire = |h: &mut Harness<'static, PhotocraftApp>| {
+    let fire = |h: &mut Harness<'static, Box<PhotocraftApp>>| {
         let reply = control(h.state_mut(), &ctx, "ui.menu.invoke", json!({"id": "actionsPanel.duplicate"}));
         assert_eq!(reply["ok"], true, "{reply}");
         h.run_steps(3);

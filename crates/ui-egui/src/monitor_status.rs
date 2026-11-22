@@ -367,7 +367,7 @@ mod tests {
     use photocraft_engine::Session;
     use std::sync::Arc;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(Session::new(), Default::default())
     }
 

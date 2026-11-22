@@ -14,7 +14,7 @@ use crate::state::Tool;
 
 /// A 400x300 document with one painted layer covering (20, 20, 120, 80), selected. The drag
 /// starts inside it, so Auto-Select picks the same layer.
-fn app() -> (PhotocraftApp, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();

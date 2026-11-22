@@ -1,8 +1,13 @@
 //! Fonts a host serves next to the app, for the platform shell that fetches them (the web build;
 //! see `photocraft_text::served`): reading the manifest, the families to fetch, and installing
 //! what arrived, which registers the files for documents and re-renders the type layers drawn
-//! without them. The UI's own font stack takes its served faces through `UiFonts::served_faces`
+//! without them. Runtime-manifest deliveries also populate owned UI fallbacks. A build-generated
+//! UI font stack takes its served faces through `UiFonts::served_faces`
 //! ([`serve`]); the framework's loader fetches them and puts them in the stack.
+
+mod loaded;
+
+pub(crate) use loaded::append as append_loaded;
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -65,10 +70,11 @@ pub(crate) fn served(ctx: &egui::Context) -> Option<Served> {
 /// re-renders the type layers that use those families, or whose text falls back to them (a script
 /// fallback, e.g. Arabic set in Inter), and show our own layout. A PSD layer still
 /// showing Photoshop's pixels (not edited yet) keeps them, as it does when its font is installed
-/// from the start. Call it every frame: it also retries the layers of a document that was busy.
-// PLAN: dialogs-w59 (`apps/photocraft-web/src/web.rs`) calls this with the `ctx` argument the UI stack used to take;
-// the framework's loader puts a delivered script fallback in the UI stack, so the argument is gone.
-pub fn install(app: &mut PhotocraftApp, delivered: Vec<(String, Vec<u8>)>) {
+/// from the start. Successful host deliveries also populate `ctx`'s UI fallbacks. The caller
+/// must apply the manifest's integrity check before delivery. Call it every frame: it also retries
+/// the layers of a document that was busy.
+pub fn install(app: &mut PhotocraftApp, ctx: &egui::Context, delivered: Vec<(String, Vec<u8>)>) {
+    let mut ui_changed = false;
     let mut layers = std::mem::take(&mut *PENDING.lock().unwrap_or_else(PoisonError::into_inner));
     if !delivered.is_empty() {
         let families: Vec<String> = delivered.iter().map(|(f, _)| f.clone()).collect();
@@ -77,11 +83,15 @@ pub fn install(app: &mut PhotocraftApp, delivered: Vec<(String, Vec<u8>)>) {
         pick(&app.session, &families, &mut layers);
         let mut eng = photocraft_text::shared().lock().unwrap_or_else(PoisonError::into_inner);
         for (family, bytes) in delivered {
+            ui_changed |= loaded::cache(ctx, &bytes);
             let added = eng.fonts.register_font_data(bytes);
             if !added.contains(&family) {
                 log::warn!("a served font file listed as {family:?} registers {added:?}; the family in fonts/manifest.txt must be the font's own");
             }
         }
+    }
+    if ui_changed {
+        crate::theme::install_fonts(ctx);
     }
     if !layers.is_empty() {
         let busy = app.session.refresh_type_layers(&layers);
@@ -94,7 +104,7 @@ pub fn install(app: &mut PhotocraftApp, delivered: Vec<(String, Vec<u8>)>) {
 /// then its layers may have been edited (a PSD layer re-rendered) or deleted (#6087).
 fn pick(session: &photocraft_engine::Session, families: &[String], layers: &mut Vec<TypeLayerRef>) {
     for st in session.documents() {
-        let first = st.snapshots.iter().find(|s| s.id == 0).map(|s| &s.doc);
+        let first = st.snapshots().iter().find(|s| s.id == 0).map(|s| &s.doc);
         // While it still is the open document, a layer picked there is picked in the snapshot too
         // (without checking it twice): a busy document is refreshed later, and by then a finished
         // job can have moved the open document on.

@@ -8,24 +8,24 @@ use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-fn harness(files: Arc<ScriptedFiles>) -> Harness<'static, PhotocraftApp> {
+fn harness(files: Arc<ScriptedFiles>) -> Harness<'static, Box<PhotocraftApp>> {
     // The framework builds its host's file service from the services the app is made with.
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { files: Some(files), ..Default::default() });
     let h = Harness::builder()
         .with_size(egui::vec2(1440.0, 900.0))
         .with_max_steps(64)
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h
 }
 
-fn field(h: &Harness<'_, PhotocraftApp>, dialog: DialogId, key: &str) -> Option<Value> {
+fn field(h: &Harness<'_, Box<PhotocraftApp>>, dialog: DialogId, key: &str) -> Option<Value> {
     let form = h.state().framework.dialogs.get_by_id::<HostedParamDialog>(dialog)?;
     serde_json::to_value(form.fields()).ok()?.get(key).cloned()
 }
 
-fn open(h: &mut Harness<'_, PhotocraftApp>, command: &str) -> DialogId {
+fn open(h: &mut Harness<'_, Box<PhotocraftApp>>, command: &str) -> DialogId {
     let ctx = h.ctx.clone();
     let reply = crate::menus::invoke(h.state_mut(), &ctx, command, json!({})).unwrap();
     let want = reply["dialog"].as_str().unwrap().to_owned();

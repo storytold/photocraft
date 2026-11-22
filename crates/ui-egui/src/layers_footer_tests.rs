@@ -17,7 +17,7 @@ use crate::PhotocraftApp;
 use crate::layers_panel_nodes::{click, row_drawn, thumb};
 use craft::layers::ui::tree::LayerPart;
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 /// OK in the open dialog `id`.
 fn confirm(h: &mut H, id: craft::ui::dialog::DialogId) {
