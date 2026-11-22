@@ -1,4 +1,4 @@
-use super::services::{ExportSettings, FormatChoices, SAVE_OPTIONS_OPEN, SaveKind, Services, plain_raster, saved_revision_after_write};
+use super::services::{ExportSettings, FormatChoices, SAVE_OPTIONS_OPEN, SaveKind, Services, flat_keeps, plain_raster, saved_revision_after_write};
 use super::{
     DocId, Document, HashMap, PhotocraftApp, Session, UiState, Value, actions, canvas, delete_layer_prompt, discard_ui, file_open, gpu_canvas, gpu_status,
     histogram_panel, i18n, jobs_ui, json, kys_import, last_brush, layers_panel_ui, mask_thumbs_ui, mask_trash_prompt, monitor_status, native_menu, notices,

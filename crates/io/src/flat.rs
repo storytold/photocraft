@@ -1849,6 +1849,228 @@ fn composite_share(format: Format) -> f32 {
     }
 }
 
+/// Whether a flat file in `format` keeps the whole of `doc`, assuming its layers already fit
+/// (one plain raster layer, the caller's question): its colour model and bit depth stored as they
+/// are, its dimensions encodable, its profile, EXIF, XMP and text metadata kept, no alpha channels
+/// or PSD-only document/layer data, and no pixels outside the canvas. Transparency requires an
+/// alpha-capable format; layer locks do not prove that the pixels are opaque. Anything else
+/// [`export_flat`] would convert or drop.
+pub fn flat_holds(doc: &Document, format: Format) -> bool {
+    let [layer] = doc.layers.as_slice() else { return false };
+    let LayerContent::Raster(surface) = &layer.content else { return false };
+    let caps = format.caps();
+    let meta = &doc.metadata;
+    // Indexed, Bitmap, Duotone and Multichannel are written through mode-specific paths or
+    // converted, so they keep their own formats rather than a flat default.
+    let model = matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab);
+    let fits = model
+        && caps.write
+        && !doc.size.is_empty()
+        && format.max_dimensions().is_none_or(|(width, height)| doc.size.width <= width && doc.size.height <= height)
+        && caps.layouts.contains(&layout_for(doc.mode, false))
+        && caps.depths.contains(&csample(doc.depth))
+        && (doc.icc_profile.is_none() || caps.icc)
+        && (meta.exif.is_none() || caps.exif)
+        && (meta.xmp.is_none() || caps.xmp)
+        && (format != Format::Jpeg || (jpeg_keeps_exif(doc) && jpeg_keeps_xmp(doc)))
+        && (meta.text.is_empty() || caps.text)
+        && meta.psd_resources.is_empty()
+        && meta.psd_global_blocks.is_empty()
+        && doc.channels.is_empty()
+        && only_pixels(doc)
+        && layer.xmp.is_none()
+        && layer.psd_blocks.is_empty()
+        && layer.label == photocraft_doc::LabelColor::None
+        && matches!(layer.name.as_str(), "Background" | "Layer 0")
+        && doc.bounds().contains_rect(&surface.content_bounds());
+    if !fits {
+        return false;
+    }
+    // Export drops an entirely opaque alpha channel; import names that encoded layout
+    // Background, and an image with transparency Layer 0. The in-memory layout alone
+    // cannot tell us whether the name will survive the round trip.
+    let opaque = !surface.format().alpha || opaque_surface(surface, doc.bounds());
+    (caps.alpha || opaque) && layer.name == if opaque { "Background" } else { "Layer 0" }
+}
+
+/// A JPEG default must keep EXIF after the encoder adjusts it for the saved image.
+fn jpeg_keeps_exif(doc: &Document) -> bool {
+    let Some(exif) = doc.metadata.exif.as_deref() else { return true };
+    // Normalization can edit the TIFF block but does not shrink it. Bound the work
+    // before processing a block that cannot fit in JPEG's 16-bit APP1 length.
+    if exif.len() > usize::from(u16::MAX) {
+        return false;
+    }
+    let ppi = Some((doc.resolution_dpi, doc.resolution_dpi));
+    let normalized = if doc.mode == ColorMode::Cmyk {
+        // CMYK JPEG has no JFIF density marker, so the encoder can add EXIF tags.
+        craft_metadata::edit::export_exif_adding_missing_resolution(exif, ppi)
+    } else {
+        codecs::export_exif(exif, ppi)
+    };
+    codecs::raw_metadata::jpeg_segments(codecs::raw_metadata::JpegMetadata { exif: Some(&normalized), ..Default::default() }).is_ok()
+}
+
+/// JPEG may trim layered XMP properties or omit an oversized packet. A default save
+/// must retain the whole packet after the encoder's resolution normalization.
+fn jpeg_keeps_xmp(doc: &Document) -> bool {
+    let Some(xmp) = doc.metadata.xmp.as_deref() else { return true };
+    // APP1 has a 16-bit length. Bound work before normalizing untrusted metadata.
+    if xmp.len() > usize::from(u16::MAX) {
+        return false;
+    }
+    let xmp = codecs::export_xmp(xmp, Some((doc.resolution_dpi, doc.resolution_dpi)));
+    codecs::raw_metadata::jpeg_xmp(&xmp).is_ok()
+}
+
+/// Whether `doc` holds nothing a flat file has no place for: no Quick Mask, paths, guides,
+/// patterns, layer comps, measurements, notes, type styles, slices, variables or timeline, each
+/// as a new document has it. A PSD keeps them all.
+fn only_pixels(doc: &Document) -> bool {
+    doc.quick_mask.is_none()
+        && doc.paths.is_empty()
+        && doc.work_path.is_none()
+        && doc.clipping_path.is_none()
+        && doc.guides == Default::default()
+        && doc.patterns.is_empty()
+        && doc.layer_comps.is_empty()
+        && doc.last_document_state.is_none()
+        && doc.measurement == Default::default()
+        && doc.global_light == Default::default()
+        && doc.notes.is_empty()
+        && doc.text_styles == Default::default()
+        && doc.slices == Default::default()
+        && doc.variables == Default::default()
+        && doc.timeline.is_none()
+}
+
+#[cfg(test)]
+mod default_save_tests {
+    use super::*;
+    use photocraft_doc::{Color, LabelColor};
+
+    fn document() -> Document {
+        Document::with_background("flat", Size::new(3, 2), ColorMode::Rgb, SampleType::U8, Color::WHITE)
+    }
+
+    fn reopened(doc: &Document, path: &str) -> Document {
+        let bytes = crate::export(doc, path, &ExportOptions::default()).unwrap().bytes;
+        crate::import(path, &bytes).unwrap().document
+    }
+
+    #[test]
+    fn flat_defaults_keep_layer_identity() {
+        let mut doc = document();
+        for format in [Format::Png, Format::Jpeg] {
+            assert!(flat_holds(&doc, format));
+            doc.layers[0].name = "Retouch".into();
+            assert!(!flat_holds(&doc, format), "the flat importer cannot keep a custom name");
+            doc.layers[0].label = LabelColor::Red;
+            let back = reopened(&doc, "identity.psd");
+            assert_eq!((back.layers[0].name.as_str(), back.layers[0].label), ("Retouch", LabelColor::Red));
+            doc.layers[0].name = "Background".into();
+            assert!(!flat_holds(&doc, format), "the flat importer cannot keep a color label");
+            doc.layers[0].label = LabelColor::None;
+        }
+    }
+
+    #[test]
+    fn flat_default_name_follows_exported_transparency() {
+        let mut doc = document();
+        doc.layers[0].name = "Layer 0".into();
+        assert!(!flat_holds(&doc, Format::Png), "an opaque alpha surface reopens as Background");
+        assert_eq!(reopened(&doc, "opaque.png").layers[0].name, "Background");
+        doc.layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.5]);
+        assert!(flat_holds(&doc, Format::Png));
+        assert_eq!(reopened(&doc, "alpha.png").layers[0].name, "Layer 0");
+        doc.layers[0].name = "Background".into();
+        assert!(!flat_holds(&doc, Format::Png), "a transparent Background name would be lost");
+    }
+
+    #[test]
+    fn flat_defaults_keep_global_light_without_effects() {
+        for altitude in [false, true] {
+            let mut doc = document();
+            if altitude {
+                doc.global_light.altitude = 15.0;
+            } else {
+                doc.global_light.angle = 45.0;
+            }
+            for format in [Format::Png, Format::Jpeg] {
+                assert!(!flat_holds(&doc, format));
+            }
+            assert_eq!(reopened(&doc, "light.psd").global_light, doc.global_light);
+        }
+    }
+
+    #[test]
+    fn jpeg_default_keeps_exif_after_normalization() {
+        for (mode, bytes, fits) in [
+            (ColorMode::Rgb, 128, true),
+            (ColorMode::Rgb, 65_527, true),
+            (ColorMode::Rgb, 70_000, false),
+            (ColorMode::Cmyk, 128, true),
+            (ColorMode::Cmyk, 65_527, false),
+        ] {
+            let mut doc = Document::with_background("EXIF", Size::new(3, 2), mode, SampleType::U8, Color::WHITE);
+            doc.resolution_dpi = 300.0;
+            // Little-endian TIFF with one ImageDescription tag and an out-of-line ASCII value.
+            // The 26-byte IFD ends before the description, whose count includes its NUL.
+            let mut exif = b"II*\0\x08\0\0\0\x01\0\x0e\x01\x02\0".to_vec();
+            exif.extend_from_slice(&(bytes - 26_u32).to_le_bytes());
+            exif.extend_from_slice(b"\x1a\0\0\0\0\0\0\0");
+            exif.resize(bytes as usize - 1, b'x');
+            exif.push(0);
+            doc.metadata.exif = Some(Arc::new(exif));
+
+            assert_eq!(flat_holds(&doc, Format::Jpeg), fits, "{mode:?}, {bytes} bytes");
+            let jpeg = reopened(&doc, "exif.jpg");
+            if fits {
+                let exif = jpeg.metadata.exif.as_deref().unwrap();
+                assert!(exif.windows(16).any(|w| w == [b'x'; 16]));
+            } else {
+                assert!(jpeg.metadata.exif.is_none());
+                assert_eq!(reopened(&doc, "exif.psd").metadata.exif, doc.metadata.exif);
+            }
+        }
+    }
+
+    #[test]
+    fn jpeg_default_keeps_the_whole_xmp_packet() {
+        let mut doc = document();
+        for (payload, fits, marker) in [
+            ("<dc:description>short</dc:description>".into(), true, "short"),
+            (format!("<dc:description>{}</dc:description>", "x".repeat(70_000)), false, "dc:description"),
+            (format!("<photoshop:DocumentAncestors>{}</photoshop:DocumentAncestors>", "<rdf:li>id</rdf:li>".repeat(5_000)), false, "DocumentAncestors"),
+        ] {
+            doc.metadata.xmp = Some(format!(
+                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\">{payload}</rdf:Description></rdf:RDF></x:xmpmeta>"
+            ).into());
+            assert_eq!(flat_holds(&doc, Format::Jpeg), fits, "{marker}");
+            assert!(flat_holds(&doc, Format::Png), "PNG has no JPEG APP1 limit");
+            let back = reopened(&doc, if fits { "metadata.jpg" } else { "metadata.psd" });
+            assert!(back.metadata.xmp.as_deref().unwrap().contains(marker));
+            if !fits {
+                let flat = reopened(&doc, "loss.jpg");
+                assert!(flat.metadata.xmp.as_deref().is_none_or(|x| !x.contains(marker)));
+            }
+        }
+    }
+
+    #[test]
+    fn jpeg_default_accounts_for_rewritten_xmp_resolution() {
+        let mut doc = document();
+        doc.resolution_dpi = 300.0;
+        let packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:tiff=\"http://ns.adobe.com/tiff/1.0/\" tiff:XResolution=\"1/1\" tiff:YResolution=\"1/1\"><dc:description></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>";
+        let xmp = packet.replace("</dc:description>", &format!("{}</dc:description>", "x".repeat(65_503 - packet.len())));
+        assert!(codecs::raw_metadata::jpeg_xmp(&xmp).is_ok(), "the input fits before the writer updates resolution");
+        doc.metadata.xmp = Some(xmp.into());
+        assert!(!flat_holds(&doc, Format::Jpeg));
+        assert!(flat_holds(&doc, Format::Png));
+        assert!(reopened(&doc, "resolution.jpg").metadata.xmp.is_none());
+    }
+}
+
 /// Flattens and encodes as `format`.
 pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Result<ExportResult, IoError> {
     export_flat_with_renderer(doc, format, opts, &photocraft_raster::Interrupt::NONE, None)
