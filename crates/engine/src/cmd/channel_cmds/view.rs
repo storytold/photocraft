@@ -1,5 +1,5 @@
 use super::planes::color_count;
-use super::{AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, Serialize};
+use super::{AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, Serialize, Session};
 
 // ---------------------------------------------------------------------------------------------
 // View state
@@ -167,4 +167,31 @@ pub fn composite_name(mode: ColorMode) -> &'static str {
         ColorMode::Grayscale => "Gray",
         _ => "RGB",
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Undo of a step that targets the channel it creates
+
+/// Before New Channel or Calculations (Result: New Channel), which target the channel they make:
+/// the history state the step starts from and the channel view then.
+pub(super) fn view_before_step(s: &Session) -> Option<(u64, ChannelView)> {
+    let st = s.active()?;
+    Some((st.history.row_id(st.history.past_len())?, st.channel_view.clone()))
+}
+
+/// After that step: undo back to the state it started from brings `before`'s view back (#14683).
+/// The views of states history no longer holds are dropped.
+pub(super) fn keep_view_for_undo(s: &mut Session, before: Option<(u64, ChannelView)>) {
+    let (Some(st), Some((id, view))) = (s.active_mut(), before) else { return };
+    let history = &st.history;
+    st.undo_channel_views.retain(|(kept, _)| *kept != id && history.row_of(*kept).is_some());
+    st.undo_channel_views.push((id, view));
+}
+
+/// Undo just made the state with a kept view current: target and show the channels it did.
+pub(crate) fn restore_view_after_undo(st: &mut DocState) {
+    let Some(id) = st.history.row_id(st.history.past_len()) else { return };
+    let Some((_, view)) = st.undo_channel_views.iter().find(|(kept, _)| *kept == id) else { return };
+    st.channel_view = view.clone();
+    fix_view(st);
 }

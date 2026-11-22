@@ -125,6 +125,8 @@ mod view;
 
 #[cfg(test)]
 mod apply_image_locked_layer_tests;
+#[cfg(test)]
+mod undo_channel_target_tests;
 
 use calc::{apply_image, calculations};
 use manage::{delete_channel, duplicate_channel, move_channel, new_channel, new_spot, options, rename_channel, set_visible};
@@ -145,8 +147,8 @@ pub(crate) use targeting::{
 };
 pub use targeting::{follows_filter_mask, follows_target, follows_vector_mask_target, gray_target, read_target_surface};
 pub use tone_target::{ToneTarget, resolve_tone_target};
-pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
+pub(crate) use view::{fix_view, restore_view_after_undo};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

@@ -55,6 +55,7 @@ impl Session {
                 let before = std::mem::replace(st.doc_mut(), d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
+                channel_cmds::restore_view_after_undo(st);
                 st.bump_revision(keep_clean);
                 st.last_damage = damage;
                 st.record_damage();
