@@ -1,0 +1,36 @@
+{
+  "schema": "craft-nightly-release-policy/v1",
+  "repository": "storytold/photocraft",
+  "repository_id": null,
+  "producer_workflow_id": null,
+  "producer_workflow_path": ".github/workflows/nightly.yml",
+  "producer_tooling_revision": null,
+  "producer_workflow_ref": null,
+  "signer_workflow_path": ".github/workflows/nightly-sign.yml",
+  "signer_tooling_revision": null,
+  "release_branch": "release",
+  "manual_actors": [],
+  "platform": "windows-x86_64",
+  "max_age_seconds": null,
+  "candidate_policy": {
+    "schema": "craft-nightly-candidate-policy/v3",
+    "epoch": null,
+    "repository": "storytold/photocraft",
+    "branch": "main",
+    "required_workflows": null,
+    "sonar": {
+      "organization": null,
+      "project": null,
+      "app_id": null,
+      "check_name": null,
+      "details_url": null,
+      "issue_types": null,
+      "accepted_conditions": null,
+      "required_conditions": null,
+      "debt": null
+    }
+  },
+  "unsigned_artifact_name": null,
+  "max_artifact_bytes": null,
+  "windows_publisher_subject": null
+}

@@ -11,6 +11,7 @@ def main() -> int:
     for name, relative in (
         ("photo_archive_suite", "nightly-archive-tests.py"),
         ("photo_plist_suite", "macos/nightly_plist_tests.py"),
+        ("photo_release_dispatch_suite", "nightly-release-tests.py"),
     ):
         spec = importlib.util.spec_from_file_location(name, here / relative)
         module = importlib.util.module_from_spec(spec)
