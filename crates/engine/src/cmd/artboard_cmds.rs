@@ -84,10 +84,23 @@ fn has_free_layers(s: &Session) -> std::result::Result<(), String> {
     if sel.is_empty() {
         return Err("select one or more layers".into());
     }
-    if sel.iter().any(|id| d.doc.artboard_of(*id).is_some()) {
-        return Err("the selection is already in an artboard".into());
+    // Layers inside an artboard move out into the new board (#14573); an artboard itself can't go into one.
+    if sel.iter().any(|id| d.doc.layer(*id).is_some_and(|l| l.artboard().is_some())) {
+        return Err("an artboard is selected".into());
+    }
+    // Layers in two different artboards weren't measured: refused, as before.
+    if boards_of(&d.doc, sel).len() > 1 {
+        return Err("the selection is in more than one artboard".into());
     }
     Ok(())
+}
+
+/// The distinct artboards holding `ids`.
+fn boards_of(doc: &photocraft_doc::Document, ids: &[LayerId]) -> Vec<LayerId> {
+    let mut boards: Vec<LayerId> = ids.iter().filter_map(|id| doc.artboard_of(*id)).collect();
+    boards.sort_by_key(|b| b.0);
+    boards.dedup();
+    boards
 }
 
 fn preset_size(name: &str) -> Option<(u32, u32)> {
@@ -426,9 +439,19 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let size = [int(p, "width").filter(|v| *v != 0), int(p, "height").filter(|v| *v != 0)];
     let (gid, rect, shift) = s.edit("New Artboard From Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &sel);
-        if ids.is_empty() || ids.iter().any(|id| doc.artboard_of(*id).is_some()) {
-            return Err(EngineError::Other("select layers that are not in an artboard".into()));
+        if ids.is_empty() || ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some())) || boards_of(doc, &ids).len() > 1 {
+            return Err(EngineError::Other("select layers that are not artboards, in at most one artboard".into()));
         }
+        // Layers taken out of an artboard (#14573): the new board goes where the topmost selected layer's top-level
+        // layer is, above the old board when that layer stays (Photoshop's measured stacks). Otherwise on top, as before.
+        let nested = ids.iter().any(|id| doc.artboard_of(*id).is_some());
+        let top_index = |doc: &photocraft_doc::Document, id: &LayerId| doc.path_of(*id).and_then(|p| p.first().copied());
+        let anchor = ids.iter().filter_map(|id| top_index(doc, id)).max();
+        let removed_below = |anchor: usize| ids.iter().filter(|id| doc.path_of(**id).is_some_and(|p| p.len() == 1 && p[0] < anchor)).count();
+        let place = anchor.filter(|_| nested).map(|a| {
+            let anchor_moves = doc.layers.get(a).is_some_and(|l| ids.contains(&l.id));
+            a - removed_below(a) + usize::from(!anchor_moves)
+        });
         let mut children = Vec::with_capacity(ids.len());
         for id in &ids {
             children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
@@ -437,7 +460,14 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         let rect = board_rect(cmd, [x, y, size[0].unwrap_or(w), size[1].unwrap_or(h)])?;
         let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), children);
         set_artboard(&mut g, Artboard { rect, background, preset: String::new() });
-        let gid = doc.insert_above(None, g);
+        let gid = match place.filter(|i| *i <= doc.layers.len()) {
+            Some(i) => {
+                let id = g.id;
+                doc.layers.insert(i, g);
+                id
+            }
+            None => doc.insert_above(None, g),
+        };
         crate::layer_multi_cmds::check_group_depth(doc, "Artboard from Layers")?;
         let shift = fit_canvas(doc);
         *active = Some(gid);
@@ -1469,6 +1499,10 @@ mod include_name_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/from_layers_history_name_tests.rs"]
 mod from_layers_history_name_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_layers_nested_tests.rs"]
+mod from_layers_nested_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]
