@@ -263,9 +263,9 @@ fn camera_raw_filter_preserves_alpha_separately() {
     p.clarity = 20.0;
     p.texture = 25.0;
     p.dehaze = 15.0;
-    p.sharpening = 30.0;
+    p.sharpen_amount = 30.0;
     p.grain_amount = 20.0;
-    p.vignette = -25.0;
+    p.vignette_amount = -25.0;
 
     camera_raw::develop(&mut px, w, h, &p, &DevelopInputs::default(), true);
 
