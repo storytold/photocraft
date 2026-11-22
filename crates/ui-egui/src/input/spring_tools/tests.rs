@@ -187,3 +187,47 @@ fn a_tool_picked_while_a_letter_is_held_stands() {
     assert_eq!(h.state().ui.tool, Tool::Lasso);
     assert_eq!(h.state().ui.spring, None);
 }
+
+/// A key the user gave a tool in Edit › Keyboard Shortcuts springs as the tool's letter does: held, it gives the previous
+/// tool back; tapped, the switch stands.
+#[test]
+fn a_held_assigned_key_gives_the_previous_tool_back() {
+    let mut h = harness(Tool::Brush);
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Y"}})).unwrap();
+    down(&mut h, Key::Y);
+    wait(&mut h, SPRING_HOLD_SECS + 0.1);
+    assert_eq!(h.state().ui.tool, Tool::Hand);
+    up(&mut h, Key::Y);
+    assert_eq!(h.state().ui.tool, Tool::Brush);
+    assert_eq!(h.state().ui.spring, None);
+
+    down(&mut h, Key::Y);
+    up(&mut h, Key::Y);
+    assert_eq!(h.state().ui.tool, Tool::Hand, "a tap switches for good");
+}
+
+/// An assigned key springs from a tool of its tool's own letter group: it picks exactly its tool, so it is no cycle.
+#[test]
+fn an_assigned_key_springs_within_its_letter_group() {
+    let mut h = harness(Tool::Brush);
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.select.pencil": "Y"}})).unwrap();
+    down(&mut h, Key::Y);
+    wait(&mut h, SPRING_HOLD_SECS + 0.1);
+    assert_eq!(h.state().ui.tool, Tool::Pencil);
+    up(&mut h, Key::Y);
+    assert_eq!(h.state().ui.tool, Tool::Brush);
+}
+
+/// An assigned key pressed while a letter is held wins, and releasing both gives the original tool back.
+#[test]
+fn an_assigned_key_and_a_letter_held_together_restore_the_original() {
+    let mut h = harness(Tool::Brush);
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Y"}})).unwrap();
+    down(&mut h, Key::E);
+    down(&mut h, Key::Y);
+    assert_eq!(h.state().ui.tool, Tool::Hand);
+    up(&mut h, Key::E);
+    assert_eq!(h.state().ui.tool, Tool::Hand, "Y is still held");
+    up(&mut h, Key::Y);
+    assert_eq!(h.state().ui.tool, Tool::Brush);
+}

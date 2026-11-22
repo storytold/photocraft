@@ -1,4 +1,4 @@
-//! Spring-loaded tool keys (#2672): hold a tool's letter for a temporary tool.
+//! Spring-loaded tool keys (#2672): hold a tool's letter, or a key the user gave a tool, for a temporary tool.
 //!
 //! A tool letter switches tools when its command fires (`shortcut_dispatch::run_fired`). If the key is
 //! then held for [`SPRING_HOLD_SECS`] or longer, or the canvas is used while it is down, the switch
@@ -49,6 +49,16 @@ pub struct Spring {
     pub used: bool,
     /// Every letter is up and the switch is temporary, but a drag is still in progress.
     pub released: bool,
+}
+
+/// The key `tool`'s key is held as in [`Spring::keys`]: its letter while the tool keeps it, else a character of the tool
+/// itself (Unicode plane 15, private use), since a key the user gave one tool selects exactly that tool (#4086) and two
+/// tools of one letter can each have one.
+pub fn key_id(app: &PhotocraftApp, tool: Tool) -> char {
+    if crate::tool_shortcuts::uses_default(app, tool) {
+        return tool.key();
+    }
+    char::from_u32(0xF_0000 + tool as u32).unwrap_or('\0')
 }
 
 /// The egui key of a tool letter (`None` for the tools without one), for the tests that press it.
