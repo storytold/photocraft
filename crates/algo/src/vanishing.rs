@@ -292,19 +292,59 @@ fn quad_mask(h: &Homography, area: Rect) -> Vec<f32> {
         .collect()
 }
 
+/// The unturned box and its transform about the centre in the plane's metric.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PastePlacement {
+    /// Top-left of the unturned box in plane coordinates.
+    pub at: [f64; 2],
+    /// Width of the box as a fraction of the plane's width.
+    pub width: f64,
+    /// Clockwise rotation in degrees.
+    pub angle: f64,
+    pub flip_h: bool,
+    pub flip_v: bool,
+}
+
+impl PastePlacement {
+    pub fn new(at: [f64; 2], width: f64) -> Self {
+        Self { at, width, angle: 0.0, flip_h: false, flip_v: false }
+    }
+}
+
 /// Pastes `src` (content in `src_rect`) onto plane `i` with its top-left at plane coordinates
 /// `at` (0..1) and its width `width` (fraction of the plane's width), aspect preserved in the
 /// plane's metric. Returns the warped image clipped to the plane (transparent elsewhere).
 pub fn paste(scene: &Scene, i: usize, src: &Surface, src_rect: Rect, at: [f64; 2], width: f64) -> Result<Option<Surface>, photocraft_raster::AllocationError> {
+    paste_placed(scene, i, src, src_rect, &PastePlacement::new(at, width))
+}
+
+/// Pastes with rotation and mirroring in the plane's metric.
+pub fn paste_placed(
+    scene: &Scene,
+    i: usize,
+    src: &Surface,
+    src_rect: Rect,
+    placement: &PastePlacement,
+) -> Result<Option<Surface>, photocraft_raster::AllocationError> {
     let Some((h, lu, lv)) = scene.frame(i) else { return Ok(None) };
     let (sw, sh) = (src_rect.width() as f64, src_rect.height() as f64);
-    if sw <= 0.0 || sh <= 0.0 {
+    if sw <= 0.0 || sh <= 0.0 || ![lu, lv].iter().all(|l| l.is_finite() && *l > 0.0) {
         return Ok(None);
     }
-    // Source px → plane (u, v): u spans `width`, v keeps the metric aspect.
-    let su = width / sw;
-    let sv = width * lu / lv / sw;
-    let to_plane = Homography([su, 0.0, at[0] - src_rect.x0 as f64 * su, 0.0, sv, at[1] - src_rect.y0 as f64 * sv, 0.0, 0.0, 1.0]);
+    let PastePlacement { at, width, angle, flip_h, flip_v } = *placement;
+    let height = width * lu / lv * sh / sw;
+    let (w, h_metric) = (width * lu, height * lv);
+    let (sin, cos) = angle.to_radians().sin_cos();
+    let fx = if flip_h { -1.0 } else { 1.0 };
+    let fy = if flip_v { -1.0 } else { 1.0 };
+    let (a, b) = (w * fx * cos / lu, -h_metric * fy * sin / lu);
+    let (d, e) = (w * fx * sin / lv, h_metric * fy * cos / lv);
+    // The source rectangle's centre maps to the unturned box's centre.
+    let sx = f64::from(src_rect.x0) / sw + 0.5;
+    let sy = f64::from(src_rect.y0) / sh + 0.5;
+    let u = at[0] + width / 2.0 - a * sx - b * sy;
+    let v = at[1] + height / 2.0 - d * sx - e * sy;
+    let to_plane = Homography([a / sw, b / sh, u, d / sw, e / sh, v, 0.0, 0.0, 1.0]);
     let full = h.mul(&to_plane);
     let mut out = warp_surface(src, src_rect, &full, Interp::Bicubic)?;
     // Clip to the plane.

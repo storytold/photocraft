@@ -14,7 +14,7 @@ use craft::behavior::kurbo::Point;
 use craft::behavior::{EditEvent, PixelSize};
 use craft::imaging::ui::vanishing_point::{
     PlaneCheck, PlaneEdge, StampLimits, StampStroke, TornPlane, VanishingPlane, VanishingPointCommand, VanishingPointEvent, VanishingPointOpen,
-    VanishingPointSession, VanishingPointSettings, VanishingPointSource, VanishingPointWorkspace, VanishingPreviewRequest, VanishingScene,
+    VanishingPointSession, VanishingPointSource, VanishingPointWorkspace, VanishingPreviewRequest, VanishingScene, VanishingTool,
 };
 use craft::imaging::ui::wide_angle::PreviewDone;
 use craft::theme::variant::Tone;
@@ -23,7 +23,7 @@ use craft::ui::dialog::{DialogId, HostedWorkspace};
 use craft::ui::primitives::Revision;
 use craft::ui::runtime::pending::Job;
 use egui::{Color32, ColorImage};
-use photocraft_algo::vanishing::{Edge, PlaneCheck as AlgoCheck, Scene, VpPlane, clone_dabs_from, clone_source};
+use photocraft_algo::vanishing::{Edge, PastePlacement, PlaneCheck as AlgoCheck, Scene, VpPlane, clone_dabs_from, clone_source};
 use photocraft_compose::{composite_to_surface, effects::has_effects, siblings_of};
 use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
 use photocraft_engine::vp_cmds::{MAX_CLONE_DABS, MAX_CLONE_STROKES, VP, copy_changed, over, paste_onto, samples_visible, visible_image};
@@ -146,18 +146,26 @@ struct Inputs {
     clip: Option<Clip>,
 }
 
-/// The bar's choices that change what the strokes paint on: New Layer and the paste (plane, top-left, width).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// What the strokes paint on: the target layer and the ordered clipboard pastes.
+#[derive(Clone, Debug, Default, PartialEq)]
 struct PaintContext {
     new_layer: bool,
-    paste: Option<(usize, [f64; 2], f64)>,
+    /// Each paste's plane, placement and the strokes before it, ordered by those strokes.
+    pastes: Vec<(usize, PastePlacement, usize)>,
 }
 
 impl PaintContext {
     /// The context the workspace's OK would answer with, so the preview paints what OK will.
     fn of(workspace: &VanishingPointWorkspace, has_paste: bool) -> Self {
         let command = workspace.command(has_paste);
-        PaintContext { new_layer: command.new_layer, paste: command.paste.first().map(|p| (p.plane, p.at, p.width)) }
+        let mut pastes: Vec<_> = command
+            .paste
+            .into_iter()
+            .map(|p| (p.plane, PastePlacement { at: p.at, width: p.width, angle: p.angle, flip_h: p.flip_h, flip_v: p.flip_v }, p.after))
+            .collect();
+        // Stable: pastes before the same stroke keep their order.
+        pastes.sort_by_key(|p| p.2);
+        PaintContext { new_layer: command.new_layer, pastes }
     }
 }
 
@@ -181,6 +189,8 @@ struct StampState {
     doc: Option<Document>,
     /// The strokes painted, the last one possibly in part.
     painted: Vec<StampStroke>,
+    /// How many of the key's pastes are laid down.
+    laid: usize,
 }
 
 /// Whether `strokes` continue what `painted` holds: the same strokes, the last of `painted` possibly shorter.
@@ -235,12 +245,12 @@ impl Preview {
 
     /// Paints `session`'s strokes with the context the app last saw.
     fn paint_latest(&self, session: &VanishingPointSession) -> bool {
-        let context = *locked(&self.latest);
+        let context = locked(&self.latest).clone();
         self.paint(session, context)
     }
 
     /// Paints what the picture does not show yet: the strokes after the ones painted, or everything when the planes,
-    /// the paste or New Layer changed or the strokes are not a continuation. True when the picture changed.
+    /// the pastes or New Layer changed or the strokes are not a continuation. True when the picture changed.
     fn paint(&self, session: &VanishingPointSession, context: PaintContext) -> bool {
         let mut guard = locked(&self.state);
         if session.strokes.is_empty() {
@@ -252,14 +262,9 @@ impl Preview {
         let stale = guard.as_ref().is_none_or(|s| s.key != key || !extends(&s.painted, &session.strokes));
         let mut area = Rect::EMPTY;
         if stale {
+            let context = &key.context;
             let Some(layer) = self.inputs.base.layer(self.inputs.layer).and_then(Layer::surface) else { return self.hide(&mut guard) };
-            let mut out = if context.new_layer { Surface::new(layer.format()) } else { layer.clone() };
-            // OK pastes first and the strokes then paint over (and sample) the pasted pixels.
-            if let (Some((i, at, width)), Some(c)) = (context.paste, self.inputs.clip.as_ref())
-                && session.planes.get(i).is_some_and(|p| self.scene.check_plane(p) != PlaneCheck::Invalid)
-            {
-                let _ = paste_onto(&sc, &mut out, i, &c.surface, c.rect, at, width);
-            }
+            let out = if context.new_layer { Surface::new(layer.format()) } else { layer.clone() };
             // A new or an empty layer samples the visible image, as OK does (`samples_visible`).
             let work = samples_visible(context.new_layer, layer).then(|| {
                 let mut w = visible_image(&self.inputs.base);
@@ -273,9 +278,28 @@ impl Preview {
                 }
                 doc
             });
-            *guard = Some(StampState { key, work, source: None, out, doc, painted: Vec::new() });
+            *guard = Some(StampState { key, work, source: None, out, doc, painted: Vec::new(), laid: 0 });
         }
         let Some(st) = guard.as_mut() else { return false };
+        // The pastes lie between the strokes, as OK lays them: each over the strokes made before it, and sampled by the
+        // later ones.
+        let pastes = st.key.context.pastes.clone();
+        let lay = |st: &mut StampState, upto: usize| {
+            let mut laid = Rect::EMPTY;
+            while let Some((i, placement, _)) = pastes.get(st.laid).filter(|p| p.2 <= upto) {
+                st.laid += 1;
+                let (Some(c), true) = (&self.inputs.clip, session.planes.get(*i).is_some_and(|p| self.scene.check_plane(p) != PlaneCheck::Invalid)) else {
+                    continue;
+                };
+                if let Some(work) = st.work.as_mut() {
+                    let _ = paste_onto(&sc, work, *i, &c.surface, c.rect, placement);
+                }
+                if let Ok(r) = paste_onto(&sc, &mut st.out, *i, &c.surface, c.rect, placement) {
+                    laid = union(laid, r.intersect(&canvas));
+                }
+            }
+            laid
+        };
         let first = st.painted.len().saturating_sub(1);
         let skip_first = st.painted.last().map_or(0, |c| c.points.len());
         for (si, c) in session.strokes.iter().enumerate().skip(first) {
@@ -283,6 +307,9 @@ impl Preview {
             let (Some(anchor), Some(points)) = (c.points.first(), c.points.get(skip..)) else { continue };
             if points.is_empty() {
                 continue;
+            }
+            if skip == 0 {
+                area = union(area, lay(st, si));
             }
             if st.source.as_ref().is_none_or(|(stroke, _)| *stroke != si) {
                 st.source = Some((si, st.work.as_ref().unwrap_or(&st.out).clone()));
@@ -302,6 +329,7 @@ impl Preview {
             };
             area = union(area, changed);
         }
+        area = union(area, lay(st, session.strokes.len()));
         for (si, c) in session.strokes.iter().enumerate().skip(first) {
             match st.painted.get_mut(si) {
                 Some(done) => {
@@ -563,24 +591,47 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<(), String
         None => return Err("no active layer".into()),
     };
     let canvas = st.doc.bounds();
+    let kept = kept_session(&st.doc.vanishing_planes);
     let (base, document) = (st.doc.clone(), st.doc.id);
     let clip = app.session.clipboard.as_ref().and_then(|c| {
         let r = c.surface.content_bounds();
         (!r.is_empty()).then(|| Clip { surface: c.surface.clone(), rect: r })
     });
     let source = Arc::new(PcVanishingSource::new(base, layer, canvas, clip));
-    let mut settings = VanishingPointSettings::default();
-    settings.paste = source.has_paste();
-
-    let open = VanishingPointOpen::new([canvas.width(), canvas.height()], name, StampLimits::new(MAX_CLONE_STROKES, MAX_CLONE_DABS))
-        .settings(settings)
+    let mut open = VanishingPointOpen::new([canvas.width(), canvas.height()], name, StampLimits::new(MAX_CLONE_STROKES, MAX_CLONE_DABS))
         .navigation(crate::canvas::document_display::navigation(app))
         .checkerboard(crate::canvas::document_display::checkerboard(app).unwrap_or_default());
+    let reopened = kept.is_some();
+    if let Some(session) = kept {
+        open = open.session(session);
+    }
+    let mut workspace = VanishingPointWorkspace::new(open);
+    if reopened {
+        // As Photoshop: back with the document's planes, ready to edit them.
+        workspace.tool(VanishingTool::EditPlane);
+    }
     let dynamic: Arc<dyn VanishingPointSource> = source.clone();
-    let dialog = app.framework.dialogs.open(HostedWorkspace::new(VanishingPointWorkspace::new(open), dynamic).held_ok());
+    let dialog = app.framework.dialogs.open(HostedWorkspace::new(workspace, dynamic).held_ok());
     app.vanishing = Some(VpApp { document, layer, dialog, source });
-    app.ui.status = tl!("Vanishing Point: click four corners to create a plane").into();
+    app.ui.status = if reopened { tl!("Vanishing Point: the document's planes") } else { tl!("Vanishing Point: click four corners to create a plane") }.into();
     Ok(())
+}
+
+/// The workspace session for the planes a document keeps, `None` when it keeps none.
+fn kept_session(planes: &[photocraft_doc::VanishingPlane]) -> Option<VanishingPointSession> {
+    if planes.is_empty() {
+        return None;
+    }
+    let edge = |e: &str| match e {
+        "right" => PlaneEdge::Right,
+        "bottom" => PlaneEdge::Bottom,
+        "left" => PlaneEdge::Left,
+        _ => PlaneEdge::Top,
+    };
+    let mut session = VanishingPointSession::default();
+    session.planes = planes.iter().map(|p| VanishingPlane::new(p.corners)).collect();
+    session.torn = planes.iter().map(|p| p.torn.as_ref().map(|t| TornPlane::new(t.from, edge(&t.edge), t.angle, t.depth))).collect();
+    Some(session)
 }
 
 /// Whether an edit event belongs to a gesture still running: its result is painted when the gesture ends.
@@ -588,10 +639,10 @@ fn in_flight<T>(event: &EditEvent<T>) -> bool {
     matches!(event, EditEvent::Begin { .. } | EditEvent::Update { .. })
 }
 
-/// Runs OK's command: `filter.vanishingPoint` with the planes, the paste and the strokes, on the layer the workspace
-/// opened on. With nothing to paste or clone there is nothing to run.
+/// Runs OK's command: `filter.vanishingPoint` with the planes, the pastes and the strokes, on the layer the workspace
+/// opened on. With nothing to paste or clone it only keeps the planes with the document (none: nothing to run).
 fn apply(app: &mut PhotocraftApp, layer: LayerId, command: &VanishingPointCommand) -> Result<(), String> {
-    if command.paste.is_empty() && command.clone.is_empty() {
+    if command.planes.is_empty() && command.paste.is_empty() && command.clone.is_empty() {
         return Ok(());
     }
     let mut params = serde_json::to_value(command).map_err(|e| e.to_string())?;
