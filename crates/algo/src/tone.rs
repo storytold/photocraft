@@ -205,6 +205,8 @@ pub struct HdrToning {
     pub exposure: f32,
     /// -100..=300 %.
     pub detail: f32,
+    /// Accepted, and has no effect: the reference application's Shadow changed neither measured
+    /// document, and what it does on high-dynamic-range data isn't measured yet (#14724).
     pub shadow: f32,
     pub highlight: f32,
     /// -100..=100.
@@ -250,9 +252,39 @@ fn curve_eval(pts: &[(f32, f32)], x: f32) -> f32 {
     pts[pts.len() - 1].1
 }
 
+/// HDR Toning's Highlight on the tone-mapped luminance (#14724): `l + c·l³`, so -100 compresses
+/// the highlights and +100 lifts them (main had the sign the other way round). +100 is c = 0.5.
+/// -100 is c = -1/3, the strongest darkening whose slope stays at or above 0 up to white, so a
+/// brighter input never comes out darker: the bare cubic at c = -0.5 turned back down past 0.82
+/// and went black past 1.41. White comes out at 2/3, near the reference's 253 → 156. A darkening
+/// holds its peak past the turning point 1/√(-3c), which is 1.0 at -100 and further out for milder
+/// settings, so a high-dynamic-range value above 1.0 still maps below white while it can.
+#[derive(Clone, Copy)]
+pub(crate) struct HdrHighlight {
+    c: f64,
+    knee: f64,
+}
+
+impl HdrHighlight {
+    pub(crate) fn new(highlight: f32) -> Self {
+        let h = f64::from(highlight);
+        let c = if h < 0.0 { h / 300.0 } else { h / 200.0 };
+        Self { c, knee: if c < 0.0 { (-1.0 / (3.0 * c)).sqrt() } else { f64::INFINITY } }
+    }
+
+    pub(crate) fn apply(self, l: f64) -> f64 {
+        // A NaN stays NaN for the checked path to refuse: `min` would turn it into the knee.
+        if self.c == 0.0 || l.is_nan() {
+            return l;
+        }
+        let l = l.min(self.knee);
+        l + self.c * l.powi(3)
+    }
+}
+
 /// Local adaptation tone mapping (Durand–Dorsey style base/detail split in log luminance): the
 /// blurred log luminance (radius) is the base layer, compressed toward its mean by `strength`;
-/// detail is boosted; then exposure, gamma, shadow/highlight lift, the toning curve, and
+/// detail is boosted; then exposure, gamma, the highlight curve, the toning curve, and
 /// vibrance/saturation. Like Photoshop the result is a flattened, low-dynamic-range image.
 pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
     if px.is_empty() {
@@ -274,6 +306,7 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
     let gamma = p.gamma.clamp(0.1, 4.0);
     let mut sorted = p.curve.clone();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let highlight = HdrHighlight::new(p.highlight);
     // Per-pixel tone map: embarrassingly parallel (base/logl read by index).
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
@@ -287,7 +320,7 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
             // The contract is "lower = more contrast", i.e. gamma is the divisor of
             // the exponent, matching the crate's other gamma controls (hdr.rs, proof_sim.rs).
             let mut l1 = (new_log.exp() * exposure).max(0.0).powf(1.0 / gamma);
-            l1 += p.shadow / 100.0 * (1.0 - l1).powi(3) * 0.5 - p.highlight / 100.0 * l1.powi(3) * 0.5;
+            l1 = highlight.apply(f64::from(l1)) as f32;
             l1 = curve_eval(&sorted, l1.clamp(0.0, 1.0));
             let ratio = l1 / l0;
             let mut out = c.map(|v| v * ratio);
@@ -305,6 +338,9 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
         }
     });
 }
+
+#[cfg(test)]
+mod hdr_toning_highlight_tests;
 
 #[cfg(test)]
 mod tests {

@@ -193,6 +193,7 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
     let compress = 1. / (1. + p.strength);
     let detail = 1. + p.detail / 100.;
     let exposure = 2f32.powf(p.exposure);
+    let highlight = super::HdrHighlight::new(p.highlight);
     independent_chunks(px, |start, qs| {
         check(ctl)?;
         let bs = base.get(start..start + qs.len()).ok_or(Error::InvalidGeometry)?;
@@ -205,20 +206,11 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
             let l0 = luma(c).max(0.) + 1e-4;
             let new_log = mean + (*b - mean) * compress + (*l - *b) * detail;
             let mut l1 = (new_log.exp() * exposure).max(0.).powf(1. / p.gamma);
-            l1 += p.shadow / 100. * (1. - l1).powi(3) * 0.5 - p.highlight / 100. * l1.powi(3) * 0.5;
-            if !l1.is_finite() {
-                // Preserve ordinary native arithmetic, but evaluate extreme valid HDR in a
-                // wider domain. A cap beyond every f32 control's polynomial crossover keeps
-                // cubing finite; those values already saturate at the final display clamp.
-                let log_value = (f64::from(new_log) + f64::from(p.exposure) * std::f64::consts::LN_2) / f64::from(p.gamma);
-                let value = log_value.exp().min(1e100);
-                let shadow = f64::from(p.shadow) / 200.;
-                let highlight = f64::from(p.highlight) / 200.;
-                let mapped = ((-(shadow + highlight) * value + 3. * shadow) * value + (1. - 3. * shadow)) * value + shadow;
-                l1 = mapped.clamp(0., 1.) as f32;
-                if !l1.is_finite() {
-                    return Err(Error::NonFiniteSample);
-                }
+            l1 = highlight.apply(f64::from(l1)) as f32;
+            // A tone past f32 is +inf (Highlight at or above 0), which the display clamp below
+            // makes white, as on the direct path; only a NaN, a broken sample, is refused.
+            if l1.is_nan() {
+                return Err(Error::NonFiniteSample);
             }
             l1 = curve_eval(&curve, l1.clamp(0., 1.));
             let mut out = c.map(|v| v * (l1 / l0));
