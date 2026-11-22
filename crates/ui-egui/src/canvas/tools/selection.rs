@@ -596,11 +596,20 @@ fn wand_click(app: &mut PhotocraftApp, click: &WandClick) {
     }
     let o = app.ui.tool_options.clone();
     let mode = crate::tool_feedback::mode_name(click.operation);
-    run(
-        app,
+    if let Err(e) = app.run(
         "select.magicWand",
         json!({"x": x, "y": y, "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}),
-    );
+    ) {
+        if e == photocraft_engine::selection_cmds::WAND_GROUP_TARGET_ERROR {
+            // The reference answers a group target with Sample All Layers off with an alert and an OK
+            // button, not the status line (#11784). The engine ran nothing, so the selection and the
+            // History are already as they were.
+            crate::dialogs::alerts::alert(app, tl!(photocraft_engine::selection_cmds::WAND_GROUP_TARGET_ERROR));
+        } else {
+            // Every other answer, and every other tool's error, stays on the status line (`run`).
+            crate::dialogs::alerts::report_error(app, e);
+        }
+    }
 }
 
 fn drag_event(app: &mut PhotocraftApp, prompted: &mut bool, edit: EditEvent<SelectionDrag>) {
@@ -941,3 +950,7 @@ mod tests {
         assert!(app.session.active().unwrap().doc.selection.is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "wand_group_dialog_tests.rs"]
+mod wand_group_dialog_tests;
