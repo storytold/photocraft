@@ -643,15 +643,75 @@ pub(crate) fn shape_image(shape: &photocraft_engine::presets::shapes::ShapePrese
     )
 }
 
-/// The texture cache key of a shape's raster: its name and size of path.
-fn shape_key(shape: &ShapePreset) -> PictureKey {
+/// The texture cache key of a shape's raster: its panel key ([`shape_keys`]) and size of path.
+fn shape_key(key: &str, shape: &ShapePreset) -> PictureKey {
     let knots: usize = shape.path.subpaths.iter().map(|s| s.knots.len()).sum();
-    ("shape", shape.name.clone(), u64::try_from(knots).unwrap_or(u64::MAX))
+    ("shape", key.to_string(), u64::try_from(knots).unwrap_or(u64::MAX))
 }
 
-/// The swatch of `shape`, keyed and named by its name.
-fn shape_swatch(shape: ShapePreset) -> Swatch {
-    Swatch { key: shape.name.clone(), name: shape.name.clone(), picture: shape_key(&shape), art: Art::Shape(Arc::new(shape)) }
+/// The swatch of `shape` under its panel `key`, named by its name.
+fn shape_swatch(key: String, shape: ShapePreset) -> Swatch {
+    Swatch { picture: shape_key(&key, &shape), key, name: shape.name.clone(), art: Art::Shape(Arc::new(shape)) }
+}
+
+/// Separates the parts of the key of a shape whose name another shape has too.
+const SHAPE_KEY_SEP: char = '\u{1f}';
+
+/// The panel and picker keys of `groups`' shapes, group by group: a shape's name, or, for a name more than one shape
+/// has (two custom shapes defined with one name, #14291), the name with its group and position, so each row is its own
+/// shape. [`shape_ref`] turns a key back into the params that name the shape.
+pub(crate) fn shape_keys(groups: &[photocraft_engine::presets::Group<ShapePreset>]) -> Vec<Vec<String>> {
+    let mut count = std::collections::HashMap::<&str, usize>::new();
+    for shape in groups.iter().flat_map(|g| &g.items) {
+        *count.entry(shape.name.as_str()).or_default() += 1;
+    }
+    groups
+        .iter()
+        .map(|g| {
+            g.items
+                .iter()
+                .enumerate()
+                .map(|(i, shape)| {
+                    if count.get(shape.name.as_str()).copied().unwrap_or(0) > 1 {
+                        format!("{}{SHAPE_KEY_SEP}{}{SHAPE_KEY_SEP}{i}", shape.name, g.name)
+                    } else {
+                        shape.name.clone()
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The `shape.presets.place` / `shape.presets.edit` params that name the shape of the panel `key` ([`shape_keys`]):
+/// `preset`, plus `group` and `position` for a name more than one shape has. `with_position` false leaves the
+/// position out (a move names the shape by name and group).
+pub(crate) fn shape_ref(key: &str, with_position: bool) -> Value {
+    let mut parts = key.rsplitn(3, SHAPE_KEY_SEP);
+    match (parts.next().and_then(|n| n.parse::<u64>().ok()), parts.next(), parts.next()) {
+        (Some(position), Some(group), Some(name)) if with_position => json!({"preset": name, "group": group, "position": position}),
+        (Some(_), Some(group), Some(name)) => json!({"preset": name, "group": group}),
+        _ => json!({"preset": key}),
+    }
+}
+
+/// The shape name in the panel `key`.
+pub(crate) fn shape_name(key: &str) -> String {
+    shape_ref(key, false)["preset"].as_str().unwrap_or(key).to_string()
+}
+
+/// `params` with the fields of `more` added (both objects).
+fn merged(mut params: Value, more: Value) -> Value {
+    if let (Some(to), Value::Object(from)) = (params.as_object_mut(), more) {
+        to.extend(from);
+    }
+    params
+}
+
+/// The params that name the preset of `key` in `panel`'s commands: `preset`, and for a shape its group and position
+/// when its name is shared ([`shape_ref`]).
+fn item_ref(panel: PresetPanel, key: &str, with_position: bool) -> Value {
+    if panel.id == SHAPES.id { shape_ref(key, with_position) } else { json!({"preset": key}) }
 }
 
 /// A Shapes panel thumbnail: the shape's raster, inset from the tile's edge.
@@ -667,12 +727,15 @@ fn shape_thumb(inputs: &PanelInputs<Vec<Swatch>>, cx: &ContentPainterCx, rect: R
 /// canvas places it where it lands.
 pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    let keys = shape_keys(&groups);
     let folders: Vec<Folder> = groups
         .iter()
-        .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|shape| (shape.name.clone(), shape.name.clone())).collect() })
+        .zip(&keys)
+        .map(|(group, keys)| Folder { name: group.name.clone(), items: keys.iter().cloned().zip(group.items.iter().map(|shape| shape.name.clone())).collect() })
         .collect();
     let names = names_of(&folders);
-    let swatches: Vec<Swatch> = groups.into_iter().flat_map(|group| group.items).map(shape_swatch).collect();
+    let swatches: Vec<Swatch> =
+        groups.into_iter().zip(keys).flat_map(|(group, keys)| keys.into_iter().zip(group.items)).map(|(key, shape)| shape_swatch(key, shape)).collect();
     let source = panel_source(PanelInputs::new(&app.ui.presets_ui, SHAPES, folders, swatches), shape_thumb);
     let zone = canvas_zone(app);
     let (events, keys) = show(&mut app.ui.presets_ui, zone, ui, SHAPES, &source, Look::default());
@@ -688,7 +751,7 @@ fn shape_fill(app: &PhotocraftApp) -> Value {
 /// The `shape.presets.place` params of `key`: at its default place, or in a square centred on the document point under
 /// the drop at `at`.
 fn shape_place(app: &PhotocraftApp, key: &str, at: Option<Pos2>) -> Value {
-    let mut params = json!({"preset": key, "fill": shape_fill(app)});
+    let mut params = merged(shape_ref(key, true), json!({"fill": shape_fill(app)}));
     if let Some(pos) = at
         && let (Some(c), Some(d)) = (crate::canvas::document_display::doc_point_at(app, pos), app.session.active())
     {
@@ -721,9 +784,12 @@ fn keep_picker_state(presets: &mut PresetUi, id: &str, state: PresetState<String
 /// Options-bar shape picker for the Custom Shape tool.
 pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     const ID: &str = "shapePicker";
-    let groups: Vec<(String, Vec<Swatch>)> = photocraft_engine::presets::shapes::all_groups(&app.session)
+    let all = photocraft_engine::presets::shapes::all_groups(&app.session);
+    let keys = shape_keys(&all);
+    let groups: Vec<(String, Vec<Swatch>)> = all
         .into_iter()
-        .map(|group| (group.name, group.items.into_iter().map(shape_swatch).collect()))
+        .zip(keys)
+        .map(|(group, keys)| (group.name, keys.into_iter().zip(group.items).map(|(key, shape)| shape_swatch(key, shape)).collect()))
         .collect();
     let source = PresetSource::new(groups, PresetFns::new(shape_rows));
     let mut value = Some(app.ui.presets_ui.shape().to_string());
@@ -756,8 +822,19 @@ fn shape_rows(groups: &Vec<(String, Vec<Swatch>)>, _: &Env) -> Vec<PresetRow<Str
 
 /// Custom Shape tool drag: places the selected shape in the dragged rect (⇧ keeps proportions).
 pub fn finish_custom_shape(app: &mut PhotocraftApp, rect: [f64; 4], keep: bool, fill: Value, stroke: Value) {
-    let name = app.ui.presets_ui.shape().to_string();
-    let r = run(app, "shape.presets.place", json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke}));
+    let key = app.ui.presets_ui.shape().to_string();
+    let name = shape_name(&key);
+    let params = json!({"rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke});
+    // A shape picked by position whose library changed since falls back to the first shape of its name.
+    let r = match app.run("shape.presets.place", merged(shape_ref(&key, true), params.clone())) {
+        Ok(v) => Some(v),
+        Err(_) if key != name => run(app, "shape.presets.place", merged(json!({"preset": name}), params)),
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+            None
+        }
+    };
     if r.is_none() && !photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == name)) {
         let template = "No custom shape \"{name}\": pick one in the options bar or Window › Shapes";
         app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);
@@ -835,14 +912,16 @@ pub(crate) fn act(panel: PresetPanel, event: &PresetEvent<PresetKey>, rows: &[Pr
     let edit = format!("{}.edit", panel.prefix);
     let run = |params: Value| Some(Act::Run(edit.clone(), params));
     match event {
-        PresetEvent::Rename { key: PresetKey::Item(key), text, .. } => run(json!({"action": "rename", "preset": key, "name": text})),
+        PresetEvent::Rename { key: PresetKey::Item(key), text, .. } => run(merged(json!({"action": "rename", "name": text}), item_ref(panel, key, true))),
         PresetEvent::Rename { key: PresetKey::Group(group), text, .. } => run(json!({"action": "renameGroup", "group": group, "name": text})),
-        PresetEvent::Delete(PresetKey::Item(key)) => run(json!({"action": "delete", "preset": key})),
+        PresetEvent::Delete(PresetKey::Item(key)) => run(merged(json!({"action": "delete"}), item_ref(panel, key, true))),
         PresetEvent::Delete(PresetKey::Group(group)) => run(json!({"action": "deleteGroup", "group": group})),
-        PresetEvent::MoveTo { key: PresetKey::Item(key), group: PresetKey::Group(group), .. } => run(json!({"action": "move", "preset": key, "to": group})),
+        PresetEvent::MoveTo { key: PresetKey::Item(key), group: PresetKey::Group(group), .. } => {
+            run(merged(json!({"action": "move", "to": group}), item_ref(panel, key, false)))
+        }
         PresetEvent::Footer(PresetFooterEvent::NewGroup) => run(json!({"action": "newGroup", "name": "Group"})),
         PresetEvent::Footer(PresetFooterEvent::New) => Some(Act::Run(format!("{}.new", panel.prefix), (panel.new_params)())),
-        PresetEvent::Footer(PresetFooterEvent::Delete) => selected.and_then(|key| run(json!({"action": "delete", "preset": key}))),
+        PresetEvent::Footer(PresetFooterEvent::Delete) => selected.and_then(|key| run(merged(json!({"action": "delete"}), item_ref(panel, key, true)))),
         PresetEvent::Reorder(edit) if matches!(edit.phase(), Some(craft::behavior::GesturePhase::Commit) | None) => {
             let mv = edit.value()?;
             // `to` counts the rows left once the moved ones, with a moved folder's presets, are taken out.
@@ -870,7 +949,7 @@ pub(crate) fn act(panel: PresetPanel, event: &PresetEvent<PresetKey>, rows: &[Pr
                     let head = &remaining[..mv.to.min(remaining.len())];
                     let folder = head.iter().rposition(|key| matches!(key, PresetKey::Group(_)))?;
                     let PresetKey::Group(group) = head[folder] else { return None };
-                    run(json!({"action": "move", "preset": key, "to": group, "index": head.len() - folder - 1}))
+                    run(merged(json!({"action": "move", "to": group, "index": head.len() - folder - 1}), item_ref(panel, key, false)))
                 }
             }
         }
@@ -1000,3 +1079,7 @@ pub(crate) fn pattern_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, selecte
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "preset_browser/custom_shape_duplicate_tests.rs"]
+mod custom_shape_duplicate_tests;
