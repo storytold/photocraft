@@ -733,6 +733,8 @@ mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod menu_automate_groups_tests;
 #[cfg(test)]
+mod paint_bucket_options_fields_tests;
+#[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
 mod paths_scroll_tests;
