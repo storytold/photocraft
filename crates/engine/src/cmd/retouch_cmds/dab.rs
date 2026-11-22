@@ -190,7 +190,7 @@ const LINEAR_MIDTONES_STRENGTH: f32 = 1.34;
 
 /// The Midtones Dodge (`burn = false`) or Burn curve for one linear value of a 32-bit document at
 /// exposure `e` (0..1): `v ± 1.34·e·v²·(1 − v)^1.5`, each channel on its own. It is fitted to the
-/// reference's 32-bit results (#12687), which tone the stored linear values: much gentler on the
+/// reference's 32-bit results (#12687, #12674), which tone the stored linear values: much gentler on the
 /// mid tones than the 8-bit curve on gamma-encoded values, and the shadows are left alone. Black
 /// and white stay put, values outside 0..1 (light above white) are kept as they are, and tones
 /// stay in order at every exposure.
@@ -323,11 +323,11 @@ impl DabTool {
     pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32) -> DabEffect {
         let sp = spacing;
         match self.clone() {
-            // A 32-bit RGB document holds linear values, which the reference's default Dodge tones
-            // with its own curve. Grayscale, the other ranges and Protect Tones off weren't measured
+            // A 32-bit RGB document holds linear values, which the reference's default Dodge and Burn
+            // tone with their own curve. Grayscale, the other ranges and Protect Tones off weren't measured
             // there and keep the gamma curve.
-            Self::Tone { burn: false, range: ToneRange::Midtones, exposure, protect: true } if fmt.sample == SampleType::F32 && fmt.mode == ColorMode::Rgb => {
-                tone_stroke(fmt, move |c| c.map(|v| linear_midtones(v, exposure, false)))
+            Self::Tone { burn, range: ToneRange::Midtones, exposure, protect: true } if fmt.sample == SampleType::F32 && fmt.mode == ColorMode::Rgb => {
+                tone_stroke(fmt, move |c| c.map(|v| linear_midtones(v, exposure, burn)))
             }
             Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, move |c| dodge_burn(c, exposure, range, burn, protect)),
             // Flow is already in the dab's coverage. The reference RGB response applies to integer
@@ -856,3 +856,7 @@ mod smudge_mode_tests;
 #[cfg(test)]
 #[path = "dodge_32bit_linear_tests.rs"]
 mod dodge_32bit_linear_tests;
+
+#[cfg(test)]
+#[path = "burn_32bit_linear_tests.rs"]
+mod burn_32bit_linear_tests;
