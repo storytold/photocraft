@@ -74,6 +74,8 @@ fn rerender(doc: &mut Document) -> Result<usize, String> {
 /// Re-rendering Photoshop's Screen/Motion Blur oracle matches its merged composite, so the result retains the input's coverage.
 #[test]
 fn screen_motion_blur_retains_input_coverage() {
+    // Reads the command registry (the smart filters' commands) before any session exists.
+    photocraft_engine::install().unwrap();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop/smart-filters/sf-blend-screen-100.psd");
     let bytes = std::fs::read(&path).expect("Screen/Motion Blur oracle missing: run cargo xtask corpus --all");
     let file = PsdFile::from_bytes(&bytes).expect("parse Screen/Motion Blur oracle");
@@ -87,6 +89,8 @@ fn screen_motion_blur_retains_input_coverage() {
 /// Re-render every Photoshop oracle in the corpus with PhotoCraft's filters and compare it with Photoshop's own merged composite.
 #[test]
 fn photoshop_oracles_rerendered() {
+    // Reads the command registry (the smart filters' commands) before any session exists.
+    photocraft_engine::install().unwrap();
     let root = photocraft_testkit::corpus::root().join("photoshop");
     let files = photocraft_testkit::corpus::psd_files("photoshop");
     let mut groups: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
