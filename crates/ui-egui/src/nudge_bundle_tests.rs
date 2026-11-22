@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -24,16 +24,16 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn bounds(h: &Harness<'_, PhotocraftApp>) -> Rect {
+fn bounds(h: &Harness<'_, Box<PhotocraftApp>>) -> Rect {
     let st = h.state().session.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
 }
 
-fn steps(h: &Harness<'_, PhotocraftApp>) -> usize {
+fn steps(h: &Harness<'_, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
-fn nudge(h: &mut Harness<'_, PhotocraftApp>, key: egui::Key, frames: usize) {
+fn nudge(h: &mut Harness<'_, Box<PhotocraftApp>>, key: egui::Key, frames: usize) {
     h.key_press(key);
     h.run_steps(frames);
 }

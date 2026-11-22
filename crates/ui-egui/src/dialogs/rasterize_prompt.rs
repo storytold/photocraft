@@ -168,7 +168,7 @@ pub fn intercept_filter(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
         filter: Some((id.to_owned(), params.clone())),
     });
     let dialog = alerts::open_prompt(app, prompt).unwrap_or_else(|open| open);
-    Some(Ok(json!({"dialog": dialog})))
+    Some(Ok(json!({"dialog": dialog.value()})))
 }
 
 /// The `PROMPTS` entry: Proceed rasterizes, Alternate converts to a Smart Object (the filter prompt

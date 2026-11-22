@@ -25,7 +25,7 @@ fn double_click(app: &mut PhotocraftApp, at: [f64; 2]) {
     click(app, at);
 }
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":400,"height":300})).unwrap();
     app.sync_views();
@@ -49,23 +49,23 @@ fn add_photo(app: &mut PhotocraftApp, w: i32, h: i32) -> LayerId {
 }
 
 /// The document area on the app's own context, for tests that need the canvas body.
-fn harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let ctx = app.ctx().clone();
     let mut h = egui_kittest::Harness::builder()
         .with_context(ctx)
         .with_step_dt(1.0 / 60.0)
         .with_size(egui::vec2(1000., 700.))
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::canvas::document_area(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::canvas::document_area(app, ui), app);
 
     h.run_steps(4);
     h
 }
 
-fn screen_at(h: &egui_kittest::Harness<'_, PhotocraftApp>, x: f64, y: f64) -> Pos2 {
+fn screen_at(h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>, x: f64, y: f64) -> Pos2 {
     crate::canvas::document_display::active_view(h.state()).unwrap().to_screen(KPoint::new(x, y))
 }
 
-fn press_drag(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, from: Pos2, to: Pos2) {
+fn press_drag(h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>, from: Pos2, to: Pos2) {
     let mods = egui::Modifiers::NONE;
     h.event(egui::Event::PointerMoved(from));
     h.step();

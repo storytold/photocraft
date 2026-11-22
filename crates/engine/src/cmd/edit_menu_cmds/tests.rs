@@ -1,8 +1,6 @@
 use super::*;
 use photocraft_doc::vector::Subpath;
 
-static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "background": "white"})).unwrap();
@@ -253,7 +251,7 @@ fn purge_all_releases_prepared_brush_tips_even_without_a_document() {
     let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     use photocraft_paint::{BrushContext, BrushSettings, Dab, GrayTile, TipShape};
     let mut s = Session::new();
-    let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)), ..Default::default() };
+    let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)).into(), ..Default::default() };
     let ctx = BrushContext::new(&brush);
     let dab = Dab::round(photocraft_geom::Point::new(12.5, 14.5), 10.0, 1.0);
     let rect = ctx.dab_rect(&dab, false);
@@ -323,7 +321,7 @@ fn content_aware_fill_huge_area_neither_panics_nor_wraps() {
 fn huge_selection(size: (u32, u32), rects: &[Rect]) -> Session {
     let mut s = blob_session(8);
     let st = s.active_mut().unwrap();
-    let doc = std::sync::Arc::make_mut(&mut st.doc);
+    let doc = std::sync::Arc::make_mut(st.doc_mut());
     doc.size = photocraft_geom::Size::new(size.0, size.1);
     let mut sel = Surface::new(PixelFormat::GRAY8);
     for r in rects {
@@ -758,7 +756,7 @@ fn preset_manager_brush_delete_clears_current_preset() {
 #[test]
 fn define_brush_preset_wraps_define_from_selection() {
     let mut s = session(8);
-    assert!(!s.is_enabled("edit.defineBrushPreset"));
+    assert!(s.is_enabled("edit.defineBrushPreset"));
     s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
     s.execute("select.rect", json!({"x": 2, "y": 2, "width": 10, "height": 10})).unwrap();
     s.execute("edit.defineBrushPreset", json!({})).unwrap();

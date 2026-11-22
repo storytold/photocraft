@@ -10,7 +10,7 @@ use crate::PhotocraftApp;
 
 /// Open one real adjustment editor in the Properties panel: the Adjustments panel shows until its
 /// pick makes an adjustment layer active, then Properties.
-fn adjustment_harness(kind: &str, depth: u32) -> Harness<'static, PhotocraftApp> {
+fn adjustment_harness(kind: &str, depth: u32) -> Harness<'static, Box<PhotocraftApp>> {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 16, "height": 8, "depth": depth})).unwrap();
     session.execute("edit.fill", json!({"color": "#b04020"})).unwrap();
@@ -21,7 +21,7 @@ fn adjustment_harness(kind: &str, depth: u32) -> Harness<'static, PhotocraftApp>
     let app = PhotocraftApp::new(session, Default::default());
     let mut properties = false;
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(320.0, 640.0)).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             if !ui.ctx().fonts(|fonts| fonts.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
@@ -48,7 +48,7 @@ fn adjustment_harness(kind: &str, depth: u32) -> Harness<'static, PhotocraftApp>
 }
 
 /// Read a document pixel on the shared scanline used by the clipping-output assertions.
-fn sample(h: &mut Harness<'_, PhotocraftApp>, x: i32) -> Vec<f32> {
+fn sample(h: &mut Harness<'_, Box<PhotocraftApp>>, x: i32) -> Vec<f32> {
     serde_json::from_value(h.state_mut().run("document.pixel", json!({"x": x, "y": 4})).unwrap()).unwrap()
 }
 

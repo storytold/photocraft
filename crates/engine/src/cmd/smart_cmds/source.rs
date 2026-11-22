@@ -70,7 +70,7 @@ pub struct SourceImage {
     pub bounds: Rect,
 }
 
-type CacheKey = ([u8; 32], PixelFormat);
+pub(super) type CacheKey = ([u8; 32], PixelFormat, Option<[u8; 32]>);
 
 struct CacheEntry {
     key: CacheKey,
@@ -100,7 +100,23 @@ fn cache() -> std::sync::MutexGuard<'static, Vec<CacheEntry>> {
 }
 
 pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
-    (*blake3::hash(bytes).as_bytes(), fmt)
+    (*blake3::hash(bytes).as_bytes(), fmt, None)
+}
+
+/// Keep automatic recognition and caller-supplied classifications separate. The filename
+/// also selects extension-sensitive importers. Neither decision may be bypassed by a hit.
+pub(super) fn source_cache_key(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>) -> CacheKey {
+    let mut key = cache_key(bytes, fmt);
+    let mut context = blake3::Hasher::new();
+    context.update(b"source-decode-context-v1\0");
+    context.update(&[match svg {
+        None => 0,
+        Some(false) => 1,
+        Some(true) => 2,
+    }]);
+    context.update(file_name.as_bytes());
+    key.2 = Some(*context.finalize().as_bytes());
+    key
 }
 
 pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
@@ -136,7 +152,7 @@ fn cache_put_within(key: CacheKey, image: SourceImage, limit: usize) {
 /// How many times these contents were decoded at this pixel format (0 = never / evicted).
 pub fn source_decode_count(bytes: &[u8], fmt: PixelFormat) -> u32 {
     let key = cache_key(bytes, fmt);
-    cache().iter().find(|e| e.key == key).map(|e| e.decodes).unwrap_or(0)
+    cache().iter().filter(|e| e.key.0 == key.0 && e.key.1 == fmt).fold(0u32, |total, e| total.saturating_add(e.decodes))
 }
 
 /// Bytes held by cached source composites.
@@ -269,7 +285,7 @@ fn convert_source(src: &Document, fmt: PixelFormat, raster: impl FnOnce(PixelFor
     }
     let mut doc = Document::new(src.name.clone(), src.size, src.mode, src.depth);
     doc.icc_profile = src.icc_profile.clone();
-    doc.layers = vec![Layer::new("source", LayerContent::Raster(raster(src.pixel_format())))];
+    doc.layers = vec![Layer::new("source", LayerContent::Raster(raster(src.pixel_format())))].into();
     if gray {
         let gray_profile = crate::color_cmds::working_profile(ColorMode::Grayscale);
         crate::color_cmds::convert_document(&mut doc, &gray_profile, craft_cms::Intent::RelativeColorimetric, true)?;
@@ -291,7 +307,7 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
     let mut h = blake3::Hasher::new();
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
-    let key = (*h.finalize().as_bytes(), fmt);
+    let key = (*h.finalize().as_bytes(), fmt, None);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
@@ -318,7 +334,7 @@ pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> R
     h.update(bytes);
     h.update(&scale.to_bits().to_le_bytes());
     h.update(&profile.to_bytes());
-    let key = (*h.finalize().as_bytes(), fmt);
+    let key = (*h.finalize().as_bytes(), fmt, None);
     if let Some(image) = cache_get(&key) {
         return Ok(image);
     }
@@ -353,12 +369,23 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
 
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    let key = cache_key(bytes, fmt);
+    source_image_inner(file_name, bytes, fmt, None)
+}
+
+pub(super) fn source_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: bool) -> Result<SourceImage> {
+    source_image_inner(file_name, bytes, fmt, Some(svg))
+}
+
+fn source_image_inner(file_name: &str, bytes: &[u8], fmt: PixelFormat, svg: Option<bool>) -> Result<SourceImage> {
+    let key = source_cache_key(file_name, bytes, fmt, svg);
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
     crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
-    let doc = decode_source(file_name, bytes)?;
+    let doc = match svg {
+        Some(svg) => super::decode_source_classified(file_name, bytes, svg)?,
+        None => decode_source(file_name, bytes)?,
+    };
     let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
@@ -368,6 +395,36 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
 mod tests {
     use super::*;
 
+    #[test]
+    fn source_cache_keys_preserve_filename_and_classification() {
+        let bytes = b"source context regression";
+        let fmt = PixelFormat::RGBA8;
+        let keys = [
+            source_cache_key("source.png", bytes, fmt, None),
+            source_cache_key("source.dat", bytes, fmt, None),
+            source_cache_key("source.png", bytes, fmt, Some(false)),
+            source_cache_key("source.png", bytes, fmt, Some(true)),
+            cache_key(bytes, fmt),
+        ];
+        for (i, key) in keys.iter().enumerate() {
+            for other in &keys[i + 1..] {
+                assert_ne!(key, other);
+            }
+        }
+        assert_eq!(keys[0], source_cache_key("source.png", bytes, fmt, None));
+        assert_ne!(keys[0], source_cache_key("source.png", bytes, PixelFormat::RGBA32F, None));
+    }
+
+    #[test]
+    fn warm_raster_source_cannot_bypass_svg_classification() {
+        let raster = photocraft_codecs::Image::from_u8(1, 1, photocraft_codecs::ChannelLayout::Rgb, vec![13, 47, 91]).unwrap();
+        let png = photocraft_codecs::encode(&raster, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        let name = "source-classification-regression.png";
+        let first = source_image_classified(name, &png, PixelFormat::RGBA8, false).unwrap();
+        assert_eq!(first.bounds, Rect::new(0, 0, 1, 1));
+        assert!(source_image_classified(name, &png, PixelFormat::RGBA8, true).is_err(), "a warm raster hit must not skip strict SVG decoding");
+        assert!(source_image(name, &png, PixelFormat::RGBA8).is_ok());
+    }
     fn image(side: i32) -> SourceImage {
         let mut s = Surface::new(PixelFormat::RGBA8);
         s.fill_rect(Rect::new(0, 0, side, side), &[0.2, 0.4, 0.6, 1.0]);

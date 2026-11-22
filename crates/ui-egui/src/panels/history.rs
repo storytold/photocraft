@@ -16,7 +16,7 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let events = {
         let shown: &PhotocraftApp = app;
         let st = shown.session.active();
-        let rows = st.map(rows).unwrap_or_default();
+        let rows: std::sync::Arc<[HistoryRow]> = st.map_or_else(|| Vec::new().into(), |st| shown.doc_queries.history_rows(&shown.session, st, || rows(st)));
         let thumbs = st.map(|st| SnapshotThumbs::new(shown, st.doc.id));
         let mut panel =
             HistoryPanel::new(&rows, current_key(shown)).source(st.and_then(source_key)).can_delete(|key| can_delete(shown, key)).footer(footer(shown));
@@ -38,7 +38,7 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// oldest to newest ending with the current one, then the redo states, next redo first. A state's key is
 /// its row id, which stays when the states before it go.
 pub(crate) fn rows(st: &photocraft_engine::DocState) -> Vec<HistoryRow> {
-    let mut rows: Vec<HistoryRow> = st.snapshots.iter().map(|snap| HistoryRow::snapshot(snap.id, snap.name.clone())).collect();
+    let mut rows: Vec<HistoryRow> = st.snapshots().iter().map(|snap| HistoryRow::snapshot(snap.id, snap.name.clone())).collect();
     let past = st.history.past_len();
     let labels = st.history.entries().into_iter().chain(st.history.redo_labels().map(str::to_string));
     for (i, label) in labels.enumerate() {
@@ -71,7 +71,7 @@ fn source_key(st: &photocraft_engine::DocState) -> Option<HistoryKey> {
 pub(crate) fn can_delete(app: &PhotocraftApp, key: &HistoryKey) -> bool {
     let Some(st) = app.session.active() else { return false };
     match *key {
-        HistoryKey::Snapshot(id) => st.snapshots.iter().any(|snap| snap.id == id),
+        HistoryKey::Snapshot(id) => st.snapshots().iter().any(|snap| snap.id == id),
         HistoryKey::State(id) => match st.history.row_of(id) {
             None | Some(0) => false,
             Some(row) if row > st.history.past_len() => st.history.non_linear && app.session.is_enabled("history.deleteState"),
@@ -260,7 +260,7 @@ pub(crate) fn select_snapshot(app: &mut PhotocraftApp, id: u64) {
 pub(crate) fn selected_snapshot(app: &PhotocraftApp) -> Option<u64> {
     let st = app.session.active()?;
     let (doc, id, spot) = app.ui.history_snapshot.as_ref()?;
-    (*doc == st.doc.id && *spot == history_spot(st) && st.snapshots.iter().any(|snap| snap.id == *id)).then_some(*id)
+    (*doc == st.doc.id && *spot == history_spot(st) && st.snapshots().iter().any(|snap| snap.id == *id)).then_some(*id)
 }
 
 /// Drops a selection that no longer holds, so the history returning to the same spot later does not

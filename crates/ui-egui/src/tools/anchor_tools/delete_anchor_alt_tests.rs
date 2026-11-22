@@ -13,7 +13,7 @@ use crate::state::Tool;
 
 /// Delete Anchor Point with the saved path "Path 1", a closed corner square
 /// (100,300)(300,300)(300,500)(100,500), targeted in the Paths panel.
-fn square() -> PhotocraftApp {
+fn square() -> Box<PhotocraftApp> {
     let (mut app, _) = setup(Tool::DeleteAnchorPoint);
     let path = json!({"subpaths": [{"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]}]});
     app.run("path.set", json!({"name": "Path 1", "path": path})).unwrap();

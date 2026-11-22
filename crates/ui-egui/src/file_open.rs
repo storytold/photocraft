@@ -230,6 +230,13 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
+        self.opened_from_listed(path, Some(path));
+    }
+
+    /// [`Self::opened_from`], with `recent` the path Open Recent lists for it (`None`: not listed).
+    /// An automation open is requested by a root-relative path, which names nothing outside
+    /// automation, so it lists where the file is on disk instead.
+    pub(crate) fn opened_from_listed(&mut self, path: &str, recent: Option<&str>) {
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
             && !st.source_read_only
@@ -238,7 +245,9 @@ impl PhotocraftApp {
             let doc = st.doc.id;
             self.remember_stamp(doc, path);
         }
-        self.push_recent(path);
+        if let Some(recent) = recent {
+            self.push_recent(recent);
+        }
     }
 
     /// The name a file called `name` opens under: its own, or the first free "Untitled-N" for a
@@ -451,7 +460,11 @@ impl PhotocraftApp {
     /// Where a web-build drop at `at` lands (the web build's own drop path until FW-264). Over a
     /// window or dialog it's not the canvas. On the canvas it carries the document point under `at`.
     pub(crate) fn drop_to(&self, ctx: &egui::Context, at: Option<egui::Pos2>) -> DropTo {
-        let uncovered = at.is_some_and(|p| ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background));
+        let uncovered = at.is_some_and(|p| {
+            ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
+                && (self.ui.document_windows.arrangement != Some(craft::behavior::dock::Arrangement::Tile)
+                    || crate::canvas::arranged_cells(self, self.last_canvas_rect).is_none_or(|cells| cells.iter().any(|(_, rect)| rect.contains(p))))
+        });
         match target_at(at, uncovered, self.drop_canvas_rect, self.session.active().is_some()) {
             DropTo::Canvas { .. } => DropTo::Canvas {
                 at: at.and_then(|p| {

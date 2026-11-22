@@ -46,7 +46,7 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
-pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
+pub use variables_cmds::{DATA_SET_FILE_MISSING, DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
 use std::sync::Arc;
@@ -63,12 +63,15 @@ pub use photocraft_paint::BrushSettings;
 pub mod cmd;
 mod doc_state;
 mod error;
+mod install;
+pub mod registry;
 mod session;
 
 pub use cmd as commands;
 pub use cmd::actions_cmds;
 pub use cmd::actions_edit_cmds;
 pub use cmd::adjust_cmds;
+pub use cmd::adjustment_brush_cmds;
 pub use cmd::align_cmds;
 pub use cmd::analysis_cmds;
 pub use cmd::artboard_cmds;
@@ -122,12 +125,12 @@ pub use cmd::layer_xmp_cmds;
 pub use cmd::lens_cmds;
 pub use cmd::magnetic_cmds;
 pub use cmd::mask_view_cmds;
-use cmd::migrate_cmds;
+pub use cmd::migrate_cmds;
 pub use cmd::mode_cmds;
 pub use cmd::multichannel_cmds;
 pub use cmd::notes_cmds;
 pub use cmd::paint_cmds;
-use cmd::path_edit_cmds;
+pub use cmd::path_edit_cmds;
 pub use cmd::pattern_cmds;
 pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
@@ -153,9 +156,9 @@ pub use cmd::stamp_cmds;
 pub use cmd::style_asl_cmds;
 pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
-use cmd::timeline_cmds;
+pub use cmd::timeline_cmds;
 pub use cmd::transform_cmds;
-use cmd::trap_cmds;
+pub use cmd::trap_cmds;
 pub use cmd::type_area_cmds;
 pub use cmd::type_caret_cmds;
 pub use cmd::type_cmds;
@@ -163,14 +166,14 @@ pub use cmd::type_extra_cmds;
 pub use cmd::type_mask_cmds;
 pub use cmd::type_spell_cmds;
 pub use cmd::type_styles_cmds;
-use cmd::variables_cmds;
+pub use cmd::variables_cmds;
 pub use cmd::vector_cmds;
-use cmd::video_cmds;
+pub use cmd::video_cmds;
 pub use cmd::vp_cmds;
 pub use cmd::warp_cmds;
 pub use cmd::web_cmds;
-use cmd::wia_cmds;
-pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState, selected_in};
+pub use cmd::wia_cmds;
+pub use doc_state::{CopiedStyle, DocState, DocStateInputs, PRECHECKED, ToolState, selected_in};
 pub use error::{EngineError, Result};
 pub use session::move_item;
 use session::restore_target;
@@ -201,7 +204,11 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 
 #[derive(Default)]
 pub struct Session {
-    docs: Vec<DocState>,
+    /// The open documents, each in a `Tracked`: views key on its revision, which every write moves.
+    docs: Vec<craft_tracked::Tracked<DocState>>,
+    /// Each open document's native save cache, shared with its save workers; dropped when the document closes.
+    pcraft_caches: std::collections::HashMap<photocraft_doc::DocId, photocraft_io::PcraftExportCache>,
+    documents_generation: u64,
     /// Override Open belongs only to one Batch scratch session, never to caller preferences.
     pub(crate) batch_open: Option<file_cmds::BatchOpen>,
     /// Import diagnostics retained by a Batch scratch that suppresses only profile prompts.
@@ -222,7 +229,7 @@ pub struct Session {
     /// `restore_layer_selection`, `layer_multi_cmds::set_selection`, `set_active_layer`, undo / redo /
     /// rollback, document switches). Compare two readings for equality to know whether anything
     /// changed in between; it is not an exact count of operations (one operation may advance it
-    /// more than once). Writing `DocState::active_layer` directly bypasses it.
+    /// more than once). Calling `DocState::set_active_layer` directly bypasses it.
     active_layer_changes: u64,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
@@ -239,10 +246,10 @@ pub struct Session {
     #[cfg(test)]
     batch_history_observer: Option<fn(&Session)>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
-    pub clipboard: Option<edit_cmds::Clip>,
+    pub clipboard: craft_tracked::Tracked<Option<edit_cmds::Clip>>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
     /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
-    pub style_clipboard: Option<CopiedStyle>,
+    pub style_clipboard: craft_tracked::Tracked<Option<CopiedStyle>>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
@@ -268,7 +275,7 @@ pub struct Session {
     /// Image › Analysis: Measurement Log and Select Data Points (see `analysis_cmds`).
     pub analysis: analysis_cmds::AnalysisState,
     /// Window › Gradients, Patterns (groups), Styles, Shapes, Tool Presets and Clone Source.
-    pub presets: presets::PresetState,
+    pub presets: craft_tracked::Tracked<presets::PresetState>,
     /// File menu state: Lock Slices, Image Assets, last Print / Save for Web settings, script
     /// event log (see `automate_cmds`).
     pub file_menu: automate_cmds::FileMenuState,
@@ -311,8 +318,8 @@ pub struct Session {
     /// The stamps being taken on a worker thread ([`Session::start_link_scan`]).
     pub link_scan: Option<link_watch::LinkScan>,
     /// Each open document's linked smart objects' files that were not there when last looked at
-    /// ([`Session::missing_links`]).
-    link_missing: std::collections::HashSet<(u64, String)>,
+    /// ([`Session::missing_links`]). Written only when the set changes, so its revision says when the list did.
+    link_missing: craft_tracked::Tracked<std::collections::HashSet<(u64, String)>>,
     /// Select Subject's last result, reused while the pixels are unchanged (#2865).
     subject_cache: smartselect_cmds::SubjectCache,
     /// Object Selection's Object Finder results (#4087), shared by the hover preview and the

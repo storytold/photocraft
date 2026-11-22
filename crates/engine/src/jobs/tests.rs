@@ -1210,7 +1210,7 @@ fn every_job_terminal_path_drops_a_live_commit_stroke() {
             if outcome == 3 {
                 // Simulate replacement outside command dispatch, which itself clears offers.
                 let doc = (*s.active().unwrap().doc).clone();
-                s.active_mut().unwrap().doc = Arc::new(doc);
+                *s.active_mut().unwrap().doc_mut() = Arc::new(doc);
             } else if outcome == 5 {
                 s.docs.clear();
                 s.active = None;

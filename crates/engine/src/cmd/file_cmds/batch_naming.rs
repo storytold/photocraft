@@ -240,6 +240,13 @@ fn expand(parts: &[Part<'_>], name: &str, ext: &str, serial: u32, date: Date) ->
 /// An absent or empty template preserves the old filename path exactly. An explicit template
 /// determines the whole filename. Recorded components retain their separate format choice.
 pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -> Result<Option<Vec<String>>> {
+    plan_counting(inputs, output, format, params, &|_| true)
+}
+
+/// [`plan`] where only the inputs `counts` accepts use up a serial number and a serial letter: an
+/// input known to fail before its action starts still gets a name (reported with its error) but
+/// the next input reuses the number it would have taken.
+pub fn plan_counting(inputs: &[BatchInput], output: &str, format: &str, params: &Value, counts: &dyn Fn(&BatchInput) -> bool) -> Result<Option<Vec<String>>> {
     let structured = components(params)?;
     let compat = compatibility(params)?;
     let flat = match params.get("flatOutput") {
@@ -286,11 +293,18 @@ pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -
         None
     };
     let mut outputs = Vec::with_capacity(inputs.len());
-    for (index, BatchInput { path, rel_dir }) in inputs.iter().enumerate() {
-        let serial = if has_serial {
-            u32::try_from(index).ok().and_then(|index| start.checked_add(index)).ok_or_else(|| bad("startingSerial plus the input count exceeds 4294967295"))?
-        } else {
-            start
+    let mut counted = Vec::with_capacity(inputs.len());
+    let mut index = 0usize;
+    for input in inputs {
+        let BatchInput { path, rel_dir } = input;
+        let counts_serial = counts(input);
+        let serial = match u32::try_from(index).ok().and_then(|index| start.checked_add(index)) {
+            _ if !has_serial => start,
+            Some(serial) => serial,
+            // An input that takes no number is named only for its error entry: past the last
+            // number, it keeps the last one rather than failing the batch.
+            None if !counts_serial => u32::MAX,
+            None => return Err(bad("startingSerial plus the input count exceeds 4294967295")),
         };
         let ext = if format == "same" { super::same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         let name = if let (Some(components), Some(calendar)) = (structured, calendar) {
@@ -313,14 +327,19 @@ pub fn plan(inputs: &[BatchInput], output: &str, format: &str, params: &Value) -
         // Preserve the recorded structured routing; ordinary native templates use main's flat output.
         let subfolder = if structured.is_some() && !flat { rel_dir.as_str() } else { "" };
         outputs.push(join(&join(output, subfolder), &name));
+        counted.push(counts_serial);
+        if counts_serial {
+            index += 1;
+        }
     }
     // Renaming within the source folder could replace a later input before it is read. Resolve
     // existing paths so aliases such as `source/./001.png` cannot bypass the check. The default
-    // (no template) path keeps its existing in-place behavior.
+    // (no template) path keeps its existing in-place behavior. An input that takes no number
+    // fails before it is opened, so nothing is written to its name.
     #[cfg(not(target_arch = "wasm32"))]
     {
         let sources: std::collections::HashSet<_> = inputs.iter().filter_map(|i| std::fs::canonicalize(&i.path).ok()).collect();
-        for output in &outputs {
+        for output in outputs.iter().zip(&counted).filter_map(|(output, counts)| counts.then_some(output)) {
             let identity = super::paths::destination_identity(std::path::Path::new(output))
                 .ok_or_else(|| bad(format!("naming output path cannot be resolved safely: {output}")))?;
             if sources.contains(&identity) {

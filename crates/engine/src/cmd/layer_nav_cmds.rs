@@ -63,7 +63,7 @@ fn navigate(s: &mut Session, step: Step, add: bool) -> Result<Value> {
     };
     let id = rows.get(target).copied().ok_or_else(|| EngineError::Other("no layer there".into()))?;
     if add {
-        let mut sel = st.selected_layers();
+        let mut sel = st.selected_layers().to_vec();
         if !sel.contains(&id) {
             sel.push(id);
         }
@@ -157,7 +157,7 @@ mod tests {
             assert_eq!(active(&s), want);
         }
         s.execute("layer.selectBottom", json!({})).unwrap();
-        assert_eq!((active(&s), s.active().unwrap().selected_layers()), (bg, vec![bg]));
+        assert_eq!((active(&s), s.active().unwrap().selected_layers().to_vec()), (bg, vec![bg]));
         s.execute("layer.selectTop", json!({})).unwrap();
         assert_eq!(active(&s), d);
     }
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(active(&s), a);
         s.execute("layer.addAboveToSelection", json!({})).unwrap();
         s.execute("layer.addAboveToSelection", json!({})).unwrap();
-        let mut sel = s.active().unwrap().selected_layers();
+        let mut sel = s.active().unwrap().selected_layers().to_vec();
         sel.sort();
         let mut want = vec![a, group, d];
         want.sort();

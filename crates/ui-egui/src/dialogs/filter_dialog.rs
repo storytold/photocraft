@@ -10,12 +10,14 @@
 
 use std::sync::Arc;
 
+use craft::behavior::NumberCodec;
 use craft::host::{PickRequest, Picked};
-use craft::ui::contract::Bind;
+use craft::ui::contract::{Bind, Show as _};
 use craft::ui::dialog::{DialogId, dialog_id};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
-use craft::ui::runtime::env::{Label, UnitKind};
+use craft::ui::runtime::env::{Env, Label, UnitKind};
 use craft::ui::runtime::requests::PathKind;
+use craft::ui::text::NumberField;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
 use serde_json::{Map, Value, json};
@@ -26,8 +28,11 @@ mod rows;
 pub(crate) use rows::{REPLACE_COLOR, replace_color_sample};
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
+const SCALE_EFFECTS: &str = "layer.layerStyle.scaleEffects";
 #[cfg(test)]
 pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
+/// The key of the document id Lens Blur captures at open (see [`validate_lens_blur_document`]).
+const LENS_BLUR_DOCUMENT: &str = "lensBlurDocument";
 
 /// The decimals of the Rotate Canvas angle: it keeps hundredths of a degree, so the ruler's
 /// straightening angle reaches the dialog as 33.69 and not 33.7 (#12035).
@@ -179,7 +184,6 @@ pub const PREVIEWED: &[&str] = &[
     "image.adjustments.replaceColor",
     MATCH_COLOR,
     "image.adjustments.hdrToning",
-    "image.rotation.arbitrary",
     "image.mode.indexedColor",
     "image.mode.bitmap",
     "image.mode.duotone",
@@ -211,6 +215,8 @@ pub fn has_dialog(command: &str) -> bool {
         || matches!(
             command,
             "image.trim"
+                // Rotate Canvas has no preview, as in the reference application (#14462).
+                | "image.rotation.arbitrary"
                 | "view.proofSetup"
                 | "layer.layerStyle.globalLight"
                 | "image.mode.colorTable"
@@ -308,6 +314,9 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
                 let kind = if command == "layer.layerStyle.globalLight" { ParamKind::angle_in(min, max, default, 0) } else { ParamKind::angle(default) };
                 p = Param::new(p.key, p.label, kind);
             }
+            if command == SCALE_EFFECTS && p.key == "scale" {
+                return scale_effects_row(p);
+            }
             if let ParamKind::Range { max, .. } = p.kind {
                 if is_pixel_param_of(command, &p.key) {
                     p = p.unit(UnitKind::Pixels);
@@ -357,6 +366,10 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
     if command == "image.mode.colorTable" {
         list.extend(crate::color_table_ui::rows(app));
     }
+    // Rotate Canvas: one row of its own, without the Interpolation row (#14462).
+    if command == super::rotate_canvas_ui::COMMAND {
+        list = super::rotate_canvas_ui::params();
+    }
     rows::custom_rows(app, command, &mut list);
     if command == "edit.colorSettings" {
         // The monitor line under the rows: the cell holds the text each frame refreshes, which the build closure cannot read from the app.
@@ -367,6 +380,30 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
         }));
     }
     list
+}
+
+/// Scale Layer Effects' row, as in Photoshop (#14996): a whole-percent field whose arrow opens a linear slider over
+/// the range, where the schema's range row would draw an always-shown logarithmic slider for 1..1000.
+fn scale_effects_row(p: Param) -> Param {
+    let ParamKind::Range { min, max, default, .. } = p.kind else { return p };
+    let label = p.label;
+    Param::custom("scale", label.clone(), move |ui, fields, _| {
+        let value = fields.number("scale").unwrap_or(default);
+        let codec = NumberCodec::new(Env::of(ui).units().reader(None), 0);
+        let shown = NumberField::new(label.clone(), Bind::given(Some(value)))
+            .codec(codec)
+            .range(min..=max)
+            .step(1.0)
+            .commit_decimals(0)
+            .unit("%")
+            .popup_slider(min..=max)
+            .show(ui);
+        if let Some(v) = shown.edit.value().copied().flatten() {
+            fields.set("scale", v.round());
+        }
+        shown.edit.response
+    })
+    .opens_with(default)
 }
 
 /// The values `command`'s dialog opens with before the remembered ones: the open document's, the
@@ -389,6 +426,9 @@ pub(crate) fn fields(app: &PhotocraftApp, command: &str, params: &[Param]) -> Di
     if command == crate::bitmap_dialog::COMMAND {
         crate::bitmap_dialog::defaults(app, &mut fields);
     }
+    if command == super::rotate_canvas_ui::COMMAND {
+        super::rotate_canvas_ui::open_values(&mut fields);
+    }
     fields
 }
 
@@ -397,6 +437,9 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
     let mut map = Map::new();
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, &mut map);
+        // #14465: the reference dialog offers no interpolation choice, and the dialog has no row
+        // for it (#14462): it sends none, so the command resamples as Preferences › General ›
+        // Image Interpolation says on every run.
     }
     if command == "type.warpText" {
         warp_defaults(app, &mut map);
@@ -500,6 +543,12 @@ pub(crate) fn title_of(label: &str) -> Label {
     Label::from(crate::i18n::t(label).trim_end_matches('…').to_string())
 }
 
+/// The title of `command`'s dialog: [`title_of`] its label, or the dialog's own name where the reference application
+/// gives it one (Arbitrary opens "Rotate Canvas", #14462).
+fn dialog_title(command: &str, label: &str) -> Label {
+    if command == super::rotate_canvas_ui::COMMAND { super::rotate_canvas_ui::title() } else { title_of(label) }
+}
+
 /// The build closure of a command dialog over its values, over the active document's canvas: its droppers, the Blur
 /// Gallery's pins and the preview pane's locator take presses there.
 fn builder(
@@ -508,6 +557,7 @@ fn builder(
     title: Label,
     params: Vec<Param>,
     reset: DialogFields,
+    preview: bool,
 ) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static {
     let key = command.to_owned();
     let canvas = app.session.active_index().map(|idx| crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
@@ -516,7 +566,9 @@ fn builder(
             .values(Bind::bound(fields))
             .reset_to(reset.clone())
             .layout(ParamLayout::Stacked)
-            .previews(previews(&key))
+            .previews(preview)
+            // Alt keeps Rotate Canvas's Cancel a Cancel, as in the reference application (#14462).
+            .alt_resets(key != super::rotate_canvas_ui::COMMAND)
             .alert_title(tl!("PhotoCraft"));
         if let Some(canvas) = canvas {
             dialog = dialog.canvas(canvas);
@@ -532,12 +584,32 @@ fn builder(
 /// Opens `command`'s schema dialog using the current settings and editing target. The dialog's key
 /// is the command; Match Color captures its destination document and layer.
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> {
+    open_as(app, command, previews(command))
+}
+
+/// [`open`] with the Preview box whether or not `command`'s dialog has one. Rotate Canvas has none (#14462), but the
+/// canvas still places a preview that changes the document's size (#1436); its tests reach that path through here.
+#[doc(hidden)]
+pub fn open_previewing(app: &mut PhotocraftApp, command: &str) -> Result<DialogId, String> {
+    open_as(app, command, true)
+}
+
+fn open_as(app: &mut PhotocraftApp, command: &str, preview: bool) -> Result<DialogId, String> {
     let spec = photocraft_engine::commands::find(command).ok_or_else(|| format!("{command} has no dialog"))?;
     let params = params(app, command, spec.params);
     let fields = fields(app, command, &params);
-    let captured = if command == MATCH_COLOR { json!(app.session.active().map(|st| (st.doc.id, st.active_layer))) } else { Value::Null };
+    let captured = if command == MATCH_COLOR {
+        json!(app.session.active().map(|st| (st.doc.id, st.active_layer)))
+    } else if command == rows::LENS_BLUR {
+        // The Depth Map Source lists this document's alpha channels by index.
+        json!({ LENS_BLUR_DOCUMENT: app.session.active().map(|st| st.doc.id) })
+    } else {
+        Value::Null
+    };
     let reset = reset_values(&params, &fields);
-    let build = builder(app, command, title_of(spec.label), params, reset);
+    // Photoshop titles the Scale Effects… dialog with the longer name (#14996).
+    let title = if command == SCALE_EFFECTS { Label::from(tl!("Scale Layer Effects")) } else { dialog_title(command, spec.label) };
+    let build = builder(app, command, title, params, reset, preview);
     let id = crate::dialogs::params::open_param(app, command, fields, captured, build);
     if command == MATCH_COLOR {
         reconcile_match_color(app);
@@ -557,7 +629,7 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
         fields.set("target", FieldValue::Json(target));
     }
     let reset = reset_values(&params, &fields);
-    let build = builder(app, command, title_of(label), params, reset);
+    let build = builder(app, command, title_of(label), params, reset, previews(command));
     // PLAN: assumed `open_param_unsaved(app, key, fields, captured, build) -> DialogId` (dialogs-w19): `open_param` without the remember key.
     crate::dialogs::params::open_param_unsaved(app, command, fields, Value::Null, build)
 }
@@ -572,7 +644,7 @@ pub fn open_smart_edit(app: &mut PhotocraftApp, command: &str, recorded: &Map<St
     let reset = reset_values(&params, &base);
     let mut opening = base;
     overlay(&params, recorded, &mut opening);
-    let build = builder(app, command, title_of(spec.label), params, reset);
+    let build = builder(app, command, dialog_title(command, spec.label), params, reset, previews(command));
     // PLAN: assumed `open_param_unsaved`, as in `open_with_spec`.
     Ok(crate::dialogs::params::open_param_unsaved(app, command, opening, target, build))
 }
@@ -598,10 +670,14 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
         }
     }
     // The exports to files take the JPEG quality only for a JPEG (a quality would make a WebP lossy).
-    if matches!(command, "file.export.artboardsToFiles" | "file.export.layersToFiles" | "file.export.layerCompsToFiles")
-        && map.get("format").and_then(Value::as_str) != Some("jpg")
-    {
+    if matches!(command, "file.export.layersToFiles" | "file.export.layerCompsToFiles") && map.get("format").and_then(Value::as_str) != Some("jpg") {
         map.remove("quality");
+    }
+    // Artboards to Files sends its Name Options only while Include Artboard Name is ticked (#13637), and the chosen
+    // file type's Export Options only while that box is ticked (#13636).
+    if command == "file.export.artboardsToFiles" {
+        crate::menus::view_cmds::strip_artboard_name_options(&mut map);
+        crate::menus::view_cmds::nest_artboard_export_options(&mut map);
     }
     // An emptied embedded LUT is no data: a stored empty `data` would be read over the chosen `lut`.
     if command == "image.adjustments.colorLookup" && map.get("data").and_then(Value::as_str).is_some_and(str::is_empty) {
@@ -616,6 +692,14 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
             map.insert("matte".into(), color);
         }
     }
+    // Lens Blur's Source menu names an alpha channel `channel:N` (by index: two channels may share a name); the command
+    // takes the `channel` source and the channel's index.
+    if command == rows::LENS_BLUR
+        && let Some(index) = map.get("depthMap").and_then(Value::as_str).and_then(rows::channel_of_choice)
+    {
+        map.insert("depthMap".into(), json!("channel"));
+        map.insert("depthChannel".into(), json!(index));
+    }
     if command == "filter.blur.radialBlur"
         && let Some([x, y]) = fields.point("center")
     {
@@ -626,6 +710,9 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     }
     if command == crate::dialogs::image_processor_ui::COMMAND {
         crate::dialogs::image_processor_ui::nest(&mut map);
+    }
+    if command == super::rotate_canvas_ui::COMMAND {
+        super::rotate_canvas_ui::command_params(&mut map);
     }
     params_of(&map)
 }
@@ -658,11 +745,28 @@ pub(crate) fn validate_match_color_destination(app: &PhotocraftApp, command: &st
     Ok(())
 }
 
-/// The held-OK check of Match Color: the destination captured at open still holds.
+/// Lens Blur's Depth Map Source names an alpha channel by its index in the document the dialog opened on (`captured`):
+/// if another document became active since (the control channel can switch it under the dialog), that index would pick
+/// a channel of the other document, so preview and OK refuse it. The other sources do not name a channel.
+/// `depth_map` is the `depthMap` param as [`command_params`] makes it.
+pub(crate) fn validate_lens_blur_document(app: &PhotocraftApp, command: &str, captured: &Value, depth_map: Option<&str>) -> Result<(), String> {
+    if command != rows::LENS_BLUR || depth_map != Some("channel") {
+        return Ok(());
+    }
+    // Only the dialog `open` made captures its document; a Smart Filter edit captures its own target and is checked there.
+    let Some(opened) = captured.get(LENS_BLUR_DOCUMENT) else { return Ok(()) };
+    let opened = opened.as_u64();
+    let active = app.session.active().map(|st| st.doc.id.0);
+    if opened.is_some() && opened == active { Ok(()) } else { Err("the Lens Blur depth map channel belongs to another document".into()) }
+}
+
+/// The held-OK check: Match Color's destination and Lens Blur's depth channel document captured at open still hold.
 pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
     let destination = crate::dialogs::params::captured(app, &result.key);
     let fields = fields_map(&result.fields);
     validate_match_color_destination(app, &result.key, &destination, &fields).map_err(Label::from)?;
+    let params = command_params(&result.key, &result.fields);
+    validate_lens_blur_document(app, &result.key, &destination, params.get("depthMap").and_then(Value::as_str)).map_err(Label::from)?;
     validate_match_color_source_layer(app, &result.key, &fields).map_err(Label::from)
 }
 
@@ -1017,8 +1121,8 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, result:
     app.ask_file(request, move |app, picked| {
         let path = match picked {
             Picked::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
-            Picked::Cancelled => return Err(crate::file_dialog::CANCELLED.into()),
-            Picked::Unavailable(error) => return Err(error),
+            Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
+            Picked::Unavailable(error) | Picked::Failed(error) => return Err(error),
             Picked::Contents(_) => return Err("open the displacement map as a document, then choose it as the Map Document".into()),
         };
         let mut params = command_params(&command, &result.fields);
@@ -1277,6 +1381,9 @@ pub struct FilterPreviewKey {
     pub params: Value,
     pub k: u32,
     pub tool_colors: ([f32; 4], [f32; 4]),
+    /// The scratch read-error generation (`crate::scratch_reads`): a tile that fails to read and recovers changes
+    /// the pixels without a new revision, and a preview computed during the error must not be kept.
+    pub scratch: u64,
 }
 
 #[cfg(test)]
