@@ -6,6 +6,61 @@ fn full_walk(f: &mut LiquifyField, s: &LiquifyStroke, a: [f64; 3], b: [f64; 3]) 
     f.walk_segment(s, a, b, false)
 }
 
+/// `apply_warp` before staging its writes: a clone of the whole field as the sampling source.
+fn warp_with_full_clone(f: &mut LiquifyField, w: &LocalWarp) {
+    let (c, r) = (w.center, w.radius);
+    let (gx0, gy0) = f.to_grid(c[0] - r, c[1] - r);
+    let (gx1, gy1) = f.to_grid(c[0] + r, c[1] + r);
+    let i0 = gx0.floor().max(0.0) as usize;
+    let j0 = gy0.floor().max(0.0) as usize;
+    let i1 = (gx1.ceil().max(-1.0) as isize).min(f.w as isize - 1);
+    let j1 = (gy1.ceil().max(-1.0) as isize).min(f.h as isize - 1);
+    if i1 < i0 as isize || j1 < j0 as isize {
+        return;
+    }
+    let old = f.d.clone();
+    for j in j0..=j1 as usize {
+        for i in i0..=i1 as usize {
+            let p = f.node_pos(i, j);
+            let t2 = ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)) / (r * r);
+            if t2 >= 1.0 {
+                continue;
+            }
+            let idx = j * f.w + i;
+            let k = falloff(t2, 0.5) * (1.0 - f64::from(f.freeze[idx]));
+            let t = w.map(p);
+            let q = [p[0] - k * (t[0] - p[0]), p[1] - k * (t[1] - p[1])];
+            let dq = bilinear(&old, f.w, f.h, (q[0] - p[0]) / f.cell + i as f64, (q[1] - p[1]) / f.cell + j as f64);
+            f.d[idx] = [(q[0] + dq[0] - p[0]) as f32, (q[1] + dq[1] - p[1]) as f32];
+        }
+    }
+}
+
+#[test]
+fn staged_warp_writes_match_sampling_a_full_clone() {
+    // apply_warp samples the field as it was before the warp; staging the writes instead of
+    // cloning the field must leave every node bit-identical, also where the warp's sampling
+    // reaches nodes it writes (a strong move over an already displaced field) and at the
+    // canvas edge.
+    let base = || {
+        let mut f = LiquifyField::new(Rect::new(0, 0, 80, 60), 2.0);
+        f.stroke_segment(&LiquifyStroke::new(LiquifyTool::ForwardWarp, 30.0), [20.0, 20.0, 1.0], [60.0, 40.0, 1.0]);
+        f
+    };
+    let warps = [
+        LocalWarp { center: [40.0, 30.0], radius: 18.0, m: [[1.3, 0.2], [-0.1, 0.8]], offset: [4.0, -3.0] },
+        LocalWarp { center: [3.0, 57.0], radius: 12.0, m: [[0.9, -0.4], [0.4, 0.9]], offset: [-2.0, 5.0] },
+        LocalWarp { center: [45.0, 28.0], radius: 25.0, m: [[1.0, 0.0], [0.0, 1.0]], offset: [9.0, 9.0] },
+    ];
+    let (mut staged, mut cloned) = (base(), base());
+    for w in &warps {
+        staged.apply_warp(w);
+        warp_with_full_clone(&mut cloned, w);
+    }
+    assert!(!staged.is_identity());
+    assert_eq!(staged.d, cloned.d);
+}
+
 #[test]
 fn a_segment_walks_only_the_dabs_that_can_reach_the_field() {
     // #937: a segment to a far-off point walked one dab per spacing step along its whole
