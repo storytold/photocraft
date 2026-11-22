@@ -59,6 +59,15 @@ impl Session {
         self.live_commit = None;
     }
 
+    /// The per-command value checks `dispatch` and `precheck` share, in the order `dispatch` runs them.
+    pub(crate) fn validate_params(&self, id: &str, spec: &crate::registry::CommandSpec, params: &Value) -> Result<()> {
+        if id == "file.new" {
+            crate::document_preset_cmds::validate_new_params(self, params)?;
+        }
+        crate::param_check::check(spec, params)?;
+        crate::filters::validate_params(id, params)
+    }
+
     /// Check a call without running it: the command exists, its params have the shape
     /// [`Self::execute`] requires (New Layer's fully), and it can run now. For a caller that does
     /// something first only when the command will go through: Free Transform applies its box
@@ -71,8 +80,7 @@ impl Session {
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
-        crate::param_check::check(spec, params)?;
-        crate::filters::validate_params(id, params)?;
+        self.validate_params(id, spec, params)?;
         if id == "layer.new.layer" {
             crate::new_layer::parse(params)?;
         }

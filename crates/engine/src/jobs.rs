@@ -1781,11 +1781,7 @@ impl Session {
             }
             return self.dispatch(&filter, p, background);
         }
-        if id == "file.new" {
-            crate::document_preset_cmds::validate_new_params(self, &params)?;
-        }
-        crate::param_check::check(spec, &params)?;
-        crate::filters::validate_params(id, &params)?;
+        self.validate_params(id, spec, &params)?;
         // A command that may not run leaves a floating selection floating (#13169): it is refused
         // before the piece drops, without a History step. One that may run is checked again
         // below, once the piece has dropped, on the pixels and selection it will change.
