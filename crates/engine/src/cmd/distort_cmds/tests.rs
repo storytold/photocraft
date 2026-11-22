@@ -279,6 +279,39 @@ fn puppet_mesh_follows_the_outline_so_separate_shapes_move_separately() {
 }
 
 #[test]
+fn perspective_rejects_invalid_destination_without_history_or_pixel_changes() {
+    let src = [[10.0, 10.0], [60.0, 10.0], [60.0, 40.0], [10.0, 40.0]];
+    let collapsed = [[4.0, 4.0]; 4];
+    let crossing = [[10.0, 10.0], [60.0, 40.0], [60.0, 10.0], [10.0, 40.0]];
+    for dst in [collapsed, crossing] {
+        let mut s = session(8);
+        let before = active_surface(&s);
+        let history = s.active().unwrap().history.past_len();
+        assert!(s.execute(PERSPECTIVE, json!({"planes": [{"src": src, "dst": dst}]})).is_err());
+        assert_eq!(active_surface(&s), before, "rejected warp must preserve pixels");
+        assert_eq!(s.active().unwrap().history.past_len(), history, "rejected warp must not create history");
+    }
+
+    // Each input is convex; averaging the linked top-left target to x=0 moves it past x=-20.
+    let left = [[20.0, 20.0], [100.0, 20.0], [100.0, 100.0], [20.0, 100.0]];
+    let right = [[100.4, 20.0], [180.4, 20.0], [180.4, 100.0], [100.4, 100.0]];
+    let planes = [
+        photocraft_algo::perspective::Plane::identity(left),
+        photocraft_algo::perspective::Plane { src: right, dst: [[-100.0, 20.0], [-20.0, 20.0], [180.4, 100.0], [100.4, 100.0]] },
+    ];
+    for plane in &planes {
+        assert!(photocraft_algo::perspective::PerspectiveMap::new(std::slice::from_ref(plane)).is_some(), "each unlinked quad is convex and valid");
+    }
+    assert!(photocraft_algo::perspective::PerspectiveMap::new(&planes).is_none(), "linking must reject the averaged destination");
+    let mut s = session(8);
+    let before = active_surface(&s);
+    let history = s.active().unwrap().history.past_len();
+    assert!(s.execute(PERSPECTIVE, json!({"planes": planes})).is_err());
+    assert_eq!(active_surface(&s), before, "rejected linked warp must preserve pixels");
+    assert_eq!(s.active().unwrap().history.past_len(), history, "rejected linked warp must not create history");
+}
+
+#[test]
 fn perspective_identity_known_homography_and_mask() {
     for depth in [8u64, 16, 32] {
         let mut s = session(depth);
@@ -311,6 +344,89 @@ fn perspective_identity_known_homography_and_mask() {
     assert!(s.execute(PERSPECTIVE, json!({})).is_err());
     assert!(s.execute(PERSPECTIVE, json!({"planes": [{"src": [[0, 0], [0, 0], [0, 0], [0, 0]], "dst": [[0, 0], [0, 0], [0, 0], [0, 0]]}]})).is_err());
     assert!(s.execute(PERSPECTIVE, json!({"planes": [{"src": q, "dst": d}], "straighten": "sideways"})).is_err());
+}
+
+/// Import can retain settings that a newer validator refuses. Replay must report that refusal
+/// while leaving the filter and its cached pixels available for correction by the user.
+#[test]
+fn rejected_stored_perspective_reports_error_and_preserves_settings() {
+    let a = Plane::identity([[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]]);
+    let b = Plane::identity([[200.0, 100.0], [200.0, 0.0], [300.0, 0.0], [300.0, 100.0]]);
+    let fixtures = [
+        [a.clone(), Plane { src: b.src, dst: b.src.map(|[x, y]| [x - 1.5 * y, y]) }],
+        [Plane { src: a.src, dst: a.src.map(|[x, y]| [-y, x]) }, Plane { src: b.src, dst: b.src.map(|[x, y]| [-y, x - 150.0]) }],
+    ];
+    for cmd in [PERSPECTIVE, PERSPECTIVE_SMART] {
+        for planes in &fixtures {
+            let mut s = session(8);
+            s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            let params = json!({"planes": planes, "interpolation": "bilinear"});
+            s.edit("stored perspective", |doc, active| {
+                let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content else { panic!("not smart") };
+                sm.smart_filters.push(SmartFilter {
+                    command: cmd.into(),
+                    params: params.clone(),
+                    blend: photocraft_color::BlendMode::Normal,
+                    opacity: 1.0,
+                    visible: true,
+                });
+                Ok(())
+            })
+            .unwrap();
+            let before = smart(&s);
+            let history = s.active().unwrap().history.past_len();
+            let st = s.active().unwrap();
+            let surface = before.cache.as_ref().unwrap();
+            for error in [
+                crate::smart_cmds::apply_smart_filters(surface, &before, st.doc.bounds()).unwrap_err(),
+                crate::smart_cmds::render(&st.doc, &before).unwrap_err(),
+            ] {
+                let message = error.to_string();
+                assert!(message.contains(cmd) && message.contains("Perspective Warp") && message.contains("folding"), "{message}");
+            }
+            // A command that replays the stored stack must also fail transactionally.
+            let error = s.execute("layer.smartFilter.setVisible", json!({"index": 0, "visible": true})).unwrap_err();
+            assert!(error.to_string().contains("Perspective Warp"), "{error}");
+            assert_eq!(smart(&s), before, "failed replay changed stored settings or cached pixels");
+            assert_eq!(s.active().unwrap().history.past_len(), history, "failed replay added history");
+        }
+    }
+}
+
+#[test]
+fn valid_stored_perspective_renders_and_unknown_filters_still_fall_through() {
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let original = active_surface(&s);
+    let st = s.active().unwrap();
+    let canvas = st.doc.bounds();
+    let src = [[10.0, 10.0], [60.0, 10.0], [60.0, 40.0], [10.0, 40.0]];
+    let planes = [Plane { src, dst: src.map(|[x, y]| [x + 5.0, y + 3.0]) }];
+    let params = json!({"planes": planes, "interpolation": "bilinear"});
+    let expected = photocraft_algo::resample::translate_surface(&original, 5, 3);
+    for cmd in [PERSPECTIVE, PERSPECTIVE_SMART, "unknown.storedFilter"] {
+        let mut sm = smart(&s);
+        sm.smart_filters.push(SmartFilter {
+            command: cmd.into(),
+            params: params.clone(),
+            blend: photocraft_color::BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        let before = sm.clone();
+        let direct = crate::filters::apply_filter_to_surface(cmd, &params, &original, canvas, None, canvas).unwrap();
+        let rendered = crate::smart_cmds::render(&st.doc, &sm).unwrap().unwrap();
+        if cmd == "unknown.storedFilter" {
+            assert!(direct.is_none(), "unknown dispatch still returns None");
+            assert_eq!(rendered, original, "unknown filter preserves pixels");
+        } else {
+            assert_eq!(direct.as_ref(), Some(&rendered));
+            assert_ne!(rendered, original, "valid stored warp must actually deform pixels");
+            assert_eq!(rendered.content_bounds(), expected.content_bounds());
+            assert!(worst(&rendered, &expected, expected.content_bounds()) <= 1.0 / 255.0);
+        }
+        assert_eq!(sm, before, "rendering changed stored settings");
+    }
 }
 
 #[test]
@@ -487,19 +603,19 @@ fn a_stored_puppet_mesh_is_drawn_while_its_pins_hold() {
     let mesh = json!({"pins": pins, "verts": verts, "deformed": moved, "tris": [[0, 1, 2], [0, 2, 3]]});
     let shifted = |dx, dy| photocraft_algo::resample::translate_surface(&surf, dx, dy);
     let p = json!({"pins": pins, "interpolation": "bilinear", "mesh": mesh});
-    let out = apply_to_surface(PUPPET_SMART, &p, &surf, canvas).unwrap();
+    let out = apply_to_surface(PUPPET_SMART, &p, &surf, canvas).unwrap().unwrap();
     assert_eq!(out.content_bounds(), Rect::new(12, 11, 62, 41));
     assert!(worst(&out, &shifted(2, 1), Rect::new(12, 11, 62, 41)) <= 1.0 / 255.0);
     // Pins edited after import: the stored mesh no longer applies.
     let mut edited = p.clone();
     edited["mesh"]["pins"][0]["dst"] = json!([40, 29]);
-    let out = apply_to_surface(PUPPET_SMART, &edited, &surf, canvas).unwrap();
+    let out = apply_to_surface(PUPPET_SMART, &edited, &surf, canvas).unwrap().unwrap();
     assert_eq!(out.content_bounds(), Rect::new(16, 14, 66, 44));
     // So does a solver setting set after import (imported params set none).
     for (k, v) in [("mode", json!("rigid")), ("density", json!("more")), ("expansion", json!(2.0))] {
         let mut q = p.clone();
         q[k] = v;
-        let out = apply_to_surface(PUPPET_SMART, &q, &surf, canvas).unwrap();
+        let out = apply_to_surface(PUPPET_SMART, &q, &surf, canvas).unwrap().unwrap();
         assert_eq!(out.content_bounds(), Rect::new(16, 14, 66, 44), "{k}");
     }
     // A malformed mesh is ignored the same way.
@@ -509,7 +625,7 @@ fn a_stored_puppet_mesh_is_drawn_while_its_pins_hold() {
     ] {
         let mut q = p.clone();
         q["mesh"] = bad;
-        let out = apply_to_surface(PUPPET_SMART, &q, &surf, canvas).unwrap();
+        let out = apply_to_surface(PUPPET_SMART, &q, &surf, canvas).unwrap().unwrap();
         assert_eq!(out.content_bounds(), Rect::new(16, 14, 66, 44));
     }
 }
