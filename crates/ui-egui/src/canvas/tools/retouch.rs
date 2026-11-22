@@ -91,7 +91,7 @@ fn red_eye_click(app: &mut PhotocraftApp, at: [f64; 2]) {
             "x": at[0].floor(),
             "y": at[1].floor(),
             "pupilSize": o.red_eye_pupil_size.clamp(1.0, 100.0),
-            "darken": o.red_eye_darken.clamp(0.0, 100.0),
+            "darken": o.red_eye_darken.clamp(1.0, 100.0),
             "target": crate::canvas::strokes::paint_target(app),
         }),
     );
