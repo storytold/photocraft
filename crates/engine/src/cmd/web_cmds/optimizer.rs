@@ -108,6 +108,38 @@ pub fn optimize(
     dpi: f32,
     preview: bool,
 ) -> Result<Optimized> {
+    optimize_region(px, bw, rect, st, icc, exif, xmp, dpi, preview, false)
+}
+
+pub(super) fn optimize_quick_export(doc: &Document, st: &WebSettings, exif: Option<&[u8]>, xmp: Option<&str>) -> Result<Optimized> {
+    let buf = photocraft_compose::flatten(doc);
+    optimize_region(
+        &buf.px,
+        doc.size.width as usize,
+        doc.bounds(),
+        st,
+        doc.icc_profile.as_deref().map(Vec::as_slice),
+        exif,
+        xmp,
+        doc.resolution_dpi,
+        false,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn optimize_region(
+    px: &[[f32; 4]],
+    bw: usize,
+    rect: Rect,
+    st: &WebSettings,
+    icc: Option<&[u8]>,
+    exif: Option<&[u8]>,
+    xmp: Option<&str>,
+    dpi: f32,
+    preview: bool,
+    keep_png_resolution: bool,
+) -> Result<Optimized> {
     if bw == 0 || rect.x0 < 0 || rect.y0 < 0 || rect.is_empty() || rect.x1 as usize > bw || (rect.y1 as usize).checked_mul(bw).is_none_or(|end| end > px.len())
     {
         return Err(other("slice is outside the pixel buffer"));
@@ -148,7 +180,7 @@ pub fn optimize(
             data.as_chunks::<3>().0.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect()
         }
     };
-    let meta = || photocraft_codecs::Metadata { dpi: Some((dpi, dpi)), xmp: xmp.map(str::to_string), ..Default::default() };
+    let meta = |dpi| photocraft_codecs::Metadata { dpi, xmp: xmp.map(str::to_string), ..Default::default() };
     let (bytes, colors) = match st.format {
         WebFormat::Png24 => {
             let (data, layout) = true_color();
@@ -158,11 +190,16 @@ pub fn optimize(
             // The profile only with Embed Color Profile on, as the WebP and JPEG branches do: Quick
             // Export, which never sets it, writes no iCCP chunk (#13798).
             let icc = icc.filter(|_| st.embed_icc);
-            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(meta());
+            // Quick Export keeps pixel density even when its metadata choice leaves XMP out.
+            let write_resolution = keep_png_resolution || xmp.is_some();
+            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data)
+                .map_err(e)?
+                .with_icc(icc.map(<[u8]>::to_vec))
+                .with_meta(meta(write_resolution.then_some((dpi, dpi))));
             let opts = photocraft_codecs::EncodeOptions {
                 png_interlaced: st.interlaced,
                 embed_icc: icc.is_some(),
-                embed_metadata: xmp.is_some(),
+                embed_metadata: write_resolution,
                 ..Default::default()
             };
             (photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &opts).map_err(e)?, None)
@@ -171,7 +208,7 @@ pub fn optimize(
             let (data, layout) = true_color();
             let icc = icc.filter(|_| st.embed_icc);
             // WebP holds EXIF (the metadata choice's "All" passes it in), so it rides along with the XMP.
-            let webp_meta = photocraft_codecs::Metadata { exif: exif.map(<[u8]>::to_vec), ..meta() };
+            let webp_meta = photocraft_codecs::Metadata { exif: exif.map(<[u8]>::to_vec), ..meta(Some((dpi, dpi))) };
             let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(webp_meta);
             let opts = photocraft_codecs::EncodeOptions {
                 webp_lossless: st.lossless,

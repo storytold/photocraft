@@ -1,4 +1,4 @@
-use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
+use super::optimizer::{optimize_quick_export, web_document, web_exif, web_warnings, web_xmp};
 use super::settings::WebSettings;
 use super::{EngineError, Result, Session, Value, bad, join, json, other, stem, write_file};
 
@@ -135,20 +135,9 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     let q = Value::Object(o);
     let st = WebSettings::from_params(&q, cmd)?;
     let (wdoc, _, _) = web_document(&doc, &json!({}), &st)?;
-    let buf = photocraft_compose::flatten(&wdoc);
     let xmp = web_xmp(&doc, st.metadata);
     let exif = web_exif(&doc, st.metadata);
-    let opt = optimize(
-        &buf.px,
-        wdoc.size.width as usize,
-        wdoc.bounds(),
-        &st,
-        wdoc.icc_profile.as_deref().map(|v| v.as_slice()),
-        exif,
-        xmp.as_deref(),
-        wdoc.resolution_dpi,
-        false,
-    )?;
+    let opt = optimize_quick_export(&wdoc, &st, exif, xmp.as_deref())?;
     write_file(&path, &opt.bytes)?;
     crate::automate_cmds::fire_event(s, "export");
     Ok(json!({"path": path, "format": fmt, "bytes": opt.bytes.len(), "warnings": web_warnings(&st, exif, wdoc.resolution_dpi)}))
@@ -157,3 +146,7 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "quick_jpg_progressive_tests.rs"]
 mod quick_jpg_progressive_tests;
+
+#[cfg(test)]
+#[path = "quick_png_phys_tests.rs"]
+mod quick_png_phys_tests;
