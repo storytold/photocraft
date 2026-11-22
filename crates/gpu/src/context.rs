@@ -92,8 +92,9 @@ impl NativeContext {
     pub fn request(options: &NativeContextOptions) -> Result<Self, GpuContextError> {
         let opts = options.clone();
         let init_work = move || -> Result<Self, GpuContextError> {
-            let instance =
-                wgpu::Instance::new(wgpu::InstanceDescriptor { backends: opts.backends, ..wgpu::InstanceDescriptor::new_without_display_handle_from_env() });
+            let desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+            let backends = if opts.backends == wgpu::Backends::all() { desc.backends } else { opts.backends };
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..desc });
 
             let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: opts.power_preference,

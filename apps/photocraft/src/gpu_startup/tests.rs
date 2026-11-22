@@ -74,15 +74,16 @@ fn no_marker_uses_the_preference() {
 
 #[test]
 fn a_crash_moves_down_each_chain_and_is_remembered() {
-    // Windows: Vulkan → DX12 → CPU.
+    // Windows: Vulkan → DX12 → GL → CPU.
     let p = plan(Auto, Some(&crashed("auto", "vulkan")), None, false, Os::Windows);
     assert_eq!((p.backend, p.remember), (Dx12, true));
     assert!(p.reason.as_deref().unwrap_or("").contains("vulkan (Intel(R) UHD Graphics)"), "{p:?}");
-    assert_eq!(plan(Dx12, Some(&crashed("dx12", "dx12")), None, false, Os::Windows).backend, Cpu);
+    assert_eq!(plan(Dx12, Some(&crashed("dx12", "dx12")), None, false, Os::Windows).backend, Gl);
+    assert_eq!(plan(Gl, Some(&crashed("gl", "gl")), None, false, Os::Windows).backend, Cpu);
     // Crashed before the adapter was chosen (enumeration): from `auto`.
     assert_eq!(plan(Auto, Some(&crashed("auto", "")), None, false, Os::Windows).backend, Dx12);
-    // `auto` that had already picked DX12 (the Intel default) goes to the CPU.
-    assert_eq!(plan(Auto, Some(&crashed("auto", "dx12")), None, false, Os::Windows).backend, Cpu);
+    // `auto` that had already picked DX12 (the Intel default) goes to GL.
+    assert_eq!(plan(Auto, Some(&crashed("auto", "dx12")), None, false, Os::Windows).backend, Gl);
     // Linux: Vulkan → GL → CPU.
     assert_eq!(plan(Auto, Some(&crashed("auto", "vulkan")), None, false, Os::Other).backend, Gl);
     assert_eq!(plan(Gl, Some(&crashed("gl", "gl")), None, false, Os::Other).backend, Cpu);
@@ -340,6 +341,7 @@ fn windows_auto_prefers_warp_over_gl() {
     let warp = cand(0x1414, T::Cpu, B::Dx12);
     assert_eq!(pick(&[svga_gl, warp], Auto, Os::Windows), Some(1));
     assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(1));
+    assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Gl, Os::Windows), Some(0));
     assert_eq!(pick(&[svga_gl], Auto, Os::Windows), Some(0));
     // Elsewhere GL keeps its rank.
     assert_eq!(pick(&[svga_gl, warp], Auto, Os::Other), Some(0));

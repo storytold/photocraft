@@ -64,8 +64,12 @@ struct VOut {
 
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> VOut {
-    let uv = vec2(f32((vi << 1u) & 2u), f32(vi & 2u));
-    return VOut(vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0));
+    var pos = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, 1.0),
+        vec2<f32>( 3.0, 1.0),
+        vec2<f32>(-1.0, -3.0)
+    );
+    return VOut(vec4<f32>(pos[vi], 0.0, 1.0));
 }
 
 fn pixel(pos: vec4<f32>) -> vec2<i32> {
