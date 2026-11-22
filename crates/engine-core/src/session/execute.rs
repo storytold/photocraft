@@ -1,8 +1,5 @@
 use super::history::{fix_selection, visibility_changes};
-use super::{
-    Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, layer_multi_cmds, retouch_cmds,
-    smart_cmds,
-};
+use super::{Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, retouch_cmds, smart_cmds};
 use crate::color_channels;
 
 impl Session {
@@ -346,7 +343,7 @@ impl Session {
         // document, seconds on the CPU path, #1773), a new or deleted layer's bounds (a
         // duplicate or a paste), and everything when that can't be bounded. A command may still
         // report its own, tighter damage after this.
-        let damage = layer_multi_cmds::step_damage(&before, &st.doc);
+        let damage = crate::damage::step_damage(&before, &st.doc);
         let keep_clean = st.keeps_clean(&before);
         #[cfg(any(test, debug_assertions))]
         let hint_before = before.clone();
@@ -386,7 +383,7 @@ impl Session {
     }
 
     /// A command's own rect for the pixels its latest [`Session::edit`] changed: sub-tile precise
-    /// for a brush dab, where the edit's own damage ([`layer_multi_cmds::step_damage`]) has tile
+    /// for a brush dab, where the edit's own damage ([`crate::layer_multi_cmds::step_damage`]) has tile
     /// precision. The redraw area becomes the intersection of the two, so a hint can only narrow
     /// it (or bound a change `step_damage` can't). The hint is first grown as `step_damage` grows
     /// a change (by a mask's feather and by effects, `grow_hint`), so the intersection keeps a
@@ -398,7 +395,7 @@ impl Session {
             && let Some(st) = self.active()
             && st.doc.id == before.id
         {
-            let misses = layer_multi_cmds::hint_misses(&before, &st.doc, rect);
+            let misses = crate::damage::hint_misses(&before, &st.doc, rect);
             if misses > 0 {
                 let step = st.history.undo_label().unwrap_or("?");
                 eprintln!("warning: `{step}` hinted damage {rect:?} that misses {misses} changed tile(s); the canvas may not redraw them");
@@ -406,7 +403,7 @@ impl Session {
             }
         }
         let Some(st) = self.active_mut() else { return };
-        let rect = layer_multi_cmds::grow_hint(&st.doc, rect);
+        let rect = crate::damage::grow_hint(&st.doc, rect);
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
         st.record_damage();
     }

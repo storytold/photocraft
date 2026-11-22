@@ -16,6 +16,7 @@ mod channel_clip;
 mod clip_group;
 pub mod color_channels;
 mod crop_fill;
+mod damage;
 pub mod display_color;
 pub mod doc_path;
 pub mod filters;
