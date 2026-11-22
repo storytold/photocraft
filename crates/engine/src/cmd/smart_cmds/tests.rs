@@ -1,6 +1,7 @@
 use super::*;
 
 mod filter_mask_paint;
+mod placement_interpolation;
 mod selection;
 mod source_flatten;
 mod stack_cache;

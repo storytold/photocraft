@@ -82,6 +82,7 @@ fn pcraft_roundtrips_camera_raw_smart_filter_params() {
             warp: None,
             stack_mode: None,
             perspective: None,
+            interpolation: Default::default(),
         }),
     );
     doc.layers.push(smart);

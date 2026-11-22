@@ -332,6 +332,9 @@ pub enum ContentM {
         /// Distort / Perspective placement (row-major 3×3); absent for affine placements.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         perspective: Option<[f64; 9]>,
+        /// How the source is resampled into place; absent (older bundles) is bicubic.
+        #[serde(default, skip_serializing_if = "is_bicubic")]
+        interpolation: photocraft_doc::PlacementInterpolation,
     },
 }
 
@@ -340,6 +343,10 @@ pub enum ContentM {
 pub struct VectorPreviewM {
     pub source_hash: [u8; 32],
     pub svg: Hash,
+}
+
+fn is_bicubic(v: &photocraft_doc::PlacementInterpolation) -> bool {
+    *v == photocraft_doc::PlacementInterpolation::Bicubic
 }
 
 fn full_density() -> f32 {

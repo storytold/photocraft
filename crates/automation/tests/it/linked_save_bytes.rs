@@ -20,6 +20,7 @@ fn a_linked_smart_object_is_not_read_into_the_bytes() {
         warp: None,
         stack_mode: None,
         perspective: None,
+        interpolation: Default::default(),
         vector_preview: None,
     };
     doc.layers.push(Layer::new("Linked", LayerContent::Smart(smart)));

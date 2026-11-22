@@ -198,6 +198,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             stack_mode: Some(photocraft_doc::StackMode::Median),
             // Distort / Perspective placement, so the round trip covers it.
             perspective: Some([1.0, 0.1, 2.0, 0.05, 1.0, 3.0, 0.001, 0.0005, 1.0]),
+            interpolation: photocraft_doc::PlacementInterpolation::Nearest,
         }),
     );
     let linked = Layer::new(
@@ -215,6 +216,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             warp: None,
             stack_mode: None,
             perspective: None,
+            interpolation: Default::default(),
         }),
     );
     d.layers.extend([paint, group, fill, grad, text, shape, smart, linked]);

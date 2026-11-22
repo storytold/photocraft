@@ -52,12 +52,13 @@ const MAX_SCAN_PER_PIXEL: usize = 256;
 /// Places a smart object's source image (`src`, its pixels in `src_rect`) in the document:
 /// through `warp` (source space) and then the affine `t` (source → document) in one resampling
 /// pass, an exact shift for whole-pixel translations (so conversions and re-renders are
-/// lossless), bicubic otherwise. Shared by the engine's re-render and PSD export's filter cache.
+/// lossless), with `interp` otherwise. Shared by the engine's re-render and PSD export's filter cache.
 pub fn place_source(
     src: &Surface,
     src_rect: Rect,
     t: &photocraft_geom::Affine,
     warp: Option<&photocraft_geom::warp::Warp>,
+    interp: Interp,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
     let [a, b, c, d, e, f] = t.m;
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
@@ -67,13 +68,13 @@ pub fn place_source(
         };
         // A fold's layers are ordered by how far the warp moved them, not the placement.
         let rest = |x: f64, y: f64| (a * x + c * y + e, b * x + d * y + f);
-        return Ok(mesh(src, src_rect, &map, Fold::Stack(&rest), Interp::Bicubic, &Interrupt::NONE));
+        return Ok(mesh(src, src_rect, &map, Fold::Stack(&rest), interp, &Interrupt::NONE));
     }
     let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
         return Ok(crate::resample::translate_surface(src, e.round() as i32, f.round() as i32));
     }
-    crate::transform::warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::Bicubic)
+    crate::transform::warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), interp)
 }
 
 /// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
@@ -83,6 +84,7 @@ pub fn place_source_projective(
     src_rect: Rect,
     h: &crate::transform::Homography,
     warp: Option<&photocraft_geom::warp::Warp>,
+    interp: Interp,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
         let map = |x: f64, y: f64| {
@@ -90,9 +92,9 @@ pub fn place_source_projective(
             h.apply(u, v)
         };
         let rest = |x: f64, y: f64| h.apply(x, y);
-        return Ok(mesh(src, src_rect, &map, Fold::Stack(&rest), Interp::Bicubic, &Interrupt::NONE));
+        return Ok(mesh(src, src_rect, &map, Fold::Stack(&rest), interp, &Interrupt::NONE));
     }
-    crate::transform::warp_surface(src, src_rect, h, Interp::Bicubic)
+    crate::transform::warp_surface(src, src_rect, h, interp)
 }
 
 /// Warps the content of `src` inside `src_rect` through the forward map `f` (source document
@@ -1183,7 +1185,7 @@ mod tests {
             src.write_region(r, &px);
             let warp = Warp::preset(WarpStyle::Arc, 15.0, [0.0, 0.0, f64::from(w), f64::from(h)]);
             let t = photocraft_geom::Affine { m: [0.2, 0.0, 0.0, 0.2, 7.0, 5.0] };
-            let out = place_source(&src, r, &t, Some(&warp)).unwrap();
+            let out = place_source(&src, r, &t, Some(&warp), Interp::Bicubic).unwrap();
             let b = out.content_bounds();
             let o = out.read_region(b);
             let opaque: Vec<f32> = o.as_chunks::<4>().0.iter().filter(|p| p[3] >= 0.999).map(|p| p[0]).collect();

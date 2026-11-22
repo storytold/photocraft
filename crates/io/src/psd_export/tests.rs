@@ -610,6 +610,7 @@ fn a_linked_fifo_is_not_read() {
         warp: None,
         stack_mode: None,
         perspective: None,
+        interpolation: Default::default(),
         vector_preview: None,
     };
     doc.layers.push(Layer::new("Linked", LayerContent::Smart(smart)));

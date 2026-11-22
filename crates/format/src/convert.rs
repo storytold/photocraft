@@ -195,6 +195,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             warp: s.warp.clone(),
             stack_mode: s.stack_mode,
             perspective: s.perspective,
+            interpolation: s.interpolation,
         },
     };
     LayerM {
@@ -533,6 +534,7 @@ impl Loader<'_> {
                 warp,
                 stack_mode,
                 perspective,
+                interpolation,
             } => LayerContent::Smart(SmartObject {
                 contents_id: self.contents_id(*contents_id, source),
                 source: match source {
@@ -565,6 +567,7 @@ impl Loader<'_> {
                 warp: warp.clone().filter(|w| w.mesh.as_ref().is_none_or(|m| m.is_valid())),
                 stack_mode: *stack_mode,
                 perspective: perspective.filter(|p| p.iter().all(|v| v.is_finite())),
+                interpolation: *interpolation,
             }),
         };
         let mask = match &m.mask {

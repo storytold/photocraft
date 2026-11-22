@@ -250,6 +250,7 @@ fn warp_layer(
                 _ => Some(Warp { bounds: sb, mesh: None, ..w.clone() }),
             };
             sm.warp = src_warp.filter(|w| !w.is_identity());
+            sm.interpolation = crate::smart_cmds::placement_interp(interp);
             // Fallback appearance for sources that can't be re-rendered.
             if let Some(c) = &mut sm.cache {
                 *c = warp_mesh_surface_with(c, rect, &map, Fold::IN_PLACE, interp, ctl).ok_or(EngineError::Cancelled)?;
