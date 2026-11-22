@@ -479,6 +479,10 @@ mod fade_visibility_tests;
 mod caf_new_layer_name_tests;
 
 #[cfg(test)]
+#[path = "edit_menu_cmds/define_custom_shape_ops_tests.rs"]
+mod define_custom_shape_ops_tests;
+
+#[cfg(test)]
 #[path = "edit_menu_cmds/find_replace_change_tests.rs"]
 mod find_replace_change_tests;
 
