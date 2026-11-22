@@ -48,6 +48,52 @@ fn cpu_only_document(app: &mut PhotocraftApp, w: u32, h: u32) -> DocId {
     app.session.active().expect("document").doc.id
 }
 
+/// The thresholds a small-document test sets on its own canvas (#15370). `SMALL_DEFER_PX` sits
+/// under the 786 k px of the document below, so a full refresh of it still reaches the deferred
+/// branch, and `SMALL_BLOCK` cuts it into the same 4 × 3 = 12 blocks the 4096 × 3072 ones had at
+/// [`BLOCK`]: still more than [`BATCH`], so the held worker really does have blocks left to draw
+/// when an edit lands. 256 px is a whole render tile and a power of two, as [`BLOCK`] is, so the
+/// blocks here have the shape production draws rather than sub-tile rects. And the 230 × 170 corner
+/// edit damages one 256 px tile (65 k px), under `SMALL_DEFER_PX`, so it is still an edit drawn at
+/// once. Production canvases keep [`DEFER_PX`] and [`BLOCK`] - see
+/// [`redraw_thresholds_belong_to_one_canvas`] and the tests that keep their megabyte documents.
+/// `pub(super)` because the block geometry these numbers assume is pinned in `tests`, where it
+/// runs on every machine; the canvas parts of them only run here, when an adapter exists (#15430).
+pub(super) const SMALL_DEFER_PX: u64 = 100_000;
+pub(super) const SMALL_BLOCK: i32 = 256;
+
+/// The document the tests below use: 1024 × 768 = 786 k px, a fifth of the 4.19 MP that the
+/// production [`DEFER_PX`] forces, with [`SMALL_DEFER_PX`] and [`SMALL_BLOCK`] on their canvas.
+pub(super) const SMALL_W: u32 = 1024;
+pub(super) const SMALL_H: u32 = 768;
+
+/// [`gpu_app`] with the deferred-redraw thresholds lowered on the app's own canvas, so its
+/// documents can be a megabyte across instead of four (#15370).
+fn small_gpu_app() -> Option<Gpu> {
+    let g = gpu_app()?;
+    let gpu = g.harness.state().gpu.clone().expect("the app's GPU canvas");
+    gpu.set_defer_px(SMALL_DEFER_PX);
+    gpu.set_redraw_block(SMALL_BLOCK);
+    Some(g)
+}
+
+/// The thresholds belong to one canvas (#15370): a canvas nobody lowered still defers at
+/// [`DEFER_PX`] and cuts at [`BLOCK`], so a test that lowers its own can't move the defer decision
+/// of a test running beside it, and no production canvas is affected. The rest of what those
+/// numbers assume - the production constants and the block grid they cut the documents into - is
+/// pinned in `tests::the_small_test_documents_keep_the_production_block_geometry`, which needs no
+/// adapter and so runs everywhere (#15430).
+#[test]
+fn redraw_thresholds_belong_to_one_canvas() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(g) = small_gpu_app() else { return };
+    let app_gpu = g.harness.state().gpu.clone().expect("the app's GPU canvas");
+    assert_eq!(app_gpu.defer_px(), SMALL_DEFER_PX, "the test asked for a lower threshold");
+    assert_eq!(app_gpu.redraw_block(), SMALL_BLOCK, "and a smaller block");
+    assert_eq!(g.observer.defer_px(), crate::gpu_canvas::DEFER_PX, "another canvas on the same device keeps the production threshold");
+    assert_eq!(g.observer.redraw_block(), BLOCK, "and the production block side");
+}
+
 /// Frames until no redraw is running.
 fn settle(g: &mut Gpu) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
@@ -88,6 +134,11 @@ fn assert_matches_synchronous(g: &mut Gpu, doc: DocId) {
     assert_eq!(differ, 0, "{differ} texels differ from the synchronous refresh");
 }
 
+/// The one background-redraw test that keeps today's thresholds: 2600 × 1700 is just over
+/// [`DEFER_PX`] (4.19 MP), so this is the production defer decision and the production [`BLOCK`]
+/// grid (3 × 2 = 6 blocks, over [`BATCH`]) - a raised constant would stop the frame deferring here
+/// (#15370). `kept_composites_go_when_a_small_edit_grows_the_document_past_the_cap` pins the other
+/// side of the same default: 2 MP of new pixels does not defer.
 #[test]
 fn a_full_cpu_refresh_draws_in_the_background_with_the_synchronous_pixels() {
     let _gpu = photocraft_testkit::gpu_lock();
@@ -108,7 +159,7 @@ fn a_full_cpu_refresh_draws_in_the_background_with_the_synchronous_pixels() {
 #[test]
 fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
+    let Some(mut g) = small_gpu_app() else { return };
     // Hold the worker before its first batch and wait until this very worker acknowledges that
     // hold: when the fill lands, all 12 blocks of this 4×3 document are still to draw by it.
     // Without the hold a fast machine finishes them before the next frame, so the edit never
@@ -116,7 +167,7 @@ fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     // acknowledgement an edit could beat the worker to the hold, and its restarted replacement
     // would satisfy the checks.
     let held = hold_redraws();
-    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     g.harness.step();
     let generation = g.harness.state().redraws.get(&doc).expect("the frame started a redraw").worker_generation;
     assert!(
@@ -127,7 +178,7 @@ fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     // the redraw runs: a small edit, drawn at once.
     g.harness.state_mut().run("layer.new.layer", json!({})).expect("layer");
     g.harness.step();
-    g.harness.state_mut().run("select.rect", json!({"x": 3900, "y": 2900, "width": 150, "height": 150})).expect("select");
+    g.harness.state_mut().run("select.rect", json!({"x": 780, "y": 580, "width": 230, "height": 170})).expect("select");
     g.harness.step();
     g.harness.state_mut().run("edit.fill", json!({"color": "#22ee22"})).expect("fill");
     g.harness.step();
@@ -145,15 +196,15 @@ fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
 #[test]
 fn an_edit_damaging_most_of_a_large_document_is_drawn_in_the_background_too() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    let Some(mut g) = small_gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     settle(&mut g);
     // Filling most of the Blend If layer touches tiles all over it: the whole canvas (a fill of a
     // small part damages only its own tiles, #9329).
-    g.harness.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 2500, "height": 1500})).expect("select");
+    g.harness.state_mut().run("select.rect", json!({"x": 10, "y": 10, "width": 1000, "height": 740})).expect("select");
     g.harness.step();
     g.harness.state_mut().run("edit.fill", json!({"color": "#22ee22"})).expect("fill");
-    assert_eq!(g.harness.state().session.active().expect("document").last_damage, Some(Rect::new(0, 0, 2600, 1700)));
+    assert_eq!(g.harness.state().session.active().expect("document").last_damage, Some(Rect::new(0, 0, SMALL_W as i32, SMALL_H as i32)));
     g.harness.step();
     assert!(g.harness.state().redraws.contains_key(&doc), "not composited inline: {}", g.harness.state().perf.last_refresh);
     settle(&mut g);
@@ -164,8 +215,8 @@ fn an_edit_damaging_most_of_a_large_document_is_drawn_in_the_background_too() {
 #[test]
 fn showing_a_hidden_layer_again_reuses_the_redraw_from_before_it_was_hidden() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    let Some(mut g) = small_gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let layer = g.harness.state().session.active().and_then(|st| st.active_layer).expect("layer");
     settle(&mut g);
     assert_eq!(g.harness.state().perf.last_refresh, "background");
@@ -192,10 +243,11 @@ fn showing_a_hidden_layer_again_reuses_the_redraw_from_before_it_was_hidden() {
 #[test]
 fn a_redraw_finishing_after_memory_usage_drops_keeps_nothing_over_it() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    let Some(mut g) = small_gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let held = start_held_redraw(&mut g, doc);
-    // Less than the document's own pixels: nothing is left for kept composites.
+    // Less than the document's memory_bytes (layers plus history: 6 MB for this 1024x768
+    // document): nothing is left for kept composites.
     g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
     drop(held);
     settle(&mut g);
@@ -209,8 +261,8 @@ fn a_redraw_finishing_after_memory_usage_drops_keeps_nothing_over_it() {
 #[test]
 fn a_state_drawn_before_the_text_gamma_changed_is_composited_again() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    let Some(mut g) = small_gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let layer = g.harness.state().session.active().and_then(|st| st.active_layer).expect("layer");
     settle(&mut g);
     g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": false})).expect("hide");
@@ -228,8 +280,8 @@ fn a_state_drawn_before_the_text_gamma_changed_is_composited_again() {
 #[test]
 fn a_redraw_across_a_text_gamma_change_is_not_kept() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    let Some(mut g) = small_gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
     drop(held);
@@ -241,8 +293,8 @@ fn a_redraw_across_a_text_gamma_change_is_not_kept() {
 #[test]
 fn a_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    let Some(mut g) = small_gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let gamma = g.harness.state().session.color.settings.blend_text_gamma;
     let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
@@ -259,8 +311,8 @@ fn a_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
 #[test]
 fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    let Some(mut g) = small_gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let gamma = g.harness.state().session.color.settings.blend_text_gamma;
     let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().run("file.new", json!({"width": 64, "height": 64})).expect("another document");
@@ -282,8 +334,8 @@ fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
 #[test]
 fn kept_composites_go_when_memory_usage_drops_between_redraws() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    let Some(mut g) = small_gpu_app() else { return };
+    cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     settle(&mut g);
     assert!(!g.harness.state().kept.entries.is_empty(), "the finished redraw is kept");
     g.harness.state_mut().session.edit_prefs(|p| p.performance.memory_usage_mb = 1);
@@ -294,7 +346,9 @@ fn kept_composites_go_when_memory_usage_drops_between_redraws() {
 
 /// An edit too small for a background redraw that grows the document past what Memory Usage
 /// leaves: the kept composite goes at the next frame. The test holds the kept state itself, so
-/// only the cap can drop it, not History letting go of the state.
+/// only the cap can drop it, not History letting go of the state. It keeps today's thresholds and
+/// its 2600 × 1700 document: Memory Usage is a whole number of megabytes, so the growth past the
+/// cap has to be megabytes of pixels, which is also what keeps it under [`DEFER_PX`] (#15370).
 #[test]
 fn kept_composites_go_when_a_small_edit_grows_the_document_past_the_cap() {
     let _gpu = photocraft_testkit::gpu_lock();
@@ -359,8 +413,8 @@ fn an_older_kept_composite_goes_when_its_document_grows_past_the_cap() {
 #[test]
 fn a_kept_state_history_purged_goes_at_the_next_frame() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    let Some(mut g) = small_gpu_app() else { return };
+    cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     let layer = g.harness.state().session.active().and_then(|st| st.active_layer).expect("layer");
     settle(&mut g);
     // Hidden, the document is drawn on the GPU: the kept state is the one before, in History.
@@ -376,8 +430,8 @@ fn a_kept_state_history_purged_goes_at_the_next_frame() {
 #[test]
 fn closing_the_document_stops_its_redraw() {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut g) = gpu_app() else { return };
-    let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
+    let Some(mut g) = small_gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), SMALL_W, SMALL_H);
     // Held: the close lands while the redraw runs, and a cancelled worker leaves the hold.
     let _held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().run("file.close", json!({"save": false})).expect("close");

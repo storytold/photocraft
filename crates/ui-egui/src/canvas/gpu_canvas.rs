@@ -158,6 +158,15 @@ pub struct GpuCanvas {
     /// [`canvas_budget`], shared with the paint callback's resources: [`GpuCanvas::format_for`]
     /// reads it while the renderer is locked.
     canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The smallest CPU refresh this canvas defers to a background redraw ([`GpuCanvas::refresh_with`],
+    /// [`DEFER_PX`]). Every real canvas starts at the constant; only a test canvas lowers it
+    /// (`set_defer_px`), and it is per canvas so tests running side by side can't change each
+    /// other's threshold (#15370).
+    defer_px: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Side of a [`crate::canvas::background_redraw`] block for this canvas's redraws: that
+    /// module's `BLOCK` until a test asks for a smaller one (`set_redraw_block`), per canvas for
+    /// the same reason.
+    redraw_block: std::sync::Arc<std::sync::atomic::AtomicI32>,
     /// Camera Raw's preview pass, built the first time the dialog asks (#6419).
     camera_raw: crate::camera_raw_gpu::Slot,
     camera_raw_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -214,6 +223,8 @@ impl GpuCanvas {
         let vram = video_memory(&info);
         res.canvas_budget.store(canvas_budget(physical_memory(), vram), Ordering::Relaxed);
         let budget = res.canvas_budget.clone();
+        let defer_px = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(DEFER_PX));
+        let redraw_block = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(crate::canvas::background_redraw::BLOCK));
         rs.renderer.write().callback_resources.insert(res);
         log::info!(
             "gpu canvas: target {:?}, max texture {max}, tile {tile}, 16F canvas {high:?}, video memory {}",
@@ -227,6 +238,8 @@ impl GpuCanvas {
             health,
             vram,
             canvas_budget: budget,
+            defer_px,
+            redraw_block,
             camera_raw: Default::default(),
             camera_raw_started: Default::default(),
             compositor_build: Default::default(),
@@ -402,6 +415,35 @@ impl GpuCanvas {
     /// [`canvas_budget`] and [`GpuCanvas::show_documents`]).
     pub fn set_canvas_budget(&self, bytes: u64) {
         self.canvas_budget.store(bytes, Ordering::Relaxed);
+    }
+
+    /// Side of the [`crate::canvas::background_redraw`] blocks this canvas's redraws cut into:
+    /// that module's `BLOCK` for every real canvas.
+    pub(crate) fn redraw_block(&self) -> i32 {
+        self.redraw_block.load(Ordering::Relaxed)
+    }
+
+    /// This canvas's threshold for a deferred refresh: [`DEFER_PX`] for every real canvas.
+    #[cfg(test)]
+    pub(crate) fn defer_px(&self) -> u64 {
+        self.defer_px.load(Ordering::Relaxed)
+    }
+
+    /// Let this canvas's background redraws start at `px` instead of [`DEFER_PX`], so a test drives
+    /// the deferred branch ([`GpuCanvas::refresh_with`]) with a document a few hundred pixels
+    /// across instead of a 4 MP one (#15370). Tests only: nothing in Preferences, a command or the
+    /// control channel reaches it, and a real canvas keeps the constant.
+    #[cfg(test)]
+    pub(crate) fn set_defer_px(&self, px: u64) {
+        self.defer_px.store(px, Ordering::Relaxed);
+    }
+
+    /// Cut this canvas's background redraws into `side`-sided blocks instead of
+    /// `BLOCK`, so a small test document still has more blocks to draw than one batch (#15370).
+    /// Tests only, like [`GpuCanvas::set_defer_px`].
+    #[cfg(test)]
+    pub(crate) fn set_redraw_block(&self, side: i32) {
+        self.redraw_block.store(side, Ordering::Relaxed);
     }
 
     /// Whether `doc`'s display textures fit its share of [`canvas_budget`]; when they don't,
@@ -733,7 +775,7 @@ impl GpuCanvas {
         // evicted ones every time (no faster than the CPU, and more memory): the banded CPU
         // compositor does it (in the background on desktop). So does a large damage rect, such
         // as hiding a big layer (#4024); small edits in the view stay on the GPU.
-        let large = region.width() as u64 * region.height() as u64 >= DEFER_PX;
+        let large = region.width() as u64 * region.height() as u64 >= self.defer_px.load(Ordering::Relaxed);
         if region == doc.bounds() || large {
             let needed = comp.working_set(doc, region);
             let fit = LayerFit { doc: doc.id.0, needed, budget: comp.fit_layers(needed, region == doc.bounds()) };
@@ -837,9 +879,10 @@ impl GpuCanvas {
         self.refresh_with(key, doc, damage, display, false)
     }
 
-    /// [`GpuCanvas::refresh`], except that with `defer`, a refresh of at least [`DEFER_PX`] the
-    /// CPU compositor would draw is left to the caller (`background_redraw`): the texture is made
-    /// ready (keeping what it shows when it already fits) and the kind is [`REFRESH_DEFERRED`].
+    /// [`GpuCanvas::refresh`], except that with `defer`, a refresh of at least [`DEFER_PX`] (a test
+    /// canvas's own threshold, `set_defer_px`) the CPU compositor would draw is left to the caller
+    /// (`background_redraw`): the texture is made ready (keeping what it shows when it already fits)
+    /// and the kind is [`REFRESH_DEFERRED`].
     pub fn refresh_with(
         &self,
         key: u64,
@@ -892,7 +935,7 @@ impl GpuCanvas {
         }
         let t0 = now_ms();
         let px = region.width() as u64 * region.height() as u64;
-        if defer && px >= DEFER_PX && self.prepare_texture(key, doc).is_some() {
+        if defer && px >= self.defer_px.load(Ordering::Relaxed) && self.prepare_texture(key, doc).is_some() {
             out.kind = REFRESH_DEFERRED;
             out.px = px;
             return out;
