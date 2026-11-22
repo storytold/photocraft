@@ -459,14 +459,14 @@ impl Ctx<'_> {
         let single = rec.block(b"lfx2").or_else(|| rec.block(b"lfxs"));
         if let Some(fx) = rec.block(b"lmfx").or(single) {
             let (enabled, items) = crate::effects_map::parse_lfx2(&fx.data).unwrap_or_else(|| (blocks::effects_enabled(&fx.data), Vec::new()));
-            l.effects = Effects { enabled, items, psd_raw: single.map(|b| Arc::new(b.data.clone())), reference: None };
+            l.effects = Effects { enabled, items, psd_raw: single.map(|b| Arc::new(b.data.clone())), reference: None, move_phase: None };
         } else if let Some(fx) = rec.block(b"lrFX")
             && !rec.section_type().is_folder()
             && let Some((enabled, items)) = crate::effects_map::parse_lrfx(&fx.data)
         {
             // Legacy effects only on non-group layers (Photoshop ignores
             // them on groups, see psd-tools effects/shape-fx.psd).
-            l.effects = Effects { enabled, items, psd_raw: None, reference: None };
+            l.effects = Effects { enabled, items, psd_raw: None, reference: None, move_phase: None };
         }
         // Effects reference point (`fxrp`: two f64, x then y); also left in `psd_blocks`, where
         // export overwrites it from the field.

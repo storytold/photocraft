@@ -106,6 +106,7 @@ pub(crate) fn move_layers_wrapped(doc: &mut Document, before: &Document, moves: 
         }
         crate::commands::translate_layer_wrapped(before, l, dx, dy, wrap);
         crate::vector_cmds::translate_vectors_wrapped(before, l, dx as f64, dy as f64, wrap);
+        note_move_phase_tree(l, dx, dy, 0);
     }
     Ok(())
 }
@@ -162,7 +163,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     let tile = wrap.then(|| before.bounds());
     // A whole number of canvases changes nothing only when every target is raster samples.
     // Text, shapes and the rest keep the raw delta, so they still move.
-    if tile.is_some_and(|tile| wrapped_delta(dx, dy, tile) == (0, 0) && targets_only_wrap(&before, &roots, mask_target)) {
+    if tile.is_some_and(|tile| wrapped_delta(dx, dy, tile) == (0, 0) && targets_only_wrap(&before, &roots, mask_target, dx, dy)) {
         return Ok(Value::Null);
     }
     let mut shift = (0, 0);
@@ -322,6 +323,35 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
     moved_target(doc, ids, dx, dy, false)
 }
 
+/// #14960: a linked Pattern Overlay with no stored effects reference point tiles from the document
+/// origin, and moving the layer has to carry that grid with it. A layer that has no reference point
+/// adds each move to its own `effects.move_phase`, which only the overlay reads (a layer moved back
+/// to where it was gets the document grid again). The reference point itself is left alone: pattern
+/// strokes, glows and bevel textures keep anchoring at it, else at the layer's corner, also when
+/// they are added after the move, and the wrap checks of a Pattern Preview move keep reading it as
+/// before. A stored reference point shifts in both move paths, as it always did. Only content that
+/// moves as a picture gets a phase: an adjustment or fill layer has no position, and a move of one
+/// changes nothing about it.
+fn note_move_phase(l: &mut Layer, dx: i32, dy: i32) {
+    if l.effects.reference.is_none() && (dx != 0 || dy != 0) && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_)) {
+        let (x, y) = l.effects.move_phase.unwrap_or((0.0, 0.0));
+        l.effects.move_phase = Some((x + f64::from(dx), y + f64::from(dy)));
+    }
+}
+
+/// [`note_move_phase`] over a moved layer and the layers inside it: the commit path shifts the
+/// reference point of every layer of a group it moves, so a linked overlay deeper in the group
+/// needs its phase there too.
+fn note_move_phase_tree(l: &mut Layer, dx: i32, dy: i32, depth: usize) {
+    note_move_phase(l, dx, dy);
+    if depth >= photocraft_doc::MAX_GROUP_DEPTH {
+        return;
+    }
+    if let LayerContent::Group(g) = &mut l.content {
+        g.children.iter_mut().for_each(|c| note_move_phase_tree(c, dx, dy, depth + 1));
+    }
+}
+
 /// [`moved`] for a drag aimed at the layer mask (`mask_target`): unlinked masks move alone.
 pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_target: bool) -> Result<Document> {
     moved_wrapping(doc, ids, dx, dy, mask_target, None)
@@ -368,6 +398,8 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
     let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
     if let Some(r) = &mut l.effects.reference {
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
+    } else {
+        note_move_phase(l, dx, dy);
     }
     let mask_wrap = wrap.filter(|_| wraps_linked_masks(&l.content));
     if let Some(m) = l.mask.as_mut().filter(|m| m.linked) {
@@ -402,18 +434,69 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
 /// True when a whole-canvas `dx`/`dy` would leave every targeted layer unchanged: each move is
 /// raster samples (or a mask moved alone) folding back onto themselves. A group counts only when
 /// every descendant does. Text, shapes, smart objects, artboards and effect reference points do
-/// not. A linked vector mask on a wrapping layer folds with it.
-fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool) -> bool {
+/// not. A linked vector mask on a wrapping layer folds with it. A linked Pattern Overlay on the
+/// content kinds #14960 measured is the exception: the drag preview tiles its grid by the raw
+/// delta, so [`overlay_grid_moves`] keeps a move that would shift that grid (review,
+/// moves.rs:458).
+fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool, dx: i32, dy: i32) -> bool {
     let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().copied().partition(|id| mask_target && doc.layer(*id).is_some_and(moves_mask_alone));
     let ids = move_targets(doc, &rest);
     if ids.is_empty() && alone.is_empty() {
         return false;
     }
-    ids.iter().all(|id| doc.layer(*id).is_some_and(|l| subtree_wraps_only(l, 0)))
+    ids.iter().all(|id| doc.layer(*id).is_some_and(|l| subtree_wraps(l, 0, true) && !overlay_grid_moves(doc, l, 0, dx, dy)))
 }
 
+/// Whether the raw `dx`/`dy` shifts the grid of a linked Pattern Overlay on `l` or on a layer
+/// inside it. The drag preview records that delta as the move phase of every raster and group
+/// layer ([`note_move_phase`]) and the overlay tiles from it (#14960); when [`targets_only_wrap`]
+/// folds a whole-canvas move away the commit keeps no phase, and the pattern snaps back from what
+/// the preview showed. The grid only stays where it was when the painted pattern has no scale and
+/// no rotation and its period divides the delta; a scaled or rotated pattern is treated as moved
+/// (the fold would need the rotated lattice, and the preview shows the phase either way). An
+/// overlay that paints nothing, with the pattern missing from the document, cannot diverge.
+fn overlay_grid_moves(doc: &Document, l: &Layer, depth: usize, dx: i32, dy: i32) -> bool {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return false;
+    }
+    // Only the content kinds whose overlay grid reads the move phase can move (overlay_anchor),
+    // and only while the style is on; an unlinked overlay tiles from the canvas, not from this layer.
+    if l.effects.enabled
+        && matches!(l.content, LayerContent::Raster(_) | LayerContent::Group(_))
+        && l.effects.items.iter().any(|e| match e {
+            photocraft_doc::Effect::PatternOverlay { name, id, scale, angle, link, .. } => {
+                *link && (*scale != 1.0 || *angle != 0.0 || pattern_period_moves(doc, id, name, dx, dy))
+            }
+            _ => false,
+        })
+    {
+        return true;
+    }
+    if let LayerContent::Group(g) = &l.content {
+        return g.children.iter().any(|c| overlay_grid_moves(doc, c, depth + 1, dx, dy));
+    }
+    false
+}
+
+/// Whether the document pattern `id`/`name` tiles with a period that does not fold `dx`/`dy` away.
+fn pattern_period_moves(doc: &Document, id: &str, name: &str, dx: i32, dy: i32) -> bool {
+    photocraft_doc::pattern::find(&doc.patterns, id, name).is_some_and(|p| {
+        p.width > 0 && p.height > 0 && (i64::from(dx).rem_euclid(i64::from(p.width)) != 0 || i64::from(dy).rem_euclid(i64::from(p.height)) != 0)
+    })
+}
+
+/// Whether `l` and everything inside it wrap as raster samples. The geometry question, which
+/// linked masks and the carried selection ask: a layer's #14960 move phase is not geometry and
+/// does not change the answer.
 fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
-    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() || l.frame.is_some() {
+    subtree_wraps(l, depth, false)
+}
+
+/// [`subtree_wraps_only`]; with `phase`, a recorded move phase also counts as something a
+/// whole-canvas move changes, so [`targets_only_wrap`] does not skip that move (its overlay grid
+/// shifts by the raw delta, as the drag preview shows it).
+fn subtree_wraps(l: &Layer, depth: usize, phase: bool) -> bool {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() || l.frame.is_some() || (phase && l.effects.move_phase.is_some()) {
         return false;
     }
     if l.vector_mask.as_ref().is_some_and(|m| m.linked) && !wraps_linked_masks(&l.content) {
@@ -421,7 +504,7 @@ fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
     }
     match &l.content {
         LayerContent::Raster(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) => true,
-        LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps_only(c, depth + 1)),
+        LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps(c, depth + 1, phase)),
         LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => false,
     }
 }
@@ -967,5 +1050,542 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(json!({"moved": count}))
     } else {
         Ok(Value::Null)
+    }
+}
+
+#[cfg(test)]
+mod style_phase_tests {
+    use super::*;
+    use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{Adjustment, Effect, Fill, FxCommon};
+    use photocraft_geom::{Rect, Size};
+
+    /// A linked Pattern Overlay with the measured defaults: Normal, 100 %, scale 100, angle 0,
+    /// Link with Layer on, phase 0 / 0.
+    fn linked_overlay() -> Effect {
+        Effect::PatternOverlay {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            name: "quadrants".into(),
+            id: String::new(),
+            scale: 1.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        }
+    }
+
+    /// A raster layer holding a filled rectangle at `rect`, as the measured "Shape" layer.
+    fn shape(rect: Rect) -> LayerContent {
+        let mut s = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(rect, &[1.0, 0.5, 0.0, 1.0]);
+        LayerContent::Raster(s)
+    }
+
+    /// A document holding one layer of `content` whose effects are `items`, and that layer's id.
+    fn doc(content: LayerContent, items: Vec<Effect>) -> (Document, LayerId) {
+        let mut d = Document::new("origin", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+        let mut l = Layer::new("Shape", content);
+        l.effects.items = items;
+        let id = l.id;
+        d.layers.push(l);
+        (d, id)
+    }
+
+    /// The reference point `id` carries in `doc`.
+    fn reference(doc: &Document, id: LayerId) -> Option<(f64, f64)> {
+        doc.layer(id).expect("the layer is there").effects.reference
+    }
+
+    /// The move phase `id` carries in `doc` (`Effects::move_phase`).
+    fn phase(doc: &Document, id: LayerId) -> Option<(f64, f64)> {
+        doc.layer(id).expect("the layer is there").effects.move_phase
+    }
+
+    /// Done when 2 and 3: a Move records the layer's moves as its move phase, which is what the
+    /// linked Pattern Overlay's grid anchors at (#14960); the effects reference point stays unset and
+    /// the effect's own `phase` stays 0 / 0 as measured. The commit and the drag preview record the
+    /// same thing.
+    #[test]
+    fn a_move_records_the_move_phase_a_linked_overlay_grid_needs() {
+        for (dx, dy) in [(7, 4), (5, 3), (-9, -2)] {
+            let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
+            let preview = moved(&before, &[id], dx, dy).expect("the layer moves");
+            assert_eq!(phase(&preview, id), Some((f64::from(dx), f64::from(dy))), "the Move preview of +{dx},+{dy}");
+            assert_eq!(reference(&preview, id), None, "the preview leaves the reference point unset");
+            let mut committed = before.clone();
+            move_layers(&mut committed, &before, &[(id, dx, dy)]).expect("the command moves the layer");
+            assert_eq!(phase(&committed, id), Some((f64::from(dx), f64::from(dy))), "the committed move of +{dx},+{dy} matches the preview");
+            assert_eq!(reference(&committed, id), None, "the commit leaves the reference point unset");
+            match &committed.layer(id).expect("the layer").effects.items[0] {
+                Effect::PatternOverlay { phase, .. } => assert_eq!(*phase, (0.0, 0.0), "the stored phase stays 0 / 0"),
+                other => panic!("the overlay is still there, got {other:?}"),
+            }
+        }
+    }
+
+    /// Done when 3: the overlay can be added after the layer has already moved, so the phase is
+    /// recorded by the move itself: a layer with no effects at all carries the sum of its moves.
+    #[test]
+    fn a_move_records_the_phase_on_a_layer_that_has_no_effects_yet() {
+        let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), Vec::new());
+        let after = moved(&before, &[id], 7, 4).expect("the layer moves");
+        assert_eq!(phase(&after, id), Some((7.0, 4.0)), "the grid of an overlay added later starts from this phase");
+    }
+
+    /// Done when 2: moving the layer back puts the grid on the document origin again. The phase is
+    /// the sum of the layer's moves, not something read off its bounds, which came back too.
+    #[test]
+    fn moving_the_layer_back_puts_the_move_phase_on_the_document_origin() {
+        let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
+        let there = moved(&before, &[id], 7, 4).expect("the layer moves");
+        let back = moved(&there, &[id], -7, -4).expect("the layer moves back");
+        let l = back.layer(id).expect("the layer");
+        assert_eq!(l.effects.move_phase, Some((0.0, 0.0)), "the sum of the moves, with the layer back where it was");
+        assert_eq!(crate::layer_multi_cmds::layer_bounds(l), Some(Rect::new(10, 10, 20, 20)), "and its bounds came back with it");
+    }
+
+    /// Done when 4: with the overlay on the group, only the group's own moves carry its grid. A
+    /// child moving alone leaves the group without a move phase, so the group keeps tiling on the
+    /// document grid.
+    #[test]
+    fn a_group_carries_the_move_phase_for_its_own_moves_only() {
+        let child = Layer::new("Shape", shape(Rect::new(10, 10, 20, 20)));
+        let child_id = child.id;
+        let mut group = Layer::group("Group", vec![child]);
+        group.effects.items = vec![linked_overlay()];
+        let group_id = group.id;
+        let mut d = Document::new("origin", Size::new(40, 40), ColorMode::Rgb, SampleType::U8);
+        d.layers.push(group);
+        let only_child = moved(&d, &[child_id], 7, 4).expect("the child moves");
+        assert_eq!(phase(&only_child, group_id), None, "a child's move leaves the group's own grid alone");
+        assert_eq!(phase(&only_child, child_id), Some((7.0, 4.0)), "the moved child records its own phase");
+        let group_moved = moved(&d, &[group_id], 7, 4).expect("the group moves");
+        assert_eq!(phase(&group_moved, group_id), Some((7.0, 4.0)), "the group's own move records its phase");
+        assert_eq!(phase(&group_moved, child_id), Some((7.0, 4.0)), "and the child moved with it");
+    }
+
+    /// The unmeasured content types keep today's behaviour: an adjustment or fill layer has no
+    /// position, and a move of one still changes nothing about it.
+    #[test]
+    fn a_move_records_no_reference_point_on_content_that_has_no_position() {
+        let cases = [LayerContent::Adjustment(Adjustment::Invert), LayerContent::Fill(Fill::Solid(Color::rgb(1.0, 0.0, 0.0)))];
+        for content in cases {
+            let what = format!("{content:?}");
+            let (before, id) = doc(content, vec![linked_overlay()]);
+            let after = moved(&before, &[id], 7, 4).expect("the layer moves");
+            assert_eq!(after, before, "the whole document is unchanged for {what}");
+            assert_eq!(reference(&after, id), None, "no reference point for {what}");
+        }
+    }
+
+    /// The measured 20 x 20 pattern of #14960: quadrants red / green / blue / black, and one white
+    /// marker pixel at tile (0, 0).
+    fn quad_pattern() -> photocraft_doc::Pattern {
+        let mut tile = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        tile.fill_rect(Rect::new(0, 0, 10, 10), &[1.0, 0.0, 0.0, 1.0]);
+        tile.fill_rect(Rect::new(10, 0, 20, 10), &[0.0, 1.0, 0.0, 1.0]);
+        tile.fill_rect(Rect::new(0, 10, 10, 20), &[0.0, 0.0, 1.0, 1.0]);
+        tile.fill_rect(Rect::new(10, 10, 20, 20), &[0.0, 0.0, 0.0, 1.0]);
+        tile.fill_rect(Rect::new(0, 0, 1, 1), &[1.0, 1.0, 1.0, 1.0]);
+        photocraft_doc::Pattern::new("quadrants", tile, 20, 20)
+    }
+
+    /// A document with the #14960 pattern registered and `layer` in it.
+    fn fixture(layer: Layer) -> Document {
+        let mut d = Document::new("origin", Size::new(80, 80), ColorMode::Rgb, SampleType::U8);
+        d.patterns.push(quad_pattern());
+        d.layers.push(layer);
+        d
+    }
+
+    /// A linked PatternOverlay naming `name`, looked up by name (empty id) like [`linked_overlay`].
+    fn linked_overlay_named(name: &str) -> Effect {
+        Effect::PatternOverlay {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            name: name.into(),
+            id: String::new(),
+            scale: 1.0,
+            angle: 0.0,
+            link: true,
+            phase: (0.0, 0.0),
+        }
+    }
+
+    /// A pattern with a 15 px period in both axes: red in columns 0..7 of each tile, blue in
+    /// 8..15. 15 divides neither 40 nor 80, so a whole-canvas move shifts this grid (the review
+    /// input at moves.rs:458).
+    fn stripes15() -> photocraft_doc::Pattern {
+        let mut tile = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        tile.fill_rect(Rect::new(0, 0, 7, 15), &[1.0, 0.0, 0.0, 1.0]);
+        tile.fill_rect(Rect::new(7, 0, 15, 15), &[0.0, 0.0, 1.0, 1.0]);
+        photocraft_doc::Pattern::new("stripes", tile, 15, 15)
+    }
+
+    /// A session on a 40 x 40 RGB8 document with `stripes15` registered and `layer` above the
+    /// Background, and that layer's id.
+    fn stripes_session(layer: Layer) -> (Session, LayerId) {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40, "depth": 8, "mode": "rgb", "background": "transparent"})).expect("a document opens");
+        let id = layer.id;
+        s.edit("setup", |doc, _| {
+            doc.patterns.push(stripes15());
+            doc.layers.push(layer);
+            Ok(())
+        })
+        .expect("the layer is set up");
+        (s, id)
+    }
+
+    /// The flattened `rect` as one letter per pixel, row-major (W white, R red, G green, B blue,
+    /// K black, `?` for anything else), so a test can compare what the compositor painted.
+    fn letters(doc: &Document, rect: Rect) -> Vec<char> {
+        let q = |v: f32| v > 0.5;
+        photocraft_compose::render(doc, rect)
+            .px
+            .iter()
+            .map(|p| match (q(p[0]), q(p[1]), q(p[2])) {
+                (true, false, false) => 'R',
+                (false, true, false) => 'G',
+                (false, false, true) => 'B',
+                (false, false, false) => 'K',
+                (true, true, true) => 'W',
+                _ => '?',
+            })
+            .collect()
+    }
+
+    /// Review point 2 (#14960): a pattern stroke is not measured by this issue, and today it
+    /// anchors at the layer's corner, so it stays exactly where it was relative to its layer across
+    /// a move. Recording the move phase must not become the anchor of a layer whose style carries a
+    /// pattern paint other than the overlay.
+    #[test]
+    fn a_pattern_stroke_stays_where_it_is_relative_to_its_layer_across_a_move() {
+        let pat = quad_pattern();
+        let mut l = Layer::new("Shape", shape(Rect::new(20, 20, 40, 40)));
+        l.effects.items = vec![Effect::Stroke(photocraft_doc::StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            size: 3.0,
+            position: photocraft_doc::StrokePosition::Outside,
+            paint: photocraft_doc::FxPaint::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0 },
+            overprint: false,
+        })];
+        let id = l.id;
+        let d = fixture(l);
+        let before = letters(&d, Rect::new(14, 22, 46, 28));
+        let after = moved(&d, &[id], 5, 3).expect("the layer moves");
+        assert_eq!(reference(&after, id), None, "the move leaves the reference point the stroke anchors at unset");
+        // The same window of pixels, followed by the move: the stroke must read identically.
+        assert_eq!(before, letters(&after, Rect::new(19, 25, 51, 31)), "the pattern stroke moved with the layer, unchanged");
+    }
+
+    /// Review point 1 (#14960): a shape layer is one of the kinds the issue did not measure, so a
+    /// linked Pattern Overlay on it keeps today's anchor at the layer's corner and moves with the
+    /// layer instead of staying on the document grid.
+    #[test]
+    fn a_linked_overlay_on_a_shape_layer_moves_with_the_layer() {
+        let path = photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(20.0, 20.0), (40.0, 20.0), (40.0, 40.0), (20.0, 40.0)])]);
+        let sh = photocraft_doc::ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(1.0, 0.5, 0.0))), ..Default::default() };
+        let mut l = Layer::new("Shape", LayerContent::Shape(sh));
+        l.effects.items = vec![linked_overlay()];
+        let id = l.id;
+        let d = fixture(l);
+        let before = letters(&d, Rect::new(22, 22, 38, 38));
+        let after = moved(&d, &[id], 7, 4).expect("the shape layer moves");
+        assert_eq!(reference(&after, id), None, "a shape layer records no move phase");
+        assert_eq!(before, letters(&after, Rect::new(29, 26, 45, 42)), "the overlay moved with the shape layer, unchanged");
+    }
+
+    /// A 3 px outside stroke painted with the #14960 pattern (not measured by the issue: it keeps
+    /// today's anchor, the effects reference point, else the layer's corner).
+    fn pattern_stroke() -> Effect {
+        let pat = quad_pattern();
+        Effect::Stroke(photocraft_doc::StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            size: 3.0,
+            position: photocraft_doc::StrokePosition::Outside,
+            paint: photocraft_doc::FxPaint::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0 },
+            overprint: false,
+        })
+    }
+
+    /// Review (CodeRabbit, moves.rs:357): a layer with no effects is moved from (23, 21) by +5,+3,
+    /// and only then gets a pattern stroke. The stroke tiles from the layer's corner (28, 24), as it
+    /// does on `upstream/main`, so it reads exactly like the same stroke on a layer that was drawn
+    /// at (28, 24) and never moved. The move phase the overlay needs must not become its anchor.
+    #[test]
+    fn a_pattern_stroke_added_after_a_move_tiles_from_the_layer_corner() {
+        let window = Rect::new(20, 16, 56, 52);
+        let mut never = Layer::new("Shape", shape(Rect::new(28, 24, 48, 44)));
+        never.effects.items = vec![pattern_stroke()];
+        let expected = letters(&fixture(never), window);
+        let l = Layer::new("Shape", shape(Rect::new(23, 21, 43, 41)));
+        let id = l.id;
+        let d = fixture(l);
+        let preview = moved(&d, &[id], 5, 3).expect("the layer moves");
+        let mut committed = d.clone();
+        move_layers(&mut committed, &d, &[(id, 5, 3)]).expect("the command moves the layer");
+        for (what, mut after) in [("the drag preview", preview), ("the committed move", committed)] {
+            after.layer_mut(id).expect("the layer").effects.items = vec![pattern_stroke()];
+            assert_eq!(letters(&after, window), expected, "{what}: the stroke added after the move tiles from the layer corner (28, 24)");
+        }
+    }
+
+    /// Review (CodeRabbit, moves.rs:369): on an 80 px wide canvas, a group with a linked mask over
+    /// a raster child at x 70..75 with a linked overlay. The group moves +1 (no wrap), then a
+    /// View > Pattern Preview move of +10 wraps the child to x 1..6; its group's mask has to wrap
+    /// with it, as it did on `upstream/main`, whatever phase the first move recorded.
+    #[test]
+    fn a_group_mask_still_wraps_with_its_child_after_a_move_recorded_the_phase() {
+        let mut child = Layer::new("Shape", shape(Rect::new(70, 10, 75, 20)));
+        child.effects.items = vec![linked_overlay()];
+        let child_id = child.id;
+        let mut group = Layer::group("Group", vec![child]);
+        let mut mask = photocraft_doc::LayerMask::hide_all();
+        mask.surface.fill_rect(Rect::new(70, 10, 75, 20), &[1.0]);
+        group.mask = Some(mask);
+        let group_id = group.id;
+        let d = fixture(group);
+        let mut once = d.clone();
+        move_layers(&mut once, &d, &[(group_id, 1, 0)]).expect("the group moves");
+        let tile = Some(once.bounds());
+        let preview = moved_wrapping(&once, &[group_id], 10, 0, false, tile).expect("the wrapping preview");
+        let mut committed = once.clone();
+        move_layers_wrapped(&mut committed, &once, &[(group_id, 10, 0)], tile).expect("the wrapping move");
+        for (what, after) in [("the drag preview", preview), ("the committed move", committed)] {
+            let LayerContent::Raster(px) = &after.layer(child_id).expect("the child").content else { panic!("the child is a raster layer") };
+            assert_eq!(px.content_bounds(), Rect::new(1, 10, 6, 20), "{what}: the child wrapped to x 1..6");
+            let m = after.layer(group_id).and_then(|g| g.mask.as_ref()).expect("the group mask");
+            assert_eq!(m.surface.content_bounds(), Rect::new(1, 10, 6, 20), "{what}: the group mask wrapped with its child");
+        }
+    }
+
+    /// Not measured by #14960, kept as on `upstream/main`: a child with a stored effects reference
+    /// point (read from a file) still keeps its group's linked mask on the raw delta in a Pattern
+    /// Preview move, and a whole-canvas move of it is still not skipped.
+    #[test]
+    fn a_stored_reference_point_keeps_the_wrap_checks_as_they_were() {
+        let mut child = Layer::new("Shape", shape(Rect::new(70, 10, 75, 20)));
+        child.effects.items = vec![linked_overlay()];
+        child.effects.reference = Some((3.0, 0.0));
+        let mut group = Layer::group("Group", vec![child]);
+        let mut mask = photocraft_doc::LayerMask::hide_all();
+        mask.surface.fill_rect(Rect::new(70, 10, 75, 20), &[1.0]);
+        group.mask = Some(mask);
+        let group_id = group.id;
+        let d = fixture(group);
+        let after = moved_wrapping(&d, &[group_id], 10, 0, false, Some(d.bounds())).expect("the wrapping preview");
+        let m = after.layer(group_id).and_then(|g| g.mask.as_ref()).expect("the group mask");
+        assert_eq!(m.surface.content_bounds(), Rect::new(80, 10, 85, 20), "the group mask keeps the raw delta, as before");
+        assert!(!targets_only_wrap(&d, &[group_id], false, 80, 0), "a whole-canvas move still changes the reference point");
+    }
+
+    /// A whole-canvas Pattern Preview move of raster layers changes nothing and is skipped, as on
+    /// `upstream/main`, until it moves something the drag preview shows: a recorded move phase, or
+    /// the grid of a linked Pattern Overlay whose period the raw delta does not fold back onto it.
+    /// The wrap of a linked mask does not depend on that phase.
+    #[test]
+    fn only_the_skip_check_reads_the_move_phase() {
+        let (before, id) = doc(shape(Rect::new(10, 10, 20, 20)), Vec::new());
+        assert!(targets_only_wrap(&before, &[id], false, 40, 0), "never moved, no overlay: a whole-canvas move is a no-op");
+        let after = moved(&before, &[id], 1, 0).expect("the layer moves");
+        let l = after.layer(id).expect("the layer");
+        assert!(!targets_only_wrap(&after, &[id], false, 40, 0), "with a move phase the whole-canvas move is not skipped");
+        assert!(subtree_wraps_only(l, 0), "but the layer still wraps as raster samples");
+        // Review (CodeRabbit, moves.rs:458): the FIRST whole-canvas move of a linked overlay is
+        // not skipped either when it shifts the grid: a 15 px period on this 40 px canvas moves
+        // by 10 px. The end-to-end preview-vs-commit check is
+        // `the_first_whole_canvas_wrapping_move_keeps_the_overlay_grid_the_preview_showed`.
+        let (mut grid, gid) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay_named("stripes")]);
+        grid.patterns.push(stripes15());
+        assert!(!targets_only_wrap(&grid, &[gid], false, 40, 0), "a linked overlay whose grid shifts keeps the move");
+        let (mut exact, eid) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay()]);
+        exact.patterns.push(quad_pattern());
+        assert!(targets_only_wrap(&exact, &[eid], false, 40, 0), "a 20 px grid repeating exactly over the 40 px canvas keeps the skip");
+        let (missing, mid) = doc(shape(Rect::new(10, 10, 20, 20)), vec![linked_overlay_named("stripes")]);
+        assert!(targets_only_wrap(&missing, &[mid], false, 40, 0), "an overlay whose pattern is not in the document paints nothing: the skip stays");
+    }
+
+    /// Review (CodeRabbit, moves.rs:458): a 40 px canvas and a linked pattern with a 15 px
+    /// period. The drag preview of the FIRST whole-canvas move records the raw delta and tiles
+    /// the grid from (40, 0); the commit used to fold that move away and snap the pattern back
+    /// to (0, 0). For a pixel layer and for a group carrying the overlay.
+    #[test]
+    fn the_first_whole_canvas_wrapping_move_keeps_the_overlay_grid_the_preview_showed() {
+        let striped = |l: Layer| {
+            let mut l = l;
+            l.effects.items = vec![linked_overlay_named("stripes")];
+            l
+        };
+        let cases = [
+            ("a pixel layer", striped(Layer::new("Shape", shape(Rect::new(10, 10, 30, 30))))),
+            ("a group", striped(Layer::group("Group", vec![Layer::new("Shape", shape(Rect::new(10, 10, 30, 30)))]))),
+        ];
+        for (what, l) in cases {
+            let (mut s, id) = stripes_session(l);
+            let window = Rect::new(12, 12, 28, 13);
+            let before = open_doc(&s).clone();
+            let preview = moved_wrapping(&before, &[id], 40, 0, false, Some(before.bounds())).expect("the wrapping preview");
+            assert_ne!(letters(&preview, window), letters(&before, window), "{what}: the preview shifts the 15 px grid by the raw 40 px delta");
+            let steps = s.active().expect("a document").history.past_len();
+            s.execute("layer.translate", json!({"layer": id.0, "dx": 40, "dy": 0, "wrap": true})).expect("the wrapping move commits");
+            assert_eq!(phase(open_doc(&s), id), Some((40.0, 0.0)), "{what}: the commit records the phase the preview showed");
+            assert_eq!(s.active().expect("a document").history.past_len(), steps + 1, "{what}: the moved grid is one history step");
+            assert_eq!(letters(open_doc(&s), window), letters(&preview, window), "{what}: the committed pattern is what the preview showed");
+        }
+    }
+
+    /// The other side of the review point: a whole-canvas move of a grid that repeats EXACTLY
+    /// over the canvas (the 20 px #14960 pattern on the 80 px fixture) paints the same picture,
+    /// so it stays the no-op skip it was on `upstream/main` and records no phase. Guard test,
+    /// passes before and after the fix.
+    #[test]
+    fn a_whole_canvas_wrapping_move_of_a_grid_that_repeats_exactly_stays_skipped() {
+        let mut l = Layer::new("Shape", shape(Rect::new(20, 20, 40, 40)));
+        l.effects.items = vec![linked_overlay()];
+        let (mut s, id) = pattern_session(l);
+        let before = open_doc(&s).clone();
+        let steps = s.active().expect("a document").history.past_len();
+        s.execute("layer.translate", json!({"layer": id.0, "dx": 80, "dy": 0, "wrap": true})).expect("the wrapping move");
+        assert_eq!(s.active().expect("a document").history.past_len(), steps, "the grid did not change, so the move stays skipped");
+        assert_eq!(phase(open_doc(&s), id), None, "and it records no phase");
+        assert_eq!(letters(open_doc(&s), Rect::new(22, 22, 38, 23)), letters(&before, Rect::new(22, 22, 38, 23)), "the picture is unchanged");
+    }
+
+    /// A session on an 80 x 80 RGB8 document with the #14960 pattern registered and `layer` above
+    /// the Background, and that layer's id.
+    fn pattern_session(layer: Layer) -> (Session, LayerId) {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 80, "height": 80, "depth": 8, "mode": "rgb", "background": "transparent"})).expect("a document opens");
+        let id = layer.id;
+        s.edit("setup", |doc, _| {
+            doc.patterns.push(quad_pattern());
+            doc.layers.push(layer);
+            Ok(())
+        })
+        .expect("the layer is set up");
+        (s, id)
+    }
+
+    /// Not measured by #14960, pinned as it now is: Layer > Rasterize > Layer on a shape layer with
+    /// a linked overlay keeps the style live but turns the content into pixels, and a pixel layer is
+    /// one of the kinds the issue measured, so the grid jumps by the layer's own top-left, from its
+    /// corner to the document origin, at that transition. Nothing records the old corner as a move
+    /// phase; the issue measures no kind transition, and this test keeps the jump from changing by
+    /// accident.
+    #[test]
+    fn rasterize_layer_moves_a_shape_layer_overlay_grid_to_the_document_origin() {
+        let path = photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(25.0, 21.0), (45.0, 21.0), (45.0, 41.0), (25.0, 41.0)])]);
+        let sh = photocraft_doc::ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(1.0, 0.5, 0.0))), ..Default::default() };
+        let mut l = Layer::new("Shape", LayerContent::Shape(sh));
+        l.effects.items = vec![linked_overlay()];
+        let (mut s, id) = pattern_session(l);
+        // 5 px inside the shape: red-blue on the grid that starts at the layer's corner (25, 21).
+        assert_eq!(letters(open_doc(&s), Rect::new(30, 31, 31, 32)), vec!['B'], "a shape layer keeps the corner anchor");
+        s.execute("layer.rasterize.layer", json!({"layer": id.0})).expect("the layer rasterizes");
+        let d = open_doc(&s);
+        assert!(matches!(d.layer(id).expect("the layer").content, LayerContent::Raster(_)), "the content is pixels now");
+        assert_eq!(phase(d, id), None, "the transition records no move phase");
+        assert_eq!(letters(d, Rect::new(30, 31, 31, 32)), vec!['K'], "the same pixel reads the document-origin grid: the grid jumped with the content kind");
+    }
+
+    /// Not measured by #14960, pinned as it now is: Rasterize > Layer Style bakes the style and
+    /// clears the recorded phase together with the reference point, so an overlay added after that
+    /// bake tiles from the document origin even though the layer physically moved +5,+3. The
+    /// issue's "an overlay added after a move tiles from that move" rule does not reach the state a
+    /// bake leaves behind, and this test pins that limit instead of guessing a rule for it.
+    #[test]
+    fn a_new_overlay_after_a_style_bake_starts_at_the_document_origin() {
+        let mut l = Layer::new("Shape", shape(Rect::new(20, 16, 40, 36)));
+        l.effects.items = vec![linked_overlay()];
+        let (mut s, id) = pattern_session(l);
+        s.execute("layer.translate", json!({"layer": id.0, "dx": 5, "dy": 3})).expect("the layer moves");
+        assert_eq!(phase(open_doc(&s), id), Some((5.0, 3.0)), "the move records the phase the overlay reads");
+        // 5 px inside the moved shape: on the grid that starts at (5, 3) the tile is (25, 26) -> red.
+        assert_eq!(letters(open_doc(&s), Rect::new(30, 29, 31, 30)), vec!['R'], "the overlay the bake bakes in follows the phase");
+        s.execute("layer.rasterize.layerStyle", json!({"layer": id.0})).expect("the style bakes");
+        assert_eq!(phase(open_doc(&s), id), None, "the bake clears the phase with the style");
+        s.edit("a new overlay", |doc, _| {
+            doc.layer_mut(id).expect("the layer").effects.items = vec![linked_overlay()];
+            Ok(())
+        })
+        .expect("the new overlay lands");
+        assert_eq!(
+            letters(open_doc(&s), Rect::new(30, 29, 31, 30)),
+            vec!['G'],
+            "the new overlay starts on the document grid, not on the phase the moved layer carried"
+        );
+    }
+
+    /// A session on a 40 x 40 RGB8 document with two positioned raster layers: `src` carries a
+    /// linked Pattern Overlay and has never moved, `dst` has no style. Returns both layer ids.
+    fn style_pair() -> (Session, LayerId, LayerId) {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40, "depth": 8, "mode": "rgb", "background": "transparent"})).expect("a document opens");
+        let (src, dst) = s
+            .edit("setup", |doc, _| {
+                let mut a = Layer::new("A", shape(Rect::new(5, 5, 15, 15)));
+                a.effects.items = vec![linked_overlay()];
+                let b = Layer::new("B", shape(Rect::new(20, 20, 30, 30)));
+                let (ia, ib) = (a.id, b.id);
+                doc.layers.push(a);
+                doc.layers.push(b);
+                Ok((ia, ib))
+            })
+            .expect("the two layers are set up");
+        (s, src, dst)
+    }
+
+    /// The open document (the plain fixture above already uses the name `doc`).
+    fn open_doc(s: &Session) -> &Document {
+        &s.active().expect("a document is open").doc
+    }
+
+    /// Carry `src`'s style onto `dst` the way the Layers panel does it: Layer Style > Copy and
+    /// Paste, or `through_clipboard` false: dragging the fx row onto the other layer (a copy, so
+    /// the source keeps its own style and phase).
+    fn carry_style(s: &mut Session, through_clipboard: bool, src: LayerId, dst: LayerId) {
+        if through_clipboard {
+            s.execute("layer.layerStyle.copyLayerStyle", json!({"layer": src.0})).expect("the style is copied");
+            s.execute("layer.layerStyle.pasteLayerStyle", json!({"layer": dst.0})).expect("the style pastes");
+        } else {
+            s.execute("layer.layerStyle.transferEffects", json!({"from": src.0, "to": dst.0, "copy": true})).expect("the fx row lands");
+        }
+    }
+
+    /// Review (#14960): `move_phase` records where THIS layer's Move commands took it, so it belongs
+    /// to the layer and not to its style, like the `psd_raw` block and the reference point. Carrying
+    /// a style from a layer that moved +5,+3 onto a layer that never moved must leave the second
+    /// layer's overlay grid on the document origin.
+    #[test]
+    fn a_carried_style_does_not_move_the_destination_grid() {
+        for through_clipboard in [true, false] {
+            let (mut s, src, dst) = style_pair();
+            s.execute("layer.translate", json!({"layer": src.0, "dx": 5, "dy": 3})).expect("the source layer moves");
+            assert_eq!(phase(open_doc(&s), src), Some((5.0, 3.0)), "the move records the source's phase");
+            assert_eq!(phase(open_doc(&s), dst), None, "the target has never moved");
+            carry_style(&mut s, through_clipboard, src, dst);
+            let d = open_doc(&s);
+            let l = d.layer(dst).expect("the target layer");
+            assert_eq!(l.effects.items.len(), 1, "the style itself arrived");
+            assert_eq!(phase(d, dst), None, "clipboard {through_clipboard}: the carried style leaves the target's grid on the document origin");
+            assert_eq!(phase(d, src), Some((5.0, 3.0)), "the source keeps its own phase");
+        }
+    }
+
+    /// The same rule from the other side: pasting a style from a layer that never moved onto a layer
+    /// that moved +2,+2 must not take that layer's grid back to the document origin.
+    #[test]
+    fn a_carried_style_does_not_erase_the_destination_move_phase() {
+        for through_clipboard in [true, false] {
+            let (mut s, src, dst) = style_pair();
+            s.execute("layer.translate", json!({"layer": dst.0, "dx": 2, "dy": 2})).expect("the target layer moves");
+            assert_eq!(phase(open_doc(&s), dst), Some((2.0, 2.0)), "the target records its own phase");
+            assert_eq!(phase(open_doc(&s), src), None, "the source has never moved");
+            carry_style(&mut s, through_clipboard, src, dst);
+            let d = open_doc(&s);
+            let l = d.layer(dst).expect("the target layer");
+            assert_eq!(l.effects.items.len(), 1, "the style itself arrived");
+            assert_eq!(phase(d, dst), Some((2.0, 2.0)), "clipboard {through_clipboard}: the target keeps the phase its own move recorded");
+        }
     }
 }

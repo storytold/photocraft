@@ -348,8 +348,12 @@ struct EffectPass<'a> {
     /// Layer bounds (gradients aligned with the layer use the whole layer, independent of the
     /// render rect).
     sb: Rect,
-    /// Linked patterns tile from the effects reference point (else the layer's top-left).
+    /// The pattern paints other than a Pattern Overlay tile from the effects reference point (else
+    /// the layer's top-left).
     anchor: (f64, f64),
+    /// The Pattern Overlay's origin: the effects reference point, else the document origin on the
+    /// content kinds #14960 measured, else the layer's top-left (see [`crate::pattern::overlay_anchor`]).
+    overlay_anchor: (f64, f64),
     /// The enabled effects. Multiple instances: the first listed is on top, so paint in reverse.
     items: Vec<&'a Effect>,
 }
@@ -374,6 +378,7 @@ impl<'a> EffectPass<'a> {
             h: big.height() as usize,
             sb,
             anchor: layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0))),
+            overlay_anchor: crate::pattern::overlay_anchor(layer, sb),
             items: layer.effects.items.iter().filter(|e| e.enabled()).collect(),
         }
     }
@@ -475,11 +480,21 @@ impl<'a> EffectPass<'a> {
     /// Paints the interior effects other than strokes and bevels: overlays, satin, inner glow
     /// and inner shadow.
     fn paint_interior(&self, lay: &mut Buffer, shape: &Map) {
-        let (w, h, big, sb, anchor, patterns) = (self.w, self.h, self.big, self.sb, self.anchor, self.patterns);
+        let (w, h, big, sb, anchor, overlay_anchor, patterns) = (self.w, self.h, self.big, self.sb, self.anchor, self.overlay_anchor, self.patterns);
         let full = Map { w, h, v: shape.v.iter().map(|a| if inside(*a) { 1.0 } else { 0.0 }).collect() };
         for (_, e) in self.rev() {
             if let Effect::PatternOverlay { common, name, id, scale, angle, link, phase } = e {
-                paint_pattern(lay, &full, patterns, name, id, Placement::anchored(anchor, *link, *phase, *scale, *angle), big, common.blend, common.opacity);
+                paint_pattern(
+                    lay,
+                    &full,
+                    patterns,
+                    name,
+                    id,
+                    Placement::anchored(overlay_anchor, *link, *phase, *scale, *angle),
+                    big,
+                    common.blend,
+                    common.opacity,
+                );
             }
         }
         for (_, e) in self.rev() {
