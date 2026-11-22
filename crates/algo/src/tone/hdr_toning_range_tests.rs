@@ -149,3 +149,17 @@ fn merge_to_hdr_local_adaptation_reaches_the_reference_from_the_reference_radian
         assert!((got - want).abs() <= 0.08 * 65535.0, "{name}: {got:.0}, the reference gives {want}");
     }
 }
+
+#[test]
+fn a_strong_local_contrast_at_a_low_gamma_stays_finite() {
+    // A bright pixel between dark ones with Detail 300 and Gamma 0.1 tones far past f32 before the
+    // shadow and highlight curve; the result is still a colour, and the checked replay agrees.
+    let p = HdrToning { radius: 100.0, strength: 0.1, gamma: 0.1, detail: 300.0, saturation: 0.0, ..Default::default() };
+    let input = vec![[0.01, 0.01, 0.01, 1.0], [0.9, 0.9, 0.9, 1.0], [0.01, 0.01, 0.01, 1.0]];
+    let mut px = input.clone();
+    hdr_toning(&mut px, 3, 1, &p);
+    assert!(px.iter().all(|q| q.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))), "{px:?}");
+    let mut checked = input;
+    checked_hdr::process_with(&mut checked, 3, 1, &p, &photocraft_raster::Interrupt::NONE).unwrap();
+    assert!(px.iter().flatten().zip(checked.iter().flatten()).all(|(a, b)| (a - b).abs() < 1e-6), "{px:?} vs {checked:?}");
+}

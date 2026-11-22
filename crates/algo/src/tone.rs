@@ -250,6 +250,19 @@ fn curve_eval(pts: &[(f32, f32)], x: f32) -> f32 {
     pts[pts.len() - 1].1
 }
 
+/// The tone of a sample whose f32 exposure, gamma and shadow/highlight arithmetic overflowed (a
+/// low Gamma or a strong local contrast): the same curve evaluated in f64. A cap beyond every
+/// control's polynomial crossover keeps cubing finite; those values saturate at the display
+/// clamp. Both HDR Toning paths use it, so they stay equal.
+pub(crate) fn wide_range_tone(new_log: f32, exposure: f32, gamma: f32, shadow: f32, highlight: f32) -> f32 {
+    let log_value = (f64::from(new_log) + f64::from(exposure) * std::f64::consts::LN_2) / f64::from(gamma);
+    let value = log_value.exp().min(1e100);
+    let shadow = f64::from(shadow) / 200.;
+    let highlight = f64::from(highlight) / 200.;
+    let mapped = ((-(shadow + highlight) * value + 3. * shadow) * value + (1. - 3. * shadow)) * value + shadow;
+    mapped.clamp(0., 1.) as f32
+}
+
 /// Local adaptation tone mapping (Durand–Dorsey style base/detail split in log luminance): the
 /// blurred log luminance (radius) is the base layer, compressed by `strength` toward its brightest
 /// value, which becomes white, so an ordinary image is stretched to the full range and its dark
@@ -292,6 +305,9 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
             // the exponent, matching the crate's other gamma controls (hdr.rs, proof_sim.rs).
             let mut l1 = (new_log.exp() * exposure).max(0.0).powf(1.0 / gamma);
             l1 += p.shadow / 100.0 * (1.0 - l1).powi(3) * 0.5 - p.highlight / 100.0 * l1.powi(3) * 0.5;
+            if !l1.is_finite() {
+                l1 = wide_range_tone(new_log, p.exposure, gamma, p.shadow, p.highlight);
+            }
             l1 = curve_eval(&sorted, l1.clamp(0.0, 1.0));
             let ratio = l1 / l0;
             let mut out = c.map(|v| v * ratio);

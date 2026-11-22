@@ -205,14 +205,8 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
             l1 += p.shadow / 100. * (1. - l1).powi(3) * 0.5 - p.highlight / 100. * l1.powi(3) * 0.5;
             if !l1.is_finite() {
                 // Preserve ordinary native arithmetic, but evaluate extreme valid HDR in a
-                // wider domain. A cap beyond every f32 control's polynomial crossover keeps
-                // cubing finite; those values already saturate at the final display clamp.
-                let log_value = (f64::from(new_log) + f64::from(p.exposure) * std::f64::consts::LN_2) / f64::from(p.gamma);
-                let value = log_value.exp().min(1e100);
-                let shadow = f64::from(p.shadow) / 200.;
-                let highlight = f64::from(p.highlight) / 200.;
-                let mapped = ((-(shadow + highlight) * value + 3. * shadow) * value + (1. - 3. * shadow)) * value + shadow;
-                l1 = mapped.clamp(0., 1.) as f32;
+                // wider domain.
+                l1 = super::wide_range_tone(new_log, p.exposure, p.gamma, p.shadow, p.highlight);
                 if !l1.is_finite() {
                     return Err(Error::NonFiniteSample);
                 }
