@@ -84,7 +84,13 @@ pub(crate) fn set_status_item(chrome: &mut ChromeState, item: StatusItem) {
 /// What the status bar readout knows about the active document. Items without a value here show a dash.
 /// The document's values are computed once per document revision and language.
 pub(crate) fn status_values(app: &PhotocraftApp) -> StatusValues {
-    let Some(st) = app.session.active() else { return StatusValues::default() };
+    app.session.active_index().map_or_else(StatusValues::default, |doc| status_values_of(app, doc))
+}
+
+/// [`status_values`] for document `doc`, whichever is active: a floating document window's status bar reads its own
+/// document (#16415).
+pub(crate) fn status_values_of(app: &PhotocraftApp, doc: usize) -> StatusValues {
+    let Some(st) = app.session.documents().get(doc) else { return StatusValues::default() };
     let mut values = app.doc_queries.status(&app.session, st, || {
         let doc: &Document = &st.doc;
         let mut values = StatusValues::default();
