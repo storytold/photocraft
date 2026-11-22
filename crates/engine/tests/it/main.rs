@@ -107,6 +107,7 @@ mod pixel_lock_edits;
 mod place_steps_measure;
 mod precheck;
 mod prefs_usage;
+mod psd_type_baseline_edit;
 mod rasterize_psd_reopen;
 mod rasterize_selected_layers;
 mod rendering_preferences;
