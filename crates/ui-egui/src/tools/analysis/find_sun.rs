@@ -341,6 +341,8 @@ impl StackDialog for FindSunDialog {
                         Some(xy.ok_or_else(|| format!("field `at` takes [x, y] in document pixels or null, got {value}"))?)
                     }
                 };
+                // Automation names no document, so a switch drops this position.
+                self.placed_on = None;
             }
             _ => return Err(format!("the Find Sun dialog has no field `{field}`")),
         }
@@ -385,6 +387,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some(dialog) = app.framework.dialogs.get_mut::<FindSunDialog>() {
             if dialog.placed_on != Some(doc) {
                 dialog.options.at = None;
+                dialog.placed_on = None;
             }
             dialog.canvas = Some(canvas);
         }

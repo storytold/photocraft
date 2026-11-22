@@ -115,4 +115,14 @@ fn an_error_keeps_find_automatically_and_a_sun_put_by_hand_stays_with_its_docume
     h.run_steps(4);
     assert_eq!(h.state().framework.dialogs.get::<FindSunDialog>().unwrap().options.at, Some([20.0, 20.0]));
     assert_eq!(result(&h)["picked"], json!(true));
+
+    // A position automation sets on another document belongs to neither, so coming back to the
+    // document a press placed the sun on doesn't measure it at that position.
+    let placed = h.state().session.active_index().unwrap();
+    h.state_mut().run("file.new", json!({"width": 128, "height": 64, "depth": 32})).unwrap();
+    h.run_steps(4);
+    set_at(&mut h, json!([30, 30]));
+    assert!(h.state_mut().session.set_active(placed));
+    h.run_steps(4);
+    assert!(h.state().framework.dialogs.get::<FindSunDialog>().unwrap().options.at.is_none());
 }
