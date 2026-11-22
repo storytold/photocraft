@@ -365,13 +365,13 @@ fn show_warp(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, w: &Sessi
     let split = pv.split.filter(|_| !w.on_type);
     // The grid as the picture is drawn: past the perspective cap through the capped map ([`warp::shown_mesh`]).
     let placed = pv.placed_warp.map(|(m, _)| m);
-    let mesh = warp::shown_mesh(&w.mesh, placed, &pv.rule_squeezes);
+    let mesh = warp::shown_mesh(&w.mesh, placed, &pv.shown_grids);
     let mut grid = WarpGrid::new("Warp grid", Bind::given(mesh.clone()), t.session.rect())
         .rule(warp::squeezing_rule(
             warp::grid_rule(unit, pv.drag_placed.or(pv.placed_warp).map(|(m, _)| m), split),
             pv.drag_placed.or(pv.placed_warp).map(|(m, _)| m),
             w.warp.bounds,
-            pv.rule_squeezes.clone(),
+            pv.shown_grids.clone(),
         ))
         .surface(warp::grid_surface(&w.mesh, unit, placed));
     if preset {

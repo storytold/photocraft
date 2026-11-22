@@ -3020,7 +3020,7 @@ fn a_long_pulled_warp_under_a_perspective_shows_its_grid_as_the_reference_draws_
             .collect(),
     )
     .unwrap();
-    let shown = super::warp::shown_mesh(&stored, Some(placed), &super::warp::RuleSqueezes::default());
+    let shown = super::warp::shown_mesh(&stored, Some(placed), &super::warp::ShownGrids::default());
     for (i, want) in [(0usize, [226.0, 125.0]), (4, [134.0, 370.0]), (8, [22.0, 664.0]), (12, [-110.0, 1014.0]), (15, [714.0, 1014.0]), (11, [578.0, 664.0])] {
         let p = shown.points[i];
         assert!((p.x - want[0]).abs() <= 4.0 && (p.y - want[1]).abs() <= 4.0, "point {i}: {p:?}, the reference drew it at {want:?}");

@@ -213,7 +213,7 @@ pub(super) fn grid_rule(unit: f64, to_doc: Option<[f64; 9]>, armed: Option<WarpS
 /// control points carried through the plain map); the grid shows and is pulled in the picture's own space, which past
 /// the render's perspective cap ([`photocraft_algo::smart_perspective::capped_map`]) is elsewhere.
 #[derive(Clone, Default)]
-pub(crate) struct RuleSqueezes(std::sync::Arc<std::sync::Mutex<Vec<Shown>>>);
+pub(crate) struct ShownGrids(std::sync::Arc<std::sync::Mutex<Vec<Shown>>>);
 
 /// A shown grid's points, the map it was carried through and the stored-style mesh's points.
 type Shown = (Vec<[f64; 2]>, [f64; 9], Vec<[f64; 2]>);
@@ -226,7 +226,7 @@ fn same(a: &[[f64; 2]], mesh: &WarpMesh) -> bool {
     a.len() == mesh.points.len() && a.iter().zip(&mesh.points).all(|(a, b)| a[0] == b.x && a[1] == b.y)
 }
 
-impl RuleSqueezes {
+impl ShownGrids {
     /// The most kept: the grid is drawn every pass and its rule runs a few times a pass, and only the newest land.
     const KEPT: usize = 16;
 
@@ -269,7 +269,7 @@ fn capped_view(to_doc: &[f64; 9], contents: &BezierMesh) -> Option<(Box<dyn Fn(f
 /// perspective cap (measured on the reference's own state after a long pull: its grid's side points lie where the
 /// capped map puts its stored points, within 2 px; the plain map put the grid's corners hundreds of pixels inside the
 /// picture). The same grid every pass for the same state, so a drag's value stays what it proposed.
-pub(super) fn shown_mesh(stored: &WarpMesh, to_doc: Option<[f64; 9]>, shown: &RuleSqueezes) -> WarpMesh {
+pub(super) fn shown_mesh(stored: &WarpMesh, to_doc: Option<[f64; 9]>, shown: &ShownGrids) -> WarpMesh {
     let Some(m) = to_doc else { return stored.clone() };
     if let Some(mesh) = shown.shown_of(stored, m) {
         return mesh;
@@ -303,7 +303,7 @@ pub(super) fn squeezing_rule(
     rule: impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh,
     to_doc: Option<[f64; 9]>,
     bounds: [f64; 4],
-    squeezes: RuleSqueezes,
+    squeezes: ShownGrids,
 ) -> impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh {
     move |mesh: &WarpMesh, edit: &WarpEdit| {
         let stored = squeezes.stored_of(mesh).map(|(_, s)| s);
@@ -320,7 +320,7 @@ pub(super) fn squeezing_rule(
 /// proposes it: when the pull takes the warp towards the viewer past the placement's horizon, the placement gives way
 /// ([`horizon_squeeze`]); the proposal is the result shown through that map ([`shown_mesh`]), which `squeezes`
 /// remembers with the map and the stored-style mesh for [`grid_edit`].
-pub(super) fn squeeze_proposal(out: WarpMesh, to_doc: [f64; 9], bounds: [f64; 4], squeezes: &RuleSqueezes) -> WarpMesh {
+pub(super) fn squeeze_proposal(out: WarpMesh, to_doc: [f64; 9], bounds: [f64; 4], squeezes: &ShownGrids) -> WarpMesh {
     let to_doc = photocraft_algo::transform::Homography(to_doc);
     let Some(back) = to_doc.inverse() else { return out };
     let contents = bezier_of(&out).map_points(|p| {
@@ -538,7 +538,7 @@ pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, 
         // once and settles, it never flips back and forth), and the points are carried through it.
         // A grid Warp mode showed or proposed (in the picture's space past the perspective cap) lands as the stored-style
         // mesh it stands for, with its map: a proposal as proposed, a cancel as the drag began.
-        let known = app.transform_preview.as_ref().and_then(|pv| pv.rule_squeezes.stored_of(mesh));
+        let known = app.transform_preview.as_ref().and_then(|pv| pv.shown_grids.stored_of(mesh));
         let squeezed = match (known, base) {
             (Some((placed, stored)), _) => Some((placed, bezier_of(&stored))),
             (None, Some((to_doc, _))) if !cancelled => photocraft_algo::transform::Homography(to_doc).inverse().and_then(|back| {

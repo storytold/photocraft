@@ -213,7 +213,7 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
                     let h = photocraft_algo::transform::Homography(m);
                     Some((h, h.inverse()?))
                 });
-                let squeezes = app.transform_preview.as_ref().map(|pv| pv.rule_squeezes.clone()).unwrap_or_default();
+                let squeezes = app.transform_preview.as_ref().map(|pv| pv.shown_grids.clone()).unwrap_or_default();
                 // The grid as the canvas gives it to the warp grid (past the perspective cap, the picture's own space).
                 let held = super::super::warp::shown_mesh(&start, placed.map(|(m, _)| m), &squeezes);
                 let flat =
