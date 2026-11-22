@@ -157,6 +157,9 @@ pub struct OpenPreview {
     /// During a warp drag on a placed smart object: the map from its contents as the drag began. The pull rule works
     /// through it, while `placed_warp` is what the drag has made of it ([`warp::grid_edit`]'s squeeze at the horizon).
     pub(crate) drag_placed: Option<([f64; 9], bool)>,
+    /// The meshes the warp grid's rule proposed squeezed at the horizon this drag, each with the map it carried them
+    /// through ([`warp::grid_rule`]), so [`warp::grid_edit`] lands each as proposed, with its map.
+    pub(crate) rule_squeezes: warp::RuleSqueezes,
     /// A smart object's stored warp, for the box's preview once its move is projective ([`WarpedPreview`]).
     pub(crate) warped: Option<WarpedPreview>,
 }
@@ -283,6 +286,7 @@ impl OpenPreview {
             held: None,
             redo_holds: Vec::new(),
             drag_placed: None,
+            rule_squeezes: warp::RuleSqueezes::default(),
             warped: None,
         }
     }

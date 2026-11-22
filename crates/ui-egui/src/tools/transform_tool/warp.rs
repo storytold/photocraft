@@ -195,6 +195,83 @@ pub(super) fn grid_rule(unit: f64, to_doc: Option<[f64; 9]>, armed: Option<WarpS
     }
 }
 
+/// The meshes [`squeezing_rule`] proposed squeezed at the horizon during the running drag, each with the map it carried
+/// it through: shared by the warp grid's rule, which runs while the grid is drawn, and [`grid_edit`], which lands them.
+#[derive(Clone, Default)]
+pub(crate) struct RuleSqueezes(std::sync::Arc<std::sync::Mutex<Vec<Squeezed>>>);
+
+/// A proposed mesh's points and the map it was carried through.
+type Squeezed = (Vec<[f64; 2]>, [f64; 9]);
+
+impl RuleSqueezes {
+    /// The most kept: the rule runs a few times a pass (the proposal, a release's landing), and only the newest land.
+    const KEPT: usize = 8;
+
+    fn remember(&self, points: Vec<[f64; 2]>, placed: [f64; 9]) {
+        let mut v = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        v.retain(|(p, _)| *p != points);
+        v.push((points, placed));
+        let extra = v.len().saturating_sub(Self::KEPT);
+        v.drain(..extra);
+    }
+
+    /// The map `mesh` was proposed through, if the rule squeezed it.
+    fn placed_of(&self, mesh: &WarpMesh) -> Option<[f64; 9]> {
+        let v = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        v.iter().rev().find(|(p, _)| p.len() == mesh.points.len() && p.iter().zip(&mesh.points).all(|(a, b)| a[0] == b.x && a[1] == b.y)).map(|(_, m)| *m)
+    }
+
+    fn clear(&self) {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+    }
+}
+
+/// `rule` under a smart object's projective placement `to_doc` (its contents' box `bounds`), each pull's proposal
+/// given way at the horizon ([`squeeze_proposal`]). The grid shows and lands exactly what it proposed: had the host
+/// squeezed the proposal afterwards, the framework would see the warp changed under the drag and end it (a long pull
+/// stuck until the button was released).
+pub(super) fn squeezing_rule(
+    rule: impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh,
+    to_doc: Option<[f64; 9]>,
+    bounds: [f64; 4],
+    squeezes: RuleSqueezes,
+) -> impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh {
+    move |mesh: &WarpMesh, edit: &WarpEdit| {
+        let out = rule(mesh, edit);
+        match to_doc {
+            Some(m) if matches!(edit, WarpEdit::Point { .. } | WarpEdit::Surface { .. }) => squeeze_proposal(out, m, bounds, &squeezes),
+            _ => out,
+        }
+    }
+}
+
+/// A pull's proposal `out` (carried through the placement `to_doc`, the contents' box `bounds`) as the grid proposes
+/// it: when the pull takes the warp towards the viewer past the placement's horizon, the placement gives way
+/// ([`horizon_squeeze`]) and the warp is carried through the map as it gave way, which `squeezes` remembers for
+/// [`grid_edit`]. Otherwise `out` itself.
+pub(super) fn squeeze_proposal(out: WarpMesh, to_doc: [f64; 9], bounds: [f64; 4], squeezes: &RuleSqueezes) -> WarpMesh {
+    let to_doc = photocraft_algo::transform::Homography(to_doc);
+    let Some(back) = to_doc.inverse() else { return out };
+    let contents = bezier_of(&out).map_points(|p| {
+        let (x, y) = back.apply(p[0], p[1]);
+        [x, y]
+    });
+    let Some(squeeze) = horizon_squeeze(to_doc.0, &contents.points, bounds) else { return out };
+    let given = to_doc.mul(&photocraft_algo::transform::Homography(squeeze));
+    if !given.0.iter().all(|v| v.is_finite()) {
+        return out;
+    }
+    let doc = contents.map_points(|p| {
+        let (x, y) = given.apply(p[0], p[1]);
+        [x, y]
+    });
+    let Some(squeezed) = WarpMesh::new(doc.us, doc.vs, doc.points.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect()) else {
+        return out;
+    };
+    squeezes.remember(squeezed.points.iter().map(|p| [p.x, p.y]).collect(), given.0);
+    squeezed
+}
+
 /// [`rule_mesh`] in a smart object's contents: the mesh, the press and the pointer's move taken back through
 /// `back`, the rule applied there (with the reach in contents units at the press) and the mesh carried to the
 /// document through `to_doc`.
@@ -381,7 +458,9 @@ pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, 
         // A smart object's warp pulled towards the viewer past its placement's horizon: the placement gives way as
         // the reference's does ([`horizon_squeeze`]), all through the drag (the reference's picture passes the horizon
         // once and settles, it never flips back and forth), and the points are carried through it.
+        let proposed = app.transform_preview.as_ref().filter(|_| !cancelled).and_then(|pv| pv.rule_squeezes.placed_of(mesh));
         let squeezed = match base {
+            _ if proposed.is_some() => proposed.map(|placed| (placed, bezier_of(mesh))),
             Some((to_doc, _)) if !cancelled => photocraft_algo::transform::Homography(to_doc).inverse().and_then(|back| {
                 let contents = bezier_of(mesh).map_points(|p| {
                     let (x, y) = back.apply(p[0], p[1]);
@@ -417,6 +496,7 @@ pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, 
         }
         if ends && let Some(pv) = app.transform_preview.as_mut() {
             pv.drag_placed = None;
+            pv.rule_squeezes.clear();
         }
     }
     if split

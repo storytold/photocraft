@@ -247,8 +247,38 @@ fn show_preview(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, ui: &m
             };
             Some((craft::behavior::kurbo::Rect::new(texels[0], texels[1], texels[2], texels[3]), map))
         });
+    // Warp mode on a smart object under a projective placement: drawn as the render draws its warp
+    // (`photocraft_algo::warp::place_source_projective`): the contents' control points carried through the render's
+    // own (capped) map, or with a point past the horizon the exact composition. The session's mesh is carried through
+    // the plain map, and on a long pull towards the viewer its far-flung points drew a narrow column where the render
+    // (and the reference) spread the picture wide.
+    let placed_session = t.session.warp().zip(pv.placed_warp).filter(|_| flat.is_none()).and_then(|(w, (to_doc, _))| {
+        let h = photocraft_algo::transform::Homography(to_doc);
+        if (h.0[6].abs() + h.0[7].abs()) <= 1e-12 * h.0[8].abs().max(1e-300) {
+            return None;
+        }
+        let back = h.inverse()?;
+        let contents = w.warp.to_mesh(1, 1).map_points(|p| {
+            let (x, y) = back.apply(p[0], p[1]);
+            [x, y]
+        });
+        let stored = photocraft_geom::warp::Warp::custom(contents, w.warp.bounds);
+        Some(match photocraft_algo::warp::warp_in_document(&stored, &h) {
+            Some(carried) => Ok(SessionWarp::new(carried, false).mesh),
+            None => Err((stored, h)),
+        })
+    });
+    let placed_exact = placed_session.as_ref().and_then(|d| d.as_ref().err()).map(|(w, h)| {
+        move |p: Point| {
+            let (u, v) = w.map(p.x, p.y);
+            let (x, y) = h.apply(u, v);
+            Point::new(x, y)
+        }
+    });
     let (map, textures) = match (t.session.warp(), &held) {
         (Some(_), _) if let Some(q) = flat => (PreviewMap::quad(q.map(|[x, y]| Point::new(x, y))), &pv.textures),
+        (Some(_), _) if let Some(Ok(mesh)) = &placed_session => (PreviewMap::mesh(mesh, t.session.rect()), &pv.textures),
+        (Some(_), _) if let Some(map) = &placed_exact => (PreviewMap::function(t.session.rect(), EXACT_WARP_CELLS, map), &pv.textures),
         (Some(w), _) => (PreviewMap::mesh(&w.mesh, t.session.rect()), &pv.textures),
         (None, Some((mesh, source, texture))) => (PreviewMap::mesh(mesh, *source), texture.unwrap_or(&pv.textures)),
         (None, None) if let Some((Ok(mesh), frame, texture)) = &warped => (PreviewMap::mesh(mesh, *frame), *texture),
@@ -334,7 +364,12 @@ fn show_warp(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, w: &Sessi
     // No splits on type (#3004).
     let split = pv.split.filter(|_| !w.on_type);
     let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect())
-        .rule(warp::grid_rule(unit, pv.drag_placed.or(pv.placed_warp).map(|(m, _)| m), split))
+        .rule(warp::squeezing_rule(
+            warp::grid_rule(unit, pv.drag_placed.or(pv.placed_warp).map(|(m, _)| m), split),
+            pv.drag_placed.or(pv.placed_warp).map(|(m, _)| m),
+            w.warp.bounds,
+            pv.rule_squeezes.clone(),
+        ))
         .surface(warp::grid_surface(&w.mesh, unit, pv.placed_warp.map(|(m, _)| m)));
     if preset {
         grid = grid.preset();

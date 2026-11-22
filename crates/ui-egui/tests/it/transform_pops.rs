@@ -595,3 +595,58 @@ fn a_pasteboard_click_applies_the_box_and_warp_mode_alike() {
         }
     }
 }
+
+/// The hand report of 2026-11-22: Perspective with the top edge at half its width, Warp, and the grid's middle pulled a
+/// long way towards the wide edge, the button held. Past the placement's horizon the placement gives way, and the
+/// reference keeps following the pointer, its picture spreading between the sides' lines. Ours stopped: the host
+/// squeezed what the grid proposed, the framework saw the warp change under the drag and ended it, so every later move
+/// did nothing until the button was released (the grid froze). And the preview drew the given-way warp through its
+/// plainly carried control points, a narrow column where the picture spreads wide (the render was right).
+#[test]
+fn a_long_pull_past_the_horizon_keeps_following_and_spreads_the_picture() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness(false) else { return };
+    setup(&mut h, "smart");
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.freeTransform"}));
+    control(&mut h, "ui.menu.invoke", json!({"id": Step::Persp.menu().expect("menu")}));
+    // The top left corner in by a quarter of the top: Perspective mirrors it, the top at half.
+    let (from, to) = (screen(&h, 60.0, 90.0), screen(&h, 105.0, 90.0));
+    drag(&mut h, from, to);
+    control(&mut h, "ui.menu.invoke", json!({"id": Step::Warp.menu().expect("menu")}));
+    h.run_steps(4);
+    let mesh = |h: &Harness| h.state().ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| w.mesh.points.clone()).expect("in Warp mode");
+    let press = screen(&h, 150.5, 150.5);
+    pointer_move(&mut h, press);
+    button(&mut h, press, true);
+    let mut shown = mesh(&h);
+    let mut frozen = Vec::new();
+    for d in (10..=140).step_by(10) {
+        let at = screen(&h, 150.5, 150.5 + f64::from(d));
+        pointer_move(&mut h, at);
+        h.run_steps(2);
+        let now = mesh(&h);
+        if now == shown {
+            frozen.push(d);
+        }
+        shown = now;
+    }
+    // The picture where it spreads past the object's own near edge (y 210), wider than the object, inside both sides' lines
+    // (x 37.5 and 262.5 at y 270), while the button is held: each spot shows some point of the object (its blue), not the
+    // background.
+    let img = h.render().expect("render");
+    let object_near = |x: f64, y: f64| {
+        let p = screen(&h, x, y);
+        (-3i64..=3).any(|dy| {
+            (-3i64..=3).any(|dx| {
+                let (px, py) = (p.x as i64 + dx, p.y as i64 + dy);
+                px >= 0 && py >= 0 && (i64::from(img.get_pixel(px as u32, py as u32)[2]) - 128).abs() <= 2
+            })
+        })
+    };
+    let missing: Vec<_> = [(48.0, 270.0), (252.0, 270.0)].into_iter().filter(|&(x, y)| !object_near(x, y)).collect();
+    let end = screen(&h, 150.5, 290.5);
+    button(&mut h, end, false);
+    h.run_steps(4);
+    assert!(frozen.is_empty(), "the pull stopped following the pointer at {frozen:?} px");
+    assert!(missing.is_empty(), "the held pull shows no picture at {missing:?}, where it spreads");
+}
