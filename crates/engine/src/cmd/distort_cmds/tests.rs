@@ -541,3 +541,35 @@ fn a_stored_puppet_mesh_is_drawn_only_on_the_placement_it_was_made_for() {
     bare.smart_filters[0].params["mesh"].as_object_mut().unwrap().remove("placement");
     assert_eq!(render(&bare), Rect::new(16, 14, 66, 44), "no placement: solved");
 }
+
+#[test]
+fn perspective_and_puppet_refuse_a_selection_with_nothing_in_it() {
+    // The block sits at (10, 10)..(60, 40); the selection is clear pixels away from it. The warp
+    // would move nothing, so the command is refused instead of recording an empty step.
+    let q = [[62.0, 45.0], [78.0, 45.0], [78.0, 58.0], [62.0, 58.0]];
+    let d = q.map(|p| [p[0] - 3.0, p[1] - 2.0]);
+    let cases = [
+        (PERSPECTIVE, "Perspective Warp", json!({"planes": [{"src": q, "dst": d}], "interpolation": "bilinear"})),
+        (PUPPET, "Puppet Warp", json!({"pins": [{"src": [70, 50], "dst": [66, 48]}], "mode": "rigid"})),
+    ];
+    for (cmd, label, params) in cases {
+        let mut s = session(8);
+        s.execute("select.rect", json!({"x": 62, "y": 45, "width": 16, "height": 13})).unwrap();
+        let (before, past) = (active_surface(&s), s.active().unwrap().history.past_len());
+        let err = s.execute(cmd, params.clone()).expect_err(cmd).to_string();
+        assert!(err.contains(&format!("Could not use {label} because the selected area is empty.")), "{cmd}: {err}");
+        assert_eq!(s.active().unwrap().history.past_len(), past, "{cmd}: no history step");
+        assert_eq!(worst(&active_surface(&s), &before, Rect::new(0, 0, 80, 60)), 0.0, "{cmd}: layer untouched");
+        // A selection that does cover the block still warps.
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 30, "height": 60})).unwrap();
+        let q2 = [[0.0, 0.0], [30.0, 0.0], [30.0, 60.0], [0.0, 60.0]];
+        let params = if cmd == PERSPECTIVE {
+            json!({"planes": [{"src": q2, "dst": q2.map(|p| [p[0] + 4.0, p[1]])}], "interpolation": "bilinear"})
+        } else {
+            json!({"pins": [{"src": [20, 25], "dst": [26, 29]}], "mode": "rigid"})
+        };
+        let past = s.active().unwrap().history.past_len();
+        s.execute(cmd, params).unwrap();
+        assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{cmd}: a covered selection records one step");
+    }
+}
