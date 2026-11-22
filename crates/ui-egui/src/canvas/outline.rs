@@ -40,10 +40,12 @@ impl MaskSource for SurfaceMask<'_> {
         self.size
     }
 
+    /// The mask's revision with the scratch read-error generation: a selection tile that fails to read traces as
+    /// empty, and as its pixels once it reads, without a new revision (`crate::scratch_reads`).
     fn revision(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
-        (self.revision, self.size, self.wrapped).hash(&mut hash);
+        (self.revision, self.size, self.wrapped, crate::scratch_reads::generation()).hash(&mut hash);
         hash.finish()
     }
 

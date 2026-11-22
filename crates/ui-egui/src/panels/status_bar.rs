@@ -3,6 +3,7 @@ use craft::behavior::kurbo::Size;
 use craft::theme::variant::Tone;
 use craft::ui::bars::{Bar, BarKind, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, ShowContainer as _};
+use craft::ui::layout_components::Row;
 use craft::ui::runtime::commands::CommandRef;
 use craft::ui::text::InvalidZoom;
 
@@ -119,8 +120,16 @@ pub fn status_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     chrome_ui::zoom_alert(app, invalid_zoom);
 }
 
-/// The status bar's trailing group.
+/// The status bar's trailing group, in a row of its own centred down the bar's height, so its members stand on the
+/// body's line: the bar's end region lays its children out from its top, and a memoized view's content is a layout
+/// room the bar's row does not reach into (#16352).
 fn trailing_view(props: &mut TrailingProps<'_>, ui: &mut egui::Ui) {
+    let centred = ui.layout().with_cross_align(egui::Align::Center);
+    ui.with_layout(centred, |ui| Row::new().show(ui, |ui, _| trailing_members(props, ui)));
+}
+
+/// The members of the status bar's trailing group: the render-path note, the background redraw and the job.
+fn trailing_members(props: &mut TrailingProps<'_>, ui: &mut egui::Ui) {
     if let Some(shown) = &props.render_path {
         shown.show(ui);
     }
@@ -134,8 +143,14 @@ fn trailing_view(props: &mut TrailingProps<'_>, ui: &mut egui::Ui) {
     }
 }
 
-/// The status bar's body.
+/// The status bar's body, in a row of its own: a memoized view's content is a layout room the bar's row does not reach
+/// into, so without it the message would sit at the top of the bar instead of on the readout's line (#16352).
 fn body_view(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
+    Row::new().show(ui, |ui, _| body_members(props, ui));
+}
+
+/// The members of the status bar's body: the readout, or "No document", and the status message.
+fn body_members(props: &mut StatusProps<'_>, ui: &mut egui::Ui) {
     match (props.document, props.view) {
         (Some(size), Some(view)) => {
             let out = StatusReadout::new(Bind::given(view), size, props.item, &props.values).show(ui);

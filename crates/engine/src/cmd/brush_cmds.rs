@@ -275,6 +275,12 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
     photocraft_color::convert::CmykSpace::for_profile(s.active().and_then(|d| d.doc.icc_profile.as_ref()))
 }
 
+/// [`stroke_with`] for another tool's stroke (the Adjustment Brush painting a mask): `brush`
+/// resolved, no Auto Erase, history state `label`.
+pub(super) fn stroke_into(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>) -> Result<Value> {
+    stroke_with(s, cmd, p, label, brush, pts, false)
+}
+
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
 fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let raw_bg = s.tools.background;
@@ -1304,8 +1310,9 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut before = std::mem::replace(&mut *s.tools.brush, b);
     // A brush the call built anew holds a new tip source: when the tip is the one it had, it keeps its revision, so the
-    // views that show the tip replay.
-    if s.tools.brush.tip == before.tip {
+    // views that show the tip replay. A stored tip's equality ignores whether its full bitmap is loaded, so a tip that
+    // loaded only now keeps the new value: swapping the old one back would drop the bitmap (#16252).
+    if s.tools.brush.tip == before.tip && s.tools.brush.tip.is_loaded() == before.tip.is_loaded() {
         std::mem::swap(&mut s.tools.brush.tip, &mut before.tip);
     }
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.

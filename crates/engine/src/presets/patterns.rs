@@ -20,17 +20,27 @@ pub fn builtin_groups() -> Vec<Group<String>> {
     vec![Group::new("Geometric", ids(&["Checkerboard", "Diagonal Lines", "Dots", "Grid"])), Group::new("Textures", ids(&["Bricks", "Weave", "Paper Noise"]))]
 }
 
-/// Bring the groups in line with the library (see the module docs).
+/// Bring the groups in line with the library (see the module docs). Groups already in line are left unwritten: a
+/// write moves the presets' revision, which the menus and the preset views rebuild on, and the Patterns panel syncs
+/// in every pass it shows.
 pub fn sync(s: &mut Session) {
-    let lib: Vec<String> = s.patterns.items.iter().map(|p| p.id.clone()).collect();
+    let lib = &s.patterns.items;
+    let in_lib = |id: &String| lib.iter().any(|p| &p.id == id);
+    let groups = &s.presets.pattern_groups;
+    let stale = groups.iter().any(|g| !g.items.iter().all(in_lib));
+    let loose: Vec<String> = lib.iter().map(|p| &p.id).filter(|id| !groups.iter().any(|g| g.items.contains(id))).cloned().collect();
+    if !stale && loose.is_empty() {
+        return;
+    }
     let groups = &mut s.presets.pattern_groups;
     for g in groups.iter_mut() {
-        g.items.retain(|id| lib.contains(id));
+        g.items.retain(in_lib);
     }
-    let loose: Vec<String> = lib.iter().filter(|id| !groups.iter().any(|g| g.items.contains(id))).cloned().collect();
     if !loose.is_empty() {
         let gi = group_index(groups, Some(UNGROUPED));
-        groups[gi].items.extend(loose);
+        if let Some(group) = groups.get_mut(gi) {
+            group.items.extend(loose);
+        }
     }
 }
 
