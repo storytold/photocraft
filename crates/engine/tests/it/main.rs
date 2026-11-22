@@ -126,6 +126,7 @@ mod svg_smart_object;
 mod tone_target_picker;
 mod transform_budget_unclamped;
 mod type_format_targets;
+mod type_name_psd_reopen;
 mod type_postscript_font;
 mod undo_keeps_active_layer;
 mod unicode_colors;
