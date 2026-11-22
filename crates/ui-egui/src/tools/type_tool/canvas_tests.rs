@@ -217,10 +217,14 @@ fn panel_harness_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static
     h
 }
 
+/// Frames the options bar may take to settle: opening the font list loads the rows' samples over several
+/// passes, more of them where the system has more fonts.
+const BAR_SETTLE_STEPS: u64 = 64;
+
 fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let _ = photocraft_text::shared();
     // As tall as a window, so the bar's popup lists open in full below it.
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(16).build_app(
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(BAR_SETTLE_STEPS).build_app(
         |ui, app: &mut PhotocraftApp| {
             ui.horizontal(|ui| show_bar(app, ui));
         },

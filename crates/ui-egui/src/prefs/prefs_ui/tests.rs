@@ -1736,3 +1736,56 @@ fn integrations_apply_without_a_restart() {
         assert!(!super::fields::read_at_launch(&format!("integrations.{key}")), "{key}");
     }
 }
+
+/// The texts the last frame painted, without a trailing colon, with each one's laid-out rect.
+fn painted_texts(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>) -> Vec<(String, egui::Rect)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((text.galley.text().trim_end_matches(':').to_owned(), text.galley.rect.translate(text.pos.to_vec2()))),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect(shape, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    h.output().shapes.iter().for_each(|clipped| collect(&clipped.shape, &mut out));
+    out
+}
+
+/// #15553: Preferences › Interface labels Appearance Mode once: the Appearance page draws the row with its own label,
+/// and the window adds none.
+#[test]
+fn the_appearance_mode_row_shows_its_label_once() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let shown = painted_texts(&h).into_iter().filter(|(text, _)| text == "Appearance Mode").count();
+    assert_eq!(shown, 1, "\"Appearance Mode\" is painted once");
+}
+
+/// #15554: Preferences › Interface shows Appearance (the mode and the canvas), then Presentation (language, font size,
+/// scale), then Options, and the rows of all three share one label column.
+#[test]
+fn the_interface_page_lists_appearance_presentation_then_options_on_one_label_column() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "interface", vec2(1280.0, 800.0), |_| {});
+    let texts = painted_texts(&h);
+    let at = |name: &str| texts.iter().find(|(text, _)| text == name).map(|(_, rect)| *rect).unwrap_or_else(|| panic!("{name:?} is painted"));
+    let order = ["Appearance", "Appearance Mode", "Canvas color", "Presentation", "Language", "UI font size", "UI scale", "Options", "Show tooltips"];
+    let tops: Vec<f32> = order.iter().map(|name| at(name).top()).collect();
+    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "top to bottom {order:?}: {tops:?}");
+    let ends: Vec<f32> = ["Appearance Mode", "Language", "Notification Duration (seconds)"].iter().map(|name| at(name).right()).collect();
+    assert!(ends.iter().all(|end| (end - ends[0]).abs() < 0.5), "one right-aligned label column: {ends:?}");
+}
+
+/// The rows of Preferences › Performance that draw their own label or heading show it once: the window adds no second
+/// "Rendering mode" beside the select's own, and no "Memory usage (MB)" beside the Memory Usage heading. Memory Usage
+/// Percent's check box shows no text, so the window's label is its only one.
+#[test]
+fn self_labelled_performance_rows_show_their_label_once() {
+    let (_, files) = app_with_store();
+    let h = prefs_harness(&files, "performance", vec2(1280.0, 800.0), |_| {});
+    let texts: Vec<String> = painted_texts(&h).into_iter().map(|(text, _)| text.to_lowercase()).collect();
+    let count = |wanted: &dyn Fn(&str) -> bool| texts.iter().filter(|text| wanted(text)).count();
+    assert_eq!(count(&|t| t == "rendering mode"), 1, "Rendering Mode is labelled once: {texts:?}");
+    assert_eq!(count(&|t| t.starts_with("memory usage") && t != "memory usage percent"), 1, "Memory Usage is labelled once: {texts:?}");
+    assert_eq!(count(&|t| t == "memory usage percent"), 1, "Memory Usage Percent is labelled once: {texts:?}");
+}

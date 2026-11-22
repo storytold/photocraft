@@ -1070,6 +1070,44 @@ mod tests {
     }
 
     #[test]
+    fn cropped_rotated_dng_gain_map_matches_full_frame_across_ahd_strips() {
+        use crate::testgen::{DngSpec, DngStorage, gain_map_opcode_list};
+
+        let (w, h) = (612, 362);
+        let data = (0..w * h).map(|i| 4096 + ((i * 7919 + i / w * 104_729) % 12000) as u16).collect();
+        let mut spec = DngSpec::cfa(w, h, data);
+        spec.storage = DngStorage::Strips { rows: 29 };
+        spec.active_area = Some([2, 2, 360, 610]);
+        spec.default_crop = Some(([1, 1], [600, 350]));
+        spec.orientation = 6;
+        spec.as_shot_neutral = Some([0.7, 1.0, 0.8]);
+        spec.color_matrix1 = Some((21, [0.61, 0.23, 0.16, 0.18, 0.73, 0.09, 0.07, 0.16, 0.77]));
+        let opts = DevelopOptions { demosaic: Demosaic::Ahd, ..Default::default() };
+        let control = crate::decode(&spec.build(), &opts.limits).unwrap();
+
+        // The map's coordinates are relative to the active image, not the sensor or crop.
+        spec.opcode_list2 = Some(gain_map_opcode_list([0, 0, 358, 608], 1, [[1.05, 1.4], [1.25, 1.7]]));
+        let sensor = crate::decode(&spec.build(), &opts.limits).unwrap();
+        assert_eq!((sensor.crop.x, sensor.crop.y, sensor.crop.width, sensor.crop.height, sensor.orientation), (3, 3, 600, 350, 6));
+        assert_eq!(sensor.gain_maps.len(), 1);
+        assert!(sensor.black_point <= 0.0, "the fixture must reach the fused route");
+        let band = par::band_rows(sensor.crop.width);
+        assert!(!band.is_multiple_of(2) && band * 2 < sensor.crop.height, "the crop must cross seams with alternating CFA phase");
+
+        let full = develop(&sensor, &opts, false).unwrap();
+        assert_eq!((full.width, full.height), (350, 600));
+        assert_eq!(full.rgb.len(), 350 * 600 * 3);
+        assert!(full.rgb != develop(&control, &opts, false).unwrap().rgb, "the decoded gain map must change pixels");
+
+        for threads in [1, 3] {
+            let fused = with_threads(threads, || develop_sensor(&sensor, &opts).unwrap());
+            assert_eq!((fused.width, fused.height, fused.rgb.len()), (full.width, full.height, full.rgb.len()));
+            let mismatch = full.rgb.iter().zip(&fused.rgb).position(|(a, b)| a != b);
+            assert_eq!(mismatch, None, "{threads} workers: first differing RGB16 sample");
+        }
+    }
+
+    #[test]
     fn fused_development_matches_for_every_orientation_and_look() {
         use crate::Cfa;
         for orientation in 1..=8 {
