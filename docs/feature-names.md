@@ -23,3 +23,4 @@ Options in Brush Settings > Shape Dynamics that PhotoCraft names in plain descri
 | Label | What it does | Check (2026-11-22) |
 | --- | --- | --- |
 | Smooth Curves | The stroke follows a curve through the pen's points instead of straight segments between them | Ordinary descriptive words; no product or feature of that name found among drawing apps' brush and smoothing options (Blender, TVPaint, Toon Boom Harmony, Sketchbook name theirs Smooth Stroke, Line Smoothing, Centerline Smoothing, Steady Stroke). No register search was run (WIPO, USPTO, EUIPO open). |
+| Taper Start, Taper End | The stroke's pressure grows from nothing over the first pixels and shrinks to nothing over the last, for pointed ends | Descriptive word, used for the same thing by unrelated drawing apps (Procreate, Adobe Fresco's Begin taper and End taper brushes). Not Procreate's Pressure Taper or Touch Taper. No register search was run (WIPO, USPTO, EUIPO open). |

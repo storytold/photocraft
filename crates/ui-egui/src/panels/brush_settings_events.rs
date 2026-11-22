@@ -32,12 +32,13 @@ pub(crate) fn apply_section_events(brush: &mut BrushSettings, shown: &mut usize,
     open_brushes
 }
 
-/// The brush after Reset: the defaults, keeping the colours, smoothing, Smooth Curves and locks.
+/// The brush after Reset: the defaults, keeping the colours, smoothing, taper, Smooth Curves and locks.
 pub(crate) fn reset(brush: &BrushSettings) -> BrushSettings {
     BrushSettings {
         color: brush.color,
         background: brush.background,
         smoothing: brush.smoothing.clone(),
+        taper: brush.taper.clone(),
         smooth_curves: brush.smooth_curves,
         locks: brush.locks.clone(),
         ..Default::default()
