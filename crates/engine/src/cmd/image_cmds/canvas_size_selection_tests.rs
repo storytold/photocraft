@@ -58,7 +58,7 @@ fn grow_shrink_and_anchored_canvas_sizes_drop_the_selection_in_one_step() {
 fn guides_still_move_with_the_offset() {
     let mut s = doc();
     {
-        let d = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let d = std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut());
         d.guides.vertical.push(100.0);
         d.guides.horizontal.push(50.0);
     }

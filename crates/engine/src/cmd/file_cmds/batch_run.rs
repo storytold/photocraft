@@ -7,9 +7,33 @@ use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, js
 /// Inputs of a batch command: `"input"` is a folder or an array of files.
 pub(crate) fn batch_inputs(p: &Value, cmd: &str) -> Result<Vec<String>> {
     match p.get("input").or_else(|| p.get("files")) {
-        Some(Value::Array(a)) => Ok(a.iter().filter_map(Value::as_str).map(str::to_string).collect()),
+        Some(Value::Array(a)) => a
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("input file {} must be a path string", i + 1) })
+            })
+            .collect(),
         Some(Value::String(dir)) => list_images(dir),
         _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: "missing \"input\" (folder or array of files)".into() }),
+    }
+}
+
+#[test]
+fn batch_rejects_a_non_path_input_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("source.png");
+    let image = photocraft_codecs::Image::from_u8(4, 4, photocraft_codecs::ChannelLayout::Rgb, vec![255; 48]).unwrap();
+    let bytes = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    std::fs::write(&input, bytes).unwrap();
+    for (cmd, format) in [("file.automate.batch", "png"), ("file.scripts.imageProcessor", "jpg")] {
+        let output = dir.path().join(format);
+        let mut s = Session::new();
+        let err = s.execute(cmd, json!({"steps": [], "input": [&input, 17], "output": &output, "format": format})).unwrap_err();
+        assert!(matches!(&err, EngineError::BadParams { cmd: name, msg } if name == cmd && msg == "input file 2 must be a path string"), "{err}");
+        assert!(!output.exists());
     }
 }
 
@@ -140,27 +164,36 @@ pub(crate) fn process_files(
     f: &dyn Fn(&mut Session) -> Result<()>,
 ) -> Value {
     let inputs: Vec<BatchInput> = inputs.iter().map(|path| BatchInput { path: path.clone(), rel_dir: String::new() }).collect();
-    process_tree(s, &inputs, output, format, save, suffix, &|scratch, _| f(scratch).map(|()| false))
+    process_tree(s, &inputs, output, format, save, TreeNaming::Suffix(suffix), &|scratch, _| f(scratch).map(|()| false))
+}
+
+pub(super) enum TreeNaming<'a> {
+    Suffix(&'a str),
+    Unique,
 }
 
 /// [`process_files`] for inputs from subfolders: each result goes to its input's relative folder
 /// under `output` (created as needed), so `a/x.png` and `b/x.png` don't collide. `f` gets the
 /// output path and returns `true` when it wrote the result there itself (Batch writes what a
 /// recorded save marked); otherwise the active document is saved after it.
-pub(crate) fn process_tree(
+pub(super) fn process_tree(
     s: &Session,
     inputs: &[BatchInput],
     output: &str,
     format: &str,
     save: SaveOpts,
-    suffix: &str,
+    naming: TreeNaming<'_>,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
+    let (suffix, unique) = match naming {
+        TreeNaming::Suffix(suffix) => (suffix, false),
+        TreeNaming::Unique => ("", true),
+    };
     let outputs = inputs.iter().map(|BatchInput { path, rel_dir }| {
         let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
         (path.as_str(), join(&join(output, rel_dir), &format!("{}{suffix}.{ext}", stem(path))))
     });
-    process_outputs(s, outputs, save, f)
+    process_outputs(s, outputs, save, unique, f)
 }
 
 /// The extension a batch output takes with Format "Same": the input's own, except for formats
@@ -240,6 +273,7 @@ fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
     save: SaveOpts,
+    unique: bool,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Value {
     // The scratch sessions have default preferences; a raw opens at the user's Raw Defaults.
@@ -256,9 +290,16 @@ fn process_outputs<'a>(
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
-        let r = process_one(raw_ppi, path, &out, save, ProcessOptions { format: None, written: Some(&written), ctx: None, input: None }, &run);
+        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique };
+        let r = process_one(raw_ppi, path, &out, save, options, &run);
         match r {
-            Ok(()) => {
+            Ok(Some(PublishedOutput { path: out, warning })) => {
+                if let Some(warning) = warning {
+                    errors.push(json!({"file": path, "output": out, "error": warning}));
+                }
+                files.push(out);
+            }
+            Ok(None) => {
                 written.record(&out, path);
                 files.push(out);
             }
@@ -311,9 +352,9 @@ pub(super) fn process_document_copies(
         let notices = std::cell::RefCell::new(Vec::new());
         let input = InputPolicy { prepare: &prepare, notices: &notices };
         let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
-        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input) };
+        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false };
         match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
-            Ok(()) => {
+            Ok(_) => {
                 written.record(&out, &path);
                 files.push(out);
             }
@@ -333,6 +374,7 @@ struct ProcessOptions<'a> {
     written: Option<&'a OutputClaims>,
     ctx: Option<&'a crate::jobs::JobCtx>,
     input: Option<&'a InputPolicy<'a>>,
+    unique: bool,
 }
 
 /// Open and process one scratch input, collecting opening diagnostics even on failure.
@@ -344,12 +386,12 @@ fn process_one(
     save: SaveOpts,
     options: ProcessOptions<'_>,
     f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
-) -> std::result::Result<(), FileFailure> {
+) -> std::result::Result<Option<PublishedOutput>, FileFailure> {
     if let Some(written) = options.written {
         written.check(out).map_err(EngineError::Other)?;
     }
     let mut scratch = Session::new();
-    let result = (|| -> std::result::Result<(), FileFailure> {
+    let result = (|| -> std::result::Result<Option<PublishedOutput>, FileFailure> {
         if let Some(input) = options.input {
             (input.prepare)(&mut scratch, path)?;
         } else {
@@ -364,7 +406,7 @@ fn process_one(
         if saved_by_action {
             // The action's saved snapshot is already written: a cancel or Esc arriving now stops the
             // inputs after this one, not this result.
-            return Ok(());
+            return Ok(None);
         }
         if let Some(ctx) = options.ctx {
             ctx.check()?;
@@ -373,6 +415,12 @@ fn process_one(
             }
         }
         let d = scratch.active().ok_or(EngineError::NoDocument)?;
+        if options.unique {
+            let (bytes, warnings) = encode(&d.doc, out, save)?;
+            let actual = save_unique_output(out, &bytes)?;
+            record_export_warnings(&mut scratch, &actual.path, warnings);
+            return Ok(Some(actual));
+        }
         let warnings = if let Some(format) = options.format {
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
             if let Some(ctx) = options.ctx { save_batch_doc(&d.doc, out, &ext, save, ctx)? } else { save_doc_as(&d.doc, out, &ext, save)? }
@@ -380,12 +428,53 @@ fn process_one(
             save_doc(&d.doc, out, save)?
         };
         record_export_warnings(&mut scratch, out, warnings);
-        Ok(())
+        Ok(None)
     })();
     if let Some(input) = options.input {
         input.notices.borrow_mut().extend(scratch.batch_open_notices.take().unwrap_or_default());
     }
     result
+}
+
+struct PublishedOutput {
+    path: String,
+    warning: Option<String>,
+}
+
+/// Claim a destination atomically so another process creating it during export cannot lose its file.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_unique_output(out: &str, bytes: &[u8]) -> Result<PublishedOutput> {
+    use std::{fs, io::ErrorKind, path::Path};
+
+    let path = Path::new(out);
+    let dir = path.parent().filter(|dir| !dir.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(dir).map_err(|error| EngineError::Other(format!("{}: {error}", dir.display())))?;
+    let name = file_name(out);
+    let prefix = out.strip_suffix(&name).unwrap_or_default();
+    let (stem, extension) = name.rsplit_once('.').unwrap_or((&name, ""));
+    for suffix in 0..=100_000 {
+        let candidate = if suffix == 0 { out.to_owned() } else { format!("{prefix}{stem}_{suffix}.{extension}") };
+        let path = Path::new(&candidate);
+        // Avoid staging encoded bytes when the name is already visibly occupied, including
+        // directories and dangling symlinks. The publication still checks the name atomically.
+        match fs::symlink_metadata(path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(EngineError::Other(format!("{candidate}: {error}"))),
+        }
+        match photocraft_format::write_noreplace(path, bytes) {
+            Ok(()) => return Ok(PublishedOutput { path: candidate, warning: None }),
+            Err(error) if error.published => return Ok(PublishedOutput { path: candidate, warning: Some(error.to_string()) }),
+            Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(EngineError::Other(format!("{candidate}: {error}"))),
+        }
+    }
+    Err(EngineError::Other(format!("{out}: no free output name through suffix _100000")))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn save_unique_output(out: &str, _bytes: &[u8]) -> Result<PublishedOutput> {
+    Err(EngineError::Other(format!("cannot write {out}: no file system on the web")))
 }
 
 /// Encode before the Batch write checkpoint. Esc accepted during an action or encode therefore
@@ -429,16 +518,22 @@ impl BatchPolicy {
 
 /// Photoshop-compatible Batch log encoding, shared by the desktop command and CLI.
 pub fn encode_batch_error_log<'a>(errors: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<u8> {
-    let mut body = String::from("Batch Start\r\n\r\n");
+    let mut body = String::from("Start Batch\r\n\r\n");
     for (input, reason) in errors {
+        let input = native_separators(input);
         body.push_str(&format!("File: \"{input}\"\r\nError: {reason}\r\n\r\n"));
     }
-    body.push_str("Batch End\r\n");
-    let mut bytes = vec![0xff, 0xfe];
+    body.push_str("End Batch\r\n");
+    let mut bytes = vec![0xfe, 0xff];
     for word in body.encode_utf16() {
-        bytes.extend_from_slice(&word.to_le_bytes());
+        bytes.extend_from_slice(&word.to_be_bytes());
     }
     bytes
+}
+
+/// Paths in the log use the platform's separators: backslashes on Windows, also for a folder given with `/`.
+fn native_separators(path: &str) -> String {
+    if cfg!(windows) { path.replace('/', "\\") } else { path.to_string() }
 }
 
 fn write_error_log(path: &str, errors: &[Value]) -> Result<()> {
@@ -477,9 +572,16 @@ fn validate_error_log(policy: &BatchPolicy, inputs: impl IntoIterator<Item = Str
 /// identities once for the whole plan, so aliases and large folder batches stay safe and linear.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn validate_flat_outputs(outputs: &[(String, String)]) -> Result<()> {
+    validate_written_outputs(outputs, &|_| true)
+}
+
+/// [`validate_flat_outputs`] for the outputs at the indices `written` accepts: every input stays a
+/// source, but an input that fails before it is opened writes nothing to its name.
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_written_outputs(outputs: &[(String, String)], written: &dyn Fn(usize) -> bool) -> Result<()> {
     let sources: std::collections::HashMap<_, _> =
         outputs.iter().enumerate().filter_map(|(index, (input, _))| std::fs::canonicalize(input).ok().map(|identity| (identity, index))).collect();
-    for (index, (_, output)) in outputs.iter().enumerate() {
+    for (index, (_, output)) in outputs.iter().enumerate().filter(|(index, _)| written(*index)) {
         let identity = super::paths::destination_identity(std::path::Path::new(output))
             .ok_or_else(|| EngineError::BadParams { cmd: "file.automate.batch".into(), msg: format!("output path cannot be resolved safely: {output}") })?;
         if sources.get(&identity).is_some_and(|&source_index| source_index != index) {
@@ -548,7 +650,7 @@ fn process_batch_outputs_with(
             path,
             out,
             save,
-            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input },
+            ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, unique: false },
             f,
         );
         if result.is_ok() {
@@ -595,7 +697,7 @@ fn process_batch_outputs_with(
         ctx.publish_batch_preview(path, None);
         done = index + 1;
         match result {
-            Ok(()) => {
+            Ok(_) => {
                 files.push(out.clone());
             }
             Err(error) => {
@@ -684,9 +786,6 @@ pub(crate) fn check_batch_depth(s: &Session, cmd: &str) -> Result<()> {
 
 pub(crate) fn batch_action(list: &[crate::actions_cmds::Action], p: &Value) -> Result<usize> {
     const CMD: &str = "file.automate.batch";
-    if p.get("actionId").is_some() {
-        return crate::actions_cmds::resolve_play_target(list, p, CMD);
-    }
     if let Some(set) = p.get("set").filter(|v| !v.is_null()) {
         let set = set.as_str().ok_or_else(|| EngineError::BadParams { cmd: CMD.into(), msg: "set must be a string".into() })?;
         let name =
@@ -760,37 +859,38 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
-    let embedded = p.get("calledActions").filter(|value| !value.is_null());
-    let list = match embedded {
-        None => s.actions.list.clone(),
-        // A droplet brings the actions it calls (#2794) and runs with those alone.
+    let called = match p.get("calledActions") {
+        None | Some(Value::Null) => s.actions.called.clone(),
+        // A droplet brings the actions it calls (#2794) and plays from those alone.
         Some(v) => {
-            let list: Vec<crate::actions_cmds::Action> =
+            let actions: Vec<crate::actions_cmds::Action> =
                 serde_json::from_value(v.clone()).map_err(|e| EngineError::BadParams { cmd: cmd.into(), msg: format!("\"calledActions\": {e}") })?;
-            if list.len() > 4096 {
+            if actions.len() > 4096 {
                 return Err(EngineError::BadParams { cmd: cmd.into(), msg: "\"calledActions\" holds more than 4096 actions".into() });
             }
-            list
+            // In the droplet's order, so its calls by index keep their targets: a captured set can
+            // hold two actions of one name, which `push` would refuse and `from_file` renames.
+            Some(crate::actions_cmds::ActionList::from_file(crate::actions_cmds::ActionsFile::new(actions, Vec::new())))
         }
     };
-    let mut called_target = None;
+    let mut called_name = None;
     let mut steps = if let Some(st) = p.get("steps") {
         parse_steps(st)?
     } else if let Some(act) = p.get("action").filter(|v| v.is_array()) {
         parse_steps(act)?
     } else {
         // The caller selects the source; calledActions supplies only its internal namespace.
-        let index = batch_action(&s.actions.list, p)?;
-        let (row, action, _) = crate::actions_cmds::playback_plan_at(s, &json!({"action": index}))?;
-        called_target = Some(crate::actions_cmds::PlaybackTarget::at(s, row, &action));
-        action.enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
+        let index = batch_action(s.actions.playable().actions(), p)?;
+        let (_, action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
+        called_name = Some(action.name.clone());
+        action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect()
     };
     let action_name = s
         .action_history
         .as_ref()
         .map(|group| group.name.clone())
-        .or_else(|| s.actions.playback_stack.first().map(|target| target.name.clone()))
-        .or_else(|| called_target.as_ref().map(|target| target.name.clone()))
+        .or_else(|| s.actions.playback_stack.first().cloned())
+        .or_else(|| called_name.clone())
         .or_else(|| p.get("action").and_then(Value::as_str).map(str::to_string))
         .or_else(|| p.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| "Batch".into());
@@ -838,7 +938,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // hands the count on, so nested batches cannot multiply past the limit. A top-level named
     // action starts fresh; standalone explicit steps retain their existing behavior. A batch nested
     // in another batch (a droplet a droplet runs) is charged the same way, so the levels share one budget.
-    let named = called_target.is_some();
+    let named = called_name.is_some();
     let nested = s.actions.playing > 0 || s.actions.batch_depth > 0;
     let mut playback_steps = 0;
     if nested || named {
@@ -853,12 +953,12 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut playback_stack = s.actions.playback_stack.clone();
-    playback_stack.extend(called_target);
+    playback_stack.extend(called_name);
     let actions = crate::actions_cmds::ActionState {
-        list,
+        list: s.actions.list.clone(),
+        called,
         playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },
         playback_stack,
-        playback_namespace: s.actions.playback_namespace + usize::from(embedded.is_some()),
         playback_steps,
         script_depth: s.actions.script_depth,
         script_steps: s.actions.script_steps,
@@ -870,21 +970,21 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         let save = SaveOpts::from_params(s, p, cmd)?;
         // A caller's recording index belongs to its original library, not an embedded namespace.
         // As in ordinary named playback, suspend it while executing and restore the Batch owner.
-        let previous_recording = if named || embedded.is_some() {
+        let previous_recording = if named {
             crate::actions_cmds::flush_recording(s)?;
             s.actions.recording.take()
         } else {
             None
         };
-        // Swap only execution context, retaining the recorder, revision and script counters.
+        // Swap only the execution context (the playback counters and the actions playback calls);
+        // the user's list, the recorder and the script counters stay.
         let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
         let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
         let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
-        let previous_namespace = std::mem::replace(&mut s.actions.playback_namespace, actions.playback_namespace);
         // The nesting depth and shared budget of the levels above travel with the run too.
         let previous_shared = std::mem::replace(&mut s.actions.budget_shared, actions.budget_shared);
         let previous_depth = std::mem::replace(&mut s.actions.batch_depth, actions.batch_depth);
-        let previous_list = embedded.is_some().then(|| std::mem::replace(&mut s.actions.list, actions.list));
+        let previous_called = std::mem::replace(&mut s.actions.called, actions.called);
         let owns_history = s.action_history.is_none() && s.prefs().actions.create_single_history_state;
         if owns_history {
             crate::actions_cmds::begin_document_history(s, &action_name);
@@ -895,22 +995,28 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
         s.actions.playing = previous_playing;
         s.actions.playback_stack = previous_stack;
-        s.actions.playback_namespace = previous_namespace;
         s.actions.budget_shared = previous_shared;
         s.actions.batch_depth = previous_depth;
-        if let Some(previous) = previous_list {
-            s.actions.list = previous;
-        }
+        s.actions.called = previous_called;
         if previous_playing == 0 && !previous_shared {
             s.actions.playback_steps = previous_steps;
         }
-        if named || embedded.is_some() {
+        if named {
             s.actions.recording = previous_recording;
         }
         return result;
     }
     let check_duplicates = recorded_output_guard(p);
-    let names = if save_and_close { None } else { batch_naming::plan(&inputs, &output, &format, p)? };
+    // A folder input the opener will refuse fails before its action starts, so it takes no serial.
+    let counts = |input: &BatchInput| {
+        #[cfg(not(target_arch = "wasm32"))]
+        if check_folder_format && !super::paths::openable_name(&input.path) {
+            return false;
+        }
+        let _ = (input, check_folder_format);
+        true
+    };
+    let names = if save_and_close { None } else { batch_naming::plan_counting(&inputs, &output, &format, p, &counts)? };
     let mut save = SaveOpts::from_params(s, p, cmd)?;
     if save_and_close {
         save.tiff_layers = save_close_tiff_layers;
@@ -938,8 +1044,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    validate_flat_outputs(&outputs)?;
-    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), outputs.iter().map(|(_, path)| path.clone()))?;
+    validate_written_outputs(&outputs, &|index| inputs.get(index).is_none_or(counts))?;
+    // Every input is protected; a refused input's name is never written, so the log may take it.
+    let written = outputs.iter().zip(&inputs).filter(|(_, input)| counts(input)).map(|((_, path), _)| path.clone());
+    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), written)?;
     let was_playing = nested;
     #[cfg(test)]
     let history_observer = s.batch_history_observer;
@@ -1352,7 +1460,7 @@ fn preserve_exr(bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod action_history_tests {
     use super::*;
-    use crate::actions_cmds::Action;
+    use crate::actions_cmds::{Action, ActionStep};
     use std::cell::RefCell;
 
     #[derive(Debug)]
@@ -1410,14 +1518,14 @@ mod action_history_tests {
             let mut s = Session::new();
             s.batch_history_observer = Some(observe);
             s.execute("actions.setHistory", json!({"singleState":single})).unwrap();
-            let mut steps = vec![("layer.renameLayer".into(), json!({"name":"Prefix"}))];
+            let mut steps = vec![ActionStep::new("layer.renameLayer", json!({"name":"Prefix"}))];
             if stopped {
-                steps.push(("actions.stopMessage".into(), json!({"message":"Stop here"})));
+                steps.push(ActionStep::new("actions.stopMessage", json!({"message":"Stop here"})));
             }
-            steps.push(("layer.renameLayer".into(), json!({"name":"Final"})));
+            steps.push(ActionStep::new("layer.renameLayer", json!({"name":"Final"})));
             let action_steps = if nested {
-                s.actions.list.push(Action::new("Child", steps));
-                vec![("actions.play".to_string(), json!({"action":"Child"}))]
+                s.actions.list.push(Action::new("Child", steps)).unwrap();
+                vec![ActionStep::new("actions.play", json!({"action":"Child"}))]
             } else {
                 steps
             };
@@ -1427,8 +1535,8 @@ mod action_history_tests {
                 s.execute("file.automate.createDroplet", json!({"path":path,"name":"Named","steps":action_steps,"output":output,"shim":false})).unwrap();
                 s.execute("file.automate.runDroplet", json!({"droplet":path,"input":paths})).unwrap()
             } else if named {
-                let index = s.actions.list.len();
-                s.actions.list.push(Action::new("Named", action_steps));
+                let index = s.actions.list.actions().len();
+                s.actions.list.push(Action::new("Named", action_steps)).unwrap();
                 s.execute("file.automate.batch", json!({"action":index,"input":paths,"output":output})).unwrap()
             } else {
                 s.execute("file.automate.batch", json!({"action":"Named","steps":action_steps,"input":paths,"output":output})).unwrap()
@@ -1467,22 +1575,25 @@ mod action_history_tests {
             }
             s.execute("actions.setHistory", json!({"singleState":single})).unwrap();
             let before: Vec<_> = s.documents().iter().map(|st| (st.doc.clone(), st.history.past_len())).collect();
-            let steps = vec![("layer.renameLayer".into(), json!({"name":"Prefix"})), ("layer.renameLayer".into(), json!({"name":"Final"}))];
+            let steps = vec![ActionStep::new("layer.renameLayer", json!({"name":"Prefix"})), ActionStep::new("layer.renameLayer", json!({"name":"Final"}))];
             let params = if named {
-                s.actions.list.push(Action::new("Opened batch", steps));
+                s.actions.list.push(Action::new("Opened batch", steps)).unwrap();
                 json!({"source":"open","action":0})
             } else {
                 json!({"source":"open","action":"Opened batch","steps":steps})
             };
             if parent {
-                s.actions.list.push(Action::new(
-                    "Parent",
-                    vec![
-                        ("layer.renameLayer".into(), json!({"name":"Before batch"})),
-                        ("file.automate.batch".into(), params),
-                        ("layer.renameLayer".into(), json!({"name":"After batch"})),
-                    ],
-                ));
+                s.actions
+                    .list
+                    .push(Action::new(
+                        "Parent",
+                        vec![
+                            ActionStep::new("layer.renameLayer", json!({"name":"Before batch"})),
+                            ActionStep::new("file.automate.batch", params),
+                            ActionStep::new("layer.renameLayer", json!({"name":"After batch"})),
+                        ],
+                    ))
+                    .unwrap();
                 let result = s.execute("actions.play", json!({"action":"Parent"})).unwrap();
                 assert!(result.get("failed").is_none(), "{result}");
             } else {
@@ -1519,8 +1630,8 @@ mod action_history_tests {
             let mut s = Session::new();
             s.execute("file.new", json!({"width":4,"height":4})).unwrap();
             s.execute("actions.setHistory", json!({"singleState":true})).unwrap();
-            s.actions.list.push(Action::new("Original", vec![]));
-            let library = serde_json::to_value(&s.actions.list).unwrap();
+            s.actions.list.push(Action::new("Original", vec![])).unwrap();
+            let library = serde_json::to_value(s.actions.list.actions()).unwrap();
             let before = s.active().unwrap().doc.clone();
             if parent {
                 crate::actions_cmds::begin_document_history(&mut s, "Parent");
@@ -1535,7 +1646,7 @@ mod action_history_tests {
                 )
                 .unwrap();
             assert_eq!(result["errors"].as_array().unwrap().len(), 1, "{result}");
-            assert_eq!(serde_json::to_value(&s.actions.list).unwrap(), library);
+            assert_eq!(serde_json::to_value(s.actions.list.actions()).unwrap(), library);
             if parent {
                 assert_eq!(s.action_history.as_ref().unwrap().name, "Parent");
                 s.execute("layer.renameLayer", json!({"name":"Parent tail"})).unwrap();

@@ -30,7 +30,7 @@ fn brush_get_reports_both_pressure_toggles_off() {
     // The session's own starting brush is the default brush at Photoshop's 10 % smoothing — the
     // same brush Reset Tool hands back — so only the smoothing differs.
     assert_eq!(
-        s.tools.brush,
+        *s.tools.brush,
         BrushSettings { smoothing: photocraft_paint::brush::Smoothing { amount: 0.1, ..Default::default() }, ..BrushSettings::default() }
     );
 }

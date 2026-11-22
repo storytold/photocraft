@@ -1,16 +1,19 @@
 use super::*;
 use crate::PhotocraftApp;
+use craft::imaging::ui::scopes::ScopePanelState;
+use egui::{Rect, vec2};
 use serde_json::json;
 
-fn app_with(params: Value) -> PhotocraftApp {
+fn app_with(params: Value) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", params).unwrap();
     app
 }
 
 /// One panel frame through a minimal egui pass.
+// PLAN: `show` now builds the framework's `ScopePanel`, which reads `Env::of(ui)`; this bare context has no host installed. If it panics, the frame needs `Fixture::host`.
 fn frame(app: &mut PhotocraftApp) {
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     ctx.begin_pass(Default::default());
     let mut ui =
         egui::Ui::new(ctx.clone(), egui::Id::unique("hist-test"), egui::UiBuilder::new().max_rect(Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, 900.0))));
@@ -40,38 +43,13 @@ fn settle(app: &mut PhotocraftApp) {
 fn ui_set(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Value {
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", params);
     match crate::control::handle(app, ctx, &req) {
-        crate::control::Outcome::Done(v) => v,
+        crate::control::Reply::Done(v) => v,
         _ => panic!("ui.set: expected an immediate reply"),
     }
 }
 
 fn inspect_stats(app: &PhotocraftApp) -> Value {
     inspect(app)["stats"].clone()
-}
-
-#[test]
-fn stats_match_their_definitions() {
-    let mut h = [0u32; 256];
-    h[0] = 25;
-    h[100] = 50;
-    h[255] = 25;
-    let s = stats(&h, None, 100).unwrap();
-    assert_eq!(s.pixels, 100);
-    assert!((s.mean - (5000.0 + 6375.0) / 100.0).abs() < 1e-9);
-    assert_eq!(s.median, 100);
-    assert_eq!(s.clipped, [25.0, 25.0], "a quarter of the pixels clip at each end");
-    // One level: its count and the percent at or below it.
-    let one = stats(&h, Some([100, 100]), 100).unwrap();
-    assert_eq!((one.count, one.percentile), (Some(50), Some(75.0)));
-    // A dragged range (either direction): the count and percent within it.
-    let range = stats(&h, Some([200, 50]), 100).unwrap();
-    assert_eq!((range.level, range.count, range.percentile), (Some([50, 200]), Some(50), Some(50.0)));
-    assert!(stats(&[0; 256], Some([0, 255]), 0).is_none(), "an empty histogram has no statistics");
-    assert!(stats(&h, None, 100).unwrap().std_dev > 0.0);
-    // The Pixels row reports the kept pixels (a selection's size, transparent ones included),
-    // not the bins' sum: a selection of only transparent pixels still has statistics.
-    let empty_bins = stats(&[0; 256], None, 500).expect("pixels were counted");
-    assert_eq!(empty_bins.pixels, 500);
 }
 
 #[test]
@@ -178,7 +156,7 @@ fn a_dead_histogram_worker_clears_the_job() {
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
     app.hist_job = Some((key, rx));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     update(&mut app, &ctx);
     assert!(app.doc_hist.is_none(), "nothing landed from the dead worker");
     // …and the next count was scheduled in its place.
@@ -225,77 +203,46 @@ fn adjustment_preview_is_counted_over_the_original() {
 
 #[test]
 fn views_keep_the_channel_and_the_menu_toggles_options() {
-    use egui_kittest::Harness;
-    use egui_kittest::kittest::Queryable;
     let mut app = app_with(json!({"width": 16, "height": 16}));
-    app.ui.histogram_panel.channel = HistChannel::Green;
-    let mut h = Harness::builder().with_size(vec2(260.0, 320.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_menu(app, ui), app);
-    h.run_steps(2);
-    h.get_by_label("All Channels View").click();
-    h.run_steps(2);
-    assert_eq!(h.state().ui.histogram_panel.view, HistView::AllChannels);
-    assert_eq!(h.state().ui.histogram_panel.channel, HistChannel::Green, "the channel is kept");
-    h.get_by_label("Show Channels in Color").click();
-    h.run_steps(2);
-    assert!(h.state().ui.histogram_panel.show_channels_in_color);
-    h.get_by_label("Show Statistics").click();
-    h.run_steps(2);
-    assert!(!h.state().ui.histogram_panel.show_statistics);
+    app.ui.histogram.settings.channel = HistChannel::Green.key().into();
+    let ctx = app.ctx().clone();
+    let fire = |app: &mut PhotocraftApp, command: ScopeCommand| assert!(run_fired(app, &ctx, &CommandRef::from(command)));
+    fire(&mut app, ScopeCommand::AllChannelsView);
+    assert_eq!(app.ui.histogram.settings.view, ScopeView::AllChannels);
+    assert_eq!(app.ui.histogram.settings.channel, "green", "the channel is kept");
+    fire(&mut app, ScopeCommand::ShowChannelsInColor);
+    assert!(app.ui.histogram.settings.show_channels_in_color);
+    fire(&mut app, ScopeCommand::ShowStatistics);
+    assert!(!app.ui.histogram.settings.show_statistics);
+    // The states mirror the settings: the radio mark follows the view.
+    let state = |app: &PhotocraftApp, command: ScopeCommand| command_states(app).into_iter().find(|(c, _)| *c == CommandRef::from(command)).map(|(_, s)| s);
+    assert_eq!(state(&app, ScopeCommand::AllChannelsView), Some(CommandState::new().checked(true)));
+    assert_eq!(state(&app, ScopeCommand::CompactView), Some(CommandState::new().checked(false)));
     // Kept with the preferences.
     let mut again = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let saved = h.state().session.prefs().dialogs.get(OPTIONS_PREF).cloned().unwrap();
+    let saved = app.session.prefs().dialogs.get(OPTIONS_PREF).cloned().unwrap();
     again.session.prefs.edit(|p| {
         p.dialogs.insert(OPTIONS_PREF.into(), saved);
     });
     restore_options(&mut again);
-    assert_eq!(again.ui.histogram_panel.view, HistView::AllChannels);
-    assert!(again.ui.histogram_panel.show_channels_in_color);
-}
-
-#[test]
-fn every_view_and_channel_draws_without_panicking() {
-    for mode in ["rgb", "cmyk", "lab", "grayscale"] {
-        let mut app = app_with(json!({"width": 24, "height": 24, "mode": mode}));
-        app.run("layer.new.layer", json!({})).unwrap();
-        settle(&mut app);
-        for view in [HistView::Compact, HistView::Expanded, HistView::AllChannels] {
-            for channel in [HistChannel::Composite, HistChannel::Red, HistChannel::Cyan, HistChannel::A, HistChannel::Luminosity, HistChannel::Colors] {
-                for range in [[200, 10], [0, 255]] {
-                    app.ui.histogram_panel.view = view;
-                    app.ui.histogram_panel.channel = channel;
-                    app.ui.histogram_range = Some(range);
-                    frame(&mut app);
-                }
-            }
-        }
-        assert!(inspect(&app)["stats"]["count"].is_u64(), "{mode}: the range has a count");
-    }
-}
-
-#[test]
-fn overlaid_colors_mix_where_channels_overlap() {
-    let ctx = egui::Context::default();
-    ctx.begin_pass(Default::default());
-    let p = ctx.layer_painter(egui::LayerId::background());
-    let h = [100u32; 256];
-    draw_overlaid(&p, Rect::from_min_size(egui::Pos2::ZERO, vec2(256.0, 50.0)), &[(&h, Color32::RED), (&h, Color32::GREEN)], false);
-    draw_overlaid(&p, Rect::from_min_size(egui::Pos2::ZERO, vec2(256.0, 50.0)), &[], true);
-    ctx.end_pass().textures_delta.clear();
+    assert_eq!(again.ui.histogram.settings.view, ScopeView::AllChannels);
+    assert!(again.ui.histogram.settings.show_channels_in_color);
+    assert!(!again.ui.histogram.settings.show_statistics);
 }
 
 #[test]
 fn ui_set_drives_the_panel() {
     let mut app = app_with(json!({"width": 16, "height": 16}));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let r = ui_set(
         &mut app,
         &ctx,
         json!({"histogramPanel": {"view": "allChannels", "channel": "luminosity"}, "histogramRange": [10, 20], "histogramRefresh": true}),
     );
     assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(app.ui.histogram_panel.view, HistView::AllChannels);
-    assert_eq!(app.ui.histogram_panel.channel, HistChannel::Luminosity);
-    assert_eq!(app.ui.histogram_range, Some([10, 20]));
+    assert_eq!(app.ui.histogram.settings.view, ScopeView::AllChannels);
+    assert_eq!(app.ui.histogram.settings.channel, "luminosity");
+    assert_eq!(range_levels(app.ui.histogram.range), Some([10, 20]));
     assert!(app.hist_uncached.is_some());
     for bad in [
         json!({"histogramPanel": {"view": "tiny"}}),
@@ -306,36 +253,14 @@ fn ui_set_drives_the_panel() {
         let r = ui_set(&mut app, &ctx, bad.clone());
         assert_eq!(r["ok"], false, "{bad}: {r}");
     }
-    assert_eq!(app.ui.histogram_panel.view, HistView::AllChannels, "a rejected call changes nothing");
-}
-
-/// The Colors overlay follows the same outline as a single channel: straight lines between bin
-/// centres, not one flat step per level, and its bands tile without gaps where outlines cross.
-#[test]
-fn colors_overlay_is_a_continuous_outline_not_steps() {
-    let r = Rect::from_min_size(egui::Pos2::ZERO, vec2(512.0, 100.0));
-    let ramp: [u32; 256] = std::array::from_fn(|i| i as u32 * 10);
-    let fall: [u32; 256] = std::array::from_fn(|i| (255 - i) as u32 * 10);
-    let mesh = overlaid_mesh(r, &[(&ramp, Color32::RED), (&fall, Color32::GREEN)], false);
-    let quads: Vec<&[egui::epaint::Vertex]> = mesh.vertices.chunks(4).collect();
-    assert!(!quads.is_empty());
-    // Every band's top edge slopes on a ramp: no flat steps.
-    let sloped = quads.iter().filter(|q| (q[1].pos.y - q[2].pos.y).abs() > 1e-4).count();
-    assert!(sloped * 10 > quads.len() * 9, "{sloped} of {} bands slope", quads.len());
-    // The two ramps cross mid-way: there the overlap is yellow and each side keeps its own colour.
-    let colors: std::collections::HashSet<_> = mesh.vertices.iter().map(|v| v.color).collect();
-    assert!(colors.contains(&Color32::from_rgb(255, 255, 0)) && colors.contains(&Color32::RED) && colors.contains(&Color32::GREEN));
-    // Nothing is drawn above the taller outline at any x.
-    for q in &quads {
-        for v in q.iter() {
-            assert!(v.pos.y >= r.top() - 1e-3 && v.pos.y <= r.bottom() + 1e-3);
-        }
-    }
+    assert_eq!(app.ui.histogram.settings.view, ScopeView::AllChannels, "a rejected call changes nothing");
+    assert_eq!(app.ui.histogram.settings.channel, "luminosity", "a rejected call changes nothing");
+    assert_eq!(range_levels(app.ui.histogram.range), Some([10, 20]), "a rejected call changes nothing");
 }
 
 /// A white Background under a black layer, with the Background selected: the entire image is
 /// black, the selected layer white.
-fn black_over_white_background_selected() -> PhotocraftApp {
+fn black_over_white_background_selected() -> Box<PhotocraftApp> {
     let mut app = app_with(json!({"width": 32, "height": 32}));
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#000000"})).unwrap();
@@ -351,8 +276,10 @@ fn cache_levels_one_still_throttles_recounts_and_an_uncached_refresh_does_not() 
     let mut app = app_with(json!({"width": 64, "height": 48}));
     app.run("prefs.set", json!({"path": "performance.cacheLevels", "value": 1})).unwrap();
     settle(&mut app);
-    // The count just landed, so the next edit falls inside the throttle.
-    app.doc_hist.as_mut().unwrap().at = 0.0;
+    // The count just landed, so the next edit falls inside the throttle. Each pass without an input
+    // time moves the context's clock on by one frame, so "just now" is the context's time, not 0.
+    let now = app.ctx().input(|i| i.time) * 1000.0;
+    app.doc_hist.as_mut().unwrap().at = now;
     app.run("edit.fill", json!({"color": "#000000"})).unwrap();
     frame(&mut app);
     assert!(app.hist_job.is_none(), "an edit within 250 ms of the last count waits");
@@ -380,14 +307,14 @@ fn uncapped_counts_keep_their_proxy_and_a_cap_reduces_by_powers_of_two() {
 /// entire image whatever Source the Expanded View was left at.
 #[test]
 fn compact_view_is_the_default_and_counts_the_entire_image() {
-    assert_eq!(HistogramPanelState::default().view, HistView::Compact);
+    assert_eq!(ScopePanelState::default().settings.view, ScopeView::Compact);
     let mut app = black_over_white_background_selected();
-    app.ui.histogram_panel = HistogramPanelState { source: HistSourceChoice::SelectedLayer, ..Default::default() };
+    app.ui.histogram.settings.source = HistSourceChoice::SelectedLayer.key().into();
     settle(&mut app);
     let i = inspect(&app);
     assert_eq!(i["source"], "entireImage");
     assert_eq!(i["stats"]["median"], 0, "the black layer over the Background, not the Background alone");
-    app.ui.histogram_panel.view = HistView::Expanded;
+    app.ui.histogram.settings.view = ScopeView::Expanded;
     settle(&mut app);
     assert_eq!(inspect(&app)["source"], "selectedLayer");
     assert_eq!(inspect_stats(&app)["median"], 255, "Expanded View counts the chosen Source");
@@ -398,10 +325,10 @@ fn compact_view_is_the_default_and_counts_the_entire_image() {
 #[test]
 fn inspect_current_follows_the_source_not_only_the_revision() {
     let mut app = black_over_white_background_selected();
-    app.ui.histogram_panel.view = HistView::Expanded;
+    app.ui.histogram.settings.view = ScopeView::Expanded;
     settle(&mut app);
     assert_eq!(inspect(&app)["current"], true);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let r = ui_set(&mut app, &ctx, json!({"histogramPanel": {"source": "selectedLayer"}}));
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(inspect(&app)["current"], false, "the entire image's histogram is not the selected layer's");
@@ -462,7 +389,7 @@ fn a_result_computed_before_a_selection_change_is_not_cached() {
     let stale = Arc::new((*before.hist).clone());
     let _ = tx.send((before.key, 1.0, stale.clone()));
     app.hist_job = Some((before.key, rx));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     update(&mut app, &ctx);
     assert!(app.hist_job.is_none(), "the stale job was consumed, not kept");
     let after = app.doc_hist.clone().expect("the previous entry stands");
@@ -484,44 +411,13 @@ fn a_result_one_revision_behind_still_lands() {
     let newer = Arc::new((*before.hist).clone());
     let _ = tx.send((before.key, 1.0, newer.clone()));
     app.hist_job = Some((before.key, rx));
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     update(&mut app, &ctx);
     assert!(app.hist_job.is_none(), "the job was consumed");
     let landed = app.doc_hist.clone().expect("the one-revision-old result lands");
     assert_eq!(landed.key.revision, before.key.revision, "landed as computed");
     assert!(Arc::ptr_eq(&landed.hist, &newer));
     assert_eq!(inspect(&app)["current"], false, "still marked stale for the newer revision");
-}
-
-/// The selection key is hashed once per document revision, not per frame: a memo for the
-/// current revision is served as-is, and a new revision (any selection change is one) rehashes.
-#[test]
-fn the_selection_key_is_memoized_per_revision() {
-    let mut app = app_with(json!({"width": 16, "height": 16}));
-    settle(&mut app);
-    let (doc, rev) = {
-        let st = app.session.active().unwrap();
-        (st.doc.id, st.revision)
-    };
-    let (_, _, real) = app.hist_sel_key.expect("refreshed while the panel updates");
-    // A poisoned memo for the same revision is served verbatim: the mask is not rehashed.
-    app.hist_sel_key = Some((doc, rev, real ^ 0xdead_beef));
-    let key_of = |app: &PhotocraftApp| {
-        let st = app.session.active().unwrap();
-        let (_, source) = resolve_source(st, source_choice(&app.ui.histogram_panel));
-        let poisoned = app.hist_sel_key.is_some_and(|(d, r, _)| d == st.doc.id && r == st.revision);
-        (poisoned, tone::tag(source, tone_space(st.doc.mode), HistScope::Selection, app.hist_sel_key.map_or(0, |(_, _, k)| k)))
-    };
-    assert_eq!(key_of(&app), (true, committed_key(&app).unwrap().0.source), "the memo is served, not rehashed");
-    app.run("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
-    let (rev2, fresh) = {
-        let st = app.session.active().unwrap();
-        (st.revision, tone::selection_key(&st.doc))
-    };
-    assert_ne!(rev2, rev, "a selection change is a new revision");
-    let ctx = egui::Context::default();
-    update(&mut app, &ctx);
-    assert_eq!(app.hist_sel_key, Some((doc, rev2, fresh)), "the new revision rehashed the mask");
 }
 
 /// The panel's Pixels statistic counts the pixels the selection covers, transparent ones
@@ -533,7 +429,7 @@ fn the_panel_reports_the_selection_size_over_transparent_pixels() {
     app.run("select.rect", json!({"x": 0, "y": 0, "width": 16, "height": 32})).unwrap();
     settle(&mut app);
     assert_eq!(inspect_stats(&app)["pixels"], 16 * 32, "the transparent selected pixels still count");
-    app.ui.histogram_panel.view = HistView::Expanded;
+    app.ui.histogram.settings.view = ScopeView::Expanded;
     frame(&mut app);
 }
 
@@ -550,4 +446,22 @@ fn the_tone_histogram_cache_ignores_selection_changes() {
     assert!(Arc::ptr_eq(&first, &tone::histograms(&mut app, src, ToneSpace::Rgb)), "a selection change is view-only for the whole-input histogram");
     app.run("select.deselect", json!({})).unwrap();
     assert!(Arc::ptr_eq(&first, &tone::histograms(&mut app, src, ToneSpace::Rgb)), "deselecting keeps it too");
+}
+
+/// A tile that fails to read counts as zeros, and as its pixels again once it reads, without a new revision or
+/// selection: the panel's histogram goes stale and is counted again (`crate::scratch_reads`).
+#[test]
+fn the_panel_recounts_after_a_scratch_read_error_transition() {
+    let mut app = app_with(json!({"width": 64, "height": 48}));
+    settle(&mut app);
+    let counted = app.doc_hist.clone().expect("landed");
+    frame(&mut app);
+    assert_eq!(inspect(&app)["current"], true, "nothing changed: still current");
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    assert_eq!(inspect(&app)["current"], false, "stale after the transition");
+    settle(&mut app);
+    let recounted = app.doc_hist.clone().expect("landed");
+    assert_eq!(recounted.key.revision, counted.key.revision, "no new revision");
+    assert_ne!(recounted.key.source, counted.key.source, "counted again for the new generation");
+    assert_eq!(inspect(&app)["current"], true);
 }

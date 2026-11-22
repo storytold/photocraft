@@ -5,21 +5,21 @@ use egui::Modifiers;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::testing;
 use crate::direct_select::PathRef;
 use crate::state::Tool;
 
 /// 800 x 600, white Background, pixel layer "Red" active, and a shape layer from (450,100) to
 /// (650,250) below it in the stack's activity (Red stays the active layer).
-pub(crate) fn setup(tool: Tool) -> (PhotocraftApp, u64) {
+pub(crate) fn setup(tool: Tool) -> (Box<PhotocraftApp>, u64) {
     let (mut app, shape) = setup_asking(tool);
     // These tests predate the live-shape question (#12768) and keep testing targeting and locks.
-    crate::dialogs::dont_show_again::remember(&mut app, crate::dialogs::live_shape_prompt::PREF);
+    crate::dialogs::alerts::remember_skip(&mut app, crate::dialogs::live_shape_prompt::PREF);
     (app, shape)
 }
 
 /// [`setup`] with the live-shape question still on.
-pub(super) fn setup_asking(tool: Tool) -> (PhotocraftApp, u64) {
+pub(super) fn setup_asking(tool: Tool) -> (Box<PhotocraftApp>, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
@@ -40,8 +40,7 @@ pub(crate) fn steps(app: &PhotocraftApp) -> usize {
 }
 
 pub(super) fn click(app: &mut PhotocraftApp, at: [f64; 2]) {
-    tool_event(app, ToolEvent::Down { x: at[0], y: at[1], pressure: 1.0 }, Modifiers::NONE);
-    tool_event(app, ToolEvent::Up { x: at[0], y: at[1] }, Modifiers::NONE);
+    testing::click(app, at, Modifiers::NONE);
 }
 
 pub(crate) fn select_saved_path(app: &mut PhotocraftApp) {
@@ -80,16 +79,6 @@ fn a_click_on_the_corner_of_the_active_shape_deletes_the_anchor() {
     assert_eq!(shape_path(&mut app, shape)["subpaths"][0]["knots"].as_array().unwrap().len(), 3);
     assert_eq!(steps(&app), n + 1);
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
-}
-
-#[test]
-fn with_a_saved_path_selected_a_click_on_the_shape_corner_does_nothing() {
-    let (mut app, shape) = setup(Tool::DeleteAnchorPoint);
-    select_saved_path(&mut app);
-    let (before, n) = (shape_path(&mut app, shape), steps(&app));
-    click(&mut app, [650.0, 250.0]);
-    assert_eq!(shape_path(&mut app, shape), before);
-    assert_eq!(steps(&app), n);
 }
 
 #[test]

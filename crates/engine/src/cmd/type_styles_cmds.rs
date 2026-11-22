@@ -49,7 +49,7 @@ fn targets(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
     } else if let Some(a) = p.get("layers").and_then(Value::as_array) {
         a.iter().filter_map(Value::as_u64).map(LayerId).collect()
     } else {
-        st.selected_layers()
+        st.selected_layers().to_vec()
     };
     Ok(ids.into_iter().filter(|id| text_of(&st.doc, *id).is_some()).collect())
 }

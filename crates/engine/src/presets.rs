@@ -39,7 +39,7 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 /// A named folder of presets.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Group<T> {
     pub name: String,
     pub items: Vec<T>,
@@ -67,7 +67,7 @@ impl Named for String {
 }
 
 /// All preset sets plus the panel state the engine needs.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct PresetState {
     pub gradients: Vec<Group<gradients::GradientPreset>>,
     /// The Gradient tool's current gradient (Gradients panel selection / gradient picker).
@@ -88,13 +88,13 @@ pub struct PresetState {
     pub clone: clone_source::CloneSources,
     /// The user defaults "Make Default" in the Layer Style dialog saves
     /// (effect kind → param set); "Reset to Default" restores them.
+    #[plain_data(assume = "JSON values: plain data")]
     pub layer_defaults: BTreeMap<String, Value>,
     /// Swatches panel library.
-    pub swatches: Vec<Group<swatches::Swatch>>,
+    #[plain_data(assume = "craft-color-ui swatch groups: plain values and strings")]
+    pub swatches: Vec<swatches::SwatchGroup>,
     /// The user contour library of the Layer Style dialog (`layer.layerStyle.contours.*`).
     pub contours: Vec<photocraft_doc::Contour>,
-    /// Bumped on every preset change (UIs key thumbnail caches on it).
-    pub rev: u64,
 }
 
 impl Default for PresetState {
@@ -112,9 +112,8 @@ impl Default for PresetState {
             export_presets: Vec::new(),
             clone: Default::default(),
             layer_defaults: BTreeMap::new(),
-            swatches: swatches::builtin(),
+            swatches: craft::color_ui::palette::default_swatches(),
             contours: Vec::new(),
-            rev: 0,
         }
     }
 }
@@ -146,7 +145,7 @@ struct Persisted {
     custom_shapes: Option<Vec<crate::edit_menu_cmds::CustomShape>>,
     #[serde(default)]
     layer_defaults: Option<BTreeMap<String, Value>>,
-    swatches: Option<Vec<Group<swatches::Swatch>>>,
+    swatches: Option<Vec<swatches::SwatchGroup>>,
     // Read entry by entry: a bad contour must not discard the other presets.
     #[serde(default)]
     contours: Option<Value>,
@@ -196,10 +195,15 @@ impl Session {
             export_presets: take(&mut m, "export_presets"),
             custom_shapes: take(&mut m, "custom_shapes"),
             layer_defaults: take(&mut m, "layer_defaults"),
-            swatches: take(&mut m, "swatches"),
+            swatches: {
+                if let Some(saved) = m.get_mut("swatches") {
+                    swatches::upgrade_saved(saved);
+                }
+                take(&mut m, "swatches")
+            },
             contours: take(&mut m, "contours"),
         };
-        let st = &mut self.presets;
+        let st = &mut *self.presets;
         if let Some(g) = p.gradient {
             st.gradient = g;
         }
@@ -268,13 +272,12 @@ impl Session {
         if let Some(c) = p.contours.filter(Value::is_array) {
             self.presets.contours = crate::contour_lib_cmds::from_json(&c);
         }
-        self.presets.rev += 1;
     }
 
-    /// Record a preset change: bumps the panel revision and marks the preferences document dirty
+    /// Record a preset change: moves the presets' revision and marks the preferences document dirty
     /// so the shell persists it.
     pub(crate) fn presets_changed(&mut self) {
-        self.presets.rev += 1;
+        self.presets.edit(|_| ());
         self.prefs.edit(|_| ());
     }
 }
@@ -308,21 +311,45 @@ pub(crate) fn req_str<'a>(p: &'a Value, k: &str, cmd: &str) -> Result<&'a str> {
 
 /// Locate a preset by name (optionally within `group`): (group index, item index).
 pub(crate) fn find<T: Named>(groups: &[Group<T>], name: &str, group: Option<&str>) -> Option<(usize, usize)> {
+    find_in(groups.iter().map(|g| (g.name.as_str(), g.items.iter().map(|i| i.name()))), name, group)
+}
+
+/// [`find`] over any list of `(group name, item names)`: the one lookup rule, for libraries whose
+/// groups are not a [`Group`].
+pub(crate) fn find_in<'a, I: IntoIterator<Item = &'a str>>(
+    groups: impl IntoIterator<Item = (&'a str, I)>,
+    name: &str,
+    group: Option<&str>,
+) -> Option<(usize, usize)> {
     groups
-        .iter()
+        .into_iter()
         .enumerate()
-        .filter(|(_, g)| group.is_none_or(|n| g.name == n))
-        .find_map(|(gi, g)| g.items.iter().position(|i| i.name() == name).map(|ii| (gi, ii)))
+        .filter(|(_, (g, _))| group.is_none_or(|n| *g == n))
+        .find_map(|(gi, (_, items))| items.into_iter().position(|i| i == name).map(|ii| (gi, ii)))
+}
+
+/// `base`, or `base {first}`, `base {first + 1}`… the first of them `taken` does not claim.
+fn numbered_name(base: &str, first: usize, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(base) {
+        return base.to_string();
+    }
+    (first..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
+}
+
+/// A preset name unique under `taken`: `base`, `base 2`, `base 3`…
+pub(crate) fn unique_name_by(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    numbered_name(base, 2, taken)
+}
+
+/// A group name unique under `taken`: `base`, `base 1`, `base 2`…
+pub(crate) fn unique_group(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    numbered_name(base, 1, taken)
 }
 
 /// `base`, or `base 2`, `base 3`… so names stay unique across all groups (Photoshop allows
 /// duplicates, but agents address presets by name).
 pub(crate) fn unique_name<T: Named>(groups: &[Group<T>], base: &str) -> String {
-    let taken = |n: &str| groups.iter().any(|g| g.items.iter().any(|i| i.name() == n));
-    if !taken(base) {
-        return base.to_string();
-    }
-    (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
+    unique_name_by(base, |n| groups.iter().any(|g| g.items.iter().any(|i| i.name() == n)))
 }
 
 /// Index of `group` (created at the end when missing), or the first group (created as
@@ -433,7 +460,7 @@ pub fn specs() -> Vec<CommandSpec> {
 /// Run another command's implementation from inside a preset command (checks `enabled`, but
 /// doesn't journal it: the outer command is what an action replays).
 pub(crate) fn call(s: &mut Session, id: &str, p: Value) -> Result<Value> {
-    let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+    let spec = crate::registry::spec(id)?;
     (spec.enabled)(s).map_err(|why| EngineError::Disabled(id.to_string(), why))?;
     // A nested command answers to the session's authorization hook like a direct call.
     if let Some(gate) = s.authorize {

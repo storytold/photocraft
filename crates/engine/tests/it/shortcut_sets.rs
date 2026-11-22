@@ -18,7 +18,7 @@ fn a_set_saves_switches_exports_and_imports_back() {
     assert_eq!((r["activeSet"].as_str(), r["modified"].as_bool(), r["sets"].clone()), (Some("Mine"), Some(false), json!(["Mine"])));
     // Export the set, go back to the defaults, then import the file: the bindings return.
     let xml = ks(&mut s, json!({"exportKys": true}))["kys"].as_str().expect("kys").to_string();
-    assert!(xml.contains("KeyboardCustomization/Mine=Mine") && xml.contains("pc-id=\"edit.copy\"><shortcut>F9</shortcut></command>"), "{xml}");
+    assert!(xml.contains("KeyboardCustomization/Mine=Mine") && xml.contains("craft-id=\"edit.copy\"><shortcut>F9</shortcut></command>"), "{xml}");
     let r = ks(&mut s, json!({"useSet": ""}));
     assert_eq!((r["overrides"].clone(), r["activeSet"].as_str()), (json!({}), Some("")));
     let r = ks(&mut s, json!({"reset": true, "importKys": xml}));

@@ -227,11 +227,18 @@ pub fn flatten_lab(doc: &Document, rect: Rect, fmt: PixelFormat, white: bool) ->
 /// work on L, a and b, worked out on the stored values; `None` for any other document, which the
 /// RGB compositor renders. Rows of `tile` render in parallel.
 pub fn render_lab(doc: &Document, rect: Rect, tile: i32) -> Option<Buffer> {
-    let stack = LabStack::new(doc).filter(LabStack::adjusts)?;
+    match render_lab_with(doc, rect, tile, &crate::InfallibleBufferAlloc) {
+        Ok(result) => result,
+        Err(never) => match never {},
+    }
+}
+
+pub(crate) fn render_lab_with<A: crate::BufferAlloc>(doc: &Document, rect: Rect, tile: i32, alloc: &A) -> Result<Option<Buffer>, A::Error> {
+    let Some(stack) = LabStack::new(doc).filter(LabStack::adjusts) else { return Ok(None) };
     let w = rect.width() as usize;
-    let mut out = Buffer::transparent(rect);
+    let mut out = alloc.filled(rect, [0.0; 4])?;
     if w == 0 || rect.is_empty() {
-        return Some(out);
+        return Ok(Some(out));
     }
     let rows = tile.max(1) as usize;
     let band = |i: usize, px: &mut [[f32; 4]]| {
@@ -249,11 +256,15 @@ pub fn render_lab(doc: &Document, rect: Rect, tile: i32) -> Option<Buffer> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
-        out.px.par_chunks_mut(w * rows).enumerate().for_each(|(i, px)| band(i, px));
+        let chunk_len = w.saturating_mul(rows).min(out.px.len()).max(1);
+        out.px.par_chunks_mut(chunk_len).enumerate().for_each(|(i, px)| band(i, px));
     }
     #[cfg(target_arch = "wasm32")]
-    for (i, px) in out.px.chunks_mut(w * rows).enumerate() {
-        band(i, px);
+    {
+        let chunk_len = w.saturating_mul(rows).min(out.px.len()).max(1);
+        for (i, px) in out.px.chunks_mut(chunk_len).enumerate() {
+            band(i, px);
+        }
     }
-    Some(out)
+    Ok(Some(out))
 }

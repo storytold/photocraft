@@ -52,7 +52,7 @@ fn point(p: &Value, key: &str) -> Result<Option<[f64; 2]>> {
 }
 
 /// Modes whose layers convert through the colour engine.
-pub(crate) fn layered(mode: ColorMode) -> bool {
+pub fn layered(mode: ColorMode) -> bool {
     matches!(mode, ColorMode::Rgb | ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab)
 }
 
@@ -223,7 +223,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     let (sdoc, ddoc) = (from.doc.clone(), to.doc.clone());
     let floating = crate::float_cmds::floating(from).cloned();
     let ids: Vec<LayerId> = match p.get("layers") {
-        None => from.selected_layers(),
+        None => from.selected_layers().to_vec(),
         Some(v) => v
             .as_array()
             .map(|a| a.iter().map(|id| id.as_u64().map(LayerId)).collect::<Option<Vec<_>>>())
@@ -356,7 +356,7 @@ pub(crate) fn duplicate_to_new_document(s: &mut Session, p: &Value) -> Result<Va
     let sdoc = s.documents().get(src).ok_or(EngineError::NoDocument)?.doc.clone();
     let ids = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
-        None => s.active().ok_or(EngineError::NoDocument)?.selected_layers(),
+        None => s.active().ok_or(EngineError::NoDocument)?.selected_layers().to_vec(),
     };
     if let Some(missing) = ids.iter().find(|id| sdoc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*missing));
