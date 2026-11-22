@@ -468,20 +468,49 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
             "sampleAllLayers": o.sample_all.patch,
             "target": crate::canvas::paint_target(app),
         });
+        // Its refusals (a locked layer, Indexed Color, a hidden layer) come as the reference's alert too, not only in
+        // the status bar (CodeRabbit on #16178).
         if let Err(e) = app.run("paint.patch", p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
+            match patch_refusal(&e) {
+                Some(alert) => {
+                    let _ = crate::dialogs::alerts::alert(app, alert);
+                }
+                None => {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                }
+            }
         }
         return;
     }
     let p = json!({"offset": off, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
     match app.run("paint.patch", p) {
         Ok(_) => crate::patch_preview::committed(app, preview, off),
-        Err(e) => {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
+        Err(e) => match patch_refusal(&e) {
+            // The reference's refusals come as an alert with OK (#12120); other errors stay in the status bar.
+            Some(alert) => {
+                let _ = crate::dialogs::alerts::alert(app, alert);
+            }
+            None => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        },
     }
+}
+
+/// The alert of a Patch the engine refused as the reference does (#12120), in the UI's language; `None` for other
+/// errors.
+fn patch_refusal(error: &str) -> Option<&'static str> {
+    Some(match error {
+        "Could not use the patch tool because the selected area is empty." => tl!("Could not use the patch tool because the selected area is empty."),
+        "Could not use the patch tool because the layer is locked." => tl!("Could not use the patch tool because the layer is locked."),
+        "Could not use the patch tool because the target layer is hidden." => tl!("Could not use the patch tool because the target layer is hidden."),
+        "Could not use the patch tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit)." => {
+            tl!("Could not use the patch tool because it does not work with Indexed Color images (convert image to RGB Color mode to edit).")
+        }
+        _ => return None,
+    })
 }
 
 /// Content-Aware Move Tool: the selection was dragged from `start` to `end`. The engine runs it as
@@ -719,6 +748,10 @@ mod tests;
 #[cfg(test)]
 #[path = "../healing_indexed_alert_tests.rs"]
 mod healing_indexed_alert_tests;
+
+#[cfg(test)]
+#[path = "../patch_content_aware_alert_tests.rs"]
+mod patch_content_aware_alert_tests;
 
 #[cfg(test)]
 #[path = "../clone_stamp_no_source_alert_tests.rs"]

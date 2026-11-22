@@ -14,6 +14,9 @@ pub const HIDDEN: &str = "Could not complete your request because the target lay
 /// The Art History Brush's own alert text (#12638).
 pub const ART_HISTORY_HIDDEN: &str = "Could not use the art history brush because the target layer is hidden.";
 
+/// The Patch tool's own alert text (#12120).
+pub const PATCH_HIDDEN: &str = "Could not use the patch tool because the target layer is hidden.";
+
 /// Commands that paint on, or move, the target layer.
 const GATED: &[&str] = &[
     "paint.stroke",
@@ -58,7 +61,12 @@ pub fn refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
     let layer = crate::commands::layer_param(s, &params).ok()?;
     // The Art History Brush's text was measured on a layer's pixels only.
     let pixels = crate::channel_cmds::target_of(&params) == crate::channel_cmds::Target::Pixels;
-    let why = if id == "paint.artHistoryBrush" && pixels { ART_HISTORY_HIDDEN } else { HIDDEN };
+    let why = match id {
+        "paint.artHistoryBrush" if pixels => ART_HISTORY_HIDDEN,
+        // Measured on a layer's pixels.
+        "paint.patch" if pixels => PATCH_HIDDEN,
+        _ => HIDDEN,
+    };
     (st.doc.layer(layer).is_some() && !shown(&st.doc, layer)).then_some(why)
 }
 
