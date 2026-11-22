@@ -91,7 +91,7 @@ fn style_queries_validate_explicit_targets_without_a_selection() {
     let mut s = white_document();
     s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
     let target = s.active().unwrap().active_layer.unwrap().0;
-    s.active_mut().unwrap().active_layer = None;
+    s.active_mut().unwrap().set_active_layer(None);
     let before = Arc::clone(&s.active().unwrap().doc);
     for (id, mut params) in style_commands() {
         assert!(!s.is_enabled(&id), "{id}");
@@ -153,7 +153,7 @@ fn missing_style_targets_report_available_layer_ids() {
         let mut s = white_document();
         let bg = s.active().unwrap().doc.background().unwrap().id;
         for selected in [true, false] {
-            s.active_mut().unwrap().active_layer = selected.then_some(bg);
+            s.active_mut().unwrap().set_active_layer(selected.then_some(bg));
             let before = Arc::clone(&s.active().unwrap().doc);
             for (id, mut params) in style_commands() {
                 params["layer"] = json!(u64::MAX);
