@@ -15,7 +15,7 @@ fn four() -> impl Iterator<Item = &'static str> {
 }
 
 /// A 100 × 100 document with a pixel layer "Paint" holding a red block, active.
-fn app() -> (PhotocraftApp, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 100, "height": 100, "background": "white"})).unwrap();
     app.sync_views();
@@ -28,12 +28,16 @@ fn app() -> (PhotocraftApp, LayerId) {
 
 /// The Edit › Transform row's state as the menu builds it.
 fn enabled(app: &PhotocraftApp, id: &str) -> bool {
-    let row = crate::menus::menu_items(app).into_iter().find(|i| i.path == ["Edit", "Transform"] && i.id == id);
-    row.unwrap_or_else(|| panic!("{id} is in Edit › Transform")).enabled
+    let rows = crate::menus::menu_rows(app);
+    let row = crate::menus::items::row(&rows, id).map(|r| (r.path.clone(), r.enabled));
+    let (path, enabled) = row.unwrap_or_else(|| panic!("{id} is in the menu"));
+    assert_eq!(path, ["Edit", "Transform"], "{id}");
+    enabled
 }
 
 fn choose(app: &mut PhotocraftApp, id: &str) -> Result<serde_json::Value, String> {
-    crate::menus::invoke(app, &egui::Context::default(), id, json!({}))
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(app, &app_ctx, id, json!({}))
 }
 
 fn warped_smart_object(app: &mut PhotocraftApp) {
@@ -57,14 +61,15 @@ fn the_split_entries_are_greyed_until_warp_opens() {
         assert!(!enabled(&app, id), "{id} is greyed with no Warp box");
     }
     choose(&mut app, "edit.transform.warp").unwrap();
-    assert!(app.ui.transform.as_ref().is_some_and(|t| t.warp.is_some()), "Warp is open");
+    assert!(app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()), "Warp is open");
     for id in SPLITS {
         assert!(enabled(&app, id), "{id} is enabled in Warp");
     }
     assert!(!enabled(&app, REMOVE), "a fresh grid has no split line to remove");
-    let before = app.ui.transform.as_ref().and_then(|t| t.warp.clone());
+    let open_warp = |app: &PhotocraftApp| app.ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| w.warp.clone());
+    let before = open_warp(&app);
     choose(&mut app, "edit.transform.splitWarpCrosswise").unwrap();
-    assert_ne!(app.ui.transform.as_ref().and_then(|t| t.warp.clone()), before, "the menu's split cuts the open grid");
+    assert_ne!(open_warp(&app), before, "the menu's split cuts the open grid");
     assert!(enabled(&app, REMOVE), "the new split line can be removed");
     crate::transform_tool::cancel(&mut app);
     assert!(app.ui.transform.is_none());
@@ -128,7 +133,7 @@ fn several_layers_a_link_group_and_type_still_grey_them() {
     let text = LayerId(app.run("type.create", json!({"x": 20, "y": 80, "text": "Hi", "size": 20})).unwrap()["layer"].as_u64().unwrap());
     app.run("layer.select", json!({"layer": text.0})).unwrap();
     choose(&mut app, "edit.transform.warp").unwrap();
-    assert!(app.ui.transform.as_ref().is_some_and(|t| t.warp.is_some()), "Warp is open on the type");
+    assert!(app.ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()), "Warp is open on the type");
     for id in four() {
         assert!(!enabled(&app, id), "{id} is greyed for editable type in Warp");
     }

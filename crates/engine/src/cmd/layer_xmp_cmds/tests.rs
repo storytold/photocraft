@@ -11,7 +11,7 @@ fn fixture(depth: u8) -> (Session, LayerId, LayerId) {
             let a = Layer::raster("A", doc.pixel_format());
             let b = Layer::group("B", vec![Layer::raster("Child", doc.pixel_format())]);
             let ids = (a.id, b.id);
-            doc.layers = vec![a, b];
+            doc.layers = vec![a, b].into();
             Ok(ids)
         })
         .unwrap();

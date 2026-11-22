@@ -70,7 +70,6 @@ mod tables;
 
 #[cfg(test)]
 use adjustments::{levels_from, selective_from};
-pub(crate) use convert::UniqueNames;
 pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, import, import_with_encoding, parse_function_key};
 #[cfg(test)]
 use convert::{MAX_NAME_CHARS, export_item, normalise};
@@ -137,7 +136,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Replace Actions…",
             menu: &[],
             shortcut: None,
-            params: r#"{"path":".atn file"?,"data":base64?,"confirm":true,"encoding":label?} → {sets,actions,warnings,unsupported}. Replaces the whole library with the complete ATN archive."#,
+            params: r#"{"path":".atn file"?,"data":base64?,"confirm":true,"encoding":label?} → {sets,actions,warnings,unsupported}. Replaces the whole library with every set of the ATN archive (a set name or action name the archive repeats gets a numbered name) and the action shortcuts with its function keys. Undo with actions.undoLibrary."#,
             enabled: crate::actions_edit_cmds::library_change_enabled,
             run: files::replace,
             journal: false,
@@ -157,7 +156,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Actions…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".atn file"? (else the bytes come back as base64 `data`),"set":name? (default: every action, as "PhotoCraft Actions"),"setSlot":index? (one folder occurrence from actions.list; requires set to match its current caption, e.g. {"set":"My Set","setSlot":0}),"action":name|index? (one action),"skipUnsupported":bool=false (omit steps with no Photoshop equivalent)} → {set, actions:[names], steps, bytes, skipped:[{action, step, id}], path|data}"##,
+            params: r##"{"path":".atn file"? (else the bytes come back as base64 `data`),"set":name? (that set's actions, none for an empty New Set set; default: every action, as the set "PhotoCraft Actions"),"action":name|index? (one action),"skipUnsupported":bool=false (leave out steps with no Photoshop equivalent instead of failing)} → {set, actions:[names], steps, bytes, skipped:[{action, step, id}], path|data}"##,
             enabled: always,
             run: save,
             journal: false,

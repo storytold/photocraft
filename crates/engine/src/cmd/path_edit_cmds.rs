@@ -131,23 +131,25 @@ fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
     if duplicate && anchors.iter().any(|a| a[0] != sub) {
         return Err(bad(CMD, "`duplicate` takes all the anchors of one subpath"));
     }
+    if duplicate && p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(bad(CMD, "`duplicate` and `curvature` can't be combined"));
+    }
     let label = step_name(CMD, p, if duplicate { "Drag Path" } else { "Drag Anchor Points" }, &["Drag Path", "Drag Anchor Point"])?;
     let curvature = p.get("curvature").and_then(Value::as_bool).unwrap_or(false);
     edit_path(s, CMD, p, label, |path| {
-        let mut anchors = anchors;
         if duplicate {
-            // Direct Selection's ⌥-drag (#13211): the copy, with the source's operation, goes last
-            // and moves; the source stays.
-            let copy = path.subpaths.get(sub).cloned().ok_or_else(|| format!("no subpath {sub} (the path has {})", path.subpaths.len()))?;
+            // Direct Selection's and Add Anchor Point's ⌥-drag (#13211, #12709): the copy goes
+            // last and moves; the source stays. The copy keeps the source's operation, but a copy
+            // of a joined subpath takes its component's (`edit::duplicate_subpaths`), so it stands
+            // alone instead of joining whichever component is last.
+            let count = path.subpaths.get(sub).ok_or_else(|| format!("no subpath {sub} (the path has {})", path.subpaths.len()))?.knots.len();
             let mut knots: Vec<usize> = anchors.iter().map(|a| a[1]).collect();
             knots.sort_unstable();
             knots.dedup();
-            if !knots.iter().copied().eq(0..copy.knots.len()) {
+            if !knots.iter().copied().eq(0..count) {
                 return Err("`duplicate` takes all the anchors of one subpath".into());
             }
-            path.subpaths.push(copy);
-            let last = path.subpaths.len() - 1;
-            anchors.iter_mut().for_each(|a| a[0] = last);
+            return edit::duplicate_subpaths(path, &anchors, d).map(|_| ());
         }
         if curvature { edit::move_anchors_curvature(path, &anchors, d) } else { edit::move_anchors(path, &anchors, d) }
     })
@@ -322,7 +324,7 @@ pub fn specs() -> Vec<CommandSpec> {
         journal: true,
     };
     vec![
-        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"duplicate":bool=false (anchors = all of one subpath's; that subpath is copied, with its operation, as the path's last subpath, and the copy's anchors move instead; the source stays; Direct Selection's ⌥-drag on a segment),"stepName":"Drag Path"|"Drag Anchor Point"? (History step name; the Convert Point tool sends "Drag Path" when it drags a whole path, Direct Selection "Drag Anchor Point" when it drags one anchor; default "Drag Anchor Points", "Drag Path" with duplicate; any other value is refused)"#.into(), move_anchors),
+        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors),"duplicate":bool=false (anchors = all of one subpath's; that subpath is copied, with its operation (a joined subpath's copy takes its component's), as the path's last subpath, and the copy's anchors move instead; the source stays; Direct Selection's ⌥-drag on a segment, Add Anchor Point's ⌥-drag; not with curvature),"stepName":"Drag Path"|"Drag Anchor Point"? (History step name; the Convert Point tool sends "Drag Path" when it drags a whole path, Direct Selection "Drag Anchor Point" when it drags one anchor, Add Anchor Point "Drag Path" when it duplicates a subpath; default "Drag Anchor Points", "Drag Path" with duplicate; any other value is refused)"#.into(), move_anchors),
         spec(
             "path.moveHandle",
             "Drag Control Point",
@@ -838,6 +840,9 @@ mod tests {
             ("path.moveAnchors", json!({"anchors": [[0]], "move": [1, 1]})),
             ("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1e300, 1]})),
             ("path.moveAnchors", json!({"anchors": [[0, 0]]})),
+            ("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1, 1], "duplicate": "yes"})),
+            ("path.moveAnchors", json!({"anchors": [[0, 0]], "move": [1, 1], "duplicate": true, "curvature": true})),
+            ("path.moveAnchors", json!({"anchors": [[1, 0]], "move": [1, 1], "duplicate": true})),
             ("path.moveHandle", json!({"subpath": 0, "knot": 0, "handle": "up", "to": [1, 1]})),
             ("path.moveHandle", json!({"subpath": 0, "knot": 0, "handle": "in"})),
             ("path.moveHandle", json!({"subpath": -1, "knot": 0, "handle": "in", "to": [1, 1]})),
@@ -904,6 +909,33 @@ mod tests {
         assert_eq!(s.active().unwrap().history.undo_label(), Some("Drag Path"));
         assert!(s.undo());
         assert_eq!(work(&s), before);
+    }
+
+    /// A copy of a joined subpath (a component's hole) takes its component's operation and stands
+    /// alone: it never joins the last component, which would cut it out of that one instead.
+    #[test]
+    fn a_duplicated_joined_subpath_stands_alone() {
+        let mut s = session();
+        s.execute(
+            "path.set",
+            json!({"path": {"subpaths": [
+                {"closed": true, "knots": [[10, 10], [60, 10], [60, 60], [10, 60]]},
+                {"closed": true, "op": "join", "knots": [[25, 25], [25, 45], [45, 45], [45, 25]]},
+                {"closed": true, "op": "subtract", "knots": [[70, 10], [110, 10], [110, 50], [70, 50]]},
+            ]}}),
+        )
+        .unwrap();
+        let before = work(&s);
+        let at = |p: &photocraft_doc::Path, x: i32, y: i32| photocraft_vector::path_coverage(p, photocraft_geom::Rect::new(x, y, x + 1, y + 1))[0];
+        assert_eq!((at(&before, 35, 35), at(&before, 15, 15), at(&before, 90, 35)), (0.0, 1.0, 0.0), "A has its hole; B cuts nothing");
+        s.execute("path.moveAnchors", json!({"anchors": [[1, 0], [1, 1], [1, 2], [1, 3]], "move": [55, 0], "duplicate": true})).unwrap();
+        let after = work(&s);
+        assert_eq!(after.subpaths[..3], before.subpaths[..], "the source stays");
+        assert_eq!(after.subpaths.len(), 4);
+        assert_eq!(after.subpaths[3].op, PathOp::Combine, "the copy of A's hole takes A's operation");
+        assert_eq!(after.components(), vec![0..2, 2..3, 3..4], "the copy is a component of its own");
+        assert_eq!(at(&after, 90, 35), 1.0, "the copy fills where it landed");
+        assert_eq!((at(&after, 35, 35), at(&after, 15, 15)), (0.0, 1.0), "A and its hole are unchanged");
     }
 }
 

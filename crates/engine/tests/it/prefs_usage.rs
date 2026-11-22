@@ -113,6 +113,11 @@ fn inherent_impls(src: &str, name: &str) -> String {
         .join("\n")
 }
 
+/// Agent settings the framework's `AgentSettings` reads itself (the control link binds
+/// `control_port`; `read_folder()` supplies the read root; the shared live client picks the
+/// closed-app choice from `when_app_closed`), so no PhotoCraft source names the field.
+const READ_BY_THE_FRAMEWORK: &[&str] = &["integrations.controlPort", "integrations.readRoot", "integrations.whenAppClosed"];
+
 #[test]
 fn every_preference_is_read_or_hidden() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -178,6 +183,7 @@ fn every_preference_is_read_or_hidden() {
                 (path, read)
             }
         };
+        let read = read || READ_BY_THE_FRAMEWORK.contains(&path.as_str());
         let hidden = HIDDEN_UNTIL_IMPLEMENTED.contains(&path.as_str());
         if !read && !hidden {
             unread.push(path);
