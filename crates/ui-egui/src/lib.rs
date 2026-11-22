@@ -483,6 +483,7 @@ pub struct PhotocraftApp {
     /// The Layer Style, Select and Mask and parameter dialogs' open targets, one field per family,
     /// keyed by the dialog.
     pub(crate) layer_style_target: Option<(craft::ui::dialog::DialogId, DocId, photocraft_doc::LayerId)>,
+    pub(crate) layer_style_pattern_edits: dialogs::layer_style::PatternOverlayEdits,
     pub(crate) select_mask_target: Option<(craft::ui::dialog::DialogId, DocId, photocraft_doc::LayerId, std::sync::Arc<select_mask_ui::PcSelectMaskSource>)>,
     /// The Guide Layout dialog's document.
     pub(crate) guide_layout_doc: Option<(craft::ui::dialog::DialogId, DocId)>,

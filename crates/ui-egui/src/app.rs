@@ -127,6 +127,7 @@ impl PhotocraftApp {
             gallery: None,
             vanishing: None,
             layer_style_target: None,
+            layer_style_pattern_edits: Default::default(),
             select_mask_target: None,
             guide_layout_doc: None,
             export_open: None,
