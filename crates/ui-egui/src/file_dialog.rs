@@ -300,6 +300,23 @@ impl PhotocraftApp {
         })
     }
 
+    /// Same asynchronous picker, offering the named file `types` in order; the first is the
+    /// type the picker starts on.
+    pub(crate) fn pick_file_bytes_typed(
+        &mut self,
+        types: &[(&str, &[&str])],
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let mut request = types.iter().fold(PickRequest::open("file"), |req, (name, exts)| req.filter(*name, exts));
+        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
+            request = request.directory(dir);
+        }
+        self.ask_file(request, move |app, picked| {
+            let (name, bytes) = read_picked(picked)?;
+            then(app, name, bytes)
+        })
+    }
+
     /// File › Open: opens every chosen file in the order the dialog returns them, reporting each
     /// failure (see [`Self::open_paths_in_order`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {

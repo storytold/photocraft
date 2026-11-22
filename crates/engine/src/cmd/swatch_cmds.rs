@@ -392,6 +392,57 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 /// Colors in an `.act` color table (what the format holds).
 pub const ACT_COLORS: usize = craft_psd::act::COLOR_COUNT;
 
+/// A file chosen with the Color Table dialog's Load… as `#rrggbb` colors plus the transparent
+/// index, told apart by its extension (`name`'s, any case). Swatches (`.aco`) and RIFF palettes
+/// (`.pal`) give their first [`ACT_COLORS`] colors in file order and no transparent index;
+/// swatches in other color models are converted as the Swatches panel shows them. Anything
+/// else is read as an `.act` ([`act_table`]). A file without colors is refused.
+pub fn color_table_file(s: &Session, name: &str, bytes: &[u8]) -> std::result::Result<(Vec<String>, Option<u64>), String> {
+    let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    let colors: Vec<String> = match ext.as_deref() {
+        Some("aco") => {
+            // Only swatches: an `.ase` or GIMP palette renamed to `.aco` isn't one.
+            let format = SwatchFormat::sniff(bytes, "table.aco");
+            if format != Some(SwatchFormat::Aco) {
+                return Err("not a swatches (.aco) file".into());
+            }
+            let (groups, _) = read_swatches(bytes, "table.aco").map_err(|e| e.to_string())?;
+            let conv = SwatchConv::new(s);
+            groups.iter().flat_map(|g| &g.entries).take(ACT_COLORS).map(|e| hex(conv.rgb(&e.color))).collect()
+        }
+        Some("pal") => riff_palette(bytes)?.iter().take(ACT_COLORS).map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")).collect(),
+        _ => return act_table(bytes),
+    };
+    if colors.is_empty() {
+        return Err("the file holds no colors".into());
+    }
+    Ok((colors, None))
+}
+
+/// The colors of a RIFF palette (`.pal`): a `RIFF` file of form `PAL ` whose `data` chunk holds
+/// a version word, an entry count and four bytes per entry (red, green, blue, flags), all
+/// little-endian. Chunks before `data` are skipped.
+fn riff_palette(bytes: &[u8]) -> std::result::Result<Vec<[u8; 3]>, String> {
+    let cut_short = || String::from("the palette is cut short");
+    if bytes.get(..4) != Some(b"RIFF".as_slice()) || bytes.get(8..12) != Some(b"PAL ".as_slice()) {
+        return Err("not a RIFF palette (.pal) file".into());
+    }
+    let le32 = |b: &[u8]| b.first_chunk::<4>().map(|w| u32::from_le_bytes(*w) as usize);
+    let mut rest = bytes.get(12..).unwrap_or_default();
+    while let (Some(id), Some(len)) = (rest.get(..4), rest.get(4..8).and_then(le32)) {
+        let body = 8usize.checked_add(len).and_then(|end| rest.get(8..end)).ok_or_else(cut_short)?;
+        if id == b"data" {
+            let [_, _, lo, hi, entries @ ..] = body else { return Err(cut_short()) };
+            let count = usize::from(u16::from_le_bytes([*lo, *hi]));
+            let colors: Vec<[u8; 3]> = entries.as_chunks::<4>().0.iter().take(count).map(|&[r, g, b, _]| [r, g, b]).collect();
+            return if colors.len() < count { Err(cut_short()) } else { Ok(colors) };
+        }
+        // Chunks are padded to an even length.
+        rest = rest.get(8 + len + (len & 1)..).unwrap_or_default();
+    }
+    Err("the palette has no color data".into())
+}
+
 /// `.act` bytes as `#rrggbb` colors plus the transparent index, for the Color Table dialog.
 /// A trailer count of 0 gives one white entry, as Photoshop loads it, never an empty table
 /// that `image.mode.colorTable` would refuse.
@@ -715,3 +766,6 @@ mod tests;
 
 #[cfg(test)]
 mod act_zero_count_tests;
+
+#[cfg(test)]
+mod color_table_load_formats_tests;
