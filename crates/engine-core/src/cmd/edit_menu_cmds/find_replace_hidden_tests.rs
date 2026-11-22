@@ -3,7 +3,7 @@ use super::{LayerContent, LayerId, Session, Value, json};
 const FIND_REPLACE: &str = "edit.findAndReplaceText";
 
 fn session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 800, "height": 500, "depth": 8, "background": "white"})).unwrap();
     s
 }
