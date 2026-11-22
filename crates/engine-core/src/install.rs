@@ -1,10 +1,11 @@
-//! The engine's full command registry: every command table, in registry order, and the install
-//! that puts it in place for the process.
+//! The engine's command registry: every command table, in registry order, and the install that
+//! puts it in place for the process. Until the engine crates are cut out of this one, it holds
+//! every engine command, and `photocraft_engine::install()` installs this list.
 
 use std::sync::OnceLock;
 
-use crate::Result;
-use crate::registry::{self, CommandSpec, Install, Table};
+use crate::registry::{self, Install, Table};
+use crate::{Result, Session};
 
 /// Every command table with its name, in registry order. The order is part of the behaviour
 /// (menus list commands in it) and `command_ids.txt` pins it. The `table` fragments are grouped by
@@ -139,7 +140,7 @@ const TABLES: &[Table] = &[
     ("actions_cmds", crate::actions_cmds::specs),
 ];
 
-/// Install every engine command for this process. Later calls return the first call's result.
+/// Install this crate's commands for the process. Later calls return the first call's result.
 pub fn install() -> Result<()> {
     static INSTALLED: OnceLock<Result<()>> = OnceLock::new();
     INSTALLED
@@ -151,18 +152,11 @@ pub fn install() -> Result<()> {
         .clone()
 }
 
-/// Every engine command in registry order, installed first: for callers that read the registry
-/// before any session exists (menus, docs, tests).
-pub fn command_specs() -> &'static [CommandSpec] {
-    // A conflicting install leaves the registry empty, and every command reports the conflict.
+/// A session with this crate's commands installed: what this crate's tests start from.
+pub fn session() -> Session {
+    // A conflicting install reports itself at the session's first command.
     let _ = install();
-    registry::command_specs()
-}
-
-/// The engine command `id`, installed first (see [`command_specs`]).
-pub fn find(id: &str) -> Option<&'static CommandSpec> {
-    let _ = install();
-    registry::find(id)
+    Session::new()
 }
 
 #[cfg(test)]

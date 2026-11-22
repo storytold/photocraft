@@ -1,0 +1,46 @@
+[package]
+name = "photocraft-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# Not `src/lib.rs`: the engine's sources moved to crates/engine-core/src, and with the old path gone
+# git carries open branches' edits of `src/lib.rs` to `crates/engine-core/src/lib.rs` (photocraft#15710).
+[lib]
+path = "src/facade.rs"
+
+[features]
+# Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
+corpus = ["photocraft-engine-core/corpus"]
+
+# The engine's code and dependencies live in photocraft-engine-core; this crate re-exports it.
+[dependencies]
+photocraft-engine-core = { workspace = true }
+
+# What tests/ and examples/ use.
+[dev-dependencies]
+craft-affinity = { workspace = true, features = ["synth"] }
+craft-cms = { workspace = true }
+craft-develop-model = { workspace = true }
+craft-psd = { workspace = true }
+photocraft-algo = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-color = { workspace = true }
+photocraft-compose = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-format = { workspace = true }
+photocraft-geom = { workspace = true }
+photocraft-io = { workspace = true, features = ["testgen"] }
+photocraft-paint = { workspace = true }
+photocraft-raster = { workspace = true }
+photocraft-testkit = { workspace = true }
+photocraft-text = { workspace = true }
+photocraft-vector = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
+exr = { version = "1.73", default-features = false }
+tempfile = "3"

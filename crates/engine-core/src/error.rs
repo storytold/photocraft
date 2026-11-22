@@ -7,7 +7,9 @@ pub enum EngineError {
     #[error("unknown command `{id}`{hint}", id = .0, hint = command_hints::unknown_command_hint(.0))]
     UnknownCommand(String),
     /// A session ran a command before the process installed any command tables.
-    #[error("no commands are installed in this process: create the session with `Session::new()`, which installs them")]
+    #[error(
+        "no commands are installed in this process: call `install()` of the engine crate in use, or create the session with `photocraft_engine::Session::new()` or a crate's `session()`, which install them"
+    )]
     NotInstalled,
     /// An install named other command tables than the one already in place; table `at` differs.
     #[error("different command tables are already installed: table {at} is `{installed}`, not `{requested}`")]
