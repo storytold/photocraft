@@ -186,6 +186,11 @@ impl Session {
             let d = self.active().ok_or_else(|| "no document open".to_string())?;
             return if d.selected_layers().is_empty() { Err("no layer selected".into()) } else { Ok(()) };
         }
+        // Scale Effects naming its layer (a script or agent) is not refused for a
+        // multi-selection; only the menu entry and a call without `layer` are (#14993).
+        if spec.id == "layer.layerStyle.scaleEffects" && params.get("layer").is_some_and(|l| !l.is_null()) {
+            return crate::layer_menu_cmds::has_effects(self);
+        }
         if let Some(why) = bitmap_mode_refusal(self, spec.id, params) {
             return Err(why.into());
         }

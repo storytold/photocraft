@@ -10,7 +10,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, layer_param};
+use crate::commands::{CommandSpec, explicit_layer, layer_param};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -70,9 +70,19 @@ fn has_linked_smart(s: &Session) -> Enabled {
     }
 }
 
-fn has_effects(s: &Session) -> Enabled {
+/// The active layer has an enabled effect. Also Scale Effects' check for a call that names its
+/// `layer`, which keeps the check it had before the single-selection rule (#14993).
+pub(crate) fn has_effects(s: &Session) -> Enabled {
     let l = active_layer(s)?;
     if l.effects.items.iter().any(Effect::enabled) { Ok(()) } else { Err("the layer has no layer effects".into()) }
+}
+
+/// Scale Effects: the active layer has effects and no other layer is selected. The reference
+/// greys the entry while two or more layers are selected and never scales a multi-selection
+/// (#14993).
+fn scale_effects_enabled(s: &Session) -> Enabled {
+    has_effects(s)?;
+    if s.active().is_some_and(|d| d.selected_layers().len() > 1) { Err("Scale Effects needs a single selected layer".into()) } else { Ok(()) }
 }
 
 fn has_content_options(s: &Session) -> Enabled {
@@ -739,6 +749,10 @@ fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
     let k = num(p, "scale", 100.0).clamp(1.0, 1000.0) / 100.0;
+    // Without a `layer` param it acts on the selection, which must be a single layer (#14993).
+    if explicit_layer(s, p)?.is_none() {
+        scale_effects_enabled(s).map_err(EngineError::Other)?;
+    }
     let id = layer_param(s, p)?;
     s.edit("Scale Effects", |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -1098,7 +1112,7 @@ pub fn specs() -> Vec<CommandSpec> {
             global_light
         ),
         spec!("layer.layerStyle.createLayer", "Create Layer", ["Layer", "Layer Style"], r##"{"layer":id?}"##, has_effects, create_layer),
-        spec!("layer.layerStyle.scaleEffects", "Scale Effects…", ["Layer", "Layer Style"], r##"{"scale":1..1000=100}"##, has_effects, scale_effects),
+        spec!("layer.layerStyle.scaleEffects", "Scale Effects…", ["Layer", "Layer Style"], r##"{"scale":1..1000=100}"##, scale_effects_enabled, scale_effects),
         spec!(
             "layer.layerStyle.transferEffects",
             "Move Layer Effects",
@@ -1136,5 +1150,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "scale_effects_multi_select_tests.rs"]
+mod scale_effects_multi_select_tests;
 #[cfg(test)]
 mod tests;
