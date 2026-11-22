@@ -1,7 +1,11 @@
 use super::lower::{
-    Paint, adjustment_on_gpu, adjustment_program, check_gradient_stops, gradient_rows, placement, single_content_pass, stroke_widths, style_index,
+    Paint, adjustment_on_gpu, adjustment_program, advanced_on_cpu, check_gradient_stops, gradient_rows, placement, single_content_pass, stroke_widths,
+    style_index,
 };
 use super::types::{Checkpoint, DocCtx, FxLayer, Kernel, MapRef, MaskUse, Pass, Role, SurfaceRef, TexUse, Unsupported};
+use photocraft_compose::advanced::Scope;
+use photocraft_doc::Knockout;
+
 use super::{Adjustment, BlendMode, Effect, Fill, FxPaint, Glow, Layer, LayerContent, LayerId, Plan, Rect, Slot, Surface, bounds, has_effects};
 
 pub(super) struct Planner<'a> {
@@ -16,6 +20,8 @@ pub(super) struct Planner<'a> {
     visits: usize,
     /// Gradient lookup tables built so far (64 KiB of host memory each, kept in the plan).
     luts: std::cell::Cell<usize>,
+    /// Where the stack being planned sits, for knockouts (`compose::advanced::Scope`).
+    scope: Scope,
 }
 
 /// Most gradient lookup tables one plan keeps (64 MiB): a nested clipped pass-through group
@@ -101,8 +107,14 @@ pub const F_HDR: u32 = 262144;
 /// `Lerp`: A rounded to `p0.x` steps per unit (adjustment results on integer documents).
 pub const F_QUANT: u32 = 32768;
 
-/// `Lerp` as A + (B − C) premultiplied (layers clipped to pass-through groups).
+/// `Lerp` as A + `opacity` × (B − C) premultiplied (layers clipped to pass-through groups at
+/// `opacity` 1; the knockout correction at 1 − layer opacity).
 pub const F_ADD_DIFF: u32 = 16384;
+
+/// `Lerp`: A mixed towards B by C's alpha × `opacity` (`compose::advanced::knockout_with`: the
+/// backdrop becomes the knockout target B inside the layer's shape C); `p0.y` set keeps A's alpha
+/// from growing (clipped layers).
+pub const F_MIX_C: u32 = 4_194_304;
 
 /// `Lerp`: B mixed back towards A (the backdrop) by the layer's Blend If weight
 /// (`compose::apply_blend_if`), from C ("This Layer": an adjustment layer's unmixed result; B when
@@ -201,7 +213,16 @@ impl<'a> Planner<'a> {
             checkpoints: Vec::new(),
             visits: 0,
             luts: std::cell::Cell::new(0),
+            scope: Scope::ROOT,
         }
+    }
+
+    /// Plan `f` with the stack scope set to `scope`, then restore the enclosing one.
+    fn in_scope<T>(&mut self, scope: Scope, f: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = std::mem::replace(&mut self.scope, scope);
+        let out = f(self);
+        self.scope = outer;
+        out
     }
 
     pub(super) fn finish(self, root: Slot) -> Plan<'a> {
@@ -254,6 +275,9 @@ impl<'a> Planner<'a> {
     }
 
     pub(super) fn stack_inner(&mut self, layers: &'a [Layer], mut backdrop: Slot, root_start: Option<usize>) -> Result<Slot, Unsupported> {
+        // Shallow knockouts stop at the bottom of this stack: the backdrop it starts from
+        // (compose::composite_stack_at_with; the top level has the Background instead).
+        let floor = if !self.scope.root && photocraft_compose::advanced::needs_floor(layers) { Some(self.retain(backdrop)) } else { None };
         let mut i = 0;
         while i < layers.len() {
             let base = &layers[i];
@@ -263,7 +287,8 @@ impl<'a> Planner<'a> {
             }
             let clipped = &layers[i + 1..j];
             if base.visible {
-                backdrop = self.layer(base, clipped, backdrop)?;
+                let ko = self.knockout_target(base, floor)?;
+                backdrop = self.layer(base, clipped, backdrop, ko)?;
                 if let (LayerContent::Adjustment(_), Some(q)) = (&base.content, photocraft_compose::adjustment_quantum(self.cx.depth)) {
                     // compose: adjustment results are rounded to the document's depth.
                     let mut p = Pass::new(Kernel::Lerp, 0);
@@ -280,7 +305,105 @@ impl<'a> Planner<'a> {
                 self.checkpoints.push(Checkpoint { layer_start: start, layer_end: start.saturating_add(i), pass_end: self.passes.len(), slot: backdrop });
             }
         }
+        if let Some(floor) = floor {
+            self.release(floor);
+        }
         Ok(backdrop)
+    }
+
+    /// `compose::advanced::knockout_target_with`: what a knockout of `layer` reveals (an owned
+    /// reference to a slot; `None` without a knockout). `floor` is the stack's starting backdrop.
+    fn knockout_target(&mut self, layer: &Layer, floor: Option<Slot>) -> Result<Option<Slot>, Unsupported> {
+        match (layer.advanced.knockout, floor) {
+            (Knockout::None, _) => Ok(None),
+            (Knockout::Shallow, Some(floor)) => Ok(Some(self.retain(floor))),
+            _ => self.deep_target().map(Some),
+        }
+    }
+
+    /// `compose::advanced::deep_target_with`: transparent in an isolated group; otherwise the
+    /// document's backdrop with its visible Background layer composited onto it, even when
+    /// occlusion left that layer out of the plan. Built fresh at each use, so no slot stays live
+    /// across stack units.
+    fn deep_target(&mut self) -> Result<Slot, Unsupported> {
+        let target = self.clear();
+        if self.scope.isolated {
+            return Ok(target);
+        }
+        let doc = self.cx.doc;
+        match doc.layers.first().filter(|l| l.visible && photocraft_compose::advanced::is_background(l)) {
+            Some(bg) => self.in_scope(Scope::ROOT, |s| s.layer(bg, &[], target, None)),
+            None => Ok(target),
+        }
+    }
+
+    /// `compose::advanced::knockout_shape_with`: the layer's content (alpha with masks) when
+    /// Transparency Shapes Layer is on; its masks alone for an adjustment layer or with it off.
+    fn knockout_shape(&mut self, layer: &'a Layer) -> Result<Slot, Unsupported> {
+        if layer.advanced.transparency_shapes && !matches!(layer.content, LayerContent::Adjustment(_)) {
+            return self.content(layer);
+        }
+        let mut p = Pass::new(Kernel::Content, 0);
+        p.color = [1.0; 4];
+        p.mask = self.mask_use(layer);
+        Ok(self.emit(p))
+    }
+
+    /// `compose::advanced::knockout_with`: inside the layer's shape the backdrop becomes `target`
+    /// (consumed), then `draw` composites the layer, and layer opacity mixes the result back
+    /// with the untouched backdrop: `R' + (1 − o)(B − B')`. `clip_alpha` keeps alpha from
+    /// growing (clipped layers).
+    fn knocked_out(
+        &mut self,
+        layer: &'a Layer,
+        target: Slot,
+        clip_alpha: bool,
+        backdrop: Slot,
+        draw: impl FnOnce(&mut Self, Slot) -> Result<Slot, Unsupported>,
+    ) -> Result<Slot, Unsupported> {
+        let shape = self.knockout_shape(layer)?;
+        let before = self.retain(backdrop);
+        let mut p = Pass::new(Kernel::Lerp, 0);
+        p.a = Some(backdrop);
+        p.b = Some(target);
+        p.c = Some(shape);
+        p.flags = F_MIX_C;
+        p.params[0] = [0.0, if clip_alpha { 1.0 } else { 0.0 }, 0.0, 0.0];
+        let knocked = self.emit(p);
+        let partial = layer.opacity < 1.0;
+        let keep = if partial { Some(self.retain(knocked)) } else { None };
+        let drawn = draw(self, knocked)?;
+        let Some(keep) = keep else {
+            self.release(before);
+            return Ok(drawn);
+        };
+        let mut p = Pass::new(Kernel::Lerp, 0);
+        p.a = Some(drawn);
+        p.b = Some(before);
+        p.c = Some(keep);
+        p.flags = F_ADD_DIFF;
+        p.opacity = 1.0 - layer.opacity.clamp(0.0, 1.0);
+        Ok(self.emit(p))
+    }
+
+    /// `compose::advanced::composite_clipped_with`: the visible clipped layers atop `base`. With a
+    /// knockout among them, each knocked-out layer reveals a copy of `base` from before the first
+    /// clipped layer (the bottom of the clipping group). Consumes `base`.
+    fn clip_onto(&mut self, clipped: &[&'a Layer], mut base: Slot) -> Result<Slot, Unsupported> {
+        let floor = if clipped.iter().any(|c| c.advanced.knockout != Knockout::None) { Some(self.retain(base)) } else { None };
+        for &c in clipped {
+            base = match floor {
+                Some(floor) if c.advanced.knockout != Knockout::None => {
+                    let target = self.retain(floor);
+                    self.knocked_out(c, target, true, base, |s, b| s.atop(c, b))?
+                }
+                _ => self.atop(c, base)?,
+            };
+        }
+        if let Some(floor) = floor {
+            self.release(floor);
+        }
+        Ok(base)
     }
 
     fn mask_use(&self, layer: &'a Layer) -> Option<MaskUse<'a>> {
@@ -346,25 +469,32 @@ impl<'a> Planner<'a> {
         Ok(after)
     }
 
-    /// Blending Options › Advanced Blending (knockout, clipped layers blended individually, blend
-    /// interior effects as group, transparency shapes off, masks hiding effects) has no GPU pass:
-    /// documents using it are composited on the CPU (`photocraft_compose::advanced`). Layers at
-    /// Photoshop's defaults pass this check for free.
+    /// Blending Options › Advanced Blending: knockout (shallow and deep, also of clipped layers)
+    /// and Transparency Shapes Layer off without effects run on the GPU (`knocked_out`). Clipped
+    /// layers blended individually, Blend Interior Effects as Group with effects, Transparency
+    /// Shapes Layer off with effects or a special-eight blend, and masks hiding effects have no
+    /// GPU pass: documents using them are composited on the CPU (`photocraft_compose::advanced`).
+    /// Layers at the reference editor's defaults pass this check for free.
     fn check_advanced(&self, layer: &Layer, clipped: &[Layer]) -> Result<(), Unsupported> {
-        if photocraft_compose::advanced_active(layer, clipped) {
-            return Err(Unsupported(format!("Advanced Blending on `{}` (composited on the CPU)", layer.name)));
+        if let Some(option) = advanced_on_cpu(layer, clipped) {
+            return Err(Unsupported(format!("Advanced Blending on `{}`: {option} (composited on the CPU)", layer.name)));
         }
         Ok(())
     }
 
-    /// composite_layer, honouring the layer's channel restrictions.
-    fn layer(&mut self, layer: &'a Layer, clipped: &'a [Layer], backdrop: Slot) -> Result<Slot, Unsupported> {
+    /// composite_layer, honouring the layer's channel restrictions and knocking out to `ko` (an
+    /// owned reference, consumed) when the layer has a knockout. Channel restrictions and Blend If
+    /// wrap the knockout, as on the CPU.
+    fn layer(&mut self, layer: &'a Layer, clipped: &'a [Layer], backdrop: Slot, ko: Option<Slot>) -> Result<Slot, Unsupported> {
         self.visits += 1;
         if self.visits > MAX_PLAN_VISITS {
             return Err(Unsupported("too many nested layers to plan for the GPU (composited on the CPU)".into()));
         }
         self.check_advanced(layer, clipped)?;
-        self.restricted(layer, backdrop, |s, b| s.layer_any(layer, clipped, b))
+        self.restricted(layer, backdrop, |s, b| match ko {
+            Some(target) => s.knocked_out(layer, target, false, b, |s, b| s.layer_any(layer, clipped, b)),
+            None => s.layer_any(layer, clipped, b),
+        })
     }
 
     /// `compose::restore_channels`: `after` with the channels a layer leaves out taken from
@@ -440,7 +570,8 @@ impl<'a> Planner<'a> {
             && !photocraft_compose::blend_if_active(layer, self.cx.mode)
         {
             let before = self.retain(backdrop);
-            let mut after = self.stack(&g.children, backdrop)?;
+            let scope = self.scope.pass_through();
+            let mut after = self.in_scope(scope, |s| s.stack(&g.children, backdrop))?;
             if opacity < 1.0 || layer.mask.is_some() || layer.vector_mask.is_some() {
                 let mut p = Pass::new(Kernel::Lerp, 0);
                 p.a = Some(self.retain(before));
@@ -467,10 +598,7 @@ impl<'a> Planner<'a> {
             // pass-through result, premultiplied).
             let iso = self.content(layer)?;
             let iso_keep = self.retain(iso);
-            let mut clipped_iso = iso;
-            for c in visible_clipped {
-                clipped_iso = self.atop(c, clipped_iso)?;
-            }
+            let clipped_iso = self.clip_onto(&visible_clipped, iso)?;
             let over = |s: &mut Self, src: Slot, before: Slot| {
                 let mut p = Pass::new(Kernel::Blend, 0);
                 p.a = Some(before);
@@ -491,10 +619,8 @@ impl<'a> Planner<'a> {
 
         if let LayerContent::Adjustment(adj) = &layer.content {
             let before = self.retain(backdrop);
-            let mut adjusted = self.adjust(adj, backdrop)?;
-            for c in visible_clipped {
-                adjusted = self.atop(c, adjusted)?;
-            }
+            let adjusted = self.adjust(adj, backdrop)?;
+            let adjusted = self.clip_onto(&visible_clipped, adjusted)?;
             let mut p = Pass::new(Kernel::AdjMix, 0);
             p.a = Some(before);
             p.b = Some(adjusted);
@@ -515,10 +641,8 @@ impl<'a> Planner<'a> {
             // The vector stroke goes above the clipped layers: the fill is the clipping base,
             // the stroke is laid over the clipped result, then the masks apply to both
             // (compose::shape_parts).
-            let mut content = self.shape_part(layer, Role::Content, fill);
-            for c in visible_clipped {
-                content = self.atop(c, content)?;
-            }
+            let content = self.shape_part(layer, Role::Content, fill);
+            let content = self.clip_onto(&visible_clipped, content)?;
             let stroke = self.shape_part(layer, Role::Stroke, stroke);
             let mut p = Pass::new(Kernel::Blend, 0);
             p.a = Some(content);
@@ -559,10 +683,8 @@ impl<'a> Planner<'a> {
             p
         } else {
             let start = self.passes.len();
-            let mut content = self.content(layer)?;
-            for c in visible_clipped {
-                content = self.atop(c, content)?;
-            }
+            let content = self.content(layer)?;
+            let content = self.clip_onto(&visible_clipped, content)?;
             if let Some(clip) = clip {
                 // Everything that built the layer's content only matters inside its bounds.
                 for p in &mut self.passes[start..] {
@@ -638,7 +760,7 @@ impl<'a> Planner<'a> {
         match &layer.content {
             LayerContent::Group(g) => {
                 let empty = self.clear();
-                let mut s = self.stack(&g.children, empty)?;
+                let mut s = self.in_scope(Scope::ISOLATED, |s| s.stack(&g.children, empty))?;
                 if layer.mask.is_some() || layer.vector_mask.is_some() {
                     let mut p = Pass::new(Kernel::Mask, 0);
                     p.a = Some(s);
@@ -840,9 +962,7 @@ impl<'a> Planner<'a> {
                 p.clip = Some(clip);
             }
         }
-        for c in clipped {
-            content = self.atop(c, content)?;
-        }
+        content = self.clip_onto(clipped, content)?;
         // Stroke Emboss shades the stroke's band, which only the CPU compositor builds (#8639).
         if layer.effects.items.iter().any(|e| matches!(e, Effect::BevelEmboss(b) if e.enabled() && b.style == photocraft_doc::BevelStyle::StrokeEmboss)) {
             return Err(Unsupported(format!("Stroke Emboss on `{}` (composited on the CPU)", layer.name)));
