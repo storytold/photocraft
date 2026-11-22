@@ -1,6 +1,13 @@
 use super::*;
 
 #[test]
+fn corpus_rejects_unknown_arguments_before_fetching() {
+    for args in [vec!["--psd-tool"], vec!["--all", "--psd-tool"], vec!["--psd-tool", "--all"]] {
+        assert_eq!(cmd(&args), Err("corpus: unknown argument `--psd-tool`".into()));
+    }
+}
+
+#[test]
 fn changed_atn_root_triggers_corpus_tests() {
     assert!(is_critical("crates/engine/src/cmd/atn_cmds.rs"));
 }

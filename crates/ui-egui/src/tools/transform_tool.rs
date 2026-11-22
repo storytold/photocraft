@@ -42,6 +42,7 @@ pub use commit::{apply_click, auto_commit, cancel, commit, end_if_left, follow_e
 pub(crate) use draw::styled_composite;
 pub use draw::{SessionShown, show_in_canvas};
 pub(crate) use draw::{moves_selection, selection_map};
+pub(crate) use options_bar::bar_key;
 pub use options_bar::{options_bar, reset_warp};
 pub(crate) use preview::read_surface;
 pub(crate) use preview::solo_layer;

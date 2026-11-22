@@ -2445,6 +2445,73 @@ fn black_white_adjustment_layer_saves_as_photoshops_class_and_old_class_still_im
     assert_eq!(t.actions.list.actions()[0].steps[1].params["reds"], 17, "{r}");
 }
 
+/// #11517: a native Black & White coefficient may be fractional, but an ATN long cannot.
+#[test]
+fn black_white_fractional_coefficients_refuse_lossy_export() {
+    for key in ["reds", "yellows", "greens", "cyans", "blues", "magentas"] {
+        for id in ["layer.newAdjustmentLayer.blackWhite", "image.adjustments.blackWhite", "layer.setAdjustment"] {
+            let mut params = json!({key: 40.4});
+            if id == "layer.setAdjustment" {
+                params["kind"] = json!("blackWhite");
+            }
+            let action = Action::new("Fractional BW", vec![ActionStep::new(id, params.clone())]);
+            let error = export("BW", &[&action], &[], false).unwrap_err();
+            assert!(error.contains(id) && error.contains("skipUnsupported"), "{id} {key}: {error}");
+            let (bytes, skipped) = export("BW", &[&action], &[], true).unwrap();
+            assert_eq!(skipped, vec![Skipped { action: "Fractional BW".into(), step: 0, id: id.into() }]);
+            assert!(import(&bytes).unwrap().actions[0].steps.is_empty());
+            assert_eq!(action.steps[0].params, params, "export must preserve the native action");
+        }
+    }
+}
+
+#[test]
+fn black_white_whole_coefficients_and_defaults_round_trip() {
+    for id in ["layer.newAdjustmentLayer.blackWhite", "image.adjustments.blackWhite", "layer.setAdjustment"] {
+        for mut params in [
+            json!({}),
+            json!({"reds": 40.0}),
+            json!({"reds": 17, "yellows": 83, "greens": -12, "cyans": 107, "blues": 51, "magentas": 133, "tint": true, "tintColor": "#c08040"}),
+        ] {
+            if id == "layer.setAdjustment" && params == json!({}) {
+                continue;
+            }
+            if id == "layer.setAdjustment" {
+                params["kind"] = json!("blackWhite");
+            }
+            let action = Action::new("Whole BW", vec![ActionStep::new(id, params.clone())]);
+            let (bytes, skipped) = export("BW", &[&action], &[], false).unwrap();
+            assert!(skipped.is_empty());
+            let imported = import(&bytes).unwrap();
+            assert!(imported.unsupported.is_empty() && imported.warnings.is_empty());
+            let step = &imported.actions[0].steps[0];
+            let (back_id, back) = (&step.command, &step.params);
+            assert_eq!(back_id, id);
+            for key in ["reds", "yellows", "greens", "cyans", "blues", "magentas"] {
+                assert_eq!(back.get(key).and_then(Value::as_f64), params.get(key).and_then(Value::as_f64), "{id} {key}: {back}");
+            }
+            for key in ["tint", "tintColor"] {
+                assert_eq!(back.get(key), params.get(key), "{id} {key}");
+            }
+        }
+    }
+}
+
+/// The reported fraction remains a real native edit at every supported document depth.
+#[test]
+fn black_white_native_fraction_keeps_its_pixels_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let mut samples = Vec::new();
+        for reds in [40.4, 40.0] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 1, "height": 1, "background": "#ff0000", "depth": depth})).unwrap();
+            s.execute("layer.newAdjustmentLayer.blackWhite", json!({"reds": reds})).unwrap();
+            samples.push(photocraft_compose::flatten(&s.active().unwrap().doc).into_px());
+        }
+        assert_ne!(samples[0], samples[1], "{depth}-bit native 40.4 must differ from rounded 40");
+    }
+}
+
 /// Smart Blur's quality uses Photoshop's `SmBQ` codes (`SBQL`/`SBQM`/`SBQH`): measured in
 /// Photoshop, the old `Hgh `/`Mdm `/`Low ` play back as its fallback quality. Old codes still read.
 #[test]
@@ -3500,6 +3567,80 @@ fn image_size_resolution_only_does_not_gain_keep_print_size() {
     // export as a descriptor that imports back as keep-print-size.
     let params = json!({"resolution": 144, "resample": "nearest"});
     assert_eq!(image_size_round_trip(&params), None);
+}
+
+/// Explicit sides override percent in native commands; strict ATN export must keep that edit.
+#[test]
+fn image_size_explicit_sides_keep_precedence_over_percent() {
+    for depth in [8, 16, 32] {
+        for (params, expected) in [
+            (json!({"width": 20, "percent": 50, "resample": "nearest"}), (20, 12)),
+            (json!({"height": 18, "percent": 50, "resample": "nearest"}), (16, 18)),
+            (json!({"width": 20, "height": 18, "percent": 50, "resample": "nearest"}), (20, 18)),
+            (json!({"percent": 50, "resample": "nearest"}), (16, 12)),
+            (json!({"width": 20, "resample": "nearest"}), (20, 15)),
+            (json!({"height": 18, "resample": "nearest"}), (24, 18)),
+            (json!({"width": 20, "percent": 50, "resample": "none", "resolution": 144}), (32, 24)),
+        ] {
+            let mut native = Session::new();
+            native.execute("file.new", json!({"width": 32, "height": 24, "depth": depth})).unwrap();
+            native.execute("image.imageSize", params.clone()).unwrap();
+            let size = native.active().unwrap().doc.size;
+            assert_eq!((size.width, size.height), expected, "native {params} at {depth} bits");
+
+            let mut recorded = Session::new();
+            recorded.actions.list.push(Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())])).unwrap();
+            let before = recorded.actions.list.clone();
+            let saved = recorded.execute("actions.save", json!({"action": "Resize"})).unwrap();
+            assert_eq!(saved["skipped"], json!([]));
+            assert_eq!(saved["steps"], 1);
+            assert_eq!(recorded.actions.list, before);
+
+            let mut replay = Session::new();
+            let loaded = replay.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+            assert_eq!(loaded["unsupported"], json!([]));
+            replay.execute("file.new", json!({"width": 32, "height": 24, "depth": depth})).unwrap();
+            let played = replay.execute("actions.play", json!({"action": "Resize"})).unwrap();
+            assert_eq!(played["ran"], 1, "{played}");
+            assert!(played.get("failed").is_none(), "{played}");
+            assert_eq!(replay.active().unwrap().doc.size, size, "ATN {params} at {depth} bits");
+        }
+    }
+}
+
+#[test]
+fn image_size_explicit_sides_do_not_hide_invalid_percent() {
+    for percent in [json!(0), json!(-1), json!("50"), json!(false)] {
+        let params = json!({"width": 20, "height": 18, "percent": percent, "resample": "nearest"});
+        let mut native = Session::new();
+        native.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
+        assert!(native.execute("image.imageSize", params.clone()).is_err(), "{params}");
+        let action = Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())]);
+        assert!(export("Size", &[&action], &[], false).is_err(), "{params}");
+        let (_, skipped) = export("Size", &[&action], &[], true).unwrap();
+        assert_eq!(skipped.len(), 1, "{params}");
+    }
+}
+
+#[test]
+fn image_size_dimensions_have_unique_atn_keys() {
+    for (params, width, height, constrained) in [
+        (json!({"width": 20, "percent": 50}), D::UnitFloat { unit: PX, value: 20.0 }, pct(50.0), Some(false)),
+        (json!({"height": 18, "percent": 50}), pct(50.0), D::UnitFloat { unit: PX, value: 18.0 }, Some(false)),
+        (json!({"width": 20, "height": 18, "percent": 50}), D::UnitFloat { unit: PX, value: 20.0 }, D::UnitFloat { unit: PX, value: 18.0 }, None),
+        (json!({"percent": 50}), pct(50.0), pct(50.0), Some(true)),
+    ] {
+        let action = Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())]);
+        let (bytes, skipped) = export("Size", &[&action], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let file = atn::parse(&bytes).unwrap();
+        let d = file.actions[0].items[0].descriptor.as_ref().unwrap();
+        for (key, value) in [("Wdth", width), ("Hght", height)] {
+            assert_eq!(d.items.iter().filter(|(id, _)| id.is(key)).count(), 1, "{key}: {params}");
+            assert_eq!(d.get(key), Some(&value), "{key}: {params}");
+        }
+        assert_eq!(get_bool(d, "CnsP"), constrained, "{params}");
+    }
 }
 
 #[test]

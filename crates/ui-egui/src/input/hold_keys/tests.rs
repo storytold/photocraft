@@ -176,8 +176,13 @@ fn space_repositions_the_drag_being_drawn() {
             slack: 1,
         },
     ];
+    // One app for the three marquee and lasso cases: the tool is state, and each case starts from no selection.
+    let mut h = harness(Tool::RectMarquee);
     for c in cases {
-        let mut h = harness(c.tool);
+        h.state_mut().run("select.deselect", json!({})).ok();
+        assert_eq!(selection(&h), Rect::EMPTY, "{:?}: the case starts with no selection", c.tool);
+        h.state_mut().ui.tool = c.tool;
+        h.run_steps(1);
         press_at(&mut h, c.start.0, c.start.1);
         for &(x, y) in c.before {
             move_to(&mut h, x, y);
@@ -368,10 +373,11 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
     }
     // The Crop and Rotate View tools go last, in an app of their own: they leave a pending crop and
     // a turned view behind.
-    let keeps = [
-        vec![Tool::Hand, Tool::Zoom, Tool::Pen, Tool::Rectangle, Tool::Type, Tool::VerticalType, Tool::PathSelection, Tool::DirectSelection],
-        vec![Tool::Crop, Tool::RotateView],
-    ];
+    // One tool per decision the refusal comes from: the Hand, Zoom and Rotate-View families, the vector family's
+    // shared line (the Pen stands for the shapes and both path tools), and the Type tools' `is_type` line (the
+    // vertical type tool takes the same branch). Every tool's own decision is asserted in
+    // `the_command_stand_in_rule_is_the_table`, without a drag.
+    let keeps = [vec![Tool::Hand, Tool::Zoom, Tool::Pen, Tool::Type], vec![Tool::Crop, Tool::RotateView]];
     for group in keeps {
         let mut h = harness(group[0]);
         for tool in group {
@@ -380,6 +386,62 @@ fn cmd_gives_the_move_tool_only_where_the_tool_does_not_take_cmd() {
             keeps_the_layer(&mut h, tool);
         }
     }
+}
+
+/// The ⌘-as-Move rule read as data: `takes_command_stand_in` and the selection family decide which tool hands a ⌘
+/// press to the Move tool, for every tool in the app. The drags above press one tool per decision; this pins each
+/// tool by name, so a tool that moves into another family or starts refusing the stand-in fails here.
+#[test]
+fn the_command_stand_in_rule_is_the_table() {
+    use crate::canvas::tools::Family;
+    let hands_to_move = |t: Tool| crate::canvas::tools::takes_command_stand_in(t) || crate::canvas::tools::family(t) == Family::Selection;
+    let got: Vec<Tool> = Tool::ALL.into_iter().filter(|t| hands_to_move(*t)).collect();
+    let want: Vec<Tool> = vec![
+        Tool::Artboard,
+        Tool::RectMarquee,
+        Tool::EllipseMarquee,
+        Tool::SingleRowMarquee,
+        Tool::SingleColumnMarquee,
+        Tool::Lasso,
+        Tool::PolygonLasso,
+        Tool::MagneticLasso,
+        Tool::MagicWand,
+        Tool::Eyedropper,
+        Tool::ColorSampler,
+        Tool::Ruler,
+        Tool::Note,
+        Tool::Count,
+        Tool::Brush,
+        Tool::Pencil,
+        Tool::ColorReplacement,
+        Tool::MixerBrush,
+        Tool::Eraser,
+        Tool::BackgroundEraser,
+        Tool::MagicEraser,
+        Tool::Gradient,
+        Tool::PaintBucket,
+        Tool::SpotHealing,
+        Tool::Remove,
+        Tool::Healing,
+        Tool::Patch,
+        Tool::ContentAwareMove,
+        Tool::RedEye,
+        Tool::CloneStamp,
+        Tool::PatternStamp,
+        Tool::HistoryBrush,
+        Tool::ArtHistoryBrush,
+        Tool::Blur,
+        Tool::Sharpen,
+        Tool::Smudge,
+        Tool::AdjustmentBrush,
+        Tool::Dodge,
+        Tool::Burn,
+        Tool::Sponge,
+        Tool::QuickSelection,
+        Tool::ObjectSelection,
+        Tool::Frame,
+    ];
+    assert_eq!(got, want, "which tools hand a ⌘ press to the Move tool");
 }
 
 /// A ⌘-drag with `tool`, one that keeps ⌘ for itself, leaves a fresh layer where it is.
@@ -397,8 +459,11 @@ fn keeps_the_layer(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool) {
 /// brush to resize, such as the Gradient.
 #[test]
 fn cmd_alt_drag_duplicates_the_layer_then_moves_the_copy() {
+    // One app, one fresh layer per case (the `with_layer` each case already calls).
+    let mut h = harness(Tool::Brush);
     for (tool, mods) in [(Tool::Brush, MAC_CMD_ALT), (Tool::Gradient, MAC_CMD_ALT), (Tool::Gradient, CTRL_ALT)] {
-        let mut h = harness(tool);
+        h.state_mut().ui.tool = tool;
+        h.run_steps(1);
         let orig = with_layer(&mut h);
         let n0 = h.state().session.active().unwrap().doc.layers.len();
         let h0 = h.state().session.active().unwrap().history.past_len();
@@ -486,8 +551,11 @@ fn last_stroke_erases(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<bool> 
 /// holds across frames (a second pass in a frame does not clear it) and goes with the release.
 #[test]
 fn tilde_erases_only_with_the_brush_and_pencil() {
+    // One app, a fresh layer per tool (`with_layer`), so the strokes of one tool never sit under the next one's.
+    let mut h = harness(Tool::Brush);
     for (tool, label, erases) in [(Tool::Brush, "Brush Tool", true), (Tool::Pencil, "Pencil", true), (Tool::CloneStamp, "", false)] {
-        let mut h = harness(tool);
+        h.state_mut().ui.tool = tool;
+        h.run_steps(1);
         with_layer(&mut h);
         key(&mut h, Key::Backtick, true, Modifiers::NONE);
         h.run_steps(3);
@@ -559,8 +627,18 @@ fn a_held_key_keeps_a_pending_crop_and_another_tools_key_commits_it() {
 /// Photoshop, not the held-over tool's menu; the tool comes back on release (#11271).
 #[test]
 fn space_right_click_opens_the_hand_view_menu() {
+    // One app for the four tools: `harness` starts the whole app (its document, panels and settle frames), which is
+    // most of a case, while the selected tool is state the app takes between frames (#15941). The tool is switched
+    // the way the ⌘-Move test below does it.
+    let mut h = harness(Tool::Move);
     for tool in [Tool::Move, Tool::Brush, Tool::RectMarquee, Tool::Pen] {
-        let mut h = harness(tool);
+        h.state_mut().ui.tool = tool;
+        // Every case starts at 100 %, not where the case before it left the shared view: the first
+        // case ends at 200 %, and a later case whose row applied nothing would still read 200 %.
+        let view = &mut h.state_mut().ui.views[0];
+        view.zoom = 1.0;
+        view.clear_pending();
+        h.run_steps(1);
         let p = screen(&h, 200.0, 150.0);
         h.event(Event::PointerMoved(p));
         h.run_steps(1);
@@ -577,6 +655,7 @@ fn space_right_click_opens_the_hand_view_menu() {
         assert_eq!(h.state().ui.tool, tool, "{tool:?}: the tool is kept");
         // Its rows work as the selected Hand's do.
         let before = zoom(&h);
+        assert!(before != 2.0, "{tool:?}: the case starts away from 200 % ({before}), so the row has to move the view");
         let ctx = h.ctx.clone();
         crate::canvas_tool_menu::choose(h.state_mut(), &ctx, "view.twoHundredPercent");
         h.run_steps(2);
@@ -611,9 +690,13 @@ fn space_hand_view_menu_closes_when_the_tool_underneath_changes() {
 /// ⌘/Ctrl+right-click, which lists the layers under the pointer for any tool (#307).
 #[test]
 fn command_or_alt_space_right_click_opens_no_view_menu() {
+    // One app for all four cases, as above; the menu a ⌘+right-click leaves open is closed before the next case.
+    let mut h = harness(Tool::Move);
     for mods in [Modifiers::COMMAND, Modifiers::ALT] {
         for tool in [Tool::Move, Tool::Brush] {
-            let mut h = harness(tool);
+            h.state_mut().ui.tool = tool;
+            h.state_mut().ui.canvas_tool_menu = None;
+            h.run_steps(1);
             let p = screen(&h, 200.0, 150.0);
             h.event(Event::PointerMoved(p));
             h.run_steps(1);
@@ -719,4 +802,45 @@ fn space_hand_pasteboard_menu_opens_outside_the_image_and_outlives_space() {
     h.state_mut().ui.tool = Tool::Brush;
     h.run_steps(2);
     assert!(h.state().ui.canvas_tool_menu.is_none(), "another tool selected closes it");
+}
+
+/// A lone Alt tap or F10 puts the keyboard on the menu bar. Space then opens no menu (it used to open File, and a held
+/// Space ran File > New) and is the Hand in the same press: the drag pans, as it always does in the reference
+/// application (#16327).
+#[test]
+fn space_after_an_alt_tap_or_f10_pans_and_opens_no_menu() {
+    for (f10, clicked) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut h = harness(Tool::Brush);
+        let p = screen(&h, 200.0, 150.0);
+        if clicked {
+            // A dab first, so the canvas holds the keyboard when the bar takes it.
+            click(&mut h, 100.0, 80.0, Modifiers::NONE);
+        }
+        h.event(Event::PointerMoved(p));
+        h.run_steps(2);
+        if f10 {
+            key(&mut h, Key::F10, true, Modifiers::NONE);
+            key(&mut h, Key::F10, false, Modifiers::NONE);
+        } else {
+            h.event(Event::ModifiersChanged(Modifiers::ALT));
+            h.run_steps(1);
+            h.event(Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(2);
+        }
+        assert!(craft::ui::menu::bar::is_focused(&h.ctx), "f10 {f10}, clicked {clicked}: the keyboard is on the bar");
+        let before = center(&h);
+        key(&mut h, Key::Space, true, Modifiers::NONE);
+        assert!(!craft::ui::menu::bar::is_open(&h.ctx), "f10 {f10}, clicked {clicked}: Space opens no menu");
+        assert!(!craft::ui::menu::bar::is_focused(&h.ctx), "f10 {f10}, clicked {clicked}: Space takes the keyboard off the bar");
+        button(&mut h, p, true, Modifiers::NONE);
+        move_to(&mut h, 250.0, 180.0);
+        let q = screen(&h, 250.0, 180.0);
+        button(&mut h, q, false, Modifiers::NONE);
+        key(&mut h, Key::Space, false, Modifiers::NONE);
+        h.run_steps(2);
+        assert!(!craft::ui::menu::bar::is_open(&h.ctx), "f10 {f10}, clicked {clicked}: no menu after the drag");
+        assert_ne!(center(&h), before, "f10 {f10}, clicked {clicked}: Space and a drag pan the view");
+        assert_eq!(h.state().session.documents().len(), 1, "f10 {f10}, clicked {clicked}: no new document");
+        assert_eq!(h.state().ui.tool, Tool::Brush, "f10 {f10}, clicked {clicked}: the tool comes back");
+    }
 }

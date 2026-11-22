@@ -19,6 +19,9 @@ pub mod actions_cmds;
 pub mod actions_edit_cmds;
 pub mod adjust_cmds;
 mod adjust_params;
+pub mod adjustment_brush_cmds;
+#[cfg(test)]
+mod adjustment_brush_cmds_tests;
 pub mod align_cmds;
 pub mod analysis_cmds;
 pub mod artboard_cmds;

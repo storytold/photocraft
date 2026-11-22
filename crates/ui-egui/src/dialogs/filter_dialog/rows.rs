@@ -316,6 +316,10 @@ fn set_lut_choice(fields: &mut DialogFields, choice: &LutChoice) {
 /// Color Lookup's 3D LUT menu lists the LUT folder's files after the built-in looks (#9754), as the adjustment
 /// layer's Properties do: one picker row over the command's `lut`, `file` and, for a LUT loaded from a file,
 /// `data` and `fileName`.
+///
+/// The picker is a `Param::custom` row and the spec's `lut` choice row is dropped, so none of those keys is ever
+/// remembered: an OK with a built-in look or a LUT file leaves the next opening at "no LUT", as the reference
+/// application does (#14422). The rows that are remembered, Dither and Interpolation, come back as OK'd.
 fn color_lookup(app: &PhotocraftApp, params: &mut Vec<Param>) {
     let at = params.iter().position(|p| p.key == "lut").unwrap_or(params.len());
     params.retain(|p| !matches!(p.key.as_str(), "lut" | "file"));

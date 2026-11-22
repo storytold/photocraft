@@ -37,6 +37,28 @@ fn set_fields(app: &mut PhotocraftApp, ctx: &egui::Context, values: &Value) {
     }
 }
 
+/// A tile that fails to read and recovers changes the pixels without a new revision or new dialog values: the
+/// preview is computed again, so it does not keep what it read during the error (`crate::scratch_reads`).
+#[test]
+fn the_preview_is_computed_again_after_a_scratch_read_error_transition() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.background_jobs = false;
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    open_filter(&mut app, "filter.stylize.solarize");
+    let ctx = app.ctx().clone();
+    let result = |app: &PhotocraftApp| app.filter_preview.as_ref().and_then(|preview| preview.result.clone()).expect("a preview result");
+    ensure_filter_preview(&mut app, 0, &ctx).expect("a preview");
+    let before = result(&app);
+    ensure_filter_preview(&mut app, 0, &ctx).expect("the same preview");
+    assert!(std::sync::Arc::ptr_eq(&result(&app), &before), "nothing changed: the same result");
+    let (revision, values) = (app.session.active().unwrap().revision, fields(&app));
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    ensure_filter_preview(&mut app, 0, &ctx).expect("a preview");
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(fields(&app), values, "the dialog values did not change");
+    assert!(!std::sync::Arc::ptr_eq(&result(&app), &before), "the preview is computed again");
+}
+
 /// #7490: the inline (web) preview path composites and uploads each changed preview once, as
 /// the background worker does. It used to flatten and upload it twice and record it twice,
 /// so the frame's refresh time counted the preview twice.
@@ -123,6 +145,7 @@ fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {
         params: json!({"radius": 999.0}),
         k: 1,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     let (told, cancelled) = std::sync::mpsc::channel();
     app.filter_preview_worker
@@ -179,6 +202,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
         params,
         k: 1,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     let doc = app.session.documents()[0].doc.clone();
     let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
@@ -581,6 +605,7 @@ fn a_mid_drag_empty_result_leaves_the_preview_alone() {
         params: json!({"radius": moved}),
         k: 1,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     let (release_empty, wait) = std::sync::mpsc::channel::<()>();
     app.filter_preview_worker
