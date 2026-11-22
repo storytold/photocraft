@@ -269,6 +269,25 @@ def corner_drags(hwnd, tag):
         say(f"dragfull restored={drag_full_windows()}")
 
 
+def resize_summary(tag, name, grabs, release_pos, final):
+    """One line per drag: the number of window-rect changes, the median lag of a step (its grab time minus the
+    time of the first grab whose cursor gave that rect's right edge, cursor_x + 3 == right), and how far the final
+    right edge is short of the release."""
+    lags = []
+    steps = 0
+    for k in range(1, len(grabs)):
+        rect = grabs[k][1]
+        if rect == grabs[k - 1][1]:
+            continue
+        steps += 1
+        first = next((j for j in range(len(grabs)) if grabs[j][2][0] + 3 == rect[2]), None)
+        if first is not None:
+            lags.append((grabs[k][0] - grabs[first][0]) * 1000)
+    median = f"{statistics.median(lags):.0f}" if lags else "n/a"
+    short = release_pos[0] + 3 - final[2]
+    say(f"resize {tag} {name} summary: steps={steps} median_lag_ms={median} short_px={short}")
+
+
 def _corner_drags(hwnd, tag):
     place(hwnd, 40, 30, 640, 460)
     start = rect_of(hwnd)
@@ -315,6 +334,7 @@ def _corner_drags(hwnd, tag):
         say(f"resize {tag} {name}: cursor at release={release_pos} final window rect={final}")
         say(f"resize {tag} {name}: start={start} end={final} grabs={len(grabs)} region={ox},{oy} {w}x{h}")
         shares = []
+        resize_summary(tag, name, grabs, release_pos, final)
         for k, (t, window, pos, bgra, took) in enumerate(grabs):
             b, total = black_share(bgra, (ox, oy), w, h, window, start)
             share = b / total if total else 0.0
@@ -604,8 +624,26 @@ def round_(exe, label, scale, drags=False):
                     say(f"before drags: dialogs={ui.get('dialogs')}")
                 corner_drags(app.hwnd, "main")
                 app.new_lines()
+                close_documents(app)
+                corner_drags(app.hwnd, "main-start")
+                app.new_lines()
     finally:
         app.quit()
+
+
+def close_documents(app):
+    """Closes every document so the window shows the start screen, as v0.23.1 does at launch."""
+    for _ in range(6):
+        app.call("engine.execute", {"command": "file.closeAll", "params": {}})
+        time.sleep(0.8)
+        ui = app.conn.call("ui.inspect", {}).get("result") or {}
+        if ui.get("dialogs"):
+            say(f"close documents: dialogs={ui.get('dialogs')}, Escape")
+            app.call("ui.key", {"key": "Escape"})
+            time.sleep(0.8)
+        if not app.doc():
+            break
+    say(f"close documents: document.inspect={json.dumps(app.doc())[:120]}")
 
 
 def release_drags():
