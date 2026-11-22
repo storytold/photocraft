@@ -168,6 +168,9 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       os: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && '["artcraft-k8s-trusted"]' || '["ubuntu-24.04"]' }}
+      # On the cluster runners sccache uses the shared cluster cache, which main runs fill for
+      # every app; PR runs on hosted runners can't reach it, so they leave it off.
+      sccache: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       # egui/winit/rfd.
       packages: >-
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
