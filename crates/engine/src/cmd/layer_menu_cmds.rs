@@ -740,6 +740,13 @@ fn global_light(s: &mut Session, p: &Value) -> Result<Value> {
 fn scale_effects(s: &mut Session, p: &Value) -> Result<Value> {
     let k = num(p, "scale", 100.0).clamp(1.0, 1000.0) / 100.0;
     let id = layer_param(s, p)?;
+    // At 100 % nothing changes: the reference adds no history state, so the document stays
+    // unmodified and keeps the layer's preserved PSD effects block (#14991).
+    if k == 1.0 {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        return Ok(Value::Null);
+    }
     s.edit("Scale Effects", |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         crate::image_cmds::scale_effects(&mut l.effects, k);
@@ -1136,5 +1143,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "scale_effects_noop_tests.rs"]
+mod scale_effects_noop_tests;
 #[cfg(test)]
 mod tests;
