@@ -170,11 +170,25 @@ fn list_system_printers(s: &Session) -> Vec<craft_print::Printer> {
         Some(source) => source(),
         None => {
             SYSTEM_LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            craft_print::printers()
+            system_printers_now()
         }
     };
     keep(&LAST_PRINTERS, s.printer_source.as_ref(), list.clone());
     list
+}
+
+/// The system's printers. craft-print asks each Windows driver about two-sided printing through
+/// prntvpt.dll; without it, list the spooler's printers through GDI instead (#8272). Like
+/// `craft_print::printers`, a listing that fails is an empty list.
+fn system_printers_now() -> Vec<craft_print::Printer> {
+    if require_print_tickets().is_ok() {
+        return craft_print::printers();
+    }
+    craft_print::rgb::printers()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| craft_print::Printer { name: p.name, description: String::new(), default: p.default, two_sided: None })
+        .collect()
 }
 
 /// `file.printers`' stand-in: the session's outside the browser, and `None` in the browser, where
@@ -1067,6 +1081,8 @@ fn driver_printable(p: &Value) -> Option<Value> {
     Some(json!([pg.printable.0, pg.printable.1, pg.printable.2, pg.printable.3]))
 }
 
+/// Lays out and renders the print page as a PDF for `cmd` and, when the params ask for it, sends
+/// it to the printer through `spooler`; returns the job summary (paper, image rect, spooler).
 fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spooler>) -> Result<Value> {
     let fit = p.get("scaleToFit").and_then(Value::as_bool).unwrap_or(false);
     let driver = (fit && native_route(p, spooler)).then(|| with_driver_printable(p));
@@ -1102,7 +1118,16 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     }
     let pdf = print_pdf(&page);
     let pdf_len = pdf.len();
+    let duplex = match p.get("duplex").and_then(Value::as_str) {
+        None => None,
+        Some("off") => Some(craft_print::Duplex::Off),
+        Some("longEdge") => Some(craft_print::Duplex::LongEdge),
+        Some("shortEdge") => Some(craft_print::Duplex::ShortEdge),
+        Some(v) => return Err(bad(cmd, format!("duplex is off, longEdge or shortEdge, not {v}"))),
+    };
     let job = craft_print::Job {
+        duplex,
+        grayscale: p.get("grayscale").and_then(Value::as_bool).unwrap_or(false),
         printer: p.get("printer").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string),
         copies,
         title: doc.name.clone(),
@@ -1143,31 +1168,67 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     )
 }
 
-/// Windows prints a PDF through Windows.Data.Pdf.dll, which the apps delay-load (see their
-/// `build.rs`) so a Windows image without it still starts. Calling into it when it cannot load
-/// would abort the process, so check that it loads first (#5884).
+/// Windows prints a PDF through Windows.Data.Pdf.dll and sets its options through the Print
+/// Ticket API in prntvpt.dll, which the apps delay-load (see their `build.rs`) so a Windows image
+/// without them still starts. Calling into one that cannot load would abort the process, so check
+/// that both load first (#5884, #8272).
 fn require_windows_pdf() -> Result<()> {
     #[cfg(target_os = "windows")]
-    {
-        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| std::ffi::OsString::from(r"C:\Windows"));
-        if !windows_pdf_loads(&windows_pdf_dll(std::path::Path::new(&root))) {
-            return Err(other(
-                "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
-            ));
-        }
+    require_windows_pdf_at(&system_root())?;
+    Ok(())
+}
+
+/// `craft-print` reads and sets Windows printer options through prntvpt.dll (the Print Ticket
+/// API), which stripped Windows images can lack; the apps delay-load it (#8272).
+fn require_print_tickets() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    require_print_tickets_at(&system_root())?;
+    Ok(())
+}
+
+/// [`require_windows_pdf`] against the Windows directory `system_root` (tests pass a fixture).
+#[cfg(target_os = "windows")]
+fn require_windows_pdf_at(system_root: &std::path::Path) -> Result<()> {
+    if !dll_loads(&system_dll(system_root, WINDOWS_PDF_DLL)) {
+        return Err(other(
+            "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
+        ));
+    }
+    require_print_tickets_at(system_root)
+}
+
+/// [`require_print_tickets`] against the Windows directory `system_root` (tests pass a fixture).
+#[cfg(target_os = "windows")]
+fn require_print_tickets_at(system_root: &std::path::Path) -> Result<()> {
+    if !dll_loads(&system_dll(system_root, PRINT_TICKET_DLL)) {
+        return Err(other(
+            "printing this page needs the Windows Print Ticket component (prntvpt.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
+        ));
     }
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn windows_pdf_dll(system_root: &std::path::Path) -> std::path::PathBuf {
-    system_root.join("System32").join("Windows.Data.Pdf.dll")
+const WINDOWS_PDF_DLL: &str = "Windows.Data.Pdf.dll";
+#[cfg(target_os = "windows")]
+const PRINT_TICKET_DLL: &str = "prntvpt.dll";
+
+/// The running Windows directory (`%SystemRoot%`), `C:\Windows` if the variable is unset.
+#[cfg(target_os = "windows")]
+fn system_root() -> std::path::PathBuf {
+    std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from)
+}
+
+/// Where the system DLL `name` lives under the Windows directory `system_root`.
+#[cfg(target_os = "windows")]
+fn system_dll(system_root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    system_root.join("System32").join(name)
 }
 
 /// Loads the DLL rather than checking the file exists: one that is present but cannot load (a
 /// dependency stripped too) would still abort at the delay-load stub.
 #[cfg(target_os = "windows")]
-fn windows_pdf_loads(dll: &std::path::Path) -> bool {
+fn dll_loads(dll: &std::path::Path) -> bool {
     dll.to_str().is_some_and(|p| winsafe::HINSTANCE::LoadLibrary(p).is_ok())
 }
 
@@ -1185,7 +1246,7 @@ pub const REMEMBERED: &str = "file.print";
 
 /// Print One Copy repeats these, and Print opens with them. They are kept in the preferences as
 /// well, so they survive a relaunch, as Photoshop's do (#7410).
-fn remember_print(s: &mut Session, p: &Value) {
+pub fn remember_print(s: &mut Session, p: &Value) {
     let mut remembered = p.clone();
     if let Some(o) = remembered.as_object_mut() {
         o.remove("output");
@@ -1363,6 +1424,12 @@ fn printers(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
+    page_of_printer(p, printing_disabled())
+}
+
+/// `file.print.page` with printing turned off or not (`disabled`). A test passes `false` to reach the printer route,
+/// which `printing_disabled` never is once a test of the process or CI's `PHOTOCRAFT_NO_PRINT` turned it off.
+fn page_of_printer(p: &Value, disabled: bool) -> Result<Value> {
     // Checked before the printer, so a bad value is the error whether or not a printer answers.
     let landscape = match p.get("orientation").filter(|v| !v.is_null()) {
         None => None,
@@ -1372,8 +1439,13 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
             _ => return Err(bad("file.print.page", "orientation is \"portrait\" or \"landscape\"")),
         },
     };
-    let printer = printer_name(p)?;
     let mut settings = printer_settings(p)?;
+    // A driver query is still a call into a printer driver, which can hang (and holds SPOOLER
+    // while it does), so a process that turned printing off asks no driver here either.
+    if disabled {
+        return Err(other("printing is disabled in this process (disable_printing or PHOTOCRAFT_NO_PRINT); file.print.page asks no printer driver"));
+    }
+    let printer = printer_name(p)?;
     if let Some(landscape) = landscape {
         let base = match settings {
             Some(s) => s,
@@ -1390,11 +1462,14 @@ fn printer_page(_: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// Set once by test harnesses (the panic hunt) so no command in the process can reach a printer.
+/// Set once by test harnesses (the panic hunt) so no command in the process can reach a printer
+/// or its driver: `file.print` and `file.printOneCopy` refuse to spool, and `file.print.page`
+/// refuses to ask a driver for its page.
 static PRINTING_DISABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Refuse to spool anything from this process from now on (tests, fuzzing). The
-/// `PHOTOCRAFT_NO_PRINT` environment variable does the same for a whole shell (CI).
+/// Refuse to spool anything, or ask a printer driver for its page, from this process from now on
+/// (tests, fuzzing). The `PHOTOCRAFT_NO_PRINT` environment variable does the same for a whole
+/// shell (CI).
 pub fn disable_printing() {
     PRINTING_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -1445,7 +1520,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let dir = std::path::absolute(dir).map_or_else(|_| dir.to_string(), |d| d.to_string_lossy().into_owned());
     let dir = crate::file_cmds::forward_slashes(dir);
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let doc = (*d.doc).clone();
+    let mut doc = (*d.doc).clone();
     let document = d.path.clone();
     let name = stem(&d.path.clone().unwrap_or_else(|| doc.name.clone()));
     // The native format keeps external links; our PSD writer has no `lnkE` (external linked
@@ -1460,6 +1535,8 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     // Copy every linked file once; relink the copy of the document to the copies.
     let mut copied: Vec<(String, String)> = Vec::new();
     let mut relinks: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
+    // (layer, the link's old base name, the base name its copy got), for copies renamed by a clash.
+    let mut renames: Vec<(photocraft_doc::LayerId, String, String)> = Vec::new();
     let mut missing = Vec::new();
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
@@ -1485,10 +1562,15 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                             .any(|entry| entry.file_name().to_string_lossy().to_lowercase() == n.to_lowercase())
                 };
                 let mut fname = base.clone();
-                let mut k = copied.len();
+                // A clash is `<stem>_<n>.<ext>` (`<name>_<n>` without an extension), n = 1, 2, ...
+                let (clash_stem, clash_ext) = match std::path::Path::new(&base).extension().and_then(|e| e.to_str()) {
+                    Some(e) if base.len() > e.len() + 1 => (&base[..base.len() - e.len() - 1], format!(".{e}")),
+                    _ => (base.as_str(), String::new()),
+                };
+                let mut n = 1usize;
                 while taken(&fname) {
-                    fname = format!("{k}-{base}");
-                    k += 1;
+                    fname = format!("{clash_stem}_{n}{clash_ext}");
+                    n += 1;
                 }
                 let t = join(&links_dir, &fname);
                 // A path that is not followed is packaged as missing, like a file that is gone.
@@ -1510,7 +1592,19 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         };
+        if file_name(path) != file_name(&target) {
+            renames.push((l.id, stem(path), stem(&target)));
+        }
         relinks.push((l.id, target));
+    }
+    // A layer named after its link's old file name takes the copy's new name (the packaged copy
+    // only; the open document keeps its names).
+    for (id, old, new) in &renames {
+        if let Some(layer) = doc.layer_mut(*id)
+            && let Some(rest) = layer.name.strip_prefix(old.as_str())
+        {
+            layer.name = format!("{new}{rest}");
+        }
     }
     let mut t = Session::new();
     t.add_document(doc, None);
@@ -1531,22 +1625,24 @@ fn ps_comment_text(s: &str) -> String {
     s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
-/// The document's paths as an Illustrator 3 PostScript file. `which`: "all", "work" or a path
-/// name. Coordinates are points (pixels at the document resolution), y up.
+/// The document's paths as an Illustrator 3 PostScript file. `which`: "documentBounds" (the
+/// frame alone, no path: header, bounding box and trailer), "all", "work" or a path name.
+/// Coordinates are points (pixels at the document resolution), y up.
 pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let k = 72.0 / dpi;
     let (w, h) = (f64::from(doc.size.width) * k, f64::from(doc.size.height) * k);
-    let mut chosen: Vec<(String, &photocraft_doc::Path)> = Vec::new();
+    let mut chosen: Vec<&photocraft_doc::Path> = Vec::new();
     match which {
         "all" => {
-            chosen.extend(doc.paths.iter().map(|p| (p.name.clone(), &p.path)));
+            chosen.extend(doc.paths.iter().map(|p| &p.path));
             if let Some(wp) = &doc.work_path {
-                chosen.push(("Work Path".into(), wp));
+                chosen.push(wp);
             }
         }
-        "work" => chosen.extend(doc.work_path.iter().map(|wp| ("Work Path".to_string(), wp))),
-        name => chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| (p.name.clone(), &p.path))),
+        "work" => chosen.extend(doc.work_path.iter()),
+        "documentBounds" => {}
+        name => chosen.extend(doc.paths.iter().filter(|p| p.name == name).map(|p| &p.path)),
     }
     let mut s = String::new();
     s.push_str("%!PS-Adobe-2.0 EPSF-1.2\n%%Creator: PhotoCraft\n");
@@ -1559,38 +1655,52 @@ pub fn paths_to_ai(doc: &Document, which: &str) -> Result<(String, usize)> {
     s.push_str("%%DocumentProcessColors: Black\n%%EndComments\n%%EndProlog\n%%BeginSetup\n%%EndSetup\n");
     let pt = |x: f64, y: f64| (x * k, h - y * k);
     let mut n = 0;
-    for (name, path) in &chosen {
+    for path in &chosen {
         let subs: Vec<_> = path.subpaths.iter().filter(|sp| !sp.knots.is_empty()).collect();
         if subs.is_empty() {
             continue;
         }
         n += 1;
-        s.push_str(&format!("%%Note: {}\n", ps_comment_text(name)));
-        let compound = subs.len() > 1;
-        if compound {
-            s.push_str("*u\n");
-        }
+        // One marked block per path, one group per subpath. A `Join` subpath belongs to the
+        // component before it, so it writes that component's note (union when none precedes).
+        s.push_str("%Adobe_Photoshop_Path_Begin:<< /defaultFill false >>\n");
+        let mut component_op = photocraft_doc::PathOp::Combine;
         for sp in subs {
+            if sp.op != photocraft_doc::PathOp::Join {
+                component_op = sp.op;
+            }
+            s.push_str("*u\n");
+            s.push_str(match component_op {
+                photocraft_doc::PathOp::Exclude => "%AI3_Note:<< /operation /xor /defaultFill false >>\n",
+                photocraft_doc::PathOp::Subtract => "%AI3_Note:<< /operation /subtract >>\n",
+                photocraft_doc::PathOp::Intersect => "%AI3_Note:<< /operation /intersect >>\n",
+                photocraft_doc::PathOp::Combine | photocraft_doc::PathOp::Join => "%AI3_Note:<< /operation /union >>\n",
+            });
+            s.push_str("1 XR\n");
             let (x, y) = pt(sp.knots[0].anchor.x, sp.knots[0].anchor.y);
             s.push_str(&format!("{x:.4} {y:.4} m\n"));
-            for seg in sp.segments() {
+            for (i, seg) in sp.segments().into_iter().enumerate() {
                 let [a, c1, c2, b] = seg;
                 let straight = c1 == a && c2 == b;
+                // The operator follows the anchor the segment ends on: lower case for a smooth
+                // one. The closing segment of a closed subpath ends on the first knot.
+                let smooth_end = sp.knots[(i + 1) % sp.knots.len()].smooth;
                 let (bx, by) = pt(b.x, b.y);
                 if straight {
-                    s.push_str(&format!("{bx:.4} {by:.4} L\n"));
+                    let op = if smooth_end { 'l' } else { 'L' };
+                    s.push_str(&format!("{bx:.4} {by:.4} {op}\n"));
                 } else {
+                    let op = if smooth_end { 'c' } else { 'C' };
                     let (x1, y1) = pt(c1.x, c1.y);
                     let (x2, y2) = pt(c2.x, c2.y);
-                    s.push_str(&format!("{x1:.4} {y1:.4} {x2:.4} {y2:.4} {bx:.4} {by:.4} C\n"));
+                    s.push_str(&format!("{x1:.4} {y1:.4} {x2:.4} {y2:.4} {bx:.4} {by:.4} {op}\n"));
                 }
             }
             // Unpainted: `n` closes the path, `N` leaves it open.
             s.push_str(if sp.closed { "n\n" } else { "N\n" });
-        }
-        if compound {
             s.push_str("*U\n");
         }
+        s.push_str("%Adobe_Photoshop_Path_End\n");
     }
     s.push_str("%%PageTrailer\n%%Trailer\n%%EOF\n");
     Ok((s, n))
@@ -1601,7 +1711,8 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let which = p.get("paths").and_then(Value::as_str).unwrap_or("all");
     let (text, n) = paths_to_ai(&d.doc, which)?;
-    if n == 0 {
+    // Document Bounds writes the frame alone (#13771); any other choice must match a path.
+    if n == 0 && which != "documentBounds" {
         return Err(bad(cmd, format!("no paths match `{which}`")));
     }
     match p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()) {
@@ -1613,9 +1724,9 @@ fn paths_to_illustrator(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
-fn has_paths(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document open")?;
-    if d.doc.paths.is_empty() && d.doc.work_path.is_none() { Err("the document has no paths".into()) } else { Ok(()) }
+/// Enabled for every open document, with or without paths: Document Bounds needs none (#13771).
+fn has_document(s: &Session) -> std::result::Result<(), String> {
+    s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -1624,7 +1735,7 @@ pub fn specs() -> Vec<CommandSpec> {
             CommandSpec { id: $id, label: $label, menu: $menu, shortcut: $sc, params: $params, enabled: $enabled, journal: true, run: $run }
         };
     }
-    const PRINT_PARAMS: &str = r##"{"printerSettings":hex? (Windows driver settings),"printer":name? (default printer),"copies":1..999=1,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"printable":[x,y,w,h] pt? (the driver's printable area from the paper's top-left, as file.print.page reports it; Scale to Fit Media fits it, else the paper minus 18 pt; a native Windows print reads the driver's own instead),"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"bleed":in=0 (Functions › Bleed: corner crop marks this far inside the image edge, on the trim line),"description":bool,"labels":bool,"emulsionDown":bool=false (mirror the page left to right, for sublimation and other transfer printing),"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool?,"printServer":"host[:port]|socket path"? (default: the system's CUPS; a named server is always printed to over IPP),"dryRun":bool=false (render the PDF, report the backend command, don't spool; write a PDF only at an explicit output path)} → {pdf:path|null (null without explicit output), imageRect, command:diagnostic array|null, sent, spooler:where the job went|null, backend:"lp|windows|ipp|portal"|null}"##;
+    const PRINT_PARAMS: &str = r##"{"printerSettings":hex? (Windows driver settings),"printer":name? (default printer),"copies":1..999=1,"duplex":"off|longEdge|shortEdge"? (absent keeps the printer's default),"grayscale":bool=false,"paper":"letter|legal|tabloid|a3|a4|a5|4x6|5x7"|[w,h] pt="letter","orientation":"portrait|landscape"="portrait","center":bool=true,"top":in?,"left":in?,"scale":%=100,"scaleToFit":bool=false,"printable":[x,y,w,h] pt? (the driver's printable area from the paper's top-left, as file.print.page reports it; Scale to Fit Media fits it, else the paper minus 18 pt; a native Windows print reads the driver's own instead),"colorHandling":"printerManages|photocraftManages|noColorManagement"="printerManages","printerProfile":profile? (photocraftManages),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"cornerCropMarks":bool,"centerCropMarks":bool,"registrationMarks":bool,"bleed":in=0 (Functions › Bleed: corner crop marks this far inside the image edge, on the trim line),"description":bool,"labels":bool,"emulsionDown":bool=false (mirror the page left to right, for sublimation and other transfer printing),"output":pdf path? (print to PDF; then "send" defaults to false),"send":bool?,"printServer":"host[:port]|socket path"? (default: the system's CUPS; a named server is always printed to over IPP),"dryRun":bool=false (render the PDF, report the backend command, don't spool; write a PDF only at an explicit output path)} → {pdf:path|null (null without explicit output), imageRect, command:diagnostic array|null, sent, spooler:where the job went|null, backend:"lp|windows|ipp|portal"|null}"##;
 
     vec![
         spec!("file.print", "Print…", &["File"], Some("Cmd+P"), PRINT_PARAMS, native_doc, print),
@@ -1681,8 +1792,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paths to Illustrator…",
             &["File", "Export"],
             None,
-            r##"{"path":str? (.ai; omit to return the text),"paths":"all|work|<path name>"="all"} → {path, paths}"##,
-            has_paths,
+            r##"{"path":str? (.ai; omit to return the text),"paths":"documentBounds|all|work|<path name>"="all" (documentBounds: the file frame with the canvas as bounding box and no path)} → {path, paths}"##,
+            has_document,
             paths_to_illustrator
         ),
     ]
@@ -1691,3 +1802,22 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "print_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "print_cmds/paths_export_document_bounds_tests.rs"]
+mod paths_export_document_bounds_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/paths_export_path_blocks_tests.rs"]
+mod paths_export_path_blocks_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/paths_export_smooth_operators_tests.rs"]
+mod paths_export_smooth_operators_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/package_clash_name_tests.rs"]
+mod package_clash_name_tests;
+#[cfg(test)]
+#[path = "print_cmds/package_layer_rename_tests.rs"]
+mod package_layer_rename_tests;

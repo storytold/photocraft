@@ -7,16 +7,24 @@
 
 use std::sync::Arc;
 
+use craft::color_ui::ui::{ProfileAction, ProfileMismatchDialog, ProfileMode, ProfileQuestion};
+use craft::ui::dialog::{DialogResult, PromptAnswer, PromptChoice, StandardPrompt};
+use craft::ui::runtime::env::Label;
 use photocraft_doc::{ColorMode, Document};
 use serde_json::{Value, json};
 
+use super::alerts;
 use crate::PhotocraftApp;
 
-/// The field that marks a prompt as this module's.
-const FIELD: &str = "__heldOpen";
-/// A regular dialog: agents see it in `ui.inspect` and answer through
-/// `ui.dialog.confirm` / `ui.dialog.cancel`, just like the profile prompt.
-const DAMAGE_FIELD: &str = "__psdDamagedOpen";
+/// Tags the damaged-file prompt: the front of `held_opens` is the damaged file.
+pub(crate) struct DamageTag;
+
+/// Tags a high-memory prompt with the preflight it asks about, so an answer that arrives after the
+/// queue moved on is not applied to another file.
+pub(crate) struct MemoryTag {
+    /// The `MemoryPrompt::id` the prompt was opened for.
+    pub(crate) id: u64,
+}
 
 /// A file read and decoded, waiting to open.
 pub struct Held {
@@ -47,9 +55,6 @@ pub struct Held {
     /// admitted by [`photocraft_engine::file_cmds::admit_as_smart_object`].
     pub smart_object: bool,
 }
-
-/// Dialog field for the high-memory confirmation prompt.
-pub const MEMORY_FIELD: &str = "__psdMemoryOpen";
 
 /// Item kind in the arrival-ordered open prompt queue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,7 +95,64 @@ pub fn arrive(app: &mut PhotocraftApp, held: Held) {
 
 /// Whether any open prompt (damage, profile or high-memory) is currently on screen.
 pub fn has_open_dialog(app: &PhotocraftApp) -> bool {
-    app.ui.dialogs.iter().any(|d| owns(&d.fields) || owns_damage(&d.fields) || owns_memory(&d.fields))
+    app.framework.dialogs.is_open::<ProfileMismatchDialog>()
+        || alerts::prompt_tagged::<DamageTag>(app).is_some()
+        || alerts::prompt_tagged::<MemoryTag>(app).is_some()
+}
+
+/// The result pump (`dialogs::TAKERS`): closes a damage or memory prompt whose file left the queue
+/// (a cancelled profile question drops every queued file), applies the profile prompt's result,
+/// then lets the next queued prompt open once the previous one is gone. Each pass drains only
+/// results already stored, so a second pass in one frame finds nothing to apply twice.
+pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    close_stale(app, ctx);
+    match app.framework.dialogs.take::<ProfileMismatchDialog>() {
+        Some(DialogResult::Ok(profile)) => {
+            let action = engine_action(profile.action);
+            // A failed open is reported by `open` itself (`open_failed`).
+            let _ = if profile.remember { answer_remembering(app, action) } else { answer(app, Some(action)) };
+        }
+        Some(_) => {
+            let _ = answer(app, None);
+        }
+        None => {}
+    }
+    advance(app);
+}
+
+/// Closes the damage or memory prompt that no longer matches the front of its queue.
+fn close_stale(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let damaged = app.held_opens.front().is_some_and(|h| h.damage_pending);
+    if !damaged && let Some(id) = alerts::prompt_tagged::<DamageTag>(app) {
+        app.framework.dialogs.cancel_by_id(ctx, id);
+    }
+    let front = app.held_memory_prompts.front().map(|m| m.id);
+    if let Some(id) = alerts::prompt_tagged::<MemoryTag>(app)
+        && alerts::prompt_tag::<MemoryTag>(app).map(|tag| tag.id) != front
+    {
+        app.framework.dialogs.cancel_by_id(ctx, id);
+    }
+}
+
+/// The answer of a damage or memory prompt (`dialogs::PROMPTS`): Proceed opens the file, Cancel
+/// drops that file only. `false` for another family's prompt.
+pub(crate) fn answer_prompt(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let accept = answer.choice == PromptChoice::Proceed;
+    if answer.take_tag::<DamageTag>().is_some() {
+        if let Err(e) = answer_damage(app, accept) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return true;
+    }
+    if let Some(MemoryTag { id }) = answer.take_tag::<MemoryTag>() {
+        // `answer_memory` reports its own failures in the status bar.
+        if app.held_memory_prompts.front().map(|m| m.id) == Some(id) {
+            let _ = answer_memory(app, accept);
+        }
+        return true;
+    }
+    false
 }
 
 /// Opens queued files in order until one needs its prompt, which is shown if it isn't yet.
@@ -145,48 +207,49 @@ pub fn advance(app: &mut PhotocraftApp) {
 fn show(app: &mut PhotocraftApp) {
     let Some(front) = app.held_opens.front() else { return };
     let Some(q) = &front.question else { return };
-    // The mode reads as the catalogs name it (French "RVB"); the file name goes in last, so
-    // nothing in it is taken for a placeholder.
-    let mode = tl!(match front.doc.mode {
-        ColorMode::Cmyk => "CMYK",
-        ColorMode::Grayscale => "Gray",
-        _ => "RGB",
-    });
-    let name = front.name.as_str();
-    let working = crate::i18n::fmt(tl!("Working: {working}"), &[("working", q.get("working").and_then(Value::as_str).unwrap_or("?"))]);
-    let missing = q.get("missing").and_then(Value::as_bool) == Some(true);
-    // A mismatch names the two profiles on the choices they belong to (`prefs_ui::mismatch_body`).
-    let message = if missing {
-        let what = crate::i18n::fmt(tl!("The document “{name}” does not have an embedded {mode} profile."), &[("mode", mode), ("name", name)]);
-        format!("{what}\n{working}")
-    } else {
-        crate::i18n::fmt(
-            tl!("The document “{name}” has an embedded color profile that does not match the current {mode} working space."),
-            &[("mode", mode), ("name", name)],
-        )
+    let mode = match front.doc.mode {
+        ColorMode::Cmyk => ProfileMode::Cmyk,
+        ColorMode::Grayscale => ProfileMode::Gray,
+        _ => ProfileMode::Rgb,
     };
-    let action = q.get("action").and_then(Value::as_str).unwrap_or("preserve").to_string();
-    let names = json!({
-        "embedded": q.get("embedded").and_then(Value::as_str).unwrap_or("?"),
-        "working": q.get("working").and_then(Value::as_str).unwrap_or("?"),
-        "policyKey": policy_key(front.doc.mode),
-    });
-    crate::prefs_ui::open_mismatch(app, &message, &action, missing, FIELD, names);
+    let text = |key: &str| q.get(key).and_then(Value::as_str).unwrap_or("?").to_owned();
+    let missing = q.get("missing").and_then(Value::as_bool) == Some(true);
+    let (question, action) = if missing {
+        // Only "leave as is" is a policy for a missing profile; the radios offer no other policy action.
+        (ProfileQuestion::missing(text("working")), ProfileAction::LeaveAsIs)
+    } else {
+        let action = match q.get("action").and_then(Value::as_str) {
+            Some("convert") => ProfileAction::ConvertToWorking,
+            Some("discard") => ProfileAction::Discard,
+            _ => ProfileAction::UseEmbedded,
+        };
+        (ProfileQuestion::mismatch(text("embedded"), text("working")), action)
+    };
+    let dialog = ProfileMismatchDialog::new(front.name.clone(), mode, question).action(action).rememberable(policy_key(front.doc.mode).is_some());
+    // Refused only when the question is already open; it keeps its answers.
+    let _ = app.framework.dialogs.open_unless_open(dialog);
+}
+
+/// The engine's name for a profile answer (`ColorState::resolve_open`).
+fn engine_action(action: ProfileAction) -> &'static str {
+    match action {
+        ProfileAction::UseEmbedded | ProfileAction::LeaveAsIs => "preserve",
+        ProfileAction::ConvertToWorking => "convert",
+        ProfileAction::Discard => "discard",
+        ProfileAction::AssignWorking => "assignWorking",
+        // `ProfileAction` is non-exhaustive: an action added later keeps the file as it is.
+        _ => "preserve",
+    }
 }
 
 /// The Color Settings policy that answers this mode's files when Ask On Mismatch is off.
 fn policy_key(mode: ColorMode) -> Option<&'static str> {
     match photocraft_engine::color_cmds::mode_space(mode) {
-        photocraft_cms::ColorSpace::Rgb => Some("policyRgb"),
-        photocraft_cms::ColorSpace::Cmyk => Some("policyCmyk"),
-        photocraft_cms::ColorSpace::Gray => Some("policyGray"),
+        craft::cms::ColorSpace::Rgb => Some("policyRgb"),
+        craft::cms::ColorSpace::Cmyk => Some("policyCmyk"),
+        craft::cms::ColorSpace::Gray => Some("policyGray"),
         _ => None,
     }
-}
-
-/// Whether `fields` are one of this module's prompts.
-pub fn owns(fields: &serde_json::Map<String, Value>) -> bool {
-    fields.contains_key(FIELD)
 }
 
 /// The prompt's answer: `Some(action)` (OK) opens the first queued file with it and moves on to
@@ -209,7 +272,6 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
         }
         app.jobs.opens.clear();
         app.jobs.batches.clear();
-        app.ui.dialogs.retain(|d| !owns(&d.fields) && !owns_damage(&d.fields) && !owns_memory(&d.fields));
         app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
         return Ok(json!({"cancelled": dropped}));
@@ -259,43 +321,16 @@ pub fn answer_remembering(app: &mut PhotocraftApp, action: &str) -> Result<Value
     r
 }
 
-/// Whether the fields belong to the damage confirmation (not the profile prompt).
-pub(crate) fn owns_damage(fields: &serde_json::Map<String, Value>) -> bool {
-    fields.contains_key(DAMAGE_FIELD)
-}
-
-/// Shows the standard agent-visible confirmation for the first damaged PSD
-/// waiting in the open queue, including its decoding warnings.
+/// Shows the framework's damaged-file prompt for the first damaged PSD waiting in the open queue,
+/// with its decoding warnings. Another family's prompt being open leaves the file waiting: the
+/// next `take` pass tries again.
 fn show_damage(app: &mut PhotocraftApp) {
     let Some(front) = app.held_opens.front().filter(|h| h.damage_pending) else { return };
-    let message = format!(
-        "{}\n\n{}\n\n{}",
-        crate::i18n::fmt(tl!("The document “{name}” may be damaged."), &[("name", &front.name)]),
-        tl!("Some layers, pixels or masks could not be read. Do you want to continue opening it?"),
-        tl!("If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original."),
-    );
-    let fields = [
-        (DAMAGE_FIELD.into(), json!(true)),
-        ("__label".into(), json!("Damaged Photoshop document")),
-        ("name".into(), json!(front.name)),
-        ("message".into(), json!(message)),
-        ("warnings".into(), json!(front.warnings)),
-    ]
-    .into_iter()
-    .collect();
-    app.ui.open_dialog(crate::state::DialogKind::Command, fields);
-}
-
-/// Body of the standard modal; the same fields are visible to automation.
-pub(crate) fn damage_body(ui: &mut egui::Ui, fields: &serde_json::Map<String, Value>) {
-    ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
-    if let Some(warnings) = fields.get("warnings").and_then(Value::as_array) {
-        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-            for warning in warnings.iter().filter_map(Value::as_str) {
-                ui.label(warning);
-            }
-        });
-    }
+    let prompt = StandardPrompt::damaged_file(front.name.clone())
+        .paragraph(tl!("If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original."))
+        .lines(front.warnings.iter().cloned().map(Label::from))
+        .tag(DamageTag);
+    let _ = alerts::open_prompt(app, prompt);
 }
 
 /// Continue or discard this file only, then move the queue forward. Accepting does not
@@ -359,7 +394,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         None => index,
     };
     app.session.set_active(index);
-    crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_deref().map(Vec::as_slice))?;
+    crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_ref())?;
     Ok(json!({"document": index, "action": action}))
 }
 
@@ -382,24 +417,26 @@ pub fn arrive_memory(
     advance_memory(app);
 }
 
-/// Whether a dialog's fields mark it as the high-memory confirmation.
-pub fn owns_memory(fields: &serde_json::Map<String, Value>) -> bool {
-    fields.contains_key(MEMORY_FIELD)
-}
-
-/// Draws the high-memory prompt's message body from its dialog fields.
-pub(crate) fn memory_body(ui: &mut egui::Ui, fields: &serde_json::Map<String, Value>) {
-    ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
-}
-
 /// Advances the shared open-prompt queue; memory prompts take their turn with damage and profile
 /// prompts in arrival order.
 pub fn advance_memory(app: &mut PhotocraftApp) {
     advance(app);
 }
 
-/// Builds and opens the confirmation dialog for a queued high-memory preflight.
+/// Opens the confirmation prompt for a queued high-memory preflight: Open or Cancel. Another
+/// family's prompt being open leaves it waiting: the next `take` pass tries again.
 fn show_memory(app: &mut PhotocraftApp, prompt: &MemoryPrompt) {
+    let shown = StandardPrompt::custom(memory_message(prompt))
+        .title(tl!("High Memory Photoshop Document"))
+        .button(PromptChoice::Proceed, tl!("Open"))
+        .button(PromptChoice::Cancel, tl!("Cancel"))
+        .tag(MemoryTag { id: prompt.id });
+    let _ = alerts::open_prompt(app, shown);
+}
+
+/// The text the high-memory prompt shows: the estimate against the available memory, the slowdown
+/// warning and, where they apply, the low-memory and unknown-capacity warnings.
+pub(crate) fn memory_message(prompt: &MemoryPrompt) -> String {
     let est_gb = prompt.estimated as f64 / (1u64 << 30) as f64;
     // An unmeasured capacity is never printed as a number, even if a stale measurement is
     // attached: the engine's `capacityUnknown` wins.
@@ -426,22 +463,7 @@ fn show_memory(app: &mut PhotocraftApp, prompt: &MemoryPrompt) {
             "The estimate is above 8 GiB and the available memory is unknown, so this process or browser tab may run out of memory. You can still try to open it."
         ));
     }
-
-    let fields = [
-        (MEMORY_FIELD.into(), json!(true)),
-        ("__label".into(), json!(tl!("High Memory Photoshop Document"))),
-        ("name".into(), json!(prompt.name)),
-        ("id".into(), json!(prompt.id)),
-        ("message".into(), json!(message)),
-        ("estimated".into(), json!(prompt.estimated)),
-        ("available".into(), json!(available)),
-        ("capacityUnknown".into(), json!(prompt.capacity_unknown)),
-        ("uncertainCapacityWarning".into(), json!(prompt.uncertain_capacity_warning)),
-    ]
-    .into_iter()
-    .collect();
-
-    app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+    message
 }
 
 /// Answers the front high-memory prompt: accepts and starts the approved open, or declines and

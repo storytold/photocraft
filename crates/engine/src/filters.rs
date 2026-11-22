@@ -76,6 +76,11 @@ fn preset(id: &str) -> Option<(&'static str, FilterParams)> {
     })
 }
 
+/// Why Lens Blur refuses an alpha channel as its depth on a Smart Object: a smart filter re-renders from its params
+/// alone, without the document's channels, so the depth would be lost (#7400). Applying it and editing a recorded
+/// filter's params both refuse it.
+pub(crate) const LENS_BLUR_CHANNEL_ON_SMART: &str = "Lens Blur can't read an alpha channel as depth on a Smart Object: rasterize the layer first";
+
 /// Builds the algorithm parameters for a filter command id from JSON params
 /// (Photoshop dialog units). Stored smart filters and previews retain their tolerant decoding;
 /// new command invocations pass through `validate_params` before any document changes.
@@ -213,7 +218,7 @@ pub(crate) fn apply_filter_to_surface_in(
     }
     // Image › Adjustments recorded as smart filters (Levels, Curves, Shadows/Highlights… from PSD).
     if let Some(kind) = id.strip_prefix("image.adjustments.") {
-        return crate::adjust_cmds::adjust_as_filter(kind, params, surf);
+        return crate::adjust_cmds::adjust_as_filter(kind, params, surf, None);
     }
     // WebAssembly plug-in smart filters (plugin_cmds).
     if id == crate::plugin_cmds::RUN {
@@ -339,7 +344,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                     // A smart filter re-renders from its params alone, without the document's
                     // channels, so Lens Blur's alpha-channel depth would be lost (#7400).
                     if matches!(fp, FilterParams::LensBlur { depth: algo::DepthSource::Channel, .. }) {
-                        return Err(EngineError::Other("Lens Blur can't read an alpha channel as depth on a Smart Object: rasterize the layer first".into()));
+                        return Err(EngineError::Other(LENS_BLUR_CHANNEL_ON_SMART.into()));
                     }
                     // A smart filter re-renders from its params alone: a Displace map read from an
                     // open document, which the re-render can't read again, is kept in them, as

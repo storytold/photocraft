@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::ActionStep;
 
 /// An independently constructed selection-property reference, as recorded in Group F.
 fn selection() -> D {
@@ -56,7 +57,7 @@ fn fixtures() -> Vec<(&'static str, Option<&'static str>, Descriptor)> {
     ellipse.items.last_mut().unwrap().1 = D::Boolean(false);
     cases.push(("AddT", Some("addTo"), ellipse));
     for mode in ["Scrn", "H", "linearDodge"] {
-        cases.push(("Fade", Some("fade"), desc("null").with("Opct", pct(25.5)).with("Md  ", enm("BlnM", mode))));
+        cases.push(("Fade", Some("fade"), desc("null").with("Opct", pct(25.0)).with("Md  ", enm("BlnM", mode))));
     }
     for edge in ["AdCH", "AdRg", "AdTp", "AdCV", "AdBt"] {
         cases.push(("Dstr", Some("distribute"), desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", edge))));
@@ -97,9 +98,9 @@ fn assert_kept(id: &str, name: Option<&str>, descriptor: Descriptor) {
     let mut s = Session::new();
     let loaded = s.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&atn::write(&original).unwrap())})).unwrap();
     assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{id}/{name:?}/{descriptor:?}");
-    assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
-    assert!(s.actions.list[0].disabled.contains(&0));
-    assert!(s.actions.list[0].dialogs.contains(&0));
+    assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
+    assert!(s.actions.list.actions()[0].disabled.contains(&0));
+    assert!(s.actions.list.actions()[0].dialogs.contains(&0));
     let saved = s.execute("actions.save", json!({"action":"Step"})).unwrap();
     assert_eq!(saved["skipped"], json!([]));
     let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
@@ -182,7 +183,7 @@ fn group_f_maps_steps_recorded_with_the_application_header() {
     for (event, d, (command, params)) in cases {
         let loaded = import(&file(event, d)).unwrap();
         assert!(loaded.unsupported.is_empty(), "{command}");
-        assert_eq!(loaded.actions[0].steps, vec![(command.to_string(), params)]);
+        assert_eq!(loaded.actions[0].steps, vec![ActionStep::new(command, params)]);
     }
 }
 
@@ -262,16 +263,16 @@ fn noncanonical_group_f_enums_keep_their_bytes_and_flags() {
     }
 }
 
-/// Fade writes native defaults and clamps only its documented opacity range.
+/// Fade writes native defaults; a recorded opacity just outside 0..=100 wraps modulo 100 on import.
 #[test]
 fn fade_defaults_and_opacity_limits_are_explicit() {
     let native = export_item("edit.fade", &json!({}), "S").unwrap().descriptor.unwrap();
     assert_eq!(native, desc("null").with("Opct", pct(100.0)).with("Md  ", enm("BlnM", "Nrml")));
-    for (opacity, expected) in [(-5.0, 0.0), (0.0, 0.0), (100.0, 100.0), (105.0, 100.0)] {
+    for (opacity, expected) in [(-5.0, 95.0), (0.0, 0.0), (100.0, 100.0), (105.0, 5.0), (250.0, 100.0)] {
         let bytes = file(AtnEvent::Code(*b"Fade"), desc("null").with("Opct", pct(opacity)).with("Md  ", enm("BlnM", "Nrml")));
         let loaded = import(&bytes).unwrap();
         assert!(loaded.unsupported.is_empty());
-        assert_eq!(loaded.actions[0].steps[0].1["opacity"].as_f64(), Some(expected));
+        assert_eq!(loaded.actions[0].steps[0].params["opacity"].as_f64(), Some(expected));
         let saved = export("Group F", &[&loaded.actions[0]], &[], false).unwrap().0;
         let d = atn::parse(&saved).unwrap().actions[0].items[0].descriptor.clone().unwrap();
         assert_eq!(d, desc("null").with("Opct", pct(expected)).with("Md  ", enm("BlnM", "Nrml")));
@@ -302,7 +303,6 @@ fn group_f_unsupported_settings_are_not_silently_replaced() {
         (*b"AddT", wrong_ref),
         (*b"PstI", desc("null").with("AntA", enm("Annt", "Unknown")).with("As  ", D::Class(class("Pxel")))),
         (*b"PstO", desc("null").with("AntA", enm("Annt", "Anno")).with("As  ", D::Class(class("Other")))),
-        (*b"Fade", desc("null").with("Opct", pct(50.0))),
         (*b"Fade", desc("null").with("Opct", px(50.0)).with("Md  ", enm("BlnM", "Nrml"))),
         (*b"Dstr", desc("null").with("null", target_ref("Lyr ")).with("Usng", enm("ADSt", "Unknown"))),
         (*b"RmvL", desc("null").with("apply", D::Boolean(true))),
@@ -332,7 +332,7 @@ fn group_f_unsupported_settings_are_not_silently_replaced() {
         original.actions[0].items[0].dialog_options = 2;
         let loaded = import(&atn::write(&original).unwrap()).unwrap();
         assert_eq!(loaded.unsupported.len(), 1);
-        assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP);
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP);
         let saved = export("Group F", &[&loaded.actions[0]], &[], false).unwrap().0;
         assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0], original.actions[0].items[0]);
     }
