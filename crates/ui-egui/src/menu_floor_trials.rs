@@ -156,6 +156,15 @@ fn the_held_menu_model_equals_a_fresh_build_after_each_step() {
     held_is_fresh(&mut h, "closing it");
     h.state_mut().session.saved_to("/tmp/Renamed.psd".into());
     held_is_fresh(&mut h, "a save that renames the document");
+    // Three documents, the first active: moving the second after the third keeps the active document where it was,
+    // and the Window menu's second entry opens the other document now (#16252).
+    for name in ["Second", "Third"] {
+        h.state_mut().session.execute("file.new", json!({"width": 200, "height": 100, "name": name})).unwrap();
+    }
+    h.state_mut().session.set_active(0);
+    held_is_fresh(&mut h, "opening two more documents");
+    assert_eq!(h.state_mut().session.move_document(1, 2), Some(2));
+    held_is_fresh(&mut h, "reordering the documents behind the active one");
 }
 
 #[test]

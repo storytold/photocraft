@@ -744,7 +744,10 @@ impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
             },
             _ => 0,
         };
-        Revision::of(&(shown, clip, self.doc.size.width, self.doc.size.height))
+        // A tile that fails to read shows zeros, and its pixels again once it reads, without moving its surface's
+        // generation: the scratch read-error generation moves with both (#16252).
+        let scratch = photocraft_raster::spill::read_error_generation();
+        Revision::of(&(shown, clip, self.doc.size.width, self.doc.size.height, scratch))
     }
 
     fn render(&self, key: &LayerThumb<LayerId>, request: &ThumbRequest) -> ThumbRender {
