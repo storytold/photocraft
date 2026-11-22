@@ -33,12 +33,7 @@ pub(crate) fn blending_rows(forced: Option<bool>) -> Vec<Param> {
         // No value enables it, so neither the user nor automation can change the target's state.
         preserve = preserve.enabled_when_in(PRESERVE, Vec::<FieldValue>::new()).not_remembered();
     }
-    vec![
-        Param::section(tl!("Blending")),
-        blend_param("mode", tl!("Mode:"), false, BlendMode::Normal),
-        super::new_layer_ui::opacity_param(),
-        preserve,
-    ]
+    vec![Param::section(tl!("Blending")), blend_param("mode", tl!("Mode:"), false, BlendMode::Normal), super::new_layer_ui::opacity_param(), preserve]
 }
 
 /// The Preserve Transparency that Fill's or Stroke's `target` (as `edit.fill` takes it) forces: off on the Background
