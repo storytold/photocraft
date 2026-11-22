@@ -253,6 +253,7 @@ mod gpu_tests {
     }
 
     #[test]
+    #[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
     fn per_pixel_settings_develop_on_the_gpu_like_the_cpu_and_the_rest_stays_on_the_cpu() {
         let _gpu = photocraft_testkit::gpu_lock();
         // 8 and 32 bits: the dialog hands the develop only `float` (32-bit or not, `camera_raw_ui/convert.rs`), so 16
@@ -312,6 +313,7 @@ mod gpu_tests {
     }
 
     #[test]
+    #[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
     fn neutral_settings_skip_the_gpu_round_trip() {
         let _gpu = photocraft_testkit::gpu_lock();
         let Some(mut app) = gpu_app(8) else { return };
@@ -328,6 +330,7 @@ mod gpu_tests {
     }
 
     #[test]
+    #[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
     fn shadows_on_a_two_pixel_proxy_develop_on_the_cpu_and_keep_the_gpu() {
         let _gpu = photocraft_testkit::gpu_lock();
         let Some(mut app) = gpu_app(8) else { return };

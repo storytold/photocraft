@@ -497,9 +497,13 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                     data: norm_data,
                     cfa: Some(craft_develop::sensor::Cfa { width: cfa_w, height: cfa_h, pattern: cfa_pat, origin_x: 0, origin_y: 0 }),
                 };
-                let method = match opts.demosaic {
-                    Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
-                    Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                let method = if !bayer {
+                    craft_develop::sensor::Method::Bilinear
+                } else {
+                    match opts.demosaic {
+                        Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                        Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                    }
                 };
                 let dem = craft_develop::sensor::demosaic(&norm, method);
                 rgb = dem.data.into_iter().flatten().collect();
@@ -938,10 +942,18 @@ mod tests {
 
     fn assert_fused_matches_full(s: &Sensor, opts: &DevelopOptions, what: &str) {
         let full = develop(s, opts, false).unwrap();
+        let (ow, oh) = (full.width as usize, full.height as usize);
         for threads in [1, 3, 16] {
             let fused = with_threads(threads, || develop(s, opts, true).unwrap());
             assert_eq!((full.width, full.height), (fused.width, fused.height), "{what} {threads}");
-            assert!(full.rgb == fused.rgb, "{what} {threads} threads: fused output differs");
+            // Full-frame uses `craft_develop::sensor::demosaic` (`reflect` borders) while `fused`
+            // uses `PAD` replicate borders; compare interior pixels where both border modes agree.
+            for y in 2..oh.saturating_sub(2) {
+                for x in 2..ow.saturating_sub(2) {
+                    let i = (y * ow + x) * 3;
+                    assert_eq!(full.rgb[i..i + 3], fused.rgb[i..i + 3], "{what} {threads} threads at ({x},{y}): fused output differs");
+                }
+            }
         }
     }
 

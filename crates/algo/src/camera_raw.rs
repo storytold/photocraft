@@ -565,7 +565,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
                     let bv = b.data[i];
                     let w_sh = (-bv / 2.5).clamp(0.0, 1.0);
                     let w_hi = (bv / 2.5).clamp(0.0, 1.0);
-                    dl += sh * w_sh * 1.4 - hi * w_hi * 1.4;
+                    dl += sh * w_sh * 1.4 + hi * w_hi * 1.4;
                 }
                 if let Some(cl_p) = &clar {
                     dl += cl * (log_l.data[i] - cl_p.data[i]);
@@ -600,8 +600,9 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
     }
 
     // 5. Sharpening in log-luminance via `craft_develop::finish::sharpen_term`.
-    if ds.detail.sharpen_amount > 0.0 {
-        let sig = craft_develop::local::sharpen_sigma(craft_develop::local::sharpen_sigma_raw(&ds, long, long) * ps);
+    let raw_sig = craft_develop::local::sharpen_sigma_raw(&ds, long, long) * ps;
+    if ds.detail.sharpen_amount > 0.0 && raw_sig >= 0.3 {
+        let sig = craft_develop::local::sharpen_sigma(raw_sig);
         let log_l = craft_develop::raster::Plane { width: w, height: h, data: img.data.iter().map(|c| craft_develop::local::log_lum(*c)).collect() };
         let blur = craft_develop::raster::blur::gaussian_taps(&log_l, &craft_develop::raster::blur::gauss_taps(sig));
         let limit = craft_develop::finish::sharpen_limit(ds.detail.sharpen_detail);
