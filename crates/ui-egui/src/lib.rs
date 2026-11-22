@@ -246,6 +246,7 @@ pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::cjk_fonts;
 pub use text::direction;
 pub use text::served_fonts;
+pub use tools::adjustment_brush;
 use tools::align_bar;
 pub use tools::analysis;
 pub use tools::artboard_tool;

@@ -407,6 +407,7 @@ paint.sharpen
 paint.smudge
 paint.historyBrush
 paint.artHistoryBrush
+paint.adjustmentBrush
 paint.redEye
 image.imageSize
 image.canvasSize

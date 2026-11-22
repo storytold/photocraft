@@ -52,6 +52,8 @@ pub enum Tool {
     Blur,
     Sharpen,
     Smudge,
+    /// Paints an adjustment layer's mask, making the layer on the first stroke (#12519).
+    AdjustmentBrush,
     Dodge,
     Burn,
     Sponge,
@@ -130,6 +132,7 @@ impl Tool {
             Self::Blur => "blur",
             Self::Sharpen => "sharpen",
             Self::Smudge => "smudge",
+            Self::AdjustmentBrush => "adjustmentBrush",
             Self::Dodge => "dodge",
             Self::Burn => "burn",
             Self::Sponge => "sponge",
@@ -164,7 +167,7 @@ impl Tool {
             .copied()
     }
 
-    pub const ALL: [Tool; 69] = [
+    pub const ALL: [Tool; 70] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -211,6 +214,7 @@ impl Tool {
         Tool::Blur,
         Tool::Sharpen,
         Tool::Smudge,
+        Tool::AdjustmentBrush,
         Tool::Dodge,
         Tool::Burn,
         Tool::Sponge,
@@ -287,6 +291,7 @@ impl Tool {
             Tool::Blur => "Blur Tool",
             Tool::Sharpen => "Sharpen Tool",
             Tool::Smudge => "Smudge Tool",
+            Tool::AdjustmentBrush => "Adjustment Brush Tool",
             Tool::Dodge => "Dodge Tool",
             Tool::Burn => "Burn Tool",
             Tool::Sponge => "Sponge Tool",
@@ -341,6 +346,7 @@ impl Tool {
                 | Tool::Blur
                 | Tool::Sharpen
                 | Tool::Smudge
+                | Tool::AdjustmentBrush
                 | Tool::Dodge
                 | Tool::Burn
                 | Tool::Sponge
@@ -367,6 +373,8 @@ impl Tool {
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush | Tool::ArtHistoryBrush => 'Y',
             Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
+            // Its own slot without a letter: no Shift+letter cycle reaches it.
+            Tool::AdjustmentBrush => '\0',
             // In the Marquee flyout, but M cycles only the Rectangular and Elliptical Marquee.
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',

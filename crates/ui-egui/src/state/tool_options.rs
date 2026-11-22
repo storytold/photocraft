@@ -39,6 +39,16 @@ pub struct ToolOptions {
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
     /// collect as a tint on the canvas and ↩ applies them together (Esc drops them).
     pub remove_after_each_stroke: bool,
+    /// Adjustment Brush: the Adjustment dropdown's entry (`photocraft_engine::adjustment_brush_cmds::ENTRIES`).
+    pub adjustment_brush_kind: String,
+    /// Adjustment Brush: Subtract (paints black into the mask) instead of Add.
+    pub adjustment_brush_subtract: bool,
+    /// Adjustment Brush: the Overlay checkbox (its tint over the mask is #12520).
+    pub adjustment_brush_overlay: bool,
+    /// Adjustment Brush: the active layer the dropdown last followed, so selecting another
+    /// adjustment layer sets it once and a pick in the dropdown sticks.
+    #[serde(skip)]
+    pub adjustment_brush_followed: Option<u64>,
     pub feather: f32,
     /// linear | radial | angle | reflected | diamond
     pub gradient_style: String,
@@ -431,6 +441,10 @@ impl Default for ToolOptions {
             object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
+            adjustment_brush_kind: photocraft_engine::adjustment_brush_cmds::DEFAULT_KIND.into(),
+            adjustment_brush_subtract: false,
+            adjustment_brush_overlay: false,
+            adjustment_brush_followed: None,
             feather: 0.0,
             gradient_style: "linear".into(),
             gradient_reverse: false,
