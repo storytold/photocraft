@@ -215,7 +215,7 @@ fn canvas_view(props: &mut CanvasProps<'_>, ui: &mut egui::Ui) {
 }
 
 /// Every input of the options bar's picker field: the presets, what it shows of the brush (its tip and face), and the
-/// picker's view state.
+/// picker's view state, and the Background Eraser's brush and tolerance when its custom rows are shown.
 #[derive(MemoProps)]
 struct FieldProps<'a> {
     presets: &'a Tracked<Arc<Vec<BrushPreset>>>,
@@ -224,11 +224,12 @@ struct FieldProps<'a> {
     current: Option<BrushKey>,
     enabled: bool,
     state: &'a mut Tracked<BrushPickerState<BrushKey>>,
+    eraser: Option<(&'a Tracked<BrushSettings>, &'a String)>,
     out: Outbox<'a, FieldEvent>,
 }
 
-/// What a run of the picker field reports: the picker's output, with every row's key when it holds picks.
-struct FieldEvent(BrushPresetPickerOutput<BrushKey>, Vec<BrushKey>);
+/// What a run of the picker field reports: picks and keys, plus any custom eraser-row changes.
+struct FieldEvent(BrushPresetPickerOutput<BrushKey>, Vec<BrushKey>, Option<EraserRows>);
 
 /// The closed picker field of the options bar, which opens the popover. `enabled` is false for the Eraser in Block
 /// mode, which paints with no brush. A memoized view: it runs when the presets, the brush's tip or face, the current
@@ -243,20 +244,36 @@ pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bo
         current: current_key(tools),
         enabled,
         state: &mut app.ui.brush_picker_state,
+        eraser: (app.ui.tool == Tool::BackgroundEraser).then_some((&tools.brush, &app.ui.tool_options.bg_tolerance_control)),
         out: Outbox::new(&mut sent),
     };
     let _ = MemoView::new("brush-preset-field", props, field_view).show(ui);
-    for FieldEvent(out, keys) in sent {
+    for FieldEvent(out, keys, eraser) in sent {
         apply(app, ui.ctx(), &keys, out);
+        if let Some(rows) = eraser {
+            commit_keyed(app, &rows.before, &rows.brush, rows.key);
+            if app.ui.tool_options.bg_tolerance_control != rows.tolerance {
+                app.ui.tool_options.bg_tolerance_control = rows.tolerance;
+            }
+        }
     }
 }
 
 /// The picker field's view.
 fn field_view(props: &mut FieldProps<'_>, ui: &mut egui::Ui) {
+    let mut eraser = props.eraser.map(|(brush, tolerance)| {
+        let brush = (**brush).clone();
+        EraserRows { before: brush.clone(), brush, tolerance: tolerance.clone(), key: None }
+    });
     let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.parts);
-    let out = input.picker(bind_tracked!(props.state)).enabled(props.enabled).show(ui);
+    let picker = input.picker(bind_tracked!(props.state)).enabled(props.enabled);
+    let picker = match eraser.as_mut() {
+        Some(rows) => picker.compact(true).rows(|ui| rows.key = crate::bg_eraser_popup::rows(ui, &mut rows.brush, &mut rows.tolerance)),
+        None => picker,
+    };
+    let out = picker.show(ui);
     let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
-    props.out.send(FieldEvent(out, keys));
+    props.out.send(FieldEvent(out, keys, eraser));
 }
 
 #[cfg(test)]
@@ -384,3 +401,7 @@ fn toggle_view(props: &mut ToggleProps<'_>, ui: &mut egui::Ui) {
 #[cfg(test)]
 #[path = "../brush_picker_gear_menu_tests.rs"]
 mod gear_menu_tests;
+
+#[cfg(test)]
+#[path = "brush_picker_compact_tests.rs"]
+mod compact_tests;
