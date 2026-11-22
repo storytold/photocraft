@@ -1,5 +1,6 @@
 //! A family installed while the app runs, picked from the Type tool's font menu.
 
+use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -23,7 +24,7 @@ fn renamed_font(family: &str) -> Vec<u8> {
 
 /// A pointer press and release at the centre of the row labelled `label`, as a mouse click.
 fn click_row(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str) {
-    let at = h.get_by_label(label).rect().center();
+    let at = h.get_by_role_and_label(Role::TreeItem, label).rect().center();
     h.hover_at(at);
     h.run();
     for pressed in [true, false] {

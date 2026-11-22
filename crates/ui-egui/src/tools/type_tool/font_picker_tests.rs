@@ -165,7 +165,7 @@ fn options_bar_hover_previews_with_the_character_picker_also_shown() {
     h.run();
     h.query_all_by_label("Font family").next().unwrap().type_text("JetBrains Mono");
     h.run();
-    h.get_by_label("JetBrains Mono").hover();
+    h.get_by_role_and_label(Role::TreeItem, "JetBrains Mono").hover();
     h.run();
     assert_eq!(font(&mut h), "JetBrains Mono");
     h.query_all_by_label("Font family").next().unwrap().hover();
