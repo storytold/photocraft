@@ -17,7 +17,7 @@ use photocraft_doc::{Document, Fill, GradientStyle, Layer, LayerContent, LayerId
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str, check_pixels_unlocked, layer_param};
+use crate::commands::{CommandSpec, check_pixels_unlocked, layer_param, parse_blend};
 use crate::presets::gradients::{GradientPreset, transparency_param};
 use crate::{EngineError, Result, Session};
 
@@ -300,7 +300,7 @@ pub fn new_layer(s: &Session, doc: &Document, p: &Value) -> Result<Layer> {
     let opacity = num(p, "opacity").unwrap_or(100.0).clamp(0.0, 100.0) / 100.0;
     let blend = match p.get("mode").and_then(Value::as_str) {
         None | Some("") => photocraft_color::BlendMode::Normal,
-        Some(m) => blend_from_str(m).ok_or_else(|| bad(CMD, format!("unknown blend mode `{m}`")))?,
+        Some(m) => parse_blend(m).ok_or_else(|| bad(CMD, format!("unknown blend mode `{m}`")))?,
     };
     let canvas = doc.bounds();
     if canvas.is_empty() {

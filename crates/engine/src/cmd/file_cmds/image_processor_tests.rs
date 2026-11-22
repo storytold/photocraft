@@ -43,7 +43,7 @@ fn image_processor_current_uses_unsaved_edits_at_several_depths_without_changing
         let before = st.doc.clone();
         let history = st.history.past_len();
         let layer = st.active_layer;
-        let selection = st.selected_layers();
+        let selection = st.selected_layers().to_vec();
         let active = s.active_index();
         assert!(st.is_dirty());
         let result =

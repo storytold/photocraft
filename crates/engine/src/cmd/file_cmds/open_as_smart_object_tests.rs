@@ -126,7 +126,7 @@ fn history_is_the_single_state_open_as_smart_object() {
     s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
     let st = s.active().unwrap();
     assert_eq!(st.history.entries(), ["Open As Smart Object"], "one state, as File > Open has");
-    assert_eq!(st.snapshots.first().map(|snap| snap.name.as_str()), Some("a_test"), "the opening snapshot is named after the layer");
+    assert_eq!(st.snapshots().first().map(|snap| snap.name.as_str()), Some("a_test"), "the opening snapshot is named after the layer");
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn the_opening_snapshot_shows_the_placed_smart_object() {
     let mut s = Session::new();
     s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
     let st = s.active().unwrap();
-    let first = st.snapshots.first().unwrap();
+    let first = st.snapshots().first().unwrap();
     assert_eq!(first.doc.layers.len(), 1, "snapshot 0 already holds the smart object");
     assert!(matches!(first.doc.layers[0].content, LayerContent::Smart(_)));
     assert_eq!(first.layers.active, Some(first.doc.layers[0].id));

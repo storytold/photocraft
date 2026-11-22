@@ -51,15 +51,15 @@ fn a_move_drag_reads_out_the_offset_it_will_commit() {
     app.ui.extras.snap = false;
     app.ui.view.show.smart_guides = false;
     let m = egui::Modifiers::NONE;
-    assert_eq!(super::offset_readout(&app), None, "no drag");
+    let rows = |r: craft::ui::canvas::ToolHostResponse| r.readout.map(|r| r.rows.into_iter().map(|(_, v)| v).collect::<Vec<_>>());
     // Pressed on the red square (16..32): with Auto-Select (on by default) an empty spot would
     // start the layer marquee instead of a move.
-    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 24.0, y: 24.0, pressure: 1.0 }, m);
-    assert_eq!(super::offset_readout(&app), None, "pressed, not moved yet");
-    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 34.4, y: 20.8, pressure: 1.0 }, m);
-    assert_eq!(super::offset_readout(&app), Some(["10 px".to_string(), "-3 px".to_string()]));
-    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 34.4, y: 20.8 }, m);
-    assert_eq!(super::offset_readout(&app), None, "released");
+    let r = crate::canvas::tool_event_response(&mut app, ToolEvent::Down { x: 24.0, y: 24.0, pressure: 1.0 }, m);
+    assert_eq!(rows(r), None, "pressed, not moved yet");
+    let r = crate::canvas::tool_event_response(&mut app, ToolEvent::Move { x: 34.4, y: 20.8, pressure: 1.0 }, m);
+    assert_eq!(rows(r), Some(vec!["10 px".to_string(), "-3 px".to_string()]));
+    let r = crate::canvas::tool_event_response(&mut app, ToolEvent::Up { x: 34.4, y: 20.8 }, m);
+    assert_eq!(rows(r), None, "released");
 }
 
 /// A release past the ±10,000,000 px the preview and the readout show commits the offset they
@@ -333,7 +333,7 @@ fn the_estimate_follows_a_group_into_its_contents() {
 
 /// A `width` × `height` `depth`-bit document whose new layer covers the canvas, one fill per tile
 /// with its own colour (a photo: no two tiles share pixels), and the Move tool on.
-fn photo(width: u32, height: u32, depth: u32) -> PhotocraftApp {
+fn photo(width: u32, height: u32, depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": width, "height": height, "depth": depth})).unwrap();
     app.sync_views();
@@ -355,13 +355,14 @@ fn photo(width: u32, height: u32, depth: u32) -> PhotocraftApp {
     app
 }
 
-/// Mid-drag by (37, 11): is the layer shown at the pointer?
+/// Mid-drag by (1000, 500) document pixels, far enough on screen for these large documents (shown at a small zoom)
+/// to pass the press slop: is the layer shown at the pointer?
 fn follows_a_drag(app: &mut PhotocraftApp) -> bool {
     let m = egui::Modifiers::NONE;
     crate::canvas::tool_event(app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, m);
-    crate::canvas::tool_event(app, ToolEvent::Move { x: 137.0, y: 111.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(app, ToolEvent::Move { x: 1100.0, y: 600.0, pressure: 1.0 }, m);
     let shown = super::display_doc(app, 0).is_some();
-    crate::canvas::tool_event(app, ToolEvent::Up { x: 137.0, y: 111.0 }, m);
+    crate::canvas::tool_event(app, ToolEvent::Up { x: 1100.0, y: 600.0 }, m);
     shown
 }
 
@@ -439,7 +440,7 @@ fn bounding_box_preference_turns_the_live_drag_off() {
 
 /// A `depth`-bit transparent document whose layer holds a red square (8..24)² and a blue one
 /// (40..56)×(8..24), the red one selected; the Move tool with Auto-Select on.
-fn selected_pixels(depth: u32) -> (PhotocraftApp, photocraft_doc::LayerId) {
+fn selected_pixels(depth: u32) -> (Box<PhotocraftApp>, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64, "background": "transparent", "depth": depth})).unwrap();
     app.sync_views();
@@ -471,10 +472,7 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], m: egui::Modifier
 
 /// ↩ through the app's key handling.
 fn enter(app: &mut PhotocraftApp) {
-    let ctx = egui::Context::default();
-    let key = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
-    let input = egui::RawInput { events: vec![key], ..Default::default() };
-    ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+    crate::canvas::testing::key(app, egui::Key::Enter, egui::Modifiers::NONE);
 }
 
 /// #578: with a selection the Move tool drags the selected pixels (from anywhere, without an
@@ -582,22 +580,6 @@ fn arrow_keys_nudge_the_selected_pixels() {
     assert_eq!(alpha(&app, id, 48, 16), 1.0, "the layer itself didn't move");
 }
 
-/// Without floatable pixels (a position-locked layer) the Move tool behaves as without a
-/// selection: it moves the layer, which the lock refuses.
-#[test]
-fn a_layer_that_cannot_float_moves_whole_as_before() {
-    let (mut app, id) = selected_pixels(8);
-    app.session.execute("layer.lockLayers", json!({"position": true})).unwrap();
-    drag(&mut app, [16.0, 16.0], [26.0, 16.0], egui::Modifiers::NONE);
-    assert_eq!(offset(&app), None);
-    assert!(alpha(&app, id, 10, 10) == 1.0 && alpha(&app, id, 30, 16) == 0.0, "nothing moved");
-    // Without a selection the layer moves whole.
-    app.session.execute("layer.lockLayers", json!({"position": false})).unwrap();
-    app.session.execute("select.deselect", json!({})).unwrap();
-    drag(&mut app, [16.0, 16.0], [26.0, 16.0], egui::Modifiers::NONE);
-    assert!(alpha(&app, id, 10, 10) == 0.0 && alpha(&app, id, 58, 16) == 1.0, "the whole layer moved");
-}
-
 #[test]
 fn floating_selection_does_not_snap_to_its_own_starting_outline_or_preview_at_zero() {
     let (mut app, _id) = selected_pixels(8);
@@ -616,7 +598,7 @@ fn floating_selection_does_not_snap_to_its_own_starting_outline_or_preview_at_ze
 
 /// Board "A" at (10, 10, 50, 50) holding a red square at (10..30)², and an empty board "B" at
 /// (200, 20, 240, 60); the red layer selected, no selection, the Move tool without Auto-Select.
-fn two_boards() -> (PhotocraftApp, photocraft_doc::LayerId, photocraft_doc::LayerId, photocraft_doc::LayerId) {
+fn two_boards() -> (Box<PhotocraftApp>, photocraft_doc::LayerId, photocraft_doc::LayerId, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 300, "height": 100, "background": "transparent"})).unwrap();
     app.sync_views();

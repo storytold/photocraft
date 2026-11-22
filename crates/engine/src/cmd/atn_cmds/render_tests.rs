@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::ActionStep;
 
 /// A real action file with one step, used by both descriptor and playback checks.
 fn file(event: AtnEvent, descriptor: Descriptor) -> Vec<u8> {
@@ -67,7 +68,7 @@ fn code_spellings_in_text_steps_keep_their_bytes_and_flags() {
         let mut s = Session::new();
         let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
         assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{:?}", original.actions[0].items[0].event);
-        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
+        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]));
         let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
@@ -93,7 +94,7 @@ fn clouds_events_map_and_refuse_unrepresentable_native_settings() {
             };
             let loaded = import(&atn::write(&file).unwrap()).unwrap();
             assert!(loaded.unsupported.is_empty());
-            assert_eq!(loaded.actions[0].steps, vec![(id.into(), json!({}))]);
+            assert_eq!(loaded.actions[0].steps, vec![ActionStep::new(id, json!({}))]);
             assert_eq!(export_item(id, &json!({}), "Render").unwrap().descriptor, Some(desc("null")));
         }
         for p in [json!({"seed": 7}), json!({"foreground": "#ff0000"}), json!({"background": "#0000ff"}), json!({"layer": 7}), json!({"target": "mask"})] {
@@ -114,11 +115,11 @@ fn clouds_events_map_and_refuse_unrepresentable_native_settings() {
 fn clouds_recorded_through_the_dialog_save() {
     for id in ["filter.render.clouds", "filter.render.differenceClouds"] {
         let mut s = Session::new();
-        s.actions.list.push(Action::new("Render", vec![(id.into(), json!({"seed": 0}))]));
+        s.actions.list.push(Action::new("Render", vec![ActionStep::new(id, json!({"seed": 0}))])).unwrap();
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]), "{id}");
         let back = import(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
-        assert_eq!(back.actions[0].steps, vec![(id.into(), json!({}))], "{id}");
+        assert_eq!(back.actions[0].steps, vec![ActionStep::new(id, json!({}))], "{id}");
     }
 }
 
@@ -156,7 +157,7 @@ fn render_descriptors_load_and_save_without_losing_values() {
 fn render_defaults_seeds_and_brightness_bounds_are_explicit() {
     let bytes = file(AtnEvent::Code(*b"Fbrs"), desc("null"));
     let action = import(&bytes).unwrap().actions.remove(0);
-    let p = &action.steps[0].1;
+    let p = &action.steps[0].params;
     assert_eq!(p["variance"], 16);
     assert_eq!(p["strength"], 4);
     assert!(i32::try_from(p["seed"].as_i64().unwrap()).is_ok());
@@ -165,13 +166,13 @@ fn render_defaults_seeds_and_brightness_bounds_are_explicit() {
     assert_eq!(import(&saved).unwrap().actions[0].steps, action.steps);
     for (brightness, expected) in [(-500, 10), (100, 100), (500, 300)] {
         let action = import(&file(AtnEvent::Code(*b"LnsF"), desc("null").with("Brgh", D::Integer(brightness)))).unwrap().actions.remove(0);
-        assert_eq!(action.steps[0].1, json!({"brightness": expected, "centerX": 0.40000000596046, "centerY": 0.40000000596046, "lens": "zoom"}));
+        assert_eq!(action.steps[0].params, json!({"brightness": expected, "centerX": 0.40000000596046, "centerY": 0.40000000596046, "lens": "zoom"}));
     }
     let native = export_item("filter.render.lensFlare", &json!({}), "S").unwrap();
     let back = import(&file(native.event, native.descriptor.unwrap())).unwrap().actions.remove(0);
-    assert_eq!(back.steps[0].1["centerX"], 0.5);
+    assert_eq!(back.steps[0].params["centerX"], 0.5);
     assert_eq!(
-        crate::filters_ext::params_for("filter.render.lensFlare", &back.steps[0].1),
+        crate::filters_ext::params_for("filter.render.lensFlare", &back.steps[0].params),
         crate::filters_ext::params_for("filter.render.lensFlare", &json!({}))
     );
     let unsigned = export_item("filter.render.fibers", &json!({"seed": u32::MAX}), "S").unwrap();
@@ -199,7 +200,7 @@ fn unsupported_render_descriptors_keep_their_bytes_and_flags() {
         original.actions[0].items[0].dialog_options = 2;
         let loaded = import(&atn::write(&original).unwrap()).unwrap();
         assert_eq!(loaded.unsupported.len(), 1);
-        assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP);
+        assert_eq!(loaded.actions[0].steps[0].command, PHOTOSHOP_STEP);
         let bytes = export("Render set", &[&loaded.actions[0]], &[], false).unwrap().0;
         assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0], original.actions[0].items[0]);
     }
@@ -242,7 +243,7 @@ fn duplicate_render_keys_keep_their_bytes_and_flags() {
         let mut s = Session::new();
         let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
         assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{event}/{key}");
-        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
+        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]));
         let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
