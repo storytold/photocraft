@@ -198,6 +198,30 @@ fn w_of_a_plain_line_keeps_its_weight() {
 }
 
 #[test]
+fn w_and_h_keep_a_diagonal_shape_create_line_live() {
+    // `shape.create` without arrow keys (or an imported line) makes a plain `LiveShape::Line`.
+    let mut app = doc();
+    app.run("shape.create", json!({"kind": "line", "from": [0, 0], "to": [200, 100], "weight": 4})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let mut h = panel(app);
+    assert!(matches!(
+        &h.state().session.active().unwrap().doc.layer(id).unwrap().content,
+        LayerContent::Shape(sh) if matches!(sh.live, Some(LiveShape::Line { .. }))
+    ));
+    type_into(&mut h, "Width", "300");
+    let (from, to, weight, _, _) = live(&h, id);
+    assert_pt(from, [0.0, 0.0], "the start");
+    assert_pt(to, [268.33, 134.16], "the end");
+    assert!(near(weight, 4.0, 1e-9), "weight {weight}");
+    assert_eq!(undo_label(&h).as_deref(), Some("Scale Paths"));
+    type_into(&mut h, "Height", "8");
+    let (from, to, weight, _, _) = live(&h, id);
+    assert!(near(weight, 8.0, 1e-9), "weight {weight}");
+    assert!(near((to[0] - from[0]).hypot(to[1] - from[1]), 300.0, 1e-6), "H keeps the length");
+    assert_eq!((shown(&h, "Width"), shown(&h, "Height")), (300.0, 8.0));
+}
+
+#[test]
 fn the_flip_buttons_mirror_the_line_and_keep_it_live() {
     let (mut h, id) = arrow();
     let (from, to, weight, width, length) = live(&h, id);
