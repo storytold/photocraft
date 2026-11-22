@@ -6953,6 +6953,7 @@ dependencies = [
  "craft-psd",
  "eframe",
  "egui",
+ "egui_kittest",
  "js-sys",
  "log",
  "photocraft-doc",
