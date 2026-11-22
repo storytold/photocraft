@@ -72,7 +72,9 @@ fn polynomials(image: &craft_raw::RawImage) -> Vec<MapPolynomial> {
 }
 
 /// Apply the OpcodeList1 GainMap and MapPolynomial opcodes of integer data to the stored codes,
-/// in list order, and drop them from the list so development does not apply them again.
+/// in list order, and drop them from the list so development does not apply them again. This runs
+/// only when a nonempty LinearizationTable is still to be applied; without one, the opcodes stay in
+/// the list and development applies them to the normalized values.
 ///
 /// DNG applies OpcodeList1 to the raw image as read from the file, before the LinearizationTable
 /// and the black and white levels (DNG 1.7, chapter 7). Its areas and gain-map positions are in
@@ -81,6 +83,9 @@ fn polynomials(image: &craft_raw::RawImage) -> Vec<MapPolynomial> {
 /// stays in the list and is handed on to development with the other lists' maps. Other opcodes
 /// stay in the list, where [`warnings`] reports them. Floating-point data is left as it is.
 pub(crate) fn apply_opcode_list1(image: &mut craft_raw::RawImage) {
+    if image.linearized || image.linearization_table.as_deref().is_none_or(<[u16]>::is_empty) {
+        return;
+    }
     let craft_raw::RawData::U16(data) = &mut image.data else { return };
     let (width, height, cpp) = (image.width, image.height, image.cpp);
     if width == 0 || height == 0 || cpp == 0 || data.len() != width * height * cpp {

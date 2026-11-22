@@ -982,6 +982,28 @@ fn an_opcode_list1_area_is_in_stored_image_coordinates() {
     assert_eq!(s.data, want);
 }
 
+/// Without a LinearizationTable, decode leaves an OpcodeList1 MapPolynomial or GainMap in the list,
+/// and development applies it to the normalized values as before, with a black level that is not 0.
+#[test]
+fn an_opcode_list1_without_a_linearization_table_is_left_to_development() {
+    let (w, h) = (16, 8);
+    let area = [0, 0, h as u32, w as u32];
+    for (name, list) in [
+        ("polynomial", testgen::map_polynomial_opcode_list(area, &[(0, vec![0.0, 2.0])])),
+        ("gain map", testgen::gain_map_opcode_list(area, 1, [[2.0, 2.0], [2.0, 2.0]])),
+    ] {
+        let data = noise(w * h, 11);
+        let mut spec = DngSpec::cfa(w, h, data.clone());
+        spec.bits = 12;
+        spec.black = vec![64];
+        spec.white = 4095;
+        spec.raw_extra = vec![(51008, Val::Undefined(list))];
+        let s = sensor(&spec.build());
+        assert_eq!(s.data, data, "{name}: the stored codes are not changed at decode");
+        assert_eq!(s.polynomials.len() + s.gain_maps.len(), 1, "{name}: handed on to development");
+    }
+}
+
 /// A LinearizationTable maps integer samples: floating-point data ignores one.
 #[test]
 fn floating_point_raw_data_ignores_a_linearization_table() {
