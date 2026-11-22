@@ -85,7 +85,7 @@ fn changing_which_way_the_image_centre_faces_measures_again() {
 }
 
 #[test]
-fn an_error_keeps_find_automatically_and_another_document_drops_a_sun_put_by_hand() {
+fn an_error_keeps_find_automatically_and_a_sun_put_by_hand_stays_with_its_document() {
     let mut h = harness();
     let ctx = h.ctx.clone();
     let set_at = |h: &mut H, at: Value| {
@@ -108,4 +108,11 @@ fn an_error_keeps_find_automatically_and_another_document_drops_a_sun_put_by_han
     let dialog = h.state().framework.dialogs.get::<FindSunDialog>().unwrap();
     assert!(dialog.options.at.is_none(), "{:?}", dialog.options.at);
     assert_eq!(result(&h)["picked"], json!(false));
+
+    // A press on a newly active document before the dialog has measured it keeps its sun.
+    h.state_mut().run("file.new", json!({"width": 128, "height": 64, "depth": 32})).unwrap();
+    assert!(super::place(h.state_mut(), [20.0, 20.0]));
+    h.run_steps(4);
+    assert_eq!(h.state().framework.dialogs.get::<FindSunDialog>().unwrap().options.at, Some([20.0, 20.0]));
+    assert_eq!(result(&h)["picked"], json!(true));
 }

@@ -93,6 +93,10 @@ pub(crate) struct FindSunDialog {
     /// Where the dialog first opens: the bottom right of the canvas, over the lower half of a 2:1 image
     /// (the ground), so it rarely covers the sun. A place the user moved it to comes first.
     first_place: egui::Pos2,
+    /// The document `options.at` was put on by a canvas press. A press can land on a document the
+    /// pump hasn't measured yet, so a switch drops only a sun put on another document (or by
+    /// automation, which names no document).
+    placed_on: Option<DocId>,
 }
 
 /// The dialog's saved placement.
@@ -356,7 +360,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let area = app.last_canvas_rect;
     let margin = egui::vec2(16.0, 16.0);
     let first_place = (area.max - ABOUT_SIZE - margin).max(area.min + margin);
-    Ok(app.framework.dialogs.open(FindSunDialog { options, result, computed, copied: None, canvas, first_place }))
+    Ok(app.framework.dialogs.open(FindSunDialog { options, result, computed, copied: None, canvas, first_place, placed_on: None }))
 }
 
 /// The dialog's result pump (a `TAKERS` row): puts a Copy button's text on the clipboard, and
@@ -379,7 +383,9 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if switched {
         let canvas = crate::canvas::document_display::CanvasHost::primary(app, index).canvas_id();
         if let Some(dialog) = app.framework.dialogs.get_mut::<FindSunDialog>() {
-            dialog.options.at = None;
+            if dialog.placed_on != Some(doc) {
+                dialog.options.at = None;
+            }
             dialog.canvas = Some(canvas);
         }
     }
@@ -402,11 +408,12 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// there, and the next pump measures it. A point off the document is the dialog's press but moves
 /// nothing.
 pub(crate) fn place(app: &mut PhotocraftApp, at: [f64; 2]) -> bool {
-    let Some(size) = app.session.active().map(|st| st.doc.bounds()) else { return false };
+    let Some((size, doc)) = app.session.active().map(|st| (st.doc.bounds(), st.doc.id)) else { return false };
     let Some(dialog) = app.framework.dialogs.get_mut::<FindSunDialog>() else { return false };
     let inside = (0.0..=f64::from(size.width())).contains(&at[0]) && (0.0..=f64::from(size.height())).contains(&at[1]);
     if inside {
         dialog.options.at = Some(at);
+        dialog.placed_on = Some(doc);
         app.ctx().request_repaint();
     }
     true
