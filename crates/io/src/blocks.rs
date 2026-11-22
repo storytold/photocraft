@@ -735,11 +735,15 @@ pub(crate) fn placed_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h
 }
 
 /// The source-space box a projective (Distort / Perspective) placement maps onto its corners: a
-/// cylinder's control-point box, as for an affine placement (#4112), else the source rect. A
-/// custom warp keeps the source rect here: there is no Photoshop reference for that combination.
+/// cylinder's or a custom warp's control-point box, as for an affine placement (#4112), else the
+/// source rect. Measured for a custom warp on the reference application's own files: after a
+/// Perspective and a pull past the warp's box, its stored corners are its placement at the box of
+/// the warp's points, to the last digits. Framing the source rect instead, a file opened in it as
+/// saved but re-rendered as a sliver on its next transform.
 pub(crate) fn perspective_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
+    use photocraft_geom::warp::WarpStyle;
     match warp {
-        Some(wp) if wp.style == photocraft_geom::warp::WarpStyle::Cylinder => placed_frame(warp, w, h),
+        Some(wp) if matches!(wp.style, WarpStyle::Cylinder | WarpStyle::Custom) => placed_frame(warp, w, h),
         _ => [0.0, 0.0, w, h],
     }
 }

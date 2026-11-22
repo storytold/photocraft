@@ -2313,3 +2313,64 @@ fn render_filters_made_in_photocraft_are_written() {
     assert!(item_for_filter(&sf("filter.render.lensFlare", json!({"lens": "fisheye"}))).unwrap_err().contains("fisheye"));
     assert!(item_for_filter(&sf("filter.render.clouds", json!({"foreground": "red"}))).is_err());
 }
+
+/// A Perspective and a custom warp that bulges past its box (the reference's own file: the top edge to 270..332, the
+/// middle pulled 150 px down, its warp's points as stored, shifted into the contents' pixels): the placed corners frame
+/// the warp's points, as the reference stores them (its quad, to its last digits). Framing the contents' rect instead
+/// put the warp's box onto those corners: the reference opened such a file as it was saved but re-rendered it as a
+/// sliver at the top on its next transform.
+#[test]
+fn a_perspective_with_a_warp_past_its_box_stores_the_corners_the_reference_stores() {
+    use photocraft_geom::warp::{BezierMesh, Warp};
+    let stored: [[f64; 2]; 16] = [
+        [150.0, 125.0],
+        [250.66666666666666, 125.0],
+        [351.3333333333333, 125.0],
+        [452.0, 125.0],
+        [150.0, 192.33333333333348],
+        [250.71013869518538, 194.79816109836207],
+        [351.37490928455975, 194.6906550970543],
+        [452.00000000000034, 192.33333333333348],
+        [150.0, 259.6666666666665],
+        [252.40554780741357, 358.2597772678116],
+        [352.9963713823862, 353.9595372154965],
+        [451.9999999999997, 259.6666666666665],
+        [150.0, 327.0],
+        [251.40173914889155, 368.6779967541204],
+        [352.03634487225116, 366.86016800473266],
+        [452.0, 327.0],
+    ];
+    let mesh = BezierMesh { us: vec![0.0, 1.0], vs: vec![0.0, 1.0], points: stored.iter().map(|p| [p[0] - 150.0, p[1] - 125.0]).collect() };
+    let warp = Warp::custom(mesh, [0.0, 0.0, 302.0, 202.0]);
+    let placed =
+        photocraft_algo::transform::Homography::rect_to_quad([0.0, 0.0, 302.0, 202.0], [[270.0, 125.0], [332.0, 125.0], [452.0, 327.0], [150.0, 327.0]])
+            .unwrap();
+    let spec = PlacedSpec {
+        idnt: "id",
+        placed: "id",
+        transform: Affine::IDENTITY,
+        perspective: Some(placed.0),
+        size: (302.0, 202.0),
+        dpi: 72.0,
+        warp: Some(&warp),
+        filter_fx: None,
+    };
+    let mut w = Vec::new();
+    let sold = sold_bytes(None, &spec, &mut w);
+    let d = sold_descriptor(&sold).unwrap();
+    let Some(Value::List(q)) = d.get("nonAffineTransform") else { panic!("corners") };
+    let q: Vec<f64> = q.iter().filter_map(|v| crate::blocks::num(Some(v))).collect();
+    let reference = [270.0, 125.0, 332.0, 125.0, 1051.0648145748135, 1335.4257712009335, -449.06481457481186, 1335.4257712009335];
+    for (a, b) in q.iter().zip(reference) {
+        assert!((a - b).abs() < 1e-6, "{q:?}");
+    }
+    // And it reads back as the same placement of the same warp.
+    let mut data = sold.clone();
+    data.truncate(sold.len());
+    let back = crate::blocks::parse_smart_perspective(b"SoLd", &data).expect("projective");
+    for (x, y) in [(0.0, 0.0), (302.0, 202.0), (150.0, 240.0)] {
+        let (a, b) = (photocraft_algo::transform::Homography(back).apply(x, y), placed.apply(x, y));
+        assert!((a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6, "{a:?} vs {b:?}");
+    }
+    assert_eq!(crate::blocks::parse_placed_warp(b"SoLd", &data).as_ref(), Some(&warp));
+}
