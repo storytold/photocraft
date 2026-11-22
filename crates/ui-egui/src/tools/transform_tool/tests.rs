@@ -2969,3 +2969,60 @@ fn undo_of_a_pull_brings_back_the_map_its_warp_was_made_with() {
     assert_eq!(warp_mesh(&app), mesh_long, "Undo takes the small pull back");
     assert_eq!(app.transform_preview.as_ref().unwrap().placed_warp, after_long, "with the map that warp was made with");
 }
+
+/// The reference's own state after a long pull of the middle under a Perspective with the top edge at half (its file:
+/// the placement from the warp's box to its stored corners, and the warp's points), and where its open session drew
+/// that grid (read off its screenshot at 50 %, about a pixel each way): the left side's points on the picture's left
+/// side, carried on past the object, the bottom corners far out below it. The grid is drawn through the render's
+/// capped map; through the plain one the corners sat inside the picture (doc y 197) and the grid looked unrelated to
+/// it.
+#[test]
+fn a_long_pulled_warp_under_a_perspective_shows_its_grid_as_the_reference_draws_it() {
+    let placed: [f64; 9] = [
+        0.42195220320486854,
+        -0.3472955765368178,
+        173.41558569614162,
+        -6.391204905766668e-13,
+        0.08072772162426656,
+        96.82079868541324,
+        -7.752258179945735e-16,
+        -0.0011576471111578094,
+        1.0,
+    ];
+    let contents: Vec<[f64; 2]> = vec![
+        [150.0, 125.0],
+        [250.0, 125.0],
+        [350.0, 125.0],
+        [450.0, 125.0],
+        [150.0, 191.66666666666663],
+        [250.1087491285402, 206.59954955455055],
+        [350.1017110638, 205.63311793407522],
+        [450.0000000000002, 191.66666666666663],
+        [150.0, 258.33333333333326],
+        [254.3499651416068, 855.6486488486745],
+        [354.0684425520055, 816.9913840296676],
+        [449.9999999999999, 258.33333333333326],
+        [150.0, 325.0],
+        [250.0310711795829, 329.26653796796677],
+        [350.0290603039429, 328.99041464783096],
+        [450.0, 325.0],
+    ];
+    let h = photocraft_algo::transform::Homography(placed);
+    let stored = WarpMesh::new(
+        vec![0.0, 1.0],
+        vec![0.0, 1.0],
+        contents
+            .iter()
+            .map(|p| {
+                let (x, y) = h.apply(p[0], p[1]);
+                Point::new(x, y)
+            })
+            .collect(),
+    )
+    .unwrap();
+    let shown = super::warp::shown_mesh(&stored, Some(placed), &super::warp::RuleSqueezes::default());
+    for (i, want) in [(0usize, [226.0, 125.0]), (4, [134.0, 370.0]), (8, [22.0, 664.0]), (12, [-110.0, 1014.0]), (15, [714.0, 1014.0]), (11, [578.0, 664.0])] {
+        let p = shown.points[i];
+        assert!((p.x - want[0]).abs() <= 4.0 && (p.y - want[1]).abs() <= 4.0, "point {i}: {p:?}, the reference drew it at {want:?}");
+    }
+}

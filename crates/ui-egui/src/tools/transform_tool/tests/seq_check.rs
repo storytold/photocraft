@@ -213,8 +213,11 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
                     let h = photocraft_algo::transform::Homography(m);
                     Some((h, h.inverse()?))
                 });
+                let squeezes = app.transform_preview.as_ref().map(|pv| pv.rule_squeezes.clone()).unwrap_or_default();
+                // The grid as the canvas gives it to the warp grid (past the perspective cap, the picture's own space).
+                let held = super::super::warp::shown_mesh(&start, placed.map(|(m, _)| m), &squeezes);
                 let flat =
-                    photocraft_geom::warp::BezierMesh { us: start.us.clone(), vs: start.vs.clone(), points: start.points.iter().map(|p| [p.x, p.y]).collect() };
+                    photocraft_geom::warp::BezierMesh { us: held.us.clone(), vs: held.vs.clone(), points: held.points.iter().map(|p| [p.x, p.y]).collect() };
                 let (s, t) = match press {
                     None => (*s, *t),
                     Some(p) => match super::super::warp::grid_surface(&start, 1.0, placed.map(|(m, _)| m))(p) {
@@ -228,7 +231,6 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
                     press = Some(Point::new(at[0], at[1]));
                 }
                 let bounds = open(app).session.warp().map(|w| w.warp.bounds).unwrap_or_default();
-                let squeezes = app.transform_preview.as_ref().map(|pv| pv.rule_squeezes.clone()).unwrap_or_default();
                 let gesture = GestureId::new(*gesture * 8 + rep as u64);
                 let mut shown = start.points.clone();
                 // How often each point has passed through infinity in this drag: the reference's picture passes the
@@ -247,10 +249,10 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
                     let Some(pulled) = pulled else { return Ok(f > 1 || rep > 0) };
                     let mut events = EditEvents::new();
                     if f == 1 {
-                        events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+                        events.push(EditEvent::begin(gesture, Mixed::Same(held.clone()), "Warp".into(), None));
                     }
                     events.push(if f == frames {
-                        EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled.clone())
+                        EditEvent::commit(gesture, Mixed::Same(held.clone()), pulled.clone())
                     } else {
                         EditEvent::update(gesture, pulled.clone())
                     });
@@ -269,8 +271,10 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, step: &Step, gesture: &mu
                     }
                     let now = warp_mesh(app).points;
                     // The framework ends a drag whose value the host changed from what the grid proposed: every later
-                    // move of the pointer did nothing (a long pull stuck until the button was released).
-                    if now != pulled.points {
+                    // move of the pointer did nothing (a long pull stuck until the button was released). The value the
+                    // host gives the grid is the session's warp as shown.
+                    let placed_now = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp).map(|(m, _)| m);
+                    if super::super::warp::shown_mesh(&warp_mesh(app), placed_now, &squeezes).points != pulled.points {
                         return Err(format!("pull {rep}, frame {f} of the drag: the warp landed other than the grid proposed it"));
                     }
                     let c = now.iter().fold(Point::ZERO, |a, p| Point::new(a.x + p.x / now.len() as f64, a.y + p.y / now.len() as f64));

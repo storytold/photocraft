@@ -103,11 +103,23 @@ pub(super) fn grid_surface(mesh: &WarpMesh, unit: f64, to_doc: Option<[f64; 9]>)
             [x, y]
         })
     });
+    // Past the perspective cap the picture (and the grid, [`shown_mesh`]) is drawn through the capped map: the press is
+    // found where that map puts the contents.
+    let capped = to_doc.zip(contents.as_ref()).and_then(|(m, c)| capped_view(&m, c));
     move |p: craft::behavior::kurbo::Point| {
         let (mesh, at, unit) = match (&contents, &placed) {
             (Some(contents), Some((back, to_doc))) => {
-                let (x, y) = back.apply(p.x, p.y);
-                let scale = to_doc.local_scale(x, y);
+                let ((x, y), scale) = match &capped {
+                    Some((fwd, inv)) => {
+                        let (x, y) = inv(p.x, p.y);
+                        let (a, b) = (fwd(x, y), fwd(x + 1.0, y));
+                        ((x, y), (b.0 - a.0).hypot(b.1 - a.1))
+                    }
+                    None => {
+                        let (x, y) = back.apply(p.x, p.y);
+                        ((x, y), to_doc.local_scale(x, y))
+                    }
+                };
                 (contents, [x, y], if scale.is_finite() && scale > 1e-9 { unit / scale } else { unit })
             }
             _ => (&doc, [p.x, p.y], unit),
@@ -195,41 +207,98 @@ pub(super) fn grid_rule(unit: f64, to_doc: Option<[f64; 9]>, armed: Option<WarpS
     }
 }
 
-/// The meshes [`squeezing_rule`] proposed squeezed at the horizon during the running drag, each with the map it carried
-/// it through: shared by the warp grid's rule, which runs while the grid is drawn, and [`grid_edit`], which lands them.
+/// The grids Warp mode has shown or proposed for a smart object under a projective placement, each with the map and
+/// the stored-style mesh it stands for: shared by the drawing ([`shown_mesh`]), the warp grid's rule, which runs while
+/// the grid is drawn, and [`grid_edit`], which lands them. The session holds the stored-style mesh (the contents'
+/// control points carried through the plain map); the grid shows and is pulled in the picture's own space, which past
+/// the render's perspective cap ([`photocraft_algo::smart_perspective::capped_map`]) is elsewhere.
 #[derive(Clone, Default)]
-pub(crate) struct RuleSqueezes(std::sync::Arc<std::sync::Mutex<Vec<Squeezed>>>);
+pub(crate) struct RuleSqueezes(std::sync::Arc<std::sync::Mutex<Vec<Shown>>>);
 
-/// A proposed mesh's points and the map it was carried through.
-type Squeezed = (Vec<[f64; 2]>, [f64; 9]);
+/// A shown grid's points, the map it was carried through and the stored-style mesh's points.
+type Shown = (Vec<[f64; 2]>, [f64; 9], Vec<[f64; 2]>);
+
+fn points_of(mesh: &WarpMesh) -> Vec<[f64; 2]> {
+    mesh.points.iter().map(|p| [p.x, p.y]).collect()
+}
+
+fn same(a: &[[f64; 2]], mesh: &WarpMesh) -> bool {
+    a.len() == mesh.points.len() && a.iter().zip(&mesh.points).all(|(a, b)| a[0] == b.x && a[1] == b.y)
+}
 
 impl RuleSqueezes {
-    /// The most kept: the rule runs a few times a pass (the proposal, a release's landing), and only the newest land.
-    const KEPT: usize = 8;
+    /// The most kept: the grid is drawn every pass and its rule runs a few times a pass, and only the newest land.
+    const KEPT: usize = 16;
 
-    fn remember(&self, points: Vec<[f64; 2]>, placed: [f64; 9]) {
+    fn remember(&self, shown: &WarpMesh, placed: [f64; 9], stored: &WarpMesh) {
         let mut v = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        v.retain(|(p, _)| *p != points);
-        v.push((points, placed));
+        let points = points_of(shown);
+        v.retain(|(p, ..)| *p != points);
+        v.push((points, placed, points_of(stored)));
         let extra = v.len().saturating_sub(Self::KEPT);
         v.drain(..extra);
     }
 
-    /// The map `mesh` was proposed through, if the rule squeezed it.
-    fn placed_of(&self, mesh: &WarpMesh) -> Option<[f64; 9]> {
+    /// The map and the stored-style mesh the shown grid `mesh` stands for, if it was shown or proposed.
+    fn stored_of(&self, mesh: &WarpMesh) -> Option<([f64; 9], WarpMesh)> {
         let v = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        v.iter().rev().find(|(p, _)| p.len() == mesh.points.len() && p.iter().zip(&mesh.points).all(|(a, b)| a[0] == b.x && a[1] == b.y)).map(|(_, m)| *m)
+        let (_, placed, stored) = v.iter().rev().find(|(p, ..)| same(p, mesh))?;
+        Some((*placed, WarpMesh::new(mesh.us.clone(), mesh.vs.clone(), stored.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect())?))
     }
 
-    fn clear(&self) {
-        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+    /// The grid last shown or proposed for the stored-style mesh `stored` under `placed`.
+    fn shown_of(&self, stored: &WarpMesh, placed: [f64; 9]) -> Option<WarpMesh> {
+        let v = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (shown, ..) = v.iter().rev().find(|(_, m, s)| *m == placed && same(s, stored))?;
+        WarpMesh::new(stored.us.clone(), stored.vs.clone(), shown.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect())
     }
 }
 
-/// `rule` under a smart object's projective placement `to_doc` (its contents' box `bounds`), each pull's proposal
-/// given way at the horizon ([`squeeze_proposal`]). The grid shows and lands exactly what it proposed: had the host
-/// squeezed the proposal afterwards, the framework would see the warp changed under the drag and end it (a long pull
-/// stuck until the button was released).
+/// The render's capped map of `to_doc` over the contents' control points `contents`, both ways, when the placement
+/// converges past the cap there; `None` when the plain map is drawn.
+#[allow(clippy::type_complexity)]
+fn capped_view(to_doc: &[f64; 9], contents: &BezierMesh) -> Option<(Box<dyn Fn(f64, f64) -> (f64, f64)>, Box<dyn Fn(f64, f64) -> (f64, f64)>)> {
+    let frame = contents.control_bounds();
+    let fwd = photocraft_algo::smart_perspective::capped_map(to_doc, frame)?;
+    let inv = photocraft_algo::smart_perspective::capped_inverse(to_doc, frame)?;
+    Some((Box::new(fwd), Box::new(inv)))
+}
+
+/// The grid Warp mode shows for the session's stored-style mesh `stored` under the placement `to_doc`: its contents'
+/// control points carried through the map the render draws the picture with, the capped one past the reference's
+/// perspective cap (measured on the reference's own state after a long pull: its grid's side points lie where the
+/// capped map puts its stored points, within 2 px; the plain map put the grid's corners hundreds of pixels inside the
+/// picture). The same grid every pass for the same state, so a drag's value stays what it proposed.
+pub(super) fn shown_mesh(stored: &WarpMesh, to_doc: Option<[f64; 9]>, shown: &RuleSqueezes) -> WarpMesh {
+    let Some(m) = to_doc else { return stored.clone() };
+    if let Some(mesh) = shown.shown_of(stored, m) {
+        return mesh;
+    }
+    let Some(back) = photocraft_algo::transform::Homography(m).inverse() else { return stored.clone() };
+    let contents = bezier_of(stored).map_points(|p| {
+        let (x, y) = back.apply(p[0], p[1]);
+        [x, y]
+    });
+    let Some((fwd, _)) = capped_view(&m, &contents) else { return stored.clone() };
+    let doc = contents.map_points(|p| {
+        let (x, y) = fwd(p[0], p[1]);
+        [x, y]
+    });
+    let Some(mesh) = WarpMesh::new(doc.us, doc.vs, doc.points.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect()) else {
+        return stored.clone();
+    };
+    if !mesh.points.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+        return stored.clone();
+    }
+    shown.remember(&mesh, m, stored);
+    mesh
+}
+
+/// `rule` under a smart object's projective placement `to_doc` (its contents' box `bounds`): the grid it is given is
+/// the one shown ([`shown_mesh`]), the rule runs on the stored-style mesh it stands for, and each pull's proposal is
+/// given way at the horizon and shown as drawn ([`squeeze_proposal`]). The grid shows and lands exactly what it
+/// proposed: had the host changed the proposal afterwards, the framework would see the warp changed under the drag
+/// and end it (a long pull stuck until the button was released).
 pub(super) fn squeezing_rule(
     rule: impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh,
     to_doc: Option<[f64; 9]>,
@@ -237,7 +306,9 @@ pub(super) fn squeezing_rule(
     squeezes: RuleSqueezes,
 ) -> impl Fn(&WarpMesh, &WarpEdit) -> WarpMesh {
     move |mesh: &WarpMesh, edit: &WarpEdit| {
-        let out = rule(mesh, edit);
+        let stored = squeezes.stored_of(mesh).map(|(_, s)| s);
+        let held = stored.as_ref().unwrap_or(mesh);
+        let out = rule(held, edit);
         match to_doc {
             Some(m) if matches!(edit, WarpEdit::Point { .. } | WarpEdit::Surface { .. }) => squeeze_proposal(out, m, bounds, &squeezes),
             _ => out,
@@ -245,10 +316,10 @@ pub(super) fn squeezing_rule(
     }
 }
 
-/// A pull's proposal `out` (carried through the placement `to_doc`, the contents' box `bounds`) as the grid proposes
-/// it: when the pull takes the warp towards the viewer past the placement's horizon, the placement gives way
-/// ([`horizon_squeeze`]) and the warp is carried through the map as it gave way, which `squeezes` remembers for
-/// [`grid_edit`]. Otherwise `out` itself.
+/// A pull's stored-style result `out` (carried through the placement `to_doc`, the contents' box `bounds`) as the grid
+/// proposes it: when the pull takes the warp towards the viewer past the placement's horizon, the placement gives way
+/// ([`horizon_squeeze`]); the proposal is the result shown through that map ([`shown_mesh`]), which `squeezes`
+/// remembers with the map and the stored-style mesh for [`grid_edit`].
 pub(super) fn squeeze_proposal(out: WarpMesh, to_doc: [f64; 9], bounds: [f64; 4], squeezes: &RuleSqueezes) -> WarpMesh {
     let to_doc = photocraft_algo::transform::Homography(to_doc);
     let Some(back) = to_doc.inverse() else { return out };
@@ -256,8 +327,10 @@ pub(super) fn squeeze_proposal(out: WarpMesh, to_doc: [f64; 9], bounds: [f64; 4]
         let (x, y) = back.apply(p[0], p[1]);
         [x, y]
     });
-    let Some(squeeze) = horizon_squeeze(to_doc.0, &contents.points, bounds) else { return out };
-    let given = to_doc.mul(&photocraft_algo::transform::Homography(squeeze));
+    let given = match horizon_squeeze(to_doc.0, &contents.points, bounds) {
+        Some(squeeze) => to_doc.mul(&photocraft_algo::transform::Homography(squeeze)),
+        None => to_doc,
+    };
     if !given.0.iter().all(|v| v.is_finite()) {
         return out;
     }
@@ -265,11 +338,13 @@ pub(super) fn squeeze_proposal(out: WarpMesh, to_doc: [f64; 9], bounds: [f64; 4]
         let (x, y) = given.apply(p[0], p[1]);
         [x, y]
     });
-    let Some(squeezed) = WarpMesh::new(doc.us, doc.vs, doc.points.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect()) else {
+    let Some(stored) = WarpMesh::new(doc.us, doc.vs, doc.points.iter().map(|p| craft::behavior::kurbo::Point::new(p[0], p[1])).collect()) else {
         return out;
     };
-    squeezes.remember(squeezed.points.iter().map(|p| [p.x, p.y]).collect(), given.0);
-    squeezed
+    let shown = shown_mesh(&stored, Some(given.0), squeezes);
+    // Plain and unsqueezed, the grid is the stored-style mesh itself; remembered all the same, so it lands with its map.
+    squeezes.remember(&shown, given.0, &stored);
+    shown
 }
 
 /// [`rule_mesh`] in a smart object's contents: the mesh, the press and the pointer's move taken back through
@@ -288,30 +363,53 @@ pub(super) fn in_contents(
     };
     let doc = bezier_of(mesh);
     let contents = doc.map_points(|p| map(back, p));
+    // Past the perspective cap the picture and the grid are drawn through the capped map ([`shown_mesh`]): the press
+    // and the pointer go through it, so a pull grabs what is shown under the pointer.
+    let capped = capped_view(&to_doc.0, &contents);
+    let to_shown = |p: [f64; 2]| match &capped {
+        Some((fwd, _)) => {
+            let (x, y) = fwd(p[0], p[1]);
+            [x, y]
+        }
+        None => map(to_doc, p),
+    };
+    let bounds = contents.control_bounds();
+    let to_contents = |p: [f64; 2]| match &capped {
+        Some((_, inv)) => {
+            let (x, y) = inv(p[0], p[1]);
+            [x, y]
+        }
+        None => doc_to_contents(to_doc, back, bounds, p),
+    };
     // The press in the document, and where the pointer is now, both taken into the contents. A surface press is the
     // contents' point at its parameters (where [`grid_surface`] found the pointer) taken through the placement itself:
     // under a perspective the carried mesh's point there lies elsewhere, and a pull from it moved too little.
     let (press, by) = match edit {
-        RuleEdit::Point { index, by } => (doc.points.get(index).copied()?, by),
-        RuleEdit::Surface { s, t, by } => (map(to_doc, contents.eval(s, t)), by),
+        RuleEdit::Point { index, by } => (to_shown(*contents.points.get(index)?), by),
+        RuleEdit::Surface { s, t, by } => (to_shown(contents.eval(s, t)), by),
         RuleEdit::SplitOnePatch { .. } => return None,
     };
-    let bounds = contents.control_bounds();
     // A surface pull presses [`PULL_PRESS`] from the pointer in the document, at the contents' point found there; off
     // the surface it keeps the pointer's own.
     let (press, edit) = match edit {
         RuleEdit::Surface { by, .. } => {
             let q = [press[0] + PULL_PRESS[0], press[1] + PULL_PRESS[1]];
-            match on_surface(&contents, doc_to_contents(to_doc, back, bounds, q)) {
+            match on_surface(&contents, to_contents(q)) {
                 Some((s, t)) => (q, RuleEdit::Surface { s, t, by }),
                 None => (press, edit),
             }
         }
         _ => (press, edit),
     };
-    let (from, to) = (doc_to_contents(to_doc, back, bounds, press), doc_to_contents(to_doc, back, bounds, [press[0] + by[0], press[1] + by[1]]));
+    let (from, to) = (to_contents(press), to_contents([press[0] + by[0], press[1] + by[1]]));
     let by = [to[0] - from[0], to[1] - from[1]];
-    let scale = to_doc.local_scale(from[0], from[1]);
+    let scale = match &capped {
+        Some(_) => {
+            let (a, b) = (to_shown(from), to_shown([from[0] + 1.0, from[1]]));
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        }
+        None => to_doc.local_scale(from[0], from[1]),
+    };
     let unit = if scale.is_finite() && scale > 1e-9 { unit / scale } else { unit };
     let mut moved = contents.clone();
     match edit {
@@ -458,10 +556,12 @@ pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, 
         // A smart object's warp pulled towards the viewer past its placement's horizon: the placement gives way as
         // the reference's does ([`horizon_squeeze`]), all through the drag (the reference's picture passes the horizon
         // once and settles, it never flips back and forth), and the points are carried through it.
-        let proposed = app.transform_preview.as_ref().filter(|_| !cancelled).and_then(|pv| pv.rule_squeezes.placed_of(mesh));
-        let squeezed = match base {
-            _ if proposed.is_some() => proposed.map(|placed| (placed, bezier_of(mesh))),
-            Some((to_doc, _)) if !cancelled => photocraft_algo::transform::Homography(to_doc).inverse().and_then(|back| {
+        // A grid Warp mode showed or proposed (in the picture's space past the perspective cap) lands as the stored-style
+        // mesh it stands for, with its map: a proposal as proposed, a cancel as the drag began.
+        let known = app.transform_preview.as_ref().and_then(|pv| pv.rule_squeezes.stored_of(mesh));
+        let squeezed = match (known, base) {
+            (Some((placed, stored)), _) => Some((placed, bezier_of(&stored))),
+            (None, Some((to_doc, _))) if !cancelled => photocraft_algo::transform::Homography(to_doc).inverse().and_then(|back| {
                 let contents = bezier_of(mesh).map_points(|p| {
                     let (x, y) = back.apply(p[0], p[1]);
                     [x, y]
@@ -481,7 +581,8 @@ pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, 
         match squeezed {
             Some((placed, doc)) => {
                 if let Some(pv) = app.transform_preview.as_mut() {
-                    pv.placed_warp = Some((placed, true));
+                    // The map the drag began with stays as it was; one it gave way to is a moved placement.
+                    pv.placed_warp = if base.is_some_and(|(m, _)| m == placed) { base } else { Some((placed, true)) };
                 }
                 set_warp(app, Warp::custom(doc, b));
             }
@@ -496,7 +597,6 @@ pub(crate) fn grid_edit(app: &mut PhotocraftApp, events: &EditEvents<WarpMesh>, 
         }
         if ends && let Some(pv) = app.transform_preview.as_mut() {
             pv.drag_placed = None;
-            pv.rule_squeezes.clear();
         }
     }
     if split

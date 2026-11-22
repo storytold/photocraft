@@ -180,6 +180,26 @@ pub fn capped_map(h: &[f64; 9], frame: [f64; 4]) -> Option<impl Fn(f64, f64) -> 
     })
 }
 
+/// The inverse of [`capped_map`] (same `h` and `frame`): the source point the capped map takes to a document point.
+/// Both passes invert exactly: across the converging direction the walk is linear once the line is known, and along it
+/// the capped spacing `s·r / (1 + (r − 1)·s)` has the inverse `g / (r − (r − 1)·g)`. `None` where `capped_map` is.
+pub fn capped_inverse(h: &[f64; 9], frame: [f64; 4]) -> Option<impl Fn(f64, f64) -> (f64, f64) + use<>> {
+    let (m, len, swap, r) = capped_setup(h, frame)?;
+    let [fx0, fy0, ..] = frame;
+    Some(move |px: f64, py: f64| {
+        let (xx, yy) = if swap { (py, px) } else { (px, py) };
+        // Pass 2 backwards: the column `xx` lies on, then the source line across it.
+        let den = m[0] - xx * m[6];
+        let (p, q) = (-m[1] / den, (xx - m[2]) / den);
+        let y = (yy * (m[6] * q + 1.0) - m[3] * q - m[5]) / (m[3] * p + m[4]);
+        // Pass 1 backwards: where along the line the capped spacing put it.
+        let (a, b) = (m[1] * y + m[2], (m[0] * len + m[1] * y + m[2]) / (m[6] * len + 1.0));
+        let g = (xx - a) / (b - a);
+        let x = len * g / (r - (r - 1.0) * g);
+        if swap { (y + fx0, x + fy0) } else { (x + fx0, y + fy0) }
+    })
+}
+
 /// [`capped_map`]'s map in its own frame: `h` from `frame`'s corner (transposed when it converges
 /// down), the converging extent, whether it is transposed, and the capped ratio.
 fn capped_setup(h: &[f64; 9], frame: [f64; 4]) -> Option<([f64; 9], f64, bool, f64)> {
@@ -612,6 +632,30 @@ pub fn from_corner(h: [f64; 9], x: f64, y: f64) -> [f64; 9] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `capped_inverse` undoes `capped_map` everywhere over a frame far past the cap, both ways the perspective may
+    /// converge (down: the reference's stored state of a 50 % Perspective after a long Warp pull, its warp frame
+    /// reaching far below the object; and sideways). The warp grid finds the contents point under the pointer this way.
+    #[test]
+    fn the_capped_inverse_undoes_the_capped_map() {
+        let down =
+            crate::transform::Homography::rect_to_quad([150.0, 125.0, 450.0, 855.6], [[226.0, 125.0], [374.0, 125.0], [6990.0, 17535.0], [-6390.0, 17535.0]])
+                .unwrap()
+                .0;
+        let side =
+            crate::transform::Homography::rect_to_quad([0.0, 0.0, 400.0, 100.0], [[0.0, 0.0], [9000.0, -4000.0], [9000.0, 4100.0], [0.0, 100.0]]).unwrap().0;
+        for (h, frame) in [(down, [150.0, 125.0, 450.0, 855.6]), (side, [0.0, 0.0, 400.0, 100.0])] {
+            let (fwd, back) = (capped_map(&h, frame).expect("capped"), capped_inverse(&h, frame).expect("capped"));
+            for i in 0..=10 {
+                for j in 0..=10 {
+                    let (x, y) = (frame[0] + (frame[2] - frame[0]) * f64::from(i) / 10.0, frame[1] + (frame[3] - frame[1]) * f64::from(j) / 10.0);
+                    let (dx, dy) = fwd(x, y);
+                    let (bx, by) = back(dx, dy);
+                    assert!((bx - x).abs() < 1e-6 && (by - y).abs() < 1e-6, "({x}, {y}) -> ({dx}, {dy}) -> ({bx}, {by})");
+                }
+            }
+        }
+    }
 
     /// The reference application's Distort of a 302 x 202 smart object, its top-right corner
     /// dragged to (480, 80): both orders' intermediates are 81 510 px but for the last bits, and it

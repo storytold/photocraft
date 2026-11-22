@@ -363,14 +363,17 @@ fn show_warp(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, w: &Sessi
     let preset = one_patch && !matches!(w.warp.style, WarpStyle::None | WarpStyle::Custom);
     // No splits on type (#3004).
     let split = pv.split.filter(|_| !w.on_type);
-    let mut grid = WarpGrid::new("Warp grid", Bind::given(w.mesh.clone()), t.session.rect())
+    // The grid as the picture is drawn: past the perspective cap through the capped map ([`warp::shown_mesh`]).
+    let placed = pv.placed_warp.map(|(m, _)| m);
+    let mesh = warp::shown_mesh(&w.mesh, placed, &pv.rule_squeezes);
+    let mut grid = WarpGrid::new("Warp grid", Bind::given(mesh.clone()), t.session.rect())
         .rule(warp::squeezing_rule(
             warp::grid_rule(unit, pv.drag_placed.or(pv.placed_warp).map(|(m, _)| m), split),
             pv.drag_placed.or(pv.placed_warp).map(|(m, _)| m),
             w.warp.bounds,
             pv.rule_squeezes.clone(),
         ))
-        .surface(warp::grid_surface(&w.mesh, unit, pv.placed_warp.map(|(m, _)| m)));
+        .surface(warp::grid_surface(&w.mesh, unit, placed));
     if preset {
         grid = grid.preset();
     }
@@ -393,8 +396,7 @@ fn show_warp(app: &PhotocraftApp, t: &FreeTransform, pv: &OpenPreview, w: &Sessi
     {
         let at = view.to_doc(pos);
         let reach = 8.0 * unit;
-        let on_grid =
-            warp::grid_surface(&w.mesh, unit, pv.placed_warp.map(|(m, _)| m))(at).is_some() || w.mesh.points.iter().any(|p| (*p - at).hypot() <= reach);
+        let on_grid = warp::grid_surface(&w.mesh, unit, placed)(at).is_some() || mesh.points.iter().any(|p| (*p - at).hypot() <= reach);
         if !on_grid {
             out.warp_click = Some(at);
         }
