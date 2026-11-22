@@ -125,6 +125,13 @@ impl TipShape {
             TipShape::Stored(r) => Some(r.bitmap()),
         }
     }
+    /// Whether the tip paints with its full bitmap: false only for a stored tip whose bitmap isn't loaded.
+    pub fn is_loaded(&self) -> bool {
+        match self {
+            TipShape::Stored(r) => r.is_loaded(),
+            TipShape::Round | TipShape::Sampled(_) => true,
+        }
+    }
     /// The tip's real pixel size (a stored tip's, not its preview's); `None` for a computed tip.
     pub fn bitmap_size(&self) -> Option<(u32, u32)> {
         match self {

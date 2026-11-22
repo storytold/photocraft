@@ -18,7 +18,7 @@ pub fn dither_noise(x: i32, y: i32) -> f32 {
     h ^= h >> 15;
     h = h.wrapping_mul(0x2C1B_3C6D);
     h ^= h >> 12;
-    f32::from((h & 0xFFFF) as u16) / 65535.0
+    f32::from((h & 0xFFFF) as u16) / 65536.0
 }
 
 use serde::{Deserialize, Serialize};
@@ -224,6 +224,16 @@ impl Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dither_noise_keeps_the_largest_hash_below_one() {
+        // This position hashes to 65535: a full-opacity probability must still include it.
+        assert_eq!(dither_noise(8, 246), 65535.0 / 65536.0);
+        assert_eq!(dither_noise(0, 0), 0.0);
+        for (x, y) in [(8, 246), (-8, -246), (i32::MIN, i32::MAX), (i32::MAX, i32::MIN)] {
+            assert!((0.0..1.0).contains(&dither_noise(x, y)));
+        }
+    }
 
     #[test]
     fn colors_convert_into_a_document_mode() {

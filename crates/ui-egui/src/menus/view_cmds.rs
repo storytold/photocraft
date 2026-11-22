@@ -19,7 +19,7 @@ mod dispatch;
 mod options;
 
 pub(crate) use arrange::document_is_floating;
-pub(crate) use dialogs::write_copy;
+pub(crate) use dialogs::{nest_artboard_export_options, strip_artboard_name_options, write_copy};
 #[cfg(test)]
 use dispatch::is_enabled_with_engine;
 pub use dispatch::{checked, handles, invoke, is_enabled, leave_full_screen_without_document};

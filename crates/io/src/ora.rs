@@ -509,6 +509,12 @@ impl Writer<'_> {
         if layer.clipped {
             self.warnings.layer(&layer.name, "OpenRaster has no clipping masks; these layers were saved unclipped");
         }
+        if layer.excluded_channels != 0 {
+            self.warnings.layer(&layer.name, "OpenRaster drops channel blending restrictions from editable layers");
+        }
+        if !layer.blend_if.is_default() {
+            self.warnings.layer(&layer.name, "OpenRaster drops Blend If settings from editable layers");
+        }
         if !layer.effects.items.is_empty() || layer.effects.psd_raw.is_some() {
             self.warnings.layer(&layer.name, "layer styles are not saved to OpenRaster");
         }
