@@ -201,14 +201,13 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if !down {
             clear(ctx);
         } else if let Some(p) = pos
-            && app.session.active().is_some_and(|st| st.doc.id != t.source)
+            && let Some((dest, _)) = target
+            && app.session.documents().get(dest).is_some_and(|st| st.doc.id != t.source)
         {
             if t.grab.is_some() {
                 ghost(ctx, p, &t.label);
             }
-            if target.is_some() {
-                ctx.set_cursor_icon(egui::CursorIcon::Copy);
-            }
+            ctx.set_cursor_icon(egui::CursorIcon::Copy);
         }
         return;
     }
@@ -238,9 +237,25 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The document under screen point `p` and the document point there. Arranged tiles use their
-/// own view transform, so selected pixels and plain layers both land at the visible drop point.
+/// The document under screen point `p` and the document point there. Arranged tiles and floating
+/// windows use their own view transform, so selected pixels and plain layers both land at the
+/// visible drop point.
 fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 2]>)> {
+    // Floating windows take priority over docked canvas cells behind them.
+    for (group, window_rect) in app.ui.document_windows.floating.iter().rev() {
+        let Some(shown) = group.shown.or_else(|| group.documents.first().copied()) else { continue };
+        let Some(d) = crate::canvas::tabs::document_index(app, shown) else { continue };
+        let host = CanvasHost { idx: d, window: Some(group.id) };
+        if let Some(space) = ToolHost::shown_space(app.ctx(), host.canvas_id())
+            && space.view.rect.contains(p)
+        {
+            let at = space.view.to_doc(p);
+            return Some((d, Some([at.x, at.y])));
+        }
+        if window_rect.contains(p) {
+            return Some((d, None));
+        }
+    }
     if !app.last_canvas_rect.contains(p) {
         return None;
     }
@@ -253,7 +268,7 @@ fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 
     match crate::canvas::arranged_cells(app, app.last_canvas_rect) {
         Some(cells) => cells.into_iter().find(|(_, r)| r.contains(p)).map(|(d, _)| (d, doc_point(d))),
         None => {
-            let d = app.session.active_index()?;
+            let d = crate::canvas::tabs::main_canvas_document(app)?;
             Some((d, doc_point(d)))
         }
     }
@@ -293,6 +308,11 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     if let Err(e) = app.run("layer.copyToDocument", p) {
         app.ui.status = e;
         app.ui.status_error = true;
+        return;
+    }
+    if app.session.active_index() != Some(dest) {
+        app.session.set_active(dest);
+        app.jobs.focus = None;
     }
 }
 

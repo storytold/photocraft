@@ -126,6 +126,13 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             continue;
         }
         follow_os_window(app, ui.ctx(), id, output.response.id);
+        if let Some((_, r)) = app.ui.document_windows.floating.iter_mut().find(|(g, _)| g.id == id)
+            && WindowHost::of(ui.ctx()).viewport_of(output.response.id).is_none()
+            && output.response.rect.is_finite()
+            && output.response.rect.width() > 0.0
+        {
+            *r = output.response.rect;
+        }
         if output.close_requested.is_some() {
             if own {
                 // A New Window for Document is a second view: closing it leaves the document open.

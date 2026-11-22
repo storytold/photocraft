@@ -260,7 +260,7 @@ pub(super) fn docked_document_indices(app: &PhotocraftApp) -> Vec<usize> {
 
 /// The document the main window's single canvas shows: the active one, or the first docked one while the active
 /// document floats.
-pub(super) fn main_canvas_document(app: &PhotocraftApp) -> Option<usize> {
+pub(crate) fn main_canvas_document(app: &PhotocraftApp) -> Option<usize> {
     let active = app.session.active()?;
     if !crate::view_cmds::document_is_floating(app, active.doc.id) {
         return app.session.active_index();
