@@ -433,6 +433,7 @@ fn the_command_stand_in_rule_is_the_table() {
         Tool::Blur,
         Tool::Sharpen,
         Tool::Smudge,
+        Tool::AdjustmentBrush,
         Tool::Dodge,
         Tool::Burn,
         Tool::Sponge,
