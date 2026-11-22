@@ -17,20 +17,26 @@ fn one_pass(s: &Surface, adj: &Adjustment, selection: Option<&Surface>, mode: Co
     s
 }
 
-/// Two patches over a 3×3 tile grid, not tile-aligned, with partial alpha; the bottom-left tiles
-/// inside the content bounds are never allocated.
-fn layer(fmt: PixelFormat) -> Surface {
+fn painted_patches(fmt: PixelFormat, patches: [Rect; 2], sample_coordinates: impl Fn(i32, i32) -> (i32, i32)) -> Surface {
     let mut s = Surface::new(fmt);
-    for r in [Rect::new(200, 240, 300, 300), Rect::new(530, 250, 560, 530)] {
+    for r in patches {
         let mut data = Vec::new();
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
                 let a = if fmt.alpha { 0.3 + 0.7 * ((x + y) % 7) as f32 / 6.0 } else { 1.0 };
-                data.extend(from_rgba(&fmt, [x as f32 / 600.0, y as f32 / 540.0, 0.5 + 0.4 * (x as f32 * 0.05).sin(), a]));
+                let (sx, sy) = sample_coordinates(x, y);
+                data.extend(from_rgba(&fmt, [sx as f32 / 600.0, sy as f32 / 540.0, 0.5 + 0.4 * (sx as f32 * 0.05).sin(), a]));
             }
         }
         s.write_region(r, &data);
     }
+    s
+}
+
+/// Two patches over a 3×3 tile grid, not tile-aligned, with partial alpha; the bottom-left tiles
+/// inside the content bounds are never allocated.
+fn layer(fmt: PixelFormat) -> Surface {
+    let s = painted_patches(fmt, [Rect::new(200, 240, 300, 300), Rect::new(530, 250, 560, 530)], |x, y| (x, y));
     assert!(!s.has_tiles_in(Rect::new(200, 512, 256, 530)), "a hole inside the content bounds");
     s
 }
@@ -99,12 +105,19 @@ fn tiled_adjustment_matches_one_pass_over_the_content() {
     }
     formats.push(PixelFormat { mode: ColorMode::Rgb, sample: SampleType::U8, alpha: false });
     formats.push(PixelFormat { mode: ColorMode::Grayscale, sample: SampleType::U16, alpha: false });
-    // A soft selection that ends inside the content.
+    // The patches cross both tile seams and leave the bottom-left tile unstored. The outer
+    // edges start off the Bayer grid so tile-local dither origins would shift the pattern.
+    let patches = [Rect::new(503, 239, 520, 253), Rect::new(513, 249, 528, 269)];
+    // Sample the original color range at fewer positions, including dark and bright tones.
+    let sample_coordinates = |x, y| (200 + (x - 503) * 15, 240 + (y - 239) * 10);
+    // A soft selection that ends inside the second patch on both axes.
     let mut soft = Surface::new(PixelFormat::GRAY8);
-    let sr = Rect::new(0, 0, 500, 400);
-    soft.write_region(sr, &(0..sr.height()).flat_map(|_| (0..sr.width()).map(|x| x as f32 / 500.0)).collect::<Vec<_>>());
+    let sr = Rect::new(503, 239, 523, 263);
+    let width = sr.width();
+    soft.write_region(sr, &(0..sr.height()).flat_map(|_| (0..width).map(|x| x as f32 / width as f32)).collect::<Vec<_>>());
     for fmt in formats {
-        let s = layer(fmt);
+        let s = painted_patches(fmt, patches, sample_coordinates);
+        assert!(!s.has_tiles_in(Rect::new(503, 256, 512, 269)), "a hole inside the content bounds");
         for (kind, p) in &adjustments {
             let adj = crate::adjust_params::from_params(kind, p, None, fmt.mode).unwrap_or_else(|e| panic!("{kind}: {e}"));
             for sel in [None, Some(&soft)] {
