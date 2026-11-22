@@ -1214,7 +1214,7 @@ mod stock_indexed_regressions {
             let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
             let fmt = surf.format();
             let mut data = Vec::new();
-            for y in b.y0..b.y1 {
+            for _ in b.y0..b.y1 {
                 for x in b.x0..b.x1 {
                     data.extend(photocraft_raster::from_rgba(&fmt, f(x)));
                 }
@@ -1263,7 +1263,7 @@ mod stock_indexed_regressions {
         });
         s.execute("image.mode.indexedColor", json!({"palette": "uniform", "colors": 3, "forced": "none", "dither": "none"})).unwrap();
         let d = doc(&s);
-        let transparent = d.color_table.as_ref().unwrap().transparent.expect("transparency slot") as u8;
+        let transparent = d.color_table.as_ref().unwrap().transparent.expect("transparency slot");
         let indices = d.color_indices.as_ref().unwrap().indices.to_interleaved(d.bounds());
         assert_ne!(indices[2], transparent, "an opaque near-white must match an opaque palette entry");
         assert_eq!(indices[3], transparent, "a clear pixel still takes the transparency slot");
