@@ -38,7 +38,7 @@ fn group(app: &PhotocraftApp, kind: Kind, name: &str) -> Value {
 }
 
 fn library(app: &PhotocraftApp) -> Value {
-    json!({"brushes": app.session.tools.presets.as_ref(), "gradients": app.session.presets.gradients, "selectedBrush": app.session.tools.brush})
+    json!({"brushes": app.session.tools.presets.as_ref(), "gradients": app.session.presets.gradients, "selectedBrush": *app.session.tools.brush})
 }
 
 impl Fixture {
@@ -74,7 +74,7 @@ impl Fixture {
         match kind {
             Kind::Brushes => {
                 assert_eq!(original.as_array().unwrap().len(), 2);
-                std::sync::Arc::make_mut(&mut app.session.tools.presets).iter_mut().find(|p| p.group == stem).unwrap().brush.size = 77.0;
+                std::sync::Arc::make_mut(&mut *app.session.tools.presets).iter_mut().find(|p| p.group == stem).unwrap().brush.size = 77.0;
             }
             Kind::Gradients => {
                 assert_eq!(original[0]["items"].as_array().unwrap().len(), 2);

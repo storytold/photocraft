@@ -272,6 +272,21 @@ mod gpu_tests {
         assert_eq!(!has_gpu(&app), software, "a software adapter keeps the CPU develop");
     }
 
+    fn worst_difference(gpu: &[[f32; 4]], cpu: &[[f32; 4]]) -> f32 {
+        assert_eq!(gpu.len(), cpu.len(), "preview frame lengths differ");
+        gpu.iter()
+            .zip(cpu)
+            .enumerate()
+            .flat_map(|(pixel, (a, b))| {
+                (0..4).map(move |channel| {
+                    let diff = (a[channel] - b[channel]).abs();
+                    assert!(diff.is_finite(), "nonfinite preview difference at pixel {pixel}, channel {channel}");
+                    diff
+                })
+            })
+            .fold(0.0, f32::max)
+    }
+
     #[test]
     fn per_pixel_settings_develop_on_the_gpu_like_the_cpu_and_the_rest_stays_on_the_cpu() {
         let _gpu = photocraft_testkit::gpu_lock();
@@ -299,14 +314,14 @@ mod gpu_tests {
             };
             let (backend, gpu, cpu) = developed(&app, per_pixel.clone());
             assert_eq!(backend, "gpu", "{depth}-bit");
-            let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+            let worst = worst_difference(&gpu, &cpu);
             assert!(worst <= TOL, "{depth}-bit: off by {worst}");
             // PLAN: the old `describe["developBackend"] == "gpu"` check read the dialog's own render; a `Job` can only be run by the host (no public runner), so the helper runs the job's body and the session's reported backend is not asserted here.
             // Shadows and Highlights develop on the GPU too, Whites and Blacks measured after them.
             let toned = cr!(per_pixel.clone() => shadows: 40.0, highlights: -35.0);
             let (backend, gpu, cpu) = developed(&app, toned.clone());
             assert_eq!(backend, "gpu", "{depth}-bit, Shadows and Highlights");
-            let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+            let worst = worst_difference(&gpu, &cpu);
             assert!(worst <= TOL, "{depth}-bit, Shadows and Highlights: off by {worst}");
             // So do Dehaze, Clarity and Texture, with Whites and Blacks measured after them.
             for spatial in [
@@ -316,7 +331,7 @@ mod gpu_tests {
             ] {
                 let (backend, gpu, cpu) = developed(&app, spatial.clone());
                 assert_eq!(backend, "gpu", "{depth}-bit, {spatial:?}");
-                let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+                let worst = worst_difference(&gpu, &cpu);
                 assert!(worst <= TOL, "{depth}-bit, {spatial:?}: off by {worst}");
             }
             // Detail develops the whole frame on the CPU.

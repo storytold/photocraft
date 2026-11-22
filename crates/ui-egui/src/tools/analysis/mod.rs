@@ -48,8 +48,8 @@ mod count_group_name_tests;
 mod count_size_alert_tests;
 
 /// The registry ids of the two panels the menu items toggle.
-const MEASUREMENT_LOG: &str = "measurementLog";
-const NOTES: &str = "notes";
+pub(crate) const MEASUREMENT_LOG: &str = "measurementLog";
+pub(crate) const NOTES: &str = "notes";
 
 /// The Count tool options bar's number (#11764): with one group (or none), its markers; with two
 /// or more, the markers of the visible groups, then the current group's in brackets (0 while it

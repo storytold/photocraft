@@ -38,7 +38,7 @@ cap-std = "4"
 clap = { workspace = true }
 # The framework through its facade: the control channel's handshake (`craft::automation::security`),
 # and the agent settings, the ArtCraft Launcher's switch and the connection file (`craft::automation::agents`).
-craft = { workspace = true, features = ["automation-agents"] }
+craft = { workspace = true, features = ["automation-agents", "control-agents"] }
 
 # Optional native GPU rendering backend
 photocraft-gpu = { workspace = true, optional = true }
