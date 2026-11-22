@@ -219,8 +219,9 @@ fn panel_harness_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static
 
 fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let _ = photocraft_text::shared();
-    // As tall as a window, so the bar's popup lists open in full below it.
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(16).build_app(
+    // As tall as a window, so the bar's popup lists open in full below it. Opening the font list loads its rows'
+    // samples over several passes (19 on Windows CI), hence the higher step limit.
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(64).build_app(
         |ui, app: &mut PhotocraftApp| {
             ui.horizontal(|ui| show_bar(app, ui));
         },
