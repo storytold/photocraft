@@ -737,15 +737,18 @@ fn raw_open_legacy_baseline_pixels() {
 
     // Default RAW Open (`def_px`/`def_hash`) runs `craft_develop::sensor::demosaic` (`reflect` borders;
     // center pixel `[47838, 39368, 49721]` matches legacy bit-for-bit); `tuned_px`/`tuned_hash` reflects
-    // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`).
+    // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`). Whole-image hashes differ by
+    // 1 LSB between MSVC and glibc `libm` float math on Windows.
+    let expected_def_hash = if cfg!(target_os = "windows") { 9_388_097_638_634_194_548 } else { 4_616_854_110_774_268_375 };
+    let expected_tuned_hash = if cfg!(target_os = "windows") { 5_472_991_315_859_343_413 } else { 17_835_173_337_254_648_648 };
     assert_eq!(
         (def_px, def_hash, wb, tuned_px, tuned_hash),
         (
             [[29689, 25226, 50514], [47838, 39368, 49721], [54535, 41252, 44908]],
-            4_616_854_110_774_268_375,
+            expected_def_hash,
             false,
             [[39311, 33399, 65535], [63418, 52119, 65535], [65535, 54440, 59060]],
-            17_835_173_337_254_648_648,
+            expected_tuned_hash,
         )
     );
 }
@@ -806,13 +809,14 @@ fn raw_open_camera_wb_legacy_baseline_pixels() {
     // Default RAW Open (`def_px`/`def_hash`) runs `craft_develop::sensor::demosaic` (`reflect` borders;
     // center pixel `[51905, 40291, 54669]` matches legacy bit-for-bit); `tuned_px`/`tuned_hash` reflects
     // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`).
+    let expected_tuned_hash = if cfg!(target_os = "windows") { 16_896_394_607_103_456_502 } else { 1_068_984_693_251_983_675 };
     assert_eq!(
         (def_px, def_hash, tuned_px, tuned_hash),
         (
             [[32235, 25796, 56002], [51905, 40291, 54669], [55142, 41405, 49143]],
             11_523_078_668_107_121_059,
             [[42084, 33938, 65535], [65535, 53409, 65535], [65535, 54586, 62244]],
-            1_068_984_693_251_983_675,
+            expected_tuned_hash,
         )
     );
 }
