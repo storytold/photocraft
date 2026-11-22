@@ -479,8 +479,10 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
     };
     ds.grain.seed = inputs.seed;
 
+    #[allow(clippy::excessive_precision)]
     const SRGB_TO_REC2020: [[f32; 3]; 3] =
         [[0.627_403_9, 0.329_283_0, 0.043_313_1], [0.069_097_3, 0.919_540_4, 0.011_362_3], [0.016_391_4, 0.088_013_3, 0.895_595_3]];
+    #[allow(clippy::excessive_precision)]
     const REC2020_TO_SRGB: [[f32; 3]; 3] =
         [[1.660_491_0, -0.587_641_1, -0.072_849_9], [-0.124_550_5, 1.132_899_9, -0.008_349_4], [-0.018_150_8, -0.100_578_9, 1.118_729_7]];
     let mul3 = |m: &[[f32; 3]; 3], v: [f32; 3]| -> [f32; 3] {
@@ -498,7 +500,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, inputs: &
 
     // 1b. Calibration in linear Rec.2020.
     let cal_m = craft_develop::colorops::calibration_matrix(&ds.calibration);
-    let cal_tint = (p.shadow_tint.clamp(-100.0, 100.0) / 100.0) as f32;
+    let cal_tint = p.shadow_tint.clamp(-100.0, 100.0) / 100.0;
     if cal_m.is_some() || cal_tint != 0.0 {
         craft_develop::raster::par_rows(&mut img.data, w, |_, row| {
             for c in row.iter_mut() {
