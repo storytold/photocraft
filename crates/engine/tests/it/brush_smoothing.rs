@@ -39,9 +39,9 @@ fn smoothing_switch_is_drivable_and_presets_keep_the_disabled_settings() {
     let mut other = Session::new();
     other.execute("tools.setBrush", params).unwrap();
     assert_eq!(other.tools.brush.smoothing, off);
-    let before = other.tools.brush.clone();
+    let before = (*other.tools.brush).clone();
     assert!(other.execute("tools.setBrush", json!({"brush": {"smoothing": {"enabled": "no"}}})).is_err());
-    assert_eq!(other.tools.brush, before);
+    assert_eq!(*other.tools.brush, before);
 }
 
 #[test]

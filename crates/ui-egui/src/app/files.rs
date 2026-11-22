@@ -19,7 +19,7 @@ impl PhotocraftApp {
         r.insert(0, path.to_string());
         let evicted: Vec<String> = if r.len() > cap { r[cap..].to_vec() } else { Vec::new() };
         r.truncate(cap);
-        self.ui.recent_files = r.clone();
+        *self.ui.recent_files = r.clone();
         self.session.prefs.edit(|p| p.file_handling.recent_files = r);
         let mut cache = self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.invalidate(path);
@@ -56,7 +56,7 @@ impl PhotocraftApp {
         let stored = &self.session.prefs().file_handling.recent_files;
         let want = stored.get(..cap.min(stored.len())).unwrap_or_default();
         if self.ui.recent_files.as_slice() != want {
-            self.ui.recent_files = want.to_vec();
+            *self.ui.recent_files = want.to_vec();
         }
     }
 
@@ -542,7 +542,7 @@ impl PhotocraftApp {
             settings.webp_lossless = e.webp_lossless.unwrap_or(settings.webp_lossless);
             settings.webp_quality = e.webp_quality.map(|q| q.min(100));
             settings.document_path = st.path.as_deref().map(std::path::PathBuf::from);
-            settings.pcraft_cache = Some(st.pcraft_cache.clone());
+            settings.pcraft_cache = self.session.pcraft_cache(st.doc.id).cloned();
         }
         settings
     }
@@ -676,12 +676,12 @@ impl PhotocraftApp {
             // A background save may finish while another document is active (or after its
             // document was closed, when there is nothing left to record).
             let _ = self.with_document(doc, |app| {
-                if let Some(st) = app.session.active_mut()
-                    && arm
-                {
-                    st.saved_to(path.to_string());
+                if arm && app.session.active().is_some() {
+                    app.session.saved_to(path.to_string());
                     // The job locked the document, but record the revision that was written.
-                    st.saved_revision = revision;
+                    if let Some(st) = app.session.active_mut() {
+                        st.saved_revision = revision;
+                    }
                     app.remember_stamp(doc, path);
                     // History Options › Automatically Create New Snapshot When Saving (#2966).
                     photocraft_engine::history_options_cmds::snapshot_on_save(&mut app.session);

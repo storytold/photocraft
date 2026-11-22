@@ -234,6 +234,10 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         if f.command == "filter.render.relight" {
             crate::filters_ext::validate_relight_lights(&f.params)?;
         }
+        // As applying it does: the re-render can't read the document's alpha channels.
+        if f.command == "filter.blur.lensBlur" && f.params.get("depthMap").and_then(Value::as_str) == Some("channel") {
+            return Err(EngineError::Other(crate::filters::LENS_BLUR_CHANNEL_ON_SMART.into()));
+        }
         // Authorize the underlying command with the complete merged params, including paths
         // already stored in the document, before committing the edit or starting a worker.
         if let Some(gate) = authorize {

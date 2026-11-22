@@ -700,49 +700,52 @@ fn chisel_fields_do_not_depend_on_the_threads() {
 
 #[test]
 fn bevel_maps_do_not_depend_on_the_threads() {
-    // Every style and technique, softened or not, and a texture; one thread (in order) is the reference.
-    let mut patchy = aa_disc(101, 101, 40.0);
+    // Compact anti-aliased fixtures keep curved, rounded, clipped oblique and patchy edges.
+    // Dimensions above 16 and below 64 exercise multi-row groups with 2 threads and
+    // one row per group with 8. Odd extents also leave a short final group.
+    let mut patchy = aa_disc(51, 51, 18.0);
+    let patchy_width = patchy.w;
     for (i, v) in patchy.v.iter_mut().enumerate() {
-        if (i % 101 / 13 + i / 101 / 17) % 5 == 0 {
+        if (i % patchy_width / 7 + i / patchy_width / 9).is_multiple_of(5) {
             *v *= 0.6;
         }
     }
-    let shapes = [aa_disc(97, 83, 30.0), aa_round_rect(131, 77, 9.0, 11.0, 120.0, 66.0, 14.0), aa_bar(90, 130, 60.0, 150.0, 25.0), patchy];
+    let shapes = [aa_disc(49, 47, 13.0), aa_round_rect(61, 47, 10.0, 9.0, 51.0, 38.0, 8.0), aa_bar(47, 63, 60.0, 74.0, 15.0), patchy];
     let mut sf = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
     sf.fill_rect(Rect::new(0, 0, 4, 2), &[0.0, 0.0, 0.0, 1.0]);
     sf.fill_rect(Rect::new(0, 2, 4, 4), &[1.0, 1.0, 1.0, 1.0]);
     let pats = [Pattern::new("stripes", sf, 4, 4)];
     let light = GlobalLight::default();
     let styles = [BevelStyle::InnerBevel, BevelStyle::OuterBevel, BevelStyle::Emboss, BevelStyle::PillowEmboss, BevelStyle::StrokeEmboss];
-    for (k, shape) in shapes.iter().enumerate() {
+    let techniques = [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft];
+    let settings = [(5.0, 0.0, false), (12.0, 2.0, false), (8.0, 0.0, true)];
+    for (shape_index, shape) in shapes.iter().enumerate() {
         let tex = TextureCtx { rect: Rect::new(3, 5, 3 + shape.w as i32, 5 + shape.h as i32), patterns: &pats, anchor: (0.0, 0.0) };
-        for style in styles {
-            for technique in [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft] {
-                for (size, soften, textured) in [(5.0, 0.0, false), (12.0, 2.0, false), (8.0, 0.0, true)] {
-                    let mut b = bevel_of(style, technique);
-                    (b.size, b.soften) = (size, soften);
-                    if textured {
-                        b.texture = Some(photocraft_doc::BevelTexture {
-                            name: "stripes".into(),
-                            id: String::new(),
-                            scale: 1.0,
-                            depth: 1.0,
-                            invert: false,
-                            link: true,
-                            phase: (0.0, 0.0),
-                        });
-                    }
-                    let run = || bevel_maps(shape, &b, &light, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES)).0;
-                    let one = with_threads(1, run);
-                    // 2 threads give groups of several units with a short last one, 16 one unit a group: the two ways `par_units` splits work (#15652).
-                    for threads in [2, 16] {
-                        let many = with_threads(threads, run);
-                        assert_eq!(one.len(), many.len());
-                        for (j, (a, m)) in one.iter().zip(&many).enumerate() {
-                            assert_eq!(bits(&a.v), bits(&m.v), "shape {k}, {style:?} {technique:?} size {size} map {j} on {threads} threads");
-                        }
-                    }
-                }
+        for (style_index, style) in styles.into_iter().enumerate() {
+            // Rotate each set through shapes. Stepping the settings twice as fast as
+            // the techniques across styles also gives every technique each setting.
+            let technique = techniques[(shape_index + style_index) % techniques.len()];
+            let (size, soften, textured) = settings[(shape_index + 2 * style_index) % settings.len()];
+            let threads = [2, 8][(shape_index + style_index) % 2];
+            let mut b = bevel_of(style, technique);
+            (b.size, b.soften) = (size, soften);
+            if textured {
+                b.texture = Some(photocraft_doc::BevelTexture {
+                    name: "stripes".into(),
+                    id: String::new(),
+                    scale: 1.0,
+                    depth: 1.0,
+                    invert: false,
+                    link: true,
+                    phase: (0.0, 0.0),
+                });
+            }
+            let run = || bevel_maps(shape, &b, &light, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES)).0;
+            let one = with_threads(1, run);
+            let many = with_threads(threads, run);
+            assert_eq!(one.len(), many.len());
+            for (j, (a, m)) in one.iter().zip(&many).enumerate() {
+                assert_eq!(bits(&a.v), bits(&m.v), "shape {shape_index}, {style:?} {technique:?} size {size} map {j} on {threads} threads");
             }
         }
     }

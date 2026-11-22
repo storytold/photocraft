@@ -102,7 +102,7 @@ pub fn begin(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &str) -> Re
     let image = crate::distort_ui::surface_image(&surface, bounds, 2048);
     let document = st.doc.id;
     let key = app.ui.alloc_id();
-    let textures = PreviewTextures::new(format!("persp-{key}"), PreviewPixels::new(image, [1.0, 1.0]));
+    let textures = PreviewTextures::new(&mut app.texture_serials, format!("persp-{key}"), PreviewPixels::new(image, [1.0, 1.0]));
     app.distort.perspective = Some(PerspSession {
         key,
         document,
@@ -184,6 +184,12 @@ pub fn canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::Rect) {
     } else if output.discard {
         app.distort.perspective = None;
     }
+}
+
+/// What the options bar shows of the open session: the mode and the plane count. A plane drawn on the canvas changes
+/// them without a command, so the options bar's content version holds them.
+pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<(PlaneMode, usize)> {
+    app.distort.perspective.as_ref().map(|s| (s.warp.mode(), s.warp.planes().len()))
 }
 
 /// The options bar: the Layout and Warp tabs, the plane count and Remove Planes or the straighten buttons, commit and
