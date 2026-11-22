@@ -837,7 +837,6 @@ fn color_of(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
     Ok(Some(Color::rgb(c[0], c[1], c[2])))
 }
 
-/// Photoshop's colours for new count groups, in order.
 /// A new count group: the colour, Marker Size and Label Size of the last group edit (`next`,
 /// remembered in the preferences, #11767), unless `color` is given.
 fn new_group(d: &Document, name: Option<String>, color: Option<Color>, next: crate::prefs::CountGroupDefaults) -> CountGroup {
@@ -852,10 +851,15 @@ fn new_group(d: &Document, name: Option<String>, color: Option<Color>, next: cra
     }
 }
 
-/// Remembers `g`'s colour and sizes for the next new count group (#11767).
-fn remember_group(s: &mut Session, g: &CountGroup) {
+/// What the next new count group starts with after an edit that left `g` as it is: its colour and sizes, without its
+/// markers (#11767).
+fn group_defaults(g: &CountGroup) -> crate::prefs::CountGroupDefaults {
     let rgb = g.color.to_rgb().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-    let next = crate::prefs::CountGroupDefaults { color: rgb, marker_size: g.marker_size, label_size: g.label_size };
+    crate::prefs::CountGroupDefaults { color: rgb, marker_size: g.marker_size, label_size: g.label_size }
+}
+
+/// Remembers `next` for the next new count group (#11767), writing the preferences only when it differs.
+fn remember_group(s: &mut Session, next: crate::prefs::CountGroupDefaults) {
     if s.prefs().count_group != next {
         s.edit_prefs(|p| p.count_group = next);
     }
@@ -1059,7 +1063,7 @@ fn count_set_group(s: &mut Session, p: &Value) -> Result<Value> {
         };
         // A new colour or size is what the next new group starts with (#11767).
         let old = &d.measurement.count_groups[g];
-        let remember = (grp.color != old.color || grp.marker_size != old.marker_size || grp.label_size != old.label_size).then(|| grp.clone());
+        let remember = (grp.color != old.color || grp.marker_size != old.marker_size || grp.label_size != old.label_size).then(|| group_defaults(&grp));
         s.edit(label, |d, _| {
             d.measurement.count_groups[g] = grp;
             if activate {
@@ -1067,8 +1071,8 @@ fn count_set_group(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(())
         })?;
-        if let Some(grp) = remember {
-            remember_group(s, &grp);
+        if let Some(next) = remember {
+            remember_group(s, next);
         }
     }
     Ok(count_json(doc(s)?.as_ref()))
