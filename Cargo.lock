@@ -1504,7 +1504,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "md-5",
  "rayon",
@@ -1527,7 +1527,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=e953d47a378776dea20789
 [[package]]
 name = "craft-color"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "serde",
 ]
@@ -1535,9 +1535,9 @@ dependencies = [
 [[package]]
 name = "craft-color-transform"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
- "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e)",
  "craft-color",
  "serde",
 ]
@@ -1590,7 +1590,7 @@ dependencies = [
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1614,13 +1614,13 @@ dependencies = [
 [[package]]
 name = "craft-develop"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "craft-color",
  "craft-color-transform",
  "craft-develop-model",
  "craft-geom",
- "craft-raw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-raw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e)",
  "rayon",
  "serde",
 ]
@@ -1628,10 +1628,10 @@ dependencies = [
 [[package]]
 name = "craft-develop-model"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "craft-geom",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e)",
  "miniz_oxide 0.9.1",
  "serde",
  "serde_json",
@@ -1785,7 +1785,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=e953d47a378776dea20789
 [[package]]
 name = "craft-geom"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "serde",
 ]
@@ -1969,11 +1969,11 @@ dependencies = [
 [[package]]
 name = "craft-metadata"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "brotli-decompressor 6.3.2",
  "chrono",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -2149,12 +2149,12 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "chrono",
- "craft-crw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26)",
+ "craft-crw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e)",
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -2317,7 +2317,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=7631ed550ef6b1abcc90a095dd7338e1b2c67c26#7631ed550ef6b1abcc90a095dd7338e1b2c67c26"
+source = "git+https://github.com/storytold/craft-libs?rev=27be7518c94ee832a82b212e0f9aecdf517d672e#27be7518c94ee832a82b212e0f9aecdf517d672e"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
