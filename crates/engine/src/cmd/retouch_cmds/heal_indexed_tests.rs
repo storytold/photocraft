@@ -12,11 +12,17 @@ const MESSAGE: &str = "Could not set the clone source because it does not work w
 /// A 64 × 64 `mode` document of `depth`, mid grey with its left half black: the edge is the
 /// texture the stroke heals onto the flat grey.
 fn edged(mode: ColorMode, depth: SampleType) -> Session {
+    let indexed = mode == ColorMode::Indexed;
+    let native_mode = if indexed { ColorMode::Rgb } else { mode };
     let mut s = Session::new();
-    s.add_document(Document::with_background("t", Size::new(64, 64), mode, depth, Color::rgb(0.5, 0.5, 0.5)), None);
+    s.add_document(Document::with_background("t", Size::new(64, 64), native_mode, depth, Color::rgb(0.5, 0.5, 0.5)), None);
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 64})).unwrap();
     s.execute("edit.fill", json!({"contents": "color", "color": "#000000"})).unwrap();
     s.execute("select.deselect", json!({})).unwrap();
+    if indexed {
+        s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+        assert!(s.active().unwrap().doc.color_table.is_some(), "indexed fixture needs a color table");
+    }
     s
 }
 

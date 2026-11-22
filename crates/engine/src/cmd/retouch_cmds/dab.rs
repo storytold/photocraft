@@ -1,7 +1,7 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
-    BlendMode, BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect,
-    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
+    BlendMode, BrushSettings, ColorTable, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat,
+    Rect, Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
     from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_blend, parse_brush, run_stroke, sponge, string, to_rgba,
 };
 use photocraft_algo::retouch::sponge_rgb;
@@ -516,6 +516,7 @@ pub struct LiveDab {
     neighborhood: DabNeighborhood,
     pre_surf: Surface,
     colors: Option<crate::color_channels::ColorChannels>,
+    indexed_table: Option<ColorTable>,
     work: WorkTiles,
     id: Option<LayerId>,
     params: Value,
@@ -620,6 +621,7 @@ impl LiveDab {
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
         let colors = crate::color_channels::explicit(p, crate::channel_cmds::color_count(&doc))?;
+        let indexed_table = crate::brush_cmds::indexed_table_for(&doc, p)?;
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
@@ -641,6 +643,7 @@ impl LiveDab {
             work: WorkTiles::new(pre_surf.channels()),
             pre_surf,
             colors,
+            indexed_table,
             id,
             params: p.clone(),
             opacity: stroke.brush.opacity,
@@ -717,6 +720,10 @@ impl LiveDab {
         if let Some(colors) = self.colors {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
             crate::color_channels::restrict_region(&self.pre_surf, surf, colors, damage)?;
+        }
+        if let Some(table) = self.indexed_table.as_ref() {
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
+            crate::indexed_edit::constrain_surface(surf, Some(&self.pre_surf), table, damage)?;
         }
         Ok(damage)
     }
