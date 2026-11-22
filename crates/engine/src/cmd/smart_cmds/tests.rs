@@ -1757,3 +1757,32 @@ fn lens_blur_smart_filter_refuses_an_alpha_channel_depth_on_edit() {
     s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"depthMap": "none"}})).unwrap();
     assert_eq!(active_smart(&s).smart_filters[0].params["depthMap"], json!("none"));
 }
+
+/// Convert to Layers of a scaled smart object whose contents' layer has pixels past the contents' canvas (painted
+/// from x -6, as a placed PSD's layers often are): they come back with the layer, moved as the placement moves them.
+/// Drawing each layer as the smart object draws it reads the canvas only, and dropped them.
+#[test]
+fn convert_to_layers_keeps_a_layers_pixels_past_the_contents_canvas() {
+    let mut inner = Document::new("inner", Size::new(20, 20), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    let mut px = Surface::new(inner.pixel_format());
+    px.fill_rect(Rect::new(-6, 2, 14, 12), &[1.0, 0.0, 0.0, 1.0]);
+    inner.layers.push(Layer::new("past the canvas", LayerContent::Raster(px)));
+    let mut cache = Surface::new(inner.pixel_format());
+    cache.fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.0, 1.0, 1.0]);
+    let mut parent = Document::new("parent", Size::new(40, 40), inner.mode, inner.depth);
+    parent.layers.push(Layer::new(
+        "outer",
+        LayerContent::Smart(SmartObject::new(
+            SmartSource::Embedded { file_name: "inner.pcraft".into(), bytes: Arc::new(encode_source(&inner).unwrap()) },
+            Affine { m: [0.5, 0.0, 0.0, 0.5, 10.25, 3.0] },
+            Some(cache),
+        )),
+    ));
+    let mut s = Session::new();
+    s.add_document(parent, None);
+    convert_to_layers(&mut s);
+    let l = active_layer(&s);
+    let b = l.surface().expect("a pixel layer").content_bounds();
+    // x -6 lands at 10.25 - 3 = 7.25; the canvas' left edge at 10.25.
+    assert!(b.x0 <= 8, "the pixels past the canvas are gone: {b:?}");
+}

@@ -113,8 +113,14 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, canvas: photocraft_geom:
     {
         check_destination_shapes(layers, transform, doc.size, doc.pixel_format().bytes_per_pixel()).map_err(other)?;
     }
-    // A pixel layer's own pixels, resized as the smart object draws them.
+    // A pixel layer's own pixels, resized as the smart object draws them. Those draws read the contents' canvas only:
+    // a layer with pixels past it (as a placed PSD's layers often have) keeps the general transform's result instead,
+    // which moves all of them.
     let render = |surface: &Surface| -> Option<Surface> {
+        let own = surface.content_bounds();
+        if !own.is_empty() && (own.x0 < canvas.x0 || own.y0 < canvas.y0 || own.x1 > canvas.x1 || own.y1 > canvas.y1) {
+            return None;
+        }
         if snapped.is_some() {
             return photocraft_algo::warp::scale_snapped(surface, canvas, [a, d, e, f]);
         }
