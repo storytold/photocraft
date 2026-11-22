@@ -160,13 +160,13 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
     let bytes_per_pixel = d.layers.first().and_then(|l| l.surface()).map_or(4, |s| s.format().bytes_per_pixel()) as f64;
     let image_bytes_per_pixel = flat_bytes_per_pixel(d);
     let id = if command == IMAGE_COMMAND {
-        // Indexed Color resamples with Nearest Neighbor only, as the command does (#6019).
-        let indexed = d.mode == photocraft_color::ColorMode::Indexed;
+        // Indexed Color and Bitmap resample with Nearest Neighbor only, as the command does (#6019, #14791).
+        let nearest_only = matches!(d.mode, photocraft_color::ColorMode::Indexed | photocraft_color::ColorMode::Bitmap);
         let mut method = resample_of(interpolation);
-        if indexed && method != Resample::Automatic {
+        if nearest_only && method != Resample::Automatic {
             method = Resample::NearestNeighbor;
         }
-        let methods = if indexed { vec![Resample::Automatic, Resample::NearestNeighbor] } else { Vec::new() };
+        let methods = if nearest_only { vec![Resample::Automatic, Resample::NearestNeighbor] } else { Vec::new() };
         let values = ImageSizeValues::new(size).pixels_per_inch(dpi).points_per_inch(points).unit(unit).method(method).column_size(columns);
         app.framework.dialogs.open(HostedImageSize::new(values, move |values: Bind<'_, ImageSizeValues>| {
             ImageSize::new(values).methods(methods.clone()).bytes_per_pixel(image_bytes_per_pixel)
@@ -306,3 +306,7 @@ fn finish(app: &mut PhotocraftApp, id: DialogId, command: &str, params: Option<V
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "image_size_resample_by_mode_tests.rs"]
+mod image_size_resample_by_mode_tests;

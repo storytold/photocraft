@@ -243,9 +243,10 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     let (ow, oh) = (d.doc.size.width, d.doc.size.height);
     let resample = parse_resample(p.get("resample").and_then(Value::as_str).unwrap_or("bicubic"));
     // An Indexed Color document holds only its colour table's colours, and a save quantises to
-    // them: interpolation showed blends that the saved file didn't have (#6019).
+    // them: interpolation showed blends that the saved file didn't have (#6019). A Bitmap
+    // document likewise holds only black and white (#14791).
     let resample = match resample {
-        Method::Filter(_) | Method::Automatic if d.doc.mode == ColorMode::Indexed => Method::Filter(Resample::Nearest),
+        Method::Filter(_) | Method::Automatic if matches!(d.doc.mode, ColorMode::Indexed | ColorMode::Bitmap) => Method::Filter(Resample::Nearest),
         m => m,
     };
     let mut pw = p.get("width").and_then(Value::as_f64);
