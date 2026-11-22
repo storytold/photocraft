@@ -14,7 +14,7 @@ const TOL: f32 = 1.0 / 255.0 + 4.0 * f32::EPSILON;
 
 use crate::GPU_LOCK;
 
-struct Gpu {
+pub(crate) struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     comp: Compositor,
@@ -98,7 +98,7 @@ fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {
 /// `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=fxc` tests D3D12 with FXC, the app's default on Windows,
 /// where the default adapter may be Vulkan. A backend asked for that can't run the tests fails
 /// them rather than skipping.
-fn gpu() -> Option<Gpu> {
+pub(crate) fn gpu() -> Option<Gpu> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let required = std::env::var_os("WGPU_BACKEND").is_some();
     let instance = crate::instance();
@@ -159,7 +159,7 @@ fn rnd(seed: u32, i: u32) -> f32 {
     (h & 0xffff) as f32 / 65535.0
 }
 
-fn noise_layer(name: &str, fmt: PixelFormat, rect: Rect, seed: u32, min_alpha: f32) -> Layer {
+pub(crate) fn noise_layer(name: &str, fmt: PixelFormat, rect: Rect, seed: u32, min_alpha: f32) -> Layer {
     let mut l = Layer::raster(name, fmt);
     let n = rect.width() as usize * rect.height() as usize;
     let ch = fmt.channels();
@@ -175,7 +175,7 @@ fn noise_layer(name: &str, fmt: PixelFormat, rect: Rect, seed: u32, min_alpha: f
     l
 }
 
-fn mask(rect: Rect, seed: u32, default: f32) -> LayerMask {
+pub(crate) fn mask(rect: Rect, seed: u32, default: f32) -> LayerMask {
     let mut m = LayerMask::reveal_all();
     m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]);
     let data: Vec<f32> = (0..rect.width() * rect.height()).map(|i| rnd(seed, i)).collect();
@@ -192,7 +192,7 @@ fn alone(mut l: Layer) -> Layer {
     l
 }
 
-fn base_doc(w: u32, h: u32) -> Document {
+pub(crate) fn base_doc(w: u32, h: u32) -> Document {
     let mut d = Document::new("t", Size::new(w, h), ColorMode::Rgb, SampleType::U8);
     d.layers.push(noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, w, h), 1, 0.3));
     d
@@ -251,11 +251,11 @@ fn diff_rect_full(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result
 
 /// GPU vs CPU over `rect`: Err with the worst pixel if over the tolerance, else the stats of
 /// the unpaged render.
-fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
+pub(crate) fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
     diff_rect_full(g, doc, rect, what).map(|pass| pass.whole_stats)
 }
 
-fn check(g: &mut Gpu, doc: &Document, what: &str) {
+pub(crate) fn check(g: &mut Gpu, doc: &Document, what: &str) {
     diff_rect(g, doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
 }
 
@@ -596,7 +596,11 @@ fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     check(&mut g, &doc, "bounded admission");
     assert!(g.comp.composite_cache_bytes() <= 1 << 20);
     assert!(diff_rect(&mut g, &doc, doc.bounds(), "bounded cache keeps its hits").unwrap().prefix_hits > 0);
-    doc.layers[0].advanced.knockout = photocraft_doc::Knockout::Deep;
+    // Blend Clipped Layers as Group off still composites on the CPU (knockout no longer does).
+    doc.layers[0].advanced.blend_clipped = false;
+    let mut clipped = noise_layer("clipped", PixelFormat::RGBA8, doc.bounds(), 9, 0.2);
+    clipped.clipped = true;
+    doc.layers.insert(1, clipped);
     assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_err());
     assert_eq!(g.comp.composite_cache_bytes(), 0);
 }
