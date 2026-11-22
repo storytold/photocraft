@@ -481,10 +481,14 @@ fn selection_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect, id
     if let Some(state) = app.session.documents().get(idx) {
         let doc = state.doc.clone();
         if let Some(selection) = doc.selection.as_ref() {
+            let offset = ants.map_or([0, 0], |(x, y)| [x, y]);
+            // The map is `transform_tool::selection_map` while a Free Transform carries the selection; its box shows
+            // the whole selection. Otherwise the ants stop at the canvas edge where the selection is shown.
+            let map = crate::transform_tool::selection_map(app, doc.id);
             let mask = super::outline::SurfaceMask::new(selection, selection.generation(), [doc.size.width, doc.size.height]);
-            // The map is `transform_tool::selection_map` while a Free Transform carries the selection.
-            let mut overlay = SelectionOverlay::new(label.to_owned(), &mask).visible(ants.is_some()).offset(ants.map_or([0, 0], |(x, y)| [x, y]));
-            if let Some(map) = crate::transform_tool::selection_map(app, doc.id) {
+            let mask = if map.is_none() { mask.on_canvas_at(offset) } else { mask };
+            let mut overlay = SelectionOverlay::new(label.to_owned(), &mask).visible(ants.is_some()).offset(offset);
+            if let Some(map) = map {
                 overlay = overlay.mapped(map);
             }
             overlay.show_at(ui, rect);

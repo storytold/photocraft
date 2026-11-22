@@ -405,3 +405,101 @@ fn selected_pixels_move_off_the_background_but_not_off_a_fully_locked_layer() {
         close_dialogs(&mut app);
     }
 }
+
+/// A marquee dragged from the pasteboard shows its outline only over the canvas, the area it can select: the box is
+/// cut along the canvas edges, so the ants never run over the pasteboard.
+#[test]
+fn a_marquee_from_the_pasteboard_shows_its_outline_only_on_the_canvas() {
+    use craft::behavior::PixelSize;
+    use craft::behavior::kurbo::Point;
+    for tool in [Tool::RectMarquee, Tool::EllipseMarquee] {
+        let mut h = harness(tool);
+        h.state_mut().ui.extras.snap = false;
+        press_at(&mut h, -60.0, -40.0, Modifiers::NONE);
+        move_to(&mut h, 100.0, 80.0);
+        let outline = h.state().canvas_tools.selection.marquee_outline(PixelSize::new(400, 300)).expect("a marquee is being dragged");
+        assert!(outline.len() > 2, "{tool:?}: {outline:?}");
+        assert!(outline.iter().all(|p| (0.0..=400.0).contains(&p.x) && (0.0..=300.0).contains(&p.y)), "{tool:?}: {outline:?}");
+        if tool == Tool::RectMarquee {
+            assert_eq!(outline, [Point::new(0.0, 0.0), Point::new(100.0, 0.0), Point::new(100.0, 80.0), Point::new(0.0, 80.0)]);
+        }
+        release_at(&mut h, 100.0, 80.0, Modifiers::NONE);
+        assert!(h.state().canvas_tools.selection.marquee_outline(PixelSize::new(400, 300)).is_none(), "{tool:?}: released");
+    }
+}
+
+/// An oval dragged from the pasteboard keeps the part past the canvas: moved fully onto the canvas it is the whole
+/// oval, the same as one drawn there, not one cut where the canvas edge was.
+#[test]
+fn an_oval_from_the_pasteboard_is_whole_once_moved_onto_the_canvas() {
+    let new_app = || {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.sync_views();
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        app.ui.tool = Tool::EllipseMarquee;
+        app
+    };
+    let selection = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.clone().expect("a selection");
+    let mut app = new_app();
+    drag(&mut app, [-100.0, 100.0], [100.0, 220.0], Modifiers::NONE);
+    assert!(selection(&app).content_bounds().x0 < 0, "the left half is kept: {:?}", selection(&app).content_bounds());
+    // A press inside the oval drags its outline.
+    drag(&mut app, [50.0, 160.0], [200.0, 160.0], Modifiers::NONE);
+    let moved = selection(&app);
+    let mut there = new_app();
+    drag(&mut there, [50.0, 100.0], [250.0, 220.0], Modifiers::NONE);
+    let there = selection(&there);
+    let b = there.content_bounds();
+    assert_eq!(moved.content_bounds(), b);
+    assert_eq!(moved.read_region(b), there.read_region(b), "pixel for pixel");
+}
+
+/// The part of an oval kept past the canvas is not shown, so a press there is outside the selection: a drag that starts
+/// on it draws a new marquee, the same as on a document with no selection, and does not move the old oval.
+#[test]
+fn a_press_on_the_hidden_part_of_an_oval_starts_a_new_marquee() {
+    let new_app = || {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        app.sync_views();
+        app.ui.extras.snap = false;
+        app.ui.view.show.smart_guides = false;
+        app.ui.tool = Tool::EllipseMarquee;
+        app
+    };
+    let selection = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.clone().expect("a selection");
+    let mut app = new_app();
+    drag(&mut app, [-100.0, 100.0], [100.0, 220.0], Modifiers::NONE);
+    // (-50, 160) is inside the oval but past the canvas edge, where no outline is drawn.
+    drag(&mut app, [-50.0, 160.0], [150.0, 260.0], Modifiers::NONE);
+    let drawn = selection(&app);
+    let mut fresh = new_app();
+    drag(&mut fresh, [-50.0, 160.0], [150.0, 260.0], Modifiers::NONE);
+    let fresh = selection(&fresh);
+    let b = fresh.content_bounds();
+    assert_eq!(drawn.content_bounds(), b, "a new oval, not the old one moved");
+    assert_eq!(drawn.read_region(b), fresh.read_region(b), "pixel for pixel");
+}
+
+/// A floating layer mask has no outline of its own, so the selection, shifted by the move, stands in for it. A ⌘-drag on
+/// the moved oval moves the mask again even where the oval started past the canvas edge.
+#[test]
+fn a_cmd_drag_on_a_moved_mask_whose_oval_started_past_the_edge_moves_it_again() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.sync_views();
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.tool = Tool::EllipseMarquee;
+    drag(&mut app, [-100.0, 100.0], [100.0, 220.0], Modifiers::NONE);
+    app.run("select.float", json!({"dx": 200, "dy": 0, "target": "mask"})).unwrap();
+    let offset = |app: &PhotocraftApp| photocraft_engine::float_cmds::floating(app.session.active().unwrap()).map(|f| f.offset);
+    assert_eq!(offset(&app), Some((200, 0)));
+    // Canvas (150, 160) is inside the moved oval; in the piece's own space it is (-50, 160), past the canvas edge.
+    drag(&mut app, [150.0, 160.0], [150.0, 200.0], Modifiers::COMMAND);
+    assert_eq!(offset(&app), Some((200, 40)), "the mask moved down");
+}
