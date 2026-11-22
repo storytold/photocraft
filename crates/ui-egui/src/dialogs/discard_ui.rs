@@ -9,6 +9,7 @@ use craft::quit::{CloseAnswer, CloseScope};
 use craft::ui::dialog::{DialogResult, UnsavedAnswer, UnsavedChangesDialog};
 use craft::ui::shell::embed::CloseDecision;
 use photocraft_doc::DocId;
+use photocraft_engine::jobs::JobId;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -32,6 +33,7 @@ pub struct Prompt {
     auto_answered: Option<DocId>,
     /// `auto` came from a control client (`saveAll`): its Saves are judged as automation.
     auto_control: bool,
+    transform_save: Option<JobId>,
 }
 
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
@@ -70,7 +72,10 @@ fn discarded(app: &PhotocraftApp, id: &str, params: &Value) -> (Option<DocId>, V
         Some(Reach::All) => (0..docs.len()).collect(),
         None => Vec::new(),
     };
-    let dirty = affected.into_iter().filter_map(|i| docs.get(i)).filter(|d| d.is_dirty()).map(|d| d.doc.id).collect();
+    let transform = crate::transform_tool::unsaved_transform(app);
+    let mut dirty: Vec<_> =
+        affected.into_iter().filter_map(|i| docs.get(i)).filter(|d| d.is_dirty() || Some(d.doc.id) == transform).map(|d| d.doc.id).collect();
+    dirty.sort_by_key(|id| Some(*id) != transform);
     (target.and_then(|i| docs.get(i)).map(|d| d.doc.id), dirty)
 }
 
@@ -88,7 +93,17 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         log::warn!("quitting a window that lost its GPU device before its unsaved work could be saved for recovery");
         return false;
     }
-    let prompt = Prompt { id: id.to_string(), params: params.clone(), target, docs, asked: None, auto: None, auto_answered: None, auto_control: false };
+    let prompt = Prompt {
+        id: id.to_string(),
+        params: params.clone(),
+        target,
+        docs,
+        asked: None,
+        auto: None,
+        auto_answered: None,
+        auto_control: false,
+        transform_save: None,
+    };
     match &app.discard {
         None => ask(app, prompt),
         // Quitting overrides whatever is pending: it covers every document, so nothing is lost.
@@ -123,7 +138,7 @@ impl PhotocraftApp {
     /// Whether closing now would lose work: a document has unsaved changes and closing wasn't
     /// confirmed. The web build has the browser ask before leaving the page while this holds (#1380).
     pub fn has_unsaved_work(&self) -> bool {
-        !self.allow_close && self.session.documents().iter().any(|d| d.is_dirty())
+        !self.allow_close && (self.session.documents().iter().any(|d| d.is_dirty()) || crate::transform_tool::unsaved_transform(self).is_some())
     }
 }
 
@@ -208,9 +223,15 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// Saves `doc`; true once it is saved. A document without a file to write back to asks where in
 /// the save dialog: the prompt then hides until it is answered, and moves on only if it saved.
-fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
-    let Some(i) = index_of(app, doc) else { return false };
+fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, from_control: bool) -> Result<bool, String> {
+    let Some(i) = index_of(app, doc) else { return Ok(false) };
     app.session.set_active(i);
+    if let Some(job) = crate::transform_tool::commit_for_save(app, from_control)? {
+        if let Some(prompt) = app.discard.as_mut() {
+            prompt.transform_save = Some(job);
+        }
+        return Ok(false);
+    }
     let saved = crate::menus::invoke_unguarded(app, ctx, "file.save", json!({}));
     if saved.is_ok() && app.file_dialog_open() {
         let ctx = ctx.clone();
@@ -219,22 +240,31 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
             saved_document(app, &ctx, doc);
             Ok(saved)
         });
-        return false;
+        return Ok(false);
     }
     match saved {
         // A Save Document script may have edited the document after it was written: still dirty.
         // A write the platform can't confirm (a web download) leaves it dirty too, and counts.
-        Ok(_) => {
-            !app.save_options_open()
-                && !app.saving()
-                && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
-        }
-        // Backing out of the file dialog is the user's choice, not an error.
-        Err(e) if e == crate::file_dialog::CANCELLED => false,
-        Err(e) => {
-            app.ui.status = couldnt_save(e);
-            app.ui.status_error = true;
-            false
+        Ok(_) => Ok(!app.save_options_open()
+            && !app.saving()
+            && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())),
+        Err(e) if e == crate::file_dialog::CANCELLED => Ok(false),
+        Err(e) => Err(couldnt_save(e)),
+    }
+}
+
+pub(crate) fn waiting_for_transform(app: &PhotocraftApp) -> bool {
+    app.discard.as_ref().is_some_and(|prompt| prompt.transform_save.is_some())
+}
+
+pub(crate) fn transform_finished(app: &mut PhotocraftApp, ctx: &egui::Context, job: JobId, landed: bool) {
+    let Some(prompt) = app.discard.as_mut().filter(|prompt| prompt.transform_save == Some(job)) else { return };
+    prompt.transform_save = None;
+    if landed && let Some(&doc) = prompt.docs.first() {
+        match save(app, ctx, doc, false) {
+            Ok(true) => advance(app, ctx),
+            Ok(false) => {}
+            Err(error) => crate::notices::error(app, error),
         }
     }
 }
@@ -267,7 +297,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Save can ask for a path and then TIFF or Targa Options, and then write in the background.
     // Wait for all three; cancellation or a failed save brings us back. The question is closed
     // meanwhile: the answer that started the save closed it.
-    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+    if app.file_dialog_open() || app.save_options_open() || app.saving() || waiting_for_transform(app) {
         return;
     }
     close_stale_question(app, ctx);
@@ -386,7 +416,7 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answe
         Answer::Discard => advance(app, ctx),
         Answer::Save => {
             authorize_save(app, from_control)?;
-            if save(app, ctx, doc) {
+            if save(app, ctx, doc, from_control)? {
                 advance(app, ctx);
             }
         }

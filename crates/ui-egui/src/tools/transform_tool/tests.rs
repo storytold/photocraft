@@ -2202,3 +2202,23 @@ fn ending_the_transform_brings_back_the_tools_options_bar() {
         assert!(h.query_by_label("Reverse").is_some(), "after {key:?} the Gradient members are back");
     }
 }
+
+#[test]
+fn save_copy_via_the_menu_writes_the_committed_transform() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("moved.psd");
+    let square = photocraft_geom::Rect::new(8, 8, 24, 24);
+    let mut app = app_with_square(64, square);
+    app.background_jobs = false;
+    let ctx = app.ctx().clone();
+    begin(&mut app, &ctx).unwrap();
+    set_quad(&mut app, corners([16.0, 8.0, 32.0, 24.0]));
+    assert!(app.has_unsaved_work());
+    assert!(app.run("file.saveACopy", json!({"path":path})).is_err());
+    assert!(!path.exists());
+    crate::menus::invoke(&mut app, &ctx, "file.saveACopy", json!({"path":path})).unwrap();
+    assert!(app.ui.transform.is_none());
+    let bytes = std::fs::read(&path).unwrap();
+    let doc = photocraft_io::import(path.to_str().unwrap(), &bytes).unwrap().document;
+    assert!(doc.layers.iter().any(|layer| layer.surface().is_some_and(|s| s.content_bounds() == square.translate(8, 0))));
+}

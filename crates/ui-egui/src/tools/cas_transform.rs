@@ -134,14 +134,11 @@ pub(crate) fn params(t: &FreeTransform, o: &ContentAwareOptions, place: bool) ->
 }
 
 /// ↩: run the command for the box. An untouched box changes nothing and adds no step.
-pub(crate) fn commit(app: &mut PhotocraftApp, t: &FreeTransform, o: &ContentAwareOptions) {
+pub(crate) fn commit(app: &mut PhotocraftApp, t: &FreeTransform, o: &ContentAwareOptions) -> Result<Value, String> {
     if t.session.is_untouched() {
-        return;
+        return Ok(json!({"changed":false}));
     }
-    if let Err(e) = app.run(COMMAND, params(t, o, true)) {
-        app.ui.status = e;
-        app.ui.status_error = true;
-    }
+    app.run(COMMAND, params(t, o, true))
 }
 
 /// Once per frame while the box is open: take a finished preview, cancel one gone stale and start

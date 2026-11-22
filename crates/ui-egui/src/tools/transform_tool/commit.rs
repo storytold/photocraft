@@ -40,10 +40,6 @@ pub fn commit(app: &mut PhotocraftApp) {
         }
         return;
     }
-    if let Some(options) = &t.content_aware {
-        crate::cas_transform::commit(app, &t, options);
-        return;
-    }
     let Some(result) = result else { return };
     let rect = [result.rect.x0, result.rect.y0, result.rect.x1, result.rect.y1];
     let quad = result.state.quad.map(|p| [p.x, p.y]);
@@ -79,7 +75,9 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let made = t.made;
-    let r = if let Some(w) = &warp {
+    let r = if let Some(options) = &t.content_aware {
+        crate::cas_transform::commit(app, &t, options)
+    } else if let Some(w) = &warp {
         // The warp's bounds are the frame it was built over (a stored smart warp's, or Warp Text's).
         app.run("edit.transform.warp", json!({"layer": t.layer, "rect": w.bounds, "warp": w, "interpolation": interpolation}))
     } else {
@@ -178,6 +176,59 @@ fn finish(app: &mut PhotocraftApp, document: Option<DocId>, layer: LayerId, made
     }
 }
 
+fn saves_document(id: &str) -> bool {
+    matches!(id, "file.save" | "file.saveAs" | "file.saveACopy")
+}
+
+fn transform_document(app: &PhotocraftApp) -> Option<DocId> {
+    app.ui.transform.as_ref()?;
+    app.transform_preview.as_ref().map(|preview| preview.doc.id)
+}
+
+pub(crate) fn unsaved_transform(app: &PhotocraftApp) -> Option<DocId> {
+    let transform = app.ui.transform.as_ref()?;
+    (committing(app).is_some() || !transform.session.is_untouched()).then(|| transform_document(app)).flatten()
+}
+
+/// An interactive Save commits the visible box before reading pixels. An automation
+/// caller can commit explicitly before saving; its authorization covers one command.
+pub(crate) fn commit_for_save(app: &mut PhotocraftApp, from_control: bool) -> Result<Option<JobId>, String> {
+    if transform_document(app).is_none_or(|doc| app.active_doc_id().ok() != Some(doc)) {
+        return Ok(None);
+    }
+    if from_control || app.automation_input || app.session.authorize.is_some() {
+        return Err(tl!("Commit or cancel the transform first").into());
+    }
+    if app.after_transform_commit.is_some() || crate::discard_ui::waiting_for_transform(app) {
+        return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+    }
+    commit(app);
+    if let Some(job) = committing(app) {
+        return Ok(Some(job));
+    }
+    if app.ui.transform.is_some() {
+        return Err(if app.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { app.ui.status.clone() });
+    }
+    Ok(None)
+}
+
+pub(crate) fn before_save(app: &mut PhotocraftApp, id: &str, params: &serde_json::Value) -> Option<Result<serde_json::Value, String>> {
+    if !saves_document(id) || transform_document(app).is_none_or(|doc| app.active_doc_id().ok() != Some(doc)) {
+        return None;
+    }
+    if let Err(error) = crate::FormatChoices::from_params(params, id) {
+        return Some(Err(error));
+    }
+    match commit_for_save(app, false) {
+        Ok(None) => None,
+        Ok(Some(_)) => {
+            app.after_transform_commit = Some((id.to_string(), params.clone()));
+            Some(Ok(serde_json::Value::Null))
+        }
+        Err(error) => Some(Err(error)),
+    }
+}
+
 /// The job applying the transform, while it runs.
 pub(crate) fn committing(app: &PhotocraftApp) -> Option<JobId> {
     app.transform_preview.as_ref().and_then(|pv| pv.committing)
@@ -202,16 +253,24 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
         if switched_away(app) {
             cancel(app);
         }
+        let ctx = app.ctx().clone();
+        crate::discard_ui::transform_finished(app, &ctx, e.id, false);
         return;
     }
     let document = pv.doc.id;
     let landed = matches!(e.outcome, JobOutcome::Done(_));
     finish(app, Some(document), LayerId(t.layer), t.made, landed);
-    // Not in another tab, which the click wasn't meant for.
-    if let Some((id, params)) = after.filter(|_| landed && app.session.active().is_some_and(|st| st.doc.id == document))
-        && let Err(e) = app.run(&id, params)
-    {
-        // A notice, as the commit's own status replaces the status bar's text next (jobs_ui).
+    let ctx = app.ctx().clone();
+    crate::discard_ui::transform_finished(app, &ctx, e.id, landed);
+    let Some((id, params)) = after.filter(|_| landed) else { return };
+    let result = if saves_document(&id) {
+        app.with_document(document, |app| crate::menus::invoke(app, &ctx, &id, params))
+    } else if app.active_doc_id().ok() == Some(document) {
+        app.run(&id, params)
+    } else {
+        return;
+    };
+    if let Err(e) = result {
         crate::notices::error(app, e);
     }
 }
@@ -421,6 +480,9 @@ fn box_command(id: &str) -> bool {
 /// `None` for other commands or when not transforming.
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
     let warping = app.ui.transform.as_ref()?.session.warp().is_some();
+    if saves_document(id) && transform_document(app) == app.active_doc_id().ok() {
+        return Some(Err(tl!("Commit or cancel the transform first").into()));
+    }
     if committing(app).is_some() {
         return box_command(id).then(|| Err(if warping { STILL_WARPING } else { STILL_APPLYING }.into()));
     }

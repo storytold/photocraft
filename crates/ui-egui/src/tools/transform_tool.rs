@@ -36,7 +36,7 @@ pub(crate) use begin::moving_texel;
 pub use begin::{
     WARP_ONE_LAYER, begin, begin_copy, begin_from_frame, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_active_layer, warps_type,
 };
-pub(crate) use commit::{SAVE_FOR_WEB, committing};
+pub(crate) use commit::{SAVE_FOR_WEB, before_save, commit_for_save, committing, unsaved_transform};
 pub use commit::{apply_click, auto_commit, cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event};
 #[cfg(test)]
 pub(crate) use draw::styled_composite;
