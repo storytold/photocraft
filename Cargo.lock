@@ -2391,6 +2391,7 @@ dependencies = [
  "craft-ui-panels",
  "craft-window",
  "egui",
+ "raw-window-handle",
  "serde",
  "web-time",
 ]
