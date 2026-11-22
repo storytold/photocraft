@@ -1286,8 +1286,9 @@ fn indexed_brush_stroke_leaves_pixels_it_did_not_paint() {
     // from its dabs. Seed it directly: Session::edit now quantizes newly edited pixels.
     {
         let state = s.active_mut().unwrap();
-        let doc = std::sync::Arc::make_mut(&mut state.doc);
-        let surf = doc.layer_mut(state.active_layer.unwrap()).unwrap().surface_mut().unwrap();
+        let layer = state.active_layer().unwrap();
+        let doc = std::sync::Arc::make_mut(state.doc_mut());
+        let surf = doc.layer_mut(layer).unwrap().surface_mut().unwrap();
         let px = photocraft_raster::from_rgba(&surf.format(), [1.0, 0.0, 0.0, 1.0]);
         surf.write_region(Rect::new(13, 2, 14, 3), &px);
     }

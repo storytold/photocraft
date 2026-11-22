@@ -335,7 +335,7 @@ fn paste_red_clipboard(s: &mut Session) {
     source.execute("file.new", json!({"width": 10, "height": 10, "background": "#ff0000"})).unwrap();
     source.execute("select.all", json!({})).unwrap();
     source.execute("edit.copy", json!({})).unwrap();
-    s.clipboard = source.clipboard.take();
+    *s.clipboard = source.clipboard.take();
     s.execute("edit.paste", json!({})).unwrap();
 }
 
