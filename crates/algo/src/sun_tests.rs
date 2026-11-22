@@ -131,3 +131,23 @@ fn the_light_shines_away_from_the_sun() {
         assert!(euler[0] > 0.0, "a sun above the horizon tilts the light down");
     }
 }
+
+#[test]
+fn a_lone_bright_pixel_is_found_on_black_and_on_a_dim_sky() {
+    let (x, y) = (300usize, 100usize);
+    for background in [0.0f32, 0.05] {
+        let mut px = vec![[background, background, background, 1.0]; W * H];
+        px[y * W + x] = [50.0, 50.0, 50.0, 1.0];
+        let found = find(&Sky { px: &px, width: W, height: H, linear: true }).expect("a sun");
+        let at = direction((x as f64 + 0.5) / W as f64, (y as f64 + 0.5) / H as f64);
+        // The window's dark centre would leave nothing to find on black, and seed the sky on a dim one.
+        assert!(angle_between(found.direction, at) < 0.5, "background {background}: {:?}", azimuth_elevation(found.direction));
+    }
+}
+
+#[test]
+fn a_colour_far_from_the_black_body_line_has_no_colour_temperature() {
+    assert!(linear_to_kelvin([0.0, 1.0, 0.0]).is_none(), "pure green");
+    let k = linear_to_kelvin(kelvin_to_linear(5000.0)).expect("a black body's colour");
+    assert!((k - 5000.0).abs() < 150.0, "{k}");
+}

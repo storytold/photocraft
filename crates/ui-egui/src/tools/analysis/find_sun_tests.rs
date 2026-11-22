@@ -83,3 +83,29 @@ fn changing_which_way_the_image_centre_faces_measures_again() {
     let turned = (before - after).rem_euclid(360.0);
     assert!((turned - 90.0).abs() < 2.0, "before {before} after {after}");
 }
+
+#[test]
+fn an_error_keeps_find_automatically_and_another_document_drops_a_sun_put_by_hand() {
+    let mut h = harness();
+    let ctx = h.ctx.clone();
+    let set_at = |h: &mut H, at: Value| {
+        h.state_mut().framework.dialogs.get_mut::<FindSunDialog>().unwrap().set_json_field(&ctx, "at", at).unwrap();
+        h.run_steps(4);
+    };
+    // Off the image: the command refuses, and the way back stays in the dialog.
+    set_at(&mut h, json!([500, 10]));
+    assert!(h.state().framework.dialogs.get::<FindSunDialog>().unwrap().result.is_err());
+    h.get_by_role_and_label(Role::Button, "Find Automatically").click();
+    h.run_steps(4);
+    let dialog = h.state().framework.dialogs.get::<FindSunDialog>().unwrap();
+    assert!(dialog.options.at.is_none() && dialog.result.is_ok());
+
+    // A sun put on this image isn't carried to the next one.
+    set_at(&mut h, json!([10, 10]));
+    assert_eq!(result(&h)["picked"], json!(true));
+    h.state_mut().run("file.new", json!({"width": 128, "height": 64, "depth": 32})).unwrap();
+    h.run_steps(4);
+    let dialog = h.state().framework.dialogs.get::<FindSunDialog>().unwrap();
+    assert!(dialog.options.at.is_none(), "{:?}", dialog.options.at);
+    assert_eq!(result(&h)["picked"], json!(false));
+}

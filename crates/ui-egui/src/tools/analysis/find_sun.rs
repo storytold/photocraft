@@ -124,13 +124,39 @@ fn readout(ui: &mut egui::Ui, text: String, button: &str, tooltip: Option<&str>,
 }
 
 fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, String>, copied: &mut Option<String>) {
+    // On an error the options stay, so the user can change what caused it (Find Automatically
+    // clears a sun put off the image) without closing the dialog.
     let r = match result {
-        Ok(r) => r,
+        Ok(r) => Some(r),
         Err(error) => {
             Notice::new(Tone::Bad, label(error)).layout(NoticeLayout::Inline).show(ui);
-            return;
+            if options.at.is_some() && Button::new(label(tl!("Find Automatically"))).show(ui).clicked() {
+                options.at = None;
+            }
+            None
         }
     };
+    if let Some(r) = r {
+        summary(ui, options, r);
+    }
+    choices(ui, options);
+    if let Some(r) = r {
+        readouts(ui, r, copied);
+    }
+    ui.horizontal(|ui| {
+        Text::new(label(tl!("Sky exposure"))).show(ui);
+        NumberField::new(label(tl!("Sky exposure")), Bind::bound(&mut options.exposure))
+            .range(0.0..=1000.0)
+            .tooltip(label(tl!("The exposure your sky is shown at. Keep 1 for the light to match the image; the intensity scales with it.")))
+            .show(ui);
+    });
+    if let Some(r) = r {
+        how(ui, r);
+    }
+}
+
+/// What was found and where, with Find Automatically when the user put the sun.
+fn summary(ui: &mut egui::Ui, options: &mut SunOptions, r: &Value) {
     let note = if r["picked"].as_bool() == Some(true) {
         Some((Tone::Info, tl!("The sun is where you put it.")))
     } else if r["found"].as_bool() != Some(true) {
@@ -155,7 +181,10 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
     });
     Text::new(label(tl!("Wrong spot? Click or drag on the sun in the image."))).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
     Text::new(label(&format!("{}: {:.2}°   {}: {:.2}°", tl!("Azimuth"), number(&r["azimuth"]), tl!("Elevation"), number(&r["elevation"])))).show(ui);
+}
 
+/// The axes, which way the image centre faces, and the sky rotation.
+fn choices(ui: &mut egui::Ui, options: &mut SunOptions) {
     let entries: Vec<Entry<String>> = FRAMES.iter().map(|(key, name)| Entry::new((*key).to_string(), label(tl!(name)))).collect();
     ui.horizontal(|ui| {
         Text::new(label(tl!("Axes"))).show(ui);
@@ -184,6 +213,10 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
             .tooltip(label(tl!("The Rotation of your skybox material, if it has one; 0 if the sky isn't turned.")))
             .show(ui);
     });
+}
+
+/// The direction and light values, each with its Copy button.
+fn readouts(ui: &mut egui::Ui, r: &Value, copied: &mut Option<String>) {
     readout(ui, format!("{}: {}", tl!("Direction to the sun"), triple(&r["direction"], 4)), tl!("Copy direction"), None, triple(&r["direction"], 7), copied);
     let rotation = &r["lightRotation"];
     if !rotation.is_null() {
@@ -207,13 +240,12 @@ fn body(ui: &mut egui::Ui, options: &mut SunOptions, result: &Result<Value, Stri
     let intensity = number(&light["intensity"]);
     let estimate = if measured { String::new() } else { format!(" ({})", tl!("estimate")) };
     readout(ui, format!("{}: {intensity:.3}{estimate}", tl!("Light intensity")), tl!("Copy intensity"), None, format!("{intensity:.3}"), copied);
-    ui.horizontal(|ui| {
-        Text::new(label(tl!("Sky exposure"))).show(ui);
-        NumberField::new(label(tl!("Sky exposure")), Bind::bound(&mut options.exposure))
-            .range(0.0..=1000.0)
-            .tooltip(label(tl!("The exposure your sky is shown at. Keep 1 for the light to match the image; the intensity scales with it.")))
-            .show(ui);
-    });
+}
+
+/// How the light was worked out.
+fn how(ui: &mut egui::Ui, r: &Value) {
+    let light = &r["light"];
+    let measured = light["measured"].as_bool() == Some(true);
     let how = if measured {
         tl!(
             "Measured from the sun in this 32-bit image. The sun in the sky also lights a 3D scene through its environment lighting, so a scene can come out brighter than the photo unless the sun is removed from that copy of the sky."
@@ -339,6 +371,17 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ctx.copy_text(text.clone());
         app.ui.status = format!("{} {text}", tl!("Copied"));
         app.ui.status_error = false;
+    }
+    // A sun put by hand belongs to the image it was put on, and the canvas that takes the pick is
+    // the active document's: both follow a switch to another document.
+    let Some((doc, index)) = app.session.active().map(|st| st.doc.id).zip(app.session.active_index()) else { return };
+    let switched = app.framework.dialogs.get::<FindSunDialog>().and_then(|d| d.computed.as_ref()).is_some_and(|(_, was, _)| *was != doc);
+    if switched {
+        let canvas = crate::canvas::document_display::CanvasHost::primary(app, index).canvas_id();
+        if let Some(dialog) = app.framework.dialogs.get_mut::<FindSunDialog>() {
+            dialog.options.at = None;
+            dialog.canvas = Some(canvas);
+        }
     }
     let Some(dialog) = app.framework.dialogs.get::<FindSunDialog>() else { return };
     let options = dialog.options.clone();

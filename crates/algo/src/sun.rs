@@ -16,9 +16,12 @@
 //! **Light** ([`measure`]): a directional light lights a surface square-on with
 //! `colour × intensity`, and a sky shown at exposure 1 adds its radiance with the same scale, so
 //! a sun that delivers irradiance `E` needs `colour × intensity = E / π`.
-//! - A 32-bit (linear) image whose sun is above white is *measured*: `E` is the sun's pixels
-//!   minus the median of the sky in a ring just outside it, summed over the solid angle each
-//!   pixel covers.
+//! - A 32-bit (linear) image whose sun peaks at 1.5 or more is *measured*: `E` is the sun's
+//!   pixels minus the median of the sky in a ring just outside it, summed over the solid angle
+//!   each pixel covers. The cutoff sits well above white because a clipped sun in a 32-bit file
+//!   (one converted from 8 bits with some exposure, or saved after an exposure change) often
+//!   lands a little above 1, and measuring it would give a light far too weak; a real sun in the
+//!   reduced sample is hundreds or thousands.
 //! - An 8/16-bit image, or a 32-bit one whose sun is clipped, has lost the sun's real
 //!   brightness, so the light is *estimated*: the sky's light on flat ground `D` is measured
 //!   from the image, and a clear-sky model where the diffuse sky light on a horizontal surface is
@@ -64,8 +67,8 @@ pub struct Light {
     pub clipped: bool,
     /// Linear RGB, largest channel 1.
     pub colour: [f64; 3],
-    /// Light intensity at sky exposure 1: `max(E) / π` (0 when the sun is below the horizon and
-    /// could only be estimated).
+    /// Light intensity at sky exposure 1: `max(E) / π` (0 when it could only be estimated and the
+    /// sun is below the horizon or the sky gives no light).
     pub intensity: f64,
     /// Correlated colour temperature of `colour` in kelvin, when it is near the Planckian locus.
     pub kelvin: Option<f64>,
@@ -266,7 +269,15 @@ pub fn find(sky: &Sky<'_>) -> Option<Found> {
             }
         }
     }
-    let seed = seed?;
+    // The winning window's centre can be dark (a lone bright pixel wins every window it is in, and
+    // the first of those is centred beside it), so the seed is the window's brightest pixel.
+    let centre = seed?;
+    let (cx, cy) = (centre % w, centre / w);
+    let seed = [cy - 1, cy, cy + 1]
+        .into_iter()
+        .flat_map(|y| [(cx + w - 1) % w, cx, (cx + 1) % w].map(|x| y * w + x))
+        .max_by(|&a, &b| lum[a].total_cmp(&lum[b]))
+        .unwrap_or(centre);
     let peak = lum[seed];
     if peak <= 0.0 {
         return None;
@@ -361,6 +372,7 @@ pub fn measure(sky: &Sky<'_>, sun: [f64; 3]) -> Option<Light> {
             }
         }
     }
+    // See the module docs for why the cutoff is 1.5 and not 1.
     let measured = sky.linear && peak >= 1.5 && luma(e) > 0.0;
     // The sky's light on flat ground (D), which only an estimate needs. The sky's light changes
     // slowly across the sky, so every `step`-th pixel each way stands for its `step × step` block.
@@ -391,7 +403,8 @@ pub fn measure(sky: &Sky<'_>, sun: [f64; 3]) -> Option<Light> {
         let colour = kelvin_to_linear(kelvin);
         // Clear-sky direct normal irradiance from the sky's diffuse light on the ground.
         let direct_normal = luma(ground) / 0.12;
-        let intensity = if elevation <= 0.0 { 0.0 } else { direct_normal / (PI * luma(colour)) };
+        // A linear sky with negative values can make the ground light negative: no sunlight then.
+        let intensity = if elevation <= 0.0 || direct_normal <= 0.0 { 0.0 } else { direct_normal / (PI * luma(colour)) };
         (colour, intensity)
     };
     Some(Light { measured, clipped: sky.linear && !measured && peak >= 0.9, colour, intensity, kelvin: linear_to_kelvin(colour), elevation })
@@ -401,6 +414,20 @@ pub fn measure(sky: &Sky<'_>, sun: [f64; 3]) -> Option<Light> {
 /// locus in CIE xy (Kim et al., *Design of advanced color temperature control system for HDTV
 /// applications*, 2002, cubic spline fit) to linear sRGB.
 pub fn kelvin_to_linear(kelvin: f64) -> [f64; 3] {
+    let [x, y] = planckian_xy(kelvin);
+    let (cx, cz) = (x / y, (1.0 - x - y) / y);
+    let rgb = [
+        3.240_454_2 * cx - 1.537_138_5 - 0.498_531_4 * cz,
+        -0.969_266_0 * cx + 1.876_010_8 + 0.041_556_0 * cz,
+        0.055_643_4 * cx - 0.204_025_9 + 1.057_225_2 * cz,
+    ]
+    .map(|c| c.max(0.0));
+    let m = rgb[0].max(rgb[1]).max(rgb[2]);
+    if m > 0.0 { rgb.map(|c| c / m) } else { [1.0; 3] }
+}
+
+/// CIE xy of a black body at `kelvin`, clamped to 1667–25000 K (Kim et al. 2002, as above).
+fn planckian_xy(kelvin: f64) -> [f64; 2] {
     let t = kelvin.clamp(1667.0, 25000.0);
     let k = 1e3 / t;
     let (k2, k3) = (k * k, k * k * k);
@@ -417,19 +444,19 @@ pub fn kelvin_to_linear(kelvin: f64) -> [f64; 3] {
     } else {
         3.081_758_0 * x3 - 5.873_386_70 * x2 + 3.751_129_97 * x - 0.370_014_83
     };
-    let (cx, cz) = (x / y, (1.0 - x - y) / y);
-    let rgb = [
-        3.240_454_2 * cx - 1.537_138_5 - 0.498_531_4 * cz,
-        -0.969_266_0 * cx + 1.876_010_8 + 0.041_556_0 * cz,
-        0.055_643_4 * cx - 0.204_025_9 + 1.057_225_2 * cz,
-    ]
-    .map(|c| c.max(0.0));
-    let m = rgb[0].max(rgb[1]).max(rgb[2]);
-    if m > 0.0 { rgb.map(|c| c / m) } else { [1.0; 3] }
+    [x, y]
 }
 
-/// Correlated colour temperature of linear sRGB `c` (McCamy's approximation, 1992), when it
-/// lands between 1000 and 25000 K.
+/// CIE 1960 uv of CIE xy.
+fn uv(x: f64, y: f64) -> [f64; 2] {
+    let d = -2.0 * x + 12.0 * y + 3.0;
+    [4.0 * x / d, 6.0 * y / d]
+}
+
+/// Correlated colour temperature of linear sRGB `c` (McCamy's approximation, 1992), when it lands
+/// between 1667 and 25000 K (the range [`planckian_xy`] covers) and `c` is near the Planckian
+/// locus: within 0.05 in CIE 1960 uv of the black body at that temperature, the limit beyond which
+/// CIE 015 says a correlated colour temperature should not be quoted.
 pub fn linear_to_kelvin(c: [f64; 3]) -> Option<f64> {
     let big_x = 0.412_456_4 * c[0] + 0.357_576_1 * c[1] + 0.180_437_5 * c[2];
     let big_y = 0.212_672_9 * c[0] + 0.715_152_2 * c[1] + 0.072_175_0 * c[2];
@@ -441,7 +468,14 @@ pub fn linear_to_kelvin(c: [f64; 3]) -> Option<f64> {
     let (x, y) = (big_x / sum, big_y / sum);
     let n = (x - 0.3320) / (0.1858 - y);
     let k = 449.0 * n.powi(3) + 3525.0 * n.powi(2) + 6823.3 * n + 5520.33;
-    (k > 1000.0 && k < 25000.0).then_some(k)
+    if !(1667.0..=25000.0).contains(&k) {
+        return None;
+    }
+    let ([u, v], [pu, pv]) = (uv(x, y), {
+        let [px, py] = planckian_xy(k);
+        uv(px, py)
+    });
+    ((u - pu).hypot(v - pv) <= 0.05).then_some(k)
 }
 
 #[cfg(test)]
