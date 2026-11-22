@@ -310,13 +310,11 @@ fn srgba([r, g, b]: [u8; 3]) -> Srgba {
 /// table's first and last cell, and Space acts on it exactly as a click does: the host opens the Color
 /// Picker on that entry, or marks it while Set Transparent is armed.
 ///
-/// No cell holds the keyboard in a PhotoCraft dialog, so none of that runs there: a dialog's Tab visits
+/// No cell holds the keyboard in a PhotoCraft dialog until a press gives it one: a dialog's Tab visits
 /// text and number fields only (`TabReach::Fields`, `docs/ui-dialogs.md`), and a row the host paints is
 /// none of the framework's focus stops, whose keys come from a `KeyUse` a `Param::custom` row cannot
-/// declare. A press in the grid leaves the dialog's own focus where it was (no cell draws the ring) and
-/// the craft key stage keeps Tab, the arrows and Space for itself (Space activates the dialog's OK). The
-/// handlers below are what the row does once something gives it the keys, as the kittest test does; a
-/// real keyboard route needs the framework (#7320).
+/// declare. A press is the way in — the cell it lands on takes the keyboard, ring and all — and from
+/// there the keys above are the row's, not the dialog's (#7320).
 fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>, highlight: Option<usize>) -> (egui::Response, Option<usize>) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let side = CELL * COLS as f32;
@@ -407,13 +405,19 @@ fn grid(ui: &mut egui::Ui, colors: &[[u8; 3]], transparent: Option<usize>, highl
     }
     // A click, or Space on the focused cell, acts on that cell: Space is the key a focused egui
     // control is activated with, and it is consumed so nothing below also reads it. Enter is left to
-    // the dialog's OK, as in Photoshop's dialogs; neither key reaches a cell in this app (see the
-    // grid's note), and Space with no cell focused activates the dialog's OK.
+    // the dialog's OK, as in Photoshop's dialogs.
     let hit = cells.iter().position(egui::Response::clicked).or_else(|| {
         let at = cells.iter().position(egui::Response::has_focus)?;
         let acted = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
         acted.then_some(at)
     });
+    // The cell the press acted on takes the keyboard with it, so the arrows and Space go on acting on
+    // the entry the user is working with. A press is the way in: a dialog's Tab stops at its text and
+    // number fields (see the grid's note), and nothing else gives a cell the keyboard. The focus of a
+    // cell that already holds it is left alone: re-requesting would drop the arrows' lock filter.
+    if let Some(i) = hit.filter(|&i| !cells[i].has_focus()) {
+        cells[i].request_focus();
+    }
     (response, hit)
 }
 

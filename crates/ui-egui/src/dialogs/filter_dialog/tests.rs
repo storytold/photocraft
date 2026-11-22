@@ -2042,6 +2042,38 @@ fn the_palette_cells_take_the_keyboard_and_name_themselves() {
     assert_eq!(harness.get_by_label(&cell(harness.state(), 31)).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "and the tree says so");
 }
 
+/// A press in the grid gives the cell it lands on the keyboard (#7320): the row is not one of the
+/// framework's focus stops, so without that a clicked cell held no keyboard at all and the row's arrows
+/// and Space never ran in the app. The cell the pointer acted on is the one the keys act on.
+#[test]
+fn a_press_gives_the_palette_cell_the_keyboard() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width": 4, "height": 4, "depth": 8, "background": "transparent"})).unwrap();
+    session.execute("image.mode.indexedColor", json!({"palette": "web", "dither": "none"})).unwrap();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+    let mut harness = harness(app, egui::vec2(900.0, 1100.0));
+    let id = open(harness.state_mut(), "image.mode.colorTable").unwrap();
+    harness.run_steps(3);
+    let cell = |app: &PhotocraftApp, i: usize| {
+        let colors = crate::dialogs::palette_file_ui::table_rgb(&fields_of(app, id), crate::dialogs::palette_file_ui::COLORS_FIELD).expect("the grid's table");
+        let [r, g, b] = colors[i];
+        format!("{i} #{r:02x}{g:02x}{b:02x}")
+    };
+    // Set Transparent armed, so a press marks the entry instead of opening the Color Picker.
+    harness.get_by_label("Set Transparent").click();
+    harness.run_steps(2);
+    // A press on a cell that is not the grid's first one takes the keyboard with it.
+    harness.get_by_label(&cell(harness.state(), 20)).click();
+    harness.run_steps(2);
+    assert!(harness.get_by_label(&cell(harness.state(), 20)).is_focused(), "the pressed cell holds the keyboard");
+    harness.key_press(egui::Key::ArrowRight);
+    harness.run_steps(2);
+    assert!(harness.get_by_label(&cell(harness.state(), 21)).is_focused(), "the arrows walk from the pressed cell");
+    harness.key_press(egui::Key::Space);
+    harness.run_steps(2);
+    assert_eq!(fields_of(harness.state(), id).int(crate::dialogs::palette_file_ui::TRANSPARENT), Some(21), "and Space acts on it");
+}
+
 /// The palette pipette: armed from its button, a press on the image highlights the entry the pixel
 /// uses — its colour's entry, or the table's transparent entry over a clear pixel.
 #[test]
