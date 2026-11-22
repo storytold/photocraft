@@ -53,9 +53,11 @@ pub(crate) fn menu_gate(app: &PhotocraftApp) -> (Gate, ModalRules) {
 /// screen-mode commands are judged as their View › Screen Mode rows, and the rows' own rules
 /// ([`refused`]) apply to them: their keys and menu items are one command.
 pub(crate) fn command_gate(app: &PhotocraftApp) -> CommandGate {
-    let ctx = app.ctx();
-    if app.splash_shortcuts_blocked(ctx, ctx.input(|i| i.time)) {
-        return CommandGate::new((), |_, _| false);
+    if app.splash.is_some() {
+        let ctx = app.ctx();
+        if app.splash_shortcuts_blocked(ctx, ctx.input(|i| i.time)) {
+            return CommandGate::new((), |_, _| false);
+        }
     }
     let (gate, rules) = menu_gate(app);
     // The refusals follow the rows' rules, so they are derived from the facts the menu model is built from.

@@ -60,7 +60,10 @@ impl PhotocraftApp {
 
     /// Returns whether the startup splash is still active (including during its initial appearance delay).
     pub(crate) fn splash_active(&self, ctx: &egui::Context, now: f64) -> bool {
-        !self.system_ready() && self.ui.notices.is_empty() && !self.splash_automation_active(ctx) && self.splash.as_ref().is_some_and(|s| s.is_active(now))
+        let Some(splash) = self.splash.as_ref() else {
+            return false;
+        };
+        splash.is_active(now) && self.ui.notices.is_empty() && !self.system_ready() && !self.splash_automation_active(ctx)
     }
 
     /// Returns whether application shortcuts are suppressed by an actively rendered splash screen.
@@ -68,19 +71,27 @@ impl PhotocraftApp {
     /// Shortcuts remain available during the initial appearance delay (when [`crate::splash::SplashState::time_until_appearance`]
     /// is `Some`), when notices are posted, or when system initialization has completed (`system_ready`).
     pub fn splash_shortcuts_blocked(&self, ctx: &egui::Context, now: f64) -> bool {
-        !self.system_ready() && self.ui.notices.is_empty() && !self.splash_automation_active(ctx) && self.splash.as_ref().is_some_and(|s| s.should_render(now))
+        let Some(splash) = self.splash.as_ref() else {
+            return false;
+        };
+        splash.should_render(now) && self.ui.notices.is_empty() && !self.system_ready() && !self.splash_automation_active(ctx)
     }
 
     /// Updates and renders the startup splash screen if active, returning `true` when the splash
     /// drew this pass in place of the main workspace body.
     fn run_splash_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> bool {
-        let now = ctx.input(|i| i.time);
-        if self.splash_automation_active(ctx)
-            && let Some(s) = &mut self.splash
-        {
-            s.dismiss();
-            ctx.request_repaint();
+        if self.splash.is_none() {
+            return false;
         }
+        if self.splash_automation_active(ctx) {
+            if let Some(s) = &mut self.splash {
+                s.dismiss();
+            }
+            self.splash = None;
+            ctx.request_repaint();
+            return false;
+        }
+        let now = ctx.input(|i| i.time);
         let system_ready = self.system_ready();
         if let Some(splash) = &mut self.splash {
             splash.ensure_started(now);

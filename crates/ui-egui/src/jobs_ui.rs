@@ -507,7 +507,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Once per frame: Escape is taken from the frame's input, so a second pass finds none. While the Batch question is
     // open Escape is its prompt's (it answers Stop), so it is left in the input. While the startup splash is active,
     // Escape must not cancel background jobs.
-    if !app.splash_active(ctx, ctx.input(|i| i.time))
+    if (app.splash.is_none() || !app.splash_active(ctx, ctx.input(|i| i.time)))
         && let Some(job) = job_in_view(app)
         && !craft::ui::runtime::focus::focused_rec(ctx).is_some_and(|r| r.stop.text)
         && !(job.command == "file.automate.batch" && app.session.batch_interrupt_waiting(job.id))
