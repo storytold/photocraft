@@ -388,6 +388,7 @@ pub fn resize_surface_with_interrupt(
 
 fn resize_controlled(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>, budget: usize, ctl: &photocraft_raster::Interrupt) -> Surface {
     let mut cur: Option<Surface> = None;
+    let canvas_in = canvas;
     let mut canvas = canvas;
     for p in plan(filter, sx, sy) {
         if ctl.cancelled() {
@@ -397,21 +398,122 @@ fn resize_controlled(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Op
         canvas = canvas.map(|c| scaled_rect(c, p.sx, p.sy));
         cur = Some(next);
     }
-    let mut out = preserve_details(cur.unwrap_or_else(|| s.clone()), filter, sx, sy);
+    let mut out = preserve_details(cur.unwrap_or_else(|| s.clone()), s, filter, sx, sy, canvas_in);
     out.prune();
     out
 }
 
-/// Preserve Details' light sharpening of an enlargement (Lanczos's output, for the other filters
-/// nothing).
-fn preserve_details(mut out: Surface, filter: Resample, sx: f64, sy: f64) -> Surface {
-    if filter == Resample::PreserveDetails && (sx > 1.0 || sy > 1.0) {
+/// Whether `filter` at `(sx, sy)` ends with Preserve Details' sharpening of an enlargement.
+fn sharpens(filter: Resample, sx: f64, sy: f64) -> bool {
+    filter == Resample::PreserveDetails && (sx > 1.0 || sy > 1.0)
+}
+
+/// Preserve Details' sharpening of an enlargement (Lanczos's output `out` of `src`; for the other
+/// filters nothing): an Unsharp Mask that steepens edges, with every sample kept within the
+/// source pixels around it before and after, so the edges get no ringing halo and the result is
+/// the same at every depth (32 bits doesn't clip Lanczos's overshoot) (#14794).
+fn preserve_details(mut out: Surface, src: &Surface, filter: Resample, sx: f64, sy: f64, canvas: Option<Rect>) -> Surface {
+    if sharpens(filter, sx, sy) {
+        dering(&mut out, src, sx, sy, canvas);
         let dst = out.content_bounds();
-        let p = crate::FilterParams::UnsharpMask { amount: 30.0, radius: 0.6 * sx.max(sy) as f32, threshold: 0.0 };
+        let p = crate::FilterParams::UnsharpMask { amount: PD_AMOUNT, radius: (PD_RADIUS * sx.max(sy)) as f32, threshold: 0.0 };
         let area = crate::output_area(&p, dst, dst, None);
         out = crate::apply(&out, &p, area, dst, None);
+        dering(&mut out, src, sx, sy, canvas);
     }
     out
+}
+
+/// Preserve Details' Unsharp Mask amount (%) and radius (per unit of scale), fitted to the
+/// reference application's 2x enlargement of a hard edge (#14794).
+pub(crate) const PD_AMOUNT: f32 = 127.0;
+pub(crate) const PD_RADIUS: f64 = 0.6;
+
+/// Keeps each sample of `out` (a resize of `src` by `(sx, sy)`) within the range of the two by
+/// two source pixels around its source position, channel by channel. Colour channels only count
+/// the source pixels that are not fully transparent. Source positions are clamped into the area
+/// the resize reads (the content, or with `canvas` that and the canvas).
+pub(crate) fn dering(out: &mut Surface, src: &Surface, sx: f64, sy: f64, canvas: Option<Rect>) {
+    let dst = out.content_bounds();
+    let content = src.content_bounds();
+    let area = canvas.map_or(content, |c| content.union(&c));
+    if dst.is_empty() || area.is_empty() || !(sx > 0.0 && sy > 0.0) {
+        return;
+    }
+    let fmt = out.format();
+    let n = fmt.channels();
+    let alpha = fmt.alpha;
+    // The two source samples around output sample `o`, as indices into `lo..=hi`.
+    let pair = |o: i32, scale: f64, lo: i32, hi: i32| -> (usize, usize) {
+        let u = ((o as f64 + 0.5) / scale - 0.5).floor();
+        let i0 = (u.clamp(f64::from(lo), f64::from(hi)) as i32 - lo) as usize;
+        let i1 = ((u + 1.0).clamp(f64::from(lo), f64::from(hi)) as i32 - lo) as usize;
+        (i0, i1)
+    };
+    let xs: Vec<(usize, usize)> = (dst.x0..dst.x1).map(|o| pair(o, sx, area.x0, area.x1 - 1)).collect();
+    let band = |b: i32| -> (Rect, Vec<f32>) {
+        let r = Rect::new(dst.x0, dst.y0 + b * BAND as i32, dst.x1, (dst.y0 + (b + 1) * BAND as i32).min(dst.y1));
+        let ys: Vec<(usize, usize)> = (r.y0..r.y1).map(|o| pair(o, sy, area.y0, area.y1 - 1)).collect();
+        let sy0 = ys.iter().map(|p| p.0.min(p.1)).min().unwrap_or(0);
+        let sy1 = ys.iter().map(|p| p.0.max(p.1)).max().unwrap_or(0) + 1;
+        let read = Rect::new(area.x0, area.y0 + sy0 as i32, area.x1, area.y0 + sy1 as i32);
+        let source = src.read_region(read);
+        let sw = read.width() as usize * n;
+        let mut data = out.read_region(r);
+        // The range of each source column over the current pair of rows: colour channels of
+        // transparent pixels count as nothing (an empty range, `lo > hi`).
+        let (mut vlo, mut vhi) = (vec![0.0f32; sw], vec![0.0f32; sw]);
+        let mut rows = None;
+        for (&(y0, y1), row) in ys.iter().zip(data.chunks_exact_mut(dst.width() as usize * n)) {
+            if rows != Some((y0, y1)) {
+                rows = Some((y0, y1));
+                let a = source.get((y0 - sy0) * sw..(y0 - sy0 + 1) * sw).unwrap_or(&[]);
+                let b = source.get((y1 - sy0) * sw..(y1 - sy0 + 1) * sw).unwrap_or(&[]);
+                for (((pa, pb), lo), hi) in a.chunks_exact(n).zip(b.chunks_exact(n)).zip(vlo.chunks_exact_mut(n)).zip(vhi.chunks_exact_mut(n)) {
+                    let seen = |p: &[f32]| !alpha || p.last().is_some_and(|&v| v > 0.0);
+                    let (sa, sb) = (seen(pa), seen(pb));
+                    for (c, (((&va, &vb), l), h)) in pa.iter().zip(pb).zip(lo.iter_mut()).zip(hi.iter_mut()).enumerate() {
+                        let all = alpha && c == n - 1;
+                        let (ia, ib) = (sa || all, sb || all);
+                        *l = match (ia, ib) {
+                            (true, true) => va.min(vb),
+                            (true, false) => va,
+                            (false, true) => vb,
+                            (false, false) => f32::INFINITY,
+                        };
+                        *h = match (ia, ib) {
+                            (true, true) => va.max(vb),
+                            (true, false) => va,
+                            (false, true) => vb,
+                            (false, false) => f32::NEG_INFINITY,
+                        };
+                    }
+                }
+            }
+            for (&(x0, x1), px) in xs.iter().zip(row.chunks_exact_mut(n)) {
+                let (l0, l1, h0, h1) = (vlo.get(x0 * n..), vlo.get(x1 * n..), vhi.get(x0 * n..), vhi.get(x1 * n..));
+                let (Some(l0), Some(l1), Some(h0), Some(h1)) = (l0, l1, h0, h1) else { continue };
+                for ((((v, &l0), &l1), &h0), &h1) in px.iter_mut().zip(l0).zip(l1).zip(h0).zip(h1) {
+                    let (lo, hi) = (l0.min(l1), h0.max(h1));
+                    if lo <= hi {
+                        *v = v.clamp(lo, hi);
+                    }
+                }
+            }
+        }
+        (r, data)
+    };
+    let bands: Vec<i32> = (0..(dst.height() as usize).div_ceil(BAND) as i32).collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let parts: Vec<(Rect, Vec<f32>)> = {
+        use rayon::prelude::*;
+        bands.par_iter().map(|&b| band(b)).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let parts: Vec<(Rect, Vec<f32>)> = bands.iter().map(|&b| band(b)).collect();
+    for (r, d) in parts {
+        out.write_region(r, &d);
+    }
 }
 
 /// Output rows computed together by [`PassState::band`].
@@ -607,6 +709,8 @@ pub struct ResizeSteps {
     canvas: Option<Rect>,
     filter: Resample,
     scale: (f64, f64),
+    /// The input and its canvas, kept for Preserve Details' closing sharpening.
+    orig: Option<(Surface, Option<Rect>)>,
     run: Option<PassRun>,
     /// Final pruning must yield too: sparse output can contain many default-filled tiles.
     prune: Option<photocraft_raster::PruneCursor>,
@@ -625,7 +729,8 @@ impl ResizeSteps {
     /// or [`resize_surface_in_canvas`] does.
     pub fn new(src: Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>) -> Self {
         let passes = plan(filter, sx, sy);
-        Self { src, total: passes.len(), passes: passes.into_iter(), canvas, filter, scale: (sx, sy), run: None, prune: None }
+        let orig = sharpens(filter, sx, sy).then(|| (src.clone(), canvas));
+        Self { src, total: passes.len(), passes: passes.into_iter(), canvas, filter, scale: (sx, sy), orig, run: None, prune: None }
     }
 
     /// How far along it is, `0.0..=1.0`: whole passes plus the bands done of the current one.
@@ -677,7 +782,10 @@ impl ResizeSteps {
         if self.prune.is_none() {
             let placeholder = Surface::new(self.src.format());
             let out = std::mem::replace(&mut self.src, placeholder);
-            self.src = preserve_details(out, self.filter, self.scale.0, self.scale.1);
+            self.src = match self.orig.take() {
+                Some((orig, canvas)) => preserve_details(out, &orig, self.filter, self.scale.0, self.scale.1, canvas),
+                None => out,
+            };
             self.prune = Some(self.src.prune_cursor());
         }
         let cursor = self.prune.as_mut()?;
@@ -704,5 +812,7 @@ pub fn crop_surface(s: &Surface, keep: Rect) -> Surface {
     out
 }
 
+#[cfg(test)]
+mod preserve_details_edge_tests;
 #[cfg(test)]
 mod tests;

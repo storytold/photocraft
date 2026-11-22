@@ -218,10 +218,15 @@ fn preserve_details_resampling_keeps_the_same_sharpening() {
     for depth in SampleType::ALL {
         for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
             let s = source(src, PixelFormat::new(mode, depth, true));
-            let resized = resize_surface(&s, sx, sy, Resample::Lanczos);
-            let p = crate::FilterParams::UnsharpMask { amount: 30.0, radius: 0.6 * sx.max(sy) as f32, threshold: 0.0 };
+            // Lanczos, kept within the source pixels around each sample (#14794), sharpened and kept
+            // within them again.
+            let mut resized = resize_surface(&s, sx, sy, Resample::Lanczos);
+            crate::resample::dering(&mut resized, &s, sx, sy, None);
+            let radius = (crate::resample::PD_RADIUS * sx.max(sy)) as f32;
+            let p = crate::FilterParams::UnsharpMask { amount: crate::resample::PD_AMOUNT, radius, threshold: 0.0 };
             let area = crate::output_area(&p, resized.content_bounds(), dst, None);
-            let expected = apply_reference(&resized, &p, area, dst, None, None, crate::auto_tile(&p, dst));
+            let mut expected = apply_reference(&resized, &p, area, dst, None, None, crate::auto_tile(&p, dst));
+            crate::resample::dering(&mut expected, &s, sx, sy, None);
             let actual = resize_surface(&s, sx, sy, Resample::PreserveDetails);
             assert_eq!(actual.to_interleaved(area), expected.to_interleaved(area));
         }
