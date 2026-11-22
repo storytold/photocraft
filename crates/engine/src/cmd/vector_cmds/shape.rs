@@ -404,6 +404,11 @@ pub fn transform_shape(sh: &mut ShapeLayer, a: &Affine) {
                 }
             })
         }
+        // A plain line under the same transforms (the W and H of a diagonal line, #13250).
+        (Some(LiveShape::Line { from, to, weight }), false) => arrow_axis_scales(a, from, to).map(|(_, perpendicular_scale)| {
+            let pt = |p: [f64; 2]| [m0 * p[0] + m2 * p[1] + tx, m1 * p[0] + m3 * p[1] + ty];
+            LiveShape::Line { from: pt(from), to: pt(to), weight: weight * perpendicular_scale }
+        }),
         _ => None,
     };
     // Keep the exact transformed outline. Remove live arrow parameters

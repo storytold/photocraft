@@ -225,3 +225,44 @@ fn another_transform_of_a_line_keeps_its_history_name() {
     h.state_mut().run("shape.edit", json!({"layer": id.0, "transform": [1.0, 0.0, 0.0, 1.0, 5.0, 5.0]})).unwrap();
     assert_ne!(undo_label(&h).as_deref(), Some("Scale Paths"));
 }
+
+/// The live plain line (no arrow parameters) of layer `id`: from, to, weight.
+fn plain(h: &H, id: LayerId) -> ([f64; 2], [f64; 2], f64) {
+    match &h.state().session.active().unwrap().doc.layer(id).unwrap().content {
+        LayerContent::Shape(sh) => match &sh.live {
+            Some(LiveShape::Line { from, to, weight }) => (*from, *to, *weight),
+            other => panic!("a live plain line, got {other:?}"),
+        },
+        _ => panic!("a shape layer"),
+    }
+}
+
+#[test]
+fn w_then_h_keep_a_diagonal_plain_line_live() {
+    // `shape.create` without arrow keys (or an imported line) makes a plain `LiveShape::Line`.
+    let mut h = bar(false);
+    h.state_mut().run("shape.create", json!({"kind": "line", "from": [0, 0], "to": [200, 100], "weight": 4})).unwrap();
+    h.run_steps(3);
+    let id = active(&h);
+    plain(&h, id);
+    assert!(near(shown(&h, "W:"), 223.61, 0.006), "W {}", shown(&h, "W:"));
+    assert_eq!(shown(&h, "H:"), 4.0);
+
+    type_into(&mut h, "W:", "300");
+    let (from, to, weight) = plain(&h, id);
+    assert_pt(from, [0.0, 0.0], "W keeps the start");
+    assert_pt(to, [268.33, 134.16], "W moves the end along the line");
+    assert!(near(weight, 4.0, 1e-9), "weight {weight}");
+    assert_eq!(undo_label(&h).as_deref(), Some("Scale Paths"));
+    assert!(near(shown(&h, "W:"), 300.0, 0.006));
+
+    type_into(&mut h, "H:", "8");
+    let (from, to, weight) = plain(&h, id);
+    assert!(near(weight, 8.0, 1e-9), "weight {weight}");
+    assert!(near((to[0] - from[0]).hypot(to[1] - from[1]), 300.0, 1e-6), "H keeps the length");
+    // The pivot is the box edge 2 px off the start; doubling the thickness moves the start 2 px
+    // along the normal (-0.447, 0.894).
+    assert_pt(from, [-0.894, 1.789], "H moves the start across the line");
+    assert_eq!(undo_label(&h).as_deref(), Some("Scale Paths"));
+    assert_eq!(shown(&h, "H:"), 8.0);
+}
