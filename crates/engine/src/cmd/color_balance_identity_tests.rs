@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::{Action, ActionStep};
 
 const COMMAND: &str = "image.adjustments.colorBalance";
 
@@ -80,7 +81,7 @@ fn zero_color_balance_preserves_smart_filter_mask_channel_and_action_edits() {
         }
         if adjust == "actions.play" {
             s.execute("actions.setHistory", json!({"singleState": false})).unwrap();
-            s.actions.list.push(crate::actions_cmds::Action::new("Neutral adjustment", vec![(COMMAND.into(), json!({}))])).unwrap();
+            s.actions.list.push(Action::new("Neutral adjustment", vec![ActionStep::new(COMMAND, json!({}))])).unwrap();
         }
         let history = s.active().unwrap().history.past_len();
         s.execute(adjust, params).unwrap();
