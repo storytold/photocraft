@@ -11,7 +11,7 @@ fn style_commands() -> impl Iterator<Item = (String, Value)> {
 }
 
 fn white_document() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
     s
 }
