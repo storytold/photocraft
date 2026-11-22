@@ -180,6 +180,12 @@ impl Session {
         if spec.id == "layer.smartFilter.deleteFilterMask" && params.get("ifPresent").and_then(Value::as_bool) == Some(true) {
             return smart_cmds::smart_layer_active(self);
         }
+        // Artboard from Group run directly (a script or a recorded action, which pass an object)
+        // on a layer that is not a plain group does nothing without an error; the menu, which
+        // asks without params, stays greyed (#14560).
+        if spec.id == "layer.new.artboardFromGroup" && params.is_object() {
+            return self.active().map(|_| ()).ok_or_else(|| "no document open".into());
+        }
         // Recorded Unlink can be repeated on a single, already-unlinked layer.
         // Keep the menu toggle's two-layer requirement when no state is supplied.
         if spec.id == "layer.linkLayers" && params.get("linked").and_then(Value::as_bool) == Some(false) {

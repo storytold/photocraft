@@ -547,7 +547,8 @@ fn artboard_target_only_form_keeps_existing_native_group_behavior() {
     assert_eq!(s.active().unwrap().doc, before);
 }
 
-/// A conversion selects its result, so a following Delete cannot remove another selected layer.
+/// A conversion selects its result, so a following Delete cannot remove another selected layer. The other
+/// selected layer goes into the new board with the group (#14560), so it is deleted with the board.
 #[test]
 fn artboard_from_group_replaces_the_previous_layer_selection() {
     let mut s = artboard_fixture();
@@ -560,9 +561,9 @@ fn artboard_from_group_replaces_the_previous_layer_selection() {
     load(&mut s, &file("artboardFromLayerGroupEvent", Descriptor::new("null").with("null", target())));
     play(&mut s);
     assert_eq!(s.active().unwrap().selected_layers(), vec![group]);
-    s.execute("layer.delete", json!({})).unwrap();
-    assert!(s.active().unwrap().doc.layer(id).is_some());
-    assert!(s.active().unwrap().doc.layer(group).is_none());
+    let doc = &s.active().unwrap().doc;
+    assert!(doc.layer(group).and_then(Layer::children).is_some_and(|c| c.iter().any(|l| l.id == id)), "the other selected layer is in the board");
+    assert!(doc.layers.iter().all(|l| l.id != id));
 }
 
 /// A missing custom color means White; an explicit white color remains Custom through save/load.

@@ -175,14 +175,15 @@ fn cancelling_the_placed_fixture_removes_its_layer() {
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 1);
 }
 
-/// A new-layer command that can't run (Artboard from Group with a pixel layer active) leaves the box and the
-/// placed layer as they were.
+/// A new-layer command that can't run (Artboard from Group with a pixel layer active, asked without params as the
+/// greyed menu entry is; a script's `{}` is a silent no-op since #14560) leaves the box and the placed layer as they
+/// were.
 #[test]
 fn a_new_layer_command_that_cant_run_leaves_the_box_open() {
     let mut h = placed_app();
     placed_and_moved(&mut h);
     let before = history(&h);
-    assert!(h.state_mut().run("layer.new.artboardFromGroup", json!({})).is_err());
+    assert!(h.state_mut().run("layer.new.artboardFromGroup", serde_json::Value::Null).is_err());
     h.run_steps(2);
     assert!(h.state().ui.transform.is_some(), "the box stays open");
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 2, "the placed layer stays");

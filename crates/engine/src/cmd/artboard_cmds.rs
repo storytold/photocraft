@@ -75,6 +75,10 @@ fn has_plain_group(s: &Session) -> std::result::Result<(), String> {
     if !d.doc.layers.iter().any(|t| t.id == id) {
         return Err("artboards must be top-level: select a group that is not nested".into());
     }
+    // More than one group selected greys it, as in the reference application (#14560).
+    if d.selected_layers().iter().filter(|s| d.doc.layer(**s).is_some_and(Layer::is_group)).count() > 1 {
+        return Err("select only one layer group".into());
+    }
     Ok(())
 }
 
@@ -365,13 +369,36 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let canvas = d.doc.bounds();
     let background = if apply_background { background_param(p, cmd)?.unwrap_or_default() } else { ArtboardBackground::White };
+    // Run directly (a script, a recorded action) on a layer that is not a top-level plain group,
+    // or on an artboard, it does nothing: no history step and no error, so playback goes on (#14560).
+    if !d.doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none()) {
+        return Ok(json!({}));
+    }
+    let others = selected_with_group(s, &d.doc, id);
     let (rect, shift) = s.edit("Artboard from Group", |doc, active| {
-        if !doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none()) {
-            return Err(EngineError::Other("artboards are made from a top-level layer group".into()));
+        let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        // A hidden group keeps today's measure (not measured in the reference).
+        let own = if l.visible { shown_children_bounds(l) } else { crate::layer_multi_cmds::layer_bounds(l) };
+        // The board covers the visible bounds of every selected layer it takes in (#14560, #14553).
+        let rect = others
+            .iter()
+            .filter_map(|o| doc.layer(*o).filter(|l| l.visible).and_then(shown_children_bounds))
+            .fold(own, |acc, r| Some(acc.map_or(r, |a| a.union(&r))))
+            .unwrap_or(canvas);
+        // The other selected layers move in, those above the group over its layers and those below
+        // under them, keeping their order.
+        let group_at = doc.path_of(id).and_then(|path| path.first().copied()).ok_or(EngineError::NoLayer(id))?;
+        let (mut below, mut above) = (Vec::new(), Vec::new());
+        for o in &others {
+            let at = doc.path_of(*o).and_then(|path| path.first().copied()).ok_or(EngineError::NoLayer(*o))?;
+            let layer = doc.remove(*o).ok_or(EngineError::NoLayer(*o))?;
+            if at < group_at { below.push(layer) } else { above.push(layer) }
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        // A hidden group keeps today's measure (not measured in the reference).
-        let rect = if l.visible { shown_children_bounds(l) } else { crate::layer_multi_cmds::layer_bounds(l) }.unwrap_or(canvas);
+        if let Some(children) = l.children_mut() {
+            children.splice(0..0, below);
+            children.extend(above);
+        }
         set_artboard(l, Artboard { rect, background, preset });
         // As in the reference application, the new artboard is Normal at 100 % whatever the group had.
         l.blend = photocraft_color::BlendMode::Normal;
@@ -383,6 +410,27 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
+}
+
+/// The selected layers Artboard from Group takes in with the group `id` (#14560), bottom to top:
+/// the other top-level selections when `id` is selected, leaving out the Background and
+/// artboards. With another group selected (not measured in the reference) it takes none in, as
+/// before.
+fn selected_with_group(s: &Session, doc: &Document, id: LayerId) -> Vec<LayerId> {
+    let sel = crate::layer_multi_cmds::selected(s);
+    if !sel.contains(&id) {
+        return Vec::new();
+    }
+    let others: Vec<LayerId> = crate::layer_multi_cmds::top_level(doc, &sel)
+        .into_iter()
+        .filter(|o| *o != id && !doc.is_background(*o) && doc.layer(*o).is_some_and(|l| l.artboard().is_none()))
+        .collect();
+    if others.iter().any(|o| doc.layer(*o).is_some_and(Layer::is_group)) {
+        return Vec::new();
+    }
+    let mut ordered: Vec<(Vec<usize>, LayerId)> = others.into_iter().filter_map(|o| Some((doc.path_of(o)?, o))).collect();
+    ordered.sort();
+    ordered.into_iter().map(|(_, o)| o).collect()
 }
 
 /// [`layer_multi_cmds::layer_bounds`](crate::layer_multi_cmds::layer_bounds) of what shows: a
@@ -1473,6 +1521,10 @@ mod from_layers_history_name_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/from_group_hidden_bounds_tests.rs"]
 mod from_group_hidden_bounds_tests;
+
+#[cfg(test)]
+#[path = "artboard_cmds/from_group_selection_tests.rs"]
+mod from_group_selection_tests;
 
 #[cfg(test)]
 #[path = "artboard_cmds/overlapping_areas_tests.rs"]
