@@ -986,17 +986,33 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     }
     let intent = intent_or(p, s.color.settings.intent())?;
     let bpc = bool_param(p, "bpc", s.color.settings.bpc);
+    let label = mode_step_label(mode);
     if preserve_indexed_rgb {
-        s.edit("Mode Change", |doc, _| {
+        s.edit(label, |doc, _| {
             doc.mode = ColorMode::Rgb;
             doc.color_table = None;
             doc.duotone = None;
             Ok(())
         })?;
     } else {
-        s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+        s.edit(label, |doc, _| convert_document(doc, &dst, intent, bpc))?;
     }
     Ok(json!({ "profile": dst.description, "intent": intent.id(), "bpc": bpc }))
+}
+
+/// History name of a conversion to `mode`: its Image › Mode menu item, as the reference
+/// application names the step (#15176).
+pub(crate) fn mode_step_label(mode: ColorMode) -> &'static str {
+    match mode {
+        ColorMode::Bitmap => "Bitmap",
+        ColorMode::Grayscale => "Grayscale",
+        ColorMode::Duotone => "Duotone",
+        ColorMode::Indexed => "Indexed Color",
+        ColorMode::Rgb => "RGB Color",
+        ColorMode::Cmyk => "CMYK Color",
+        ColorMode::Lab => "Lab Color",
+        ColorMode::Multichannel => "Multichannel",
+    }
 }
 
 // ------------------------------------------------------------------ gamut
