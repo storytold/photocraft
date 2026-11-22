@@ -83,14 +83,26 @@ impl Session {
             crate::group_options::GroupOptions::parse(id, params)?;
         }
         // A command that takes `"layer"` (an id or a name, as it resolves it) fails on one the
-        // document doesn't have.
+        // document doesn't have - except a Color Lookup step whose params name a channel or the
+        // Quick Mask: it never resolves its `"layer"` param (#14485), so precheck must not
+        // refuse a shape `execute` runs - the Actions panel and `execute` then agree.
         if spec.params.contains("\"layer\":id")
+            && !Self::channel_step_ignores_named_layer(id, params)
             && let Some(l) = commands::explicit_layer(self, params)?
             && self.active().is_none_or(|st| st.doc.layer(l).is_none())
         {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: format!("no layer {}", l.0) });
         }
         self.admit(id, spec, params).map(|_| ())
+    }
+
+    /// The one narrow #14485 owner-decision key, shared by `precheck` and
+    /// `explicit_layer_enabled`: a Color Lookup step whose own params name an alpha channel
+    /// or Quick Mask target never writes the layer its `"layer"` param names, so that layer
+    /// is not resolved, checked or required for it. Raster and mask targets keep the
+    /// named-layer checks.
+    fn channel_step_ignores_named_layer(id: &str, params: &Value) -> bool {
+        id == "image.adjustments.colorLookup" && channel_cmds::is_channel_target(params)
     }
 
     /// What `dispatch` checks once the params are valid, before a floating selection drops (so a
@@ -129,7 +141,7 @@ impl Session {
     }
 
     /// [`Self::is_enabled`] for a call with `params`: their `"target"` can enable a command, as a
-    /// targeted layer mask enables Image › Adjustments › Invert on an adjustment layer (#780).
+    /// targeted layer mask enables Image Ã¢â‚¬Âº Adjustments Ã¢â‚¬Âº Invert on an adjustment layer (#780).
     pub fn is_enabled_with(&self, id: &str, params: &Value) -> bool {
         // An unknown id is disabled; its reason would rank every command id for "did you mean".
         commands::find(id).is_some_and(|spec| self.spec_disabled_reason(spec, id, params).is_none())
@@ -210,6 +222,16 @@ impl Session {
         if !spec.params.contains("\"layer\":id") {
             return Ok(None);
         }
+        // #14485 owner decision: a Color Lookup step whose own params name an alpha channel or the
+        // Quick Mask never writes the layer its `"layer"` param names, so that layer must not be
+        // admitted as if it were the write target - the swap below would apply Color Lookup's
+        // #14429 hidden-layer rule to a layer the step leaves alone, where main ran the channel
+        // edit. Answer `None` so `admit` falls back to the plain precondition on the real active
+        // layer, exactly what `is_enabled_with` does; the step then reaches
+        // `destructive_adjust`'s channel branch. Raster and mask targets keep the named-layer check.
+        if Self::channel_step_ignores_named_layer(spec.id, params) {
+            return Ok(None);
+        }
         // An ATN group-end index is a valid no-op only for Select. Let that command validate
         // its other parameters and preserve the current selection.
         if spec.id == "layer.select"
@@ -252,14 +274,14 @@ impl Session {
     }
 
     /// Apply a change of layer visibility (and nothing else): a history state when History
-    /// Options › Make Layer Visibility Changes Undoable is on (the default, as in Photoshop),
+    /// Options Ã¢â‚¬Âº Make Layer Visibility Changes Undoable is on (the default, as in Photoshop),
     /// otherwise the document changes without one, so the History panel and Undo skip it.
     pub fn edit_visibility<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
         let record = self.visibility_undoable();
         self.edit_with(label, record, f)
     }
 
-    /// History Options › Make Layer Visibility Changes Undoable.
+    /// History Options Ã¢â‚¬Âº Make Layer Visibility Changes Undoable.
     pub fn visibility_undoable(&self) -> bool {
         self.prefs().history_options.make_layer_visibility_changes_undoable
     }
@@ -405,7 +427,7 @@ impl Session {
 }
 
 /// A Bitmap document holds only black and white, so Photoshop greys out its filters and its
-/// Image › Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
+/// Image Ã¢â‚¬Âº Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
 /// other `plugin.*` commands manage plug-ins). Catalogue queries still answer.
 fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
     let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == crate::plugin_cmds::RUN)

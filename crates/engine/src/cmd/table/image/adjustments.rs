@@ -94,8 +94,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 "blackWhite" => Some("Cmd+Alt+Shift+B"),
                 _ => None,
             },
-            params,
-            enabled: crate::adjust_cmds::has_adjustable,
+            // Color Lookup edits the layer its `layer` param names (the active one by default), so
+            // its precondition is checked on that layer (#14429). A step whose own params name a
+            // channel or Quick Mask target edits that instead and is admitted on the real active
+            // layer (#14485).
+            params: if kind == "colorLookup" { Box::leak(format!(r#"{params} + {{"layer":id?=the active layer}}"#).into_boxed_str()) } else { params },
+            // Color Lookup has its own target checks (#14429); the other adjustments share
+            // the plain one.
+            enabled: if kind == "colorLookup" { crate::adjust_cmds::has_color_lookup_target } else { crate::adjust_cmds::has_adjustable },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
                 if matches!(kind.as_str(), "levels" | "curves") {
@@ -133,6 +139,12 @@ pub fn specs() -> Vec<CommandSpec> {
                     adj
                 };
                 let label = adj.label().to_string();
+                // Color Lookup's target refusals (#14429) come after params parsing, so a
+                // wrong-typed param still reports BadParams first, and before any write -
+                // for the smart filter path included.
+                if kind == "colorLookup" {
+                    crate::adjust_cmds::color_lookup_applicable(s, p).map_err(crate::error::EngineError::Other)?;
+                }
                 // A smart object records the adjustment as a smart filter (Photoshop), which
                 // re-runs from the source instead of baking into a copy of the pixels.
                 if crate::adjust_cmds::adjust_as_smart_filter(s, &kind, &label, recorded.as_ref().unwrap_or(p))? {
