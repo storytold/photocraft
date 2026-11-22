@@ -152,6 +152,8 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
     cr.noise_luminance_detail = cr.noise_luminance_detail.clamp(0.0, 100.0);
     cr.noise_color = cr.noise_color.clamp(0.0, 100.0);
     cr.noise_color_detail = cr.noise_color_detail.clamp(0.0, 100.0);
+    // The legacy detail stage uses this value to set the bounds of a clamp.
+    cr.sharpen_detail = cr.sharpen_detail.clamp(0.0, 100.0);
     // `exposure` becomes `2^exposure`, which overflows f32 to infinity from 128 up (and then
     // writes inf/NaN into 32-bit layers). Clamp to the documented -5..5.
     cr.exposure = cr.exposure.clamp(-5.0, 5.0);
@@ -728,6 +730,14 @@ mod tests {
         let d = s.active().unwrap();
         if let LayerContent::Smart(so) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
             assert!(so.smart_filters[0].params.get("encodingGamma").is_none());
+        }
+    }
+
+    #[test]
+    fn camera_raw_settings_clamp_sharpen_detail_without_changing_valid_values() {
+        for (stored, expected) in [(-1.0, 0.0), (0.0, 0.0), (37.5, 37.5), (100.0, 100.0), (101.0, 100.0)] {
+            let params = raw_params(RAW, &json!({"sharpenDetail": stored})).unwrap();
+            assert_eq!(params.sharpen_detail, expected);
         }
     }
 
