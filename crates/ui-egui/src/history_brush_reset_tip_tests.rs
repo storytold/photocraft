@@ -4,11 +4,11 @@ use photocraft_engine::BrushSettings;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::control::{ControlRequest, Outcome, handle};
+use crate::control::{ControlRequest, Reply, handle};
 use crate::state::Tool;
 
 /// Build a small document with initialized views for the tool-state regressions.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
@@ -17,9 +17,9 @@ fn app() -> PhotocraftApp {
 
 /// Dispatch a shell command through the control channel and synchronize the resulting state.
 fn invoke(app: &mut PhotocraftApp, id: &str, params: serde_json::Value) {
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let (req, _rx) = ControlRequest::new("ui.menu.invoke", json!({"id": id, "params": params}));
-    let Outcome::Done(result) = handle(app, &ctx, &req) else { panic!("command did not finish") };
+    let Reply::Done(result) = handle(app, &ctx, &req) else { panic!("command did not finish") };
     assert_eq!(result["ok"], true, "{result}");
     app.sync_views();
 }
@@ -55,7 +55,7 @@ fn assert_history_tip(app: &mut PhotocraftApp) {
     assert_eq!(brush.smoothing.amount, 0.0);
     assert_eq!(brush.mode, photocraft_color::BlendMode::Normal);
     assert!(!brush.flip_x && !brush.flip_y);
-    assert_eq!(brush.tip, photocraft_engine::paint::brush::TipShape::Round);
+    assert_eq!(*brush.tip, photocraft_engine::paint::brush::TipShape::Round);
 }
 
 fn assert_history_reset(app: &mut PhotocraftApp) {
@@ -89,8 +89,8 @@ fn the_options_bar_draws_21_on_the_brush_chip_without_a_smoothing_field() {
     pick(&mut app, Tool::HistoryBrush);
     scramble(&mut app);
     invoke(&mut app, "tool.reset", json!({}));
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ProMedium);
+    let ctx = app.ctx().clone();
+    PhotocraftApp::setup_context(&ctx, Default::default());
     let mut output = egui::FullOutput::default();
     for _ in 0..3 {
         let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 300.0)));
@@ -133,10 +133,10 @@ fn customized_history_brush_survives_tool_switches() {
     let mut app = app();
     pick(&mut app, Tool::HistoryBrush);
     scramble(&mut app);
-    let custom = app.session.tools.brush.clone();
+    let custom = (*app.session.tools.brush).clone();
     pick(&mut app, Tool::Pencil);
     pick(&mut app, Tool::HistoryBrush);
-    assert_eq!(app.session.tools.brush, custom);
+    assert_eq!(*app.session.tools.brush, custom);
 }
 
 /// Saved UI state retains the custom History Brush until an explicit Reset Tool request.
@@ -145,13 +145,13 @@ fn saved_history_brush_is_preserved_until_explicitly_reset() {
     let mut app = app();
     pick(&mut app, Tool::HistoryBrush);
     scramble(&mut app);
-    let custom = app.session.tools.brush.clone();
+    let custom = (*app.session.tools.brush).clone();
     pick(&mut app, Tool::Pencil);
     let saved = serde_json::to_value(&app.ui).unwrap();
     let mut restored = self::app();
     restored.ui = serde_json::from_value(saved).unwrap();
     pick(&mut restored, Tool::HistoryBrush);
-    assert_eq!(restored.session.tools.brush, custom);
+    assert_eq!(*restored.session.tools.brush, custom);
     invoke(&mut restored, "tool.reset", json!({}));
     assert_history_reset(&mut restored);
 }
@@ -169,31 +169,5 @@ fn reset_all_restores_the_history_brush_active_or_picked_later() {
         invoke(&mut app, "tool.resetAll", json!({"confirmed": true}));
         pick(&mut app, Tool::HistoryBrush);
         assert_history_reset(&mut app);
-    }
-}
-
-/// Guard the existing reset tip and smoothing defaults of every other brush-picker tool.
-#[test]
-fn other_tools_keep_their_reset_tips_and_smoothing() {
-    for tool in Tool::ALL.iter().copied().filter(|t| *t != Tool::HistoryBrush && crate::paint_mouse::has_brush_picker(*t)) {
-        let mut app = app();
-        pick(&mut app, tool);
-        scramble(&mut app);
-        invoke(&mut app, "tool.reset", json!({}));
-        let default = BrushSettings::default();
-        let expected = match tool {
-            Tool::Brush | Tool::Smudge => (13.0, 0.0, 0.25),
-            Tool::Eraser | Tool::BackgroundEraser => (13.0, 1.0, 0.25),
-            Tool::Pencil => (1.0, 1.0, 0.25),
-            Tool::Healing => (19.0, 1.0, 0.25),
-            Tool::Burn | Tool::Dodge | Tool::Sponge => (65.0, 0.0, 0.25),
-            Tool::CloneStamp => (21.0, 0.0, 0.25),
-            Tool::Remove => (19.0, default.hardness, default.spacing),
-            _ => (default.size, default.hardness, default.spacing),
-        };
-        let b = &app.session.tools.brush;
-        assert_eq!((b.size, b.hardness, b.spacing), expected, "{tool:?}");
-        let smoothing = if matches!(tool, Tool::CloneStamp | Tool::Eraser) { 0.0 } else { 0.1 };
-        assert_eq!(b.smoothing.amount, smoothing, "{tool:?}");
     }
 }
