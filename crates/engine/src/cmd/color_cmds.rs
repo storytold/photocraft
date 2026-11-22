@@ -1140,6 +1140,127 @@ fn flatten_for_profile(doc: &mut Document, active: &mut Option<photocraft_doc::L
     Ok(())
 }
 
+/// An Indexed document going to an RGB profile stays Indexed (#14262). Without a colour table
+/// there is no palette to convert, so it takes the ordinary conversion.
+fn keeps_indexed(doc: &Document, dst: &Profile) -> bool {
+    doc.mode == ColorMode::Indexed && dst.color_space == ColorSpace::Rgb && doc.color_table.as_ref().is_some_and(|t| !t.colors.is_empty())
+}
+
+/// Converts an Indexed document's colour table, pixels and colour values from its profile to the
+/// RGB profile `dst`, keeping the mode, the table's length and order, and its transparent entry.
+/// A pixel whose 8-bit colour is a table entry becomes that entry's converted colour at any depth,
+/// so the image still uses only table colours; any other pixel is converted on its own.
+fn convert_indexed_profile(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bool) -> Result<()> {
+    let src = document_profile(doc);
+    let t = Transform::new(&src, dst, intent, bpc).map_err(cms_err)?;
+    let mut entries = std::collections::HashMap::new();
+    if let Some(table) = doc.color_table.as_mut() {
+        let old: Vec<u8> = table.colors.iter().flatten().copied().collect();
+        let mut new = vec![0u8; old.len()];
+        t.convert_u8(&old, 3, &mut new, 3, false).map_err(cms_err)?;
+        for (entry, c) in table.colors.iter_mut().zip(new.as_chunks::<3>().0) {
+            let converted = *c;
+            entries.insert(*entry, converted);
+            *entry = converted;
+        }
+    }
+    // Indices that held for the old pixels still hold for the converted ones: every pixel keeps
+    // its entry, only the colours changed.
+    let held = doc
+        .color_indices
+        .as_ref()
+        .map(|k| k.layer)
+        .filter(|&id| doc.layer(id).and_then(|l| l.surface()).is_some_and(|surf| doc.color_indices.as_ref().is_some_and(|k| k.holds(id, surf))));
+    let remap = |px: &mut [f32]| {
+        let [r, g, b] = [0, 1, 2].map(|k| px.get(k).copied().unwrap_or(0.0));
+        let key = [r, g, b].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let mut out = [0.0f32; 16];
+        let rgb = match entries.get(&key) {
+            Some(c) => c.map(|v| f32::from(v) / 255.0),
+            None if t.eval(&[r, g, b], &mut out).is_ok() => [out[0], out[1], out[2]].map(|v| v.clamp(0.0, 1.0)),
+            None => return,
+        };
+        for (d, v) in px.iter_mut().zip(rgb) {
+            *d = v;
+        }
+    };
+    crate::image_cmds::for_each_surface(&mut doc.layers, false, &mut |surf, _| *surf = remap_rgb_surface(surf, &remap));
+    for l in &mut doc.layers {
+        convert_layer_colors(l, &mut |c| convert_color(c, ColorMode::Rgb, ColorMode::Rgb, &t));
+    }
+    convert_style_colors(&mut doc.text_styles, &mut |c| convert_color(c, ColorMode::Rgb, ColorMode::Rgb, &t));
+    if let Some(id) = held {
+        let pixels = doc.layer(id).and_then(|l| l.surface()).cloned();
+        if let (Some(k), Some(pixels)) = (doc.color_indices.as_mut(), pixels) {
+            k.pixels = pixels;
+        }
+    }
+    doc.icc_profile = Some(dst.to_bytes());
+    Ok(())
+}
+
+/// `s` with `f` applied to each pixel's samples (colour channels first, alpha after), the
+/// untouched default pixel included, in the same format. Non-RGB surfaces are returned unchanged.
+/// As in [`convert_surface`], each distinct tile is mapped once and coordinates that shared it
+/// share the result.
+fn remap_rgb_surface(s: &Surface, f: &(dyn Fn(&mut [f32]) + Sync)) -> Surface {
+    use rayon::prelude::*;
+    let sf = s.format();
+    if sf.mode != ColorMode::Rgb {
+        return s.clone();
+    }
+    let n = sf.channels();
+    let mut dp = s.default_pixel();
+    f(&mut dp);
+    let mut out = Surface::with_default(sf, &dp);
+    let mut distinct: Vec<Arc<photocraft_raster::Tile>> = Vec::new();
+    let mut slot: std::collections::HashMap<*const photocraft_raster::Tile, usize> = std::collections::HashMap::new();
+    let tiles: Vec<(photocraft_geom::TileCoord, usize)> = s
+        .tiles()
+        .map(|(c, tile)| {
+            let i = *slot.entry(Arc::as_ptr(tile)).or_insert_with(|| {
+                distinct.push(tile.clone());
+                distinct.len() - 1
+            });
+            (*c, i)
+        })
+        .collect();
+    let map_tile = |tile: &Arc<photocraft_raster::Tile>| {
+        let mut bytes = tile.bytes().to_vec();
+        let mut px = vec![0.0f32; n];
+        for i in 0..bytes.len() / sf.bytes_per_pixel().max(1) {
+            for (k, v) in px.iter_mut().enumerate() {
+                *v = photocraft_color::read_sample(&bytes, sf.sample, i * n + k);
+            }
+            f(&mut px);
+            for (k, v) in px.iter().enumerate() {
+                photocraft_color::write_sample(&mut bytes, sf.sample, i * n + k, *v);
+            }
+        }
+        bytes
+    };
+    let mut mapped = Vec::with_capacity(distinct.len());
+    for batch in distinct.chunks(32) {
+        let staged: Vec<Vec<u8>> = batch.par_iter().map(map_tile).collect();
+        for bytes in staged {
+            let coord = photocraft_geom::TileCoord::new(0, 0);
+            let mut surface = Surface::new(sf);
+            let mut tile = surface.tile_mut(coord).bytes_mut();
+            if tile.len() == bytes.len() {
+                tile.copy_from_slice(&bytes);
+            }
+            drop(tile);
+            mapped.push(surface.tile(coord).cloned());
+        }
+    }
+    for (coord, index) in tiles {
+        if let Some(Some(tile)) = mapped.get(index) {
+            out.put_tiles([(coord, tile.clone())]);
+        }
+    }
+    out
+}
+
 /// Optionally freeze placed pixels or flatten the source, then convert in one atomic edit.
 fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     let spec = p
@@ -1160,9 +1281,9 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     // A document tagged with a profile of the same colours as the destination needs no colour
     // conversion (compared by colour, not bytes). Without Flatten or Rasterize it stays as it is,
     // with no history state, as in the reference application (#14261); with either, that still
-    // runs as before. An untagged document is still converted and tagged, and an Indexed, Duotone
-    // or Multichannel one still goes through the conversion that changes its mode; none of those
-    // was measured (a Bitmap one is refused above). The embedded profile itself is compared, so one that can't be read
+    // runs as before. An untagged document is still converted and tagged, an Indexed one still has
+    // its table converted (#14262), and a Duotone or Multichannel one still goes through the
+    // conversion that changes its mode; none of those was measured (a Bitmap one is refused above). The embedded profile itself is compared, so one that can't be read
     // or doesn't fit the mode is still replaced.
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let measured = matches!(doc.mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Grayscale | ColorMode::Lab);
@@ -1184,6 +1305,8 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
             // conversion would have, so the reply's profile is the document's.
             doc.icc_profile = Some(dst.to_bytes());
             Ok(())
+        } else if keeps_indexed(doc, &dst) {
+            convert_indexed_profile(doc, &dst, intent, bpc)
         } else if dither {
             profile_dither::convert(doc, &dst, intent, bpc)
         } else {
@@ -1998,3 +2121,6 @@ mod settings_tests {
 
 #[cfg(test)]
 mod convert_profile_bitmap_tests;
+
+#[cfg(test)]
+mod convert_profile_indexed_tests;
