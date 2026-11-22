@@ -158,3 +158,41 @@ fn new_spot_channel_dialog_creates_the_ink_from_the_selection_and_remembers_it()
     assert_eq!(f.text("name"), Some("Spot Color 1"));
     assert_eq!(hex(f.color("color").unwrap()), "#0050ff");
 }
+
+/// Include in Total Spot Ink: Channel Options has the checkbox on a spot channel (hidden while the
+/// channel is an alpha channel; Quick Mask and the New dialogs have none), its field reaches
+/// `channel.options` as `totalInk`, and OK takes a substrate out of Total Spot Ink.
+#[test]
+fn include_in_total_spot_ink_checkbox() {
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    app.run("channel.options", json!({"channel": 0, "indicates": "spot", "name": "Shirt"})).unwrap();
+    let shown =
+        |f: &DialogFields| rows(Kind::Channel, f.text("indicates") == Some("spot")).into_iter().find(|p| p.key == "totalInk").expect("the row").visible(f);
+    let id = open(&mut app, &json!(0)).unwrap();
+    crate::dialogs::testing::show(&mut app);
+    let f = values(&app, id);
+    assert_eq!(f.bool("totalInk"), Some(true), "a new spot channel counts");
+    assert_eq!(params(&f, &json!(0))["totalInk"], json!(true));
+    assert!(shown(&f), "shown on a spot channel");
+    set(&mut app, id, "totalInk", json!(false));
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    assert!(channel(&app).spot.is_some() && !channel(&app).total_ink, "OK applied it");
+
+    // Reopened it shows the stored choice; as an alpha channel the row hides and the flag stays.
+    let id = open(&mut app, &json!(0)).unwrap();
+    crate::dialogs::testing::show(&mut app);
+    assert_eq!(values(&app, id).bool("totalInk"), Some(false));
+    set(&mut app, id, "indicates", json!("masked"));
+    crate::dialogs::testing::show(&mut app);
+    assert!(!shown(&values(&app, id)), "hidden on an alpha channel");
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    assert!(channel(&app).spot.is_none() && !channel(&app).total_ink, "the flag stays with the channel");
+
+    // Quick Mask and a channel still to be made have no ink to count.
+    assert!(!fields(&app, &json!("quickMask")).unwrap().contains("totalInk"));
+    for kind in [Kind::QuickMask, Kind::LayerMask, Kind::New, Kind::Spot] {
+        assert!(rows(kind, false).iter().all(|p| p.key != "totalInk"), "{kind:?}");
+    }
+    assert!(params(&new_channel_fields(&app).unwrap(), &Value::Null).get("totalInk").is_none());
+}
