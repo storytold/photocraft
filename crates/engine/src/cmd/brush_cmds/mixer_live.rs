@@ -89,9 +89,12 @@ impl Core {
                 }
             }
             // Render the visible document including the active layer exactly once, before
-            // deposition. Masks, transforms, blend modes and adjustments use the compositor.
+            // deposition. Masks, transforms and blend modes use the compositor; adjustment layers
+            // are left out so they are not applied twice to the loaded pixels (#15464).
             let sample = (self.settings.sample_all_layers && self.settings.samples_canvas(dab)).then(|| {
-                let buf = photocraft_compose::render(&self.doc, r);
+                let mut src = (*self.doc).clone();
+                crate::cmd::sample_cmds::hide_adjustment_layers(&mut src);
+                let buf = photocraft_compose::render(&src, r);
                 let fmt = self.pre.format();
                 let mut sample = Region::new(r, fmt.channels());
                 for (src, dst) in buf.px.iter().zip(sample.data.chunks_exact_mut(sample.ch)) {
@@ -409,7 +412,11 @@ pub(super) fn sample(s: &mut Session, p: &Value) -> Result<Value> {
     let cmyk = doc_cmyk_space(s);
     let load = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Vec<[f32; 4]>> {
         let surface = if flag(p, "sampleAllLayers", brush.mixer.sample_all_layers) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels {
-            let buf = photocraft_compose::render(&doc, rect);
+            // Copy the pixels below the adjustment stack: loading its composite would apply the
+            // adjustments again when these pixels are painted into a layer (#15464).
+            let mut src = doc.clone();
+            crate::cmd::sample_cmds::hide_adjustment_layers(&mut src);
+            let buf = photocraft_compose::render(&src, rect);
             let mut surface = Surface::new(PixelFormat::RGBA32F);
             surface.write_region(rect, &buf.px.iter().flatten().copied().collect::<Vec<_>>());
             surface

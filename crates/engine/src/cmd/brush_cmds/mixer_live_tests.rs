@@ -142,6 +142,48 @@ fn mixer_sample_is_spatial_and_never_edits_document() {
     assert!(s.tools.mixer.spatial.is_some(), "sample persists across strokes");
 }
 
+/// #15464: Sample All Layers samples the pixels below an adjustment layer, not the adjusted
+/// composite. Loading the adjusted composite would apply the adjustment a second time when the
+/// Mixer Brush paints it into a layer beneath the adjustment.
+#[test]
+fn mixer_sample_all_layers_ignores_adjustment_layers() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width":192,"height":96,"background":"#808080"})).unwrap();
+    s.execute("layer.new.layer", json!({"name":"Source"})).unwrap();
+    s.edit("source", |doc, id| {
+        crate::channel_cmds::target_surface(doc, *id, &json!({}))?.0.fill_rect(Rect::new(0, 0, 96, 96), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({"name":"Paint"})).unwrap();
+    s.edit("paint", |doc, id| {
+        *crate::channel_cmds::target_surface(doc, *id, &json!({}))?.0 = Surface::new(PixelFormat::RGBA8);
+        Ok(())
+    })
+    .unwrap();
+    s.tools.brush.mixer.sample_all_layers = true;
+    let out = s.execute("brush.mixer.sample", json!({"points":[[48,48]],"size":8,"brush":{"hardness":1.0,"pressureSize":false}})).unwrap();
+    let c = out["color"].as_array().unwrap();
+    let (r, g) = (c[0].as_f64().unwrap(), c[1].as_f64().unwrap());
+    assert!(r > 0.9 && g < 0.1, "the load is unadjusted red, not the inverted composite: {out}");
+}
+
+/// #15464: the live Mixer Brush preview also samples below adjustment layers, and so deposits the
+/// unadjusted pixels on the target while the adjustment still applies once to the final composite.
+#[test]
+fn mixer_live_preview_ignores_adjustment_layers_when_sampling_all() {
+    let mut s = fixture(PixelFormat::RGBA8);
+    s.execute("layer.select", json!({"layer":"Source"})).unwrap();
+    s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer":"Paint"})).unwrap();
+    let p = json!({"points":[[48,48]],"size":8,"brush":{"hardness":1.0,"pressureSize":false},"wet":100,"mix":100,"cleanAfterStroke":false});
+    let id = s.active().unwrap().active_layer.unwrap();
+    let live = LiveMixer::begin(&s, &p).unwrap();
+    let px = live.doc.layer(id).unwrap().surface().unwrap().rgba(48, 48);
+    assert!(px[3] > 0.9 && px[0] > 0.9 && px[1] < 0.1, "the preview paints unadjusted red: {px:?}");
+}
+
 /// Smoothing tails match replay and invalid input cannot mutate the last valid preview.
 #[test]
 fn mixer_live_smoothing_tail_and_invalid_input() {

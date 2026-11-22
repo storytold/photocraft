@@ -142,6 +142,19 @@ pub fn average(px: &[[f32; 4]], mode: ColorMode, depth: SampleType) -> [f32; 4] 
     [r, g, b, quantize((alpha / px.len() as f64) as f32, depth)]
 }
 
+/// Hide every adjustment layer, including those nested in groups. Sampling paths that copy the
+/// sampled pixels into a layer must leave adjustments out, or the adjustment is applied a second
+/// time when the copied pixels land beneath it (#15464).
+pub(crate) fn hide_adjustment_layers(doc: &mut Document) {
+    let adjustments: Vec<Vec<usize>> =
+        doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Adjustment(_))).map(|(path, _, _)| path).collect();
+    for path in adjustments {
+        if let Some(layer) = doc.layer_at_mut(&path) {
+            layer.visible = false;
+        }
+    }
+}
+
 /// The document that renders what `which` samples: the whole document, or a copy with the layers
 /// it leaves out hidden. `active` is the active layer (`None`: Current Layer samples nothing).
 fn sampled_document(doc: &Document, active: Option<LayerId>, which: SampleLayers) -> Option<std::borrow::Cow<'_, Document>> {
@@ -164,24 +177,20 @@ fn sampled_document(doc: &Document, active: Option<LayerId>, which: SampleLayers
         _ => {}
     }
     let mut copy = doc.clone();
-    let walk: Vec<(Vec<usize>, LayerId, bool)> = doc.walk().into_iter().map(|(p, _, l)| (p, l.id, matches!(l.content, LayerContent::Adjustment(_)))).collect();
+    let walk: Vec<(Vec<usize>, LayerId)> = doc.walk().into_iter().map(|(p, _, l)| (p, l.id)).collect();
     if matches!(which, SampleLayers::CurrentAndBelow | SampleLayers::CurrentAndBelowNoAdjustments) {
         // Everything composited after (above) the active layer in the bottom-to-top walk, except
         // its own contents: the walk lists a group before its children.
-        let pos = walk.iter().position(|(_, id, _)| Some(*id) == active)?;
-        let own = walk.get(pos).map(|(p, _, _)| p.clone()).unwrap_or_default();
-        for (path, _, _) in walk.get(pos + 1..).unwrap_or_default().iter().filter(|(p, _, _)| !p.starts_with(&own)) {
+        let pos = walk.iter().position(|(_, id)| Some(*id) == active)?;
+        let own = walk.get(pos).map(|(p, _)| p.clone()).unwrap_or_default();
+        for (path, _) in walk.get(pos + 1..).unwrap_or_default().iter().filter(|(p, _)| !p.starts_with(&own)) {
             if let Some(l) = copy.layer_at_mut(path) {
                 l.visible = false;
             }
         }
     }
     if which.no_adjustments() {
-        for (path, _, _) in walk.iter().filter(|(_, _, adj)| *adj) {
-            if let Some(l) = copy.layer_at_mut(path) {
-                l.visible = false;
-            }
-        }
+        hide_adjustment_layers(&mut copy);
     }
     Some(Cow::Owned(copy))
 }

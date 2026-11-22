@@ -1443,6 +1443,24 @@ fn sample_all_layers_spot_healing_heals_onto_an_empty_layer() {
     }
 }
 
+/// #15464: Sample All Layers copies the pixels *below* an adjustment layer, not the adjusted
+/// composite. Otherwise the adjustment is applied a second time when the copied pixels land in a
+/// layer beneath it. The visible composite stays inverted; the layer's own pixels stay red.
+#[test]
+fn sample_all_layers_ignores_adjustment_layers() {
+    for depth in DEPTHS {
+        let mut s = session(100, 30, depth, "rgb");
+        paint_layer(&mut s, |_, _| [1.0, 0.0, 0.0, 1.0]);
+        s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let visible = photocraft_compose::render(&s.active().unwrap().doc, Rect::new(50, 15, 51, 16)).px[0];
+        assert!(visible[1] > 0.9 && visible[0] < 0.1, "depth {depth}: the composite is inverted: {visible:?}");
+        s.execute("paint.blur", json!({"points": [[10, 15], [90, 15]], "size": 16, "hardness": 100, "strength": 100, "sampleAllLayers": true})).unwrap();
+        let p = rgba(&s, 50, 15);
+        assert!(p[0] > 0.9 && p[1] < 0.1 && p[2] < 0.1, "depth {depth}: the empty layer holds unadjusted red, not the inverted composite: {p:?}");
+    }
+}
+
 #[test]
 fn smudge_across_a_transparent_edge_has_no_dark_fringe() {
     for depth in DEPTHS {

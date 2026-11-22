@@ -38,6 +38,11 @@ pub(crate) fn composite_region(pre: &Document, id: Option<LayerId>, which: Sampl
             }
         }
     }
+    if which == SampleLayers::All {
+        // Sampled pixels are copied into a layer beneath the adjustment stack. Leaving adjustments
+        // in would apply them twice, once to the sample and again to the finished layer (#15464).
+        crate::cmd::sample_cmds::hide_adjustment_layers(&mut doc);
+    }
     let buf = photocraft_compose::render(&doc, rect);
     let n = fmt.channels();
     let mut out = Region::new(rect, n);
