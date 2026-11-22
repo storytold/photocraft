@@ -182,7 +182,8 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
 /// `selection` limits the result. Like layer filters, neighbourhood filters repeat the edge pixels
 /// `None` for ids that aren't pixel filters. `Err` when the requesting session's authority denies
 /// the filter's params (an ambient path the session may not read): the caller must surface the
-/// error rather than render unfiltered pixels.
+/// error rather than render unfiltered pixels. Invalid stored Perspective Warp geometry also
+/// returns an error without changing the stored parameters.
 pub fn apply_filter_to_surface(
     id: &str,
     params: &Value,
@@ -209,7 +210,7 @@ pub(crate) fn apply_filter_to_surface_in(
     // authority, including adjustment LUTs and plug-ins, before any resolver can read them.
     crate::jobs::authorize_render_command(id, params)?;
     // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds).
-    if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas) {
+    if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas)? {
         return Ok(Some(out));
     }
     // Lens Correction / Adaptive Wide Angle / Camera Raw smart filters (lens_cmds).

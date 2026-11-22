@@ -148,7 +148,7 @@ pub fn perspective_params(cmd: &str, p: &Value) -> Result<Vec<Plane>> {
         straighten(&mut planes, mode);
     }
     if PerspectiveMap::new(&planes).is_none() {
-        return Err(bad(cmd, "a plane is degenerate (its corners must form a quad)"));
+        return Err(bad(cmd, "invalid Perspective Warp geometry: degenerate or conflicting planes, or a gap that cannot be interpolated without folding"));
     }
     Ok(planes)
 }
@@ -229,12 +229,13 @@ pub fn perspective_surface(surf: &Surface, planes: &[Plane], interp: Interp) -> 
 }
 
 /// Smart-filter hook: re-applies a stored Liquify / Puppet / Perspective Warp to a rendered
-/// smart object (`None` for other ids).
-pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) -> Option<Surface> {
+/// smart object (`None` for other ids). Invalid stored Perspective Warp geometry is an error,
+/// not an unknown filter: replay must report it rather than silently omit the deformation.
+pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) -> Result<Option<Surface>> {
     match id {
         LIQUIFY => {
-            let (strokes, cell) = liquify_params(id, params, canvas).ok()?;
-            Some(liquify_surface(surf, &strokes, cell, canvas))
+            let Ok((strokes, cell)) = liquify_params(id, params, canvas) else { return Ok(None) };
+            Ok(Some(liquify_surface(surf, &strokes, cell, canvas)))
         }
         // A stored warp too far to render leaves the smart object as it is (#1019).
         PUPPET | PUPPET_SMART => {
@@ -244,12 +245,13 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
             if let Some((mesh, deformed)) = stored_puppet_mesh(params).filter(|_| !b.is_empty())
                 && let Some(out) = warp_with_mesh(surf, b, &mesh, &deformed, interp(params))
             {
-                return Some(out);
+                return Ok(Some(out));
             }
-            Some(puppet_surface(surf, &puppet_params(id, params).ok()?, interp(params)).unwrap_or_else(|| surf.clone()))
+            let Ok(warp) = puppet_params(id, params) else { return Ok(None) };
+            Ok(Some(puppet_surface(surf, &warp, interp(params)).unwrap_or_else(|| surf.clone())))
         }
-        PERSPECTIVE | PERSPECTIVE_SMART => Some(perspective_surface(surf, &perspective_params(id, params).ok()?, interp(params))),
-        _ => None,
+        PERSPECTIVE | PERSPECTIVE_SMART => Ok(Some(perspective_surface(surf, &perspective_params(id, params)?, interp(params)))),
+        _ => Ok(None),
     }
 }
 

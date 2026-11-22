@@ -762,9 +762,12 @@ impl PerspectiveMap {
     }
 }
 
-/// The closest pair of boundary points `(on a, on b)` of two DISJOINT convex source quads, or
-/// `None` when they overlap or touch (no gap to interpolate across).
-fn quad_gap(a: &[[f64; 2]; 4], b: &[[f64; 2]; 4]) -> Option<([f64; 2], [f64; 2])> {
+/// Minimum-distance boundary segments `(on a, on b)` of two DISJOINT convex source quads.
+/// Parallel closest faces contribute both ends of their overlap; choosing just one end would
+/// miss folds at the other and make acceptance depend on plane/corner order. At most eight
+/// vertex projections are retained per pair, keeping the gap search bounded. Overlapping or
+/// touching quads have no gap to interpolate across.
+fn quad_gaps(a: &[[f64; 2]; 4], b: &[[f64; 2]; 4]) -> Vec<([f64; 2], [f64; 2])> {
     // Separating-axis test on all edge normals; strict, so touching quads are not disjoint.
     let separated = [a, b].into_iter().any(|poly| {
         (0..4).any(|k| {
@@ -781,54 +784,80 @@ fn quad_gap(a: &[[f64; 2]; 4], b: &[[f64; 2]; 4]) -> Option<([f64; 2], [f64; 2])
         })
     });
     if !separated {
-        return None;
+        return Vec::new();
     }
-    // For disjoint convex polygons the minimum distance is attained at a vertex of one of them.
-    let mut best: Option<([f64; 2], [f64; 2], f64)> = None;
+    // The extreme points of the closest-point set include a vertex of one polygon. Compute
+    // the minimum first so a tolerance tie cannot depend on which candidate was visited first.
+    let mut candidates = Vec::with_capacity(8);
     for v in a {
         let (q, d) = nearest_on_quad(b, *v);
-        if best.map_or(true, |s| d < s.2) {
-            best = Some((*v, q, d));
-        }
+        candidates.push((*v, q, d));
     }
     for v in b {
         let (q, d) = nearest_on_quad(a, *v);
-        if best.map_or(true, |s| d < s.2) {
-            best = Some((q, *v, d));
-        }
+        candidates.push((q, *v, d));
     }
-    best.filter(|s| s.2 > 1.0e-9).map(|s| (s.0, s.1))
+    let best = candidates.iter().fold(f64::INFINITY, |best, c| best.min(c.2));
+    if !best.is_finite() || best <= 1.0e-9 {
+        return Vec::new();
+    }
+    let tolerance = 1.0e-9 * best.max(1.0);
+    let mut gaps: Vec<_> = candidates.into_iter().filter(|c| c.2 - best <= tolerance).map(|c| (c.0, c.1)).collect();
+    gaps.sort_by(|a, b| a.0[0].total_cmp(&b.0[0]).then(a.0[1].total_cmp(&b.0[1])).then(a.1[0].total_cmp(&b.1[0])).then(a.1[1].total_cmp(&b.1[1])));
+    gaps.dedup();
+    gaps
 }
 
 /// A gap between two disjoint planes that the blend must cross without folding: the closest
-/// boundary points `from` (on plane `a`) and `to` (on plane `b`), and the sign `sigma` of the
-/// direction `to − from` both planes preserve locally (−1 for mirrored planes).
+/// boundary points `from` and `to`, and a unit destination direction transported by both
+/// local Jacobians. Rotations and mirrors carry this reference along with the destination.
 struct Gap {
     from: [f64; 2],
     to: [f64; 2],
-    sigma: f64,
+    direction: [f64; 2],
 }
 
 enum GapKind {
-    /// Mixed orientations or underivable ends: no consistent direction to protect (unchanged).
+    /// Opposed transported directions or underivable ends: no stable common direction.
     Unchecked,
     /// The planes' destinations are in the wrong order along the gap: no global bijection.
     Overlapping,
-    Ordered(f64),
+    Ordered([f64; 2]),
 }
 
 impl PerspectiveMap {
     fn gap_kind(&self, i: usize, j: usize, from: [f64; 2], to: [f64; 2]) -> GapKind {
-        let u = [to[0] - from[0], to[1] - from[1]];
-        // ⟨J u, u⟩: the plane's own local stretch along the gap direction.
-        let along =
-            |pm: &PlaneMap, p: [f64; 2]| pm.jacobian(p[0], p[1]).map(|jac| (jac[0] * u[0] + jac[1] * u[1]) * u[0] + (jac[2] * u[0] + jac[3] * u[1]) * u[1]);
+        let unit = |v: [f64; 2]| {
+            let scale = v[0].abs().max(v[1].abs());
+            if !scale.is_finite() || scale == 0.0 {
+                return None;
+            }
+            let v = [v[0] / scale, v[1] / scale];
+            let len = v[0].hypot(v[1]);
+            Some([v[0] / len, v[1] / len])
+        };
+        let Some(u) = unit([to[0] - from[0], to[1] - from[1]]) else { return GapKind::Unchecked };
+        let along = |pm: &PlaneMap, p: [f64; 2]| {
+            let jac = pm.jacobian(p[0], p[1])?;
+            // Only direction matters here. Scale before multiplication so a large finite
+            // affine Jacobian cannot overflow and turn an otherwise checkable gap off.
+            let scale = jac.iter().fold(0.0_f64, |scale, v| scale.max(v.abs()));
+            if scale == 0.0 {
+                return None;
+            }
+            let jac = jac.map(|v| v / scale);
+            unit([jac[0] * u[0] + jac[1] * u[1], jac[2] * u[0] + jac[3] * u[1]])
+        };
         let (Some(da), Some(db)) = (along(&self.planes[i], from), along(&self.planes[j], to)) else {
             return GapKind::Unchecked;
         };
-        if !da.is_finite() || !db.is_finite() || da == 0.0 || db == 0.0 || da.signum() != db.signum() {
+        // The bisector of the normalized transported directions treats both planes equally,
+        // regardless of scale or order. Opposed directions have no stable common reference.
+        let sum = [da[0] + db[0], da[1] + db[1]];
+        if sum[0].hypot(sum[1]) <= 1.0e-12 {
             return GapKind::Unchecked;
         }
+        let Some(direction) = unit(sum) else { return GapKind::Unchecked };
         let image = |k: usize, p: [f64; 2]| {
             let (a, b) = self.planes[k].src_inv.apply(p[0], p[1]);
             self.map_plane(k, a, b)
@@ -836,13 +865,13 @@ impl PerspectiveMap {
         let (Some(start), Some(end)) = (image(i, from), image(j, to)) else {
             return GapKind::Unchecked;
         };
-        let total = (end.0 - start.0) * u[0] + (end.1 - start.1) * u[1];
+        let total = (end.0 - start.0) * direction[0] + (end.1 - start.1) * direction[1];
         if !total.is_finite() {
             GapKind::Unchecked
-        } else if total * da.signum() <= 0.0 {
+        } else if total <= 0.0 {
             GapKind::Overlapping
         } else {
-            GapKind::Ordered(da.signum())
+            GapKind::Ordered(direction)
         }
     }
 
@@ -887,7 +916,7 @@ impl PerspectiveMap {
             };
             let value = self.with_anchors(x, y, base);
             if let Some(before) = previous {
-                let step = ((value.0 - before.0) * u[0] + (value.1 - before.1) * u[1]) * g.sigma;
+                let step = (value.0 - before.0) * g.direction[0] + (value.1 - before.1) * g.direction[1];
                 if !(step > 0.0) {
                     return false;
                 }
@@ -922,11 +951,15 @@ impl PerspectiveMap {
         let mut gaps = Vec::new();
         for i in 0..planes.len() {
             for j in (i + 1)..planes.len() {
-                let Some((from, to)) = quad_gap(&planes[i].src, &planes[j].src) else { continue };
-                match self.gap_kind(i, j, from, to) {
-                    GapKind::Unchecked => {}
-                    GapKind::Overlapping => return None,
-                    GapKind::Ordered(sigma) => gaps.push(Gap { from, to, sigma }),
+                for (from, to) in quad_gaps(&planes[i].src, &planes[j].src) {
+                    // Use the same sampling orientation after a plane permutation, avoiding
+                    // different rounding in `from + t * (to - from)` on reversed segments.
+                    let (a, b, from, to) = if from[0].total_cmp(&to[0]).then(from[1].total_cmp(&to[1])).is_gt() { (j, i, to, from) } else { (i, j, from, to) };
+                    match self.gap_kind(a, b, from, to) {
+                        GapKind::Unchecked => {}
+                        GapKind::Overlapping => return None,
+                        GapKind::Ordered(direction) => gaps.push(Gap { from, to, direction }),
+                    }
                 }
             }
         }
@@ -1669,6 +1702,94 @@ mod tests {
         [a, Plane { src: b.src, dst }]
     }
 
+    #[test]
+    fn parallel_gap_endpoints_reject_folds_in_every_plane_and_corner_order() {
+        for shear in [0.0, 0.05, 1.5] {
+            for corner in 0..4 {
+                let a = column(0.0, 100.0);
+                // The first closest vertex of B is at the opposite end from A's first one.
+                let mut src = [[200.0, 100.0], [200.0, 0.0], [300.0, 0.0], [300.0, 100.0]];
+                src.rotate_left(corner);
+                let b = Plane { src, dst: src.map(|[x, y]| [x - shear * y, y]) };
+                for planes in [[a.clone(), b.clone()], [b, a]] {
+                    let map = PerspectiveMap::new(&planes);
+                    if shear > 1.0 {
+                        assert!(map.is_none(), "fold at the other endpoint: shear {shear}, corner {corner}");
+                    } else {
+                        let map = map.expect("identity and a mild parallel shear must remain valid");
+                        for y in [0.0, 50.0, 100.0] {
+                            let mut previous = f64::NEG_INFINITY;
+                            for step in 0..=1000 {
+                                let out = map.map(100.0 + f64::from(step) * 0.1, y);
+                                assert!(out.0 > previous, "safe shear {shear}, corner {corner}, y {y}");
+                                previous = out.0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_gap_extremes_include_partial_face_overlap() {
+        let a = column(0.0, 100.0).src;
+        let b = [[200.0, 25.0], [300.0, 25.0], [300.0, 125.0], [200.0, 125.0]];
+        // One extreme is a vertex of A; the other is a vertex of B. Rotate the source too,
+        // so floating-point ties on non-axis-aligned faces must not drop an extreme.
+        for rotate in [false, true] {
+            let turn = |[x, y]: [f64; 2]| if rotate { [0.6 * x - 0.8 * y, 0.8 * x + 0.6 * y] } else { [x, y] };
+            for (a, b, swapped) in [(a.map(turn), b.map(turn), false), (b.map(turn), a.map(turn), true)] {
+                let gaps = quad_gaps(&a, &b);
+                assert!(gaps.len() <= 8);
+                for y in [25.0, 100.0] {
+                    let (from, to) = if swapped { (turn([200.0, y]), turn([100.0, y])) } else { (turn([100.0, y]), turn([200.0, y])) };
+                    assert!(gaps.iter().any(|(p, q)| close((p[0], p[1]), (from[0], from[1]), 1e-8) && close((q[0], q[1]), (to[0], to[1]), 1e-8)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transported_gap_direction_preserves_safe_transforms_and_rejects_crossings() {
+        // Exact quarter turns expose the zero source projection; also cover an arbitrary
+        // rotation, nonuniform scale/shear, and a reflection in destination space.
+        for m in [[0.0, -1.0, 1.0, 0.0], [0.0, 1.0, -1.0, 0.0], [-1.0, 0.0, 0.0, -1.0], [0.6, -0.8, 0.8, 0.6], [0.0, -2.0, 0.5, 1.0], [0.0, 2.0, 0.5, 1.0]] {
+            let transform = |[x, y]: [f64; 2]| [m[0] * x + m[1] * y + 17.0, m[2] * x + m[3] * y - 9.0];
+            for shift in [0.0, -5.0, -20.0, -150.0] {
+                let [a, b] = gap_planes(shift).map(|p| Plane { src: p.src, dst: p.dst.map(transform) });
+                let orders = [[a.clone(), b.clone()], [b, a]];
+                if shift < -100.0 {
+                    for planes in orders {
+                        assert!(PerspectiveMap::new(&planes).is_none(), "crossing gap: {m:?}");
+                    }
+                    continue;
+                }
+                let maps = orders.map(|planes| PerspectiveMap::new(&planes).expect("safe transformed gap"));
+                for map in &maps {
+                    if shift == -20.0 {
+                        assert!(map.radius > BLEND_RADIUS, "transported monotonicity must widen a sharp crossover: {m:?}");
+                    }
+                }
+                for y in [0.0, 0.5, 50.0, 100.0] {
+                    let mut previous = f64::NEG_INFINITY;
+                    for step in 0..=2000 {
+                        let x = 100.0 + f64::from(step) * 0.05;
+                        let out = maps[0].map(x, y);
+                        let projection = out.0 * m[0] + out.1 * m[2];
+                        assert!(projection > previous, "fold: {m:?}, shift {shift}, ({x}, {y})");
+                        assert!(close(out, maps[1].map(x, y), 1e-6), "plane order changed the map");
+                        if shift == 0.0 {
+                            let expected = transform([x, y]);
+                            assert!(close(out, (expected[0], expected[1]), 1e-6), "common affine map changed");
+                        }
+                        previous = projection;
+                    }
+                }
+            }
+        }
+    }
+
     /// Rows of the full map (blend, corner boost and anchors) across a 100px gap; each must
     /// advance strictly in x and keep its y. Includes rows through and next to the corners.
     fn assert_rows_monotone(map: &PerspectiveMap, context: &str) {
@@ -1742,7 +1863,7 @@ mod tests {
     #[test]
     fn identical_planes_are_monotone_for_any_radius() {
         let mut map = PerspectiveMap::new(&gap_planes(0.0)).unwrap();
-        let gap = Gap { from: [100.0, 0.0], to: [200.0, 0.0], sigma: 1.0 };
+        let gap = Gap { from: [100.0, 0.0], to: [200.0, 0.0], direction: [1.0, 0.0] };
         for radius in [BLEND_RADIUS, 45.0, 1.0e3, 1.0e5] {
             map.radius = radius;
             assert!(map.gap_is_monotone(&gap), "radius {radius}");
