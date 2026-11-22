@@ -155,7 +155,7 @@ fn cylinder_through(w: &Warp, h: &Homography, b: [f64; 4]) -> Option<Warp> {
 /// whose warp box `w.bounds` lands on `sb` in source space. A placement that only scales and
 /// moves keeps it a cylinder (written to PSD as one, [`cylinder_through`]). Otherwise (rotated,
 /// skewed, flipped, in perspective) it becomes its mesh, a custom warp.
-fn cylinder_in_source(w: &Warp, inv: &Homography, sb: [f64; 4]) -> Option<Warp> {
+pub(crate) fn cylinder_in_source(w: &Warp, inv: &Homography, sb: [f64; 4]) -> Option<Warp> {
     if let Some(c) = cylinder_through(w, inv, sb) {
         return Some(c);
     }
