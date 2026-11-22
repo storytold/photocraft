@@ -3,6 +3,23 @@ use serde_json::json;
 use super::*;
 
 #[test]
+fn shape_edit_rejects_invalid_history_names_before_editing() {
+    let mut s = session(100, 80, 8);
+    let shape = s.execute("shape.create", json!({"rect": [20, 20, 50, 30]})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    for params in [
+        json!({"path": shape["path"], "historyName": "Custom label"}),
+        json!({"path": shape["path"], "historyName": 1}),
+        json!({"name": "Renamed", "historyName": "Close Path"}),
+    ] {
+        assert!(s.execute("shape.edit", params).is_err());
+        assert_eq!(s.active().unwrap().doc, doc);
+        assert_eq!(s.active().unwrap().history.past_len(), steps);
+    }
+}
+
+#[test]
 fn stroke_validation_rejects_hostile_values_without_editing_history() {
     let mut s = session(100, 80, 8);
     let id = s.execute("shape.create", json!({"rect": [20, 20, 50, 30], "stroke": {"width": 4}})).unwrap()["layer"].as_u64().unwrap();

@@ -112,7 +112,7 @@ fn pen_and_curvature_keep_default_history_names_even_with_freeform_selected_at_c
                 // commit adds none, and no step takes the Freeform name.
                 let h = &app.session.active().unwrap().history;
                 assert_eq!(h.past_len(), n + 3);
-                assert_eq!(h.undo_label(), Some("Edit Shape"));
+                assert_eq!(h.undo_label(), Some("New Anchor Point"));
                 assert!(!app.ui.status_error, "{}", app.ui.status);
                 continue;
             }

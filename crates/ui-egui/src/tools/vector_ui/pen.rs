@@ -348,6 +348,9 @@ fn commit_resumed_on_layer(app: &mut PhotocraftApp, pen: &PenPath, path: &Value,
         return Some(Ok(Value::Null));
     }
     let mut params = json!({"layer": id, "path": p});
+    if pen.live_layer && closed {
+        params["historyName"] = json!("Close Path");
+    }
     // Closing a shape made of open paths gives it the options bar's fill and stroke, as drawing it closed would have.
     // A Pen shape has its fill from the first anchor (#12909), so besides one with no fill this counts one whose fill
     // is still the options bar's; a fill set by hand stays.
@@ -391,7 +394,12 @@ fn run_beside_draft(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<
 /// is made when the path is finished.
 pub(super) fn start_live_shape(app: &mut PhotocraftApp) {
     let Some(pen) = app.ui.pen.as_ref().filter(|p| starts_live_shape(app, p)) else { return };
-    let params = json!({"kind": "path", "path": path_json(&pen_path(pen)), "fill": fill_param(app), "stroke": super::shapes::open_pen_stroke_param(app)});
+    let Some(st) = app.session.active() else { return };
+    let coalesce = format!("pen-first-anchor:{}", st.revision);
+    let params = json!({
+        "kind": "path", "path": path_json(&pen_path(pen)), "fill": fill_param(app),
+        "stroke": super::shapes::open_pen_stroke_param(app), "coalesce": coalesce,
+    });
     let made = match run_beside_draft(app, "shape.create", params) {
         Ok(made) => made,
         Err(e) => {
@@ -409,6 +417,7 @@ pub(super) fn start_live_shape(app: &mut PhotocraftApp) {
     if let Some((doc, id, was)) = made {
         pen.resumes = Some(Resumed { doc, path: "layer".into(), layer: Some(id), index: 0, was });
         pen.live_layer = true;
+        pen.first_anchor_history = Some(coalesce);
         pen.kept = 0;
     }
     super::pen_resume::rebind_owner(app, &mut pen);
@@ -446,15 +455,24 @@ fn follow_live_layer(app: &mut PhotocraftApp) {
 /// changes the draft (`host::drain`). A refused edit is reported; the anchors stay in the draft for the next anchor or
 /// the finish to try again.
 pub(super) fn sync_live_layer_from_draft(app: &mut PhotocraftApp) {
-    let Some(pen) = app.ui.pen.as_ref().filter(|p| p.live_layer && !p.commit_failed && !p.draft.knots.is_empty()) else { return };
+    let Some(pen) = app.ui.pen.as_mut().filter(|p| p.live_layer && !p.commit_failed && !p.draft.knots.is_empty()) else { return };
+    // End coalescing on the first release even when a click left the handles retracted.
+    let first_anchor_history = pen.first_anchor_history.take();
     let Some((r, id)) = pen.resumes.as_ref().and_then(|r| Some((r, r.layer?))) else { return };
     let drawn = pen_path(pen);
     let Some(st) = app.session.active() else { return };
-    if live_subpath(&st.doc, pen).zip(drawn.subpaths.first()).is_some_and(|(a, b)| same_subpath(a, b)) {
+    let Some(previous) = live_subpath(&st.doc, pen) else { return };
+    if drawn.subpaths.first().is_some_and(|subpath| same_subpath(previous, subpath)) {
         return;
     }
     let Some(path) = with_resumed_subpath(&st.doc, r, &path_json(&drawn)) else { return };
-    match run_beside_draft(app, "shape.edit", json!({"layer": id, "path": path})) {
+    let mut params = json!({"layer": id, "path": path});
+    if pen.draft.knots.len() > previous.knots.len() {
+        params["historyName"] = json!("New Anchor Point");
+    } else if let Some(key) = first_anchor_history {
+        params["coalesce"] = json!(key);
+    }
+    match run_beside_draft(app, "shape.edit", params) {
         Ok(_) => follow_live_layer(app),
         Err(e) => {
             app.ui.status = e;
