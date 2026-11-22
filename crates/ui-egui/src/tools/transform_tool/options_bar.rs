@@ -2,7 +2,8 @@ use craft::behavior::{RulerUnits, Ticks};
 use craft::draw::ui::transform::{BarSlot, TransformBar, TransformGroups, TransformRequest};
 use craft::imaging::ui::warp::{CylinderValues, WarpFieldValues, WarpFields, WarpFieldsEdit, WarpFieldsOutput, WarpGridChoice, WarpStyleEntry};
 use craft::ui::canvas::RulerText;
-use craft::ui::contract::{Bind, Entry};
+use craft::ui::choice::Checkbox;
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::runtime::env::{Label, UnitKind};
 use photocraft_engine::prefs::Unit;
 
@@ -10,12 +11,15 @@ use super::begin::{enter_warp, warps_type};
 use super::commit::{cancel, commit};
 use super::warp::{edit_session_warp, set_warp};
 use super::{BezierMesh, PhotocraftApp, Warp, WarpStyle, json};
-use crate::state::SessionWarp;
+use crate::state::{MadeLayer, SessionWarp};
 
 /// Free Transform's options bar: the framework's [`TransformBar`] over the open session. The bar
 /// reports edits and the app applies them in the order they came; the persisted choices (unit,
 /// aspect link, interpolation, relative position, reference point) are written by the bar to
 /// `tool_options.transform`.
+///
+/// A place (#14113) shows the reference application's place layout: no H/V skew or
+/// Interpolation, and an Anti-alias check after Show Reference Point, live only for a PDF source.
 ///
 /// Content-Aware Scale shows the reference point, position and size groups and its own Amount and
 /// Protect group. The Warp phase shows the warp group in place of the fields. Each pass applies
@@ -34,6 +38,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut warp_out = WarpFieldsOutput::default();
     // Held outside the bar's block: the warp slot borrows them for as long as the bar lives.
     let warp = t.session.warp().map(|w| (warp_values(w), w.on_type));
+    let place = t.made == Some(MadeLayer::Place);
+    let anti_alias_id = egui::Id::unique("photocraft-place-anti-alias").with(t.id);
+    let anti_alias = ctx.data(|d| d.get_temp::<bool>(anti_alias_id)).unwrap_or(true);
+    let pdf = place && placed_pdf(app, t.layer);
+    let mut anti_alias_picked = None;
     let out = {
         let mut bar =
             TransformBar::new(Label::from(tl!("Free Transform").to_string()), &t.session, Bind::bound(&mut settings)).units(x_text, y_text).size_units(&units);
@@ -44,6 +53,14 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             groups.position = true;
             groups.size = true;
             bar = bar.groups(groups).extra(BarSlot::new(|ui| crate::cas_transform::fields(app, ui, &t)));
+        } else if place {
+            let mut groups = TransformGroups::ALL;
+            groups.skew = false;
+            groups.interpolation = false;
+            bar = bar.groups(groups).extra(BarSlot::new(|ui| {
+                let check = Checkbox::new(Bind::given(anti_alias)).label(tl!("Anti-alias").to_owned()).enabled(pdf).show(ui);
+                anti_alias_picked = check.value().copied();
+            }));
         }
         if let Some((values, on_type)) = &warp {
             bar = bar.warp_fields(BarSlot::new(|ui| {
@@ -59,6 +76,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         bar.show(ui)
     };
+    if let Some(on) = anti_alias_picked {
+        ctx.data_mut(|d| d.insert_temp(anti_alias_id, on));
+    }
     if settings != app.ui.tool_options.transform {
         app.ui.tool_options.transform = settings;
     }
@@ -82,8 +102,21 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Whether the placed layer `layer` is a smart object whose source is a PDF (embedded bytes, or a
+/// linked `.pdf` file): the place's Anti-alias check is live only for it.
+fn placed_pdf(app: &PhotocraftApp, layer: u64) -> bool {
+    let Some(layer) = app.session.active().and_then(|st| st.doc.layer(photocraft_doc::LayerId(layer))) else { return false };
+    match &layer.content {
+        photocraft_doc::LayerContent::Smart(so) => match &so.source {
+            photocraft_doc::SmartSource::Embedded { bytes, .. } => bytes.starts_with(b"%PDF-"),
+            photocraft_doc::SmartSource::Linked { path } => std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")),
+        },
+        _ => false,
+    }
+}
+
 /// A key of what the bar shows of the open session: the box, its skew, the phase, the interpolation, the reference
-/// point, the Warp group's values and the armed split. A drag on the canvas changes them without a command, so the
+/// point, whether it is a place (#14113), the Warp group's values and the armed split. A drag on the canvas changes them without a command, so the
 /// options bar's content version holds this key.
 pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<u64> {
     use std::hash::{Hash, Hasher};
@@ -94,7 +127,7 @@ pub(crate) fn bar_key(app: &PhotocraftApp) -> Option<u64> {
     for p in state.quad.iter().chain([&state.pivot]) {
         (p.x.to_bits(), p.y.to_bits()).hash(&mut hasher);
     }
-    (s.skew_v().to_bits(), s.phase(), s.interpolation(), s.reference_point(), s.allows()).hash(&mut hasher);
+    (s.skew_v().to_bits(), s.phase(), s.interpolation(), s.reference_point(), s.allows(), t.made == Some(MadeLayer::Place)).hash(&mut hasher);
     if let Some(w) = s.warp() {
         let v = warp_values(w);
         (v.style, v.vertical, v.bend.to_bits(), v.horizontal.to_bits(), v.vertical_distortion.to_bits(), v.grid, w.on_type).hash(&mut hasher);
@@ -217,3 +250,7 @@ pub fn reset_warp(app: &mut PhotocraftApp) {
         pv.split = None;
     }
 }
+
+#[cfg(test)]
+#[path = "place_options_bar_tests.rs"]
+mod place_options_bar_tests;

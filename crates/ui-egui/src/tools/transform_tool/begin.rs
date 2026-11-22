@@ -255,7 +255,7 @@ pub(crate) fn on_prepared(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
     // As `mark_made` would have done at once, had the box opened inline.
     if let Some(made) = made {
         if opened && let Some(t) = app.ui.transform.as_mut() {
-            t.made = Some(made);
+            set_made(t, made);
         } else {
             take_back_made(app, document, layer);
         }
@@ -266,9 +266,18 @@ pub(crate) fn on_prepared(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
 /// Mark the box `begin` opened, or the one it is still preparing, as made for `made`.
 fn mark_made(app: &mut PhotocraftApp, made: MadeLayer) {
     if let Some(t) = app.ui.transform.as_mut() {
-        t.made = Some(made);
+        set_made(t, made);
     } else if let Some(p) = app.transform_preparing.as_mut() {
         p.made = Some(made);
+    }
+}
+
+/// Marks the open box as made for `made`. A place shows the reference point, as the reference
+/// application's place bar does (#14113); the persisted Show Reference Point stays as it is.
+fn set_made(t: &mut FreeTransform, made: MadeLayer) {
+    t.made = Some(made);
+    if made == MadeLayer::Place {
+        let _ = t.session.apply(TransformEdit::ReferencePoint(true), 0.0);
     }
 }
 
