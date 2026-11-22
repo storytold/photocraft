@@ -753,6 +753,9 @@ mod rotate_canvas_layout_tests;
 pub(crate) mod rotate_canvas_ui;
 #[cfg(test)]
 mod scale_effects_layout_tests;
+
+#[cfg(test)]
+mod auto_align_no_match_tests;
 pub mod screen_picker;
 pub mod select_mask_ui;
 pub mod shape_dialog;

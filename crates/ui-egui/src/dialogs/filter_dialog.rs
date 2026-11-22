@@ -1018,9 +1018,29 @@ pub(crate) fn run_command(app: &mut PhotocraftApp, ctx: &egui::Context, command:
 /// and reports a failure through the notices.
 pub(crate) fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
     let command = result.key.clone();
-    if let Err(error) = run_command(app, ctx, &command, result) {
+    if let Err(error) = run_command(app, ctx, &command, result)
+        && !auto_align_no_match(app, &command, &error)
+    {
         crate::notices::error(app, error);
     }
+}
+
+/// The "Don't show again" key of Auto-Align's no-match alert.
+pub(crate) const AUTO_ALIGN_NO_MATCH: &str = "autoAlignNoMatch";
+
+/// Auto-Align Layers from the menu finding nothing to align (#14200): the message in an alert with OK and "Don't show
+/// again" (off), instead of a notice. Once the box was ticked, the message shows in the status bar only. Engine, CLI
+/// and MCP callers still get the error. Returns whether the failure was this one.
+fn auto_align_no_match(app: &mut PhotocraftApp, command: &str, error: &str) -> bool {
+    use photocraft_engine::photo_cmds::NO_DETAIL;
+    if command != "edit.autoAlignLayers" || !error.ends_with(NO_DETAIL) {
+        return false;
+    }
+    if crate::dialogs::alerts::alert_once(app, tl!(NO_DETAIL), AUTO_ALIGN_NO_MATCH).is_none() {
+        app.ui.status = tl!(NO_DETAIL).to_owned();
+        app.ui.status_error = true;
+    }
+    true
 }
 
 /// Lets the playing action drop the step of a dialog that did not run.
