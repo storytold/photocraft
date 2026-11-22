@@ -735,6 +735,50 @@ colors, and changing those colors invalidates both cached frames and pending wor
 including when the preview proxy factor changes. A same-color frame at the old factor can
 remain visible during a drag until the new result arrives. This follows Adobe's documented
 [Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
+
+A palette that fills all 256 entries has no slot left for the transparent entry, so the automatic
+transparency handling cannot apply. **System (Mac)** and **System (Windows)** are fixed 256-entry
+tables, so converting with Transparency on and one of those produces an opaque Indexed document.
+**Exact** fills the table when the image already uses 256 colours: converting with Transparency on
+then is refused (`Exact with transparency needs 255 or fewer opaque palette colours plus one
+transparent entry`), leaving the document unchanged. The computed palettes (Adaptive, Selective,
+Perceptual, Uniform) are built one colour short when transparency is on, and **Web** uses 216
+entries, so they keep the transparent entry. Naming an explicit `transparent` index still makes that
+entry transparent with any palette.
+
+The auto-appended entry goes **last**, as Photoshop appends it. The command's `transparentFirst`
+puts it at index 0 instead and shifts the other entries up one (the table's pixels store RGB, so
+nothing is remapped). It is ignored for System (Mac) and System (Windows), which have no free slot.
+
+That entry carries the clear pixels only: it is skipped by the nearest-colour search, so an opaque
+pixel always maps to another entry and stays opaque, even when the entry's placeholder white is
+exactly its colour (the default Forced Black and White adds a white of its own) and even when it is
+the nearest colour in the table. Painting on an Indexed document follows the same rule: a stroke in
+the transparent entry's colour maps to the nearest other entry and stays opaque. Only an explicit
+`transparent` index (Set Transparent, a loaded `.act` trailer) also makes the opaque pixels nearest
+to that entry transparent.
+
+The dialog (`crates/ui-egui/src/dialogs/palette_file_ui.rs`) shows the table as a 16-cell-wide
+grid shared with Color Table: the 256 slots of a colour table are always drawn, so an entry's
+position is its index, and the ones the table does not have yet are dashed. A click asks the
+Color Picker for that entry, and the picked colour is folded back into the table field
+(`paletteColors` for a Custom palette, `colors` for Color Table); a click on a dashed slot first
+grows the table up to it with opaque black entries, as a new entry's colour, and then opens the
+picker on that black. The **Set Transparent** switch and the **Color Picker** pipette stand under the
+grid, on the same row (a row of their own would make the dialog take the window's width). The switch
+makes the next click mark an entry instead of editing it (the marked entry is drawn as a checkerboard
+with an X, and is the one named in `transparent`; click it again to clear). The pipette arms the
+canvas: a press on the image highlights the entry that pixel uses — the one matching its colour (an
+exact match, else the nearest, for a dithered edge), or the table's transparent entry over a clear
+pixel — with an accent ring around the slot. Palette: Custom… is seeded with the document's table on an Indexed
+document, else with the palette the dialog opens on, and Color Table is seeded with the document's
+table and its transparent entry every time, so the grid always has the table it shows to edit;
+`colors`/`forced` grey out while a Custom table is chosen, and **Transparency** and **1st Index as
+Transparent** grey out for **System (Mac)** and **System (Windows)**, whose fixed tables have no
+slot for the auto-appended entry. **Load…** and **Save…** exchange `.act`
+files and palette PNGs (a 1-pixel-tall colour-type-3 image whose PLTE is the table and whose tRNS
+names the transparent entry).
+
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).

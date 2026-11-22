@@ -41,7 +41,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let palette_ms = elapsed(start);
             let mut out = px.clone();
             let start = Instant::now();
-            let indices = quantize::quantize(&mut out, doc.size.width as usize, &pal, Dither::Diffusion, 0.75, transparent);
+            let alpha = transparent.map_or(quantize::AlphaMode::Keep, quantize::AlphaMode::Carries);
+            let indices = quantize::quantize(&mut out, doc.size.width as usize, &pal, Dither::Diffusion, 0.75, alpha);
             let diffusion_ms = elapsed(start);
             std::hint::black_box(indices);
             let start = Instant::now();

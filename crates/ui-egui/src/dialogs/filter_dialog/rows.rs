@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-const INDEXED_COLOR: &str = "image.mode.indexedColor";
+pub(crate) const INDEXED_COLOR: &str = "image.mode.indexedColor";
 pub(crate) const LENS_BLUR: &str = "filter.blur.lensBlur";
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
 const COLOR_LOOKUP: &str = "image.adjustments.colorLookup";
@@ -83,6 +83,22 @@ fn retype(params: &mut [Param], key: &str, kind: impl FnOnce(&ParamKind) -> Para
     }
 }
 
+/// Replace the row `key` of `params` with what `f` makes of it (a placeholder stands in while it
+/// runs, so the row is never read half-taken).
+fn tap(params: &mut [Param], key: &str, f: impl FnOnce(Param) -> Param) {
+    let Some(at) = params.iter().position(|p| p.key == key) else { return };
+    let taken = std::mem::replace(&mut params[at], Param::section(Label::Empty));
+    params[at] = f(taken);
+}
+
+/// The palettes a Custom table does not belong to: the entry count and the forced colours are
+/// the table's own while one is given.
+const BUILT_IN_PALETTES: [&str; 8] = ["selective", "perceptual", "adaptive", "exact", "systemMac", "systemWindows", "web", "uniform"];
+
+/// The palettes that can carry the auto-appended transparent entry: every one but the two fixed
+/// System tables, which have no free slot (docs/development.md, Indexed Color conversion).
+const TRANSPARENCY_PALETTES: [&str; 7] = ["selective", "perceptual", "adaptive", "exact", "web", "uniform", "custom"];
+
 // --- Indexed Color ---------------------------------------------------------------------------------------------
 
 /// The matte menu's entries: the named mattes, then `custom` for the colour row after it.
@@ -122,6 +138,25 @@ fn indexed_color(app: &PhotocraftApp, params: &mut Vec<Param>) {
     let seed = indexed_matte_seed(&indexed_matte_defaults(app), "foreground").unwrap_or([1.0; 3]);
     let matte_color = Param::new(MATTE_COLOR, Label::from(tl!("Matte Color")), ParamKind::color(Some(seed))).visible_when("matte", "custom");
     params.insert(at + 1, matte_color);
+
+    // Palette: Custom… gives the table itself: the count and the forced colours are the table's
+    // own then, so their rows grey out (as in Photoshop). The grid and its pipette belong to it too.
+    let table = crate::dialogs::palette_file_ui::controls_row(INDEXED_COLOR, Label::from(tl!("Colors"))).visible_when("palette", "custom").not_remembered();
+    match params.iter().position(|p| p.key == "colors") {
+        Some(i) => {
+            params.insert(i + 1, table);
+        }
+        None => params.push(table),
+    }
+    for key in ["colors", "forced"] {
+        tap(params, key, |p| p.enabled_when_in("palette", BUILT_IN_PALETTES));
+    }
+    // Transparency and "1st index as transparent" both need a slot for the auto-appended entry: the
+    // fixed System tables have none, so both grey out (docs/development.md, Indexed Color conversion).
+    tap(params, "transparency", |p| p.enabled_when_in("palette", TRANSPARENCY_PALETTES));
+    tap(params, "transparentFirst", |p| {
+        Param::new(p.key, Label::from(tl!("1st Index as Transparent")), p.kind).enabled_when_in("palette", TRANSPARENCY_PALETTES)
+    });
 }
 
 /// Resolve a tool colour into the encoded samples used by Indexed Color's matte.

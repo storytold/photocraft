@@ -12,6 +12,13 @@ rust-version = "1.95"
 [workspace.dependencies]
 # The craft framework through its facade (`craft::ui::…`). The egui `[patch]` below must match
 # `craft::egui_fork::REV` (checked by `cargo xtask ci`).
+# Open against this revision, from the palette dialogs of #7320 (the first host-painted row inside a
+# dialog). Both need the framework, and the lines go when a revision settles them:
+#   1. a dialog's Tab visits text and number fields only (`TabReach::Fields`) and a `Param::custom` row
+#      cannot register a focus stop, so the palette grid is reached by a press or an accessibility focus
+#      action, never by Tab;
+#   2. egui gives a focused, click-sensing widget a fake primary click on Space/Enter, repeats included
+#      (`Context::interact`), so a held Space acts once per key-repeat instead of once per press.
 craft = { git = "https://github.com/storytold/craft-libs", rev = "77c7c62345c1f4213f59a07d9fdc156ecde0b540", default-features = false }
 craft-tracked = { git = "https://github.com/storytold/craft-libs", rev = "77c7c62345c1f4213f59a07d9fdc156ecde0b540" }
 craft-ui-macros = { git = "https://github.com/storytold/craft-libs", rev = "77c7c62345c1f4213f59a07d9fdc156ecde0b540" }
