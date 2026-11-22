@@ -2,6 +2,16 @@ use serde_json::json;
 
 use super::*;
 
+fn specs() -> &'static [crate::commands::CommandSpec] {
+    crate::install().unwrap();
+    crate::commands::command_specs()
+}
+
+fn registered(id: &str) -> &'static crate::commands::CommandSpec {
+    crate::install().unwrap();
+    crate::commands::find(id).expect("registered")
+}
+
 fn parse(doc: &str) -> Params {
     Params::parse(doc).unwrap_or_else(|| panic!("{doc}"))
 }
@@ -28,7 +38,7 @@ const UNPARSED: &[&str] = &[
 #[test]
 fn every_registry_doc_parses_and_renders_back_byte_for_byte() {
     let mut unparsed = Vec::new();
-    for c in crate::commands::command_specs() {
+    for c in specs() {
         match Params::parse(c.params) {
             Some(p) => assert_eq!(p.render(), c.params, "{}: the schema must reproduce the doc", c.id),
             None => unparsed.push(c.id),
@@ -57,7 +67,7 @@ fn no_registry_range_is_left_as_prose() {
             }
         }
     }
-    for c in crate::commands::command_specs() {
+    for c in specs() {
         if let Some(p) = Params::parse(c.params) {
             for (_, o) in &p.objects {
                 walk(c.id, o);
@@ -146,7 +156,7 @@ fn universal_keys_are_the_ones_every_command_honours() {
 
 #[test]
 fn the_registry_schema_is_read_once_and_shared() {
-    let spec = crate::commands::find("filter.blur.gaussianBlur").unwrap();
+    let spec = registered("filter.blur.gaussianBlur");
     let a = of(spec).unwrap();
     assert!(std::ptr::eq(a, of(spec).unwrap()));
     assert_eq!(a.param("radius").unwrap().range(), Some((0.1, 1000.0)));
@@ -156,7 +166,7 @@ fn the_registry_schema_is_read_once_and_shared() {
 /// before any trailing notes, so composed keys stay documented (#15255).
 #[test]
 fn new_adjustment_layer_docs_keep_composed_options_in_front_of_notes() {
-    let spec = crate::commands::find("layer.newAdjustmentLayer.gradientMap").expect("registered");
+    let spec = registered("layer.newAdjustmentLayer.gradientMap");
     let schema = parse(spec.params);
     assert!(schema.has_key("opacity"), "{}", spec.params);
     assert!(schema.has_key("name"), "{}", spec.params);
@@ -171,7 +181,7 @@ fn new_adjustment_layer_docs_keep_composed_options_in_front_of_notes() {
 /// `opacity`, so `action: "set"` is accepted and no range is left as prose (#15255).
 #[test]
 fn gradient_presets_stop_documents_the_set_keys() {
-    let spec = crate::commands::find("gradient.presets.stop").expect("registered");
+    let spec = registered("gradient.presets.stop");
     let schema = parse(spec.params);
     assert!(schema.has_key("stops"), "{}", spec.params);
     assert!(schema.has_key("transparency"), "{}", spec.params);
@@ -182,7 +192,7 @@ fn gradient_presets_stop_documents_the_set_keys() {
 /// `data` payload is accepted and not rejected as unknown (#15255).
 #[test]
 fn import_csh_documents_path_and_data() {
-    let spec = crate::commands::find("shape.presets.importCsh").expect("registered");
+    let spec = registered("shape.presets.importCsh");
     let schema = parse(spec.params);
     assert!(schema.has_key("path"), "{}", spec.params);
     assert!(schema.has_key("data"), "{}", spec.params);

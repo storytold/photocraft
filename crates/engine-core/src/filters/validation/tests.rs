@@ -369,6 +369,7 @@ fn injected_channel_targets_and_extended_filter_colours_keep_working() {
 
 /// The finite single-range top-level params of every checked command's schema.
 fn documented_ranges() -> Vec<(&'static str, String, f64, f64)> {
+    crate::install().unwrap();
     let mut out = Vec::new();
     for spec in crate::commands::command_specs().iter().filter(|c| checked(c.id)) {
         let Some(schema) = crate::param_schema::of(spec) else { continue };

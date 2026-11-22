@@ -175,6 +175,7 @@ mod tests {
     #[test]
     fn every_command_with_a_closed_doc_rejects_an_unknown_key() {
         // #7596: an undocumented key used to run the command on its defaults and report success.
+        crate::install().unwrap();
         let mut checked = 0;
         for spec in crate::commands::command_specs() {
             let Some(schema) = param_schema::of(spec) else { continue };
@@ -200,6 +201,7 @@ mod tests {
 
     #[test]
     fn incomplete_docs_are_registered_closed_docs() {
+        crate::install().unwrap();
         for id in INCOMPLETE {
             let spec = crate::commands::find(id).unwrap_or_else(|| panic!("{id} is not registered"));
             assert!(param_schema::of(spec).is_some_and(|p| !p.open()), "{id}: open or unparsed docs are not checked anyway");
@@ -209,7 +211,7 @@ mod tests {
 
     #[test]
     fn a_misspelled_key_fails_through_dispatch_instead_of_running_on_defaults() {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         let err = s.execute("paint.gradient", json!({"from": [0, 0], "to": [7, 7], "colour": "red"})).unwrap_err().to_string();
