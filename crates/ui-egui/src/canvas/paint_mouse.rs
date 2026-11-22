@@ -54,7 +54,15 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // start at 0° and off too, whatever the outgoing brush has (#12629).
         None if matches!(
             tool,
-            Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge | Tool::AdjustmentBrush | Tool::ArtHistoryBrush
+            Tool::BackgroundEraser
+                | Tool::Healing
+                | Tool::Burn
+                | Tool::Dodge
+                | Tool::Sponge
+                | Tool::CloneStamp
+                | Tool::Smudge
+                | Tool::AdjustmentBrush
+                | Tool::ArtHistoryBrush
         ) =>
         {
             fresh_brush(tool, &current)

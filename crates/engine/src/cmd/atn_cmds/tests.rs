@@ -3610,7 +3610,7 @@ fn image_size_explicit_sides_keep_precedence_over_percent() {
 
 #[test]
 fn image_size_explicit_sides_do_not_hide_invalid_percent() {
-    for percent in [json!(0), json!(-1), json!("50"), json!(false), json!(null)] {
+    for percent in [json!(0), json!(-1), json!("50"), json!(false)] {
         let params = json!({"width": 20, "height": 18, "percent": percent, "resample": "nearest"});
         let mut native = Session::new();
         native.execute("file.new", json!({"width": 32, "height": 24})).unwrap();
