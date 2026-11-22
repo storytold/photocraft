@@ -521,7 +521,16 @@ fn finish(app: &mut PhotocraftApp, answer: PrintAnswer) {
                 app.ui.status_error = true;
             }
         }
-        PrintFinish::Done | _ => photocraft_engine::print_cmds::remember_print(&mut app.session, &print_params(&fields)),
+        // Done (#11655): the settings go to `file.printSettings`, the journaling command that stores
+        // exactly what `remember_print` stores - so while an action records, the same click is also
+        // its step, and Print opens with them either way. Automation cannot answer Done: OK on this
+        // dialog is Print, Done is only its button, so no marker gates the route any more.
+        PrintFinish::Done | _ => {
+            if let Err(e) = app.run("file.printSettings", print_params(&fields)) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        }
     }
 }
 
