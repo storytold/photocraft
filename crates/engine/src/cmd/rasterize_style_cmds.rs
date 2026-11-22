@@ -27,7 +27,7 @@ pub fn can_bake(l: &Layer) -> bool {
 /// Some selected layer (or the active one) has effects to bake.
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
-    let ids = d.selected_layers().into_iter().chain(d.active_layer);
+    let ids = d.selected_layers().iter().copied().chain(d.active_layer);
     if ids.filter_map(|id| d.doc.layer(id)).any(can_bake) { Ok(()) } else { Err("no selected layer has layer effects to rasterize".into()) }
 }
 

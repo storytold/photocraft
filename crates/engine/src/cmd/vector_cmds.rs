@@ -381,3 +381,6 @@ mod triangle_history_names_tests;
 
 #[cfg(test)]
 mod line_arrowhead_history_names_tests;
+
+#[cfg(test)]
+mod ellipse_tool_history_name_tests;

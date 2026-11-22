@@ -30,11 +30,13 @@ mod profile_dither;
 // ------------------------------------------------------------------ state
 
 /// View › Proof Setup settings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct ProofSetup {
     /// What the user asked for (built-in id or path), for display.
     pub name: String,
+    #[plain_data(assume = "craft-cms profile: parsed tables and bytes, no interior mutability")]
     pub profile: Arc<Profile>,
+    #[plain_data(assume = "craft-cms rendering intent: a fieldless enum")]
     pub intent: Intent,
     pub bpc: bool,
     /// Simulate paper colour (absolute colorimetric proof → display, black ink simulated).
@@ -46,9 +48,12 @@ pub struct ProofSetup {
 
 impl Default for ProofSetup {
     fn default() -> Self {
+        // One shared copy of the built-in profile: every proof-state read of a document without its own setup makes a
+        // default, and copying the profile each time costs about half a millisecond.
+        static COATED_CMYK: std::sync::OnceLock<Arc<Profile>> = std::sync::OnceLock::new();
         ProofSetup {
             name: "working-cmyk".into(),
-            profile: Arc::new(Builtin::CoatedCmyk.profile().clone()),
+            profile: Arc::clone(COATED_CMYK.get_or_init(|| Arc::new(Builtin::CoatedCmyk.profile().clone()))),
             intent: Intent::RelativeColorimetric,
             bpc: true,
             simulate_paper: false,
@@ -58,7 +63,7 @@ impl Default for ProofSetup {
 }
 
 /// Per-document proofing state the UI reads (see [`ColorState::proof`]).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui_macros::PlainData)]
 pub struct ProofView {
     pub setup: ProofSetup,
     /// View › Proof Colors.
@@ -216,7 +221,7 @@ pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
 pub struct ColorState {
     /// Edit › Color Settings (persisted with the preferences).
     pub settings: ColorSettings,
-    proofs: HashMap<DocId, ProofView>,
+    proofs: craft_tracked::Tracked<HashMap<DocId, ProofView>>,
     /// The displays and their ICC profiles as read by the platform, primary (menu-bar) display
     /// first (used when Color Settings › Monitor Profile is `auto`; none = sRGB display).
     pub displays: Vec<crate::display_color::Display>,
@@ -384,6 +389,11 @@ impl ColorState {
     /// Proofing state of a document (defaults: coated CMYK, relative colorimetric + BPC, off).
     pub fn proof(&self, doc: DocId) -> ProofView {
         self.proofs.get(&doc).cloned().unwrap_or_else(|| ProofView { gamut_threshold: craft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() })
+    }
+
+    /// The revision of every document's proofing state: it moves with each change to one.
+    pub fn proofs_revision(&self) -> craft_tracked::Revision {
+        self.proofs.revision()
     }
 
     /// Borrow the document's proofing state without cloning its profile or allocating defaults.
@@ -1007,9 +1017,19 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
+/// Edit > Convert to Profile: a document open, and not in Bitmap mode, where the reference
+/// application greys it (#14263).
+fn convert_profile_enabled(s: &Session) -> std::result::Result<(), String> {
+    let doc = &s.active().ok_or("no document open")?.doc;
+    if doc.mode == ColorMode::Bitmap {
+        return Err("Convert to Profile is not available for Bitmap documents".into());
+    }
+    Ok(())
+}
+
 /// Assign Profile is greyed for Lab, Bitmap and Multichannel documents, as in the reference
-/// application, and a script that runs it there fails (#14238). Convert to Profile keeps
-/// [`has_doc`]: it stays enabled for Lab.
+/// application, and a script that runs it there fails (#14238). Convert to Profile is greyed
+/// for Bitmap only ([`convert_profile_enabled`]): it stays enabled for Lab and Multichannel.
 fn assign_profile_enabled(s: &Session) -> std::result::Result<(), String> {
     let doc = &s.active().ok_or_else(|| "no document open".to_string())?.doc;
     let mode = match doc.mode {
@@ -1127,6 +1147,10 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
         .and_then(Value::as_str)
         .ok_or_else(|| EngineError::BadParams { cmd: "edit.convertToProfile".into(), msg: "missing `profile`".into() })?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    // Also for a caller that runs it without the enabled check (#14263).
+    if doc.mode == ColorMode::Bitmap {
+        return Err(EngineError::Other("Convert to Profile is not available for Bitmap documents".into()));
+    }
     let dst = s.color.resolve(spec, Some(doc), None)?;
     let intent = intent_or(p, s.color.settings.intent())?;
     let bpc = bool_param(p, "bpc", s.color.settings.bpc);
@@ -1136,9 +1160,9 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     // A document tagged with a profile of the same colours as the destination needs no colour
     // conversion (compared by colour, not bytes). Without Flatten or Rasterize it stays as it is,
     // with no history state, as in the reference application (#14261); with either, that still
-    // runs as before. An untagged document is still converted and tagged, and an Indexed, Duotone,
-    // Bitmap or Multichannel one still goes through the conversion that changes its mode; none
-    // of those was measured. The embedded profile itself is compared, so one that can't be read
+    // runs as before. An untagged document is still converted and tagged, and an Indexed, Duotone
+    // or Multichannel one still goes through the conversion that changes its mode; none of those
+    // was measured (a Bitmap one is refused above). The embedded profile itself is compared, so one that can't be read
     // or doesn't fit the mode is still replaced.
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let measured = matches!(doc.mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Grayscale | ColorMode::Lab);
@@ -1384,7 +1408,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert to Profile…",
             ["Edit"],
             r##"{"profile":"srgb|display-p3|adobe-rgb-compat|prophoto-compat|linear-srgb|rec2020|gray-gamma-2.2|sgray|lab-d50|coated-cmyk|working" (or a path to an .icc file),"intent":"perceptual|relative|saturation|absolute"="relative","bpc":bool=true,"dither":bool=false (deterministic color quantization for 8-bit profile changes),"flatten":bool=false (flatten in the source profile before conversion),"rasterizePlaced":bool=false (freeze displayed Smart Object pixels; flatten takes precedence)}"##,
-            has_doc,
+            convert_profile_enabled,
             convert_to_profile,
             true
         ),
@@ -1971,3 +1995,6 @@ mod settings_tests {
         assert!(s.execute("color.profileMismatch", json!({"action": "explode"})).is_err());
     }
 }
+
+#[cfg(test)]
+mod convert_profile_bitmap_tests;

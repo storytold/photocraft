@@ -53,8 +53,8 @@ fn stamp_layer(doc: &Document, name: String) -> Result<Layer> {
 /// Make `id` the only selected layer and the active one.
 fn select_only(s: &mut Session, id: LayerId) {
     if let Some(st) = s.active_mut() {
-        st.selected_layers = vec![id];
-        st.active_layer = Some(id);
+        *st.selection_mut() = vec![id];
+        st.set_active_layer(Some(id));
         st.layer_anchor = Some(id);
         crate::fix_selection(st);
     }
@@ -289,7 +289,7 @@ mod tests {
         let (mut s, ..) = session(8);
         s.execute("layer.new.layer", json!({"name": "Opaque"})).unwrap();
         let opaque = s.active().unwrap().active_layer.unwrap();
-        let l = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(opaque).unwrap();
+        let l = std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(opaque).unwrap();
         let fmt = l.surface().unwrap().format();
         l.content = LayerContent::Raster(photocraft_raster::Surface::with_default(fmt, &[0.0, 1.0, 0.0, 1.0]));
         let video = LayerId(s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap()["layer"].as_u64().unwrap());
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn stamp_down_keeps_the_lower_layers_clipping_label_and_link() {
         let (mut s, _, hidden, blue) = session(8);
-        let l = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(hidden).unwrap();
+        let l = std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(hidden).unwrap();
         l.visible = true;
         l.clipped = true;
         l.label = photocraft_doc::LabelColor::Red;

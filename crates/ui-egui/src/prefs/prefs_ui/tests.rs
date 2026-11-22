@@ -723,8 +723,34 @@ fn run_cases(cases: Vec<Case>) {
 }
 
 /// A case that only seeds a file and checks what the app loads from it.
-fn loaded(name: &'static str, seed: Value, check: impl Fn(&PhotocraftApp) + 'static) -> Case {
-    Case { name, seed: Some(seed), set: Box::new(|_, _| {}), check: Box::new(move |app, _, _| check(app)) }
+struct Loaded {
+    name: &'static str,
+    seed: Value,
+    check: Box<dyn Fn(&PhotocraftApp)>,
+}
+
+fn loaded(name: &'static str, seed: Value, check: impl Fn(&PhotocraftApp) + 'static) -> Loaded {
+    Loaded { name, seed, check: Box::new(check) }
+}
+
+/// One app per case: what it loads, then what its first tick leaves in the file. A load that reset values writes the
+/// repaired preferences on that tick, so the file must read back cleanly as what the app holds; a repair that drops
+/// other keys fails here without a restarted app.
+fn run_loaded(cases: Vec<Loaded>) {
+    for case in cases {
+        eprintln!("case: {}", case.name);
+        let files = Arc::new(MemoryFiles::new());
+        seed(&files, &case.seed, Some(<prefs::SavedPrefs as Settings>::SCHEMA_VERSION));
+        let mut app = app_on(&files);
+        (case.check)(&app);
+        let ctx = app.ctx().clone();
+        tick(&mut app, &ctx);
+        let (reread, report) = services_on(&files).settings.unwrap();
+        assert!(report.section_errors.is_empty(), "{}: {:?}", case.name, report.section_errors);
+        // Compared as written: the file has no nulls, while the preset libraries hold some in memory.
+        let written = |p: &prefs::SavedPrefs| serde_json::to_value(p).unwrap();
+        assert_eq!(written(reread.get()), written(&app.session.saved_prefs()), "{}", case.name);
+    }
 }
 
 fn restart_cases() -> Vec<Case> {
@@ -741,11 +767,11 @@ fn restart_cases() -> Vec<Case> {
             }),
             check: Box::new(|app, ctx, _| {
                 // The list comes back, newest first.
-                assert_eq!(app.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/work/b.png".to_string(), "/work/a.psd".to_string()]);
                 // Lowering "Recent File List Contains" shortens the menu at once; 0 turns it off.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 1}})).unwrap();
                 tick(app, ctx);
-                assert_eq!(app.ui.recent_files, vec!["/work/b.png".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/work/b.png".to_string()]);
                 app.push_recent("/work/c.tif");
                 assert_eq!(app.session.prefs().file_handling.recent_files, vec!["/work/c.tif".to_string()]);
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 0}})).unwrap();
@@ -755,7 +781,7 @@ fn restart_cases() -> Vec<Case> {
                 // Clearing the list in Preferences (or by an agent) reaches the menu.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 20, "fileHandling.recentFiles": ["/x.psd"]}})).unwrap();
                 tick(app, ctx);
-                assert_eq!(app.ui.recent_files, vec!["/x.psd".to_string()]);
+                assert_eq!(*app.ui.recent_files, vec!["/x.psd".to_string()]);
                 // A hostile count from a hand-edited preferences file is capped, not trusted.
                 app.run("prefs.set", json!({"values": {"fileHandling.recentFileCount": 100}})).unwrap();
                 app.session.prefs.edit(|p| p.file_handling.recent_file_count = u32::MAX);
@@ -982,7 +1008,8 @@ fn remembered_state_survives_a_restart() {
     run_cases(restart_cases());
 }
 
-fn damaged_cases() -> Vec<Case> {
+/// The load-only cases, and the cases that set state in a first app and restart.
+fn damaged_cases() -> (Vec<Loaded>, Vec<Case>) {
     use crate::state::Tool;
     let d = crate::state::ToolOptions::default;
     let mut cases = Vec::new();
@@ -1080,8 +1107,9 @@ fn damaged_cases() -> Vec<Case> {
         assert_eq!(app.session.tools.background, [1.0; 4]);
     }));
     // A tool-colour preset with an invalid channel is refused and leaves the remembered colours alone.
+    let mut restarts = Vec::new();
     for bad_channel in [json!(1e100), json!("red"), json!(true), json!({}), json!([])] {
-        cases.push(Case {
+        restarts.push(Case {
             name: "tool colours after an invalid preset",
             seed: None,
             set: Box::new(move |app, _| {
@@ -1099,12 +1127,14 @@ fn damaged_cases() -> Vec<Case> {
             }),
         });
     }
-    cases
+    (cases, restarts)
 }
 
 #[test]
 fn a_damaged_remembered_value_resets_only_itself() {
-    run_cases(damaged_cases());
+    let (loaded, restarts) = damaged_cases();
+    run_loaded(loaded);
+    run_cases(restarts);
 }
 
 #[test]
@@ -1276,7 +1306,7 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     crate::tool_memory::persist(&mut app, &ctx);
     // The Brush's tip becomes a big sampled one, then the Blur tool takes over that brush (the Eraser has its own
     // starting tip since #11936).
-    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0));
+    app.session.tools.brush.tip = TipShape::Sampled(GrayTile::from_fn(400, 300, |x, y| ((x * y) % 7) as f32 / 7.0)).into();
     app.session.tools.brush_changed();
     app.ui.tool = Tool::Blur;
     crate::paint_mouse::sync_tool_brush(&mut app);
@@ -1292,7 +1322,7 @@ fn the_saved_brush_owner_follows_the_saved_last_brush() {
     assert_eq!(app2.session.tools.brush.size, 77.0);
 
     // Once the Blur tool's brush is saved, the Blur tool owns it in the preferences too.
-    app.session.tools.brush.tip = TipShape::Round;
+    app.session.tools.brush.tip = TipShape::Round.into();
     app.session.tools.brush.size = 33.0;
     app.session.tools.brush_changed();
     crate::last_brush::persist(&mut app, &ctx);

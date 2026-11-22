@@ -124,8 +124,8 @@ pub(super) fn replace(app: &mut PhotocraftApp) -> Result<Value, String> {
                 let (name, bytes) = files.into_iter().next().ok_or(crate::file_dialog::CANCELLED)?;
                 (name, bytes, None)
             }
-            Picked::Cancelled => return Err(crate::file_dialog::CANCELLED.into()),
-            Picked::Unavailable(why) => return Err(why),
+            Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
+            Picked::Unavailable(why) | Picked::Failed(why) => return Err(why),
         };
         if bytes.len() as u64 > MAX_PICKED_BYTES {
             return Err(tl!("The Actions file is too large.").into());

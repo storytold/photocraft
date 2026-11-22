@@ -1,4 +1,4 @@
-use super::batch_run::{BatchInput, batch_inputs_tree, process_document_copies, process_tree};
+use super::batch_run::{BatchInput, TreeNaming, batch_inputs_tree, process_document_copies, process_tree};
 use super::open::import_opened;
 use super::paths::{file_name, list_images, read_file, stem, untitled_name};
 use super::save::SaveOpts;
@@ -13,6 +13,9 @@ mod image_processor_formats_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "image_processor_tests.rs"]
 mod image_processor_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "image_processor_unique_names_tests.rs"]
+mod image_processor_unique_names_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "load_stack_name_tests.rs"]
@@ -132,9 +135,9 @@ pub(super) fn image_processor(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let r = if source == "folder" {
         let inputs = batch_inputs_tree(p, cmd, &output)?;
-        process_tree(s, &inputs, &output, format, save, "", &process)
+        process_tree(s, &inputs, &output, format, save, TreeNaming::Unique, &process)
     } else {
-        let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().collect() };
+        let documents = if source == "current" { vec![s.active().ok_or(EngineError::NoDocument)?] } else { s.documents().iter().map(|st| &**st).collect() };
         if documents.is_empty() {
             return Err(EngineError::NoDocument);
         }
@@ -231,7 +234,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
         "folder" => ProcessorInputs::Folder(batch_inputs_tree(p, IMAGE_PROCESSOR, output)?),
         "current" => ProcessorInputs::Documents(vec![s.active().ok_or(EngineError::NoDocument)?]),
         _ if s.documents().is_empty() => return Err(EngineError::NoDocument),
-        _ => ProcessorInputs::Documents(s.documents().iter().collect()),
+        _ => ProcessorInputs::Documents(s.documents().iter().map(|st| &**st).collect()),
     };
     let mut files = Vec::new();
     let mut errors = Vec::new();
@@ -253,7 +256,7 @@ fn image_processor_formats(s: &Session, p: &Value, source: &str, output: &str) -
             Ok(false)
         };
         let mut result = match &inputs {
-            ProcessorInputs::Folder(inputs) => process_tree(s, inputs, output, format.extension, format.save, "", &process),
+            ProcessorInputs::Folder(inputs) => process_tree(s, inputs, output, format.extension, format.save, TreeNaming::Unique, &process),
             ProcessorInputs::Documents(documents) => process_document_copies(s, documents, output, format.extension, format.save, &process),
         };
         if let Some(Value::Array(written)) = result.get_mut("files").map(Value::take) {
@@ -328,7 +331,7 @@ pub(super) fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value>
                 Ok(())
             })?;
             if let Some(st) = s.active_mut() {
-                st.selected_layers = st.active_layer.into_iter().collect();
+                *st.selection_mut() = st.active_layer.into_iter().collect();
             }
         }
     }

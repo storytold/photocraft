@@ -49,7 +49,7 @@ fn shared_session(instances: usize) -> (Session, LayerId) {
     let placed = crate::file_cmds::place_bytes(&mut s, "Shared.svg", original.to_vec(), None, &json!({"smartObject":true})).unwrap();
     let id = LayerId(placed["layer"].as_u64().unwrap());
     let first = s.active().unwrap().doc.layer(id).unwrap().clone();
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     for index in 1..instances {
         let mut layer = first.duplicate();
         let LayerContent::Smart(sm) = &mut layer.content else { panic!("smart") };
@@ -196,7 +196,7 @@ fn local_svg_source_memo_evicts_and_oversize_entries_render_without_retention() 
 fn shared_svg_update_render_failure_and_cancelled_authorization_preserve_document_history() {
     for cancel in [false, true] {
         let (mut s, id) = shared_session(2);
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let LayerContent::Smart(sm) = &mut doc.layers.last_mut().unwrap().content else { panic!("smart") };
         sm.smart_filters.push(SmartFilter {
             command: if cancel { "image.adjustments.invert" } else { "unsupported.persisted.filter" }.into(),
@@ -229,7 +229,7 @@ fn shared_svg_update_render_failure_and_cancelled_authorization_preserve_documen
 #[test]
 fn shared_svg_update_keeps_the_existing_placed_pixel_budget_atomic() {
     let (mut s, id) = shared_session(2);
-    let LayerContent::Smart(sm) = &mut Arc::make_mut(&mut s.active_mut().unwrap().doc).layers.last_mut().unwrap().content else { panic!("smart") };
+    let LayerContent::Smart(sm) = &mut Arc::make_mut(s.active_mut().unwrap().doc_mut()).layers.last_mut().unwrap().content else { panic!("smart") };
     sm.transform = Affine { m: [1000., 0., 0., 1000., 0., 0.] };
     let before = s.active().unwrap().doc.clone();
     let history = s.active().unwrap().history.entries();
