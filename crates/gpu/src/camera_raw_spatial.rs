@@ -298,16 +298,6 @@ fn split(p: &CameraRaw) -> (CameraRaw, CameraRaw) {
     (pre, post)
 }
 
-/// Whether the spatial develop handles `p`: it has a spatial stage other than Detail (sharpening,
-/// noise reduction), which stays on the CPU. Texture and Clarity develop on the GPU for opaque
-/// pixels in sRGB's primaries; elsewhere the develop answers `None` and the CPU develops.
-pub fn spatial_supported(p: &CameraRaw) -> bool {
-    (p.dehaze != 0.0 || p.highlights != 0.0 || p.shadows != 0.0 || p.texture != 0.0 || p.clarity != 0.0)
-        && p.sharpen_amount <= 0.0
-        && p.noise_luminance <= 0.0
-        && p.noise_color <= 0.0
-}
-
 impl CameraRawDevelop {
     /// Develops `source` (`size`, straight RGBA, display-encoded) with settings `p` that have
     /// spatial stages ([`spatial_supported`]) and reads the result back. `Ok(None)` when these
@@ -353,7 +343,7 @@ impl CameraRawDevelop {
         inputs: &DevelopInputs,
         float: bool,
     ) -> Result<Option<Vec<[f32; 4]>>, Unsupported> {
-        if !spatial_supported(p) || p.is_identity() {
+        if !crate::camera_raw::spatial_supported(p) || p.is_identity() {
             return Ok(None);
         }
         let [w, h] = size;

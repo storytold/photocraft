@@ -12,7 +12,7 @@
 //! It renders into `Rgba32Float`; [`CameraRawDevelop::supported`] says whether the adapter can.
 
 use photocraft_algo::camera_raw::{
-    BalanceStep, CURVE_LUT, FIX_GRID, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, RowOn, TONE_STEPS, VignetteStyle,
+    BalanceStep, CURVE_LUT, CameraRaw, FIX_GRID, MIXER_GRID, MIXER_KINDS, PRESENCE_GRID, PRESENCE_KINDS, PerPixel, RowOn, TONE_STEPS, VignetteStyle,
 };
 
 use crate::Unsupported;
@@ -75,6 +75,16 @@ impl Image {
     }
 }
 
+/// Whether the spatial develop handles `p`: it has a spatial stage other than Detail (sharpening,
+/// noise reduction), which stays on the CPU. Texture and Clarity develop on the GPU for opaque
+/// pixels in sRGB's primaries; elsewhere the develop answers `None` and the CPU develops.
+pub fn spatial_supported(p: &CameraRaw) -> bool {
+    (p.dehaze != 0.0 || p.highlights != 0.0 || p.shadows != 0.0 || p.texture != 0.0 || p.clarity != 0.0)
+        && p.sharpen_amount <= 0.0
+        && p.noise_luminance <= 0.0
+        && p.noise_color <= 0.0
+}
+
 /// The Camera Raw preview pass and its textures (reused while the size stays).
 pub struct CameraRawDevelop {
     pipeline: wgpu::RenderPipeline,
@@ -87,8 +97,10 @@ pub struct CameraRawDevelop {
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<wgpu::Buffer>,
     /// The spatial stages' passes, built the first time settings need them.
+    #[cfg(not(target_arch = "wasm32"))]
     spatial: Option<crate::camera_raw_spatial::Spatial>,
     /// Texture's and Clarity's compute passes, built the first time settings need them.
+    #[cfg(not(target_arch = "wasm32"))]
     detail: Option<crate::camera_raw_detail::Detail>,
 }
 
@@ -176,7 +188,9 @@ impl CameraRawDevelop {
             target: None,
             #[cfg(not(target_arch = "wasm32"))]
             readback: None,
+            #[cfg(not(target_arch = "wasm32"))]
             spatial: None,
+            #[cfg(not(target_arch = "wasm32"))]
             detail: None,
         }
     }
@@ -234,6 +248,7 @@ impl CameraRawDevelop {
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Builds the spatial stages' passes if they aren't yet.
     pub(crate) fn ensure_spatial(&mut self, device: &wgpu::Device) {
         if self.spatial.is_none() {
@@ -241,11 +256,13 @@ impl CameraRawDevelop {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// The spatial stages' passes, once built.
     pub(crate) fn spatial_passes(&self) -> Option<&crate::camera_raw_spatial::Spatial> {
         self.spatial.as_ref()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Builds Texture's and Clarity's passes if they aren't yet.
     pub(crate) fn ensure_detail(&mut self, device: &wgpu::Device) {
         if self.detail.is_none() {
@@ -253,21 +270,25 @@ impl CameraRawDevelop {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Texture's and Clarity's passes, once built.
     pub(crate) fn detail_passes(&self) -> Option<&crate::camera_raw_detail::Detail> {
         self.detail.as_ref()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Drops the cached source, so a half-done upload isn't taken for it next time.
     pub(crate) fn forget_source(&mut self) {
         self.source = None;
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// The uploaded source's view.
     pub(crate) fn source_view(&self) -> Option<&wgpu::TextureView> {
         self.source.as_ref().map(|s| &s.view)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Records the per-pixel pass with `stages` from `input` into `target` (both `size`). The
     /// settings and tables are written to the queue now, so a pass recorded later in the same
     /// submission would overwrite them: each submission records one per-pixel pass.

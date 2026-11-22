@@ -42,7 +42,9 @@
 
 pub mod bounds;
 mod camera_raw;
+#[cfg(not(target_arch = "wasm32"))]
 mod camera_raw_detail;
+#[cfg(not(target_arch = "wasm32"))]
 mod camera_raw_spatial;
 mod fx;
 pub mod health;
@@ -60,9 +62,11 @@ use photocraft_doc::{DocId, Document, LayerContent, LayerId, Pattern};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile};
 
-pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
+pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop, spatial_supported};
+#[cfg(not(target_arch = "wasm32"))]
 pub use camera_raw_detail::CAMERA_RAW_DETAIL_SHADER;
-pub use camera_raw_spatial::{CAMERA_RAW_SPATIAL_SHADER, spatial_supported};
+#[cfg(not(target_arch = "wasm32"))]
+pub use camera_raw_spatial::CAMERA_RAW_SPATIAL_SHADER;
 pub use health::{DeviceHealth, Fault};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
