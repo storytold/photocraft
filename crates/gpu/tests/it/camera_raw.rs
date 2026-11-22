@@ -524,3 +524,46 @@ fn texture_and_clarity_on_the_gpu() {
         ],
     );
 }
+
+/// `cargo test -p photocraft-gpu --release --test it -- --ignored --nocapture spatial_timing`
+#[test]
+#[ignore = "timing"]
+fn spatial_timing() {
+    let Some(mut g) = gpu() else { return };
+    let (w, h) = (2000, 1333);
+    let src = image(w, h, Depth::Eight);
+    let all = cr! { exposure: 0.3, contrast: 20.0, dehaze: 20.0, highlights: -40.0, shadows: 40.0, texture: 30.0, clarity: 30.0, whites: 20.0, blacks: -10.0, vibrance: 20.0 };
+    for (name, p) in [
+        ("Shadows/Highlights", cr! { highlights: -40.0, shadows: 40.0 }),
+        ("Dehaze", cr! { dehaze: 30.0 }),
+        ("Texture", cr! { texture: 40.0 }),
+        ("Clarity", cr! { clarity: 40.0 }),
+        ("all of them", all),
+    ] {
+        let inputs = DevelopInputs::default();
+        let time = |f: &mut dyn FnMut()| {
+            f();
+            let t = std::time::Instant::now();
+            for _ in 0..5 {
+                f();
+            }
+            t.elapsed().as_secs_f64() * 1000.0 / 5.0
+        };
+        let gpu_ms = time(&mut || {
+            std::hint::black_box(g.dev.develop_spatial(&g.device, &g.queue, None, &src, Some(1), [w as u32, h as u32], &p, &inputs, false).unwrap());
+        });
+        let cpu_ms = time(&mut || {
+            let mut px = src.clone();
+            develop(&mut px, w, h, &p, &inputs, false);
+        });
+        eprintln!("{name:20} {w}×{h}: GPU {gpu_ms:7.1} ms, CPU {cpu_ms:7.1} ms");
+    }
+    // The per-pixel pass alone (upload cached, one pass, the read back), for the fixed cost.
+    let p = cr! { exposure: 0.3 };
+    let stages = per_pixel(&p, w, h, false, None).unwrap();
+    let t = std::time::Instant::now();
+    for _ in 0..5 {
+        std::hint::black_box(g.dev.develop(&g.device, &g.queue, None, &src, Some(1), [w as u32, h as u32], &stages).unwrap());
+    }
+    eprintln!("per-pixel pass alone: {:7.1} ms", t.elapsed().as_secs_f64() * 1000.0 / 5.0);
+}

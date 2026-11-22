@@ -19,16 +19,24 @@ enum Pass {
     Cols,
     Moves,
     Apply,
+    RowsDirect,
+    ColsDirect,
 }
 
-const PASSES: [(Pass, &str); 6] = [
+const PASSES: [(Pass, &str); 8] = [
     (Pass::Planes, "cs_planes"),
     (Pass::Copy, "cs_copy"),
     (Pass::Rows, "cs_box_rows"),
     (Pass::Cols, "cs_box_cols"),
     (Pass::Moves, "cs_moves"),
     (Pass::Apply, "cs_apply"),
+    (Pass::RowsDirect, "cs_box_rows_direct"),
+    (Pass::ColsDirect, "cs_box_cols_direct"),
 ];
+
+/// Radii up to this sum directly at each pixel (every pixel in parallel); above, one invocation
+/// per line runs a running sum.
+const DIRECT_MAX: usize = 48;
 
 /// The compute pipelines.
 pub(crate) struct Detail {
@@ -173,23 +181,19 @@ impl Detail {
             self.dispatch(device, encoder, Pass::Copy, &uniform(0, 0), &coeffs, &bufs, 1, src, dst, full);
             // `from` is the buffer the next box pass reads.
             let mut from = 0usize;
-            for (pass, lines) in [(Pass::Rows, h), (Pass::Cols, w)] {
+            for rows in [true, false] {
                 for &r in radii.iter() {
                     if r == 0 {
                         continue;
                     }
-                    self.dispatch(
-                        device,
-                        encoder,
-                        pass,
-                        &uniform(r as u32, 0),
-                        &coeffs,
-                        &bufs,
-                        if from == 0 { 0 } else { 2 },
-                        src,
-                        dst,
-                        [lines.div_ceil(64), 1],
-                    );
+                    let route = if from == 0 { 0 } else { 2 };
+                    let (pass, groups) = match (rows, r <= DIRECT_MAX) {
+                        (true, true) => (Pass::RowsDirect, full),
+                        (false, true) => (Pass::ColsDirect, full),
+                        (true, false) => (Pass::Rows, [h.div_ceil(64), 1]),
+                        (false, false) => (Pass::Cols, [w.div_ceil(64), 1]),
+                    };
+                    self.dispatch(device, encoder, pass, &uniform(r as u32, 0), &coeffs, &bufs, route, src, dst, groups);
                     from = 1 - from;
                 }
             }

@@ -181,6 +181,33 @@ fn cs_box_cols(@builtin(global_invocation_id) id: vec3<u32>) {
     box_line(id.x, false);
 }
 
+// One box pass of radius `P.size.z` summed directly at each pixel (rows or columns), for radii
+// where that beats a line's running sum: every pixel in parallel, edges clamped.
+fn box_direct(id: vec3<u32>, rows: bool) {
+    if id.x >= P.size.x || id.y >= P.size.y {
+        return;
+    }
+    let r = i32(P.size.z);
+    let last = i32(select(P.size.y, P.size.x, rows)) - 1;
+    let at = i32(select(id.y, id.x, rows));
+    var acc = vec4(0.0);
+    for (var t = -r; t <= r; t++) {
+        let x = u32(clamp(at + t, 0, last));
+        acc += blur_in[select(index(id.x, x), index(x, id.y), rows)];
+    }
+    blur_out[index(id.x, id.y)] = acc / f32(2 * r + 1);
+}
+
+@compute @workgroup_size(8, 8)
+fn cs_box_rows_direct(@builtin(global_invocation_id) id: vec3<u32>) {
+    box_direct(id, true);
+}
+
+@compute @workgroup_size(8, 8)
+fn cs_box_cols_direct(@builtin(global_invocation_id) id: vec3<u32>) {
+    box_direct(id, false);
+}
+
 // Adds scale `P.size.w`'s terms to the moves; `blur_in` holds the planes blurred at that scale
 // (the planes themselves for a scale too small to blur).
 @compute @workgroup_size(8, 8)

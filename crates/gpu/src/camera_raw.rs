@@ -467,7 +467,7 @@ fn flags(s: &PerPixel) -> u32 {
         false,
         wb.is_some_and(|w| w.whites.is_some() && w.whites_fix.as_ref().is_some_and(|g| g.len() * 3 == FIX_VALUES)),
         // 20–23: the white-balance steps and their correction grids.
-        s.white_balance.first().is_some(),
+        !s.white_balance.is_empty(),
         s.white_balance.first().is_some_and(fix_fits),
         s.white_balance.get(1).is_some(),
         s.white_balance.get(1).is_some_and(fix_fits),

@@ -364,7 +364,7 @@ impl CameraRawDevelop {
         let detail = p.texture != 0.0 || p.clarity != 0.0;
         // Texture's and Clarity's GPU passes read opaque pixels in sRGB's primaries (the CPU
         // blurs alpha-weighted planes elsewhere).
-        if detail && (!inputs.srgb_primaries() || source.iter().any(|q| !(q[3] >= 1.0))) {
+        if detail && (!inputs.srgb_primaries() || source.iter().any(|q| q[3].partial_cmp(&1.0).is_none_or(|o| o.is_lt()))) {
             return Ok(None);
         }
         let (pre, post) = split(p);
