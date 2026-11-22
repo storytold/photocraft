@@ -71,7 +71,6 @@ pub mod theme;
 pub mod tone;
 pub(crate) mod tool_memory;
 pub mod updates_ui;
-pub mod work_area;
 
 use std::collections::HashMap;
 
