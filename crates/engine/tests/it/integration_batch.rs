@@ -21,7 +21,9 @@ fn a_new_fill_layer_consumes_the_selection_it_took_as_mask() {
 fn define_pattern_accepts_a_canvas_wider_than_the_old_4000_px_cap() {
     let mut s = session(4500, 8);
     s.execute("edit.definePattern", json!({"name": "Wide"})).unwrap();
-    let mut s = session(8001, 8);
+    let mut s = session(30_000, 8);
+    s.execute("edit.definePattern", json!({"name": "MaxEdge"})).unwrap();
+    let mut s = session(30_001, 8);
     assert!(s.execute("edit.definePattern", json!({"name": "TooWide"})).is_err());
 }
 
