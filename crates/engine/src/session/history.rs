@@ -25,17 +25,20 @@ impl Session {
         st.coalesce = None;
         // The step being undone: the layers whose visibility it changed get it back.
         let changed = st.history.current_visibility().to_vec();
-        match st.history.undo(st.doc.clone()) {
+        let doc = st.doc.clone();
+        match st.history.undo(doc) {
             // Undo Clear History: the list comes back, the document is the same one. Not an
             // edit: keep a clean document clean (the revision still moves for the panels).
             Some((d, layers)) if Arc::ptr_eq(&d, &st.doc) => {
                 restore_target(st, layers);
                 let clean = !st.is_dirty();
                 st.revision += 1;
+                st.record_unknown_damage();
                 if clean {
                     st.saved_revision = st.revision;
                 }
                 st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+                st.record_damage();
                 true
             }
             Some((mut d, layers)) => {
@@ -49,11 +52,12 @@ impl Session {
                 // Pixels this step can have touched, so the canvas recomposites only that
                 // (it recomposited everything before).
                 let damage = layer_multi_cmds::step_damage(&d, &st.doc);
-                let before = std::mem::replace(&mut st.doc, d);
+                let before = std::mem::replace(st.doc_mut(), d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
                 st.bump_revision(keep_clean);
                 st.last_damage = damage;
+                st.record_damage();
                 true
             }
             None => false,
@@ -76,7 +80,8 @@ impl Session {
         let keep_visibility = !self.visibility_undoable();
         let Some(st) = self.active_mut() else { return false };
         st.coalesce = None;
-        match st.history.redo(st.doc.clone()) {
+        let doc = st.doc.clone();
+        match st.history.redo(doc) {
             Some((mut d, layers)) => {
                 if d.name != st.doc.name {
                     Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
@@ -87,11 +92,12 @@ impl Session {
                     carry_visibility(&st.doc, &mut d, &changed);
                 }
                 let damage = layer_multi_cmds::step_damage(&st.doc, &d);
-                let before = std::mem::replace(&mut st.doc, d);
+                let before = std::mem::replace(st.doc_mut(), d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
                 st.bump_revision(keep_clean);
                 st.last_damage = damage;
+                st.record_damage();
                 true
             }
             None => false,
@@ -136,12 +142,13 @@ impl Session {
             carry_visibility(&st.doc, &mut d, &changed);
         }
         let damage = layer_multi_cmds::step_damage(&d, &st.doc);
-        let before = std::mem::replace(&mut st.doc, d);
+        let before = std::mem::replace(st.doc_mut(), d);
         // Taking back a selection-only step keeps a clean document clean, as Undo does (#6865).
         let keep_clean = st.keeps_clean(&before);
         restore_target(st, layers);
         st.bump_revision(keep_clean);
         st.last_damage = damage;
+        st.record_damage();
         true
     }
 }
@@ -184,15 +191,15 @@ pub(crate) fn restore_target(st: &mut DocState, layers: LayerTarget) {
     // Deselect Layers is a valid history target, not a missing layer to replace with the top
     // layer. An edit after deselection must undo back to no active or selected layers (#3042).
     if layers.active.is_none() && layers.selected.is_empty() {
-        st.active_layer = None;
-        st.selected_layers.clear();
+        st.set_active_layer(None);
+        st.selection_mut().clear();
         st.layer_anchor = None;
         channel_cmds::fix_view(st);
         return;
     }
     if layers.active.is_some_and(|id| st.doc.layer(id).is_some()) {
-        st.active_layer = layers.active;
-        st.selected_layers = layers.selected;
+        st.set_active_layer(layers.active);
+        *st.selection_mut() = layers.selected;
     }
     fix_active(st);
 }
@@ -201,18 +208,40 @@ pub(crate) fn restore_target(st: &mut DocState, layers: LayerTarget) {
 /// layers, and collapse to the active layer when a command made a non-member active.
 pub(crate) fn fix_selection(st: &mut DocState) {
     let Some(active) = st.active_layer else {
-        st.selected_layers.clear();
+        st.selection_mut().clear();
         return;
     };
     if !st.selected_layers.contains(&active) {
-        st.selected_layers = vec![active];
+        *st.selection_mut() = vec![active];
     } else {
         let live: std::collections::HashSet<LayerId> = st.doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
-        st.selected_layers.retain(|id| live.contains(id));
+        st.selection_mut().retain(|id| live.contains(id));
         let mut seen = std::collections::HashSet::new();
-        st.selected_layers.retain(|id| seen.insert(*id));
+        st.selection_mut().retain(|id| seen.insert(*id));
     }
     if st.layer_anchor.is_some_and(|a| !st.selected_layers.contains(&a)) {
         st.layer_anchor = Some(active);
+    }
+}
+
+#[cfg(test)]
+mod held_selection_tests {
+    use super::{DocState, LayerTarget, restore_target};
+    use photocraft_doc::{ColorMode, Document, Layer, PixelFormat, SampleType, Size};
+
+    #[test]
+    fn history_target_restoration_invalidates_held_selection() {
+        let mut doc = Document::new("history", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let a = Layer::raster("a", PixelFormat::RGBA8);
+        let b = Layer::raster("b", PixelFormat::RGBA8);
+        let (a_id, b_id) = (a.id, b.id);
+        doc.layers = vec![a, b].into();
+        let (a, b) = (a_id, b_id);
+        let mut st = DocState::new(doc, None);
+        assert_eq!(st.selected_layers(), &[b]);
+        restore_target(&mut st, LayerTarget { active: Some(a), selected: vec![b, a, b] });
+        assert_eq!(st.selected_layers(), &[a, b]);
+        restore_target(&mut st, LayerTarget::default());
+        assert!(st.selected_layers().is_empty());
     }
 }

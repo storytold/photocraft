@@ -3,7 +3,7 @@ use crate::{Services, state::Tool};
 use photocraft_doc::LayerContent;
 use photocraft_engine::Session;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app
@@ -102,9 +102,9 @@ fn blocked_layer(app: &mut PhotocraftApp, name: &str, hidden: bool) -> u64 {
 fn change_all_offers_skip_all_per_kind_and_cancel_keeps_the_document() {
     let mut app = app();
     let target = type_layer(&mut app, "cat cat");
-    let locked = blocked_layer(&mut app, "Locked title", false);
-    let hidden_below = blocked_layer(&mut app, "Hidden second", true);
     let hidden_above = blocked_layer(&mut app, "Hidden first", true);
+    let hidden_below = blocked_layer(&mut app, "Hidden second", true);
+    let locked = blocked_layer(&mut app, "Locked title", false);
     let before = app.session.active().unwrap().history.past_len();
     open(&mut app).unwrap();
     set_field(&mut app, "find", json!("cat")).unwrap();
@@ -135,9 +135,10 @@ fn change_all_offers_skip_all_per_kind_and_cancel_keeps_the_document() {
 #[test]
 fn find_next_warns_when_it_reaches_a_blocked_layer() {
     let mut app = app();
-    let last = type_layer(&mut app, "cat later");
-    let hidden = blocked_layer(&mut app, "Hidden", true);
     let first = type_layer(&mut app, "cat first");
+    let hidden = blocked_layer(&mut app, "Hidden", true);
+    let last = type_layer(&mut app, "cat later");
+    app.run("layer.select", json!({"layer":first})).unwrap();
     open(&mut app).unwrap();
     set_field(&mut app, "find", json!("cat")).unwrap();
     assert_eq!(command(&mut app, "find").unwrap()["found"]["layer"], first);
@@ -151,8 +152,8 @@ fn find_next_warns_when_it_reaches_a_blocked_layer() {
 #[test]
 fn warning_preference_is_per_kind_and_a_stale_confirmation_rechecks_layer_order() {
     let mut app = app();
-    let visible = type_layer(&mut app, "cat visible");
     let locked = blocked_layer(&mut app, "Locked", false);
+    let visible = type_layer(&mut app, "cat visible");
     let hidden = blocked_layer(&mut app, "Hidden", true);
     open(&mut app).unwrap();
     set_field(&mut app, "find", json!("cat")).unwrap();
@@ -161,13 +162,13 @@ fn warning_preference_is_per_kind_and_a_stale_confirmation_rechecks_layer_order(
     let newest = blocked_layer(&mut app, "New hidden layer", true);
     command(&mut app, "skip").unwrap();
     assert_eq!(inspect(&app).unwrap()["warning"]["layer"], newest);
-    assert!(!super::super::dont_show_again::dismissed(&app, "findReplaceHidden"));
+    assert!(!super::super::alerts::dismissed(&app, "findReplaceHidden"));
 
     set_field(&mut app, "dontShowAgain", json!(true)).unwrap();
     command(&mut app, "skip").unwrap();
     assert_eq!(inspect(&app).unwrap()["warning"]["layer"], locked);
-    assert!(super::super::dont_show_again::dismissed(&app, "findReplaceHidden"));
-    assert!(!super::super::dont_show_again::dismissed(&app, "findReplaceLocked"));
+    assert!(super::super::alerts::dismissed(&app, "findReplaceHidden"));
+    assert!(!super::super::alerts::dismissed(&app, "findReplaceLocked"));
     assert_eq!(command(&mut app, "skip").unwrap()["found"]["layer"], visible);
     assert_eq!(text(&app, hidden), "cat");
 }
@@ -185,7 +186,7 @@ fn modeless_window_focus_enter_tab_and_escape() {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
     open(h.state_mut()).unwrap();
     set_field(h.state_mut(), "find", json!("selected on open")).unwrap();
     set_field(h.state_mut(), "replace", json!("old")).unwrap();
@@ -227,7 +228,7 @@ fn warning_escape_cancels_the_search_and_enter_uses_skip() {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
     open(h.state_mut()).unwrap();
     set_field(h.state_mut(), "find", json!("cat")).unwrap();
     set_field(h.state_mut(), "replace", json!("dog")).unwrap();

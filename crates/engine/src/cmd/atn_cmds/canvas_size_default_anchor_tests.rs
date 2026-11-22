@@ -68,7 +68,7 @@ fn canvas_size_step_without_anchor_keys_anchors_top_left() {
 fn canvas_size_step_without_anchor_keys_imports_top_left() {
     let descriptor = desc("null").with("Wdth", px(100.0)).with("Hght", px(100.0)).with("Rltv", D::Boolean(true));
     let loaded = import(&canvas_file(descriptor)).unwrap();
-    assert_eq!(loaded.actions[0].steps[0].1["anchor"], json!("topLeft"));
+    assert_eq!(loaded.actions[0].steps[0].params["anchor"], json!("topLeft"));
 }
 
 /// A step with both keys keeps today's mapping: Cntr / Cntr centres.

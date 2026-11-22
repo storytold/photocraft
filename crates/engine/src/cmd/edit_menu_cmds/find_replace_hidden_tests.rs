@@ -124,22 +124,27 @@ fn find_warning_respects_direction_scope_and_the_current_match() {
     use super::{BlockedTextLayer, find_replace_warning};
 
     let mut s = session();
-    let first = type_layer(&mut s, "cat first");
+    let first = type_layer(&mut s, "cat first cat");
     let locked = type_layer(&mut s, "cat locked");
     s.execute("layer.setProps", json!({"layer": locked, "locked": true})).unwrap();
-    let last = type_layer(&mut s, "cat last");
+    type_layer(&mut s, "cat last");
     let params = |forward| json!({"action": "find", "find": "cat", "forward": forward});
-    for (forward, expected) in [(true, last), (false, first)] {
+    for (forward, starts) in [(true, [0, 10]), (false, [10, 0])] {
+        s.execute("layer.select", json!({"layer":first})).unwrap();
         let p = params(forward);
-        assert!(find_replace_warning(&s, &p, None, |_, _| false).unwrap().is_none());
-        assert_eq!(s.execute(FIND_REPLACE, p.clone()).unwrap()["found"]["layer"], expected);
+        assert!(find_replace_warning(&s, &p, None, None, |_, _| false).unwrap().is_none());
+        for start in starts {
+            let found = s.execute(FIND_REPLACE, p.clone()).unwrap()["found"].clone();
+            assert_eq!(found["layer"], first);
+            assert_eq!(found["start"], start);
+        }
         let cursor = s.edit_state.find_cursor.clone();
-        let warning = find_replace_warning(&s, &p, cursor.as_ref(), |_, _| false).unwrap().unwrap();
+        let warning = find_replace_warning(&s, &p, cursor.as_ref(), s.edit_state.find_start, |_, _| false).unwrap().unwrap();
         assert_eq!((warning.layer.0, warning.reason), (locked, BlockedTextLayer::Locked));
         assert_eq!(s.edit_state.find_cursor, cursor);
     }
     let scoped = json!({"action": "find", "find": "cat", "allLayers": false, "layer": first});
-    assert!(find_replace_warning(&s, &scoped, None, |_, _| false).unwrap().is_none());
+    assert!(find_replace_warning(&s, &scoped, None, None, |_, _| false).unwrap().is_none());
     let scoped = json!({"action": "find", "find": "cat", "allLayers": false, "layer": locked});
-    assert_eq!(find_replace_warning(&s, &scoped, None, |_, _| false).unwrap().unwrap().layer.0, locked);
+    assert_eq!(find_replace_warning(&s, &scoped, None, None, |_, _| false).unwrap().unwrap().layer.0, locked);
 }
