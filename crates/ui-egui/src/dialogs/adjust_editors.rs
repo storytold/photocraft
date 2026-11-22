@@ -217,6 +217,10 @@ fn lifted<T>(events: EditEvents<T>, wrap: impl Fn(T) -> AdjustValue) -> AdjustOu
     AdjustOut { ask: None, edit: events.map(wrap) }
 }
 
+fn reset_legacy_toggle(value: BrightnessContrast, previous_legacy: bool, reset: bool) -> BrightnessContrast {
+    if reset && value.legacy != previous_legacy { BrightnessContrast::new(0.0, 0.0, value.legacy) } else { value }
+}
+
 /// Shows the editor of `kind` over `value` for one pass.
 fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, cx: &mut AdjustDialogCx<'_>) -> AdjustOut {
     let context = cx.context;
@@ -224,11 +228,9 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
         ("brightnessContrast", AdjustValue::BrightnessContrast { value }) => {
             let legacy = value.legacy;
             let out = BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(&mut *value)).context(context).show(ui);
-            let apply_toggle = |value: BrightnessContrast| {
-                if context.is_dialog() && value.legacy != legacy { BrightnessContrast::new(0.0, 0.0, value.legacy) } else { value }
-            };
-            *value = apply_toggle(*value);
-            lifted(out.events.map(apply_toggle), |value| AdjustValue::BrightnessContrast { value })
+            let reset = context.is_dialog();
+            *value = reset_legacy_toggle(*value, legacy, reset);
+            lifted(out.events.map(|value| reset_legacy_toggle(value, legacy, reset)), |value| AdjustValue::BrightnessContrast { value })
         }
         ("levels", AdjustValue::Levels { levels }) => {
             let mut panel = LevelsPanel::new("Levels", Bind::bound(levels), setup.channels.clone())
