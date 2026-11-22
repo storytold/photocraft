@@ -45,6 +45,7 @@ mod steps_direct_adjustments;
 mod steps_distort;
 mod steps_doc;
 mod steps_droplet;
+mod steps_file_menu;
 mod steps_frame_section;
 mod steps_gallery;
 mod steps_gradient;
@@ -236,3 +237,5 @@ mod fade_step_tests;
 #[cfg(test)]
 #[path = "atn_cmds/canvas_size_default_anchor_tests.rs"]
 mod canvas_size_default_anchor_tests;
+#[cfg(test)]
+mod file_menu_tests;
