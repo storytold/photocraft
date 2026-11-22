@@ -27,7 +27,7 @@ impl Session {
         &self.docs
     }
 
-    /// Changes whenever a document is opened, closed or renamed.
+    /// Changes whenever a document is opened, closed, renamed or moved to another position.
     pub fn documents_generation(&self) -> u64 {
         self.documents_generation
     }
@@ -171,6 +171,10 @@ impl Session {
     pub fn move_document(&mut self, from: usize, to: usize) -> Option<usize> {
         let active = self.active().map(|d| d.doc.id);
         let to = move_item(&mut self.docs, from, to)?;
+        // The Window menu lists the documents by position: a move changes what each entry opens (#16252).
+        if to != from {
+            self.documents_generation = self.documents_generation.wrapping_add(1);
+        }
         self.active = active.and_then(|id| self.docs.iter().position(|d| d.doc.id == id));
         self.note_active_change();
         Some(to)
@@ -315,5 +319,23 @@ mod document_generation_tests {
         assert_eq!(session.documents_generation(), opened.wrapping_add(1));
         session.close(0);
         assert_eq!(session.documents_generation(), opened.wrapping_add(1));
+    }
+
+    /// A reorder that leaves the active document where it was still moves the generation: the Window menu's
+    /// entries open other documents now (#16252).
+    #[test]
+    fn document_generation_moves_when_documents_are_reordered() {
+        let mut session = Session::new();
+        for _ in 0..3 {
+            session.add_document(Document::new("test", Size::new(2, 2), ColorMode::Rgb, SampleType::U8), None);
+        }
+        session.set_active(0);
+        let before = session.documents_generation();
+        assert_eq!(session.move_document(1, 2), Some(2));
+        assert_eq!(session.active_index(), Some(0), "the active document stays first");
+        assert_eq!(session.documents_generation(), before.wrapping_add(1));
+        let moved = session.documents_generation();
+        assert_eq!(session.move_document(1, 1), Some(1));
+        assert_eq!(session.documents_generation(), moved, "a move to the same place changes nothing");
     }
 }

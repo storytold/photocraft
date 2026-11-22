@@ -44,6 +44,13 @@ struct Documents<'a> {
     /// The active document, by its `Tracked` revision, which moves with every change to it: its content, layers,
     /// selection, history, mode, mask and view state, which most rules read.
     active: Option<&'a Tracked<DocState>>,
+    /// Every open document's revision in tab order, folded into one value: rules that read other documents than the
+    /// active one (Merge Channels needs grayscale documents of the active one's size) follow their changes (#16252).
+    all: u64,
+    /// The scratch read-error generation: a tile that fails to read shows zeros through `&self`, and the real pixels
+    /// again once it reads, without moving its document's revision. Rules that read pixels (the align commands read
+    /// content bounds) follow both (#16252).
+    scratch: u64,
     /// A running job greys the commands that would change its document.
     jobs: (bool, Option<u64>),
     /// Smart Objects › Edit Contents' parent: whether the active document is a smart object's contents.
@@ -174,6 +181,17 @@ impl<'a> MenuFacts<'a> {
     }
 }
 
+/// The revisions of `documents` in their order, folded into one value that moves when any of them changes or they
+/// are reordered. A fixed size, so the key is the same few bytes however many documents are open.
+fn all_revisions(documents: &[Tracked<DocState>]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    for document in documents {
+        document.revision().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 impl<'a> RuleFacts<'a> {
     /// What the rules read in `app`'s current state.
     pub(crate) fn of(app: &'a PhotocraftApp) -> RuleFacts<'a> {
@@ -186,6 +204,8 @@ impl<'a> RuleFacts<'a> {
                 active_generation: s.active_generation(),
                 active_index: s.active_index(),
                 active: s.active_tracked(),
+                all: all_revisions(s.documents()),
+                scratch: photocraft_raster::spill::read_error_generation(),
                 jobs: (s.has_jobs(), s.active_job().map(|job| job.id.0)),
                 smart_child: active.is_some_and(|d| s.smart_links.iter().any(|link| link.child == d.doc.id)),
                 fade: s.edit_state.fade.as_ref().map(|fade| (fade.doc, fade.revision)),
