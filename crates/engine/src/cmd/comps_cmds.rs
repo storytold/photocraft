@@ -461,11 +461,20 @@ fn list(s: &mut Session) -> Result<Value> {
 }
 
 /// File › Export › Layer Comps to Files: one file per comp, named
-/// `<prefix>_<index>_<comp name>.<format>`.
+/// `<prefix>_<index>_<comp name>[_<comp comment>].<ext>`, as the reference application names them (#13940). The
+/// comment is added only when it is not blank. Spaces in the comp name and comment become `-` for PNG and stay for the
+/// other formats; both go through [`sanitize`]. TIFF is written as `.tif` and JPEG as `.jpg`.
 fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.layerCompsToFiles";
     let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
+    let ext = match format.as_str() {
+        "tiff" => "tif",
+        "jpeg" => "jpg",
+        other => other,
+    };
+    // PNG file names use dashes for spaces (measured); the other formats keep them.
+    let part = |text: &str| if ext == "png" { sanitize(text).replace(' ', "-") } else { sanitize(text) };
     let save = SaveOpts::from_params(s, p, cmd)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
@@ -484,7 +493,8 @@ fn comps_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         let mut one = (*doc).clone();
         apply_comp(&mut one, c, false);
         one.last_applied_comp = Some(c.id);
-        let path = join(&dir, &format!("{}_{:04}_{}.{format}", sanitize(&prefix), i, sanitize(&c.name)));
+        let comment = if c.comment.trim().is_empty() { String::new() } else { format!("_{}", part(&c.comment)) };
+        let path = join(&dir, &format!("{}_{:04}_{}{comment}.{ext}", sanitize(&prefix), i, part(&c.name)));
         save_doc(&one, &path, save)?;
         files.push(path);
     }
@@ -567,7 +577,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.export.layerCompsToFiles",
             "Layer Comps to Files…",
             &["File", "Export"],
-            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"selectedOnly":bool=false (only the last applied comp),"comps":[id]?,"quality":0..12?} → {files}"##,
+            r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"selectedOnly":bool=false (only the last applied comp),"comps":[id]?,"quality":0..12?} → {files} (one "<prefix>_<index>_<comp name>[_<comment>].<ext>" per comp, the index 4 digits from 0000 in panel order and the comment only when not blank: spaces in the name and comment become "-" in PNG and stay in other formats, characters a file name can't hold become "_", and TIFF and JPEG are written as .tif and .jpg)"##,
             export_comps,
             comps_to_files
         ),
@@ -581,3 +591,7 @@ mod tests;
 #[cfg(test)]
 #[path = "comps_cmds/layer_comps_to_files_history_tests.rs"]
 mod layer_comps_to_files_history_tests;
+
+#[cfg(test)]
+#[path = "comps_cmds/layer_comps_to_files_names_tests.rs"]
+mod layer_comps_to_files_names_tests;
