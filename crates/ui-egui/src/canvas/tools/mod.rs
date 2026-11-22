@@ -497,6 +497,7 @@ fn with_rig<R>(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
     host: CanvasHost,
+    output: Option<u32>,
     tools: &mut CanvasTools,
     stand_ins: bool,
     shown: BodyShown,
@@ -592,7 +593,7 @@ fn with_rig<R>(
                 break 'select dynamic(picked);
             }
             if global_picked {
-                break 'select dynamic(boxed.insert(global_warp::tool(&scope)));
+                break 'select dynamic(boxed.insert(global_warp::tool(&scope, host.idx, output)));
             }
             if transform_picked && let Some(t) = transform.as_mut() {
                 break 'select t as &mut dyn CanvasTool;
@@ -693,7 +694,7 @@ fn with_rig<R>(
 /// (`shown` is what they reported) and before its picture, and applies what it reports: the view a tool or the
 /// autoscroll moved (in the response's `view`), the Scroll All Windows follow, and each family's drain, which feeds
 /// the picture of the same pass. Tools are active only on the document's own canvas (`CanvasHost::primary`).
-pub(crate) fn run(app: &mut PhotocraftApp, ui: &egui::Ui, host: CanvasHost, out: &ToolPass, shown: BodyShown) -> ToolHostResponse {
+pub(crate) fn run(app: &mut PhotocraftApp, ui: &egui::Ui, host: CanvasHost, output: Option<u32>, out: &ToolPass, shown: BodyShown) -> ToolHostResponse {
     let ctx = ui.ctx().clone();
     let primary = host.is_primary(app);
     let mut tools = std::mem::take(&mut app.canvas_tools);
@@ -713,7 +714,8 @@ pub(crate) fn run(app: &mut PhotocraftApp, ui: &egui::Ui, host: CanvasHost, out:
     tools.zoom.options = navigation;
     tools.zoom.options.scrubby_zoom = app.ui.tool_options.zoom_scrubby;
     let smart = super::snap_ui::smart_guide_color(app);
-    let mut response = with_rig(app, &ctx, host, &mut tools, primary, shown, |selected, tool_host| tool_host.smart_guide_color(smart).run(ui, out, selected));
+    let mut response =
+        with_rig(app, &ctx, host, output, &mut tools, primary, shown, |selected, tool_host| tool_host.smart_guide_color(smart).run(ui, out, selected));
     // The autoscroll moves the view the pass ended with; the caller copies the response's view into its own.
     if let (Some(scroll), Some(space)) = (response.scroll, out.space.as_ref()) {
         let size = app.session.documents().get(host.idx).map(|state| Size::new(f64::from(state.doc.size.width), f64::from(state.doc.size.height)));
@@ -748,7 +750,7 @@ pub(crate) fn claimed_regions(app: &mut PhotocraftApp, ctx: &egui::Context, host
         return Vec::new();
     }
     let mut tools = std::mem::take(&mut app.canvas_tools);
-    let regions = with_rig(app, ctx, host, &mut tools, primary, BodyShown::default(), |selected, _| selected.regions());
+    let regions = with_rig(app, ctx, host, None, &mut tools, primary, BodyShown::default(), |selected, _| selected.regions());
     app.canvas_tools = tools;
     regions
 }
@@ -798,7 +800,7 @@ pub(crate) fn tool_changed(app: &mut PhotocraftApp, ctx: &egui::Context, host: C
     let mut tools = std::mem::take(&mut app.canvas_tools);
     let id = host.canvas_id();
     let primary = host.is_primary(app);
-    with_rig(app, ctx, host, &mut tools, primary, BodyShown::default(), |selected, tool_host| {
+    with_rig(app, ctx, host, None, &mut tools, primary, BodyShown::default(), |selected, tool_host| {
         tool_host.cancel(ctx, id, selected, CancelReason::HostChanged);
     });
     app.canvas_tools = tools;

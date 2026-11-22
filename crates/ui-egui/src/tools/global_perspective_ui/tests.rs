@@ -561,9 +561,11 @@ fn each_canvas_gates_the_raw_preview_on_its_actual_monitor() {
     let idx = a.session.active_index().unwrap();
     let before = session(&a).describe();
     assert!(Screen::of(&a, &session(&a).source_doc, Some(2)).transform.is_some());
+    assert!(!preview_visible(&a, idx, Some(2)), "an incompatible canvas must not admit GlobalWarpTool pointer gestures");
     assert!(canvas_shapes(&mut a, &ctx, &view(), idx, Some(2)).is_empty());
     assert!(crate::distort_ui::display_doc_for_output(&a, idx, Some(2)).is_none(), "the incompatible canvas must retain the source layer");
     for output in [None, Some(1), Some(3)] {
+        assert!(preview_visible(&a, idx, output), "compatible canvases must keep their guide gestures");
         assert!(!canvas_shapes(&mut a, &ctx, &view(), idx, output).is_empty());
         assert!(crate::distort_ui::display_doc_for_output(&a, idx, output).is_some());
     }

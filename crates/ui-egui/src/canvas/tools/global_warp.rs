@@ -15,11 +15,21 @@ use crate::global_perspective_ui::{self as session, HIT_POINTS, Hover, Keys};
 /// The tool for one pass.
 struct GlobalWarpTool<'a> {
     scope: &'a ToolScope<'a>,
+    idx: usize,
+    output: Option<u32>,
 }
 
 /// The global warp's tool for the canvas pass.
-pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>) -> FamilyTool<'a> {
-    Box::new(GlobalWarpTool { scope })
+pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, idx: usize, output: Option<u32>) -> FamilyTool<'a> {
+    Box::new(GlobalWarpTool { scope, idx, output })
+}
+
+impl GlobalWarpTool<'_> {
+    /// A hidden/colour-incompatible canvas never changes guides behind an invisible overlay.
+    /// Use the same canvas output and admission condition as its rendered guide mesh.
+    fn preview_visible(&self) -> bool {
+        self.scope.with_app(|app| session::preview_visible(app, self.idx, self.output))
+    }
 }
 
 /// Ctrl, or ⌘ off the Mac where the host reports Ctrl as ⌘, locks to the image axes; Shift to the guide's own.
@@ -36,6 +46,11 @@ fn at(pointer: &ToolPointer, cx: &ToolContext<'_>) -> Option<([f64; 2], f64)> {
 
 impl CanvasTool for GlobalWarpTool<'_> {
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        // Consume the press without handing it to a paint/transform tool when the
+        // current monitor cannot draw the guide overlay.
+        if !self.preview_visible() {
+            return ToolAction::Done;
+        }
         let Some((p, tol)) = at(pointer, cx) else { return ToolAction::Ignored };
         let began = self.scope.with_app(|app| session::pointer_down(app, p, tol, keys_of(pointer.mods)));
         // A press that starts no drag (a click on a guide, on the result, past the photo) is still the session's.
@@ -43,12 +58,20 @@ impl CanvasTool for GlobalWarpTool<'_> {
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if !self.preview_visible() {
+            self.scope.with_app(session::pointer_cancel);
+            return;
+        }
         if let Some((p, _)) = at(pointer, cx) {
             self.scope.with_app(|app| session::pointer_move(app, p, keys_of(pointer.mods)));
         }
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        if !self.preview_visible() {
+            self.scope.with_app(session::pointer_cancel);
+            return;
+        }
         match at(pointer, cx) {
             Some((p, _)) => self.scope.with_app(|app| session::pointer_up(app, p, keys_of(pointer.mods))),
             None => self.scope.with_app(session::pointer_cancel),
@@ -105,6 +128,9 @@ impl CanvasTool for GlobalWarpTool<'_> {
     fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if !self.preview_visible() {
+            return Cursor::System(CursorIcon::Default);
+        }
         let over = cx.pointer.as_ref().and_then(|pointer| at(pointer, cx));
         let hover = over.map_or(Hover::Idle, |(p, tol)| self.scope.with_app(|app| session::hover(app, p, tol)));
         match hover {

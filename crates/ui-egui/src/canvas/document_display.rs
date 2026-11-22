@@ -354,7 +354,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
                 let (tool, active) = (app.ui.tool, !app.dialog_open());
                 crate::alt_grab::watch(app, ui.ctx(), egui::Id::unique(("pc-alt-grab", host.idx)), input.rect, tool, active);
             }
-            hosted = Some(tools::run(app, ui, host, &input, body_shown));
+            hosted = Some(tools::run(app, ui, host, output, &input, body_shown));
         }
         // Escape/Enter and guide edits must be reconciled before building this pass's overlay.
         // Use the body's actual view, including canvas navigation and ruler insets.
