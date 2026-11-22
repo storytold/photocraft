@@ -308,3 +308,57 @@ mod tests;
 #[cfg(test)]
 #[path = "path_selection_enter_escape_tests.rs"]
 mod path_selection_enter_escape_tests;
+
+/// Path Selection owns Delete while it has selected components or a targeted saved path.
+pub(crate) fn delete_selected(app: &mut PhotocraftApp) -> bool {
+    if app.ui.tool != Tool::PathSelection || app.ui.pen.is_some() || app.ui.transform.is_some() || app.ui.direct_selection.editing.is_some() {
+        return false;
+    }
+    if crate::guide_select::selected(app).is_some() {
+        if let Err(error) = crate::guide_select::delete_selected(app) {
+            crate::notices::error(app, error);
+        }
+        return true;
+    }
+    if !app.ui.view.shows(app.ui.view.show.target_path) {
+        return false;
+    }
+    let (command, params) = match selected(app) {
+        Some((target @ (PathRef::Layer(_) | PathRef::Saved(_)), _, heads)) => {
+            let mut params = target.params(app);
+            params["subpaths"] = json!(heads);
+            ("path.deleteComponents", params)
+        }
+        Some((PathRef::TypePath(_), _, _)) => return true,
+        Some(_) => return false,
+        None if !app.ui.direct_selection.anchors.is_empty() => return true,
+        None => {
+            let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app) else { return false };
+            ("path.delete", PathRef::Saved(index).params(app))
+        }
+    };
+    match app.run(command, params) {
+        Ok(_) => deselect_components(app),
+        Err(error) => crate::notices::error(app, error),
+    }
+    true
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    #[test]
+    fn delete_of_a_targeted_saved_path_keeps_the_active_layer() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":40,"height":40})).unwrap();
+        app.run("path.set", json!({"name":"Saved","path":{"subpaths":[{"knots":[[1,1],[2,2]]}]}})).unwrap();
+        app.ui.tool = Tool::PathSelection;
+        app.ui.selected_path = Some("Saved".into());
+        let active = app.session.active().unwrap().active_layer;
+        assert!(delete_selected(&mut app));
+        let state = app.session.active().unwrap();
+        assert_eq!(state.active_layer, active);
+        assert!(state.doc.paths.is_empty());
+    }
+}

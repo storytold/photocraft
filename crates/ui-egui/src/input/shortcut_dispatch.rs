@@ -688,6 +688,9 @@ fn run_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Fired) {
         }
     }
     if id == EditCommands::Delete.id() {
+        if crate::path_components::delete_selected(app) {
+            return;
+        }
         // A finished work path shown by a Pen or Path Selection, or the path or segment Direct Selection targets:
         // ⌫/Delete edits the path, as in Photoshop (#5702, #12695, #13203), never Edit › Clear on the pixels under it.
         if let Some((command, params)) = crate::vector_ui::delete_key_edits_path(app) {
