@@ -15,7 +15,7 @@
 
 use craft::behavior::ColumnWidth;
 use craft::ui::choice::{Radio, RadioGroup};
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::{Shade, Text};
 use craft::ui::layout_components::{Grid, Stack};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
@@ -172,7 +172,7 @@ fn projection_row(ui: &mut egui::Ui, fields: &mut DialogFields) -> egui::Respons
     let current = projection(fields);
     settle(fields, current);
     let group = RadioGroup::new(tl!("Projection").to_owned(), Bind::given(current.to_owned())).show(ui, |ui, _| {
-        Grid::new(COLUMNS).show(ui, |ui, _| {
+        Grid::new(COLUMNS).gap(Gap::Section).show(ui, |ui, _| {
             for (id, label, _) in PROJECTIONS {
                 Stack::new().show(ui, |ui, _| {
                     Radio::new(id.to_owned()).label(crate::i18n::t(label).to_string()).show(ui);
