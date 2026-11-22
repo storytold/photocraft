@@ -27,7 +27,6 @@ icu_normalizer = { version = "2.3.0", default-features = false, features = ["com
 icu_properties = { version = "2.3.0", default-features = false, features = ["compiled_data", "default", "serde"] }
 icu_provider_blob = { version = "2.3.0", default-features = false, features = ["alloc"] }
 indexmap = { version = "2.14.2", default-features = false, features = ["default", "serde", "std"] }
-linux-raw-sys = { version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
 naga = { version = "30.0.1", default-features = false, features = ["default", "glsl-out", "hlsl-out", "spv-out", "wgsl-in"] }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 rustix = { version = "1.1.5", default-features = false, features = ["alloc", "default", "event", "fs", "net", "pipe", "process", "shm", "std", "system", "termios", "time"] }
@@ -37,8 +36,14 @@ syn = { version = "3.0.10", default-features = false, features = ["clone-impls",
 toml = { version = "1.2.1", default-features = false, features = ["default", "display", "parse", "serde", "std"] }
 typenum = { version = "1.20.1", default-features = false, features = ["const-generics"] }
 uuid = { version = "1.29.2", default-features = false, features = ["default", "rng", "serde", "std", "v4"] }
-wayland-sys = { version = "0.31.11", default-features = false, features = ["client", "dlopen", "egl", "once_cell"] }
 wgpu-types = { version = "30.0.1", default-features = false, features = ["fragile-send-sync-non-atomic-wasm", "std", "web"] }
+
+# Linux-only pins. wayland-sys 0.31.11 imports RawFd unconditionally, and
+# linux-raw-sys is a Linux syscall table, so they must not be selected on Windows
+# when clippy runs `--workspace --all-targets`.
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-raw-sys = { version = "0.12.1", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+wayland-sys = { version = "0.31.11", default-features = false, features = ["client", "dlopen", "egl", "once_cell"] }
 
 # Host units of syn can diverge from the target graph; a build script makes Cargo
 # select this crate's build-dependencies on the host.
