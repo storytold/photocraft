@@ -401,9 +401,10 @@ fn minimum_maximum_preserve_roundness() {
         let before = active_pixels(&s);
         let lit = |s: &Session, x: usize, y: usize| active_pixels(s)[(y * 48 + x) * 4] > 0.5;
         s.execute("filter.other.maximum", json!({"radius": 4, "preserve": "roundness"})).unwrap();
-        // Grown into a disc of radius 4: (4, 0) and (2, 3) are in, the square's corner isn't.
-        assert!(lit(&s, 28, 16) && lit(&s, 26, 19), "depth {depth}");
-        assert!(!lit(&s, 28, 20) && !lit(&s, 27, 19), "depth {depth}");
+        // Grown into a disc of radius 4.5: (4, 0) and (3, 3) are in, (4, 3) and the square's corner
+        // aren't.
+        assert!(lit(&s, 28, 16) && lit(&s, 27, 19), "depth {depth}");
+        assert!(!lit(&s, 28, 20) && !lit(&s, 28, 19), "depth {depth}");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(active_pixels(&s), before);
         // The default is Squareness: the corner is taken.
