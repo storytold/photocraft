@@ -127,7 +127,8 @@ pub(super) fn conditional_to(_: &str, p: &Value) -> Option<Descriptor> {
     for key in ["then", "else"] {
         if let Some(name) = jstr(p, key) {
             let mut items = vec![ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul(name) }];
-            if let Some(set) = jstr(p, "set") {
+            let scope = if key == "then" { "thenSet" } else { "elseSet" };
+            if let Some(set) = jstr(p, scope).or_else(|| jstr(p, "set")) {
                 items.push(ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul(set) });
             }
             d = d.with(key, D::Reference(items));
@@ -347,8 +348,11 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
     if let Some(r) = get_bool(d, "Rltv") {
         p.insert("relative".into(), r.into());
     }
-    let v = get_enum(d, "Vrtc").unwrap_or_else(|| "Cntr".into());
-    let h = get_enum(d, "Hrzn").unwrap_or_else(|| "Cntr".into());
+    let (v, h) = match (get_enum(d, "Vrtc"), get_enum(d, "Hrzn")) {
+        // A step with neither anchor key anchors at the top left; with one, the other axis centres.
+        (None, None) => ("Top".into(), "Left".into()),
+        (v, h) => (v.unwrap_or_else(|| "Cntr".into()), h.unwrap_or_else(|| "Cntr".into())),
+    };
     let anchor = match (v.as_str(), h.as_str()) {
         ("Top", "Left") => "topLeft",
         ("Top", "Cntr") => "top",
@@ -523,6 +527,11 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
         Some(Value::String(unit)) if unit == "pt" => PT,
         _ => return None,
     };
+    // Native playback validates a supplied percentage even when explicit sides override it.
+    // Dropping an invalid percentage would turn a refused action into a different, valid edit.
+    if p.get("percent").is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|pc| !pc.is_finite() || pc <= 0.0)) {
+        return None;
+    }
     // Resolution only with Resample on imports as keep-print-size; a command without it cannot be told apart.
     if jnum(p, "resolution").is_some()
         && jnum(p, "width").is_none()
@@ -556,7 +565,18 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
         return None;
     }
     if let Some(pc) = jnum(p, "percent").filter(|_| !resolution_only) {
-        d = d.with("Wdth", pct(pc)).with("Hght", pct(pc)).with("CnsP", D::Boolean(true));
+        // An explicit side wins in the native command; never write duplicate dimension keys.
+        let width_percent = jnum(p, "width").is_none();
+        let height_percent = jnum(p, "height").is_none();
+        if width_percent {
+            d = d.with("Wdth", pct(pc));
+        }
+        if height_percent {
+            d = d.with("Hght", pct(pc));
+        }
+        if width_percent || height_percent {
+            d = d.with("CnsP", D::Boolean(width_percent && height_percent));
+        }
     }
     if let Some(w) = jnum(p, "width").filter(|_| !resolution_only) {
         if unit == PT && w <= 0.0 {

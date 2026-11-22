@@ -70,59 +70,6 @@ pub(crate) fn deselect_components(app: &mut PhotocraftApp) {
     app.ui.direct_selection = DirectSelection::default();
 }
 
-/// Delete the Path Selection tool's saved path or selected components before Edit › Clear can run.
-pub(crate) fn handle_delete_key(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-    if app.ui.tool != Tool::PathSelection || app.ui.pen.is_some() || app.ui.transform.is_some() || app.ui.direct_selection.drag.is_some() {
-        return false;
-    }
-    let Some(event_index) = crate::shortcuts::object_delete_press(ctx) else { return false };
-    let visible = app.ui.view.shows(app.ui.view.show.target_path);
-    let action = match visible.then(|| selected(app)).flatten() {
-        Some((target @ (PathRef::Layer(_) | PathRef::Saved(_)), _, heads)) => {
-            let mut params = target.params(app);
-            params["subpaths"] = json!(heads);
-            Some(("path.deleteComponents", params))
-        }
-        // Type paths carry text placement. Keep their components and the owning type layer intact.
-        Some((PathRef::TypePath(_), _, _)) => None,
-        // The finished Work Path keeps its existing Delete shortcut.
-        Some(_) => return false,
-        None if !app.ui.direct_selection.anchors.is_empty()
-            && app.ui.direct_selection.owner.as_ref().is_some_and(|owner| owner.tool() == Tool::PathSelection)
-            && matches!(app.ui.direct_selection.target, Some(PathRef::Layer(_) | PathRef::Saved(_) | PathRef::TypePath(_))) =>
-        {
-            None
-        }
-        None if !visible => return false,
-        None => {
-            let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app) else { return false };
-            Some(("path.delete", PathRef::Saved(index).params(app)))
-        }
-    };
-    // A guide can stay selected when switching tools and keeps priority over this path.
-    if crate::guide_select::keys(app, ctx) {
-        return true;
-    }
-    if !crate::shortcuts::consume_object_delete(ctx, event_index) {
-        return false;
-    }
-    // A stale, locked or unsupported selection still owns the key.
-    if let Some((command, params)) = action {
-        match app.run(command, params) {
-            Ok(_) => app.ui.direct_selection = DirectSelection::default(),
-            Err(e) => {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
-        }
-    }
-    true
-}
-
-#[cfg(test)]
-#[path = "path_selection_delete_key_tests.rs"]
-mod path_selection_delete_key_tests;
-
 /// The operation every selected component has, for the menu's icon; `None` when they differ.
 pub(crate) fn selected_op(app: &PhotocraftApp) -> Option<&'static str> {
     let (_, path, heads) = selected(app)?;
@@ -361,3 +308,57 @@ mod tests;
 #[cfg(test)]
 #[path = "path_selection_enter_escape_tests.rs"]
 mod path_selection_enter_escape_tests;
+
+/// Path Selection owns Delete while it has selected components or a targeted saved path.
+pub(crate) fn delete_selected(app: &mut PhotocraftApp) -> bool {
+    if app.ui.tool != Tool::PathSelection || app.ui.pen.is_some() || app.ui.transform.is_some() || app.ui.direct_selection.editing.is_some() {
+        return false;
+    }
+    if crate::guide_select::selected(app).is_some() {
+        if let Err(error) = crate::guide_select::delete_selected(app) {
+            crate::notices::error(app, error);
+        }
+        return true;
+    }
+    if !app.ui.view.shows(app.ui.view.show.target_path) {
+        return false;
+    }
+    let (command, params) = match selected(app) {
+        Some((target @ (PathRef::Layer(_) | PathRef::Saved(_)), _, heads)) => {
+            let mut params = target.params(app);
+            params["subpaths"] = json!(heads);
+            ("path.deleteComponents", params)
+        }
+        Some((PathRef::TypePath(_), _, _)) => return true,
+        Some(_) => return false,
+        None if !app.ui.direct_selection.anchors.is_empty() => return true,
+        None => {
+            let Some((index, _)) = crate::vector_ui::selected_saved_path_index(app) else { return false };
+            ("path.delete", PathRef::Saved(index).params(app))
+        }
+    };
+    match app.run(command, params) {
+        Ok(_) => deselect_components(app),
+        Err(error) => crate::notices::error(app, error),
+    }
+    true
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    #[test]
+    fn delete_of_a_targeted_saved_path_keeps_the_active_layer() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":40,"height":40})).unwrap();
+        app.run("path.set", json!({"name":"Saved","path":{"subpaths":[{"knots":[[1,1],[2,2]]}]}})).unwrap();
+        app.ui.tool = Tool::PathSelection;
+        app.ui.selected_path = Some("Saved".into());
+        let active = app.session.active().unwrap().active_layer;
+        assert!(delete_selected(&mut app));
+        let state = app.session.active().unwrap();
+        assert_eq!(state.active_layer, active);
+        assert!(state.doc.paths.is_empty());
+    }
+}

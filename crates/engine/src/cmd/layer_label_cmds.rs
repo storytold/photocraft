@@ -31,7 +31,7 @@ fn set_label(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let roots = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
-        None => st.selected_layers(),
+        None => st.selected_layers().to_vec(),
     };
     if roots.is_empty() {
         return Err(bad("no layer selected"));
@@ -62,6 +62,7 @@ fn set_label(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(st) = s.active_mut() {
             // This is saved document metadata; no canvas pixels need recompositing.
             st.last_damage = Some(photocraft_geom::Rect::EMPTY);
+            st.record_damage();
         }
     }
     Ok(json!({"color": color.id(), "layers": targets.iter().map(|(_, id)| id.0).collect::<Vec<_>>(), "changed": changed}))

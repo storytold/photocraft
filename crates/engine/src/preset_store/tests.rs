@@ -44,12 +44,53 @@ fn tip16(w: u32, h: u32, seed: u32) -> GrayTile {
 }
 
 fn sampled(name: &str, group: &str, tip: GrayTile) -> BrushPreset {
-    let brush = BrushSettings { size: 42.0, spacing: 0.1, tip: TipShape::Sampled(tip), ..Default::default() };
+    let brush = BrushSettings { size: 42.0, spacing: 0.1, tip: TipShape::Sampled(tip).into(), ..Default::default() };
     BrushPreset { name: name.into(), brush, builtin: false, group: group.into(), folder: Vec::new(), captures: Default::default() }
 }
 
 fn user(s: &Session) -> Vec<BrushPreset> {
     s.tools.presets.iter().filter(|p| !p.builtin).cloned().collect()
+}
+
+#[test]
+fn empty_stores_preserve_shared_builtin_presets() {
+    let first_dir = TempDir::new("shared-first");
+    let second_dir = TempDir::new("shared-second");
+    let (mut first, warnings) = session(&first_dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let (second, warnings) = session(&second_dir);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+    first.execute("brush.presets.save", json!({"name": "Only first"})).unwrap();
+    assert!(second.tools.presets.iter().all(|p| p.name != "Only first"));
+    assert!(!std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
+}
+
+#[test]
+fn saved_airbrush_group_keeps_legacy_and_explicit_rates_across_reopen() {
+    let mem = MemBackend::default();
+    let group = json!({"format": GROUP_FORMAT, "version": 1, "group": "Airbrush", "presets": [
+        {"name": "Legacy Airbrush", "brush": {"buildUp": true}},
+        {"name": "Custom Airbrush", "brush": {"buildUp": true, "buildUpRate": 35}},
+        {"name": "Regular Brush", "brush": {}},
+    ]});
+    mem.write(&group_file_name("Airbrush"), &serde_json::to_vec(&group).unwrap()).unwrap();
+
+    let mut s = Session::new();
+    let warnings = s.attach_preset_store(open(Box::new(mem.clone())));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(s.tools.brush.build_up_rate, 10.0);
+    for (name, build_up, rate) in [("Regular Brush", false, 10.0), ("Custom Airbrush", true, 35.0), ("Legacy Airbrush", true, 20.0)] {
+        s.execute("tools.setBrush", json!({"preset": name})).unwrap();
+        assert_eq!(s.tools.brush.build_up, build_up);
+        assert_eq!(s.tools.brush.build_up_rate, rate);
+    }
+
+    s.execute("brush.presets.save", json!({"name": "Resaved Airbrush"})).unwrap();
+    let mut reopened = Session::new();
+    assert!(reopened.attach_preset_store(open(Box::new(mem))).is_empty());
+    reopened.execute("tools.setBrush", json!({"preset": "Resaved Airbrush"})).unwrap();
+    assert_eq!(reopened.tools.brush.build_up_rate, 20.0);
 }
 
 #[test]
@@ -101,7 +142,7 @@ fn tip_decoder_rejects_garbage() {
             })
             .collect();
         let _ = decode_tip(&v);
-        let mut w = TIP_MAGIC.to_vec();
+        let mut w = b"PCTIP1".to_vec();
         w.extend_from_slice(&v);
         let _ = decode_tip(&w);
     }
@@ -119,7 +160,7 @@ fn group_with_sampled_8_and_16_bit_tips_round_trips() {
     let b = sampled("Sixteen", "Inks", tip16(50, 70, 2));
     let mut c = sampled("Shared tip", "Other", tip8(64, 48, 1));
     c.brush.size = 9.0;
-    s.tools.presets.extend([a, b, c]);
+    std::sync::Arc::make_mut(&mut *s.tools.presets).extend([a, b, c]);
     s.brush_presets_changed();
     s.sync_preset_store();
     let files = dir.files();
@@ -128,7 +169,7 @@ fn group_with_sampled_8_and_16_bit_tips_round_trips() {
     // 16-bit ones: an 8-bit tip this small is its own preview.
     assert_eq!(files.iter().filter(|f| f.starts_with("tips/")).count(), 6, "{files:?}");
     // The session keeps previews, not the bitmaps (#1843).
-    assert!(user(&s).iter().all(|p| matches!(&p.brush.tip, TipShape::Stored(r) if !r.is_loaded())));
+    assert!(user(&s).iter().all(|p| matches!(&*p.brush.tip, TipShape::Stored(r) if !r.is_loaded())));
     assert!(files.contains(&INDEX_FILE.to_string()));
 
     let (t, w) = session(&dir);
@@ -148,11 +189,11 @@ fn group_with_sampled_8_and_16_bit_tips_round_trips() {
 fn commands_persist_and_delete_removes_from_disk() {
     let dir = TempDir::new("commands");
     let (mut s, _) = session(&dir);
-    s.tools.brush.tip = TipShape::Sampled(tip16(20, 20, 4));
+    s.tools.brush.tip = TipShape::Sampled(tip16(20, 20, 4)).into();
     s.execute("brush.presets.save", json!({"name": "Scribble"})).unwrap();
     assert_eq!(dir.files().iter().filter(|f| f.starts_with("tips/")).count(), 2, "the tip and its preview");
     // The tool's brush now is the saved preset's stored tip, still loaded.
-    assert!(matches!(&s.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()));
+    assert!(matches!(&*s.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()));
     let (t, _) = session(&dir);
     let p = photocraft_paint::presets::find(&t.tools.presets, "Scribble").expect("saved preset reloads");
     assert_eq!(p.brush.tip, s.tools.brush.tip);
@@ -243,7 +284,7 @@ fn startup_with_many_groups_loads_them_all() {
     let (mut s, _) = session(&dir);
     for g in 0..25 {
         for i in 0..4 {
-            s.tools.presets.push(sampled(&format!("P{g}-{i}"), &format!("Group {g}"), tip8(16 + i, 16, g)));
+            std::sync::Arc::make_mut(&mut *s.tools.presets).push(sampled(&format!("P{g}-{i}"), &format!("Group {g}"), tip8(16 + i, 16, g)));
         }
     }
     s.brush_presets_changed();
@@ -267,7 +308,7 @@ fn reordering_presets_and_groups_persists() {
     let (mut s, _) = session(&dir);
     for (n, g) in [("Ink 1", "Inks"), ("Ink 2", "Inks"), ("Wash", "Washes")] {
         s.execute("brush.presets.save", json!({"name": n})).unwrap();
-        s.tools.presets.iter_mut().find(|p| p.name == n).unwrap().group = g.into();
+        std::sync::Arc::make_mut(&mut *s.tools.presets).iter_mut().find(|p| p.name == n).unwrap().group = g.into();
     }
     s.brush_presets_changed();
     s.sync_preset_store();
@@ -296,11 +337,27 @@ fn reordering_presets_and_groups_persists() {
 }
 
 #[test]
+fn reordering_only_built_in_presets_persists() {
+    let names = |s: &Session| s.tools.presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    let dir = TempDir::new("reorder-builtin");
+    let (mut s, _) = session(&dir);
+    let group = s.tools.presets[0].group.clone();
+    let last = s.tools.presets.iter().rfind(|p| p.builtin && p.group == group).unwrap().name.clone();
+    let first = s.tools.presets[0].name.clone();
+    assert_ne!(last, first);
+    s.execute("brush.presets.move", json!({"name": last, "before": first})).unwrap();
+    assert_eq!(s.tools.presets[0].name, last);
+    let (t, w) = session(&dir);
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(names(&t), names(&s), "the new built-in order survives a restart");
+}
+
+#[test]
 fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     let dir = TempDir::new("corrupt");
     let (mut s, _) = session(&dir);
-    s.tools.presets.push(sampled("Good", "Fine", tip8(8, 8, 1)));
-    s.tools.presets.push(sampled("Lost", "Broken tip", tip16(9, 9, 2)));
+    std::sync::Arc::make_mut(&mut *s.tools.presets).push(sampled("Good", "Fine", tip8(8, 8, 1)));
+    std::sync::Arc::make_mut(&mut *s.tools.presets).push(sampled("Lost", "Broken tip", tip16(9, 9, 2)));
     s.brush_presets_changed();
     s.sync_preset_store();
     let be = DirBackend::new(&dir.0);
@@ -314,10 +371,10 @@ fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Good").is_some());
     // Full tips load when a brush is used (#1843): the broken one fails then, not at start.
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Lost").is_some());
-    let before = t.tools.brush.clone();
+    let before = (*t.tools.brush).clone();
     let e = t.execute("tools.setBrush", json!({"preset": "Lost"})).unwrap_err().to_string();
     assert!(e.contains(&h), "{e}");
-    assert_eq!(t.tools.brush, before, "a failed pick leaves the brush alone");
+    assert_eq!(*t.tools.brush, before, "a failed pick leaves the brush alone");
     t.execute("tools.setBrush", json!({"preset": "Good"})).unwrap();
     // The broken files are left alone for the user (never deleted by a sync).
     t.execute("brush.presets.save", json!({"name": "Another"})).unwrap();
@@ -340,7 +397,7 @@ fn write_failures_are_warnings() {
     std::fs::write(&dir.0, b"not a dir").unwrap();
     let mut s = Session::new();
     s.attach_preset_store(open_dir(&dir.0));
-    s.tools.brush.tip = TipShape::Sampled(tip8(4, 4, 0));
+    s.tools.brush.tip = TipShape::Sampled(tip8(4, 4, 0)).into();
     s.execute("brush.presets.save", json!({"name": "Nope"})).unwrap();
     let w = s.preset_store.as_mut().unwrap().take_warnings();
     assert!(!w.is_empty());
@@ -370,7 +427,7 @@ fn bench_load_500_sampled_presets() {
         // A mix of 8-bit (most .abr tips) and 16-bit tips, 64..319 px.
         let side = 64 + (i * 37) % 256;
         let t = if i % 4 == 0 { tip16(side, side, i) } else { tip8(side, side, i) };
-        s.tools.presets.push(sampled(&format!("Brush {i}"), &format!("Set {}", i / 50), t));
+        std::sync::Arc::make_mut(&mut *s.tools.presets).push(sampled(&format!("Brush {i}"), &format!("Set {}", i / 50), t));
     }
     s.brush_presets_changed();
     let t0 = std::time::Instant::now();
@@ -397,7 +454,7 @@ fn a_store_directory_that_does_not_exist_yet_opens_without_warnings() {
     assert!(!dir.exists());
     let opened = open_dir(&dir);
     assert!(opened.warnings.is_empty(), "{:?}", opened.warnings);
-    assert!(opened.actions.is_empty());
+    assert!(opened.actions.actions().is_empty());
     let err = DirBackend::new(&dir).read(ACTIONS_FILE, MAX_ACTIONS_BYTES).unwrap_err();
     assert!(missing_file(&err), "{err}");
 }
@@ -411,7 +468,7 @@ fn library(n: u32, side: u32) -> (Session, MemBackend) {
     let mut s = Session::new();
     s.attach_preset_store(open(Box::new(mem.clone())));
     for i in 0..n {
-        s.tools.presets.push(sampled(&format!("Big {i}"), "Big Set", tip8(side, side, i)));
+        std::sync::Arc::make_mut(&mut *s.tools.presets).push(sampled(&format!("Big {i}"), "Big Set", tip8(side, side, i)));
     }
     s.brush_presets_changed();
     s.sync_preset_store();
@@ -453,7 +510,7 @@ fn reopening_a_library_decodes_no_tips_and_using_a_brush_decodes_only_its_own() 
     let user_presets = user(&t);
     assert_eq!(user_presets.len(), n as usize);
     for p in &user_presets {
-        let TipShape::Stored(r) = &p.brush.tip else { panic!("{} is not a stored tip", p.name) };
+        let TipShape::Stored(r) = &*p.brush.tip else { panic!("{} is not a stored tip", p.name) };
         assert!(!r.is_loaded() && (r.width, r.height) == (side, side));
         assert!(r.preview.width <= PREVIEW_SIDE && r.preview.height <= PREVIEW_SIDE);
     }
@@ -463,7 +520,7 @@ fn reopening_a_library_decodes_no_tips_and_using_a_brush_decodes_only_its_own() 
     // Using one brush decodes exactly its tip; painting and picking it again reuse it.
     t.execute("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
     t.execute("tools.setBrush", json!({"preset": "Big 3"})).unwrap();
-    let TipShape::Stored(r) = &t.tools.brush.tip else { panic!("the brush keeps its stored tip") };
+    let TipShape::Stored(r) = &*t.tools.brush.tip else { panic!("the brush keeps its stored tip") };
     assert_eq!(r.full.as_deref(), Some(&tip8(side, side, 3)), "the tool paints with the full tip");
     assert_eq!(cache(&t).decodes, 1);
     t.execute("paint.stroke", json!({"points": [[10, 10], [50, 50]], "brush": {"size": 30}})).unwrap();
@@ -471,7 +528,7 @@ fn reopening_a_library_decodes_no_tips_and_using_a_brush_decodes_only_its_own() 
     t.execute("tools.setBrush", json!({"preset": "Big 3"})).unwrap();
     assert_eq!((cache(&t).decodes, cache(&t).tips), (1, 1));
     // Picking a preset never loads the library's other tips, and the library stays light.
-    assert!(user(&t).iter().all(|p| matches!(&p.brush.tip, TipShape::Stored(r) if !r.is_loaded())));
+    assert!(user(&t).iter().all(|p| matches!(&*p.brush.tip, TipShape::Stored(r) if !r.is_loaded())));
     // The panel's "current brush" match still works on a stored tip.
     let picked = photocraft_paint::presets::find(&t.tools.presets, "Big 3").unwrap();
     assert_eq!(picked.brush.tip, t.tools.brush.tip);
@@ -501,7 +558,28 @@ fn the_decoded_tip_cache_stays_within_its_budget() {
     t.preset_store.as_ref().unwrap().set_tip_cache_limit(0);
     assert_eq!(cache(&t).tips, 0);
     t.execute("tools.setBrush", json!({"preset": "Big 1"})).unwrap();
-    assert!(matches!(&t.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()));
+    assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()));
+}
+
+/// A stored tip the brush holds unloaded (its file failed to load at startup and is back) loads on the next brush
+/// edit, and the brush keeps the loaded bitmap instead of the unloaded tip it compares equal to (#16252).
+#[test]
+fn a_brush_edit_keeps_a_stored_tip_that_loads_only_now() {
+    let (s, mem) = library(1, 64);
+    drop(s);
+    let mut t = Session::new();
+    t.attach_preset_store(open(Box::new(mem)));
+    t.execute("tools.setBrush", json!({"preset": "Big 0"})).unwrap();
+    if let TipShape::Stored(r) = &mut *t.tools.brush.tip {
+        r.full = None;
+    }
+    assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if !r.is_loaded()), "the tip starts unloaded");
+    t.execute("tools.setBrush", json!({"brush": {"size": 30}})).unwrap();
+    assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()), "the edit keeps the tip it loaded");
+    // An edit of a brush whose tip is loaded already keeps the tip and its revision.
+    let revision = t.tools.brush.tip.revision();
+    t.execute("tools.setBrush", json!({"brush": {"size": 40}})).unwrap();
+    assert_eq!(t.tools.brush.tip.revision(), revision, "an unchanged loaded tip keeps its revision");
 }
 
 #[test]
@@ -511,7 +589,7 @@ fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
     let mut t = Session::new();
     t.attach_preset_store(open(Box::new(mem.clone())));
     t.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
-    let key = |t: &Session, name: &str| match &photocraft_paint::presets::find(&t.tools.presets, name).unwrap().brush.tip {
+    let key = |t: &Session, name: &str| match &*photocraft_paint::presets::find(&t.tools.presets, name).unwrap().brush.tip {
         TipShape::Stored(r) => r.key.clone(),
         other => panic!("{other:?}"),
     };
@@ -519,17 +597,17 @@ fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
     let k0 = key(&t, "Big 0");
     mem.remove(&tip_file(&k0)).unwrap();
     t.execute("tools.setBrush", json!({"preset": "Hard Round"})).unwrap();
-    let broken = t.tools.presets.iter_mut().find(|p| p.name == "Big 0").unwrap();
+    let broken = std::sync::Arc::make_mut(&mut *t.tools.presets).iter_mut().find(|p| p.name == "Big 0").unwrap();
     broken.captures.color = true;
     broken.brush.color = [1.0, 0.0, 0.0, 1.0];
     t.tools.foreground = [0.0, 0.0, 1.0, 1.0];
-    let before = t.tools.brush.clone();
+    let before = (*t.tools.brush).clone();
     let preset_before = t.tools.current_preset.clone();
     let foreground_before = t.tools.foreground;
     let revision_before = t.tools.brush_rev;
     assert!(t.execute("tools.setBrush", json!({"preset": "Big 0"})).is_err());
     assert!(t.execute("paint.stroke", json!({"points": [[1, 1], [9, 9]], "preset": "Big 0"})).is_err());
-    assert_eq!(t.tools.brush, before);
+    assert_eq!(*t.tools.brush, before);
     assert_eq!(t.tools.current_preset, preset_before);
     assert_eq!(t.tools.foreground, foreground_before);
     assert_eq!(t.tools.brush_rev, revision_before);
@@ -572,7 +650,7 @@ fn a_store_without_previews_makes_them_once_and_then_loads_lazily() {
     let w = s.attach_preset_store(open(Box::new(mem.clone())));
     assert!(w.is_empty(), "{w:?}");
     let a = photocraft_paint::presets::find(&s.tools.presets, "Old A").unwrap().clone();
-    assert!(matches!(&a.brush.tip, TipShape::Stored(r) if (r.width, r.height) == (300, 200) && !r.is_loaded()));
+    assert!(matches!(&*a.brush.tip, TipShape::Stored(r) if (r.width, r.height) == (300, 200) && !r.is_loaded()));
     assert!(matches!(&a.brush.texture.pattern, Pattern::Stored(r) if r.key == hashes[1]));
     // Attaching rewrote the group with sizes and previews.
     let rewritten: serde_json::Value = serde_json::from_slice(&mem.read(&file, MAX_GROUP_BYTES).unwrap()).unwrap();
@@ -592,7 +670,7 @@ fn a_store_without_previews_makes_them_once_and_then_loads_lazily() {
     let out = t.execute("edit.presets.exportImportPresets", json!({"action": "export"})).unwrap();
     let back: Vec<BrushPreset> = serde_json::from_value(out["data"]["brushes"].clone()).unwrap();
     let a = back.iter().find(|p| p.name == "Old A").unwrap();
-    assert_eq!(a.brush.tip, TipShape::Sampled(tips[0].clone()));
+    assert_eq!(a.brush.tip, TipShape::Sampled(tips[0].clone()).into());
     assert_eq!(a.brush.texture.pattern, Pattern::Tile(tips[1].clone()));
 }
 
@@ -694,7 +772,7 @@ fn a_group_file_that_failed_to_load_is_not_overwritten() {
     mem.files.lock().unwrap().insert(file.clone(), newer.clone());
     let mut s = Session::new();
     s.attach_preset_store(open(Box::new(mem.clone())));
-    s.tools.brush.tip = TipShape::Sampled(tip8(4, 4, 0));
+    s.tools.brush.tip = TipShape::Sampled(tip8(4, 4, 0)).into();
     s.execute("brush.presets.save", json!({"name": "New"})).unwrap();
     assert_eq!(mem.files.lock().unwrap().get(&file), Some(&newer), "a file the store could not read was overwritten");
     assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
@@ -713,6 +791,34 @@ fn an_actions_file_that_failed_to_load_is_not_overwritten() {
     s.sync_preset_store();
     assert_eq!(mem.files.lock().unwrap().get(ACTIONS_FILE), Some(&newer), "an actions file the store could not read was overwritten");
     assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+}
+
+// A PhotoCraft actions file that keyed calls and shortcuts by stored action id loads with names
+// only: the calls and the `actions.playById:<id>` keys move to the names loading gave the ids, and
+// the file is written back once without them.
+#[test]
+fn stored_action_ids_move_to_names_on_load() {
+    let id = "0123456789abcdef0123456789abcdef";
+    let mem = MemBackend::default();
+    let file = format!(
+        r#"{{"version":1,"actions":[
+            {{"name":"Same","steps":[],"legacy_shortcut_owner":true}},
+            {{"name":"Same","steps":[],"action_id":"{id}"}},
+            {{"name":"Caller","steps":[["actions.play",{{"action":"Same","actionId":"{id}"}}]]}}]}}"#
+    );
+    mem.files.lock().unwrap().insert(ACTIONS_FILE.into(), file.into_bytes());
+    let mut s = Session::new();
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(format!("actions.playById:{id}"), "F6".into());
+    });
+    s.attach_preset_store(open(Box::new(mem.clone())));
+    let names: Vec<&str> = s.actions.list.actions().iter().map(|action| action.name.as_str()).collect();
+    assert_eq!(names, ["Same", "Same 2", "Caller"]);
+    assert_eq!(s.actions.list.actions()[2].steps[0].params, json!({"action": "Same 2"}));
+    assert_eq!(s.prefs().shortcuts.get("actions.play:Same 2").map(String::as_str), Some("F6"));
+    assert!(!s.prefs().shortcuts.keys().any(|key| key.starts_with("actions.playById:")));
+    let saved = String::from_utf8(mem.files.lock().unwrap()[ACTIONS_FILE].clone()).unwrap();
+    assert!(!saved.contains(id), "{saved}");
 }
 
 /// A large pattern opens as a small preview (texture libraries run to gigabytes) and is read at
@@ -1153,4 +1259,15 @@ fn a_symlinked_preset_entry_is_refused_not_written_through() {
     assert_eq!(std::fs::read(&outside).unwrap(), b"victim");
     be.write("fresh.json", b"{}").unwrap();
     assert_eq!(be.read("fresh.json", 1024).unwrap(), b"{}");
+}
+
+#[test]
+fn tip_adapter_matches_shared_codec_and_keeps_preview_limit() {
+    for t in [tip8(37, 21, 3), tip16(40, 33, 9)] {
+        let shared = craft_pcraft_tip::tip::encode(t.width, t.height, &t.data);
+        assert_eq!(encode_tip(&t), shared);
+        assert_eq!(decode_tip(&shared).unwrap(), t);
+        assert!(decode_tip_max(&shared, t.width - 1).is_err());
+        assert_eq!(decode_tip_max(&shared, t.width).unwrap(), t);
+    }
 }

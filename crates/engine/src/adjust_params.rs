@@ -146,7 +146,7 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             };
             for (i, key) in ["shadows", "midtones", "highlights"].iter().enumerate() {
                 if let Some(v) = r.numbers(key, 3)? {
-                    tones[i] = [v[0], v[1], v[2]].map(|x| x.clamp(-100.0, 100.0));
+                    tones[i] = [v[0], v[1], v[2]].map(|x| x.round().clamp(-100.0, 100.0));
                 }
             }
             Adjustment::ColorBalance {
@@ -449,8 +449,12 @@ fn merge(mut a: Value, b: Value) -> Value {
     a
 }
 
+/// One Channel Mixer output row: every coefficient and the constant is a whole percentage.
+/// Scripted values round to the nearest whole percent before clamping, as the reference
+/// application measures (0.4 to 0, 0.5 to 1, 50.6 to 51, 300 to 200, #14414); halves round away
+/// from zero, which is what the dialog's own slider pass already does (`f32::round`).
 fn mixer_row(v: &[f32]) -> [f32; 4] {
-    std::array::from_fn(|i| v.get(i).copied().unwrap_or(0.0).clamp(-200.0, 200.0) / 100.0)
+    std::array::from_fn(|i| v.get(i).copied().unwrap_or(0.0).round().clamp(-200.0, 200.0) / 100.0)
 }
 
 fn hue_saturation(r: &Reader<'_>, base: Option<&Adjustment>) -> Result<Adjustment> {

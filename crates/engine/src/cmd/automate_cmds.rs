@@ -46,7 +46,7 @@ pub struct FileMenuState {
     /// View › Lock Slices.
     pub slices_locked: bool,
     /// Documents with File › Generate › Image Assets on.
-    pub image_assets: Vec<DocId>,
+    pub image_assets: craft_tracked::Tracked<Vec<DocId>>,
     /// File › Print settings used last (Print One Copy repeats them).
     pub last_print: Option<Value>,
     /// Save for Web settings used last.
@@ -336,8 +336,8 @@ pub fn document_saved(s: &mut Session, doc: photocraft_doc::DocId) -> Option<Val
 
 // ---------- Create Droplet ----------
 
-/// Resolve the enabled steps of the saved action chosen for a droplet: by name within `set` when
-/// one is given (a loaded library can hold one name in two sets), else by name or index.
+/// Resolve the enabled steps of the saved action chosen for a droplet: by name, refused when a
+/// given `set` does not hold it, else by name or index.
 pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Vec<(String, Value)>> {
     let index = match p.get("set").filter(|v| !v.is_null()) {
         Some(set) => {
@@ -345,14 +345,15 @@ pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Ve
             let name = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(cmd, "a set needs a named action"))?;
             s.actions
                 .list
+                .actions()
                 .iter()
                 .position(|a| a.name == name && a.set.as_deref() == Some(set))
                 .ok_or_else(|| bad(cmd, format!("no action named `{name}` in set `{set}`")))?
         }
-        None => crate::actions_cmds::resolve(&s.actions.list, p, cmd)?,
+        None => crate::actions_cmds::resolve(s.actions.list.actions(), p, cmd)?,
     };
-    let action = s.actions.list.get(index).ok_or_else(|| bad(cmd, "the selected action no longer exists"))?;
-    Ok(action.enabled_steps().map(|(_, step)| step.clone()).collect())
+    let action = s.actions.list.action(index).ok_or_else(|| bad(cmd, "the selected action no longer exists"))?;
+    Ok(action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect())
 }
 
 /// Save the chosen action's enabled steps and dependencies as a runnable droplet.
@@ -370,7 +371,7 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     check_known(&commands, cmd)?;
     // Play Action steps need their actions when the droplet runs on its own (#2794). Not under
     // `actions`: the CLI reads that key as an action set.
-    let called = crate::actions_cmds::called_actions(&s.actions.list, &mut steps);
+    let called = crate::actions_cmds::called_actions(s.actions.list.actions(), &mut steps);
     let path = if path.ends_with(".pcdroplet") || path.ends_with(".json") { path.to_string() } else { format!("{path}.pcdroplet") };
     let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&path));
     let steps_json: Vec<Value> = steps.iter().map(|(id, pr)| json!([id, pr])).collect();
@@ -449,7 +450,11 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "missing \"input\" (files or folders)")),
     };
     for i in raw {
-        if std::path::Path::new(&i).is_dir() { inputs.extend(list_images(&i)?) } else { inputs.push(i) }
+        if std::path::Path::new(&i).is_dir() {
+            inputs.extend(list_images(&i)?)
+        } else if crate::file_cmds::openable_name(&i) {
+            inputs.push(i)
+        }
     }
     if inputs.is_empty() {
         return Err(bad(cmd, "no input images"));
@@ -571,7 +576,7 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         s.execute("file.new", json!({"width": pw, "height": ph, "mode": mode, "depth": depth, "background": "white", "name": name}))?;
         let idx = s.active_index().ok_or(EngineError::NoDocument)?;
         if let Some(st) = s.active_mut() {
-            std::sync::Arc::make_mut(&mut st.doc).resolution_dpi = res as f32;
+            std::sync::Arc::make_mut(st.doc_mut()).resolution_dpi = res as f32;
         }
         let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
         for (k, path) in chunk.iter().enumerate() {
@@ -629,6 +634,14 @@ fn contact_sheet(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if flatten {
             s.execute("layer.flattenImage", json!({}))?;
+            // The reference ends a flattened sheet with a normal layer, not a Background (#13702).
+            s.edit("Make Layer", |doc, active| {
+                let l = doc.background_mut().ok_or(EngineError::Other("the flattened sheet has no Background layer".into()))?;
+                crate::extra_cmds::unlock_background(l);
+                l.name = "Contact Sheet II".into();
+                *active = Some(l.id);
+                Ok(())
+            })?;
         }
         docs.push(idx);
     }
@@ -695,9 +708,16 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 #[cfg(test)]
+#[path = "droplet_skip_non_images_tests.rs"]
+mod droplet_skip_non_images_tests;
+#[cfg(test)]
 #[path = "automate_cmds/tests.rs"]
 mod tests;
 
 #[cfg(test)]
 #[path = "automate_cmds/contact_sheet_subfolders_tests.rs"]
 mod contact_sheet_subfolders_tests;
+
+#[cfg(test)]
+#[path = "automate_cmds/contact_sheet_flatten_tests.rs"]
+mod contact_sheet_flatten_tests;

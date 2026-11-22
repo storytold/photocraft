@@ -22,7 +22,7 @@ use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, blend_from_str};
+use crate::commands::{CommandSpec, parse_blend};
 use crate::{EngineError, Result, Session};
 
 mod art_history;
@@ -181,7 +181,7 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
             s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
             b
         }
-        _ => s.tools.brush.clone(),
+        _ => (*s.tools.brush).clone(),
     };
     let mut brush = stroke_brush(&base, p);
     // The Eraser's Erase to History in Pencil or Block mode paints back through that hard tip.
@@ -411,9 +411,9 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","state":row (a History panel row, as history.setSource),"snapshot":id (a history.newSnapshot id; default: the History panel's source, as paint.historyBrush; a source of another canvas size or colour mode is an error),"style":"tightShort|tightMedium|tightLong|looseMedium|looseLong|dab|tightCurl|looseCurl"="tightMedium","area":0..100=50,"tolerance":0..100=0,"opacity":0..100=100 (overrides the common 1..100: how strongly the history state is painted; 0 changes nothing; no flow, mode is Normal)"#
+                r#","state":row (a History panel row, as history.setSource),"snapshot":id (a history.newSnapshot id; default: the History panel's source, as paint.historyBrush; a source of another canvas size or colour mode is an error),"style":"tightShort|tightMedium|tightLong|looseMedium|looseLong|dab|tightCurl|looseCurl"="tightShort","area":0..500=50,"tolerance":0..100=0,"opacity":0..100=100 (overrides the common 1..100: how strongly the history state is painted; 0 changes nothing; no flow, mode is Normal)"#
             ),
-            enabled: has_pixel_layer,
+            enabled: art_history::enabled,
             run: art_history::run,
             journal: true,
         },

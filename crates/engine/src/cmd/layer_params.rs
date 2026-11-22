@@ -1,5 +1,5 @@
 use super::params::bad;
-use super::{BlendMode, Document, EngineError, Layer, LayerId, LayerMask, Result, SampleType, Session, Value};
+use super::{Document, EngineError, Layer, LayerId, LayerMask, Result, SampleType, Session, Value};
 
 /// The layer a command's `"layer"` param names: an id, or a name (the topmost layer of that
 /// name, as Photoshop's "select layer by name" action step finds it, so a loaded action replays
@@ -70,12 +70,6 @@ pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
         Some(id) => Ok(id),
         None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
     }
-}
-
-pub fn blend_from_str(s: &str) -> Option<BlendMode> {
-    let norm = |x: &str| x.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
-    let want = norm(s);
-    std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
 }
 
 /// The active selection as the mask of a layer being created, or None without a selection.

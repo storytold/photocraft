@@ -246,7 +246,7 @@ pub(super) fn merge_group(s: &mut Session, id: LayerId) -> Result<Value> {
         solo.blend = photocraft_doc::BlendMode::Normal;
         solo.clipped = false;
         let mut tmp = doc.clone();
-        tmp.layers = vec![solo];
+        tmp.layers = vec![solo].into();
         let mut merged = Layer::new(group.name.clone(), LayerContent::Raster(pixels::composite_layers_uncropped(&tmp, fmt)));
         merged.id = group.id;
         merged.opacity = group.opacity;

@@ -708,7 +708,34 @@ pub(super) const EVENTS: &[Event] = &[
     adjustment_event!("Thrs", "Thrs", "threshold", "Threshold"),
     adjustment_event!("Pstr", "Pstr", "posterize", "Posterize"),
     adjustment_event!("Invr", "Invr", "invert", "Invert"),
-    adjustment_event!("ClrB", "ClrB", "colorBalance", "Color Balance"),
+    // Color Balance: an Image > Adjustments apply step whose descriptor has no PrsL plays with
+    // Preserve Luminosity OFF (measured, #14417) - the reference's on default belongs to the
+    // dialog and to fresh adjustments. The shared from() keeps the key absent because a layer
+    // edit is a merge, so only this event path fills it.
+    Event {
+        code: "ClrB",
+        name: "colorBalance",
+        label: "Color Balance",
+        ids: &["image.adjustments.colorBalance"],
+        from: |d| match adjustment_by_class("ClrB") {
+            Some(a) => match adjustment_steps(a, "image.adjustments.", Some(d)) {
+                Mapped::Steps(steps) => Mapped::Steps(
+                    steps
+                        .into_iter()
+                        .map(|(id, mut p)| {
+                            if p.get("preserveLuminosity").is_none() {
+                                p["preserveLuminosity"] = serde_json::Value::Bool(false);
+                            }
+                            (id, p)
+                        })
+                        .collect(),
+                ),
+                other => other,
+            },
+            None => Mapped::Unsupported { harmless: false },
+        },
+        to: |_, p| adjustment_by_class("ClrB").and_then(|a| (a.to)(p)),
+    },
     // Written as the string event the reference application runs, with the `vibrance` class it
     // records; the old `Vbrn` code still loads through LEGACY_CODES.
     adjustment_event!("", "vibrance", "vibrance", "Vibrance"),
@@ -1225,6 +1252,16 @@ pub(super) const EVENTS: &[Event] = &[
         ids: &["file.automate.createDroplet"],
         from: super::steps_droplet::droplet_from,
         to: super::steps_droplet::droplet_to,
+    },
+    // File › Automate › Conditional Mode Change: the script event recorded after the Convert Mode
+    // it runs (#10723).
+    Event {
+        code: "",
+        name: super::steps_mode_change::MODE_CHANGE_EVENT,
+        label: "Conditional Mode Change",
+        ids: &[super::steps_mode_change::MODE_CHANGE],
+        from: super::steps_mode_change::mode_change_from,
+        to: super::steps_mode_change::mode_change_to,
     },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },
