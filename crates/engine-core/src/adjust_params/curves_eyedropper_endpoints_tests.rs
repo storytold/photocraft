@@ -250,3 +250,33 @@ fn grayscale_picks_move_only_their_own_end_point() {
     let (master, _) = channels(&both);
     assert!(master.len() == 2 && close(&master[0], BLACK, 0.0) && close(&master[1], WHITE, 1.0), "{master:?}");
 }
+
+/// The channel curves of a Curves adjustment layer after two Properties panel picks
+/// (`layer.setAdjustment` with `eyedropper`), as the panel sends them.
+fn panel_picks(picks: [(&str, f32); 2]) -> [Vec<CurvePoint>; 3] {
+    let mut s = session();
+    s.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    for (point, tone) in picks {
+        s.execute("layer.setAdjustment", json!({"eyedropper": {"point": point, "color": [tone, tone, tone]}})).unwrap();
+    }
+    let d = s.active().unwrap();
+    let layer = d.doc.layer(d.active_layer.unwrap()).unwrap();
+    let LayerContent::Adjustment(adjustment) = &layer.content else { panic!("expected an adjustment layer") };
+    channels(adjustment).1.clone()
+}
+
+/// The Properties panel pickers were not measured, so they keep today's behaviour: each pick
+/// scales the other end point too.
+#[test]
+fn properties_panel_picks_keep_the_old_scaling() {
+    for curve in panel_picks([("black", BLACK), ("white", WHITE)]) {
+        assert_eq!(curve.len(), 2, "{curve:?}");
+        assert!(close(&curve[0], BLACK * WHITE, 0.0), "the white pick scales the black end point: {curve:?}");
+        assert!(close(&curve[1], WHITE, 1.0), "{curve:?}");
+    }
+    for curve in panel_picks([("white", WHITE), ("black", BLACK)]) {
+        assert_eq!(curve.len(), 2, "{curve:?}");
+        assert!(close(&curve[0], BLACK, 0.0), "{curve:?}");
+        assert!(close(&curve[1], BLACK + WHITE * (1.0 - BLACK), 1.0), "the black pick scales the white end point: {curve:?}");
+    }
+}
