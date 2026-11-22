@@ -2,8 +2,7 @@
 
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 #[cfg(test)]
-use egui::Rect;
-use egui::vec2;
+use egui::{Rect, vec2};
 use photocraft_color::BlendMode;
 use photocraft_doc::LayerId;
 use photocraft_engine::history_source_cmds::HistorySource;
