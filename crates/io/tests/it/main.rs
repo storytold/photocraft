@@ -39,6 +39,7 @@ mod large_png_export;
 mod large_psb;
 mod layer_labels;
 mod layer_xmp;
+mod layered_exr;
 mod modes;
 mod multichannel;
 mod native_vector_preview;

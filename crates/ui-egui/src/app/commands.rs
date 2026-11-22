@@ -206,12 +206,28 @@ impl PhotocraftApp {
             self.perf.stage.command(id, self.perf.command_ms);
         }
         match &r {
-            Ok(_) => {
+            Ok(reply) => {
                 if self.ui.status_error {
                     self.ui.status.clear();
                     self.ui.status_error = false;
                 }
                 self.sync_views();
+                if id == photocraft_engine::exr_cmds::LAYERED_EXR
+                    && let Some(path) = reply.get("path").and_then(Value::as_str)
+                {
+                    let warnings: Vec<_> = reply
+                        .get("warnings")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(crate::i18n::t)
+                        .map(str::to_owned)
+                        .collect();
+                    let what = crate::i18n::fmt(tl!("Exported {name}"), &[("name", &crate::file_open::display_name(path))]);
+                    self.ui.status.clone_from(&what);
+                    notices::io_warnings(self, &what, &warnings);
+                }
                 let removed = self.session.take_samplers_removed();
                 if removed > 0 && !self.ui.status_error {
                     // A canvas-size change (crop, Canvas Size, Image Size, rotation) dropped Color

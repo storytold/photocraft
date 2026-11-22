@@ -3,9 +3,11 @@ use super::{PhotocraftApp, Value, json};
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
+use photocraft_doc::DocId;
+use photocraft_engine::exr_cmds::LAYERED_EXR;
 
 #[path = "artboard_export_options.rs"]
 mod artboard_export_options;
@@ -16,8 +18,7 @@ pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
 
 // ---------- dialogs and pickers in front of engine commands ----------
 
-/// The command ids whose dialog is a hosted parameter form built by [`params_for`] (Open EXR Parts included).
-/// The dialogs area's `PARAM_FAMILIES` row owns exactly these.
+/// Hosted parameter forms built by [`params_for`] and handled by the generic runner.
 const FORM_COMMANDS: [&str; 21] = [
     "file.openExrParts",
     "layer.videoLayers.interpretFootage",
@@ -45,6 +46,20 @@ const FORM_COMMANDS: [&str; 21] = [
 /// Whether `key` is the command id of a form this file opens.
 pub(crate) fn is_form(key: &str) -> bool {
     FORM_COMMANDS.contains(&key)
+}
+
+pub(crate) fn layered_exr_document(captured: &Value) -> Option<DocId> {
+    captured.as_u64().map(DocId)
+}
+
+pub(crate) fn run_layered_exr_form(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
+    let captured = crate::dialogs::params::captured(app, LAYERED_EXR);
+    let written = layered_exr_document(&captured)
+        .ok_or_else(|| tl!("The document for this export is closed").to_string())
+        .and_then(|doc| app.with_document(doc, |app| crate::filter_dialog::run_command(app, ctx, LAYERED_EXR, result)));
+    if let Err(error) = written {
+        crate::notices::error(app, error);
+    }
 }
 
 /// The reply of a command that opened a dialog.
@@ -284,6 +299,22 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             ])
         }
         crate::dialogs::conditional_mode_change_dialog::COMMAND => plain(crate::dialogs::conditional_mode_change_dialog::rows()),
+        LAYERED_EXR => {
+            let (_, _, name) = doc?;
+            plain(vec![
+                Param::new("path", tl!("Destination"), ParamKind::text(format!("{dir}/{}-layers.exr", stem(&name))))
+                    .browse(PathKind::SaveFile)
+                    .not_remembered(),
+                Param::new("composite", tl!("Include Composite"), ParamKind::bool(true)),
+                Param::new("selectedOnly", tl!("Selected Layers Only"), ParamKind::bool(false)).not_remembered(),
+                choice(
+                    "compression",
+                    tl!("Compression"),
+                    opts(&[("zip", "ZIP"), ("zips", "ZIPS"), ("piz", "PIZ"), ("rle", "RLE"), ("none", tl!("None"))]),
+                    "zip",
+                ),
+            ])
+        }
         "file.export.layersToFiles" => {
             let (_, _, name) = doc?;
             plain(vec![
@@ -786,6 +817,17 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "type.warpText" => Some(crate::dialogs::open_command_dialog(app, id, label).map(opened)),
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app).value().to_string()}))),
         "file.export.dataSetsAsFiles" if cfg!(target_arch = "wasm32") => Some(Err(tl!("Data Sets as Files is unavailable on the web").to_string())),
+        LAYERED_EXR => {
+            if cfg!(target_arch = "wasm32") {
+                return Some(Err(tl!("Layered OpenEXR export is unavailable on the web").to_string()));
+            }
+            let document = match app.active_doc_id() {
+                Ok(doc) => doc,
+                Err(error) => return Some(Err(error)),
+            };
+            let (rows, fields) = params_for(app, id)?;
+            Some(Ok(opened(open_form(app, id, label, rows, fields, json!(document.0)))))
+        }
         "file.automate.batch" if crate::actions::selected_action(app).is_none() => Some(Err("record an action in the Actions panel first".into())),
         _ if is_form(id) => {
             let (rows, fields) = params_for(app, id)?;

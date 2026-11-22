@@ -83,6 +83,55 @@ fn names_in(dir: &std::path::Path) -> Vec<String> {
     names
 }
 
+#[test]
+fn layered_exr_menu_exports_through_its_options_form() {
+    let (mut app, ctx) = app_with(1);
+    let key = photocraft_engine::exr_cmds::LAYERED_EXR;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("layers.exr");
+    let dialog = open_form(&mut app, &ctx, key);
+    assert_eq!(fields(&app, dialog)["composite"], true);
+    assert_eq!(fields(&app, dialog)["compression"], "zip");
+    set(&mut app, &ctx, dialog, "path", json!(path));
+    set(&mut app, &ctx, dialog, "compression", json!("none"));
+    app.run("file.new", json!({"width": 140, "height": 80})).unwrap();
+    confirm(&mut app, &ctx, dialog).unwrap();
+    frame(&mut app, &ctx);
+    let parts = photocraft_io::exr_parts::entries(&std::fs::read(path).unwrap()).unwrap();
+    assert!(parts.iter().any(|entry| entry.name == "Beauty" && entry.width == 100), "{parts:?}");
+    assert_eq!(app.session.active().unwrap().doc.size.width, 140, "export leaves the current tab active");
+    assert!(app.session.active().unwrap().path.is_none(), "a layered EXR is an export copy");
+}
+
+#[test]
+fn layered_exr_menu_exports_the_raster_in_a_mixed_selection_and_warns() {
+    let (mut app, ctx) = app_with(1);
+    let state = app.session.active_mut().unwrap();
+    let raster = state.doc.layers[0].id;
+    let group = photocraft_doc::Layer::group("Empty group", Vec::new());
+    let group_id = group.id;
+    std::sync::Arc::make_mut(state.doc_mut()).layers.push(group);
+    state.set_active_layer(Some(raster));
+    *state.selection_mut() = vec![raster, group_id];
+
+    let key = photocraft_engine::exr_cmds::LAYERED_EXR;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("selected.exr");
+    let dialog = open_form(&mut app, &ctx, key);
+    set(&mut app, &ctx, dialog, "path", json!(path));
+    set(&mut app, &ctx, dialog, "selectedOnly", json!(true));
+    set(&mut app, &ctx, dialog, "composite", json!(false));
+    confirm(&mut app, &ctx, dialog).unwrap();
+    frame(&mut app, &ctx);
+
+    let reopened = photocraft_io::import("selected.exr", &std::fs::read(path).unwrap()).unwrap().document;
+    assert_eq!(reopened.layers.len(), 1);
+    assert!(reopened.layers[0].surface().is_some());
+    let notices = crate::notices::shown(&app, &ctx);
+    assert!(notices.iter().any(|(_, lines, _)| lines.iter().any(|line| line.contains("Only selected RGB raster layers"))), "{notices:?}");
+    assert!(app.run(key, json!({"path": dir.path().join("explicit.exr"), "layers": [raster.0, group_id.0]})).is_err());
+}
+
 /// One frame of the app on `ctx`.
 fn frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut output = ctx.run_ui(Default::default(), |ui| {

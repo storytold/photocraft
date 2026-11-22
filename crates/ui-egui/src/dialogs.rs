@@ -103,6 +103,11 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
+        ParamFamily {
+            cancel: Some(filter_dialog::cancel),
+            document: Some(crate::view_cmds::dialogs::layered_exr_document),
+            ..ParamFamily::new(|key| key == photocraft_engine::exr_cmds::LAYERED_EXR, crate::view_cmds::dialogs::run_layered_exr_form)
+        },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
@@ -309,7 +314,7 @@ pub(crate) mod params {
             Some(FieldValue::Text(text)) if !text.is_empty() => Some(PathBuf::from(text)),
             _ => None,
         });
-        let start = current.and_then(|path| if path.is_dir() { Some(path) } else { path.parent().map(Path::to_path_buf) }).filter(|dir| dir.is_dir());
+        let start = current.as_deref().and_then(|path| if path.is_dir() { Some(path) } else { path.parent() }).filter(|dir| dir.is_dir());
         let mut pick = match &request.kind {
             PathKind::SaveFile => {
                 let mut pick = PickRequest::save(PURPOSE);
@@ -319,6 +324,12 @@ pub(crate) mod params {
                 }
                 if let Some(name) = &request.file_name {
                     pick = pick.file_name(name.clone());
+                }
+                if key_of(app, id).as_deref() == Some(photocraft_engine::exr_cmds::LAYERED_EXR) {
+                    pick = pick.filter("OpenEXR", &["exr"]).suggested_extension("exr");
+                    if let Some(name) = current.as_deref().and_then(Path::file_name) {
+                        pick = pick.file_name(name.to_string_lossy());
+                    }
                 }
                 pick
             }

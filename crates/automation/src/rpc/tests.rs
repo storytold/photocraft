@@ -652,6 +652,42 @@ fn doc_export_layers_writes_only_beneath_the_write_root() {
 }
 
 #[test]
+fn layered_exr_command_stages_only_inside_the_write_root() {
+    let base = std::env::temp_dir().join(format!("pc-layered-exr-command-{}", std::process::id()));
+    let root = base.join("workspace");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
+    h.handle("doc.new", json!({"width": 12, "height": 8, "background": "white", "name": "card"})).unwrap();
+    let export = |h: &mut Headless, p| h.handle("engine.execute", json!({"command": photocraft_engine::exr_cmds::LAYERED_EXR, "params": p}));
+    let outside = base.join("outside.exr");
+    assert!(export(&mut h, json!({"path": outside})).unwrap_err().to_string().contains("inside the automation root"));
+    assert!(!outside.exists());
+
+    let result = export(&mut h, json!({"path": "inside.exr", "compression": "rle"})).unwrap();
+    assert_eq!(result["path"], "inside.exr");
+    let file = root.join("inside.exr");
+    let bytes = std::fs::read(&file).unwrap();
+    let parts = photocraft_io::exr_parts::entries(&bytes).unwrap();
+    assert!(parts.iter().any(|entry| entry.name == "Beauty"), "{parts:?}");
+    assert!(parts.iter().any(|entry| entry.kind == photocraft_io::exr_parts::EntryKind::Part && entry.name != "Beauty"), "{parts:?}");
+    assert!(export(&mut h, json!({"path": "inside.exr", "layers": [u64::MAX]})).is_err());
+    assert_eq!(std::fs::read(&file).unwrap(), bytes, "an invalid layer export kept the previous file");
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "the failed export removed its staging file");
+
+    h.handle("doc.open", json!({"path": "inside.exr"})).unwrap();
+    assert!(export(&mut h, json!({"path": file})).unwrap_err().to_string().contains("document's own file"));
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    let alias = root.join("alias.exr");
+    std::fs::hard_link(&file, &alias).unwrap();
+    assert!(export(&mut h, json!({"path": "alias.exr"})).unwrap_err().to_string().contains("document's own file"));
+    assert_eq!(std::fs::read(&alias).unwrap(), bytes);
+    export(&mut h, json!({"path": "alias.exr", "overwrite": true})).unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+    drop(h);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn doc_export_data_sets_refuse_collisions_and_import_reads_the_root() {
     let base = std::env::temp_dir().join(format!("pc-doc-data-sets-{}", std::process::id()));
     let root = base.join("workspace");

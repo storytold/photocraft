@@ -188,6 +188,21 @@ impl AuthorizedWorkspace {
         self.write_stream(path, &mut |w| w.write_all(bytes))
     }
 
+    /// Compare requests and existing file identities below the held write root.
+    pub(crate) fn same_write_destination(&self, requested: &str, existing: &str) -> Result<bool, AutomationError> {
+        let requested = request_path(requested, self.write.as_ref())?;
+        let Some(root) = &self.write else { return Ok(false) };
+        let Some(own) = scoped_path(existing, root)? else { return Ok(false) };
+        if requested == own {
+            return Ok(true);
+        }
+        match same_workspace_file(&root.dir, &requested, &own) {
+            Ok(same) => Ok(same),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(file_error("check export destination", &requested.to_string_lossy(), error)),
+        }
+    }
+
     /// [`Self::write`] with the file's bytes produced by `write` straight into the temporary
     /// file (it may seek back to patch lengths), so a large PSD/PSB is never held in memory
     /// whole (#5333). The same refusals, the same atomic replace.
@@ -252,6 +267,21 @@ impl AuthorizedWorkspace {
         }
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn same_workspace_file(dir: &Dir, requested: &Path, own: &Path) -> std::io::Result<bool> {
+    use cap_std::fs::MetadataExt;
+    let target = dir.metadata(requested)?;
+    let source = dir.metadata(own)?;
+    Ok(target.dev() == source.dev() && target.ino() == source.ino())
+}
+
+#[cfg(windows)]
+fn same_workspace_file(dir: &Dir, requested: &Path, own: &Path) -> std::io::Result<bool> {
+    let target = same_file::Handle::from_file(dir.open(requested)?.into_std())?;
+    let source = same_file::Handle::from_file(dir.open(own)?.into_std())?;
+    Ok(target == source)
 }
 
 /// Removes a temporary file on drop unless `armed` was cleared after its rename. The removal

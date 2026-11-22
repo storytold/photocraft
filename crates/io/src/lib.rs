@@ -49,6 +49,9 @@ pub mod export_estimate;
 #[cfg(any(unix, windows))]
 mod exr_native;
 pub mod exr_parts;
+mod layered_exr;
+mod layered_exr_import;
+pub use layered_exr::{LayeredExrCompression, LayeredExrOptions, is_layered_exr_raster, write_layered_exr};
 mod flat;
 pub mod gradient_bake;
 pub mod guides_map;
@@ -888,18 +891,26 @@ pub fn import_file_for_open_verified(
         // Windows seek_read advances this handle during the format probe.
         // Rewind the same verified handle before reading a non-PSD file.
         std::io::Seek::rewind(&mut file).map_err(read_failed)?;
-        // A flat scanline EXR is decoded block by block straight into tiles; other EXR
-        // layouts, and EXR headers the band decoder refuses, are read whole below.
+        // Editable EXR stacks and flat scanlines go straight into tiles. EXR layouts these
+        // importers don't cover are read whole below.
         let mut streamed = None;
         let format_name = path.file_name().and_then(|name| name.to_str()).unwrap_or(name);
         if photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
             let before = photocraft_raster::spill::read_error_generation();
-            if let Some(mut result) = exr_native::import(&mut file, ctl)? {
+            let layered = layered_exr_import::import(name, &mut file, opts, ctl)?;
+            let imported = if layered.is_some() {
+                layered
+            } else {
+                std::io::Seek::rewind(&mut file).map_err(read_failed)?;
+                exr_native::import(&mut file, ctl)?
+            };
+            if let Some(mut result) = imported {
                 // A rewrite in place while the blocks were read must not become the document.
                 if FileIdentity::of_handle(&watch).map_err(read_failed)? != identity {
                     return Err(IoError::Read(format!("{}: the file changed while it was being opened; open it again", path.display())));
                 }
                 photocraft_raster::spill::check_since(before).map_err(IoError::Read)?;
+                result.document.scratch_health().map_err(IoError::Read)?;
                 ctl.check().map_err(|_| IoError::Cancelled)?;
                 result.document.name = name.to_string();
                 streamed = Some(result);
@@ -1079,7 +1090,16 @@ fn import_stages(
             }
         }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
-        Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
+        Route::Flat => {
+            let exr = as_ext.map_or_else(
+                || photocraft_formats::detect(name, bytes) == Some(photocraft_formats::Format::OpenExr),
+                |ext| ext.trim_start_matches('.').eq_ignore_ascii_case("exr"),
+            );
+            if exr && let Some(result) = layered_exr_import::import(name, &mut std::io::Cursor::new(bytes), opts, ctl)? {
+                return Ok(result);
+            }
+            flat::import_flat_with_options(name, bytes, opts, ctl)
+        }
     }
 }
 

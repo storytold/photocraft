@@ -494,6 +494,7 @@ view.newGuidesFromShape
 view.clearCanvasGuides
 file.exrParts
 file.openExrParts
+file.export.layeredExr
 type.antiAlias.none
 type.antiAlias.sharp
 type.antiAlias.crisp

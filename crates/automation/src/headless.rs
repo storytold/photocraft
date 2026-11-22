@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use photocraft_engine::exr_cmds::{LAYERED_EXR, export_layered_exr_with};
 use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 use photocraft_engine::{Session, command_specs, file_cmds};
 use photocraft_format::PcraftWriter;
@@ -593,13 +594,16 @@ impl Headless {
         }
     }
 
-    /// Default the params, authorize an untrusted command and apply finished jobs. Render Video
-    /// runs here for an untrusted session, with its own write capability.
+    /// Default the params, authorize an untrusted command and apply finished jobs. Direct
+    /// capability-scoped exports run here without granting a nested command filesystem access.
     fn admit(&mut self, id: &str, params: Value) -> Result<Admitted, AutomationError> {
         let params = if params.is_null() { json!({}) } else { params };
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             if id == "file.export.renderVideo" {
                 return self.render_video(params, |_, _| true).map(Admitted::Done);
+            }
+            if id == LAYERED_EXR {
+                return self.export_layered_exr(params).map(Admitted::Done);
             }
             authorize_engine_command(id, &params)?;
         }
@@ -626,6 +630,26 @@ impl Headless {
 }
 
 impl Headless {
+    fn export_layered_exr(&mut self, params: Value) -> Result<Value, AutomationError> {
+        self.sync_jobs();
+        let Filesystem::Workspace(workspace) = &self.filesystem else {
+            return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into()));
+        };
+        let err = |e: AutomationError| photocraft_engine::EngineError::Other(e.to_string());
+        Ok(export_layered_exr_with(&self.session, &params, |path, write| {
+            if params.get("overwrite").and_then(Value::as_bool) != Some(true)
+                && let Some(own) = self.session.active().and_then(|s| s.path.as_deref())
+                && workspace.same_write_destination(path, own).map_err(err)?
+            {
+                return Err(photocraft_engine::EngineError::BadParams {
+                    cmd: LAYERED_EXR.into(),
+                    msg: "choose a new path or pass `overwrite: true` to replace the document's own file".into(),
+                });
+            }
+            workspace.write_stream(path, write).map_err(err)
+        })?)
+    }
+
     /// A direct automation Render Video uses only the launch-time write capability. Nested
     /// engine actions still reject this filesystem command until they can carry capabilities.
     pub(crate) fn render_video(&mut self, params: Value, progress: impl FnMut(usize, usize) -> bool) -> Result<Value, AutomationError> {
