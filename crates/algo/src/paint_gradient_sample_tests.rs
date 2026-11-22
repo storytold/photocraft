@@ -7,7 +7,7 @@
 use photocraft_color::PixelFormat;
 use photocraft_raster::Surface;
 
-use super::{BlendMode, GradientShape, Rect, paint_gradient};
+use super::{BlendMode, FillMode, GradientShape, Rect, paint_gradient};
 
 const LINEAR: [f32; 11] = [0.0, 2.0, 17.0, 42.0, 70.0, 99.0, 129.0, 162.0, 196.0, 228.0, 255.0];
 
@@ -18,7 +18,7 @@ fn ramp() -> Vec<(f32, [f32; 4])> {
 /// An 800 × 600 RGB8 gradient from `from` to `to`, dither off.
 fn painted(shape: GradientShape, from: (f32, f32), to: (f32, f32)) -> Surface {
     let mut s = Surface::new(PixelFormat::RGBA8);
-    paint_gradient(&mut s, Rect::new(0, 0, 800, 600), from, to, shape, &ramp(), false, 1.0, BlendMode::Normal, false, None, false);
+    paint_gradient(&mut s, Rect::new(0, 0, 800, 600), from, to, shape, &ramp(), false, 1.0, FillMode::Blend(BlendMode::Normal), false, None, false);
     s
 }
 
