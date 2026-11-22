@@ -594,6 +594,14 @@ def round_(exe, label, scale, drags=False):
             case(app, "b2 ui.pointer brush stroke, window focused", lambda: pointer_stroke(app))
             case(app, "g2 type ui.click, window focused", lambda: type_click(app))
             if drags:
+                # b2 brushes on the type layer h left active, which opens the rasterize prompt; a modal
+                # prompt keeps the window from resizing, so cancel it first.
+                ui = app.conn.call("ui.inspect", {}).get("result") or {}
+                if ui.get("dialogs"):
+                    app.call("ui.key", {"key": "Escape"})
+                    time.sleep(1.0)
+                    ui = app.conn.call("ui.inspect", {}).get("result") or {}
+                    say(f"before drags: dialogs={ui.get('dialogs')}")
                 corner_drags(app.hwnd, "main")
                 app.new_lines()
     finally:
