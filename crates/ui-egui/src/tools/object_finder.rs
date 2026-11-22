@@ -34,8 +34,9 @@ use crate::state::{ObjectFinderMode, Tool};
 /// Seconds the pointer must rest before an object is looked up.
 pub const DEBOUNCE: f64 = 0.12;
 
-/// What a lookup job sends: the object and its hover mask.
-type Found = Option<(Arc<Region>, HoverMask)>;
+/// What a lookup job sends: the object. Its hover mask is made on the UI thread, whose
+/// `texture_serials` number it.
+type Found = Option<Arc<Region>>;
 
 /// A lookup running off the UI thread.
 struct Job {
@@ -91,9 +92,10 @@ fn active(app: &PhotocraftApp, pressed: bool) -> bool {
 }
 
 /// The hover mask of an object: the one place a region becomes the tint the outline shows.
-fn mask_of(r: &Region) -> HoverMask {
+/// `serials` (the app's `texture_serials`) keeps its texture apart from earlier masks'.
+fn mask_of(serials: &mut craft::ui::primitives::Serials, r: &Region) -> HoverMask {
     let b = r.bbox;
-    HoverMask::sampled(Rect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)), |x, y| r.at(x.floor() as i32, y.floor() as i32))
+    HoverMask::sampled(serials, Rect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)), |x, y| r.at(x.floor() as i32, y.floor() as i32))
 }
 
 /// Advances the hover preview with the pointer at `at` (document px; `None` = off the canvas)
@@ -149,9 +151,10 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
     if let Some(job) = &f.job {
         match job.rx.try_recv() {
             Ok(found) => {
-                if let Some((r, mask)) = found {
+                if let Some(r) = found {
                     if photocraft_engine::layer_multi_cmds::same_pixels(&job.doc, &doc_arc) {
                         app.session.object_finder.insert(&doc_arc, target, Arc::clone(&r));
+                        let mask = mask_of(&mut app.texture_serials, &r);
                         f.mask = Some((r, mask));
                     }
                 } else {
@@ -171,7 +174,7 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
         f.shown = app.session.object_finder.lookup(&doc_arc, target, at[0] as f32, at[1] as f32);
     }
     match &f.shown {
-        Some(r) if !f.mask.as_ref().is_some_and(|(m, _)| Arc::ptr_eq(m, r)) => f.mask = Some((Arc::clone(r), mask_of(r))),
+        Some(r) if !f.mask.as_ref().is_some_and(|(m, _)| Arc::ptr_eq(m, r)) => f.mask = Some((Arc::clone(r), mask_of(&mut app.texture_serials, r))),
         None => f.mask = None,
         _ => {}
     }
@@ -199,10 +202,7 @@ fn spawn(doc: Arc<Document>, layer: Option<LayerId>, all_layers: bool, px: [i32;
     let work = {
         let doc = Arc::clone(&doc);
         move || {
-            let found = find_object(&doc, layer, all_layers, at[0] as f32, at[1] as f32).map(|r| {
-                let mask = mask_of(&r);
-                (Arc::new(r), mask)
-            });
+            let found = find_object(&doc, layer, all_layers, at[0] as f32, at[1] as f32).map(Arc::new);
             let _ = tx.send(found);
             ctx.request_repaint();
         }

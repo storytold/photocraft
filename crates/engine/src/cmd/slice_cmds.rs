@@ -92,9 +92,10 @@ fn layer_slice_rect(doc: &Document, s: &Slice) -> Option<Rect> {
 }
 
 /// Re-fits layer-based slices of the active document to their layers; drops slices whose layer
-/// was deleted (as Photoshop does). Not a history step.
+/// was deleted (as Photoshop does). Not a history step. Runs after every command, so it reads through `active` and
+/// borrows the document to change only when a slice moves: the borrow moves its `Tracked` revision.
 pub(crate) fn refresh(s: &mut Session) {
-    let Some(st) = s.active_mut() else { return };
+    let Some(st) = s.active() else { return };
     if !st.doc.slices.list.iter().any(|sl| sl.origin == SliceOrigin::Layer) {
         return;
     }
@@ -109,6 +110,7 @@ pub(crate) fn refresh(s: &mut Session) {
     if changes.is_empty() {
         return;
     }
+    let Some(st) = s.active_mut() else { return };
     let doc = Arc::make_mut(st.doc_mut());
     for (id, r) in changes {
         match r {

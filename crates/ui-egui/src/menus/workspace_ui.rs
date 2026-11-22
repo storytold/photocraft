@@ -39,9 +39,10 @@ pub struct ShellUi {
 }
 
 /// The workspaces of the app.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, craft::ui::contract::PlainData)]
 pub struct Workspaces {
     /// Built-in and saved workspaces, the current one, the lock.
+    #[plain_data(assume = "craft-behavior workspace data: plain values and strings")]
     pub set: WorkspaceSet<String>,
 }
 
@@ -113,11 +114,11 @@ pub fn load(app: &mut PhotocraftApp) {
             if set.find(&stored.current).is_some() {
                 set.current = stored.current;
             }
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
         }
         None => {
             let moved = migrate(app, &prefs, &mut set);
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
             if moved {
                 store(app);
             }
@@ -318,6 +319,11 @@ pub fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
 /// The state of each workspace command, for the command source.
 pub fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     workspace_states(&app.workspaces.set).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
+}
+
+/// [`states`], derived from the workspaces.
+pub fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &app.workspaces, || states(app))
 }
 
 // ---------------------------------------------------------------------------------------------------------------

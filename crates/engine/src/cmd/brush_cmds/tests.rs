@@ -362,7 +362,7 @@ fn presets_save_load_delete_round_trip() {
     let b = s.execute("tools.setBrush", json!({"preset": "mine"})).unwrap();
     assert_eq!(b["size"], 77.0);
     let back: BrushSettings = serde_json::from_value(s.execute("brush.get", json!({})).unwrap()).unwrap();
-    assert_eq!(back, s.tools.brush);
+    assert_eq!(back, *s.tools.brush);
     // Overwrite, then delete.
     s.execute("brush.presets.save", json!({"name": "Mine"})).unwrap();
     assert_eq!(s.tools.presets.len(), n0 + 1);
@@ -454,11 +454,11 @@ fn presets_save_appends_at_the_end_and_update_overwrites_in_place() {
 #[test]
 fn a_failed_set_brush_leaves_no_current_preset_behind() {
     let mut s = session(10, 10);
-    let before = s.tools.brush.clone();
+    let before = (*s.tools.brush).clone();
     // A rejected brush (a wrong-typed size) must not record the preset it came with.
     assert!(s.execute("tools.setBrush", json!({"preset": "Chalk", "brush": {"size": "big"}})).is_err());
     assert_eq!(s.tools.current_preset, None);
-    assert_eq!(s.tools.brush, before);
+    assert_eq!(*s.tools.brush, before);
     // Once the brush is accepted, the preset is recorded.
     s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
     assert_eq!(s.tools.current_preset.as_deref(), Some("Chalk"));
@@ -476,7 +476,7 @@ fn set_brush_merges_fields() {
     assert_eq!(b.size, 55.0);
     assert!(b.shape_dynamics.enabled && b.shape_dynamics.size.jitter == 0.5 && b.shape_dynamics.angle.jitter == 0.25);
     s.execute("tools.setBrush", json!({"reset": true})).unwrap();
-    assert_eq!(s.tools.brush, BrushSettings::default());
+    assert_eq!(*s.tools.brush, BrushSettings::default());
     // Protect texture carries the pattern across textured presets.
     s.execute("tools.setBrush", json!({"preset": "Chalk", "protectTexture": true})).unwrap();
     let chalk_pattern = s.tools.brush.texture.pattern.clone();
@@ -571,7 +571,7 @@ fn an_uncaptured_preset_size_keeps_dual_brush_proportions() {
 fn set_brush_keeps_untouched_bitmaps_and_replaces_touched_ones() {
     let tile = |w, h, k: u32| GrayTile::from_fn(w, h, move |x, y| ((x * k + y) % 5) as f32 / 4.0);
     let base = BrushSettings {
-        tip: TipShape::Sampled(tile(900, 700, 3)),
+        tip: TipShape::Sampled(tile(900, 700, 3)).into(),
         dual_brush: photocraft_paint::DualBrush { tip: TipShape::Sampled(tile(30, 20, 2)), ..Default::default() },
         texture: photocraft_paint::Texture { pattern: photocraft_paint::Pattern::Tile(tile(64, 64, 1)), ..Default::default() },
         ..Default::default()
@@ -591,13 +591,13 @@ fn set_brush_keeps_untouched_bitmaps_and_replaces_touched_ones() {
         cmd,
     )
     .unwrap();
-    assert_eq!((&b.tip, &b.dual_brush.tip), (&TipShape::Round, &TipShape::Round));
+    assert_eq!((&*b.tip, &b.dual_brush.tip), (&TipShape::Round, &TipShape::Round));
     assert!(matches!(b.texture.pattern, photocraft_paint::Pattern::Procedural { size: 32, .. }));
     // A section replaced by a non-object is an error, not a silently kept bitmap.
     assert!(merge_brush(&base, &json!({"dualBrush": 3}), cmd).is_err());
     assert!(merge_brush(&base, &json!(null), cmd).is_err());
     // Speed: a panel edit on a big imported tip doesn't base64 the tip.
-    let big = BrushSettings { tip: TipShape::Sampled(tile(2500, 2500, 7)), ..Default::default() };
+    let big = BrushSettings { tip: TipShape::Sampled(tile(2500, 2500, 7)).into(), ..Default::default() };
     let t0 = std::time::Instant::now();
     for i in 0..10 {
         merge_brush(&big, &json!({"size": 10 + i}), cmd).unwrap();
@@ -620,7 +620,7 @@ fn define_brush_from_selection() {
     let r = s.execute("brush.defineFromSelection", json!({"name": "Blob"})).unwrap();
     assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(6), Some(4)));
     assert_eq!(s.tools.brush.size, 6.0);
-    assert!(matches!(&s.tools.brush.tip, TipShape::Sampled(t) if t.width == 6 && t.height == 4 && t.get(0, 0) == 1.0));
+    assert!(matches!(&*s.tools.brush.tip, TipShape::Sampled(t) if t.width == 6 && t.height == 4 && t.get(0, 0) == 1.0));
     assert!(s.tools.presets.iter().any(|p| p.name == "Blob"));
     // Paint with it.
     s.execute("select.deselect", json!({})).unwrap();
@@ -653,15 +653,15 @@ fn define_brush_from_selection_survives_allocation_failure() {
     // panic or an OOM abort.
     let mut s = session(40, 40);
     s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
-    let brush_before = s.tools.brush.clone();
-    let presets_before = s.tools.presets.clone();
+    let brush_before = (*s.tools.brush).clone();
+    let presets_before = (*s.tools.presets).clone();
     let history_before = s.active().unwrap().history.past_len();
     crate::allocation::fail_next_for_test();
     let result = s.execute("brush.defineFromSelection", json!({"name": "Blob"}));
     let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
     assert!(result.is_err(), "an allocation failure must be reported, not panic");
-    assert_eq!(s.tools.brush, brush_before, "the current brush is unchanged");
-    assert_eq!(s.tools.presets, presets_before, "the preset list is unchanged");
+    assert_eq!(*s.tools.brush, brush_before, "the current brush is unchanged");
+    assert_eq!(*s.tools.presets, presets_before, "the preset list is unchanged");
     assert_eq!(s.active().unwrap().history.past_len(), history_before, "no history step was recorded");
 }
 
@@ -674,16 +674,16 @@ fn define_brush_from_selection_survives_failure_of_the_second_allocation() {
     let mut s = session(40, 40);
     s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
     let pixels_before = surface(&s);
-    let brush_before = s.tools.brush.clone();
-    let presets_before = s.tools.presets.clone();
+    let brush_before = (*s.tools.brush).clone();
+    let presets_before = (*s.tools.presets).clone();
     let history_before = s.active().unwrap().history.past_len();
     crate::allocation::fail_after_for_test(1);
     let result = s.execute("brush.defineFromSelection", json!({"name": "Blob"}));
     let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
     assert!(result.is_err(), "an allocation failure must be reported, not panic");
     assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for defining a brush from the selection")));
-    assert_eq!(s.tools.brush, brush_before, "the current brush is unchanged");
-    assert_eq!(s.tools.presets, presets_before, "the preset list is unchanged");
+    assert_eq!(*s.tools.brush, brush_before, "the current brush is unchanged");
+    assert_eq!(*s.tools.presets, presets_before, "the preset list is unchanged");
     assert_eq!(s.active().unwrap().history.past_len(), history_before, "no history step was recorded");
     assert!(same_pixels(&pixels_before, &surface(&s), s.active().unwrap().doc.bounds()), "the document pixels are unchanged");
 }
@@ -693,16 +693,16 @@ fn define_brush_from_selection_propagates_compositor_allocation_error_transactio
     let mut s = session(40, 40);
     s.execute("select.rect", json!({"x": 5, "y": 5, "width": 20, "height": 20})).unwrap();
     let doc = s.active().unwrap().doc.clone();
-    let brush_before = s.tools.brush.clone();
-    let presets_before = s.tools.presets.clone();
+    let brush_before = (*s.tools.brush).clone();
+    let presets_before = (*s.tools.presets).clone();
     let history_before = s.active().unwrap().history.past_len();
     let result = define_from_selection_with_renderer(&mut s, &json!({"name": "Blob"}), |_, _, _| {
         Err(photocraft_compose::RenderBandsError::Allocation(photocraft_raster::AllocationError::NotEnoughMemory { bytes: 64 }))
     });
     assert!(result.is_err_and(|e| e.to_string().contains("defining a brush from the selection")));
     assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
-    assert_eq!(s.tools.brush, brush_before);
-    assert_eq!(s.tools.presets, presets_before);
+    assert_eq!(*s.tools.brush, brush_before);
+    assert_eq!(*s.tools.presets, presets_before);
     assert_eq!(s.active().unwrap().history.past_len(), history_before);
 }
 
@@ -954,14 +954,14 @@ fn pose_axes_commands_keep_minimal_patches_legacy_alias_and_preset_replay() {
     let input = StrokePoint { tilt_x: 13.0, tilt_y: -27.0, pressure: 0.71, rotation: 67.0, ..Default::default() };
     s.execute("tools.setBrush", json!({"brush": {"pose": {"enabled": true, "tiltX": 45, "tiltY": -18, "overrideTilt": true}}})).unwrap();
     assert_eq!(photocraft_paint::dynamics::apply_pose(&s.tools.brush, input), StrokePoint { tilt_x: 45.0, tilt_y: -18.0, ..input });
-    let before = s.tools.brush.clone();
+    let before = (*s.tools.brush).clone();
     s.execute("tools.setBrush", json!({"pose": {"overrideTiltX": false}})).unwrap();
     assert_eq!(
         photocraft_paint::dynamics::apply_pose(&s.tools.brush, input),
         StrokePoint { tilt_y: -18.0, ..input },
         "turning X off retains Y override and live X input"
     );
-    let mixed = s.tools.brush.clone();
+    let mixed = (*s.tools.brush).clone();
     assert_eq!(brush_patch(&before, &mixed), json!({"pose": {"overrideTiltX": false}}), "the derived combined flag must not enter an axis-only patch");
     let wire = s.execute("brush.get", json!({})).unwrap();
     assert_eq!(wire["pose"]["overrideTiltX"], false);
@@ -979,13 +979,13 @@ fn pose_axes_commands_keep_minimal_patches_legacy_alias_and_preset_replay() {
     for (id, params) in &s.journal {
         replay.execute(id, params.clone()).unwrap();
     }
-    assert_eq!(replay.tools.brush, s.tools.brush, "recorded commands reproduce the same axes");
+    assert_eq!(*replay.tools.brush, *s.tools.brush, "recorded commands reproduce the same axes");
 }
 
 #[test]
 fn pose_axes_invalid_flags_fail_atomically() {
     let mut s = session(100, 80);
-    let before = s.tools.brush.clone();
+    let before = (*s.tools.brush).clone();
     let n = s.journal.len();
     for pose in [
         json!({"overrideTiltX": "yes"}),
@@ -994,7 +994,7 @@ fn pose_axes_invalid_flags_fail_atomically() {
         json!({"overrideTilt": "yes", "overrideTiltX": false}),
     ] {
         assert!(s.execute("tools.setBrush", json!({"brush": {"pose": pose}})).is_err());
-        assert_eq!(s.tools.brush, before);
+        assert_eq!(*s.tools.brush, before);
         assert_eq!(s.journal.len(), n, "a failed update records no command");
     }
 }
@@ -1031,18 +1031,18 @@ fn new_brush_controls_round_trip_through_set_brush() {
     }
     let mut t = session(40, 40);
     t.execute("tools.setBrush", json!({ "brush": got })).unwrap();
-    assert_eq!(t.tools.brush, s.tools.brush);
+    assert_eq!(*t.tools.brush, *s.tools.brush);
     // Locked sections survive picking a preset through the command.
     s.execute("tools.setBrush", json!({"preset": "Chalk"})).unwrap();
     assert!(s.tools.brush.shape_dynamics.brush_projection && s.tools.brush.locks.texture);
     // Wrong types are errors and leave the brush alone.
-    let before = s.tools.brush.clone();
+    let before = (*s.tools.brush).clone();
     for bad in
         [json!({"spacingEnabled": 3}), json!({"locks": {"texture": "yes"}}), json!({"mixer": {"wet": "wet"}}), json!({"shapeDynamics": {"tiltScale": []}})]
     {
         assert!(s.execute("tools.setBrush", json!({ "brush": bad })).is_err());
     }
-    assert_eq!(s.tools.brush, before);
+    assert_eq!(*s.tools.brush, before);
 }
 
 #[test]
@@ -1186,7 +1186,7 @@ fn coalesced_set_brush_calls_journal_once_per_gesture() {
     for (id, p) in s.journal.iter().skip(1) {
         t.execute(id, p.clone()).unwrap();
     }
-    assert_eq!(t.tools.brush, s.tools.brush);
+    assert_eq!(*t.tools.brush, *s.tools.brush);
 }
 
 /// A Scatter amount beyond the 1000 % maximum (the issue's 1e38, just above the maximum, or one
@@ -1207,11 +1207,11 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     for (j, shown) in [(1e38, "1e38"), (10.01, "10.01"), (1e39, "inf"), (-1.0, "-1.0")] {
         for (patch, what) in [(scatter(j), "scatter"), (dual(j), "dual brush scatter")] {
             let mut s = new();
-            let before = s.tools.brush.clone();
+            let before = (*s.tools.brush).clone();
             let err = s.execute("tools.setBrush", json!({ "brush": patch.clone() })).unwrap_err();
             let msg = err.to_string();
             assert!(matches!(err, EngineError::BadParams { .. }) && msg.contains(what) && msg.contains(shown), "{j}: {msg}");
-            assert_eq!(s.tools.brush, before, "a rejected scatter must not change the session brush");
+            assert_eq!(*s.tools.brush, before, "a rejected scatter must not change the session brush");
             let (doc, revision) = (s.active().unwrap().doc.clone(), s.active().unwrap().revision);
             let err = paint_stroke(&mut s, &json!({"points": [[10, 10]], "brush": patch})).unwrap_err();
             assert!(matches!(err, EngineError::BadParams { .. }) && err.to_string().contains(shown), "{j}: {err}");
@@ -1366,7 +1366,7 @@ fn set_brush_takes_a_per_dynamic_curve_and_a_patch_resets_it() {
     let mut s = session(20, 20);
     let curve = json!([[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]]);
     s.execute("tools.setBrush", json!({"shapeDynamics": {"enabled": true, "size": {"control": "penPressure", "curve": curve}}})).unwrap();
-    let with = s.tools.brush.clone();
+    let with = (*s.tools.brush).clone();
     assert_eq!(with.shape_dynamics.size.curve.points(), vec![[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]]);
     assert!(with.transfer.opacity.curve.is_linear(), "other dynamics keep their own curve");
     // The panel's diff back to linear is a real patch, and applying it restores the linear curve.
@@ -1531,6 +1531,56 @@ fn brush_and_pencil_paint_a_cmyk_pick_with_the_picked_inks() {
         let got: Vec<f32> = surf.read_region(Rect::new(8, 8, 9, 9)).into_iter().take(4).collect();
         assert!(got.iter().zip(cyan).all(|(a, b)| (a - b).abs() < 0.02), "{cmd}: {got:?}");
     }
+}
+
+/// The `paint.stroke` result's `warnings`, as strings (an absent list reads as empty).
+fn stroke_warnings(r: &Value) -> Vec<String> {
+    r["warnings"].as_array().map(|w| w.iter().filter_map(|m| m.as_str().map(str::to_string)).collect()).unwrap_or_default()
+}
+
+/// #8389: `spacing` multiplies the brush diameter, so `size: 150, spacing: 5` steps dabs 750 px
+/// apart and a 320 px stroke gets its first dab only. The result reports that pitch and warns
+/// instead of losing the rest of the stroke's coverage silently.
+#[test]
+fn a_stroke_shorter_than_its_dab_pitch_reports_the_pitch_and_warns() {
+    let mut s = session(400, 400);
+    let r = s.execute("paint.stroke", json!({"points": [[200, 40], [200, 360]], "size": 150, "spacing": 5, "color": "#ff0000"})).unwrap();
+    assert_eq!(r["pitch"].as_f64(), Some(750.0), "{r}");
+    let warnings = stroke_warnings(&r);
+    assert_eq!(warnings.len(), 1, "{r}");
+    assert!(warnings[0].contains("750") && warnings[0].contains("320"), "names the pitch and the path length: {r}");
+    // Only the first dab landed: the far end of the stroke is untouched.
+    assert_eq!(rgba(&s, 200, 330)[3], 0.0);
+}
+
+/// #8389: the warning is only for strokes that lose coverage, and their result keeps its old
+/// shape (no `pitch`, no `warnings`). A normal spacing, a tap (a path the first dab already
+/// covers) and Spacing turned off (dabs follow the stroke's speed, so there is no pitch) all
+/// paint without one.
+#[test]
+fn strokes_that_keep_their_coverage_do_not_warn() {
+    let mut s = session(400, 400);
+    let quiet = |r: &Value| r.get("pitch").is_none() && r.get("warnings").is_none();
+    let r = s.execute("paint.stroke", json!({"points": [[200, 40], [200, 360]], "size": 150, "spacing": 0.25})).unwrap();
+    assert!(quiet(&r), "{r}");
+    let tap = s.execute("paint.stroke", json!({"points": [[100, 100], [130, 100]], "size": 150, "spacing": 5})).unwrap();
+    assert!(quiet(&tap), "the first dab covers the whole path: {tap}");
+    let timed = s.execute("paint.stroke", json!({"points": [[20, 20], [380, 20]], "size": 10, "spacing": 5, "brush": {"spacingEnabled": false}})).unwrap();
+    assert!(quiet(&timed), "{timed}");
+}
+
+/// #8389: whether the first dab covers the path is judged by that dab's diameter, not the brush
+/// size. With the default pressure sizing, a first point at pressure 0.2 makes a `size: 150` dab
+/// 30 px wide, so `spacing: 5` steps 150 px and a 50 px path reaches past the dab and still warns.
+#[test]
+fn a_light_first_point_is_judged_by_its_own_dab_diameter() {
+    let mut s = session(400, 400);
+    s.execute("tools.setBrush", json!({"brush": {"pressureSize": true}})).unwrap();
+    let r = s.execute("paint.stroke", json!({"points": [[100, 200, 0.2], [150, 200, 0.2]], "size": 150, "spacing": 5, "color": "#ff0000"})).unwrap();
+    assert_eq!(r["pitch"].as_f64(), Some(150.0), "{r}");
+    let warnings = stroke_warnings(&r);
+    assert_eq!(warnings.len(), 1, "{r}");
+    assert!(warnings[0].contains("30.0 px") && warnings[0].contains("150.0 px apart") && warnings[0].contains("50.0 px path"), "{r}");
 }
 
 #[test]

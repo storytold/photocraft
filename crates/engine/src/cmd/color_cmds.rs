@@ -30,11 +30,13 @@ mod profile_dither;
 // ------------------------------------------------------------------ state
 
 /// View › Proof Setup settings.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct ProofSetup {
     /// What the user asked for (built-in id or path), for display.
     pub name: String,
+    #[plain_data(assume = "craft-cms profile: parsed tables and bytes, no interior mutability")]
     pub profile: Arc<Profile>,
+    #[plain_data(assume = "craft-cms rendering intent: a fieldless enum")]
     pub intent: Intent,
     pub bpc: bool,
     /// Simulate paper colour (absolute colorimetric proof → display, black ink simulated).
@@ -46,9 +48,12 @@ pub struct ProofSetup {
 
 impl Default for ProofSetup {
     fn default() -> Self {
+        // One shared copy of the built-in profile: every proof-state read of a document without its own setup makes a
+        // default, and copying the profile each time costs about half a millisecond.
+        static COATED_CMYK: std::sync::OnceLock<Arc<Profile>> = std::sync::OnceLock::new();
         ProofSetup {
             name: "working-cmyk".into(),
-            profile: Arc::new(Builtin::CoatedCmyk.profile().clone()),
+            profile: Arc::clone(COATED_CMYK.get_or_init(|| Arc::new(Builtin::CoatedCmyk.profile().clone()))),
             intent: Intent::RelativeColorimetric,
             bpc: true,
             simulate_paper: false,
@@ -58,7 +63,7 @@ impl Default for ProofSetup {
 }
 
 /// Per-document proofing state the UI reads (see [`ColorState::proof`]).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, craft_ui_macros::PlainData)]
 pub struct ProofView {
     pub setup: ProofSetup,
     /// View › Proof Colors.
@@ -216,7 +221,7 @@ pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
 pub struct ColorState {
     /// Edit › Color Settings (persisted with the preferences).
     pub settings: ColorSettings,
-    proofs: HashMap<DocId, ProofView>,
+    proofs: craft_tracked::Tracked<HashMap<DocId, ProofView>>,
     /// The displays and their ICC profiles as read by the platform, primary (menu-bar) display
     /// first (used when Color Settings › Monitor Profile is `auto`; none = sRGB display).
     pub displays: Vec<crate::display_color::Display>,
@@ -384,6 +389,11 @@ impl ColorState {
     /// Proofing state of a document (defaults: coated CMYK, relative colorimetric + BPC, off).
     pub fn proof(&self, doc: DocId) -> ProofView {
         self.proofs.get(&doc).cloned().unwrap_or_else(|| ProofView { gamut_threshold: craft_cms::gamut::DEFAULT_THRESHOLD, ..Default::default() })
+    }
+
+    /// The revision of every document's proofing state: it moves with each change to one.
+    pub fn proofs_revision(&self) -> craft_tracked::Revision {
+        self.proofs.revision()
     }
 
     /// Borrow the document's proofing state without cloning its profile or allocating defaults.
