@@ -11,7 +11,6 @@
 //! `photocraft_color::convert`), so their [`composite_profile`] is sRGB; documents tagged with
 //! a different CMYK profile therefore display approximately until compositing is mode-native.
 
-use crate::prefs::SavedPrefsExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -1555,6 +1554,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prefs::SavedPrefsExt;
     use photocraft_geom::Rect;
 
     /// Image › Mode to CMYK keeps a filled background's shared tile shared (#4531): one
