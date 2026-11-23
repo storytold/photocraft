@@ -246,6 +246,73 @@ fn is_open_as_format(ext: &str) -> bool {
         || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read)
 }
 
+/// The Raw Options fields `file.openAs` takes with `"as": "raw"` (#14051).
+pub const RAW_LAYOUT_KEYS: &[&str] = &["width", "height", "channels", "depth", "byteOrder", "interleaved", "header"];
+
+/// Photoshop Raw's layout from `file.openAs`'s params (#14051): `None` unless `as` is `raw` and
+/// at least one of [`RAW_LAYOUT_KEYS`] is given, so a bare `raw` stays the camera raw type it was.
+/// `width` and `height` are required; the rest start at Raw Options' values (1 interleaved
+/// channel at 8 bits, Mac byte order, no header). Only the value types are checked here: what a
+/// file can hold is [`photocraft_io::photoshop_raw::RawLayout::check`]'s to say.
+pub fn raw_layout_param(p: &Value) -> Result<Option<photocraft_io::photoshop_raw::RawLayout>> {
+    use photocraft_io::photoshop_raw::{ByteOrder, RawLayout};
+    let as_raw = p.get("as").or_else(|| p.get("format")).and_then(Value::as_str).is_some_and(|ext| ext.trim_start_matches('.').eq_ignore_ascii_case("raw"));
+    if !as_raw || !RAW_LAYOUT_KEYS.iter().any(|key| p.get(*key).is_some_and(|v| !v.is_null())) {
+        return Ok(None);
+    }
+    let bad = |msg: String| EngineError::BadParams { cmd: "file.openAs".into(), msg };
+    let given = |key: &str| p.get(key).filter(|v| !v.is_null());
+    let whole = |key: &str, default: Option<u64>| -> Result<u64> {
+        match given(key) {
+            None => default.ok_or_else(|| bad(format!("Photoshop Raw needs \"{key}\""))),
+            Some(v) => v.as_u64().ok_or_else(|| bad(format!("expected a whole number for \"{key}\""))),
+        }
+    };
+    let small = |key: &str, default: Option<u64>| -> Result<u32> {
+        let v = whole(key, default)?;
+        u32::try_from(v).map_err(|_| bad(format!("\"{key}\" is too large: {v}")))
+    };
+    let byte_order = match given("byteOrder") {
+        None => ByteOrder::Mac,
+        Some(v) => match v.as_str() {
+            Some("mac") => ByteOrder::Mac,
+            Some("ibm") => ByteOrder::IbmPc,
+            _ => return Err(bad(format!("expected \"mac\" or \"ibm\" for \"byteOrder\", not {v}"))),
+        },
+    };
+    let interleaved = match given("interleaved") {
+        None => true,
+        Some(v) => v.as_bool().ok_or_else(|| bad("expected boolean for \"interleaved\"".into()))?,
+    };
+    Ok(Some(RawLayout {
+        width: small("width", None)?,
+        height: small("height", None)?,
+        channels: small("channels", Some(1))?,
+        depth: small("depth", Some(8))?,
+        byte_order,
+        interleaved,
+        header: whole("header", Some(0))?,
+    }))
+}
+
+/// File › Open As › Photoshop Raw (#14051): the file at `path` read as the pixels `layout`
+/// describes, opened as a document named after the file. History starts with its snapshot and
+/// Open, as for any open. There is no Photoshop Raw writer, so the document keeps no path: Save
+/// asks where to save instead of writing over the source.
+fn open_photoshop_raw(s: &mut Session, path: &str, bytes: &[u8], layout: &photocraft_io::photoshop_raw::RawLayout) -> Result<Value> {
+    crate::allocation::checkpoint("importing document")?;
+    let name = file_name(path);
+    let r = photocraft_io::photoshop_raw::import(&name, bytes, layout).map_err(|e| crate::error::io_open_as_error(&name, "raw", e))?;
+    let mut doc = r.document;
+    doc.name = name.clone();
+    let (i, color) = s.open_document(doc, None);
+    if let Some(st) = s.active_mut() {
+        st.source_read_only = r.source_read_only;
+    }
+    batch_open_notice(s, &name, &r.warnings, &color);
+    Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
+}
+
 /// Open the selected file with its decoder options and record its Batch source identity.
 pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.openAs")?.to_string();
@@ -262,8 +329,12 @@ pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: format!("\"as\" names no format PhotoCraft reads: {ext:?}") });
     }
+    let raw_layout = raw_layout_param(p)?;
     let bytes = read_file(&path)?;
-    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
+    let result = match raw_layout {
+        Some(layout) => open_photoshop_raw(s, &path, &bytes, &layout)?,
+        None => open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?,
+    };
     remember_batch_open(s);
     Ok(result)
 }

@@ -29,7 +29,7 @@ pub(crate) mod params {
 
     use super::{
         PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
-        equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
+        equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui, raw_options_ui,
         smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
@@ -79,6 +79,7 @@ pub(crate) mod params {
         ParamFamily { check: Some(count_group_name_ui::check), ..ParamFamily::new(count_group_name_ui::owns, count_group_name_ui::run) },
         ParamFamily { check: Some(duplicate_layer_ui::check), ..ParamFamily::new(duplicate_layer_ui::owns, duplicate_layer_ui::run) },
         ParamFamily::new(snapshot_dialog::owns, snapshot_dialog::run),
+        ParamFamily::new(raw_options_ui::owns, raw_options_ui::run),
         ParamFamily::new(history_options_ui::owns, history_options_ui::run),
         ParamFamily::new(brush_preset_dialog::owns, brush_preset_dialog::run),
         ParamFamily { check: Some(equalize_ui::check), ..ParamFamily::new(equalize_ui::owns, equalize_ui::run) },
@@ -755,6 +756,7 @@ mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
+pub(crate) mod raw_options_ui;
 #[cfg(test)]
 mod rotate_canvas_layout_tests;
 pub(crate) mod rotate_canvas_ui;
