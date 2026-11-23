@@ -402,9 +402,9 @@ fn fields_set_position(f: &mut DialogFields, left: f64, top: f64) {
 
 /// The document's flattened picture at the preview size, mirrored for Emulsion Down (the sheet
 /// draws the picture unmirrored in the box). The texture lives in the context's memory under the
-/// document's id and revision.
+/// document's id and revision, and the scratch read-error generation (`crate::scratch_reads`).
 fn picture(ctx: &egui::Context, doc: &photocraft_doc::Document, revision: u64, mirror: bool) -> egui::load::SizedTexture {
-    let key = egui::Id::unique(("print-thumb", doc.id.0, revision, mirror));
+    let key = egui::Id::unique(("print-thumb", doc.id.0, revision, mirror, crate::scratch_reads::generation()));
     let tex: Option<std::sync::Arc<egui::TextureHandle>> = ctx.data(|d| d.get_temp(key));
     let tex = tex.unwrap_or_else(|| {
         let th = photocraft_compose::thumbnail(doc, 400);
@@ -537,6 +537,8 @@ pub(super) fn print_params(f: &DialogFields) -> Value {
             p.insert(k.to_string(), v);
         }
     }
+    // The ruler unit is the dialog's own display setting; `file.print` takes no `units`.
+    p.remove("units");
     // The driver's printable area belongs to a print to the printer, not to a file or a dry run.
     if f.text("output").is_some_and(|output| !output.is_empty()) || f.bool("dryRun") == Some(true) {
         p.remove("printable");
@@ -569,4 +571,20 @@ pub(crate) fn print_status(app: &mut PhotocraftApp, r: &Value) {
         crate::i18n::fmt(tl!(template), &[("path", r["pdf"].as_str().unwrap_or(""))])
     };
     app.ui.status_error = false;
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    /// A tile that fails to read and recovers keeps the document's revision; the preview picture still draws again,
+    /// so it does not keep the zeros it read during the error.
+    #[test]
+    fn the_preview_picture_draws_again_after_a_scratch_read_error_transition() {
+        use photocraft_doc::{ColorMode, Document, SampleType};
+        let ctx = egui::Context::default();
+        let doc = Document::new("Print", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        let first = super::picture(&ctx, &doc, 3, false).id;
+        assert_eq!(super::picture(&ctx, &doc, 3, false).id, first, "the same revision keeps its picture");
+        crate::scratch_reads::tests::simulate_read_error_transition();
+        assert_ne!(super::picture(&ctx, &doc, 3, false).id, first, "the picture draws again after the transition");
+    }
 }

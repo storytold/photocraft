@@ -8,7 +8,6 @@ use serde_json::json;
 
 use super::{COMMAND, greyed, param};
 use crate::PhotocraftApp;
-use crate::panels::layers_tree::blend_key;
 
 /// The reference application's Fade Mode list, a group per row.
 const GROUPS: [&[&str]; 6] = [
@@ -46,7 +45,7 @@ fn the_list_is_the_27_modes_in_the_reference_order() {
 #[test]
 fn the_params_doc_lists_all_27_modes_and_the_old_names_still_work() {
     let options = spec_modes();
-    let modes: Vec<Option<BlendMode>> = options.iter().map(|o| photocraft_engine::commands::blend_from_str(o)).collect();
+    let modes: Vec<Option<BlendMode>> = options.iter().map(|o| photocraft_engine::commands::parse_blend(o)).collect();
     assert_eq!(modes, BlendMode::LAYER_MODES.map(Some).to_vec());
     for old in ["normal", "multiply", "screen", "overlay", "softLight", "hardLight", "darken", "lighten", "difference", "color", "luminosity"] {
         assert!(options.iter().any(|o| o == old), "{old} is still listed");
@@ -56,12 +55,12 @@ fn the_params_doc_lists_all_27_modes_and_the_old_names_still_work() {
 /// The dialog's row writes the Layers panel's keys; each one fades.
 #[test]
 fn every_listed_mode_fades() {
-    for key in BlendMode::LAYER_MODES.map(blend_key) {
+    for key in BlendMode::LAYER_MODES.map(|mode| mode.key().to_string()) {
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
         s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
         let out = s.execute(COMMAND, json!({"opacity": 50, "mode": key})).unwrap();
-        assert_eq!(out["mode"], json!(photocraft_engine::commands::blend_from_str(&key).unwrap().label()), "{key}");
+        assert_eq!(out["mode"], json!(photocraft_engine::commands::parse_blend(&key).unwrap().label()), "{key}");
     }
 }
 
@@ -104,7 +103,7 @@ fn the_row_disables_the_documents_greyed_modes() {
         let ParamKind::Blend { modes, .. } = &row.kind else { panic!("Mode is a blend row") };
         assert_eq!(modes.len(), BlendMode::LAYER_MODES.len(), "{mode} {depth}");
         for m in BlendMode::LAYER_MODES {
-            assert_eq!(row.option_enabled(&blend_key(m)), !want.contains(&m), "{mode} {depth}: {}", m.label());
+            assert_eq!(row.option_enabled(m.key()), !want.contains(&m), "{mode} {depth}: {}", m.label());
         }
     }
 }
