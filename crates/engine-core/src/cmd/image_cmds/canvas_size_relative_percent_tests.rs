@@ -11,7 +11,7 @@ use crate::Session;
 use crate::actions_cmds::{Action, ActionStep};
 
 fn doc(width: u32, height: u32) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": width, "height": height, "background": "white"})).unwrap();
     s
 }
