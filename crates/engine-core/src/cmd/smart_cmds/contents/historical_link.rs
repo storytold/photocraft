@@ -113,12 +113,9 @@ pub(crate) fn relink_to_file(s: &mut Session, p: &Value) -> Result<Value> {
     let parsed = crate::file_cmds::historical_xcf_sample_order(p, RELINK)?.map(order_from_io);
     let explicit = p.get("historicalXcfSampleOrder").map(|_| parsed);
     let expected = crate::file_cmds::expected_source_digest(p, RELINK)?;
+    // Relink stores document data, not a process-working-directory path. The job carries
+    // the saved document's path and read_change resolves this spelling in that scope.
     let path = path_param(RELINK, p)?.to_string();
-    let path = if std::path::Path::new(&path).is_relative() {
-        std::path::absolute(&path).map_err(|e| other(format!("can't resolve {path}: {e}")))?.to_string_lossy().into_owned()
-    } else {
-        path
-    };
     let id = layer_param(s, p)?;
     let source = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     smart(&source, id)?;

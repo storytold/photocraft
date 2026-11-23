@@ -6,7 +6,7 @@ fn bytes(little: bool) -> Vec<u8> {
     let mut b = crate::jobs::historical_fixture::historical_rgba16();
     if little {
         let at = b.len() - 8;
-        for w in b[at..].chunks_exact_mut(2) {
+        for w in b[at..].as_chunks_mut::<2>().0 {
             w.swap(0, 1)
         }
     }
@@ -78,7 +78,12 @@ fn changed_links_refuse_storage_and_decode_commands_without_document_or_file_mut
         "layer.smartObjects.convertToLinked",
     ] {
         let output = directory.path().join(format!("{command}.pcraft"));
-        let error = s.execute(command, json!({"layer":layer.0,"path":output})).unwrap_err();
+        let params = match command {
+            "layer.smartObjects.exportContents" | "layer.smartObjects.convertToLinked" => json!({"layer":layer.0,"path":output}),
+            "layer.smartObjects.updateAllModifiedContent" | "layer.smartObjects.embedAllLinked" => json!({}),
+            _ => json!({"layer":layer.0}),
+        };
+        let error = s.execute(command, params).unwrap_err();
         assert!(matches!(error, EngineError::HistoricalXcfLinkChanged(_)), "{command}: {error}");
         assert!(Arc::ptr_eq(&s.active().unwrap().doc, &before), "{command}");
         assert_eq!(s.active().unwrap().history.past_len(), history);
@@ -147,4 +152,30 @@ fn malformed_relink_controls_fail_before_missing_path_io() {
         assert!(matches!(s.execute(RELINK, params), Err(EngineError::BadParams { .. })));
     }
     assert!(Arc::ptr_eq(&s.active().unwrap().doc, &before));
+}
+
+#[test]
+fn relative_relink_keeps_document_folder_identity_in_native_and_cooperative_jobs() {
+    let directory = tempfile::tempdir().unwrap();
+    let folder = directory.path().join("saved-document");
+    std::fs::create_dir(&folder).unwrap();
+    let source = folder.join("source.xcf");
+    let target = folder.join("relative.xcf");
+    std::fs::write(&target, bytes(true)).unwrap();
+    for cooperative in [false, true] {
+        let mut s = session(&source);
+        let layer = id(&s);
+        s.saved_to(folder.join("document.pcraft").to_string_lossy().into_owned());
+        s.set_cooperative_jobs(cooperative);
+        let result = match s.start(RELINK, json!({"layer":layer.0,"path":"relative.xcf"})).unwrap() {
+            crate::jobs::Started::Done(result) => result,
+            crate::jobs::Started::Job(id) => s.wait_job(id).unwrap(),
+        };
+        assert_eq!(result["layer"], layer.0);
+        assert_eq!(object(&s, layer).source, SmartSource::Linked { path: "relative.xcf".into() });
+        assert_eq!(object(&s, layer).historical_xcf_sample_order, Some(Order::LittleEndian));
+        assert_eq!(object(&s, layer).historical_xcf_link_digest, Some(photocraft_io::linked::historical_xcf_digest(&bytes(true))));
+        s.execute("layer.smartObjects.updateModifiedContent", json!({"layer":layer.0})).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), bytes(true));
+    }
 }

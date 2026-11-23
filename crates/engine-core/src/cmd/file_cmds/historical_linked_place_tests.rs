@@ -8,7 +8,7 @@ fn fixture(little: bool) -> Vec<u8> {
     let mut bytes = crate::jobs::historical_fixture::historical_rgba16();
     if little {
         let start = bytes.len() - 8;
-        for word in bytes[start..].chunks_exact_mut(2) {
+        for word in bytes[start..].as_chunks_mut::<2>().0 {
             word.swap(0, 1);
         }
     }
