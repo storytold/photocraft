@@ -1272,13 +1272,17 @@ struct ReadyPlace {
 }
 
 fn ready_place(different_tab: bool) -> ReadyPlace {
+    ready_place_with_services(different_tab, crate::Services::default())
+}
+
+fn ready_place_with_services(different_tab: bool, services: crate::Services) -> ReadyPlace {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width":16,"height":16,"name":"Place target"})).unwrap();
     let target = session.active().unwrap().doc.clone();
     session.execute("file.new", json!({"width":16,"height":16,"name":"Unrelated tab"})).unwrap();
     let unrelated = session.active().unwrap().doc.clone();
     session.set_active(0);
-    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    let mut app = PhotocraftApp::new(session, services);
     app.background_jobs = true;
     app.sync_views();
     let bytes = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#ff0011"/></svg>"##;
@@ -1439,11 +1443,18 @@ fn smart_picker_sources() -> (tempfile::TempDir, SmartPickerSources) {
     (directory, sources)
 }
 
+/// Install the scripted native picker in the host before any job or dialog starts.
+fn ready_smart_picker(different_tab: bool) -> (ReadyPlace, Arc<craft::host::ScriptedFiles>) {
+    let files = Arc::new(craft::host::ScriptedFiles::held());
+    // Framework captures the Files provider at construction; replacing only Services
+    // afterwards does not replace the host's picker or its answer queue.
+    let ready = ready_place_with_services(different_tab, crate::Services { files: Some(files.clone()), ..Default::default() });
+    (ready, files)
+}
+
 /// Drive the native File menu and Files service, rather than bypassing the picker with
 /// the starter. Its returned order is intentionally different from natural name order.
-fn pick_smart_opens(app: &mut PhotocraftApp, paths: Vec<std::path::PathBuf>) -> Vec<JobId> {
-    let files = Arc::new(craft::host::ScriptedFiles::held());
-    app.services.files = Some(files.clone());
+fn pick_smart_opens(app: &mut PhotocraftApp, files: &craft::host::ScriptedFiles, paths: Vec<std::path::PathBuf>) -> Vec<JobId> {
     app.session.color_mut().settings.ask_on_missing = false;
     app.session.color_mut().settings.ask_on_mismatch = false;
     let ctx = app.ctx().clone();
@@ -1476,8 +1487,8 @@ fn assert_picked_smart_sources(app: &PhotocraftApp, sources: &SmartPickerSources
     }
 }
 
-fn complete_smart_picker_before_shell(ready: &mut ReadyPlace, sources: &SmartPickerSources, open_first: bool) {
-    let jobs = pick_smart_opens(&mut ready.app, vec![sources[1].0.clone(), sources[0].0.clone()]);
+fn complete_smart_picker_before_shell(ready: &mut ReadyPlace, files: &craft::host::ScriptedFiles, sources: &SmartPickerSources, open_first: bool) {
+    let jobs = pick_smart_opens(&mut ready.app, files, vec![sources[1].0.clone(), sources[0].0.clone()]);
     assert_eq!(jobs.len(), 2);
     assert_eq!(ready.app.jobs.opens.iter().map(|open| open.name.as_str()).collect::<Vec<_>>(), ["image2.png", "image10.png"]);
     // Reverse actual Smart Object completion to prove tab order comes from the
@@ -1497,8 +1508,8 @@ fn native_smart_picker_completions_wait_for_place_and_keep_source_order_in_eithe
     let (_directory, sources) = smart_picker_sources();
     for open_first in [false, true] {
         for commit in [false, true] {
-            let mut ready = ready_place(false);
-            complete_smart_picker_before_shell(&mut ready, &sources, open_first);
+            let (mut ready, files) = ready_smart_picker(false);
+            complete_smart_picker_before_shell(&mut ready, &files, &sources, open_first);
             present_place_and_open(&mut ready);
             let ctx = ready.app.ctx().clone();
             super::tick(&mut ready.app, &ctx);
@@ -1534,8 +1545,8 @@ fn native_smart_picker_completions_wait_for_place_and_keep_source_order_in_eithe
 #[test]
 fn cancelling_a_native_picked_smart_open_preserves_place_focus_and_never_publishes_it() {
     let (_directory, sources) = smart_picker_sources();
-    let mut ready = ready_place(false);
-    let jobs = pick_smart_opens(&mut ready.app, vec![sources[0].0.clone()]);
+    let (mut ready, files) = ready_smart_picker(false);
+    let jobs = pick_smart_opens(&mut ready.app, &files, vec![sources[0].0.clone()]);
     assert_eq!(jobs.len(), 1);
     assert!(super::cancel(&mut ready.app, jobs[0]));
     ready.app.session.join_cancelled_jobs();
@@ -1558,8 +1569,8 @@ fn cancelling_a_native_picked_smart_open_preserves_place_focus_and_never_publish
 fn native_smart_picker_completions_do_not_start_place_transform_over_an_unrelated_tab() {
     let (_directory, sources) = smart_picker_sources();
     for open_first in [false, true] {
-        let mut ready = ready_place(true);
-        complete_smart_picker_before_shell(&mut ready, &sources, open_first);
+        let (mut ready, files) = ready_smart_picker(true);
+        complete_smart_picker_before_shell(&mut ready, &files, &sources, open_first);
         present_place_and_open(&mut ready);
         let ctx = ready.app.ctx().clone();
         super::tick(&mut ready.app, &ctx);
