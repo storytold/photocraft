@@ -310,7 +310,9 @@ fn remembering_keeps_only_the_dialog_settings() {
     let source = PixelSize::new(1200, 800);
     let mut options = ExportOptions::default();
     options.format = "jpg".into();
-    options.quality = 40;
+    // #13722: JPG's quality is a step of the dialog's 1..7 scale, so a remembered one reads back as
+    // itself; the old 1..100 values are mapped by `jpg_quality_tests`.
+    options.quality = 4;
     options.size = DialogSize::pixels(600, 400);
     options.lock_aspect = false;
     options.metadata = ExportMetadata::Exif;
@@ -584,7 +586,7 @@ fn export_document_scales_and_flattens() {
     assert_eq!(out.layers.len(), 1);
     let proxy = default_export_document(&doc, &f, Some(40)).unwrap();
     assert_eq!(proxy.size.width, 40);
-    assert_eq!(settings(&f).jpeg_quality, Some(85));
+    assert_eq!(settings(&f).jpeg_quality, Some(93), "no quality key: the scale's step 6, the default of #13722");
 }
 
 /// Read the main JPEG frame, skipping complete segments rather than searching marker bytes:
@@ -640,7 +642,7 @@ fn jpeg_export_sampling_skips_embedded_thumbnail() {
 }
 
 /// High-quality JPEG must keep the colour detail of a transparent graphic over its background;
-/// lower qualities use chroma subsampling, including at the quality-50 boundary.
+/// the lower steps of Export As's 1..7 Quality scale subsample the chroma (#7985, #13722).
 #[test]
 fn jpeg_export_preserves_fine_colour_edges() {
     use photocraft_doc::{Color, ColorMode, Layer, SampleType, Size};
@@ -658,7 +660,7 @@ fn jpeg_export_preserves_fine_colour_edges() {
             let fields = json!({"format": "jpg", "quality": quality, "scale": 100}).as_object().unwrap().clone();
             let out = default_export_document(&doc, &fields, None).unwrap();
             let encoded = photocraft_io::export(&out, "detail.jpg", &settings(&fields).io_options()).unwrap();
-            let expected_sampling = if quality <= 50 { [(2, 2), (1, 1), (1, 1)] } else { [(1, 1); 3] };
+            let expected_sampling = if jpg_quality_step(u8::try_from(quality).unwrap()) <= 4 { [(2, 2), (1, 1), (1, 1)] } else { [(1, 1); 3] };
             assert_eq!(jpeg_sampling_factors(&encoded.bytes), expected_sampling, "{depth:?}, quality {quality}: JPEG sampling");
             let decoded = photocraft_codecs::decode(&encoded.bytes).unwrap().convert(photocraft_codecs::ChannelLayout::Rgb, photocraft_codecs::SampleType::U8);
             assert_eq!(decoded.dimensions(), (32, 16), "{depth:?}, quality {quality}");
@@ -679,12 +681,25 @@ fn jpeg_export_preserves_fine_colour_edges() {
 }
 
 #[test]
-fn jpeg_export_settings_follow_quality_sampling_cutoff() {
-    for quality in 1..=100 {
-        let fields = json!({"format": "jpg", "quality": quality}).as_object().unwrap().clone();
+fn jpeg_export_settings_follow_the_quality_scale() {
+    // #13722: each of the seven steps writes its fixed encoder quality, and the 4:2:0 / 4:4:4 split
+    // follows the step. A quality an older setting still carries takes the nearest step.
+    for (carried, want_quality, want_sampled) in [
+        (1u32, 20u8, true),
+        (2, 35, true),
+        (3, 50, true),
+        (4, 65, true),
+        (5, 75, false),
+        (6, 93, false),
+        (7, 100, false),
+        (43, 50, true),
+        (85, 93, false),
+        (100, 100, false),
+    ] {
+        let fields = json!({"format": "jpg", "quality": carried}).as_object().unwrap().clone();
         let options = settings(&fields).io_options();
-        assert_eq!(options.encode.jpeg_quality, quality);
-        assert_eq!(options.encode.jpeg_chroma_subsampling, quality <= 50, "quality {quality}");
+        assert_eq!(options.encode.jpeg_quality, want_quality, "quality {carried}");
+        assert_eq!(options.encode.jpeg_chroma_subsampling, want_sampled, "quality {carried}");
     }
     // Save As retains the codec's existing sampling default.
     assert!(ExportSettings::default().io_options().encode.jpeg_chroma_subsampling);
@@ -766,7 +781,8 @@ fn layered_preview_runs_outside_the_ui_frame() {
 }
 
 /// Picking a format in the dialog's list gives it the quality its Export preference holds, JPEG
-/// and WebP each their own.
+/// and WebP each their own. JPEG's preference carries the old 1..100 scale, so it opens on the
+/// nearest step of the 1..7 Quality scale and writes that step's encoder quality (#13722).
 #[test]
 fn switching_export_formats_uses_independent_quality_preferences() {
     let mut app = export_app(20, 10);
@@ -779,7 +795,7 @@ fn switching_export_formats_uses_independent_quality_preferences() {
     open(h.state_mut()).unwrap();
     h.run_steps(3);
     let size = PixelSize::new(20, 10);
-    for (label, jpeg, webp) in [("WebP", None, Some(72)), ("JPG", Some(43), None)] {
+    for (label, jpeg, webp) in [("WebP", None, Some(72)), ("JPG", Some(50), None)] {
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Format").click();
         h.run_steps(3);
         h.get_by_label(label).click();

@@ -1493,7 +1493,9 @@ fn export_as_is_recorded_and_replayed() {
     // The dialog's next pass takes the answered path and exports.
     control(&mut app, "ui.dialog.confirm", json!({"dialog": id}));
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 20, 10, Some(70))]);
+    // The control channel still carries the old 1..100 quality 70, which Export As maps to the
+    // lower of the two nearest steps, encoder quality 65 (#13722).
+    assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 20, 10, Some(65))]);
     let craft::automation::actions::ActionStep { command: step_id, params: step } = app.session.actions().list.actions()[0].steps.last().cloned().unwrap();
     assert_eq!(step_id, "file.export.exportAs");
     // The scale is the dialog's percentage, a number whatever its JSON form (`50` or `50.0`).
@@ -1506,7 +1508,7 @@ fn export_as_is_recorded_and_replayed() {
     exported.borrow_mut().clear();
     let played = app.run("actions.play", json!({"action": 0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
-    assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 50, 30, Some(70))], "the played document, scaled as recorded");
+    assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 50, 30, Some(65))], "the played document, scaled as recorded");
     assert!(!app.dialog_open(), "no dialog on playback");
 }
 

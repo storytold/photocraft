@@ -79,6 +79,47 @@ fn valid_setting(key: &str, v: &Value) -> bool {
     }
 }
 
+/// What the dialog's JPG Quality scale holds (#13722): seven integer steps, Low to High, default 6.
+pub(crate) const JPG_QUALITY_MIN: u8 = 1;
+pub(crate) const JPG_QUALITY_MAX: u8 = 7;
+pub(crate) const JPG_QUALITY_DEFAULT: u8 = 6;
+
+/// The encoder quality (1 to 100) of each JPG Quality step, index 0 is step 1 (#13722). Only step 6
+/// is measured against the reference application: 93 is the encoder quality whose quantisation
+/// tables come closest to its step-6 tables. The other six are the fixed, monotonic values the
+/// issue asks for (steps 1-5 and 7 are not measured), spaced so the Export preferences' shipped
+/// default 85 is nearest to step 6, which is the default the reference application opens with.
+const JPG_STEP_QUALITY: [u8; 7] = [20, 35, 50, 65, 75, 93, 100];
+
+/// The JPG Quality step a quality in the dialog's settings carries: a value inside the scale is the
+/// step itself, and an old 1..100 quality (a preference, a saved preset or a recorded Export As
+/// step) is the step whose encoder quality is nearest, a tie going to the lower step. Nothing here
+/// is an error: #13722 asks that an old value still load.
+pub(crate) fn jpg_quality_step(quality: u8) -> u8 {
+    if quality <= JPG_QUALITY_MAX {
+        return quality.max(JPG_QUALITY_MIN);
+    }
+    let mut nearest = 0usize;
+    let mut gap = i32::MAX;
+    for (at, step_quality) in JPG_STEP_QUALITY.iter().enumerate() {
+        let this = (i32::from(*step_quality) - i32::from(quality)).abs();
+        if this < gap {
+            gap = this;
+            nearest = at;
+        }
+    }
+    // Seven steps: the index plus the scale's start is at most `JPG_QUALITY_MAX`.
+    (nearest + usize::from(JPG_QUALITY_MIN)) as u8
+}
+
+/// The encoder quality a JPG Quality `step` writes; a step outside the scale takes the nearest end
+/// of it.
+pub(crate) fn jpg_encoder_quality(step: u8) -> u8 {
+    // The clamp is the whole index bound: `at` stays inside the seven steps.
+    let at = usize::from(step.clamp(JPG_QUALITY_MIN, JPG_QUALITY_MAX)) - usize::from(JPG_QUALITY_MIN);
+    JPG_STEP_QUALITY[at]
+}
+
 /// The dialog's [`ExportOptions`] for the settings map `f`. A key that is missing or not a value
 /// [`valid_setting`] accepts keeps the dialog's default, so a damaged saved preset opens as the
 /// default does.
@@ -90,6 +131,11 @@ pub(crate) fn options_of(f: &Map<String, Value>) -> ExportOptions {
     }
     if let Some(quality) = f.get("quality").and_then(Value::as_f64) {
         o.quality = quality.round().clamp(1.0, 100.0) as u8;
+    }
+    if o.format == "jpg" {
+        // A saved preset, a remembered session or a recorded Export As step that still carries the
+        // old 1..100 quality loads as the nearest scale step (#13722), never as an error.
+        o.quality = jpg_quality_step(o.quality);
     }
     if let Some(v) = f.get("lossless").and_then(Value::as_bool) {
         o.lossless = v;
@@ -273,10 +319,13 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
 fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, source: PixelSize, layers: Vec<LayerId>) -> Result<DialogId, String> {
     let prefs = app.session.prefs().export.clone();
     let mut options = ExportOptions::default();
-    options.quality = u8::try_from(prefs.jpeg_quality.clamp(1, 100)).unwrap_or(85);
+    // JPG's Quality is the 1..7 scale (#13722); the Export preference still carries the old 1..100
+    // quality, so it opens as the nearest step, and with the shipped default 85 that is step 6.
+    let jpeg_quality = jpg_quality_step(u8::try_from(prefs.jpeg_quality.clamp(1, 100)).unwrap_or(JPG_QUALITY_DEFAULT));
+    options.quality = jpeg_quality;
     options.lossless = prefs.webp_lossless;
     let mut defaults = ExportFormatDefaults::default();
-    defaults.jpeg_quality = u8::try_from(prefs.jpeg_quality.clamp(1, 100)).unwrap_or(85);
+    defaults.jpeg_quality = jpeg_quality;
     defaults.webp_quality = u8::try_from(prefs.webp_quality.clamp(1, 100)).unwrap_or(85);
     defaults.webp_lossless = prefs.webp_lossless;
     // One file per exportable layer of a selection: a single one is named after its layer, several go into a folder
@@ -606,12 +655,14 @@ fn tga_bits(f: &Map<String, Value>) -> Option<photocraft_io::TgaBits> {
 fn settings(f: &Map<String, Value>) -> ExportSettings {
     let fmt = s_fmt(f);
     let quality = n(f, "quality", 85.0).clamp(1.0, 100.0) as u8;
+    // JPG's Quality is the 1..7 scale (#13722); WebP keeps its own 1..100 quality.
+    let jpg_step = jpg_quality_step(quality);
     let metadata = s(f, "metadata");
     ExportSettings {
-        jpeg_quality: (fmt == "jpg").then_some(quality),
-        // Photoshop's 1-7 Export As presets measured 4:2:0 at 1-4 and 4:4:4 at 5-7.
-        // An exact mapping to 1-100 is unestablished; reuse PhotoCraft's Save for Web cutoff.
-        jpeg_chroma_subsampling: fmt == "jpg" && quality <= 50,
+        jpeg_quality: (fmt == "jpg").then_some(jpg_encoder_quality(jpg_step)),
+        // #7985 measured the reference application's steps 1-4 at 4:2:0 and steps 5-7 at 4:4:4;
+        // since #13722 Quality is those steps, so the split follows the step and not the percent.
+        jpeg_chroma_subsampling: fmt == "jpg" && jpg_step <= 4,
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
         xmp_all: metadata == "all",
@@ -1320,6 +1371,8 @@ mod tests;
 
 #[cfg(test)]
 mod jpg_progressive_tests;
+#[cfg(test)]
+mod jpg_quality_tests;
 #[cfg(test)]
 mod layer_name_sanitise_tests;
 
