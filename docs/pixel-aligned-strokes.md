@@ -6,7 +6,7 @@ setting is `useAlignedRendering` on `shape.create`, `shape.edit`, `shape.info`,
 appending with `addTo` preserves the target setting when omitted. Tool presets
 retain the preference; Reset Tool restores false.
 
-The Triangle tool also exposes **Snap Bounding Box**, enabled by default. That
+The Triangle and Rectangle tools also expose **Snap Bounding Box**, enabled by default. That
 separate tool preference (`align_edges`) rounds the drag box before creating the
 path; it does not toggle render-time Align Edges or edit an existing layer.
 
