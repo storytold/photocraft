@@ -30,3 +30,6 @@ mod mask_tests;
 
 #[cfg(test)]
 mod levels_tests;
+
+#[cfg(test)]
+mod point_color_tests;

@@ -161,3 +161,6 @@ pub fn masked_exposure(options: MaskedExposureOptions) -> MaskedExposureFixture 
 
 /// Original scalar Levels source framing used by IO and engine regressions.
 pub mod levels;
+
+/// Original typed point-effect source records for native command oracles.
+pub mod point;

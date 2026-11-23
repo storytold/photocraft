@@ -169,6 +169,9 @@ fn prepare_plan(
             if filter.command == "image.adjustments.levels" && (format.mode != ColorMode::Rgb || format.sample != SampleType::F32) {
                 return Err(Refusal::Unsupported("native Levels preparation is proven only for RGB/F32"));
             }
+            if super::point_color::native(&filter.command) && format.mode != ColorMode::Rgb {
+                return Err(Refusal::Unsupported("point-color preparation is proven only for RGB owners"));
+            }
             let adjustment = native_adjustment(filter)?;
             let mut filter = filter.clone();
             filter.visible = stage.envelope.visible;
@@ -351,7 +354,7 @@ fn native_adjustment(filter: &SmartFilter) -> Result<Adjustment> {
                 black: LevelsChannel::default(),
             })
         }
-        _ => Err(Refusal::Unsupported("unrecognized native tone data")),
+        _ => super::point_color::adjustment(filter).unwrap_or(Err(Refusal::Unsupported("unrecognized native tone data"))),
     }
 }
 
