@@ -106,29 +106,35 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let filled = s.edit("Paint Bucket", |doc, _| {
         let area = doc.bounds();
         let sel = doc.selection.clone();
+        // A spot channel is filled as the tone it shows (CodeRabbit on #10217), over where the
+        // fill can reach: the selection's bounds, or the canvas.
+        let spot = crate::channel_cmds::is_spot_target(doc, p);
+        let reach = sel.as_ref().map_or(area, |m| m.content_bounds().intersect(&area));
         let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
-        let ok = if all && region.is_none() {
-            false
-        } else if let Some((tile, scale, angle, phase)) = &pattern {
-            // Render the pattern over the canvas once, then sample it at each filled pixel.
-            let place = photocraft_compose::pattern::Placement::new(photocraft_geom::Rect::EMPTY, false, *phase, *scale, *angle);
-            let rendered = photocraft_compose::pattern::render(tile, &place, area);
-            let w = area.width() as usize;
-            let src = |px: i32, py: i32| rendered[(py - area.y0) as usize * w + (px - area.x0) as usize];
-            if let Some(region) = &region {
-                bucket_fill_region_inks(surf, region, opacity, sel.as_ref(), lock, src, None, mode);
+        crate::channel_cmds::as_tone(surf, spot, reach, |surf| {
+            let ok = if all && region.is_none() {
+                false
+            } else if let Some((tile, scale, angle, phase)) = &pattern {
+                // Render the pattern over the canvas once, then sample it at each filled pixel.
+                let place = photocraft_compose::pattern::Placement::new(photocraft_geom::Rect::EMPTY, false, *phase, *scale, *angle);
+                let rendered = photocraft_compose::pattern::render(tile, &place, area);
+                let w = area.width() as usize;
+                let src = |px: i32, py: i32| rendered[(py - area.y0) as usize * w + (px - area.x0) as usize];
+                if let Some(region) = &region {
+                    bucket_fill_region_inks(surf, region, opacity, sel.as_ref(), lock, src, None, mode);
+                    true
+                } else {
+                    bucket_fill_inks(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, src, None, mode)
+                }
+            } else if let Some(region) = &region {
+                bucket_fill_region_inks(surf, region, opacity, sel.as_ref(), lock, |_, _| c, inks, mode);
                 true
             } else {
-                bucket_fill_inks(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, src, None, mode)
-            }
-        } else if let Some(region) = &region {
-            bucket_fill_region_inks(surf, region, opacity, sel.as_ref(), lock, |_, _| c, inks, mode);
-            true
-        } else {
-            bucket_fill_inks(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, |_, _| c, inks, mode)
-        };
-        surf.prune();
-        Ok(ok)
+                bucket_fill_inks(surf, area, (x, y), tol, contiguous, aa, opacity, sel.as_ref(), lock, |_, _| c, inks, mode)
+            };
+            surf.prune();
+            Ok(ok)
+        })
     })?;
     Ok(json!({ "filled": filled }))
 }
@@ -192,9 +198,13 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Gradient", |doc, _| {
         let sel = doc.selection.clone();
         let area = sel.as_ref().map(|m| m.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds()).intersect(&doc.bounds());
+        // A spot channel takes the gradient as tone (CodeRabbit on #10217).
+        let spot = crate::channel_cmds::is_spot_target(doc, p);
         let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
-        paint_gradient(surf, area, from, to, shape, &stops, reverse, opacity, blend, dither, sel.as_ref(), lock);
-        Ok(())
+        crate::channel_cmds::as_tone(surf, spot, area, |surf| {
+            paint_gradient(surf, area, from, to, shape, &stops, reverse, opacity, blend, dither, sel.as_ref(), lock);
+            Ok(())
+        })
     })?;
     Ok(Value::Null)
 }

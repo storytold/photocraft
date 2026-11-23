@@ -155,9 +155,13 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
         s.edit("Fill", |doc, _| {
             let sel = doc.selection.clone();
+            // A spot channel is filled as the tone it shows, black laying solid ink (CodeRabbit
+            // on #10217). History Fill brings back what the channel stored, ink as ink.
+            let spot = !restore && crate::channel_cmds::is_spot_target(doc, p);
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
-            blend_into(surf, area, &source, sel.as_ref(), Blend { mode, opacity, keep_alpha: preserve || lock, restore })?;
-            Ok(())
+            crate::channel_cmds::as_tone(surf, spot, area, |surf| {
+                blend_into(surf, area, &source, sel.as_ref(), Blend { mode, opacity, keep_alpha: preserve || lock, restore })
+            })
         })
     })?;
     Ok(out)

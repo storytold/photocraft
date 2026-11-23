@@ -64,6 +64,56 @@ pub(crate) fn invert_region(s: &mut Surface, r: Rect) -> Result<()> {
     Ok(())
 }
 
+/// Runs `f` on `surf` as tone when it is a spot channel's (`spot`): a spot channel stores ink
+/// but reads, and takes paint, as tone, so `area` turns to tone before `f` and back to ink after
+/// it (CodeRabbit on #10217). Black paint lays solid ink, white paint takes it away, and a blend
+/// mode works on what the channel shows. A tile-sized block at a time, only over `area`: nothing
+/// the size of the document is allocated, and tiles outside `area` stay shared with history.
+pub(crate) fn as_tone<T>(surf: &mut Surface, spot: bool, area: Rect, f: impl FnOnce(&mut Surface) -> Result<T>) -> Result<T> {
+    if !spot || area.is_empty() {
+        return f(surf);
+    }
+    invert_blocks(surf, area)?;
+    let out = f(surf);
+    invert_blocks(surf, area)?;
+    // Paper (no ink) turned to tone and back is bare again: its tiles go.
+    surf.prune();
+    out
+}
+
+/// Runs `f` on `area` one block of the tile grid at a time, so a caller that needs a buffer of
+/// its own never allocates one the size of the whole area (CodeRabbit on #10217). Blocks are
+/// clipped to `area`, so an edge block is only as big as what lies inside it.
+pub(crate) fn over_blocks(area: Rect, mut f: impl FnMut(Rect) -> Result<()>) -> Result<()> {
+    let t = photocraft_geom::TILE_SIZE;
+    let mut y = area.y0.div_euclid(t).saturating_mul(t);
+    while y < area.y1 {
+        let y1 = y.saturating_add(t);
+        let mut x = area.x0.div_euclid(t).saturating_mul(t);
+        while x < area.x1 {
+            let x1 = x.saturating_add(t);
+            let block = Rect::new(x, y, x1, y1).intersect(&area);
+            if !block.is_empty() {
+                f(block)?;
+            }
+            if x1 <= x {
+                break;
+            }
+            x = x1;
+        }
+        if y1 <= y {
+            break;
+        }
+        y = y1;
+    }
+    Ok(())
+}
+
+/// [`invert_region`] over `area`, one block of the tile grid at a time.
+fn invert_blocks(surf: &mut Surface, area: Rect) -> Result<()> {
+    over_blocks(area, |block| invert_region(surf, block))
+}
+
 /// The surface a pixel command writes to and whether the layer's transparency is locked.
 pub(crate) fn target_surface<'a>(doc: &'a mut Document, layer: Option<LayerId>, p: &Value) -> Result<(&'a mut Surface, bool)> {
     match target_of(p) {

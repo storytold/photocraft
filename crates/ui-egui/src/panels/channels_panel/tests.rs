@@ -86,6 +86,32 @@ fn cmyk_channel_thumbs_upload_the_document_inks() {
     assert_eq!(centre(Row::Color(3)), egui::Color32::from_gray(255), "rich black has no K");
 }
 
+/// A spot channel stores ink and its picture shows tone: solid ink reads dark, bare paper white,
+/// as in Photoshop (#10152). An alpha channel's picture shows what it stores, so the two read
+/// opposite ways from the same stored value — which is why the row's grey cannot be the stored
+/// value alone. `channel_thumb_gray` makes that difference, and this is the test that fails if the
+/// drawing path stops asking it: the helper's own unit test passes either way.
+#[test]
+fn a_spot_channels_picture_reads_its_ink_dark_and_an_alphas_as_stored() {
+    let mut app = app_with("rgb");
+    app.run("channel.new", json!({"name": "Alpha 1", "fill": "white"})).unwrap();
+    // A spot channel takes its ink from the selection, so select everything: the stored value is
+    // then the same as the alpha channel's, which is the point of the comparison below.
+    app.run("select.all", json!({})).unwrap();
+    app.run("channel.newSpot", json!({"name": "Varnish", "color": "#ff0000", "solidity": 100})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    let st = app.session.active().unwrap();
+    assert!(st.doc.channels.get(1).is_some_and(|c| c.spot.is_some()), "the second channel is the spot one");
+    let source = ChannelThumbs::new(&app, st);
+    let request = ThumbRequest::for_cell(56.0, 1.0);
+    let centre = |key: Row| {
+        let ThumbRender::Ready(img) = source.render(&key, &request) else { panic!("{key:?} renders at once") };
+        img[(img.size[0] / 2, img.size[1] / 2)]
+    };
+    assert_eq!(centre(Row::Alpha(0)), egui::Color32::from_gray(255), "a white alpha channel shows white");
+    assert_eq!(centre(Row::Alpha(1)), egui::Color32::from_gray(0), "the same value as solid ink shows black");
+}
+
 /// Each event runs its engine command; a reorder is one history step and counts alpha channels only.
 #[test]
 fn channel_events_run_their_commands() {

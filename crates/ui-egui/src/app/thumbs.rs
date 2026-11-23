@@ -169,6 +169,17 @@ impl<'a> ChannelThumbs<'a> {
             Row::Composite | Row::Color(_) => None,
         }
     }
+
+    /// The channel a row shows, where it is one: what the row's grey is read from
+    /// ([`channel_thumb_gray`]) depends on whether that channel holds ink. A layer mask is not a
+    /// channel and shows what it stores.
+    fn channel(&self, key: &Row) -> Option<&photocraft_doc::AlphaChannel> {
+        match *key {
+            Row::Alpha(i) => self.st.doc.channels.get(i),
+            Row::QuickMask => self.st.doc.quick_mask.as_ref(),
+            Row::LayerMask | Row::Composite | Row::Color(_) => None,
+        }
+    }
 }
 
 /// The pixel rect `(x0, y0, x1, y1)` of a `w`×`h` frame that `region` (fractions of it) names, at least one pixel each way.
@@ -226,9 +237,15 @@ impl ThumbSource<Row> for ChannelThumbs<'_> {
             }
             Row::Alpha(_) | Row::QuickMask | Row::LayerMask => {
                 let Some(surface) = self.surface(key) else { return ThumbRender::Blank };
+                let channel = self.channel(key);
                 frame_image(frame, request.side, |x, y| {
                     let v = surface.sample_channel((x0 + x) as i32, (y0 + y) as i32, 0);
-                    let g = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    // A spot channel stores ink and shows tone (#10152); everything else here —
+                    // an alpha channel, the Quick Mask, a layer mask — shows what it stores.
+                    let g = match channel {
+                        Some(ch) => channel_thumb_gray(ch, v),
+                        None => (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+                    };
                     [g, g, g, 255]
                 })
             }
@@ -276,6 +293,33 @@ fn channel_tint(mode: photocraft_doc::ColorMode, k: usize, byte: u8, in_color: b
         (Cmyk, 1) => egui::Color32::from_rgb(255, byte, 255),
         (Cmyk, 2) => egui::Color32::from_rgb(255, 255, byte),
         _ => egui::Color32::from_gray(byte),
+    }
+}
+
+/// The grey of an alpha, spot or Quick Mask thumbnail pixel whose stored value is `v`. A spot
+/// channel stores ink and shows tone: ink is dark, as in Photoshop (#10152).
+fn channel_thumb_gray(ch: &photocraft_doc::AlphaChannel, v: f32) -> u8 {
+    let v = if ch.spot.is_some() { 1.0 - v } else { v };
+    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+#[cfg(test)]
+mod channel_thumb_tests {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{AlphaChannel, Color};
+    use photocraft_raster::Surface;
+
+    use super::channel_thumb_gray;
+
+    /// #10152: a spot channel's thumbnail shows its ink dark and bare paper white; an alpha
+    /// channel's shows what it stores.
+    #[test]
+    fn a_spot_thumbnail_shows_ink_dark_and_an_alpha_thumbnail_as_stored() {
+        let alpha = AlphaChannel::new("Alpha 1", Surface::new(PixelFormat::GRAY8));
+        let spot = AlphaChannel { spot: Some((Color::rgb(1.0, 0.0, 0.0), 1.0)), ..alpha.clone() };
+        assert_eq!((channel_thumb_gray(&alpha, 1.0), channel_thumb_gray(&alpha, 0.0)), (255, 0));
+        assert_eq!((channel_thumb_gray(&spot, 1.0), channel_thumb_gray(&spot, 0.0)), (0, 255), "solid ink black, paper white");
+        assert_eq!(channel_thumb_gray(&spot, 0.25), 191);
     }
 }
 
