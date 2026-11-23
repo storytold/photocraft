@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
-use craft::font_catalog::{Catalog, Limits, Source};
+use craft::font_catalog::{Catalog, FontEnv, Limits, Os, Source};
 use craft::font_manager::axes::{FontAxis, NamedInstance, read_axes, read_named_instances};
 use parley::FontContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
@@ -268,8 +268,8 @@ impl FontDb {
         db
     }
 
-    /// Registers the installed fonts of the craft [`catalog`] (its first scan finishes here). Font
-    /// files are memory-mapped lazily by fontique when a face is first used.
+    /// Registers the installed fonts of the [`installed_catalog`] (its first scan finishes here).
+    /// Font files are memory-mapped lazily by fontique when a face is first used.
     pub fn load_system_fonts(&mut self) {
         if self.system_loaded {
             return;
@@ -282,7 +282,7 @@ impl FontDb {
             if cfg!(target_os = "macos")
                 && let Some(path) = crate::cjk::mac_pingfang()
             {
-                let _ = catalog().add_file(&path, Source::App, &Limits::default());
+                let _ = installed_catalog().add_file(&path, Source::App, &Limits::default());
             }
             // One call per file: fontique's directory scan is much slower on large folders.
             for path in installed_font_files() {
@@ -292,8 +292,8 @@ impl FontDb {
             // Catalog is the source, so they register without the mirror back into it.
             let mut loaded = Vec::new();
             let mut seen = HashSet::new();
-            for face in catalog().faces().iter().filter(|f| is_installed_face(f) && f.path.is_none()) {
-                let Ok(data) = catalog().load(face) else { continue };
+            for face in installed_catalog().faces().iter().filter(|f| is_installed_face(f) && f.path.is_none()) {
+                let Ok(data) = installed_catalog().load(face) else { continue };
                 if seen.insert(Arc::as_ptr(&data.bytes).cast::<u8>() as usize) {
                     self.register_bytes(Blob::new(Arc::new(data.bytes.to_vec())), None);
                 }
@@ -903,9 +903,25 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
 }
 
-/// The process's font Catalog: the installed fonts, the fonts added at run time and the bundled
-/// ones. The engine, the font picker and the Glyphs panel all read this one.
+/// The process's font Catalog: the fonts added at run time, the bundled ones and, where
+/// [`shared`](crate::shared) scans them (`uses_system_fonts`), the installed ones. The engine,
+/// the font picker and the Glyphs panel all read this one, so in tests they offer the same fixed
+/// set whatever the machine has installed.
 pub fn catalog() -> &'static Arc<Catalog> {
+    static OFFERED: std::sync::OnceLock<Arc<Catalog>> = std::sync::OnceLock::new();
+    OFFERED.get_or_init(|| {
+        if crate::uses_system_fonts() {
+            Arc::clone(Catalog::global())
+        } else {
+            Arc::new(Catalog::new(FontEnv { os: Os::None, ..FontEnv::default() }).with_font_service(false))
+        }
+    })
+}
+
+/// The Catalog of the machine's installed fonts, for code that asks for them by name
+/// ([`FontDb::load_system_fonts`]). The same Catalog as [`catalog`] where the shared engine scans
+/// the installed fonts.
+pub fn installed_catalog() -> &'static Arc<Catalog> {
     Catalog::global()
 }
 
@@ -925,14 +941,14 @@ fn is_installed_face(face: &craft::font_catalog::FaceInfo) -> bool {
     matches!(face.source, Source::System | Source::Store | Source::App)
 }
 
-/// The installed font files of the [`catalog`] (waits for its first scan), each once by canonical
+/// The installed font files of the [`installed_catalog`] (waits for its first scan), each once by canonical
 /// path, in the Catalog's order, without the macOS private UI fonts. The one selection every
 /// consumer of the installed fonts (the shaper, the script fallbacks, the SVG renderer) uses.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn installed_font_files() -> Vec<std::path::PathBuf> {
     let mut seen = HashSet::new();
     let mut files = Vec::new();
-    for face in catalog().faces().iter().filter(|f| is_installed_face(f)) {
+    for face in installed_catalog().faces().iter().filter(|f| is_installed_face(f)) {
         let Some(path) = &face.path else { continue };
         if is_private_font_path(path) {
             continue;
@@ -1048,7 +1064,7 @@ mod tests {
     /// font picker and the engine offer the same fonts (#6683).
     #[test]
     fn every_catalog_family_is_listed() {
-        let mut offered: Vec<String> = super::catalog()
+        let mut offered: Vec<String> = super::installed_catalog()
             .faces()
             .iter()
             .filter(|f| matches!(f.source, super::Source::System | super::Source::Store | super::Source::App))

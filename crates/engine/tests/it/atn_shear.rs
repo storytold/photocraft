@@ -1,6 +1,7 @@
 //! Public load/save/playback witnesses for the measured Shear action mapping.
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionStep},
@@ -178,7 +179,7 @@ fn shear_unrepresentable_steps_stay_kept_without_partial_playback() {
         let past = s.active().unwrap().history.past_len();
         let name = loaded.actions[0].name.clone();
         for action in loaded.actions {
-            s.actions.list.push(action).unwrap();
+            s.actions_mut().list.push(action).unwrap();
         }
         let report = s.execute("actions.play", json!({"action":name})).unwrap();
         assert_eq!(report["ran"], 0);

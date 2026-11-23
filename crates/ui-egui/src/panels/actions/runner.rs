@@ -5,6 +5,7 @@
 use craft::automation::actions::{ActionPlayer, ActionRunner, ActionStep, PlaybackBudget, PlaybackRefusal, PlaybackReport, StepOutcome};
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{HostedCanvasSize, HostedImageSize, HostedParamDialog};
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 use web_time::Duration;
 
@@ -24,7 +25,7 @@ pub(crate) fn play_targets(app: &mut PhotocraftApp, targets: &[usize], from: usi
     playback::stop(app);
     let (mut last, mut ran) = (None, before);
     for (n, &i) in targets.iter().enumerate() {
-        let name = app.session.actions.list.action(i).map(|a| a.name.clone());
+        let name = app.session.actions().list.action(i).map(|a| a.name.clone());
         let params = if n == 0 && from > 0 { json!({"action": i, "from": from}) } else { json!({"action": i}) };
         let mut v = app.run("actions.play", params)?;
         ran = ran.saturating_add(v.get("ran").and_then(Value::as_u64).unwrap_or(0));
@@ -37,7 +38,7 @@ pub(crate) fn play_targets(app: &mut PhotocraftApp, targets: &[usize], from: usi
         if let Some(dialog) = paused.filter(|_| !failed) {
             // As they are now, not by index: the list can be reordered while the dialog is open
             // (`actions.move`), and one deleted and made again under its name isn't the same action.
-            let list = &app.session.actions.list;
+            let list = &app.session.actions().list;
             let rest: Vec<Action> = targets.get(n + 1..).unwrap_or_default().iter().filter_map(|i| list.action(*i).cloned()).collect();
             let token = paused_token(app, &dialog);
             if let Some(entry) = token.and_then(|t| app.paused_playbacks.paused.get_mut(&t))
@@ -509,7 +510,7 @@ fn play_steps(
     };
     let owner = recording
         .map(|(_, idx)| {
-            let into = app.session.actions.list.action(idx).map(|a| a.name.clone());
+            let into = app.session.actions().list.action(idx).map(|a| a.name.clone());
             json!({"index": idx, "into": into, "action": action.name, "from": from})
         })
         .or(suspended);
@@ -551,7 +552,7 @@ fn play_steps(
     }
     if !ended {
         // The runner borrows the app for the whole play, so the player reads its own copy of the playable list.
-        let list = app.session.actions.playable().clone();
+        let list = app.session.actions().playable().clone();
         let mut runner = ShellRunner { app: &mut *app, interactive, resolved: None, ending: None, detail: None, wait: None };
         let report: PlaybackReport = ActionPlayer::play(&list, index, from, &mut runner, budget);
         let ShellRunner { ending, detail, wait, .. } = runner;
@@ -670,10 +671,10 @@ fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
     // `suspended_guard` refuses what would move the recorded action, but another command may
     // still replace the list: the call goes to the action of that name, never to whatever now
     // sits at the old index, and is dropped if that action is gone.
-    let list = app.session.actions.list.actions();
+    let list = app.session.actions().list.actions();
     let target = if list.get(idx).is_some_and(|a| a.name == into) { Some(idx) } else { list.iter().position(|a| a.name == into) };
     if let Some(idx) = target
-        && app.session.actions.recording.is_none()
+        && app.session.recording.target.is_none()
     {
         actions_cmds::restore_recording(&mut app.session, idx, name, from);
     }
@@ -907,7 +908,7 @@ pub(crate) fn check_editor(app: &PhotocraftApp, dialog: DialogId, command: &str,
 
 /// Check that preview and confirmation still target the command and receiver that opened the editor.
 fn check_menu_editor(app: &PhotocraftApp, paused: &PausedPlayback, command: &str, params: &Value) -> Result<(), String> {
-    let actions = app.session.actions.list.actions();
+    let actions = app.session.actions().list.actions();
     if let Some((_, original)) = &paused.menu_editor
         && (original != command
             || paused.played.iter().any(|played| actions.iter().find(|action| action.name == played.name) != Some(played))
@@ -1060,7 +1061,7 @@ pub fn resume(app: &mut PhotocraftApp, token: u64) -> Result<(), String> {
         || !paused.callers.is_empty()
         || app
             .session
-            .actions
+            .actions()
             .list
             .actions()
             .iter()
@@ -1085,7 +1086,7 @@ pub fn resume(app: &mut PhotocraftApp, token: u64) -> Result<(), String> {
     // The rest plays by name: refuse it when an action of the paused call changed meanwhile, so a
     // new action of the same name never plays from the old one's step. With nothing left to play,
     // the call simply ends. (Another document coming to the front fails `history.resume` above.)
-    let list = app.session.actions.list.actions();
+    let list = app.session.actions().list.actions();
     if remaining && paused.played.iter().any(|a| list.iter().find(|b| b.name == a.name) != Some(a)) {
         let error = "the action changed while it was paused";
         actions_cmds::finish_pending_history(&mut app.session);
@@ -1132,7 +1133,7 @@ pub fn resume(app: &mut PhotocraftApp, token: u64) -> Result<(), String> {
         && v.get("paused").is_none()
         && v.get("stopped").is_none()
     {
-        let list = app.session.actions.list.actions();
+        let list = app.session.actions().list.actions();
         let rest: Vec<usize> = paused.then.iter().map_while(|then| list.iter().position(|a| a == then)).collect();
         match play_targets(app, &rest, 0, ran) {
             Ok(Some(r)) => played = Ok(r),
