@@ -28,16 +28,15 @@ fn within(actual: &[i32], expected: &[i32], tol: i32) -> bool {
 
 /// The reference application enlarges the red/white edge 2x to `0,0,0,8,247,255,255,255,255`
 /// (green channel, y=20, x 196..204) with Preserve Details: no overshoot on either side, a
-/// steep edge. Measured at 8 bits; the same edge holds at 16 and 32 bits.
+/// steep edge. Measured at 8 bits only (16 and 32 bits keep the previous result, see
+/// [`unmeasured_enlargements_keep_the_previous_sharpening`]).
 #[test]
 fn enlarging_a_hard_edge_does_not_ring() {
     let reference = [0, 0, 0, 8, 247, 255, 255, 255, 255];
-    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
-        for alpha in [false, true] {
-            let o = resize_surface_in_canvas(&document(sample, alpha), 2.0, 2.0, Resample::PreserveDetails, CANVAS);
-            let row = green(&o, 20, 196..205);
-            assert!(within(&row, &reference, 2), "{sample:?} alpha={alpha}: {row:?}, reference {reference:?}");
-        }
+    for alpha in [false, true] {
+        let o = resize_surface_in_canvas(&document(SampleType::U8, alpha), 2.0, 2.0, Resample::PreserveDetails, CANVAS);
+        let row = green(&o, 20, 196..205);
+        assert!(within(&row, &reference, 2), "alpha={alpha}: {row:?}, reference {reference:?}");
     }
 }
 
@@ -86,46 +85,121 @@ const ROWS: [[i32; 9]; 7] = [
     [8, 0, 0, 54, 201, 255, 255, 247, 253],
 ];
 
-/// At any scale and depth the enlargement stays within the source's levels: no halo darker than
+/// The measured enlargement (8 bits, 2x) stays within the source's levels: no halo darker than
 /// the red or brighter than the white, and flat areas stay flat.
 #[test]
-fn enlargements_never_overshoot() {
-    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
-        let s = document(sample, true);
-        for k in [1.37, 2.0, 3.0] {
-            let o = resize_surface_in_canvas(&s, k, k, Resample::PreserveDetails, CANVAS);
-            let dst = scaled_rect(CANVAS, k, k);
-            assert_eq!(o.content_bounds(), dst, "{sample:?} {k}");
-            for v in o.read_region(dst) {
-                assert!((0.0..=1.0).contains(&v), "{sample:?} {k}: {v}");
-            }
-            // Inside the red square, away from its edge.
-            let p = o.pixel((50.0 * k) as i32, (50.0 * k) as i32);
-            assert_eq!(p, vec![1.0, 0.0, 0.0, 1.0], "{sample:?} {k}");
-        }
+fn the_measured_enlargement_never_overshoots() {
+    let s = document(SampleType::U8, true);
+    let o = resize_surface_in_canvas(&s, 2.0, 2.0, Resample::PreserveDetails, CANVAS);
+    let dst = scaled_rect(CANVAS, 2.0, 2.0);
+    assert_eq!(o.content_bounds(), dst);
+    for v in o.read_region(dst) {
+        assert!((0.0..=1.0).contains(&v), "{v}");
     }
+    // Inside the red square, away from its edge.
+    assert_eq!(o.pixel(100, 100), vec![1.0, 0.0, 0.0, 1.0]);
 }
 
-/// A layer smaller than the canvas, on transparency: the clamp doesn't pull its colour towards
-/// the transparent pixels, and the stepped resize gives the same pixels as the one-shot one.
+/// A layer smaller than the canvas, on transparency: in the measured case the clamp doesn't pull
+/// its colour towards the transparent pixels, and at any scale and depth the stepped resize gives
+/// the same pixels as the one-shot one.
 #[test]
 fn transparent_surroundings_and_steps_match() {
     for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
         s.fill_rect(Rect::new(10, 10, 30, 30), &[0.2, 0.6, 1.0, 1.0]);
-        let o = resize_surface_in_canvas(&s, 2.5, 2.5, Resample::PreserveDetails, CANVAS);
-        // On the layer's edge the colour stays the layer's.
-        let edge = o.pixel(25, 50);
-        assert!(edge[3] > 0.0 && edge[3] < 1.0, "{sample:?} {edge:?}");
-        let off = edge.iter().take(3).zip([0.2, 0.6, 1.0]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
-        assert!(off < 0.01, "{sample:?} {edge:?}");
-        let mut steps = ResizeSteps::new(s.clone(), 2.5, 2.5, Resample::PreserveDetails, Some(CANVAS));
-        let stepped = loop {
-            if let Some(out) = steps.step(&mut || true) {
-                break out;
+        for k in [2.0, 2.5] {
+            let o = resize_surface_in_canvas(&s, k, k, Resample::PreserveDetails, CANVAS);
+            if sample == SampleType::U8 && k == 2.0 {
+                // On the layer's edge the colour stays the layer's.
+                let edge = o.pixel(20, 40);
+                assert!(edge[3] > 0.0 && edge[3] < 1.0, "{edge:?}");
+                let off = edge.iter().take(3).zip([0.2, 0.6, 1.0]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+                assert!(off < 0.01, "{edge:?}");
             }
-        };
-        let r = o.content_bounds().union(&stepped.content_bounds());
-        assert_eq!(stepped.read_region(r), o.read_region(r), "{sample:?}");
+            let mut steps = ResizeSteps::new(s.clone(), k, k, Resample::PreserveDetails, Some(CANVAS));
+            let stepped = loop {
+                if let Some(out) = steps.step(&mut || true) {
+                    break out;
+                }
+            };
+            let r = o.content_bounds().union(&stepped.content_bounds());
+            assert_eq!(stepped.read_region(r), o.read_region(r), "{sample:?} {k}");
+        }
     }
+}
+
+/// Preserve Details before #14794: Lanczos, then an Unsharp Mask of 30 % at radius 0.6 x scale.
+fn lanczos_and_unsharp_mask(s: &Surface, sx: f64, sy: f64) -> Surface {
+    let out = resize_surface(s, sx, sy, Resample::Lanczos);
+    let dst = out.content_bounds();
+    let p = crate::FilterParams::UnsharpMask { amount: 30.0, radius: 0.6 * sx.max(sy) as f32, threshold: 0.0 };
+    let area = crate::output_area(&p, dst, dst, None);
+    let mut out = crate::apply(&out, &p, area, dst, None);
+    out.prune();
+    out
+}
+
+/// The issue measured only 8-bit 2x enlargements; other scales and 16/32-bit documents keep
+/// Preserve Details' previous result (#14794, "not measured ... keep today's behaviour").
+#[test]
+fn unmeasured_enlargements_keep_the_previous_sharpening() {
+    let cases = [
+        (SampleType::U8, 1.37, 1.37),
+        (SampleType::U8, 3.0, 3.0),
+        (SampleType::U8, 2.0, 1.5),
+        (SampleType::U8, 1.0, 2.0),
+        (SampleType::U16, 2.0, 2.0),
+        (SampleType::F32, 2.0, 2.0),
+    ];
+    for (sample, sx, sy) in cases {
+        let s = document(sample, false);
+        let actual = resize_surface(&s, sx, sy, Resample::PreserveDetails);
+        let expected = lanczos_and_unsharp_mask(&s, sx, sy);
+        let r = actual.content_bounds().union(&expected.content_bounds());
+        assert!(actual.read_region(r) == expected.read_region(r), "{sample:?} {sx}x{sy}: differs from Lanczos + Unsharp Mask 30 %");
+    }
+}
+
+/// One axis shrinking and the other growing: the columns black, black, black, white reduced to a
+/// quarter keep the white averaged in by the reduction instead of being clamped back to black.
+#[test]
+fn mixed_axis_resize_keeps_reduced_detail() {
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        for x in 0..64 {
+            let v = if x % 4 == 3 { 1.0 } else { 0.0 };
+            s.fill_rect(Rect::new(x, 0, x + 1, 16), &[v, v, v, 1.0]);
+        }
+        let o = resize_surface(&s, 0.25, 2.0, Resample::PreserveDetails);
+        let v = o.pixel(8, 16)[1];
+        assert!(v > 0.1, "{sample:?}: green {v} at (8,16), the white columns were clamped away");
+        let expected = lanczos_and_unsharp_mask(&s, 0.25, 2.0);
+        let r = o.content_bounds().union(&expected.content_bounds());
+        assert!(o.read_region(r) == expected.read_region(r), "{sample:?}: differs from Lanczos + Unsharp Mask 30 %");
+    }
+}
+
+/// A band of output rows that spans thousands of source rows (6000x4000 at 2 x 0.01 spans about
+/// 3900 per band) reads them a row at a time, so a read stays within the read budget.
+#[test]
+fn dering_reads_a_bounded_number_of_source_rows() {
+    let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, false));
+    s.fill_rect(Rect::new(0, 0, 8, 4000), &[0.5, 0.5, 0.5]);
+    let mut o = resize_surface(&s, 2.0, 0.01, Resample::Lanczos);
+    dering(&mut o, &s, 2.0, 0.01, None);
+    let rows = DERING_MAX_READ_ROWS.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(rows <= 1, "one dering read spanned {rows} source rows");
+}
+
+/// Dering writes its bands a group at a time, like `resize_pass`, instead of holding them all.
+#[test]
+fn dering_holds_a_bounded_group_of_bands() {
+    let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, false));
+    s.fill_rect(Rect::new(0, 0, 2, 6400), &[0.5, 0.5, 0.5]);
+    let mut o = resize_surface(&s, 2.0, 2.0, Resample::Lanczos);
+    dering(&mut o, &s, 2.0, 2.0, None);
+    let held = DERING_MAX_HELD_BANDS.load(std::sync::atomic::Ordering::Relaxed);
+    let group = rayon::current_num_threads().max(1) * 2;
+    assert!(held <= group, "dering held {held} of {} bands at once (group {group})", 12800usize.div_ceil(BAND));
 }
