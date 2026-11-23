@@ -533,7 +533,7 @@ impl BmpBits {
 
 /// `true` if `bytes` start with the PSD/PSB signature.
 pub fn is_psd(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"8BPS")
+    craft_psd::head::sniff(bytes)
 }
 
 /// PSD/PSB/PSDT by magic, or by a declared Photoshop extension when no other raster
@@ -1470,6 +1470,16 @@ mod tests {
         assert_eq!(import_preflight("x.afphoto", b"Affinity"), ImportPreflight::Unbounded);
         // A Photoshop extension whose bytes are a readable flat image follows the image.
         assert_eq!(import_preflight("misnamed.psd", png), ImportPreflight::Flat);
+    }
+
+    #[test]
+    fn psd_candidate_detection_uses_the_four_byte_signature() {
+        assert!(super::is_psd(b"8BPS"));
+        assert!(super::is_psd(b"8BPS\0\x01"));
+        assert!(super::is_psd(b"8BPS\0\x02"));
+        assert!(super::is_psd(b"8BPS\0\x03"));
+        assert!(!super::is_psd(b"8BP"));
+        assert!(!super::is_psd(b"8BPT\0\x01"));
     }
 
     /// Verifies a valid PSD remains editable after import.

@@ -39,8 +39,8 @@ fn esc() -> egui::Event {
 }
 
 fn assert_idle(app: &PhotocraftApp) {
-    assert_eq!(app.session.actions.playing, 0);
-    assert!(app.session.actions.playback_stack.is_empty());
+    assert_eq!(app.session.recording.playing, 0);
+    assert!(app.session.recording.playback_stack.is_empty());
     assert!(app.paused_playbacks.paused.is_empty());
     assert!(app.paused_playbacks.timer.is_none());
 }

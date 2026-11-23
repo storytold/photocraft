@@ -11,10 +11,10 @@ use crate::PhotocraftApp;
 fn facts(app: &PhotocraftApp) -> ActionsMenuFacts {
     let path_selected = app.ui.selected_path.as_deref().is_some_and(|name| actions_edit_cmds::selected_recording_path(&app.session, name).is_ok());
     ActionsMenuFacts::new()
-        .recording(app.session.actions.recording.is_some())
+        .recording(app.session.recording.target.is_some())
         .path_selected(path_selected)
         .waiting(super::playback::pending(app))
-        .tool_recording(app.session.actions.record_tools)
+        .tool_recording(app.session.recording.record_tools)
 }
 
 /// Whether the app offers `command`: Set Options…, Batch… and Button Mode have no counterpart here.
