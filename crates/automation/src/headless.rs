@@ -207,7 +207,11 @@ impl Headless {
             Filesystem::Workspace(workspace) => {
                 let (bytes, save_path) = workspace.read_with_save_path(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                (files::open_bytes_with_options(name, &bytes, opts)?, save_path)
+                // Rooted acquisition precedes authority. Native XCF stages use
+                // the same session gate as commands, while admission below keeps
+                // this host's existing profile, path and typed-error policies.
+                let opened = self.session.with_native_xcf_import_authority(|| files::open_bytes_with_options(name, &bytes, opts))?;
+                (opened, save_path)
             }
         };
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.

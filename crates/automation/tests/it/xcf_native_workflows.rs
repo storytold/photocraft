@@ -361,3 +361,131 @@ async fn bridge_keeps_held_identity_question_and_warnings_through_existing_dialo
     client.cancel().await.unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), app).await.unwrap().unwrap();
 }
+
+fn native_masked_source() -> Vec<u8> {
+    photocraft_io::native_xcf_tones::fixtures::masked_exposure(Default::default()).bytes
+}
+fn native_owner(document: &photocraft_doc::Document) -> &photocraft_doc::SmartObject {
+    let photocraft_doc::LayerContent::Smart(owner) = &document.layers[0].content else { panic!("authorized effect remains independently editable") };
+    assert_eq!(owner.smart_filters.len(), 1);
+    assert_eq!(owner.smart_filters[0].command, "image.adjustments.exposure");
+    assert!(owner.filter_mask.is_some());
+    owner
+}
+fn report_without_native_ids(document: &photocraft_doc::Document) -> photocraft_doc::import_conversion::ConversionReport {
+    use photocraft_doc::import_conversion::ImportConversion;
+    let Some(ImportConversion::Report(report)) = document.metadata.import_conversion.as_deref() else { panic!("source report required") };
+    let mut report = report.clone();
+    // Separate imports allocate separate native identities; every other source,
+    // mapping, attachment and native target fact must agree.
+    for entry in &mut report.entries {
+        for target in &mut entry.targets {
+            target.layer_id = None;
+        }
+    }
+    report
+}
+
+#[test]
+fn rooted_headless_native_effects_match_engine_open_and_survive_native_replay() {
+    let fixture = Fixture::new();
+    let source = native_masked_source();
+    std::fs::write(fixture.read.join("source.xcf"), &source).unwrap();
+    let options = photocraft_automation::files::import_options_from_params(&json!({})).unwrap();
+    let mut engine = photocraft_engine::Session::new();
+    engine.execute("edit.colorSettings", json!({"askOnMismatch":false,"askOnMissing":false,"policyRgb":"preserve"})).unwrap();
+    let reference = photocraft_engine::file_cmds::open_bytes_as_with_import_options(&mut engine, "source.xcf", &source, None, None, &options).unwrap();
+    let expected = engine.active().unwrap().doc.clone();
+    let expected_owner = native_owner(&expected);
+    let expected_pixels = expected_owner.cache.as_ref().unwrap().to_interleaved(expected.bounds());
+    let mut headless = fixture.headless();
+    let preparations = photocraft_io::native_xcf_tones::preparation_count();
+    let opened = headless.handle("doc.open", json!({"path":"source.xcf"})).unwrap();
+    assert!(photocraft_io::native_xcf_tones::preparation_count() > preparations);
+    let document = headless.session.active().unwrap().doc.clone();
+    let owner = native_owner(&document);
+    assert_eq!(opened["warnings"], reference["warnings"]);
+    assert_eq!(owner.smart_filters, expected_owner.smart_filters);
+    assert_eq!(owner.filter_mask, expected_owner.filter_mask);
+    assert_eq!(owner.transform, expected_owner.transform);
+    assert_eq!(owner.cache.as_ref().unwrap().to_interleaved(document.bounds()), expected_pixels);
+    assert_eq!(report_without_native_ids(&document), report_without_native_ids(&expected));
+    assert!(headless.session.active().unwrap().source_read_only);
+    assert!(headless.session.active().unwrap().path.is_none());
+    headless.handle("doc.save", json!({"path":"replay.pcraft"})).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&std::fs::read(fixture.read.join("replay.pcraft")).unwrap()).unwrap();
+    let reopened_owner = native_owner(&reopened);
+    assert_eq!(reopened_owner.smart_filters, owner.smart_filters);
+    assert_eq!(reopened_owner.filter_mask, owner.filter_mask);
+    assert_eq!(reopened_owner.cache.as_ref().unwrap().to_interleaved(reopened.bounds()), expected_pixels);
+    assert_eq!(reopened.metadata.import_conversion, document.metadata.import_conversion);
+    let mut uncached = reopened_owner.clone();
+    uncached.cache = None;
+    let rendered = photocraft_engine::smart_cmds::render(&reopened, &uncached).unwrap().unwrap();
+    assert_eq!(rendered.to_interleaved(reopened.bounds()), expected_pixels, "saved pixels must be reproducible from native controls");
+    assert_eq!(std::fs::read(fixture.read.join("source.xcf")).unwrap(), source);
+    // A completed host import must not turn sessionless helper calls into an
+    // executable route, including trusted CLI's separate low-level contract.
+    let before = photocraft_io::native_xcf_tones::preparation_count();
+    let direct = photocraft_automation::files::open_bytes_with_options("source.xcf", &source, &options).unwrap();
+    assert!(matches!(direct.document.layers[0].content, photocraft_doc::LayerContent::Raster(_)));
+    assert_eq!(photocraft_io::native_xcf_tones::preparation_count(), before);
+}
+
+fn deny_native_exposure(command: &str, params: &Value) -> photocraft_engine::Result<()> {
+    photocraft_automation::workspace::authorize_engine_step(command, params)?;
+    if command == "image.adjustments.exposure" { Err(photocraft_engine::EngineError::Other("native exposure denied".into())) } else { Ok(()) }
+}
+fn cancel_native_exposure(command: &str, params: &Value) -> photocraft_engine::Result<()> {
+    photocraft_automation::workspace::authorize_engine_step(command, params)?;
+    if command == "image.adjustments.exposure" { Err(photocraft_engine::EngineError::Cancelled) } else { Ok(()) }
+}
+
+#[test]
+fn rooted_native_effect_denial_and_cancellation_precede_preparation_and_admission() {
+    let fixture = Fixture::new();
+    let source = native_masked_source();
+    std::fs::write(fixture.read.join("source.xcf"), &source).unwrap();
+    for (gate, cancelled) in [(deny_native_exposure as fn(&str, &Value) -> photocraft_engine::Result<()>, false), (cancel_native_exposure, true)] {
+        let mut headless = fixture.headless();
+        headless.session.authorize = Some(gate);
+        let document = headless.session.active().unwrap().doc.clone();
+        let listing = headless.session_list();
+        let preparations = photocraft_io::native_xcf_tones::preparation_count();
+        let error = headless.handle("doc.open", json!({"path":"source.xcf"})).unwrap_err();
+        if cancelled {
+            assert!(matches!(error, photocraft_automation::AutomationError::Import(photocraft_io::IoError::Cancelled)));
+        } else {
+            assert!(
+                matches!(error,photocraft_automation::AutomationError::Import(photocraft_io::IoError::NativeXcfToneDenied { ref command }) if command=="image.adjustments.exposure")
+            );
+        }
+        assert_eq!(photocraft_io::native_xcf_tones::preparation_count(), preparations);
+        assert!(Arc::ptr_eq(&document, &headless.session.active().unwrap().doc));
+        assert_eq!(headless.session_list(), listing);
+        assert_eq!(std::fs::read(fixture.read.join("source.xcf")).unwrap(), source);
+        let direct = photocraft_automation::files::open_bytes("source.xcf", &source).unwrap();
+        assert!(matches!(direct.document.layers[0].content, photocraft_doc::LayerContent::Raster(_)), "failed scopes restore inert IO");
+    }
+}
+
+#[test]
+fn rooted_native_authority_cannot_admit_data_from_outside_or_absent_read_roots() {
+    let fixture = Fixture::new();
+    let source = native_masked_source();
+    std::fs::write(fixture.outside.join("source.xcf"), &source).unwrap();
+    let mut headless = fixture.headless();
+    let before = headless.session.active().unwrap().doc.clone();
+    let preparations = photocraft_io::native_xcf_tones::preparation_count();
+    for path in [fixture.outside.join("source.xcf"), PathBuf::from("../outside/source.xcf")] {
+        let error = headless.open(&path).unwrap_err();
+        assert!(matches!(error, photocraft_automation::AutomationError::BadRequest(_)));
+        assert!(Arc::ptr_eq(&before, &headless.session.active().unwrap().doc));
+        assert_eq!(photocraft_io::native_xcf_tones::preparation_count(), preparations);
+    }
+    let mut denied = Headless::new();
+    assert!(matches!(denied.open(&fixture.outside.join("source.xcf")), Err(photocraft_automation::AutomationError::BadRequest(_))));
+    assert!(denied.session.documents().is_empty());
+    assert_eq!(photocraft_io::native_xcf_tones::preparation_count(), preparations);
+    assert_eq!(std::fs::read(fixture.outside.join("source.xcf")).unwrap(), source);
+}

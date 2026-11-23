@@ -14,6 +14,16 @@ pub(crate) fn with_authority<T>(gate: Option<Gate>, import: impl FnOnce() -> T) 
     import()
 }
 
+impl crate::Session {
+    /// Scope one synchronous import with this session's native XCF command gate.
+    /// Acquire source bytes through the caller's filesystem capability first:
+    /// this scope grants no file access and does not admit or recolor a document.
+    /// Ordinary sessionless IO remains inert, and nested restrictions are preserved.
+    pub fn with_native_xcf_import_authority<T>(&self, import: impl FnOnce() -> T) -> T {
+        with_authority(self.authorize, import)
+    }
+}
+
 fn authorize(command: &str, params: &Value) -> std::result::Result<(), photocraft_io::native_xcf_tones::AuthorizationError> {
     match crate::jobs::authorize_render_command(command, params) {
         Ok(()) => Ok(()),
