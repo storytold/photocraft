@@ -20,7 +20,7 @@ fn square(doc: &Document, name: &str, r: Rect, rgba: [f32; 4]) -> Layer {
 /// Blue in "Inner", and Green at the top level above Group 1. Returns the session and the ids of
 /// Group 1 and Inner, with Inner active.
 fn session(depth: usize) -> (Session, LayerId, LayerId) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     let ids = s
         .edit("Groups", |doc, active| {
