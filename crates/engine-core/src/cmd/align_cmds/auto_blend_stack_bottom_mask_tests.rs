@@ -120,7 +120,7 @@ type Setup = fn(&mut Session, &[LayerId]) -> Value;
 /// the bottom layer stays hidden where the layer above takes over.
 #[test]
 fn other_runs_keep_the_bottom_layer_masked() {
-    let cases: [(&str, Setup); 5] = [
+    let cases: [(&str, Setup); 6] = [
         ("panorama", |s, ids| {
             // A panorama pair: FocusL over x 0..240, FocusR over x 160..400.
             let (l, r) = (ids[0], ids[1]);
@@ -146,6 +146,20 @@ fn other_runs_keep_the_bottom_layer_masked() {
                 Ok(())
             })
             .unwrap();
+            json!({"method": "stack", "seamlessTones": false})
+        }),
+        ("stack with the top in a half-opaque group", |s, ids| {
+            // The group thins the top's coverage, so the bottom shows through even where the
+            // top is opaque and sharp; revealing all of the bottom would show more of it.
+            s.execute("layer.select", json!({"layer": ids[1].0})).unwrap();
+            s.execute("layer.groupLayers", json!({})).unwrap();
+            let group = s.active().unwrap().active_layer.unwrap();
+            s.edit("fade", |doc, _| {
+                doc.layer_mut(group).unwrap().opacity = 0.5;
+                Ok(())
+            })
+            .unwrap();
+            select(s, ids);
             json!({"method": "stack", "seamlessTones": false})
         }),
         ("stack over an existing mask", |s, ids| {

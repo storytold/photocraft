@@ -389,10 +389,15 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
 /// focus-weight mask (#14212). The reveal uncovers bottom pixels wherever that weight is below 1;
 /// each one must sit under an opaque, fully weighted pixel of the top layer, drawn normally at
 /// full opacity and not clipped, since a clipped top takes its coverage from the bottom's mask.
-/// The bottom must have no effects, which would trace the wider mask, and no pixels outside
-/// `area`, which its old mask hid.
+/// Both must sit in the same group: a group holding only the top (its opacity, fill, blend or
+/// mask) would thin the top's coverage over the bottom. The bottom must have no effects, which
+/// would trace the wider mask, and no pixels outside `area`, which its old mask hid.
 fn revealing_the_bottom_keeps_the_composite(doc: &Document, ids: &[LayerId], area: Rect, alpha: &[Vec<f32>], weights: &[Vec<f32>]) -> bool {
     let (Some(bottom), Some(top)) = (doc.layer(ids[0]), doc.layer(ids[1])) else { return false };
+    let index = doc.layers.index();
+    if index.parent(ids[0]) != index.parent(ids[1]) {
+        return false;
+    }
     let bottom_inside = bottom.surface().is_some_and(|s| {
         let b = s.content_bounds();
         b.is_empty() || b.intersect(&area) == b
