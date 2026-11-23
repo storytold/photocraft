@@ -11,7 +11,7 @@ use craft::imaging::ui::transform_preview::StylePlan;
 
 /// A 200 × 160 document with a 40 × 20 blue block at (60, 60) on its own layer, wearing a 4 px
 /// red outside Stroke.
-fn app(mode: &str, depth: u32) -> PhotocraftApp {
+fn app(mode: &str, depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 160, "mode": mode, "depth": depth})).unwrap();
     app.run("layer.new.layer", json!({"name": "styled"})).unwrap();

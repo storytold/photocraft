@@ -154,7 +154,7 @@ mod tests {
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(Session::new(), Services::default())
     }
 

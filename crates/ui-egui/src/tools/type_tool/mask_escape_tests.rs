@@ -12,7 +12,7 @@ use super::commit_tests::type_new;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn new_app(tool: Tool, use_esc_to_commit: bool) -> PhotocraftApp {
+fn new_app(tool: Tool, use_esc_to_commit: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.run("prefs.set", json!({"path": "type.useEscToCommit", "value": use_esc_to_commit})).unwrap();
@@ -23,12 +23,12 @@ fn new_app(tool: Tool, use_esc_to_commit: bool) -> PhotocraftApp {
     app
 }
 
-fn press(mut app: PhotocraftApp, k: egui::Key, modifiers: Modifiers) -> PhotocraftApp {
+fn press(mut app: Box<PhotocraftApp>, k: egui::Key, modifiers: Modifiers) -> Box<PhotocraftApp> {
     crate::canvas::testing::key(&mut app, k, modifiers);
     app
 }
 
-pub(super) fn escape(app: PhotocraftApp) -> PhotocraftApp {
+pub(super) fn escape(app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
     press(app, egui::Key::Escape, Modifiers::NONE)
 }
 

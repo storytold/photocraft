@@ -16,7 +16,7 @@ use crate::state::Tool;
 const SAVED: &str = "Path 1";
 
 /// A saved path of two squares (the second combined), targeted, with Direct Selection.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -32,10 +32,10 @@ fn saved(app: &PhotocraftApp) -> Path {
 }
 
 /// The vector tools' options bar for `tool`, laid out once.
-fn bar(app: PhotocraftApp, tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn bar(app: Box<PhotocraftApp>, tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_size(vec2(1400.0, 400.0)).with_context(ctx).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 ui.horizontal(|ui| crate::vector_ui::options_bar(app, ui, tool));
             }
@@ -47,7 +47,7 @@ fn bar(app: PhotocraftApp, tool: Tool) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn open_path_operations(h: &mut Harness<'_, PhotocraftApp>) {
+fn open_path_operations(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     h.get_by_label("Path operations").click();
     h.run_steps(3);
 }

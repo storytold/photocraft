@@ -240,6 +240,9 @@ mod tabs_tests;
 mod doc_window_dialog_tests;
 
 #[cfg(test)]
+mod document_window_title_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -262,9 +265,10 @@ mod rotation_preview_isolation_tests {
 
     use super::*;
 
-    /// Opens the filter dialog of `command` and returns its id.
+    /// Opens the filter dialog of `command` with its Preview box and returns its id. Rotate Canvas has no Preview
+    /// (#14462); its size-changing preview (#1436) is reached through `open_previewing`.
     fn open(app: &mut PhotocraftApp, command: &str) -> DialogId {
-        let id = crate::filter_dialog::open(app, command).expect("the dialog opens");
+        let id = crate::filter_dialog::open_previewing(app, command).expect("the dialog opens");
         // The Preview box is on from the dialog's first drawn pass.
         for _ in 0..2 {
             crate::smart_filter_dialog::tests::pass(app);
@@ -273,17 +277,17 @@ mod rotation_preview_isolation_tests {
     }
 
     /// A harness running the app's dialogs, for the Preview box's clicks.
-    fn dialogs_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    fn dialogs_harness(app: Box<PhotocraftApp>) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1200.0, 900.0))
             .with_context(app.ctx().clone())
-            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
         h.run_steps(2);
         h
     }
 
     /// Clicks the open dialog's Preview box.
-    fn toggle_preview(h: &mut egui_kittest::Harness<'static, PhotocraftApp>) {
+    fn toggle_preview(h: &mut egui_kittest::Harness<'static, Box<PhotocraftApp>>) {
         use egui_kittest::kittest::Queryable;
         h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Preview").click();
         h.run_steps(2);
@@ -614,11 +618,11 @@ mod zoom_animation_tests {
 mod display_memo_tests;
 
 #[cfg(test)]
-mod cpu_background_tests;
+mod cpu_background_gpu_tests;
 
 #[cfg(test)]
-#[path = "canvas/blend_viewport_tests.rs"]
-mod blend_viewport_regression;
+#[path = "canvas/blend_viewport_gpu_tests.rs"]
+mod blend_viewport_gpu_tests;
 
 #[cfg(test)]
 #[path = "canvas/pixel_alignment_tests.rs"]
@@ -627,7 +631,7 @@ mod pixel_alignment_tests;
 #[cfg(test)]
 mod multi_channel_ui_tests {
     use super::*;
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width":64,"height":64})).unwrap();
         app.sync_views();

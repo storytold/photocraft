@@ -15,7 +15,7 @@ fn four() -> impl Iterator<Item = &'static str> {
 }
 
 /// A 100 × 100 document with a pixel layer "Paint" holding a red block, active.
-fn app() -> (PhotocraftApp, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 100, "height": 100, "background": "white"})).unwrap();
     app.sync_views();

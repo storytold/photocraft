@@ -14,7 +14,10 @@ use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 #[cfg(test)]
 use craft::ui::patterns::preferences::PrefValue;
-use craft::ui::patterns::preferences::{Closed, PageInfo, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage};
+use craft::ui::patterns::preferences::{
+    Closed, PageInfo, PreferencesDraft, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage,
+};
+use craft::ui::runtime::env::{Words, WordsOverride, with_env};
 use craft::ui::runtime::memory::SaveKey;
 use craft::ui::runtime::requests::ColorRequest;
 use photocraft_engine::prefs::SECTIONS;
@@ -40,17 +43,20 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
     }
     if let Some(section) = id.strip_prefix("edit.preferences.") {
         open_preferences(app, section);
-        return Some(Ok(json!({"dialog": "preferences"})));
+        // The id `ui.inspect` lists the window under, as every hosted dialog replies (#15544); the status says why it
+        // did not open.
+        let opened = app.framework.dialogs.get::<PrefsDialog>().map(|d| json!({"dialog": d.id().value().to_string()}));
+        return Some(opened.ok_or_else(|| app.ui.status.clone()));
     }
     let dialog = |d: Result<DialogId, String>| Some(d.map(|d| json!({"dialog": d.value().to_string()})));
     match id {
         "edit.keyboardShortcuts" => {
             super::shortcuts::open(app, 0);
-            Some(Ok(json!({"dialog": "shortcuts"})))
+            Some(Ok(super::shortcuts::control_reply()))
         }
         "edit.menus" => {
             super::shortcuts::open(app, 1);
-            Some(Ok(json!({"dialog": "shortcuts"})))
+            Some(Ok(super::shortcuts::control_reply()))
         }
         "edit.toolbar" => {
             crate::panels::toolbar::open_drawer(app);
@@ -99,6 +105,8 @@ pub(crate) struct PrefsDialog {
     saved_rev: u64,
     /// The language the document's labels are in: the draft's language, which previews before Apply.
     labels: Lang,
+    /// Cached framework words for that same draft language, including the footer and window title.
+    words: Arc<Words>,
     /// What the custom rows read from the app, as of the last `feed`.
     custom: PrefsCustom,
     /// The colour row whose swatch was pressed, until `take` opens the picker for it.
@@ -141,6 +149,7 @@ impl PrefsDialog {
         if wanted != self.labels {
             doc.relabel(&host.with_lang(wanted));
             self.labels = wanted;
+            self.words = Arc::new(Words::from_i18n(Arc::clone(crate::i18n::framework_i18n()), wanted));
         }
     }
 }
@@ -161,7 +170,14 @@ impl StackDialog for PrefsDialog {
     fn show(&mut self, ui: &mut egui::Ui, _stack: &DialogStack) -> Option<DialogResult<PrefsAnswer>> {
         let doc = self.doc.take()?;
         let mut with_custom = doc.custom(self.custom.clone());
-        let out = PreferencesWindow::new(Bind::bound(&mut self.state)).remember(SaveKey::new("photocraft.preferences")).show(ui, &mut with_custom);
+        // Relabeling the document covers its rows, but the framework draws its footer/title from Env.
+        // Scope those words to the draft as well, without changing the main window's language.
+        let words = Arc::clone(&self.words);
+        let out = with_env(
+            ui,
+            |set| set.words = Some(WordsOverride::Replace(words)),
+            |ui| PreferencesWindow::new(Bind::bound(&mut self.state)).remember(SaveKey::new("photocraft.preferences")).show(ui, &mut with_custom),
+        );
         self.doc = Some(with_custom.custom(()));
         if let Some(request) = out.pick_color {
             self.pick = Some(request);
@@ -226,7 +242,8 @@ pub fn open_preferences(app: &mut PhotocraftApp, section: &str) {
     state.selected = section.to_string();
     let custom = PrefsCustom::new(app, false);
     let saved_rev = app.session.prefs.rev();
-    app.framework.dialogs.open(PrefsDialog { doc: Some(doc), state, saved_rev, labels: host.lang(), custom, pick: None, edits: Vec::new() });
+    let words = Arc::new(Words::from_i18n(Arc::clone(crate::i18n::framework_i18n()), host.lang()));
+    app.framework.dialogs.open(PrefsDialog { doc: Some(doc), state, saved_rev, labels: host.lang(), words, custom, pick: None, edits: Vec::new() });
 }
 
 /// The language the draft's `interface.language` names, as the code stored in the draft.

@@ -19,7 +19,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// A fresh transparent document with the default brush and no smoothing, as the issue measured.
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 320, "height": 320, "background": "transparent"})).unwrap();
     app.session.tools.brush.smoothing.amount = 0.0;

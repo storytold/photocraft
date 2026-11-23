@@ -6,7 +6,7 @@ use egui_kittest::{Harness, kittest::Queryable};
 use crate::panels::panel_docking::{apply, is_front, is_shown, show_panel};
 use craft::behavior::dock::Action as DockAction;
 
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
@@ -30,7 +30,7 @@ fn commands(app: &PhotocraftApp, action: usize) -> Vec<String> {
 
 /// Two sets, Web listed first: "Resize" (Web) adds a layer "w", "Sharpen" and "Soften" (Retouch)
 /// add "r1" and "r2".
-fn two_set_app() -> PhotocraftApp {
+fn two_set_app() -> Box<PhotocraftApp> {
     let mut app = new_app();
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     for (name, set, layer) in [("Resize", "Web", "w"), ("Sharpen", "Retouch", "r1"), ("Soften", "Retouch", "r2")] {
@@ -172,7 +172,7 @@ fn set_folders_group_actions_and_collapse() {
     push(&mut app, "Also loose", None, vec![]);
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
     h.run_steps(3);
-    let first = |h: &Harness<'_, PhotocraftApp>, label: &str| h.get_all_by_label(label).next().expect(label).rect();
+    let first = |h: &Harness<'_, Box<PhotocraftApp>>, label: &str| h.get_all_by_label(label).next().expect(label).rect();
     let folder = first(&h, "Retouch");
     assert!(first(&h, "Loose").top() < folder.top());
     assert!(first(&h, "Sharpen").top() > folder.top());

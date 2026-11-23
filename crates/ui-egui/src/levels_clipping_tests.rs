@@ -195,7 +195,7 @@ fn hostile_settings_do_not_panic() {
 }
 
 /// A 16×8 document: the background's red channel ramps 0..1 left to right, green is 0.5, blue 1.
-fn ramp_app(mode: ColorMode, depth: SampleType) -> PhotocraftApp {
+fn ramp_app(mode: ColorMode, depth: SampleType) -> Box<PhotocraftApp> {
     let mut doc = Document::with_background("t", Size::new(16, 8), mode, depth, Color::rgba(1.0, 1.0, 1.0, 1.0));
     let gray = mode == ColorMode::Grayscale;
     if let Some(s) = doc.layers[0].surface_mut() {
@@ -480,7 +480,7 @@ fn smart_filter_levels_show_no_display() {
     assert!(app.levels_clipping.is_none(), "the cache goes");
 }
 
-fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn dialog_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let h = Harness::builder()
         .with_context(app.ctx().clone())
         .with_size(egui::vec2(1200.0, 900.0))
@@ -491,7 +491,7 @@ fn dialog_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 }
 
 /// The `clipping` field of the first open dialog as automation lists it: `"shadows"`, `"highlights"` or `None`.
-fn clipping(h: &Harness<'static, PhotocraftApp>) -> Option<Value> {
+fn clipping(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<Value> {
     let dialogs = h.state().framework.dialogs.open_dialogs();
     dialogs.first().and_then(|d| d.fields.as_ref()).map(|fields| fields["clipping"].clone()).filter(|clip| !clip.is_null())
 }

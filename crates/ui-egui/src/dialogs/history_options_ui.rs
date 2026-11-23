@@ -63,7 +63,7 @@ mod tests {
     use super::*;
     use crate::new_layer_ui::testing::{set, top};
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
     }
 

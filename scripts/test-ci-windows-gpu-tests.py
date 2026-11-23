@@ -103,5 +103,54 @@ class Selection(unittest.TestCase):
             needs('crates/ui-egui/src/canvas.rs', packages=[p for p in PACKAGES if p['name'] != 'photocraft-gpu'])
 
 
+class NeutralSelection(unittest.TestCase):
+    PACKAGES = [
+        pkg('photocraft-geom', 'crates/geom'),
+        pkg('photocraft-algo', 'crates/algo', ['photocraft-geom']),
+        pkg('photocraft-compose', 'crates/compose', ['photocraft-geom']),
+        pkg('photocraft-engine', 'crates/engine', ['photocraft-compose']),
+        pkg('photocraft-ui-egui', 'crates/ui-egui', ['photocraft-engine']),
+    ]
+
+    def skipped(self, *changed):
+        return select.neutral_to_skip(list(changed), self.PACKAGES, ROOT)
+
+    def test_a_change_elsewhere_skips_every_neutral_package(self):
+        self.assertEqual(self.skipped('crates/ui-egui/src/lib.rs'), ['photocraft-algo', 'photocraft-compose', 'photocraft-geom'])
+
+    def test_a_changed_package_and_its_dependents_are_not_skipped(self):
+        self.assertEqual(self.skipped('crates/compose/src/lib.rs'), ['photocraft-algo', 'photocraft-geom'])
+        # geom is a dependency of algo and compose, so its change keeps all three.
+        self.assertEqual(self.skipped('crates/geom/src/lib.rs'), [])
+
+    def test_shared_inputs_skip_nothing(self):
+        for path in ['crates/ui-egui/Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml']:
+            with self.subTest(path=path):
+                self.assertEqual(self.skipped('crates/ui-egui/src/lib.rs', path), [])
+
+    def test_documentation_only_skips_all_of_them(self):
+        self.assertEqual(self.skipped('docs/a.md'), ['photocraft-algo', 'photocraft-compose', 'photocraft-geom'])
+
+
+class TestLinuxSkip(unittest.TestCase):
+    def skipped(self, *changed):
+        return select.linux_to_skip(list(changed), PACKAGES, ROOT)
+
+    def test_a_leaf_change_skips_what_does_not_build_on_it(self):
+        self.assertEqual(self.skipped('crates/ui-egui/src/lib.rs'), ['photocraft-compose', 'photocraft-raster'])
+
+    def test_a_change_reaches_the_packages_built_on_it_but_never_skips_gpu(self):
+        self.assertEqual(self.skipped('crates/compose/src/lib.rs'), ['photocraft-raster'])
+        self.assertNotIn('photocraft-gpu', self.skipped('crates/ui-egui/src/lib.rs'))
+
+    def test_shared_inputs_skip_nothing(self):
+        for path in ['crates/raster/Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml']:
+            with self.subTest(path=path):
+                self.assertEqual(self.skipped('crates/ui-egui/src/lib.rs', path), [])
+
+    def test_documentation_only_skips_everything_but_gpu(self):
+        self.assertEqual(self.skipped('docs/a.md'), ['photocraft', 'photocraft-compose', 'photocraft-raster', 'photocraft-ui-egui'])
+
+
 if __name__ == '__main__':
     unittest.main()

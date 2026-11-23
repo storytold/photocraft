@@ -2,7 +2,7 @@
 use super::*;
 use crate::canvas::{ToolEvent, testing, tool_event};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":600,"height":400})).unwrap();
     app.sync_views();
