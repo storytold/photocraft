@@ -8,6 +8,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 #[test]
 fn failed_effect_build_is_not_reused_after_original_pixels_recover() {
+    photocraft_raster::spill::use_test_volume_space();
     let dir = std::env::temp_dir().join(format!("photocraft-compose-scratch-retry-{}", std::process::id()));
     spill::configure(Some(&dir), 1).unwrap();
     let mut doc = Document::new("Shadow", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);

@@ -479,7 +479,7 @@ impl Ctx<'_> {
         // Advanced Blending channel restrictions (`brst`: the u32 ids of channels left out);
         // also kept in `psd_blocks`, where export rewrites it from the field.
         if let Some(b) = rec.block(b"brst") {
-            l.excluded_channels = crate::blocks::parse_brst(&b.data);
+            l.excluded_channels = craft_psd::tagged::channel_restrictions(&b.data);
         }
         // Advanced Blending (`knko`, `infx`, `clbl`, `tsly`, `lmgm`, `vmgm`); the blocks stay in
         // `psd_blocks`, where export rewrites them from the field in place.
@@ -978,13 +978,9 @@ fn write_rgba8(s: &mut Surface, canvas: Rect, data: &[u8]) -> Result<(), String>
 }
 
 pub(crate) fn parse_guides(data: &[u8], doc: &mut Document) {
-    let rd = |at: usize| data.get(at..at + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
-    let Some(count) = rd(12) else { return };
-    for i in 0..count as usize {
-        let at = 16 + i * 5;
-        let (Some(loc), Some(&dir)) = (rd(at), data.get(at + 4)) else { break };
-        let pos = f64::from(loc as i32) / 32.0;
-        if dir == 1 {
+    for g in craft_psd::guides::parse_v1_prefix(data) {
+        let pos = f64::from(g.location) / 32.0;
+        if g.direction == 1 {
             doc.guides.horizontal.push(pos);
         } else {
             doc.guides.vertical.push(pos);
@@ -1193,9 +1189,8 @@ fn read_initial_metadata(
             },
             crate::vector_map::WORK_PATH => doc.work_path = crate::vector_map::path_from_resource(&resource.data, header.width, header.height),
             crate::vector_map::CLIPPING_PATH => {
-                let len = usize::from(resource.data.first().copied().unwrap_or(0));
-                let name = resource.data.get(1..1 + len).map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
-                doc.clipping_path = Some(photocraft_doc::ClippingPath { name, flatness: 0.0 });
+                let name = String::from_utf8_lossy(craft_psd::path::clipping_path_name(&resource.data).unwrap_or_default()).into_owned();
+                doc.clipping_path = Some(photocraft_doc::ClippingPath { name, flatness: crate::vector_map::clipping_flatness(&resource.data) });
                 doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone())));
             }
             crate::channel_map::ALPHA_IDENTIFIERS if !multichannel => {}
@@ -1451,7 +1446,7 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
     let cc = fmt.mode.color_channels();
     let tree = file.layer_tree_max_depth(photocraft_doc::MAX_GROUP_DEPTH);
     let space = photocraft_compose::cmyk_space(doc);
-    doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0));
+    doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0)).into();
     mark_background(file, &mut doc.layers);
     if let Some(Ok(craft_psd::resources::ResourceData::LayerGroupInfo(groups))) =
         file.resources.iter().find(|r| r.id == ids::LAYER_GROUP_INFO).and_then(craft_psd::resources::ImageResource::parsed)

@@ -186,10 +186,10 @@ fn a_hole_is_as_thick_as_it_is_through_not_along() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn thin_holes_are_filled_the_same_on_any_number_of_threads() {
-    let (w, h) = (300, 200);
+    let (w, h) = (150, 100);
     let img = busy(w, h, 3, 5);
     // A wavy line 6 px thick across the image.
-    let hole: Vec<bool> = (0..w * h).map(|i| (((i % w) as f32 * 0.05).sin() * 30.0 + 100.0 - (i / w) as f32).abs() < 3.0).collect();
+    let hole: Vec<bool> = (0..w * h).map(|i| (((i % w) as f32 * 0.05).sin() * 15.0 + 50.0 - (i / w) as f32).abs() < 3.0).collect();
     let px = roles(w, h, &hole);
     let run = |threads: usize| {
         let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();

@@ -67,7 +67,7 @@ pub fn open(app: &mut PhotocraftApp, brush: Option<&BrushSettings>) -> DialogId 
             // Include Color belongs to the tool settings: only with them, as in Photoshop.
             Param::new("color", tl!("Include Color"), ParamKind::bool(false)).enabled_when("toolSettings", true),
         ];
-        let mut dialog = ParamDialog::command(KEY, tl!("New Brush Preset…"), rows).values(Bind::bound(fields)).ok_enabled(why.is_none());
+        let mut dialog = ParamDialog::command(KEY, tl!("New Brush Preset"), rows).values(Bind::bound(fields)).ok_enabled(why.is_none());
         if let Some(why) = why {
             dialog = dialog.ok_reason(Label::from(why));
         }
