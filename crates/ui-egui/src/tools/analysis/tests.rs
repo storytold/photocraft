@@ -294,3 +294,105 @@ fn a_hidden_layer_keeps_the_button_and_the_click_shows_the_alert() {
     assert_eq!(now.history.past_len(), steps, "no History step");
     assert!(ruler(st).is_some(), "the ruler line is still there");
 }
+
+/// The height of the number painted beside the first Count marker of a document whose group has `label_size`, read
+/// from the frame's text shapes.
+fn count_number_height(label_size: u32) -> f32 {
+    use crate::app::framework::BuildApp as _;
+    use egui::epaint::Shape;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
+    app.run("count.add", json!({"x": 100, "y": 50})).unwrap();
+    app.run("count.setGroup", json!({"labelSize": label_size})).unwrap();
+    app.sync_views();
+    let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(900.0, 600.0)).build_app(
+        |ui, app: &mut PhotocraftApp| {
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    h.run_steps(6);
+    let mut heights = Vec::new();
+    let mut stack: Vec<&Shape> = h.output().shapes.iter().map(|c| &c.shape).collect();
+    while let Some(shape) = stack.pop() {
+        match shape {
+            Shape::Vec(v) => stack.extend(v.iter()),
+            Shape::Text(t) if t.galley.text() == "1" => heights.push(t.galley.size().y),
+            _ => {}
+        }
+    }
+    heights.into_iter().fold(0.0, f32::max)
+}
+
+/// Label Size sets the size of the numbers beside the Count markers.
+#[test]
+fn count_label_size_sizes_the_marker_numbers() {
+    let (small, large) = (count_number_height(8), count_number_height(40));
+    assert!(small > 0.0, "the marker number is painted");
+    assert!(large > small * 2.0, "a larger Label Size paints larger numbers: {small} then {large}");
+}
+
+/// A 300 x 200 document with two notes (the second without an author) and the Notes panel body in a harness,
+/// nothing selected.
+fn notes_harness() -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
+    let (mut app, _) = app();
+    app.run("notes.add", json!({"x": 20, "y": 20, "author": "Ann", "text": "first"})).unwrap();
+    app.run("notes.add", json!({"x": 120, "y": 80, "author": "", "text": "second"})).unwrap();
+    app.ui.analysis.note_selected = None;
+    let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            super::notes_panel::body(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::studio());
+    h.run_steps(4);
+    h
+}
+
+fn disabled(h: &egui_kittest::Harness<'static, Box<PhotocraftApp>>, label: &str) -> bool {
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+    h.get_by_label(label).accesskit_node().is_disabled()
+}
+
+/// With no note selected the panel selects none by itself, shows an inactive empty text field, a blank counter and
+/// greyed buttons; a selected note shows "N / M" and its stored author, and nothing for a missing one.
+#[test]
+fn notes_panel_empty_state_and_counter() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = notes_harness();
+    assert_eq!(h.state().ui.analysis.note_selected, None, "note 1 isn't selected by itself");
+    assert!(h.query_by_label("1 / 2").is_none() && h.query_by_label("2 / 2").is_none(), "blank counter");
+    assert!(disabled(&h, "Notes"), "the text field is inactive");
+    for label in ["Previous note", "Next note", "Delete note"] {
+        assert!(disabled(&h, label), "{label} is greyed out");
+    }
+    assert!(h.query_by_label("first").is_none(), "no note's text is shown");
+
+    h.state_mut().ui.analysis.note_selected = Some(1);
+    h.run_steps(3);
+    assert!(h.query_by_label("2 / 2").is_some());
+    assert!(h.query_by_label("No author").is_none(), "an empty author stays empty");
+    assert!(!disabled(&h, "Next note") && !disabled(&h, "Delete note"));
+    h.state_mut().ui.analysis.note_selected = Some(0);
+    h.run_steps(3);
+    assert!(h.query_by_label("1 / 2").is_some());
+    assert!(h.query_by_label("Ann").is_some(), "the stored author");
+}
+
+/// A note made with a click takes the keyboard: typing goes into its text.
+#[test]
+fn a_note_made_with_a_click_takes_the_keyboard() {
+    let mut h = notes_harness();
+    h.state_mut().ui.tool = Tool::Note;
+    down(h.state_mut(), 200.0, 150.0, egui::Modifiers::NONE);
+    up(h.state_mut(), 200.0, 150.0);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.analysis.note_selected, Some(2));
+    h.event(egui::Event::Text("hello".into()));
+    h.run_steps(3);
+    assert_eq!(h.state().session.active().unwrap().doc.notes[2].text, "hello", "typing goes into the new note");
+}

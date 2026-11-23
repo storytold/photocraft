@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_COORDINATE: f64 = 1_000_000.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "lowercase")]
 pub enum SymmetryMode {
     Vertical,
@@ -29,7 +29,7 @@ impl SymmetryMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, craft_ui_macros::PlainData)]
 pub struct PresetSymmetry {
     pub mode: SymmetryMode,
     pub center: [f64; 2],

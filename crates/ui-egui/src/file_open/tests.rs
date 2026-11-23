@@ -4,6 +4,7 @@ use craft::host::{Picked, ScriptedFiles};
 use craft::ui::runtime::drag::OsFile;
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::Document;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_geom::Size;
 use serde_json::json;
 use std::cell::RefCell;
@@ -1444,7 +1445,7 @@ fn save_a_copy_is_recorded_and_replayed_as_a_copy() {
     app.run("actions.stop", json!({})).unwrap();
     // PLAN: assumed panels-w29's `ActionStep` is `craft::automation::actions::ActionStep`
     let saved = craft::automation::actions::ActionStep::new("file.saveACopy", json!({"path": "/pics/copy.png"}));
-    assert_eq!(app.session.actions.list.actions()[0].steps.last(), Some(&saved));
+    assert_eq!(app.session.actions().list.actions()[0].steps.last(), Some(&saved));
     assert_eq!(crate::actions::label_of("file.saveACopy"), "Save a Copy");
     written.borrow_mut().clear();
     let played = app.run("actions.play", json!({"action": 0})).unwrap();
@@ -1493,7 +1494,7 @@ fn export_as_is_recorded_and_replayed() {
     control(&mut app, "ui.dialog.confirm", json!({"dialog": id}));
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(*exported.borrow(), [("/pics/out.jpg".to_string(), 20, 10, Some(70))]);
-    let craft::automation::actions::ActionStep { command: step_id, params: step } = app.session.actions.list.actions()[0].steps.last().cloned().unwrap();
+    let craft::automation::actions::ActionStep { command: step_id, params: step } = app.session.actions().list.actions()[0].steps.last().cloned().unwrap();
     assert_eq!(step_id, "file.export.exportAs");
     // The scale is the dialog's percentage, a number whatever its JSON form (`50` or `50.0`).
     assert_eq!((&step["path"], &step["format"], &step["quality"]), (&json!("/pics/out.jpg"), &json!("jpg"), &json!(70)));

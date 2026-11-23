@@ -70,7 +70,8 @@ fn keeps_box_drag(id: &str) -> bool {
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
-    // The views that ran before it in this pass show its change in the next one.
+    // The regions that ran before it in this pass show its change in the next one.
+    app.commands_run += 1;
     ctx.request_repaint();
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
