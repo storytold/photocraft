@@ -808,7 +808,7 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
             params.get("path").is_some() || ["importKys", "exportKys", "summarize"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some())
         }
         // Toolbar presets: a .tbr read or written by path.
-        "edit.toolbar" => ["loadPreset", "savePreset"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some()),
+        "edit.toolbar" => params.get("path").is_some() || ["loadPreset", "savePreset"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some()),
         "plugin.reload" => true,
         _ => false,
     }
