@@ -165,18 +165,25 @@ fn auto_align(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
-/// The most memory Auto-Blend's working buffers may take past the canvas: a bound independent
-/// of the layers' own bounding boxes, which a sparse layer (a dot at each far corner) can make
-/// arbitrarily large, and of how many layers are blended.
-const MAX_BLEND_BYTES: u64 = 4 << 30;
+/// The default budget for Auto-Blend working buffers, including when sparse layers make the
+/// bounds far larger than the canvas.
+const DEFAULT_BLEND_BYTES: u64 = 4 << 30;
 
-/// What Auto-Blend's buffers hold per work-area pixel, as f32: each layer's pixels, luminance,
-/// alpha and mask weight, plus the merged picture and the depth map. A `stack` blend also holds
-/// `fuse_stack`'s pyramids when `fuse` (a `stack` blend with Seamless Tones; 4/3 of a level 0
-/// each): the accumulated and the current image's (`channels` each), and about seven single-channel ones (luma, alpha, energies, winners, halo).
+/// Larger explicit stack budgets are limited to half of detected RAM. Keep the legacy
+/// allowance when RAM is small or unknown, within the target's allocation size limit.
+fn stack_blend_budget_limit(ram: Option<u64>) -> u64 {
+    (ram.unwrap_or(0) / 2).max(DEFAULT_BLEND_BYTES).min(isize::MAX as u64)
+}
+
+/// Peak Auto-Blend working buffers per pixel. Selecting weights holds the images, luma, alpha,
+/// scores and winner maps at once. Later blending holds one weight per layer, the merged picture
+/// and depth map. Seamless stacks also hold fusion pyramids: two channel-wide and roughly seven
+/// single-channel pyramids, each estimated at 4/3 of its base level.
 fn blend_bytes_per_pixel(layers: u64, channels: u64, fuse: bool) -> u64 {
+    let select_weights = layers.saturating_mul(channels.saturating_add(4));
+    let blend = layers.saturating_mul(channels.saturating_add(3)).saturating_add(channels.saturating_mul(2));
     let pyramids = if fuse { channels.saturating_mul(2).saturating_add(7).saturating_mul(4).div_ceil(3) } else { 0 };
-    layers.saturating_mul(channels.saturating_add(3)).saturating_add(channels.saturating_mul(2)).saturating_add(pyramids).saturating_mul(4)
+    blend.saturating_add(pyramids).max(select_weights).saturating_mul(4)
 }
 
 /// Auto-Blend's buffers, for allocation errors.
@@ -204,6 +211,18 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     if want_depth && method != "stack" {
         return Err(bad(cmd, "`depthMap` needs `method`: stack"));
     }
+    let budget = match p.get("memoryBudget") {
+        None => DEFAULT_BLEND_BYTES,
+        Some(_) if method != "stack" => return Err(bad(cmd, "`memoryBudget` needs `method`: stack")),
+        Some(value) => {
+            let bytes = value.as_u64().filter(|&bytes| bytes > 0).ok_or_else(|| bad(cmd, "`memoryBudget` must be a positive integer in bytes"))?;
+            let limit = stack_blend_budget_limit(crate::memory::physical_memory());
+            if bytes > limit {
+                return Err(bad(cmd, format!("`memoryBudget` cannot exceed {limit} bytes on this machine")));
+            }
+            bytes
+        }
+    };
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc: std::sync::Arc<Document> = st.doc.clone();
     let mut union = Rect::EMPTY;
@@ -218,25 +237,34 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     // The whole layers, past the canvas too (#5745): Auto-Align leaves a panorama's layers
     // partly off the canvas, and Photoshop masks and blends all of each layer, so Reveal All
     // shows the whole panorama. Layers so far apart that their bounds are mostly empty, or
-    // whose buffers would exceed `MAX_BLEND_BYTES`, keep to the canvas.
+    // whose buffers would exceed the budget, keep to the canvas.
     let canvas = doc.bounds();
     let channels = ids.iter().filter_map(|id| doc.layer(*id).and_then(|l| l.surface()).map(|s| s.channels() as u64)).max().unwrap_or(4);
     let per_px = blend_bytes_per_pixel(ids.len() as u64, channels, method == "stack" && seamless);
-    let fits = px_of(&union).saturating_mul(per_px) <= MAX_BLEND_BYTES && px_of(&union) <= content_px.max(px_of(&canvas)).saturating_mul(2);
+    let union_pixels = px_of(&union);
+    let fits = union_pixels.saturating_mul(per_px) <= budget && union_pixels <= content_px.max(px_of(&canvas)).saturating_mul(2);
     let area = if fits { union } else { union.intersect(&canvas) };
     if area.is_empty() {
         return Err(EngineError::Other("the selected layers are empty".into()));
     }
     // The fallback (the canvas) can still be past the budget: a huge canvas, or sparse layers
     // whose content bounds fill it. Refuse before any layer is expanded into dense buffers.
-    if px_of(&area).saturating_mul(per_px) > MAX_BLEND_BYTES {
+    let need = px_of(&area).saturating_mul(per_px);
+    if need > budget {
+        let (limit, advice) = if method == "stack" {
+            (format!("{budget} bytes (`memoryBudget`)"), "blend fewer or smaller layers, or increase `memoryBudget`")
+        } else {
+            (format!("{} MB", budget >> 20), "blend fewer or smaller layers")
+        };
         return Err(EngineError::Other(format!(
-            "Auto-Blend would need more than {} MB for {} layers over {} x {} px; blend fewer or smaller layers",
-            MAX_BLEND_BYTES >> 20,
+            "Auto-Blend would need more than {limit} for {} layers over {} x {} px; {advice}",
             ids.len(),
             area.width(),
             area.height()
         )));
+    }
+    if method == "stack" {
+        crate::memory_gate::ensure("blend the selected layers", need)?;
     }
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut imgs: Vec<Vec<f32>> = Vec::new();
@@ -388,7 +416,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.autoBlendLayers",
             "Auto-Blend Layers…",
-            r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"##,
+            r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false,"memoryBudget":bytes?=4294967296 (stack only)}"##,
             auto_blend
         ),
     ]

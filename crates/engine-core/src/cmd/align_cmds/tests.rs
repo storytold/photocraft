@@ -364,11 +364,108 @@ fn auto_blend_budget_counts_layers_and_channels() {
     assert_eq!(blend_bytes_per_pixel(2, 4, true), 88 + 80);
     // Without Seamless Tones `fuse_stack` never runs, so its pyramids are not budgeted: two RGBA
     // layers over 6000 x 6000 px fit the limit only then.
-    assert!(36_000_000 * blend_bytes_per_pixel(2, 4, false) <= MAX_BLEND_BYTES);
-    assert!(36_000_000 * blend_bytes_per_pixel(2, 4, true) > MAX_BLEND_BYTES);
+    assert!(36_000_000 * blend_bytes_per_pixel(2, 4, false) <= DEFAULT_BLEND_BYTES);
+    assert!(36_000_000 * blend_bytes_per_pixel(2, 4, true) > DEFAULT_BLEND_BYTES);
     // A 2^27-pixel area would need about 11 GiB for just two RGBA layers: it keeps to the canvas.
-    assert!((1u64 << 27).saturating_mul(blend_bytes_per_pixel(2, 4, false)) > MAX_BLEND_BYTES);
+    assert!((1u64 << 27).saturating_mul(blend_bytes_per_pixel(2, 4, false)) > DEFAULT_BLEND_BYTES);
     assert_eq!(blend_bytes_per_pixel(u64::MAX, 4, true), u64::MAX, "saturates instead of overflowing");
+}
+
+#[test]
+fn auto_blend_budget_counts_the_score_and_winner_planes_in_both_stack_modes() {
+    assert_eq!(blend_bytes_per_pixel(12, 4, false), 12 * (4 + 4) * 4);
+    assert_eq!(blend_bytes_per_pixel(32, 4, true), 32 * (4 + 4) * 4);
+}
+
+#[test]
+fn auto_blend_stack_rejects_a_budget_below_its_weight_peak() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+    let mut layers = Vec::new();
+    for index in 0..12 {
+        let name = format!("Focus layer {index}");
+        s.execute("layer.new.layer", json!({"name": name})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.edit(name.as_str(), |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[0.2, 0.4, 0.5, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        layers.push(id);
+    }
+    select(&mut s, &layers);
+
+    let before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let peak = 8 * 8 * 12 * (4 + 4) * 4;
+    let rejected = s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false, "memoryBudget": peak - 1})).unwrap_err().to_string();
+    assert!(rejected.contains("memoryBudget") && rejected.contains("8 x 8"), "{rejected}");
+    assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+
+    let result = s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false, "memoryBudget": peak})).unwrap();
+    assert!(result["blended"].is_null());
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+}
+
+#[test]
+fn auto_blend_budget_for_three_full_resolution_photos() {
+    let pixels = 6_192 * 4_128;
+    let two = pixels * blend_bytes_per_pixel(2, 4, true);
+    let three = pixels * blend_bytes_per_pixel(3, 4, true);
+    assert_eq!(three, 5_009_872_896);
+    assert!(two <= DEFAULT_BLEND_BYTES && three > DEFAULT_BLEND_BYTES);
+    assert!(three <= 5 << 30);
+
+    // Check the limit with synthetic RAM values. No full-sized images are allocated.
+    let addressable = isize::MAX as u64;
+    assert_eq!(stack_blend_budget_limit(Some(24 << 30)), (12 << 30).min(addressable));
+    assert_eq!(stack_blend_budget_limit(Some(6 << 30)), DEFAULT_BLEND_BYTES.min(addressable));
+    assert_eq!(stack_blend_budget_limit(None), DEFAULT_BLEND_BYTES.min(addressable));
+    assert_eq!(stack_blend_budget_limit(Some(u64::MAX)), addressable);
+}
+
+#[test]
+fn auto_blend_stack_uses_the_memory_budget_before_allocating() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "transparent"})).unwrap();
+    let mut layers = Vec::new();
+    for (name, left) in [("Left", 0), ("Right", 8)] {
+        s.execute("layer.new.layer", json!({"name": name})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.edit(name, |doc, _| {
+            doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(left, 0, left + 16, 16), &[0.2, 0.4, 0.5, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        layers.push(id);
+    }
+    select(&mut s, &layers);
+
+    // At 168 bytes per pixel, the 16×16 canvas needs 43,008 bytes and the
+    // 24×16 union needs 64,512. Every allocation here uses only a tiny image.
+    let before = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    let err = s.execute("edit.autoBlendLayers", json!({"method": "stack", "memoryBudget": 43_007})).unwrap_err().to_string();
+    assert!(err.contains("memoryBudget") && err.contains("43007") && err.contains("16 x 16"), "{err}");
+    assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+
+    for (budget, includes_outside) in [(43_008, false), (64_512, true)] {
+        let result = s.execute("edit.autoBlendLayers", json!({"method": "stack", "memoryBudget": budget})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let blended = doc.layer(LayerId(result["blended"].as_u64().unwrap())).unwrap().surface().unwrap();
+        assert!(blended.pixel(12, 8)[3] > 0.0, "both budgets cover the canvas");
+        assert_eq!(blended.pixel(20, 8)[3] > 0.0, includes_outside, "budget {budget}");
+        s.undo();
+    }
+
+    for invalid in [json!(0), json!(-1), json!(1.5), json!("43008"), Value::Null, json!(u64::MAX)] {
+        let err = s.execute("edit.autoBlendLayers", json!({"method": "stack", "memoryBudget": invalid})).unwrap_err().to_string();
+        assert!(err.contains("memoryBudget"), "{err}");
+    }
+    let err = s.execute("edit.autoBlendLayers", json!({"method": "panorama", "memoryBudget": 64_512})).unwrap_err().to_string();
+    assert!(err.contains("memoryBudget") && err.contains("stack"), "{err}");
 }
 
 #[test]
