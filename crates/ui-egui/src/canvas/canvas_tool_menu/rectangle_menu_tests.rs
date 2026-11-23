@@ -6,6 +6,7 @@
 //! The checks shared with the Triangle tool (#13367), which measured the same three menus, live
 //! here and take the tool; `triangle_menu_tests` runs them for the Triangle.
 
+use craft::draw::geometry::ShapeGeometry;
 use craft::draw::ui::VectorMode;
 use craft::keymap::Mods;
 use egui::Modifiers;
@@ -17,7 +18,6 @@ use super::line_menu_tests::{greyed, menu, shown};
 use super::tests::{any_dialog, app, harness, open_here, pick, right_click, screen_of};
 use super::{available, open_at};
 use crate::PhotocraftApp;
-use crate::canvas::testing;
 use crate::state::Tool;
 
 /// The measured menu over a pixel layer with no path, in the issue's notation.
@@ -36,51 +36,66 @@ const PATH_MENU: &str = "Define Custom Shape… ― Blending Options… ― Make
 /// The four Unite rows, greyed in every measured menu.
 const UNITE: [&str; 4] = ["Unite Shapes", "Subtract Front Shape", "Unite Shapes at Overlap", "Subtract Shapes at Overlap"];
 
-/// A point of the 32 × 32 document off every shape the fixtures draw.
-const EMPTY: [f32; 2] = [2.0, 2.0];
+/// A point of the 200 × 200 document off every shape the fixtures draw, clear of the shape's
+/// bounding-box handles.
+pub(super) const EMPTY: [f32; 2] = [10.0, 10.0];
 
-/// `app` with `tool` picked in `mode`, shown at 800 % so a right-click a few pixels off the shape is
-/// clear of the shape's bounding-box handles.
-pub(super) fn with_tool(mut app: Box<PhotocraftApp>, tool: Tool, mode: VectorMode) -> Box<PhotocraftApp> {
-    app.ui.tool = tool;
-    app.ui.tool_options.shape_mode = mode;
-    app.sync_views();
-    app.ui.views[0].zoom = 8.0;
+/// A point inside every fixture's shape.
+pub(super) const INSIDE: [f32; 2] = [80.0, 90.0];
+
+/// A 200 × 200 document.
+fn document() -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app
 }
 
-/// The selected tool drags from (8, 8) to (24, 24) on the canvas.
-fn draw(app: &mut PhotocraftApp) {
-    testing::press(app, [8.0, 8.0], Modifiers::NONE);
-    testing::move_to(app, [16.0, 16.0], Modifiers::NONE);
-    testing::move_to(app, [24.0, 24.0], Modifiers::NONE);
-    testing::release(app, [24.0, 24.0], Modifiers::NONE);
+/// `app` with `tool` picked in `mode`.
+pub(super) fn with_tool(mut app: Box<PhotocraftApp>, tool: Tool, mode: VectorMode) -> Box<PhotocraftApp> {
+    app.ui.tool = tool;
+    app.ui.tool_options.shape_mode = mode;
+    app
+}
+
+/// The geometry of the shape `tool` draws from (40, 40) to (120, 120).
+fn geometry(tool: Tool) -> Value {
+    json!({"kind": if tool == Tool::Triangle { "triangle" } else { "rect" }, "rect": [40.0, 40.0, 80.0, 80.0]})
 }
 
 /// A pixel layer filled red above the Background, active, with `tool` in Shape mode and no path.
 pub(super) fn pixel_layer(tool: Tool) -> Box<PhotocraftApp> {
-    let mut app = app();
+    let mut app = document();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     with_tool(app, tool, VectorMode::Shape)
 }
 
-/// `tool` drew a filled shape with a 2 px stroke from (8, 8) to (24, 24) in Shape mode: its
-/// shape layer is active.
-pub(super) fn shape_layer(tool: Tool) -> Box<PhotocraftApp> {
-    let mut app = with_tool(app(), tool, VectorMode::Shape);
+/// `tool`'s shape from (40, 40) to (120, 120) with a 2 px stroke, filled when `filled`, as a drag
+/// in Shape mode makes it: its shape layer is active and selected.
+fn shape_layer_filled(tool: Tool, filled: bool) -> Box<PhotocraftApp> {
+    let mut app = with_tool(document(), tool, VectorMode::Shape);
+    app.ui.tool_options.shape_fill = filled;
     app.ui.tool_options.stroke_width = 2.0;
-    draw(&mut app);
+    let rect = craft::behavior::kurbo::Rect::new(40.0, 40.0, 120.0, 120.0);
+    let shape = if tool == Tool::Triangle { ShapeGeometry::Triangle { rect } } else { ShapeGeometry::Rect { rect, radii: [0.0; 4] } };
+    crate::vector_ui::create_geometry(&mut app, &shape, crate::vector_ui::kind_of(tool), None).unwrap();
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().content.kind_name(), "Shape", "{tool:?} made a shape layer");
     app
+}
+
+/// [`shape_layer_filled`], filled.
+pub(super) fn shape_layer(tool: Tool) -> Box<PhotocraftApp> {
+    shape_layer_filled(tool, true)
 }
 
 /// [`pixel_layer`], then `tool` drew the same shape in Path mode: the Work Path holds it, and the
 /// pixel layer stays active.
 pub(super) fn work_path(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = with_tool(pixel_layer(tool), tool, VectorMode::Path);
-    draw(&mut app);
+    let outline = photocraft_engine::vector_cmds::shape_path(&geometry(tool)).unwrap();
+    app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&outline)})).unwrap();
+    app.ui.selected_path = Some("work".into());
     let st = app.session.active().unwrap();
     assert!(st.doc.work_path.is_some(), "{tool:?} drew the Work Path");
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().content.kind_name(), "Pixel", "the pixel layer stays active");
@@ -143,7 +158,7 @@ fn greyed_rows(spec: &str, greyed: &[&str], pixel: bool) -> Vec<String> {
 /// bar's on the layer.
 pub(super) fn check_pixel_layer_menu(tool: Tool) {
     let mut h = harness(pixel_layer(tool));
-    let entries = entries_at(&mut h, tool, [16.0, 16.0]);
+    let entries = entries_at(&mut h, tool, INSIDE);
     assert_eq!(shown(&entries), menu(PIXEL_MENU), "{tool:?}");
     let measured = [
         &["Define Custom Shape…", "Make Selection…", "Fill Path…", "Stroke Path…"][..],
@@ -265,7 +280,7 @@ fn on_empty_canvas_over_a_rectangle_layer_the_menu_lists_the_reference_rows() {
 fn in_path_mode_over_a_work_path_the_menu_lists_the_reference_rows() {
     // Inside the rectangle too: in Path mode it is part of the Work Path, not a shape layer.
     check_work_path_menu(Tool::Rectangle, EMPTY);
-    check_work_path_menu(Tool::Rectangle, [16.0, 16.0]);
+    check_work_path_menu(Tool::Rectangle, INSIDE);
 }
 
 #[test]
@@ -281,7 +296,7 @@ fn pixels_mode_and_unmeasured_cases_open_nothing() {
 #[test]
 fn inside_the_rectangle_opens_nothing() {
     let mut h = harness(shape_layer(Tool::Rectangle));
-    opens_nothing(&mut h, [16.0, 16.0], "inside the rectangle");
+    opens_nothing(&mut h, INSIDE, "inside the rectangle");
     // On empty canvas the same document opens the menu.
     entries_at(&mut h, Tool::Rectangle, EMPTY);
 }
@@ -290,12 +305,8 @@ fn inside_the_rectangle_opens_nothing() {
 fn on_a_corner_radius_widget_opens_nothing() {
     // No fill, so a point inside the top-left corner, where its widget sits, is off the shape as
     // Path Selection picks it: only the widget keeps the right-click.
-    let mut app = with_tool(app(), Tool::Rectangle, VectorMode::Shape);
-    app.ui.tool_options.shape_fill = false;
-    app.ui.tool_options.stroke_width = 2.0;
-    draw(&mut app);
-    let mut h = harness(app);
-    let widget = [12.0, 12.0];
+    let mut h = harness(shape_layer_filled(Tool::Rectangle, false));
+    let widget = [50.0, 50.0];
     assert!(!crate::shape_controls::corner_targets(h.state()).is_empty(), "the rectangle shows its corner widgets");
     let st = h.state().session.active().unwrap();
     assert!(crate::vector_ui::pick_shape_at(&st.doc, widget, crate::path_components::press_tolerance(h.state())).is_none());
