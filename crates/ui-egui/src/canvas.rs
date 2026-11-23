@@ -242,6 +242,9 @@ mod tabs_tests;
 mod doc_window_dialog_tests;
 
 #[cfg(test)]
+mod document_window_title_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

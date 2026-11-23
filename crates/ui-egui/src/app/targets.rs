@@ -163,7 +163,8 @@ impl PhotocraftApp {
             self.ui.mask_target = guard.target == "mask";
             self.ui.vector_mask_target = false;
             self.ui.filter_mask_target = None;
-            self.session.tools.target_mask(self.ui.mask_target || guard.target == "quickMask" || guard.target.get("channel").is_some());
+            let mask = self.ui.mask_target || guard.target == "quickMask" || guard.target.get("channel").is_some();
+            self.session.tools.target_mask(mask);
             return;
         }
         // Read through `active`, and borrow the document to change only for the one write below: the borrow moves its
