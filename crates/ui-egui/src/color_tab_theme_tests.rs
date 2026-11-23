@@ -13,7 +13,7 @@ use crate::theme::AppTheme;
 fn field_height(kind: AppTheme, height: f32) -> f32 {
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(300.0, height)).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 crate::panels::panel_docking::probe::body(app, ui, "color");
             }

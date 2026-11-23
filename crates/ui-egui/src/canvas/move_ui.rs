@@ -236,7 +236,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     }
     let fresh = app.move_preview.as_ref().is_some_and(|p| p.doc == doc_id && p.revision == revision);
     if !fresh {
-        let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, &st.selected_layers());
+        let ids = photocraft_engine::layer_multi_cmds::move_targets(&doc, st.selected_layers());
         if ids.is_empty() {
             return None;
         }
@@ -288,11 +288,20 @@ fn shape_reach(l: &photocraft_doc::Layer, canvas: Rect) -> Option<Rect> {
     Some(b.inflate(m))
 }
 
-/// `ids` and every layer inside them (groups move their contents).
+/// `ids` and every layer inside them (groups move their contents), in document order. Only the
+/// subtrees of `ids` are visited.
 pub(crate) fn with_descendants(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
-    let walk = doc.walk();
-    let roots: Vec<_> = walk.iter().filter(|(_, _, l)| ids.contains(&l.id)).map(|(p, _, _)| p.as_slice()).collect();
-    walk.iter().filter(|(p, _, _)| roots.iter().any(|r| p.starts_with(r))).map(|(_, _, l)| l.id).collect()
+    fn push(l: &photocraft_doc::Layer, out: &mut Vec<LayerId>) {
+        out.push(l.id);
+        l.children().into_iter().flatten().for_each(|c| push(c, out));
+    }
+    let mut out = Vec::new();
+    for id in doc.layers.index().roots(ids) {
+        if let Some(l) = doc.layer(id) {
+            push(l, &mut out);
+        }
+    }
+    out
 }
 
 /// Where the canvas shows layer `id` of document `doc` at `revision` relative to where it is: the

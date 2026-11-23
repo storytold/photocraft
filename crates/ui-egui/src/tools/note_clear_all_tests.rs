@@ -6,7 +6,7 @@ use serde_json::json;
 use super::*;
 
 /// A 200 × 100 document with three notes, the second one selected, and the Note tool.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     for (x, author) in [(10, "A"), (60, "B"), (110, "C")] {

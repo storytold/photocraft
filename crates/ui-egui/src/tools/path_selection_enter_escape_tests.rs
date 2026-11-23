@@ -12,7 +12,7 @@ use crate::state::Tool;
 
 /// 800 x 600 with the saved path "Path 1" (a square and a triangle) targeted, and the square
 /// selected as a component.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     let path = json!({"subpaths": [

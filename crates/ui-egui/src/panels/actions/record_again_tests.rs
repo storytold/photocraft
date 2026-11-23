@@ -1,5 +1,6 @@
 //! Record Again uses the real editor while retaining the selected step and permissions. These trials read the dialog
 //! host (`app.framework`), so they live in the crate.
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use craft::automation::ui::actions::{ActionSelection, ActionsPanelCommands};
@@ -16,7 +17,7 @@ use crate::PhotocraftApp;
 use crate::control::{ControlRequest, Reply, handle};
 
 /// Draw the actual dialog host over one selected command, without a GPU or file service.
-fn harness(command: &str, params: Value) -> Harness<'static, PhotocraftApp> {
+fn harness(command: &str, params: Value) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.background_jobs = false;
     app.run("file.new", json!({"width":8,"height":6})).unwrap();
@@ -24,7 +25,7 @@ fn harness(command: &str, params: Value) -> Harness<'static, PhotocraftApp> {
     let mut action = Action::new("A", vec![ActionStep::new(command, params), ActionStep::new("select.all", json!({}))]);
     action.disabled.insert(0);
     action.dialogs.insert(0);
-    app.session.actions.list.push(action).unwrap();
+    app.session.actions_mut().list.push(action).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Step(0, 0));
     let mut h =
         Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1000.0, 760.0)).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
@@ -34,7 +35,7 @@ fn harness(command: &str, params: Value) -> Harness<'static, PhotocraftApp> {
 }
 
 /// One control request through the public channel; the reply is the request's answer.
-fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value) -> Value {
+fn control(h: &mut Harness<'static, Box<PhotocraftApp>>, method: &str, params: Value) -> Value {
     let ctx = h.ctx.clone();
     let (request, _reply) = ControlRequest::new(method, params);
     let reply = match handle(h.state_mut(), &ctx, &request) {
@@ -46,7 +47,7 @@ fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value)
 }
 
 /// Open by firing the panel menu's Record Again row, preserving its selected-step and enablement checks.
-fn open(h: &mut Harness<'static, PhotocraftApp>) -> DialogId {
+fn open(h: &mut Harness<'static, Box<PhotocraftApp>>) -> DialogId {
     let ctx = h.ctx.clone();
     assert!(super::menu::run_fired(h.state_mut(), &ctx, &CommandRef::from(ActionsPanelCommands::RecordAgain)), "the Actions panel owns the row");
     h.run_steps(3);
@@ -54,33 +55,33 @@ fn open(h: &mut Harness<'static, PhotocraftApp>) -> DialogId {
 }
 
 /// Sets one field of dialog `id` as an agent would.
-fn set_field(h: &mut Harness<'static, PhotocraftApp>, id: DialogId, field: &str, value: Value) -> Value {
+fn set_field(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, field: &str, value: Value) -> Value {
     control(h, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}))
 }
 
 /// Answers OK on dialog `id`; the error is the reason the dialog refused.
-fn confirm(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) -> Result<(), String> {
+fn confirm(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> Result<(), String> {
     let reply = control(h, "ui.dialog.confirm", json!({"dialog": id}));
     if reply["ok"] == true { Ok(()) } else { Err(reply["error"].as_str().unwrap_or("refused").to_string()) }
 }
 
 /// Cancels dialog `id`.
-fn cancel(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) {
+fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) {
     control(h, "ui.dialog.cancel", json!({"dialog": id}));
 }
 
 /// The number the open dialog `id` lists under `key`, whatever kind of hosted dialog it is.
-fn number(h: &Harness<'static, PhotocraftApp>, id: DialogId, key: &str) -> Option<f64> {
+fn number(h: &Harness<'static, Box<PhotocraftApp>>, id: DialogId, key: &str) -> Option<f64> {
     h.state().framework.dialogs.open_dialogs().into_iter().find(|d| d.id == id)?.fields?.get(key)?.as_f64()
 }
 
 /// Whether dialog `id` is still open.
-fn is_open(h: &Harness<'static, PhotocraftApp>, id: DialogId) -> bool {
+fn is_open(h: &Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> bool {
     h.state().framework.dialogs.stack().contains(id)
 }
 
 /// A resize with different recorded and document sizes exposes seeding from the wrong source.
-fn sizing() -> Harness<'static, PhotocraftApp> {
+fn sizing() -> Harness<'static, Box<PhotocraftApp>> {
     harness("image.imageSize", json!({"width":4,"height":3,"resample":"nearest"}))
 }
 
@@ -88,13 +89,13 @@ fn sizing() -> Harness<'static, PhotocraftApp> {
 #[test]
 fn seeded_editor_cancels_or_updates_only_the_original_step() {
     let mut h = sizing();
-    let original = h.state().session.actions.list.clone();
+    let original = h.state().session.actions().list.clone();
     let revision = h.state().session.active().unwrap().revision;
     let dialog = open(&mut h);
     assert_eq!(number(&h, dialog, "width"), Some(4.0));
     assert_eq!(number(&h, dialog, "height"), Some(3.0));
     cancel(&mut h, dialog);
-    assert_eq!(h.state().session.actions.list, original);
+    assert_eq!(h.state().session.actions().list, original);
     assert_eq!(h.state().session.active().unwrap().revision, revision);
     assert!(!is_open(&h, dialog));
     let dialog = open(&mut h);
@@ -103,7 +104,7 @@ fn seeded_editor_cancels_or_updates_only_the_original_step() {
     assert_eq!(set_field(&mut h, dialog, "height", json!(5))["ok"], true);
     confirm(&mut h, dialog).unwrap();
     assert!(!h.state().dialog_open());
-    let action = h.state().session.actions.list.action(0).unwrap();
+    let action = h.state().session.actions().list.action(0).unwrap();
     assert_eq!(action.steps.len(), 2);
     assert_eq!(action.steps[0].params["width"].as_f64(), Some(6.0));
     assert!(action.disabled.contains(&0));
@@ -145,18 +146,18 @@ fn stale_denied_or_failed_edit_preserves_the_stored_step() {
             }
             "retargeted" => {
                 let other = ActionStep::new("select.all", json!({}));
-                h.state_mut().session.actions.list.replace_step(0, 0, other).unwrap();
+                h.state_mut().session.actions_mut().list.replace_step(0, 0, other).unwrap();
             }
             _ => {
                 accepted = set_field(&mut h, dialog, "percent", json!(-1))["ok"] == true;
             }
         }
-        let original = h.state().session.actions.list.clone();
+        let original = h.state().session.actions().list.clone();
         let revision = h.state().session.active().unwrap().revision;
         if accepted {
             assert!(confirm(&mut h, dialog).is_err(), "{mode}");
         }
-        assert_eq!(h.state().session.actions.list, original, "{mode}");
+        assert_eq!(h.state().session.actions().list, original, "{mode}");
         assert_eq!(h.state().session.active().unwrap().revision, revision, "{mode}");
         cancel(&mut h, dialog);
         let retry = open(&mut h);
@@ -168,7 +169,7 @@ fn stale_denied_or_failed_edit_preserves_the_stored_step() {
 #[test]
 fn another_dialog_cannot_consume_the_selected_step() {
     let mut h = sizing();
-    let original = h.state().session.actions.list.clone();
+    let original = h.state().session.actions().list.clone();
     let real = open(&mut h);
     let key = h.state().framework.dialogs.open_dialogs().into_iter().find(|open| open.id == real).and_then(|open| open.key).expect("the editor has a key");
     // A second hosted dialog with the same key and values, as another opener could make it.
@@ -186,7 +187,7 @@ fn another_dialog_cannot_consume_the_selected_step() {
     );
     h.run_steps(3);
     let _ = confirm(&mut h, fake);
-    assert_eq!(h.state().session.actions.list, original, "the impostor's answer does not touch the stored step");
+    assert_eq!(h.state().session.actions().list, original, "the impostor's answer does not touch the stored step");
     assert!(is_open(&h, real), "the real editor is still waiting for its own answer");
     confirm(&mut h, real).unwrap();
     assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_engine::doc::Size::new(4, 3));
@@ -235,7 +236,7 @@ fn filter_and_adjustment_previews_retain_permissions_before_evaluation() {
         if command == "image.adjustments.levels" {
             assert!(crate::dialogs::adjust_preview::display_doc(h.state_mut(), 0).is_some(), "the permitted adjustment preview is evaluated");
         }
-        let original = h.state().session.actions.list.clone();
+        let original = h.state().session.actions().list.clone();
         let revision = h.state().session.active().unwrap().revision;
         if command.starts_with("filter.") {
             set_field(&mut h, dialog, "radius", json!(8));
@@ -249,10 +250,10 @@ fn filter_and_adjustment_previews_retain_permissions_before_evaluation() {
         PREVIEW_CHECKS.store(0, Ordering::SeqCst);
         preview_routes(h.state_mut(), &context);
         assert!(PREVIEW_CHECKS.load(Ordering::SeqCst) > 0, "the changed actual request was refused before evaluation: {command}");
-        assert_eq!(h.state().session.actions.list, original);
+        assert_eq!(h.state().session.actions().list, original);
         assert_eq!(h.state().session.active().unwrap().revision, revision);
         let answer = confirm(&mut h, dialog);
         assert!(answer.is_err(), "OK with the changed settings is refused: {command}");
-        assert_eq!(h.state().session.actions.list, original);
+        assert_eq!(h.state().session.actions().list, original);
     }
 }

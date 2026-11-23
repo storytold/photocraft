@@ -147,7 +147,7 @@ mod tests {
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
         app.ui.tool = Tool::Pen;
         app.ui.tool_options.vector_mode = VectorMode::Shape;
-        app
+        *app
     }
 
     /// One Pen click at `(x, y)`.

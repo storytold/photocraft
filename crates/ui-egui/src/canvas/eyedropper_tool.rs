@@ -4,8 +4,8 @@
 //! As the Eyedropper tool, a press and each drag sample the foreground (Alt: the background). As
 //! the Alt stand-in, every sample goes to the foreground, because Alt is the key that called the
 //! stand-in, and Shift+Alt adds a colour sampler at the clicked pixel instead (#11890). As the
-//! Triangle's stand-in, a sample also becomes the tool's solid Fill, and Shift+Alt samples as Alt
-//! does (#13364).
+//! Triangle or Custom Shape stand-in, a sample also becomes the tool's solid Fill, and Shift+Alt
+//! samples as Alt does (#13364, #15856).
 
 use craft::behavior::{CancelReason, Cursor, PointerButton};
 use craft::color_ui::ui::{EyedropperTool, SampleSize, SampleSource};
@@ -15,11 +15,11 @@ use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolHostResponse, T
 use craft::ui::primitives::Draw;
 use serde_json::json;
 
+use super::cursor_policy::shape_alt_sets_fill;
 use super::document_display::CanvasHost;
 use super::sampling;
 use super::tools::{FamilyTool, ToolScope};
 use crate::PhotocraftApp;
-use crate::state::Tool;
 
 /// The gesture's flags, kept in `CanvasTools::eyedropper`.
 #[derive(Debug, Default)]
@@ -37,7 +37,7 @@ pub(crate) struct PcEyedropper<'a> {
     inner: EyedropperTool<'a>,
     /// Runs as the Alt stand-in of a painting tool.
     stand_in: bool,
-    /// Runs as the Triangle's Alt stand-in: a pick also sets the tool's Fill.
+    /// Runs as a shape tool's Alt stand-in: a pick also sets the tool's Fill.
     shape_fill: bool,
 }
 
@@ -58,20 +58,20 @@ pub(crate) fn drain(_app: &mut PhotocraftApp, _state: &mut EyedropperState, _res
 
 impl<'a> PcEyedropper<'a> {
     fn new(scope: &'a ToolScope<'a>, state: &'a mut EyedropperState, stand_in: bool) -> Self {
-        let (mut options, foreground, precise, triangle) = scope.with_app(|app| {
+        let (mut options, foreground, precise, shape_fill) = scope.with_app(|app| {
             let [r, g, b, _] = app.session.tools.foreground;
             let precise = app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise;
-            (app.ui.tool_options.eyedropper, Srgba::rgb(r, g, b), precise, app.ui.tool == Tool::Triangle)
+            (app.ui.tool_options.eyedropper, Srgba::rgb(r, g, b), precise, shape_alt_sets_fill(app.ui.tool))
         });
         // Preferences › Cursors › Other Cursors = Precise wants the plain crosshair, so no ring.
         options.show_ring &= !precise;
         let sample = move |at: [f64; 2], size: SampleSize, source: SampleSource| {
             scope.with_app(|app| sampling::pick(app, at, size, source)).map(|c| Srgba::rgb(c[0], c[1], c[2]))
         };
-        PcEyedropper { scope, state, inner: EyedropperTool::new(options, sample).foreground(foreground), stand_in, shape_fill: stand_in && triangle }
+        PcEyedropper { scope, state, inner: EyedropperTool::new(options, sample).foreground(foreground), stand_in, shape_fill: stand_in && shape_fill }
     }
 
-    /// Writes the newest pick to its swatch; as the Triangle's stand-in, also makes the tool's Fill
+    /// Writes the newest pick to its swatch; as a shape tool's stand-in, also makes the tool's Fill
     /// solid, so it follows the foreground (`vector_ui::shapes::tool_paint`).
     fn apply(&mut self) {
         let Some(pick) = self.inner.take() else { return };
@@ -86,7 +86,7 @@ impl<'a> PcEyedropper<'a> {
         });
     }
 
-    /// Shift+Alt adds a colour sampler: the painting tools' stand-in, not the Triangle's.
+    /// The painting tools' Shift+Alt stand-in adds a colour sampler.
     fn shift_adds_samplers(&self) -> bool {
         self.stand_in && !self.shape_fill
     }

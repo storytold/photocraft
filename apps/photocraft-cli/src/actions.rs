@@ -90,7 +90,8 @@ pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<
     let is_atn = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("atn")) || matches!(bytes.get(..4), Some([0, 0, 0, 12 | 16]));
     if !is_atn {
         let text = String::from_utf8(bytes).map_err(|source| ActionsError::Utf8 { path: path.to_path_buf(), source })?;
-        let (steps, set) = load_actions(&text, name)?;
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        let (steps, set) = load_actions(text, name)?;
         return Ok((steps, set, Vec::new()));
     }
     let imp = photocraft_engine::atn_cmds::import(&bytes).map_err(|message| ActionsError::Atn { path: path.to_path_buf(), message })?;
@@ -113,4 +114,24 @@ pub fn load_actions_file(path: &Path, name: Option<&str>) -> Result<(Steps, Vec<
         .collect();
     let play = vec![("actions.play".to_string(), json!({"action": action.name}))];
     Ok((play, imp.actions, warnings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_actions_file_accepts_utf8_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("actions.json");
+
+        std::fs::write(&path, b"\xEF\xBB\xBF[\"image.adjustments.invert\"]").unwrap();
+        let (steps, set, warnings) = load_actions_file(&path, None).unwrap();
+        assert_eq!(steps, vec![("image.adjustments.invert".to_owned(), json!({}))]);
+        assert!(set.is_empty());
+        assert!(warnings.is_empty());
+
+        std::fs::write(&path, b"\xEF\xBB\xBF[").unwrap();
+        assert!(matches!(load_actions_file(&path, None), Err(ActionsError::Json(_))));
+    }
 }

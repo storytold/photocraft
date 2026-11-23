@@ -14,16 +14,16 @@ use crate::canvas::testing;
 use crate::state::Tool;
 use craft::draw::ui::VectorMode;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     prepared(PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()))
 }
 
 /// The app on `ctx`, a harness's context that has the framework installed.
-fn app_on(ctx: egui::Context) -> PhotocraftApp {
+fn app_on(ctx: egui::Context) -> Box<PhotocraftApp> {
     prepared(PhotocraftApp::with_context(ctx, photocraft_engine::Session::new(), crate::Services::default()))
 }
 
-fn prepared(mut app: PhotocraftApp) -> PhotocraftApp {
+fn prepared(mut app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.ui.tool = Tool::Pen;
     app
@@ -38,9 +38,9 @@ fn square(app: &mut PhotocraftApp, x: f64, y: f64, side: f64) {
 }
 
 /// The options bar of the Pen in a harness `width` wide.
-fn options_harness(app: PhotocraftApp, width: f32) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn options_harness(app: Box<PhotocraftApp>, width: f32) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(width, 400.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 ui.horizontal(|ui| super::options_bar(app, ui, Tool::Pen));
             }
@@ -227,7 +227,7 @@ fn the_options_bar_menu_sets_the_operation_and_merges() {
     square(&mut app, 50.0, 50.0, 40.0);
     app.ui.tool_options.pen_path_op = "combine".into();
     let mut h = options_harness(app, 1100.0);
-    let open = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+    let open = |h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>| {
         h.get_by_label("Path operations").click();
         h.run_steps(3);
     };

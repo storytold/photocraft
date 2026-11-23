@@ -13,7 +13,7 @@ use crate::state::Tool;
 
 /// A 64 × 64 document with the Pattern Stamp; with `layer`, a layer above the Background whose
 /// left half is red and whose right half is transparent.
-fn app(layer: bool) -> PhotocraftApp {
+fn app(layer: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
     if layer {

@@ -1,3 +1,6 @@
+use craft::menu::{LANGUAGE_COMMAND, THEME_COMMAND};
+use photocraft_engine::color_cmds::ColorExt;
+
 use super::invoke::{panel_alias, proof_preset, workspace_id};
 use super::{DOCUMENT_ITEM, PhotocraftApp, Value};
 
@@ -72,6 +75,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         i if crate::links::url_for(i).is_some() => true,
         // Interface brightness works with or without a document, as in Photoshop.
         "view.darkenInterface" | "view.lightenInterface" => true,
+        // Appearance and Language rows: the theme and the language change with or without a document.
+        THEME_COMMAND | LANGUAGE_COMMAND => true,
         "file.save" | "file.saveAs" | "file.export.exportAs" | "file.export.quickExportAsPng" => {
             app.session.active().is_some() && app.services.export.is_some()
         }
@@ -166,7 +171,7 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     }
     if id == "view.proofColors" || id == "view.gamutWarning" {
         let Some(d) = app.session.active() else { return Some(false) };
-        let pv = app.session.color.proof(d.doc.id);
+        let pv = app.session.color().proof(d.doc.id);
         return Some(if id == "view.proofColors" { pv.enabled } else { pv.gamut_warning });
     }
     if let Some(rest) = id.strip_prefix("window.workspace.") {

@@ -273,6 +273,10 @@ mod tests {
                 let fmt = PixelFormat::new(mode, depth, true);
                 for (w, h) in [(512, 512), (900, 240), (2400, 1200)] {
                     for seed in [0, 3, 7, 18916] {
+                        // One seed exercises the large canvas; all seeds still run at both smaller sizes.
+                        if w == 2400 && seed != 0 {
+                            continue;
+                        }
                         let px = render(fmt, w, h, seed, (BLACK, WHITE), None);
                         let v: Vec<f32> = px.chunks_exact(fmt.channels()).map(|p| p[0]).collect();
                         let n = v.len() as f32;

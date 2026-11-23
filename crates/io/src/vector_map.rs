@@ -20,6 +20,19 @@ pub const WORK_PATH: u16 = 1025;
 /// Clipping path name resource id.
 pub const CLIPPING_PATH: u16 = 2999;
 
+/// The flatness field immediately follows the Pascal name, without a pad byte.
+pub(crate) fn clipping_flatness_offset(data: &[u8]) -> Option<usize> {
+    craft_psd::path::clipping_path_name(data).map(|name| 1 + name.len())
+}
+
+/// A 2999 resource may carry just the name; no complete flatness field means printer default.
+pub(crate) fn clipping_flatness(data: &[u8]) -> f32 {
+    clipping_flatness_offset(data)
+        .and_then(|start| data.get(start..start + 4))
+        .and_then(|field| <[u8; 4]>::try_from(field).ok())
+        .map_or(0.0, |field| u32::from_be_bytes(field) as f32 / 65536.0)
+}
+
 fn op_from_psd(v: i16) -> PathOp {
     match v {
         0 => PathOp::Exclude,
