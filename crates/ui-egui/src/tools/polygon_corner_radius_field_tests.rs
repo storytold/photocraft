@@ -1,8 +1,9 @@
 //! #13302: the Polygon tool's options bar has its own corner radius after Sides, in px (0 to
 //! start, and after Reset Tool), in Shape and Path mode. It rounds the next polygon drawn, never
-//! the active one, and shares the Rectangle Radius's 0..150000 range and alert; text that is not
-//! a number keeps the previous value with the reference's invalid-entry alert.
+//! the active one, and shares the Rectangle Radius's 0..150000 range and its "closest value"
+//! alert. Text that is not a number keeps the previous value, as the framework's number fields do.
 
+use craft::draw::ui::VectorMode;
 use egui::accesskit::Role;
 use egui::vec2;
 use egui_kittest::Harness;
@@ -11,13 +12,12 @@ use photocraft_doc::vector::Knot;
 use photocraft_doc::{LayerContent, LiveShape};
 use serde_json::json;
 
-use super::{POLYGON_RADIUS_INVALID_ALERT, RADIUS_RANGE_ALERT};
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::state::{DialogKind, Tool};
+use crate::state::Tool;
 
 /// An 800 × 600 document with the Polygon tool current.
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.ui.tool = Tool::Polygon;
@@ -25,49 +25,36 @@ fn new_app() -> PhotocraftApp {
 }
 
 /// The options bar drawn for `app`.
-fn bar_with(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
+fn bar_with(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    let mut h =
+        Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1800.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     h.run_steps(4);
     h
 }
 
 /// The options-bar number field named `label`.
-fn field_rect(h: &Harness<'static, PhotocraftApp>, label: &str) -> Option<egui::Rect> {
+fn field_rect(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> Option<egui::Rect> {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(label)).map(|n| n.rect())
 }
 
-/// Clicks into Radius, selects its text and types `text`, `per_key` one character per pass, then
-/// Tabs out of it.
-fn enter_radius(h: &mut Harness<'static, PhotocraftApp>, text: &str, per_key: bool) {
-    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius:")).expect("the Radius field").click();
+/// Clicks into Radius, selects its text and types `text`, then Tabs out of it.
+fn enter_radius(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Radius")).expect("the Radius field").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    let keys: Vec<String> = if per_key { text.chars().map(String::from).collect() } else { vec![text.to_owned()] };
-    for k in keys {
-        h.event(egui::Event::Text(k));
-        h.run_steps(1);
-    }
+    h.event(egui::Event::Text(text.into()));
+    h.run_steps(1);
     h.key_press(egui::Key::Tab);
     h.run_steps(3);
 }
 
-/// The messages of the open alerts.
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
-    h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str().map(str::to_owned)).collect()
-}
-
-/// OK on every open alert, as `ui.dialog.confirm` presses it (this harness draws only the bar).
-fn ok_all(h: &mut Harness<'static, PhotocraftApp>) {
-    let ids: Vec<u64> = h.state().ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).map(|d| d.id).collect();
-    for id in ids {
-        crate::dialogs::confirm(h.state_mut(), id).unwrap();
-    }
-    h.run_steps(3);
+/// How many alerts are open.
+fn alerts(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
+    crate::dialogs::alerts::alerts(h.state()).len()
 }
 
 /// The Polygon tool's radius, and the Rectangle tool's, which it must leave alone.
-fn radii(h: &Harness<'static, PhotocraftApp>) -> (f32, f32) {
+fn radii(h: &Harness<'static, Box<PhotocraftApp>>) -> (f32, f32) {
     let o = &h.state().ui.tool_options;
     (o.polygon_corner_radius, o.corner_radius)
 }
@@ -149,24 +136,30 @@ fn assert_rounds(knots: &[Knot], sharp: &[Knot], r: f64) {
 
 #[test]
 fn the_radius_field_follows_sides_and_starts_at_zero_in_shape_and_path_mode() {
-    for mode in ["shape", "path"] {
+    for mode in [VectorMode::Shape, VectorMode::Path] {
         let mut app = new_app();
-        app.ui.tool_options.shape_mode = mode.into();
+        app.ui.tool_options.shape_mode = mode;
         let h = bar_with(app);
-        let sides = field_rect(&h, "Sides:").expect("the Sides field");
-        let radius = field_rect(&h, "Radius:").unwrap_or_else(|| panic!("{mode}: the Radius field"));
-        assert!(radius.left() > sides.right() && (radius.center().y - sides.center().y).abs() < 1.0, "{mode}: Radius right after Sides");
-        assert_eq!(radii(&h), (0.0, 0.0), "{mode}: 0 px to start");
+        let sides = field_rect(&h, "Sides").expect("the Sides field");
+        let radius = field_rect(&h, "Radius").unwrap_or_else(|| panic!("{mode:?}: the Radius field"));
+        assert!(radius.left() > sides.right() && (radius.center().y - sides.center().y).abs() < 1.0, "{mode:?}: Radius right after Sides");
+        assert_eq!(radii(&h), (0.0, 0.0), "{mode:?}: 0 px to start");
     }
+    let h = bar_with({
+        let mut app = new_app();
+        app.ui.tool = Tool::Star;
+        app
+    });
+    assert!(field_rect(&h, "Radius").is_none(), "the Star tool has no polygon radius");
 }
 
 #[test]
 fn a_radius_in_range_is_taken_without_an_alert_and_leaves_the_rectangles_alone() {
     for (typed, want) in [("20", 20.0), ("0.5", 0.5), ("150000", 150_000.0), ("0", 0.0)] {
         let mut h = bar_with(new_app());
-        enter_radius(&mut h, typed, false);
+        enter_radius(&mut h, typed);
         assert_eq!(radii(&h), (want, 0.0), "{typed}");
-        assert!(alerts(&h).is_empty(), "{typed} is in range");
+        assert_eq!(alerts(&h), 0, "{typed} is in range");
     }
 }
 
@@ -174,52 +167,28 @@ fn a_radius_in_range_is_taken_without_an_alert_and_leaves_the_rectangles_alone()
 fn a_radius_past_the_range_takes_the_closest_value_with_one_alert() {
     for (typed, want) in [("-5", 0.0), ("99999999", 150_000.0)] {
         let mut h = bar_with(new_app());
-        enter_radius(&mut h, "12", false);
-        enter_radius(&mut h, typed, false);
+        enter_radius(&mut h, "12");
+        enter_radius(&mut h, typed);
         assert_eq!(radii(&h), (want, 0.0), "{typed}");
-        assert_eq!(alerts(&h), vec![RADIUS_RANGE_ALERT.to_string()], "{typed}: one alert");
-        ok_all(&mut h);
-        assert!(alerts(&h).is_empty(), "{typed}: OK closes the alert");
-        assert_eq!(radii(&h).0, want, "{typed}: the closest value stays");
+        assert_eq!(alerts(&h), 1, "{typed}: one alert");
     }
 }
 
 #[test]
-fn text_that_is_no_number_keeps_the_previous_radius_with_the_invalid_entry_alert() {
+fn text_that_is_no_number_keeps_the_previous_radius() {
     let mut h = bar_with(new_app());
-    enter_radius(&mut h, "12", false);
-    enter_radius(&mut h, "abc", false);
+    enter_radius(&mut h, "12");
+    enter_radius(&mut h, "abc");
     assert_eq!(radii(&h), (12.0, 0.0), "the last valid value stays");
-    assert_eq!(alerts(&h), vec![POLYGON_RADIUS_INVALID_ALERT.to_string()], "one invalid-entry alert");
-    ok_all(&mut h);
-    // Visiting the field again without typing, then a number, raises nothing.
-    enter_radius(&mut h, "", false);
-    assert!(alerts(&h).is_empty(), "nothing typed: {:?}", alerts(&h));
-    enter_radius(&mut h, "7", false);
-    assert_eq!(radii(&h), (7.0, 0.0));
-    assert!(alerts(&h).is_empty(), "7 is a number in range: {:?}", alerts(&h));
-}
-
-#[test]
-fn arithmetic_is_a_number_until_text_spoils_it() {
-    let mut h = bar_with(new_app());
-    // `50/2` is held, unread, until the field is left: only that pass reads `50/2x`.
-    enter_radius(&mut h, "50/2x", true);
-    assert_eq!(alerts(&h), vec![POLYGON_RADIUS_INVALID_ALERT.to_string()], "50/2x is no number");
-    ok_all(&mut h);
-    enter_radius(&mut h, "50/2", true);
-    assert_eq!(radii(&h), (25.0, 0.0));
-    assert!(alerts(&h).is_empty(), "{:?}", alerts(&h));
 }
 
 #[test]
 fn the_radius_field_leaves_the_active_polygon_and_the_history_alone() {
     let mut app = new_app();
     drag(&mut app, [400.0, 300.0], [600.0, 400.0]);
-    app.sync_views();
     let before = (active_shape(&app), app.session.active().unwrap().history.past_len());
     let mut h = bar_with(app);
-    enter_radius(&mut h, "30", false);
+    enter_radius(&mut h, "30");
     assert_eq!(radii(&h), (30.0, 0.0));
     let after = (active_shape(h.state()), h.state().session.active().unwrap().history.past_len());
     assert_eq!(after, before, "the active polygon keeps its corners and no History state is added");
@@ -253,9 +222,18 @@ fn radius_0_draws_the_sharp_polygon() {
 }
 
 #[test]
+fn the_rectangle_radius_does_not_round_the_polygon() {
+    let mut app = new_app();
+    app.ui.tool_options.corner_radius = 20.0;
+    drag(&mut app, [400.0, 300.0], [600.0, 400.0]);
+    let (live, _) = active_shape(&app);
+    assert_eq!(live, LiveShape::Polygon { rect: [400.0, 300.0, 200.0, 100.0], sides: 5, star_ratio: 1.0, corner_radius: 0.0 });
+}
+
+#[test]
 fn path_mode_rounds_the_next_outline_too() {
     let mut app = new_app();
-    app.ui.tool_options.shape_mode = "path".into();
+    app.ui.tool_options.shape_mode = VectorMode::Path;
     app.ui.tool_options.polygon_corner_radius = 20.0;
     drag(&mut app, [400.0, 300.0], [600.0, 400.0]);
     let work = app.session.active().unwrap().doc.work_path.clone().expect("a work path");

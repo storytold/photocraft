@@ -6,6 +6,8 @@
 //! are shown as errors (status bar + notice); import warnings as a notice.
 
 use crate::{PhotocraftApp, notices};
+use craft::ui::runtime::drag::OsFile;
+use craft::ui::runtime::windows::{WindowAction, WindowHost};
 use photocraft_doc::DocId;
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
@@ -20,30 +22,32 @@ pub enum OsEvent {
     Quit,
 }
 
-/// Where files dropped on the window land, as in the reference app. winit 0.30's drops carry no
-/// position, so it comes from the OS ([`Services::cursor_pos`](crate::Services::cursor_pos));
-/// unknown counts as elsewhere.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DropTarget {
+/// Where files dropped on the window land, as in the reference app. The framework's drop targets
+/// say it: the tab strip (`Slot`), the document canvas (`Canvas`) and the window (`Window`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum DropTo {
     /// The active document's canvas: placed as layers (Place Embedded), each in Free Transform.
-    Canvas,
-    /// The tab strip: opened with their tabs from this position (the strip shows it while files
-    /// hover).
-    Tabs(usize),
+    /// `at` is the document point under the drop, which picks a Frame layer to fill; `None` when
+    /// it is not known.
+    Canvas {
+        /// The document point under the drop.
+        at: Option<[f64; 2]>,
+    },
+    /// The tab strip: opened with their tabs from this document position.
+    Slot(usize),
     /// Anywhere else (panels, a dialog, no document): opened like File › Open.
-    Elsewhere,
+    Window,
 }
 
-impl DropTarget {
+impl DropTo {
     /// What a dropped file called `name` does here. Preset files (brushes, gradients) go to their
-    /// libraries wherever they land, so only a canvas drop of anything else is placed. This is the
-    /// whole routing decision, apart from where the pointer is ([`target_at`]).
-    pub fn route(self, name: &str) -> DropRoute {
-        if self == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(name) { DropRoute::Place } else { DropRoute::Open }
+    /// libraries wherever they land, so only a canvas drop of anything else is placed.
+    pub(crate) fn route(self, name: &str) -> DropRoute {
+        if matches!(self, DropTo::Canvas { .. }) && !crate::preset_files_ui::is_preset_file(name) { DropRoute::Place } else { DropRoute::Open }
     }
 }
 
-/// What happens to one dropped file, by [`DropTarget::route`].
+/// What happens to one dropped file, by [`DropTo::route`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DropRoute {
     /// Placed on the active document's canvas (File › Place Embedded), in Free Transform.
@@ -52,29 +56,19 @@ pub enum DropRoute {
     Open,
 }
 
-/// Where a drop at `at` lands, from what the last frame drew: the tab strip, the canvas (a drop
-/// is placed only while a document is open) and whether `at` is free of windows and dialogs above
-/// the workspace (`uncovered`). No pointer, a covered one, or none of those regions means
-/// [`DropTarget::Elsewhere`]: the files open like File › Open, which is also what a drop onto the
-/// Home screen or an empty workspace does (#10492).
-pub(crate) fn target_at(
-    at: Option<egui::Pos2>,
-    uncovered: bool,
-    tabs: Option<&crate::canvas::TabStrip>,
-    canvas: Option<egui::Rect>,
-    has_document: bool,
-) -> DropTarget {
+/// Where a web-build drop at `at` lands, from what the last frame drew: the canvas (a drop is
+/// placed only while a document is open) and whether `at` is free of windows and dialogs above
+/// the workspace (`uncovered`). No pointer, a covered one, or no canvas means [`DropTo::Window`].
+/// The web build's own drop path until FW-264; native drops arrive through framework drop targets.
+pub(crate) fn target_at(at: Option<egui::Pos2>, uncovered: bool, canvas: Option<egui::Rect>, has_document: bool) -> DropTo {
     let Some(p) = at.filter(|_| uncovered) else {
-        return DropTarget::Elsewhere;
+        return DropTo::Window;
     };
-    if let Some(strip) = tabs.filter(|s| s.rect.contains(p)) {
-        return DropTarget::Tabs(strip.slot(p.x));
-    }
     // The canvas shown last frame may belong to a document closed since.
     if has_document && canvas.is_some_and(|r| r.contains(p)) {
-        return DropTarget::Canvas;
+        return DropTo::Canvas { at: None };
     }
-    DropTarget::Elsewhere
+    DropTo::Window
 }
 
 /// Why a dropped `path` can't be opened or placed when it is a folder, for a clear message in
@@ -110,8 +104,8 @@ pub(crate) fn log_drag_over(ctx: &egui::Context, hovering: usize) {
 pub(crate) enum DropPlace {
     /// Destination captured when the file is dropped, before a later pointer move.
     At { source: Box<DropPlace>, frame: Option<photocraft_doc::LayerId> },
-    /// Dropped onto the window (desktop): read from its path, or through egui.
-    File(egui::DroppedFileHandle),
+    /// Dropped onto the window (desktop): read from its path, or from the bytes the OS gave.
+    File(OsFile),
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
     Bytes(String, Vec<u8>),
@@ -122,7 +116,7 @@ impl DropPlace {
     fn queued_bytes(&self) -> usize {
         match self {
             Self::At { source, .. } => source.queued_bytes(),
-            Self::File(_) => 0,
+            Self::File(f) => f.bytes.as_ref().map_or(0, |b| b.len()),
             Self::Bytes(_, bytes) => bytes.len(),
         }
     }
@@ -132,7 +126,7 @@ impl DropPlace {
     fn holds_bytes(&self) -> bool {
         match self {
             Self::At { source, .. } => source.holds_bytes(),
-            Self::File(_) => false,
+            Self::File(f) => f.bytes.is_some(),
             Self::Bytes(..) => true,
         }
     }
@@ -181,8 +175,8 @@ pub(crate) fn with_missing_fonts_of(doc: &photocraft_doc::Document, mut warnings
 }
 
 /// A dropped file's name ("dropped" when it has none).
-fn dropped_name(f: &egui::DroppedFileHandle) -> String {
-    f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into())
+fn dropped_name(f: &OsFile) -> String {
+    if f.name.is_empty() { "dropped".into() } else { f.name.clone() }
 }
 
 /// `path` as the `String` file paths are carried in, or what to tell the user when its name isn't
@@ -236,6 +230,13 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
+        self.opened_from_listed(path, Some(path));
+    }
+
+    /// [`Self::opened_from`], with `recent` the path Open Recent lists for it (`None`: not listed).
+    /// An automation open is requested by a root-relative path, which names nothing outside
+    /// automation, so it lists where the file is on disk instead.
+    pub(crate) fn opened_from_listed(&mut self, path: &str, recent: Option<&str>) {
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
             && !st.source_read_only
@@ -244,7 +245,9 @@ impl PhotocraftApp {
             let doc = st.doc.id;
             self.remember_stamp(doc, path);
         }
-        self.push_recent(path);
+        if let Some(recent) = recent {
+            self.push_recent(recent);
+        }
     }
 
     /// The name a file called `name` opens under: its own, or the first free "Untitled-N" for a
@@ -380,29 +383,35 @@ impl PhotocraftApp {
         notices::error(self, msg);
     }
 
-    /// Files dropped onto the window at `at` (the pointer, when known), routed by [`DropTarget`].
-    /// Preset files (brushes, gradients) always go to their libraries. Native drops carry an
-    /// absolute path, read in bounded reads (#375) rather than egui's whole-file read.
-    pub fn open_dropped(&mut self, ctx: &egui::Context, files: Vec<egui::DroppedFileHandle>, at: Option<egui::Pos2>) {
-        let target = self.drop_target(ctx, at);
+    /// Files dropped onto the window, routed by `to` ([`DropTo`]). Preset files (brushes,
+    /// gradients) always go to their libraries. A native drop carries an absolute path, read in
+    /// bounded reads (#375); a drop without a path carries its bytes.
+    pub(crate) fn open_dropped(&mut self, ctx: &egui::Context, files: Vec<OsFile>, to: DropTo) {
+        // Files dragged in from another app's window bring PhotoCraft to the front and give it the keyboard, as
+        // Photoshop does, instead of leaving it behind the source (#5687). A drop on a floating panel's window
+        // brings the main window.
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
         // The log tells a drop that never reached the app (the operating system, or an elevated
         // process, refused it) from one the app routed (#10492). File names stay out of it.
-        log::info!("{} file(s) dropped on the window: {target:?}, pointer {}", files.len(), if at.is_some() { "known" } else { "unknown" });
-        let frame = at.and_then(|at| crate::canvas::ViewXform::active(self).map(|xf| xf.to_doc(at))).and_then(|p| crate::frame_tool::frame_at(self, p));
-        let mut slot = match target {
-            DropTarget::Tabs(slot) => Some(slot),
-            DropTarget::Canvas | DropTarget::Elsewhere => None,
+        log::info!("{} file(s) dropped on the window: {to:?}", files.len());
+        let frame = match to {
+            DropTo::Canvas { at } => at.and_then(|p| crate::frame_tool::frame_at(self, p)),
+            DropTo::Slot(_) | DropTo::Window => None,
+        };
+        let mut slot = match to {
+            DropTo::Slot(slot) => Some(slot),
+            DropTo::Canvas { .. } | DropTo::Window => None,
         };
         // A box still open from an earlier drop (or any Free Transform) is applied first (#4833):
         // the queue below places the next file only once no box is open, so a separate drop
         // would otherwise wait unseen for ↩. Files dropped together still go one by one.
-        if target == DropTarget::Canvas && self.ui.transform.is_some() && files.iter().any(|f| target.route(&dropped_name(f)) == DropRoute::Place) {
+        if matches!(to, DropTo::Canvas { .. }) && self.ui.transform.is_some() && files.iter().any(|f| to.route(&dropped_name(f)) == DropRoute::Place) {
             crate::transform_tool::commit(self);
         }
         for f in files {
             let name = dropped_name(&f);
-            let route = target.route(&name);
-            if let Some(why) = folder_error(f.path()) {
+            let route = to.route(&name);
+            if let Some(why) = f.path.as_deref().and_then(folder_error) {
                 match route {
                     DropRoute::Place => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &name), ("error", &why)])),
                     DropRoute::Open => self.open_failed(&name, &why),
@@ -423,7 +432,7 @@ impl PhotocraftApp {
         }
     }
 
-    /// The pointer position, from the OS cursor service when available, falling back to egui's
+    /// The pointer position (the web build's drop path until FW-264), from the OS cursor service when available, falling back to egui's
     /// last-known pointer position (e.g. on Wayland).
     pub(crate) fn cursor_pos(&mut self, ctx: &egui::Context) -> Option<egui::Pos2> {
         self.services.cursor_pos.as_mut().and_then(|f| f(ctx)).or_else(|| ctx.input(|i| i.pointer.latest_pos()))
@@ -439,31 +448,49 @@ impl PhotocraftApp {
     /// Transform still open is applied first (#4833).
     pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<bool> {
         let at = self.cursor_pos(ctx);
-        let canvas = self.drop_target(ctx, at) == DropTarget::Canvas;
-        let places: Vec<bool> = names.iter().map(|n| canvas && DropTarget::Canvas.route(n) == DropRoute::Place).collect();
+        let to = self.drop_to(ctx, at);
+        let canvas = matches!(to, DropTo::Canvas { .. });
+        let places: Vec<bool> = names.iter().map(|n| canvas && to.route(n) == DropRoute::Place).collect();
         if places.contains(&true) && self.ui.transform.is_some() {
             crate::transform_tool::commit(self);
         }
         places
     }
 
-    /// Where a drop at `at` lands. Over a window or dialog it's neither the canvas nor the tabs.
-    pub(crate) fn drop_target(&self, ctx: &egui::Context, at: Option<egui::Pos2>) -> DropTarget {
-        let uncovered = at.is_some_and(|p| ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background));
-        target_at(at, uncovered, self.tab_strip.as_ref(), self.drop_canvas_rect, self.session.active().is_some())
+    /// Where a web-build drop at `at` lands (the web build's own drop path until FW-264). Over a
+    /// window or dialog it's not the canvas. On the canvas it carries the document point under `at`.
+    pub(crate) fn drop_to(&self, ctx: &egui::Context, at: Option<egui::Pos2>) -> DropTo {
+        let uncovered = at.is_some_and(|p| {
+            ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)
+                && (self.ui.document_windows.arrangement != Some(craft::behavior::dock::Arrangement::Tile)
+                    || crate::canvas::arranged_cells(self, self.last_canvas_rect).is_none_or(|cells| cells.iter().any(|(_, rect)| rect.contains(p))))
+        });
+        match target_at(at, uncovered, self.drop_canvas_rect, self.session.active().is_some()) {
+            DropTo::Canvas { .. } => DropTo::Canvas {
+                at: at.and_then(|p| {
+                    crate::canvas::document_display::active_view(self).map(|view| {
+                        let d = view.to_doc(p);
+                        [d.x, d.y]
+                    })
+                }),
+            },
+            to => to,
+        }
     }
 
     /// Open one dropped file; with `slot`, its tab goes there (at once, or when a held prompt is
     /// answered). True when it took the slot.
-    fn open_dropped_file(&mut self, f: &egui::DroppedFileHandle, name: &str, slot: Option<usize>) -> Result<bool, String> {
+    fn open_dropped_file(&mut self, f: &OsFile, name: &str, slot: Option<usize>) -> Result<bool, String> {
         let (docs, opens) = (self.session.documents().len(), self.jobs.opens.len());
         let held = self.held_opens.len() + self.held_memory_prompts.len();
         // The slot travels with the open through the inline document, a background tab and a
         // memory/profile prompt, so no separate move here can land on another document.
-        if f.path().is_absolute() {
-            self.open_path_placed(&path_text(f.path(), false)?, slot, None)?;
+        if let Some(path) = f.path.as_deref().filter(|p| p.is_absolute()) {
+            self.open_path_placed(&path_text(path, false)?, slot, None)?;
+        } else if let Some(bytes) = &f.bytes {
+            self.open_bytes_placed(name, bytes, None, slot, None)?;
         } else {
-            self.open_bytes_placed(name, &crate::read_dropped(&**f)?, None, slot, None)?;
+            return Err(tl!("couldn't read the file").to_string());
         }
         if slot.is_none() {
             return Ok(false);
@@ -511,17 +538,19 @@ impl PhotocraftApp {
                     self.failed(tl!("Invalid nested file drop").into());
                     continue;
                 }
-                DropPlace::File(f) if f.path().is_absolute() => (
-                    dropped_name(&f),
-                    path_text(f.path(), false).and_then(|path| {
-                        let mut p = params.clone();
-                        p["path"] = serde_json::json!(path);
-                        self.run("file.placeEmbedded", p)
-                    }),
-                ),
                 DropPlace::File(f) => {
                     let name = dropped_name(&f);
-                    let placed = crate::read_dropped(&*f).and_then(|bytes| self.place_bytes_with(&name, bytes, None, &params));
+                    let placed = if let Some(path) = f.path.as_deref().filter(|p| p.is_absolute()) {
+                        path_text(path, false).and_then(|path| {
+                            let mut p = params.clone();
+                            p["path"] = serde_json::json!(path);
+                            self.run("file.placeEmbedded", p)
+                        })
+                    } else if let Some(bytes) = &f.bytes {
+                        self.place_bytes_with(&name, bytes.to_vec(), None, &params)
+                    } else {
+                        Err(tl!("couldn't read the file").to_string())
+                    };
                     (name, placed)
                 }
                 DropPlace::Bytes(name, bytes) => {
@@ -615,20 +644,9 @@ impl PhotocraftApp {
                 OsEvent::Open(paths) => {
                     self.open_paths(&paths);
                     // Bring the window forward when another app (Finder, the Dock, Explorer via a
-                    // second launch) asked us to open; restore it first if it was minimized.
-                    if ctx.input(|i| i.viewport().minimized) == Some(true) {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    }
-                    // Native Wayland lets a window come forward only with the launcher's activation
-                    // token, which winit can't apply to an existing window (its focus is a no-op
-                    // there): mark the window as wanting attention instead, so the taskbar
-                    // highlights it rather than the file opening out of sight.
-                    let raise = if self.services.is_wayland {
-                        egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational)
-                    } else {
-                        egui::ViewportCommand::Focus
-                    };
-                    ctx.send_viewport_cmd(raise);
+                    // second launch) asked us to open. The host restores it from minimized and, on
+                    // native Wayland, asks for attention instead of focus.
+                    WindowHost::of(ctx).act(egui::ViewportId::ROOT, WindowAction::Focus);
                     ctx.request_repaint();
                 }
                 OsEvent::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),

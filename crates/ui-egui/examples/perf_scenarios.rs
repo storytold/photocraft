@@ -18,6 +18,7 @@
 //! what the refreshes did (`refresh_kinds`: `Refresh::kind` counts, also "rect" / "full" without
 //! an adapter; `fallbacks`: `CpuReason::kind` of any refresh the wgpu compositor didn't draw).
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use eframe::egui_wgpu::RenderState;
@@ -942,7 +943,7 @@ fn full_canvas_layer_scenarios(b: &mut Bench, sz: &Sizes) {
 }
 
 /// #1015, #9330: a huge document with one painted layer, zoomed out: times only the reduced CPU
-/// composite `canvas::ensure_texture` draws when the document is too large for GPU textures.
+/// composite the canvas draws when the document is too large for GPU textures.
 fn huge_document_scenarios(b: &mut Bench, sz: &Sizes) {
     let name = "zoomed-out reduced composite of the huge document with one painted layer";
     if !b.wanted(name) {
@@ -1263,7 +1264,7 @@ fn full_refresh_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     };
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
         photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        photocraft_ui_egui::PhotocraftApp::new(s, photocraft_ui_egui::Services::default())
+        photocraft_ui_egui::PhotocraftApp::with_context(cc.egui_ctx.clone(), s, photocraft_ui_egui::Services::default())
     });
     harness.run_steps(6);
     b.current = Some(name.to_string());
@@ -1300,7 +1301,7 @@ fn frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     let doc = std::mem::take(&mut s);
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
         photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = photocraft_ui_egui::PhotocraftApp::new(doc, photocraft_ui_egui::Services::default());
+        let mut app = photocraft_ui_egui::PhotocraftApp::with_context(cc.egui_ctx.clone(), doc, photocraft_ui_egui::Services::default());
         app.background_jobs = true;
         app
     });
@@ -1442,7 +1443,7 @@ fn algorithm_scenarios(b: &mut Bench, sz: &Sizes) {
 }
 
 /// #4017: File > New at 10 × 5 m, 200 ppi (3.1 GP), and the first refresh of the canvas that
-/// draws a document too large for GPU textures (the reduced CPU canvas, `canvas::ensure_texture`).
+/// draws a document too large for GPU textures (the reduced CPU canvas).
 fn huge_new_scenario(b: &mut Bench, sz: &Sizes) {
     let name = "new 3 GP document + first reduced canvas refresh";
     if !b.wanted(name) {
@@ -1771,7 +1772,7 @@ fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     let doc = std::mem::take(&mut s);
     let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
         photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        photocraft_ui_egui::PhotocraftApp::new(doc, photocraft_ui_egui::Services::default())
+        photocraft_ui_egui::PhotocraftApp::with_context(cc.egui_ctx.clone(), doc, photocraft_ui_egui::Services::default())
     });
     // Warm up: first frames build the canvas cache of the 24 MP document.
     harness.run_steps(6);
@@ -1780,12 +1781,12 @@ fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
     b.px.borrow_mut().clear();
     let mut samples = Vec::new();
     let run = (|| -> Res<()> {
-        let layers = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.doc.layers.len());
+        let layers = |h: &egui_kittest::Harness<'_, Box<photocraft_ui_egui::PhotocraftApp>>| h.state().session.active().map(|d| d.doc.layers.len());
         let base_layers = layers(&harness);
-        let past = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.history.past_len());
+        let past = |h: &egui_kittest::Harness<'_, Box<photocraft_ui_egui::PhotocraftApp>>| h.state().session.active().map(|d| d.history.past_len());
         let base_past = past(&harness);
         for i in 0..=b.reps.max(1) {
-            let rev = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.revision);
+            let rev = |h: &egui_kittest::Harness<'_, Box<photocraft_ui_egui::PhotocraftApp>>| h.state().session.active().map(|d| d.revision);
             // Untimed: Paste Into turns the selection into the pasted layer's
             // mask, so each sample re-creates the same ~5 % selection (the
             // clipboard is not consumed), and shows it for a frame, as the app
