@@ -245,12 +245,12 @@ fn without_an_active_artboard_the_checkbox_is_greyed_and_every_board_is_written(
     // with Blue Board also selected, and no layer at all.
     for active in [vec![b.red_layer], vec![b.blue, b.red_layer], vec![]] {
         if active.is_empty() {
-            h.state_mut().session.active_mut().unwrap().active_layer = None;
+            h.state_mut().session.active_mut().unwrap().set_active_layer(None);
             h.state_mut().sync_views();
         } else {
             select(&mut h, &active);
             let st = h.state().session.active().unwrap();
-            assert_eq!((st.active_layer, st.selected_layers().len()), (Some(LayerId(b.red_layer)), active.len()), "{active:?}");
+            assert_eq!((st.active_layer(), st.selected_layers().len()), (Some(LayerId(b.red_layer)), active.len()), "{active:?}");
         }
         let dialog = open(&mut h, &dir.path().to_string_lossy());
         assert_eq!(checkbox(&h), (false, false), "{active:?}: greyed and unticked");
