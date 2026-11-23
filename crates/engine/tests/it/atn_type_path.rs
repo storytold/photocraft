@@ -4,9 +4,10 @@ use craft_psd::{
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
 };
 use photocraft_doc::{LayerContent, LayerId};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
-    actions_cmds::Action,
+    actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
     atn_cmds::{export, import},
 };
 use serde_json::{Value, json};
@@ -63,7 +64,7 @@ fn descriptor_identity_flags_and_make_alias_roundtrip() {
         source.dialog_options = 2;
         let loaded = load(source.clone());
         assert!(loaded.unsupported.is_empty());
-        assert_eq!(loaded.actions[0].steps[0].0, COMMAND);
+        assert_eq!(loaded.actions[0].steps[0].command, COMMAND);
         let result = saved(&loaded.actions[0]);
         assert_eq!(result.descriptor.unwrap().to_bytes(), source.descriptor.unwrap().to_bytes());
         assert!(!result.enabled);
@@ -101,9 +102,9 @@ fn playback_matches_native_path_and_preserves_text_with_undo_redo() {
                 d.items.reverse();
                 d.name = UnicodeString::new_nul("Recorded path");
             }
-            recorded.actions.list = load(item(d)).actions;
+            recorded.actions_mut().list = ActionList::from_file(ActionsFile::new(load(item(d)).actions, Vec::new()));
             if noncanonical {
-                assert!(recorded.actions.list[0].steps[0].1.get(SOURCE).is_some());
+                assert!(recorded.actions().list.actions()[0].steps[0].params.get(SOURCE).is_some());
             }
             let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
             assert_eq!(result["ran"], 1);
@@ -149,7 +150,7 @@ fn unsupported_path_forms_are_kept_and_save_without_loss() {
         let source = item(d);
         let loaded = load(source.clone());
         assert_eq!(loaded.unsupported.len(), 1);
-        assert_eq!(loaded.actions[0].steps[0].0, "actions.photoshopStep");
+        assert_eq!(loaded.actions[0].steps[0].command, "actions.photoshopStep");
         assert_eq!(saved(&loaded.actions[0]), source);
     }
 }
@@ -163,7 +164,7 @@ fn non_text_and_no_document_playback_fail_without_edits() {
             s.execute("file.new", json!({"width":8,"height":8})).unwrap();
         }
         let before = s.active().map(|st| (st.doc.clone(), st.history.past_len()));
-        s.actions.list = load(item(descriptor())).actions;
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(load(item(descriptor())).actions, Vec::new()));
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 0);
         assert!(result.get("failed").is_some(), "{result}");
@@ -175,9 +176,9 @@ fn non_text_and_no_document_playback_fail_without_edits() {
 #[test]
 fn native_export_refuses_explicit_targets_and_damaged_metadata() {
     for params in [json!({"layer":1}), json!({"layers":[1]}), json!({(SOURCE):"bad base64"}), json!({(SOURCE):Value::Null})] {
-        let action = Action::new("Path", vec![(COMMAND.into(), params)]);
+        let action = Action::new("Path", vec![ActionStep::new(COMMAND, params)]);
         assert!(export("Paths", &[&action], &[], false).is_err());
     }
-    let action = Action::new("Path", vec![(COMMAND.into(), json!({}))]);
+    let action = Action::new("Path", vec![ActionStep::new(COMMAND, json!({}))]);
     assert_eq!(saved(&action).descriptor.unwrap(), descriptor());
 }
