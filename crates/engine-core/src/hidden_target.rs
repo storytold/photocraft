@@ -125,11 +125,18 @@ mod tests {
         let (mut s, hidden) = session();
         s.execute("layer.setProps", json!({"layer":hidden,"name":"hidden","visible":false})).unwrap();
         s.execute("layer.new.layer", json!({"name":"visible"})).unwrap();
-        for command in ["paint.stroke", "paint.pencil", "paint.bucket", "paint.gradient"] {
-            let params = json!({"layer":"hidden","target":{"colors":[0,2]},"points":[[8,8]],"from":[0,0],"to":[16,16],"x":8,"y":8});
+        for (command, mut params) in [
+            ("paint.stroke", json!({"points":[[8,8]]})),
+            ("paint.pencil", json!({"points":[[8,8]]})),
+            ("paint.bucket", json!({"x":8,"y":8})),
+            ("paint.gradient", json!({"from":[0,0],"to":[16,16]})),
+        ] {
+            params["layer"] = json!("hidden");
+            params["target"] = json!({"colors":[0,2]});
             let before = s.active().unwrap().doc.clone();
             let steps = s.active().unwrap().history.past_len();
-            assert!(s.execute(command, params).unwrap_err().to_string().contains(HIDDEN));
+            let err = s.execute(command, params).unwrap_err().to_string();
+            assert!(err.contains(HIDDEN), "{command}: {err}");
             assert_eq!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(hidden)), before.layer(photocraft_doc::LayerId(hidden)));
             assert_eq!(s.active().unwrap().history.past_len(), steps);
         }

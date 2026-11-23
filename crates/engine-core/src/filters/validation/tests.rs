@@ -165,8 +165,13 @@ fn extended_filter_choices_match_their_specs_and_reject_unlisted_values() {
     ];
     for id in ids {
         let doc = specs.iter().find(|spec| spec.id == id).unwrap().params;
-        for &(key, allowed) in choices(id).unwrap() {
-            // The table repeats the registry's params doc, so the two cannot drift apart.
+        let schema = crate::param_schema::of(crate::commands::find(id).unwrap()).unwrap();
+        let mut seen = 0;
+        for p in schema.params() {
+            let [crate::param_schema::Kind::Choice(allowed)] = p.kinds.as_slice() else { continue };
+            let (key, allowed) = (p.key(), allowed.join("|"));
+            seen += 1;
+            // The schema is read from the registry's params doc: there is no second copy.
             assert!(doc.contains(&format!("\"{key}\":\"{allowed}\"")), "{id}.{key}");
             for value in [json!("zzbogus"), json!(false), json!(1), Value::Null] {
                 rejected(&mut s, id, key, value);
@@ -175,8 +180,9 @@ fn extended_filter_choices_match_their_specs_and_reject_unlisted_values() {
                 validate_params(id, &json!({key:value})).unwrap();
             }
         }
+        assert!(seen > 0, "{id}: no choices");
     }
-    // Keys `prepare` injects, and undocumented ones, stay accepted as before.
+    // Keys `prepare` injects stay accepted.
     s.execute("filter.stylize.tiles", json!({"count":4,"foreground":[1,0,0,1]})).unwrap();
     s.execute("filter.stylize.wind", json!({"direction":"fromLeft"})).unwrap();
 }
@@ -359,4 +365,74 @@ fn injected_channel_targets_and_extended_filter_colours_keep_working() {
     assert_eq!(params["foreground"], json!(s.tools.foreground));
     assert_eq!(params["background"], json!(s.tools.background));
     s.execute("filter.render.fibers", params).unwrap();
+}
+
+/// The finite single-range top-level params of every checked command's schema.
+fn documented_ranges() -> Vec<(&'static str, String, f64, f64)> {
+    crate::install().unwrap();
+    let mut out = Vec::new();
+    for spec in crate::commands::command_specs().iter().filter(|c| checked(c.id)) {
+        let Some(schema) = crate::param_schema::of(spec) else { continue };
+        for p in schema.params().filter(|p| p.keys.len() == 1) {
+            if let Some((min, max)) = p.range()
+                && max.is_finite()
+                && min < max
+                && !DIALOG_RANGES.contains(&(spec.id, p.key()))
+            {
+                out.push((spec.id, p.key().to_string(), min, max));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn every_documented_filter_and_adjustment_range_is_enforced_at_dispatch() {
+    // #7597: the bounds come from the params doc alone, for every filter and adjustment.
+    let ranges = documented_ranges();
+    assert!(ranges.iter().filter(|r| r.0.starts_with("image.adjustments.")).count() > 20);
+    assert!(ranges.iter().filter(|r| r.0.starts_with("filter.")).count() > 150);
+    for (id, key, min, max) in ranges {
+        let step = ((max - min) / 1000.0).max(1e-6);
+        for v in [min, max] {
+            validate_params(id, &json!({ key.clone(): v })).unwrap_or_else(|e| panic!("{id}.{key}={v}: {e}"));
+        }
+        for v in [min - step, max + step] {
+            let err = validate_params(id, &json!({ key.clone(): v })).expect_err(&format!("{id}.{key}={v}")).to_string();
+            assert!(err.contains(&key), "{err}");
+        }
+        assert!(validate_params(id, &json!({ key.clone(): "1" })).is_err(), "{id}.{key}");
+    }
+}
+
+#[test]
+fn the_run_path_never_clamps_inside_a_documented_range() {
+    // A clamp tighter than the doc silently ran a documented value as another (#7597). Records
+    // (smart filters, PSD imports) may still decode wider than the doc.
+    let mut narrower = Vec::new();
+    for (id, key, min, max) in documented_ranges() {
+        if crate::filters::params_for(id, &json!({})).is_none() {
+            continue;
+        }
+        let step = ((max - min) / 100.0).min(1.0);
+        let run = |v: f64| format!("{:?}", crate::filters::params_for(id, &json!({ key.clone(): v })));
+        if run(min) == run(min + step) || run(max) == run(max - step) {
+            narrower.push(format!("{id}.{key} {min}..{max}"));
+        }
+    }
+    assert!(narrower.is_empty(), "{narrower:#?}");
+}
+
+/// `layer` accepts the same selectors `explicit_layer` already reads, including a recorded
+/// Action's `{"name":...}` object (#15255). A boolean is still rejected.
+#[test]
+fn layer_params_accept_recorded_name_selectors() {
+    crate::install().unwrap();
+    for id in ["filter.blur.gaussianBlur", "image.adjustments.levels"] {
+        for layer in [json!("Receiver"), json!(1), json!({"name": "Receiver"}), json!({"background": true})] {
+            validate_params(id, &json!({"layer": layer})).unwrap_or_else(|e| panic!("{id} {layer}: {e}"));
+        }
+        let err = validate_params(id, &json!({"layer": false})).unwrap_err().to_string();
+        assert!(err.contains("layer"), "{err}");
+    }
 }
