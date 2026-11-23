@@ -866,16 +866,24 @@ fn name_border_param(p: &Value, cmd: &str) -> Result<Option<NameBorder>> {
     let font = p.get("font").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).unwrap_or("Arial");
     let font_style = p.get("fontStyle").and_then(Value::as_str).filter(|f| !f.trim().is_empty()).unwrap_or("Regular");
     let white = [1.0, 1.0, 1.0, 1.0];
-    let unknown = || bad(cmd, "`extension` must be \"white\", \"black\", \"#rrggbb\" or [r, g, b]");
+    // `#rrggbb(aa)` or [r, g, b(, a)] numbers under `key`; anything else is `None`, so it fails the export.
+    let colour = |key: &str| -> Result<Option<[f32; 4]>> {
+        Ok(match p.get(key) {
+            Some(Value::String(c)) => parse_hex(c),
+            Some(Value::Array(a)) if (3..=4).contains(&a.len()) && a.iter().all(Value::is_number) => Some(color_param(cmd, p, key, white)?),
+            _ => None,
+        })
+    };
     let extension = match p.get("extension") {
         None | Some(Value::Null) => white,
         Some(Value::String(c)) if c.eq_ignore_ascii_case("white") => white,
         Some(Value::String(c)) if c.eq_ignore_ascii_case("black") => [0.0, 0.0, 0.0, 1.0],
         // The dialog's Other...: the colour picked in its swatch.
-        Some(Value::String(c)) if c.eq_ignore_ascii_case("other") => color_param(cmd, p, "extensionColor", white)?,
-        Some(Value::String(c)) => parse_hex(c).ok_or_else(unknown)?,
-        Some(Value::Array(a)) if (3..=4).contains(&a.len()) && a.iter().all(Value::is_number) => color_param(cmd, p, "extension", white)?,
-        Some(_) => return Err(unknown()),
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("other") => match p.get("extensionColor") {
+            None | Some(Value::Null) => white,
+            Some(_) => colour("extensionColor")?.ok_or_else(|| bad(cmd, "`extensionColor` must be \"#rrggbb\" or [r, g, b]"))?,
+        },
+        Some(_) => colour("extension")?.ok_or_else(|| bad(cmd, "`extension` must be \"white\", \"black\", \"#rrggbb\" or [r, g, b]"))?,
     };
     let text = color_param(cmd, p, "textColor", [0.0, 0.0, 0.0, 1.0])?.map(|c| c.clamp(0.0, 1.0));
     let style = json!({"font": font, "fontStyle": font_style, "size": size.min(NAME_SIZE_MAX_PT), "color": text});

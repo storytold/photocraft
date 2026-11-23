@@ -194,6 +194,9 @@ fn bad_name_options_fail_and_write_nothing() {
         json!({"extension": 3}),
         json!({"extension": [0.5]}),
         json!({"extension": [0.1, "x", 0.2]}),
+        json!({"extension": "other", "extensionColor": "not-a-colour"}),
+        json!({"extension": "other", "extensionColor": [0.5]}),
+        json!({"extension": "other", "extensionColor": [0.1, "x", 0.2]}),
     ] {
         let mut p = bad.clone();
         p["includeName"] = json!(true);
