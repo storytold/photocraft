@@ -592,3 +592,45 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert!(b.histogram.is_empty());
     }
 }
+
+#[test]
+fn eight_bit_selection_measurement_includes_level_127_and_excludes_126() {
+    use photocraft_color::PixelFormat;
+    use photocraft_raster::Surface;
+
+    let make_session = |rows: [u8; 4]| {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 4, "height": 4, "background": "white"})).unwrap();
+        s.edit("selection", |doc, _| {
+            let mut sel = Surface::new(PixelFormat::GRAY8);
+            for (y, level) in rows.into_iter().enumerate() {
+                sel.fill_rect(Rect::new(0, y as i32, 4, y as i32 + 1), &[f32::from(level) / 255.0]);
+            }
+            doc.selection = Some(sel);
+            Ok(())
+        })
+        .unwrap();
+        s
+    };
+
+    // Graded 4x4 mask (25, 127, 128, 128): includes rows 1..=3 -> area 12, bounds 4x3.
+    let mut graded = make_session([25, 127, 128, 128]);
+    graded.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+    let list = graded.execute("measurementLog.list", json!({})).unwrap();
+    let row = &list["rows"][0]["values"];
+    assert_eq!(row["count"].as_u64(), Some(1));
+    assert_eq!(row["area"].as_f64(), Some(12.0));
+    assert_eq!(row["width"].as_f64(), Some(4.0));
+    assert_eq!(row["height"].as_f64(), Some(3.0));
+
+    // Uniform level 127 is included (area 16).
+    let mut at_127 = make_session([127, 127, 127, 127]);
+    at_127.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+    let list_127 = at_127.execute("measurementLog.list", json!({})).unwrap();
+    assert_eq!(list_127["rows"][0]["values"]["count"].as_u64(), Some(1));
+    assert_eq!(list_127["rows"][0]["values"]["area"].as_f64(), Some(16.0));
+
+    // Uniform level 126 stays below the feature cutoff.
+    let mut at_126 = make_session([126, 126, 126, 126]);
+    assert!(at_126.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).is_err());
+}
