@@ -489,6 +489,19 @@ mod tests {
         assert!(answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}1"), Srgba::rgb(0.0, 1.0, 0.0)));
         assert!(!answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}9"), Srgba::BLACK), "no such stop");
     }
+
+    /// Toggling Use Legacy in the Brightness/Contrast dialog starts both sliders over at 0 in the
+    /// new mode; an edit that keeps the mode, and the Properties panel (no reset), keep the values.
+    #[test]
+    fn toggling_use_legacy_in_the_dialog_resets_brightness_and_contrast() {
+        for legacy in [false, true] {
+            let toggled = BrightnessContrast::new(40.0, -80.0, !legacy);
+            assert_eq!(reset_legacy_toggle(toggled, legacy, true), BrightnessContrast::new(0.0, 0.0, !legacy));
+            assert_eq!(reset_legacy_toggle(toggled, legacy, false), toggled, "the Properties panel keeps its values");
+            let kept = BrightnessContrast::new(40.0, -80.0, legacy);
+            assert_eq!(reset_legacy_toggle(kept, legacy, true), kept, "an edit in the same mode is kept");
+        }
+    }
 }
 
 #[cfg(test)]

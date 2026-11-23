@@ -123,8 +123,7 @@ fn cancel(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) {
 
 fn dialog_harness(app: Box<PhotocraftApp>, size: egui::Vec2) -> Harness<'static, Box<PhotocraftApp>> {
     // Real frame times: a double-click's two clicks must land within the double-click time.
-    let h =
-        Harness::builder().with_context(app.ctx().clone()).with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
+    let h = Harness::builder().with_context(app.ctx().clone()).with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h
 }
@@ -1000,22 +999,4 @@ fn selective_color_dialog_folds_the_single_colour_form_into_the_rows() {
     assert!(shown.get("relative").is_none(), "folded: {shown}");
     assert_eq!(shown["method"], json!("absolute"));
     assert_eq!(shown["reds"][0].as_f64(), Some(10.0));
-}
-
-#[test]
-fn toggling_legacy_resets_brightness_and_contrast_in_the_dialog() {
-    let mut app = app_with_image();
-    let id = open(&mut app, "image.adjustments.brightnessContrast").unwrap();
-    let mut h =
-        Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1100.0, 760.0)).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
-    for (legacy, contrast) in [(false, 30), (true, -80)] {
-        set_params(h.state_mut(), id, &json!({"brightness":40,"contrast":contrast,"legacy":legacy}));
-        h.run_steps(4);
-        h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Use Legacy").click();
-        h.run_steps(3);
-        let out = params(h.state_mut(), id);
-        assert_eq!(out["legacy"], !legacy);
-        assert_eq!(out["brightness"].as_f64(), Some(0.0));
-        assert_eq!(out["contrast"].as_f64(), Some(0.0));
-    }
 }
