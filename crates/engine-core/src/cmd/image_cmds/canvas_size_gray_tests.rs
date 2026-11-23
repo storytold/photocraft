@@ -78,7 +78,9 @@ fn an_unknown_extension_colour_still_takes_the_background_colour() {
 
 #[test]
 fn the_params_doc_lists_gray() {
-    let spec = crate::cmd::command_specs().iter().find(|c| c.id == "image.canvasSize").unwrap();
+    // The registry lists the commands once a session has installed them.
+    let _ = crate::session();
+    let spec = crate::registry::find("image.canvasSize").unwrap();
     assert!(spec.params.contains("|gray|"), "{}", spec.params);
 }
 
