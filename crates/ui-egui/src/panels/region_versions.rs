@@ -11,6 +11,7 @@
 use std::hash::{Hash, Hasher};
 
 use craft::ui::contract::{MemoProps, MemoView};
+use photocraft_engine::link_watch::LinkWatchExt as _;
 
 use super::PhotocraftApp;
 use crate::color_picker_ui::PickWindow;
