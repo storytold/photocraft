@@ -227,7 +227,14 @@ pub fn missing_message(session: DisplaySession, missing: &[AnyOf], distro: Distr
 
 /// Library directories to search: `LD_LIBRARY_PATH`, then the usual system and Flatpak paths.
 fn search_dirs(ld_library_path: Option<&str>) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = ld_library_path.unwrap_or("").split(':').filter(|d| !d.is_empty()).map(PathBuf::from).collect();
+    // ld.so accepts either separator; an empty entry in a nonempty list means the current directory.
+    // An unset or entirely empty variable adds no directories.
+    let mut dirs: Vec<PathBuf> = ld_library_path
+        .filter(|value| !value.is_empty())
+        .into_iter()
+        .flat_map(|value| value.split([':', ';']))
+        .map(|dir| PathBuf::from(if dir.is_empty() { "." } else { dir }))
+        .collect();
     let triplet = if cfg!(target_arch = "aarch64") {
         "aarch64-linux-gnu"
     } else if cfg!(target_arch = "riscv64") {
@@ -263,12 +270,6 @@ fn read_ldconfig() -> Option<String> {
 /// This system's linker cache and library directories.
 fn system_probe() -> Probe {
     Probe { ldconfig: read_ldconfig(), dirs: search_dirs(std::env::var("LD_LIBRARY_PATH").ok().as_deref()) }
-}
-
-/// Whether the linker cache lists `soname`; `None` when the cache can't be read, which proves
-/// nothing (musl, NixOS, some containers).
-pub fn cached(soname: &str) -> Option<bool> {
-    read_ldconfig().map(|text| ldconfig_has(&text, soname, ldconfig_arch_tag()))
 }
 
 /// Are all the libraries `session` needs found on this system? (For choosing a display server:
@@ -404,7 +405,8 @@ mod tests {
     fn library_dirs_count_and_unread_cache_is_inconclusive() {
         let dirs = search_dirs(Some("/opt/x/lib::/nix/store/abc/lib"));
         assert_eq!(dirs[0], PathBuf::from("/opt/x/lib"));
-        assert_eq!(dirs[1], PathBuf::from("/nix/store/abc/lib"));
+        assert_eq!(dirs[1], PathBuf::from("."));
+        assert_eq!(dirs[2], PathBuf::from("/nix/store/abc/lib"));
         // Found by file in a directory (no ldconfig, as on NixOS).
         let probe = Probe { ldconfig: None, dirs: vec![PathBuf::from("/nix/lib")] };
         let present = ["/nix/lib/libwayland-client.so.0", "/nix/lib/libxkbcommon.so.0", "/nix/lib/libEGL.so.1"];
@@ -416,6 +418,44 @@ mod tests {
         let msg = missing_message(DisplaySession::Wayland, &missing, Distro::Unknown);
         assert!(msg.contains("apt install libwayland-client0 libxkbcommon0 libvulkan1"), "{msg}");
         assert!(msg.contains("dnf install libwayland-client libxkbcommon vulkan-loader"), "{msg}");
+    }
+
+    #[test]
+    fn library_path_separators_and_empty_entries_follow_the_loader() {
+        let defaults = search_dirs(None);
+        assert_eq!(search_dirs(Some("")), defaults, "an entirely empty variable adds no directories");
+        for (value, entries) in [
+            ("/opt/a:/opt/b", &["/opt/a", "/opt/b"][..]),
+            ("/opt/a;/opt/b", &["/opt/a", "/opt/b"][..]),
+            ("/opt/a;/opt/b:/opt/c", &["/opt/a", "/opt/b", "/opt/c"][..]),
+            (":/opt/b", &[".", "/opt/b"][..]),
+            ("/opt/a:", &["/opt/a", "."][..]),
+            ("/opt/a::/opt/b", &["/opt/a", ".", "/opt/b"][..]),
+            ("/opt/a;;/opt/b", &["/opt/a", ".", "/opt/b"][..]),
+            (":", &[".", "."][..]),
+            (";", &[".", "."][..]),
+            (" /opt/a ;relative/lib", &[" /opt/a ", "relative/lib"][..]),
+            (" ", &[" "][..]),
+        ] {
+            let mut expected: Vec<PathBuf> = entries.iter().map(PathBuf::from).collect();
+            expected.extend(defaults.iter().cloned());
+            assert_eq!(search_dirs(Some(value)), expected, "LD_LIBRARY_PATH={value:?}");
+        }
+    }
+
+    #[test]
+    fn loader_search_paths_prevent_false_startup_errors() {
+        let soname = "libxkbcommon-x11.so.0";
+        let names: Vec<&str> = ALL_X11.iter().copied().filter(|name| *name != soname).collect();
+        let probe = Probe { ldconfig: Some(cache_for_this_arch(&names)), dirs: search_dirs(None) };
+        let missing = check(DisplaySession::X11, &probe, |_| false);
+        assert!(decide(DisplaySession::X11, missing, || Distro::Debian).is_err(), "a genuinely missing library still blocks startup");
+        for (value, directory) in [("/opt/a;/opt/b", "/opt/b"), (":/opt/a", "."), ("/opt/a:", ".")] {
+            let probe = Probe { ldconfig: Some(cache_for_this_arch(&names)), dirs: search_dirs(Some(value)) };
+            let present = Path::new(directory).join(soname);
+            let verdict = check(DisplaySession::X11, &probe, |path| path == present);
+            assert_eq!(decide(DisplaySession::X11, verdict, || Distro::Debian), Ok(()), "LD_LIBRARY_PATH={value:?}, library at {}", present.display());
+        }
     }
 
     #[test]

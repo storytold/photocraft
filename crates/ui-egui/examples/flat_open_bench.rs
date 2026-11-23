@@ -17,7 +17,7 @@
 //!
 //! Rows per case, in ms over `--reps` repetitions:
 //! - `import`: `import_for_open_with`, the real File › Open path (decode, orientation, tiles)
-//! - `admission`: `Session::open_document` of that document
+//! - `admission`: `ColorExt::open_document` of that document
 //! - `decode`: the codec alone, orientation kept as stored
 //! - `orient`: `Image::oriented` with the file's EXIF orientation (a no-op for an upright file)
 //! - `tiles`: `image_to_document` on the decoded image (layout conversion, tile construction, prune)
@@ -34,6 +34,7 @@
 //! A case run directly with `--case` generates a missing fixture in its own process, which
 //! raises its peak: run the bench once without `--case` first.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
@@ -259,7 +260,7 @@ fn run_case(case: &Case, dir: &Path, quick: bool, reps: usize, cpu: bool) -> Res
     let peak_process_after_import = photocraft_testkit::perf::process_peak_rss_bytes();
 
     // Pass 2: the phases of the import on their own.
-    let format = photocraft_codecs::detect(&bytes).ok_or("unknown format")?;
+    let format = photocraft_formats::detect(&name, &bytes).and_then(photocraft_formats::Format::raster_codec).ok_or("unknown format")?;
     let keep = DecodeOptions { keep_orientation: true, ..Default::default() };
     for _ in 0..reps {
         let t = Instant::now();

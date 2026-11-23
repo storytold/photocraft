@@ -59,6 +59,7 @@ const F_HDR: u32 = 262144u;     // 32-bit float document: HDR blends and Exposur
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + (B - C) premultiplied (clips on pass-through groups)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
+const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
 const F_LAYER_SHAPE: u32 = 1048576u; // fx merge: B is the shape; layer = its colour at fill p0.x inside it × its alpha
 
@@ -166,61 +167,61 @@ fn vivid_light_generic(cb: f32, cs: f32) -> f32 {
 // WebGPU compiler rejects it, which left the web app without a GPU compositor.
 const F32_MAX: f32 = 0x1.fffffep+127f;
 
+// FXC (the DX12 compiler between naga's HLSL and the driver) stops following a switch this size
+// once every case returns: "error X3507: 'blend_channel': Not all control paths return a value",
+// and then no compositor pipeline builds — the whole session composites on the CPU. Each case
+// assigns instead; the one return at the end is what FXC's flow analysis can follow.
 fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
     // Linear Dodge / Divide clip at 1 at integer depths, at f32::MAX in 32-bit documents.
     let hi = select(1.0, F32_MAX, (op.flags & F_HDR) != 0u);
+    var r = cs;                                                 // Normal, Dissolve, PassThrough
     switch mode {
-        case 3: { return min(cb, cs); }                         // Darken
-        case 4: { return cb * cs; }                             // Multiply
-        case 5: { return color_burn(cb, cs); }                  // ColorBurn
-        case 6: { return max(cb + cs - 1.0, 0.0); }             // LinearBurn
-        case 8: { return max(cb, cs); }                         // Lighten
-        case 9: { return cb + cs - cb * cs; }                   // Screen
-        case 10: { return color_dodge(cb, cs); }                // ColorDodge
-        case 11: { return min(cb + cs, hi); }                   // LinearDodge
-        case 13: { return hard_light(cs, cb); }                 // Overlay
-        case 14: { return soft_light_ps(cb, cs); }              // SoftLight
-        case 15: { return hard_light(cb, cs); }                 // HardLight
-        case 16: { return vivid_light_ps(cb, cs); }             // VividLight (Photoshop)
-        case 17: { return clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); } // LinearLight
+        case 3: { r = min(cb, cs); }                            // Darken
+        case 4: { r = cb * cs; }                                // Multiply
+        case 5: { r = color_burn(cb, cs); }                     // ColorBurn
+        case 6: { r = max(cb + cs - 1.0, 0.0); }                // LinearBurn
+        case 8: { r = max(cb, cs); }                            // Lighten
+        case 9: { r = cb + cs - cb * cs; }                      // Screen
+        case 10: { r = color_dodge(cb, cs); }                   // ColorDodge
+        case 11: { r = min(cb + cs, hi); }                      // LinearDodge
+        case 13: { r = hard_light(cs, cb); }                    // Overlay
+        case 14: { r = soft_light_ps(cb, cs); }                 // SoftLight
+        case 15: { r = hard_light(cb, cs); }                    // HardLight
+        case 16: { r = vivid_light_ps(cb, cs); }                // VividLight (Photoshop)
+        case 17: { r = clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); }  // LinearLight
         case 18: {                                              // PinLight
-            if (cs <= 0.5) { return min(cb, 2.0 * cs); }
-            return max(cb, 2.0 * cs - 1.0);
+            if (cs <= 0.5) { r = min(cb, 2.0 * cs); } else { r = max(cb, 2.0 * cs - 1.0); }
         }
         case 19: {                                              // HardMix (Photoshop)
-            return select(0.0, 1.0, vivid_light_generic(cb, cs) >= 0.5 - 1e-6);
+            r = select(0.0, 1.0, vivid_light_generic(cb, cs) >= 0.5 - 1e-6);
         }
-        case 20: { return abs(cb - cs); }                       // Difference
-        case 21: { return cb + cs - 2.0 * cb * cs; }            // Exclusion
-        case 22: { return max(cb - cs, 0.0); }                  // Subtract
+        case 20: { r = abs(cb - cs); }                          // Difference
+        case 21: { r = cb + cs - 2.0 * cb * cs; }               // Exclusion
+        case 22: { r = max(cb - cs, 0.0); }                     // Subtract
         case 23: {                                              // Divide
-            if (cs <= 0.0) { return select(1.0, 0.0, cb <= 0.0); }
-            return min(cb / cs, hi);
+            if (cs <= 0.0) { r = select(1.0, 0.0, cb <= 0.0); } else { r = min(cb / cs, hi); }
         }
-        case 28: {                                             // Reflect
-            if (cs >= 1.0) { return 1.0; }
-            return min(cb * cb / (1.0 - cs), 1.0);
+        case 28: {                                              // Reflect
+            if (cs >= 1.0) { r = 1.0; } else { r = min(cb * cb / (1.0 - cs), 1.0); }
         }
-        case 29: {                                             // Glow
-            if (cb >= 1.0) { return 1.0; }
-            return min(cs * cs / (1.0 - cb), 1.0);
+        case 29: {                                              // Glow
+            if (cb >= 1.0) { r = 1.0; } else { r = min(cs * cs / (1.0 - cb), 1.0); }
         }
-        case 30: { return 1.0 - abs(1.0 - cb - cs); }            // Negation
-        case 31: {                                             // XOR (8-bit channel operation)
+        case 30: { r = 1.0 - abs(1.0 - cb - cs); }               // Negation
+        case 31: {                                              // XOR (8-bit channel operation)
             let b = u32(floor(clamp(cb, 0.0, 1.0) * 255.0 + 0.5));
             let s = u32(floor(clamp(cs, 0.0, 1.0) * 255.0 + 0.5));
-            return f32(b ^ s) / 255.0;
+            r = f32(b ^ s) / 255.0;
         }
-        case 32: {                                             // Paint.NET Color Burn
-            if (cs <= 0.0) { return 0.0; }
-            return max(1.0 - (1.0 - cb) / cs, 0.0);
+        case 32: {                                              // Paint.NET Color Burn
+            if (cs <= 0.0) { r = 0.0; } else { r = max(1.0 - (1.0 - cb) / cs, 0.0); }
         }
-        case 33: {                                             // Paint.NET Color Dodge
-            if (cs >= 1.0) { return 1.0; }
-            return min(cb / (1.0 - cs), 1.0);
+        case 33: {                                              // Paint.NET Color Dodge
+            if (cs >= 1.0) { r = 1.0; } else { r = min(cb / (1.0 - cs), 1.0); }
         }
-        default: { return cs; }                                 // Normal, Dissolve, PassThrough
+        default: { r = cs; }
     }
+    return r;
 }
 
 fn lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
@@ -826,7 +827,7 @@ fn dither_noise(d: vec2<i32>) -> f32 {
     h = h ^ (h >> 15u);
     h = h * 0x2C1B3C6Du;
     h = h ^ (h >> 12u);
-    return f32(h & 0xFFFFu) / 65535.0;
+    return f32(h & 0xFFFFu) / 65536.0;
 }
 
 fn layer_texel(d: vec2<i32>) -> vec4<f32> {
@@ -1058,12 +1059,14 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
 
 // ---- Blend If (photocraft_doc::BlendRange, compose::blend_if_weight) ---------------------------
 
-// 0 at or below `lo`, 1 at or above `hi`; a hard step at `lo` when unsplit.
+// 0 at or below `lo`, 1 at or above `hi`; a hard step at `lo` when unsplit. In an 8-bit
+// RGB document (`p4.z`) a split ramp counts both ends, 0 only below `lo` (BlendRange::weight_8bit).
 fn bi_ramp(lo: f32, hi: f32, x: f32) -> f32 {
     if (hi <= lo) {
         return select(0.0, 1.0, x >= lo);
     }
-    return clamp((x - lo) / (hi - lo), 0.0, 1.0);
+    let lo_end = select(lo, lo - 1.0, op.p4.z > 0.5);
+    return clamp((x - lo_end) / (hi - lo_end), 0.0, 1.0);
 }
 
 // How much of value `v` (0..255) shows through range `e` (0 = Gray, then the channels) on side
@@ -1101,7 +1104,11 @@ fn blend_if_weight(this_px: vec4<f32>, under: vec4<f32>) -> f32 {
         } else {
             // compose::blend_if_gray: (30 R + 59 G + 11 B) / 100, rounded half down on whole levels.
             let sum = 30.0 * v.r + 59.0 * v.g + 11.0 * v.b;
-            let gray = select(sum / 100.0, floor((sum + 49.0) / 100.0), all(v == round(v)));
+            var gray = sum / 100.0;
+            if (all(v == round(v))) {
+                // Float division can undershoot an integer before floor, e.g. 9700 / 100.
+                gray = f32((u32(sum) + 49u) / 100u);
+            }
             k = k * bi_weight(0u, s, gray) * bi_weight(1u, s, v.r) * bi_weight(2u, s, v.g) * bi_weight(3u, s, v.b);
         }
         if (k <= 0.0) {
@@ -1246,7 +1253,7 @@ fn outline_share(cov: f32, l: f32) -> f32 {
 // is the effect shape). Coverage `kind`: 0 the effect map, 1 full; then F_KNOCKOUT m × (1 − a k)
 // (k = `p4.w`),
 // F_GATE inside ? m : 0, F_REL inside ? min(m / a, 1) : 0, F_STROKE_OUT inside ? (vector ? 0 : 1)
-// : m.
+// : m. F_REPLACE: the paint replaces A by the coverage instead of blending over it.
 @fragment
 fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
@@ -1274,6 +1281,16 @@ fn fs_fxpaint(in: VOut) -> @location(0) vec4<f32> {
     let k = m * op.opacity;
     if (k <= 0.0) { return dst; }
     let c = fx_color(d);
+    if ((op.flags & F_REPLACE) != 0u) {
+        // effects.rs: a Normal inside stroke knocks the layer out by its coverage and adds the
+        // stroke (`layer × (1 − coverage) + stroke × opacity × coverage`, premultiplied), also on
+        // Lab documents (no CIELAB mix).
+        let sa = c.a * k;
+        if (sa <= 0.0) { return dst; }
+        let kept = dst.a * (1.0 - clamp(m, 0.0, 1.0));
+        let ao = kept + sa;
+        return vec4((dst.rgb * kept + c.rgb * sa) / ao, min(ao, 1.0));
+    }
     return fx_composite(d, dst, vec4(c.rgb, c.a * k));
 }
 
@@ -1394,14 +1411,31 @@ fn ra(p: vec2<i32>) -> f32 {
 }
 fn mout(v: f32) -> vec4<f32> { return vec4(v, 0.0, 0.0, 1.0); }
 
-// Map::shifted by whole pixels: p0 = (dx, dy, outside, invert (1 - a before shifting)).
+// Map::shifted, whole-pixel or sub-pixel: p0 = (dx, dy, outside, invert). The invert is taken per
+// tap, as the CPU inverts its map before sampling it and uses `outside` for taps off the map. A
+// whole-pixel offset weights its four taps 1 and 0, so it reads exactly the one texel the old
+// whole-pixel path read; the arithmetic order matches `Map::shifted` term by term.
+fn mtap(p: vec2<i32>, outside: f32, invert: f32) -> f32 {
+    if (!inside(p, chunk.size)) { return outside; }
+    let v = textureLoad(tex_a, p, 0).r;
+    if (invert > 0.5) { return 1.0 - v; }
+    return v;
+}
 @fragment
 fn fs_mshift(in: VOut) -> @location(0) vec4<f32> {
-    let s = local(in.pos) - vec2<i32>(i32(op.p0.x), i32(op.p0.y));
-    if (!inside(s, chunk.size)) { return mout(op.p0.z); }
-    var v = textureLoad(tex_a, s, 0).r;
-    if (op.p0.w > 0.5) { v = 1.0 - v; }
-    return mout(v);
+    let p = local(in.pos);
+    let fx = floor(op.p0.x);
+    let fy = floor(op.p0.y);
+    let ax = op.p0.x - fx;
+    let ay = op.p0.y - fy;
+    let s = p - vec2<i32>(i32(fx), i32(fy));
+    let v00 = mtap(s, op.p0.z, op.p0.w);
+    let v10 = mtap(s - vec2<i32>(1, 0), op.p0.z, op.p0.w);
+    let v01 = mtap(s - vec2<i32>(0, 1), op.p0.z, op.p0.w);
+    let v11 = mtap(s - vec2<i32>(1, 1), op.p0.z, op.p0.w);
+    let top = v00 * (1.0 - ax) + v10 * ax;
+    let bot = v01 * (1.0 - ax) + v11 * ax;
+    return mout(top * (1.0 - ay) + bot * ay);
 }
 
 // effects::dilate: inside (distance < 0) min(A + r, 1), else max(A, clamp(r + 0.5 - dist_outside));
@@ -1538,8 +1572,9 @@ fn bevel_part(p: vec2<i32>, depth: f32, region: f32) -> f32 {
     let shade = (n.x * op.p0.x + n.y * op.p0.y + n.z * op.p0.z) / len;
     let se = op.p0.w;
     var k = shade - se;
-    // effects::bevel_maps: the gloss contour maps the shading, a flat face's as the neutral (#7360).
-    if (op.p1.w > 0.5) { k = lut(0, shade) - lut(0, se); }
+    // effects::bevel_maps: the gloss contour maps the shading; a flat face's unmapped shading
+    // stays the neutral (#7360).
+    if (op.p1.w > 0.5) { k = lut(0, shade) - se; }
     var v = 0.0;
     if (op.p1.z > 0.5) {
         if (k <= 0.0) { v = clamp(-k / max(se, 1e-3), 0.0, 1.0) * region; }

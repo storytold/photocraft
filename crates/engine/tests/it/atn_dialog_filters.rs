@@ -1,6 +1,8 @@
+use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
+use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::actions_cmds::{ActionList, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
-use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
-use photocraft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use serde_json::{Value, json};
 
 fn encoded(code: &[u8; 4], d: Descriptor) -> Vec<u8> {
@@ -66,7 +68,7 @@ fn custom_and_fibers_recordings_round_trip_replay_native_settings_and_undo() {
     for (code, d, id, p) in cases() {
         let imported = atn_cmds::import(&encoded(&code, d.clone())).unwrap();
         assert!(imported.unsupported.is_empty());
-        assert_eq!(imported.actions[0].steps[0].0, id);
+        assert_eq!(imported.actions[0].steps[0].command, id);
         let (out, skipped) = atn_cmds::export("Dialog", &[&imported.actions[0]], &[], false).unwrap();
         assert!(skipped.is_empty());
         assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
@@ -75,7 +77,7 @@ fn custom_and_fibers_recordings_round_trip_replay_native_settings_and_undo() {
             native.execute(id, p.clone()).unwrap();
             let mut s = fixture(depth);
             let before = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
-            s.actions.list = imported.actions.clone();
+            s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
             assert_eq!(s.execute("actions.play", json!({"action":"Dialog"})).unwrap()["ran"], 1);
             assert_eq!(
                 photocraft_compose::flatten(&s.active().unwrap().doc).px,
@@ -94,16 +96,16 @@ fn fibers_missing_seed_is_stable_across_playback_and_save() {
     let d = Descriptor::new("null").with("Vrnc", D::Integer(16)).with("Strg", D::Integer(4));
     let imported = atn_cmds::import(&encoded(b"Fbrs", d)).unwrap();
     assert!(imported.unsupported.is_empty());
-    let p = &imported.actions[0].steps[0].1;
+    let p = &imported.actions[0].steps[0].params;
     let seed = i32::try_from(p["seed"].as_i64().unwrap()).unwrap();
     let (out, skipped) = atn_cmds::export("Dialog", &[&imported.actions[0]], &[], false).unwrap();
     assert!(skipped.is_empty());
     assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor.as_ref().unwrap().get("RndS"), Some(&D::Integer(seed)));
     let saved = atn_cmds::import(&out).unwrap();
-    assert_eq!(saved.actions[0].steps[0].1, *p);
+    assert_eq!(saved.actions[0].steps[0].params, *p);
     let render = |actions| {
         let mut s = fixture(8);
-        s.actions.list = actions;
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(actions, Vec::new()));
         s.execute("actions.play", json!({"action":"Dialog"})).unwrap();
         photocraft_compose::flatten(&s.active().unwrap().doc).px.clone()
     };
@@ -116,7 +118,7 @@ fn fibers_preserves_noncanonical_descriptors_without_rejecting_missing_defaults(
     for d in [Descriptor::new("null"), Descriptor::new("null").with("RndS", D::Integer(-1))] {
         let imported = atn_cmds::import(&encoded(b"Fbrs", d)).unwrap();
         assert!(imported.unsupported.is_empty());
-        assert_eq!(imported.actions[0].steps[0].0, "filter.render.fibers");
+        assert_eq!(imported.actions[0].steps[0].command, "filter.render.fibers");
         let (out, skipped) = atn_cmds::export("Dialog", &[&imported.actions[0]], &[], false).unwrap();
         assert!(skipped.is_empty());
         let saved = atn_cmds::import(&out).unwrap();
@@ -133,7 +135,7 @@ fn fibers_preserves_noncanonical_descriptors_without_rejecting_missing_defaults(
     key.items[0].0 = Id::Str(b"Vrnc".to_vec());
     for d in [named, class, ordered, key] {
         let imported = atn_cmds::import(&encoded(b"Fbrs", d.clone())).unwrap();
-        assert_eq!(imported.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(imported.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let (out, _) = atn_cmds::export("Dialog", &[&imported.actions[0]], &[], false).unwrap();
         assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
     }
@@ -156,7 +158,7 @@ fn dialog_filters_keep_unrepresented_types_ranges_and_fields_whole() {
                 odd.items.push((Id::new(key), value));
             }
             let a = atn_cmds::import(&encoded(&code, odd.clone())).unwrap();
-            assert_eq!(a.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+            assert_eq!(a.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
             let (out, _) = atn_cmds::export("Dialog", &[&a.actions[0]], &[], false).unwrap();
             assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(odd));
         }
@@ -166,7 +168,7 @@ fn dialog_filters_keep_unrepresented_types_ranges_and_fields_whole() {
         let key = if code == *b"Cstm" { "scale" } else { "variance" };
         for value in [json!(0), json!(10000), json!(1.5)] {
             let mut edited = a.actions[0].clone();
-            edited.steps[0].1[key] = value;
+            edited.steps[0].params[key] = value;
             assert!(atn_cmds::export("Dialog", &[&edited], &[], false).is_err());
         }
     }
