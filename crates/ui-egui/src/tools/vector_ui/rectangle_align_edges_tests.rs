@@ -78,9 +78,17 @@ fn a_rounded_rectangle_follows_the_checkbox_too() {
     for (align, want) in [(true, [10.0, 11.0, 30.0, 20.0]), (false, [10.3, 10.6, 30.4, 19.6])] {
         let mut app = app(|o| o.align_edges = align);
         drag(&mut app, START, END, 4.0);
-        let (live, kind, _) = drawn_layer(&mut app);
-        assert_eq!(kind, "roundedRect");
+        let (live, _, _) = drawn_layer(&mut app);
         assert_close(live, want);
+        let st = app.session.active().unwrap();
+        let radii = match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+            photocraft_doc::LayerContent::Shape(sh) => match sh.live {
+                Some(photocraft_doc::LiveShape::Rect { radii, .. }) => radii,
+                ref other => panic!("a live rectangle, got {other:?}"),
+            },
+            _ => panic!("a shape layer"),
+        };
+        assert_eq!(radii, [4.0; 4], "the corners stay rounded");
     }
 }
 
