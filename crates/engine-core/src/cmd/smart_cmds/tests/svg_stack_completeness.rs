@@ -19,6 +19,61 @@ fn gzip(svg: &[u8]) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
+#[test]
+fn svgz_fallback_rejects_preview_only_affinity_without_changing_smart_contents() {
+    let image = photocraft_codecs::Image::from_u8(2, 1, photocraft_codecs::ChannelLayout::Rgba, vec![17, 31, 57, 255, 0, 0, 0, 0]).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    // Existing shared synthetic container API: a valid thumbnail without a
+    // native object graph, so ordinary Open offers only its warned preview.
+    let source = craft_affinity::synth::container(&[], Some(&png));
+    for name in ["preview.afphoto", "renamed.png", "without-extension"] {
+        let ordinary = photocraft_io::import(name, &source).unwrap();
+        assert!(ordinary.preview_only && ordinary.source_read_only);
+        assert_eq!(ordinary.document.size, Size::new(2, 1));
+        assert!(crate::file_cmds::import(name, &source).unwrap_err().to_string().contains("embedded preview"));
+        assert!(decode_source(name, &source).unwrap_err().to_string().contains("embedded preview"));
+        let mut session = session(8);
+        paint(&mut session);
+        let id = LayerId(convert(&mut session));
+        let before = session.active().unwrap().clone();
+        let (old_name, old_bytes) = contents_of(&before.doc, id).unwrap();
+        let error = replace_contents_bytes(&mut session, id, name, source.clone()).unwrap_err();
+        assert!(error.to_string().contains("embedded preview"));
+        let after = session.active().unwrap();
+        assert!(Arc::ptr_eq(&before.doc, &after.doc));
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.saved_revision, before.saved_revision);
+        assert_eq!(after.history.past_len(), before.history.past_len());
+        let (name, bytes) = contents_of(&after.doc, id).unwrap();
+        assert_eq!(name, old_name);
+        assert!(Arc::ptr_eq(&bytes, &old_bytes));
+    }
+    // A complete non-SVG source still reaches its normal engine decoder.
+    assert_eq!(decode_source("complete.png", &png).unwrap().size, Size::new(2, 1));
+}
+
+#[test]
+fn non_svg_smart_contents_preserve_typed_psd_budget_refusals() {
+    let source = session(8);
+    let psd = photocraft_io::export(&source.active().unwrap().doc, "source.psd", &Default::default()).unwrap().bytes;
+    let snapshot = photocraft_io::memory::MemorySnapshot { available_ram: Some(4 << 30), swap_free: None, commit_headroom: None };
+    let hard = photocraft_io::memory::resolve_budget(snapshot, None).hard_limit;
+    photocraft_io::memory::with_mock_memory(snapshot, || {
+        photocraft_io::psd_budget::with_test_estimate_charge(hard + 1, || {
+            // This is the real IO admission error, not a mock import result.
+            assert!(matches!(photocraft_io::import("source.psd", &psd), Err(photocraft_io::IoError::PsdImportBudget { .. })));
+            match decode_source("source.psd", &psd).unwrap_err() {
+                EngineError::PsdHardBudget { name, required, limit, .. } => {
+                    assert_eq!(name, "source.psd");
+                    assert!(required > hard);
+                    assert_eq!(limit, hard);
+                }
+                error => panic!("the engine's typed source refusal was lost: {error}"),
+            }
+        });
+    });
+}
+
 fn smart_svg(bytes: Vec<u8>) -> SmartObject {
     SmartObject::new(SmartSource::Embedded { file_name: "Stack completeness.svg".into(), bytes: Arc::new(bytes) }, Affine::IDENTITY, None)
 }

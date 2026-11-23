@@ -63,9 +63,14 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
-    photocraft_io::import_smart_object_source(file_name, bytes, 24_000_000)
-        .map(|imported| imported.document)
-        .map_err(|error| other(format!("can't read smart object contents \"{file_name}\": {error}")))
+    if let Some(imported) =
+        photocraft_io::try_import_smart_object_svg(file_name, bytes, 24_000_000).map_err(|error| crate::error::io_open_error(file_name, error))?
+    {
+        return Ok(imported.document);
+    }
+    // Non-SVG sources must keep the common engine admission path, including its
+    // allocation checkpoint, typed memory refusals and preview-only rejection.
+    crate::file_cmds::import(file_name, bytes)
 }
 
 /// Reuse the central format decision made by this render operation.

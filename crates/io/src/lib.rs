@@ -1086,6 +1086,16 @@ fn import_stages(
 /// Decode Smart Object contents without silently accepting omitted SVG images.
 /// Unlike ordinary Open, these callers cannot present partial SVG contents as a warning.
 pub fn import_smart_object_source(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
+    match try_import_smart_object_svg(name, bytes, max_decoded_pixels)? {
+        Some(imported) => Ok(imported),
+        None => import(name, bytes),
+    }
+}
+
+/// Strictly decode recognized SVG/SVGZ contents, or return `None` without
+/// importing another format. Hosts with stronger generic-source admission can
+/// retain their existing fallback (preview-only rejection, typed budgets, etc.).
+pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<Option<ImportResult>, IoError> {
     if craft_svg::sniff::is_svgz(bytes) {
         // These explicit routes precede SVGZ sniffing in the shared registry. Do not
         // reinterpret an Affinity file or the existing gzip-XCF transport as SVG.
@@ -1097,13 +1107,13 @@ pub fn import_smart_object_source(name: &str, bytes: &[u8], max_decoded_pixels: 
             if is_svg_input(name, text.as_bytes()) {
                 // Keep original encoding bytes so the strict import's decompressed-byte
                 // allowance applies before UTF-16 or legacy text conversion as usual.
-                return svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels);
+                return svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some);
             }
         }
     } else if svg::is_svg(bytes) {
-        return svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels);
+        return svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels).map(Some);
     }
-    import(name, bytes)
+    Ok(None)
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
