@@ -22,7 +22,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use craft::ui::bars::StatusProgress;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft::ui::dialog::{BlockingOverlay, PromptAnswer, PromptChoice, StandardPrompt};
 use craft::ui::display::{Picture, Progress, Shade, Text};
@@ -749,7 +748,7 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         && let Some(st) = app.session.close(index)
     {
         let read_only = st.source_read_only;
-        let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
+        let doc = Arc::try_unwrap(st.into_document()).unwrap_or_else(|d| (*d).clone());
         crate::open_prompt::arrive(app, held(doc, read_only, None, true));
         return Ok(());
     }
@@ -828,27 +827,22 @@ pub fn save_progress(app: &PhotocraftApp, doc: DocId) -> Option<String> {
     app.session.job(save.job).map(|j| saving_percent(&j))
 }
 
-/// The status bar's job readout (the bar's trailing group): the job's label, a progress bar, the percentage and a
-/// cancel button, "Saving" for a save. A print's cancel is shown refused: the system print queue owns it. Draws
-/// nothing when no job runs.
-pub fn status_progress(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(j) = job_in_view(app) else { return };
+/// The job the status bar's trailing group shows, and its progress: the job's label, the fraction and a cancel
+/// button, "Saving" for a save. A print's cancel is shown refused: the system print queue owns it. `None` when no job
+/// runs.
+pub(crate) fn status_job(app: &PhotocraftApp) -> Option<(JobId, crate::panels::status_bar::Progress)> {
+    let j = job_in_view(app)?;
     if j.command == "file.automate.batch" {
-        return;
+        return None;
     }
     let saving = app.jobs.saves.iter().any(|s| s.job == j.id);
     let more = app.session.jobs().len().saturating_sub(1);
     // A save's percentage is the component's own.
     let name = if saving { tl!("Saving").to_owned() } else { tl!(&j.label).to_owned() };
     let label = if more > 0 { format!("{name} (+{more})") } else { name };
-    let mut progress = StatusProgress::new(label, shown_fraction(&j)).cancel(tl!("Cancel (Esc)").to_owned());
     // A print has already reached the spool worker; cancellation belongs to the system queue.
-    if matches!(j.command.as_str(), "file.print" | "file.printOneCopy") {
-        progress = progress.cancel_refused(tl!("Manage submitted jobs in the system print queue").to_owned());
-    }
-    if progress.show(ui).cancelled {
-        cancel(app, j.id);
-    }
+    let refused = matches!(j.command.as_str(), "file.print" | "file.printOneCopy").then(|| tl!("Manage submitted jobs in the system print queue").to_owned());
+    Some((j.id, crate::panels::status_bar::Progress { label, fraction: shown_fraction(&j), cancel: Some(tl!("Cancel (Esc)").to_owned()), refused }))
 }
 
 /// Show the folder Batch worker's immutable current document in the canvas area. The worker

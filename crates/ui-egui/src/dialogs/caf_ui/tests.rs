@@ -1,6 +1,7 @@
 use craft::imaging::ui::fill::FillOp;
 use craft::ui::canvas::PixelRect;
 use photocraft_doc::LayerId;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 
 use super::preview::{compute_preview, plan_params};
@@ -360,7 +361,7 @@ fn an_empty_recorded_step_plays_with_the_last_settings_after_a_restart() {
         ..Default::default()
     };
     let imported = photocraft_engine::atn_cmds::import(&craft_psd::atn::write(&file).unwrap()).unwrap();
-    restarted.session.actions.list.push(imported.actions.into_iter().next().unwrap()).unwrap();
+    restarted.session.actions_mut().list.push(imported.actions.into_iter().next().unwrap()).unwrap();
     let layers = restarted.session.active().unwrap().doc.layers.len();
     let result = restarted.session.execute("actions.play", json!({"action": 0})).unwrap();
     assert_eq!(result["ran"], 1, "{result}");

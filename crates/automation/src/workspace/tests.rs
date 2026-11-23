@@ -65,6 +65,25 @@ fn read_growth_is_rejected_at_the_observed_length() {
 }
 
 #[test]
+fn location_names_the_file_below_the_root_that_holds_it() {
+    let (library, work, _) = roots("location");
+    std::fs::create_dir_all(work.join("shots")).unwrap();
+    std::fs::write(work.join("shots/a.png"), b"a").unwrap();
+    std::fs::write(library.join("same.png"), b"first").unwrap();
+    std::fs::write(work.join("same.png"), b"second").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    // A root-relative request names the file below the root that holds it, as an absolute path.
+    assert_eq!(workspace.location("shots/a.png"), Some(work.join("shots").join("a.png")));
+    // The first root that holds the name wins, as for `read`.
+    assert_eq!(workspace.location("same.png"), Some(library.join("same.png")));
+    // An absolute request below a root keeps naming that file.
+    assert_eq!(workspace.location(&work.join("same.png").to_string_lossy()), Some(work.join("same.png")));
+    assert_eq!(workspace.location("missing.png"), None);
+    assert_eq!(workspace.location("../outside.png"), None, "a path escaping the roots has no location");
+    assert_eq!(AuthorizedWorkspace::default().location("shots/a.png"), None, "no read root, no location");
+}
+
+#[test]
 fn open_pcraft_loads_a_directory_below_the_read_root() {
     let (inside, _, workspace) = roots("pcraft-dir");
     let doc = photocraft_doc::Document::new("Native", photocraft_doc::Size::new(16, 12), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
@@ -928,7 +947,7 @@ fn svg_smart_handoff_is_memory_only_and_linked_sources_stay_denied() {
         assert!(authorize_desktop_engine_command(id, &ambient).is_err(), "{id}");
         assert!(headless.command_run(id, ambient).is_err(), "{id}");
     }
-    let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
     let id = photocraft_doc::LayerId(layer.as_u64().unwrap());
     let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("SVG smart object") };
     sm.source = photocraft_doc::SmartSource::Linked { path: "/outside/source.svg".into() };
@@ -959,7 +978,7 @@ fn svg_update_cannot_replay_desktop_lut_file_in_any_shared_instance() {
         .unwrap();
         let target = photocraft_doc::LayerId(pasted["layer"].as_u64().unwrap());
         let filtered = if shared_only {
-            let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+            let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
             let duplicate = doc.layer(target).unwrap().duplicate();
             let id = duplicate.id;
             doc.layers.push(duplicate);
@@ -984,7 +1003,7 @@ fn svg_update_cannot_replay_desktop_lut_file_in_any_shared_instance() {
         assert_eq!(headless.session.active().unwrap().doc, before);
         assert_eq!(headless.session.active().unwrap().revision, revision);
         // A hidden stored filter is not executed, so its unused filename grants no access.
-        let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
         let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(filtered).unwrap().content else { panic!("smart object") };
         sm.smart_filters.last_mut().unwrap().visible = false;
         assert_eq!(headless.command_run("layer.smartObjects.updateSvg", params).unwrap()["updated"], true);
@@ -1064,6 +1083,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.vectorMask.add"
             | "layer.vectorMask.edit"
             | "layer.vectorMask.info"
+            | "layer.vectorMask.currentPath"
             | "paint.symmetryFromPath"
             | "edit.defineCustomShape"
             // `"as":"path"` pastes the clipboard as a vector path (#10694).

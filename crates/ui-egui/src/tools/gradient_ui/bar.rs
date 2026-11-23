@@ -11,6 +11,7 @@ use craft::ui::pickers::Select;
 use craft::ui::runtime::env::{Env, Label};
 use craft::ui::text::NumberField;
 use photocraft_doc::BlendMode;
+use photocraft_engine::presets::PresetsExt;
 
 use super::{fill_layer_active, options_changed, stops};
 use crate::state::Tool;
@@ -18,9 +19,16 @@ use crate::{PhotocraftApp, panel_docking};
 
 /// The blend modes the Classic gradient lists, with a rule above each group.
 fn blend_modes() -> Vec<Entry<BlendMode>> {
-    let keys: Vec<BlendKeyEntry<BlendMode>> =
-        crate::blend_keys::tool_modes(Tool::Gradient).unwrap_or_default().into_iter().flatten().map(|mode| crate::panels::blend_entry(mode, mode)).collect();
-    blend_entries(&keys, |entry| Label::from(tl!(entry.key.label()).to_string()))
+    static CACHE: crate::i18n::LangCache<(), Vec<Entry<BlendMode>>> = crate::i18n::LangCache::new();
+    CACHE.get_or_build((), || {
+        let keys: Vec<BlendKeyEntry<BlendMode>> = crate::blend_keys::tool_modes(Tool::Gradient)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|mode| crate::panels::blend_entry(mode, mode))
+            .collect();
+        blend_entries(&keys, |entry| Label::from(tl!(entry.key.label()).to_string()))
+    })
 }
 
 /// `add` captioned `label` as a field of the bar.
@@ -35,7 +43,7 @@ pub(crate) fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A selected gradient fill layer is edited live whatever the stored choice: the Mode cell reads Gradient and is greyed.
     let locked_live = fill_layer_active(app);
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    let tool_stops = stops::of_preset(&app.session.presets.gradient, fg, bg);
+    let tool_stops = stops::of_preset(&app.session.presets().gradient, fg, bg);
     let sampler = stops::sampler(fg, bg);
     let words = Env::of(ui).words::<GradientFillWords>();
     let styles: Vec<Entry<GradientStyle>> = GradientStyle::ALL.iter().map(|style| Entry::new(*style, style.label(&words)).icon(style.icon())).collect();

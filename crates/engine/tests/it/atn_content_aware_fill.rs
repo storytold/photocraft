@@ -1,6 +1,7 @@
 //! Recorded CAF settings use the native operation; unsupported descriptors stay whole.
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionStep},
@@ -189,7 +190,7 @@ fn caf_unrepresented_descriptors_are_kept_and_never_partially_play() {
         let before = s.active().unwrap().doc.clone();
         let past = s.active().unwrap().history.past_len();
         for action in imported.actions {
-            s.actions.list.push(action).unwrap();
+            s.actions_mut().list.push(action).unwrap();
         }
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 0);
@@ -280,7 +281,7 @@ fn caf_action_matches_native_pixels_and_undo_at_each_depth() {
         let before = s.active().unwrap().doc.clone();
         let source = s.active().unwrap().active_layer.unwrap();
         let past = s.active().unwrap().history.past_len();
-        s.actions.list.push(load(descriptor())).unwrap();
+        s.actions_mut().list.push(load(descriptor())).unwrap();
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert!(result.get("failed").is_none(), "{depth}: {result}");
         assert_eq!(result["ran"], 1);
@@ -321,7 +322,7 @@ fn caf_action_matches_native_pixels_and_undo_at_each_depth() {
         let past = recorded.active().unwrap().history.past_len();
         let mut d = descriptor();
         d.items[6].1 = enm("cafOutput", "cafOutputToCurrentLayer");
-        recorded.actions.list.push(load(d)).unwrap();
+        recorded.actions_mut().list.push(load(d)).unwrap();
         let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none(), "{depth}: {result}");
@@ -378,7 +379,7 @@ fn caf_current_layer_sampling_matches_distinct_multilayer_controls() {
             let mut d = descriptor();
             d.items[1].1 = D::Boolean(all_layers);
             d.items[6].1 = enm("cafOutput", "cafOutputToCurrentLayer");
-            recorded.actions.list.push(load(d)).unwrap();
+            recorded.actions_mut().list.push(load(d)).unwrap();
             let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
             assert_eq!(result["ran"], 1);
             assert!(result.get("failed").is_none(), "{depth}/{all_layers}: {result}");
@@ -414,7 +415,7 @@ fn caf_action_without_selection_fails_without_an_edit() {
     s.execute("file.new", json!({"width":8,"height":8})).unwrap();
     let before = s.active().unwrap().doc.clone();
     let past = s.active().unwrap().history.past_len();
-    s.actions.list.push(load(descriptor())).unwrap();
+    s.actions_mut().list.push(load(descriptor())).unwrap();
     let result = s.execute("actions.play", json!({"action":0})).unwrap();
     assert_eq!(result["ran"], 0);
     assert!(result.get("failed").is_some());

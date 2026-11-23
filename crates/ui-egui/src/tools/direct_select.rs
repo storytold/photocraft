@@ -521,6 +521,9 @@ mod history_names_tests;
 mod options_bar_tests;
 
 #[cfg(test)]
+mod convert_point_delete_key_tests;
+
+#[cfg(test)]
 mod freeform_command_tests {
     use super::*;
     use crate::canvas::testing::{move_to, press, release};
