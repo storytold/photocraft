@@ -153,6 +153,7 @@ pub fn install() -> Result<()> {
 /// all cut out of this one, it holds their hooks. A stage runs its hooks in the order written
 /// here: store comes last so that `sync_preset_store` runs after the other after-command hooks.
 pub fn register(install: &mut Install) {
+    install.incomplete.push(crate::param_check::INCOMPLETE);
     // Session slots, by owner crate. model:
     install.slot::<crate::color_cmds::ColorState>();
     // image

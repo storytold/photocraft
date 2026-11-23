@@ -15,21 +15,19 @@ use crate::commands::CommandSpec;
 use crate::param_schema::{self, UNIVERSAL};
 use crate::{EngineError, Result};
 
-/// Commands whose doc does not yet name every key they read (the engine's own tests pass
-/// them more): not checked until their doc is completed. The list may only shrink.
-const INCOMPLETE: &[&str] = &[
+/// Core's commands whose doc does not yet name every key they read (the engine's own tests pass
+/// them more): not checked until their doc is completed. The list may only shrink. Each engine
+/// crate lists its own commands and hands the list to the install ([`crate::registry::Install::incomplete`]).
+pub(crate) const INCOMPLETE: &[&str] = &[
     "actions.duplicate",
     "actions.photoshopStep",
     "actions.play",
     "actions.record",
-    "brush.mixer.sample",
     "brush.presets.move",
     "brush.presets.moveGroup",
     "count.move",
     "count.remove",
     "document.activate",
-    "edit.fill",
-    "edit.fillForeground",
     "edit.transform.flipVertical",
     "edit.transform.splitWarpCrosswise",
     "file.automate.batch",
@@ -75,25 +73,6 @@ const INCOMPLETE: &[&str] = &[
     "layer.videoLayers.replaceFootage",
     "measurementLog.delete",
     "notes.delete",
-    "paint.artHistoryBrush",
-    "paint.backgroundEraser",
-    "paint.blur",
-    "paint.bucket",
-    "paint.burn",
-    "paint.cloneStamp",
-    "paint.colorReplacement",
-    "paint.dodge",
-    "paint.healingBrush",
-    "paint.historyBrush",
-    "paint.mixerBrush",
-    "paint.patternStamp",
-    "paint.pencil",
-    "paint.redEye",
-    "paint.sharpen",
-    "paint.smudge",
-    "paint.sponge",
-    "paint.spotHealing",
-    "paint.stroke",
     "path.addToSelection",
     "path.intersectWithSelection",
     "path.set",
@@ -125,7 +104,7 @@ const INCOMPLETE: &[&str] = &[
 pub(crate) fn check(spec: &CommandSpec, params: &Value) -> Result<()> {
     let Some(map) = params.as_object() else { return Ok(()) };
     let Some(schema) = param_schema::of(spec) else { return Ok(()) };
-    if schema.open() || INCOMPLETE.contains(&spec.id) {
+    if schema.open() || crate::registry::is_incomplete(spec.id) {
         return Ok(());
     }
     for key in map.keys() {
@@ -146,7 +125,7 @@ pub(crate) fn check(spec: &CommandSpec, params: &Value) -> Result<()> {
 /// descriptor), never typed by a caller.
 /// Whether `id` is on the incomplete-docs list: unknown keys are not rejected yet.
 pub fn is_incomplete(id: &str) -> bool {
-    INCOMPLETE.contains(&id)
+    crate::registry::is_incomplete(id)
 }
 
 fn implied(id: &str, key: &str) -> bool {
@@ -185,7 +164,7 @@ mod tests {
         for spec in crate::commands::command_specs() {
             let Some(schema) = param_schema::of(spec) else { continue };
             let typo = json!({"zzTypo": 1});
-            if schema.open() || INCOMPLETE.contains(&spec.id) {
+            if schema.open() || crate::registry::is_incomplete(spec.id) {
                 assert!(check(spec, &typo).is_ok(), "{}", spec.id);
                 continue;
             }

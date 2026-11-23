@@ -45,6 +45,9 @@ pub struct Install {
     pub order: Option<&'static str>,
     /// The pipeline hooks of the crates whose tables these are.
     pub hooks: Hooks,
+    /// Each crate's commands whose docs do not yet name every key they read: their params are not
+    /// checked for unknown keys ([`is_incomplete`]). A crate lists only its own commands, sorted.
+    pub incomplete: Vec<&'static [&'static str]>,
     /// The session slots of the crates whose tables these are, one per type.
     pub(crate) slots: Vec<SlotInit>,
 }
@@ -76,6 +79,12 @@ pub fn command_specs() -> &'static [CommandSpec] {
 /// The installed command `id`, if any.
 pub fn find(id: &str) -> Option<&'static CommandSpec> {
     INSTALLED.registry().ok()?.get(id)
+}
+
+/// Whether the installed command `id` is on a crate's incomplete-docs list: unknown keys are not
+/// rejected yet.
+pub fn is_incomplete(id: &str) -> bool {
+    INSTALLED.installed().is_ok_and(|install| install.incomplete.iter().any(|list| list.contains(&id)))
 }
 
 /// The installed pipeline hooks (none before an install, or after a conflicting one).

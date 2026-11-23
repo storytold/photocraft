@@ -27,6 +27,33 @@ const TABLES: &[Table] = &[
     ("pick_cmds", crate::pick_cmds::specs),
 ];
 
+/// This crate's commands whose doc does not yet name every key they read (the engine's own tests
+/// pass them more): not checked until their doc is completed. The list may only shrink.
+const INCOMPLETE: &[&str] = &[
+    "brush.mixer.sample",
+    "edit.fill",
+    "edit.fillForeground",
+    "paint.artHistoryBrush",
+    "paint.backgroundEraser",
+    "paint.blur",
+    "paint.bucket",
+    "paint.burn",
+    "paint.cloneStamp",
+    "paint.colorReplacement",
+    "paint.dodge",
+    "paint.healingBrush",
+    "paint.historyBrush",
+    "paint.mixerBrush",
+    "paint.patternStamp",
+    "paint.pencil",
+    "paint.redEye",
+    "paint.sharpen",
+    "paint.smudge",
+    "paint.sponge",
+    "paint.spotHealing",
+    "paint.stroke",
+];
+
 /// This crate's command tables.
 pub fn command_tables() -> &'static [Table] {
     TABLES
@@ -35,6 +62,7 @@ pub fn command_tables() -> &'static [Table] {
 /// This crate's pipeline hooks. Each is the only hook of its stage, so the order the engine
 /// crates' `register`s run in doesn't change what they do.
 pub fn register(install: &mut Install) {
+    install.incomplete.push(INCOMPLETE);
     let hooks = &mut install.hooks;
     hooks.coalesce_journal.push(crate::brush_cmds::coalesce_journal);
     // The Magic Eraser's alert for an Indexed Color or Bitmap document (#12032), the same error
@@ -66,4 +94,22 @@ pub fn session() -> Session {
     // A conflicting install reports itself at the session's first command.
     let _ = install();
     Session::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use photocraft_engine_core::param_schema;
+
+    use super::{INCOMPLETE, install};
+
+    #[test]
+    fn incomplete_docs_are_registered_closed_docs() {
+        install().unwrap();
+        for id in INCOMPLETE {
+            let spec = photocraft_engine_core::commands::find(id).unwrap_or_else(|| panic!("{id} is not registered"));
+            assert!(param_schema::of(spec).is_some_and(|p| !p.open()), "{id}: open or unparsed docs are not checked anyway");
+            assert!(photocraft_engine_core::is_incomplete(id), "{id} is on the installed list");
+        }
+        assert!(INCOMPLETE.windows(2).all(|w| w[0] < w[1]), "sorted, no duplicates");
+    }
 }
