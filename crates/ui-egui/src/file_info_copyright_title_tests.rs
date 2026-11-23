@@ -81,7 +81,7 @@ fn the_main_window_title_has_the_prefix() {
     let xmp = r#"<rdf:Description xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/" xmpRights:Marked="False"/>"#;
     for packet in [Some(xmp), None] {
         let mut app = self::app();
-        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).metadata.xmp = packet.map(Into::into);
+        std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).metadata.xmp = packet.map(Into::into);
         assert_eq!(window(&app), "oracle \u{2014} PhotoCraft", "{packet:?}");
     }
 }
