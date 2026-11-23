@@ -24,6 +24,8 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 #[cfg(test)]
+mod convert_profile_fogra39_tests;
+#[cfg(test)]
 mod convert_profile_same_tests;
 mod profile_dither;
 
