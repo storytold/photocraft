@@ -8,7 +8,7 @@ use super::*;
 
 /// The reference app's test document: 400 × 300, RGB, 8 bit, 72 ppi.
 pub(super) fn reference_document() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 400, "height": 300, "depth": 8, "resolution": 72, "background": "white"})).unwrap();
     s
 }
@@ -93,7 +93,7 @@ fn a_place_that_makes_a_pixel_layer_is_one_place_image_state() {
 fn a_one_page_pdf_is_named_after_what_its_place_made() {
     let dir = tempfile::tempdir().unwrap();
     let pdf = dir.path().join("page.pdf").to_string_lossy().into_owned();
-    let mut src = Session::new();
+    let mut src = crate::session();
     src.execute("file.new", json!({"width": 100, "height": 60, "depth": 8, "resolution": 72, "background": "#ff0000"})).unwrap();
     src.execute("file.saveACopy", json!({"path": pdf})).unwrap();
     for (smart, name, kind) in [(true, "Place Embedded Smart Object", "embedded"), (false, "Place Image", "pixels")] {
