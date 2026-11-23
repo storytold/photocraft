@@ -1,3 +1,4 @@
+use craft::color_ui::ui::{SampleSize, SampleSource};
 use egui::Modifiers;
 use photocraft_geom::Rect;
 use serde_json::json;
@@ -9,7 +10,7 @@ use crate::{PhotocraftApp, Services};
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
 /// Select the Eyedropper and target a fully revealed mask on a red pixel layer or an Invert adjustment above it.
-fn app_with_mask(adjustment: bool) -> PhotocraftApp {
+fn app_with_mask(adjustment: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
     app.session
@@ -24,6 +25,11 @@ fn app_with_mask(adjustment: bool) -> PhotocraftApp {
     assert!(app.ui.mask_target);
     app.ui.tool = Tool::Eyedropper;
     app
+}
+
+/// Set the Sample setting from its `sampleLayer` id.
+fn set_source(app: &mut PhotocraftApp, id: &str) {
+    app.ui.tool_options.eyedropper.source = SampleSource::from_id(id).unwrap();
 }
 
 fn paint_mask(app: &mut PhotocraftApp, rect: Rect, gray: f32) {
@@ -52,7 +58,7 @@ fn targeted_pixel_and_adjustment_masks_supply_point_samples() {
         let mut app = app_with_mask(adjustment);
         paint_mask(&mut app, Rect::new(2, 2, 3, 3), 0.5);
         for mode in ["current", "currentAndBelow"] {
-            app.ui.tool_options.eyedropper_sample = mode.into();
+            set_source(&mut app, mode);
             app.run("tools.setColors", json!({"foreground": "#222222"})).unwrap();
             click(&mut app, 1.5, 1.5, Modifiers::NONE);
             assert_eq!(app.session.tools.foreground, gray(1.0), "adjustment={adjustment} {mode}");
@@ -67,8 +73,8 @@ fn targeted_pixel_and_adjustment_masks_supply_point_samples() {
 fn mask_average_clips_at_canvas_edge_and_alt_sets_background() {
     let mut app = app_with_mask(false);
     paint_mask(&mut app, Rect::new(0, 0, 1, 2), 0.0);
-    app.ui.tool_options.eyedropper_sample = "currentAndBelow".into();
-    app.ui.tool_options.eyedropper_size = 3;
+    set_source(&mut app, "currentAndBelow");
+    app.ui.tool_options.eyedropper.size = SampleSize::from_pixels(3).unwrap();
     app.run("tools.setColors", json!({"foreground": [0.2, 0.2, 0.2, 1.0], "background": [0.8, 0.8, 0.8, 1.0]})).unwrap();
     let foreground = app.session.tools.foreground;
     click(&mut app, 0.5, 0.5, Modifiers::ALT);
@@ -81,7 +87,7 @@ fn mask_average_clips_at_canvas_edge_and_alt_sets_background() {
 fn composite_modes_and_pixel_targets_still_sample_the_image() {
     let mut app = app_with_mask(true);
     for mode in ["all", "allNoAdjustments", "currentAndBelowNoAdjustments"] {
-        app.ui.tool_options.eyedropper_sample = mode.into();
+        set_source(&mut app, mode);
         let sample = app.run("document.sampleColor", json!({"x": 4.5, "y": 4.5, "sampleLayer": mode})).unwrap();
         let [r, g, b, _]: [f32; 4] = serde_json::from_value(sample).unwrap();
         click(&mut app, 4.5, 4.5, Modifiers::NONE);
@@ -91,7 +97,7 @@ fn composite_modes_and_pixel_targets_still_sample_the_image() {
     // explicit Eyedropper target.
     app.run("channel.target.composite", json!({})).unwrap();
     assert!(!app.ui.mask_target);
-    app.ui.tool_options.eyedropper_sample = "current".into();
+    set_source(&mut app, "current");
     let before = app.session.tools.foreground;
     click(&mut app, 4.5, 4.5, Modifiers::NONE);
     assert_eq!(app.session.tools.foreground, before, "the adjustment alone has no image pixels");
@@ -99,7 +105,7 @@ fn composite_modes_and_pixel_targets_still_sample_the_image() {
     let mut app = app_with_mask(false);
     app.run("channel.target.composite", json!({})).unwrap();
     for mode in ["current", "currentAndBelow"] {
-        app.ui.tool_options.eyedropper_sample = mode.into();
+        set_source(&mut app, mode);
         click(&mut app, 4.5, 4.5, Modifiers::NONE);
         assert_eq!(app.session.tools.foreground, RED, "{mode}");
     }
@@ -110,7 +116,7 @@ fn composite_modes_and_pixel_targets_still_sample_the_image() {
 fn vector_alpha_quick_mask_and_temporary_samples_keep_their_source() {
     let red_gray = gray(photocraft_color::convert::rgb_to_gray([1.0, 0.0, 0.0]));
     let mut app = app_with_mask(false);
-    app.ui.tool_options.eyedropper_sample = "current".into();
+    set_source(&mut app, "current");
     app.ui.tool = Tool::Brush;
     click(&mut app, 4.5, 4.5, Modifiers::ALT);
     assert_eq!(app.session.tools.foreground, red_gray, "the brush's Alt-click still samples the image");
@@ -145,7 +151,7 @@ fn filter_mask_target_keeps_the_image_based_sample() {
     assert!(app.session.active().unwrap().doc.layer(layer).unwrap().mask.is_some());
     app.select_filter_mask_target(Some(layer.0));
     assert!(app.filter_mask_targeted());
-    app.ui.tool_options.eyedropper_sample = "current".into();
+    set_source(&mut app, "current");
     let sample = app.run("document.sampleColor", json!({"x": 4.5, "y": 4.5, "sampleLayer": "current"})).unwrap();
     let [r, g, b, a]: [f32; 4] = serde_json::from_value(sample).unwrap();
     let want = gray(photocraft_color::convert::rgb_to_gray([r, g, b]));
@@ -154,25 +160,24 @@ fn filter_mask_target_keeps_the_image_based_sample() {
     assert_eq!(app.session.tools.foreground, want);
 }
 
-/// Out-of-canvas points and invalid sample options leave both swatches intact.
+/// Out-of-canvas and non-finite points leave both swatches intact.
 #[test]
 fn invalid_mask_samples_leave_both_swatches_unchanged() {
     let mut app = app_with_mask(false);
-    app.ui.tool_options.eyedropper_sample = "current".into();
+    set_source(&mut app, "current");
     app.run("tools.setColors", json!({"foreground": [0.2, 0.2, 0.2, 1.0], "background": [0.8, 0.8, 0.8, 1.0]})).unwrap();
     let before = (app.session.tools.foreground, app.session.tools.background);
     let assert_unchanged = |app: &PhotocraftApp| assert_eq!((app.session.tools.foreground, app.session.tools.background), before);
-    for (x, y) in [(-0.1, 1.0), (1.0, 8.0), (f64::NAN, 1.0), (1.0, f64::INFINITY)] {
+    for (x, y) in [(-0.1, 1.0), (1.0, 8.0)] {
         for mods in [Modifiers::NONE, Modifiers::ALT] {
             click(&mut app, x, y, mods);
             assert_unchanged(&app);
         }
     }
-    app.ui.tool_options.eyedropper_size = 2;
-    click(&mut app, 1.0, 1.0, Modifiers::NONE);
-    assert_unchanged(&app);
-    app.ui.tool_options.eyedropper_size = 1;
-    app.ui.tool_options.eyedropper_sample = "invalid".into();
-    click(&mut app, 1.0, 1.0, Modifiers::ALT);
+    // A point with no screen position (the pointer cannot be put there): the pick itself refuses it.
+    let options = app.ui.tool_options.eyedropper;
+    for at in [[f64::NAN, 1.0], [1.0, f64::INFINITY]] {
+        assert_eq!(super::pick(&mut app, at, options.size, options.source), None, "{at:?}");
+    }
     assert_unchanged(&app);
 }

@@ -10,10 +10,24 @@ use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
 use crate::rng::{rand_signed, rand01, stream};
 use crate::{Dab, StrokePoint};
 
-/// Maximum pulled-string length at 100 % smoothing, in screen pixels.
-pub const MAX_STRING_PX: f64 = 100.0;
+/// Maximum pulled-string length at 100 % smoothing, in screen pixels: 150 px at 50 %, as measured
+/// in the reference application (#11888).
+pub const MAX_STRING_PX: f64 = 300.0;
 /// Stroke time over which exponential smoothing moves its fraction of the way to the pointer.
 pub const SMOOTHING_STEP_MS: f64 = 16.0;
+/// Exponential smoothing's time constant at 100 % smoothing, in ms, and the power of the amount
+/// it scales by: `tau = SMOOTHING_TAU_MS · amount^SMOOTHING_TAU_EXP`. Fitted to the reference
+/// application's lag (#11888): a 200 px drag in 40 moves 10 ms apart ends 19 px short at 10 %
+/// (tau 43 ms) and 78 px short at 50 % (tau 173 ms).
+pub const SMOOTHING_TAU_MS: f64 = 314.0;
+pub const SMOOTHING_TAU_EXP: f64 = 0.864;
+
+/// The fraction of the way to the pointer exponential smoothing moves in one
+/// [`SMOOTHING_STEP_MS`] at `amount`, clamped to 0..1. At 0 (or NaN) it is 1.0: no smoothing.
+pub fn smoothing_pull(amount: f64) -> f64 {
+    let tau = SMOOTHING_TAU_MS * amount.clamp(0.0, 1.0).powf(SMOOTHING_TAU_EXP);
+    if tau > 0.0 { 1.0 - (-SMOOTHING_STEP_MS / tau).exp() } else { 1.0 }
+}
 
 /// With Spacing unchecked, one dab per this many milliseconds of stroke time, so faster strokes
 /// space their dabs further apart (Photoshop: "the speed of the cursor determines the spacing").
@@ -31,6 +45,9 @@ const MAX_AIRBRUSH_DABS_PER_SEGMENT: usize = 512;
 /// Most steps one distance-spaced segment emits: two far-apart points at a quarter-pixel spacing
 /// would otherwise be billions of steps, all buffered before the first is drawn.
 const MAX_DISTANCE_STEPS_PER_SEGMENT: usize = 1 << 20;
+/// Most steps one stroke emits in total, over all its segments and spacing modes; later ones are
+/// dropped (a real stroke is orders of magnitude shorter).
+const MAX_STEPS_PER_STROKE: u64 = 1 << 21;
 
 /// The dab centre of the pixel-grid cell holding `v` (see [`PathWalker::pixel_grid`]): the
 /// pixel's centre for `offset` 0.5, the nearest pixel corner for 0. A value within rounding
@@ -100,12 +117,15 @@ pub struct Smoother {
     zoom: f64,
     pos: Option<StrokePoint>,
     last_input: Option<StrokePoint>,
+    /// Has time passed between two input points? Then the stroke is timed, and a later point
+    /// with no time since the last one moves the brush no further (not by the untimed pull).
+    timed: bool,
 }
 
 impl Smoother {
     /// `zoom` is the view zoom (only used with `adjust_for_zoom`).
     pub fn new(cfg: &Smoothing, zoom: f32) -> Self {
-        Self { cfg: cfg.clone(), zoom: f64::from(zoom.max(0.01)), pos: None, last_input: None }
+        Self { cfg: cfg.clone(), zoom: f64::from(zoom.max(0.01)), pos: None, last_input: None, timed: false }
     }
 
     fn active(&self) -> bool {
@@ -146,21 +166,27 @@ impl Smoother {
         }
         // Exponential: every SMOOTHING_STEP_MS of stroke time moves `a` of the way towards the
         // pointer, so the feel doesn't depend on how often the device reports. Input without
-        // timestamps takes one step per point.
-        let a = 1.0 - amount.min(0.95);
+        // timestamps was never measured: it takes one step per point with the pull it always had.
+        let a = smoothing_pull(amount);
         let dt = prev_input.map_or(0.0, |q| p.time - q.time);
         let still = prev_input.is_some_and(|q| q.x == p.x && q.y == p.y);
         if still && !self.cfg.catch_up {
             // Without Stroke Catch-Up the brush stops while the pointer pauses (Photoshop).
             return;
         }
-        let (iters, step) = if dt > 0.0 && dt.is_finite() {
+        let has_time = dt > 0.0 && dt.is_finite();
+        self.timed |= has_time;
+        if self.timed && !has_time {
+            // No time passed (two reports in one millisecond): the brush stays where it is.
+            return;
+        }
+        let (iters, step) = if has_time {
             let steps = dt / SMOOTHING_STEP_MS;
             let iters = steps.ceil().clamp(1.0, 64.0);
             // Each of `iters` moves covers `steps / iters` steps' worth of pull.
             (iters as usize, 1.0 - (1.0 - a).powf(steps.min(64.0) / iters))
         } else {
-            (1, a)
+            (1, 1.0 - amount.min(0.95))
         };
         let mut cur = pos;
         for _ in 0..iters {
@@ -188,9 +214,10 @@ impl Smoother {
     }
 
     /// End of stroke: with Catch-Up On Stroke End the brush finishes at the last pointer position
-    /// and pose.
+    /// and pose. Not in Pulled String Mode: the brush stays the string's length behind the pointer
+    /// (measured, #11888).
     pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
-        if !self.active() || !self.cfg.catch_up_on_end {
+        if !self.active() || !self.cfg.catch_up_on_end || self.cfg.pulled_string {
             return;
         }
         if let (Some(pos), Some(last)) = (self.pos, self.last_input)
@@ -338,7 +365,19 @@ impl PathWalker {
         self
     }
 
+    /// The stroke's first point. With the airbrush on it lays two dabs, so a plain click builds
+    /// up as Photoshop's does (#11886).
+    fn emit_first(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
+        self.emit(point, out);
+        if self.interval.is_some() {
+            self.emit(point, out);
+        }
+    }
+
     fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
+        if self.step >= MAX_STEPS_PER_STROKE {
+            return;
+        }
         if let Some(g) = self.grid {
             self.cell = Some((grid_cell(point.x, g), grid_cell(point.y, g)));
         }
@@ -363,7 +402,7 @@ impl PathWalker {
             }
         }
         if let Some(f) = self.pending_first.take() {
-            self.emit(f, out);
+            self.emit_first(f, out);
         }
         if len > 1e-9 {
             // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
@@ -373,7 +412,7 @@ impl PathWalker {
                 None => {
                     if !self.grid.is_some_and(|g| self.grid_steps(&a, &p, g, out)) {
                         let mut emitted = 0usize;
-                        while self.next_at <= len + 1e-9 && emitted < MAX_DISTANCE_STEPS_PER_SEGMENT {
+                        while self.next_at <= len + 1e-9 && emitted < MAX_DISTANCE_STEPS_PER_SEGMENT && self.step < MAX_STEPS_PER_STROKE {
                             let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
                             self.emit(q, out);
                             self.next_at += step_len(&q).max(0.25);
@@ -389,7 +428,7 @@ impl PathWalker {
                     self.speed_acc += dt;
                     let max_n = (len / MIN_SPEED_STEP).ceil().max(1.0) as usize;
                     let mut n = 0;
-                    while self.speed_acc >= iv && n < max_n {
+                    while self.speed_acc >= iv && n < max_n && self.step < MAX_STEPS_PER_STROKE {
                         self.speed_acc -= iv;
                         let f = ((dt - self.speed_acc) / dt).clamp(0.0, 1.0);
                         self.emit(lerp_pt(&a, &p, f), out);
@@ -426,7 +465,7 @@ impl PathWalker {
 
     pub fn finish(&mut self, out: &mut impl FnMut(StepInput)) {
         if let Some(f) = self.pending_first.take() {
-            self.emit(f, out);
+            self.emit_first(f, out);
         }
     }
 }
@@ -581,13 +620,23 @@ impl DabBuilder {
     }
 
     pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) {
+        self.build_step(*s, out);
+    }
+
+    fn build_step(&mut self, mut s: StepInput, out: &mut Vec<Dab>) {
         let b = &self.brush;
+        // Both initial Airbrush dabs share the first Fade step. Count jitter uses the emitted step.
+        let emitted_step = s.step;
+        if b.build_up {
+            s.step = emitted_step.saturating_sub(1);
+        }
+        let s = &s;
         let seed = self.seed;
         let sd = &b.shape_dynamics;
         let sc = &b.scattering;
         let count = if sc.enabled {
             let n = sc.count.clamp(1, 16) as f32;
-            let k = scalar(&sc.count_jitter, s, rand01(seed, s.step, stream::COUNT));
+            let k = scalar(&sc.count_jitter, s, rand01(seed, emitted_step, stream::COUNT));
             ((n * k).round() as u32).clamp(1, 16)
         } else {
             1
@@ -821,7 +870,7 @@ impl DabGenerator {
             // step list (the pixel-grid mode can emit 1e7 steps for one).
             let brush = &*self.step_brush;
             let builder = &mut self.builder;
-            self.walker.push(p, &|q| step_len_for(brush, q), &mut |s| builder.build(&s, dabs));
+            self.walker.push(p, &|q| step_len_for(brush, q), &mut |s| builder.build_step(s, dabs));
             if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
                 let step = db.step_len(&p);
                 w.push(p, &|_| step, &mut |s| db.build(&s, dual));
@@ -845,7 +894,7 @@ impl DabGenerator {
         let mut sm = Vec::new();
         self.smoother.finish(&mut sm);
         self.walk(&sm, dabs, dual);
-        self.walker.finish(&mut |s| self.builder.build(&s, dabs));
+        self.walker.finish(&mut |s| self.builder.build_step(s, dabs));
         if let (Some(w), Some(db)) = (self.dual_walker.as_mut(), self.dual.as_mut()) {
             w.finish(&mut |s| db.build(&s, dual));
         }
@@ -869,6 +918,27 @@ mod walker_budget_tests {
         let before = steps.get();
         walker.push(StrokePoint::new(1.0e9 + 10.0, 0.0, 1.0), &|_: &StrokePoint| 1.0, &mut count);
         assert!(steps.get() > before && steps.get() - before <= 11, "{} more steps", steps.get() - before);
+    }
+
+    #[test]
+    fn a_stroke_of_many_far_segments_stops_at_the_total_cap() {
+        let steps = std::cell::Cell::new(0u64);
+        let mut count = |_: StepInput| steps.set(steps.get() + 1);
+        let mut walker = PathWalker::new(None);
+        let quarter = |_: &StrokePoint| 0.25;
+        walker.push(StrokePoint::new(0.0, 0.0, 1.0), &quarter, &mut count);
+        for i in 1..=8 {
+            walker.push(StrokePoint::new(1.0e9 * f64::from(i), 0.0, 1.0), &quarter, &mut count);
+        }
+        assert!(steps.get() <= MAX_STEPS_PER_STROKE, "{}", steps.get());
+        // Speed spacing over absurd timestamps stops too, without iterating billions of times.
+        let mut speed = PathWalker::new(None).speed_spacing(1.0);
+        speed.push(StrokePoint::new(0.0, 0.0, 1.0), &quarter, &mut count);
+        let mut far = StrokePoint::new(1.0e9, 0.0, 1.0);
+        far.time = 1.0e12;
+        let before = steps.get();
+        speed.push(far, &quarter, &mut count);
+        assert!(steps.get() - before <= MAX_STEPS_PER_STROKE, "{}", steps.get() - before);
     }
 
     #[test]
@@ -1046,3 +1116,7 @@ mod streaming_tests {
         assert_eq!(dabs.len(), 2_000_001);
     }
 }
+
+#[cfg(test)]
+#[path = "smoothing_lag_tests.rs"]
+mod smoothing_lag_tests;

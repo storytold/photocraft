@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
-"""Run the configured GPU group on lavapipe without silently losing comparisons."""
+"""Run a command with wgpu on lavapipe, and fail if a GPU comparison in its output was skipped.
+
+The Linux gate runs nextest's `gpu` test group in a shard of its own through this script
+(`ci-gpu-lavapipe.py <xtask> ci tests --from <dir> --gpu`, scripts/ci-test-shard.sh): every wgpu
+device in the run is Vulkan on Mesa's CPU rasterizer, each test's output is shown, and the output
+is checked here for authored skips and for the parity tests' Vulkan backend line.
+
+Usage: ci-gpu-lavapipe.py COMMAND [ARGS...]
+"""
 import glob
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
-import tomllib
-
-
-def gpu_filter(config):
-    filters = [row['filter'] for row in config['profile']['default']['overrides']
-               if row.get('test-group') == 'gpu']
-    if not filters:
-        raise ValueError('nextest GPU group has no filters')
-    return ' | '.join(f'({value})' for value in filters)
 
 
 def validate_log(lines):
@@ -37,23 +35,16 @@ def validate_log(lines):
     return rejected
 
 
-def main():
-    root = Path(__file__).resolve().parents[1]
-    with (root / '.config/nextest.toml').open('rb') as source:
-        selected = gpu_filter(tomllib.load(source))
-    icds = sorted(glob.glob('/usr/share/vulkan/icd.d/lvp_icd*.json'))
-    if not icds:
-        raise RuntimeError('Install mesa-vulkan-drivers and libvulkan1 before this check')
+def run(command, icds, out=sys.stdout):
+    """Runs `command` on the Vulkan drivers in `icds`; returns its exit status, or 1 when it passed
+    but its output shows a skipped comparison."""
     env = dict(os.environ, WGPU_BACKEND='vulkan', VK_ICD_FILENAMES=os.pathsep.join(icds))
-    command = ['cargo', 'nextest', 'run', '--profile', 'ci', '--workspace', '--locked',
-               '--features', 'heif', '--lib', '--bins', '--tests', '-E', selected,
-               '--success-output', 'immediate', '--color', 'never']
     # Stream output and keep it on disk, rather than buffering every successful test in memory.
     with tempfile.TemporaryFile(mode='w+t') as log:
-        with subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True) as process:
+        with subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True) as process:
             for line in process.stdout:
-                sys.stdout.write(line)
+                out.write(line)
                 log.write(line)
             result = process.wait()
         log.seek(0)
@@ -63,5 +54,15 @@ def main():
     return result if result else int(bool(errors))
 
 
+def main(argv):
+    if not argv:
+        print(__doc__, file=sys.stderr)
+        return 2
+    icds = sorted(glob.glob('/usr/share/vulkan/icd.d/lvp_icd*.json'))
+    if not icds:
+        raise RuntimeError('Install mesa-vulkan-drivers and libvulkan1 before this check')
+    return run(argv, icds)
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
