@@ -1,9 +1,13 @@
 //! JPEG XL opens with the `jxl` feature; without it the file is still recognised and the error says
 //! what this build lacks (never a panic or "unrecognized format").
 
+#[cfg(feature = "jxl")]
 use crate::common::raster;
+#[cfg(feature = "jxl")]
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_io::{ExportOptions, export, import};
+#[cfg(feature = "jxl")]
+use photocraft_io::{ExportOptions, export};
+use photocraft_io::import;
 
 #[cfg(not(feature = "jxl"))]
 #[test]
