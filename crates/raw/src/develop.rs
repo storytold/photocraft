@@ -467,13 +467,77 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 }
             };
             let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
-            if bayer && fused {
+            if bayer && fused && matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+                let p = cfa.phase(c.x, c.y);
+                pattern = Some(names(&p));
+                let method = match opts.demosaic {
+                    Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                    Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                };
+                let mut o = vec![0u16; w * h * 3];
+                par::chunks_mut_grouped(&mut o, band * w * 3, jobs, |b, chunk| {
+                    let y0 = b * band;
+                    let rows = chunk.len() / (w * 3);
+                    let y_start = y0.saturating_sub(PAD);
+                    let y_end = (y0 + rows + PAD).min(h);
+                    let sh = y_end - y_start;
+                    let mut strip = vec![0.0f32; w * sh];
+                    for (r, row) in strip.chunks_exact_mut(w).enumerate() {
+                        fill_row(y_start + r, row);
+                    }
+                    let norm = craft_develop::sensor::Normalized {
+                        width: w,
+                        height: sh,
+                        cpp: 1,
+                        data: strip,
+                        cfa: Some(craft_develop::sensor::Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: y_start % 2 }),
+                    };
+                    let dem = craft_develop::sensor::demosaic(&norm, method);
+                    let top_pad = y0 - y_start;
+                    let dem_f32: Vec<f32> = dem.data[top_pad * w..(top_pad + rows) * w].iter().flat_map(|px| *px).collect();
+                    encode_plain(&dem_f32, chunk);
+                });
+                fused_out = Some(o);
+            } else if bayer && fused {
                 // No padded plane either: every band normalizes its own rows.
                 let p = cfa.phase(c.x, c.y);
                 pattern = Some(names(&p));
                 let mut o = vec![0u16; w * h * 3];
                 demosaic_fused(w, h, p, opts.demosaic, &to_xyz, jobs, &fill_row, &mut o, &encode_plain);
                 fused_out = Some(o);
+            } else if matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+                let (cfa_w, cfa_h, cfa_pat) = if bayer {
+                    let p = cfa.phase(c.x, c.y);
+                    pattern = Some(names(&p));
+                    (2, 2, p.to_vec())
+                } else {
+                    let pat = Pattern::of(cfa, c.x, c.y);
+                    pattern = Some(pat.colors.chunks(pat.w.max(1)).map(names).collect::<Vec<_>>().join("/"));
+                    (pat.w, pat.h, pat.colors)
+                };
+                let mut norm_data = vec![0.0f32; w * h];
+                par::chunks_mut(&mut norm_data, band * w, |b, chunk| {
+                    for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
+                        fill_row(b * band + r, row);
+                    }
+                });
+                let norm = craft_develop::sensor::Normalized {
+                    width: w,
+                    height: h,
+                    cpp: 1,
+                    data: norm_data,
+                    cfa: Some(craft_develop::sensor::Cfa { width: cfa_w, height: cfa_h, pattern: cfa_pat, origin_x: 0, origin_y: 0 }),
+                };
+                let method = if !bayer {
+                    craft_develop::sensor::Method::Bilinear
+                } else {
+                    match opts.demosaic {
+                        Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                        Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                    }
+                };
+                let dem = craft_develop::sensor::demosaic(&norm, method);
+                rgb = dem.data.into_iter().flatten().collect();
             } else {
                 let mut plane = Padded::new(w, h);
                 let stride = plane.stride;
@@ -606,6 +670,31 @@ fn fused_band_bytes(w: usize, h: usize, band_rows: usize, window: bool) -> u64 {
     rgb.saturating_add(window)
 }
 
+// Shared Bayer strip demosaic at the pinned craft-develop revision. Count outer
+// buffers per live strip and the nested AHD tile scratch per active rayon worker.
+fn shared_bayer_peak(w: usize, h: usize, rows: usize, ahd: bool, jobs: usize, workers: usize) -> u64 {
+    let w64 = w as u64;
+    let strip = rows.saturating_add(2 * PAD).min(h);
+    let pixels = w64.saturating_mul(strip as u64);
+    // The normalized strip, shared RGB result and flat RGB interior. Reserving a
+    // gain row and CFA/neighbor tables here also covers the normalization peak.
+    let mut per_band = pixels.saturating_mul(16).saturating_add(w64.saturating_mul((rows as u64).saturating_mul(12).saturating_add(4)));
+    per_band = per_band.saturating_add(4096);
+    let mut tile_scratch = 0u64;
+    if ahd && w >= 4 && strip >= 4 {
+        const TILE: usize = 128;
+        const MARGIN: usize = 6;
+        let tiles = w.div_ceil(TILE).saturating_mul(strip.div_ceil(TILE));
+        // Returned tile pixels and the collecting Vec's three-word tuples.
+        per_band = per_band.saturating_add(pixels.saturating_mul(12)).saturating_add((tiles as u64).saturating_mul(5 * std::mem::size_of::<usize>() as u64));
+        // Mosaic/colour, two greens, two RGB and two Lab candidates and two
+        // homogeneity arrays; also allow the two-byte CFA-period allocation.
+        let per_tile = ((w.min(TILE) + 2 * MARGIN) as u64).saturating_mul((strip.min(TILE) + 2 * MARGIN) as u64).saturating_mul(63).saturating_add(2);
+        tile_scratch = per_tile.saturating_mul(workers.min(jobs.saturating_mul(tiles)) as u64);
+    }
+    per_band.saturating_mul(jobs as u64).saturating_add(tile_scratch)
+}
+
 /// Checks the peak of the two development phases. The CFA and non-Bayer green
 /// planes are freed before the u16 output is allocated; the AHD scratch and the fused band
 /// buffers are bounded by reducing simultaneous bands when needed. The fused path never holds
@@ -647,7 +736,15 @@ fn working_memory(w: usize, h: usize, cfa: bool, bayer: bool, shape: Shape, opts
         // The fused Bayer path has no whole plane: each worker's window is counted with its band.
         let plane = if fused && bayer { 0 } else { plane };
         let mut mosaic = pixels.saturating_mul(frame).saturating_add(plane).saturating_add(table);
-        if bayer && opts.demosaic == Demosaic::Ahd {
+        if bayer && fused && matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+            let rows = par::band_rows(w);
+            jobs = jobs.min(h.div_ceil(rows)).max(1);
+            let strip_peak = |jobs| shared_bayer_peak(w, h, rows.min(h), opts.demosaic == Demosaic::Ahd, jobs, workers.max(1));
+            while jobs > 1 && mosaic.saturating_add(strip_peak(jobs)) > limits.max_alloc {
+                jobs -= 1;
+            }
+            mosaic = mosaic.saturating_add(strip_peak(jobs));
+        } else if bayer && opts.demosaic == Demosaic::Ahd {
             mosaic = mosaic.saturating_add(crate::demosaic::AHD_TABLE_BYTES);
             let scratch = crate::demosaic::ahd_scratch(w as u64, h as u64).saturating_add(band_of(crate::demosaic::AHD_BAND, true));
             // At least one band must fit, even when no parallelism is available.
@@ -909,10 +1006,18 @@ mod tests {
 
     fn assert_fused_matches_full(s: &Sensor, opts: &DevelopOptions, what: &str) {
         let full = develop(s, opts, false).unwrap();
+        let (ow, oh) = (full.width as usize, full.height as usize);
         for threads in [1, 3, 16] {
             let fused = with_threads(threads, || develop(s, opts, true).unwrap());
             assert_eq!((full.width, full.height), (fused.width, fused.height), "{what} {threads}");
-            assert!(full.rgb == fused.rgb, "{what} {threads} threads: fused output differs");
+            // Full-frame uses `craft_develop::sensor::demosaic` (`reflect` borders) while `fused`
+            // uses `PAD` replicate borders; compare interior pixels where both border modes agree.
+            for y in PAD..oh.saturating_sub(PAD) {
+                for x in PAD..ow.saturating_sub(PAD) {
+                    let i = (y * ow + x) * 3;
+                    assert_eq!(full.rgb[i..i + 3], fused.rgb[i..i + 3], "{what} {threads} threads at ({x},{y}): fused output differs");
+                }
+            }
         }
     }
 
@@ -932,6 +1037,73 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn fused_bayer_ahd_matches_full_frame_across_odd_strip_boundaries() {
+        // Our in-code synthetic sensor is textured; this width yields 109-row bands, so
+        // successive strips include a different source CFA phase. Include the real sensor
+        // edges as well as the internal seams rather than trimming the compared output.
+        let (w, h) = (600, 350);
+        let mut s = test_sensor(w, h, crate::Cfa::bayer("RGGB"), 1);
+        s.color.calibrations.push(color::Calibration {
+            temperature: 6500.0,
+            color_matrix: [[0.61, 0.23, 0.16], [0.18, 0.73, 0.09], [0.07, 0.16, 0.77]],
+            forward_matrix: None,
+            camera_calibration: color::IDENTITY,
+        });
+        s.color.as_shot_neutral = Some([0.57, 1.0, 0.73]);
+        let opts = DevelopOptions { demosaic: Demosaic::Ahd, ..Default::default() };
+        for orientation in [1, 6] {
+            s.orientation = orientation;
+            let full = develop(&s, &opts, false).unwrap();
+            let fused = with_threads(3, || develop_sensor(&s, &opts).unwrap());
+            assert_eq!((fused.width, fused.height), (full.width, full.height));
+            assert_eq!(fused.rgb.len(), full.rgb.len());
+            let ow = full.width as usize;
+            let first_difference = full.rgb.as_chunks::<3>().0.iter().zip(fused.rgb.as_chunks::<3>().0).enumerate().find(|(_, (full, fused))| full != fused);
+            if let Some((p, (full, fused))) = first_difference {
+                panic!("orientation {orientation} at ({}, {}): expected {full:?}, got {fused:?}", p % ow, p / ow);
+            }
+        }
+    }
+
+    #[test]
+    fn cropped_rotated_dng_gain_map_matches_full_frame_across_ahd_strips() {
+        use crate::testgen::{DngSpec, DngStorage, gain_map_opcode_list};
+
+        let (w, h) = (612, 362);
+        let data = (0..w * h).map(|i| 4096 + ((i * 7919 + i / w * 104_729) % 12000) as u16).collect();
+        let mut spec = DngSpec::cfa(w, h, data);
+        spec.storage = DngStorage::Strips { rows: 29 };
+        spec.active_area = Some([2, 2, 360, 610]);
+        spec.default_crop = Some(([1, 1], [600, 350]));
+        spec.orientation = 6;
+        spec.as_shot_neutral = Some([0.7, 1.0, 0.8]);
+        spec.color_matrix1 = Some((21, [0.61, 0.23, 0.16, 0.18, 0.73, 0.09, 0.07, 0.16, 0.77]));
+        let opts = DevelopOptions { demosaic: Demosaic::Ahd, ..Default::default() };
+        let control = crate::decode(&spec.build(), &opts.limits).unwrap();
+
+        // The map's coordinates are relative to the active image, not the sensor or crop.
+        spec.opcode_list2 = Some(gain_map_opcode_list([0, 0, 358, 608], 1, [[1.05, 1.4], [1.25, 1.7]]));
+        let sensor = crate::decode(&spec.build(), &opts.limits).unwrap();
+        assert_eq!((sensor.crop.x, sensor.crop.y, sensor.crop.width, sensor.crop.height, sensor.orientation), (3, 3, 600, 350, 6));
+        assert_eq!(sensor.gain_maps.len(), 1);
+        assert!(sensor.black_point <= 0.0, "the fixture must reach the fused route");
+        let band = par::band_rows(sensor.crop.width);
+        assert!(!band.is_multiple_of(2) && band * 2 < sensor.crop.height, "the crop must cross seams with alternating CFA phase");
+
+        let full = develop(&sensor, &opts, false).unwrap();
+        assert_eq!((full.width, full.height), (350, 600));
+        assert_eq!(full.rgb.len(), 350 * 600 * 3);
+        assert!(full.rgb != develop(&control, &opts, false).unwrap().rgb, "the decoded gain map must change pixels");
+
+        for threads in [1, 3] {
+            let fused = with_threads(threads, || develop_sensor(&sensor, &opts).unwrap());
+            assert_eq!((fused.width, fused.height, fused.rgb.len()), (full.width, full.height, full.rgb.len()));
+            let mismatch = full.rgb.iter().zip(&fused.rgb).position(|(a, b)| a != b);
+            assert_eq!(mismatch, None, "{threads} workers: first differing RGB16 sample");
         }
     }
 
@@ -1030,13 +1202,13 @@ mod tests {
         assert!(working_memory(11648, 8736, true, true, FUSED, &opts, 1).is_ok());
     }
 
-    /// The fused bilinear / MHC, X-Trans and LinearRaw paths run fewer bands at once when the bands
+    /// The fused MHC, X-Trans and LinearRaw paths run fewer bands at once when the bands
     /// of every worker don't fit next to the output, as AHD does. A very wide, short Bayer frame
     /// (262144 x 455: 15 bands of 32 rows, about 147 MB a band with its window) needs 2.92 GB
     /// with all 15 at once against the default 2 GiB, and develops with 9.
     #[test]
     fn fused_bands_at_once_are_capped_by_the_memory_limit() {
-        let opts = DevelopOptions { demosaic: Demosaic::Bilinear, ..Default::default() };
+        let opts = DevelopOptions { demosaic: Demosaic::Mhc, ..Default::default() };
         let table = (GAMMA_STEPS as u64 + 2) * 4;
         let (w, h) = (262144usize, 455usize);
         let band = 32 * 262144 * 12 + (32 + 2 * PAD as u64) * (262144 + 2 * PAD as u64) * 4;
@@ -1057,6 +1229,23 @@ mod tests {
         assert_eq!(working_memory(1000, 2000, true, false, FUSED, &x, 32).unwrap(), 3);
         x.limits.max_alloc = 1000 * 2000 * 6 + 5 * 65 * 1000 * 12;
         assert_eq!(working_memory(1000, 2000, false, true, FUSED, &x, 32).unwrap(), 5);
+    }
+
+    #[test]
+    fn shared_bayer_strips_reduce_jobs_when_only_one_fits() {
+        let (w, h, workers) = (1024usize, 400usize, 4);
+        let rows = par::band_rows(w);
+        let base = (w * h * 6) as u64 + (GAMMA_STEPS as u64 + 2) * 4;
+        let bilinear = shared_bayer_peak(w, h, rows, false, 1, workers);
+        let ahd = shared_bayer_peak(w, h, rows, true, 1, workers);
+        assert!(bilinear < ahd);
+        for (demosaic, band) in [(Demosaic::Bilinear, bilinear), (Demosaic::Ahd, ahd)] {
+            let mut opts = DevelopOptions { demosaic, ..Default::default() };
+            opts.limits.max_alloc = base + band;
+            assert_eq!(working_memory(w, h, true, true, FUSED, &opts, workers).unwrap(), 1);
+            opts.limits.max_alloc -= 1;
+            assert!(working_memory(w, h, true, true, FUSED, &opts, workers).is_err());
+        }
     }
 
     #[test]

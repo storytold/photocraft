@@ -10,12 +10,17 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+craft-develop = { workspace = true }
+craft-develop-model = { workspace = true }
 craft-metadata = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 rustfft = "6.4.1"
+# `craft::imaging::fold_order`, `RawDevelopSettings` and `WideAngleSession`; the facade's `ui` stays off, so algo is egui-free.
+craft = { workspace = true, features = ["imaging"] }
 
 # Parallel tiles on native; wasm builds stay single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -23,7 +28,6 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 photocraft-testkit = { workspace = true }
-serde_json = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]

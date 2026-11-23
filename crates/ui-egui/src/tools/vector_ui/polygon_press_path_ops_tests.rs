@@ -3,6 +3,7 @@
 //! The same keys still constrain (⇧) and draw from the centre (⌥). Pressed only after the drag
 //! started, they only do that, and the drag makes a new layer as before.
 
+use craft::draw::ui::VectorMode;
 use egui::Modifiers;
 use photocraft_doc::vector::{PathOp, Subpath};
 use photocraft_doc::{LayerContent, ShapeLayer};
@@ -14,7 +15,7 @@ use crate::state::Tool;
 
 /// The issue's test document: 800 × 600, the Polygon tool in Shape mode with 5 sides, and the
 /// shape layer Polygon 1 (a polygon drawn from 400,300 to 600,400) active.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.sync_views();
@@ -27,9 +28,10 @@ fn app() -> PhotocraftApp {
     app
 }
 
-/// Press at `from` with `press` held, move to `to` and release there with `rest` held.
+/// Press at `from` with `press` held, move to `to` (halfway first) and release there with `rest` held.
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], press: Modifiers, rest: Modifiers) {
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, press);
+    tool_event(app, ToolEvent::Move { x: (from[0] + to[0]) / 2.0, y: (from[1] + to[1]) / 2.0, pressure: 1.0 }, rest);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, rest);
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, rest);
 }
@@ -194,7 +196,7 @@ fn unmeasured_cases_keep_making_a_new_layer() {
     // Path mode: the outline joins the Work Path as a new one would, with the options bar's
     // Exclude, not the press's Combine.
     let mut app = self::app();
-    app.ui.tool_options.shape_mode = "path".into();
+    app.ui.tool_options.shape_mode = VectorMode::Path;
     drag(&mut app, [100.0, 100.0], [200.0, 200.0], Modifiers::NONE, Modifiers::NONE);
     drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::SHIFT, Modifiers::SHIFT);
     let work = app.session.active().unwrap().doc.work_path.clone().expect("a work path");

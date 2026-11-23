@@ -1,54 +1,15 @@
 //! Brush previews for the Brush Settings and Brushes panels: the S-curve stroke strip and tip
-//! thumbnails, rendered with the real brush engine and cached per slot on a cheap signature of the
-//! settings, so a preview re-renders only when something that changes it changes.
+//! thumbnails, rendered with the real brush engine. The signatures below name what a preview
+//! depends on; the framework's texture store keys its textures by them, so a preview re-renders
+//! only when something that changes it changes.
 
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+use craft::draw::ui::brush_settings::PreviewStroke;
 use egui::Color32;
 use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{self, Pattern, StrokePoint, TipShape};
-
-/// Values cached per named slot, each tagged with the signature it was rendered for. A slot holds
-/// one value, so dragging a slider replaces the slot's texture instead of piling up new ones.
-#[derive(Clone)]
-pub struct SigCache<T> {
-    slots: HashMap<String, (u64, T)>,
-    /// Number of renders so far (tests and the perf overlay).
-    pub renders: u64,
-}
-
-impl<T> Default for SigCache<T> {
-    fn default() -> Self {
-        Self { slots: HashMap::new(), renders: 0 }
-    }
-}
-
-impl<T: Clone> SigCache<T> {
-    /// The value for `slot`, rendered by `render` only when the slot is empty or `sig` changed.
-    pub fn get(&mut self, slot: &str, sig: u64, render: impl FnOnce() -> T) -> T {
-        if let Some((s, v)) = self.slots.get(slot)
-            && *s == sig
-        {
-            return v.clone();
-        }
-        self.renders += 1;
-        let v = render();
-        self.slots.insert(slot.to_string(), (sig, v.clone()));
-        v
-    }
-    /// Drop slots not in `keep` (presets deleted from the session).
-    pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
-        self.slots.retain(|k, _| keep(k));
-    }
-    pub fn len(&self) -> usize {
-        self.slots.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.slots.is_empty()
-    }
-}
 
 fn js<T: serde::Serialize>(h: &mut DefaultHasher, v: &T) {
     serde_json::to_vec(v).unwrap_or_default().hash(h);
@@ -58,7 +19,9 @@ fn js<T: serde::Serialize>(h: &mut DefaultHasher, v: &T) {
 fn tile_sig(h: &mut DefaultHasher, t: &paint::GrayTile) {
     (t.width, t.height, t.data.len()).hash(h);
     let step = (t.data.len() / 4096).max(1);
-    t.data.iter().step_by(step).for_each(|v| v.hash(h));
+    // One write of the whole sample: hashing value by value costs a hasher round per value.
+    let sample: Vec<u16> = t.data.iter().step_by(step).copied().collect();
+    sample.hash(h);
 }
 
 /// A stored tile (#1843) by its key, size and whether its full bitmap is loaded (the preview
@@ -103,12 +66,13 @@ pub fn tip_sig(tip: &TipShape, hardness: f32, angle: f32, roundness: f32, flip: 
     h.finish()
 }
 
-/// A stroke rendered with the brush (scaled down to fit), as straight RGBA8: Photoshop's preview
-/// S-curve with pressure tapering in and out.
+/// A stroke rendered with the brush (scaled down to fit), as straight RGBA8: the framework's
+/// [`PreviewStroke`] (Photoshop's S-curve with the pressure tapering in and out).
 pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec<u8> {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    let shape = PreviewStroke::new(w, h);
     let mut brush = b.clone();
-    let k = ((h as f32 * 0.55) / brush.size.max(1.0)).min(1.0);
+    let k = shape.fit(f64::from(brush.size)) as f32;
     brush.size = (brush.size * k).max(1.0);
     brush.dual_brush.size = (brush.dual_brush.size * k).max(1.0);
     brush.color = color;
@@ -116,15 +80,7 @@ pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec
     brush.seed = 7;
     // Build-up adds dabs over (simulated) time: the preview has none.
     brush.build_up = false;
-    let n = 64;
-    let points: Vec<StrokePoint> = (0..=n)
-        .map(|i| {
-            let s = i as f64 / n as f64;
-            let x = 10.0 + s * (w as f64 - 20.0);
-            let y = h as f64 / 2.0 - (s * std::f64::consts::TAU).sin() * h as f64 * 0.22;
-            StrokePoint::new(x, y, (s * std::f64::consts::PI).sin().max(0.05) as f32)
-        })
-        .collect();
+    let points: Vec<StrokePoint> = shape.samples().into_iter().map(|s| StrokePoint::new(s.x, s.y, s.pressure)).collect();
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     let mut s = photocraft_raster::Surface::new(fmt);
     paint::apply_stroke(&mut s, &paint::Stroke { brush, points }, None, false);
@@ -132,6 +88,12 @@ pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec
     let mut px = vec![[0.0f32; 4]; (w * h) as usize];
     s.read_rgba_into(r, &mut px);
     px.iter().flat_map(|p| p.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect()
+}
+
+/// The stroke preview of `b` in `color` as the picture the framework's `StripImage` takes.
+pub fn stroke_image(b: &BrushSettings, [w, h]: [usize; 2], color: Color32) -> egui::ColorImage {
+    let c = color.to_normalized_gamma_f32();
+    egui::ColorImage::from_rgba_unmultiplied([w, h], &preview_pixels(b, w as u32, h as u32, [c[0], c[1], c[2], 1.0]))
 }
 
 /// Box-downsample a tip bitmap so its larger side is at most `max` (cheap bilinear lookups after).
@@ -214,56 +176,14 @@ fn bilinear(data: &[f32], w: u32, h: u32, x: f32, y: f32) -> f32 {
     top * (1.0 - fy) + bottom * fy
 }
 
-fn upload(ctx: &egui::Context, name: &str, w: u32, h: u32, rgba: &[u8]) -> egui::TextureHandle {
-    let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba);
-    ctx.load_texture(name, img, egui::TextureOptions::LINEAR)
-}
-
-fn cache_id() -> egui::Id {
-    egui::Id::unique("brush-preview-cache")
-}
-
-/// Run `f` on the context's preview cache. The cache is taken out of egui's memory while `f` runs,
-/// because uploading a texture needs the context (which `data_mut` holds locked).
-pub fn with_cache<R>(ctx: &egui::Context, f: impl FnOnce(&mut SigCache<egui::TextureHandle>) -> R) -> R {
-    let mut cache = ctx.data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<SigCache<egui::TextureHandle>>(cache_id())));
-    let r = f(&mut cache);
-    ctx.data_mut(|d| d.insert_temp(cache_id(), cache));
-    r
-}
-
-/// Renders done by the preview cache so far.
-pub fn render_count(ctx: &egui::Context) -> u64 {
-    with_cache(ctx, |c| c.renders)
-}
-
-/// The stroke preview of `b` for `slot`, re-rendered only when the brush or size changes.
-pub fn stroke_texture(ctx: &egui::Context, slot: &str, b: &BrushSettings, w: u32, h: u32, color: Color32) -> egui::TextureHandle {
-    let mut hs = DefaultHasher::new();
-    (preview_sig(b), w, h, color).hash(&mut hs);
-    let sig = hs.finish();
-    with_cache(ctx, |cache| {
-        cache.get(slot, sig, || {
-            let c = color.to_normalized_gamma_f32();
-            upload(ctx, slot, w, h, &preview_pixels(b, w, h, [c[0], c[1], c[2], 1.0]))
-        })
-    })
-}
-
-/// A tip thumbnail for `slot` (`n × n`; `shape` is hardness, angle, roundness), re-rendered only
-/// when the tip changes.
-pub fn tip_texture(ctx: &egui::Context, slot: &str, tip: &TipShape, shape: (f32, f32, f32), n: u32, color: Color32) -> egui::TextureHandle {
-    let (hardness, angle, roundness) = shape;
-    let mut hs = DefaultHasher::new();
-    (tip_sig(tip, hardness, angle, roundness, (false, false)), n, color).hash(&mut hs);
-    let sig = hs.finish();
-    with_cache(ctx, |cache| {
-        cache.get(slot, sig, || {
-            let a = tip_alpha(tip, hardness, angle, roundness, (false, false), n);
-            let px: Vec<u8> = a.iter().flat_map(|v| [color.r(), color.g(), color.b(), (v * 255.0).round() as u8]).collect();
-            upload(ctx, slot, n, n, &px)
-        })
-    })
+/// A tip thumbnail (`n × n`, `n` clamped as [`tip_alpha`] does; `shape` is hardness, angle,
+/// roundness) in `color`, as the picture a framework texture takes. Key the texture by
+/// [`tip_sig`] and `n`.
+pub fn tip_image(tip: &TipShape, (hardness, angle, roundness): (f32, f32, f32), n: u32, color: Color32) -> egui::ColorImage {
+    let a = tip_alpha(tip, hardness, angle, roundness, (false, false), n);
+    let side = n.clamp(2, 512) as usize;
+    let px: Vec<u8> = a.iter().flat_map(|v| [color.r(), color.g(), color.b(), (v * 255.0).round() as u8]).collect();
+    egui::ColorImage::from_rgba_unmultiplied([side, side], &px)
 }
 
 #[cfg(test)]
@@ -271,27 +191,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sig_cache_renders_only_on_change() {
-        let mut c: SigCache<u32> = SigCache::default();
-        let mut b = BrushSettings::default();
-        let mut calls = 0;
-        for _ in 0..5 {
-            c.get("strip", preview_sig(&b), || {
-                calls += 1;
-                calls
-            });
-        }
-        assert_eq!((calls, c.renders), (1, 1));
-        b.shape_dynamics.size.jitter = 0.5;
-        assert_eq!(c.get("strip", preview_sig(&b), || 99), 99);
-        assert_eq!(c.get("strip", preview_sig(&b), || 100), 99);
-        assert_eq!((c.renders, c.len()), (2, 1));
+    fn preview_sig_follows_the_brush_not_its_colour() {
         // Colour and the session's foreground don't matter; the brush's own fields do.
         let base = preview_sig(&BrushSettings::default());
         assert_eq!(base, preview_sig(&BrushSettings { color: [1.0, 0.0, 0.0, 1.0], ..Default::default() }));
         assert_ne!(base, preview_sig(&BrushSettings { texture: paint::Texture { enabled: true, ..Default::default() }, ..Default::default() }));
-        c.retain(|_| false);
-        assert!(c.is_empty());
     }
 
     #[test]
@@ -332,7 +236,7 @@ mod tests {
         // Loading the tip re-renders the thumbnail; the stroke preview paints with the preview.
         let sig = |t: paint::StoredTile| tip_sig(&TipShape::Stored(t), 1.0, 0.0, 1.0, (false, false));
         assert_ne!(sig(r.clone()), sig(loaded));
-        let b = BrushSettings { tip: TipShape::Stored(r), size: 900.0, ..Default::default() };
+        let b = BrushSettings { tip: TipShape::Stored(r).into(), size: 900.0, ..Default::default() };
         let px = preview_pixels(&b, 120, 40, [1.0, 0.0, 0.0, 1.0]);
         assert!(px.as_chunks::<4>().0.iter().any(|p| p[3] > 128));
     }
