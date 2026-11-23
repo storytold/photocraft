@@ -1,4 +1,6 @@
 //! Resolve and freeze a clone source without changing the sampled document.
+use crate::color_cmds::ColorExt;
+use crate::presets::PresetsExt;
 use std::sync::Arc;
 
 use crate::presets::clone_source::uses_slot;
@@ -185,7 +187,7 @@ pub(super) fn resolve_preview(s: &Session, p: &Value, map: &crate::presets::clon
 }
 
 fn resolve_source(s: &Session, p: &Value, cmd: &str, source: Option<crate::presets::clone_source::SourceDoc>) -> Result<CloneFrom> {
-    let slot = s.presets.clone.active();
+    let slot = s.presets().clone.active();
     let picked = uses_slot(p);
     if picked && slot.document_closed && source.is_none_or(|d| Some(d.id) == slot.document) {
         return Err(bad(cmd, crate::presets::clone_source::SOURCE_CLOSED));
@@ -246,6 +248,6 @@ fn color_transform(s: &Session, doc: &Document, which: SampleLayers, cmd: &str) 
     if source.same_bytes(&destination) {
         return Ok(None);
     }
-    let opts = TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() };
+    let opts = TransformOptions { intent: s.color().settings.intent(), bpc: s.color().settings.bpc, ..Default::default() };
     craft_cms::transform::cached(&source, &destination, opts).map(Some).map_err(|e| bad(cmd, format!("cannot convert clone source colors: {e}")))
 }

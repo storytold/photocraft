@@ -12,6 +12,7 @@
 //! bound in Preferences (`scriptEvents`) and fired by [`fire_event`]: the engine fires New,
 //! Close, Print and Export itself; the app shell fires Start, Open and Save.
 
+use crate::actions_cmds::ActionsExt;
 use photocraft_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
 
@@ -307,16 +308,16 @@ pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Ve
         Some(set) => {
             let set = set.as_str().ok_or_else(|| bad(cmd, "\"set\" must be a string"))?;
             let name = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(cmd, "a set needs a named action"))?;
-            s.actions
+            s.actions()
                 .list
                 .actions()
                 .iter()
                 .position(|a| a.name == name && a.set.as_deref() == Some(set))
                 .ok_or_else(|| bad(cmd, format!("no action named `{name}` in set `{set}`")))?
         }
-        None => crate::actions_cmds::resolve(s.actions.list.actions(), p, cmd)?,
+        None => crate::actions_cmds::resolve(s.actions().list.actions(), p, cmd)?,
     };
-    let action = s.actions.list.action(index).ok_or_else(|| bad(cmd, "the selected action no longer exists"))?;
+    let action = s.actions().list.action(index).ok_or_else(|| bad(cmd, "the selected action no longer exists"))?;
     Ok(action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect())
 }
 
@@ -335,7 +336,7 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     check_known(&commands, cmd)?;
     // Play Action steps need their actions when the droplet runs on its own (#2794). Not under
     // `actions`: the CLI reads that key as an action set.
-    let called = crate::actions_cmds::called_actions(s.actions.list.actions(), &mut steps);
+    let called = crate::actions_cmds::called_actions(s.actions().list.actions(), &mut steps);
     let path = if path.ends_with(".pcdroplet") || path.ends_with(".json") { path.to_string() } else { format!("{path}.pcdroplet") };
     let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&path));
     let steps_json: Vec<Value> = steps.iter().map(|(id, pr)| json!([id, pr])).collect();
@@ -648,7 +649,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.scripts.statistics",
             "Statistics…",
             &["File", "Scripts"],
-            r##"{"mode":"mean|median|maximum|minimum|range|summation|variance|standardDeviation|skewness|kurtosis|entropy"="median","input":folder|[paths],"align":bool=false (Auto-Align first)} → new document with one stack-mode smart object"##,
+            r##"{"mode":"mean|median|maximum|minimum|range|summation|variance|standardDeviation|skewness|kurtosis|entropy"="median","input":folder|[paths],"paths":folder|[paths]? (older name for input),"align":bool=false (Auto-Align first)} → new document with one stack-mode smart object"##,
             native,
             statistics
         ),

@@ -503,7 +503,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Patterns…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".pat file"?,"data":base64 bytes? (instead of a path)} → {imported:[ids],count}"##,
+            params: r##"{"path":".pat file"?,"data":base64 bytes? (instead of a path),"group":string? (file name; accepted, currently unused: patterns go to the library)} → {imported:[ids],count}"##,
             enabled: always,
             journal: true,
             run: import,
@@ -617,8 +617,7 @@ mod tests {
                 let mut s = crate::session();
                 let background = if transparent { "transparent" } else { "white" };
                 s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth, "background": background})).unwrap();
-                s.execute("select.rect", json!({"x": 3, "y": 4, "width": 20, "height": 13})).unwrap();
-                s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+                crate::tests::fill_active(&mut s, Some(Rect::new(3, 4, 23, 17)), "#336699");
                 let doc = &s.active().unwrap().doc;
                 let area = Rect::new(2, 1, 38, 29);
                 let all = Rect::new(0, 0, 36, 28);
@@ -640,7 +639,7 @@ mod tests {
         for (depth, opaque) in [(8u64, true), (32, false)] {
             let mut s = crate::session();
             s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth, "background": "transparent"})).unwrap();
-            s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+            crate::tests::fill_active(&mut s, None, "#336699");
             s.execute("layer.setProps", json!({"opacity": 0.999})).unwrap();
             let (_, all_opaque) = composite_surface_in_bands(&s.active().unwrap().doc, Rect::new(0, 0, 8, 8), 3);
             assert_eq!(all_opaque, opaque, "depth {depth}");
@@ -684,7 +683,7 @@ mod tests {
         assert_eq!(photocraft_doc::pattern::working_bytes_for(8000 * 8000, SampleType::U8), 8000 * 8000 * 4);
         let (side, max_px) = (80, 80 * 80);
         s.execute("file.new", json!({"width": side, "height": side, "depth": 8})).unwrap();
-        s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
+        crate::tests::fill_active(&mut s, None, "#336699");
         assert!(define_with_max_pixels(&mut s, &json!({"name": "Too large"}), max_px - 1).is_err());
         define_with_max_pixels(&mut s, &json!({"name": "Largest"}), max_px).unwrap();
         let p = s.patterns.items.iter().find(|p| p.name == "Largest").unwrap();

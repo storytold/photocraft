@@ -10,7 +10,7 @@
 mod action_history;
 mod actions_record;
 pub mod adjust_params;
-mod allocation;
+pub mod allocation;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
@@ -38,6 +38,8 @@ pub mod memory;
 pub mod memory_gate;
 pub mod new_layer;
 mod param_check;
+pub use param_check::is_incomplete;
+pub mod param_schema;
 mod pixels;
 pub mod prefs;
 pub mod preset_store;
@@ -259,8 +261,6 @@ pub struct Session {
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
-    /// Colour management: proofing state, monitor profile, display transforms.
-    pub color: color_cmds::ColorState,
     /// Open Edit Contents documents and the smart objects they update.
     pub smart_links: Vec<state::SmartLink>,
     /// Type › Save Default Type Styles: character and paragraph style new type layers start from.
@@ -280,13 +280,9 @@ pub struct Session {
     pub patterns: state::PatternLibrary,
     /// Image › Analysis: Measurement Log and Select Data Points (see `analysis_cmds`).
     pub analysis: state::AnalysisState,
-    /// Window › Gradients, Patterns (groups), Styles, Shapes, Tool Presets and Clone Source.
-    pub presets: craft_tracked::Tracked<presets::PresetState>,
     /// File menu state: Lock Slices, Image Assets, last Print / Save for Web settings, script
     /// event log (see `automate_cmds`).
     pub file_menu: state::FileMenuState,
-    /// Window › Actions. The list persists with the preset store when one is attached.
-    pub actions: actions_cmds::ActionState,
     /// Action recording and playback: the recording target, depths and step counters.
     pub recording: ActionRecording,
     /// Gate for every command the session runs, including the ones a command runs on its own
@@ -300,15 +296,9 @@ pub struct Session {
     /// `None` when there is no automation policy to keep (headless sessions gate everything
     /// with `authorize`).
     pub automation_gate: Option<fn(&str, &serde_json::Value) -> Result<()>>,
-    /// A further route for File › Print when neither `lp` nor a CUPS server over IPP is
-    /// reachable (the XDG Print portal in a Flatpak); see `print_cmds::Spooler`.
-    pub print_spooler: Option<print_cmds::Spooler>,
-    /// The printers `file.printers`, `file.print.printers` and the Print dialog list in place of
-    /// the system's (tests); see `print_cmds::PrinterSource`. `None` asks the spooler.
-    pub printer_source: Option<print_cmds::PrinterSource>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
-    /// The installed crates' session slots ([`Session::slot`]).
+    /// The installed crates' session slots ([`Session::slot_or_default`]).
     slots: slots::Slots,
     /// Color Sampler points dropped by the last canvas-size change (crop, Canvas Size, Image Size,
     /// rotation), for the status message. Read with [`Session::take_samplers_removed`].
@@ -322,16 +312,11 @@ pub struct Session {
     /// Each open document's linked smart objects' files: size and modification time when last
     /// seen ([`link_watch`]).
     pub link_stamps: std::collections::HashMap<(u64, String), state::Stamp>,
-    /// The stamps being taken on a worker thread ([`Session::start_link_scan`]).
+    /// The stamps being taken on a worker thread ([`LinkWatchExt::start_link_scan`](crate::link_watch::LinkWatchExt::start_link_scan)).
     pub link_scan: Option<state::LinkScan>,
     /// Each open document's linked smart objects' files that were not there when last looked at
-    /// ([`Session::missing_links`]). Written only when the set changes, so its revision says when the list did.
+    /// ([`LinkWatchExt::missing_links`](crate::link_watch::LinkWatchExt::missing_links)). Written only when the set changes, so its revision says when the list did.
     link_missing: craft_tracked::Tracked<std::collections::HashSet<(u64, String)>>,
-    /// Select Subject's last result, reused while the pixels are unchanged (#2865).
-    subject_cache: smartselect_cmds::SubjectCache,
-    /// Object Selection's Object Finder results (#4087), shared by the hover preview and the
-    /// click that commits it; valid while the pixels are unchanged.
-    pub object_finder: smartselect_cmds::ObjectFinderCache,
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<state::LiveCommit>,

@@ -1,4 +1,6 @@
 use super::*;
+use crate::actions_cmds::ActionsExt;
+use crate::preset_store::PresetStoreExt;
 use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use serde_json::json;
 use std::path::PathBuf;
@@ -371,13 +373,15 @@ fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Good").is_some());
     // Full tips load when a brush is used (#1843): the broken one fails then, not at start.
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Lost").is_some());
-    let before = (*t.tools.brush).clone();
-    let e = t.execute("tools.setBrush", json!({"preset": "Lost"})).unwrap_err().to_string();
+    let mut lost = photocraft_paint::presets::find(&t.tools.presets, "Lost").unwrap().brush.clone();
+    let e = t.load_brush_tips(&mut lost).unwrap_err();
     assert!(e.contains(&h), "{e}");
-    assert_eq!(*t.tools.brush, before, "a failed pick leaves the brush alone");
-    t.execute("tools.setBrush", json!({"preset": "Good"})).unwrap();
+    let mut good = photocraft_paint::presets::find(&t.tools.presets, "Good").unwrap().brush.clone();
+    t.load_brush_tips(&mut good).unwrap();
     // The broken files are left alone for the user (never deleted by a sync).
-    t.execute("brush.presets.save", json!({"name": "Another"})).unwrap();
+    std::sync::Arc::make_mut(&mut *t.tools.presets).push(sampled("Another", "Fine", tip8(8, 8, 3)));
+    t.brush_presets_changed();
+    t.sync_preset_store();
     let files = dir.files();
     assert!(files.contains(&"junk-00000000.pcbrushes".to_string()) && files.contains(&tip_file(&h)), "{files:?}");
 
@@ -662,9 +666,10 @@ fn a_store_without_previews_makes_them_once_and_then_loads_lazily() {
     assert!(t.attach_preset_store(open(Box::new(mem.clone()))).is_empty());
     assert_eq!(mem.list().unwrap(), files);
     assert_eq!(user(&t), user(&s));
-    t.execute("tools.setBrush", json!({"preset": "Old A"})).unwrap();
-    assert_eq!(t.tools.brush.tip.bitmap(), Some(&tips[0]));
-    assert_eq!(t.tools.brush.texture.pattern.bitmap(), Some(&tips[1]));
+    let mut old_a = photocraft_paint::presets::find(&t.tools.presets, "Old A").unwrap().brush.clone();
+    t.load_brush_tips(&mut old_a).unwrap();
+    assert_eq!(old_a.tip.bitmap(), Some(&tips[0]));
+    assert_eq!(old_a.texture.pattern.bitmap(), Some(&tips[1]));
     assert_eq!(cache(&t).decodes, 2);
     // Exported presets embed the full bitmaps, as before.
     let out = t.execute("edit.presets.exportImportPresets", json!({"action": "export"})).unwrap();
@@ -812,9 +817,9 @@ fn stored_action_ids_move_to_names_on_load() {
         prefs.shortcuts.insert(format!("actions.playById:{id}"), "F6".into());
     });
     s.attach_preset_store(open(Box::new(mem.clone())));
-    let names: Vec<&str> = s.actions.list.actions().iter().map(|action| action.name.as_str()).collect();
+    let names: Vec<&str> = s.actions().list.actions().iter().map(|action| action.name.as_str()).collect();
     assert_eq!(names, ["Same", "Same 2", "Caller"]);
-    assert_eq!(s.actions.list.actions()[2].steps[0].params, json!({"action": "Same 2"}));
+    assert_eq!(s.actions().list.actions()[2].steps[0].params, json!({"action": "Same 2"}));
     assert_eq!(s.prefs().shortcuts.get("actions.play:Same 2").map(String::as_str), Some("F6"));
     assert!(!s.prefs().shortcuts.keys().any(|key| key.starts_with("actions.playById:")));
     let saved = String::from_utf8(mem.files.lock().unwrap()[ACTIONS_FILE].clone()).unwrap();
@@ -828,10 +833,8 @@ fn large_patterns_load_on_use() {
     let dir = TempDir::new("patterns-large");
     let (mut s, _) = session(&dir);
     s.execute("file.new", json!({"width": 300, "height": 200})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
-    s.execute("select.rect", json!({"x": 250, "y": 150, "width": 50, "height": 50})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#ffffff");
+    crate::tests::fill_active(&mut s, Some(photocraft_geom::Rect::new(250, 150, 300, 200)), "#ff0000");
     s.execute("edit.definePattern", json!({"name": "Big"})).unwrap();
     assert_eq!(dir.files().iter().filter(|f| f.ends_with(".preview.pat")).count(), 1);
 
@@ -935,7 +938,7 @@ fn patterns_survive_a_restart() {
 
 fn define_pattern(s: &mut Session, name: &str, color: &str, width: u32) {
     s.execute("file.new", json!({"width": width, "height": 6})).unwrap();
-    s.execute("edit.fill", json!({"color": color})).unwrap();
+    crate::tests::fill_active(s, None, color);
     s.execute("edit.definePattern", json!({"name": name})).unwrap();
 }
 

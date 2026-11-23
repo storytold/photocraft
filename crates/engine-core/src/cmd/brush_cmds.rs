@@ -6,6 +6,7 @@
 //! (`{"scattering": {"enabled": true}}`). Strokes are deterministic: the jitter seed is the `seed`
 //! param or a hash of the points, so a journaled command replays to identical pixels.
 
+use crate::preset_store::PresetStoreExt;
 use photocraft_geom::Rect;
 use photocraft_paint::mixer::MixerSettings;
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
@@ -1326,7 +1327,7 @@ pub fn remembered_settings(b: &BrushSettings) -> Option<Value> {
 /// not a brush or fails the checks `tools.setBrush` makes (a size or scatter out of range). The
 /// options-bar values are clamped to the ranges their controls allow (size 1..max px; opacity
 /// 1..100 %; hardness, flow and smoothing 0..100 %), and stored tips load when the store is attached (else
-/// they paint with their previews until `Session::attach_preset_store`).
+/// they paint with their previews until `PresetStoreExt::attach_preset_store`).
 pub fn restored_settings(s: &Session, v: &Value) -> Option<BrushSettings> {
     if !v.is_object() {
         return None;
@@ -1576,3 +1577,6 @@ mod define_brush_no_selection_tests;
 
 #[cfg(test)]
 mod define_brush_color_density_tests;
+
+#[cfg(test)]
+mod filter_mask_stroke_tests;

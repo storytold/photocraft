@@ -33,9 +33,7 @@ fn scene(depth: u32) -> (Session, u64) {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
     let id = s.execute("layer.new.layer", json!({"name": "a"})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("select.rect", json!({"x": 14, "y": 10, "width": 56, "height": 20})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": "#e02010"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
+    crate::tests::fill_active(&mut s, Some(photocraft_geom::Rect::new(14, 10, 64, 30)), "#e02010");
     s.execute("layer.layerStyle.dropShadow", json!({"blend": "normal", "distance": 6, "size": 4, "color": "#102040"})).unwrap();
     s.execute("layer.layerStyle.outerGlow", json!({"blend": "normal", "size": 5, "color": "#20c040", "add": true})).unwrap();
     s.execute("layer.layerStyle.innerShadow", json!({"blend": "normal", "distance": 3, "size": 3, "add": true})).unwrap();
