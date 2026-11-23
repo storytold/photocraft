@@ -3,6 +3,8 @@
 //! shown, Open develops every one and Cancel closes every one. The framework's `RawFilmstrip`
 //! draws the tiles; this module holds the raws and their thumbnails.
 
+use photocraft_engine::commands::raw_auto_cmds::Proxy;
+
 use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
 use super::sidecar::read_sidecar;
 use super::{CameraRaw, PhotocraftApp, RawOpen, Rect, Value, hosted, image, json, workspace_demosaic};
@@ -18,6 +20,7 @@ pub struct HeldRaw {
     /// Its settings and the settings it started from (its sidecar's, or the defaults) once it
     /// has been shown and left for another (`None`: not edited yet).
     pub(super) kept: Option<(CameraRaw, CameraRaw)>,
+    pub(super) auto_history: super::AutoHistory,
     /// The filmstrip thumbnail until it is first handed to the workspace, then its texture.
     pub(super) thumb: Option<egui::ColorImage>,
     // PLAN: the framework tile takes a `SizedTexture`, which does not own its texture: the handle stays here so the texture lives as long as the raw is held.
@@ -27,7 +30,7 @@ pub struct HeldRaw {
 impl HeldRaw {
     pub(super) fn new(app: &PhotocraftApp, raw: RawOpen) -> Self {
         let thumb = super::open::document_index(app, raw.document).and_then(|i| thumbnail(app, i));
-        HeldRaw { raw, kept: None, thumb, tex: None }
+        HeldRaw { raw, kept: None, auto_history: Default::default(), thumb, tex: None }
     }
 }
 
@@ -164,10 +167,9 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
     if app.session.prefs().raw_defaults.apply_auto_tone
         && let Some(st) = super::open::document_index(app, raw.document).and_then(|i| app.session.documents().get(i))
         && let Some(surf) = st.doc.layers.iter().find_map(|l| l.surface())
-        && let Ok((area, w, h)) = super::convert::preview_area(st.doc.bounds(), surf)
+        && let Ok(proxy) = Proxy::new(surf, st.doc.bounds())
     {
-        let (proxy, ..) = super::convert::box_proxy(surf, area, w, h);
-        photocraft_algo::camera_raw::auto_tone(&proxy, &mut p);
+        photocraft_algo::camera_raw::auto_tone(&proxy.pixels, &mut p);
     }
     (p, None)
 }

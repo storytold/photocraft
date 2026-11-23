@@ -31,6 +31,7 @@ use craft::ui::primitives::Revision;
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::pending::Job;
 use egui::ColorImage;
+use photocraft_algo::camera_raw::auto::{Image, Panel, suggest_full};
 use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs};
 use photocraft_algo::histogram::RgbHistogram;
 use photocraft_doc::LayerId;
@@ -60,7 +61,6 @@ use open::{Target, non_defaults};
 use proxy::{ProxyBase, ProxyJob};
 pub use sidecar::sidecar_path;
 
-const PROXY_SIDE: usize = 900;
 /// Smallest run of proxy pixels one rayon task takes in the per-pixel passes: below it the
 /// split costs more than the work.
 #[cfg(not(target_arch = "wasm32"))]
@@ -153,10 +153,19 @@ pub(crate) struct SourceInit {
     pub(crate) display: Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(crate) gpu: Option<CameraRawGpu>,
     pub(crate) encoding_gamma: f32,
+    pub(crate) shadow_noise: f32,
+    auto_history: AutoHistory,
     pub(crate) lab_transform: Arc<craft::cms::Transform>,
     pub(crate) scope_transform: Arc<craft::cms::Transform>,
     pub(crate) detail: DetailPreview,
     pub(crate) ctx: egui::Context,
+}
+
+pub(super) type AutoHistory = Arc<Mutex<Option<AppliedAuto>>>;
+
+pub(super) struct AppliedAuto {
+    before: CameraRaw,
+    after: CameraRaw,
 }
 
 #[cfg(test)]
@@ -174,6 +183,8 @@ pub(crate) struct PcRawSource {
     pub(crate) full_w: usize,
     pub(crate) full_h: usize,
     float: bool,
+    shadow_noise: f32,
+    auto_history: AutoHistory,
     /// The open-time dialog's camera tone curve: Shadows / Highlights act on the raw data there, in linear light before
     /// this curve, and the preview undoes it to show the same.
     raw_curve: Mutex<Option<Arc<Vec<[f32; 2]>>>>,
@@ -212,8 +223,23 @@ impl PcRawSource {
 
     /// A source over `init`; its pictures are empty until the first develop lands.
     pub(crate) fn new(init: SourceInit) -> Self {
-        let SourceInit { proxy, selection, proxy_size, full_size, block, float, display, gpu, encoding_gamma, lab_transform, scope_transform, detail, ctx } =
-            init;
+        let SourceInit {
+            proxy,
+            selection,
+            proxy_size,
+            full_size,
+            block,
+            float,
+            display,
+            gpu,
+            encoding_gamma,
+            shadow_noise,
+            auto_history,
+            lab_transform,
+            scope_transform,
+            detail,
+            ctx,
+        } = init;
         let size = PixelSize::new(full_size.0 as u32, full_size.1 as u32);
         // Before (Y) is the undeveloped proxy, shown through the document's display.
         let before = SharedPicture::new(size);
@@ -230,6 +256,8 @@ impl PcRawSource {
             full_w: full_size.0,
             full_h: full_size.1,
             float,
+            shadow_noise,
+            auto_history,
             raw_curve: Mutex::new(None),
             display,
             gpu,
@@ -379,8 +407,26 @@ impl RawDevelopSource for PcRawSource {
     }
 
     fn auto(&self, settings: &CameraRaw) -> CameraRaw {
-        let mut next = settings.clone();
-        photocraft_algo::camera_raw::auto_tone(&self.proxy, &mut next);
+        let mut history = self.auto_history.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(last) = history.as_ref().filter(|last| &last.after == settings) {
+            return last.before.clone();
+        }
+        let Some(image) = Image::new(&self.proxy, self.pw, self.ph, self.selection.as_deref().map(Vec::as_slice)) else {
+            return settings.clone();
+        };
+        let image = image.with_encoding_gamma(self.inputs.encoding_gamma).with_shadow_noise(self.shadow_noise);
+        let curve = self.raw_curve.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let next = suggest_full(&image, &Panel::ALL, settings, self.float, |pixels, w, h, params| {
+            let mut p = params.clone();
+            let inputs = DevelopInputs { pixel_scale: w as f32 / self.full_w.max(1) as f32, ..self.inputs };
+            if let Some(curve) = &curve {
+                proxy::retone(pixels, w, h, curve, &mut p);
+            }
+            photocraft_algo::camera_raw::develop(pixels, w, h, &p, &inputs, self.float);
+        });
+        if &next != settings {
+            *history = Some(AppliedAuto { before: settings.clone(), after: next.clone() });
+        }
         next
     }
 

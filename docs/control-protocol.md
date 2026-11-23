@@ -657,8 +657,7 @@ viewports, so the dialog is drawn over the main window and appears in the image.
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
-then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto` (true: the Light
-sliders from the image's histogram, the panel's Auto button), `commit` and
+then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto`, `commit` and
 `cancel`, and while a raw file opens also `demosaic` (below). All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
 opened). Unknown `ui` or settings properties, non-boolean `before` / `auto` / `commit` / `cancel`, and
@@ -666,6 +665,16 @@ opened). Unknown `ui` or settings properties, non-boolean `before` / `auto` / `c
 `pointCurveGreen`, `pointCurveBlue`) are empty or 2–16 finite points in 0–255 with inputs at
 least one level apart. Commit dispatches one `filter.cameraRaw` engine command; a failed commit
 keeps the dialog open for correction. Nothing else writes document history.
+
+The **Auto** button and `{"ui":{"auto":true}}` adjust White Balance, Light, Color and Effects
+in one dialog undo step. For integer-depth images, Auto compares rendered previews for new
+channel clipping and the distribution of tones. It can fit a composite point curve when
+the existing tone curve is neutral. Activate Auto again with those same settings to restore the
+previous settings, or send `{"ui":{"undo":true}}` to undo the edit.
+For a headless estimate on a pixel layer use `engine.execute` with
+`filter.cameraRaw.autoSettings` and a `panel` of `light`, `whiteBalance`, `color`, `effects`
+or `all`. It returns `{layer, settings}` for inspection or a subsequent `filter.cameraRaw`
+command.
 
 A raw file opened from a path reads its sidecar (`IMG_0001.xmp` beside `IMG_0001.CR2`, Camera
 Raw's `crs:` settings) into the open-time dialog, and Open writes changed settings back

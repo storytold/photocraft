@@ -16,6 +16,8 @@ pub mod spatial {
     pub use craft_develop::camera_raw::spatial::*;
 }
 
+pub mod auto;
+
 fn to_shared_wheel(w: Wheel) -> craft_develop::camera_raw::Wheel {
     craft_develop::camera_raw::Wheel { hue: w.hue, sat: w.sat, lum: w.lum }
 }

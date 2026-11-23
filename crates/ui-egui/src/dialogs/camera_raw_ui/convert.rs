@@ -4,9 +4,10 @@ use std::sync::Arc;
 use craft::behavior::PixelSize;
 use craft::imaging::ui::raw_develop::{RawDevelopOpen, RawDevelopSource, RawDevelopWorkspace, RawFilmItem, RawTarget};
 use craft::ui::dialog::HostedWorkspace;
+use photocraft_engine::commands::raw_auto_cmds::Proxy;
 
 use super::open::{Coverage, RawOpen, Target};
-use super::{CameraRaw, LayerId, PROXY_SIDE, PcRawSource, PhotocraftApp, RawSession, Rect, SourceInit, hosted_mut, to_framework};
+use super::{CameraRaw, LayerId, PcRawSource, PhotocraftApp, RawSession, SourceInit, hosted_mut, to_framework};
 use serde_json::json;
 
 /// Camera Raw Defaults › Sharpen For: output sharpening, folded into the Camera Raw step `rest`
@@ -54,63 +55,6 @@ pub(super) fn apply_raw_conversions(app: &mut PhotocraftApp, index: usize, d: &p
         app.session.execute(id, params).map_err(|e| e.to_string())?;
     }
     Ok(())
-}
-
-/// `area` of `surf` averaged over `k`×`k` blocks, row-major (`ceil(w/k)` × `ceil(h/k)`). A block
-/// past the last row repeats that row, as a clamped edge; each source row is still read once,
-/// weighted by the block rows it stands for (a one-row domain read the same row `k` times, which
-/// is quadratic in its width).
-fn box_average(surf: &photocraft_raster::Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
-    let (w, h) = (area.width() as usize, area.height() as usize);
-    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
-    let mut proxy = vec![[0.0f32; 4]; pw * ph];
-    let mut row = vec![[0.0f32; 4]; w];
-    for py in 0..ph {
-        // f64: a weighted f32 sample near f32::MAX would overflow to infinity.
-        let mut acc = vec![[0.0f64; 5]; pw];
-        for sy in py * k..((py + 1) * k).min(h) {
-            let weight = if sy == h - 1 { ((py + 1) * k - sy) as f64 } else { 1.0 };
-            let y = area.y0 + sy as i32;
-            surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
-            for (x, q) in row.iter().enumerate() {
-                let a = &mut acc[x / k];
-                for c in 0..4 {
-                    a[c] += f64::from(q[c]) * weight;
-                }
-                a[4] += weight;
-            }
-        }
-        for (x, a) in acc.iter().enumerate() {
-            proxy[py * pw + x] = [0, 1, 2, 3].map(|c| (a[c] / a[4]) as f32);
-        }
-    }
-    proxy
-}
-
-/// What the preview develops, and its size: the engine filter domain, including pixels outside the
-/// canvas, since spatial Camera Raw stages (vignette, grain, local contrast) must agree with the
-/// committed result.
-pub(super) fn preview_area(canvas: Rect, surf: &photocraft_raster::Surface) -> Result<(Rect, usize, usize), String> {
-    let area = canvas.union(&surf.content_bounds());
-    let width = area.x1.checked_sub(area.x0).filter(|n| (1..=1_048_576).contains(n));
-    let height = area.y1.checked_sub(area.y0).filter(|n| (1..=1_048_576).contains(n));
-    let (Some(w), Some(h)) = (width, height) else {
-        return Err("RAW Develop preview bounds are too large".into());
-    };
-    let (w, h) = (w as usize, h as usize);
-    if w.checked_mul(h).is_none_or(|pixels| pixels > 512_000_000) {
-        return Err("RAW Develop preview bounds are too large".into());
-    }
-    Ok((area, w, h))
-}
-
-/// `area` of `surf` (`w`×`h`) box-averaged down to at most [`PROXY_SIDE`] pixels on its long side:
-/// the proxy, its size, and the side of the blocks averaged.
-pub(super) fn box_proxy(surf: &photocraft_raster::Surface, area: Rect, w: usize, h: usize) -> (Vec<[f32; 4]>, usize, usize, usize) {
-    let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
-    let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
-    let proxy = box_average(surf, area, k);
-    (proxy, pw, ph, k)
 }
 
 /// A raw being opened: what the open-time dialog starts from.
@@ -187,20 +131,14 @@ fn open_session(
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     // The engine derives the same value for the command (`lens_cmds::camera_raw_cmd`).
     let encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
-    let (area, w, h) = preview_area(canvas, &surf)?;
-    let (proxy, pw, ph, k) = box_proxy(&surf, area, w, h);
-    // Coverage at the centre of each proxy block.
-    let sample = |value: &dyn Fn(i32, i32) -> f32| {
-        (0..ph)
-            .flat_map(|y| (0..pw).map(move |x| (area.x0 + (x * k + k / 2).min(w - 1) as i32, area.y0 + (y * k + k / 2).min(h - 1) as i32)))
-            .map(|(x, y)| value(x, y).clamp(0.0, 1.0))
-            .collect::<Vec<_>>()
-    };
+    let proxy = Proxy::new(&surf, canvas)?;
     let selection = match &coverage {
-        Coverage::Selection => st.doc.selection.as_ref().map(|mask| sample(&|x, y| mask.sample_channel(x, y, 0))),
-        Coverage::Mask(mask) => Some(sample(&|x, y| mask.value(x, y))),
+        Coverage::Selection => st.doc.selection.as_ref().map(|mask| proxy.sample_coverage(|x, y| mask.sample_channel(x, y, 0))),
+        Coverage::Mask(mask) => Some(proxy.sample_coverage(|x, y| mask.value(x, y))),
         Coverage::None => None,
     };
+    let shadow_noise = proxy.shadow_noise(&surf, encoding_gamma, selection.as_deref());
+    let Proxy { pixels, width: pw, height: ph, full_width: w, full_height: h, block: k, area } = proxy;
     let source = photocraft_engine::color_cmds::composite_profile(&st.doc);
     let display = app.session.color().canvas_display(&st.doc).map_err(|e| e.to_string())?;
     let lab_transform = craft::cms::cached(&source, craft::cms::Builtin::LabD50.profile(), Default::default()).map_err(|e| e.to_string())?;
@@ -224,8 +162,13 @@ fn open_session(
     );
     let navigation = crate::canvas::document_display::navigation(app);
     let checkerboard = crate::canvas::document_display::checkerboard(app);
+    let auto_history = raw
+        .as_ref()
+        .and_then(|start| app.raw_shelf.iter().find(|held| held.raw.document == start.raw.document))
+        .map(|held| held.auto_history.clone())
+        .unwrap_or_default();
     let source = Arc::new(PcRawSource::new(SourceInit {
-        proxy,
+        proxy: pixels,
         selection,
         proxy_size: (pw, ph),
         full_size: (w, h),
@@ -234,6 +177,8 @@ fn open_session(
         display,
         gpu: gpu.clone(),
         encoding_gamma,
+        shadow_noise,
+        auto_history,
         lab_transform,
         scope_transform,
         detail,
@@ -294,61 +239,4 @@ fn open_session(
         super::filmstrip::sync_pictures(app, ctx);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod box_average_tests {
-    use super::{Rect, box_average};
-    use photocraft_color::PixelFormat;
-    use photocraft_raster::Surface;
-
-    /// The clamped reference: every block row read, past the last row the last row again.
-    fn reference(surf: &Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
-        let (w, h) = (area.width() as usize, area.height() as usize);
-        let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
-        let mut out = Vec::new();
-        let mut row = vec![[0.0f32; 4]; w];
-        for py in 0..ph {
-            let mut acc = vec![[0.0f32; 5]; pw];
-            for dy in 0..k {
-                let y = area.y0 + (py * k + dy).min(h - 1) as i32;
-                surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
-                for (x, q) in row.iter().enumerate() {
-                    for c in 0..4 {
-                        acc[x / k][c] += q[c];
-                    }
-                    acc[x / k][4] += 1.0;
-                }
-            }
-            out.extend(acc.iter().map(|a| [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]]));
-        }
-        out
-    }
-
-    #[test]
-    fn blocks_past_the_last_row_match_the_clamped_average() {
-        let mut surf = Surface::new(PixelFormat::RGBA32F);
-        for x in 0..37 {
-            for y in 0..5 {
-                surf.fill_rect(Rect::new(x, y, x + 1, y + 1), &[x as f32 / 37.0, y as f32 / 5.0, 0.5, 1.0]);
-            }
-        }
-        for (area, k) in [(Rect::new(0, 0, 37, 5), 2), (Rect::new(0, 0, 37, 5), 4), (Rect::new(0, 2, 37, 3), 16), (Rect::new(3, 0, 37, 5), 7)] {
-            let (got, want) = (box_average(&surf, area, k), reference(&surf, area, k));
-            assert_eq!(got.len(), want.len());
-            for (g, w) in got.iter().zip(&want) {
-                assert!(g.iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-5), "{area:?} k={k}: {g:?} vs {w:?}");
-            }
-        }
-    }
-
-    /// Samples near f32::MAX stay finite: the weighted sums are held in f64.
-    #[test]
-    fn huge_samples_do_not_overflow() {
-        let mut surf = Surface::new(PixelFormat::RGBA32F);
-        let big = f32::MAX / 2.0;
-        surf.fill_rect(Rect::new(0, 0, 2, 1), &[big, -big, big, 1.0]);
-        let got = box_average(&surf, Rect::new(0, 0, 2, 1), 4);
-        assert!(got.iter().flatten().all(|v| v.is_finite()), "{got:?}");
-    }
 }

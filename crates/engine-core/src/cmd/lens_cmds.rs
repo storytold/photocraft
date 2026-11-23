@@ -248,7 +248,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
     match id {
         LENS => Some(lens::correct(surf, canvas, &lens_params(id, params, canvas, None).ok()?)),
         WIDE => Some(wideangle::apply(surf, canvas, &wide_params(id, params, None).ok()?, Interp::Bicubic)),
-        RAW => Some(camera_raw_surface(surf, canvas, &raw_params(id, params).ok()?, &camera_raw::DevelopInputs::default())),
+        RAW => Some(camera_raw_surface(surf, canvas, &raw_params(id, params).ok()?, &raw_inputs(params))),
         _ => None,
     }
 }
@@ -273,7 +273,7 @@ fn filterable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
-fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
+pub(super) fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
     filterable(s)?;
     let d = s.active().ok_or("no document open")?;
     match d.doc.mode {
@@ -381,7 +381,7 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// The transfer curve Camera Raw decodes `doc`'s values with ([`CameraRaw::encoding_gamma`]):
+/// The transfer curve Camera Raw decodes `doc`'s values with ([`camera_raw::DevelopInputs::encoding_gamma`]):
 /// ProPhoto's gamma 1.8 (raws open in it), Adobe RGB's 563/256, 1 for linear sRGB, else 0 for
 /// the sRGB curve.
 pub fn encoding_gamma(doc: &Document) -> f32 {
@@ -420,10 +420,16 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let t0 = Stopwatch::start();
+    let inputs = raw_inputs(p);
     let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
-        camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr, &camera_raw::DevelopInputs::default())
+        camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr, &inputs)
     })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
+}
+
+fn raw_inputs(params: &Value) -> camera_raw::DevelopInputs {
+    let encoding_gamma = params.get("encodingGamma").and_then(Value::as_f64).filter(|g| (0.5..=4.0).contains(g)).unwrap_or(0.0) as f32;
+    camera_raw::DevelopInputs { encoding_gamma, ..camera_raw::DevelopInputs::default() }
 }
 
 fn lens_batch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -722,6 +728,15 @@ mod tests {
             _ => panic!("smart object expected"),
         };
         assert_eq!(filters[0].params["encodingGamma"], json!(1.8));
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        let settings = raw_params(RAW, &filters[0].params).unwrap();
+        let inputs = camera_raw::DevelopInputs { encoding_gamma: 1.8, ..camera_raw::DevelopInputs::default() };
+        let expected = camera_raw_surface(surf, d.doc.bounds(), &settings, &inputs);
+        let srgb = camera_raw_surface(surf, d.doc.bounds(), &settings, &camera_raw::DevelopInputs::default());
+        let replayed = apply_to_surface(RAW, &filters[0].params, surf, d.doc.bounds()).unwrap();
+        let sample = |image: &Surface| image.sample_channel(60, 40, 1);
+        assert_ne!(sample(&expected), sample(&srgb));
+        assert_eq!(sample(&replayed), sample(&expected));
         // sRGB documents use the sRGB curve, the default, and store nothing.
         let mut s = session(8);
         assert_eq!(encoding_gamma(&s.active().unwrap().doc), 0.0);

@@ -113,6 +113,7 @@ pub mod plugin_cmds;
 pub mod preset_import_cmds;
 pub mod print_cmds;
 pub mod rasterize_style_cmds;
+pub mod raw_auto_cmds;
 pub mod redeye_cmds;
 pub mod render_cmds;
 pub mod retouch_cmds;

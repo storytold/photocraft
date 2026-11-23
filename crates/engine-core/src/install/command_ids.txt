@@ -703,6 +703,7 @@ filter.lensCorrection
 filter.adaptiveWideAngle
 filter.cameraRaw
 file.automate.lensCorrection
+filter.cameraRaw.autoSettings
 filter.vanishingPoint
 select.saveSelection
 select.loadSelection
