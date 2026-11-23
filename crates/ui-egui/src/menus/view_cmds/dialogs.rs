@@ -1,5 +1,6 @@
 use super::dispatch::no_params;
 use super::{PhotocraftApp, Value, json};
+use crate::dialogs::image_processor_ui;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
@@ -56,9 +57,14 @@ fn opened(id: DialogId) -> Value {
 fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>, fields: DialogFields, fixed: Value) -> DialogId {
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
+    let image_processor = id == image_processor_ui::COMMAND;
+    if image_processor {
+        image_processor_ui::settings_opened(app.ctx());
+    }
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
         derive(&key, fields);
-        ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields))
+        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
+        if image_processor { image_processor_ui::settings_footer(dialog) } else { dialog }
     })
 }
 

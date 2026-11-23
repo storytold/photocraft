@@ -92,6 +92,15 @@ success-output = "immediate"
 # All cases and the 60-second warning remain unchanged.
 threads-required = 2
 
+# The slowest UI GPU tests start together (priority below) and redraw the whole app per frame on
+# the Windows software GPU. Four at once starve one frame past egui_kittest's 10-second device
+# poll (`PollError: ... Wait timed out`, live_stroke_canvas part_0, twice in a row in #16529).
+# Two slots each keep at most two of them on the adapter at a time; no case or timeout changes.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "windows")'
+filter = 'package(photocraft-ui-egui) & test(/gpu_tests::(live_stroke_canvas::the_canvas_shows_the_committed_stroke_part_|checker_canvas::pixel_grid_is_solid_and_visible_|full_res_preview::)/)'
+threads-required = 2
+
 # Slowest tests start first. nextest starts higher-priority tests first, so a long test no longer
 # begins at the end of the run and extends the job. Every test that took over 60 s on the Windows
 # runner in the cold run of #15474 (unit and integration legs); the same tests are the slowest on
