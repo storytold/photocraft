@@ -4,6 +4,8 @@ use craft::behavior::canvas::ZoomLadder;
 use craft::behavior::kurbo::Size;
 use craft::ui::canvas::{PixelRect, RasterSource};
 use craft::ui::primitives::Revision;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 
 #[test]
 fn display_image_matches_egui_unmultiplied_conversion() {
@@ -41,7 +43,7 @@ fn app_on_two_displays() -> Box<PhotocraftApp> {
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("edit.fill", json!({"color": "#cc8040"})).unwrap();
     let icc = |id: &str| Some(resolve_profile(id, None, None).unwrap().to_bytes());
-    app.session.color.set_displays(Ok(vec![
+    app.session.color_mut().set_displays(Ok(vec![
         Display { id: 1, name: "A".into(), frame: [0.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("srgb") },
         Display { id: 4, name: "B".into(), frame: [100.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("display-p3") },
     ]));
@@ -175,8 +177,8 @@ fn clone_overlay_is_circular_and_respects_visibility() {
     assert_eq!(image(32 + 8, 32 + 8).a(), 0, "the brush square's corner, outside the circle, is clipped");
     assert_eq!(image(32 + 12, 32).a(), 0, "past the hard tip's rim");
     assert_eq!(app.session.active().unwrap().revision, revision);
-    assert!(app.session.presets.clone.active().anchor.is_none());
-    app.session.presets.clone.overlay.show = false;
+    assert!(app.session.presets().clone.active().anchor.is_none());
+    app.session.presets_mut().clone.overlay.show = false;
     assert!(clone_source_image(&mut app).is_none(), "a hidden Clone Source shows no image");
 }
 
@@ -218,7 +220,7 @@ fn clone_overlay_opacity_and_flow_match_a_stamp_on_another_layer() {
             app.ui.tool = Tool::CloneStamp;
             app.ui.tool_options.clone_sample = "all".into();
             app.session.tools.brush.size = 20.0;
-            app.session.presets.clone.overlay.clipped = clipped;
+            app.session.presets_mut().clone.overlay.clipped = clipped;
             for (opacity, flow) in [(1.0, 1.0), (0.5, 1.0), (1.0, 0.25), (0.5, 0.4)] {
                 // A full-strength overlay is shown first, so the change comes after a shown one.
                 clone_overlay_centre_alpha(&mut app);
@@ -244,7 +246,7 @@ fn clone_overlay_opacity_and_flow_match_a_stamp_on_another_layer() {
 fn clone_overlay_separate_opacity_setting_still_multiplies_the_brush_opacity() {
     let mut app = clone_overlay_app(20.0);
     app.session.tools.brush.opacity = 0.5;
-    app.session.presets.clone.overlay.opacity = 40.0;
+    app.session.presets_mut().clone.overlay.opacity = 40.0;
     let alpha = clone_overlay_centre_alpha(&mut app);
     assert!((alpha - 0.2).abs() < 0.01, "50% brush opacity times 40% overlay opacity: {alpha}");
 }
@@ -360,7 +362,7 @@ fn clone_cursor_from_an_inactive_document_cannot_replace_the_active_offset_refer
             app.ui.document_windows.arrangement = Some(Arrangement::TwoUpVertical);
             super::testing::frame(&mut app);
             let document = app.session.active().unwrap().doc.id;
-            let slots = app.session.presets.clone.clone();
+            let slots = app.session.presets().clone.clone();
             let revision = app.session.active().unwrap().revision;
             super::testing::move_to(&mut app, [40.0, 30.0], egui::Modifiers::NONE);
             assert_eq!(app.ui.presets_ui.clone_cursor, Some((document, [40.0, 30.0])));
@@ -380,7 +382,7 @@ fn clone_cursor_from_an_inactive_document_cannot_replace_the_active_offset_refer
             assert_eq!(crate::preset_panels::clone_offset_edit(&app, [-20.0, -10.0]).unwrap()["anchor"], json!([40.0, 30.0]));
             super::testing::move_to(&mut app, [44.0, 34.0], egui::Modifiers::NONE);
             assert_eq!(app.ui.presets_ui.clone_cursor, Some((document, [44.0, 34.0])), "the active canvas still updates normally");
-            assert_eq!(app.session.presets.clone, slots, "hover does not establish a source anchor");
+            assert_eq!(app.session.presets().clone, slots, "hover does not establish a source anchor");
             assert_eq!(app.session.active().unwrap().revision, revision, "hover does not paint");
         }
     }
@@ -1045,8 +1047,8 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
 
 /// #11276: a document floating in its own window zooms from the zoom typed into the status bar
 /// and into the Navigator, as a tabbed one does; the window doesn't keep or write back an older
-/// copy of the view. Only the typed zoom fields are driven here, not the Navigator's slider or
-/// zoom buttons.
+/// copy of the view. #16415: so does the zoom typed into the floating window's own status bar.
+/// Only the typed zoom fields are driven here, not the Navigator's slider or zoom buttons.
 #[test]
 fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     use egui_kittest::kittest::{NodeT, Queryable};
@@ -1092,9 +1094,20 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         f.sort_by(|a, b| a.left().total_cmp(&b.left()));
         f
     };
-    assert_eq!(fields(&h).len(), 2, "the status bar's and the Navigator's zoom fields");
-    for (field, typed, want) in [(0, "200", 2.0), (1, "50", 0.5), (0, "300", 3.0), (1, "100", 1.0)] {
-        let at = fields(&h)[field].center();
+    // The main status bar's field lies lowest, the Navigator's furthest right, the floating window's status bar's is the
+    // third.
+    let pick = |f: &[egui::Rect], which: &str| -> egui::Rect {
+        let lowest = f.iter().copied().max_by(|a, b| a.bottom().total_cmp(&b.bottom())).unwrap_or(egui::Rect::NOTHING);
+        let right = f.iter().copied().max_by(|a, b| a.left().total_cmp(&b.left())).unwrap_or(egui::Rect::NOTHING);
+        match which {
+            "status" => lowest,
+            "navigator" => right,
+            _ => f.iter().copied().find(|r| *r != lowest && *r != right).unwrap_or(egui::Rect::NOTHING),
+        }
+    };
+    assert_eq!(fields(&h).len(), 3, "the status bar's, the Navigator's and the floating window's zoom fields");
+    for (field, typed, want) in [("status", "200", 2.0), ("navigator", "50", 0.5), ("window", "300", 3.0), ("navigator", "100", 1.0)] {
+        let at = pick(&fields(&h), field).center();
         h.event(egui::Event::PointerMoved(at));
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });

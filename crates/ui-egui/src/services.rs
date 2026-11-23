@@ -493,6 +493,11 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 /// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
 pub type WindowFrameFn = Box<dyn FnMut()>;
 
+/// Whether the physical primary mouse button is down now, read from the OS. A move of a floating document window by
+/// its title bar runs in the OS (its hit test answers the caption), so the app never sees the press or the release;
+/// the button going up ends the move (#16415).
+pub type PrimaryDownFn = Box<dyn Fn() -> bool + Send + Sync>;
+
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
@@ -644,6 +649,8 @@ pub struct Services {
     pub window_frame: Option<WindowFrameFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// Physical primary mouse button currently down (Windows): ends an OS move of a floating document window.
+    pub primary_down: Option<PrimaryDownFn>,
     /// Which end of the pen is in use, where the platform reports it outside the stylus feed
     /// (Windows: the feed carries no pen samples there). Read for the eraser-end tool switch.
     pub pen_end: Option<PenEndFn>,
