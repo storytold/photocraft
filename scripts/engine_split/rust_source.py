@@ -5,16 +5,20 @@ the same offsets. `test_regions` finds a crate's test code: whole files reached 
 `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) `mod x;`, and the `#[cfg(test)]` items and bare `#[test]`
 functions of other files (the test harness compiles `#[test]` functions only in test builds).
 `#[cfg(any(test, ...))]` items are not test code: other builds compile them too.
+`compiled_files` lists the files some crate target's module tree reaches; the rewrites edit only
+those, since a file no module reaches never compiles and CI's unreached-rs guard flags any edit to it.
 `edited_definitions` finds a branch's edits to definitions a step moved or changed, for the steps'
 `branch` modes.
 """
-import os, re, subprocess
+import glob, os, re, subprocess
 
 CFG_TEST = re.compile(r"#\[cfg\((?:test|all\(test\b[^\]]*\))\)\]")
 MOD_DECL = re.compile(r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([a-z]+\))?\s+)?mod\s+([a-z0-9_]+)\s*;")
 PATH_ATTR = re.compile(r'#\[path\s*=\s*"([^"]+)"\]')
 TEST_ATTR = re.compile(r"#\[test\]")
 TEST_FN = re.compile(r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+([a-z0-9_]+)")
+INLINE_MOD = re.compile(r"\bmod\s+([a-z0-9_]+)\s*\{")
+TARGET_PATH = re.compile(r'^\s*path\s*=\s*"([^"]+\.rs)"', re.M)
 IDENT_BEFORE = re.compile(r"[A-Za-z0-9_]")
 
 
@@ -93,18 +97,28 @@ def block_end(masked, start):
     return i
 
 
-def module_file(parent, name, attrs):
-    """The file of `mod name;` declared in `parent` with attributes `attrs`, or None."""
+def module_file(parent, name, attrs, inline=()):
+    """The file of `mod name;` declared in `parent` with attributes `attrs`, inside the inline
+    modules `inline` (outermost first), or None."""
     d = os.path.dirname(parent)
+    if os.path.basename(parent) not in ("lib.rs", "mod.rs", "main.rs"):
+        d = os.path.join(d, os.path.basename(parent)[:-3])
+    d = os.path.join(d, *inline)
     p = PATH_ATTR.search(attrs)
     if p:
+        if not inline:
+            d = os.path.dirname(parent)
         f = os.path.normpath(os.path.join(d, p.group(1)))
         return f if os.path.isfile(f) else None
-    base = d if os.path.basename(parent) in ("lib.rs", "mod.rs", "main.rs") else os.path.join(d, os.path.basename(parent)[:-3])
-    for f in (os.path.join(base, name + ".rs"), os.path.join(base, name, "mod.rs")):
+    for f in (os.path.join(d, name + ".rs"), os.path.join(d, name, "mod.rs")):
         if os.path.isfile(f):
             return f
     return None
+
+
+def inline_mods(masked, pos):
+    """Names of the inline `mod x { .. }` blocks around `pos`, outermost first."""
+    return [m.group(1) for m in INLINE_MOD.finditer(masked, 0, pos) if block_end(masked, m.start()) > pos]
 
 
 def test_regions(root_file):
@@ -119,12 +133,39 @@ def test_regions(root_file):
         regions[f] = None if is_test else []
         for d in MOD_DECL.finditer(m):
             attrs = src[d.start(1) : d.end(1)]
-            child = module_file(f, d.group(2), attrs)
+            child = module_file(f, d.group(2), attrs, inline_mods(m, d.start()))
             if child:
                 todo.append((child, is_test or bool(CFG_TEST.search(attrs))))
         if not is_test:
             regions[f] = item_ranges(m)
     return regions
+
+
+def compiled_files(roots):
+    """Every .rs file under `roots` that a target root of a crate there reaches through `mod` lines."""
+    targets = []
+    for root in roots:
+        for d, dirs, files in os.walk(root):
+            dirs[:] = [x for x in dirs if x not in ("target", "vendor")]
+            if "Cargo.toml" not in files:
+                continue
+            targets += [os.path.join(d, f) for f in ("build.rs", "src/lib.rs", "src/main.rs")]
+            targets += [os.path.join(d, p) for p in TARGET_PATH.findall(open(os.path.join(d, "Cargo.toml")).read())]
+            for sub in ("src/bin", "tests", "benches", "examples"):
+                targets += glob.glob(os.path.join(d, sub, "*.rs")) + glob.glob(os.path.join(d, sub, "*", "main.rs"))
+    seen, todo = set(), [os.path.normpath(t) for t in targets if os.path.isfile(t)]
+    while todo:
+        f = todo.pop()
+        if f in seen:
+            continue
+        seen.add(f)
+        src = open(f).read()
+        m = mask(src)
+        for d in MOD_DECL.finditer(m):
+            child = module_file(f, d.group(2), src[d.start(1) : d.end(1)], inline_mods(m, d.start()))
+            if child:
+                todo.append(os.path.normpath(child))
+    return seen
 
 
 def item_ranges(masked):

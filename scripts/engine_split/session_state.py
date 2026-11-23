@@ -25,7 +25,7 @@ every run.
 import argparse, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rust_source import edited_definitions, git  # noqa: E402
+from rust_source import compiled_files, edited_definitions, git  # noqa: E402
 
 FIELDS = ["record_tools", "recording", "take", "playing", "playback_stack", "playback_steps", "budget_shared", "batch_depth", "script_depth", "script_steps"]
 RENAMED = {"recording": "target"}
@@ -108,18 +108,8 @@ def rewrite(path):
     return False
 
 
-def rust_files(roots):
-    for root in roots:
-        for d, _, files in os.walk(root):
-            if "/target" in d or "/vendor" in d:
-                continue
-            for name in files:
-                if name.endswith(".rs"):
-                    yield os.path.join(d, name)
-
-
 def split():
-    n = sum(rewrite(p) for p in rust_files(["crates", "apps"]))
+    n = sum(rewrite(p) for p in sorted(compiled_files(["crates", "apps"])))
     print(f"session_state split: {n} files rewritten")
 
 

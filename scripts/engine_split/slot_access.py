@@ -41,7 +41,7 @@ Running any mode twice gives the same result. What it cannot do is printed at th
 import argparse, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rust_source import block_end, edited_definitions, git, mask  # noqa: E402
+from rust_source import block_end, compiled_files, edited_definitions, git, mask  # noqa: E402
 
 CORE = "crates/engine-core/src/"
 # The engine and the crates that use it; nothing below the engine has a session.
@@ -338,16 +338,6 @@ def rewrite(path):
     return False
 
 
-def rust_files(roots):
-    for root in roots:
-        for d, _, files in os.walk(root):
-            if "/target" in d or "/vendor" in d or d.startswith("vendor"):
-                continue
-            for name in files:
-                if name.endswith(".rs"):
-                    yield os.path.join(d, name)
-
-
 # ---------------------------------------------------------------- fix mode
 
 ACCESSOR_READ = re.compile(r"\.(" + "|".join(SLOTS) + r")\(\)")
@@ -505,7 +495,7 @@ def main():
     os.chdir(git("rev-parse", "--show-toplevel").strip())
     MEMBERS = members()
     if args.mode == "split":
-        n = sum(rewrite(p) for p in rust_files(ROOTS))
+        n = sum(rewrite(p) for p in sorted(compiled_files(ROOTS)))
         print(f"slot_access split: {n} files rewritten")
     elif args.mode == "branch":
         changed = git("diff", "--name-only", f"{args.base}...{args.head}").split()
