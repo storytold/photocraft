@@ -86,14 +86,18 @@ fn a_relative_percentage_that_is_not_a_number_is_refused_without_a_change() {
 
 #[test]
 fn a_recorded_relative_percent_step_plays_back_as_the_command() {
-    for (pct, expected) in [(50.0, (600, 450)), (-50.0, (200, 150))] {
+    // A width-only step grows the width and keeps the omitted height.
+    let width_only = Descriptor::new("null").with("Rltv", D::Boolean(true)).with("Wdth", D::UnitFloat { unit: *b"#Prc", value: 200.0 });
+    for (case, step, expected) in
+        [("+50 %", recorded_step(50.0, 50.0), (600, 450)), ("-50 %", recorded_step(-50.0, -50.0), (200, 150)), ("width +200 %", width_only, (1200, 300))]
+    {
         let mut s = doc(400, 300);
-        let data = photocraft_paint::tile::b64_encode(&action_file(recorded_step(pct, pct)));
+        let data = photocraft_paint::tile::b64_encode(&action_file(step));
         let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
-        assert_eq!(loaded["unsupported"], json!([]), "{pct} %");
+        assert_eq!(loaded["unsupported"], json!([]), "{case}");
         let result = s.execute("actions.play", json!({"action": loaded["actions"][0]})).unwrap();
         assert!(result.get("failed").is_none(), "{result}");
-        assert_eq!(size(&s), expected, "{pct} %");
+        assert_eq!(size(&s), expected, "{case}");
     }
 }
 
