@@ -402,6 +402,10 @@ fn a_move_drag_between_floating_windows() {
     // Position windows side-by-side so they don't occlude each other
     h.state_mut().ui.document_windows.floating[0].1 = Rect::from_min_size(egui::pos2(50.0, 80.0), vec2(500.0, 400.0));
     h.state_mut().ui.document_windows.floating[1].1 = Rect::from_min_size(egui::pos2(600.0, 80.0), vec2(500.0, 400.0));
+    // Set distinct views for source and destination floating windows
+    h.state_mut().ui.views[0].zoom = 1.5;
+    h.state_mut().ui.views[1].zoom = 2.0;
+    h.state_mut().ui.views[1].center = [35.0, 20.0];
     h.state_mut().session.set_active(0);
     h.state_mut().ui.tool = Tool::Move;
     h.run_steps(4);
@@ -413,6 +417,7 @@ fn a_move_drag_between_floating_windows() {
 
     let host1 = CanvasHost::primary(h.state(), 1);
     let view1 = ToolHost::shown_space(&h.ctx, host1.canvas_id()).unwrap().view;
+    assert_ne!(view0.zoom, view1.zoom, "source and destination views must have distinct zoom transforms");
     // Known off-center drop point in destination document coordinates (dest-doc size is 60×50, center is (30, 25))
     let drop_doc = [25.0, 35.0];
     let drop = to_screen(&view1, drop_doc[0], drop_doc[1]);
