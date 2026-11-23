@@ -373,7 +373,7 @@ fn recorded_replace_color_clamps_shifts_and_plays_the_lab_box_at_every_depth() {
         if inverse {
             let mut mask = photocraft_raster::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[1.0]);
             mask.fill_rect(photocraft_doc::Rect::new(1, 0, 2, 1), &[0.0]);
-            std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(mask);
+            std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection = Some(mask);
         }
         let before = raw(&s);
         s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));

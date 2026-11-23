@@ -199,14 +199,10 @@ fn dont_save_all(_: &Value, _: &Value) -> Vec<(String, Value)> {
     vec![pair("applyToAll", json!(true)), pair("choice", json!("dontSave"))]
 }
 
-/// A blend label such as "Multiply" to the Blend row's id; a string `blend_from_str` refuses passes through so the
+/// A blend label such as "Multiply" to the Blend row's id; a string `parse_blend` refuses passes through so the
 /// row refuses it.
 fn blend_id(value: &Value) -> Value {
-    value
-        .as_str()
-        .and_then(photocraft_engine::commands::blend_from_str)
-        .map(|mode| json!(crate::panels::layers_tree::blend_key(mode).to_string()))
-        .unwrap_or_else(|| value.clone())
+    value.as_str().and_then(photocraft_engine::commands::parse_blend).map(|mode| json!(mode.key().to_string())).unwrap_or_else(|| value.clone())
 }
 
 // PLAN: the framework field ids `mode` (Fill, Stroke) and `blend` (Smart Filter) are assumed (dialogs-w22 by request).
@@ -360,9 +356,26 @@ pub(crate) fn method(app: &mut PhotocraftApp, ctx: &egui::Context, req: &Control
     if !matches!(req.method.as_str(), "ui.dialog.set" | "ui.dialog.confirm" | "ui.dialog.cancel" | "ui.dialog.apply") {
         return None;
     }
-    let id = match dialog_id(host(app), p) {
-        Ok(id) => id,
-        Err(e) => return Some(err(e)),
+    // Keyboard Shortcuts and Menus draws outside the host: Cancel closes it; its changes go through
+    // `edit.keyboardShortcuts` params (#15544).
+    if p.get("dialog").and_then(Value::as_str) == Some(crate::prefs_ui::shortcuts::CONTROL_ID) {
+        return Some(match req.method.as_str() {
+            "ui.dialog.cancel" if crate::prefs_ui::shortcuts::cancel(app) => ok(Value::Null),
+            "ui.dialog.cancel" => err("Keyboard Shortcuts and Menus is not open"),
+            _ => err("Keyboard Shortcuts and Menus takes its changes as `edit.keyboardShortcuts` params; `ui.dialog.cancel` closes it"),
+        });
+    }
+    // The unsaved-changes prompt is listed as "discard" and answered by that id.
+    let id = if p.get("dialog").and_then(Value::as_str) == Some(crate::discard_ui::CONTROL_ID) {
+        match crate::discard_ui::host_id(app) {
+            Some(id) => id,
+            None => return Some(err("no unsaved-changes prompt is open")),
+        }
+    } else {
+        match dialog_id(host(app), p) {
+            Ok(id) => id,
+            Err(e) => return Some(err(e)),
+        }
     };
     Some(match req.method.as_str() {
         "ui.dialog.set" => set(app, ctx, id, p),

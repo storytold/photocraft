@@ -65,6 +65,13 @@ pub(crate) fn chunks_mut_limited<T: Send>(buf: &mut [T], chunk: usize, jobs: usi
         chunks_mut(buf, chunk, f);
         return;
     }
+    chunks_mut_grouped(buf, chunk, jobs, f);
+}
+
+/// A hard task count even when every worker fits: `f` may wait on nested rayon
+/// work, in which case an outer task can be suspended while its worker helps.
+pub(crate) fn chunks_mut_grouped<T: Send>(buf: &mut [T], chunk: usize, jobs: usize, f: impl Fn(usize, &mut [T]) + Sync + Send) {
+    let chunk = chunk.max(1);
     let per_group = buf.len().div_ceil(chunk).div_ceil(jobs.max(1)).max(1);
     chunks_mut(buf, chunk.saturating_mul(per_group), |group, part| {
         for (local, c) in part.chunks_mut(chunk).enumerate() {

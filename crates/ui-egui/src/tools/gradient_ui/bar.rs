@@ -18,9 +18,16 @@ use crate::{PhotocraftApp, panel_docking};
 
 /// The blend modes the Classic gradient lists, with a rule above each group.
 fn blend_modes() -> Vec<Entry<BlendMode>> {
-    let keys: Vec<BlendKeyEntry<BlendMode>> =
-        crate::blend_keys::tool_modes(Tool::Gradient).unwrap_or_default().into_iter().flatten().map(|mode| crate::panels::blend_entry(mode, mode)).collect();
-    blend_entries(&keys, |entry| Label::from(tl!(entry.key.label()).to_string()))
+    static CACHE: crate::i18n::LangCache<(), Vec<Entry<BlendMode>>> = crate::i18n::LangCache::new();
+    CACHE.get_or_build((), || {
+        let keys: Vec<BlendKeyEntry<BlendMode>> = crate::blend_keys::tool_modes(Tool::Gradient)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|mode| crate::panels::blend_entry(mode, mode))
+            .collect();
+        blend_entries(&keys, |entry| Label::from(tl!(entry.key.label()).to_string()))
+    })
 }
 
 /// `add` captioned `label` as a field of the bar.
