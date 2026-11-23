@@ -1,4 +1,5 @@
 use super::*;
+use crate::presets::PresetsExt;
 use photocraft_color::ColorMode;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
@@ -224,7 +225,7 @@ fn clone_preview_matches_source_without_mutating_session() {
         paint_layer(&mut s, |x, y| [x as f32 / 32.0, y as f32 / 32.0, 0.25, 1.0]);
         s.execute("cloneSource.set", json!({"source": [8,8]})).unwrap();
         let revision = s.active().unwrap().revision;
-        let slots = s.presets.clone.clone();
+        let slots = s.presets().clone.clone();
         let map = Mapping { source: (8.0, 8.0), anchor: (20.0, 20.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
         let buf = clone_preview(&s, Rect::new(20, 20, 21, 21), &map, "current").unwrap();
         let expected = rgba(&s, 8, 8);
@@ -232,7 +233,7 @@ fn clone_preview_matches_source_without_mutating_session() {
             assert!((actual - expected).abs() < 0.001);
         }
         assert_eq!(s.active().unwrap().revision, revision);
-        assert_eq!(s.presets.clone, slots);
+        assert_eq!(s.presets().clone, slots);
         assert!(clone_preview(&s, Rect::new(0, 0, 2048, 2048), &map, "current").is_err());
         assert!(clone_preview(&s, Rect::new(20, 20, 21, 21), &map, "invalid").is_err());
         let invalid = Mapping { source: (f64::NAN, 0.0), ..map };
@@ -1277,6 +1278,11 @@ fn retouch_params(id: &str, history_state: usize, target: Value) -> Value {
         }
         "paint.sponge" => p["mode"] = json!("saturate"),
         _ => {}
+    }
+    // `strength` and `exposure` are shared stroke settings: give them only to the tools whose doc
+    // takes them, since dispatch refuses an unknown key.
+    if let Some(schema) = crate::param_schema::of(crate::commands::find(id).unwrap()).filter(|s| !s.open()) {
+        p.as_object_mut().unwrap().retain(|k, _| !matches!(k.as_str(), "strength" | "exposure") || schema.has_key(k));
     }
     p
 }
@@ -3232,9 +3238,9 @@ fn clone_preview_reads_another_document() {
     let map = Mapping { source: (10.0, 12.0), anchor: (30.0, 30.0), m: [1.0, 0.0, 0.0, 1.0], document: Some(source) };
     // The public preview API's explicit mapping remains independent of the selected slot.
     s.execute("cloneSource.select", json!({"index": 1})).unwrap();
-    let slots = s.presets.clone.clone();
+    let slots = s.presets().clone.clone();
     let buf = clone_preview(&s, Rect::new(30, 30, 31, 31), &map, "current").unwrap();
-    assert_eq!(s.presets.clone, slots, "preview never changes the selected slot");
+    assert_eq!(s.presets().clone, slots, "preview never changes the selected slot");
     let want = doc_rgba(&s, 0, 10, 12);
     for (a, b) in buf.px[0].iter().zip(want) {
         assert!((a - b).abs() < 0.01, "{:?} vs {want:?}", buf.px[0]);
@@ -3252,7 +3258,7 @@ fn clone_source_document_closed_or_invalid_is_an_error() {
         assert!(LiveRetouch::begin(&s, cmd, &json!({"points": [[20, 20]], "size": 4})).is_err());
     }
     assert_eq!(s.active().unwrap().doc, before, "nothing painted");
-    assert_eq!(s.presets.clone.active().anchor, None, "a refused stroke pairs nothing");
+    assert_eq!(s.presets().clone.active().anchor, None, "a refused stroke pairs nothing");
     assert_eq!(s.execute("cloneSource.list", json!({})).unwrap()["sources"][0]["document"], Value::Null);
     // Explicit `source`/`offset` params sample the painted document, whatever the slot says.
     s.execute("paint.cloneStamp", json!({"points": [[20, 20]], "offset": [4, 0], "size": 4})).unwrap();
@@ -3304,7 +3310,7 @@ fn clone_source_set_names_the_source_document() {
     ] {
         assert!(s.execute("cloneSource.set", bad.clone()).is_err(), "{bad}");
     }
-    assert_eq!(s.presets.clone.active().source, Some([10.0, 12.0]), "a refused call changes nothing");
+    assert_eq!(s.presets().clone.active().source, Some([10.0, 12.0]), "a refused call changes nothing");
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -10,6 +10,7 @@
 //! shortcut whose command is disabled in the current state reports why on the status bar instead
 //! of doing nothing silently, as the greyed menu item shows.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::HashMap;
 
 use rustc_hash::FxHashMap;
@@ -320,7 +321,7 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         push_row(&mut rows, &mut index, def);
     }
     // Recorded actions run on their own key (the user's assignment is an override).
-    for action in app.session.actions.list.actions() {
+    for action in app.session.actions().list.actions() {
         let id = crate::actions::shortcut_id(&action.name);
         push_row(&mut rows, &mut index, app_row(&id, &action.name).with_path(vec!["Actions".into(), action.name.clone()]));
     }
@@ -726,7 +727,7 @@ fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, command: &CommandRe
     let action = id.strip_prefix(crate::actions::SHORTCUT_PREFIX);
     let command_id = if action.is_some() { "actions.play" } else { id };
     // A key saved for an action that was since deleted or renamed names no action.
-    let missing = action.is_some_and(|name| !app.session.actions.list.actions().iter().any(|a| a.name == name));
+    let missing = action.is_some_and(|name| !app.session.actions().list.actions().iter().any(|a| a.name == name));
     let outcome = if missing || !crate::menus::is_enabled(app, command_id) {
         let why = if missing { "The Action no longer exists".into() } else { disabled_reason(app, command_id) };
         let template = "{label} is not available: {reason}";

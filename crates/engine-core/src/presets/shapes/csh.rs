@@ -1,5 +1,7 @@
 //! Import a complete custom-shape set before changing the persistent library.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
@@ -15,7 +17,7 @@ pub(super) fn spec() -> CommandSpec {
         label: "Import Shapes",
         menu: &[],
         shortcut: None,
-        params: r#"{"path":str (.csh) | "data":str (base64),"group":str?} → {group,count,names}; appends a uniquely named group, never replaces existing presets"#,
+        params: r#"{"path":str (.csh) or "data":str (base64),"group":str?} → {group,count,names}; appends a uniquely named group, never replaces existing presets"#,
         enabled: always,
         run: import,
         journal: true,
@@ -68,8 +70,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             Ok((group, items))
         },
         |s, (group, mut items)| {
-            let group = super::super::gradients::unique_group(&s.presets.shapes, &group);
-            let mut taken: HashSet<String> = s.presets.shapes.iter().flat_map(|g| g.items.iter().map(|i| i.name.clone())).collect();
+            let group = super::super::gradients::unique_group(&s.presets().shapes, &group);
+            let mut taken: HashSet<String> = s.presets().shapes.iter().flat_map(|g| g.items.iter().map(|i| i.name.clone())).collect();
             taken.extend(s.edit_state.custom_shapes.iter().map(|c| c.name.clone()));
             let mut suffixes: HashMap<String, usize> = HashMap::new();
             for item in &mut items {
@@ -82,8 +84,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let names: Vec<String> = items.iter().map(|i| i.name.clone()).collect();
             let result = json!({"group": group, "count": items.len(), "names": names});
-            s.presets.shapes.push(Group::new(&group, items));
-            s.presets_changed();
+            s.presets_mut().shapes.push(Group::new(&group, items));
+            presets_changed(s);
             Ok(result)
         },
     )

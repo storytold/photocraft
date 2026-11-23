@@ -2,6 +2,7 @@
 use super::*;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_geom::Rect;
+use serde_json::json;
 
 /// Map inputs, explicit point precedence and native records survive normalization for every
 /// multi-component subset, including full explicit sets and CMYK Black.

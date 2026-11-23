@@ -25,7 +25,6 @@ use photocraft_color::{Color, SampleType};
 use photocraft_doc::{CountGroup, Document, Layer, MeasurementScale, Ruler};
 use photocraft_geom::Rect;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::commands::CommandSpec;
@@ -58,71 +57,7 @@ pub const COLUMNS: &[(&str, &str)] = &[
     ("angle", "Angle"),
 ];
 
-const COMMON: &[&str] = &["label", "dateTime", "document", "source", "scale", "scaleUnits", "scaleFactor"];
-const SELECTION_ONLY: &[&str] =
-    &["count", "area", "perimeter", "circularity", "height", "width", "grayMin", "grayMax", "grayMean", "grayMedian", "integratedDensity", "histogram"];
-const RULER_ONLY: &[&str] = &["length", "angle"];
-const COUNT_ONLY: &[&str] = &["count"];
-
-/// Data points a measurement source can record.
-pub fn available(source: &str) -> Vec<&'static str> {
-    let extra = match source {
-        "selection" => SELECTION_ONLY,
-        "ruler" => RULER_ONLY,
-        _ => COUNT_ONLY,
-    };
-    COMMON.iter().chain(extra).copied().collect()
-}
-
-/// Image › Analysis › Select Data Points: what Record Measurements writes per source.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DataPoints {
-    pub selection: Vec<String>,
-    pub ruler: Vec<String>,
-    pub count: Vec<String>,
-}
-
-impl Default for DataPoints {
-    fn default() -> Self {
-        let all = |s| available(s).into_iter().map(String::from).collect();
-        Self { selection: all("selection"), ruler: all("ruler"), count: all("count") }
-    }
-}
-
-impl DataPoints {
-    fn of(&self, source: &str) -> &[String] {
-        match source {
-            "selection" => &self.selection,
-            "ruler" => &self.ruler,
-            _ => &self.count,
-        }
-    }
-    fn of_mut(&mut self, source: &str) -> &mut Vec<String> {
-        match source {
-            "selection" => &mut self.selection,
-            "ruler" => &mut self.ruler,
-            _ => &mut self.count,
-        }
-    }
-}
-
-/// One Measurement Log row.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LogRow {
-    pub id: u64,
-    /// Data point values by key (see [`COLUMNS`]).
-    pub values: Map<String, Value>,
-}
-
-/// Session-wide analysis state (`Session::analysis`).
-#[derive(Clone, Debug, Default)]
-pub struct AnalysisState {
-    pub log: Vec<LogRow>,
-    next_row: u64,
-    /// Counter for "Measurement N" labels.
-    next_measurement: u64,
-    pub data_points: DataPoints,
-}
+pub use crate::state::{AnalysisState, DataPoints, LogRow, available};
 
 // ------------------------------------------------------------------ helpers
 

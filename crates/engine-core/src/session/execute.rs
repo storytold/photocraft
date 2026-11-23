@@ -373,9 +373,9 @@ impl Session {
             self.hint_before = Some(hint_before);
         }
         if damage.is_none_or(|d| !d.is_empty()) {
-            // Free the mask early; a stale entry would only miss (it is keyed by pixels).
-            self.subject_cache = Default::default();
-            self.object_finder = Default::default();
+            for edited in &crate::registry::hooks().pixels_edited {
+                edited(self);
+            }
         }
         Ok(r)
     }

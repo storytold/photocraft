@@ -1,4 +1,5 @@
 use crate::cmd::{Color, ColorMode, CommandSpec, Document, EngineError, Layer, SampleType, Size, Value, always, json, parse_hex};
+use crate::color_cmds::ColorExt;
 
 /// File menu: New (new documents take their presets from the document preset store).
 pub fn specs() -> Vec<CommandSpec> {
@@ -55,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 // Photoshop's New Document › Color Profile: tag the document with another profile
                 // than the working space (#321). Checked before the document opens.
                 if let Some(spec) = p.get("profile").and_then(Value::as_str).filter(|spec| !matches!(*spec, "working" | "none")) {
-                    let prof = s.color.resolve(spec, Some(&doc), None)?;
+                    let prof = s.color().resolve(spec, Some(&doc), None)?;
                     if prof.color_space != crate::color_cmds::mode_space(doc.mode) {
                         return Err(EngineError::BadParams {
                             cmd: "file.new".into(),
