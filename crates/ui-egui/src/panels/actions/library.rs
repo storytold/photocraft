@@ -73,7 +73,7 @@ pub(crate) fn idle(app: &PhotocraftApp, command: &str) -> Result<(), String> {
     let paused = &app.paused_playbacks.paused;
     let editor = paused.values().any(|p| p.menu_editor.is_some());
     let spelling = app.ui.type_panels.spell.as_ref().and_then(|spell| spell.resume).is_some_and(|token| paused.contains_key(&token));
-    if app.session.actions.recording.is_some() || app.session.actions.playing > 0 || super::playback::pending(app) || editor || spelling {
+    if app.session.recording.target.is_some() || app.session.recording.playing > 0 || super::playback::pending(app) || editor || spelling {
         return Err(tl!("Stop recording or playback before changing the Actions library.").into());
     }
     Ok(())

@@ -82,8 +82,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     }
     let [r, g, b, _] = app.session.tools.foreground;
     let first = app.session.patterns.items.first().map(|p| p.id.clone());
-    let ctx = app.ctx().clone();
-    let patterns = crate::panels::preset_browser::pattern_swatches(app, &ctx);
+    let patterns = crate::panels::preset_browser::pattern_swatches(app);
     let rows = rows([r, g, b], first.clone());
     let reset = defaults([r, g, b], first);
     let title = Label::from(tl!("Fill"));

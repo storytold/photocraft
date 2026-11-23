@@ -24,16 +24,21 @@ socket I/O and handler waits use timeouts; MCP and headless batches are limited 
 JSON-lines replies and encoded MCP tool results are capped at 8 MiB, with aggregate batch reply
 budgets. Headless previews have source-pixel, requested-edge, and encoded-PNG ceilings. The
 bridge bounds incoming reply frames and screenshot decoding.
-Automation file methods require separately configured read and write roots. Request paths are
-relative, and absolute, traversal, alternate-separator, device-name, and link-escape paths are
-rejected before file effects.
+Automation file methods require separately configured read and write roots. Request paths may be
+relative or absolute beneath the canonical or configured spelling of the applicable granted root.
+Absolute paths outside that root are rejected. Accepted absolute paths are translated to relative
+paths and resolved through the held directory capability. Relative requests reject empty or `.`
+components and alternate separators. Absolute requests are split into native path components
+before checking the root-relative remainder, so repeated separators and interior `.` components
+are normalized. Both forms reject parent traversal in the remainder, disallowed component names
+and link escapes before file effects.
 
 **Known limitations:** the token is a bearer credential and grants the complete non-filesystem
 control surface. There is no encryption, client identity, general per-method capability check,
 explicit JSON-depth policy, aggregate session-memory accounting, or command-duration/cancellation
 budget. Desktop capture/encoding and import/export still need their own operation budgets.
-The listener creates one thread per authenticated
-active connection, within the connection cap. Trusted one-shot CLI operations and interactive
+The listener creates one thread per accepted active connection, including clients that are still
+authenticating, within the connection cap. Trusted one-shot CLI operations and interactive
 desktop file pickers retain the launching user's normal filesystem authority.
 
 Use a private token file, enable `--control` only for a trusted local automation session, and never proxy the unencrypted protocol beyond loopback. See [Automation security](../security/automation-security.md) for the remaining gateway work.
