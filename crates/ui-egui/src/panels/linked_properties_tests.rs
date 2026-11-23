@@ -83,6 +83,11 @@ fn read_only(h: &Harness<'_, Box<PhotocraftApp>>, label: &str) -> bool {
     h.get_by_label(label).accesskit_node().is_read_only()
 }
 
+/// Every labelled node's role and label, for the failure messages.
+fn labels(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
+    h.query_all_by_label_contains("").map(|n| format!("{:?} {:?}", n.accesskit_node().role(), n.accesskit_node().label())).collect()
+}
+
 /// The path the row shows for `file`: the full absolute path.
 fn shown(file: &std::path::Path) -> String {
     photocraft_engine::doc_path::resolve_in(&file.to_string_lossy(), None).unwrap().display().to_string()
@@ -92,7 +97,7 @@ fn shown(file: &std::path::Path) -> String {
 fn a_linked_smart_object_shows_its_kind_path_read_only_size_and_actions() {
     let (_directory, file) = png("small-100x60-72.png");
     let h = panel("file.placeLinked", &file);
-    assert!(h.query_by_label("Linked Smart Object").is_some(), "the header names the kind");
+    assert!(h.query_by_label("Linked Smart Object").is_some(), "the header names the kind: {:?}", labels(&h));
     // W and H are read-only, and show the size; X and Y stay editable.
     assert!(read_only(&h, "Width") && read_only(&h, "Height"), "read-only W/H");
     for (label, value) in [("Width", "100"), ("Height", "60")] {
@@ -116,7 +121,7 @@ fn an_embedded_smart_object_keeps_its_header_fields_and_actions() {
     let (_directory, file) = png("small-100x60-72.png");
     let h = panel("file.placeEmbedded", &file);
     assert!(h.query_by_label("Linked Smart Object").is_none());
-    assert!(h.query_by_label("Smart Object Layer").is_some());
+    assert!(h.query_by_label("Smart Object Layer").is_some(), "{:?}", labels(&h));
     assert!(!read_only(&h, "Width") && !read_only(&h, "Height"), "W/H fields");
     assert!(h.query_by_label("Maintain aspect ratio").is_some());
     assert!(h.query_by_label(&shown(&file)).is_none(), "no path row");
