@@ -4,82 +4,58 @@
 //! typing session is one "Edit Type" history step and automation sees exactly what the user does.
 //! Offsets in [`TextEdit`] are character indices (the engine's unit); the layout works in bytes.
 
-use std::collections::HashMap;
-use std::ops::Range;
 use std::sync::{Arc, PoisonError};
 
-use egui::ime_context::{CommittedText, ImeContextTracker, ImeMutationStamp, ImeObservation, ImeTarget};
-use egui::{Color32, Pos2, Stroke};
 use photocraft_doc::{Document, LayerContent, LayerId, TextLayer};
 use photocraft_geom::{Affine, Point};
 use photocraft_text::TextLayout;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
-use crate::state::{BoxResize, TextEdit};
+use crate::state::TextEdit;
 
+mod controls;
 mod defaults;
 mod editing;
 mod fonts;
-mod ime;
-mod ime_edit;
+mod host;
 mod insertion_style;
-mod keys;
 mod layout;
 mod options_bar;
-mod overlay;
 mod panel;
 mod pointer;
+mod values;
+mod vertical_cursor;
 
+pub(crate) use controls::canvas_controls;
+#[cfg(test)]
+pub(crate) use craft::text::ui::editor::CharToggle;
+#[cfg(test)]
 use defaults::apply;
 #[cfg(test)]
 use defaults::{default_style_params, default_styles, shown_scale};
 pub use defaults::{foreground_changed, open_color_picker};
-pub(crate) use defaults::{formatting_params, target, target_text, type_unit};
-use editing::selected_styles;
-#[cfg(test)]
-pub(crate) use editing::{CharToggle, step_char_metric, toggle_char_style, toggle_hyphenate};
+pub(crate) use defaults::{formatting_params, target, target_text};
 pub use editing::{cancel, commit, commit_with, edit_active, edit_at, end_if_left};
-pub(crate) use editing::{commit_shortcut, copy_selection, cut_selection, request_paste, select_all};
+pub(crate) use editing::{commit_before_selecting, focus_editor};
 #[cfg(test)]
-use editing::{insert, insert_typed, smart_quotes};
+pub(crate) use editing::{step_char_metric, toggle_char_style, toggle_hyphenate};
 #[cfg(test)]
-pub(crate) use fonts::{Axis, axis_value, slider_axes};
-#[cfg(test)]
-use fonts::{FONT_LIST_HEIGHT, font_picker_in, preview_text, style_names, wheel_family_index};
-use fonts::{FontFieldEdit, accept_row, font_labels_id, font_menu_rows};
-pub(crate) use fonts::{FontLibrary, family_picker_in, fonts_ready, selected_style};
-pub use fonts::{families, style_label, styles, sync_font_names, warm_fonts};
-pub(crate) use ime::{ImeState, controls_only, finish_reset_logic, finish_reset_pass, in_ui_pass, install_reset_hooks};
-#[cfg(test)]
-use ime::{IncomingComposition, ResetPhase};
-#[cfg(test)]
-use ime_edit::ime_update;
-pub(crate) use ime_edit::sync_ime;
-#[cfg(test)]
-pub(crate) use keys::flow_key;
-pub use keys::handle_keys;
+use fonts::preview_text;
+pub use fonts::{families, style_label, styles, warm_fonts};
+pub(crate) use fonts::{finish_font_state, font_state, selected_style};
+pub(crate) use host::LayerHost;
 pub use layout::layout;
 pub(crate) use layout::{hit_layer, offset_at, shows_own_layout};
-#[cfg(test)]
-use options_bar::num_field;
 pub use options_bar::options_bar;
 pub(crate) use options_bar::styles_at;
 #[cfg(test)]
-pub(crate) use options_bar::{kerning_label, parse_kerning};
-#[cfg(test)]
-use overlay::CARET_STROKES;
-pub use overlay::draw_overlay;
-#[cfg(test)]
-pub(crate) use panel::{OPENTYPE_BUTTONS, toggle_opentype};
+pub(crate) use panel::toggle_opentype;
 pub use panel::{character_panel, type_properties};
 #[cfg(test)]
-use pointer::{MIN_BOX, handle_sides, word_boundary};
-pub(crate) use pointer::{PathClick, box_handle_at, hover_path_target, inside_box};
-#[cfg(test)]
-pub(crate) use pointer::{box_shape, click_selection, next_click_count, path_target};
-pub use pointer::{multi_click, pointer_down, pointer_move, pointer_up};
+pub(crate) use pointer::{PathClick, path_target};
+pub(crate) use pointer::{TypeState, box_shape, drain, tool};
+pub(crate) use values::doc_unit;
 
 pub const PLACEHOLDER: &str = "Lorem Ipsum";
 
@@ -111,11 +87,6 @@ fn current_text(app: &PhotocraftApp, id: LayerId) -> Option<String> {
     Some(text_layer(&app.session.active()?.doc, id)?.text.clone())
 }
 
-/// Character count without cloning the layer's text.
-fn text_char_count(app: &PhotocraftApp, id: LayerId) -> Option<usize> {
-    Some(text_layer(&app.session.active()?.doc, id)?.text.chars().count())
-}
-
 /// The selected characters, clamped after undo/redo may have shortened the text.
 pub(crate) fn selected_range(app: &PhotocraftApp) -> Option<[usize; 2]> {
     let ed = app.ui.text_edit.as_ref()?;
@@ -134,6 +105,9 @@ fn byte_range(text: &str, a: usize, b: usize) -> (usize, usize) {
 mod vertical_align_buttons_tests;
 
 #[cfg(test)]
+mod vertical_cursor_tests;
+
+#[cfg(test)]
 mod canvas_tests;
 #[cfg(test)]
 mod ctrl_period_cancel_tests;
@@ -142,8 +116,6 @@ mod ctrl_period_cancel_tests;
 mod font_commit_tests;
 #[cfg(test)]
 mod font_picker_tests;
-#[cfg(test)]
-mod options_tooltips_tests;
 #[cfg(test)]
 mod panels_toggle_tests;
 
@@ -162,3 +134,6 @@ mod locked_layer_alert_tests;
 mod ime_tests;
 #[cfg(test)]
 mod mask_escape_tests;
+
+#[cfg(test)]
+mod unchanged_edit_history_tests;

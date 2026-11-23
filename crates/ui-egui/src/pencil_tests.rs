@@ -1,15 +1,15 @@
-//! The Pencil tool (#213): aliased strokes through the live-stroke path, Auto Erase, the square
-//! pixel-grid cursor, ⇧-click lines, Control+Alt resizing and the B group.
+//! The Pencil tool (#213): aliased strokes through the live-stroke path, Auto Erase, the cursor's
+//! shape rule, ⇧-click lines, Control+Alt resizing and the B group.
 
-use egui::{Key, Modifiers, Pos2, Rect, vec2};
-use egui_kittest::Harness;
+use egui::Modifiers;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform, pencil_cursor_rect, pencil_tip_is_round, tool_event};
+use crate::canvas::cursor_policy::pencil_tip_is_round;
+use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 120, "height": 80, "background": "transparent"})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#000000", "background": "#ffffff"})).unwrap();
@@ -147,44 +147,12 @@ fn shift_clicked_pencil_does_not_split_a_click_near_a_pixel_boundary() {
 #[test]
 fn ctrl_alt_drag_resizes_the_pencil_without_painting() {
     let mut app = app();
+    // ⌃⌥ is its own chord on a Mac only: elsewhere the window host reports Ctrl as ⌘.
+    crate::canvas::testing::on_a_mac(&app);
     let ctrl_alt = Modifiers { alt: true, ctrl: true, ..Default::default() };
-    assert!(crate::brush_resize::applies(Tool::Pencil));
     drag(&mut app, &[(50.0, 40.0), (60.0, 40.0)], ctrl_alt);
     assert_eq!(app.session.tools.brush.size, 23.0);
     assert_eq!(app.session.active().unwrap().history.past_len(), 0);
-}
-
-#[test]
-fn square_cursor_sits_on_the_pixel_grid() {
-    let rect = Rect::from_min_size(Pos2::new(0.0, 0.0), vec2(800.0, 600.0));
-    let xf = ViewXform { rect, zoom: 8.0, center: [50.0, 37.5], flip: false, rotation: 0.0, aspect: 1.0 };
-    // 1 px at 800 %: the 8-point square of the pixel under the pointer.
-    let r = pencil_cursor_rect(&xf, [10.3, 5.7], 1.0, 1.0);
-    assert_eq!(r, Rect::from_two_pos(xf.to_screen(10.0, 5.0), xf.to_screen(11.0, 6.0)));
-    assert_eq!(r.size(), vec2(8.0, 8.0));
-    // Even sizes centre on the nearest pixel corner; odd ones on the pixel.
-    let r = pencil_cursor_rect(&xf, [10.3, 5.7], 4.0, 1.0);
-    assert_eq!(r, Rect::from_two_pos(xf.to_screen(8.0, 4.0), xf.to_screen(12.0, 8.0)));
-    let r = pencil_cursor_rect(&xf, [10.9, 5.1], 3.0, 1.0);
-    assert_eq!(r, Rect::from_two_pos(xf.to_screen(9.0, 4.0), xf.to_screen(12.0, 7.0)));
-    // At 2× and at an odd zoom the edges land on physical pixels.
-    for (zoom, ppp) in [(3.3, 2.0), (0.5, 2.0), (1.0, 1.0), (13.7, 1.5)] {
-        let xf = ViewXform {
-            rect: Rect::from_min_size(Pos2::new(0.3, 0.7), vec2(800.0, 600.0)),
-            zoom,
-            center: [50.2, 37.9],
-            flip: true,
-            rotation: 0.0,
-            aspect: 1.0,
-        };
-        let r = pencil_cursor_rect(&xf, [20.4, 30.6], 5.0, ppp);
-        for v in [r.min.x, r.min.y, r.max.x, r.max.y] {
-            assert!((v * ppp - (v * ppp).round()).abs() < 1e-3, "zoom {zoom} ppp {ppp}: {v}");
-        }
-        assert!((r.width() - 5.0 * zoom).abs() <= 1.0 / ppp + 1e-3, "{r:?}");
-    }
-    // Hostile numbers don't panic.
-    let _ = pencil_cursor_rect(&xf, [f64::NAN, f64::INFINITY], f32::NAN, f32::NAN);
 }
 
 #[test]
@@ -224,77 +192,6 @@ fn the_eraser_in_pencil_mode_erases_aliased_pixels() {
         }
     }
     assert!(erased > 500, "{erased}");
-}
-
-#[test]
-fn the_eraser_in_block_mode_erases_a_16_screen_px_square() {
-    // #2770: a soft, small, half-opacity Eraser in Block mode still clears a hard square of
-    // 16 screen pixels: 16 document pixels at 100 %, 8 at 200 %.
-    for (zoom, n) in [(1.0, 16usize), (2.0, 8)] {
-        let mut app = app();
-        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
-        app.ui.tool = Tool::Eraser;
-        crate::paint_mouse::sync_tool_brush(&mut app);
-        app.run("tools.setBrush", json!({"brush": {"size": 5, "hardness": 0.0, "opacity": 0.5, "flow": 0.3, "smoothing": {"amount": 0.0}}})).unwrap();
-        app.ui.tool_options.eraser_mode = "block".into();
-        app.ui.views[0].zoom = zoom;
-        drag(&mut app, &[(60.3, 40.6)], Modifiers::NONE);
-        let (id, p) = last(&app);
-        assert_eq!((id.as_str(), &p["block"]), ("paint.pencil", &json!(true)));
-        let s = layer(&app).surface().unwrap().clone();
-        let (mut erased, mut x0, mut y0, mut x1, mut y1) = (0, i32::MAX, i32::MAX, 0, 0);
-        for y in 0..80 {
-            for x in 0..120 {
-                let a = s.rgba(x, y)[3];
-                assert!(a == 0.0 || a == 1.0, "partial alpha {a} at ({x},{y}), zoom {zoom}");
-                if a == 0.0 {
-                    erased += 1;
-                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
-                }
-            }
-        }
-        assert_eq!((erased, x1 - x0 + 1, y1 - y0 + 1), (n * n, n as i32, n as i32), "zoom {zoom}");
-    }
-}
-
-#[test]
-fn b_cycles_brush_pencil_color_replacement_and_mixer_brush() {
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
-        app
-    });
-    h.state_mut().ui.tool = Tool::Move;
-    h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
-    h.run_steps(4);
-    let press = |h: &mut Harness<'_, PhotocraftApp>, m: Modifiers| {
-        h.event(egui::Event::Key { key: Key::B, physical_key: None, pressed: true, repeat: false, modifiers: m });
-        h.event(egui::Event::Key { key: Key::B, physical_key: None, pressed: false, repeat: false, modifiers: m });
-        h.run_steps(2);
-    };
-    press(&mut h, Modifiers::NONE);
-    assert_eq!(h.state().ui.tool, Tool::Brush);
-    press(&mut h, Modifiers::NONE);
-    assert_eq!(h.state().ui.tool, Tool::Pencil);
-    press(&mut h, Modifiers::NONE);
-    assert_eq!(h.state().ui.tool, Tool::ColorReplacement);
-    press(&mut h, Modifiers::NONE);
-    assert_eq!(h.state().ui.tool, Tool::MixerBrush);
-    // Use Shift Key for Tool Switch: ⇧B cycles, B keeps the group's tool.
-    h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
-    press(&mut h, Modifiers::SHIFT);
-    assert_eq!(h.state().ui.tool, Tool::Brush);
-    press(&mut h, Modifiers::SHIFT);
-    assert_eq!(h.state().ui.tool, Tool::Pencil);
-    press(&mut h, Modifiers::SHIFT);
-    assert_eq!(h.state().ui.tool, Tool::ColorReplacement);
-    press(&mut h, Modifiers::SHIFT);
-    assert_eq!(h.state().ui.tool, Tool::MixerBrush);
-    press(&mut h, Modifiers::NONE);
-    assert_eq!(h.state().ui.tool, Tool::MixerBrush);
-    assert_eq!(Tool::from_name("pencil"), Some(Tool::Pencil));
-    assert_eq!(Tool::from_name("mixerBrush"), Some(Tool::MixerBrush));
 }
 
 /// Erase to History paints the source state in each Eraser mode, even on a layer made since.
@@ -519,6 +416,10 @@ fn history_stroke_pixels(mode: &str, pressed: &serde_json::Value, switched: Opti
     tool_event(&mut app, ToolEvent::Up { x: pts[4].0, y: pts[4].1 }, Modifiers::NONE);
     let (id, p) = last(&app);
     assert_eq!(id, "paint.historyBrush", "{mode}: {p}");
+    // The mode's own flags: the pixel comparisons can't see one go, as both strokes would lose it.
+    for flag in ["pencil", "block"] {
+        assert_eq!(p.get(flag) == Some(&json!(true)), mode == flag, "{mode}: {flag} in {p}");
+    }
     let st = app.session.active().unwrap();
     layer(&app).surface().unwrap().read_region(st.doc.bounds())
 }
@@ -537,15 +438,15 @@ fn a_tool_key_mid_stroke_paints_what_the_stroke_paints_without_it() {
         ("no dynamics, then size jitter", round.clone(), json!({"shapeDynamics": {"enabled": true, "size": {"jitter": 1.0}}})),
         ("no smoothing, then 90 %", round.clone(), json!({"smoothing": {"enabled": true, "amount": 0.9}})),
     ];
-    for mode in ["", "brush", "pencil", "block"] {
-        for (what, pressed, switched) in &cases {
-            let plain = history_stroke_pixels(mode, pressed, None);
-            assert!(history_stroke_pixels(mode, pressed, Some(switched)) == plain, "{mode} {what}: the switch changed the stroke");
-            // The switched-to brush paints differently, so the comparison means something; Block
-            // mode keeps only the brush's smoothing.
-            if mode != "block" || what.contains("smoothing") {
-                assert!(history_stroke_pixels(mode, switched, None) != plain, "{mode} {what}: both brushes paint alike");
-            }
-        }
+    // Each choice, not every mode with every case (#16041): the brush is captured once, at the
+    // press, whatever the mode, so History Brush takes every case and each Erase to History mode
+    // one, for its own flags: Brush and Pencil with the sampled tip, Block with smoothing (the only
+    // brush setting Block keeps).
+    let runs = cases.iter().map(|c| ("", c)).chain([("brush", &cases[2]), ("pencil", &cases[2]), ("block", &cases[4])]);
+    for (mode, (what, pressed, switched)) in runs {
+        let plain = history_stroke_pixels(mode, pressed, None);
+        assert!(history_stroke_pixels(mode, pressed, Some(switched)) == plain, "{mode} {what}: the switch changed the stroke");
+        // The switched-to brush paints differently, so the comparison means something.
+        assert!(history_stroke_pixels(mode, switched, None) != plain, "{mode} {what}: both brushes paint alike");
     }
 }

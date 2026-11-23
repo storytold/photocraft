@@ -49,9 +49,9 @@ fn running_the_menu_command_opens_no_dialog() {
     app.run("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     app.run("layer.new.group", json!({})).unwrap();
     let ctx = egui::Context::default();
-    let dialogs = app.ui.dialogs.len();
+    let dialogs = app.dialog_count();
     let layers = app.session.active().unwrap().doc.layers.len();
     crate::menus::invoke(&mut app, &ctx, ID, json!({})).expect("the command runs");
-    assert_eq!(app.ui.dialogs.len(), dialogs, "no dialog opens");
+    assert_eq!(app.dialog_count(), dialogs, "no dialog opens");
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "the group became an artboard in place");
 }
