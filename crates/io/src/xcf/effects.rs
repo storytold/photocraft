@@ -13,6 +13,8 @@ mod masked_exposure_tests;
 mod point_color;
 #[cfg(test)]
 mod point_color_tests;
+#[cfg(test)]
+mod resource_fallback_tests;
 mod spatial;
 #[cfg(test)]
 mod spatial_tests;
