@@ -48,7 +48,7 @@ fn has_clip_and_selection(s: &Session) -> std::result::Result<(), String> {
 /// Layers panel's selection; never the Background, a group or an adjustment layer (no pixels of
 /// their own to paste into; a shape counts, cached pixels or not).
 fn paste_into_each_targets(d: &crate::DocState) -> Vec<LayerId> {
-    let ids = d.selection_sources().unwrap_or_else(|| d.selected_layers());
+    let ids = d.selection_sources().unwrap_or_else(|| d.selected_layers().to_vec());
     let has_pixels = |id: &LayerId| d.doc.layer(*id).is_some_and(|l| !matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_)));
     ids.into_iter().filter(|id| !d.doc.is_background(*id) && has_pixels(id)).collect()
 }
