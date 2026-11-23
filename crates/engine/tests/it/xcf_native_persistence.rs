@@ -144,7 +144,7 @@ fn misnamed_plain_and_gzip_xcf_keep_source_protection_and_native_reopen_independ
                 assert_eq!(std::fs::read(destination).unwrap(), bytes);
             }
             session.execute("layer.setProps", json!({"opacity":0.5})).unwrap();
-            let rendered = photocraft_compose::flatten(&session.active().unwrap().doc).px;
+            let rendered = photocraft_compose::flatten(&session.active().unwrap().doc);
             let report = session.active().unwrap().doc.metadata.import_conversion.clone();
             session.execute("file.saveACopy", json!({"path":native})).unwrap();
             session.saved_to(native.to_str().unwrap().into());
@@ -161,10 +161,10 @@ fn misnamed_plain_and_gzip_xcf_keep_source_protection_and_native_reopen_independ
             assert!(!state.source_read_only && state.protected_import_source.is_none());
             assert_eq!(state.path.as_deref(), native.to_str());
             assert_eq!(state.doc.metadata.import_conversion, report);
-            assert_eq!(photocraft_compose::flatten(&state.doc).px, rendered);
+            assert_eq!(photocraft_compose::flatten(&state.doc).px, rendered.px);
             reopened.execute("layer.setProps", json!({"opacity":0.75})).unwrap();
             reopened.execute("edit.undo", json!({})).unwrap();
-            assert_eq!(photocraft_compose::flatten(&reopened.active().unwrap().doc).px, rendered);
+            assert_eq!(photocraft_compose::flatten(&reopened.active().unwrap().doc).px, rendered.px);
             reopened.execute("edit.redo", json!({})).unwrap();
             assert!(reopened.active().unwrap().is_dirty());
         }
