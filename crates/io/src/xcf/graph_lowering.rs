@@ -5,14 +5,33 @@ use photocraft_color::BlendMode;
 use photocraft_doc::SmartFilter;
 use photocraft_raster::Interrupt;
 
+mod tone;
+
 #[cfg(test)]
 mod tests;
 
 const MAX_NODES: usize = 64;
+const MAX_STEPS: usize = 64;
+const BRIGHTNESS: &[graph::Field<'_>] =
+    &[graph::Field { name: "brightness", kind: graph::FieldType::Number }, graph::Field { name: "contrast", kind: graph::FieldType::Number }];
+const EXPOSURE: &[graph::Field<'_>] =
+    &[graph::Field { name: "black-level", kind: graph::FieldType::Number }, graph::Field { name: "exposure", kind: graph::FieldType::Number }];
+const LEVELS: &[graph::Field<'_>] = &[
+    graph::Field { name: "in-low", kind: graph::FieldType::Number },
+    graph::Field { name: "in-high", kind: graph::FieldType::Number },
+    graph::Field { name: "out-low", kind: graph::FieldType::Number },
+    graph::Field { name: "out-high", kind: graph::FieldType::Number },
+];
 const AUX: &[graph::Field<'_>] = &[graph::Field { name: "aux", kind: graph::FieldType::Input }];
 const DECLARATIONS: &[graph::Operation<'_>] = &[
     graph::Operation { name: "invert-linear", fields: &[] },
     graph::Operation { name: "gegl:invert-linear", fields: &[] },
+    graph::Operation { name: "brightness-contrast", fields: BRIGHTNESS },
+    graph::Operation { name: "gegl:brightness-contrast", fields: BRIGHTNESS },
+    graph::Operation { name: "exposure", fields: EXPOSURE },
+    graph::Operation { name: "gegl:exposure", fields: EXPOSURE },
+    graph::Operation { name: "levels", fields: LEVELS },
+    graph::Operation { name: "gegl:levels", fields: LEVELS },
     graph::Operation { name: "over", fields: AUX },
     graph::Operation { name: "gegl:over", fields: AUX },
     graph::Operation { name: "svg:src-over", fields: AUX },
@@ -73,6 +92,14 @@ fn input(input: graph::Input, before: usize) -> Result<usize> {
     }
 }
 
+fn native_input(input: graph::Input, before: usize, results: &[usize]) -> Result<usize> {
+    match input {
+        graph::Input::Source => Ok(0),
+        graph::Input::Node(index) if index < before => results.get(index).copied().ok_or(Failure::Invalid("source result has no native output")),
+        _ => Err(Failure::Invalid("input is not an earlier graph result")),
+    }
+}
+
 /// The shared graph is inert public data. Recheck bounds and all edges here so a
 /// manually constructed graph cannot bypass native admission or panic indexing.
 pub(super) fn lower(source: &graph::Graph<'_>, ctl: &Interrupt<'_>) -> Result<Plan> {
@@ -95,7 +122,9 @@ pub(super) fn lower(source: &graph::Graph<'_>, ctl: &Interrupt<'_>) -> Result<Pl
         input(label.input, source.nodes.len())?;
     }
     let mut steps = Vec::new();
-    steps.try_reserve_exact(source.nodes.len()).map_err(|_| Failure::Storage)?;
+    steps.try_reserve_exact(MAX_STEPS).map_err(|_| Failure::Storage)?;
+    let mut results = Vec::new();
+    results.try_reserve_exact(source.nodes.len()).map_err(|_| Failure::Storage)?;
     let mut ordinals = 0u64;
     for (index, node) in source.nodes.iter().enumerate() {
         check(ctl)?;
@@ -107,7 +136,23 @@ pub(super) fn lower(source: &graph::Graph<'_>, ctl: &Interrupt<'_>) -> Result<Pl
             return Err(Failure::Invalid("duplicate source ordinal"));
         }
         ordinals |= bit;
-        let from = input(node.input.ok_or(Failure::Unsupported("operation has no owner input"))?, index)?;
+        let from = native_input(node.input.ok_or(Failure::Unsupported("operation has no owner input"))?, index, &results)?;
+        if tone::is_operation(&node.operation) {
+            let filters = tone::map(node, ctl)?;
+            if filters.is_empty() || steps.len().checked_add(filters.len()).is_none_or(|count| count > MAX_STEPS) {
+                return Err(Failure::Unsupported("native graph control limit exceeded"));
+            }
+            let mut previous = from;
+            for filter in filters {
+                steps.push(Step::Filter { input: previous, filter });
+                previous = steps.len();
+            }
+            results.push(previous);
+            continue;
+        }
+        if steps.len() == MAX_STEPS {
+            return Err(Failure::Unsupported("native graph control limit exceeded"));
+        }
         let step = match node.operation.as_str() {
             "invert-linear" | "gegl:invert-linear" => {
                 if !node.properties.is_empty() {
@@ -130,17 +175,18 @@ pub(super) fn lower(source: &graph::Graph<'_>, ctl: &Interrupt<'_>) -> Result<Pl
                     return Err(Failure::Unsupported("source-over property has no native adapter"));
                 }
                 let graph::Value::Input(above) = aux.value else { return Err(Failure::Invalid("auxiliary input is not a resolved graph edge")) };
-                Step::Join { below: from, above: input(above, index)?, blend: BlendMode::Normal }
+                Step::Join { below: from, above: native_input(above, index, &results)?, blend: BlendMode::Normal }
             }
             _ => return Err(Failure::Unsupported("operation has no native adapter")),
         };
         steps.push(step);
+        results.push(steps.len());
     }
-    let output = input(source.output, source.nodes.len())?;
+    let output = native_input(source.output, source.nodes.len(), &results)?;
     check(ctl)?;
     Ok(Plan {
         steps,
         output,
-        note: "Native Invert, document encoding, depth, range and source-over compositing rules apply; source/native transfer interpretation may differ",
+        note: "Native tone controls, document encoding, depth, range, per-control quantization and source-over rules apply; source transfer, pivots or clipping may differ",
     })
 }

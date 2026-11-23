@@ -1,7 +1,7 @@
 //! One fixed binary topology, materialized as ordinary native layers.
 //! Both branches originate in the same admitted Raster owner; no graph evaluator,
 //! arbitrary nested input, source text or executable join rule is retained.
-use super::{Budgets, Plan, PreparedRaster, Refusal, Result, add, check, mul, prepare_plan};
+use super::{Budgets, Plan, PreparedRaster, Refusal, Result, add, check, mul, native_adjustment, prepare_plan};
 use crate::xcf::effects::{Mapping, MaskRequirement};
 use craft_xcf::effects::Owner;
 use photocraft_color::BlendMode;
@@ -29,9 +29,19 @@ pub(super) fn prepare(
     {
         return Err(Refusal::Unsupported("binary graph requires its verified full-strength envelope"));
     }
-    let [filter] = stage.filters.as_slice() else { return Err(Refusal::Unsupported("one verified Invert upper branch")) };
-    if filter.command != "image.adjustments.invert" || filter.params != serde_json::json!({}) {
-        return Err(Refusal::Unsupported("binary graph requires ordinary native Invert"));
+    if stage.filters.is_empty() || stage.filters.len() > 8 {
+        return Err(Refusal::Unsupported("bounded verified tone upper branch"));
+    }
+    for filter in &stage.filters {
+        // Other scalar families may gain native render support independently;
+        // that does not qualify them for this fixed binary composition policy.
+        if !matches!(
+            filter.command.as_str(),
+            "image.adjustments.invert" | "image.adjustments.brightnessContrast" | "image.adjustments.exposure" | "image.adjustments.levels"
+        ) {
+            return Err(Refusal::Unsupported("unqualified binary tone family"));
+        }
+        native_adjustment(filter)?;
     }
     let LayerContent::Raster(source) = &owner.content else { return Err(Refusal::Unsupported("binary graph requires a raster owner")) };
     let width = usize::try_from(i64::from(bounds.x1) - i64::from(bounds.x0)).map_err(|_| Refusal::Limit)?;
@@ -111,7 +121,7 @@ pub(super) fn prepare(
     contents.resolution_dpi = document.resolution_dpi;
     contents.icc_profile = document.icc_profile.clone();
     contents.layers.push(Layer::new("Original lower branch", LayerContent::Raster(original_local)));
-    contents.layers.push(Layer::new("Inverted upper branch", LayerContent::Smart(upper.smart)));
+    contents.layers.push(Layer::new("Filtered upper branch", LayerContent::Smart(upper.smart)));
     let mut cache = Surface::new(format);
     photocraft_compose::try_render_bands(&contents, local, 1, |band| -> Result<()> {
         check(ctl)?;

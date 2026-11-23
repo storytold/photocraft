@@ -5,6 +5,8 @@
 #[cfg(test)]
 mod binary_over_tests;
 pub(super) mod coverage;
+#[cfg(test)]
+mod graph_tone_tests;
 pub(super) mod installer;
 #[cfg(test)]
 mod levels_tests;
@@ -71,7 +73,7 @@ pub(super) struct Mapping {
     /// Filters stay full-strength. Apply the source envelope exactly once around
     /// the compound stage, after complete private preparation/mask admission.
     pub filters: Vec<SmartFilter>,
-    /// One verified import-time topology: original input below its inverted copy.
+    /// One verified import-time topology: original input below its filtered copy.
     /// Materialized as two ordinary native layers, never serialized as a rule.
     pub over_original: bool,
     pub envelope: Envelope,

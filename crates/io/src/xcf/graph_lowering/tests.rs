@@ -77,3 +77,39 @@ fn shared_budget_and_cancellation_refusals_never_publish_a_plan() {
     let parsed = graph::parse("invert-linear", DECLARATIONS, &mut budget, &|| true).unwrap();
     assert!(matches!(lower(&parsed, &ctl), Err(Failure::Cancelled)));
 }
+
+#[test]
+fn decomposed_tone_nodes_keep_exact_f64_controls_and_resolve_references_to_final_results() {
+    let plan =
+        prepare_text("brightness-contrast brightness=0.25 contrast=-2 id=adjusted exposure exposure=1 ref=adjusted levels in-low=0.1 in-high=0.9").unwrap();
+    assert_eq!(plan.steps.len(), 5);
+    assert_eq!(plan.output, 5);
+    assert!(matches!(&plan.steps[0], Step::Filter { input: 0, filter } if filter.command == "image.adjustments.invert"));
+    assert!(matches!(&plan.steps[3], Step::Filter { input: 3, filter } if filter.command == "image.adjustments.exposure"));
+    assert!(matches!(&plan.steps[4], Step::Filter { input: 3, filter } if filter.command == "image.adjustments.levels"));
+    let literal = prepare_text("gegl:exposure black-level=0.0123456789012345 exposure=0.1234567890123456").unwrap();
+    let Step::Filter { filter, .. } = &literal.steps[0] else { panic!("native exposure") };
+    assert_eq!(filter.params["exposure"].as_f64(), Some(0.1234567890123456));
+    assert_eq!(filter.params["offset"].as_f64(), Some(-0.0123456789012345 * 0.1234567890123456_f64.exp2()));
+    let branch = prepare_text("id=in over aux=[ref=in brightness-contrast brightness=0.25 contrast=-2 exposure exposure=1]").unwrap();
+    assert_eq!(branch.output, 5);
+    assert!(matches!(&branch.steps[4], Step::Join { below: 0, above: 4, .. }));
+}
+
+#[test]
+fn graph_tone_domain_and_control_caps_refuse_without_narrowing_or_guessing() {
+    for raw in [
+        "exposure black-level=0.10000000000000002",
+        "brightness-contrast contrast=5.000000000000001",
+        "levels in-low=0.5 in-high=0.5",
+        "levels out-low=0.9 out-high=0.1",
+        "levels gamma=1",
+        "exposure exposure=NaN",
+        "exposure exposure=1 exposure=2",
+        "gimp:exposure exposure=1",
+    ] {
+        assert!(prepare_text(raw).is_err(), "{raw}");
+    }
+    let flood = ["brightness-contrast brightness=3 contrast=-5"; 9].join(" ");
+    assert!(prepare_text(&flood).is_err(), "native controls remain bounded independently of source node count");
+}
