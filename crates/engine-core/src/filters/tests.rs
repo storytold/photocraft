@@ -691,6 +691,8 @@ fn wave_scales_move_pixels_by_exactly_the_scaled_amplitude() {
 /// outside 1–100 (only a hand-edited record has those), render within Photoshop's range.
 #[test]
 fn wave_scale_params_default_to_100_and_clamp_to_photoshops_range() {
+    // Validation reads the installed command's schema; making a session installs the registry.
+    let _ = crate::session();
     let scales = |p: Value| match params_for("filter.distort.wave", &p) {
         Some(FilterParams::Wave { scale_horizontal, scale_vertical, .. }) => (scale_horizontal, scale_vertical),
         other => panic!("{p}: {other:?}"),
