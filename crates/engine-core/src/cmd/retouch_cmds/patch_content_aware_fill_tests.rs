@@ -13,10 +13,15 @@ fn l8(v: u8) -> f32 {
     f32::from(v) / 255.0
 }
 
-/// The measured test document.
+/// The measured test document at 8 bit.
 fn test_document() -> Session {
+    test_document_at(8)
+}
+
+/// The measured test document at the given pixel `depth`.
+fn test_document_at(depth: u64) -> Session {
     let mut s = crate::session();
-    s.execute("file.new", json!({"width": 800, "height": 600, "depth": 8, "mode": "rgb"})).unwrap();
+    s.execute("file.new", json!({"width": 800, "height": 600, "depth": depth, "mode": "rgb"})).unwrap();
     s.edit("setup", |doc, active| {
         let b = doc.bounds();
         let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
@@ -105,6 +110,18 @@ fn content_aware_patch_fills_the_black_spot_with_its_grey_surroundings_for_every
             assert_row(&s, 400, 182, 218, [l8(128); 3], LEVELS3, &format!("structure {structure}, color {color}"));
         }
     }
+}
+
+/// The depth the replaced test had (8 and 16): the black-spot cell at 16 bit, same window and
+/// the command's defaults - the fill runs at 16 bit and lands within the same 3 levels of the
+/// grey (fails on main, which pastes the checker there too).
+#[test]
+fn content_aware_patch_fill_works_at_16_bits() {
+    let mut s = test_document_at(16);
+    s.execute("select.rect", json!({"x": 180, "y": 380, "width": 40, "height": 40})).unwrap();
+    let r = s.execute("paint.patch", json!({"offset": [-40, -260], "contentAware": true})).unwrap();
+    assert_eq!(r["contentAware"], json!(true));
+    assert_row(&s, 400, 182, 218, [l8(128); 3], LEVELS3, "16 bit");
 }
 
 /// Done when #2: the white spot (580,180, 40 x 40) dragged onto the red stripe (the issue's
