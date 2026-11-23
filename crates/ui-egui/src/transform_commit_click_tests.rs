@@ -59,6 +59,17 @@ fn a_click_outside_the_box_on_the_image_keeps_it_open() {
 fn a_click_on_the_pasteboard_commits_one_free_transform_step() {
     for p in [[-30.0, 100.0], [100.0, -30.0], [230.0, 100.0], [100.0, 230.0]] {
         let mut app = app();
+        // This oracle addresses the canvas at these same four document points.
+        // The floating task bar can cover them; use the real Window command to
+        // expose the pasteboard without changing the click or bypassing its route.
+        let app_ctx = app.ctx().clone();
+        crate::menus::invoke(&mut app, &app_ctx, "window.panel.contextualTaskBar", json!({"on": false})).unwrap();
+        assert!(!app.ui.panels.context_task_bar);
+        crate::canvas::testing::shown(&mut app);
+        let view = crate::canvas::testing::view(&app).expect("the canvas shows the original click point");
+        let point = crate::canvas::testing::to_screen(&app, p);
+        assert!(view.rect.contains(point), "the unchanged pasteboard point reaches the real canvas: {p:?}");
+        assert!(crate::transform_task_bar::shown_rect(&app, &app_ctx).is_none(), "the bar cannot own this canvas click");
         let before = steps(&app);
         click(&mut app, p);
         assert!(app.ui.transform.is_none(), "{p:?}");
@@ -78,8 +89,12 @@ fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
     app.ui.extras.rulers = false;
     app.ui.extras.snap = false;
     // "Other" has a blue block at x 120..160, y 120..160; "Paint" a red one at x 20..60, y 20..60.
+    let mut other = None;
     for (name, at, color) in [("Other", 120, "#0000ff"), ("Paint", 20, "#ff0000")] {
         let id = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        if name == "Other" {
+            other = Some(LayerId(id));
+        }
         app.run("layer.select", json!({"layer": id})).unwrap();
         app.run("select.rect", json!({"x": at, "y": at, "width": 40, "height": 40})).unwrap();
         app.run("edit.fill", json!({"contents": "color", "color": color})).unwrap();
@@ -88,13 +103,20 @@ fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
     let paint = app.session.active().unwrap().active_layer.unwrap();
     let app_ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &app_ctx, "edit.freeTransform", json!({})).unwrap();
-    shift_right(&mut app);
+    app.ui.transform.as_mut().unwrap().edit_box(|b| *b = b.scaled_about_pivot(2.0, 2.0));
     let before = steps(&app);
     click(&mut app, [140.0, 140.0]);
     assert!(app.ui.transform.is_none(), "committed");
     assert_eq!(steps(&app), before + 1);
+    let bounds = app.session.active().unwrap().doc.layer(paint).unwrap().surface().unwrap().content_bounds();
+    assert_eq!(bounds, photocraft_geom::Rect::new(0, 0, 80, 80), "the resized pixels are committed");
     assert_eq!(app.session.active().unwrap().history.entries().last().map(ToString::to_string).as_deref(), Some("Free Transform"));
     assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint], "the selection doesn't change");
+    app.ui.tool = crate::state::Tool::Move;
+    app.ui.tool_options.move_auto_select = true;
+    app.ui.tool_options.move_target = "layer".into();
+    click(&mut app, [140.0, 140.0]);
+    assert_eq!(app.session.active().unwrap().selected_layers(), vec![other.unwrap()], "the second click picks the other layer");
 }
 
 /// A layer linked to the transformed one after the box opened moves with the commit

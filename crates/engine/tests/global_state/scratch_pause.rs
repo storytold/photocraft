@@ -9,6 +9,7 @@ use serde_json::json;
 
 #[test]
 fn paused_scratch_disk_restores_the_history_limit() {
+    photocraft_raster::spill::use_test_volume_space();
     let _scratch = crate::lock(&crate::PROCESS);
     let dir = std::env::temp_dir().join(format!("photocraft-engine-scratch-pause-{}", std::process::id()));
     let mut session = Session::new();
