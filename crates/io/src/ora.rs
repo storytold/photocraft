@@ -563,7 +563,10 @@ impl Writer<'_> {
         let canvas = self.doc.bounds();
         let (rect, mut buf) = match &layer.content {
             LayerContent::Raster(s) => {
-                let r = s.content_bounds();
+                let content = s.content_bounds();
+                // OpenRaster has no default pixel: a visible one must be materialized across the
+                // canvas, including when pruning left no stored tiles at all.
+                let r = if s.default_pixel().last().is_some_and(|alpha| *alpha > 0.0) { canvas.union(&content) } else { content };
                 admit_layer(r)?;
                 (r, photocraft_compose::surface_to_buffer(s, r).into_px())
             }

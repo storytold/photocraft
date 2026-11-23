@@ -75,6 +75,17 @@ fn assert_same(a: &[Layer], b: &[Layer]) {
 }
 
 #[test]
+fn default_filled_raster_layers_round_trip_over_the_whole_canvas() {
+    let mut d = Document::new("default.ora", Size { width: 8, height: 6 }, ColorMode::Rgb, SampleType::U8);
+    let background = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 1.0]);
+    d.layers = vec![Layer::new("Background", LayerContent::Raster(background))].into();
+
+    let (back, _, _) = round_trip(&d);
+
+    assert_eq!(photocraft_compose::flatten(&d).px, photocraft_compose::flatten(&back).px);
+}
+
+#[test]
 fn layers_groups_and_properties_round_trip_at_8_and_16_bit() {
     for depth in [SampleType::U8, SampleType::U16] {
         let d = doc(depth);
