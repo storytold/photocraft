@@ -10,7 +10,8 @@ use craft::color_ui::ui::{ColorSamplerMarks, ColorSamplerTool, ColorSamplers, Sa
 use craft::draw::ui::{RulerLine, RulerTool};
 use craft::ui::canvas::{CanvasTool, NoTool, ToolAction, ToolClaims, ToolContext, ToolHostResponse, ToolKey, ToolPath, ToolPointer, canvas_space};
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
-use craft::ui::primitives::{Draw, PaintShape, StrokeWidth, TextRun};
+use craft::ui::fonts::FontRef;
+use craft::ui::primitives::{DocRun, DocText, Draw, PaintShape, StrokeWidth};
 use craft::ui::runtime::env::Label;
 use craft::ui::style::{ComponentStyle, DataColor, StyleColor, StyleCx};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2, vec2};
@@ -196,7 +197,12 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect) {
                 .count_groups
                 .iter()
                 .filter(|g| g.visible)
-                .map(|g| CountGroupMarks { color: color32(g.color.to_rgb()), radius: 1.0 + g.marker_size as f32, points: g.points.clone() })
+                .map(|g| CountGroupMarks {
+                    color: color32(g.color.to_rgb()),
+                    radius: 1.0 + g.marker_size as f32,
+                    label_size: g.label_size as f32,
+                    points: g.points.clone(),
+                })
                 .collect()
         })
     } else {
@@ -438,10 +444,15 @@ impl CanvasTool for NotePass<'_> {
 
 // ------------------------------------------------------------------ paint
 
+/// The width a marker's number is laid out in, wide enough for any count at the largest Label Size.
+const NUMBER_ROOM: f32 = 1000.0;
+
 /// One visible count group's marks.
 struct CountGroupMarks {
     color: Color32,
     radius: f32,
+    /// The numbers' font size in screen points: the group's Label Size.
+    label_size: f32,
     points: Vec<[f64; 2]>,
 }
 
@@ -462,8 +473,7 @@ fn overlay_style(cx: &StyleCx<'_>) -> OverlayStyle {
     OverlayStyle { metrics: Metrics::new(), ink: cx.color(tokens.color.overlay.stroke), halo: cx.color(tokens.color.overlay.halo), shadow: tokens.stroke.thin }
 }
 
-/// The count markers of the visible groups, numbered in each group. Paint only.
-// PLAN: the group's label size is not applied; `TextRun` takes a `TypeRole`, not a point size.
+/// The count markers of the visible groups, numbered in each group, the numbers at the group's Label Size. Paint only.
 #[derive(craft::ui::contract::Component, craft::ui::contract::Props)]
 #[component(canvas_control)]
 pub(crate) struct CountMarks {
@@ -507,9 +517,11 @@ impl Component for CountMarks {
                 let number = (i + 1).to_string();
                 let anchor = at + vec2(2.0 + group.radius, -1.0);
                 for (offset, color) in [(Vec2::splat(style.shadow), style.halo), (Vec2::ZERO, style.ink)] {
-                    let run = TextRun::new(number.as_str()).role(craft::theme::TypeRole::Caption).color(color);
-                    let layout = draw.layout(&run, f32::INFINITY);
-                    draw.galley(anchor + offset - vec2(0.0, layout.size().y), &layout);
+                    let runs = [DocRun::new(number.as_str(), FontRef::proportional(), group.label_size, DataColor::new(color.egui()))];
+                    let text = DocText::new(&runs);
+                    let height = cx.layout_doc(&text).size().y;
+                    let top_left = anchor + offset - vec2(0.0, height);
+                    draw.doc(Rect::from_min_size(top_left, vec2(NUMBER_ROOM, height)), &text);
                 }
             }
         }
