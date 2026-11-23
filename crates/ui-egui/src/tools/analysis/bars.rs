@@ -7,8 +7,9 @@ use craft::draw::ui::measure::{RulerBar, RulerLine};
 use craft::theme::Srgba;
 use craft::ui::buttons::{Button, IconButton, ToggleButton};
 use craft::ui::choice::Swatch;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::{Divider, Text};
+use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
@@ -180,9 +181,11 @@ fn count(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &photocraft_doc::Docum
 }
 
 fn note(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: &photocraft_doc::Document) {
-    TextField::new(Label::from(tl!("Author")), Bind::bound(&mut app.ui.analysis.note_author)).show(ui);
+    // In `Field`s: a bare control's label only names it, it is not drawn (#16338).
+    Field::new(Label::from(tl!("Author"))).show(ui, |ui, _| TextField::new(Label::from(tl!("Author")), Bind::bound(&mut app.ui.analysis.note_author)).show(ui));
     let rgb = app.ui.analysis.note_color;
-    if Swatch::new(Label::from(tl!("Color")), Srgba::from_rgb_array(rgb)).show(ui).clicked
+    let swatch = Field::new(Label::from(tl!("Color"))).show(ui, |ui, _| Swatch::new(Label::from(tl!("Color")), Srgba::from_rgb_array(rgb)).show(ui).clicked);
+    if swatch.inner == Some(true)
         && let Err(message) = crate::color_picker_ui::open_for_target(app, "noteColor", &crate::color_picker_ui::title_for(tl!("Color")), rgb)
     {
         crate::notices::error(app, message);

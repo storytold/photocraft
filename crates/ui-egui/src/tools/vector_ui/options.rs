@@ -7,9 +7,11 @@ use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::display::{Divider, Text};
+use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::text::NumberField;
+use photocraft_engine::presets::PresetsExt;
 
 use super::path_menus::{path_alignment_menu, path_arrangement_menu, path_operations_menu};
 use super::path_ops::{active_path_name, indexed_document};
@@ -205,9 +207,15 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     match tool {
         Tool::FreeformPen => {
             Divider::vertical().show(ui);
-            let field =
-                NumberField::new(label(tl!("Curve Fit:")), Bind::given(Some(f64::from(o.curve_fit)))).range(0.5..=10.0).unit_kind(UnitKind::Pixels).show(ui);
-            if let Some(Some(v)) = field.value().copied() {
+            // In a `Field`: a bare control's label only names it, it is not drawn (#16338).
+            let picked = Field::new(label(tl!("Curve Fit:")))
+                .show(ui, |ui, _| {
+                    let field = NumberField::new(label(tl!("Curve Fit:")), Bind::given(Some(f64::from(o.curve_fit))));
+                    field.range(0.5..=10.0).unit_kind(UnitKind::Pixels).show(ui).value().copied()
+                })
+                .inner
+                .flatten();
+            if let Some(Some(v)) = picked {
                 o.curve_fit = v as f32;
             }
             let alt = crate::shortcuts::pretty("Alt");
@@ -444,12 +452,12 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let was_linked = app.ui.arrow_default == Some(target);
     let mut linked = was_linked;
     let recent_colors: Vec<Srgba> = crate::paint_picker::recent_colors(&app.session).into_iter().map(|c| Srgba::new(c[0], c[1], c[2], 1.0)).collect();
-    let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets.gradients, fg, bg);
-    let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets.gradient, recent: &mut app.ui.recent_gradients, fg, bg };
+    let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets().gradients, fg, bg);
+    let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets().gradient, recent: &mut app.ui.recent_gradients, fg, bg };
     let current = [sh.fill.clone(), sh.stroke.as_ref().map(|s| s.paint.clone())];
     let mut library = crate::shape_paint_ui::ChipLibrary::new(
         &recent_colors,
-        &app.session.presets.swatches,
+        &app.session.presets().swatches,
         &mut app.ui.paint_folders,
         gradients,
         &mut app.ui.shape_gradient_state,
