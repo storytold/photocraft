@@ -269,7 +269,16 @@ impl PlaceSteps {
             if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;
-                let (sharp, warnings) = crate::smart_cmds::render_with_warnings(doc, &so)?;
+                // The render starts on the whole pixel the raster pixels would: a half-pixel
+                // placement (#14114) stays in the transform, not in the rendered cache.
+                let exact = so.transform;
+                if input.frame.is_none() {
+                    so.transform.m[4] = exact.m[4].round();
+                    so.transform.m[5] = exact.m[5].round();
+                }
+                let rendered = crate::smart_cmds::render_with_warnings(doc, &so);
+                so.transform = exact;
+                let (sharp, warnings) = rendered?;
                 for warning in warnings {
                     if !self.warnings.contains(&warning) {
                         self.warnings.push(warning);

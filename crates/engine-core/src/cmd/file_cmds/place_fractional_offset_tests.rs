@@ -67,3 +67,27 @@ fn a_negative_half_pixel_offset_is_unchanged() {
     assert_eq!(r["bounds"], json!([-1.0, 120.0, 99.0, 180.0]));
     assert_eq!((x0, y0), (-1, 120));
 }
+
+/// An SVG placed on a half pixel renders its cache on the whole pixel, not resampled across it:
+/// a 1000×800 rectangle fitted into 400×300 keeps 12.5 in the transform, and its pixels start
+/// with a solid column at 13 and nothing at 12.
+#[test]
+fn a_half_pixel_svg_renders_on_the_whole_pixel() {
+    let dir = std::env::temp_dir().join(format!("photocraft-place-fractional-svg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("wide.svg");
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#c80000"/></svg>"##;
+    std::fs::write(&path, svg).unwrap();
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    s.execute("file.placeEmbedded", json!({"path": path.to_string_lossy(), "fit": true, "smartObject": true, "center": [200.0, 150.0]})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let d = s.active().unwrap();
+    let layer = d.doc.layer(d.active_layer.unwrap()).unwrap();
+    let LayerContent::Smart(so) = &layer.content else { panic!("a smart object was expected") };
+    assert_eq!([so.transform.m[4], so.transform.m[5]], [12.5, 0.0], "the transform keeps the half pixel");
+    let cache = so.cache.as_ref().expect("the rendered pixels");
+    assert_eq!(cache.content_bounds().x0, 13, "the pixels start at 13");
+    assert_eq!(cache.rgba(13, 150)[3], 1.0, "a solid first column");
+    assert_eq!(cache.rgba(386, 150)[3], 1.0, "a solid last column");
+}
