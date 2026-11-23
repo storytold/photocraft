@@ -53,6 +53,15 @@ impl B {
     /// Outer or Inner Glow stages, Precise or Softer. Returns the number of maps written.
     pub(super) fn glow(&mut self, g: &Glow, inner: bool) -> usize {
         // glow_map
+        if fx::precise_inner_glow_uses_alpha(g, inner) {
+            let d = self.field(FieldKind::Inside, g.size);
+            let mut s = stage(Kernel::MGlow, Some(d), Some(In::Shape), [0.0, g.size + 1.0, 0.0, 0.0], 1);
+            s.p1[0] = 1.0;
+            s.p1[1] = fx::PRECISE_INNER_GLOW_ALPHA_OFFSET;
+            s.out = Some(0);
+            self.stages.push(s);
+            return 1;
+        }
         let center = inner && g.source == GlowSource::Center;
         let m = match g.technique {
             GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {

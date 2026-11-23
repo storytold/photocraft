@@ -53,6 +53,7 @@ use distance::{
     sharp_edges,
 };
 use paint::dissolves;
+pub use paint::{PRECISE_INNER_GLOW_ALPHA_OFFSET, precise_inner_glow_uses_alpha};
 pub use paint::{
     aa_shift, anti_aliased_contour, bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise, ranged_lut,
     sample_gradient, satin_lut, spread_split,
@@ -261,5 +262,7 @@ mod satin_invert_contour_tests;
 #[cfg(test)]
 mod satin_size_one_tests;
 
+#[cfg(test)]
+mod inner_glow_precise_alpha_tests;
 #[cfg(test)]
 mod inner_glow_size_one_tests;

@@ -1478,10 +1478,44 @@ fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
 // solid within the spread / choke.
 @fragment
 fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
-    let d = textureLoad(tex_a, local(in.pos), 0).r + 0.5;
+    let p = local(in.pos);
+    if (op.p1.x > 0.5) {
+        let a = textureLoad(tex_b, p, 0).r;
+        if (a == 0.0) { return mout(0.0); }
+        // Linear contour and 50% Range double the raw falloff.
+        if (a < 1.0 && uniform_partial_alpha(p, a)) {
+            return mout((1.0 - (a + op.p1.y) / op.p0.y) * a);
+        }
+        let d = textureLoad(tex_a, p, 0).r + 0.5;
+        return mout(clamp(1.0 - d / op.p0.y, 0.0, 1.0) * a);
+    }
+    let d = textureLoad(tex_a, p, 0).r + 0.5;
     var m = 0.5 * clamp(1.0 - (d - op.p0.x) / op.p0.y, 0.0, 1.0);
     if (d <= op.p0.x) { m = 1.0; }
     return mout(m);
+}
+
+fn uniform_partial_alpha(p: vec2<i32>, a: f32) -> bool {
+    let x = vec2(-1, 0);
+    let y = vec2(0, -1);
+    var sides = vec4(textureLoad(tex_b, p + x, 0).r, textureLoad(tex_b, p - x, 0).r,
+                     textureLoad(tex_b, p + y, 0).r, textureLoad(tex_b, p - y, 0).r);
+    var corners = vec4(textureLoad(tex_b, p + x + y, 0).r, textureLoad(tex_b, p - x + y, 0).r,
+                       textureLoad(tex_b, p + x - y, 0).r, textureLoad(tex_b, p - x - y, 0).r);
+    if (all(p > vec2(0)) && all(p + vec2(1) < chunk.size)) {
+        if (all(sides == vec4(a)) && all(corners == vec4(a))) { return true; }
+    } else {
+        let bounds = vec4(p.x > 0, p.x + 1 < chunk.size.x, p.y > 0, p.y + 1 < chunk.size.y);
+        sides = select(vec4(0.0), sides, bounds);
+        corners = select(vec4(0.0), corners, select(vec4(false), bounds.xyxy, bounds.zzww));
+    }
+    // Allow transparent neighbours at hard boundaries, provided at least three others match.
+    let same_sides = sides == vec4(a);
+    let same_corners = corners == vec4(a);
+    let other_sides = select(sides != vec4(0.0), vec4(false), same_sides);
+    let other_corners = select(corners != vec4(0.0), vec4(false), same_corners);
+    let matching = select(vec4(0.0), vec4(1.0), same_sides) + select(vec4(0.0), vec4(1.0), same_corners);
+    return !any(select(other_sides, vec4(true), other_corners)) && dot(matching, vec4(1.0)) >= 3.0;
 }
 
 // Last step of a coverage map: p0 = (|A - B| (satin), 1 - v (1: before the contour, 2: after it,
