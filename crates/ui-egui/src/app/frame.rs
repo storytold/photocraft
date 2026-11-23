@@ -88,7 +88,7 @@ impl PhotocraftApp {
         // So does selecting another layer or document by any route (#6483).
         type_tool::end_if_left(self);
         transform_tool::end_if_left(self);
-        prefs_ui::tick(self, ctx, std::time::Instant::now());
+        prefs_ui::tick_frame(self, ctx);
         updates_ui::tick(self);
         #[cfg(not(target_arch = "wasm32"))]
         crate::text::installed_fonts::tick(self, ctx);
