@@ -93,7 +93,18 @@ impl TextEngine {
             let b = l.clusters.iter().find(|c| c.range.start == next)?;
             (a.line == b.line && !a.rtl).then_some(b.x - a.x)
         };
-        let with = gap(&self.layout(layer, dpi))?;
+        let laid = gap(&self.layout(layer, dpi))?;
+        // Measured on unwrapped copies when the text wraps (box or area type): unkerning the
+        // character can widen it (a Japanese character in Metrics loses its proportional width)
+        // and push the pair onto two lines, although it sits on one as laid out.
+        let wraps = matches!(layer.shape, photocraft_doc::text::TextShape::Box { .. } | photocraft_doc::text::TextShape::Area { .. });
+        let unwrapped = |mut l: TextLayer| {
+            if wraps {
+                l.shape = photocraft_doc::text::TextShape::Point;
+            }
+            l
+        };
+        let with = if wraps { gap(&self.layout(&unwrapped(layer.clone()), dpi))? } else { laid };
         // Em of the pair's first character (px).
         let mut acc = 0;
         let style_run = runs.iter().find(|r| {
@@ -125,7 +136,7 @@ impl TextEngine {
             push(next.clamp(start, end), end, false);
             start = end;
         }
-        let without = gap(&self.layout(&plain, dpi))?;
+        let without = gap(&self.layout(&unwrapped(plain), dpi))?;
         let k = (with - without) / em * 1000.0;
         k.is_finite().then_some(k)
     }

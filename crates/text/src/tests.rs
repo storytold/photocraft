@@ -2174,6 +2174,28 @@ fn metrics_kerning_sets_japanese_proportionally() {
     assert_eq!(vertical(Kerning::Metrics), vertical(Kerning::Off));
 }
 
+/// A pair's kerning is measured without reflowing it: カタ fits a 180 px box on its `palt`
+/// widths (176.1 px), and unkerning カ to full width (189.2 px) must not wrap タ and lose the
+/// pair. A pair the box really splits has none.
+#[test]
+fn pair_kerning_keeps_a_wrapped_pair_on_its_line() {
+    use photocraft_doc::text::TextShape;
+    if !crate::CRAFT_FONTS.iter().any(|f| f.family == "Shippori Mincho") {
+        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        return;
+    }
+    let mut e = TextEngine::new();
+    let s = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 100.0, ..Default::default() };
+    let boxed = |width: f32| TextLayer { shape: TextShape::Box { x: 0.0, y: 0.0, width, height: 1000.0 }, ..styled("カタ", s.clone()) };
+    let point = e.pair_kerning(&styled("カタ", s.clone()), 72.0, 0).unwrap();
+    assert!((point + 131.0).abs() < 0.5, "{point}");
+    let fitted = e.layout(&boxed(180.0), 72.0);
+    assert_eq!(fitted.clusters[0].line, fitted.clusters[1].line, "カタ fits the box");
+    let boxed_k = e.pair_kerning(&boxed(180.0), 72.0, 0);
+    assert!(boxed_k.is_some_and(|k| (k - point).abs() < 1e-3), "{boxed_k:?} vs {point}");
+    assert_eq!(e.pair_kerning(&boxed(150.0), 72.0, 0), None, "タ wraps in a 150 px box");
+}
+
 #[test]
 fn japanese_dictionary_word_boundaries() {
     // Use only the existing bundled Latin fonts: segmentation must not require a CJK font.
