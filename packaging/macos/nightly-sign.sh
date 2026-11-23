@@ -84,7 +84,8 @@ notarize() {
   status="$(printf '%s' "$out" | plutil -extract status raw -o - - 2>/dev/null || true)"
   if [[ "$status" != "Accepted" ]]; then
     if [[ -n "$id" ]]; then
-      xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" || true
+      # Capped: the shared signer bounds a step's output at 256 KiB.
+      xcrun notarytool log "$id" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" | head -c 131072 || true
     fi
     echo "error: notarization of $(basename "$file") failed (status: ${status:-unknown})" >&2
     exit 1
