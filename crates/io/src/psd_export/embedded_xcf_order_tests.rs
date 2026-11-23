@@ -159,8 +159,7 @@ fn unknown_hints_are_retained_and_known_hints_clear_on_reset_or_rasterization() 
 
 #[test]
 fn external_link_does_not_gain_embedded_order_semantics() {
-    let folder = tempfile::tempdir().unwrap();
-    let path = folder.path().join("external.xcf");
+    let path = std::env::temp_dir().join(format!("photocraft-psd-external-xcf-{}.xcf", std::process::id()));
     let bytes = xcf(true);
     std::fs::write(&path, &bytes).unwrap();
     let mut doc = document(SmartSource::Linked { path: path.to_string_lossy().into_owned() }, Some(Order::LittleEndian));
@@ -171,5 +170,7 @@ fn external_link_does_not_gain_embedded_order_semantics() {
     let record = &file.layer_info.as_ref().unwrap().layers[0];
     assert!(record.block(b"SoLd").is_none());
     assert!(record.block(&crate::smart_xcf_order::PSD_KEY).is_none());
-    assert_eq!(std::fs::read(path).unwrap(), bytes);
+    let unchanged = std::fs::read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(unchanged, bytes);
 }
