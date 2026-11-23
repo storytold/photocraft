@@ -403,6 +403,12 @@ fn deeply_nested_embedded_svg_is_dropped_not_a_stack_overflow() {
             // drawing still renders (its rect is black).
             let r = open(&embed(&base64_data_url("image/svg+xml", nested(svg::MAX_XML_DEPTH - 2).as_bytes())));
             assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
+            // One more child level fits in isolation, but exceeds the shared
+            // allowance once the outer drawing's ancestor is included.
+            let beyond = nested(svg::MAX_XML_DEPTH - 1);
+            let r = open(&embed(&base64_data_url("image/svg+xml", beyond.as_bytes())));
+            assert!(close(px(&r.document, 4, 4), [0.0; 4]), "over-limit child must remain transparent: {:?}", px(&r.document, 4, 4));
+            assert!(r.warnings.iter().any(|warning| warning.contains("omitted")), "over-limit child must be disclosed: {:?}", r.warnings);
         })
         .unwrap()
         .join()
