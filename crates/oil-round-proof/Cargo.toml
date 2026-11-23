@@ -1,0 +1,13 @@
+[package]
+name = "photocraft-oil-round-proof"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+photocraft-algo = { workspace = true }
+rayon = { workspace = true }
