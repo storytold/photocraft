@@ -389,6 +389,26 @@ impl Drop for TempExr {
     }
 }
 
+/// The path open decodes a one-layer file block by block into an RGB document (#14069); the
+/// layer is still named after the file's channels.
+#[test]
+fn a_one_layer_file_opened_from_a_path_is_named_after_its_channels() {
+    for (tag, channels, name, pixel) in [
+        ("one-ya", &[("Y", 0.5), ("A", 0.25)][..], "YA", [0.5, 0.5, 0.5, 0.25]),
+        ("one-rgba", &RGBA[..], "RGB", [0.8, 0.4, 0.2, 0.5]),
+        ("one-rgb", &RGB[..], "Background", [0.3, 0.6, 0.9, 1.0]),
+    ] {
+        let path = TempExr::new(tag, &one_part(channels));
+        let r = import_file("render.exr", &path.0, &ImportOptions::default(), &Interrupt::NONE).unwrap();
+        let d = &r.document;
+        assert_eq!((d.mode, d.depth), (ColorMode::Rgb, SampleType::F32), "{tag}");
+        assert_eq!(d.layers.len(), 1, "{tag}");
+        assert_eq!(d.layers[0].name, name, "{tag}");
+        assert_eq!(d.background().is_some(), name == "Background", "{tag}");
+        assert_eq!(px(&d.layers[0], 1, 1), pixel, "{tag}");
+    }
+}
+
 #[test]
 fn opening_from_a_path_gives_the_same_tree() {
     let cases = [

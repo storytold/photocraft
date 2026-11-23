@@ -707,7 +707,8 @@ pub(crate) fn open_layered(name: &str, bytes: &[u8], opts: &crate::ImportOptions
     Ok(Some(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false }))
 }
 
-/// The name of an EXR's only layer when it has transparency: `RGB`, or `YA` for a grey one.
-pub(crate) fn single_layer_name(mode: ColorMode) -> &'static str {
-    if mode == ColorMode::Grayscale { "YA" } else { "RGB" }
+/// The name of an EXR's only layer when it has transparency: `RGB`, or `YA` when the file's
+/// channels are `Y` and `A` (`gray`), whatever mode the document opens in.
+pub(crate) fn single_layer_name(gray: bool) -> &'static str {
+    if gray { "YA" } else { "RGB" }
 }

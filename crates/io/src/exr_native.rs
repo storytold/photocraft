@@ -99,7 +99,8 @@ pub(crate) fn import<R: Read + Seek>(source: R, ctl: &Interrupt<'_>) -> Result<O
     require_scratch(scratch_expected)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut document = Document::new("", Size::new(info.width, info.height), mode, SampleType::F32);
-    let name = if info.has_alpha { crate::exr_parts::single_layer_name(mode) } else { "Background" };
+    // Named after the file's channels, not the document's mode: `Y` + `A` is `YA` (#14062).
+    let name = if info.has_alpha { crate::exr_parts::single_layer_name(info.gray) } else { "Background" };
     let mut layer = Layer::new(name, LayerContent::Raster(surface));
     if !info.has_alpha {
         layer.locks.transparency = true;

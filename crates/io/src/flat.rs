@@ -428,7 +428,7 @@ pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Opti
         && let [layer] = &mut d.layers[..]
         && !layer.has_background_traits()
     {
-        layer.name = crate::exr_parts::single_layer_name(d.mode).into();
+        layer.name = crate::exr_parts::single_layer_name(d.mode == ColorMode::Grayscale).into();
     }
     if d.icc_profile.is_none() && d.mode == ColorMode::Rgb {
         // Only an image the whole-image path decoded can carry a CICP description (a PNG never does).
