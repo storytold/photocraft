@@ -407,22 +407,6 @@ fn mask_at(s: &Session, x: i32, y: i32) -> f32 {
     d.doc.layer(d.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0)
 }
 
-/// #2456: Edit > Fill (and the fill keys) fill the targeted mask of an adjustment layer.
-#[test]
-fn fill_works_on_an_adjustment_layers_mask() {
-    let mut s = session(8, "rgb");
-    s.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
-    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
-    let mask = json!({"target": "mask"});
-    assert!(!s.is_enabled("edit.fill"), "no pixels to fill without the mask target");
-    assert!(s.is_enabled_with("edit.fill", &mask));
-    assert!(s.is_enabled_with("edit.fillForeground", &mask));
-    s.execute("edit.fill", json!({"contents": "black", "target": "mask"})).unwrap();
-    assert_eq!(mask_at(&s, 3, 3), 0.0, "the mask is filled black");
-    s.execute("edit.fill", json!({"contents": "white", "target": "mask"})).unwrap();
-    assert_eq!(mask_at(&s, 3, 3), 1.0);
-}
-
 /// #780: with the layer mask targeted, Invert (⌘I) inverts the mask, past the canvas too, and
 /// leaves the layer's pixels alone; one history step.
 #[test]
@@ -737,58 +721,6 @@ fn replace_color_lab_bounds_are_refused_on_a_smart_object() {
     assert!(r.is_err(), "Lab bounds on a smart object must be refused");
     assert!(smart_filters_of(&s).is_empty());
     assert_eq!(max_diff(&flatten(&s), &before), 0.0);
-}
-
-/// #5335: Curves (⌘M) edits the targeted layer mask, saved channel or Quick Mask at every depth.
-#[test]
-fn curves_apply_to_non_colour_targets_at_every_depth() {
-    let area = photocraft_geom::Rect::from_xywh(0, 0, 48, 32);
-    for depth in DEPTHS {
-        for target in ["mask", "alpha", "quickMask"] {
-            let mut s = session(depth, "rgb");
-            s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
-            let p = match target {
-                "mask" => {
-                    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
-                    json!({"points": [[0, 0], [128, 200], [255, 255]], "target": "mask"})
-                }
-                "alpha" => {
-                    s.execute("channel.new", json!({"name": "Sky sel", "fill": "white"})).unwrap();
-                    json!({"points": [[0, 0], [128, 200], [255, 255]], "target": {"channel": 0}})
-                }
-                _ => {
-                    s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
-                    json!({"points": [[0, 0], [128, 200], [255, 255]], "target": "quickMask"})
-                }
-            };
-            let edit_target = p.get("target").cloned().unwrap_or(json!(null));
-            s.edit("levels", |doc, active| {
-                let (surf, _) = crate::channel_cmds::target_surface(doc, *active, &json!({ "target": edit_target })).unwrap();
-                surf.fill_rect(area, &[0.5]);
-                Ok(())
-            })
-            .unwrap();
-            let read = |s: &Session| {
-                let d = s.active().unwrap();
-                let layer = d.doc.layer(d.active_layer.unwrap()).unwrap();
-                let t = match target {
-                    "quickMask" => d.doc.quick_mask.as_ref().unwrap().surface.sample_channel(8, 8, 0),
-                    "alpha" => d.doc.channels[0].surface.sample_channel(8, 8, 0),
-                    _ => layer.mask.as_ref().unwrap().surface.sample_channel(8, 8, 0),
-                };
-                (rgba(s, 8, 8), t)
-            };
-            let ((pixels, before), past) = (read(&s), s.active().unwrap().history.past_len());
-            s.execute("image.adjustments.curves", p).unwrap();
-            let (pixels_after, after) = read(&s);
-            let case = format!("{target} at {depth}");
-            assert_eq!(pixels_after, pixels, "{case}: colour pixels stay put");
-            assert!(after > before + 0.1, "{case}: the curve lifted the midtone ({before} → {after})");
-            assert_eq!(s.active().unwrap().history.past_len(), past + 1, "{case}");
-            s.undo();
-            assert!((read(&s).1 - before).abs() < 1e-5, "{case}: undo restores the target");
-        }
-    }
 }
 
 /// #5335: a layer mask, saved channel or Quick Mask holds gray levels whatever the document's

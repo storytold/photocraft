@@ -431,6 +431,3 @@ pub(super) fn push_unique(v: &mut Vec<f64>, x: f64) {
 #[cfg(test)]
 #[path = "export_clut_stack_tests.rs"]
 mod export_clut_stack_tests;
-#[cfg(test)]
-#[path = "layers_to_files_prefix_tests.rs"]
-mod layers_to_files_prefix_tests;
