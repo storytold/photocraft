@@ -29,7 +29,7 @@ fn the_menu_lists_the_thirteen_setups_in_order() {
     assert_eq!(COLOR_SETTINGS_PRESETS[3], "Monitor Color");
     assert_eq!(COLOR_SETTINGS_PRESETS[12], "North America Web/Internet");
     // The params doc offers Custom, then the same names.
-    let spec = crate::command_specs().iter().find(|c| c.id == CMD).unwrap().params;
+    let spec = specs().into_iter().find(|c| c.id == CMD).unwrap().params;
     let names = format!("\"preset\":\"{CUSTOM_SETTINGS}|{}\"", COLOR_SETTINGS_PRESETS.join("|"));
     assert!(spec.contains(&names), "{spec}");
 }
