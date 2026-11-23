@@ -37,7 +37,7 @@ const WANT: [&str; 17] = [
 
 /// A 64 × 48 document with two pixel layers above the background, the top one active; with
 /// `both`, the other one is selected too. The Count tool is current.
-fn app(both: bool) -> (PhotocraftApp, egui::Context, [u64; 2]) {
+fn app(both: bool) -> (Box<PhotocraftApp>, egui::Context, [u64; 2]) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     let layer = |r: Value| r["layer"].as_u64().unwrap();
@@ -48,7 +48,8 @@ fn app(both: bool) -> (PhotocraftApp, egui::Context, [u64; 2]) {
     }
     app.sync_views();
     app.ui.tool = Tool::Count;
-    (app, egui::Context::default(), [ink, paint])
+    let ctx = app.ctx().clone();
+    (app, ctx, [ink, paint])
 }
 
 /// The open menu's `ui.inspect` entries as (id, label, enabled), "―" for separators.
@@ -72,7 +73,7 @@ fn selected(app: &PhotocraftApp) -> usize {
 fn with_two_layers_selected_the_layer_rows_read_in_the_plural() {
     let (mut app, ctx, _) = app(true);
     assert_eq!(selected(&app), 2);
-    right_click(&mut app, &ctx, 50.0, 40.0);
+    right_click(&mut app, 50.0, 40.0);
     let entries = inspected(&mut app, &ctx);
     assert_eq!(entries.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), WANT, "the command ids and their order don't change");
     for (id, _, plural) in COUNTED {
@@ -125,7 +126,7 @@ fn with_two_layers_selected_the_layer_rows_read_in_the_plural() {
 fn with_one_layer_selected_the_layer_rows_stay_singular() {
     let (mut app, ctx, _) = app(false);
     assert_eq!(selected(&app), 1);
-    right_click(&mut app, &ctx, 50.0, 40.0);
+    right_click(&mut app, 50.0, 40.0);
     let entries = inspected(&mut app, &ctx);
     assert_eq!(entries.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), WANT);
     for (id, singular, _) in COUNTED {
@@ -144,7 +145,7 @@ fn with_one_layer_selected_the_layer_rows_stay_singular() {
 fn the_labels_match_the_layers_panel_menu() {
     for multi in [false, true] {
         let (mut app, ctx, [_, paint]) = app(multi);
-        right_click(&mut app, &ctx, 50.0, 40.0);
+        right_click(&mut app, 50.0, 40.0);
         let entries = inspected(&mut app, &ctx);
         let st = app.session.active().unwrap();
         let layer = st.doc.layer(photocraft_doc::LayerId(paint)).unwrap();
@@ -161,7 +162,7 @@ fn the_labels_match_the_layers_panel_menu() {
 #[test]
 fn delete_layers_still_deletes_the_selected_layers() {
     let (mut app, ctx, [ink, paint]) = app(true);
-    right_click(&mut app, &ctx, 50.0, 40.0);
+    right_click(&mut app, 50.0, 40.0);
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": "layer.delete"}))["ok"], true);
     let st = app.session.active().unwrap();
     for id in [ink, paint] {

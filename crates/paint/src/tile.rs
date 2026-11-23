@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 ///
 /// The samples are shared: cloning a tile (brush settings are cloned on every pointer event of a
 /// stroke, #4534) copies a pointer, not a sampled tip that may be thousands of pixels across.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub struct GrayTile {
     pub width: u32,
     pub height: u32,
@@ -86,7 +86,7 @@ pub const PREVIEW_SIDE: u32 = 96;
 /// could not load it, so a missing file degrades the stroke instead of failing it.
 ///
 /// Two stored tiles are equal when their key and size are (the key names the content).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredTile {
     /// The owner's key for the bitmap (the preset store uses the content hash).
@@ -174,53 +174,21 @@ impl<'de> Deserialize<'de> for GrayTile {
     }
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// Base64 with the standard alphabet; decoding takes padded or unpadded input.
+const B64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new().with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+);
 
 /// Standard base64 with padding (the tile serde form; commands taking file bytes).
 pub fn b64_encode(b: &[u8]) -> String {
-    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
-    for c in b.chunks(3) {
-        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
-        out.push(B64[(n >> 18) as usize & 63] as char);
-        out.push(B64[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { B64[n as usize & 63] as char } else { '=' });
-    }
-    out
+    base64::Engine::encode(&B64, b)
 }
 
-/// Decode standard base64 (whitespace ignored); `None` on invalid input.
+/// Decode standard base64, padded or not (whitespace ignored); `None` on invalid input.
 pub fn b64_decode(s: &str) -> Option<Vec<u8>> {
-    let val = |c: u8| -> Option<u32> {
-        Some(match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        } as u32)
-    };
     let s: Vec<u8> = s.bytes().filter(|c| !c.is_ascii_whitespace()).collect();
-    if !s.len().is_multiple_of(4) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    for c in s.chunks(4) {
-        let pad = c.iter().rev().take_while(|&&x| x == b'=').count();
-        let mut n = 0u32;
-        for (i, &x) in c.iter().enumerate() {
-            n = (n << 6) | if i >= 4 - pad { 0 } else { val(x)? };
-        }
-        out.push((n >> 16) as u8);
-        if pad < 2 {
-            out.push((n >> 8) as u8);
-        }
-        if pad < 1 {
-            out.push(n as u8);
-        }
-    }
-    Some(out)
+    base64::Engine::decode(&B64, s).ok()
 }
 
 // ---------- sampling ----------
@@ -428,9 +396,9 @@ mod tests {
         let c = t.clone();
         assert!(std::sync::Arc::ptr_eq(&t.data, &c.data));
         assert_eq!(t, c);
-        let brush = crate::brush::BrushSettings { tip: crate::brush::TipShape::Sampled(t.clone()), ..Default::default() };
+        let brush = crate::brush::BrushSettings { tip: crate::brush::TipShape::Sampled(t.clone()).into(), ..Default::default() };
         let copy = brush.clone();
-        let crate::brush::TipShape::Sampled(ct) = &copy.tip else { panic!("sampled") };
+        let crate::brush::TipShape::Sampled(ct) = &*copy.tip else { panic!("sampled") };
         assert!(std::sync::Arc::ptr_eq(&t.data, &ct.data), "the settings' clone shares the tip");
     }
 
@@ -440,6 +408,18 @@ mod tests {
             let b: Vec<u8> = (0..n).map(|i| (i * 37 + 5) as u8).collect();
             assert_eq!(b64_decode(&b64_encode(&b)).unwrap(), b);
         }
+    }
+
+    #[test]
+    fn base64_rejects_bad_padding_and_takes_unpadded() {
+        assert_eq!(b64_decode("aGk=").as_deref(), Some(&b"hi"[..]));
+        assert_eq!(b64_decode("aGk").as_deref(), Some(&b"hi"[..]));
+        assert_eq!(b64_decode(" aG\nk= ").as_deref(), Some(&b"hi"[..]));
+        assert_eq!(b64_decode("").as_deref(), Some(&b""[..]));
+        assert_eq!(b64_decode("===="), None);
+        assert_eq!(b64_decode("QQ==QUJD"), None);
+        assert_eq!(b64_decode("a"), None);
+        assert_eq!(b64_decode("a$=="), None);
     }
 
     #[test]
