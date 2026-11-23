@@ -311,13 +311,15 @@ mod app_tests {
     /// One frame of `passes` egui passes of `pass_ms` each, through the app's hooks: the raw input
     /// hook starts the record once, and each pass's UI build ends in `finish_frame`. Every pass but
     /// the last asks egui for another, as a sizing pass does. `stroke`: each pass renders stroke
-    /// points for 1 ms.
-    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, passes: usize, pass_ms: u64, stroke: bool) {
+    /// points for 1 ms. Returns the first pass's input time, before any UI work.
+    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, passes: usize, pass_ms: u64, stroke: bool) -> Option<f64> {
+        let mut first_input_ms = None;
         app.perf.stage.start(crate::gpu_canvas::now_ms(), 1);
         ctx.run_ui(egui::RawInput::default(), |ui| {
             let ctx = ui.ctx().clone();
             let t0 = crate::gpu_canvas::now_ms();
             app.perf.stage.ui_start(t0, None);
+            first_input_ms.get_or_insert(app.perf.stage.input_ms);
             std::thread::sleep(std::time::Duration::from_millis(pass_ms));
             if stroke {
                 app.perf.stage.stroke_ms += 1.0;
@@ -328,18 +330,21 @@ mod app_tests {
             app.finish_frame(&ctx, crate::gpu_canvas::now_ms() - t0);
         })
         .drop_without_applying_deltas();
+        first_input_ms
     }
 
     #[test]
     fn two_30_ms_passes_of_one_frame_are_one_60_ms_slow_frame() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        let ctx = egui::Context::default();
-        frame(&mut app, &ctx, 2, 30, false);
+        let ctx = app.ctx().clone();
+        let first_input_ms = frame(&mut app, &ctx, 2, 30, false);
         let frames: Vec<_> = app.slow_frames.frames().cloned().collect();
         assert_eq!(frames.len(), 1, "{frames:?}");
         let f = &frames[0];
         assert!(f.frame_ms >= 60.0 && f.ui_ms >= 60.0, "both passes: {f:?}");
-        assert!(f.input_ms < 30.0, "the first pass isn't the second's input: {f:?}");
+        // Context initialization or scheduler delays before the first pass are real input time.
+        // The invariant is that a later pass does not replace it with the first pass's UI time.
+        assert_eq!(Some(f.input_ms), first_input_ms, "the first pass isn't the second's input: {f:?}");
         assert_eq!(app.perf.stage, super::FrameStages::default(), "the last pass closed the record");
     }
 
@@ -347,11 +352,11 @@ mod app_tests {
     fn the_stroke_trace_gets_one_row_per_frame_not_per_pass() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.stroke_trace.output = crate::stroke_trace::Output::Stderr;
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         for _ in 0..3 {
-            frame(&mut app, &ctx, 2, 1, true);
+            assert!(frame(&mut app, &ctx, 2, 1, true).is_some(), "the frame ran at least one UI pass");
         }
-        frame(&mut app, &ctx, 2, 1, false);
+        assert!(frame(&mut app, &ctx, 2, 1, false).is_some(), "the frame ran at least one UI pass");
         let s = app.stroke_trace.last.clone().expect("the stroke ended");
         assert_eq!(s.frames, 3, "{s:?}");
         assert_eq!(s.moves, [1.0, 1.0], "each row has its frame's moves: {s:?}");
@@ -362,7 +367,7 @@ mod app_tests {
     fn a_stroke_live_only_in_a_discarded_pass_still_gets_its_frame_traced() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.stroke_trace.output = crate::stroke_trace::Output::Stderr;
-        let ctx = egui::Context::default();
+        let ctx = app.ctx().clone();
         app.perf.stage.start(crate::gpu_canvas::now_ms(), 1);
         ctx.run_ui(egui::RawInput::default(), |ui| {
             let ctx = ui.ctx().clone();
@@ -377,7 +382,7 @@ mod app_tests {
         })
         .drop_without_applying_deltas();
         assert!(app.live_stroke.is_none() && app.stroke_trace.last.is_none());
-        frame(&mut app, &ctx, 2, 1, false);
+        assert!(frame(&mut app, &ctx, 2, 1, false).is_some(), "the frame ran at least one UI pass");
         let s = app.stroke_trace.last.clone().expect("the stroke ended");
         assert_eq!(s.frames, 1, "the frame whose stroke the last pass cancelled: {s:?}");
     }
@@ -390,7 +395,7 @@ mod app_tests {
         let layer = s.active().and_then(|d| d.active_layer).expect("the background").0;
         let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            PhotocraftApp::new(s, crate::Services::default())
+            PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
         });
         harness.run_steps(6);
         // Every frame counts as slow, so the test doesn't depend on the machine's speed.

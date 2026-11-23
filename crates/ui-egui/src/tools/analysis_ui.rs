@@ -48,6 +48,9 @@ pub enum Drag {
     RulerNew(Option<Ruler>),
     /// Moving a ruler handle: 0 start, 1 end, 2 protractor end.
     RulerHandle(u8),
+    /// Moving the whole ruler, grabbed on its line or a protractor's vertex (#11981): where the
+    /// press was and the ruler then; it follows the pointer by the drag delta.
+    RulerMove([f64; 2], Ruler),
     /// Moving count marker (group, index) from where it was.
     Count(usize, usize, [f64; 2]),
     /// Moving note `index`: grab offset from its position.
@@ -81,6 +84,9 @@ pub struct AnalysisUi {
     pub dialog: Option<(String, Map<String, Value>)>,
     #[serde(skip)]
     pub drag: Option<Drag>,
+    /// A note was just made with a click: the Notes panel focuses its text next frame (#11793).
+    #[serde(skip)]
+    pub focus_note_text: bool,
 }
 
 impl Default for AnalysisUi {
@@ -95,6 +101,7 @@ impl Default for AnalysisUi {
             use_measurement_scale: false,
             dialog: None,
             drag: None,
+            focus_note_text: false,
         }
     }
 }
@@ -195,9 +202,14 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             Ok(doc) => app.pick_file_bytes(move |app, name, bytes| {
                 app.refocus(doc)?;
                 let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
-                if r.is_ok() {
+                if let Ok(v) = &r {
                     app.ui.analysis.notes = true;
                     app.sync_views();
+                    // Notes whose icon landed off the canvas stay there; the alert says so (#13914).
+                    if v["outside"] == json!(true) {
+                        let params = json!({"message": tl!("Some notes are placed outside the canvas.")}).as_object().cloned().unwrap_or_default();
+                        app.ui.open_dialog(crate::state::DialogKind::Error, params);
+                    }
                 }
                 r
             }),
@@ -238,8 +250,41 @@ fn tolerance(app: &PhotocraftApp) -> f64 {
     7.0 / f64::from(app.point_zoom().max(0.01))
 }
 
+/// The Ruler's grab radius: ±8 screen px, the reference's hit zone around a ruler end and its
+/// line (#11981). The Count, Note and Color Sampler tools keep [`tolerance`].
+fn ruler_tolerance(app: &PhotocraftApp) -> f64 {
+    8.0 / f64::from(app.point_zoom().max(0.01))
+}
+
+/// Is `p` within the ±`tol` square around `q`? A ruler end is hit in a 17 × 17 px square at 100 %
+/// zoom (#11981).
+fn within(p: [f64; 2], q: [f64; 2], tol: f64) -> bool {
+    (p[0] - q[0]).abs() <= tol && (p[1] - q[1]).abs() <= tol
+}
+
+/// Distance from `p` to the segment `a`–`b`.
+fn segment_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    dist(p, [a[0] + t * dx, a[1] + t * dy])
+}
+
 fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
+}
+
+/// Is `p` within the grab radius `tol` of one of `r`'s end points?
+fn near_end(r: Ruler, p: [f64; 2], tol: f64) -> bool {
+    within(p, r.start, tol) || within(p, r.end, tol)
+}
+
+/// Is the pointer at document point `p` over the ruler's end points? The very hit test a press
+/// makes its decision with ([`near_end`] with [`ruler_tolerance`]), so the Ruler tool's ⌥ pointer
+/// shows exactly where an ⌥-drag starts the protractor arm (#12037).
+pub(crate) fn ruler_end_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    let tol = ruler_tolerance(app);
+    app.session.active().is_some_and(|d| d.doc.measurement.ruler.is_some_and(|r| near_end(r, p, tol)))
 }
 
 /// Shift constrains to 45° steps around `from`, as the reference does (#11985): on a diagonal step
@@ -271,6 +316,14 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
 mod analysis_ruler_click_tests;
 
 #[cfg(test)]
+#[path = "analysis_ruler_visibility_tests.rs"]
+mod analysis_ruler_visibility_tests;
+
+#[cfg(test)]
+#[path = "analysis_ruler_move_tests.rs"]
+mod analysis_ruler_move_tests;
+
+#[cfg(test)]
 #[path = "note_show_on_new_tests.rs"]
 mod note_show_on_new_tests;
 
@@ -283,6 +336,7 @@ pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Val
     let result = app.run("notes.add", params)?;
     app.ui.analysis.note_selected = result["index"].as_u64().map(|v| v as usize);
     app.ui.analysis.notes = true;
+    app.ui.analysis.focus_note_text = true;
     app.ui.view.show.notes = true;
     Ok(result)
 }
@@ -304,12 +358,15 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     let tol = tolerance(app);
     match (tool, ev) {
         (Tool::Ruler, ToolEvent::Down { x, y, .. }) => {
+            let tol = ruler_tolerance(app);
             let p = [x, y];
             let cur = doc.measurement.ruler;
-            let near = |q: [f64; 2]| dist(p, q) <= tol;
+            let near = |q: [f64; 2]| within(p, q, tol);
             match cur {
+                // A protractor's vertex moves the whole protractor, with or without ⌥ (#11981).
+                Some(r) if r.protractor.is_some() && near(r.start) => app.ui.analysis.drag = Some(Drag::RulerMove(p, r)),
                 // ⌥-drag from an end point starts the protractor arm at that vertex.
-                Some(mut r) if mods.alt && (near(r.start) || near(r.end)) => {
+                Some(mut r) if mods.alt && near_end(r, p, tol) => {
                     if near(r.end) && !near(r.start) {
                         std::mem::swap(&mut r.start, &mut r.end);
                     }
@@ -320,6 +377,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 Some(r) if r.protractor.is_some_and(near) => app.ui.analysis.drag = Some(Drag::RulerHandle(2)),
                 Some(r) if near(r.end) => app.ui.analysis.drag = Some(Drag::RulerHandle(1)),
                 Some(r) if near(r.start) => app.ui.analysis.drag = Some(Drag::RulerHandle(0)),
+                // On the line, away from the ends: the whole ruler moves (#11981). A protractor's
+                // arm lines are not measured and keep starting a new ruler.
+                Some(r) if r.protractor.is_none() && segment_dist(p, r.start, r.end) <= tol => app.ui.analysis.drag = Some(Drag::RulerMove(p, r)),
                 _ => {
                     set_ruler(app, Ruler { start: p, end: p, protractor: None });
                     app.ui.analysis.drag = Some(Drag::RulerNew(cur));
@@ -329,6 +389,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         (Tool::Ruler, ToolEvent::Move { x, y, .. }) => {
             let (Some(drag), Some(mut r)) = (app.ui.analysis.drag, doc.measurement.ruler) else { return true };
             match drag {
+                Drag::RulerMove(from, at_press) => {
+                    let (dx, dy) = (x - from[0], y - from[1]);
+                    let shift = |q: [f64; 2]| [q[0] + dx, q[1] + dy];
+                    r = Ruler { start: shift(at_press.start), end: shift(at_press.end), protractor: at_press.protractor.map(shift) };
+                }
                 Drag::RulerNew(_) | Drag::RulerHandle(1) => r.end = constrain(r.start, [x, y], mods.shift),
                 Drag::RulerHandle(0) => r.start = constrain(r.end, [x, y], mods.shift),
                 Drag::RulerHandle(_) => r.protractor = Some(constrain(r.start, [x, y], mods.shift)),
@@ -494,7 +559,9 @@ fn handle(painter: &egui::Painter, p: Pos2) {
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
     let v = &app.ui.view;
-    if app.ui.tool == Tool::Ruler
+    // The ruler stays drawn whichever tool is active, and View › Extras hides it (#11987). View ›
+    // Show has no Ruler entry, so only the master Extras switch applies.
+    if v.extras
         && let Some(r) = doc.measurement.ruler
     {
         let s = xf.to_screen(r.start[0] as f32, r.start[1] as f32);
@@ -545,7 +612,11 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     // Color Sampler points (#1046): persistent numbered markers, drawn whatever the active tool is.
     // While one is dragged its marker follows the pointer, and a new one shows the next number
-    // there (#11729), unless the limit is reached and the release cannot place it.
+    // there (#11729), unless the limit is reached and the release cannot place it. View › Extras
+    // off hides the markers but keeps the points and their Info readouts (#11741).
+    if !v.extras {
+        return;
+    }
     let mut samplers = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
     match app.ui.analysis.drag {
         Some(Drag::Sampler(i, at)) if app.ui.tool == Tool::ColorSampler && i < samplers.len() => samplers[i] = at,
@@ -631,48 +702,119 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             let m = &doc.measurement;
             ui.label(RichText::new(crate::i18n::fmt(tl!("Count: {n}"), &[("n", &count_readout(m))])).color(t.text).size(11.0));
             crate::widgets::vline(ui, 22.0);
-            if !m.count_groups.is_empty() {
-                let mut gi = m.active_count_group.min(m.count_groups.len() - 1);
-                let opts: Vec<(usize, &str)> = m.count_groups.iter().enumerate().map(|(i, g)| (i, g.name.as_str())).collect();
-                if crate::widgets::dropdown(ui, "count-group", tl!("Group"), &mut gi, &opts, 140.0) {
-                    let _ = app.run("count.setGroup", json!({"group": gi, "active": true}));
+            // Every control from the start, in Photoshop's order (#11765): group, eye, folder,
+            // trash, Clear, colour, Marker Size, Label Size. With no group yet the swatch and the
+            // sizes show what the next new group gets; using them, or the eye, changes nothing
+            // until there is a group (not measured).
+            let group = (!m.count_groups.is_empty()).then(|| m.active_count_group.min(m.count_groups.len() - 1));
+            let next = photocraft_doc::CountGroup::default();
+            let g = group.map_or(&next, |gi| &m.count_groups[gi]);
+            if let Some(mut gi) = group {
+                // The groups, a separator, then Rename… for the current group (#11766).
+                const RENAME: usize = usize::MAX;
+                let mut opts: Vec<(usize, &str)> = m.count_groups.iter().enumerate().map(|(i, g)| (i, g.name.as_str())).collect();
+                opts.push((RENAME, tl!("Rename…")));
+                let current = gi;
+                let (chosen, _) = crate::widgets::dropdown_wheel_grouped(ui, "count-group", tl!("Group"), &mut gi, &opts, 150.0, |v| *v == RENAME);
+                match chosen.last().copied() {
+                    Some(RENAME) => crate::count_group_name_ui::open_rename(app, current),
+                    Some(g) => {
+                        let _ = app.run("count.setGroup", json!({"group": g, "active": true}));
+                    }
+                    None => {}
                 }
-                let g = &m.count_groups[gi];
-                let eye = if g.visible { "eye" } else { "eye-off" };
-                if crate::icons::button(ui, eye, 22.0, false, tl!("Toggle count group visibility")).clicked() {
-                    let _ = app.run("count.setGroup", json!({"group": gi, "visible": !g.visible}));
-                }
-                let rgb = g.color.to_rgb();
-                // PhotoCraft's Color Picker (sRGB), as everywhere else (#2144).
-                if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Color")).clicked() {
-                    crate::color_picker_ui::open_for_command(
-                        app,
-                        &crate::color_picker_ui::title_for(tl!("Color")),
-                        rgb,
-                        "count.setGroup",
-                        json!({"group": gi}),
-                    );
-                }
-                if crate::icons::button(ui, "trash", 22.0, false, tl!("Delete count group")).clicked() {
-                    let _ = app.run("count.deleteGroup", json!({"group": gi}));
-                }
+            } else {
+                ui.add_enabled_ui(false, |ui| crate::widgets::dropdown(ui, "count-group", tl!("Group"), &mut 0usize, &[(0, tl!("Count Group"))], 150.0));
             }
+            let eye = if g.visible { "eye" } else { "eye-off" };
+            if crate::icons::button(ui, eye, 22.0, false, tl!("Toggle visibility of count group")).clicked()
+                && let Some(gi) = group
+            {
+                let _ = app.run("count.setGroup", json!({"group": gi, "visible": !g.visible}));
+            }
+            // The "Count Group Name" dialog names the new group (#11766).
             if crate::icons::button(ui, "folder-plus", 22.0, false, tl!("Create a new count group")).clicked() {
-                let _ = app.run("count.newGroup", json!({}));
+                crate::count_group_name_ui::open_new(app);
             }
-            if crate::widgets::secondary_button(ui, tl!("Clear"), 0.0).clicked() && m.count_total() > 0 {
+            // The last group can't be deleted from here (`count.deleteGroup` still can).
+            let trash = ui.add_enabled_ui(m.count_groups.len() >= 2, |ui| {
+                crate::icons::button(ui, "trash", 22.0, false, tl!("Delete the currently selected count group"))
+            });
+            if trash.inner.clicked()
+                && let Some(gi) = group
+            {
+                let _ = app.run("count.deleteGroup", json!({"group": gi}));
+            }
+            // Clear acts on a visible current group with markers (`count.clear` itself is unchanged).
+            let clearable = group.is_some() && g.visible && !g.points.is_empty();
+            if ui.add_enabled_ui(clearable, |ui| crate::widgets::secondary_button(ui, tl!("Clear"), 0.0)).inner.clicked() {
                 let _ = app.run("count.clear", json!({}));
             }
-            if let Some(g) = m.count_groups.get(m.active_count_group) {
-                crate::widgets::vline(ui, 22.0);
-                let (mut ms, mut ls) = (g.marker_size as f32, g.label_size as f32);
-                ui.label(RichText::new(tl!("Marker Size")).color(t.text_dim).size(11.0));
-                let a = crate::widgets::value_field(ui, &mut ms, 1.0..=10.0, "", 40.0).accessible_name(tl!("Marker Size")).changed();
-                ui.label(RichText::new(tl!("Label Size")).color(t.text_dim).size(11.0));
-                let b = crate::widgets::value_field(ui, &mut ls, 8.0..=72.0, "", 44.0).accessible_name(tl!("Label Size")).changed();
-                if a || b {
-                    let _ = app.run("count.setGroup", count_size_params(ms, ls));
+            let rgb = g.color.to_rgb();
+            // PhotoCraft's Color Picker (sRGB), as everywhere else (#2144).
+            if crate::widgets::color_swatch_button(ui, color32(rgb), tl!("Count group color")).on_hover_text(tl!("Count group color")).clicked()
+                && let Some(gi) = group
+            {
+                crate::color_picker_ui::open_for_command(
+                    app,
+                    &crate::color_picker_ui::title_for(tl!("Count Color")),
+                    rgb,
+                    "count.setGroup",
+                    json!({"group": gi}),
+                );
+            }
+            crate::widgets::vline(ui, 22.0);
+            let (mut ms, mut ls) = (g.marker_size as f32, g.label_size as f32);
+            // Scrubby captions with colons, as in Photoshop: the options bar's own caption, which
+            // scrubs the field after it when dragged. The catalogs translate the names without
+            // the colon (main's captions), so the colon follows the translation.
+            let caption = |ui: &mut egui::Ui, text: &str| crate::panels::opt_label(ui, &format!("{text}:"));
+            // Each caption names its field (the scrub link), so a screen reader reads what is shown.
+            // A value typed past the range becomes the closest one, and leaving the field opens the
+            // reference's alert (#11768).
+            let (marker_name, label_name) = (format!("{}:", tl!("Marker Size")), format!("{}:", tl!("Label Size")));
+            caption(ui, tl!("Marker Size"));
+            // Read before the fields: they consume the arrow keys and the wheel they step with.
+            let stepped =
+                ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_field_wheeled(ui.ctx());
+            let (marker_slot, label_slot) =
+                (ui.make_persistent_id(egui::IdSalt::new("count-marker-size")), ui.make_persistent_id(egui::IdSalt::new("count-label-size")));
+            drop_decimal_points(ui, marker_slot);
+            let (a, marker_out) = crate::widgets::value_field_whole_alerting(ui, &marker_name, &mut ms, 1.0..=10.0, "", 40.0);
+            ui.data_mut(|d| d.insert_temp(marker_slot, a.id));
+            caption(ui, tl!("Label Size"));
+            drop_decimal_points(ui, label_slot);
+            let (b, label_out) = crate::widgets::value_field_whole_alerting(ui, &label_name, &mut ls, 8.0..=72.0, "", 44.0);
+            ui.data_mut(|d| d.insert_temp(label_slot, b.id));
+            // One undo step per scrub (of a field or its caption), as the Gradient tool's Opacity,
+            // and per typed entry (each keystroke applies while typing). An arrow or wheel step is
+            // a step of its own, as before.
+            let edit = |r: &egui::Response| {
+                let key = r.id.with("count-size-edit");
+                if r.drag_started() || r.gained_focus() {
+                    let n = ui.ctx().cumulative_pass_nr();
+                    ui.data_mut(|d| d.insert_temp(key, n));
                 }
+                let typed = (r.has_focus() || r.lost_focus()) && !stepped;
+                if r.changed() && (r.dragged() || typed) {
+                    ui.data(|d| d.get_temp::<u64>(key)).map(|n| format!("count-size:{}:{n}", key.value()))
+                } else {
+                    None
+                }
+            };
+            let coalesce = edit(&a).or(edit(&b));
+            if marker_out {
+                open_alert_once(app, MARKER_SIZE_RANGE_ALERT);
+            }
+            if label_out {
+                open_alert_once(app, LABEL_SIZE_RANGE_ALERT);
+            }
+            if (a.changed() || b.changed()) && group.is_some() {
+                let mut p = count_size_params(ms, ls);
+                if let Some(k) = coalesce {
+                    p["coalesce"] = json!(k);
+                }
+                let _ = app.run("count.setGroup", p);
             }
             true
         }
@@ -723,6 +865,36 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
 }
 
 // ------------------------------------------------------------------ panels and dialogs
+
+/// The reference's alerts for a Marker Size or Label Size typed out of range (#11768).
+pub(crate) const MARKER_SIZE_RANGE_ALERT: &str = "An integer between 1 and 10 is required. Closest value inserted.";
+pub(crate) const LABEL_SIZE_RANGE_ALERT: &str = "An integer between 8 and 72 is required. Closest value inserted.";
+
+/// Opens the alert with `message` (English, translated here) unless it is already up.
+fn open_alert_once(app: &mut PhotocraftApp, message: &str) {
+    let message = tl!(message).to_owned();
+    let shown = app.ui.dialogs.iter().any(|d| d.kind == DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(message.as_str()));
+    if !shown {
+        app.ui.open_dialog(DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
+}
+
+/// The Count tool's size fields take digits only, as the reference's do (#11768): a `.` or `,`
+/// typed, pasted or committed by an IME into the field whose id was saved under `slot` last frame
+/// is dropped, so "2.6" reads as 26. An IME commit left empty stays: it ends the composition.
+fn drop_decimal_points(ui: &mut egui::Ui, slot: egui::Id) {
+    let focused = ui.data(|d| d.get_temp::<egui::Id>(slot)).is_some_and(|id| ui.memory(|m| m.has_focus(id)));
+    if focused {
+        ui.input_mut(|i| {
+            for e in &mut i.events {
+                if let egui::Event::Text(t) | egui::Event::Paste(t) | egui::Event::Ime(egui::ImeEvent::Commit(t)) = e {
+                    t.retain(|c| c != '.' && c != ',');
+                }
+            }
+            i.events.retain(|e| !matches!(e, egui::Event::Text(t) | egui::Event::Paste(t) if t.is_empty()));
+        });
+    }
+}
 
 /// `count.setGroup` params for the options bar's Marker Size and Label Size fields, sent as JSON
 /// integers (the fields edit `f32`s; `8.0` is a float on the wire).
@@ -882,7 +1054,9 @@ fn show_note_options(app: &mut PhotocraftApp, i: usize) {
 fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let notes = app.session.active().map(|d| d.doc.notes.clone()).unwrap_or_default();
     let n = notes.len();
-    let mut sel = app.ui.analysis.note_selected.filter(|i| *i < n).or((n > 0).then_some(0));
+    // No note selected (after Delete, Clear All, a new document) stays unselected (#11793).
+    let mut sel = app.ui.analysis.note_selected.filter(|i| *i < n);
+    let focus_text = std::mem::take(&mut app.ui.analysis.focus_note_text);
     let mut close = false;
     let mut edit: Option<Value> = None;
     let mut delete = false;
@@ -891,31 +1065,44 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     panel_window(app, ctx, "notes-panel", tl!("Notes"), vec2(-40.0, 300.0), 260.0, |ui| {
         close = title_row(ui, tl!("Notes"));
         match sel {
+            // No note selected: an empty, inactive text box with the reference's placeholder.
             None => {
-                ui.label(RichText::new(tl!("Click with the Note tool to add a note.")).color(t.text_dim).size(11.0));
+                ui.label(RichText::new(" ").size(11.0));
+                let mut empty = String::new();
+                ui.add_enabled(
+                    false,
+                    egui::TextEdit::multiline(&mut empty).desired_rows(6).desired_width(f32::INFINITY).hint_text(tl!("Click a note to view or edit")),
+                )
+                .accessible_name(tl!("Notes"));
             }
             Some(i) => {
                 let note = &notes[i];
-                ui.label(RichText::new(if note.author.is_empty() { tl!("No author").to_string() } else { note.author.clone() }).color(t.text_dim).size(11.0));
+                // The author line as stored: empty for a note without author (#11793).
+                ui.label(RichText::new(if note.author.is_empty() { " ".to_string() } else { note.author.clone() }).color(t.text_dim).size(11.0));
                 let mut text = note.text.clone();
-                if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(6).desired_width(f32::INFINITY)).accessible_name(tl!("Notes")).changed() {
+                let resp = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(6).desired_width(f32::INFINITY)).accessible_name(tl!("Notes"));
+                // A note just made with a click: the caret goes into its text, ready to type.
+                if focus_text {
+                    resp.request_focus();
+                }
+                if resp.changed() {
                     edit = Some(json!({"index": i, "text": text, "coalesce": format!("note-{i}")}));
                 }
             }
         }
         crate::widgets::hairline(ui);
         ui.horizontal(|ui| {
-            if ui.add_enabled_ui(n > 1, |ui| crate::icons::button(ui, "chevrons-left", 22.0, false, tl!("Previous note"))).inner.clicked() {
+            let step = n > 1 && sel.is_some();
+            if ui.add_enabled_ui(step, |ui| crate::icons::button(ui, "chevrons-left", 22.0, false, tl!("Previous note"))).inner.clicked() {
                 sel = sel.map(|i| (i + n - 1) % n);
                 navigated = true;
             }
-            if ui.add_enabled_ui(n > 1, |ui| crate::icons::button(ui, "chevrons-right", 22.0, false, tl!("Next note"))).inner.clicked() {
+            if ui.add_enabled_ui(step, |ui| crate::icons::button(ui, "chevrons-right", 22.0, false, tl!("Next note"))).inner.clicked() {
                 sel = sel.map(|i| (i + 1) % n);
                 navigated = true;
             }
-            let template = "{index} of {total}";
-            let position = crate::i18n::fmt(tl!(template), &[("index", &sel.map_or(0, |i| i + 1).to_string()), ("total", &n.to_string())]);
-            ui.label(RichText::new(position).color(t.text_dim).size(11.0));
+            // "N / M", blank with no note selected (#11793).
+            ui.label(RichText::new(note_counter(sel, n)).color(t.text_dim).size(11.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add_enabled_ui(sel.is_some(), |ui| crate::icons::button(ui, "trash", 22.0, false, tl!("Delete note"))).inner.clicked() {
                     delete = true;
@@ -936,6 +1123,11 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if close {
         app.ui.analysis.notes = false;
     }
+}
+
+/// The Notes panel's counter: "N / M" for note N of M, blank with no note selected (#11793).
+pub(crate) fn note_counter(sel: Option<usize>, n: usize) -> String {
+    sel.filter(|i| *i < n).map_or_else(String::new, |i| format!("{} / {n}", i + 1))
 }
 
 fn num_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, range: std::ops::RangeInclusive<f32>, suffix: &str) {
@@ -975,6 +1167,7 @@ pub fn dialog_command(kind: &str, f: &Map<String, Value>) -> Option<(&'static st
             }
         }
         "dataPoints" => ("image.analysis.selectDataPoints", json!({"selection": f.get("selection"), "ruler": f.get("ruler"), "count": f.get("count")})),
+        crate::count_group_name_ui::KIND => return crate::count_group_name_ui::command(f),
         "scaleMarker" => (
             "image.analysis.placeScaleMarker",
             json!({"length": f.get("length"), "fontSize": f.get("fontSize"), "displayText": f.get("displayText"), "textPosition": f.get("textPosition"), "color": f.get("color")}),
@@ -985,10 +1178,15 @@ pub fn dialog_command(kind: &str, f: &Map<String, Value>) -> Option<(&'static st
 
 fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some((kind, mut f)) = app.ui.analysis.dialog.clone() else { return };
+    if kind == crate::count_group_name_ui::KIND && crate::count_group_name_ui::stale(app, &f) {
+        app.ui.analysis.dialog = None;
+        return;
+    }
     let t = Tokens::get(ctx);
     let title = match kind.as_str() {
         "scale" => "Measurement Scale",
         "dataPoints" => "Select Data Points",
+        crate::count_group_name_ui::KIND => crate::count_group_name_ui::TITLE,
         _ => "Measurement Scale Marker",
     };
     let mut result: Option<bool> = None;
@@ -1023,6 +1221,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     let text = if custom { format!("{pl} pixels = {ll:.4} {u}") } else { "1 pixels = 1.0000 pixels".into() };
                     ui.label(RichText::new(tl!(&text)).color(t.text_dim).size(11.0));
                 }
+                crate::count_group_name_ui::KIND => result = crate::count_group_name_ui::body(ui, &mut f).or(result),
                 "dataPoints" => {
                     ui.horizontal_top(|ui| {
                         for (source, label) in [("selection", tl!("Selections")), ("ruler", tl!("Ruler Tool")), ("count", tl!("Count Tool"))] {
@@ -1096,7 +1295,17 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
 pub(crate) mod tests;
 
 #[cfg(test)]
+#[path = "count_group_name_tests.rs"]
+mod count_group_name_tests;
+
+#[cfg(test)]
+#[path = "notes_panel_layout_tests.rs"]
+mod notes_panel_layout_tests;
+#[cfg(test)]
 mod sampler_drag_tests;
+
+#[cfg(test)]
+mod sampler_extras_tests;
 
 /// Marks the "Delete this note?" alert (#11788).
 const DELETE_NOTE_MARK: &str = "__deleteNote";
@@ -1261,3 +1470,11 @@ mod note_clear_all_tests;
 #[cfg(test)]
 #[path = "analysis_ruler_escape_tests.rs"]
 mod analysis_ruler_escape_tests;
+
+#[cfg(test)]
+#[path = "count_options_bar_tests.rs"]
+mod count_options_bar_tests;
+
+#[cfg(test)]
+#[path = "count_size_alert_tests.rs"]
+mod count_size_alert_tests;

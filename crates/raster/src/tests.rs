@@ -1043,6 +1043,17 @@ fn fallible_interleaved_writes_match_encoded_pixels_and_reject_bad_lengths() {
     }
 }
 
+#[test]
+fn tile_storage_counts_whole_tiles() {
+    let fmt = PixelFormat::RGBA8;
+    let tile = (TILE_SIZE as u64).pow(2) * 4;
+    assert_eq!(tile_storage_bytes(Rect::new(0, 0, 1, 1), &fmt), tile);
+    // A one-pixel column down four tiles keeps four whole tiles; straddling an edge, five.
+    assert_eq!(tile_storage_bytes(Rect::new(0, 0, 1, TILE_SIZE * 4), &fmt), 4 * tile);
+    assert_eq!(tile_storage_bytes(Rect::new(0, -1, 1, TILE_SIZE * 4), &fmt), 5 * tile);
+    assert_eq!(tile_storage_bytes(Rect::EMPTY, &fmt), 0);
+}
+
 /// The byte a row-callback test writes at pixel (x, y).
 fn row_byte(x: i32, y: i32) -> u8 {
     (x.wrapping_mul(7).wrapping_add(y.wrapping_mul(13)) & 0xff) as u8
@@ -1329,4 +1340,31 @@ fn benchmark_u16_rgba_reads() {
             }
         }
     }
+}
+
+#[test]
+fn generations_follow_mutations_and_remain_shared_by_unmodified_clones() {
+    let mut original = Surface::new(PixelFormat::RGBA8);
+    let initial = original.generation();
+    let copy = original.clone();
+    assert_eq!(copy.generation(), initial);
+    let region = Rect::new(0, 0, 1, 1);
+    let _ = original.read_region(region);
+    assert_eq!(original.generation(), initial);
+    original.write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+    assert_ne!(original.generation(), initial);
+    assert_eq!(copy.generation(), initial);
+    assert_ne!(original.read_region(region), copy.read_region(region));
+    let changed = original.generation();
+    original.map_color(|v| v * 0.5);
+    assert_ne!(original.generation(), changed);
+    let mapped = original.generation();
+    original.prune();
+    assert_ne!(original.generation(), mapped);
+    let before_tile = original.generation();
+    let old_copy = original.clone();
+    original.tile_mut(TileCoord { tx: 0, ty: 0 }).bytes_mut()[0] ^= 0xff;
+    assert_ne!(original.generation(), before_tile);
+    assert_eq!(old_copy.generation(), before_tile);
+    assert_ne!(original.read_region(region), old_copy.read_region(region));
 }

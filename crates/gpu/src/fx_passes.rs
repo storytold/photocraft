@@ -158,7 +158,7 @@ impl Compositor {
         }
 
         if let Some(t) = t_trace.filter(|_| !damage.is_empty()) {
-            eprintln!("effect maps of `{}`: shape + distance fields over {damage:?} in {:.2} ms (CPU)", layer.name, t.elapsed().as_secs_f64() * 1000.0);
+            eprintln!("effect maps of {:?}: shape + distance fields over {damage:?} in {:.2} ms (CPU)", layer.name, t.elapsed().as_secs_f64() * 1000.0);
         }
         e.progs.truncate(progs.len());
         while e.progs.len() < progs.len() {
@@ -258,8 +258,7 @@ impl Compositor {
                 lut: s.lut.clone(),
             });
         }
-        self.kit.run(device, queue, encoder, &draws);
-        Ok(())
+        self.kit.run(device, queue, encoder, &draws)
     }
 }
 

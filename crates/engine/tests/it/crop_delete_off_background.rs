@@ -2,10 +2,11 @@
 //! Photoshop does: it keeps the pixels past the canvas, and an extension is transparent on every
 //! layer. Delete on keeps the Background, and Image › Reveal All is unchanged (#10867).
 
-use photocraft_engine::actions_cmds::Action;
+use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{EngineError, Session, atn_cmds};
 use photocraft_geom::Rect;
-use photocraft_psd::{atn, descriptor::Value as D};
 use serde_json::{Value, json};
 
 const MAGENTA: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
@@ -112,7 +113,7 @@ fn the_action_steps_turned_crop_unlocks_the_background() {
     // through a binary .atn: its descriptor carries `Dlt` false, the importer decodes it and
     // `actions.play` runs the step.
     let params = json!({"x": 10, "y": 10, "width": 60, "height": 30, "angle": 10, "deleteCroppedPixels": false});
-    let action = Action::new("Crop", vec![("image.crop".into(), params)]);
+    let action = Action::new("Crop", vec![ActionStep::new("image.crop", params)]);
     let (bytes, skipped) = atn_cmds::export("Crop", &[&action], &[], false).unwrap();
     assert!(skipped.is_empty());
     let file = atn::parse(&bytes).unwrap();
@@ -121,10 +122,10 @@ fn the_action_steps_turned_crop_unlocks_the_background() {
     let imported = atn_cmds::import(&bytes).unwrap();
     assert!(imported.unsupported.is_empty() && imported.warnings.is_empty());
     let step = &imported.actions[0].steps[0];
-    assert_eq!((step.0.as_str(), &step.1["deleteCroppedPixels"]), ("image.crop", &json!(false)));
+    assert_eq!((step.command.as_str(), &step.params["deleteCroppedPixels"]), ("image.crop", &json!(false)));
 
     let mut s = doc();
-    s.actions.list = imported.actions;
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     let before = past(&s);
     s.execute("actions.play", json!({"action": "Crop"})).unwrap();
     assert_eq!(past(&s), before + 1, "one undo step");

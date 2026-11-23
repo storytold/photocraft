@@ -10,21 +10,21 @@ mod layout_doc;
 use egui::{Event, Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
 use photocraft_doc::{Document, LayerContent, LayerId};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::layer_multi_cmds::{layer_bounds, move_targets, moved};
 use photocraft_geom::Rect;
-use photocraft_ui_egui::canvas::ViewXform;
 use photocraft_ui_egui::state::Tool;
 use photocraft_ui_egui::{PhotocraftApp, Services};
 use serde_json::json;
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 /// The app (CPU canvas) with the small layout document open.
 fn app() -> (H, layout_doc::Handles) {
     let (doc, handles) = layout_doc::build(layout_doc::Spec::small());
     let h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_pixels_per_point(1.0).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
         app.session.open_document(doc, None);
         app.sync_views();
         app
@@ -43,10 +43,8 @@ fn bounds(h: &H, id: LayerId) -> Rect {
 }
 
 fn screen(h: &H, p: [f64; 2]) -> Pos2 {
-    let app = h.state();
-    let v = &app.ui.views[0];
-    let rect = photocraft_ui_egui::rulers::content_rect(app, app.last_canvas_rect);
-    ViewXform { rect, zoom: v.zoom, center: v.center, flip: false, rotation: v.rotation, aspect: 1.0 }.to_screen(p[0] as f32, p[1] as f32)
+    let view = photocraft_ui_egui::canvas::active_view(h.state()).expect("an active document view");
+    view.to_screen(craft::behavior::kurbo::Point::new(p[0], p[1]))
 }
 
 /// A point where `id` (or, for a group, one of its layers) is the topmost layer with pixels.
@@ -93,7 +91,7 @@ fn actual_pixels(h: &mut H) {
     let size = app.session.active().map(|s| s.doc.size).expect("doc");
     app.ui.views[0].zoom = 1.0;
     app.ui.views[0].center = [size.width as f32 / 2.0, size.height as f32 / 2.0];
-    app.ui.views[0].fit_pending = false;
+    app.ui.views[0].clear_pending();
     // View › Snap and smart guides would pull the layers onto their neighbours' edges.
     app.ui.extras.snap = false;
     app.ui.view.show.smart_guides = false;
@@ -218,44 +216,48 @@ fn the_move_preview_is_what_the_move_commits() {
     }
 }
 
-#[test]
-fn layout_document_composites_on_the_gpu_like_the_cpu() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    use eframe::wgpu;
-    fn block_on<F: std::future::Future>(f: F) -> F::Output {
-        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-        let mut f = std::pin::pin!(f);
-        loop {
-            if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
-                return v;
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn layout_document_composites_on_the_gpu_like_the_cpu() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        use eframe::wgpu;
+        fn block_on<F: std::future::Future>(f: F) -> F::Output {
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            let mut f = std::pin::pin!(f);
+            loop {
+                if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+                    return v;
+                }
+                std::thread::yield_now();
             }
-            std::thread::yield_now();
         }
-    }
-    let Ok(adapter) =
-        block_on(wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env()).request_adapter(&wgpu::RequestAdapterOptions::default()))
-    else {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    };
-    if photocraft_gpu::Compositor::preferred_acc_format(&adapter) != wgpu::TextureFormat::Rgba32Float {
-        eprintln!("skipping: adapter can't render Rgba32Float");
-        return;
-    }
-    let Ok((device, queue)) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else { return };
-    let Ok(mut comp) = photocraft_gpu::Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
-    let (d, _) = layout_doc::build(layout_doc::Spec::small());
-    let (_, texts) = layout_doc::count(&d);
-    assert!(texts >= 10);
-    assert!(d.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Smart(_))));
-    let cpu = photocraft_compose::flatten(&d);
-    let gpu = photocraft_gpu::render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("the layout composites on the GPU");
-    let mut worst = 0.0f32;
-    for (c, g) in cpu.px.iter().zip(&gpu) {
-        for k in 0..4 {
-            let (a, b) = if k == 3 { (c[3], g[3]) } else { (c[k] * c[3], g[k] * g[3]) };
-            worst = worst.max((a - b).abs());
+        let Ok(adapter) = block_on(
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env()).request_adapter(&wgpu::RequestAdapterOptions::default()),
+        ) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        if photocraft_gpu::Compositor::preferred_acc_format(&adapter) != wgpu::TextureFormat::Rgba32Float {
+            eprintln!("skipping: adapter can't render Rgba32Float");
+            return;
         }
+        let Ok((device, queue)) = block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else { return };
+        let Ok(mut comp) = photocraft_gpu::Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
+        let (d, _) = layout_doc::build(layout_doc::Spec::small());
+        let (_, texts) = layout_doc::count(&d);
+        assert!(texts >= 10);
+        assert!(d.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Smart(_))));
+        let cpu = photocraft_compose::flatten(&d);
+        let gpu = photocraft_gpu::render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("the layout composites on the GPU");
+        let mut worst = 0.0f32;
+        for (c, g) in cpu.px.iter().zip(&gpu) {
+            for k in 0..4 {
+                let (a, b) = if k == 3 { (c[3], g[3]) } else { (c[k] * c[3], g[k] * g[3]) };
+                worst = worst.max((a - b).abs());
+            }
+        }
+        assert!(worst <= 2.0 / 255.0, "GPU differs from the CPU by {}/255", worst * 255.0);
     }
-    assert!(worst <= 2.0 / 255.0, "GPU differs from the CPU by {}/255", worst * 255.0);
 }

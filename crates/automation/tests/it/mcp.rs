@@ -532,7 +532,7 @@ async fn headless_doc_save_takes_maximize_compatibility() {
         let r = call(&client, tool, params.clone()).await;
         assert_ne!(r.is_error, Some(true), "{params}: {}", text(&r));
         let bytes = std::fs::read(dir.join(params["path"].as_str().unwrap())).unwrap();
-        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+        assert_eq!(craft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
     }
     let r = call(&client, "doc_export", json!({"path": "bad.psd", "maximizeCompatibility": "no"})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
@@ -555,7 +555,7 @@ async fn headless_doc_export_layers_takes_maximize_compatibility() {
         let file = result["files"][0].as_str().unwrap();
         assert!(file.starts_with(sub), "{file}");
         let bytes = std::fs::read(dir.join(file)).unwrap();
-        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+        assert_eq!(craft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
     }
     let r = call(&client, "doc_export_layers", json!({"dir": "bad", "format": "psd", "maximizeCompatibility": "no"})).await;
     assert_eq!(r.is_error, Some(true), "{}", text(&r));
@@ -971,7 +971,7 @@ async fn doc_export_layers_reports_skipped_layers() {
     json_of(&call(&client, "command_run", json!({"id": "layer.setProps", "params": {"visible": false}})).await);
     let result = json_of(&call(&client, "doc_export_layers", json!({"dir": "layers"})).await);
     assert_eq!(result["count"], 1);
-    assert_eq!(result["files"], json!(["layers/card_0001_Background.png"]));
+    assert_eq!(result["files"], json!(["layers/card_0002_Background.png"]));
     assert_eq!(
         result["skipped"],
         json!([
@@ -1040,7 +1040,7 @@ async fn smart_object_commands_refuse_real_linked_files_without_changing_the_ses
     session.execute("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
     let layer = session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].clone();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(state.doc_mut()).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: dir.join("external.png").to_string_lossy().into_owned() };
     std::fs::write(dir.join("parent.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
     let client = connect(headless_in(&dir)).await;
@@ -1511,6 +1511,7 @@ async fn convention_tool_hints_match_what_each_tool_does() {
     const ADDS: (bool, bool, bool) = (false, false, false);
     const EDITS: (bool, bool, bool) = (false, true, false);
     let expected = [
+        ("agent_folders", READ),
         ("command_list", READ),
         ("doc_inspect", READ),
         ("session_list", READ),
