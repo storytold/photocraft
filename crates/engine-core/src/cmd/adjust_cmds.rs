@@ -425,8 +425,11 @@ pub(crate) fn black_white_enabled(s: &Session) -> std::result::Result<(), String
         return has_adjustable(s);
     }
     let d = s.active().ok_or("no document open")?;
-    if matches!(d.doc.mode, ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Indexed) {
-        return Err(BLACK_WHITE_UNAVAILABLE.into());
+    match d.doc.mode {
+        ColorMode::Rgb => {}
+        ColorMode::Grayscale | ColorMode::Cmyk | ColorMode::Lab | ColorMode::Indexed => return Err(BLACK_WHITE_UNAVAILABLE.into()),
+        // Not measured, so a hidden layer there is not refused either.
+        ColorMode::Bitmap | ColorMode::Duotone | ColorMode::Multichannel => return has_adjustable(s),
     }
     let layer = d.active_layer.and_then(|id| d.doc.layer(id));
     let hidden = layer.is_some_and(|l| !l.visible && matches!(l.content, LayerContent::Raster(_)));

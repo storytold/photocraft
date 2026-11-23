@@ -163,6 +163,14 @@ fn unmeasured_modes_and_targets_keep_todays_behaviour() {
     s.execute("file.new", json!({"width": 16, "height": 16, "mode": "gray", "background": "white"})).unwrap();
     s.execute("image.mode.duotone", json!({"type": "monotone"})).unwrap();
     assert_eq!(black_white_enabled(&s), has_adjustable(&s), "Duotone");
+    // Also on a hidden pixel layer there, which Duotone keeps.
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 16, "height": 16, "mode": "gray", "background": "white"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
+    s.execute("layer.setProps", json!({"visible": false})).unwrap();
+    s.execute("image.mode.duotone", json!({"type": "monotone"})).unwrap();
+    assert_eq!(has_adjustable(&s), Ok(()), "Duotone, hidden pixel layer");
+    assert_eq!(black_white_enabled(&s), Ok(()), "Duotone, hidden pixel layer");
     // Bitmap keeps the refusal all Image › Adjustments but Invert have there.
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 16, "height": 16, "mode": "gray", "background": "white"})).unwrap();
