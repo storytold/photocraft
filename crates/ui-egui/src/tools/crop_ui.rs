@@ -76,7 +76,8 @@ pub(crate) fn finish(app: &mut PhotocraftApp, tool: &mut CropTool, output: CropO
     }
 }
 
-/// Runs once per pass: while another tool is current, a drawn frame is cropped as leaving the tool does.
+/// Runs once per pass: while another tool is current, a drawn frame is cropped as leaving the tool does, and the view
+/// is upright after it.
 pub(crate) fn each_pass(app: &mut PhotocraftApp) {
     if app.ui.tool == Tool::Crop {
         return;
@@ -85,7 +86,13 @@ pub(crate) fn each_pass(app: &mut PhotocraftApp) {
     let keeps_pending = app.stylus.tool_before_eraser == Some(Tool::Crop);
     let (settings, units) = (app.ui.tool_options.crop.clone(), units(app));
     let event = app.canvas_tools.crop.tool.leave(&settings, &document, &units, keeps_pending);
+    // The tool drives the view only while it is picked: the view a default-mode crop turned goes upright with the
+    // commit leaving the tool makes, accepted or refused, as Enter's does (#16330).
+    let commits = matches!(event, Some(CropEvent::Apply(_)));
     handle_event(app, event);
+    if commits {
+        upright_view(app, document.key);
+    }
 }
 
 /// The one commit: the menus, the bar, the task bar and the canvas menu call it. True when the document was cropped.
@@ -223,9 +230,19 @@ pub fn frame(app: &PhotocraftApp) -> Option<CropBox> {
     app.canvas_tools.crop.tool.frame()
 }
 
-/// The canvas shows the pixels past its edges under the shield.
+/// The canvas shows the pixels past its edges under the shield. Default mode only: in Classic Mode the frame lies over
+/// the pasteboard and the layers stop at the canvas edge, as in Photoshop.
 pub(crate) fn shows_beyond_canvas(app: &PhotocraftApp) -> bool {
-    app.ui.tool == Tool::Crop && app.canvas_tools.crop.tool.shows_beyond_canvas()
+    app.ui.tool == Tool::Crop && app.ui.tool_options.crop.image_mode() && app.canvas_tools.crop.tool.shows_beyond_canvas()
+}
+
+/// The colour the area a crop adds past the canvas previews in (`shows_beyond_canvas`), as the commit fills it: the
+/// background colour on a visible Background with Delete Cropped Pixels on and Fill: Background. `None` previews
+/// transparency (Delete off turns the Background into a layer; Content-Aware Fill makes its own pixels).
+pub(crate) fn grown_fill(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f32; 4]> {
+    let crop = &app.ui.tool_options.crop;
+    let fills = crop.delete_pixels && crop.fill == CropFill::Background && doc.background().is_some_and(|layer| layer.visible);
+    fills.then_some(app.session.tools.background)
 }
 
 /// Show Cropped Area is off with the Crop tool showing a frame: nothing outside it shows.

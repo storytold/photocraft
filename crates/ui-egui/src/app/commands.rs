@@ -223,9 +223,15 @@ impl PhotocraftApp {
             Err(e) => {
                 self.ui.status = e.clone();
                 self.ui.status_error = true;
-                if id == "image.applyDataSet" && e == photocraft_engine::DATA_SET_LAYER_LOCKED {
-                    // The reference application refuses a locked type layer with an alert (#14499).
-                    let _ = crate::dialogs::alerts::alert(self, tl!(photocraft_engine::DATA_SET_LAYER_LOCKED));
+                // The reference application refuses a locked type layer (#14499) and a missing
+                // replacement file (#14500) with an alert; the alert names no layer or file.
+                let alert = [photocraft_engine::DATA_SET_LAYER_LOCKED, photocraft_engine::DATA_SET_FILE_MISSING]
+                    .into_iter()
+                    .find(|a| e == *a || e.strip_prefix(a).is_some_and(|rest| rest.starts_with(" (")));
+                if id == "image.applyDataSet"
+                    && let Some(alert) = alert
+                {
+                    let _ = crate::dialogs::alerts::alert(self, tl!(alert));
                 }
             }
         }

@@ -91,6 +91,9 @@ pub(super) fn rules() -> Vec<SettingRule> {
             if let Some(label) = label_override(key) {
                 tweak(&mut rules, &path, |r| r.label(label));
             }
+            if section == "interface" {
+                tweak(&mut rules, &path, |r| r.group(interface_group(key)));
+            }
             if path == "interface.language" {
                 let mut pairs: Vec<(String, String)> = vec![("auto".into(), "Auto".into())];
                 pairs.extend(crate::i18n::Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name().to_string())));
@@ -121,14 +124,6 @@ pub(super) fn rules() -> Vec<SettingRule> {
         }
     }
 
-    // Interface groups, in Photoshop's order.
-    for key in ["canvasColor", "canvasCustomColor", "canvasBorder"] {
-        tweak(&mut rules, &format!("interface.{key}"), |r| r.group("Appearance"));
-    }
-    for key in ["language", "uiFontSize", "uiScale"] {
-        tweak(&mut rules, &format!("interface.{key}"), |r| r.group("Presentation"));
-    }
-
     // Drawn elsewhere or not at all: the theme keys follow the Appearance row, View › Rulers sets showRulers, and the
     // GPU row draws the adapter, backend and GPU switch together.
     for path in [
@@ -153,9 +148,9 @@ pub(super) fn rules() -> Vec<SettingRule> {
     if cfg!(target_arch = "wasm32") {
         tweak(&mut rules, "performance.lowLatencyDrawing", |r| r.hidden());
     }
-    // WinTab is a Windows-only opt-in, drawn with its note.
+    // WinTab is a Windows-only opt-in, drawn with its note; the row labels itself.
     if cfg!(target_os = "windows") {
-        tweak(&mut rules, "tools.tabletInput", |r| r.custom());
+        tweak(&mut rules, "tools.tabletInput", |r| r.custom_rows());
     } else {
         tweak(&mut rules, "tools.tabletInput", |r| r.hidden());
     }
@@ -163,16 +158,18 @@ pub(super) fn rules() -> Vec<SettingRule> {
     // Rows the app draws itself (`PrefsCustom`).
     for path in [
         "performance.memoryUsagePercent",
-        "performance.memoryUsageMb",
-        "performance.renderingMode",
         "performance.gpuAdapter",
         "tools.pressureCurve",
         "scratchDisks.disks",
         "fileHandling.recentFiles",
         "type.favoriteFonts",
-        "interface.appearanceMode",
     ] {
         tweak(&mut rules, path, |r| r.custom());
+    }
+    // Rows that draw their own label or heading, so the window adds none: the Appearance page (Appearance Mode, the
+    // themes), Rendering Mode's select and the Memory Usage block.
+    for path in ["interface.appearanceMode", "performance.renderingMode", "performance.memoryUsageMb"] {
+        tweak(&mut rules, path, |r| r.custom_rows());
     }
     // The favourite fonts are the user's library, not a Type setting.
     tweak(&mut rules, "type.favoriteFonts", |r| r.keep_on_reset());
@@ -187,6 +184,17 @@ pub(super) fn rules() -> Vec<SettingRule> {
     tweak(&mut rules, "tools.nudgeBundlePauseMs", |r| r.shown_when("tools.bundleNudges", "true"));
 
     rules.into_values().collect()
+}
+
+/// The Interface group of `key`: Appearance (the mode, its themes and the canvas), Presentation (language, font size,
+/// scale) and Options for the rest, as in Photoshop. Groups show in the order of their first row, so
+/// `prefs::Interface` lists its fields in this order.
+fn interface_group(key: &str) -> &'static str {
+    match key {
+        "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes" | "canvasColor" | "canvasCustomColor" | "canvasBorder" => "Appearance",
+        "language" | "uiFontSize" | "uiScale" => "Presentation",
+        _ => "Options",
+    }
 }
 
 /// Changes the rule of `key`, starting one when it has none.

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
+- Rust: `rust-toolchain.toml` names the release CI builds with, and rustup installs it with the web target on first use (`rust-version` in Cargo.toml is the oldest release the sources support, 1.95).
 - macOS, Windows or Linux. On Linux, install the windowing, GL and GTK development packages:
   - Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`
   - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
@@ -100,7 +100,7 @@ On a native host with a working wgpu adapter, capture the two images into a fres
     set -eu
     shortcut_snapshots="$(mktemp -d)"
     PHOTOCRAFT_SHORTCUT_SNAPSHOTS="$shortcut_snapshots" cargo test -p photocraft-ui-egui --lib \
-        prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
+        prefs::prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
     test -s "$shortcut_snapshots/ctrl-k-1x.png"
     test -s "$shortcut_snapshots/ctrl-k-2x.png"
     printf 'Review the shortcut row and conflict message in %s\n' "$shortcut_snapshots"
@@ -191,7 +191,7 @@ A file dragged in from the desktop logs two lines at `info` (`file_open.rs`; fil
 |---|---|
 | `PHOTOCRAFT_GPU=1` (or `=0`) | Headless CLI: prefer GPU composition and flat export (0 to disable, empty to unset). Explicit `--gpu`/`--no-gpu` CLI flags override this variable. `file.export.quickExport` composites and encodes inside the engine, which has no renderer, so it always runs on the CPU; `run --gpu` prints a one-time warning when a step uses it |
 | `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>`; also the port for `photocraft-cli serve --port` and `mcp --bridge` when the flag is absent. Empty is unset |
-| `PHOTOCRAFT_NO_PRINT` | Set to anything but `0`: `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works). CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
+| `PHOTOCRAFT_NO_PRINT` | Set to a non-empty value other than `0` (empty counts as unset): `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works) and `file.print.page` asks no printer driver. CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `PHOTOCRAFT_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
 | `PHOTOCRAFT_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |
@@ -1067,12 +1067,18 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
   turns it on).
 - With the feature on, a missing corpus is a failure ("run `cargo xtask corpus --all`"), never a
   silent skip, and every floor is enforced.
+- The tests that walk `corpus/psd`, `corpus/psd-tools` and `corpus/photoshop` take each
+  directory's fixed sample (`photocraft-testkit`'s `corpus` module: every colour mode and depth,
+  PSD and PSB, every tagged block key outside the large files, each oracle kind, at small canvas
+  sizes), so each test stays near a second. `PHOTOCRAFT_FULL_SWEEP=1` takes every file, as it
+  takes every case of the testkit sweeps; the Affinity test's sampled rows are marked in its table.
+  A sample file a pin removes fails the test: pick its replacement for the sample.
 - If you touch psd, io, codecs, compose, gpu, text or format, run `cargo xtask test-corpus` before
-  you finish.
-- The CI `corpus` job runs `cargo xtask corpus --all` and then `cargo xtask test-corpus` on every PR
-  and on main. `corpus/` is cached with `actions/cache`, keyed on the hash of `corpus_pins.rs` and
-  the manifests. A download happens only when a pin changes; otherwise the cache restores in seconds
-  and is re-verified (sha256) before the tests run. Fork PRs read the base branch's cache.
+  you finish, and `PHOTOCRAFT_FULL_SWEEP=1 cargo xtask test-corpus` when the change could reach
+  files outside the samples.
+- CI: the Linux gate builds the corpus tests in (`PHOTOCRAFT_CORPUS_TESTS=1`) and each test shard
+  runs `cargo xtask corpus --all` first (pinned, sha256-verified, about 20 MB). Pull requests and
+  main run the samples; the nightly run sets `PHOTOCRAFT_FULL_SWEEP=1` and runs every file.
 
 **Our own corpus: [photocraft-corpus](https://github.com/storytold/photocraft-corpus).**
 
@@ -1136,7 +1142,7 @@ the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
 
 These checks use PhotoCraft's own importer and inspector; they do **not** prove that
 Photoshop can open the output or interprets it correctly. The report marks those
-stages `not_run`. The ordinary CI corpus job does not yet run this recipe command or
+stages `not_run`. The ordinary CI gate does not yet run this recipe command or
 upload its artifacts; that integration and the Photoshop judge are separate work.
 
 ## Rendering fidelity (PSD oracle)
