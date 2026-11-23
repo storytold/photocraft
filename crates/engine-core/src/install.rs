@@ -106,6 +106,7 @@ const TABLES: &[Table] = &[
     ("artboard_cmds", crate::artboard_cmds::specs),
     ("distort_cmds", crate::distort_cmds::specs),
     ("analysis_cmds", crate::analysis_cmds::specs),
+    ("sun_cmds", crate::sun_cmds::specs),
     ("notes_cmds", crate::notes_cmds::specs),
     ("font_library_cmds", crate::font_library_cmds::specs),
     ("history_cmds", crate::history_cmds::specs),

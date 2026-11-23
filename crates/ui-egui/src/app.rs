@@ -83,6 +83,7 @@ impl PhotocraftApp {
             patch_preview: None,
             cam_preview: None,
             data_set_preview: Default::default(),
+            find_sun_options: Default::default(),
             held_erase: false,
             last_stroke_end: None,
             brush_resize: Default::default(),

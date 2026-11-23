@@ -44,6 +44,8 @@ pub(crate) enum DialogPick {
     PatternPhase,
     /// A click on the image moves a filter preview's view to the point.
     Locator,
+    /// A click or drag on the image puts Find Sun's sun there.
+    Sun,
 }
 
 /// The pipette's tip, at the bottom left of its 24-unit icon box.
@@ -67,6 +69,9 @@ pub(crate) fn armed(app: &PhotocraftApp) -> Option<DialogPick> {
     }
     if dialogs.get_by_id::<HostedColorRange>(top).is_some() {
         return Some(DialogPick::ColorRange);
+    }
+    if dialogs.get_by_id::<crate::analysis::find_sun::FindSunDialog>(top).is_some() {
+        return Some(DialogPick::Sun);
     }
     if let Some(style) = dialogs.get_by_id::<HostedLayerStyle>(top) {
         let draft = style.draft();
@@ -110,7 +115,7 @@ pub(crate) fn disarm_dropper(app: &mut PhotocraftApp) {
 pub(crate) fn follows_drag(app: &PhotocraftApp, pick: DialogPick) -> bool {
     match pick {
         DialogPick::TonePicker(_) => app.framework.dialogs.stack().top().is_some(),
-        DialogPick::Color | DialogPick::ParamDropper | DialogPick::ColorRange => true,
+        DialogPick::Color | DialogPick::ParamDropper | DialogPick::ColorRange | DialogPick::Sun => true,
         _ => false,
     }
 }
@@ -129,6 +134,9 @@ pub(crate) fn resample(app: &mut PhotocraftApp, pick: DialogPick, at: [f64; 2], 
         }
         DialogPick::ColorRange => {
             pick_color_range(app, at, mods);
+        }
+        DialogPick::Sun => {
+            crate::analysis::find_sun::place(app, at);
         }
         _ => {}
     }
@@ -241,5 +249,6 @@ pub(crate) fn cursor(app: &PhotocraftApp, pick: DialogPick) -> Cursor {
         DialogPick::CurvesPoint => pipette(None),
         DialogPick::ShadowDrag | DialogPick::GradientDrag | DialogPick::PatternPhase => Cursor::System(CursorIcon::Move),
         DialogPick::Locator => Cursor::Painted(PaintedCursor::Locator),
+        DialogPick::Sun => Cursor::Painted(PaintedCursor::Crosshair),
     }
 }

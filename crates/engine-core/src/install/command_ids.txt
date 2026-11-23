@@ -837,6 +837,7 @@ count.setGroup
 measurementLog.list
 measurementLog.delete
 measurementLog.export
+image.analysis.findSun
 notes.add
 notes.set
 notes.delete

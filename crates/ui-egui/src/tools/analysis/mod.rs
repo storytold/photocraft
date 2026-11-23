@@ -18,6 +18,7 @@ use crate::state::Tool;
 pub(crate) mod bars;
 pub(crate) mod canvas;
 pub(crate) mod dialogs;
+pub(crate) mod find_sun;
 pub(crate) mod log_panel;
 pub(crate) mod note_alerts;
 pub(crate) mod notes_panel;
@@ -156,6 +157,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             dialogs::open(app, dialogs::Kind::Scale).map(|_| json!({"dialog": "measurementScale"}))
         }
         "image.analysis.selectDataPoints" => dialogs::open(app, dialogs::Kind::DataPoints).map(|_| json!({"dialog": "dataPoints"})),
+        "image.analysis.findSun" => find_sun::open(app).map(|_| json!({"dialog": "findSun"})),
         "image.analysis.placeScaleMarker" => {
             app.session.active()?;
             dialogs::open(app, dialogs::Kind::ScaleMarker).map(|_| json!({"dialog": "scaleMarker"}))

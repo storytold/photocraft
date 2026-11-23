@@ -5,10 +5,11 @@
 //! calls onto those functions in document units.
 
 use craft::behavior::cursor::{Cursor, PaintedCursor};
+use craft::behavior::kurbo::Point;
 use craft::behavior::value::CancelReason;
 use craft::keymap::Mods;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
-use craft::ui::primitives::Draw;
+use craft::ui::primitives::{Draw, PaintShape, StrokeColor, StrokeWidth};
 
 use super::{FamilyTool, ToolScope};
 use crate::canvas::document_display::CanvasHost;
@@ -83,6 +84,7 @@ impl CanvasTool for DialogTool<'_> {
                 DialogPick::ColorRange => (canvas_input::pick_color_range(app, at, mods), !follows),
                 // A drag after the locator's press does nothing (#9648).
                 DialogPick::Locator => (canvas_input::locate(app, at), true),
+                DialogPick::Sun => (crate::analysis::find_sun::place(app, at), !follows),
                 DialogPick::ShadowDrag => (canvas_input::drag_shadow(app, at, [0.0, 0.0]), false),
                 DialogPick::GradientDrag => (canvas_input::drag_gradient(app, at, [0.0, 0.0]), false),
                 DialogPick::PatternPhase => {
@@ -163,7 +165,25 @@ impl CanvasTool for DialogTool<'_> {
         self.state.press.is_some() && matches!(self.pick, DialogPick::PatternPhase | DialogPick::ShadowDrag | DialogPick::GradientDrag)
     }
 
-    fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}
+    /// Find Sun marks its sun: a ring with a cross in it.
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        if self.pick != DialogPick::Sun {
+            return;
+        }
+        let Some(at) = self.scope.with_app(|app| crate::analysis::find_sun::marker(app)) else { return };
+        let (Some(space), Some(style)) = (cx.space(), cx.style()) else { return };
+        let centre = space.view.to_screen(Point::new(at[0], at[1]));
+        let line = StrokeColor::Theme(style.color(style.tokens.color.overlay.line));
+        draw.stroke(&PaintShape::Circle(centre, 12.0), StrokeWidth::Medium, line);
+        for (a, b) in [
+            (egui::vec2(-18.0, 0.0), egui::vec2(-6.0, 0.0)),
+            (egui::vec2(6.0, 0.0), egui::vec2(18.0, 0.0)),
+            (egui::vec2(0.0, -18.0), egui::vec2(0.0, -6.0)),
+            (egui::vec2(0.0, 6.0), egui::vec2(0.0, 18.0)),
+        ] {
+            draw.stroke(&PaintShape::Path(vec![centre + a, centre + b]), StrokeWidth::Medium, line);
+        }
+    }
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         if cx.precise() && samples(self.pick) {

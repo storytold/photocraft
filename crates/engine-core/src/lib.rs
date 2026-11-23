@@ -161,6 +161,7 @@ pub use cmd::smartselect_cmds;
 pub use cmd::solid_fill_cmds;
 pub use cmd::stamp_cmds;
 pub use cmd::style_asl_cmds;
+pub use cmd::sun_cmds;
 pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
 pub use cmd::timeline_cmds;

@@ -384,6 +384,8 @@ pub struct PhotocraftApp {
     pub(crate) cam_preview: Option<cam_preview::CamPreview>,
     /// Image › Apply Data Set…'s Preview: the set shown in the document (`apply_data_set_ui`).
     pub(crate) data_set_preview: panels::apply_data_set_ui::PreviewState,
+    /// Image › Analysis › Find Sun's options, kept for the next open (`analysis::find_sun`).
+    pub(crate) find_sun_options: analysis::find_sun::SunOptions,
     /// The Brush or Pencil erase key is held this frame (`hold_keys::erase_held`, #3439).
     held_erase: bool,
     /// Position and pen pressure at the last stroke's endpoint: ⇧-click interpolates from them (#178, #2827).
