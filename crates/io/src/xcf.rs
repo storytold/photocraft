@@ -404,7 +404,7 @@ pub(crate) fn import_with_samples(name: &str, bytes: &[u8], ctl: &Interrupt<'_>,
     mapper.report.attach(&mut document, &mut mapper.warnings);
     let initial_view = mapper.view.finish(&document, &image_metadata, selected_path, &mut mapper.warnings);
     ctl.progress(1.0);
-    let historical_xcf_sample_order = request.and_then(|_| match options.historical_order {
+    let historical_xcf_sample_order = request.and(match options.historical_order {
         crate::HistoricalXcfOrder::Explicit(order) => Some(order),
         _ => None,
     });
