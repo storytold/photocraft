@@ -2,6 +2,7 @@
 
 use craft::behavior::{EditEvent, Mixed};
 use craft::draw::stroke::StrokeStyle;
+use craft::draw::ui::RADIUS_RANGE;
 use craft::draw::ui::shape::{ShapeAppearance, ShapeBar, ShapeChange, ShapePaint, ShapeToolSettings, VectorMode};
 use craft::draw::ui::shape_drag::ShapeKind;
 use craft::ui::choice::Checkbox;
@@ -157,6 +158,29 @@ fn tool_settings(o: &crate::state::ToolOptions, live: Option<&photocraft_doc::Li
     settings
 }
 
+/// What the bar shows after the framework's cells for one tool: the Triangle's Align Edges and the
+/// Polygon's own corner radius.
+fn tool_extras(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+    if tool == Tool::Triangle {
+        Divider::vertical().show(ui);
+        // Only a shape layer has pixel edges to align: greyed in Path mode (#13370).
+        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
+        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
+        if let Some(next) = on.value().copied() {
+            app.ui.tool_options.align_edges = next;
+        }
+    }
+    if tool == Tool::Polygon {
+        // The tool's own corner radius for the next polygon, after Sides (#13302); the active shape is not touched.
+        // A value typed past the Rectangle Radius's range takes the closest one and says so.
+        Divider::vertical().show(ui);
+        let out = crate::option_cells::number(tl!("Radius"), &mut app.ui.tool_options.polygon_corner_radius, RADIUS_RANGE).unit("px").show(ui);
+        if let Some(alert) = out.out_of_range {
+            crate::option_cells::range_alert(app, ui, &alert);
+        }
+    }
+}
+
 /// The title of the alert for a number typed outside its range.
 fn range_title(kind: ShapeKind) -> String {
     match kind {
@@ -225,15 +249,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         .chips(|which, chip, chip_ui| decorate_chip(chip, which, &mut library, chip_ui))
         .show(ui);
     let (fill_gradient, stroke_gradient) = (library.gradient(ShapePaint::Fill), library.gradient(ShapePaint::Stroke));
-    if tool == Tool::Triangle {
-        Divider::vertical().show(ui);
-        // Only a shape layer has pixel edges to align: greyed in Path mode (#13370).
-        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
-        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
-        if let Some(next) = on.value().copied() {
-            app.ui.tool_options.align_edges = next;
-        }
-    }
+    tool_extras(app, ui, tool);
 
     let mut recent: Option<[f32; 3]> = None;
     let mut remembered: Vec<Fill> = Vec::new();
@@ -384,3 +400,7 @@ mod rectangle_radius_target_tests;
 #[cfg(test)]
 #[path = "polygon_sides_alert_tests.rs"]
 mod polygon_sides_alert_tests;
+
+#[cfg(test)]
+#[path = "polygon_corner_radius_field_tests.rs"]
+mod polygon_corner_radius_field_tests;
