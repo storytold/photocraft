@@ -12,7 +12,9 @@ use serde_json::json;
 use super::line_menu_tests::greyed;
 use super::tests::{app, harness, right_click, screen_of};
 use crate::PhotocraftApp;
+use crate::canvas::testing;
 use crate::state::Tool;
+use craft::draw::ui::VectorMode;
 
 /// The shape tools whose Shape-mode menu the issues measured.
 const TOOLS: [Tool; 2] = [Tool::Line, Tool::EllipseShape];
@@ -24,9 +26,12 @@ const STYLE_ROWS: [&str; 4] = ["Copy Fill", "Copy Complete Stroke", "Paste Fill"
 /// `rgb`, with no stroke; its new shape layer is active. Returns that layer.
 fn draw(app: &mut PhotocraftApp, tool: Tool, rgb: [f32; 3], from: [f64; 2], to: [f64; 2]) -> LayerId {
     app.ui.tool = tool;
-    app.ui.tool_options.shape_mode = "shape".into();
+    app.ui.tool_options.shape_mode = VectorMode::Shape;
     app.session.tools.foreground = [rgb[0], rgb[1], rgb[2], 1.0];
-    crate::vector_ui::finish_shape(app, tool, from, to, Modifiers::NONE);
+    testing::press(app, from, Modifiers::NONE);
+    testing::move_to(app, [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], Modifiers::NONE);
+    testing::move_to(app, to, Modifiers::NONE);
+    testing::release(app, to, Modifiers::NONE);
     let id = app.session.active().unwrap().active_layer.unwrap();
     assert!(fill_of(app, id).is_some(), "{tool:?} drew a filled shape layer");
     id
@@ -41,16 +46,16 @@ fn fill_of(app: &PhotocraftApp, id: LayerId) -> Option<Fill> {
 }
 
 /// A red pixel layer added above the others, active, with `tool` picked in Shape mode and no path.
-fn pixel_layer(mut app: PhotocraftApp, tool: Tool) -> PhotocraftApp {
+fn pixel_layer(mut app: Box<PhotocraftApp>, tool: Tool) -> Box<PhotocraftApp> {
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     app.ui.tool = tool;
-    app.ui.tool_options.shape_mode = "shape".into();
+    app.ui.tool_options.shape_mode = VectorMode::Shape;
     app
 }
 
 /// Right-click the middle of the document: the greyed rows of the menu's Copy and Paste groups.
-fn greyed_style_rows(h: &mut Harness<'static, PhotocraftApp>, tool: Tool) -> Vec<String> {
+fn greyed_style_rows(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool) -> Vec<String> {
     let p = screen_of(h.state(), [16.0, 16.0]);
     right_click(h, p, Modifiers::NONE);
     let inspected = crate::control::inspect(h.state(), &h.ctx);
@@ -60,7 +65,7 @@ fn greyed_style_rows(h: &mut Harness<'static, PhotocraftApp>, tool: Tool) -> Vec
 }
 
 /// Click the open menu's row `label`, which closes the menu.
-fn pick(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+fn pick(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str) {
     h.get_by_label(label).click();
     h.run_steps(2);
     assert!(h.state().ui.canvas_tool_menu.is_none(), "{label} closes the menu");

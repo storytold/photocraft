@@ -9,9 +9,11 @@ use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
 use super::line_menu_tests::{greyed, menu, shown};
-use super::tests::{app, harness, right_click, screen_of};
+use super::tests::{any_dialog, app, close_dialogs, dialog_open, harness, right_click, screen_of};
 use crate::PhotocraftApp;
+use crate::canvas::testing;
 use crate::state::Tool;
+use craft::draw::ui::VectorMode;
 
 const PIXEL_MENU: &str = "Define Custom Shape… ― Blending Options… ― Make Selection… · New Guides From Shape · Fill Path… · Stroke Path… ― \
     Rasterize Layer · Rasterize Layer Style · Rasterize Vector Mask ― Free Transform ― Unite Shapes · Subtract Front Shape · \
@@ -24,27 +26,30 @@ const SHAPE_LAYER_MENU: &str = "Define Custom Shape… ― Blending Options… �
     Isolate Layers";
 
 /// The Ellipse tool picked in `mode`.
-fn ellipse_tool(mut app: PhotocraftApp, mode: &str) -> PhotocraftApp {
+fn ellipse_tool(mut app: Box<PhotocraftApp>, mode: VectorMode) -> Box<PhotocraftApp> {
     app.ui.tool = Tool::EllipseShape;
-    app.ui.tool_options.shape_mode = mode.into();
+    app.ui.tool_options.shape_mode = mode;
     app
 }
 
 /// A pixel layer filled red above the Background, active, and no path.
-fn pixel_layer() -> PhotocraftApp {
+fn pixel_layer() -> Box<PhotocraftApp> {
     let mut app = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    ellipse_tool(app, "shape")
+    ellipse_tool(app, VectorMode::Shape)
 }
 
 /// An ellipse the Ellipse tool drew over the document's middle, with a stroke: its shape layer is
 /// active.
-fn ellipse_layer() -> PhotocraftApp {
-    let mut app = ellipse_tool(app(), "shape");
+fn ellipse_layer() -> Box<PhotocraftApp> {
+    let mut app = ellipse_tool(app(), VectorMode::Shape);
     // The measured ellipse had a stroke; without one Copy Complete Stroke greys, as in the Line's menu.
     app.ui.tool_options.stroke_width = 2.0;
-    crate::vector_ui::finish_shape(&mut app, Tool::EllipseShape, [8.0, 8.0], [24.0, 24.0], Modifiers::NONE);
+    testing::press(&mut app, [8.0, 8.0], Modifiers::NONE);
+    testing::move_to(&mut app, [16.0, 16.0], Modifiers::NONE);
+    testing::move_to(&mut app, [24.0, 24.0], Modifiers::NONE);
+    testing::release(&mut app, [24.0, 24.0], Modifiers::NONE);
     let st = app.session.active().unwrap();
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert_eq!(layer.content.kind_name(), "Shape");
@@ -52,7 +57,7 @@ fn ellipse_layer() -> PhotocraftApp {
 }
 
 /// Right-click document point `doc`: the open menu's entries as `ui.inspect` lists them.
-fn entries_at(h: &mut Harness<'static, PhotocraftApp>, doc: [f32; 2]) -> Vec<Value> {
+fn entries_at(h: &mut Harness<'static, Box<PhotocraftApp>>, doc: [f32; 2]) -> Vec<Value> {
     let p = screen_of(h.state(), doc);
     right_click(h, p, Modifiers::NONE);
     let inspected = crate::control::inspect(h.state(), &h.ctx);
@@ -61,7 +66,7 @@ fn entries_at(h: &mut Harness<'static, PhotocraftApp>, doc: [f32; 2]) -> Vec<Val
 }
 
 /// Pick the row `label` of the open menu.
-fn pick(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+fn pick(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str) {
     h.get_by_label(label).click();
     h.run_steps(2);
     assert!(h.state().ui.canvas_tool_menu.is_none(), "{label} closes the menu");
@@ -130,14 +135,12 @@ fn the_rows_run_the_menu_bar_and_pen_menu_commands() {
     let mut h = harness(ellipse_layer());
     entries_at(&mut h, [2.0, 2.0]);
     pick(&mut h, "Free Transform Path");
-    let dialog = h.state().ui.dialogs.last().and_then(|d| d.fields.get("__command")).cloned();
-    assert_eq!(dialog, Some(json!("path.transform")), "the Pen's Free Transform Path dialog");
-    h.state_mut().ui.dialogs.clear();
+    assert!(dialog_open(h.state()), "the Pen's Free Transform Path dialog");
+    close_dialogs(h.state_mut());
     entries_at(&mut h, [2.0, 2.0]);
     pick(&mut h, "Blending Options…");
-    let kind = h.state().ui.dialogs.last().map(|d| &d.kind);
-    assert!(matches!(kind, Some(crate::state::DialogKind::LayerStyle)), "the menu bar's Layer Style dialog");
-    h.state_mut().ui.dialogs.clear();
+    assert!(any_dialog(h.state()) && !dialog_open(h.state()), "the menu bar's Layer Style dialog");
+    close_dialogs(h.state_mut());
     entries_at(&mut h, [2.0, 2.0]);
     pick(&mut h, "Isolate Layers");
     assert!(!h.state().session.active().unwrap().isolated_layers.is_empty(), "Isolate Layers isolates the ellipse layer");
@@ -155,13 +158,15 @@ fn the_rows_run_the_menu_bar_and_pen_menu_commands() {
 
 #[test]
 fn path_and_pixels_mode_open_no_menu() {
-    for mode in ["path", "pixels"] {
-        for (layer, app) in [("pixel", pixel_layer()), ("ellipse", ellipse_layer())] {
-            let mut h = harness(ellipse_tool(app, mode));
+    for mode in [VectorMode::Path, VectorMode::Pixels] {
+        // One app at a time: an array of built apps keeps them all on the test thread's stack.
+        for (layer, make) in [("pixel", pixel_layer as fn() -> Box<PhotocraftApp>), ("ellipse", ellipse_layer)] {
+            let mut h = harness(ellipse_tool(make(), mode));
             let p = screen_of(h.state(), [16.0, 16.0]);
             right_click(&mut h, p, Modifiers::NONE);
-            assert!(h.state().ui.canvas_tool_menu.is_none(), "{mode} mode, {layer} layer");
-            assert!(h.state().ui.layer_menu.is_none(), "{mode} mode, {layer} layer");
+            let inspected = crate::control::inspect(h.state(), &h.ctx);
+            assert_eq!(inspected["canvasToolMenu"], Value::Null, "{mode:?} mode, {layer} layer");
+            assert_eq!(inspected["layerMenu"], Value::Null, "{mode:?} mode, {layer} layer");
         }
     }
 }
@@ -179,10 +184,11 @@ fn other_layer_kinds_open_no_menu() {
         app.run(command, params).unwrap();
         let st = app.session.active().unwrap();
         assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().content.kind_name(), kind);
-        let mut h = harness(ellipse_tool(app, "shape"));
+        let mut h = harness(ellipse_tool(app, VectorMode::Shape));
         let p = screen_of(h.state(), [2.0, 2.0]);
         right_click(&mut h, p, Modifiers::NONE);
-        assert!(h.state().ui.canvas_tool_menu.is_none(), "{kind} layer");
-        assert!(h.state().ui.layer_menu.is_none(), "{kind} layer");
+        let inspected = crate::control::inspect(h.state(), &h.ctx);
+        assert_eq!(inspected["canvasToolMenu"], Value::Null, "{kind} layer");
+        assert_eq!(inspected["layerMenu"], Value::Null, "{kind} layer");
     }
 }

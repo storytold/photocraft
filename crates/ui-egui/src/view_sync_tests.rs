@@ -5,14 +5,14 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-fn app_with_two_documents() -> PhotocraftApp {
+fn app_with_two_documents() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     assert_eq!(app.ui.views.len(), 2);
     // The first document is zoomed in; the second keeps its own default view.
     app.ui.views[0].zoom = 3.2;
-    app.ui.views[0].fit_pending = false;
+    app.ui.views[0].clear_pending();
     app
 }
 
@@ -43,4 +43,43 @@ fn every_document_keeps_its_own_view_through_syncs() {
     assert_eq!(app.ui.views.len(), 2);
     assert_eq!(app.ui.views[0].zoom, 3.2, "the first document's view is untouched");
     assert_eq!(app.ui.views[1].zoom, 4.0, "the last document's view follows it to its new index");
+}
+
+/// #11325: Zoom In/Out must never use a point right-clicked in another document.
+#[test]
+fn switching_documents_closes_the_canvas_view_menu() {
+    for tool in [crate::Tool::Zoom, crate::Tool::Hand] {
+        let mut app = app_with_two_documents();
+        app.ui.tool = tool;
+        assert!(crate::canvas_tool_menu::open_at(&mut app, tool, Default::default(), egui::pos2(10.0, 10.0), [20.0, 20.0], None));
+        assert!(matches!(app.ui.canvas_tool_menu.as_ref().map(|menu| &menu.kind), Some(crate::canvas_tool_menu::MenuKind::View)));
+        app.sync_views();
+        assert!(app.ui.canvas_tool_menu.is_some(), "ordinary sync keeps the menu");
+        app.run("layer.new.layer", json!({})).unwrap();
+        assert!(app.ui.canvas_tool_menu.is_some(), "an edit in the same document keeps the menu");
+        assert!(app.session.set_active(0));
+        app.sync_views();
+        assert!(app.ui.canvas_tool_menu.is_none(), "a document switch closes the old document's menu");
+    }
+}
+
+/// A tab closing can put another document at the same index, or move the menu's own document
+/// to another index. Follow its identity, not its slot.
+#[test]
+fn closing_a_tab_keeps_the_canvas_menu_only_for_its_own_document() {
+    for close_menu_document in [false, true] {
+        let mut app = app_with_two_documents();
+        if close_menu_document {
+            assert!(app.session.set_active(0));
+            app.sync_views();
+        }
+        app.ui.tool = crate::Tool::Hand;
+        let document = app.session.active().unwrap().doc.id;
+        assert!(crate::canvas_tool_menu::open_at(&mut app, crate::Tool::Hand, Default::default(), egui::pos2(10.0, 10.0), [20.0, 20.0], None));
+        assert!(matches!(app.ui.canvas_tool_menu.as_ref().map(|menu| &menu.kind), Some(crate::canvas_tool_menu::MenuKind::View)));
+        app.run("file.close", json!({"document": 0})).unwrap();
+        assert_eq!(app.session.active_index(), Some(0), "the survivor occupies the first slot");
+        assert_eq!(app.session.active().unwrap().doc.id == document, !close_menu_document);
+        assert_eq!(app.ui.canvas_tool_menu.is_some(), !close_menu_document, "only a menu for the surviving document stays open");
+    }
 }
