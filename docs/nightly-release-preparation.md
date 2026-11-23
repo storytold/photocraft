@@ -6,12 +6,11 @@ All three jobs remain literally disabled. There is no
 schedule or platform secret grant. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to the local placeholder `REPIN_TO_MERGED_SHARED_SIGNER_SHA` in both
-callers. It stands for the craft-common-actions commit that merges the multi-platform signer
-(policy v3, the `platforms` input and the Linux and macOS legs), which is not merged yet. This
-tree must not be published or activated until both callers name that reviewed merged commit
-in `uses` and `tooling-revision`; the earlier pin, `077d4657` (#330), is Windows-only. A pin is
-reviewed source availability, not provider, queue, native signing or crypto qualification.
+Shared tooling is pinned to `a4f6fd51e854773de8b24b4f92e1ad7e770c08d7`, the craft-common-actions
+main commit that merged [#342](https://github.com/storytold/craft-common-actions/pull/342): policy v3,
+the `platforms` input and the Linux and macOS legs, all switched off. Both callers name it in `uses`
+and `tooling-revision`; the earlier pin, `077d4657` (#330), is Windows-only. A pin is reviewed
+source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
 
 **Platform rows (dormant).** The producer caller lists

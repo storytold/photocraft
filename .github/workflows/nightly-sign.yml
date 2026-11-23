@@ -34,9 +34,9 @@ jobs:
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@REPIN_TO_MERGED_SHARED_SIGNER_SHA
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@a4f6fd51e854773de8b24b4f92e1ad7e770c08d7
     with:
-      tooling-revision: REPIN_TO_MERGED_SHARED_SIGNER_SHA
+      tooling-revision: a4f6fd51e854773de8b24b4f92e1ad7e770c08d7
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}
     # No secrets: inherit or raw platform values in this caller. Only the isolated native

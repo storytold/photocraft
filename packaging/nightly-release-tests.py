@@ -474,6 +474,7 @@ class NightlyTrustAnchors(unittest.TestCase):
                 self.assertEqual(tooling, uses, "the defining workflow SHA and tooling input must match")
             pins.update(uses)
         self.assertEqual(len(pins), 1, "producer and signer must pin the same shared commit")
+        self.assertRegex(pins.pop(), r"^[0-9a-f]{40}$", "pin a full immutable commit, never a branch or placeholder")
 
 
 if __name__ == "__main__":
