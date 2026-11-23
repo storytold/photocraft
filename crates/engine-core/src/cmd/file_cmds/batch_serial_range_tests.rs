@@ -59,7 +59,7 @@ fn a_batch_run_from_serial_zero_writes_000_and_001() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let dir = dir.to_string_lossy().into_owned();
-    let mut s = crate::Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 4, "height": 4, "background": "#ff0000"})).unwrap();
     let inputs: Vec<String> = ["a.png", "b.png"].iter().map(|name| join(&dir, name)).collect();
     for path in &inputs {
