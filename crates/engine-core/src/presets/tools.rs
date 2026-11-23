@@ -8,6 +8,8 @@
 //! The Crop tool's options-bar presets (New / Delete Crop Preset…) are tool presets of the
 //! `"crop"` tool, as in Photoshop, so they also show in the Tool Presets panel.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -91,7 +93,7 @@ pub fn builtin() -> Vec<ToolPreset> {
 fn list(s: &mut Session, p: &Value) -> Result<Value> {
     let filter = str_param(p, "tool").map(norm);
     let items: Vec<Value> = s
-        .presets
+        .presets()
         .tool_presets
         .iter()
         .filter(|t| filter.as_ref().is_none_or(|f| norm(&t.tool) == *f))
@@ -133,7 +135,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
         let f = s.tools.foreground;
         options["foreground"] = json!(f);
     }
-    if s.presets.tool_presets.len() >= MAX_PRESETS {
+    if s.presets().tool_presets.len() >= MAX_PRESETS {
         return Err(bad(CMD, format!("at most {MAX_PRESETS} tool presets can be saved; delete some first")));
     }
     let base = match p.get("name") {
@@ -142,10 +144,10 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) => checked_name(n, CMD)?,
         Some(_) => return Err(bad(CMD, "`name` must be a string")),
     };
-    let groups = [Group::new("", s.presets.tool_presets.clone())];
+    let groups = [Group::new("", s.presets().tool_presets.clone())];
     let name = super::unique_name(&groups, &base);
-    s.presets.tool_presets.push(ToolPreset { name: name.clone(), tool: tool.clone(), options });
-    s.presets_changed();
+    s.presets_mut().tool_presets.push(ToolPreset { name: name.clone(), tool: tool.clone(), options });
+    presets_changed(s);
     Ok(json!({"name": name, "tool": tool}))
 }
 
@@ -153,7 +155,7 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "tool.presets.select";
     let name = req_str(p, "preset", CMD)?;
     let t = s
-        .presets
+        .presets()
         .tool_presets
         .iter()
         .find(|t| t.name == name)
@@ -186,18 +188,18 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     if action == "rename" {
         checked_name(req_str(p, "name", CMD)?, CMD)?;
     }
-    let mut groups = vec![Group::new("", std::mem::take(&mut s.presets.tool_presets))];
+    let mut groups = vec![Group::new("", std::mem::take(&mut s.presets_mut().tool_presets))];
     let r = edit_groups(&mut groups, &action, p, CMD);
-    s.presets.tool_presets = groups.pop().map(|g| g.items).unwrap_or_default();
+    s.presets_mut().tool_presets = groups.pop().map(|g| g.items).unwrap_or_default();
     let r = r?;
-    s.presets_changed();
+    presets_changed(s);
     Ok(r)
 }
 
 fn reset(s: &mut Session, _: &Value) -> Result<Value> {
-    s.presets.tool_presets = builtin();
-    s.presets_changed();
-    Ok(json!({"presets": s.presets.tool_presets.len()}))
+    s.presets_mut().tool_presets = builtin();
+    presets_changed(s);
+    Ok(json!({"presets": s.presets().tool_presets.len()}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {

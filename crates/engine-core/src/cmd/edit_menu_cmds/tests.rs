@@ -1,4 +1,5 @@
 use super::*;
+use crate::presets::PresetsExt;
 use photocraft_doc::vector::Subpath;
 
 fn session(depth: u32) -> Session {
@@ -906,17 +907,17 @@ fn tool_presets_round_trip_through_export_import() {
     }
     let selected = target.execute("tool.presets.select", json!({"preset":"2 : 3"})).unwrap();
     assert_eq!(selected["options"]["toolOptions"]["crop_ratio"], "2:3");
-    assert_eq!(target.presets.tool_presets.iter().filter(|p| p.name == "2 : 3").count(), 1);
+    assert_eq!(target.presets().tool_presets.iter().filter(|p| p.name == "2 : 3").count(), 1);
     let only_brushes = source.execute("edit.presets.exportImportPresets", json!({"kinds":["brushes"]})).unwrap();
     assert_eq!(only_brushes["tools"], 0);
     let with_builtins = source.execute("edit.presets.exportImportPresets", json!({"kinds":["tools"], "includeBuiltins":true})).unwrap();
-    assert_eq!(with_builtins["tools"].as_u64().unwrap() as usize, source.presets.tool_presets.len());
+    assert_eq!(with_builtins["tools"].as_u64().unwrap() as usize, source.presets().tool_presets.len());
 }
 
 #[test]
 fn tool_preset_import_is_validated_before_mutation_and_accepts_old_files() {
     let mut s = crate::session();
-    let before = s.presets.tool_presets.clone();
+    let before = s.presets().tool_presets.clone();
     for preset in [
         json!({"name":"", "tool":"crop", "options":{}}),
         json!({"name":"x".repeat(256), "tool":"crop", "options":{}}),
@@ -928,11 +929,11 @@ fn tool_preset_import_is_validated_before_mutation_and_accepts_old_files() {
             json!({"action":"import", "data":{"format":PRESET_FORMAT, "toolPresets":[{"name":"Valid", "tool":"crop", "options":{}}, preset]}}),
         );
         assert!(result.is_err());
-        assert_eq!(s.presets.tool_presets, before);
+        assert_eq!(s.presets().tool_presets, before);
     }
     let too_many: Vec<_> = (0..crate::presets::tools::MAX_PRESETS + 1).map(|i| json!({"name":format!("Crop {i}"), "tool":"crop", "options":{}})).collect();
     assert!(s.execute("edit.presets.exportImportPresets", json!({"action":"import", "data":{"format":PRESET_FORMAT, "toolPresets":too_many}})).is_err());
-    assert_eq!(s.presets.tool_presets, before);
+    assert_eq!(s.presets().tool_presets, before);
     let result = s.execute("edit.presets.exportImportPresets", json!({"action":"import", "data":{"format":PRESET_FORMAT, "version":1}})).unwrap();
     assert_eq!(result["tools"], 0);
 }

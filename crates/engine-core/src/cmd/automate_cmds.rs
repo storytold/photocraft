@@ -12,8 +12,8 @@
 //! bound in Preferences (`scriptEvents`) and fired by [`fire_event`]: the engine fires New,
 //! Close, Print and Export itself; the app shell fires Start, Open and Save.
 
-use photocraft_doc::{DocId, Layer, LayerContent};
-use serde::{Deserialize, Serialize};
+use crate::actions_cmds::ActionsExt;
+use photocraft_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -40,22 +40,7 @@ fn reject_extendscript(cmd: &str, path: &str) -> Result<()> {
     }
 }
 
-/// Session state of the File-menu commands (not saved, not history).
-#[derive(Clone, Debug, Default)]
-pub struct FileMenuState {
-    /// View › Lock Slices.
-    pub slices_locked: bool,
-    /// Documents with File › Generate › Image Assets on.
-    pub image_assets: craft_tracked::Tracked<Vec<DocId>>,
-    /// File › Print settings used last (Print One Copy repeats them).
-    pub last_print: Option<Value>,
-    /// Save for Web settings used last.
-    pub last_web: Option<Value>,
-    /// Results of the most recent script event (for inspection), newest last, capped.
-    pub event_log: Vec<Value>,
-    /// Set while event scripts run, so their commands don't fire events recursively.
-    pub firing: bool,
-}
+pub use crate::state::FileMenuState;
 
 // ---------- scripts ----------
 
@@ -128,8 +113,8 @@ pub(crate) const MAX_SCRIPT_STEPS: u64 = crate::actions_cmds::MAX_PLAYBACK_STEPS
 fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
     let mut results = Vec::new();
     for (id, params) in steps {
-        s.actions.script_steps = s.actions.script_steps.saturating_add(1);
-        if s.actions.script_steps > MAX_SCRIPT_STEPS {
+        s.recording.script_steps = s.recording.script_steps.saturating_add(1);
+        if s.recording.script_steps > MAX_SCRIPT_STEPS {
             results.push(json!({"command": id, "error": format!("the script ran more than {MAX_SCRIPT_STEPS} steps in all (scripts calling scripts)")}));
             break;
         }
@@ -171,15 +156,15 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "give \"path\" (a script file), \"script\" (its text) or \"steps\"")),
     };
     check_known(&steps, cmd)?;
-    if s.actions.script_depth >= MAX_SCRIPT_DEPTH {
+    if s.recording.script_depth >= MAX_SCRIPT_DEPTH {
         return Err(bad(cmd, format!("scripts are nested more than {MAX_SCRIPT_DEPTH} deep")));
     }
-    if s.actions.script_depth == 0 {
-        s.actions.script_steps = 0;
+    if s.recording.script_depth == 0 {
+        s.recording.script_steps = 0;
     }
-    s.actions.script_depth += 1;
+    s.recording.script_depth += 1;
     let results = run_steps(s, &steps);
-    s.actions.script_depth -= 1;
+    s.recording.script_depth -= 1;
     let ok = results.iter().all(|r| r.get("error").is_none());
     Ok(json!({"steps": steps.len(), "ok": ok, "results": results}))
 }
@@ -198,27 +183,7 @@ pub const EVENTS: [(&str, &str); 8] = [
     ("everything", "Everything"),
 ];
 
-/// One event → script binding.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ScriptBinding {
-    pub event: String,
-    /// A script file (see [`parse_script`]).
-    pub script: Option<String>,
-    /// Or inline steps (an action).
-    pub steps: Option<Value>,
-    /// Display name (the action's name).
-    pub name: String,
-}
-
-/// Preferences › Script Events Manager.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ScriptEvents {
-    /// "Enable Events to Run Scripts/Actions".
-    pub enabled: bool,
-    pub bindings: Vec<ScriptBinding>,
-}
+pub use crate::prefs::{ScriptBinding, ScriptEvents};
 
 fn script_events(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.scripts.scriptEventsManager";
@@ -343,16 +308,16 @@ pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Ve
         Some(set) => {
             let set = set.as_str().ok_or_else(|| bad(cmd, "\"set\" must be a string"))?;
             let name = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(cmd, "a set needs a named action"))?;
-            s.actions
+            s.actions()
                 .list
                 .actions()
                 .iter()
                 .position(|a| a.name == name && a.set.as_deref() == Some(set))
                 .ok_or_else(|| bad(cmd, format!("no action named `{name}` in set `{set}`")))?
         }
-        None => crate::actions_cmds::resolve(s.actions.list.actions(), p, cmd)?,
+        None => crate::actions_cmds::resolve(s.actions().list.actions(), p, cmd)?,
     };
-    let action = s.actions.list.action(index).ok_or_else(|| bad(cmd, "the selected action no longer exists"))?;
+    let action = s.actions().list.action(index).ok_or_else(|| bad(cmd, "the selected action no longer exists"))?;
     Ok(action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect())
 }
 
@@ -371,7 +336,7 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     check_known(&commands, cmd)?;
     // Play Action steps need their actions when the droplet runs on its own (#2794). Not under
     // `actions`: the CLI reads that key as an action set.
-    let called = crate::actions_cmds::called_actions(s.actions.list.actions(), &mut steps);
+    let called = crate::actions_cmds::called_actions(s.actions().list.actions(), &mut steps);
     let path = if path.ends_with(".pcdroplet") || path.ends_with(".json") { path.to_string() } else { format!("{path}.pcdroplet") };
     let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&path));
     let steps_json: Vec<Value> = steps.iter().map(|(id, pr)| json!([id, pr])).collect();

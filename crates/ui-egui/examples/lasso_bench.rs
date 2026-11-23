@@ -13,6 +13,7 @@
 //! each frame on the GPU (with a readback, about 7 ms here), otherwise only the app's logic runs.
 //! `PHOTOCRAFT_GPU_SYNC=1` makes a canvas refresh wait for the GPU.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use egui::{Event, Modifiers, PointerButton, Pos2};

@@ -1,5 +1,6 @@
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 /// A real action file with one step, used by both descriptor and playback checks.
 fn file(event: AtnEvent, descriptor: Descriptor) -> Vec<u8> {
@@ -68,7 +69,7 @@ fn code_spellings_in_text_steps_keep_their_bytes_and_flags() {
         let mut s = crate::session();
         let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
         assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{:?}", original.actions[0].items[0].event);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]));
         let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
@@ -115,7 +116,7 @@ fn clouds_events_map_and_refuse_unrepresentable_native_settings() {
 fn clouds_recorded_through_the_dialog_save() {
     for id in ["filter.render.clouds", "filter.render.differenceClouds"] {
         let mut s = crate::session();
-        s.actions.list.push(Action::new("Render", vec![ActionStep::new(id, json!({"seed": 0}))])).unwrap();
+        s.actions_mut().list.push(Action::new("Render", vec![ActionStep::new(id, json!({"seed": 0}))])).unwrap();
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]), "{id}");
         let back = import(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
@@ -243,7 +244,7 @@ fn duplicate_render_keys_keep_their_bytes_and_flags() {
         let mut s = crate::session();
         let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
         assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{event}/{key}");
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]));
         let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();

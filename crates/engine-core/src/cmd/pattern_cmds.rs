@@ -10,114 +10,21 @@
 //!
 //! Patterns are referenced by `"pattern": id | name` (document first, then library).
 
-use photocraft_color::{ColorMode, PixelFormat, SampleType};
+use photocraft_color::PixelFormat;
 use photocraft_doc::{Color, Document, Fill, Layer, LayerContent, Pattern, Rect};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
+use crate::preset_store::PresetStoreExt;
 use crate::{EngineError, Result, Session};
 
-/// The app-level pattern library (Window › Patterns).
-#[derive(Clone, Debug)]
-pub struct PatternLibrary {
-    pub items: Vec<Pattern>,
-    /// Bumped when a pattern's pixels are replaced under the same id (an imported `.pat` whose
-    /// id is already in the library), which its id, name and size don't show.
-    pub pixels_rev: u64,
-    /// Saved patterns held as a small preview until used, by id: their full size. The preset
-    /// store reads the pixels ([`full`]); everything that paints goes through [`resolve`].
-    pub stored: std::collections::HashMap<String, (u32, u32)>,
-}
-
-impl Default for PatternLibrary {
-    fn default() -> Self {
-        PatternLibrary { items: builtin(), pixels_rev: 0, stored: Default::default() }
-    }
-}
-
-impl PatternLibrary {
-    /// Add `pat`, or replace the pattern with its id (marking the pixels changed).
-    pub fn upsert(&mut self, pat: Pattern) {
-        self.stored.remove(&pat.id);
-        match self.items.iter_mut().find(|q| q.id == pat.id) {
-            Some(q) => {
-                *q = pat;
-                self.pixels_rev += 1;
-            }
-            None => self.items.push(pat),
-        }
-    }
-}
+pub use crate::state::{PatternLibrary, builtin};
 
 /// Whether `p` is a built-in pattern as shipped (same id, name, size and pixels): those are never
 /// saved. A built-in replaced by an import, or renamed, is the user's and is.
 pub(crate) fn is_pristine_builtin(p: &Pattern, builtins: &[Pattern]) -> bool {
     builtins.iter().any(|b| b.id == p.id && b.name == p.name && (b.width, b.height) == (p.width, p.height) && b.surface == p.surface)
-}
-
-fn hash01(x: u32, y: u32, seed: u32) -> f32 {
-    let mut h = x.wrapping_mul(0x8da6_b343) ^ y.wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
-    h ^= h >> 13;
-    h = h.wrapping_mul(0x5bd1_e995);
-    h ^= h >> 15;
-    (h & 0xffff) as f32 / 65535.0
-}
-
-fn procedural(name: &str, w: u32, h: u32, f: impl Fn(u32, u32) -> [f32; 3]) -> Pattern {
-    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, false);
-    let mut s = Surface::new(fmt);
-    let mut px = Vec::with_capacity((w * h * 3) as usize);
-    for y in 0..h {
-        for x in 0..w {
-            px.extend_from_slice(&f(x, y));
-        }
-    }
-    // Quantise through the 8-bit surface so ids are stable.
-    s.write_region(Rect::new(0, 0, w as i32, h as i32), &px);
-    Pattern::new(name, s, w, h)
-}
-
-/// Built-in patterns: generated procedurally here (our own, CC0), so the library is never empty.
-pub fn builtin() -> Vec<Pattern> {
-    let g = |v: f32| [v, v, v];
-    vec![
-        procedural("Checkerboard", 16, 16, |x, y| g(if (x / 8 + y / 8) % 2 == 0 { 0.8 } else { 1.0 })),
-        procedural("Diagonal Lines", 8, 8, |x, y| g(if (x + y) % 8 < 2 { 0.2 } else { 1.0 })),
-        procedural("Dots", 12, 12, |x, y| {
-            let (dx, dy) = (x as f32 + 0.5 - 6.0, y as f32 + 0.5 - 6.0);
-            g(((dx * dx + dy * dy).sqrt() - 3.0).clamp(0.0, 1.0))
-        }),
-        procedural("Grid", 16, 16, |x, y| g(if x == 0 || y == 0 { 0.55 } else { 1.0 })),
-        procedural("Bricks", 32, 16, |x, y| {
-            let row = y / 8;
-            let xo = (x + if row % 2 == 1 { 8 } else { 0 }) % 16;
-            let mortar = y % 8 == 7 || xo == 15;
-            let n = hash01(x, y, 7) * 0.08;
-            if mortar { [0.78 + n, 0.76 + n, 0.72 + n] } else { [0.62 + n, 0.27 + n * 0.5, 0.2] }
-        }),
-        procedural("Weave", 16, 16, |x, y| {
-            let over = ((x / 4) + (y / 4)) % 2 == 0;
-            let t = if over { (y % 4) as f32 / 3.0 } else { (x % 4) as f32 / 3.0 };
-            let v = 0.55 + 0.35 * (1.0 - (2.0 * t - 1.0).abs());
-            [v, v * 0.92, v * 0.8]
-        }),
-        procedural("Paper Noise", 64, 64, |x, y| {
-            // Two octaves of smoothed value noise (wraps at 64 px).
-            let oct = |cell: u32, seed: u32| {
-                let (cx, cy) = (x / cell, y / cell);
-                let (fx, fy) = ((x % cell) as f32 / cell as f32, (y % cell) as f32 / cell as f32);
-                let n = 64 / cell;
-                let v = |i: u32, j: u32| hash01(i % n, j % n, seed);
-                let s = |t: f32| t * t * (3.0 - 2.0 * t);
-                let (sx, sy) = (s(fx), s(fy));
-                let a = v(cx, cy) + (v(cx + 1, cy) - v(cx, cy)) * sx;
-                let b = v(cx, cy + 1) + (v(cx + 1, cy + 1) - v(cx, cy + 1)) * sx;
-                a + (b - a) * sy
-            };
-            g(0.78 + 0.14 * oct(8, 1) + 0.08 * oct(2, 2))
-        }),
-    ]
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -141,7 +48,7 @@ pub fn full(s: &Session, p: &Pattern) -> std::result::Result<Pattern, String> {
     if !s.patterns.stored.contains_key(&p.id) {
         return Ok(p.clone());
     }
-    let st = s.preset_store.as_ref().ok_or_else(|| format!("pattern \"{}\" is not loaded: no preset store", p.display_name()))?;
+    let st = s.preset_store().ok_or_else(|| format!("pattern \"{}\" is not loaded: no preset store", p.display_name()))?;
     let mut f = st.load_pattern(&p.id).map_err(|e| format!("pattern \"{}\" could not be loaded: {e}", p.display_name()))?;
     f.name = p.name.clone();
     Ok(f)
@@ -637,6 +544,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use photocraft_color::SampleType;
     use photocraft_doc::LayerId;
 
     fn session(depth: u64) -> Session {

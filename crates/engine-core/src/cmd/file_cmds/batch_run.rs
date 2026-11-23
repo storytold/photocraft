@@ -3,6 +3,8 @@ use super::paths::{extension, file_name, join, list_files, list_images, read_fil
 use super::processing::parse_steps;
 use super::save::{SaveOpts, encode, save_doc, save_doc_as};
 use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, json, str_param};
+use crate::actions_cmds::ActionsExt;
+use crate::color_cmds::ColorExt;
 
 /// Inputs of a batch command: `"input"` is a folder or an array of files.
 pub(crate) fn batch_inputs(p: &Value, cmd: &str) -> Result<Vec<String>> {
@@ -779,7 +781,7 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
 /// Refuses a batch or droplet nested past [`MAX_BATCH_DEPTH`](crate::actions_cmds::MAX_BATCH_DEPTH),
 /// before it reads or decodes anything: each level keeps its parent's scratch document open.
 pub(crate) fn check_batch_depth(s: &Session, cmd: &str) -> Result<()> {
-    if s.actions.batch_depth >= crate::actions_cmds::MAX_BATCH_DEPTH {
+    if s.recording.batch_depth >= crate::actions_cmds::MAX_BATCH_DEPTH {
         return Err(EngineError::BatchLimit(format!(
             "invalid parameters for `{cmd}`: batches and droplets are nested more than {} deep",
             crate::actions_cmds::MAX_BATCH_DEPTH
@@ -864,7 +866,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
     let called = match p.get("calledActions") {
-        None | Some(Value::Null) => s.actions.called.clone(),
+        None | Some(Value::Null) => s.actions().called.clone(),
         // A droplet brings the actions it calls (#2794) and plays from those alone.
         Some(v) => {
             let actions: Vec<crate::actions_cmds::Action> =
@@ -884,7 +886,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         parse_steps(act)?
     } else {
         // The caller selects the source; calledActions supplies only its internal namespace.
-        let index = batch_action(s.actions.playable().actions(), p)?;
+        let index = batch_action(s.actions().playable().actions(), p)?;
         let (_, action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
         called_name = Some(action.name.clone());
         action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect()
@@ -893,7 +895,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         .action_history
         .as_ref()
         .map(|group| group.name.clone())
-        .or_else(|| s.actions.playback_stack.first().cloned())
+        .or_else(|| s.recording.playback_stack.first().cloned())
         .or_else(|| called_name.clone())
         .or_else(|| p.get("action").and_then(Value::as_str).map(str::to_string))
         .or_else(|| p.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).map(str::to_string))
@@ -943,31 +945,30 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // action starts fresh; standalone explicit steps retain their existing behavior. A batch nested
     // in another batch (a droplet a droplet runs) is charged the same way, so the levels share one budget.
     let named = called_name.is_some();
-    let nested = s.actions.playing > 0 || s.actions.batch_depth > 0;
+    let nested = s.recording.playing > 0 || s.recording.batch_depth > 0;
     let mut playback_steps = 0;
     if nested || named {
-        let spent = if nested { s.actions.playback_steps } else { 0 };
+        let spent = if nested { s.recording.playback_steps } else { 0 };
         playback_steps =
             spent.saturating_add((steps.len().max(1) as u64).saturating_mul(if source == "open" { s.documents().len() } else { inputs.len() } as u64));
         if playback_steps > crate::actions_cmds::MAX_PLAYBACK_STEPS {
             return Err(EngineError::BatchLimit(format!("invalid parameters for `{cmd}`: this batch would exceed the action playback step limit")));
         }
         if nested {
-            s.actions.playback_steps = playback_steps;
+            s.recording.playback_steps = playback_steps;
         }
     }
-    let mut playback_stack = s.actions.playback_stack.clone();
+    let mut playback_stack = s.recording.playback_stack.clone();
     playback_stack.extend(called_name);
-    let actions = crate::actions_cmds::ActionState {
-        list: s.actions.list.clone(),
-        called,
-        playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },
+    let actions = crate::actions_cmds::ActionState { list: s.actions().list.clone(), called, ..Default::default() };
+    let run = crate::ActionRecording {
+        playing: if named { s.recording.playing.saturating_add(1) } else { s.recording.playing },
         playback_stack,
         playback_steps,
-        script_depth: s.actions.script_depth,
-        script_steps: s.actions.script_steps,
+        script_depth: s.recording.script_depth,
+        script_steps: s.recording.script_steps,
         budget_shared: nested,
-        batch_depth: s.actions.batch_depth.saturating_add(1),
+        batch_depth: s.recording.batch_depth.saturating_add(1),
         ..Default::default()
     };
     if source == "open" {
@@ -976,19 +977,19 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         // As in ordinary named playback, suspend it while executing and restore the Batch owner.
         let previous_recording = if named {
             crate::actions_cmds::flush_recording(s)?;
-            s.actions.recording.take()
+            s.recording.target.take()
         } else {
             None
         };
         // Swap only the execution context (the playback counters and the actions playback calls);
         // the user's list, the recorder and the script counters stay.
-        let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
-        let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
-        let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
+        let previous_playing = std::mem::replace(&mut s.recording.playing, run.playing);
+        let previous_stack = std::mem::replace(&mut s.recording.playback_stack, run.playback_stack);
+        let previous_steps = std::mem::replace(&mut s.recording.playback_steps, run.playback_steps);
         // The nesting depth and shared budget of the levels above travel with the run too.
-        let previous_shared = std::mem::replace(&mut s.actions.budget_shared, actions.budget_shared);
-        let previous_depth = std::mem::replace(&mut s.actions.batch_depth, actions.batch_depth);
-        let previous_called = std::mem::replace(&mut s.actions.called, actions.called);
+        let previous_shared = std::mem::replace(&mut s.recording.budget_shared, run.budget_shared);
+        let previous_depth = std::mem::replace(&mut s.recording.batch_depth, run.batch_depth);
+        let previous_called = std::mem::replace(&mut s.actions_mut().called, actions.called);
         let owns_history = s.action_history.is_none() && s.prefs().actions.create_single_history_state;
         if owns_history {
             crate::actions_cmds::begin_document_history(s, &action_name);
@@ -997,16 +998,16 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         if owns_history {
             crate::actions_cmds::finish_document_history(s);
         }
-        s.actions.playing = previous_playing;
-        s.actions.playback_stack = previous_stack;
-        s.actions.budget_shared = previous_shared;
-        s.actions.batch_depth = previous_depth;
-        s.actions.called = previous_called;
+        s.recording.playing = previous_playing;
+        s.recording.playback_stack = previous_stack;
+        s.recording.budget_shared = previous_shared;
+        s.recording.batch_depth = previous_depth;
+        s.actions_mut().called = previous_called;
         if previous_playing == 0 && !previous_shared {
-            s.actions.playback_steps = previous_steps;
+            s.recording.playback_steps = previous_steps;
         }
         if named {
-            s.actions.recording = previous_recording;
+            s.recording.target = previous_recording;
         }
         return result;
     }
@@ -1030,9 +1031,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let raw_ppi = super::open::raw_open_resolution(s);
     let action_prefs = s.prefs().actions.clone();
     let prefs = s.prefs.clone();
-    let color_settings = s.color.settings.clone();
+    let color_settings = s.color().settings.clone();
     let raw_settings = s.batch_raw_open.as_ref().unwrap_or(&s.prefs().raw_defaults).clone();
-    let script_count = s.actions.script_steps;
+    let script_count = s.recording.script_steps;
     let outputs: Vec<(String, String)> = if save_and_close {
         inputs.iter().map(|input| (input.path.clone(), input.path.clone())).collect()
     } else {
@@ -1075,10 +1076,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 let _ = check_folder_format;
                 if quiet_profiles || quiet_raw {
                     scratch.prefs = prefs.clone();
-                    scratch.color.settings = color_settings.clone();
+                    scratch.color_mut().settings = color_settings.clone();
                     if quiet_profiles {
-                        scratch.color.settings.ask_on_mismatch = false;
-                        scratch.color.settings.ask_on_missing = false;
+                        scratch.color_mut().settings.ask_on_mismatch = false;
+                        scratch.color_mut().settings.ask_on_missing = false;
                     }
                     scratch.authorize = authorize;
                     if quiet_raw {
@@ -1087,7 +1088,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     scratch.batch_open_notices = Some(Vec::new());
                 }
                 if override_open {
-                    scratch.batch_open = Some(super::open::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, read_only: false });
+                    scratch.batch_open = Some(crate::state::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, read_only: false });
                 } else {
                     let bytes = read_file(path)?;
                     if quiet_profiles || quiet_raw {
@@ -1160,9 +1161,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 };
                 scratch.authorize = authorize;
-                scratch.actions = actions.clone();
-                scratch.actions.playback_steps = carried.get();
-                scratch.actions.script_steps = script_steps.get();
+                *scratch.actions_mut() = actions.clone();
+                scratch.recording = run.clone();
+                scratch.recording.playback_steps = carried.get();
+                scratch.recording.script_steps = script_steps.get();
                 scratch.prefs.edit(|prefs| prefs.actions = action_prefs.clone());
                 let owns_history = scratch.action_history.is_none() && scratch.prefs().actions.create_single_history_state;
                 if owns_history {
@@ -1230,8 +1232,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 if let Some(observe) = history_observer {
                     observe(scratch);
                 }
-                carried.set(scratch.actions.playback_steps);
-                script_steps.set(scratch.actions.script_steps);
+                carried.set(scratch.recording.playback_steps);
+                script_steps.set(scratch.recording.script_steps);
                 result
             };
             let mut result = process_batch_outputs_with(
@@ -1248,9 +1250,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         },
         move |s, (result, carried, script_steps)| {
             if was_playing {
-                s.actions.playback_steps = carried;
+                s.recording.playback_steps = carried;
             }
-            s.actions.script_steps = script_steps;
+            s.recording.script_steps = script_steps;
             let mut result = result;
             mark_script_limit(s, &mut result);
             if let (Some(notices), Some(imports)) = (&mut s.batch_open_notices, result.get("notices").and_then(Value::as_array)) {
@@ -1406,14 +1408,14 @@ fn batch_open_documents(
 /// A Batch run from a script charges each step it executes to the script's total, as nested
 /// playback does (`consume_playback_step`); the Batch itself is only one script step.
 fn charge_script_step(s: &mut Session) -> Result<()> {
-    if s.actions.script_depth == 0 {
+    if s.recording.script_depth == 0 {
         return Ok(());
     }
     let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
-    if s.actions.script_steps >= max {
+    if s.recording.script_steps >= max {
         return Err(EngineError::Other(format!("the script ran more than {max} steps in all (scripts calling scripts)")));
     }
-    s.actions.script_steps += 1;
+    s.recording.script_steps += 1;
     Ok(())
 }
 
@@ -1423,7 +1425,7 @@ fn charge_script_step(s: &mut Session) -> Result<()> {
 fn mark_script_limit(s: &Session, result: &mut Value) {
     let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
     let failed = result.get("errors").and_then(Value::as_array).is_some_and(|errors| !errors.is_empty());
-    if s.actions.script_depth > 0 && s.actions.script_steps >= max && failed {
+    if s.recording.script_depth > 0 && s.recording.script_steps >= max && failed {
         result["scriptLimitError"] = json!(format!("the script ran more than {max} steps in all (scripts calling scripts)"));
     }
 }
@@ -1464,6 +1466,7 @@ fn preserve_exr(bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod action_history_tests {
     use super::*;
+    use crate::actions_cmds::ActionsExt;
     use crate::actions_cmds::{Action, ActionStep};
     use std::cell::RefCell;
 
@@ -1528,7 +1531,7 @@ mod action_history_tests {
             }
             steps.push(ActionStep::new("layer.renameLayer", json!({"name":"Final"})));
             let action_steps = if nested {
-                s.actions.list.push(Action::new("Child", steps)).unwrap();
+                s.actions_mut().list.push(Action::new("Child", steps)).unwrap();
                 vec![ActionStep::new("actions.play", json!({"action":"Child"}))]
             } else {
                 steps
@@ -1539,8 +1542,8 @@ mod action_history_tests {
                 s.execute("file.automate.createDroplet", json!({"path":path,"name":"Named","steps":action_steps,"output":output,"shim":false})).unwrap();
                 s.execute("file.automate.runDroplet", json!({"droplet":path,"input":paths})).unwrap()
             } else if named {
-                let index = s.actions.list.actions().len();
-                s.actions.list.push(Action::new("Named", action_steps)).unwrap();
+                let index = s.actions().list.actions().len();
+                s.actions_mut().list.push(Action::new("Named", action_steps)).unwrap();
                 s.execute("file.automate.batch", json!({"action":index,"input":paths,"output":output})).unwrap()
             } else {
                 s.execute("file.automate.batch", json!({"action":"Named","steps":action_steps,"input":paths,"output":output})).unwrap()
@@ -1581,13 +1584,13 @@ mod action_history_tests {
             let before: Vec<_> = s.documents().iter().map(|st| (st.doc.clone(), st.history.past_len())).collect();
             let steps = vec![ActionStep::new("layer.renameLayer", json!({"name":"Prefix"})), ActionStep::new("layer.renameLayer", json!({"name":"Final"}))];
             let params = if named {
-                s.actions.list.push(Action::new("Opened batch", steps)).unwrap();
+                s.actions_mut().list.push(Action::new("Opened batch", steps)).unwrap();
                 json!({"source":"open","action":0})
             } else {
                 json!({"source":"open","action":"Opened batch","steps":steps})
             };
             if parent {
-                s.actions
+                s.actions_mut()
                     .list
                     .push(Action::new(
                         "Parent",
@@ -1634,8 +1637,8 @@ mod action_history_tests {
             let mut s = crate::session();
             s.execute("file.new", json!({"width":4,"height":4})).unwrap();
             s.execute("actions.setHistory", json!({"singleState":true})).unwrap();
-            s.actions.list.push(Action::new("Original", vec![])).unwrap();
-            let library = serde_json::to_value(s.actions.list.actions()).unwrap();
+            s.actions_mut().list.push(Action::new("Original", vec![])).unwrap();
+            let library = serde_json::to_value(s.actions().list.actions()).unwrap();
             let before = s.active().unwrap().doc.clone();
             if parent {
                 crate::actions_cmds::begin_document_history(&mut s, "Parent");
@@ -1650,7 +1653,7 @@ mod action_history_tests {
                 )
                 .unwrap();
             assert_eq!(result["errors"].as_array().unwrap().len(), 1, "{result}");
-            assert_eq!(serde_json::to_value(s.actions.list.actions()).unwrap(), library);
+            assert_eq!(serde_json::to_value(s.actions().list.actions()).unwrap(), library);
             if parent {
                 assert_eq!(s.action_history.as_ref().unwrap().name, "Parent");
                 s.execute("layer.renameLayer", json!({"name":"Parent tail"})).unwrap();
