@@ -11,6 +11,8 @@ and pushes that start in the minutes between restore nothing from the deleted en
 once. Deleting is the only write; the entry the cold run saves does not exist yet when this runs.
 Only entries created before this run started are deleted: a push or pull request run in the same
 minutes may have saved an entry of its own, and the cold run's own save is never touched.
+Only the Linux entries: the nightly run skips the Windows job, so deleting the Windows rolling entry
+would only make the next Windows build on `main` cold.
 """
 
 from datetime import datetime
@@ -23,7 +25,7 @@ import time
 
 REF = 'refs/heads/main'
 BUILD_JOB = re.compile(r'^gate / build \(')
-ROLLING = '-gate-crates-'
+ROLLING = '-gate-crates-Linux-'
 POLL_SECONDS = 20
 GIVE_UP_SECONDS = 100 * 60
 

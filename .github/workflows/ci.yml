@@ -227,8 +227,11 @@ jobs:
   # would not shorten the slowest one while its slowest test alone takes ~9.6 min (the
   # shortcut-dispatch UI test). The browser apps are wasm targets, so their native tests are left
   # out; pull requests also leave out photocraft-gpu and the platform-neutral packages nothing they
-  # change reaches (`windows_gpu`, `windows_skip`). Windows keeps a dependency-only cache entry:
-  # its workspace crates would not fit the repository's cache budget beside Linux's.
+  # change reaches (`windows_gpu`, `windows_skip`). The build keeps the compiled workspace crates
+  # between runs (`cache-workspace-crates`), as on Linux, so a main run rebuilds only the crates its
+  # changes reach instead of all of them (16m 46s of a 27.9 min build for a two-file change). It
+  # fits the 10 GB cache budget now that the Linux rolling entry is saved trimmed (about 3.1 GB).
+  # The nightly run skips this job, so `cold-cache-clear` leaves the Windows entry alone.
   windows:
     needs: platforms
     if: needs.platforms.outputs.windows == 'true'
@@ -237,6 +240,7 @@ jobs:
     with:
       os: '["windows-latest"]'
       lint-cache: false
+      cache-workspace-crates: true
       # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels with
       # kittest's strict `MissingGlyphPolicy::Panic`, and a hosted Windows image has no guaranteed
       # Japanese or Simplified Chinese system font. Same pinned central fonts as Linux and release.
@@ -272,8 +276,8 @@ jobs:
   # Keeps one Actions cache entry per family on main, so the repository stays within its 10 GB
   # budget and GitHub never evicts an entry a run still needs (an evicted Windows entry makes the
   # Windows build cold, about 60 instead of 21 minutes). It runs beside the run's jobs and prunes
-  # each time a job that saves an entry finishes: the gate's build jobs (the Linux rolling entry,
-  # about 4 GB, and the Windows dependency entry) and web. A skipped job is listed under its
+  # each time a job that saves an entry finishes: the gate's build jobs (the Linux and Windows
+  # rolling entries; Linux's is about 3.1 GB trimmed) and web. A skipped job is listed under its
   # own name (a skipped reusable-workflow call under the caller job's), so a run that skips one
   # still ends. No `needs`: the gate is one reusable call, and waiting for it would leave the
   # replaced entry in place until every shard has run. A failed prune warns instead of failing the
@@ -303,7 +307,7 @@ jobs:
             ^windows( / build \(.*\))?$
             ^web build and wasm size gate$
 
-  # The nightly cold run never restores the rolling crates entry, so the old entry is only overlap
+  # The nightly cold run never restores Linux's rolling crates entry, so the old entry is only overlap
   # while the cold run saves its own: two entries of about 4 GB, which with the others go over the
   # 10 GB cache limit and get the Windows, web and corpus entries evicted. This deletes the old
   # entries when the build job starts saving (scripts/ci-clear-rolling-cache.py).
