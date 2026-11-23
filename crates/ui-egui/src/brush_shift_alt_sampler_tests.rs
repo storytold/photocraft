@@ -48,6 +48,7 @@ fn shift_alt_click_adds_a_sampler_with_every_alt_eyedropper_tool() {
         let mut app = app(tool);
         let fg = foreground(&app);
         let before = steps(&app);
+        let document = app.session.active().unwrap().doc.clone();
         click(&mut app, 199.7, 120.2, SHIFT_ALT);
         let got = samplers(&mut app);
         // The point the Color Sampler tool's command places for the same click.
@@ -56,7 +57,12 @@ fn shift_alt_click_adds_a_sampler_with_every_alt_eyedropper_tool() {
         assert_eq!(got, samplers(&mut twin), "{tool:?}: one sampler at the clicked pixel");
         assert_eq!(got.len(), 1, "{tool:?}");
         assert_eq!(foreground(&app), fg, "{tool:?}: the foreground stays");
-        assert_eq!(steps(&app), before, "{tool:?}: nothing painted");
+        assert_eq!(steps(&app), before + 1, "{tool:?}: one sampler History step");
+        let state = app.session.active().unwrap();
+        assert_eq!(state.history.undo_label(), Some("New Color Sampler"), "{tool:?}");
+        assert_eq!(state.doc.as_ref(), document.as_ref(), "{tool:?}: nothing painted");
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(samplers(&mut app).is_empty(), "{tool:?}: undo removes the sampler");
     }
 }
 
