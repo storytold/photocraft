@@ -20,7 +20,7 @@ use std::f64::consts::PI;
 use serde::{Deserialize, Serialize};
 
 /// Warp style: none, a custom mesh, or one of Photoshop's presets (menu order).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum WarpStyle {
     #[default]
@@ -161,7 +161,7 @@ impl WarpStyle {
 }
 
 /// A preset style prepared for one box: its control grid and the box it bends.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, craft_ui_macros::PlainData)]
 pub struct StyleWarp {
     /// The 4 × 4 Bezier control grid in box units (0..1, y down), row-major.
     grid: Grid,
@@ -529,7 +529,7 @@ const BERN_INV: [[f64; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [-5.0 / 6.0, 3.0, -1.5, 1
 /// `us`/`vs` are the patch boundaries in the box's normalised coordinates (`0..=1`, increasing,
 /// first 0 and last 1). Control points are a `(3·(us.len()-1)+1) × (3·(vs.len()-1)+1)` grid in
 /// row-major order, in output (document) coordinates; neighbouring patches share their edge row.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct BezierMesh {
     pub us: Vec<f64>,
     pub vs: Vec<f64>,
@@ -1029,7 +1029,7 @@ fn move_control_points(points: &mut [[f64; 2]], nx: usize, ny: usize, cols: usiz
 }
 
 /// A complete warp: what Photoshop's `warp` descriptor stores, plus the custom mesh.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub struct Warp {
     pub style: WarpStyle,

@@ -486,6 +486,9 @@ This is another implemented subset of #10723, not support for its remaining even
 - Close without `Svng` preserves the unanswered save choice. Headless playback refuses to discard a
   changed document. Native `file.close` still defaults to discard; `save: "ask"` opts into this policy.
 - Photo Filter converts recorded Lab colours through `craft-cms`.
+- Black & White exports store coefficients as signed 32-bit integers. Strict export refuses
+  fractional coefficients; `skipUnsupported:true` reports the omitted step. Native commands
+  retain fractional coefficients.
 - Direct Vibrance and Gradient Map save as the string events `vibrance` and `gradientMapEvent`.
   Stroke Outside uses `StrL.Otsd`, group Pass Through uses `BlnM.passThrough`, Canvas Size extension
   colours use `FrgC` and `Clr `, and Absolute Colorimetric intent uses `Inte.AClr`.
@@ -514,7 +517,9 @@ The Vibrance event and adjustment-opacity handling incorporate [@bommerts' contr
 
 - Image Size preserves `scaleStyles`. Native calls default to true; an absent ATN flag means
   false (the reference application plays both alike), so Save writes the key only when it is true.
-  Crop and resolution-only resizing retain their existing behavior.
+  Explicit pixel dimensions take precedence over `percent`; a side without an explicit size
+  keeps its percentage. Strict export refuses an invalid supplied percentage even when explicit
+  dimensions would override it. Crop and resolution-only resizing retain their existing behavior.
 - Convert to Profile preserves `Dthr`, `Fltt` and `rasterizePlaced`, defaulting to false.
   `sdwM` is written as the reference application records it (-1); other values and malformed
   flags remain kept steps. Absolute intent writes `AClr`, with `AbsC` still accepted on import.
@@ -1154,17 +1159,18 @@ Measured with a folder `in` holding `a.png`, `b.png`, `notes.txt` and `sub/a.png
 - **Errors, Stop For Errors** (no `Log ` key): the batch stops at the failing file; files before it are
   saved, nothing after it is processed.
 - **Errors, Log Errors To File:** the batch goes on, and at the end a message says an error occurred and
-  the details are in the log. The log file is **UTF-16 LE with BOM and CRLF**, and is written even when
-  nothing failed. In German the lines are (the application's own language):
+  the details are in the log. The log file is **UTF-16 BE with BOM (`FE FF`) and CRLF**, and is written even when
+  nothing failed. The first line is `Start Batch` and the last is `End Batch` followed by CRLF; `File:` paths
+  use the platform separators (backslashes on Windows). The measured layout:
 
   ```
-  Stapelanfang
+  Start Batch
   <blank>
-  Datei: "<full path, or the document's name for open documents>"
-  Fehler: <message> (<error code>)
+  File: "<full path, or the document's name for open documents>"
+  Error: <message>
   <blank>
   …one pair per failed file…
-  Stapelende
+  End Batch
   ```
 - **Cancel:** Esc during a batch stops the running command and asks "A command was cancelled or stopped
   during batch processing. Continue with the next file or stop?" (Continue / Stop). Stop ends the batch
@@ -1182,7 +1188,7 @@ Batch cancellation conformance (Photoshop 2026 observation above; PhotoCraft's p
 | Ask Continue or Stop | Continue skips the interrupted input; Stop returns prior outputs and skips the rest | Implemented and tested in engine and UI |
 | Keep headless cancellation direct | `jobs.cancel` returns partial results without an interactive question | Implemented and tested, including a worker waiting for a desktop decision |
 | No progress bar | The desktop Batch preview is the visible feedback | Implemented, UI tested and visually checked |
-| Preserve error policy and log | Continue retains earlier errors and writes one final UTF-16 LE log | Implemented and tested with errors before and after Esc |
+| Preserve error policy and log | Continue retains earlier errors and writes one final UTF-16 BE log | Implemented and tested with errors before and after Esc |
 
 - **Return value:** when any file failed, the Batch step itself reports "cancelled" (the dialog returns no
   descriptor); a script run with Stop For Errors reports success even though it stopped.

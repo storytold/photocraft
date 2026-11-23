@@ -2,10 +2,10 @@
 //! the dialog; OK keeps it as read, Relink… relinks through Relink to File, automation opens list
 //! the files in `warnings`.
 
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::sync::Arc;
 
+use craft::host::{PickKind, Picked, ScriptedFiles};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId, SmartSource};
@@ -13,10 +13,10 @@ use photocraft_geom::Rect;
 use serde_json::json;
 
 use super::*;
-use crate::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Services, control};
+use crate::{Services, control};
 
-/// File dialogs the user is still in: the requests with their replies.
-type Open = Rc<RefCell<Vec<(FileDialogRequest, FileDialogReply)>>>;
+/// The file service, whose dialogs stay open until the test answers them.
+type Open = Arc<ScriptedFiles>;
 
 /// A folder holding `doc.pcraft`, a 40×40 document with three layers linked to `art.png` (a red
 /// PNG placed linked, a duplicate sharing its contents, and a second placement of the same file);
@@ -69,14 +69,13 @@ fn saved(keep: bool, stored: Option<&str>) -> Saved {
 
 /// An app that imports with the real decoders, opens inline (no worker) and whose file dialogs
 /// stay open until the test answers them.
-fn app() -> (PhotocraftApp, Open) {
-    let open: Open = Rc::default();
-    let held = open.clone();
+fn app() -> (Box<PhotocraftApp>, Open) {
+    let open: Open = Arc::new(ScriptedFiles::held());
     let services = Services {
         import: Some(Box::new(|name, bytes, opts| {
             photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
         })),
-        file_dialog: Some(Box::new(move |request, _parent, reply| held.borrow_mut().push((request, reply)))),
+        files: Some(open.clone()),
         automation_read: Some(Box::new(|path: &str| {
             let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
             let name = Path::new(path).file_name().unwrap().to_string_lossy().into_owned();
@@ -96,8 +95,25 @@ fn open_file(app: &mut PhotocraftApp, path: &Path) {
 }
 
 /// The open Cannot Locate Linked Assets dialogs.
-fn dialogs(app: &PhotocraftApp) -> Vec<&crate::state::Dialog> {
-    app.ui.dialogs.iter().filter(|d| owns(&d.fields)).collect()
+fn dialogs(app: &PhotocraftApp) -> Vec<&MissingLinksDialog> {
+    open_ids(app).into_iter().filter_map(|id| app.framework.dialogs.get_by_id::<MissingLinksDialog>(id)).collect()
+}
+
+/// The id of the one open Cannot Locate Linked Assets dialog.
+fn dialog_id_of(app: &PhotocraftApp) -> DialogId {
+    let ids = open_ids(app);
+    assert_eq!(ids.len(), 1, "one dialog is open");
+    ids[0]
+}
+
+/// The files `dialog` lists, as `ui.inspect` reports them.
+fn listed(dialog: &MissingLinksDialog) -> serde_json::Value {
+    dialog.json_fields().unwrap()["files"].clone()
+}
+
+/// Whether no dialog is open on the app's dialog host.
+fn no_dialogs(app: &PhotocraftApp) -> bool {
+    app.framework.dialogs.open_dialogs().is_empty()
 }
 
 /// Each linked layer's stored path, in `layers` order.
@@ -122,9 +138,16 @@ fn centre(app: &PhotocraftApp) -> [u8; 3] {
 }
 
 /// Answers the file dialog the user is in.
-fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
-    let (_, reply) = open.borrow_mut().pop().expect("a file dialog is open");
-    std::thread::spawn(move || reply.send(answer)).join().unwrap();
+fn answer(open: &Open, picked: Picked) {
+    open.answer(picked).expect("a file dialog is open");
+}
+
+/// Sends the control request `method` and returns its immediate reply.
+fn call(app: &mut PhotocraftApp, method: &str, params: serde_json::Value) -> serde_json::Value {
+    let (req, _rx) = control::ControlRequest::new(method, params);
+    let ctx = app.ctx().clone();
+    let control::Reply::Done(r) = control::handle(app, &ctx, &req) else { panic!("{method} answers at once") };
+    r
 }
 
 fn abs(p: &Path) -> String {
@@ -137,9 +160,9 @@ fn an_open_with_a_missing_link_lists_the_file_once_by_its_absolute_path() {
     let (mut app, _) = app();
     open_file(&mut app, &s.doc);
     let shown = dialogs(&app);
-    assert_eq!(shown.len(), 1, "{:?}", app.ui.dialogs.iter().map(|d| &d.fields).collect::<Vec<_>>());
-    let f = &shown[0].fields;
-    assert_eq!(f["__label"], json!("PhotoCraft"));
+    assert_eq!(shown.len(), 1, "{:?}", app.framework.dialogs.open_dialogs());
+    assert_eq!(shown[0].document(), app.session.active().unwrap().doc.id);
+    let f = shown[0].json_fields().unwrap();
     assert_eq!(f["document"], json!(app.session.active().unwrap().doc.id.0));
     // Three layers, two smart objects, one file: one row.
     assert_eq!(f["files"], json!([{"file": abs(&s.art), "paths": [abs(&s.art)]}]));
@@ -150,7 +173,7 @@ fn a_relative_link_is_listed_by_the_file_it_names_beside_the_document() {
     let s = saved(false, Some("art.png"));
     let (mut app, _) = app();
     open_file(&mut app, &s.doc);
-    assert_eq!(dialogs(&app)[0].fields["files"], json!([{"file": abs(&s.art), "paths": ["art.png"]}]));
+    assert_eq!(listed(dialogs(&app)[0]), json!([{"file": abs(&s.art), "paths": ["art.png"]}]));
 }
 
 #[test]
@@ -166,8 +189,8 @@ fn every_missing_file_gets_a_row_in_path_order() {
     std::fs::remove_file(&other).unwrap();
     let (mut app, _) = app();
     open_file(&mut app, &s.doc);
-    let rows = &dialogs(&app)[0].fields["files"];
-    assert_eq!(rows, &json!([{"file": abs(&other), "paths": [abs(&other)]}, {"file": abs(&s.art), "paths": [abs(&s.art)]}]));
+    let rows = listed(dialogs(&app)[0]);
+    assert_eq!(rows, json!([{"file": abs(&other), "paths": [abs(&other)]}, {"file": abs(&s.art), "paths": [abs(&s.art)]}]));
 }
 
 #[test]
@@ -175,11 +198,11 @@ fn links_that_are_there_or_no_links_open_without_the_dialog() {
     let s = saved(true, None);
     let (mut app, _) = app();
     open_file(&mut app, &s.doc);
-    assert!(app.ui.dialogs.is_empty(), "every linked file is there");
+    assert!(no_dialogs(&app), "every linked file is there");
     let plain = s.dir.path().join("plain.png");
     std::fs::write(&plain, png("#ffffff")).unwrap();
     open_file(&mut app, &plain);
-    assert!(app.ui.dialogs.is_empty(), "no links");
+    assert!(no_dialogs(&app), "no links");
 }
 
 #[test]
@@ -189,13 +212,13 @@ fn ok_and_cancel_keep_the_document_as_it_was_read() {
         let (mut app, _) = app();
         open_file(&mut app, &s.doc);
         let history = app.session.active().unwrap().history.past_len();
-        let id = dialogs(&app)[0].id;
+        let id = dialog_id_of(&app);
         if ok {
-            crate::dialogs::confirm(&mut app, id).unwrap();
+            crate::dialogs::testing::confirm(&mut app, id).unwrap();
         } else {
-            crate::dialogs::cancel(&mut app, id).unwrap();
+            crate::dialogs::testing::cancel(&mut app, id).unwrap();
         }
-        assert!(app.ui.dialogs.is_empty());
+        assert!(no_dialogs(&app));
         assert_eq!(app.session.documents().len(), 1, "the document stays open");
         assert_eq!(links(&app, s.layers), [abs(&s.art), abs(&s.art), abs(&s.art)], "the links are kept");
         assert_eq!(centre(&app), [255, 0, 0], "the last pixels show");
@@ -210,29 +233,27 @@ fn relink_links_every_layer_of_the_file_to_the_one_picked_and_the_row_leaves() {
     std::fs::write(&found, png("#0000ff")).unwrap();
     let (mut app, open) = app();
     open_file(&mut app, &s.doc);
-    let id = dialogs(&app)[0].id;
-    let ctx = egui::Context::default();
+    let id = dialog_id_of(&app);
     // Cancelling the file dialog changes nothing.
     relink(&mut app, id, &abs(&s.art)).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: false, .. }, _)]));
-    answer(&open, None);
-    app.poll_file_dialog(&ctx, None);
+    assert_eq!(open.open(), 1);
+    assert_eq!(open.requests().last().unwrap().kind, PickKind::Open, "one file is asked for");
+    answer(&open, Picked::Cancelled);
+    app.poll_file_dialog();
     assert_eq!(links(&app, s.layers), [abs(&s.art), abs(&s.art), abs(&s.art)]);
-    assert_eq!(dialogs(&app)[0].fields["files"].as_array().unwrap().len(), 1);
+    assert_eq!(dialogs(&app)[0].files().len(), 1);
     // A picked file relinks all three layers through Relink to File: one state per smart object.
     let history = app.session.active().unwrap().history.past_len();
     relink(&mut app, id, &abs(&s.art)).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    answer(&open, Some(FileDialogAnswer::Paths(vec![abs(&found)])));
-    app.poll_file_dialog(&ctx, None);
+    answer(&open, Picked::Paths(vec![found.clone()]));
+    app.poll_file_dialog();
     assert!(!app.ui.status_error, "{}", app.ui.status);
     assert_eq!(links(&app, s.layers), [abs(&found), abs(&found), abs(&found)]);
     assert_eq!(centre(&app), [0, 0, 255]);
     let st = app.session.active().unwrap();
     assert_eq!(st.history.past_len(), history + 2);
     assert_eq!(st.history.entries()[history + 1..], ["Relink to File", "Relink to File"].map(String::from)[..], "{:?}", st.history.entries());
-    assert_eq!(dialogs(&app)[0].fields["files"], json!([]), "the row left the list");
+    assert_eq!(listed(dialogs(&app)[0]), json!([]), "the row left the list");
 }
 
 #[test]
@@ -240,12 +261,12 @@ fn relink_refuses_a_file_without_a_path_and_a_closed_dialog() {
     let s = saved(false, None);
     let (mut app, _) = app();
     open_file(&mut app, &s.doc);
-    let id = dialogs(&app)[0].id;
+    let id = dialog_id_of(&app);
     let err = relink_to(&mut app, id, &abs(&s.art), "art.png").unwrap_err();
     assert!(err.contains("needs a file on disk"), "{err}");
     assert!(relink_to(&mut app, id, "/elsewhere/other.png", &abs(&s.doc)).is_err(), "not listed");
-    assert_eq!(dialogs(&app)[0].fields["files"].as_array().unwrap().len(), 1);
-    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(dialogs(&app)[0].files().len(), 1);
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
     assert!(relink_to(&mut app, id, &abs(&s.art), &abs(&s.doc)).is_err(), "the dialog was closed");
     assert_eq!(links(&app, s.layers), [abs(&s.art), abs(&s.art), abs(&s.art)]);
 }
@@ -256,10 +277,9 @@ fn automation_opens_list_the_files_in_warnings_without_the_dialog() {
     let warning = format!("Cannot locate linked asset: {}", abs(&s.art));
     // The control channel's app.open.
     let (mut app, _) = app();
-    let (req, _rx) = control::ControlRequest::new("app.open", json!({"path": abs(&s.doc)}));
-    let control::Outcome::Done(r) = control::handle(&mut app, &egui::Context::default(), &req) else { panic!("app.open answers at once") };
+    let r = call(&mut app, "app.open", json!({"path": abs(&s.doc)}));
     assert_eq!(r["result"]["warnings"], json!([warning]), "{r}");
-    assert!(app.ui.dialogs.is_empty());
+    assert!(no_dialogs(&app));
     // The engine's open (CLI, agents, Batch).
     let mut session = photocraft_engine::Session::new();
     let bytes = std::fs::read(&s.doc).unwrap();
@@ -280,11 +300,11 @@ fn the_dialog_draws_the_rows_and_relinks_from_its_button() {
     std::fs::write(&found, png("#0000ff")).unwrap();
     let (mut app, open) = app();
     open_file(&mut app, &s.doc);
-    // The first frame draws no dialog: the fonts are installed after it.
-    let shown = std::mem::take(&mut app.ui.dialogs);
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.state_mut().ui.dialogs = shown;
+    let ctx = app.ctx().clone();
+    let mut h = Harness::<'static, Box<PhotocraftApp>>::builder()
+        .with_context(ctx)
+        .with_size(egui::vec2(1000.0, 700.0))
+        .build_ui_state(|ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     h.run_steps(3);
     let heading = h.get_by_label("Cannot locate linked assets:").rect();
     let button = h.get_by_label("Relink…").rect();
@@ -297,16 +317,15 @@ fn the_dialog_draws_the_rows_and_relinks_from_its_button() {
     assert!(ok.left() > button.right() && cancel.left() > button.right(), "OK and Cancel on the right");
     h.get_by_label("Relink…").click();
     h.run_steps(2);
-    let ctx = h.ctx.clone();
-    h.state_mut().poll_file_dialog(&ctx, None);
-    answer(&open, Some(FileDialogAnswer::Paths(vec![abs(&found)])));
-    h.state_mut().poll_file_dialog(&ctx, None);
+    assert_eq!(open.open(), 1, "Relink… asks for a file");
+    answer(&open, Picked::Paths(vec![found.clone()]));
+    h.state_mut().poll_file_dialog();
     h.run_steps(2);
     assert_eq!(links(h.state(), s.layers), [abs(&found), abs(&found), abs(&found)]);
     assert!(h.query_by_label("Relink…").is_none(), "the row left");
     h.get_by_label("OK").click();
     h.run_steps(2);
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(no_dialogs(h.state()));
 }
 
 /// A document that keeps no path (a directory `.pcraft`, a template, a read-only source) still has
@@ -315,8 +334,7 @@ fn the_dialog_draws_the_rows_and_relinks_from_its_button() {
 fn automation_warnings_take_relative_links_from_the_opened_file() {
     let s = saved(false, Some("art.png"));
     let (mut app, _) = app();
-    let (req, _rx) = control::ControlRequest::new("app.open", json!({"path": abs(&s.doc)}));
-    let control::Outcome::Done(r) = control::handle(&mut app, &egui::Context::default(), &req) else { panic!("app.open answers at once") };
+    let r = call(&mut app, "app.open", json!({"path": abs(&s.doc)}));
     let warning = format!("Cannot locate linked asset: {}", abs(&s.art));
     assert_eq!(r["result"]["warnings"], json!([warning]), "{r}");
     app.session.active_mut().unwrap().path = None;
@@ -336,7 +354,7 @@ fn a_file_dated_before_1970_is_not_missing() {
     std::fs::File::options().write(true).open(&s.art).unwrap().set_modified(old).unwrap();
     let (mut app, _) = app();
     open_file(&mut app, &s.doc);
-    assert!(app.ui.dialogs.is_empty(), "{:?}", app.ui.dialogs.iter().map(|d| &d.fields).collect::<Vec<_>>());
+    assert!(no_dialogs(&app), "{:?}", app.framework.dialogs.open_dialogs());
 }
 
 /// Refuses every path, as an automation policy refuses one outside its granted root.
@@ -354,8 +372,7 @@ fn automation_warnings_skip_files_the_policy_refuses() {
     let s = saved(false, None);
     let (mut app, _) = app();
     app.services.automation_authorize = Some(refuse_paths);
-    let (req, _rx) = control::ControlRequest::new("app.open", json!({"path": abs(&s.doc)}));
-    let control::Outcome::Done(r) = control::handle(&mut app, &egui::Context::default(), &req) else { panic!("app.open answers at once") };
+    let r = call(&mut app, "app.open", json!({"path": abs(&s.doc)}));
     assert_eq!(r["result"]["warnings"], json!([]), "{r}");
     // The engine's open under the same gate.
     let mut session = photocraft_engine::Session::new();
