@@ -15,6 +15,7 @@
 //! going back to a state drawn a moment ago (⌥-click on an eye and again, an undo and its redo)
 //! uploads those blocks instead of compositing every layer again.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
@@ -232,7 +233,7 @@ impl KeptComposites {
 /// application setting, not part of the document. Read from the session's settings, which the
 /// engine keeps in step with the process-wide value compose reads (`psblend::set_text_gamma`).
 fn text_gamma(app: &PhotocraftApp) -> u32 {
-    app.session.color.settings.blend_text_gamma.to_bits()
+    app.session.color().settings.blend_text_gamma.to_bits()
 }
 
 /// Bytes kept composites of document `doc` may hold: what Memory Usage leaves beside its pixels
@@ -292,7 +293,9 @@ pub(crate) fn start(
     gpu_attempt_ms: f64,
 ) {
     let all = blocks(doc.bounds());
-    let display_key = display.as_deref().map_or(0, |d| d.texture_key);
+    // What the texture stores, like `texture_key`: a Multichannel document's inks follow the Spot
+    // dot gain, so blocks drawn with another gain aren't this state's.
+    let display_key = display.as_deref().map_or(0, |d| d.texture_key) ^ super::display::ink_preview_key(&doc);
     let gamma = text_gamma(app);
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
@@ -413,12 +416,10 @@ fn collect(r: &mut Redraw, p: Piece) {
     r.collected_bytes = bytes;
 }
 
-/// The active document's redraw in the status bar: "Redrawing" and how much is done.
-pub(crate) fn status(app: &PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(r) = app.session.active().and_then(|st| app.redraws.get(&st.doc.id)) else { return };
-    let t = crate::theme::Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(format!("{:.0}%", r.fraction() * 100.0)).color(t.text_dim).size(11.5).monospace());
-    ui.label(egui::RichText::new(tl!("Redrawing")).color(t.text_dim).size(12.0));
+/// The active document's redraw as the status bar shows it: "Redrawing" and how much is done.
+pub(crate) fn progress(app: &PhotocraftApp) -> Option<crate::panels::status_bar::Progress> {
+    let r = app.session.active().and_then(|st| app.redraws.get(&st.doc.id))?;
+    Some(crate::panels::status_bar::Progress { label: tl!("Redrawing").to_owned(), fraction: Some(r.fraction()), cancel: None, refused: None })
 }
 
 /// Stop document `doc`'s redraw (its canvas was redrawn some other way, or is gone).
@@ -584,5 +585,7 @@ fn draw(
     }
 }
 
+#[cfg(test)]
+mod gpu_tests;
 #[cfg(test)]
 mod tests;

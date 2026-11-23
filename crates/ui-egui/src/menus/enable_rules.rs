@@ -1,6 +1,7 @@
 //! Photoshop menu enablement the engine's per-command checks don't express: the Background layer
-//! (no styles, masks, clipping, arranging, transforms without a selection), layer-kind specific
-//! items (Rasterize ›, Combine Shapes ›), and single-layer documents (Merge Visible, Flatten Image).
+//! (no styles, masks, clipping, arranging, grouping, transforms without a selection), layer-kind
+//! specific items (Rasterize ›, Combine Shapes ›), and single-layer documents (Merge Visible,
+//! Flatten Image, Load Selection without a saved selection).
 //! Applied on top of `menus::is_enabled`, so menus, shortcuts and the Layers context menu grey the
 //! same items Photoshop greys.
 
@@ -27,6 +28,8 @@ fn background_blocks(id: &str, has_selection: bool) -> bool {
         "layer.createClippingMask"
             | "layer.releaseClippingMask"
             | "layer.mergeDown"
+            // The Background can't go into a group (#12866, measured on the canvas menu).
+            | "layer.new.groupFromLayers"
             | "layer.lockLayers"
             | "layer.maskAllObjects"
             | "edit.puppetWarp"
@@ -58,6 +61,12 @@ fn kind_blocks(id: &str, l: &Layer) -> bool {
 pub fn disabled_for(doc: &Document, active: Option<&Layer>, id: &str) -> bool {
     let only_background = doc.layers.len() == 1 && doc.layers.first().is_some_and(|b| crate::doc_props_ui::is_background(doc, b));
     if only_background && matches!(id, "layer.mergeVisible" | "layer.flattenImage" | "layer.mergeLayers" | "layer.rasterize.allLayers") {
+        return true;
+    }
+    // A lone Background has no transparency or mask to load: Load Selection waits for a saved
+    // selection or Quick Mask (#13293). The command itself still loads the colour channels, as a
+    // Ctrl-click on a channel does.
+    if only_background && id == "select.loadSelection" && doc.channels.is_empty() && doc.quick_mask.is_none() {
         return true;
     }
     if id == "layer.delete.hiddenLayers" && doc.walk().iter().all(|(_, _, l)| l.visible) {
@@ -104,6 +113,11 @@ fn selection_targets(id: &str) -> Option<Targets> {
 /// runs on all of them is greyed only when none of them can take it (the active layer alone must
 /// not decide). Everything else, and a single selected layer, is judged by the active layer.
 pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Option<&Layer>, id: &str) -> bool {
+    // The reference application refuses Group from Layers whenever the Background is among the
+    // selected layers, not only when it is the active one.
+    if id == "layer.new.groupFromLayers" && selected.iter().filter_map(|l| doc.layer(*l)).any(|l| crate::doc_props_ui::is_background(doc, l)) {
+        return true;
+    }
     let Some(rule) = selection_targets(id).filter(|_| selected.len() > 1) else { return disabled_for(doc, active, id) };
     let layers = selected.iter().filter_map(|l| doc.layer(*l));
     let can = |l: &Layer| !disabled_for(doc, Some(l), id) && (!matches!(rule, Targets::WithoutMask) || l.mask.is_none());
@@ -117,6 +131,25 @@ pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Opti
 pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
     let Some(st) = app.session.active() else { return false };
     let active = st.active_layer.and_then(|a| st.doc.layer(a));
+    // The split warps edit the open Warp box's grid, or a smart object's stored warp: without
+    // either there is no grid to split (#12494).
+    if matches!(
+        id,
+        "edit.transform.splitWarpCrosswise" | "edit.transform.splitWarpHorizontally" | "edit.transform.splitWarpVertically" | "edit.transform.removeWarpSplit"
+    ) && !crate::transform_tool::warps_active_layer(app)
+    {
+        return true;
+    }
+    // Remove Warp Split takes out a split line of the open grid; with none (a single patch, as
+    // the engine's `Split::Remove` sees it) there is nothing to remove.
+    if id == "edit.transform.removeWarpSplit"
+        && app.ui.transform.as_ref().and_then(|t| t.session.warp()).map(|w| &w.warp).is_some_and(|w| {
+            let m = w.to_mesh(1, 1);
+            m.us.len() <= 2 && m.vs.len() <= 2
+        })
+    {
+        return true;
+    }
     // Free Transform Path works on the Background too: it moves the path, not the pixels.
     let transform = id == "edit.freeTransform" || (id.starts_with("edit.transform.") && id != "edit.transform.again");
     if transform && crate::vector_ui::free_transform_path(app).is_some() {
@@ -167,8 +200,8 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
         return true;
     }
     // Only these commands depend on the selection; skip walking the layers for the rest.
-    if selection_targets(id).is_some() {
-        return disabled_for_selection(&st.doc, &st.selected_layers(), active, id);
+    if selection_targets(id).is_some() || id == "layer.new.groupFromLayers" {
+        return disabled_for_selection(&st.doc, st.selected_layers(), active, id);
     }
     disabled_for(&st.doc, active, id)
 }
@@ -184,87 +217,129 @@ mod tests {
         s
     }
 
-    fn off(s: &photocraft_engine::Session, id: &str) -> bool {
-        let st = s.active().unwrap();
-        disabled_for(&st.doc, st.active_layer.and_then(|a| st.doc.layer(a)), id)
+    type Setup = fn(&mut photocraft_engine::Session);
+
+    fn layer_of(r: serde_json::Value) -> LayerId {
+        LayerId(r["layer"].as_u64().unwrap())
     }
 
-    #[test]
-    fn background_greys_styles_masks_and_transforms() {
-        let mut s = session();
-        for id in [
-            "layer.layerStyle.dropShadow",
-            "layer.layerMask.revealAll",
-            "layer.arrange.bringForward",
-            "layer.mergeDown",
-            "edit.freeTransform",
-            "edit.transform.scale",
-            "layer.flattenImage",
-            "layer.mergeVisible",
-            "layer.createClippingMask",
-            "layer.rasterize.layer",
-            "layer.combineShapes.unite",
-            "layer.delete.hiddenLayers",
-        ] {
-            assert!(off(&s, id), "{id} should be greyed on a lone Background");
-        }
-        assert!(!off(&s, "layer.layerStyle.globalLight"));
-        // A selection makes Free Transform available on the Background.
+    fn lone_background(_: &mut photocraft_engine::Session) {}
+
+    fn background_with_selection(s: &mut photocraft_engine::Session) {
         s.execute("select.all", json!({})).unwrap();
-        assert!(!off(&s, "edit.freeTransform"));
-        // So does a targeted alpha channel, which transforms instead of the Background (#2835).
-        s.execute("select.deselect", json!({})).unwrap();
+    }
+
+    /// A targeted alpha channel transforms instead of the Background (#2835).
+    fn background_with_alpha_target(s: &mut photocraft_engine::Session) {
         s.execute("channel.new", json!({})).unwrap();
         s.execute("channel.target", json!({"channel": 0})).unwrap();
-        let app = crate::PhotocraftApp::new(s, crate::Services::default());
-        assert!(!disabled(&app, "edit.freeTransform") && !disabled(&app, "edit.transform.flipHorizontal"));
     }
 
-    /// Photoshop treats Content-Aware Scale like Free Transform: on the Background it needs a
-    /// selection, and then scales the selected pixels.
-    #[test]
-    fn content_aware_scale_on_the_background_needs_a_selection() {
-        let mut s = session();
-        assert!(off(&s, "edit.contentAwareScale"));
-        s.execute("select.all", json!({})).unwrap();
-        assert!(!off(&s, "edit.contentAwareScale"));
-        let mut app = crate::PhotocraftApp::new(s, crate::Services::default());
-        assert!(!disabled(&app, "edit.contentAwareScale"));
-        let r = app.session.execute("edit.contentAwareScale", json!({"scaleX": 70})).unwrap();
-        assert_eq!(r["to"], json!([14, 20]));
-        // A normal layer takes it without a selection.
-        app.session.execute("select.deselect", json!({})).unwrap();
-        app.session.execute("layer.new.layer", json!({})).unwrap();
-        assert!(!disabled(&app, "edit.contentAwareScale"));
-    }
-
-    /// With several layers selected, Rasterize is judged by the whole selection, not by the layer
-    /// that happens to be active (or was right-clicked).
-    #[test]
-    fn rasterize_follows_the_whole_selection() {
-        let mut s = session();
+    fn plain_layer(s: &mut photocraft_engine::Session) {
         s.execute("layer.new.layer", json!({})).unwrap();
-        let raster = s.active().unwrap().active_layer.unwrap();
-        let text = photocraft_doc::LayerId(s.execute("type.create", json!({"text": "Hi", "size": 12, "x": 2, "y": 12})).unwrap()["layer"].as_u64().unwrap());
-        let sel = |s: &photocraft_engine::Session, ids: &[photocraft_doc::LayerId], id: &str| {
-            let st = s.active().unwrap();
-            disabled_for_selection(&st.doc, ids, ids.last().and_then(|a| st.doc.layer(*a)), id)
-        };
-        // The raster layer is active, but the type layer in the selection can be rasterized.
-        let ids = [text, raster];
-        assert!(!sel(&s, &ids, "layer.rasterize.layer"));
-        assert!(!sel(&s, &ids, "layer.rasterize.type"));
-        assert!(sel(&s, &ids, "layer.rasterize.shape"), "no shape layer is selected");
-        assert!(sel(&s, &ids, "layer.rasterize.smartObject"));
-        // Nothing selected can be rasterized: greyed, as for a single raster layer.
+    }
+
+    /// A type layer and a raster layer selected, the raster layer active.
+    fn type_and_raster(s: &mut photocraft_engine::Session) {
+        let raster = layer_of(s.execute("layer.new.layer", json!({})).unwrap());
+        let text = layer_of(s.execute("type.create", json!({"text": "Hi", "size": 12, "x": 2, "y": 12})).unwrap());
+        s.execute("layer.select", json!({"layer": text.0})).unwrap();
+        s.execute("layer.select", json!({"layer": raster.0, "mode": "add"})).unwrap();
+    }
+
+    fn background_and_raster(s: &mut photocraft_engine::Session) {
         let bg = s.active().unwrap().doc.layers[0].id;
-        assert!(sel(&s, &[bg, raster], "layer.rasterize.layer"));
-        // One selected layer is judged by itself, and other commands are not affected.
-        assert!(sel(&s, &[raster], "layer.rasterize.layer") && !sel(&s, &[text], "layer.rasterize.layer"));
-        let st = s.active().unwrap();
-        let active = ids.last().and_then(|a| st.doc.layer(*a));
-        for id in ["layer.layerStyle.dropShadow", "layer.mergeDown", "layer.rasterize.vectorMask"] {
-            assert_eq!(sel(&s, &ids, id), disabled_for(&st.doc, active, id), "{id}: decided by the active layer, as before");
+        let raster = layer_of(s.execute("layer.new.layer", json!({})).unwrap());
+        s.execute("layer.select", json!({"layer": bg.0})).unwrap();
+        s.execute("layer.select", json!({"layer": raster.0, "mode": "add"})).unwrap();
+    }
+
+    /// Three layers, the first two linked, the first selected (#11217).
+    fn linked_layer_selected(s: &mut photocraft_engine::Session) -> LayerId {
+        let a = layer_of(s.execute("layer.new.layer", json!({})).unwrap());
+        let b = layer_of(s.execute("layer.new.layer", json!({})).unwrap());
+        let c = layer_of(s.execute("layer.new.layer", json!({})).unwrap());
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        s.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+        assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+        s.execute("layer.select", json!({"layer": a.0})).unwrap();
+        c
+    }
+
+    fn linked_partner(s: &mut photocraft_engine::Session) {
+        linked_layer_selected(s);
+    }
+
+    fn unlinked_layer(s: &mut photocraft_engine::Session) {
+        let c = linked_layer_selected(s);
+        s.execute("layer.select", json!({"layer": c.0})).unwrap();
+    }
+
+    /// Document state → command → greyed, through the menu's own `disabled`.
+    #[test]
+    fn enable_rules_follow_the_document() {
+        type Case<'a> = (&'a str, Setup, &'a [(&'a str, bool)]);
+        let cases: &[Case<'_>] = &[
+            (
+                "a lone Background greys styles, masks, arranging, merges and transforms",
+                lone_background,
+                &[
+                    ("layer.layerStyle.dropShadow", true),
+                    ("layer.layerMask.revealAll", true),
+                    ("layer.arrange.bringForward", true),
+                    ("layer.mergeDown", true),
+                    ("edit.freeTransform", true),
+                    ("edit.transform.scale", true),
+                    ("edit.contentAwareScale", true),
+                    ("layer.flattenImage", true),
+                    ("layer.mergeVisible", true),
+                    ("layer.createClippingMask", true),
+                    ("layer.rasterize.layer", true),
+                    ("layer.combineShapes.unite", true),
+                    ("layer.delete.hiddenLayers", true),
+                    ("layer.layerStyle.globalLight", false),
+                ],
+            ),
+            ("a selection frees the Background's transforms", background_with_selection, &[("edit.freeTransform", false), ("edit.contentAwareScale", false)]),
+            (
+                "a targeted alpha channel transforms instead of the Background",
+                background_with_alpha_target,
+                &[("edit.freeTransform", false), ("edit.transform.flipHorizontal", false)],
+            ),
+            ("a normal layer takes Content-Aware Scale without a selection", plain_layer, &[("edit.contentAwareScale", false)]),
+            (
+                "Rasterize follows the whole selection, not the active layer",
+                type_and_raster,
+                &[("layer.rasterize.layer", false), ("layer.rasterize.type", false), ("layer.rasterize.shape", true), ("layer.rasterize.smartObject", true)],
+            ),
+            ("nothing selected can be rasterized", background_and_raster, &[("layer.rasterize.layer", true)]),
+            (
+                "a layer with linked partners does not warp",
+                linked_partner,
+                &[("edit.transform.warp", true), ("edit.freeTransform", false), ("edit.transform.distort", false)],
+            ),
+            ("an unlinked layer warps", unlinked_layer, &[("edit.transform.warp", false)]),
+            (
+                "an ordinary layer keeps its items",
+                plain_layer,
+                &[
+                    ("layer.layerStyle.dropShadow", false),
+                    ("layer.layerMask.revealAll", false),
+                    ("layer.mergeDown", false),
+                    ("edit.freeTransform", false),
+                    ("layer.flattenImage", false),
+                    ("layer.rasterize.type", true),
+                    ("layer.layerStyle.copyLayerStyle", true),
+                ],
+            ),
+        ];
+        for (name, setup, wants) in cases {
+            let mut s = session();
+            setup(&mut s);
+            let app = crate::PhotocraftApp::new(s, crate::Services::default());
+            for (id, greyed) in *wants {
+                assert_eq!(disabled(&app, id), *greyed, "{name}: {id}");
+            }
         }
     }
 
@@ -359,10 +434,16 @@ mod tests {
         let mut checked = 0;
         for sel in selections {
             for copied in [false, true] {
+                // `is_enabled` only reads the app, so one app per world answers for every command; each command then
+                // runs on a world of its own. A copied style is read by Paste Layer Style alone (the engine's
+                // `style_clipboard`), so the other commands run without it only (#15652).
+                let app = crate::PhotocraftApp::new(world(sel, copied), crate::Services::default());
                 for (cmd, must_change) in commands {
-                    let app = crate::PhotocraftApp::new(world(sel, copied), crate::Services::default());
+                    if copied && cmd != "layer.layerStyle.pasteLayerStyle" {
+                        continue;
+                    }
                     let enabled = crate::menus::is_enabled(&app, cmd);
-                    let mut s = app.session;
+                    let mut s = world(sel, copied);
                     let before = fingerprint(&s);
                     let r = s.execute(cmd, json!({}));
                     let changed = fingerprint(&s) != before;
@@ -382,38 +463,55 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, selections.len() * 2 * commands.len());
+        assert_eq!(checked, selections.len() * (commands.len() + 1));
     }
 
-    /// #11217 review: one linked layer selected opens a box over its link group, which refuses
-    /// Warp, so the menu greys Warp the same way it does for several selected layers; an unlinked
-    /// layer keeps it.
+    /// #13293: on a lone Background, Group from Layers… and Load Selection… are greyed, as in the
+    /// reference. A pixel selection doesn't change that; a saved selection enables Load Selection….
     #[test]
-    fn warp_is_greyed_for_a_layer_with_linked_partners() {
-        let mut s = session();
-        let id = |r: serde_json::Value| photocraft_doc::LayerId(r["layer"].as_u64().unwrap());
-        let a = id(s.execute("layer.new.layer", json!({})).unwrap());
-        let b = id(s.execute("layer.new.layer", json!({})).unwrap());
-        let c = id(s.execute("layer.new.layer", json!({})).unwrap());
-        s.execute("layer.select", json!({"layer": a.0})).unwrap();
-        s.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
-        assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
-        s.execute("layer.select", json!({"layer": a.0})).unwrap();
-        let mut app = crate::PhotocraftApp::new(s, crate::Services::default());
-        assert!(disabled(&app, "edit.transform.warp"), "a linked layer warps with its partner: not available");
-        assert!(!disabled(&app, "edit.freeTransform") && !disabled(&app, "edit.transform.distort"), "the box itself is");
-        app.session.execute("layer.select", json!({"layer": c.0})).unwrap();
-        assert!(!disabled(&app, "edit.transform.warp"), "an unlinked layer warps");
-    }
-
-    #[test]
-    fn ordinary_layers_keep_their_items() {
-        let mut s = session();
-        s.execute("layer.new.layer", json!({})).unwrap();
-        for id in ["layer.layerStyle.dropShadow", "layer.layerMask.revealAll", "layer.mergeDown", "edit.freeTransform", "layer.flattenImage"] {
-            assert!(!off(&s, id), "{id}");
+    fn a_lone_background_greys_group_from_layers_and_load_selection() {
+        let mut app = crate::PhotocraftApp::new(session(), crate::Services::default());
+        for id in ["layer.new.groupFromLayers", "select.loadSelection"] {
+            assert!(!crate::menus::is_enabled(&app, id), "{id} is greyed on a lone Background");
         }
-        assert!(off(&s, "layer.rasterize.type"));
-        assert!(off(&s, "layer.layerStyle.copyLayerStyle"));
+        app.session.execute("select.rect", json!({"x": 2, "y": 2, "width": 8, "height": 8})).unwrap();
+        for id in ["layer.new.groupFromLayers", "select.loadSelection"] {
+            assert!(!crate::menus::is_enabled(&app, id), "{id} is greyed with a pixel selection");
+        }
+        app.session.execute("select.saveSelection", json!({"name": "Keep"})).unwrap();
+        app.session.execute("select.deselect", json!({})).unwrap();
+        assert!(crate::menus::is_enabled(&app, "select.loadSelection"), "a saved selection can be loaded");
+        assert!(!crate::menus::is_enabled(&app, "layer.new.groupFromLayers"), "the Background still can't be grouped");
+        // The command itself still loads, as a Ctrl-click on a channel does.
+        let mut s = session();
+        s.execute("select.loadSelection", json!({"channel": "red"})).unwrap();
+    }
+
+    /// #13293: where they apply, both rows stay live: a plain layer, and a document with more than
+    /// the Background or with Quick Mask on. Group from Layers… stays greyed whenever the Background
+    /// is among the selected layers (#12866).
+    #[test]
+    fn group_from_layers_and_load_selection_stay_live_where_they_apply() {
+        let mut s = session();
+        let bg = s.active().unwrap().doc.layers[0].id;
+        let layer = photocraft_doc::LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+        let mut app = crate::PhotocraftApp::new(s, crate::Services::default());
+        let on = |app: &crate::PhotocraftApp, id: &str| crate::menus::is_enabled(app, id);
+        assert!(on(&app, "layer.new.groupFromLayers") && on(&app, "select.loadSelection"), "a plain layer");
+        app.session.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
+        assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
+        assert!(!on(&app, "layer.new.groupFromLayers"), "the Background with another layer selected (#12866)");
+        app.session.execute("layer.select", json!({"layer": bg.0})).unwrap();
+        assert!(!on(&app, "layer.new.groupFromLayers"), "the Background alone");
+        assert!(on(&app, "select.loadSelection"), "another layer's transparency can be loaded");
+        app.session.execute("layer.select", json!({"layer": layer.0})).unwrap();
+        app.session.execute("layer.delete", json!({})).unwrap();
+        assert!(!on(&app, "select.loadSelection"));
+        app.session.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        assert!(on(&app, "select.loadSelection"), "Quick Mask keeps today's state");
     }
 }
+
+#[cfg(test)]
+#[path = "warp_split_enable_tests.rs"]
+mod warp_split_enable_tests;

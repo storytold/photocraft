@@ -41,7 +41,7 @@ pub fn tip_outline(b: &BrushSettings, full: bool) -> Option<Vec<Vec<[f32; 2]>>> 
     let ro = b.roundness.clamp(0.0, 1.0).max(0.5 / (b.size / 2.0)).min(1.0);
     let (sn, cs) = b.angle.to_radians().sin_cos();
     let (fx, fy) = (if b.flip_x { -1.0 } else { 1.0 }, if b.flip_y { -1.0 } else { 1.0 });
-    match &b.tip {
+    match &*b.tip {
         TipShape::Round => {
             // The normal cursor is the 50 % contour, matching the plain-circle path (#2744):
             // the soft tip falls off as (1 - t²)⁴, not the old smoothstep midpoint.
@@ -117,12 +117,14 @@ fn plain_dab(b: &BrushSettings) -> Dab {
 }
 
 /// The box `BrushContext::dab_rect` gives `dab`, an aliased dab of `b` (bounded for rendering),
-/// without building the context: it reaches the radius from the centre, or for a sampled tip √2
-/// times it, the corners of its bitmap turned. Roundness, angle and the bitmap's aspect don't
-/// change it.
+/// without building the context's mipmaps.
 fn aliased_dab_rect(b: &BrushSettings, dab: &Dab) -> Rect {
-    let sampled = b.tip.bitmap().is_some_and(GrayTile::is_valid);
-    rect_around(dab, if sampled { dab.radius * std::f32::consts::SQRT_2 } else { dab.radius })
+    let tip = b.tip.bitmap().filter(|g| g.is_valid());
+    let square = rect_around(dab, if tip.is_some() { dab.radius * std::f32::consts::SQRT_2 } else { dab.radius });
+    match tip {
+        Some(g) => crate::render::trim_sampled_dab_rect(square, (g.width as usize, g.height as usize), dab, false),
+        None => square,
+    }
 }
 
 /// The boundary of the pixels of `rect` that `cov` (row-major) covers, as the rings
@@ -446,12 +448,12 @@ mod tests {
             let (dx, dy) = (x as f32 - 15.5, y as f32 - 15.5);
             (1.0 - (dx * dx + dy * dy).sqrt() / 16.0).clamp(0.0, 1.0)
         });
-        let b = BrushSettings { size: 20.0, tip: TipShape::Sampled(disc), ..Default::default() };
+        let b = BrushSettings { size: 20.0, tip: TipShape::Sampled(disc).into(), ..Default::default() };
         let rings = tip_outline(&b, false).expect("a sampled disc traces");
         assert!(rings.iter().all(|r| r.len() >= 3));
         assert!(rings.iter().flatten().all(|p| p[0].is_finite() && p[1].is_finite() && p[0].hypot(p[1]) <= 1.001));
         let blank = GrayTile::from_fn(8, 8, |_, _| 0.0);
-        let b = BrushSettings { size: 20.0, tip: TipShape::Sampled(blank), ..Default::default() };
+        let b = BrushSettings { size: 20.0, tip: TipShape::Sampled(blank).into(), ..Default::default() };
         assert!(tip_outline(&b, false).is_none());
     }
 
@@ -571,13 +573,13 @@ mod tests {
             BrushSettings { size: 8.0, roundness: 0.4, angle: -70.0, flip_y: true, ..Default::default() },
             // So thin and turned 45°: a diagonal of pixels touching only at their corners.
             BrushSettings { size: 9.0, roundness: 0.01, angle: 45.0, ..Default::default() },
-            BrushSettings { size: 12.0, tip: TipShape::Sampled(ring_tip()), ..Default::default() },
+            BrushSettings { size: 12.0, tip: TipShape::Sampled(ring_tip()).into(), ..Default::default() },
             BrushSettings { size: 5.0, square: true, ..Default::default() },
             BrushSettings { size: 4.0, square: true, angle: 30.0, roundness: 0.5, ..Default::default() },
         ]);
         let formats = [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F];
         for b in &brushes {
-            let what = format!("{} px, roundness {}, angle {}, sampled {}, square {}", b.size, b.roundness, b.angle, b.tip != TipShape::Round, b.square);
+            let what = format!("{} px, roundness {}, angle {}, sampled {}, square {}", b.size, b.roundness, b.angle, *b.tip != TipShape::Round, b.square);
             for at in [[20.3, 15.6], [20.8, 15.2], [-7.5, 3.0], [0.0, -0.5], [13.5, 13.49]] {
                 let (want, _) = placed(b, at).unwrap_or_else(|| panic!("{what}: no outline"));
                 for fmt in formats {
@@ -605,7 +607,7 @@ mod tests {
         assert!(aliased_outline(&BrushSettings { size: 5000.0, ..Default::default() }).is_none());
         assert!(aliased_outline(&BrushSettings { size: 9.0, angle: f32::NAN, ..Default::default() }).is_none());
         let blank = GrayTile::from_fn(8, 8, |_, _| 0.0);
-        assert!(aliased_outline(&BrushSettings { size: 9.0, tip: TipShape::Sampled(blank), ..Default::default() }).is_none());
+        assert!(aliased_outline(&BrushSettings { size: 9.0, tip: TipShape::Sampled(blank).into(), ..Default::default() }).is_none());
         for v in [f32::NAN, f32::INFINITY, -1.0, 1e9] {
             let _ = aliased_outline(&BrushSettings { size: 9.0, roundness: v, angle: v, ..Default::default() });
         }
@@ -621,7 +623,7 @@ mod tests {
     /// right only for a dab that paints nothing.
     fn mismatch(b: &BrushSettings, at: [f64; 2], fmt: PixelFormat) -> Option<String> {
         let what = || {
-            let (flips, sampled) = ((b.flip_x, b.flip_y), b.tip != TipShape::Round);
+            let (flips, sampled) = ((b.flip_x, b.flip_y), *b.tip != TipShape::Round);
             format!("size {} roundness {} angle {} flips {flips:?} square {} sampled {sampled} at {at:?} {fmt:?}", b.size, b.roundness, b.angle, b.square)
         };
         let (got, count) = painted(b, at, fmt, reach(b.size));
@@ -680,7 +682,7 @@ mod tests {
             BrushSettings { size: 1.0, ..Default::default() },
             BrushSettings { size: 4.0, ..Default::default() },
             BrushSettings { size: 9.0, roundness: 0.5, angle: 30.0, ..Default::default() },
-            BrushSettings { size: 14.0, tip: TipShape::Sampled(l_tip()), angle: 70.0, flip_x: true, ..Default::default() },
+            BrushSettings { size: 14.0, tip: TipShape::Sampled(l_tip()).into(), angle: 70.0, flip_x: true, ..Default::default() },
             BrushSettings { size: 6.0, square: true, ..Default::default() },
         ];
         let mut fails = Vec::new();
@@ -717,7 +719,7 @@ mod tests {
                 for angle in [0.0, 17.0, 90.0, 135.0, 180.0, 270.0, -60.0] {
                     for roundness in [1.0, 0.6, 0.25] {
                         for (flip_x, flip_y) in [(false, false), (true, false), (false, true), (true, true)] {
-                            let b = BrushSettings { size, angle, roundness, flip_x, flip_y, tip: TipShape::Sampled(tip.clone()), ..Default::default() };
+                            let b = BrushSettings { size, angle, roundness, flip_x, flip_y, tip: TipShape::Sampled(tip.clone()).into(), ..Default::default() };
                             for at in [[20.3, 15.6], [20.8, 15.2], [-3.5, -0.5]] {
                                 fails.extend(mismatch(&b, at, PixelFormat::RGBA8));
                             }
@@ -751,7 +753,7 @@ mod tests {
             let roundness = if rng.below(3) == 0 { 1.0 } else { 0.01 + rng.unit() * 0.99 };
             let angle = if rng.below(4) == 0 { [0.0, 90.0, -90.0, 45.0, 180.0, 360.0][rng.below(6) as usize] } else { rng.unit() * 800.0 - 400.0 };
             let (flip_x, flip_y, square) = (rng.below(2) == 0, rng.below(2) == 0, rng.below(10) == 0);
-            let b = BrushSettings { size, roundness, angle, flip_x, flip_y, square, tip, ..Default::default() };
+            let b = BrushSettings { size, roundness, angle, flip_x, flip_y, square, tip: tip.into(), ..Default::default() };
             let frac = [0.0, 0.5, 0.25, 0.75, 0.999, 0.001, f64::from(rng.unit())];
             let mut coord = || rng.below(80) as f64 - 40.0 + frac[rng.below(frac.len() as u64) as usize];
             let at = [coord(), coord()];
@@ -819,7 +821,7 @@ mod tests {
         for (name, tip) in &tips {
             for &size in &sizes {
                 for (roundness, angle, flip_x, square) in [(1.0, 0.0, false, false), (0.2, 30.0, true, false), (0.5, -110.0, false, true)] {
-                    let b = BrushSettings { size, roundness, angle, flip_x, square, aliased: true, tip: tip.clone(), ..Default::default() };
+                    let b = BrushSettings { size, roundness, angle, flip_x, square, aliased: true, tip: tip.clone().into(), ..Default::default() };
                     let b = b.bounded_for_render();
                     let dab = plain_dab(&b);
                     let (early, exact) = (aliased_dab_rect(&b, &dab), BrushContext::new(&b).dab_rect(&dab, false));
@@ -831,12 +833,12 @@ mod tests {
         }
         assert!(fails.is_empty(), "{} boxes differ:\n{}", fails.len(), fails.join("\n"));
         let fits = |tip: &TipShape, size: f32| {
-            let b = BrushSettings { size, aliased: true, tip: tip.clone(), ..Default::default() };
+            let b = BrushSettings { size, aliased: true, tip: tip.clone().into(), ..Default::default() };
             let r = aliased_dab_rect(&b, &plain_dab(&b));
             r.width().max(r.height()) <= MAX_ALIASED_SIDE
         };
-        for (name, tip, last) in [("round", TipShape::Round, 508.0), ("sampled", TipShape::Sampled(l_tip()), 359.0)] {
-            let b = |size: f32| BrushSettings { size, tip: tip.clone(), ..Default::default() };
+        for (name, tip, last) in [("round", TipShape::Round, 508.0), ("sampled", TipShape::Sampled(l_tip()), 460.0)] {
+            let b = |size: f32| BrushSettings { size, tip: tip.clone().into(), ..Default::default() };
             assert!(fits(&tip, last) && aliased_outline(&b(last)).is_some(), "{name} tip at {last} px");
             assert!(!fits(&tip, last + 1.0) && aliased_outline(&b(last + 1.0)).is_none(), "{name} tip at {} px", last + 1.0);
         }
@@ -860,7 +862,7 @@ mod tests {
         }
         // An empty bitmap, and one whose data doesn't fit its size.
         for tip in [GrayTile { width: 0, height: 0, data: Vec::new().into() }, GrayTile { width: 4, height: 4, data: vec![u16::MAX; 3].into() }] {
-            fails.extend(mismatch(&BrushSettings { size: 9.0, tip: TipShape::Sampled(tip), ..Default::default() }, [5.3, -2.7], PixelFormat::RGBA8));
+            fails.extend(mismatch(&BrushSettings { size: 9.0, tip: TipShape::Sampled(tip).into(), ..Default::default() }, [5.3, -2.7], PixelFormat::RGBA8));
         }
         assert!(fails.is_empty(), "{} mismatches:\n{}", fails.len(), fails.join("\n"));
     }

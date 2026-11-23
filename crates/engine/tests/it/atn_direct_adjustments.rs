@@ -1,9 +1,11 @@
 //! Recorded direct Gradient Map and Replace Color forms from #10603 / #10607.
-use photocraft_engine::{Session, atn_cmds};
-use photocraft_psd::{
+use craft_psd::{
     atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem},
     descriptor::{Descriptor, Id, UnicodeString, Value as D},
 };
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::actions_cmds::{ActionList, ActionStep, ActionsFile};
+use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
 
 fn enumeration(kind: &str, value: &str) -> D {
@@ -70,24 +72,24 @@ fn load(event: [u8; 4], descriptor: Descriptor, command: &str) -> Session {
     let bytes = bytes(event, descriptor);
     let report = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
     assert_eq!(report["unsupported"], json!([]), "recorded {} must map to {command}", String::from_utf8_lossy(&event));
-    assert_eq!(s.actions.list[0].steps[0].0, command);
+    assert_eq!(s.actions().list.actions()[0].steps[0].command, command);
     s
 }
 
 #[test]
 fn recorded_grmp_imports_as_direct_gradient_map() {
     let s = load(*b"GrMp", gradient(), "image.adjustments.gradientMap");
-    assert_eq!(s.actions.list[0].steps[0].1["stops"], json!([[0, [0, 0, 1]], [1, [1, 0, 0]]]));
+    assert_eq!(s.actions().list.actions()[0].steps[0].params["stops"], json!([[0, [0, 0, 1]], [1, [1, 0, 0]]]));
 }
 
 #[test]
 fn recorded_rplc_imports_as_direct_replace_color() {
     let s = load(*b"RplC", replace(), "image.adjustments.replaceColor");
-    assert_eq!(s.actions.list[0].steps[0].1["hue"], json!(30));
+    assert_eq!(s.actions().list.actions()[0].steps[0].params["hue"], json!(30));
 }
 
 fn saved(s: &Session) -> AtnItem {
-    let refs = s.actions.list.iter().collect::<Vec<_>>();
+    let refs = s.actions().list.actions().iter().collect::<Vec<_>>();
     let (bytes, skipped) = atn_cmds::export("Direct adjustments", &refs, &[], false).unwrap();
     assert!(skipped.is_empty());
     atn::parse(&bytes).unwrap().actions.remove(0).items.remove(0)
@@ -189,13 +191,13 @@ fn fractional_gradient_changes_pixels_and_preserves_selection_and_undo() {
         let mut direct = fixture("rgb", depth);
         direct.execute("select.rect", json!({"x":0,"y":0,"width":3,"height":1})).unwrap();
         let original = raw(&direct);
-        direct.execute("image.adjustments.gradientMap", imported.actions[0].steps[0].1.clone()).unwrap();
+        direct.execute("image.adjustments.gradientMap", imported.actions[0].steps[0].params.clone()).unwrap();
         let expected = raw(&direct);
         assert_ne!(expected, original);
         assert_eq!(&expected[12..], &original[12..], "outside the selection");
         let mut replay = fixture("rgb", depth);
         replay.execute("select.rect", json!({"x":0,"y":0,"width":3,"height":1})).unwrap();
-        replay.actions.list = imported.actions;
+        replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         play(&mut replay);
         assert_eq!(raw(&replay), expected);
         assert!(replay.undo());
@@ -293,7 +295,7 @@ fn kept(event: [u8; 4], d: Descriptor) {
     let imported = atn_cmds::import(&bytes(event, d.clone())).unwrap();
     assert_eq!(imported.unsupported.len(), 1, "{d:?}");
     let mut s = Session::new();
-    s.actions.list = imported.actions;
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     assert_eq!(saved(&s).descriptor, Some(d));
 }
 
@@ -338,10 +340,15 @@ fn invalid_replace_descriptors_and_lossy_exports_are_refused() {
         kept(*b"RplC", d);
     }
     let mut s = load(*b"GrMp", gradient(), "image.adjustments.gradientMap");
-    s.actions.list[0].steps[0].1["stops"][0][1][0] = json!(0.2);
-    assert!(atn_cmds::export("Direct adjustments", &[&s.actions.list[0]], &[], false).is_err(), "stale color metadata must not fall through to GdMp");
+    let mut stale = s.actions().list.actions()[0].steps[0].clone();
+    stale.params["stops"][0][1][0] = json!(0.2);
+    s.actions_mut().list.replace_step(0, 0, stale).unwrap();
+    assert!(
+        atn_cmds::export("Direct adjustments", &[&s.actions().list.actions()[0]], &[], false).is_err(),
+        "stale color metadata must not fall through to GdMp"
+    );
     for p in [json!({"color":"#ff0000"}), json!({"labMinimum":[40,0,0],"labMaximum":[60,0,0],"hue":0.5})] {
-        let a = photocraft_engine::actions_cmds::Action::new("Native", vec![("image.adjustments.replaceColor".into(), p)]);
+        let a = photocraft_engine::actions_cmds::Action::new("Native", vec![ActionStep::new("image.adjustments.replaceColor", p)]);
         assert!(atn_cmds::export("Direct adjustments", &[&a], &[], false).is_err());
     }
 }
@@ -362,18 +369,18 @@ fn recorded_replace_color_clamps_shifts_and_plays_the_lab_box_at_every_depth() {
         d.items[5].1 = D::Integer(250);
         let imported = atn_cmds::import(&bytes(*b"RplC", d)).unwrap();
         assert!(imported.unsupported.is_empty());
-        assert_eq!(imported.actions[0].steps[0].1["fuzziness"], 0);
-        assert_eq!(imported.actions[0].steps[0].1["lightness"], 100);
+        assert_eq!(imported.actions[0].steps[0].params["fuzziness"], 0);
+        assert_eq!(imported.actions[0].steps[0].params["lightness"], 100);
         let mut s = fixture("lab", depth);
         set_lab_pixels(&mut s);
         s.execute("select.rect", json!({"x":1,"y":0,"width":1,"height":1})).unwrap();
         if inverse {
             let mut mask = photocraft_raster::Surface::with_default(photocraft_doc::PixelFormat::GRAY8, &[1.0]);
             mask.fill_rect(photocraft_doc::Rect::new(1, 0, 2, 1), &[0.0]);
-            std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(mask);
+            std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).selection = Some(mask);
         }
         let before = raw(&s);
-        s.actions.list = imported.actions;
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         play(&mut s);
         let after = raw(&s);
         if inverse {
@@ -395,7 +402,7 @@ fn recorded_replace_color_clamps_shifts_and_plays_the_lab_box_at_every_depth() {
 /// Matching uses original Lab/CMYK channels and tagged RGB rather than display-converted samples.
 #[test]
 fn lab_matching_uses_native_channels_and_the_embedded_rgb_profile() {
-    use photocraft_cms::{Builtin, Transform, TransformOptions};
+    use craft_cms::{Builtin, Transform, TransformOptions};
     for depth in [8, 16, 32] {
         for (mode, profile) in [("rgb", Builtin::DisplayP3), ("gray", Builtin::SGray), ("cmyk", Builtin::CoatedCmyk), ("lab", Builtin::LabD50)] {
             let mut s = fixture(mode, depth);
@@ -412,7 +419,7 @@ fn lab_matching_uses_native_channels_and_the_embedded_rgb_profile() {
             // not the command's profile resolver or its new matching helper.
             let t = Transform::with_options(profile.profile(), Builtin::LabD50.profile(), TransformOptions::default()).unwrap();
             let mut lab = [[0.0, 0.0, 0.0, 1.0]; 4];
-            t.convert_f32(&before, format.channels(), lab.as_flattened_mut(), 4, true);
+            t.convert_f32(&before, format.channels(), lab.as_flattened_mut(), 4, true).unwrap();
             let center = [lab[1][0] as f64 * 100.0, lab[1][1] as f64 * 255.0 - 128.0, lab[1][2] as f64 * 255.0 - 128.0];
             let lo = center.map(|v| v - 0.2);
             let hi = center.map(|v| v + 0.2);
@@ -612,7 +619,7 @@ fn legacy_rgb_replace_color_and_ordinary_gradient_exports_are_unchanged() {
     assert_eq!(raw(&s), expected.as_flattened());
     let action = photocraft_engine::actions_cmds::Action::new(
         "Ordinary",
-        vec![("image.adjustments.gradientMap".into(), json!({"stops":[[0,"#000000"],[1,"#ffffff"]]}))],
+        vec![ActionStep::new("image.adjustments.gradientMap", json!({"stops":[[0,"#000000"],[1,"#ffffff"]]}))],
     );
     let (b, _) = atn_cmds::export("Ordinary", &[&action], &[], false).unwrap();
     assert_eq!(

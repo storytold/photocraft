@@ -215,13 +215,15 @@ pub fn handle_pointer_message(message: u32, w_param: usize, pen_flags: impl FnOn
     CONTACT_END.store(encode_end(next.contact), Ordering::Relaxed);
 }
 
+/// `GetPointerPenInfo`'s pen flags for a pointer (`None`: not a pen).
 fn read_pen_flags(pointer_id: u32) -> Option<u32> {
     // SAFETY: `info` is a stack-allocated buffer initialized to zero that outlives the call, and
     // `pointer_id` comes from a WM_POINTER message; an unknown id makes the call fail, not crash.
-    unsafe {
+    let info = unsafe {
         let mut info: POINTER_PEN_INFO = std::mem::zeroed();
-        (GetPointerPenInfo(pointer_id, &mut info) != 0).then_some(info.pen_flags)
-    }
+        (GetPointerPenInfo(pointer_id, &mut info) != 0).then_some(info)
+    }?;
+    Some(info.pen_flags)
 }
 
 /// `WH_GETMESSAGE`: the posted pointer messages, as the UI thread takes them from its queue.

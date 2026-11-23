@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType as CSample};
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
+use photocraft_doc::{AlphaChannel, ColorIndices, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{AllocationError, Interrupt, PruneCursor, RowWriteError, Surface};
 
 use crate::renderer::{BandRenderer, RenderError};
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
+use crate::{BmpBits, ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
@@ -127,6 +127,9 @@ fn import_flat_impl_with_options(
         }
     };
     apply_flat_format(&mut r, bytes, format, img.as_ref())?;
+    if format == Some(Format::Png) {
+        read_png_indices(&mut r, bytes, ctl)?;
+    }
     Ok(r)
 }
 
@@ -237,7 +240,9 @@ impl FlatBuilder {
     }
 
     /// The document, after copying and pruning whatever is left: the one-shot result and the last
-    /// step of a stepped one.
+    /// step of a stepped one. Like the one-shot import, it records how many images the file holds
+    /// when the decoder read only the first, so Save doesn't write over the rest (#5733). A palette
+    /// PNG's indices are left to [`PngIndices`].
     pub(crate) fn finish(mut self, bytes: &[u8], format: Option<Format>) -> Result<ImportResult, IoError> {
         let copied = self.copy_done();
         while !self.copy_done() {
@@ -251,14 +256,141 @@ impl FlatBuilder {
         let Self { name, img, mode, depth, surface, warnings, .. } = self;
         let (w, h) = img.dimensions();
         let mut r = flat_document(&name, (w, h, img.layout(), mode, depth), surface, img.icc.clone(), &img.meta, warnings, Some(&img))?;
+        r.document.file_encoding.source_images = source_images(&img.warnings);
         apply_flat_format(&mut r, bytes, format, Some(&img))?;
         Ok(r)
     }
 }
 
+/// Each pixel's palette index in the palette PNG `bytes`, opened as `doc`, read again a band of
+/// rows per [`PngIndices::step`], so Color Table can tell entries of one colour apart (#14342).
+/// No indices, and Color Table falls back to the nearest entry, when the document's one layer
+/// doesn't show each pixel's entry at the file's place for it (an EXIF orientation turned the
+/// pixels, which colours alone can't show when entries repeat, or a colour conversion changed
+/// them), or when the file is interlaced (not read here). One row at a time, into tiles one band
+/// of rows at a time: next to the layer, only the indices themselves (a byte per pixel) and one
+/// band are held. None either when memory can't hold them: the open's own memory check didn't
+/// count them.
+pub(crate) struct PngIndices<B: AsRef<[u8]>> {
+    reader: png::Reader<std::io::Cursor<B>>,
+    table: photocraft_doc::ColorTable,
+    layer: photocraft_doc::LayerId,
+    surface: Surface,
+    map: Surface,
+    band: Vec<u8>,
+    shown: Vec<[u8; 4]>,
+    bits: usize,
+    width: u32,
+    height: i32,
+    y: i32,
+}
+
+impl<B: AsRef<[u8]>> PngIndices<B> {
+    /// Starts reading `bytes` for `doc`'s indices; `None` when they can't be recorded, or needn't
+    /// be.
+    pub(crate) fn new(bytes: B, doc: &Document) -> Option<Self> {
+        let table = doc.color_table.as_ref()?;
+        // Only entries that share a colour need the file. When every entry has its own colour,
+        // each pixel's colour names its entry and Color Table's nearest entry finds it, so the
+        // pass over all the file's rows is skipped.
+        let mut colors = table.colors.clone();
+        colors.sort_unstable();
+        if !colors.windows(2).any(|w| w[0] == w[1]) {
+            return None;
+        }
+        let [layer] = doc.layers.as_slice() else { return None };
+        let surface = layer.surface()?;
+        let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+        decoder.set_transformations(png::Transformations::IDENTITY);
+        decoder.set_ignore_text_chunk(true);
+        let reader = decoder.read_info().ok()?;
+        let info = reader.info();
+        let (w, h, bits) = (info.width, info.height, info.bit_depth as usize);
+        if info.color_type != png::ColorType::Indexed || info.interlaced || !matches!(bits, 1 | 2 | 4 | 8) || (w, h) != (doc.size.width, doc.size.height) {
+            return None;
+        }
+        let width = usize::try_from(w).ok()?;
+        let band_len = width.checked_mul(usize::try_from(TILE_SIZE).ok()?)?;
+        // The index surface's whole tiles, the band, and the row of the layer read beside it.
+        let needed = tile_bytes(w, h, 1).saturating_add(u64::from(w).saturating_mul(TILE_SIZE as u64 + 4));
+        crate::memory::check_fits(w, h, needed, crate::memory::available()).ok()?;
+        let mut band = Vec::new();
+        band.try_reserve_exact(band_len).ok()?;
+        let mut shown = Vec::new();
+        shown.try_reserve_exact(width).ok()?;
+        shown.resize(width, [0u8; 4]);
+        Some(Self {
+            reader,
+            table: table.clone(),
+            layer: layer.id,
+            surface: surface.clone(),
+            map: Surface::new(PixelFormat::GRAY8),
+            band,
+            shown,
+            bits,
+            width: w,
+            height: i32::try_from(h).ok()?,
+            y: 0,
+        })
+    }
+
+    /// Reads the next band of rows into the indices: `Some(true)` once every row is read (then
+    /// [`Self::finish`]), `Some(false)` while rows are left, `None` when no indices can be recorded.
+    pub(crate) fn step(&mut self) -> Option<bool> {
+        let Self { reader, table, surface, map, band, shown, bits, width, height, y, .. } = self;
+        let (bits, w, band_y) = (*bits, *width, *y);
+        while *y < *height && *y - band_y < TILE_SIZE {
+            let row = reader.next_row().ok()??;
+            surface.read_rgba8_into(Rect::from_xywh(0, *y, w, 1), shown);
+            for (x, px) in shown.iter().enumerate() {
+                let bit = x * bits;
+                let byte = *row.data().get(bit / 8)?;
+                let i = (byte >> (8 - bits - bit % 8)) & (0xff >> (8 - bits));
+                let entry = table.colors.get(usize::from(i))?;
+                let ok = if px[3] == 0 { table.transparent == Some(i) } else { px[..3] == entry[..] };
+                if !ok {
+                    return None;
+                }
+                band.push(i);
+            }
+            *y += 1;
+        }
+        map.try_write_interleaved(Rect::from_xywh(0, band_y, w, u32::try_from(*y - band_y).ok()?), band).ok()?;
+        band.clear();
+        Some(*y == *height)
+    }
+
+    /// The indices, once [`Self::step`] has read every row.
+    pub(crate) fn finish(mut self) -> Option<ColorIndices> {
+        // An eXIf after the pixels counts too.
+        self.reader.finish().ok()?;
+        if self.reader.info().exif_metadata.as_deref().is_some_and(|e| codecs::exif_orientation(e) != 1) || self.y != self.height {
+            return None;
+        }
+        Some(ColorIndices { layer: self.layer, pixels: self.surface, indices: self.map })
+    }
+}
+
+/// The indices of a palette PNG opened as `r` (see [`PngIndices`]), read with a cancel check
+/// between bands of rows.
+fn read_png_indices(r: &mut ImportResult, bytes: &[u8], ctl: &Interrupt) -> Result<(), IoError> {
+    let Some(mut read) = PngIndices::new(bytes, &r.document) else { return Ok(()) };
+    loop {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        match read.step() {
+            Some(false) => {}
+            Some(true) => break,
+            None => return Ok(()),
+        }
+    }
+    r.document.color_indices = read.finish();
+    Ok(())
+}
+
 /// What every flat format does to the document of its pixels: the palette mode, the save
 /// settings, a Targa's alpha channel and the profile an untagged image needs. `img` is the
-/// decoded image, when the document was built from one (a streamed PNG has none).
+/// decoded image, when the document was built from one (a streamed PNG has none). A palette
+/// PNG's indices are read after it, by [`PngIndices`], which a stepped import can step.
 pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Option<Format>, img: Option<&Image>) -> Result<(), IoError> {
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
     // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
@@ -274,7 +406,9 @@ pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Opti
         r.document.mode = ColorMode::Indexed;
         r.document.color_table = Some(photocraft_doc::ColorTable { colors, transparent });
     }
-    r.document.file_encoding = file_encoding_as(format, bytes);
+    // The decoder's count of frames or pages left out (set above) stays alongside the encoding.
+    let encoding = file_encoding_as(format, bytes);
+    r.document.file_encoding = photocraft_doc::FileEncoding { source_images: r.document.file_encoding.source_images.or(encoding.source_images), ..encoding };
     if format == Some(Format::Tga) && img.is_some_and(|i| i.layout() == ChannelLayout::Rgba) {
         tga_alpha_to_channel(&mut r.document)?;
     }
@@ -284,8 +418,8 @@ pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Opti
     let d = &mut r.document;
     if d.icc_profile.is_none() && matches!(format, Some(Format::OpenExr | Format::Hdr)) {
         d.icc_profile = match d.mode {
-            ColorMode::Rgb => Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes()),
-            ColorMode::Grayscale => Some(photocraft_cms::builtin::linear_gray().to_bytes()),
+            ColorMode::Rgb => Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes()),
+            ColorMode::Grayscale => Some(craft_cms::builtin::linear_gray().to_bytes()),
             _ => None,
         };
     }
@@ -308,7 +442,7 @@ pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Opti
 fn hdr_fallback(img: &Image) -> Option<(Arc<Vec<u8>>, String)> {
     let c = img.cicp.filter(|c| c.is_hdr() && img.sample_type().is_float())?;
     let warning = format!("the HDR colour primaries (H.273 code {}) aren't supported; the image is read as linear sRGB", c.primaries);
-    Some((photocraft_cms::Builtin::LinearSrgb.profile().to_bytes(), warning))
+    Some((craft_cms::Builtin::LinearSrgb.profile().to_bytes(), warning))
 }
 
 /// The profile a HEIF's `nclx` colour description stands for, when the file has no ICC profile
@@ -323,29 +457,47 @@ fn cicp_profile(img: &Image) -> Option<Arc<Vec<u8>>> {
     }
     // Unspecified primaries on an HDR image: BT.2100's, which PQ and HLG are defined with.
     let primaries = if c.primaries == 2 && c.is_hdr() { 9 } else { c.primaries };
-    photocraft_cms::builtin::cicp_rgb(primaries, c.transfer, linear).map(|p| p.to_bytes())
+    craft_cms::builtin::cicp_rgb(primaries, c.transfer, linear).map(|p| p.to_bytes())
+}
+
+/// A frame import: the frames handed to the caller's callback and the decoder's warnings that
+/// survived salvaging (#11113). A GIF or WebP truncated after some frames decodes those frames
+/// with [`codecs::DecodeWarning::Truncated`] on the first; the caller must disclose that the
+/// animation is incomplete rather than report a plain success.
+#[derive(Debug, Default)]
+pub struct FramesImport {
+    pub frames: usize,
+    pub warnings: Vec<String>,
 }
 
 /// Every frame of a GIF as a single-layer document, handed to `each` in order with its delay in
 /// milliseconds (a still GIF has one). One frame at a time becomes a document, so the caller
-/// can flatten and drop it. Returns the number of frames; stops at the first error `each` gives.
-pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+/// can flatten and drop it. Returns the frame count and any decoder warnings; stops at the
+/// first error `each` gives.
+pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
     import_frames(name, codecs::decode_gif_frames(bytes, &codecs::DecodeOptions::default())?, each)
 }
 
 /// Every frame of a WebP as a single-layer document, as [`import_gif_frames`] does for a GIF: an
 /// animation's frames composited onto its canvas, with their durations in milliseconds; a still
 /// WebP is one frame.
-pub fn import_webp_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+pub fn import_webp_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
     import_frames(name, codecs::decode_webp_frames(bytes, &codecs::DecodeOptions::default())?, each)
 }
 
-fn import_frames(name: &str, frames: Vec<codecs::AnimationFrame>, each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+fn import_frames(name: &str, frames: Vec<codecs::AnimationFrame>, each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<FramesImport, IoError> {
     let n = frames.len();
+    let mut warnings = Vec::new();
     for f in frames {
-        each(image_to_document(name, &f.image)?.document, f.delay_ms)?;
+        let r = image_to_document(name, &f.image)?;
+        for w in r.warnings {
+            if !warnings.contains(&w) {
+                warnings.push(w);
+            }
+        }
+        each(r.document, f.delay_ms)?;
     }
-    Ok(n)
+    Ok(FramesImport { frames: n, warnings })
 }
 
 /// The lossy settings `bytes` were encoded with, for File › Save to keep: a JPEG's quality
@@ -370,6 +522,11 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
             }
             None => {}
         },
+        // An icon file's directory count (ICONDIR: reserved, type, count, little-endian); the
+        // decoder opens one of its sizes.
+        Some(Format::Ico) => {
+            e.source_images = bytes.get(4..6).and_then(|c| <[u8; 2]>::try_from(c).ok()).map(|c| u32::from(u16::from_le_bytes(c))).filter(|&n| n > 1);
+        }
         _ => {}
     }
     e
@@ -501,7 +658,14 @@ pub fn import_tiff_page_with_options(
         drop(bands);
         return import_tiff_with_extras(name, bytes, page, opts, ctl);
     }
-    tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES, ctl)
+    let mut r = tiff_to_document(name, bands.upright(), crate::memory::available, BAND_BYTES, ctl)?;
+    // A 1-bit black-and-white TIFF opens in Bitmap mode, as in Photoshop (#10480); like a
+    // Bitmap PSD, its pixels are kept as gray. Its one sample has no extra samples beside it,
+    // so it always opens here.
+    if r.document.mode == ColorMode::Grayscale && tiff_is_bilevel(bytes, page) {
+        r.document.mode = ColorMode::Bitmap;
+    }
+    Ok(r)
 }
 
 /// A layered TIFF page: its layer tag and resources are read into a plan, the plan's estimate is
@@ -539,6 +703,7 @@ fn import_tiff_layered(
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut r = crate::tiff_layers::import_layered(name, &img, plan, ctl)?;
+    r.document.file_encoding.source_images = r.document.file_encoding.source_images.or(source_images(&img.warnings));
     if orientation != 1 {
         r.warnings.push("the TIFF's orientation tag was ignored so the layers stay aligned with the image".to_string());
     }
@@ -599,6 +764,15 @@ fn import_tiff_with_extras(
     };
     ctl.check().map_err(|_| IoError::Cancelled)?;
     image_to_document(name, &img.oriented(orientation)?)
+}
+
+/// Whether the TIFF page that opens (`page`, else the default one) is bilevel: one 1-bit sample
+/// per pixel, black-and-white (PhotometricInterpretation 0 or 1).
+fn tiff_is_bilevel(bytes: &[u8], page: Option<usize>) -> bool {
+    let Ok(info) = codecs::tiff_info(bytes) else { return false };
+    page.or_else(|| info.default_page())
+        .and_then(|i| info.pages.get(i))
+        .is_some_and(|p| p.bits_per_sample == 1 && p.samples_per_pixel == 1 && matches!(p.photometric, Some(0 | 1)))
 }
 
 /// A flat TIFF page as a single-layer document, decoded a group of rows at a time into the
@@ -663,7 +837,9 @@ fn tiff_to_document(
     let mut warnings: Vec<String> = bands.warnings.iter().map(ToString::to_string).collect();
     warnings.extend(f.warning.clone());
     let meta = std::mem::take(&mut bands.meta);
-    Ok(single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings))
+    let mut r = single_layer_document(name, (w, h), f, layout.has_alpha(), s, bands.icc.take(), meta, warnings);
+    r.document.file_encoding.source_images = source_images(&bands.warnings);
+    Ok(r)
 }
 
 /// The bytes of a layer's tiles holding a `w` × `h` image of `bpp` bytes a pixel: tiles are whole
@@ -798,7 +974,22 @@ fn image_to_document_with_memory(name: &str, img: &Image, ctl: &Interrupt, avail
     }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.95);
-    flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))
+    let mut r = flat_document(name, (w, h, img.layout(), mode, depth), s, img.icc.clone(), &img.meta, warnings, Some(img))?;
+    r.document.file_encoding.source_images = source_images(&img.warnings);
+    Ok(r)
+}
+
+/// How many frames, pages, parts or entries the file holds when the decoder read only one of
+/// them (`u32::MAX` when it couldn't count them), so Save doesn't write the document back over
+/// all of them (#5733).
+fn source_images(warnings: &[codecs::DecodeWarning]) -> Option<u32> {
+    warnings.iter().find_map(|w| match *w {
+        codecs::DecodeWarning::MoreFrames { total } | codecs::DecodeWarning::MorePages { total } | codecs::DecodeWarning::MoreParts { total } => {
+            Some(total.unwrap_or(u32::MAX))
+        }
+        codecs::DecodeWarning::MoreElements { total } => Some(total),
+        _ => None,
+    })
 }
 
 /// What the decoder noticed (frames or pages left out, data ending early) and the conversion
@@ -866,7 +1057,7 @@ fn flat_document(
         warnings.extend(crate::unequal_resolution_warning(f64::from(x), f64::from(y)));
     }
     // Guides in the Photoshop resources a JPEG (APP13) or TIFF carries: resource 1032.
-    let guides = meta.photoshop_resources.as_deref().and_then(|r| photocraft_psd::tiff::resources_from_bytes(r).ok());
+    let guides = meta.photoshop_resources.as_deref().and_then(|r| craft_psd::tiff::resources_from_bytes(r).ok());
     if let Some(g) = guides.as_ref().and_then(|(res, _)| res.iter().find(|r| r.id == 1032)) {
         crate::psd_import::parse_guides(&g.data, &mut doc);
     }
@@ -972,12 +1163,16 @@ impl PngStream {
         self.surface.prune_cursor()
     }
 
-    /// The document of the layer, with the profile and metadata the file ended with.
+    /// The document of the layer, with the profile and metadata the file ended with, and the
+    /// count of images the file holds when the decoder read only the first (an animated PNG's
+    /// frames), so Save doesn't write one image over all of them (#5733).
     pub(crate) fn into_document(self, name: &str, extras: codecs::PngExtras) -> Result<ImportResult, IoError> {
         let Self { surface, header, .. } = self;
         let (mode, _, depth, _) = flat_target(header.layout, header.sample);
         let warnings = extras.warnings.iter().map(ToString::to_string).collect();
-        flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)
+        let mut r = flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)?;
+        r.document.file_encoding.source_images = source_images(&extras.warnings);
+        Ok(r)
     }
 }
 
@@ -1076,7 +1271,7 @@ fn single_layer_document(
         warnings.extend(crate::unequal_resolution_warning(f64::from(x), f64::from(y)));
     }
     // Guides in the Photoshop resources a JPEG (APP13) or TIFF carries: resource 1032.
-    let guides = meta.photoshop_resources.as_deref().and_then(|r| photocraft_psd::tiff::resources_from_bytes(r).ok());
+    let guides = meta.photoshop_resources.as_deref().and_then(|r| craft_psd::tiff::resources_from_bytes(r).ok());
     if let Some(g) = guides.as_ref().and_then(|(res, _)| res.iter().find(|r| r.id == 1032)) {
         crate::psd_import::parse_guides(&g.data, &mut doc);
     }
@@ -1396,7 +1591,7 @@ impl<'a> FlatSource<'a> {
             // A CMYK target is written as CMYK with the document's own profile (#2220), which it
             // therefore needs; RGB-only targets keep the compositor's own handling (built-in
             // coated CMYK when the embedded profile is unusable).
-            use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
+            use craft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
             let profile = match doc.icc_profile.as_ref() {
                 Some(bytes) => Profile::parse(bytes).map_err(|e| IoError::Unsupported(format!("invalid CMYK composite profile: {e}")))?,
                 None => Builtin::CoatedCmyk.profile().clone(),
@@ -1424,7 +1619,7 @@ impl<'a> FlatSource<'a> {
             // RGB-only targets use the sRGB composite directly, without separating CMYK; the
             // compositor renders Lab documents in sRGB. Either way the file is tagged sRGB.
             warnings.push(format!("{:?} composite written as sRGB RGB (colour-managed conversion)", fmt.mode));
-            icc = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes().to_vec());
+            icc = Some(craft_cms::Builtin::Srgb.profile().to_bytes().to_vec());
         }
         let mode = if fmt.mode == ColorMode::Grayscale { ColorMode::Grayscale } else { ColorMode::Rgb };
         Ok(Self { doc, native: None, mode, sample, inks: false, space: None, icc, rows: 0 })
@@ -1622,8 +1817,9 @@ fn compact_alpha(data: &mut Vec<u8>, color: usize, alpha: usize) {
     data.truncate(n * color);
 }
 
-/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy).
-pub(crate) fn opaque_surface(s: &Surface, r: Rect) -> bool {
+/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy). `s` must
+/// have an alpha channel.
+pub fn opaque_surface(s: &Surface, r: Rect) -> bool {
     let fmt = s.format();
     let (ch, bps) = (fmt.channels(), fmt.sample.bytes());
     let a = ch - 1;
@@ -1672,12 +1868,12 @@ pub fn export_flat_with_renderer(
     ctl: &photocraft_raster::Interrupt,
     mut renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
-    if let Some(mut r) = export_mode_specific(doc, format, opts)? {
-        // Palette PNG/BMP and Duotone exports render on their own paths before the renderer
+    if let Some(mut r) = export_mode_specific(doc, format, opts, ctl)? {
+        // Palette PNG/BMP/GIF and Duotone exports render on their own paths before the renderer
         // branch: say so, or `--gpu` would silently do nothing for them.
         if let Some(renderer) = &mut renderer {
             let why = match doc.mode {
-                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP export uses the CPU compositor",
+                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP/GIF export uses the CPU compositor",
                 ColorMode::Duotone => "Duotone export uses the CPU compositor",
                 _ => "this export uses the CPU compositor",
             };
@@ -1702,6 +1898,9 @@ pub fn export_flat_with_renderer(
                 let mut img = prepare_flat(img, format, &mut warnings)?;
                 if format == Format::Tga {
                     img = tga_image(doc, img, opts.tga_bits, opts.preserve_alpha, &mut warnings)?;
+                }
+                if format == Format::Bmp {
+                    img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
                 }
                 if format == Format::Dds {
                     img = dds_image(doc, img, &mut warnings)?;
@@ -1753,6 +1952,9 @@ pub fn export_flat_with_renderer(
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, opts.preserve_alpha, &mut warnings)?;
     }
+    if format == Format::Bmp {
+        img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
+    }
     if format == Format::Dds {
         img = dds_image(doc, img, &mut warnings)?;
     }
@@ -1776,7 +1978,7 @@ fn strip_xmp(meta: &mut codecs::Metadata, opts: &ExportOptions) {
 /// format without CMYK, colours converted to what an untagged file means. Pixel by pixel, so a
 /// band of rows gets what the whole image would (and the same warnings).
 fn prepare_flat(mut img: Image, format: Format, warnings: &mut Vec<String>) -> Result<Image, IoError> {
-    use photocraft_cms::{Builtin, Intent};
+    use craft_cms::{Builtin, Intent};
     if img.layout().has_alpha() && !format.caps().alpha {
         // Flattened over white, as saving a transparent document without transparency does.
         img = matte_over_white(&img)?;
@@ -1791,7 +1993,7 @@ fn prepare_flat(mut img: Image, format: Format, warnings: &mut Vec<String>) -> R
         // see [`import_flat`]).
         if let Some(linear) = convert_rgb(&img, Builtin::LinearSrgb.profile(), Intent::RelativeColorimetric, false, CSample::F32)? {
             img = linear;
-        } else if let Some(linear) = convert_gray(&img, photocraft_cms::builtin::linear_gray(), CSample::F32)? {
+        } else if let Some(linear) = convert_gray(&img, craft_cms::builtin::linear_gray(), CSample::F32)? {
             img = linear;
         }
     } else if !format.caps().icc || (img.layout().is_gray() && !format.caps().layouts.iter().any(|l| l.is_gray())) {
@@ -2057,6 +2259,29 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, preserve_alpha: 
     }
 }
 
+/// The image an RGB BMP of `bits` per pixel holds: 24 composites a transparent image over white,
+/// 32 gives an opaque image an opaque alpha; `None` keeps the image (32 with transparency, else
+/// 24). Grayscale images are written as they are. 16 bits is refused: the encoder has no 16-bit
+/// BMP.
+fn bmp_image(img: Image, bits: Option<BmpBits>, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    let Some(bits) = bits else { return Ok(img) };
+    if !img.layout().is_rgb() {
+        warnings.push(format!("{}-bit BMP applies to RGB images; the grayscale image is written as it is", bits.bits()));
+        return Ok(img);
+    }
+    match bits {
+        BmpBits::Bits16 => Err(IoError::Unsupported("16-bit BMP is not supported yet; use 24 or 32 bits".into())),
+        BmpBits::Bits24 if img.layout().has_alpha() => {
+            warnings.push("transparency composited over white; a 24-bit BMP has no alpha".into());
+            matte_over_white(&img)
+        }
+        BmpBits::Bits32 if !img.layout().has_alpha() => {
+            map_bands(&img, ChannelLayout::Rgba, img.sample_type(), |vals| vals.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 1.0]).collect())
+        }
+        _ => Ok(img),
+    }
+}
+
 /// The image a DDS texture holds (#8563): as with a 32-bit Targa, the document's alpha channel
 /// becomes the texture's alpha when it has exactly one (spot channels don't count), the colours
 /// composited over white where the layers are transparent; BC1 keeps it as on/off, BC2 and BC3
@@ -2162,8 +2387,8 @@ fn matte_over_white(img: &Image) -> Result<Image, IoError> {
 
 /// RGB pixels converted from their profile (sRGB when untagged) to `dst`, unclamped, untagged and
 /// stored as `sample`. `None` when the image isn't RGB or already holds `dst`'s colours.
-fn convert_rgb(img: &Image, dst: &photocraft_cms::Profile, intent: photocraft_cms::Intent, bpc: bool, sample: CSample) -> Result<Option<Image>, IoError> {
-    use photocraft_cms::{Builtin, ColorSpace, Profile};
+fn convert_rgb(img: &Image, dst: &craft_cms::Profile, intent: craft_cms::Intent, bpc: bool, sample: CSample) -> Result<Option<Image>, IoError> {
+    use craft_cms::{Builtin, ColorSpace, Profile};
     if !img.layout().is_rgb() {
         return Ok(None);
     }
@@ -2174,8 +2399,8 @@ fn convert_rgb(img: &Image, dst: &photocraft_cms::Profile, intent: photocraft_cm
 
 /// Gray pixels converted from their profile (sGray when untagged) to `dst`, unclamped, untagged
 /// and stored as `sample`. `None` when the image isn't gray or already holds `dst`'s colours.
-fn convert_gray(img: &Image, dst: &photocraft_cms::Profile, sample: CSample) -> Result<Option<Image>, IoError> {
-    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile};
+fn convert_gray(img: &Image, dst: &craft_cms::Profile, sample: CSample) -> Result<Option<Image>, IoError> {
+    use craft_cms::{Builtin, ColorSpace, Intent, Profile};
     if !matches!(img.layout(), ChannelLayout::Gray | ChannelLayout::GrayA) {
         return Ok(None);
     }
@@ -2187,28 +2412,35 @@ fn convert_gray(img: &Image, dst: &photocraft_cms::Profile, sample: CSample) -> 
 /// `img`'s pixels converted from `src` to `dst` (see [`convert_rgb`]).
 fn convert_from(
     img: &Image,
-    src: &photocraft_cms::Profile,
-    dst: &photocraft_cms::Profile,
-    intent: photocraft_cms::Intent,
+    src: &craft_cms::Profile,
+    dst: &craft_cms::Profile,
+    intent: craft_cms::Intent,
     bpc: bool,
     sample: CSample,
 ) -> Result<Option<Image>, IoError> {
     if src.same_colors(dst) {
         return Ok(None);
     }
-    let t = photocraft_cms::Transform::new(src, dst, intent, bpc).map_err(|e| IoError::Unsupported(e.to_string()))?;
+    let t = craft_cms::Transform::new(src, dst, intent, bpc).map_err(|e| IoError::Unsupported(e.to_string()))?;
     let stride = img.layout().channels();
+    // The band closure cannot return an error, so a refused conversion is kept for after it.
+    let refused = std::cell::RefCell::new(None);
     let out = map_bands(img, img.layout(), sample, |mut vals| {
-        t.apply(&mut vals, stride);
+        if let Err(e) = t.apply(&mut vals, stride) {
+            *refused.borrow_mut() = Some(e.to_string());
+        }
         vals
     })?;
+    if let Some(e) = refused.into_inner() {
+        return Err(IoError::Unsupported(e));
+    }
     Ok(Some(out.with_icc(None)))
 }
 
 /// Colour-managed CMYK → sRGB for formats that cannot store CMYK (the document's embedded
 /// CMYK profile when it parses, else the built-in coated CMYK; relative colorimetric + BPC).
 fn cmyk_image_to_srgb(img: &Image) -> Result<Image, IoError> {
-    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
+    use craft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
     let src = img
         .icc
         .as_ref()
@@ -2252,25 +2484,57 @@ fn cmyk_image_to_srgb(img: &Image) -> Result<Image, IoError> {
         vals.extend(Image::from_raw(w, n as u32, img.layout(), img.sample_type(), rows.to_vec())?.to_normalized());
         dst_band.clear();
         dst_band.resize(n * row * ds, 0.0);
-        t.convert_f32(&vals, ss, &mut dst_band, ds, true);
+        t.convert_f32(&vals, ss, &mut dst_band, ds, true).map_err(|e| IoError::Unsupported(e.to_string()))?;
         out.extend_from_slice(&dst_band);
     }
     Ok(Image::from_normalized(w, h, layout, sample, &out)?.with_icc(Some(dst.to_bytes().to_vec())).with_meta(img.meta.clone()))
 }
 
-/// Indexed Color → PNG-8 or an 8-bit BMP with its colour table; Duotone → the inks rendered as RGB.
-fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) -> Result<Option<ExportResult>, IoError> {
+/// The metadata a GIF cannot hold, worded as the generic encoder's fidelity warnings word it.
+/// The indexed route encodes straight from the document instead of through [`encode_image`], so it
+/// has to report what that check would have warned about.
+fn gif_dropped_metadata(doc: &Document, opts: &ExportOptions) -> Vec<String> {
+    let mut w = Vec::new();
+    if !opts.encode.embed_metadata {
+        return w;
+    }
+    if doc.icc_profile.is_some() && opts.encode.embed_icc {
+        w.push("ICC profile not supported; it will be dropped".into());
+    }
+    if doc.metadata.exif.is_some() {
+        w.push("EXIF not supported; it will be dropped".into());
+    }
+    // Export As ▸ Metadata: None already dropped these before the generic encoder got to say so.
+    if opts.xmp != XmpEmbed::None {
+        if doc.metadata.xmp.is_some() {
+            w.push("XMP not supported; it will be dropped".into());
+        }
+        if !doc.metadata.text.is_empty() {
+            w.push("text metadata not supported; it will be dropped".into());
+        }
+    }
+    w.push("resolution (DPI) not supported; it will be dropped".into());
+    w
+}
+
+/// Indexed Color → PNG-8, an 8-bit BMP or a GIF with the document's colour table; Duotone → the
+/// inks rendered as RGB.
+fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<Option<ExportResult>, IoError> {
     match doc.mode {
-        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp) => {
+        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp | Format::Gif) => {
             let Some(table) = doc.color_table.as_ref().filter(|t| !t.colors.is_empty() && t.colors.len() <= 256) else { return Ok(None) };
-            // PNG transparency belongs to a palette index, not its RGB value. Keep the
+            // PNG and GIF transparency belongs to a palette index, not its RGB value. Keep the
             // transparent entry out of opaque lookup, even when it duplicates an opaque colour.
-            let png_transparent_index = table.transparent.map(usize::from).filter(|_| format == Format::Png);
+            let transparent_index = table.transparent.map(usize::from).filter(|_| format != Format::Bmp);
             let (opaque_indices, colors): (Vec<u8>, Vec<_>) =
-                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != png_transparent_index).map(|(i, c)| (i as u8, c)).unzip();
+                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != transparent_index).map(|(i, c)| (i as u8, c)).unzip();
             let opaque = photocraft_doc::ColorTable { colors, transparent: None };
+            // This route renders and encodes on its own, so it polls `ctl` itself: before the
+            // render, per band and before the encoder (#11861 review).
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             let mut idx = try_buffer(doc.size.area() as usize, 1)?;
             photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), IoError> {
+                ctl.check().map_err(|_| IoError::Cancelled)?;
                 for p in &band.px {
                     let i = match table.transparent {
                         Some(t) if p[3] < 0.5 => t,
@@ -2282,6 +2546,7 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 }
                 Ok(())
             })?;
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             if format == Format::Bmp {
                 let bytes = codecs::encode_bmp_indexed(doc.size.width, doc.size.height, &idx, &table.colors)?;
                 let mut warnings = vec![format!("written as an 8-bit palette BMP ({} colours)", table.colors.len())];
@@ -2290,10 +2555,28 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 }
                 return Ok(Some(ExportResult { bytes, warnings }));
             }
+            if format == Format::Gif {
+                // The whole table in its original order, as the palette PNG and BMP write it: a
+                // GIF colour table holds 2^n entries, and the writer pads the ones past the
+                // document's last entry with black, so no used index moves (#11824). A
+                // transparent index past the last entry needs a slot too: pad through it, or a
+                // transparent pixel fails the export of an API-created table (#11861 review).
+                let mut colors = table.colors.clone();
+                if let Some(t) = table.transparent.filter(|t| usize::from(*t) >= colors.len()) {
+                    colors.resize(usize::from(t) + 1, [0, 0, 0]);
+                }
+                let bytes = codecs::web::encode_gif_indexed(doc.size.width, doc.size.height, &idx, &colors, table.transparent, false)?;
+                let mut warnings = vec![format!("written as a GIF with the document's colour table ({} colours)", table.colors.len())];
+                warnings.extend(gif_dropped_metadata(doc, opts));
+                return Ok(Some(ExportResult { bytes, warnings }));
+            }
             // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
             let dpi = opts.encode.embed_metadata.then_some((doc.resolution_dpi, doc.resolution_dpi));
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi, opts.encode.png_stereo)?;
             let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
+            if opts.encode.png_interlaced {
+                warnings.push("written without interlacing: the palette PNG exporter does not interlace".into());
+            }
             if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {
                 warnings.push("text metadata is not supported by the palette PNG exporter; it will be dropped".into());
             }
@@ -2318,7 +2601,7 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
 #[cfg(test)]
 mod cicp_tests {
     use super::*;
-    use photocraft_cms::{Builtin, Profile};
+    use craft_cms::{Builtin, Profile};
 
     fn tagged(sample: CSample, cicp: codecs::Cicp) -> Image {
         let mut img = Image::new(1, 1, ChannelLayout::Rgb, sample).unwrap();
@@ -2461,7 +2744,7 @@ mod tiff_banded_tests {
 #[cfg(test)]
 mod assumed_profile_tests {
     use super::*;
-    use photocraft_cms::{Builtin, Profile};
+    use craft_cms::{Builtin, Profile};
     use photocraft_color::Color;
 
     fn doc(mode: ColorMode) -> Document {
@@ -2566,7 +2849,7 @@ mod streamed_png_tests {
         let mut top = layer(&doc, &[(Rect::new(40, 100, 260, 650), &[0.2, 0.7, 0.3, 0.5])]);
         top.opacity = 0.7;
         top.blend = BlendMode::Multiply;
-        doc.layers = vec![bottom, top];
+        doc.layers = vec![bottom, top].into();
         assert!(opaque_bottom(&doc));
         for xmp in [XmpEmbed::All, XmpEmbed::None] {
             let r = same_as_whole(&doc, 256, &ExportOptions { xmp, ..Default::default() });
@@ -2579,14 +2862,14 @@ mod streamed_png_tests {
         // Transparent RGBA, opaque CMYK (written as sRGB through its profile), 16-bit gray and
         // float RGB out of range (written with 16 bits, clipped, with the warning).
         let mut rgba = Document::new("rgba", Size::new(130, 333), ColorMode::Rgb, SampleType::U8);
-        rgba.layers = vec![layer(&rgba, &[(Rect::new(10, 20, 120, 300), &[0.3, 0.6, 0.9, 0.4])])];
+        rgba.layers = vec![layer(&rgba, &[(Rect::new(10, 20, 120, 300), &[0.3, 0.6, 0.9, 0.4])])].into();
         let mut cmyk = Document::new("cmyk", Size::new(97, 211), ColorMode::Cmyk, SampleType::U8);
-        cmyk.icc_profile = Some(photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes());
-        cmyk.layers = vec![layer(&cmyk, &[(cmyk.bounds(), &[0.3, 0.6, 0.1, 0.2, 1.0]), (Rect::new(0, 50, 97, 99), &[0.0, 0.9, 0.9, 0.0, 1.0])])];
+        cmyk.icc_profile = Some(craft_cms::Builtin::CoatedCmyk.profile().to_bytes());
+        cmyk.layers = vec![layer(&cmyk, &[(cmyk.bounds(), &[0.3, 0.6, 0.1, 0.2, 1.0]), (Rect::new(0, 50, 97, 99), &[0.0, 0.9, 0.9, 0.0, 1.0])])].into();
         let mut gray = Document::new("gray", Size::new(64, 190), ColorMode::Grayscale, SampleType::U16);
-        gray.layers = vec![layer(&gray, &[(gray.bounds(), &[0.25, 1.0]), (Rect::new(0, 0, 64, 77), &[0.6123, 1.0])])];
+        gray.layers = vec![layer(&gray, &[(gray.bounds(), &[0.25, 1.0]), (Rect::new(0, 0, 64, 77), &[0.6123, 1.0])])].into();
         let mut hdr = Document::new("hdr", Size::new(50, 120), ColorMode::Rgb, SampleType::F32);
-        hdr.layers = vec![layer(&hdr, &[(hdr.bounds(), &[1.5, 0.25, -0.1, 1.0])])];
+        hdr.layers = vec![layer(&hdr, &[(hdr.bounds(), &[1.5, 0.25, -0.1, 1.0])])].into();
         for doc in [&rgba, &cmyk, &gray, &hdr] {
             assert!(single_layer(doc).is_some(), "{}", doc.name);
             same_as_whole(doc, 37, &ExportOptions::default());
@@ -2608,7 +2891,7 @@ mod streamed_png_tests {
             density: 1.0,
             feather: 0.0,
         });
-        doc.layers = vec![bottom, layer(&doc, &[(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0])])];
+        doc.layers = vec![bottom, layer(&doc, &[(Rect::new(0, 0, 40, 40), &[1.0, 0.0, 0.0, 1.0])])].into();
         assert!(!opaque_bottom(&doc));
         let whole = decoded(&export_flat(&doc, Format::Png, &ExportOptions::default()).unwrap().bytes);
         let streamed = decoded(&export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::NONE, 256).unwrap().bytes);
@@ -2626,7 +2909,7 @@ mod streamed_png_tests {
         let mut hole = layer(&doc, &[(Rect::new(8, 800, 56, 960), &[1.0, 1.0, 1.0, 1.0])]);
         hole.fill_opacity = 0.0;
         hole.advanced.knockout = photocraft_doc::Knockout::Deep;
-        doc.layers = vec![bottom, hole];
+        doc.layers = vec![bottom, hole].into();
         assert!(opaque_bottom(&doc));
         assert!(stream_png(&doc, &ExportOptions::default(), &Interrupt::NONE, false, 256, &mut 0.0).unwrap().is_none());
         let r = same_as_whole(&doc, 256, &ExportOptions::default());
@@ -2644,7 +2927,7 @@ mod streamed_png_tests {
     #[test]
     fn interlacing_is_turned_off_with_a_warning() {
         let mut doc = Document::new("interlaced", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
-        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])].into();
         let mut opts = ExportOptions::default();
         opts.encode.png_interlaced = true;
         let r = export_png_streamed(&doc, &opts, &Interrupt::NONE, 7).unwrap();
@@ -2656,7 +2939,7 @@ mod streamed_png_tests {
     #[test]
     fn a_cancelled_stream_stops_with_cancelled() {
         let mut doc = Document::new("cancel", Size::new(40, 30), ColorMode::Rgb, SampleType::U8);
-        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])];
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.5, 0.5, 0.5, 1.0])])].into();
         let yes = || true;
         let r = export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::cancel_only(&yes), 7);
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
@@ -3008,6 +3291,20 @@ mod fused_tile_tests {
     }
 
     #[test]
+    fn a_cancel_while_a_palette_png_is_read_for_its_indices_fails_the_open() {
+        // Red, white, white: two entries share a colour, so once the pixels are built the open
+        // reads the file again for each pixel's entry (#14342). A cancel raised then still counts.
+        let png = codecs::encode_png_indexed(4, 2, &[0, 1, 2, 2, 0, 1, 2, 2], &[[255, 0, 0], [255, 255, 255], [255, 255, 255]], None, None, None).unwrap();
+        let last = std::sync::Mutex::new(0.0f32);
+        let progress = |f: f32| *last.lock().unwrap() = f;
+        let pixels_built = || *last.lock().unwrap() >= 0.95;
+        let r = import_flat_with("t.png", &png, &Interrupt::new(&pixels_built, &progress));
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        let r = import_flat_with("t.png", &png, &Interrupt::NONE).unwrap();
+        assert!(r.document.color_indices.is_some(), "the file was read for its indices");
+    }
+
+    #[test]
     fn progress_is_reported_and_never_goes_backwards() {
         let bytes = codecs::encode(&pixels(64, 64, false), Format::Png, &codecs::EncodeOptions::default()).unwrap();
         let seen = std::sync::Mutex::new(Vec::new());
@@ -3032,3 +3329,99 @@ mod fused_tile_tests {
 
 #[cfg(test)]
 mod png_stream_tests;
+
+#[cfg(test)]
+mod bilevel_tiff_tests {
+    use super::*;
+
+    /// A 16×8 uncompressed TIFF with one `bits`-bit sample per pixel, PhotometricInterpretation
+    /// `photometric` (0 WhiteIsZero, 1 BlackIsZero), rows of alternating stripes.
+    fn tiff(bits: u16, photometric: u16) -> Vec<u8> {
+        tiff_pages(&[(bits, photometric)])
+    }
+
+    /// A TIFF with one 16×8 page per `(bits, photometric)`, chained through the IFDs' next
+    /// offsets: each page's IFD is followed by its strip.
+    fn tiff_pages(pages: &[(u16, u16)]) -> Vec<u8> {
+        let (w, h) = (16u32, 8u32);
+        let mut out = b"II*\0".to_vec();
+        out.extend(8u32.to_le_bytes());
+        for (i, &(bits, photometric)) in pages.iter().enumerate() {
+            let row: Vec<u8> = if bits == 1 { vec![0b1010_1010, 0b1111_0000] } else { (0..w).map(|x| if x % 2 == 0 { 255 } else { 0 }).collect() };
+            let data: Vec<u8> = (0..h).flat_map(|_| row.clone()).collect();
+            let entries: [(u16, u16, u32); 9] = [
+                (256, 3, w),
+                (257, 3, h),
+                (258, 3, u32::from(bits)),
+                (259, 3, 1),
+                (262, 3, u32::from(photometric)),
+                (273, 4, 0),
+                (277, 3, 1),
+                (278, 3, h),
+                (279, 4, data.len() as u32),
+            ];
+            let ifd_at = out.len() as u32;
+            let data_at = ifd_at + 2 + entries.len() as u32 * 12 + 4;
+            let next_ifd = if i + 1 < pages.len() { data_at + data.len() as u32 } else { 0 };
+            out.extend((entries.len() as u16).to_le_bytes());
+            for (tag, ty, value) in entries {
+                let value = if tag == 273 { data_at } else { value };
+                out.extend(tag.to_le_bytes());
+                out.extend(ty.to_le_bytes());
+                out.extend(1u32.to_le_bytes());
+                if ty == 3 {
+                    out.extend((value as u16).to_le_bytes());
+                    out.extend([0, 0]);
+                } else {
+                    out.extend(value.to_le_bytes());
+                }
+            }
+            out.extend(next_ifd.to_le_bytes());
+            out.extend(data);
+        }
+        out
+    }
+
+    /// #10480: Photoshop 2025 opens a 1-bit TIFF in Bitmap mode (`DocumentMode.BITMAP`, 1 bit);
+    /// it opened as Grayscale. An 8-bit gray TIFF stays Grayscale.
+    #[test]
+    fn a_one_bit_tiff_opens_in_bitmap_mode() {
+        let r = import_flat("bilevel.tif", &tiff(1, 1)).unwrap();
+        assert_eq!(r.document.mode, ColorMode::Bitmap);
+        let gray = import_flat("gray.tif", &tiff(8, 1)).unwrap();
+        assert_eq!(gray.document.mode, ColorMode::Grayscale);
+        // The same black and white pixels either way.
+        let px = |r: &ImportResult, x: i32| r.document.layers[0].surface().unwrap().pixel(x, 3)[0];
+        for x in 0..8 {
+            assert_eq!(px(&r, x), px(&gray, x), "x={x}");
+        }
+    }
+
+    /// A WhiteIsZero (min-is-white) 1-bit TIFF also opens in Bitmap mode, with a 0 bit white and
+    /// a 1 bit black: the same bits as the BlackIsZero file, inverted.
+    #[test]
+    fn a_min_is_white_one_bit_tiff_opens_in_bitmap_mode_inverted() {
+        let miw = import_flat("min-is-white.tif", &tiff(1, 0)).unwrap();
+        assert_eq!(miw.document.mode, ColorMode::Bitmap);
+        let mib = import_flat("min-is-black.tif", &tiff(1, 1)).unwrap();
+        let px = |r: &ImportResult, x: i32| r.document.layers[0].surface().unwrap().pixel(x, 3)[0];
+        // Row bits 1010_1010 1111_0000: a 1 bit at even x in the first byte, then four 1s, four 0s.
+        for x in 0..16 {
+            let bit = if x < 8 { x % 2 == 0 } else { x < 12 };
+            let white = if bit { 0.0 } else { 1.0 };
+            assert_eq!(px(&miw, x), white, "x={x}: bit {}", u8::from(bit));
+            assert_eq!(px(&miw, x), 1.0 - px(&mib, x), "x={x}");
+        }
+    }
+
+    /// The Bitmap check reads the page that opens: a second page that is bilevel opens in Bitmap
+    /// mode, while the 8-bit gray first page stays Grayscale.
+    #[test]
+    fn a_bilevel_second_page_opens_in_bitmap_mode() {
+        let bytes = tiff_pages(&[(8, 1), (1, 1)]);
+        let second = import_tiff_page("pages.tif", &bytes, Some(1)).unwrap();
+        assert_eq!(second.document.mode, ColorMode::Bitmap);
+        let first = import_tiff_page("pages.tif", &bytes, Some(0)).unwrap();
+        assert_eq!(first.document.mode, ColorMode::Grayscale);
+    }
+}

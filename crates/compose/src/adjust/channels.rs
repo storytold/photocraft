@@ -183,6 +183,13 @@ pub(super) fn lab_denorm(n: [f32; 3]) -> [f32; 3] {
 /// Neutral a or b as Lab surfaces store it ((0 + 128) / 255).
 pub const LAB_NEUTRAL: f32 = 128.0 / 255.0;
 
+/// Lightness-preserving neutral gray for an sRGB Gradient Map stop colour in an 8/16-bit
+/// Grayscale document: keeps the colour's CIE L* instead of Rec. 601 luma.
+pub(super) fn gray_from_srgb_lightness(c: [f32; 3]) -> [f32; 3] {
+    let l = srgb_to_lab(c)[0];
+    [lab_to_srgb([l, 0.0, 0.0])[0]; 3]
+}
+
 /// An adjustment Photoshop evaluates on a Lab document's own channels, as an operation on one
 /// pixel's stored L, a, b (normalised as Lab surfaces store them: L / 100, (a + 128) / 255,
 /// (b + 128) / 255) in a document of `depth`: Invert and Posterize (each channel), Threshold
@@ -257,7 +264,7 @@ pub(super) fn apply_lab(adj: &Adjustment, buf: &mut Buffer, depth: Option<Sample
                 std::array::from_fn(|i| (c[i] + after[i] - before[i]).clamp(0.0, 1.0))
             })
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
+        Adjustment::GradientMap { stops, reverse, dither, .. } => {
             let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {

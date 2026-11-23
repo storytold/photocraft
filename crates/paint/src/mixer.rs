@@ -3,21 +3,50 @@
 //! Model (behavioural, our own): each dab samples the canvas colour under its footprint. The pickup
 //! colour `P` moves towards it by `wet`. The deposited colour mixes the reservoir `R` (weight
 //! `amount × (1 − mix·wet)`) with the pickup (weight `mix·wet`); it lands at `flow` times the total
-//! weight. The reservoir amount drains per dab unless `load` is 100 %, so low Load strokes dry out.
+//! weight. Below 100 % Load the reservoir lasts for a length of stroke (390 px at Load 1 %, 570 px
+//! at 5 %, measured; a power law between and above), not a number of dabs: it paints at full
+//! strength that far, then the amount steps down to [`DRY_STEP`] and fades with the distance
+//! travelled ([`DRY_FADE_PX`]), so low Load strokes dry out. Load 100 % never runs out.
 //! A dry brush (`wet = 0`) paints only reservoir colour; an empty, wet brush smears canvas colour.
 
 use photocraft_raster::{Surface, from_rgba, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
-use crate::retouch::{alpha_index, apply_dab_stroke, over_native};
+use crate::retouch::{StrokeTooLarge, alpha_index, apply_dab_stroke, over_native};
 use photocraft_geom::Rect;
 
 /// Fraction of the way the pickup colour moves towards the canvas colour per dab at 100 % Wet.
 pub const PICKUP_RATE: f32 = 0.25;
 
+/// Stroke length a load lasts at Load 1 %; the reference application paints solid for about 390 px
+/// (35 px tip at 25 % spacing). Lower Load values last as long as 1 %.
+pub const SUPPLY_AT_1_PERCENT_PX: f32 = 390.0;
+/// Exponent of the supply's power law in Load, from the measured 570 px at Load 5 %.
+pub const SUPPLY_EXPONENT: f32 = 0.2357;
+/// The reservoir amount once the supply runs out: a 35 px soft tip at 25 % spacing then lays down
+/// about 68 % alpha, as measured.
+pub const DRY_STEP: f32 = 0.45;
+/// Stroke length over which a run-out load fades by a factor of e (the measured alpha falls by
+/// about × 0.85–0.88 per 30 px).
+pub const DRY_FADE_PX: f32 = 170.0;
+
+/// Stroke length a load at `load` (0..1) lasts at full strength; infinite at 100 %.
+pub fn supply_length(load: f32) -> f32 {
+    if load >= 1.0 {
+        return f32::INFINITY;
+    }
+    SUPPLY_AT_1_PERCENT_PX * (load * 100.0).max(1.0).powf(SUPPLY_EXPONENT)
+}
+
+/// The share of a full load left after `travelled` px of stroke at `load`.
+pub fn supply_left(load: f32, travelled: f32) -> f32 {
+    let length = supply_length(load);
+    if travelled < length { 1.0 } else { DRY_STEP * (-(travelled - length) / DRY_FADE_PX).exp() }
+}
+
 /// Mixer Brush options (all 0..1).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MixerSettings {
     pub wet: f32,
@@ -31,11 +60,15 @@ pub struct MixerSettings {
     pub load_after_stroke: bool,
     /// Empty the brush after each stroke (the automatic Clean option).
     pub clean_after_stroke: bool,
+    /// Load Solid Colors Only (the load menu's checkable entry, `solidColorsOnly` in
+    /// `tools.setBrush`): ⌥-click loads the one colour under the hotspot instead of the sampled tip
+    /// image (#11952). Off by default. Load Brush and the load after each stroke ignore it.
+    pub solid_colors_only: bool,
 }
 
 impl Default for MixerSettings {
     fn default() -> Self {
-        Self { wet: 0.5, load: 0.5, mix: 0.5, flow: 1.0, sample_all_layers: false, clean_after_stroke: true, load_after_stroke: true }
+        Self { wet: 0.5, load: 0.5, mix: 0.5, flow: 1.0, sample_all_layers: false, clean_after_stroke: true, load_after_stroke: true, solid_colors_only: false }
     }
 }
 
@@ -69,6 +102,13 @@ pub struct MixerState {
     /// The color recorded by the last stroke (its color) or the last Load Brush or Clean Brush
     /// (the foreground). None = no stroke, load or clean yet.
     pub color: Option<[f32; 4]>,
+    /// Stroke length travelled so far in the current stroke, in px (the load's supply is measured
+    /// in stroke length).
+    #[serde(skip)]
+    pub travelled: f32,
+    /// The last dab of the current stroke: its index and centre.
+    #[serde(skip)]
+    pub last_dab: Option<(usize, f64, f64)>,
 }
 
 impl MixerState {
@@ -171,7 +211,7 @@ pub fn apply_mixer_stroke(
     state: &mut MixerState,
     selection: Option<&Surface>,
     lock_transparency: bool,
-) -> Rect {
+) -> Result<Rect, StrokeTooLarge> {
     let fmt = target.format();
     let mut st = stroke.clone();
     st.brush.opacity = 1.0;
@@ -231,9 +271,21 @@ pub fn apply_mixer_dab_region(
         v
     };
     let res = state.reservoir.map(native);
-    let mut amount = if res.is_some() { state.amount.clamp(0.0, 1.0) } else { 0.0 };
-    let mut pickup: Option<Vec<f32>> = state.pickup.map(native);
     let (mix, flow, load) = (m.mix.clamp(0.0, 1.0), m.flow.clamp(0.0, 1.0), m.load.clamp(0.0, 1.0));
+    let mut amount = if res.is_some() { state.amount.clamp(0.0, 1.0) } else { 0.0 };
+    // The supply is a length of stroke (#11943): the dab deposits what is left at its own
+    // distance from the stroke start, the first dab at none.
+    let (x, y) = (fp.dab.center.x, fp.dab.center.y);
+    let before = match state.last_dab {
+        Some((index, ..)) if fp.index > index => state.travelled,
+        _ => 0.0,
+    };
+    let step = state.last_dab.filter(|(index, ..)| fp.index > *index).map_or(0.0, |(_, lx, ly)| (x - lx).hypot(y - ly) as f32);
+    let after = before + if step.is_finite() { step } else { 0.0 };
+    // Far enough past the supply both shares underflow to zero; the load is then simply used up.
+    let left = supply_left(load, before);
+    amount = if left > 0.0 { amount * supply_left(load, after) / left } else { 0.0 };
+    let mut pickup: Option<Vec<f32>> = state.pickup.map(native);
     let mut paint = vec![0.0f32; n];
     // Transfer › Wetness / Mix Jitter scale the settings per dab.
     let (wet, mix) = (m.effective_wet(&fp.dab), mix * fp.dab.mix.clamp(0.0, 1.0));
@@ -266,7 +318,13 @@ pub fn apply_mixer_dab_region(
             });
         }
     }
-    let wr = if res.is_some() { amount * (1.0 - mix * wet) } else { 0.0 };
+    // Nothing picked up (a transparent canvas under a clean pickup) leaves the load at full
+    // strength, as a dry dab: an empty layer does not thin the paint (#11944).
+    let wr = match (&res, &pickup) {
+        (None, _) => 0.0,
+        (Some(_), None) => amount,
+        (Some(_), Some(_)) => amount * (1.0 - mix * wet),
+    };
     let wp = if pickup.is_some() { mix * wet } else { 0.0 };
     let total = wr + wp;
     if total > 1e-6 {
@@ -307,7 +365,8 @@ pub fn apply_mixer_dab_region(
             }
         }
     }
-    amount *= 1.0 - 0.08 * (1.0 - load);
+    state.travelled = after;
+    state.last_dab = Some((fp.index, x, y));
     state.amount = amount;
     state.pickup = pickup.map(|p| to_rgba(&fmt, &p));
 }
@@ -327,12 +386,17 @@ mod tests {
 
     #[test]
     fn low_load_runs_dry_and_full_load_does_not() {
+        // The load lasts for a length of stroke (390 px at the lowest Load), so the stroke is longer
+        // than that.
+        let mut long = stroke(10.0);
+        long.points[1].x = 796.0;
         for (load, expect_dry) in [(0.0, true), (1.0, false)] {
             let mut s = Surface::new(PixelFormat::RGBA8);
             let mut st = MixerState::default();
             st.load([1.0, 0.0, 0.0, 1.0]);
-            apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings { wet: 0.0, load, mix: 0.0, flow: 1.0, ..Default::default() }, &mut st, None, false);
-            let (start, end) = (s.rgba(10, 10)[3], s.rgba(190, 10)[3]);
+            apply_mixer_stroke(&mut s, None, &long, &MixerSettings { wet: 0.0, load, mix: 0.0, flow: 1.0, ..Default::default() }, &mut st, None, false)
+                .unwrap();
+            let (start, end) = (s.rgba(10, 10)[3], s.rgba(790, 10)[3]);
             assert!(start > 0.95, "{start}");
             if expect_dry {
                 assert!(end < start * 0.6, "load {load}: {start} → {end}");
@@ -360,7 +424,8 @@ mod tests {
             &mut st,
             None,
             false,
-        );
+        )
+        .unwrap();
         // Blue is dragged into the white half.
         let c = s.rgba(115, 10);
         assert!(c[2] > c[1] + 0.05 && c[1] < 0.95, "{c:?}");
@@ -381,7 +446,7 @@ mod tests {
         // On red, the clean wet brush smears red and lays down none of the blue it was loaded with.
         let mut s = Surface::new(PixelFormat::RGBA8);
         s.fill_rect(Rect::new(0, 0, 200, 20), &[1.0, 0.0, 0.0, 1.0]);
-        apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings::default(), &mut st, None, false);
+        apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings::default(), &mut st, None, false).unwrap();
         let c = s.rgba(100, 10);
         assert!(c[0] > 0.99 && c[1] < 0.01 && c[2] < 0.01, "{c:?}");
     }
@@ -449,7 +514,7 @@ mod tests {
     fn dry_empty_brush_paints_nothing() {
         let mut s = Surface::new(PixelFormat::RGBA8);
         let mut st = MixerState::default();
-        let dmg = apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings { wet: 0.0, ..Default::default() }, &mut st, None, false);
+        let dmg = apply_mixer_stroke(&mut s, None, &stroke(10.0), &MixerSettings { wet: 0.0, ..Default::default() }, &mut st, None, false).unwrap();
         assert!(!dmg.is_empty());
         assert_eq!(s.rgba(50, 10)[3], 0.0);
     }
@@ -467,7 +532,8 @@ mod tests {
             for p in &mut k.points {
                 p.pressure = pressure;
             }
-            apply_mixer_stroke(&mut s, None, &k, &MixerSettings { wet: 1.0, load: 1.0, mix: 1.0, flow: 1.0, ..Default::default() }, &mut st, None, false);
+            apply_mixer_stroke(&mut s, None, &k, &MixerSettings { wet: 1.0, load: 1.0, mix: 1.0, flow: 1.0, ..Default::default() }, &mut st, None, false)
+                .unwrap();
             st.pickup
         };
         assert!(run(0.0).is_none());

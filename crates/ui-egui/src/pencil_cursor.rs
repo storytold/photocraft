@@ -4,11 +4,15 @@
 
 use std::sync::Arc;
 
-use egui::{CursorIcon, Painter, Pos2, Shape, Stroke, pos2, vec2};
+use craft::behavior::CanvasView;
+use craft::behavior::kurbo::Point;
+use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2};
+use photocraft_engine::prefs::PaintingCursor as PaintingPref;
 use photocraft_paint::brush::{BrushSettings, TipShape};
 use photocraft_paint::{grid_center, grid_square};
 
-use crate::canvas::ViewXform;
+use crate::PhotocraftApp;
+use crate::state::Tool;
 
 /// Closed rings of pixel corners, as `photocraft_paint::outline::aliased_outline` traces them.
 type Rings = Vec<Vec<[i32; 2]>>;
@@ -16,6 +20,11 @@ type Rings = Vec<Vec<[i32; 2]>>;
 /// Under this many points across, the cursor is too small to show where it is, so the hotspot
 /// crosshair joins it.
 const SMALL: f32 = 6.0;
+
+/// Contrast pair for the pixel-grid cursor: dark outside the filled pixels, light inside.
+fn cursor_outline() -> [Color32; 2] {
+    [Color32::from_black_alpha(160), Color32::from_white_alpha(230)]
+}
 
 #[derive(Clone)]
 struct Cached {
@@ -37,16 +46,25 @@ struct Key {
 
 impl Key {
     fn of(b: &BrushSettings) -> Self {
-        Self { tip: b.tip.clone(), size: b.size, angle: b.angle, roundness: b.roundness, flip_x: b.flip_x, flip_y: b.flip_y, square: b.square }
+        Self { tip: (*b.tip).clone(), size: b.size, angle: b.angle, roundness: b.roundness, flip_x: b.flip_x, flip_y: b.flip_y, square: b.square }
     }
     fn matches(&self, b: &BrushSettings) -> bool {
-        crate::brush_cursor::same_tip(&self.tip, &b.tip)
+        same_tip(&self.tip, &b.tip)
             && self.size == b.size
             && self.angle == b.angle
             && self.roundness == b.roundness
             && self.flip_x == b.flip_x
             && self.flip_y == b.flip_y
             && self.square == b.square
+    }
+}
+
+/// Whether two tips produce the same outline. Stored tips compare equal by key even before their
+/// full bitmap finishes loading, so also require the full-bitmap presence to match (#1843).
+pub(crate) fn same_tip(a: &TipShape, b: &TipShape) -> bool {
+    match (a, b) {
+        (TipShape::Stored(a), TipShape::Stored(b)) => a.key == b.key && a.full.is_some() == b.full.is_some(),
+        _ => a == b,
     }
 }
 
@@ -59,45 +77,89 @@ struct Lines {
     size: f32,
 }
 
-/// The Pencil's cursor with the pointer at `at` (screen): the outline of the pixels a dab there
-/// fills where [`draw`] can show them, else the tip's smooth outline. From 100 % up that is
-/// centred where the dab lands, as the outline is; below 100 % it is on the pointer, which the
-/// dab lands within half a physical pixel of. `block` is the Block-mode Eraser's square in
-/// document pixels; `centre` is Preferences › Cursors › Show Crosshair in Brush Tip.
-pub(crate) fn cursor(painter: &Painter, xf: &ViewXform, at: Pos2, brush: &BrushSettings, block: Option<f32>, centre: bool) -> CursorIcon {
-    let doc = xf.to_doc(at);
-    if let Some(size) = draw(painter, xf, doc, brush, block) {
-        // Too small to see where it is: the hotspot as well.
-        if centre || size < SMALL {
-            crate::tool_cursor::crosshair(painter, at, 4.0, 0.0);
-        }
-        return CursorIcon::None;
+/// `Some(Some(block_size))` for the Block-mode Eraser, `Some(None)` for the Pencil or Pencil-mode
+/// Eraser, and `None` for any other tool.
+fn aliased_block(app: &PhotocraftApp, tool: Tool) -> Option<Option<f32>> {
+    if crate::eraser_ui::block_mode(app, tool) {
+        return Some(Some(crate::eraser_ui::block_size(app)));
     }
-    // Where a document pixel is smaller than a physical one, the tip's smooth outline is as
-    // exact: all of a round tip, or a sampled tip's 50 % contour, where the aliased dab cuts them.
-    // A tip too big to trace is off by under a pixel at its edge.
-    let radius = (brush.size / 2.0 * xf.zoom).max(1.0);
-    let axes = crate::brush_cursor::tip_axes(xf, brush.size);
-    let (normal, mark) = (!matches!(brush.tip, TipShape::Round), centre || 2.0 * radius < SMALL);
-    // From 100 % up the dab, on the pixel grid, can be half a document pixel each way from the
-    // pointer, half a physical pixel or more (4 points at 800 %): the outline goes where it lands,
-    // as the square's circle did. It is painted, since an OS cursor bitmap can only sit on the
-    // pointer; the hotspot crosshair stays there.
-    let (cx, cy) = grid_center(doc[0], doc[1], brush.size);
-    let dab = xf.to_screen(cx, cy);
-    if whole_pixels(xf.zoom, pixels_per_point(painter)) && dab.is_finite() {
-        crate::brush_cursor::paint(painter, dab, brush, radius, axes, normal);
-        if mark {
-            crate::tool_cursor::crosshair(painter, at, 4.0, 0.0);
-        }
-        return CursorIcon::None;
+    (tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool)).then_some(None)
+}
+
+/// Whether the current preferences and painting state want the brush-tip cursor rather than a
+/// Standard tool icon, Precise crosshair, resize preview, or sample target.
+fn wants_tip_cursor(app: &PhotocraftApp, tool: Tool, painting: bool, caps_lock: bool, option: bool) -> bool {
+    if app.brush_resize.active() || caps_lock {
+        return false;
     }
-    crate::brush_cursor::cursor(painter, at, brush, radius, axes, normal, mark)
+    let prefs = &app.session.prefs().cursors;
+    if matches!(prefs.painting, PaintingPref::Standard | PaintingPref::Precise) {
+        return false;
+    }
+    if painting && prefs.show_only_crosshair_while_painting {
+        return false;
+    }
+    !crate::canvas::cursor_policy::source_target(tool, option, prefs.painting, caps_lock)
+}
+
+/// Whether [`show`] owns the cursor at screen point `at`: when `true`, the tool host hides the
+/// framework cursor so only the pixel-grid outline (and optional hotspot crosshair) is drawn.
+pub(crate) fn owns_cursor(app: &PhotocraftApp, view: &CanvasView, at: Pos2, painting: bool, caps_lock: bool, option: bool) -> bool {
+    let tool = app.ui.tool;
+    let Some(block) = aliased_block(app, tool) else { return false };
+    if !wants_tip_cursor(app, tool, painting, caps_lock, option) {
+        return false;
+    }
+    let doc = view.to_doc(at);
+    compute_lines(app.ctx(), view, [doc.x, doc.y], &app.session.tools.brush, block).is_some()
+}
+
+/// Paints the pixel-grid cursor outline over the canvas body when [`owns_cursor`] holds.
+pub(crate) fn show(ui: &mut egui::Ui, app: &PhotocraftApp, rect: Rect, view: &CanvasView, pointer: Option<Pos2>) {
+    let Some(at) = pointer.filter(|p| rect.contains(*p) && view.rect.contains(*p)) else { return };
+    let tool = app.ui.tool;
+    let Some(block) = aliased_block(app, tool) else { return };
+    let mods = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
+    if mods.cmd || crate::canvas::cursor_policy::alt_samples(tool, mods) || ui.input(|i| i.key_down(egui::Key::Space)) {
+        return;
+    }
+    let option = mods.alt || app.ui.shell.latched.alt;
+    let painting = crate::canvas::paint_tool::stroking(app).is_some();
+    if !wants_tip_cursor(app, tool, painting, app.caps_lock, option) {
+        return;
+    }
+    let doc = view.to_doc(at);
+    let painter = ui.painter().with_clip_rect(rect);
+    let Some(size) = draw(&painter, view, [doc.x, doc.y], &app.session.tools.brush, block) else { return };
+    let centre = crate::canvas::cursor_policy::brush_tip_centre(tool, option, app.session.prefs().cursors.show_crosshair_in_brush_tip);
+    if centre || size < SMALL {
+        draw_hotspot_crosshair(&painter, at, pixels_per_point(&painter));
+    }
+}
+
+/// Draws a small contrast crosshair centred on the pointer hotspot when the tip is tiny or
+/// Preferences › Cursors › Show Crosshair in Brush Tip is enabled.
+fn draw_hotspot_crosshair(painter: &Painter, at: Pos2, ppp: f32) {
+    let px = 1.0 / ppp;
+    let arm = 4.0;
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let c = pos2(snap(at.x), snap(at.y));
+    let [dark, light] = cursor_outline();
+    let outer = Stroke::new(px * 3.0, dark);
+    let inner = Stroke::new(px, light);
+    for (a, b) in [(pos2(c.x - arm, c.y), pos2(c.x + arm, c.y)), (pos2(c.x, c.y - arm), pos2(c.x, c.y + arm))] {
+        painter.line_segment([a, b], outer);
+        painter.line_segment([a, b], inner);
+    }
 }
 
 /// Physical pixels per point, or 1 when the context's figure is unusable.
 fn pixels_per_point(painter: &Painter) -> f32 {
-    let ppp = painter.ctx().pixels_per_point();
+    ctx_pixels_per_point(painter.ctx())
+}
+
+fn ctx_pixels_per_point(ctx: &egui::Context) -> f32 {
+    let ppp = ctx.pixels_per_point();
     if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 }
 }
 
@@ -108,33 +170,42 @@ fn whole_pixels(zoom: f32, ppp: f32) -> bool {
     zoom * ppp >= 1.0 - 1e-4
 }
 
-/// Draws the outline of the pixels a dab centred at document point `at` fills: `brush`'s, or with
-/// `block` the Block-mode Eraser's square of that many pixels (16 screen pixels at any zoom,
-/// #2770). Returns its larger side on screen; `None`, drawing nothing, where a document pixel is
-/// smaller than a physical one either way (below 100 %, or at 100 % with a Pixel Aspect Ratio
-/// below 1), for a tip too big or ragged to trace, or off the map.
-fn draw(painter: &Painter, xf: &ViewXform, at: [f64; 2], brush: &BrushSettings, block: Option<f32>) -> Option<f32> {
-    let ppp = pixels_per_point(painter);
+/// Computes the screen-space outline lines for the pixels a dab centred at document point `at`
+/// fills: `brush`'s, or with `block` the Block-mode Eraser's square of that many pixels (16 screen
+/// pixels at any zoom, #2770). Returns `None` where a document pixel is smaller than a physical one
+/// either way (below 100 %, or at 100 % with a Pixel Aspect Ratio below 1), for a tip too big or
+/// ragged to trace, or off the map.
+fn compute_lines(ctx: &egui::Context, view: &CanvasView, at: [f64; 2], brush: &BrushSettings, block: Option<f32>) -> Option<Lines> {
+    let ppp = ctx_pixels_per_point(ctx);
     let rings: Vec<Vec<[f32; 2]>> = match block {
         Some(size) => {
             let [x0, y0, x1, y1] = grid_square(at[0], at[1], size).map(|v| v as f32);
             vec![vec![[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]
         }
         None => {
-            if !whole_pixels(xf.zoom.min(xf.zoom_x()), ppp) {
+            let aspect = if view.aspect.is_finite() && view.aspect > 0.0 { view.aspect } else { 1.0 };
+            let min_zoom = (view.zoom * aspect.min(1.0)) as f32;
+            if !whole_pixels(min_zoom, ppp) {
                 return None;
             }
             // Traced once per brush for a dab at the origin: one at `at` fills the same pixels
             // moved by the whole pixels between their grid centres.
-            let rings = outline(painter.ctx(), brush)?;
+            let rings = outline(ctx, brush)?;
             let (cx, cy) = grid_center(at[0], at[1], brush.size);
             let (ox, oy) = grid_center(0.0, 0.0, brush.size);
             let (dx, dy) = (cx - ox, cy - oy);
             rings.iter().map(|r| r.iter().map(|&[x, y]| [x as f32 + dx, y as f32 + dy]).collect()).collect()
         }
     };
-    let lines = screen_lines(xf, &rings, ppp)?;
-    let [dark, light] = crate::theme::Tokens::cursor_outline();
+    screen_lines(view, &rings, ppp)
+}
+
+/// Draws the outline of the pixels a dab centred at document point `at` fills. Returns its larger
+/// side on screen, or `None` drawing nothing.
+fn draw(painter: &Painter, view: &CanvasView, at: [f64; 2], brush: &BrushSettings, block: Option<f32>) -> Option<f32> {
+    let lines = compute_lines(painter.ctx(), view, at, brush, block)?;
+    let ppp = pixels_per_point(painter);
+    let [dark, light] = cursor_outline();
     let px = 1.0 / ppp;
     // The dark lines first: where two filled pixels touch at a corner, the light ones stay on top.
     painter.extend(lines.dark.into_iter().map(|l| Shape::closed_line(l, Stroke::new(px, dark))));
@@ -162,14 +233,19 @@ fn outline(ctx: &egui::Context, brush: &BrushSettings) -> Option<Arc<Rings>> {
 /// for the light one, so 1-pixel strokes hug the pixels from either side. On a view that isn't
 /// turned the corners first snap to physical pixels (`ppp` per point), for crisp lines. `None`
 /// when a corner doesn't land on a finite point.
-fn screen_lines(xf: &ViewXform, rings: &[Vec<[f32; 2]>], ppp: f32) -> Option<Lines> {
-    let aligned = xf.rotation.rem_euclid(90.0) == 0.0;
+fn screen_lines(view: &CanvasView, rings: &[Vec<[f32; 2]>], ppp: f32) -> Option<Lines> {
+    if rings.is_empty() || !view.zoom.is_finite() || !view.rotation.is_finite() || !view.aspect.is_finite() {
+        return None;
+    }
+    let aligned = view.rotation.rem_euclid(90.0) == 0.0;
     let snap = |p: Pos2| if aligned { pos2((p.x * ppp).round() / ppp, (p.y * ppp).round() / ppp) } else { p };
+    let origin = view.to_screen(Point::ZERO);
     // Half a physical pixel out of the edge from `a` to `b`: its filled pixels are on its right,
     // so out is to its left, turned, flipped and stretched with the view.
     let out = |a: [f32; 2], b: [f32; 2]| {
-        let sign = |v: f32| f32::from(v > 0.0) - f32::from(v < 0.0);
-        xf.map_vec(vec2(sign(b[1] - a[1]), -sign(b[0] - a[0]))).normalized() * (0.5 / ppp)
+        let sign = |v: f32| f64::from(v > 0.0) - f64::from(v < 0.0);
+        let mapped = view.to_screen(Point::new(sign(b[1] - a[1]), -sign(b[0] - a[0]))) - origin;
+        mapped.normalized() * (0.5 / ppp)
     };
     let (mut dark, mut light) = (Vec::with_capacity(rings.len()), Vec::with_capacity(rings.len()));
     let (mut min, mut max) = (pos2(f32::INFINITY, f32::INFINITY), pos2(f32::NEG_INFINITY, f32::NEG_INFINITY));
@@ -178,7 +254,7 @@ fn screen_lines(xf: &ViewXform, rings: &[Vec<[f32; 2]>], ppp: f32) -> Option<Lin
         let (mut outer, mut inner) = (Vec::with_capacity(n), Vec::with_capacity(n));
         for (i, &c) in ring.iter().enumerate() {
             let (Some(&prev), Some(&next)) = (ring.get((i + n - 1) % n), ring.get((i + 1) % n)) else { continue };
-            let p = snap(xf.to_screen(c[0], c[1]));
+            let p = snap(view.to_screen(Point::new(f64::from(c[0]), f64::from(c[1]))));
             let o = out(prev, c) + out(c, next);
             (min, max) = (min.min(p), max.max(p));
             outer.push(p + o);
@@ -196,12 +272,15 @@ fn screen_lines(xf: &ViewXform, rings: &[Vec<[f32; 2]>], ppp: f32) -> Option<Lin
 
 #[cfg(test)]
 mod tests {
-    use egui::{Rect, Vec2};
+    use egui::{Vec2, vec2};
 
     use super::*;
 
-    fn view(zoom: f32, rotation: f32, flip: bool, aspect: f32) -> ViewXform {
-        ViewXform { rect: Rect::from_min_size(pos2(0.3, 0.7), egui::vec2(800.0, 600.0)), zoom, center: [50.2, 37.9], flip, rotation, aspect }
+    fn view(zoom: f32, rotation: f32, flip: bool, aspect: f32) -> CanvasView {
+        CanvasView::new(Rect::from_min_size(pos2(0.3, 0.7), vec2(800.0, 600.0)), Point::new(50.2, 37.9), f64::from(zoom))
+            .rotation(f64::from(rotation))
+            .flip_x(flip)
+            .aspect(f64::from(aspect))
     }
 
     /// A square of pixels is drawn where the old square cursor was (`rect_stroke` outside and
@@ -214,7 +293,7 @@ mod tests {
             let xf = view(zoom, 0.0, false, 1.0);
             let lines = screen_lines(&xf, &square, ppp).unwrap();
             let snap = |v: f32| (v * ppp).round() / ppp;
-            let (a, b) = (xf.to_screen(8.0, 4.0), xf.to_screen(12.0, 8.0));
+            let (a, b) = (xf.to_screen(Point::new(8.0, 4.0)), xf.to_screen(Point::new(12.0, 8.0)));
             let (x0, y0, x1, y1, h) = (snap(a.x), snap(a.y), snap(b.x), snap(b.y), 0.5 / ppp);
             assert_eq!(lines.dark, [[pos2(x0 - h, y0 - h), pos2(x1 + h, y0 - h), pos2(x1 + h, y1 + h), pos2(x0 - h, y1 + h)]], "zoom {zoom}, ppp {ppp}");
             assert_eq!(lines.light, [[pos2(x0 + h, y0 + h), pos2(x1 - h, y0 + h), pos2(x1 - h, y1 - h), pos2(x0 + h, y1 - h)]], "zoom {zoom}, ppp {ppp}");
@@ -225,9 +304,9 @@ mod tests {
         // edges (√½ pixel diagonally), outside the square; the light line's inside it.
         let xf = view(8.0, 30.0, true, 1.0);
         let lines = screen_lines(&xf, &square, 1.0).unwrap();
-        let centre = xf.to_screen(10.0, 6.0);
+        let centre = xf.to_screen(Point::new(10.0, 6.0));
         for (i, [x, y]) in square[0].iter().copied().enumerate() {
-            let p = xf.to_screen(x, y);
+            let p = xf.to_screen(Point::new(f64::from(x), f64::from(y)));
             let (d, l): (Vec2, Vec2) = (lines.dark[0][i] - p, lines.light[0][i] - p);
             assert!((d.length() - 0.5f32.hypot(0.5)).abs() < 1e-4 && (d + l).length() < 1e-4, "corner {i}: {d:?} {l:?}");
             assert!((lines.dark[0][i] - centre).length() > (p - centre).length(), "corner {i}");
@@ -274,11 +353,11 @@ mod tests {
                                     // Snapping to physical pixels can move the corner by half a
                                     // pixel either way, so judge the two points from where it went.
                                     let mid = xf.to_doc(pos2((d.x + l.x) / 2.0, (d.y + l.y) / 2.0));
-                                    let shift = [f64::from(c[0]) - mid[0], f64::from(c[1]) - mid[1]];
+                                    let shift = [f64::from(c[0]) - mid.x, f64::from(c[1]) - mid.y];
                                     let slack = f64::from(0.75 / ppp / (zoom * aspect.min(1.0)));
                                     let filled_at = |p: Pos2| {
-                                        let [x, y] = xf.to_doc(p);
-                                        filled([x + shift[0], y + shift[1]])
+                                        let pt = xf.to_doc(p);
+                                        filled([pt.x + shift[0], pt.y + shift[1]])
                                     };
                                     let (moved, dark, light) = (shift[0].hypot(shift[1]), filled_at(d), filled_at(l));
                                     if moved > slack || dark || !light {
@@ -325,36 +404,6 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &outline(&ctx, &BrushSettings { size: 10.0, ..brush }).unwrap()));
     }
 
-    /// Below 100 % a Pencil under 6 points across still shows its hotspot, as its cursor always
-    /// has when too small to see where it is: the smooth circle with the crosshair in it. A
-    /// bigger one is the plain circle unless Show Crosshair in Brush Tip asks for the crosshair.
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn below_100_percent_a_tiny_pencil_still_shows_its_hotspot() {
-        // The OS cursor bitmap a pass that runs `f` shows.
-        let bitmap = |f: &dyn Fn(&Painter)| {
-            let ctx = egui::Context::default();
-            let mut output = ctx.run_ui(Default::default(), |ui| f(ui.painter()));
-            // No renderer takes the font atlas here.
-            output.textures_delta.clear();
-            output.platform_output.cursor_image.map(|i| (i.size, i.rgba))
-        };
-        let (xf, at) = (view(0.5, 0.0, false, 1.0), pos2(100.0, 100.0));
-        // At 50 % an 11 px tip is 5.5 points across and a 12 px one 6.
-        for (size, centre, crosshair) in [(1.0, false, true), (11.0, false, true), (12.0, false, false), (40.0, false, false), (40.0, true, true)] {
-            let brush = BrushSettings { size, ..Default::default() };
-            let radius = (size / 2.0 * 0.5).max(1.0);
-            let want = bitmap(&|p| {
-                crate::tool_cursor::circle(p, at, radius, crosshair);
-            });
-            assert!(want.is_some());
-            let got = bitmap(&|p| {
-                cursor(p, &xf, at, &brush, None, centre);
-            });
-            assert_eq!(got, want, "{size} px, Show Crosshair in Brush Tip {centre}");
-        }
-    }
-
     /// At 100 % a document pixel is one physical pixel at any UI scale, so the outline is drawn.
     /// The zoom in points is `1 / ppp` there, and `(1 / ppp) · ppp` rounds to just under 1 in f32
     /// at many scales (85 % on a 1× or 2× display, 110 % on a 2.25× one): those showed the smooth
@@ -372,85 +421,17 @@ mod tests {
             let mut output = ctx.run_ui(Default::default(), |ui| {
                 scale = ui.ctx().pixels_per_point();
                 let xf = view(1.0 / ppp, 0.0, false, 1.0);
-                cursor(ui.painter(), &xf, xf.to_screen(20.3, 15.6), &brush, None, false);
+                draw(ui.painter(), &xf, [20.3, 15.6], &brush, None);
             });
             // No renderer takes the font atlas here.
             output.textures_delta.clear();
             assert_eq!(scale, ppp);
             let lines = output.shapes.iter().filter(|s| matches!(&s.shape, Shape::Path(p) if p.closed)).count();
-            let bitmap = output.platform_output.cursor_image.is_some();
-            if lines != 2 || bitmap {
-                fails.push(format!("ppp {ppp}: {lines} outline lines drawn, the smooth outline's OS cursor bitmap {bitmap}"));
+            if lines != 2 {
+                fails.push(format!("ppp {ppp}: {lines} outline lines drawn"));
             }
         }
         assert!(fails.is_empty(), "{}", fails.join("\n"));
-    }
-
-    /// From 100 % up the dab lands on the pixel grid, up to half a pixel each way from the pointer
-    /// (4 points at 800 %). A tip too big to trace keeps its smooth outline, centred where the dab
-    /// lands, as the old square's circle was: two pointers over one dab draw what a pointer on its
-    /// centre draws, a round tip's circle around that centre. None of it is an OS cursor bitmap,
-    /// which can only sit on the pointer; the hotspot crosshair still does.
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn from_100_percent_an_untraceable_tip_is_centred_on_its_dab() {
-        let disc = photocraft_paint::GrayTile::from_fn(64, 64, |x, y| if (x as f32 - 31.5).hypot(y as f32 - 31.5) < 30.0 { 1.0 } else { 0.0 });
-        // Round tips over the 508 px cap (at 300 % and 100 % their circle fits an OS cursor
-        // bitmap), a squashed and turned one, and a sampled tip over about 359 px.
-        let cases = [
-            (BrushSettings { size: 600.0, ..Default::default() }, 8.0),
-            (BrushSettings { size: 520.0, ..Default::default() }, 3.0),
-            (BrushSettings { size: 600.0, ..Default::default() }, 1.0),
-            (BrushSettings { size: 600.0, roundness: 0.5, angle: 30.0, ..Default::default() }, 8.0),
-            (BrushSettings { size: 400.0, tip: TipShape::Sampled(disc), ..Default::default() }, 2.0),
-        ];
-        // What a pass drawing the cursor with the pointer at `at` paints, and its OS cursor bitmap.
-        let pass = |xf: &ViewXform, at: Pos2, brush: &BrushSettings, centre: bool| {
-            let ctx = egui::Context::default();
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                cursor(ui.painter(), xf, at, brush, None, centre);
-            });
-            // No renderer takes the font atlas here.
-            output.textures_delta.clear();
-            (output.shapes.into_iter().map(|s| s.shape).collect::<Vec<_>>(), output.platform_output.cursor_image.map(|i| (i.size, i.rgba)))
-        };
-        for (brush, zoom) in &cases {
-            let what = format!("{} px, roundness {}, sampled {}, at {} %", brush.size, brush.roundness, brush.tip != TipShape::Round, zoom * 100.0);
-            let xf = view(*zoom, 0.0, false, 1.0);
-            // An even size: the dab over both points is centred on the pixel corner (20, 16).
-            let dab = xf.to_screen(20.0, 16.0);
-            let (want, _) = pass(&xf, dab, brush, false);
-            for [x, y] in [[20.1, 15.6], [20.4, 15.9]] {
-                let (got, bitmap) = pass(&xf, xf.to_screen(x, y), brush, false);
-                for s in &got {
-                    if let Shape::Circle(c) = s {
-                        assert!((c.center - dab).length() < 1e-3, "{what}, pointer at ({x}, {y}): a circle around {:?}, the dab's centre is {dab:?}", c.center);
-                    }
-                }
-                assert!(
-                    !got.is_empty() && got == want,
-                    "{what}, pointer at ({x}, {y}): {} shapes painted, {} with the pointer on the dab",
-                    got.len(),
-                    want.len()
-                );
-                assert!(bitmap.is_none(), "{what}, pointer at ({x}, {y}): an OS cursor bitmap");
-            }
-        }
-        // Show Crosshair in Brush Tip: the outline is the dab's, the crosshair the pointer's.
-        let (brush, zoom) = &cases[0];
-        let xf = view(*zoom, 0.0, false, 1.0);
-        let at = xf.to_screen(20.3, 15.6);
-        let crosshair = {
-            let ctx = egui::Context::default();
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                crate::tool_cursor::crosshair(ui.painter(), at, 4.0, 0.0);
-            });
-            output.textures_delta.clear();
-            output.platform_output.cursor_image.map(|i| (i.size, i.rgba))
-        };
-        let (got, bitmap) = pass(&xf, at, brush, true);
-        assert!(crosshair.is_some() && bitmap == crosshair, "the hotspot crosshair");
-        assert_eq!(got, pass(&xf, xf.to_screen(20.0, 16.0), brush, false).0, "the outline with the crosshair");
     }
 
     /// The Block-mode Eraser's square is the engine's `16 / zoom` pixels at every zoom (#2770),
@@ -485,8 +466,8 @@ mod tests {
         });
         let unloaded = photocraft_paint::StoredTile { key: "ring".into(), width: 48, height: 48, preview: Arc::new(preview), full: None };
         let loaded = photocraft_paint::StoredTile { full: Some(Arc::new(ring)), ..unloaded.clone() };
-        let before = BrushSettings { size: 24.0, tip: TipShape::Stored(unloaded), ..Default::default() };
-        let after = BrushSettings { tip: TipShape::Stored(loaded), ..before.clone() };
+        let before = BrushSettings { size: 24.0, tip: TipShape::Stored(unloaded).into(), ..Default::default() };
+        let after = BrushSettings { tip: TipShape::Stored(loaded).into(), ..before.clone() };
         assert_eq!(before.tip, after.tip, "stored tips compare by key");
         let traced = photocraft_paint::outline::aliased_outline(&after);
         assert!(traced.is_some() && photocraft_paint::outline::aliased_outline(&before) != traced);

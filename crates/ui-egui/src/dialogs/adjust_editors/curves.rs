@@ -70,7 +70,7 @@ pub(super) fn editor_channel_picker(ui: &mut egui::Ui, id: egui::Id, channels: &
 
 /// The popup, with `translate` for whether the built-in labels follow the interface language;
 /// a user-typed channel name is shown exactly as entered (#5335).
-fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], text: &str, translate: bool) -> usize {
+pub(super) fn channel_picker_opts(ui: &mut egui::Ui, id: egui::Id, opts: &[(usize, &str)], text: &str, translate: bool) -> usize {
     let mut ch: usize = ui.data(|d| d.get_temp(id)).unwrap_or(0);
     if ch >= opts.len() {
         ch = 0;
@@ -396,7 +396,8 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         }
         ui.data_mut(|d| d.insert_temp(stroke_id, (active, last)));
     } else {
-        let interaction = crate::point_curve::interact(ui, &resp, graph, &mut pts, &mut st.gesture);
+        let interaction =
+            crate::point_curve::interact_with_hit_radius(ui, &resp, graph, &mut pts, &mut st.gesture, crate::point_curve::curves_grab_radius(cx.dialog));
         changed = interaction.changed;
         e.commit |= interaction.commit;
     }
@@ -603,7 +604,12 @@ mod multi_channel_tests {
                 for kind in ["levels", "curves"] {
                     let base = adjust_params::to_params(&adjust_params::default_for(kind, st.doc.mode).unwrap());
                     let space = space_of(&base);
-                    let hist = Arc::new(tone::compute_histograms(&st.doc, HistSource::Colors { layer: st.active_layer.unwrap(), colors }, space));
+                    let hist = Arc::new(tone::compute_histograms(
+                        &st.doc,
+                        HistSource::Colors { layer: st.active_layer.unwrap(), colors },
+                        space,
+                        tone::HistScope::WholeInput,
+                    ));
                     // Native subset histograms have their own combined slot even in Lab, whose
                     // ordinary composite histograms instead start with Lightness at slot 0.
                     assert_eq!(hist.ch.len(), 1 + st.doc.pixel_format().mode.color_channels());
