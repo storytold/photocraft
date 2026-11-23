@@ -1,6 +1,6 @@
 //! Spring-loaded tool keys (#2672): hold a tool's letter for a temporary tool.
 //!
-//! A tool letter switches tools when it is pressed, as before (`shortcuts::handle`). If the key is
+//! A tool letter switches tools when its command fires (`shortcut_dispatch::run_fired`). If the key is
 //! then held for [`SPRING_HOLD_SECS`] or longer, or the canvas is used while it is down, the switch
 //! was only temporary: releasing the key gives back the tool in effect before the press, with its
 //! options. A quick tap with no canvas use stays a permanent switch.
@@ -12,14 +12,16 @@
 //!   previous tool returns once the button is up (as `hold_keys` latches Space).
 //! - Another letter pressed while one is held wins (newest first); releasing every held letter
 //!   returns the original tool. Holding two letters at once counts as a hold.
-//! - Key repeats are not presses: `shortcuts::handle` drops them for tool letters.
+//! - Key repeats are not presses: the runtime fires them as `FirePhase::Repeat`, which no tool letter acts on.
+//! - The key-up is the command's `FirePhase::Release` ([`released`]); nothing polls key state.
+//! - The hold is read from the key's own times (`Fired::time`: when its press and its release arrived), not from the
+//!   frames that run them.
 //!
 //! Z is one case: hold Z to zoom, add ⌥ to zoom out, as with the Zoom tool itself (and as
 //! `hold_keys` does for ⌥ with a held Zoom In).
 //!
 //! The state is [`crate::state::UiState::spring`], readable over the control channel.
 
-use egui::Key;
 use serde::{Deserialize, Serialize};
 
 use crate::PhotocraftApp;
@@ -38,8 +40,10 @@ pub struct Spring {
     pub tool: Tool,
     /// The tool letters held, oldest first.
     pub keys: Vec<char>,
-    /// `egui` input time of the first press.
+    /// Input time of the first press (`Fired::time`).
     pub since: f64,
+    /// Input time the last held letter came up (`Fired::time` of its release); `None` while a letter is down.
+    pub up: Option<f64>,
     /// The canvas was pressed (or a second letter pressed) while held: the switch is temporary
     /// however short the hold.
     pub used: bool,
@@ -47,22 +51,28 @@ pub struct Spring {
     pub released: bool,
 }
 
-/// The egui key of a tool letter (`None` for the tools without one).
-pub fn key_of(letter: char) -> Option<Key> {
+/// The egui key of a tool letter (`None` for the tools without one), for the tests that press it.
+#[cfg(test)]
+pub fn key_of(letter: char) -> Option<egui::Key> {
     if letter == '\0' {
         return None;
     }
-    Key::from_name(&letter.to_string())
+    egui::Key::from_name(&letter.to_string())
 }
 
-/// Is `k` some tool's single-key shortcut?
-pub fn is_tool_key(k: Key) -> bool {
-    Tool::ALL.iter().any(|t| key_of(t.key()) == Some(k))
+/// The key `letter` came up at the input time `at` (its tool command's `FirePhase::Release`): it no longer counts as held.
+pub fn released(app: &mut PhotocraftApp, letter: char, at: f64) {
+    if let Some(s) = app.ui.spring.as_mut() {
+        s.keys.retain(|k| *k != letter);
+        if s.keys.is_empty() {
+            s.up = Some(at);
+        }
+    }
 }
 
 /// A tool letter switched the tool from `before` (the switch is already made). `plain` is false
-/// when ⇧ or ⌥ was held: those switches are permanent. `now` is the input time.
-pub fn pressed(app: &mut PhotocraftApp, letter: char, before: Tool, plain: bool, now: f64) {
+/// when ⇧ or ⌥ was held: those switches are permanent. `at` is the press's input time (`Fired::time`).
+pub fn pressed(app: &mut PhotocraftApp, letter: char, before: Tool, plain: bool, at: f64) {
     let active = app.ui.spring.as_ref().is_some_and(|s| !s.released);
     if !plain {
         app.ui.spring = None;
@@ -72,6 +82,7 @@ pub fn pressed(app: &mut PhotocraftApp, letter: char, before: Tool, plain: bool,
         if let Some(s) = app.ui.spring.as_mut() {
             s.keys.retain(|k| *k != letter);
             s.keys.push(letter);
+            s.up = None;
             s.used = true;
             s.tool = app.ui.tool;
         }
@@ -79,7 +90,7 @@ pub fn pressed(app: &mut PhotocraftApp, letter: char, before: Tool, plain: bool,
     }
     // The current group's own key cycles it (or keeps it), as a tap always has.
     let tool = app.ui.tool;
-    app.ui.spring = (before.key() != letter).then(|| Spring { previous: before, tool, keys: vec![letter], since: now, used: false, released: false });
+    app.ui.spring = (before.key() != letter).then(|| Spring { previous: before, tool, keys: vec![letter], since: at, up: None, used: false, released: false });
 }
 
 /// Is `tool` in effect only while its letter is held (or its drag finishes)? A tap that turns out
@@ -95,8 +106,8 @@ pub fn note_canvas_press(app: &mut PhotocraftApp) {
     }
 }
 
-/// Once a frame, before the key handling: notice released letters and give the previous tool
-/// back when the switch was temporary and no drag is in progress.
+/// Once a pass, after the fired commands ran ([`released`] has taken the letters that came up): give the previous
+/// tool back when the switch was temporary and no drag is in progress.
 pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(mut s) = app.ui.spring.take() else { return };
     // Type editing begun with the temporary Type tool keeps it: the edit owns the tool now. So
@@ -104,18 +115,18 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.ui.text_edit.is_some() || app.ui.tool != s.tool {
         return;
     }
-    let (now, button) = ctx.input(|i| (i.time, i.pointer.any_down()));
-    let dragging = app.drag.is_some() || button;
+    let button = ctx.input(|i| i.pointer.any_down());
+    let in_gesture = crate::canvas::tools::in_gesture(app);
+    let dragging = in_gesture || button;
     if !s.released {
-        if app.drag.is_some() {
+        if in_gesture {
             s.used = true;
         }
-        s.keys.retain(|k| key_of(*k).is_some_and(|k| ctx.input(|i| i.key_down(k))));
-        if !s.keys.is_empty() {
+        let Some(up) = s.up.filter(|_| s.keys.is_empty()) else {
             app.ui.spring = Some(s);
             return;
-        }
-        if !s.used && now - s.since < SPRING_HOLD_SECS {
+        };
+        if !s.used && up - s.since < SPRING_HOLD_SECS {
             // A tap: the switch stands.
             return;
         }

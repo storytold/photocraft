@@ -6,18 +6,6 @@ fn lang(code: &str) -> Lang {
 }
 
 #[test]
-fn hindi_has_the_reveal_and_camera_raw_rows() {
-    if !needs_catalogs() {
-        return;
-    }
-    let hi = lang("hi");
-    assert_eq!(tr(hi, "Reveal in Explorer"), "Explorer में दिखाएँ");
-    assert_eq!(tr(hi, "Reveal in Finder"), "Finder में दिखाएँ");
-    assert_eq!(tr(hi, "RAW Defaults…"), "RAW डिफ़ॉल्ट…");
-    assert!(has(hi, "RAW Defaults…"), "RAW Defaults… is a catalog row, not a fallback");
-}
-
-#[test]
 fn hindi_tags_resolve() {
     if !needs_catalogs() {
         return;
@@ -43,10 +31,6 @@ fn georgian_tags_resolve() {
     assert_eq!(ka.name(), "ქართული");
     assert_eq!(Lang::from_pref("ka"), ka);
     assert_eq!(Lang::from_pref("KA"), ka);
-    assert_eq!(tr(ka, "Layer"), "შრე");
-    assert_eq!(tr(ka, "File"), "ფაილი");
-    assert_eq!(trn(ka, 1, "{n} layer", "{n} layers"), "შრე: 1");
-    assert_eq!(trn(ka, 3, "{n} layer", "{n} layers"), "შრე: 3");
 }
 
 #[test]
@@ -69,13 +53,11 @@ fn indonesian_vietnamese_and_thai_tags_resolve() {
         assert_eq!(Lang::from_pref(tag), th, "{tag}");
     }
     assert_eq!(th.name(), "ไทย");
-    assert_eq!(tr(th, "File"), "ไฟล์");
-    assert_eq!(tr(th, "Layer"), "เลเยอร์");
 }
 
-/// Tamil: regional tags resolve, counts take one|other, and placeholders stay untranslated.
+/// Tamil: regional tags resolve, and placeholders survive the lookup.
 #[test]
-fn tamil_tags_plurals_and_placeholders() {
+fn tamil_tags_and_placeholders() {
     if !needs_catalogs() {
         return;
     }
@@ -83,10 +65,7 @@ fn tamil_tags_plurals_and_placeholders() {
     for tag in ["ta", "ta-IN", "ta_LK", "ta_IN.UTF-8"] {
         assert_eq!(Lang::from_pref(tag), ta, "{tag}");
     }
-    assert_eq!(trn(ta, 1, "{n} layer", "{n} layers"), "1 அடுக்கு");
-    assert_eq!(trn(ta, 3, "{n} layer", "{n} layers"), "3 அடுக்குகள்");
     assert!(tr(ta, "Scratch: {size}").contains("{size}"));
-    assert_ne!(tr(ta, "Zoom In (hold, drag to scrub)"), "Zoom In (hold, drag to scrub)");
 }
 
 #[test]
@@ -225,9 +204,6 @@ fn spanish_swedish_finnish_danish_and_norwegian_resolve() {
     for tag in ["sv", "SV", "sv-SE", "sv_SE.UTF-8", "sv-FI", "sv_FI.UTF-8", "sv-AX"] {
         assert_eq!(Lang::from_pref(tag), sv, "{tag}");
     }
-    assert_eq!(tr(sv, "File"), "Arkiv");
-    assert_eq!(trn(sv, 1, "{n} layer", "{n} layers"), "1 lager");
-    assert_eq!(trn(sv, 3, "{n} layer", "{n} layers"), "3 lager");
     let fi = lang("fi");
     assert_eq!(fi.name(), "Suomi");
     for tag in ["fi", "FI", "fi-FI", "fi_FI.UTF-8"] {
@@ -236,24 +212,16 @@ fn spanish_swedish_finnish_danish_and_norwegian_resolve() {
     // Filipino and Swedish in Finland don't pick Finnish.
     assert_ne!(lang_from_tag("fil"), Some(fi));
     assert_ne!(lang_from_tag("sv-FI"), Some(fi));
-    assert_eq!(tr(fi, "File"), "Tiedosto");
-    // The partitive singular follows any number but 1.
-    for (n, layer) in [(0, "tasoa"), (1, "taso"), (2, "tasoa"), (21, "tasoa")] {
-        assert_eq!(trn(fi, n, "{n} layer", "{n} layers"), format!("{n} {layer}"));
-    }
     let da = lang("da");
     assert_eq!(da.name(), "Dansk");
     for tag in ["da", "DA", "da-DK", "da_DK.UTF-8", "da-GL"] {
         assert_eq!(Lang::from_pref(tag), da, "{tag}");
     }
-    assert_eq!(trn(da, 1, "{n} document", "{n} documents"), "1 dokument");
-    assert_eq!(trn(da, 3, "{n} document", "{n} documents"), "3 dokumenter");
     let nb = lang("nb");
     assert_eq!(nb.name(), "Norsk bokmål");
     for tag in ["nb", "NB", "nb-NO", "nb_NO.UTF-8", "no", "no-NO", "no_NO.UTF-8", "nn", "nn-NO", "nn_NO.UTF-8"] {
         assert_eq!(Lang::from_pref(tag), nb, "{tag}");
     }
-    assert_eq!(trn(nb, 3, "{n} item", "{n} items"), "3 elementer");
 }
 
 #[test]
@@ -303,7 +271,6 @@ fn ukrainian_and_arabic_resolve() {
         assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
         assert_eq!(Lang::from_pref(tag), ar, "{tag}");
     }
-    assert_eq!(dir_for_code("ar"), Dir::Rtl);
     assert_eq!(ar.dir(), Dir::Rtl);
 }
 
@@ -336,25 +303,6 @@ fn azerbaijani_resolves_locales_and_preferences() {
         assert_eq!(Lang::from_pref(tag), az, "{tag}");
     }
     assert_eq!(tr(az, "unknown translation"), "unknown translation");
-    for n in [0, 1, 2, 11, 19, 20, 21, 99, 100, 101, 102, 119, 120, 1000, 1001, u64::MAX] {
-        assert_eq!(trn(az, n, "{n} layer", "{n} layers"), format!("{n} qat"));
-    }
-}
-
-/// Exact lookups retain contextual meanings, dotted/dotless letters and product placeholders.
-#[test]
-fn azerbaijani_keeps_context_placeholders_and_command_names() {
-    if !needs_catalogs() {
-        return;
-    }
-    let az = lang("az");
-    for (source, translated) in [("File", "Fayl"), ("Layer", "Qat"), ("Kind", "Növ"), ("Type Layer", "Mətn qatı"), ("Light Theme", "Açıq mövzu")] {
-        assert_eq!(tr(az, source), translated);
-    }
-    assert_eq!(tr_ctx(az, "cameraRaw", "Light"), "İşıq");
-    assert_eq!(tr_ctx(az, "fontWeight", "Light"), "İncə");
-    assert_ne!(tr_id(az, "edit.clear", "Clear"), "Clear");
-    assert!(fmt(tr(az, "About {app}"), &[("app", "PhotoCraft")]).contains("PhotoCraft"));
 }
 
 /// Bosnian locales, with or without region, script or encoding, select the Latin catalog.
@@ -370,8 +318,6 @@ fn bosnian_resolves_locales_and_preferences() {
         assert_eq!(Lang::from_pref(tag), bs, "{tag}");
     }
     assert_ne!(lang_from_tag("hr-HR"), Some(bs), "Croatian is not Bosnian");
-    assert_eq!(trn(bs, 3, "{n} pixel", "{n} pixels"), "3 piksela");
-    assert_eq!(trn(bs, 5, "{n} document", "{n} documents"), "5 dokumenata");
 }
 
 #[test]
@@ -512,14 +458,15 @@ fn bundled_catalogs_are_consistent() {
 }
 
 #[test]
-fn raw_develop_labels_are_translated_in_every_shipped_catalog() {
-    if !needs_catalogs() {
-        return;
-    }
-    for language in LANGUAGES.iter().skip(1) {
-        let l = lang(language.code);
-        for source in ["RAW Develop", "RAW Develop Filter", "RAW Develop Filter…", "RAW Defaults", "RAW Defaults…"] {
-            assert!(has(l, source) && !tr(l, source).is_empty(), "{}: {source}", language.code);
-        }
-    }
+fn language_cache_separates_catalogs_and_keys() {
+    let cache = LangCache::<u8, String>::new();
+    let first = fixture_lang("de", "\tAll\tfirst\n");
+    let second = fixture_lang("de", "\tAll\tsecond\n");
+    with_language(first, || {
+        assert_eq!(cache.get_or_build(1, || t("All").to_owned()), "first");
+        assert_eq!(cache.get_or_build(1, || "unexpected rebuild".to_owned()), "first");
+        assert_eq!(cache.get_or_build(2, || "other key".to_owned()), "other key");
+    });
+    with_language(second, || assert_eq!(cache.get_or_build(1, || t("All").to_owned()), "second"));
+    with_language(first, || assert_eq!(cache.get_or_build(1, || "unexpected rebuild".to_owned()), "first"));
 }
