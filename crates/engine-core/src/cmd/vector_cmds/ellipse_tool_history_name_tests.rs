@@ -78,3 +78,26 @@ fn invalid_history_labels_leave_the_document_and_history_intact() {
     assert_eq!(session.active().unwrap().doc, before);
     assert_eq!(session.active().unwrap().history.past_len(), steps);
 }
+
+/// #13320: the Polygon tool's press-time addition is one step named Polygon Tool; `addHistoryName`
+/// names only additions, and any other value is refused with the document left as it was.
+#[test]
+fn an_addition_can_carry_the_polygon_tools_history_name() {
+    let mut session = document();
+    let response = session.execute("shape.create", json!({"kind": "polygon", "rect": [10, 10, 40, 40]})).unwrap();
+    let layer = &response["layer"];
+    let steps = session.active().unwrap().history.past_len();
+    session
+        .execute("shape.create", json!({"kind": "polygon", "rect": [20, 20, 40, 40], "addTo": layer, "op": "subtract", "addHistoryName": "Polygon Tool"}))
+        .unwrap();
+    let st = session.active().unwrap();
+    assert_eq!((st.history.undo_label(), st.history.past_len()), (Some("Polygon Tool"), steps + 1));
+    let before = st.doc.clone();
+    let err = session.execute("shape.create", json!({"kind": "polygon", "rect": [20, 20, 40, 40], "addTo": layer, "addHistoryName": "Line Tool"}));
+    assert!(err.is_err(), "only the Polygon tool's name");
+    let st = session.active().unwrap();
+    assert_eq!((st.history.past_len(), &st.doc), (steps + 1, &before), "a refused name changes nothing");
+    // A new layer ignores it and keeps its own label.
+    session.execute("shape.create", json!({"kind": "polygon", "rect": [5, 5, 10, 10], "addHistoryName": "Polygon Tool"})).unwrap();
+    assert_eq!(session.active().unwrap().history.undo_label(), Some("New Shape Layer"));
+}

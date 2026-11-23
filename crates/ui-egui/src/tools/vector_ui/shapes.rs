@@ -307,6 +307,10 @@ pub fn finish_drag_pressed(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &
     {
         p["addTo"] = json!(id.0);
         p["op"] = json!(op);
+        // The press's operation is the Polygon tool's own step (#13320); the options bar's stays Add Shape.
+        if press_path_op(app, kind, press).is_some() {
+            p["addHistoryName"] = json!("Polygon Tool");
+        }
     }
     if let Err(e) = app.run("shape.create", p) {
         report(app, e);

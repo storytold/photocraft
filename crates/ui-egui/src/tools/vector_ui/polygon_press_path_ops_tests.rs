@@ -238,3 +238,15 @@ fn undo_and_redo_the_added_component() {
     assert_eq!(active(&app).1.path.subpaths.len(), 2);
     assert_eq!(alpha(&app, IN_BOTH.0, IN_BOTH.1), 0.0);
 }
+
+/// The press's addition is one History step named Polygon Tool (#13320); a drag joined with the
+/// options bar's operation keeps Add Shape.
+#[test]
+fn the_press_addition_is_named_polygon_tool() {
+    let mut app = app();
+    drag(&mut app, [450.0, 250.0], [550.0, 350.0], Modifiers::ALT, Modifiers::ALT);
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Polygon Tool"));
+    app.ui.tool_options.shape_path_op = "exclude".into();
+    drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::NONE, Modifiers::NONE);
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Shape"));
+}

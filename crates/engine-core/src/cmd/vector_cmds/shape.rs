@@ -435,11 +435,24 @@ fn default_name(kind: &str) -> &'static str {
     }
 }
 
+/// The label of a shape addition (`addTo`): Add Shape, or the tool's own step named by
+/// `addHistoryName`. Only the Polygon tool's press-time operation names its addition ("Polygon
+/// Tool", storytold/photocraft#13320); any other value is refused.
+fn addition_history_name(p: &Value, cmd: &str) -> Result<&'static str> {
+    match p.get("addHistoryName") {
+        None | Some(Value::Null) => Ok("Add Shape"),
+        Some(v) if v.as_str() == Some("Polygon Tool") => Ok("Polygon Tool"),
+        Some(_) => Err(bad(cmd, "`addHistoryName` must be \"Polygon Tool\"")),
+    }
+}
+
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
-/// A tool history override labels new layers. Additions use the Add Shape label.
+/// A tool history override labels new layers. Additions use the Add Shape label, or the one
+/// `addHistoryName` names ([`addition_history_name`]).
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let label = super::paths::pen_history_name(p, CMD, "New Shape Layer")?;
+    let add_label = addition_history_name(p, CMD)?;
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("rect");
     let (path, live) = if kind == "path" {
         let v = p.get("path").ok_or_else(|| bad(CMD, "kind \"path\" needs `path`"))?;
@@ -454,7 +467,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
-        with_shape(s, id, "Add Shape", |sh, _| {
+        with_shape(s, id, add_label, |sh, _| {
             for mut sp in path.subpaths {
                 // A joined subpath (a hole) belongs to the component before it, which takes `op`.
                 if sp.op != PathOp::Join {
