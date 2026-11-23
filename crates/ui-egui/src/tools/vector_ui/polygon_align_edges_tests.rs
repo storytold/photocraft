@@ -23,7 +23,7 @@ const SNAPPED: [f64; 4] = [10.0, 11.0, 30.0, 20.0];
 /// A 200 × 100 document after one Polygon drag from `from` to `to` with the tool options `set` gives,
 /// `mods` pressed after the start. The pixel-grid snap of vector tools is off, so only Align Edges
 /// rounds.
-fn drawn(set: impl FnOnce(&mut ToolOptions), from: [f64; 2], to: [f64; 2], mods: Modifiers) -> PhotocraftApp {
+fn drawn(set: impl FnOnce(&mut ToolOptions), from: [f64; 2], to: [f64; 2], mods: Modifiers) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.run("prefs.set", json!({"path": "tools.snapVectorToolsAndTransformsToPixelGrid", "value": false})).unwrap();
