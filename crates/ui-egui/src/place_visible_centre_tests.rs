@@ -27,16 +27,21 @@ fn placing_app(zoom: f32, center: [f32; 2], rotation: f32, name: &str, (w, h): (
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 400, "height": 300, "depth": 8})).unwrap();
     app.ui.extras.rulers = false;
-    testing::shown(&mut app);
+    show(&mut app, zoom, center, rotation);
+    (app, files, path)
+}
+
+/// Shows the view at `zoom`, centred on `center` and turned by `rotation`, on the canvas.
+fn show(app: &mut PhotocraftApp, zoom: f32, center: [f32; 2], rotation: f32) {
+    testing::shown(app);
     let v = &mut app.ui.views[0];
     (v.zoom, v.center, v.rotation) = (zoom, center, rotation);
     v.clear_pending();
-    testing::shown(&mut app);
-    let shown = testing::view(&app).expect("the canvas shows the view");
+    testing::shown(app);
+    let shown = testing::view(app).expect("the canvas shows the view");
     // The canvas aligns the view to device pixels, so its centre may move by up to half of one.
     let near = |a: f64, b: f32| (a - f64::from(b)).abs() <= 0.5 / f64::from(zoom) + 1e-3;
     assert!(near(shown.center.x, center[0]) && near(shown.center.y, center[1]), "the canvas shows the view asked for: {:?}", shown.center);
-    (app, files, path)
 }
 
 /// The part of the canvas the view shows: `[x0, y0, x1, y1]` in document pixels.
@@ -107,8 +112,10 @@ fn a_selection_wins_over_the_view() {
 /// a rotated one.
 #[test]
 fn a_view_cut_on_one_axis_or_rotated_keeps_the_canvas_centre() {
-    // At 100 % centred right of the canvas: its left part is cut off, the whole 300 down shows.
-    let (mut app, files, path) = placing_app(1.0, [350.0, 150.0], 0.0, "src.png", (100, 60));
+    // At 100 % moved right so the canvas's left 100 pixels are cut off; the whole 300 down shows.
+    let (mut app, files, path) = placing_app(1.0, [200.0, 150.0], 0.0, "src.png", (100, 60));
+    let [x0, _, x1, _] = visible(&app);
+    show(&mut app, 1.0, [(100.0 + (x1 - x0) / 2.0) as f32, 150.0], 0.0);
     let [x0, y0, _, y1] = visible(&app);
     assert!(x0 > 0.0 && y0 <= 0.0 && y1 >= 300.0, "the view cuts the canvas across only: {x0},{y0} to {y1} down");
     assert_eq!(place(&mut app, &files, &path, "file.placeEmbedded"), [150, 120, 250, 180], "cut across only");
