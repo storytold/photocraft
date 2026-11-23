@@ -276,7 +276,7 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         let label = format!("Next {} ({letter})", first.label());
         let mut def = app_row(&next_in_group_id(letter), &label).with_path(vec!["Tools".into(), label.clone()]);
         def.defaults.extend(binding(&format!("Shift+{letter}")));
-        push_row(&mut rows, &mut seen, def);
+        push_row(&mut rows, &mut index, def);
     }
     // The held erase key is momentary; the hand and zoom keys are the runtime's.
     for &(id, label, key) in photocraft_engine::prefs::TEMPORARY_TOOLS {
