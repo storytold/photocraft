@@ -60,6 +60,7 @@ mod kra;
 pub mod linked;
 pub mod memory;
 mod multichannel_map;
+pub mod native_xcf_tones;
 mod ora;
 mod palette_map;
 pub use ora::losses as ora_losses;
@@ -130,6 +131,9 @@ pub enum IoError {
     /// A GIMP XCF file that could not be read.
     #[error("XCF: {0}")]
     Xcf(String),
+    /// A valid source tone stage needs permission the importing request denied.
+    #[error("the imported XCF tone command `{command}` is not authorized")]
+    NativeXcfToneDenied { command: String },
     /// PSD parse/write failure.
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),

@@ -1268,6 +1268,7 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
+        let native_authorization = self.authorize;
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
@@ -1316,7 +1317,11 @@ impl Session {
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
                         ctx.progress(0.02, "Decoding");
-                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
+                        let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| {
+                            crate::file_cmds::with_native_xcf_import_authority(native_authorization, || {
+                                photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl)
+                            })
+                        });
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {
@@ -1334,7 +1339,11 @@ impl Session {
                     }
                     OpenSource::Path(p) => {
                         let mut opened = None;
-                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened));
+                        let res = ctx.stage(0.0, 0.95, "Decoding", |ctl| {
+                            crate::file_cmds::with_native_xcf_import_authority(native_authorization, || {
+                                import_path(&name_w, &p, &opts, expected_fingerprint.as_ref(), ctl, &mut opened)
+                            })
+                        });
                         match res {
                             Ok(imported) => WorkResult::Decoded(Box::new(imported)),
                             Err(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram }) if confirm_damage => {

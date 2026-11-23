@@ -4,7 +4,7 @@
 
 #![cfg(feature = "corpus")]
 
-use photocraft_doc::import_conversion::{ConversionDisposition, ConversionReason, ConversionReport, ImportConversion};
+use photocraft_doc::import_conversion::{ConversionDisposition, ConversionEntry, ConversionReason, ConversionReport, ImportConversion};
 use photocraft_doc::{Document, LayerContent};
 use photocraft_geom::Point;
 
@@ -160,6 +160,12 @@ fn archived_effect_stack_retains_exact_ordered_owner_evidence_without_claiming_a
     assert!(imported.source_read_only && !imported.preview_only);
     let document = &imported.document;
     assert_eq!(document.layers.iter().map(|layer| layer.name.as_str()).collect::<Vec<_>>(), ["Unaffected sibling", "Effect stack owner"]);
+    let sibling = document.layers[0].surface().unwrap();
+    for (x, y) in [(9, 7), (31, 26)] {
+        let rgb = [0, 1, 2].map(|channel| (((x + 8) * 31 + y * 17 + channel * 101 + 7) * 13 % 256) as f32 / 255.);
+        let alpha = ((x + y) * 255 / 76).min(255) as f32 / 255.;
+        assert_eq!(sibling.rgba(x, y), [rgb[0], rgb[1], rgb[2], alpha]);
+    }
     let owner = &document.layers[1];
     let LayerContent::Raster(surface) = &owner.content else { panic!("inventory-only effects must preserve saved owner pixels") };
     assert!(owner.effects.items.is_empty(), "source inventory is not a native effect stack");
@@ -175,8 +181,13 @@ fn archived_effect_stack_retains_exact_ordered_owner_evidence_without_claiming_a
     // Serialized order is the reverse of filter creation: disabled exposure
     // remains present, preceding brightness/contrast with its distinct mask.
     assert_eq!(effects.len(), 2);
-    for (ordinal, (entry, (name, operation))) in
-        effects.iter().zip([("Stack stage 2", "gegl:exposure"), ("Stack stage 1", "gimp:brightness-contrast")]).enumerate()
+    for (ordinal, (entry, (name, operation, reason))) in effects
+        .iter()
+        .zip([
+            ("Stack stage 2", "gegl:exposure", ConversionReason::NativeLimitation),
+            ("Stack stage 1", "gimp:brightness-contrast", ConversionReason::MissingMapping),
+        ])
+        .enumerate()
     {
         assert_eq!(entry.source.kind, "layer_effect");
         assert_eq!(entry.source.ordinal, ordinal as u32);
@@ -187,15 +198,51 @@ fn archived_effect_stack_retains_exact_ordered_owner_evidence_without_claiming_a
         assert_eq!(entry.targets[0].layer_id, Some(owner.id));
         assert_eq!(entry.targets[0].label, owner.name);
         assert_eq!(entry.disposition, ConversionDisposition::RetainedUnapplied);
-        assert_eq!(entry.reason, ConversionReason::MissingMapping);
+        assert_eq!(entry.reason, reason);
         assert_eq!(entry.attachments.len(), 1);
         let attachment = &report.attachments[entry.attachments[0] as usize];
         assert_eq!(attachment.kind, "xcf.layer_effect");
         assert_eq!(attachment.encoding, "xcf_effect_record");
     }
     assert_ne!(effects[0].source.record_offset, effects[1].source.record_offset);
+    assert_archived_stage_masks(&source, &effects);
     assert!(imported.warnings.iter().any(|warning| warning.contains("2 layer effect(s)") && warning.contains("not applied")));
     assert_attachment_source(document, &source);
     let reopened = reopen(document);
     assert_attachment_source(&reopened, &source);
+}
+
+fn assert_archived_stage_masks(source: &[u8], effects: &[&ConversionEntry]) {
+    // The producer sets distinct selections before adding each stage. The shared reader
+    // exposes their exact stored coverage independently of display opacity and visibility.
+    let xcf = craft_xcf::Xcf::parse(source).unwrap();
+    let mut effect_budget = craft_xcf::effects::Budget::default();
+    let mut metadata = craft_xcf::records::Budget::default();
+    let keep_going = || true;
+    let inventory = xcf.layer_effects(0, &mut effect_budget, &keep_going).unwrap();
+    let reader = craft_xcf::effects::Reader::new(source, xcf.image().version);
+    let mut mask_offsets = Vec::new();
+    for (ordinal, (offset, (left, top))) in inventory.offsets.into_iter().zip([(12, 8), (7, 5)]).enumerate() {
+        assert_eq!(Some(offset), effects[ordinal].source.record_offset);
+        let owned = reader.read(inventory.owner, offset, &mut effect_budget, &keep_going).unwrap();
+        assert_eq!(owned.record.visible, ordinal == 1);
+        let mask = xcf.effect_mask_header(&owned.record, &mut metadata, &keep_going).unwrap().unwrap();
+        assert_eq!((mask.width(), mask.height()), (48, 32));
+        mask_offsets.push(mask.source_offset());
+        let mut bytes = 48 * 32;
+        xcf.visit_effect_mask_tiles(&mask, Default::default(), &mut bytes, &keep_going, |tile| {
+            assert_eq!(tile.drawable.channels, 1);
+            for (i, sample) in tile.data.iter().enumerate() {
+                let x = tile.x + i as u32 % tile.width;
+                let y = tile.y + i as u32 / tile.width;
+                let expected = if (left..left + 8).contains(&x) && (top..top + 6).contains(&y) { 255 } else { 0 };
+                assert_eq!(*sample, expected, "stage {ordinal}, pixel ({x}, {y})");
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(bytes, 0);
+    }
+    assert_eq!(mask_offsets.len(), 2);
+    assert_ne!(mask_offsets[0], mask_offsets[1]);
 }

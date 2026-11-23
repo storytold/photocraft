@@ -205,10 +205,15 @@ pub fn open_bytes_as_with_import_options(
     let (mut r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
     } else {
-        let r = photocraft_io::import_with_options_as(&decode_name, bytes, as_ext, opts).map_err(|e| match as_ext {
-            Some(ext) => crate::error::io_open_as_error(&file_name(name), ext, e),
-            None => crate::error::io_open_error(&decode_name, e),
-        })?;
+        let r = super::with_native_xcf_import_authority(s.authorize, || photocraft_io::import_with_options_as(&decode_name, bytes, as_ext, opts)).map_err(
+            |error| match error {
+                photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                error => match as_ext {
+                    Some(ext) => crate::error::io_open_as_error(&file_name(name), ext, error),
+                    None => crate::error::io_open_error(&decode_name, error),
+                },
+            },
+        )?;
         (r, None)
     };
     if (s.batch_open.is_some() || s.batch_open_notices.is_some()) && r.preview_only {

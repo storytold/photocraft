@@ -2,6 +2,7 @@
 //! maps its neutral document representation into PhotoCraft's model.
 
 mod color;
+mod effects;
 mod historical;
 mod metadata;
 mod metadata_packets;
@@ -212,7 +213,19 @@ impl Mapper<'_, '_> {
         if !source.group && !source.floating_selection {
             self.map_text(&properties, index, source, &mut layer)?;
         }
-        self.report.layer_effects(self.xcf, index, &layer, &mut self.warnings, self.ctl)?;
+        self.report.layer_effects(
+            self.xcf,
+            index,
+            &mut layer,
+            &mut effects::coverage::Admission {
+                retained: &mut self.budget,
+                source: &mut self.source_budget,
+                metadata: &mut self.record_budget,
+                options: self.options,
+            },
+            &mut self.warnings,
+            self.ctl,
+        )?;
         Ok((layer, linear))
     }
 
@@ -321,7 +334,7 @@ pub(crate) fn import_with_samples(name: &str, bytes: &[u8], ctl: &Interrupt<'_>,
         source_budget: MAX_PIXEL_BYTES,
         record_budget,
         options,
-        report: report::Report::new(bytes, image.version),
+        report: report::Report::new(bytes, image.version).with_native_context(&document),
         view: saved_view::SavedView::default(),
         resolution: source_axes,
         text_budget: text_source::NativeBudget::default(),

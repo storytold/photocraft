@@ -23,6 +23,8 @@ use crate::{EngineError, Result, Session};
 mod batch_run;
 mod export;
 mod info;
+mod native_xcf_import;
+pub(crate) use native_xcf_import::with_authority as with_native_xcf_import_authority;
 mod open;
 mod open_as_smart_object;
 mod paths;
