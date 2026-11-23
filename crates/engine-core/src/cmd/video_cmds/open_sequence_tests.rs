@@ -19,7 +19,7 @@ fn folder(name: &str) -> std::path::PathBuf {
 
 /// Writes a `w` x `h` white PNG with a red bar `bar` pixels wide down its left edge.
 fn write_bar(path: &std::path::Path, w: u32, h: u32, bar: u32) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": w, "height": h, "background": "#ffffff"})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": bar, "height": h})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
@@ -68,7 +68,7 @@ fn bars(s: &Session, id: LayerId) -> Vec<u32> {
 #[test]
 fn a_numbered_run_opens_as_one_untitled_video_document() {
     let d = measured_folder("measured");
-    let mut s = Session::new();
+    let mut s = crate::session();
     let r = open(&mut s, &d, "frame001.png", json!({"fps": 12.5})).unwrap();
     assert_eq!(s.documents().len(), 1);
     assert_eq!(r["document"], 0);
@@ -102,7 +102,7 @@ fn a_numbered_run_opens_as_one_untitled_video_document() {
 #[test]
 fn any_frame_of_the_run_opens_all_of_it_at_30_fps_by_default() {
     let d = measured_folder("middle");
-    let mut s = Session::new();
+    let mut s = crate::session();
     let r = open(&mut s, &d, "frame002.png", json!({})).unwrap();
     let id = LayerId(r["layer"].as_u64().unwrap());
     assert_eq!(bars(&s, id), [10, 20, 30]);
@@ -114,7 +114,7 @@ fn any_frame_of_the_run_opens_all_of_it_at_30_fps_by_default() {
 #[test]
 fn the_document_takes_the_next_free_untitled_name() {
     let d = measured_folder("untitled");
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "Untitled-1"})).unwrap();
     assert_eq!(s.active().unwrap().doc.name, "Untitled-1");
     open(&mut s, &d, "frame001.png", json!({})).unwrap();
@@ -127,7 +127,7 @@ fn the_document_takes_the_next_free_untitled_name() {
 #[test]
 fn undo_and_redo_step_through_the_two_open_states() {
     let d = measured_folder("undo");
-    let mut s = Session::new();
+    let mut s = crate::session();
     let r = open(&mut s, &d, "frame001.png", json!({})).unwrap();
     let id = LayerId(r["layer"].as_u64().unwrap());
     assert!(s.undo());
@@ -140,7 +140,7 @@ fn undo_and_redo_step_through_the_two_open_states() {
 #[test]
 fn an_unnumbered_file_is_not_part_of_a_numeric_sequence() {
     let d = measured_folder("flat");
-    let mut s = Session::new();
+    let mut s = crate::session();
     let e = open(&mut s, &d, "flat.png", json!({})).unwrap_err();
     assert_eq!(e.to_string(), "Could not complete the Open command because the file is not part of a numeric sequence.");
     assert!(s.documents().is_empty());
@@ -150,7 +150,7 @@ fn an_unnumbered_file_is_not_part_of_a_numeric_sequence() {
 /// with the same number, frames of another size, a frame that isn't an image, a missing file.
 #[test]
 fn bad_sequences_are_errors_and_open_nothing() {
-    let mut s = Session::new();
+    let mut s = crate::session();
 
     let gap = folder("gap");
     write_bar(&gap.join("frame001.png"), 40, 30, 10);
@@ -183,7 +183,7 @@ fn bad_sequences_are_errors_and_open_nothing() {
 #[test]
 fn bad_params_are_errors() {
     let d = measured_folder("params");
-    let mut s = Session::new();
+    let mut s = crate::session();
     assert!(s.execute("file.openImageSequence", json!({})).is_err());
     assert!(s.execute("file.openImageSequence", json!({"path": 7})).is_err());
     for fps in [json!(0), json!(-1), json!(1001), json!("30"), json!(f64::MAX)] {
@@ -237,7 +237,7 @@ fn each_file_is_one_frame_even_an_animated_gif() {
         let path = d.join(format!("clip{i}.gif")).to_string_lossy().into_owned();
         super::tests::write_gif(&path, 40, 30, &[([255, 0, 0], 10), ([0, 0, 255], 10), ([0, 255, 0], 10)]);
     }
-    let mut s = Session::new();
+    let mut s = crate::session();
     let r = open(&mut s, &d, "clip1.gif", json!({})).unwrap();
     assert_eq!(r["frames"], 2);
     let id = LayerId(r["layer"].as_u64().unwrap());
