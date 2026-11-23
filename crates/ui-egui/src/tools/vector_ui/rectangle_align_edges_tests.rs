@@ -20,7 +20,7 @@ const GEAR: &str = "Set additional shape and path options";
 
 /// A 200 × 100 document with the Rectangle tool and its options set by `set`. The pixel-grid snap
 /// of vector tools is off, so only Align Edges rounds.
-fn app(set: impl FnOnce(&mut ToolOptions)) -> PhotocraftApp {
+fn app(set: impl FnOnce(&mut ToolOptions)) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.run("prefs.set", json!({"path": "tools.snapVectorToolsAndTransformsToPixelGrid", "value": false})).unwrap();
