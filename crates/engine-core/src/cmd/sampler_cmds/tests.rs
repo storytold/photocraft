@@ -96,14 +96,12 @@ fn move_delete_and_clear() {
 }
 
 #[test]
-fn placing_and_moving_add_no_history_and_change_no_pixels() {
+fn placing_and_moving_change_no_pixels() {
     let mut s = session();
     let before = s.active().unwrap().doc.layers[0].surface().unwrap().pixel(5, 5);
-    let past = s.active().unwrap().history.past_len();
     s.execute("view.colorSamplers.add", json!({"x": 5, "y": 5})).unwrap();
     s.execute("view.colorSamplers.move", json!({"index": 0, "x": 9, "y": 9})).unwrap();
     s.execute("view.colorSamplers.delete", json!({"index": 0})).unwrap();
-    assert_eq!(s.active().unwrap().history.past_len(), past, "no history steps");
     assert_eq!(s.active().unwrap().doc.layers[0].surface().unwrap().pixel(5, 5), before, "no pixels changed");
     assert!(!s.active().unwrap().is_dirty(), "a clean document stays clean");
 }

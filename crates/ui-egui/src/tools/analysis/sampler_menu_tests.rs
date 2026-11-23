@@ -80,6 +80,9 @@ fn the_sampler_menu_only_deletes_the_point_under_the_pointer() {
     assert_eq!(samplers(&app), [[20.5, 20.5], [180.5, 90.5]], "only the middle sampler is removed");
     let listed = app.run("view.colorSamplers.list", json!({})).unwrap();
     assert_eq!(listed["samplers"][1]["number"], 2, "the last sampler becomes number 2");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Color Sampler"));
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(samplers(&app), before);
 }
 
 /// Delete never removes a different sampler when the list changes while the menu is open: one

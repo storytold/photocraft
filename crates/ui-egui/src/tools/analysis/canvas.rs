@@ -6,7 +6,7 @@
 
 use craft::behavior::kurbo::Point;
 use craft::behavior::{CancelReason, CountMark, Cursor, CursorBadge, CursorIcon, EditEvent, Input, Metrics, Mixed, PaintedCursor};
-use craft::color_ui::ui::{ColorSamplerMarks, ColorSamplerTool, ColorSamplers, SamplerEvent};
+use craft::color_ui::ui::{ColorSamplerMarks, ColorSamplerPass, ColorSamplerTool, ColorSamplers, SamplerEvent};
 use craft::draw::ui::{RulerLine, RulerTool};
 use craft::ui::canvas::{CanvasTool, NoTool, ToolAction, ToolClaims, ToolContext, ToolHostResponse, ToolKey, ToolPath, ToolPointer, canvas_space};
 use craft::ui::contract::{Access, Common, Component, Cx, MeasureCx, PaintUi, Props as _, Role, Show as _};
@@ -30,6 +30,8 @@ const MOVED: f64 = 0.5;
 pub(crate) struct AnalysisTools {
     ruler: RulerTool,
     sampler: ColorSamplerTool,
+    sampler_press: Option<usize>,
+    sampler_events: Vec<SamplerEvent>,
     /// The document's points as the framework's collection, which the sampler pass borrows. It is rebuilt from the
     /// document at every pass (`tool`); it is storage for that borrow, not state.
     samplers: ColorSamplers,
@@ -42,6 +44,8 @@ impl Default for AnalysisTools {
         Self {
             ruler: RulerTool::new(),
             sampler: ColorSamplerTool::new(),
+            sampler_press: None,
+            sampler_events: Vec::new(),
             samplers: ColorSamplers::new(),
             count: CountTool::default(),
             note: NoteTool::default(),
@@ -73,7 +77,7 @@ fn ruler_line(app: &PhotocraftApp) -> Option<RulerLine> {
 /// The tool of `Tool::{Ruler, ColorSampler, Count, Note}` for one pass.
 pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut AnalysisTools, _host: CanvasHost) -> FamilyTool<'a> {
     let tool = scope.with_app(|app| app.ui.tool);
-    let AnalysisTools { ruler, sampler, samplers, count, note } = state;
+    let AnalysisTools { ruler, sampler, samplers, sampler_press, sampler_events, count, note } = state;
     match tool {
         Tool::Ruler => {
             let line = scope.with_app(|app| ruler_line(app));
@@ -85,7 +89,7 @@ pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut AnalysisTools, _
             Some((built, size)) => {
                 *samplers = built;
                 let samplers: &'a ColorSamplers = samplers;
-                Box::new(sampler.pass(samplers, size))
+                Box::new(SamplerHistoryPass { pass: sampler.pass(samplers, size), samplers, pressed: sampler_press, events: sampler_events })
             }
             None => Box::new(NoTool),
         },
@@ -95,6 +99,68 @@ pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut AnalysisTools, _
             let deletable = scope.with_app(|app| super::note_alerts::deletable(app));
             Box::new(NotePass { scope, state: note, deletable })
         }
+    }
+}
+
+/// The framework reports changes to the sampler list. PhotoCraft also records a completed
+/// gesture on an existing point when it lands on the same pixel.
+struct SamplerHistoryPass<'a> {
+    pass: ColorSamplerPass<'a>,
+    samplers: &'a ColorSamplers,
+    pressed: &'a mut Option<usize>,
+    events: &'a mut Vec<SamplerEvent>,
+}
+
+impl CanvasTool for SamplerHistoryPass<'_> {
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        let action = self.pass.press(pointer, cx);
+        self.events.extend(self.pass.take_events());
+        *self.pressed = None;
+        if matches!(action, ToolAction::Claimed)
+            && let Some(space) = cx.space()
+        {
+            let Point { x, y } = space.view.to_doc(pointer.pos);
+            *self.pressed = self.samplers.hit([x, y], space.view.doc_len(cx.reach()));
+        }
+        action
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.pass.drag(pointer, cx);
+    }
+
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.pass.release(pointer, cx);
+        let events = self.pass.take_events();
+        let pressed = self.pressed.take();
+        if events.is_empty()
+            && let Some(index) = pressed
+            && let Some(&point) = self.samplers.points().get(index)
+        {
+            self.events.push(SamplerEvent::moved(index, point));
+        }
+        self.events.extend(events);
+    }
+
+    fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
+        *self.pressed = None;
+        self.pass.cancel(reason, cx);
+    }
+
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        self.pass.paint(draw, cx);
+    }
+
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        self.pass.cursor(cx)
+    }
+
+    fn autoscrolls(&self) -> bool {
+        self.pass.autoscrolls()
+    }
+
+    fn command_form(&self) -> ToolPath {
+        self.pass.command_form()
     }
 }
 
@@ -111,7 +177,7 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut AnalysisTools, _respons
             _ => {}
         }
     }
-    for event in state.sampler.take_events() {
+    for event in std::mem::take(&mut state.sampler_events) {
         let result = match event {
             SamplerEvent::Add { at, .. } => {
                 if app.session.active().is_some_and(|st| st.color_samplers.len() >= photocraft_engine::sampler_cmds::MAX_SAMPLERS) {

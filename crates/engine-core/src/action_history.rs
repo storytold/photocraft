@@ -1,7 +1,7 @@
 //! Consolidate document history after commands finish their own atomic transactions.
 use crate::{EngineError, Result, Session};
 use photocraft_doc::{DocId, Document};
-use photocraft_ops::{History, LayerTarget};
+use photocraft_ops::{ColorSamplerChange, History, LayerTarget};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,6 +12,7 @@ struct BeforeDocument {
     doc: Arc<Document>,
     history: History,
     layers: LayerTarget,
+    color_samplers: Vec<[f64; 2]>,
     coalesce: Option<String>,
     saved_revision: u64,
     clean: bool,
@@ -25,6 +26,7 @@ impl BeforeDocument {
             doc: st.doc.clone(),
             history: st.history.clone(),
             layers: st.layer_target(),
+            color_samplers: st.color_samplers.clone(),
             coalesce: st.coalesce.clone(),
             saved_revision: st.saved_revision,
             clean: !st.is_dirty(),
@@ -135,7 +137,9 @@ fn consolidate(s: &mut Session, group: &ActionHistory) {
         history.max_states = st.history.max_states;
         history.max_bytes = st.history.max_bytes;
         history.non_linear = st.history.non_linear;
-        if st.doc.as_ref() == before.doc.as_ref() {
+        let samplers_changed =
+            st.history.color_sampler_history_revision() != before.history.color_sampler_history_revision() && st.color_samplers != before.color_samplers;
+        if st.doc.as_ref() == before.doc.as_ref() && !samplers_changed {
             *st.doc_mut() = before.doc.clone();
             st.coalesce = before.coalesce.clone();
             if before.clean && st.saved_revision == before.saved_revision {
@@ -144,7 +148,8 @@ fn consolidate(s: &mut Session, group: &ActionHistory) {
         } else {
             let visibility = st.history.captured_visibility().unwrap_or(st.history.current_visibility()).to_vec();
             history.set_current_layers(before.layers.clone());
-            history.record(format!("Action: {}", group.name), before.doc.clone(), st.layer_target());
+            let change = samplers_changed.then(|| ColorSamplerChange::new(&before.color_samplers, &st.color_samplers));
+            history.record_with_color_samplers(format!("Action: {}", group.name), before.doc.clone(), st.layer_target(), change);
             history.add_current_visibility(&visibility);
             st.coalesce = None;
         }

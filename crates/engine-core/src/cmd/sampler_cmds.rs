@@ -2,8 +2,8 @@
 //! the Info panel, so a fixed position can be compared instead of chasing the live pointer.
 //!
 //! Points are per-document view state ([`crate::DocState::color_samplers`]): they belong to their
-//! document, are discarded when it closes, and are not saved to `.pcraft` or PSD. Placing, moving
-//! and removing them changes no pixels and adds no History step, so they are not journaled. Each
+//! document and are discarded when it closes. Placing, moving and removing them records a
+//! pixel-neutral History step. Each
 //! point reads one composite pixel (no averaging); its values match the Info panel's pointer
 //! readout (RGB 0–255 and colour-managed CMYK percentages, as in the Color Picker).
 
@@ -11,7 +11,7 @@ use photocraft_doc::Document;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::{DocState, EngineError, Result, Session};
+use crate::{EngineError, Result, Session};
 
 /// Photoshop's Color Sampler limit: at most 10 points per document.
 pub const MAX_SAMPLERS: usize = 10;
@@ -87,20 +87,23 @@ fn index_param(cmd: &str, p: &Value) -> Result<usize> {
     p.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(cmd, "pass `index` (0-based)"))
 }
 
-/// Apply a Color Sampler change to the active document: view state, so no history step and no
-/// pixels. Bumps the revision (keeping a clean document clean) so UIs refresh.
-fn change<R>(s: &mut Session, f: impl FnOnce(&mut DocState) -> Result<R>) -> Result<R> {
+/// Validate the edit against a copy of the point list before touching History, so failed
+/// commands leave the points, Undo and Redo intact.
+fn change(s: &mut Session, label: &str, f: impl FnOnce(&Document, &mut Vec<[f64; 2]>) -> Result<Value>) -> Result<Value> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let mut points = st.color_samplers.clone();
+    let result = f(&st.doc, &mut points)?;
+    crate::actions_cmds::before_action_edit(s);
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let r = f(st)?;
-    let clean = st.saved_revision == st.revision;
-    st.revision += 1;
-    st.record_unknown_damage();
-    if clean {
-        st.saved_revision = st.revision;
-    }
-    st.last_damage = Some(photocraft_geom::Rect::EMPTY);
-    st.record_damage();
-    Ok(r)
+    let change = photocraft_ops::ColorSamplerChange::new(&st.color_samplers, &points);
+    let layers = st.layer_target();
+    st.history.set_current_layers(layers.clone());
+    st.history.record_with_color_samplers(label, st.doc.clone(), layers, Some(change));
+    st.color_samplers = points;
+    st.trim_history();
+    st.coalesce = None;
+    st.bump_view_revision(!st.is_dirty());
+    Ok(result)
 }
 
 fn add(s: &mut Session, p: &Value) -> Result<Value> {
@@ -108,14 +111,14 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
     let size = crate::sample_cmds::size_param(CMD, p)?;
-    change(s, |st| {
-        let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
-        if st.color_samplers.len() >= MAX_SAMPLERS {
+    change(s, "New Color Sampler", |doc, points| {
+        let pos = pixel(doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
+        if points.len() >= MAX_SAMPLERS {
             return Err(EngineError::Other(limit_message()));
         }
-        st.color_samplers.push(pos);
-        let i = st.color_samplers.len() - 1;
-        Ok(json!({"index": i, "count": st.color_samplers.len(), "point": point_json(&st.doc, i, pos, size)}))
+        let i = points.len();
+        points.push(pos);
+        Ok(json!({"index": i, "count": points.len(), "point": point_json(doc, i, pos, size)}))
     })
 }
 
@@ -125,34 +128,35 @@ fn move_point(s: &mut Session, p: &Value) -> Result<Value> {
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
     let size = crate::sample_cmds::size_param(CMD, p)?;
-    change(s, |st| {
-        let n = st.color_samplers.len();
-        if i >= n {
-            return Err(bad(CMD, format!("no sample point {i} (the document has {n})")));
-        }
-        let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
-        st.color_samplers[i] = pos;
-        Ok(json!({"index": i, "point": point_json(&st.doc, i, pos, size)}))
+    change(s, "Drag Color Sampler", |doc, points| {
+        let n = points.len();
+        let point = points.get_mut(i).ok_or_else(|| bad(CMD, format!("no sample point {i} (the document has {n})")))?;
+        let pos = pixel(doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
+        *point = pos;
+        Ok(json!({"index": i, "point": point_json(doc, i, pos, size)}))
     })
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "view.colorSamplers.delete";
     let i = index_param(CMD, p)?;
-    change(s, |st| {
-        let n = st.color_samplers.len();
+    change(s, "Delete Color Sampler", |_, points| {
+        let n = points.len();
         if i >= n {
             return Err(bad(CMD, format!("no sample point {i} (the document has {n})")));
         }
-        st.color_samplers.remove(i);
-        Ok(json!({"deleted": 1, "remaining": st.color_samplers.len()}))
+        points.remove(i);
+        Ok(json!({"deleted": 1, "remaining": points.len()}))
     })
 }
 
 fn clear(s: &mut Session, _p: &Value) -> Result<Value> {
-    change(s, |st| {
-        let n = st.color_samplers.len();
-        st.color_samplers.clear();
+    if s.active().ok_or(EngineError::NoDocument)?.color_samplers.is_empty() {
+        return Ok(json!({"deleted": 0, "remaining": 0}));
+    }
+    change(s, "Delete Color Sampler", |_, points| {
+        let n = points.len();
+        points.clear();
         Ok(json!({"deleted": n, "remaining": 0}))
     })
 }
@@ -226,3 +230,6 @@ mod pixel_centre_tests;
 
 #[cfg(test)]
 mod sample_size_tests;
+
+#[cfg(test)]
+mod history_tests;
