@@ -512,7 +512,10 @@ fn a_vanished_remembered_printer_falls_back_to_the_default() {
 
 #[test]
 fn print_one_copy_keeps_saved_settings_while_the_spooler_is_busy() {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    // In a child, so a print that waits for the lock fails when `in_child`'s bound ends.
+    if !in_child("cmd::print_cmds::tests::print_one_copy_keeps_saved_settings_while_the_spooler_is_busy", &[("PHOTOCRAFT_NO_PRINT", "1")]) {
+        return;
+    }
     for cached in [false, true] {
         let mut s = session("rgb", 8);
         s.printer_source = Some(test_printers());
@@ -521,22 +524,18 @@ fn print_one_copy_keeps_saved_settings_while_the_spooler_is_busy() {
             s.execute("file.printers", json!({})).unwrap();
         }
         let (held_tx, held) = std::sync::mpsc::channel();
-        let (release, released_rx) = std::sync::mpsc::channel::<()>();
-        let released = std::sync::Arc::new(AtomicBool::new(false));
-        let done = released.clone();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        // The holder keeps the lock until `release` is sent, after the print returns.
         let holder = std::thread::spawn(move || {
             with_spooler(|| {
                 held_tx.send(()).unwrap();
-                let _ = released_rx.recv_timeout(std::time::Duration::from_secs(5));
-                done.store(true, Ordering::SeqCst);
+                let _ = released.recv();
             });
         });
         held.recv().unwrap();
         let result = s.start("file.printOneCopy", json!({"dryRun": true}));
-        let waited = released.load(Ordering::SeqCst);
         let _ = release.send(());
         holder.join().unwrap();
-        assert!(!waited, "Print One Copy waited for the spooler; cached={cached}");
         result.unwrap();
         let remembered = last_print(&s).unwrap();
         assert_eq!(remembered["printer"], "Saved printer");
@@ -1307,10 +1306,12 @@ mod cups {
         s.file_menu.last_print = Some(json!({"printServer": server, "printer": "Gone"}));
         let (held_tx, held) = mpsc::channel();
         let (release, released) = mpsc::channel::<()>();
+        // The holder keeps the lock until `release` is sent, after the print returns. A print
+        // that waits for the lock never returns, and `in_child` fails the test when its bound ends.
         let holder = std::thread::spawn(move || {
             with_spooler(|| {
                 held_tx.send(()).unwrap();
-                let _ = released.recv_timeout(std::time::Duration::from_secs(5));
+                let _ = released.recv();
             });
         });
         held.recv().unwrap();
