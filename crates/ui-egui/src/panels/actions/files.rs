@@ -1,5 +1,6 @@
 //! Load Actions… and Save Actions…: the `.atn` file dialogs of the Actions panel.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 
 use craft::host::{PickRequest, Picked};
@@ -42,7 +43,7 @@ pub(super) fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) ->
     };
     // Show what arrived: select the first loaded action, expanded.
     let first = r["actions"][0].as_str().and_then(|first| {
-        let list = &app.session.actions.list;
+        let list = &app.session.actions().list;
         list.actions().iter().position(|a| a.name == first).map(|i| (i, first.to_string()))
     });
     if let Some((i, first)) = first {

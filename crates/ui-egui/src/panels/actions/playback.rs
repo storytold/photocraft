@@ -10,6 +10,7 @@
 use craft::ui::contract::Bind;
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 use web_time::{Duration, Instant};
 
@@ -62,7 +63,7 @@ pub(super) fn step_pause(app: &PhotocraftApp) -> Option<Duration> {
 /// Park `action` after its step `i` (`ran` steps of it so far): it continues from the next step
 /// after `wait`. Returns the `paused` value the runner reports.
 pub(super) fn pace(app: &mut PhotocraftApp, action: &str, i: usize, id: &str, ran: u64, wait: Duration) -> Value {
-    let rev = app.session.actions.list.revision();
+    let rev = app.session.actions().list.revision();
     let gate = app.session.authorize;
     let pb = &mut app.paused_playbacks;
     let token = pb.pause(action.to_string(), i.saturating_add(1), gate);
@@ -102,7 +103,7 @@ pub(crate) fn stop(app: &mut PhotocraftApp) -> bool {
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(timer) = app.paused_playbacks.timer else { return };
     let esc = !app.dialog_open() && crate::window_keys::take_escape(ctx);
-    let changed = timer.rev != app.session.actions.list.revision() || app.session.recording.target.is_some();
+    let changed = timer.rev != app.session.actions().list.revision() || app.session.recording.target.is_some();
     if esc || changed || !app.paused_playbacks.paused.contains_key(&timer.token) {
         stop(app);
         return;

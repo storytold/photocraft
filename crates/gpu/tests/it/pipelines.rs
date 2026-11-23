@@ -55,7 +55,14 @@ fn every_compositor_pipeline_builds() {
             let info = adapter.get_info();
             let format = Compositor::preferred_acc_format(&adapter);
             // Draws build only the pipelines they use; this builds every one.
-            let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+            // GLES shares one adapter-context lock. Building every pipeline on
+            // available_parallelism() threads panics with "Could not lock adapter
+            // context. This is most-likely a deadlock." on the artcraft k8s runners,
+            // which expose both Vulkan and GL on llvmpipe and can report dozens of CPUs.
+            let threads = match info.backend {
+                wgpu::Backend::Gl => 1,
+                _ => std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+            };
             if let Err(e) = Compositor::try_new_with_format_threads(&device, format, threads) {
                 panic!("{:?} adapter {} (driver {}): {e}", info.backend, info.name, info.driver_info);
             }

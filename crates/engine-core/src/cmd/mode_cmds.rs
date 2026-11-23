@@ -7,6 +7,7 @@
 //! inks (`Document::duotone`), which display and flat export render through. Like Photoshop the
 //! conversions flatten (Indexed, Bitmap) and require a grayscale source (Bitmap, Duotone).
 
+use crate::color_cmds::ColorExt;
 use craft_cms::{ColorSpace, TransformOptions};
 use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
@@ -357,8 +358,8 @@ fn working_matte_color(s: &Session, doc: &Document, color: [f32; 4]) -> Result<[
         // CMYK and Lab flatten through the compositor's sRGB view on the pinned main path.
         _ => crate::color_cmds::composite_profile(doc),
     };
-    let source = s.color.working(ColorMode::Rgb);
-    let options = TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() };
+    let source = s.color().working(ColorMode::Rgb);
+    let options = TransformOptions { intent: s.color().settings.intent(), bpc: s.color().settings.bpc, ..Default::default() };
     let transform = craft_cms::transform::cached(&source, &destination, options)
         .map_err(|e| bad("image.mode.indexedColor", format!("cannot convert matte colour: {e}")))?;
     let mut output = [0.0; 16];

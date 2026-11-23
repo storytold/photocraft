@@ -1,4 +1,5 @@
 use super::*;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 use craft::automation::actions::{ActionList, ActionStep};
 use craft::automation::ui::actions::{ActionSelection, ActionsEvent, ActionsHost};
@@ -21,18 +22,18 @@ fn new_action(name: &str, pairs: Vec<(String, Value)>) -> Action {
 
 /// Add `action` to the session's list.
 fn add_action(app: &mut PhotocraftApp, action: Action) {
-    app.session.actions.list.push(action).expect("a name the list does not hold yet");
+    app.session.actions_mut().list.push(action).expect("a name the list does not hold yet");
 }
 
 /// The steps of action `index` as `(command, params)` pairs, the form the journal and the engine's
 /// results keep.
 fn pairs(app: &PhotocraftApp, index: usize) -> Vec<(String, Value)> {
-    app.session.actions.list.actions()[index].steps.iter().map(|s| (s.command.clone(), s.params.clone())).collect()
+    app.session.actions().list.actions()[index].steps.iter().map(|s| (s.command.clone(), s.params.clone())).collect()
 }
 
 /// The commands of action `index`'s steps.
 fn commands(app: &PhotocraftApp, index: usize) -> Vec<String> {
-    app.session.actions.list.actions()[index].steps.iter().map(|s| s.command.clone()).collect()
+    app.session.actions().list.actions()[index].steps.iter().map(|s| s.command.clone()).collect()
 }
 
 /// Edit the session's actions as a plain vector, to reach states the list's own edits do not
@@ -40,9 +41,9 @@ fn commands(app: &PhotocraftApp, index: usize) -> Vec<String> {
 /// replaces the old one through [`ActionList::replace`], so the revision only moves forward; a
 /// name taken twice is renamed, as for any load.
 fn edit_actions(app: &mut PhotocraftApp, edit: impl FnOnce(&mut Vec<Action>)) {
-    let mut file = app.session.actions.list.to_file();
+    let mut file = app.session.actions().list.to_file();
     edit(&mut file.actions);
-    app.session.actions.list.replace(ActionList::from_file(file));
+    app.session.actions_mut().list.replace(ActionList::from_file(file));
 }
 
 /// Press the footer's Play on the selected action (or `action` from step `from`), as the panel
@@ -315,12 +316,12 @@ fn spelling_playback_blocks_library_edits_until_done() {
     let error = app.run("actions.clearAll", json!({"confirm": true})).unwrap_err();
     assert_eq!(app.ui.status, error);
     assert!(app.ui.status_error);
-    assert_eq!(app.session.actions.list.actions()[0].name, "Spell");
+    assert_eq!(app.session.actions().list.actions()[0].name, "Spell");
     close_spelling(&mut app);
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "Tail");
     app.run("actions.clearAll", json!({"confirm": true})).unwrap();
-    assert!(app.session.actions.list.actions().is_empty());
+    assert!(app.session.actions().list.actions().is_empty());
 }
 
 fn deny_second_spelling_change(id: &str, params: &Value) -> photocraft_engine::Result<()> {
@@ -435,7 +436,7 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
         let output = dir.path().join(if mixed { "mixed" } else { "success" });
         let inputs = if mixed { vec![&input, &corrupt] } else { vec![&input] };
         let batch = json!({"input": inputs, "output": output, "steps": [], "format": "png"});
-        let index = app.session.actions.list.actions().len();
+        let index = app.session.actions().list.actions().len();
         let name = if mixed { "Mixed Batch" } else { "Successful Batch" };
         add_action(&mut app, new_action(name, vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))]));
         let result = app.run("actions.play", json!({"action": index})).unwrap();
@@ -478,7 +479,7 @@ fn played_view_steps_act_on_the_document_the_steps_before_them_opened() {
     assert_ne!(opened, 0);
     assert!(app.ui.views[opened].pending.ends_with(&[ViewCommands::ZoomIn, ViewCommands::ZoomIn, ViewCommands::FitOnScreen].map(ViewRequest::Command)));
     assert!(app.ui.views[0].pending.is_empty(), "the document open before is left alone");
-    let around = app.session.actions.list.actions().iter().position(|a| a.name == "Around").unwrap();
+    let around = app.session.actions().list.actions().iter().position(|a| a.name == "Around").unwrap();
     assert_eq!(commands(&app, around), ["actions.play"], "the view steps are not recorded a second time");
 }
 
@@ -493,13 +494,13 @@ fn view_menu_commands_record_append_and_replay_after_resize() {
     super::begin_recording(&mut app, Some(0));
     crate::menus::invoke(&mut app, &ctx, "view.fitOnScreen", json!({})).unwrap();
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list.actions().len(), 1);
+    assert_eq!(app.session.actions().list.actions().len(), 1);
     assert_eq!(commands(&app, 0), ["image.canvasSize", "view.fitOnScreen"]);
     assert_eq!(label_of("view.fitOnScreen"), "Fit on Screen");
     // Persisted actions retain the menu step, and playback fits the new document.
-    let saved = serde_json::to_string(&app.session.actions.list.to_file()).unwrap();
+    let saved = serde_json::to_string(&app.session.actions().list.to_file()).unwrap();
     let file = serde_json::from_str(&saved).unwrap();
-    app.session.actions.list.replace(ActionList::from_file(file));
+    app.session.actions_mut().list.replace(ActionList::from_file(file));
     app.run("file.new", json!({"width": 200, "height": 140})).unwrap();
     app.run("view.actualPixels", json!({})).unwrap();
     let result = app.run("actions.play", json!({"action": 0})).unwrap();
@@ -794,7 +795,7 @@ fn recorded_save_as_with_the_suggested_name_saves_each_document_under_its_own() 
         [("file.saveAs".into(), json!({"folder": "out", "extension": "psd"})), ("file.saveAs".into(), json!({"path": "out/renamed.psd"}))]
     );
     // Played on two other documents: each under its own name in the recorded folder.
-    app.session.actions.list.delete_step(0, 1).unwrap();
+    app.session.actions_mut().list.delete_step(0, 1).unwrap();
     written.borrow_mut().clear();
     let mut expected = Vec::new();
     for name in ["second", "third"] {
@@ -1004,7 +1005,7 @@ fn a_check_spelling_step_with_its_dialog_opens_it_and_done_continues() {
     assert!(layer_names(&app).contains(&"after".to_string()), "Done played the rest");
     assert!(app.ui.status.starts_with("Played"), "{}", app.ui.status);
     // With its dialog off, the step checks without opening anything and changes nothing.
-    app.session.actions.list.set_dialog(0, 0, false).unwrap();
+    app.session.actions_mut().list.set_dialog(0, 0, false).unwrap();
     let v = play(&mut app, &json!({"action": "Spell"})).unwrap();
     assert_eq!(v["ran"], 2, "{v}");
     assert!(app.ui.type_panels.spell.is_none());
@@ -1261,7 +1262,7 @@ fn a_recorded_call_paused_by_a_dialog_records_one_call_and_replays_once() {
     let live = app.session.journal.len();
     let id = pause_child(&mut app);
     assert!(app.session.recording.target.is_none(), "recording stays suspended while the step dialog is open");
-    let names = |app: &PhotocraftApp| app.session.actions.list.actions().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+    let names = |app: &PhotocraftApp| app.session.actions().list.actions().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
     let before = names(&app);
     assert_eq!(app.run("actions.record", json!({"name": "Intruder"})), Err(refusal.clone()), "no second recording while the call is suspended");
     assert_eq!(app.run("actions.delete", json!({"action": "Owner"})), Err(refusal.clone()), "the suspended owner can't be deleted");
@@ -1329,7 +1330,7 @@ fn a_failing_resumed_playback_ends_the_recorded_call_once() {
     let mut app = recording_with_dialog_child();
     let id = pause_child(&mut app);
     // The rest of the call can't be found any more: resuming it fails.
-    app.session.actions.list.rename(0, "Renamed", |_, _, _| {}).unwrap();
+    app.session.actions_mut().list.rename(0, "Renamed", |_, _, _| {}).unwrap();
     assert!(answer_ok(&mut app, id).is_err(), "the resumed playback fails");
     assert!(app.session.recording.target.is_some(), "recording comes back when the resumed playback fails");
     app.run("actions.stop", json!({})).unwrap();
@@ -1345,7 +1346,7 @@ fn a_suspended_call_is_recorded_into_its_action_after_the_list_changes() {
     answer_ok(&mut app, id).unwrap();
     app.run("actions.stop", json!({})).unwrap();
     assert!(pairs(&app, 1).is_empty(), "the action now at the old index gets nothing");
-    assert_eq!(app.session.actions.list.actions()[2].name, "Owner");
+    assert_eq!(app.session.actions().list.actions()[2].name, "Owner");
     assert_eq!(pairs(&app, 2), child_call());
 }
 
@@ -1409,7 +1410,7 @@ fn recording_with_displace_child(answers: impl IntoIterator<Item = craft::host::
     let services = crate::Services { files: Some(std::sync::Arc::new(craft::host::ScriptedFiles::answering(answers))), ..Default::default() };
     let mut app = recording_with_dialog_child_using(services);
     app.background_jobs = false;
-    app.session.actions.list.replace_step(0, 0, ActionStep::new("filter.distort.displace", json!({}))).unwrap();
+    app.session.actions_mut().list.replace_step(0, 0, ActionStep::new("filter.distort.displace", json!({}))).unwrap();
     app
 }
 
@@ -1642,7 +1643,7 @@ fn a_changed_live_gate_cannot_be_replaced_for_the_remaining_action() {
             let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
             if nested {
                 add_action(&mut app, new_action("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
-                app.session.actions.list.replace_step(0, 2, ActionStep::new("actions.play", json!({"action":"Nested tail"}))).unwrap();
+                app.session.actions_mut().list.replace_step(0, 2, ActionStep::new("actions.play", json!({"action":"Nested tail"}))).unwrap();
             }
             spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
             let corrected = app.session.active().unwrap().doc.clone();
@@ -1688,7 +1689,7 @@ fn a_changed_context_is_rejected_before_dialog_or_worker_admission() {
 fn unchanged_and_released_gates_allow_the_action_tail() {
     for scenario in ["released", "same", "new"] {
         let mut app = gated_blur_fixture(true, false);
-        app.session.actions.list.insert_step(0, 1, ActionStep::new("layer.renameLayer", json!({"name":"Allowed tail"}))).unwrap();
+        app.session.actions_mut().list.insert_step(0, 1, ActionStep::new("layer.renameLayer", json!({"name":"Allowed tail"}))).unwrap();
         let dialog = pause_gated_blur(&mut app, (scenario != "new").then_some(deny_wide_blur as Gate));
         match scenario {
             "same" | "new" => app.session.authorize = Some(deny_wide_blur),
@@ -1710,7 +1711,7 @@ fn configured_gates_require_one_composed_policy_for_automated_resume() {
     assert!(!std::ptr::fn_addr_eq(deny_wide_blur as Gate, deny_file_open as Gate));
     for (automated, identical) in [(false, false), (true, false), (true, true)] {
         let mut app = gated_blur_fixture(true, false);
-        app.session.actions.list.insert_step(0, 1, ActionStep::new("layer.renameLayer", json!({"name":"Allowed tail"}))).unwrap();
+        app.session.actions_mut().list.insert_step(0, 1, ActionStep::new("layer.renameLayer", json!({"name":"Allowed tail"}))).unwrap();
         app.session.authorize = Some(deny_wide_blur);
         let service: Gate = if identical { deny_wide_blur } else { deny_file_open };
         app.services.automation_authorize = Some(service);
@@ -1749,7 +1750,7 @@ fn configured_gates_require_one_composed_policy_for_automated_resume() {
 /// A policy change after the final spelling step must not discard completed edits when no tail remains to dispatch.
 fn a_changed_gate_after_the_last_spelling_step_keeps_completed_edits() {
     let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
-    app.session.actions.list.delete_step(0, 2).unwrap();
+    app.session.actions_mut().list.delete_step(0, 2).unwrap();
     spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
     let corrected = app.session.active().unwrap().doc.clone();
     app.session.authorize = Some(|_, _| Ok(()));
@@ -1786,7 +1787,7 @@ fn paused_adjustments_bind_implicit_pixel_and_mask_receivers() {
             } else if targeting == "null" {
                 params["layer"] = Value::Null;
             }
-            app.session.actions.list.replace_step(0, 0, ActionStep::new("image.adjustments.brightnessContrast", params)).unwrap();
+            app.session.actions_mut().list.replace_step(0, 0, ActionStep::new("image.adjustments.brightnessContrast", params)).unwrap();
             let dialog = pause_gated_blur(&mut app, None);
             app.session.select_layer(b).unwrap();
             let before = app.session.active().unwrap().doc.clone();
@@ -1817,7 +1818,7 @@ fn paused_adjustments_bind_implicit_pixel_and_mask_receivers() {
         let b = photocraft_doc::LayerId(app.run("layer.new.layer", json!({"name":"B"})).unwrap()["layer"].as_u64().unwrap());
         app.session.select_layer(a).unwrap();
         app.session
-            .actions
+            .actions_mut()
             .list
             .replace_step(0, 0, ActionStep::new("image.adjustments.brightnessContrast", json!({"brightness":40,"target":{"channel":0}})))
             .unwrap();
@@ -1837,7 +1838,7 @@ fn paused_adjustments_bind_implicit_pixel_and_mask_receivers() {
     app.run("layer.layerMask.revealAll", json!({})).unwrap();
     app.run("edit.fill", json!({"color":"#808080","target":"mask"})).unwrap();
     assert!(app.layer_mask_targeted());
-    app.session.actions.list.replace_step(0, 0, ActionStep::new("image.adjustments.brightnessContrast", json!({"brightness":40}))).unwrap();
+    app.session.actions_mut().list.replace_step(0, 0, ActionStep::new("image.adjustments.brightnessContrast", json!({"brightness":40}))).unwrap();
     let before = app.session.active().unwrap().doc.clone();
     let rows = app.session.active().unwrap().history.past_len();
     let dialog = pause_gated_blur(&mut app, None);
@@ -1861,7 +1862,7 @@ fn a_document_channel_adjustment_survives_an_active_layer_change() {
     app.run("edit.fill", json!({"color":"#808080","target":{"channel":0}})).unwrap();
     app.session.select_layer(a).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .replace_step(0, 0, ActionStep::new("image.adjustments.brightnessContrast", json!({"brightness":40,"target":{"channel":0}})))
         .unwrap();
@@ -1887,9 +1888,9 @@ fn an_implicit_paused_filter_refuses_a_public_api_receiver_change() {
             app.run("select.deselect", json!({})).unwrap();
             app.session.select_layer(a).unwrap();
             if explicit {
-                let mut step = app.session.actions.list.actions()[0].steps[0].clone();
+                let mut step = app.session.actions().list.actions()[0].steps[0].clone();
                 step.params["layer"] = json!(a.0);
-                app.session.actions.list.replace_step(0, 0, step).unwrap();
+                app.session.actions_mut().list.replace_step(0, 0, step).unwrap();
             }
             let dialog = pause_gated_blur(&mut app, None);
             // Supported host/session API, not a modal-blocked native menu/control command.
@@ -2062,7 +2063,7 @@ fn a_kept_gate_does_not_carry_into_the_rest_of_a_set_after_a_pause() {
 
     // With that step off, the tail passes, and the user's own action after it plays with the
     // user's access.
-    app.session.actions.list.set_step(0, 2, false).unwrap();
+    app.session.actions_mut().list.set_step(0, 2, false).unwrap();
     play_set(&mut app, "S");
     let dialog = last_dialog(&app);
     answer_ok(&mut app, dialog).unwrap();

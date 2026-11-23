@@ -2,6 +2,8 @@
 //! preset libraries ([`SavedPrefs`]), how it is read, and the session methods that move it in and
 //! out.
 
+use crate::color_cmds::ColorExt;
+use crate::presets::PresetsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -14,8 +16,8 @@ use crate::Session;
 /// Everything PhotoCraft keeps in its settings file: the preferences at the top level (their
 /// sections as `[general]`, `[interface]`, ...), Edit › Color Settings as `colorSettings` and the
 /// preset libraries as `presets`. The type the settings store holds
-/// (`craft::settings::SettingsStore<SavedPrefs>`); [`Session::saved_prefs`] and
-/// [`Session::set_saved_prefs`] move it in and out of the session.
+/// (`craft::settings::SettingsStore<SavedPrefs>`); [`SavedPrefsExt::saved_prefs`] and
+/// [`SavedPrefsExt::set_saved_prefs`] move it in and out of the session.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SavedPrefs {
@@ -47,7 +49,7 @@ impl craft::settings::Settings for SavedPrefs {
     const SCHEMA_VERSION: u32 = 1;
 }
 
-/// Reads a `preferences.json` written by [`Session::prefs_to_json`] (the file before
+/// Reads a `preferences.json` written by [`SavedPrefsExt::prefs_to_json`] (the file before
 /// `config.toml`), with its migrations: the old shift-key default, the single-theme preference,
 /// the `sr` catalog and the renamed command ids. Missing keys keep their defaults and unknown keys
 /// are ignored, so files from older and newer versions load. A value of the wrong type (a
@@ -157,137 +159,146 @@ fn remap_command_ids(v: &mut Value) {
     }
 }
 
-impl Session {
+/// The settings file on a session: preferences, colour settings and presets together.
+pub trait SavedPrefsExt {
     /// Everything persisted as one JSON document: the preferences plus `colorSettings`.
-    pub fn prefs_to_json(&self) -> String {
+    fn prefs_to_json(&self) -> String;
+    /// [`Self::prefs_to_json`] as a JSON tree (frontends merge it with what storage holds).
+    fn prefs_value(&self) -> Value;
+    /// Restore preferences saved by [`Self::prefs_to_json`]: [`parse_prefs_json`], then
+    /// [`Self::set_saved_prefs`]. The returned list names the values both left at their
+    /// defaults. Only text that isn't a JSON object fails as a whole.
+    fn load_prefs_json(&mut self, s: &str) -> std::result::Result<Vec<InvalidPref>, String>;
+    /// Everything the settings file holds, as the session has it now.
+    fn saved_prefs(&self) -> SavedPrefs;
+    /// Takes `saved` as the session's preferences, colour settings and presets, from either source
+    /// (the settings file, or an older `preferences.json` through [`parse_prefs_json`]), and
+    /// applies the engine-side ones. Values that read but that this build no longer accepts are
+    /// put back to their defaults (or the nearest accepted value) and returned.
+    fn set_saved_prefs(&mut self, saved: SavedPrefs) -> Vec<InvalidPref>;
+}
+
+impl SavedPrefsExt for Session {
+    fn prefs_to_json(&self) -> String {
         serde_json::to_string_pretty(&self.prefs_value()).unwrap_or_default()
     }
 
-    /// [`Session::prefs_to_json`] as a JSON tree (frontends merge it with what storage holds).
-    pub fn prefs_value(&self) -> Value {
+    fn prefs_value(&self) -> Value {
         let mut v = self.prefs().to_json();
         if let Value::Object(m) = &mut v {
-            m.insert("colorSettings".into(), serde_json::to_value(&self.color.settings).unwrap_or(Value::Null));
+            m.insert("colorSettings".into(), serde_json::to_value(&self.color().settings).unwrap_or(Value::Null));
             m.insert("version".into(), json!(PREFS_VERSION));
-            m.insert("presets".into(), self.presets.to_json(self));
+            m.insert("presets".into(), self.presets().to_json(self));
         }
         v
     }
 
-    /// Restore preferences saved by [`Session::prefs_to_json`]: [`parse_prefs_json`], then
-    /// [`Session::set_saved_prefs`]. The returned list names the values both left at their
-    /// defaults. Only text that isn't a JSON object fails as a whole.
-    pub fn load_prefs_json(&mut self, s: &str) -> std::result::Result<Vec<InvalidPref>, String> {
+    fn load_prefs_json(&mut self, s: &str) -> std::result::Result<Vec<InvalidPref>, String> {
         let (saved, mut invalid) = parse_prefs_json(s)?;
         invalid.extend(self.set_saved_prefs(saved));
         Ok(invalid)
     }
 
-    /// Everything the settings file holds, as the session has it now.
-    pub fn saved_prefs(&self) -> SavedPrefs {
-        SavedPrefs { prefs: self.prefs().clone(), color_settings: self.color.settings.clone(), presets: self.presets.to_json(self) }
+    fn saved_prefs(&self) -> SavedPrefs {
+        SavedPrefs { prefs: self.prefs().clone(), color_settings: self.color().settings.clone(), presets: self.presets().to_json(self) }
     }
 
-    /// Takes `saved` as the session's preferences, colour settings and presets, from either source
-    /// (the settings file, or an older `preferences.json` through [`parse_prefs_json`]), and
-    /// applies the engine-side ones. Values that read but that this build no longer accepts are
-    /// put back to their defaults (or the nearest accepted value) and returned.
-    pub fn set_saved_prefs(&mut self, saved: SavedPrefs) -> Vec<InvalidPref> {
+    fn set_saved_prefs(&mut self, saved: SavedPrefs) -> Vec<InvalidPref> {
         let SavedPrefs { mut prefs, color_settings, presets } = saved;
         let mut invalid = Vec::new();
         // An Effect Cache the field no longer accepts (above the 32-bit cap, saved before the cap
         // or by a 64-bit build; a hand-edited 0) loads as the nearest value it does. Otherwise
         // Apply from another Preferences tab, which validates every value, would reject it.
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
-        self.color.settings = color_settings;
+        self.color_mut().settings = color_settings;
         // A number outside 0..MAX reads, but `validate_settings` would then refuse every later
         // Color Settings edit: reset it like an unreadable value.
-        let gain = self.color.settings.spot_dot_gain;
+        let gain = self.color().settings.spot_dot_gain;
         if !(gain.is_finite() && (0.0..=photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN).contains(&gain)) {
             invalid.push(InvalidPref { keys: vec!["colorSettings".into(), "spotDotGain".into()], value: json!(gain) });
-            self.color.settings.spot_dot_gain = photocraft_compose::multichannel::SPOT_DOT_GAIN;
+            self.color_mut().settings.spot_dot_gain = photocraft_compose::multichannel::SPOT_DOT_GAIN;
         }
-        photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
-        photocraft_compose::multichannel::set_spot_dot_gain(self.color.settings.spot_dot_gain);
+        photocraft_compose::psblend::set_text_gamma(self.color().settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(self.color().settings.spot_dot_gain);
         self.prefs.edit(|p| *p = prefs);
         self.load_presets_json(presets);
         self.apply_prefs();
         invalid
     }
+}
 
-    /// Full JSON view used by `prefs.get`: preferences plus `colorSettings`.
-    pub(super) fn prefs_view(&self) -> Value {
-        let mut v = self.prefs().to_json();
-        if let Value::Object(m) = &mut v {
-            m.insert("colorSettings".into(), serde_json::to_value(&self.color.settings).unwrap_or(Value::Null));
-        }
-        // Old clients read the single-theme preference: the theme the appearance mode shows.
-        if let Some(interface) = v.get_mut("interface").and_then(Value::as_object_mut) {
-            interface.insert("theme".into(), json!(self.prefs().interface.shown_theme()));
-        }
-        v
+/// Full JSON view used by `prefs.get`: preferences plus `colorSettings`.
+pub(super) fn prefs_view(s: &Session) -> Value {
+    let mut v = s.prefs().to_json();
+    if let Value::Object(m) = &mut v {
+        m.insert("colorSettings".into(), serde_json::to_value(&s.color().settings).unwrap_or(Value::Null));
     }
+    // Old clients read the single-theme preference: the theme the appearance mode shows.
+    if let Some(interface) = v.get_mut("interface").and_then(Value::as_object_mut) {
+        interface.insert("theme".into(), json!(s.prefs().interface.shown_theme()));
+    }
+    v
+}
 
-    /// Set one dotted path, routing `colorSettings.*` to the colour state.
-    /// Batches defer colour validation until their complete candidate is staged. Returns
-    /// whether colour settings were touched, including whole-section/root-object updates.
-    pub(super) fn set_pref(&mut self, path: &str, value: Value, validate_color: bool) -> std::result::Result<bool, String> {
-        // The section itself or a path inside it: `colorSettingsworkingRgb`, `colorSettings.` and
-        // `colorSettings..workingRgb` are none, and the authorization policy doesn't treat them as one.
-        if let Some(rest) =
-            path.strip_prefix("colorSettings").filter(|r| r.is_empty() || r.strip_prefix('.').is_some_and(|c| c.split('.').all(|part| !part.is_empty())))
-        {
-            let mut cur = serde_json::to_value(&self.color.settings).map_err(|e| e.to_string())?;
-            let rest = rest.trim_start_matches('.');
-            if rest.is_empty() {
-                cur = value;
-            } else {
-                set_path(&mut cur, rest, value)?;
-            }
-            let next = serde_json::from_value(cur).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
-            if validate_color {
-                crate::color_cmds::validate_settings(&next)?;
-            }
-            self.color.settings = next;
-            self.prefs.edit(|_| ());
-            return Ok(true);
-        }
-        let mut next = self.prefs().clone();
-        let mut color_changed = false;
-        if path.is_empty() || SECTIONS.iter().any(|(id, _)| *id == path) || matches!(path, "shortcuts" | "alternateShortcuts" | "menus" | "toolbar") {
-            // Whole section (or everything): merge the object key by key so each value is checked.
-            let obj = value.as_object().ok_or_else(|| format!("`{path}` needs an object"))?;
-            let current = self.prefs().interface.clone();
-            let applies = |p: &str, v: &Value| p != "interface.theme" || current.section_theme_changes(v);
-            for (k, v) in obj {
-                let p = if path.is_empty() { k.clone() } else { format!("{path}.{k}") };
-                if path.is_empty() && k == "colorSettings" {
-                    color_changed |= self.set_pref("colorSettings", v.clone(), validate_color)?;
-                    continue;
-                }
-                if v.is_object()
-                    && !p.starts_with("shortcuts")
-                    && !p.starts_with("alternateShortcuts")
-                    && !p.ends_with(".colors")
-                    && next.get(&p).is_some_and(|c| c.is_object())
-                {
-                    for (k2, v2) in v.as_object().into_iter().flatten() {
-                        let p2 = format!("{p}.{k2}");
-                        if applies(&p2, v2) {
-                            next.set(&p2, v2.clone())?;
-                        }
-                    }
-                } else if applies(&p, v) {
-                    next.set(&p, v.clone())?;
-                }
-            }
+/// Set one dotted path, routing `colorSettings.*` to the colour state.
+/// Batches defer colour validation until their complete candidate is staged. Returns
+/// whether colour settings were touched, including whole-section/root-object updates.
+pub(super) fn set_pref(s: &mut Session, path: &str, value: Value, validate_color: bool) -> std::result::Result<bool, String> {
+    // The section itself or a path inside it: `colorSettingsworkingRgb`, `colorSettings.` and
+    // `colorSettings..workingRgb` are none, and the authorization policy doesn't treat them as one.
+    if let Some(rest) =
+        path.strip_prefix("colorSettings").filter(|r| r.is_empty() || r.strip_prefix('.').is_some_and(|c| c.split('.').all(|part| !part.is_empty())))
+    {
+        let mut cur = serde_json::to_value(&s.color().settings).map_err(|e| e.to_string())?;
+        let rest = rest.trim_start_matches('.');
+        if rest.is_empty() {
+            cur = value;
         } else {
-            next.set(path, value)?;
+            set_path(&mut cur, rest, value)?;
         }
-        if next.actions.create_single_history_state != self.prefs().actions.create_single_history_state && crate::action_history::history_policy_in_use(self) {
-            return Err("cannot change action history settings during playback".into());
+        let next = serde_json::from_value(cur).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
+        if validate_color {
+            crate::color_cmds::validate_settings(&next)?;
         }
-        self.prefs.edit(|p| *p = next);
-        Ok(color_changed)
+        s.color_mut().settings = next;
+        s.prefs.edit(|_| ());
+        return Ok(true);
     }
+    let mut next = s.prefs().clone();
+    let mut color_changed = false;
+    if path.is_empty() || SECTIONS.iter().any(|(id, _)| *id == path) || matches!(path, "shortcuts" | "alternateShortcuts" | "menus" | "toolbar") {
+        // Whole section (or everything): merge the object key by key so each value is checked.
+        let obj = value.as_object().ok_or_else(|| format!("`{path}` needs an object"))?;
+        let current = s.prefs().interface.clone();
+        let applies = |p: &str, v: &Value| p != "interface.theme" || current.section_theme_changes(v);
+        for (k, v) in obj {
+            let p = if path.is_empty() { k.clone() } else { format!("{path}.{k}") };
+            if path.is_empty() && k == "colorSettings" {
+                color_changed |= set_pref(s, "colorSettings", v.clone(), validate_color)?;
+                continue;
+            }
+            if v.is_object()
+                && !p.starts_with("shortcuts")
+                && !p.starts_with("alternateShortcuts")
+                && !p.ends_with(".colors")
+                && next.get(&p).is_some_and(|c| c.is_object())
+            {
+                for (k2, v2) in v.as_object().into_iter().flatten() {
+                    let p2 = format!("{p}.{k2}");
+                    if applies(&p2, v2) {
+                        next.set(&p2, v2.clone())?;
+                    }
+                }
+            } else if applies(&p, v) {
+                next.set(&p, v.clone())?;
+            }
+        }
+    } else {
+        next.set(path, value)?;
+    }
+    if next.actions.create_single_history_state != s.prefs().actions.create_single_history_state && crate::action_history::history_policy_in_use(s) {
+        return Err("cannot change action history settings during playback".into());
+    }
+    s.prefs.edit(|p| *p = next);
+    Ok(color_changed)
 }

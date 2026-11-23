@@ -1,6 +1,7 @@
 //! Explicit Paste modes preserve source kind instead of silently using the ordinary raster route.
 
 use photocraft_engine::Session;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::json;
 
 /// This uses only the original public command API, so the pre-fix failure is executable.
@@ -286,15 +287,15 @@ fn atn_classes_roundtrip_and_play_real_modes() {
         assert_eq!(load(&mut s, &recorded(descriptor(class_id)))["unsupported"], json!([]));
         // `As Pxel` is what an ordinary Paste records: it keeps the ordinary route.
         let params = if mode == "pixels" { json!({}) } else { json!({"as":mode}) };
-        assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("edit.paste", params)]);
+        assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("edit.paste", params)]);
         let saved = save(&mut s);
         let file = atn::parse(&saved).unwrap();
         if mode != "pixels" {
             assert_eq!(file.actions[0].items[0].descriptor.as_ref().unwrap().get("As  "), descriptor(class_id).get("As  "));
         }
         let imported = atn_cmds::import(&saved).unwrap();
-        assert_eq!(imported.actions[0].steps, s.actions.list.actions()[0].steps);
-        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        assert_eq!(imported.actions[0].steps, s.actions().list.actions()[0].steps);
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         let result = s.execute("actions.play", json!({"action":"Paste"})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none(), "{result}");
@@ -316,7 +317,7 @@ fn atn_classes_roundtrip_and_play_real_modes() {
 fn atn_unknown_forms_are_kept_and_legacy_omission_stays_legacy() {
     let mut s = scene(8);
     assert_eq!(load(&mut s, &recorded(Descriptor::new("null")))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("edit.paste", json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("edit.paste", json!({}))]);
     for d in [
         descriptor("unknownClass"),
         Descriptor::new("null").with("As  ", D::Text(UnicodeString::new_nul("Path"))),
@@ -328,7 +329,7 @@ fn atn_unknown_forms_are_kept_and_legacy_omission_stays_legacy() {
         let file = atn::parse(&original).unwrap();
         let mut s = Session::new();
         assert_eq!(load(&mut s, &original)["unsupported"].as_array().unwrap().len(), 1);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         assert_eq!(atn::parse(&save(&mut s)).unwrap().actions[0].items[0].descriptor, file.actions[0].items[0].descriptor);
     }
     for p in [
@@ -358,7 +359,7 @@ fn recorded_pixels_paste_keeps_the_ordinary_route() {
     s.execute("edit.paste", json!({"as":"shape"})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
     assert_eq!(load(&mut s, &recorded(recorded_pixels_paste(false)))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("edit.paste", json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("edit.paste", json!({}))]);
     let layers = s.active().unwrap().doc.layers.len();
     let result = s.execute("actions.play", json!({"action":"Paste"})).unwrap();
     assert_eq!(result["ran"], 1);
@@ -372,5 +373,5 @@ fn recorded_pixels_paste_keeps_the_ordinary_route() {
 fn recorded_pixels_paste_in_place_maps() {
     let mut s = Session::new();
     assert_eq!(load(&mut s, &recorded(recorded_pixels_paste(true)))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("edit.pasteSpecial.pasteInPlace", json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("edit.pasteSpecial.pasteInPlace", json!({}))]);
 }

@@ -7,6 +7,7 @@
 //! per-step flag sets (`disabled`, `dialogs`) in step with the moved indices, like
 //! `actions.move` and `actions.delete`.
 
+use crate::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 
 use crate::actions_cmds::{ActionStep, flush_recording, list_error, not_playing, note_automation_edit, pending_steps, resolve, shift_action_calls};
@@ -78,7 +79,7 @@ fn is_step_command(id: &str) -> bool {
 fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.insert";
     not_playing(s, cmd)?;
-    let idx = resolve(s.actions.list.actions(), p, cmd)?;
+    let idx = resolve(s.actions().list.actions(), p, cmd)?;
     let id = match p.get("id") {
         Some(Value::String(id)) if !id.trim().is_empty() => id.trim().to_string(),
         _ => return Err(bad(cmd, "needs `id`, the command the step runs")),
@@ -94,12 +95,13 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     if id == "actions.play" {
         // Refuse the one cycle visible here; deeper ones are caught at playback.
         let target = params.get("action");
-        let is_self = target.and_then(Value::as_str) == Some(s.actions.list.actions()[idx].name.as_str()) || target.and_then(Value::as_u64) == Some(idx as u64);
+        let is_self =
+            target.and_then(Value::as_str) == Some(s.actions().list.actions()[idx].name.as_str()) || target.and_then(Value::as_u64) == Some(idx as u64);
         if is_self {
             return Err(bad(cmd, "an action cannot play itself"));
         }
     }
-    let len = s.actions.list.step_count(idx).saturating_add(pending_steps(s, idx).count());
+    let len = s.actions().list.step_count(idx).saturating_add(pending_steps(s, idx).count());
     let at = index(p, "at", cmd)?.unwrap_or(len);
     if at > len {
         return Err(bad(cmd, format!("`at` {at} is past the last step ({len})")));
@@ -108,10 +110,10 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
         flush_recording(s)?;
     }
     let is_stop = id == crate::atn_cmds::STOP_MESSAGE;
-    s.actions.list.insert_step(idx, at, ActionStep::new(id, params)).map_err(|e| list_error(cmd, e))?;
+    s.actions_mut().list.insert_step(idx, at, ActionStep::new(id, params)).map_err(|e| list_error(cmd, e))?;
     // A newly inserted Stop shows its message in the app. Duplicates keep their own flags.
     if is_stop {
-        s.actions.list.set_dialog(idx, at, true).map_err(|e| list_error(cmd, e))?;
+        s.actions_mut().list.set_dialog(idx, at, true).map_err(|e| list_error(cmd, e))?;
     }
     note_automation_edit(s, idx);
     Ok(step_result(s, idx, at))
@@ -119,7 +121,7 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The result of an insert or a step duplicate: step `at` of action `idx` as it now stands.
 fn step_result(s: &Session, idx: usize, at: usize) -> Value {
-    let action = &s.actions.list.actions()[idx];
+    let action = &s.actions().list.actions()[idx];
     json!({"action": action.name, "step": at, "id": action.steps[at].command, "steps": action.steps.len()})
 }
 
@@ -133,16 +135,16 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return duplicate_set(s, set.as_str().ok_or_else(|| bad(cmd, "set must be a name"))?);
     }
-    let idx = resolve(s.actions.list.actions(), p, cmd)?;
+    let idx = resolve(s.actions().list.actions(), p, cmd)?;
     if let Some(step) = index(p, "step", cmd)? {
-        let len = s.actions.list.step_count(idx).saturating_add(pending_steps(s, idx).count());
+        let len = s.actions().list.step_count(idx).saturating_add(pending_steps(s, idx).count());
         if step >= len {
             return Err(bad(cmd, "step is out of range"));
         }
         if s.recording.target.is_some_and(|(_, i)| i == idx) {
             flush_recording(s)?;
         }
-        s.actions.list.duplicate_step(idx, step).map_err(|e| list_error(cmd, e))?;
+        s.actions_mut().list.duplicate_step(idx, step).map_err(|e| list_error(cmd, e))?;
         note_automation_edit(s, idx);
         let mut result = step_result(s, idx, step + 1);
         result["index"] = json!(idx);
@@ -151,8 +153,8 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     if s.recording.target.is_some() {
         return Err(bad(cmd, "stop recording before duplicating an action"));
     }
-    let at = s.actions.list.duplicate_action(idx, shift_action_calls).map_err(|e| list_error(cmd, e))?;
-    let copy = &s.actions.list.actions()[at];
+    let at = s.actions_mut().list.duplicate_action(idx, shift_action_calls).map_err(|e| list_error(cmd, e))?;
+    let copy = &s.actions().list.actions()[at];
     Ok(json!({"action": copy.name, "index": at, "steps": copy.steps.len()}))
 }
 
@@ -166,9 +168,9 @@ fn duplicate_set(s: &mut Session, source: &str) -> Result<Value> {
     if !sets.iter().any(|name| name == source) {
         return Err(bad(cmd, "the selected set no longer exists"));
     }
-    let name = s.actions.list.duplicate_set(source, shift_action_calls).map_err(|e| list_error(cmd, e))?;
-    let copies = s.actions.list.actions().iter().filter(|action| action.set.as_deref() == Some(name.as_str())).count();
-    match s.actions.list.actions().iter().position(|action| action.set.as_deref() == Some(name.as_str())) {
+    let name = s.actions_mut().list.duplicate_set(source, shift_action_calls).map_err(|e| list_error(cmd, e))?;
+    let copies = s.actions().list.actions().iter().filter(|action| action.set.as_deref() == Some(name.as_str())).count();
+    match s.actions().list.actions().iter().position(|action| action.set.as_deref() == Some(name.as_str())) {
         Some(at) => Ok(json!({"set": name, "index": at, "actions": copies})),
         None => Ok(json!({"set": name, "actions": 0})),
     }
@@ -179,21 +181,21 @@ fn duplicate_set(s: &mut Session, source: &str) -> Result<Value> {
 fn dialog(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.dialog";
     not_playing(s, cmd)?;
-    let idx = resolve(s.actions.list.actions(), p, cmd)?;
+    let idx = resolve(s.actions().list.actions(), p, cmd)?;
     let enabled = match p.get("enabled") {
         None | Some(Value::Null) => None,
         Some(Value::Bool(b)) => Some(*b),
         Some(_) => return Err(bad(cmd, "`enabled` must be true or false")),
     };
     let step = index(p, "step", cmd)?;
-    let len = s.actions.list.step_count(idx).saturating_add(pending_steps(s, idx).count());
+    let len = s.actions().list.step_count(idx).saturating_add(pending_steps(s, idx).count());
     if step.is_some_and(|step| step >= len) {
         return Err(bad(cmd, "step is out of range"));
     }
     if s.recording.target.is_some_and(|(_, i)| i == idx) {
         flush_recording(s)?;
     }
-    let action = &s.actions.list.actions()[idx];
+    let action = &s.actions().list.actions()[idx];
     // One step, or every step: on unless all already are.
     let edits: Vec<(usize, bool)> = match step {
         Some(step) => vec![(step, enabled.unwrap_or(!action.dialogs.contains(&step)))],
@@ -203,31 +205,31 @@ fn dialog(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     for (step, on) in edits {
-        s.actions.list.set_dialog(idx, step, on).map_err(|e| list_error(cmd, e))?;
+        s.actions_mut().list.set_dialog(idx, step, on).map_err(|e| list_error(cmd, e))?;
     }
-    let action = &s.actions.list.actions()[idx];
+    let action = &s.actions().list.actions()[idx];
     Ok(json!({"action": action.name, "dialogs": action.dialogs}))
 }
 
 fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.assignSet";
     not_playing(s, cmd)?;
-    let idx = resolve(s.actions.list.actions(), p, cmd)?;
+    let idx = resolve(s.actions().list.actions(), p, cmd)?;
     let set = match p.get("set") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(Value::String(_)) => return Err(bad(cmd, "`set` is empty; pass null to take the action out of its set")),
         Some(_) => return Err(bad(cmd, "`set` must be a name or null")),
     };
-    s.actions.list.assign_set(idx, set).map_err(|e| list_error(cmd, e))?;
-    let action = &s.actions.list.actions()[idx];
+    s.actions_mut().list.assign_set(idx, set).map_err(|e| list_error(cmd, e))?;
+    let action = &s.actions().list.actions()[idx];
     Ok(json!({"action": action.name, "set": action.set}))
 }
 
 /// Every set name, in the Actions panel's order: the sets of the actions as they first appear,
 /// then the empty ones New Set made.
 pub fn set_names(s: &Session) -> Vec<String> {
-    s.actions.list.sets().into_iter().map(str::to_owned).collect()
+    s.actions().list.sets().into_iter().map(str::to_owned).collect()
 }
 
 /// New Set…: an empty set folder, named `name` or "Set N" (the first number no set has), that New
@@ -245,7 +247,7 @@ fn new_set(s: &mut Session, p: &Value) -> Result<Value> {
     if names.contains(&name) {
         return Err(bad(cmd, format!("a set named `{name}` already exists")));
     }
-    s.actions.list.new_set(&name).map_err(|e| list_error(cmd, e))?;
+    s.actions_mut().list.new_set(&name).map_err(|e| list_error(cmd, e))?;
     Ok(json!({"set": name}))
 }
 
@@ -505,11 +507,12 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use crate::actions_cmds::Action;
+    use crate::actions_cmds::ActionsExt;
 
     fn session_with(steps: &[&str]) -> Session {
         let mut s = crate::session();
         s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-        s.actions.list.push(Action::new("A", steps.iter().map(|id| ActionStep::new(*id, json!({}))).collect())).unwrap();
+        s.actions_mut().list.push(Action::new("A", steps.iter().map(|id| ActionStep::new(*id, json!({}))).collect())).unwrap();
         s
     }
 
@@ -522,14 +525,14 @@ mod tests {
             .execute("actions.insert", json!({"action": "A", "at": 1, "id": "actions.stopMessage", "params": {"message": "Check", "allowContinue": true}}))
             .unwrap();
         assert_eq!((r["step"].as_u64(), r["steps"].as_u64()), (Some(1), Some(4)));
-        let a = &s.actions.list.actions()[0];
+        let a = &s.actions().list.actions()[0];
         assert_eq!(a.steps[1], ActionStep::new("actions.stopMessage", json!({"message": "Check", "allowContinue": true})));
         assert_eq!(a.disabled.iter().copied().collect::<Vec<_>>(), [2], "the switched-off step moved down one");
         assert_eq!(a.dialogs.iter().copied().collect::<Vec<_>>(), [1, 3], "the inserted Stop's dialog is on; the old toggle moved down one");
         // Default position: the end. A bare id works for a parameterless command.
         let r = s.execute("actions.insert", json!({"action": 0, "id": "layer.new.layer"})).unwrap();
         assert_eq!(r["step"], 4);
-        assert_eq!(s.actions.list.actions()[0].steps[4].command, "layer.new.layer");
+        assert_eq!(s.actions().list.actions()[0].steps[4].command, "layer.new.layer");
         // Playback runs the inserted stop and continues past it.
         let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
         assert_eq!(played["ran"], 4, "{played}");
@@ -544,7 +547,7 @@ mod tests {
         s.execute("actions.insert", json!({"action": "A", "at": 0, "id": "select.all"})).unwrap();
         s.execute("layer.new.layer", json!({"name": "Two"})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
-        let ids: Vec<&str> = s.actions.list.actions()[0].steps.iter().map(|step| step.command.as_str()).collect();
+        let ids: Vec<&str> = s.actions().list.actions()[0].steps.iter().map(|step| step.command.as_str()).collect();
         assert_eq!(ids, ["select.all", "layer.new.layer", "layer.new.layer"]);
     }
 
@@ -560,14 +563,14 @@ mod tests {
         assert_eq!(s.execute("actions.get", json!({"action": "A"})).unwrap()["dialogs"], json!([0, 1]));
         // Deleting a step keeps the flags of the others in place.
         s.execute("actions.delete", json!({"action": "A", "step": 0})).unwrap();
-        assert_eq!(s.actions.list.actions()[0].dialogs.iter().copied().collect::<Vec<_>>(), [0]);
+        assert_eq!(s.actions().list.actions()[0].dialogs.iter().copied().collect::<Vec<_>>(), [0]);
     }
 
     #[test]
     fn conditional_tests_the_document_and_plays_a_branch() {
         let mut s = session_with(&[]);
-        s.actions.list.push(Action::new("Yes", vec![ActionStep::new("layer.new.layer", json!({"name": "yes"}))])).unwrap();
-        s.actions.list.push(Action::new("No", vec![ActionStep::new("layer.new.layer", json!({"name": "no"}))])).unwrap();
+        s.actions_mut().list.push(Action::new("Yes", vec![ActionStep::new("layer.new.layer", json!({"name": "yes"}))])).unwrap();
+        s.actions_mut().list.push(Action::new("No", vec![ActionStep::new("layer.new.layer", json!({"name": "no"}))])).unwrap();
         let names = |s: &Session| s.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.name.clone()).collect::<Vec<_>>();
         // 8 × 8: square, not landscape; one Background: no layers yet.
         for (cond, expect) in [
@@ -601,11 +604,11 @@ mod tests {
         let r = s.execute("actions.conditional", json!({"if": "landscape", "then": "Yes"})).unwrap();
         assert!(r["played"].is_null());
         // A failing branch reports like a nested Play, and stops a calling action.
-        s.actions.list.push(Action::new("Bad", vec![ActionStep::new("layer.delete", json!({"layer": 999}))])).unwrap();
+        s.actions_mut().list.push(Action::new("Bad", vec![ActionStep::new("layer.delete", json!({"layer": 999}))])).unwrap();
         let r = s.execute("actions.conditional", json!({"if": "always", "then": "Bad"})).unwrap();
         assert!(r["failed"].is_object(), "{r}");
         assert!(crate::actions_cmds::nested_failure("actions.conditional", &r).is_some());
-        s.actions
+        s.actions_mut()
             .list
             .push(Action::new(
                 "Caller",
@@ -648,7 +651,7 @@ mod tests {
         let r = s.execute("actions.record", json!({"set": "Retouch"})).unwrap();
         s.execute("actions.stop", json!({})).unwrap();
         let i = r["index"].as_u64().unwrap() as usize;
-        assert_eq!(s.actions.list.actions()[i].set.as_deref(), Some("Retouch"));
+        assert_eq!(s.actions().list.actions()[i].set.as_deref(), Some("Retouch"));
         assert_eq!(set_names(&s), ["Set 1", "Retouch", "Set 2"], "Retouch now holds an action");
         assert!(s.execute("actions.record", json!({"set": 3})).is_err());
     }
@@ -657,16 +660,16 @@ mod tests {
     fn assign_set_moves_an_action_between_folders() {
         let mut s = session_with(&["select.all"]);
         assert_eq!(s.execute("actions.assignSet", json!({"action": "A", "set": " Retouch "})).unwrap()["set"], "Retouch");
-        assert_eq!(s.actions.list.actions()[0].set.as_deref(), Some("Retouch"));
+        assert_eq!(s.actions().list.actions()[0].set.as_deref(), Some("Retouch"));
         assert_eq!(s.execute("actions.list", json!({})).unwrap()["actions"][0]["set"], "Retouch");
         assert_eq!(s.execute("actions.assignSet", json!({"action": 0, "set": null})).unwrap()["set"], Value::Null);
-        assert_eq!(s.actions.list.actions()[0].set, None);
+        assert_eq!(s.actions().list.actions()[0].set, None);
     }
 
     #[test]
     fn bad_params_fail_gracefully() {
         let mut s = session_with(&["select.all"]);
-        let before = s.actions.list.clone();
+        let before = s.actions().list.clone();
         for p in [
             json!({}),
             json!({"action": "A"}),
@@ -689,9 +692,9 @@ mod tests {
         for p in [json!({}), json!({"action": "A", "set": ""}), json!({"action": "A", "set": 7}), json!({"action": "B", "set": "S"})] {
             assert!(s.execute("actions.assignSet", p.clone()).is_err(), "{p}");
         }
-        assert_eq!(s.actions.list, before, "rejected edits change nothing");
+        assert_eq!(s.actions().list, before, "rejected edits change nothing");
         // Nothing edits during playback.
-        s.actions.list.push(Action::new("Loop", vec![ActionStep::new("actions.insert", json!({"action": "A", "id": "select.all"}))])).unwrap();
+        s.actions_mut().list.push(Action::new("Loop", vec![ActionStep::new("actions.insert", json!({"action": "A", "id": "select.all"}))])).unwrap();
         let played = s.execute("actions.play", json!({"action": "Loop"})).unwrap();
         assert!(played["failed"]["error"].as_str().unwrap().contains("playback"), "{played}");
     }
@@ -699,7 +702,7 @@ mod tests {
     fn record_conditional(width: u32, height: u32) -> (Session, usize) {
         let mut s = crate::session();
         s.execute("file.new", json!({"width": width, "height": height})).unwrap();
-        s.actions.list.push(Action::new("Tall", vec![ActionStep::new("layer.new.layer", json!({"name": "Tall"}))])).unwrap();
+        s.actions_mut().list.push(Action::new("Tall", vec![ActionStep::new("layer.new.layer", json!({"name": "Tall"}))])).unwrap();
         let layers = s.active().unwrap().doc.walk().len();
         s.execute("actions.record", json!({"name": "Parent"})).unwrap();
         s.execute("actions.conditional", json!({"if": "portrait", "then": "Tall", "else": null})).unwrap();
@@ -708,7 +711,7 @@ mod tests {
     }
 
     fn parent_steps(s: &Session) -> Vec<ActionStep> {
-        s.actions.list.actions().iter().find(|a| a.name == "Parent").unwrap().steps.clone()
+        s.actions().list.actions().iter().find(|a| a.name == "Parent").unwrap().steps.clone()
     }
 
     #[test]
