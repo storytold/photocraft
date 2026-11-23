@@ -102,7 +102,7 @@ fn an_unreadable_docking_layout_is_retained_until_a_panel_changes() {
     assert_eq!(snapshot(&app), saved, "the fallback keeps the original layout and its companion data");
     assert!(crate::notices::shown_titled(&app, RECOVERY_TITLE));
 
-    crate::panel_docking::apply(&mut app, Vec::new()).unwrap();
+    assert!(crate::panel_docking::show_panel(&mut app, "layers", Some(true)).unwrap());
     assert_eq!(snapshot(&app), saved, "showing the already visible panel keeps the saved layout");
 
     app.run("window.panel.close", json!({"panel": "layers"})).unwrap();
@@ -113,6 +113,7 @@ fn an_unreadable_docking_layout_is_retained_until_a_panel_changes() {
 #[test]
 fn choosing_or_resetting_to_the_same_arrangement_replaces_the_unreadable_layout() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
     app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
     let default = snapshot(&app);
     let named = crate::workspace_ui::save(&mut app, "Same arrangement").unwrap();
@@ -130,7 +131,7 @@ fn choosing_or_resetting_to_the_same_arrangement_replaces_the_unreadable_layout(
         assert!(crate::workspace_ui::select(&mut app, "missing-workspace").is_err());
         assert_eq!(snapshot(&app), saved);
 
-        app.run(command, json!({})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
         assert_eq!(app.session.prefs().panel_layout, default);
         assert!(!crate::notices::shown_titled(&app, RECOVERY_TITLE));
     }
