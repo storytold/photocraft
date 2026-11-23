@@ -143,6 +143,10 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
     }
     // Each band of output rows loads and filters along x only the source rows its taps read.
     let (a, stretch) = filter.kernel(ny as f64 / h as f64);
+    // A transform cancelled before this pass builds no tap table (ten million taps for a 1 px source enlarged that far).
+    if ctl.cancelled() {
+        return None;
+    }
     let taps = tap_table(ny, h, a, stretch, along_y)?;
     let last = h.saturating_sub(1) as i64;
     for y0 in (0..ny).step_by(band) {
@@ -299,7 +303,8 @@ pub(crate) fn load(src: &Surface, bounds: Rect, depth: Depth) -> Option<Image> {
     const READ_ROWS: usize = 4;
     let (w, h, n) = (bounds.width() as usize, bounds.height() as usize, src.channels());
     let mut px = zeros(w.checked_mul(h)?.checked_mul(n)?)?;
-    crate::par::chunks_mut(&mut px, LOAD_ROWS * w * n, true, |i, part| {
+    // Chunks of at most the rows there are: `LOAD_ROWS * w * n` could overflow on wasm32 for a wide one-row source.
+    crate::par::chunks_mut(&mut px, (LOAD_ROWS.min(h) * w * n).max(1), true, |i, part| {
         // A few rows at a time, through one buffer that stays in the cache.
         let mut band = Vec::new();
         for (j, rows) in part.chunks_mut((READ_ROWS * w * n).max(1)).enumerate() {
