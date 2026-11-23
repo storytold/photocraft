@@ -73,7 +73,7 @@ fn discarded(app: &PhotocraftApp, id: &str, params: &Value) -> (Option<DocId>, V
     (target.and_then(|i| docs.get(i)).map(|d| d.doc.id), dirty)
 }
 
-/// Park `id` behind a prompt if it would discard unsaved work. Returns whether it did.
+/// Park `id` behind a prompt if it would discard unsaved work, or hold a Close of a clean document until its running save succeeds (see [`crate::jobs_ui::close_when_saved`]). Returns whether it did.
 pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     let (target, docs) = discarded(app, id, params);
     if docs.is_empty() {
