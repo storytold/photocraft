@@ -102,7 +102,7 @@ fn changed_historical_links_refuse_contents_and_storage_commands_atomically() {
             _ => json!({"layer":id.0}),
         };
         let error = session.execute(&format!("layer.smartObjects.{command}"), params).unwrap_err();
-        assert!(error.to_string().contains("bytes changed"), "{command}: {error}");
+        assert!(matches!(error, crate::EngineError::HistoricalXcfLinkChanged(_)), "{command}: {error}");
         assert!(Arc::ptr_eq(session.active().unwrap().doc(), before.doc()));
         assert_eq!((session.active().unwrap().revision, session.active().unwrap().history.past_len()), (before.revision, before.history.past_len()));
         assert_eq!(session.documents().len(), 1);
@@ -110,10 +110,9 @@ fn changed_historical_links_refuse_contents_and_storage_commands_atomically() {
         assert!(!output.exists());
         assert_eq!(std::fs::read(&path).unwrap(), changed);
     }
-    // Convert to Linked has a narrower supported contract: interpreted contents
-    // need an explicit replacement workflow before any file is written.
+    // Convert to Linked also authenticates the old revision before its first write.
     let error = session.execute("layer.smartObjects.convertToLinked", json!({"layer":id.0,"path":output})).unwrap_err();
-    assert!(error.to_string().contains("explicit sample-order workflow"), "{error}");
+    assert!(matches!(error, crate::EngineError::HistoricalXcfLinkChanged(_)), "{error}");
     assert!(!output.exists());
     assert!(Arc::ptr_eq(session.active().unwrap().doc(), before.doc()));
     std::fs::write(&path, &approved).unwrap();
