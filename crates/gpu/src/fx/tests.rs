@@ -318,6 +318,130 @@ fn bands_end_at_the_coordinate_ceiling() {
     assert_eq!(super::bands(Rect::new(0, 0, 8, 10), 0).len(), 10, "a zero step still makes progress");
 }
 
+/// #14950: the Size 1 Outer Glow program convolves the ¼–½–¼ taps the CPU's `glow_map` applies,
+/// instead of dropping the identity width-1 blur, so both compositors build the same map. A Size 10
+/// outer glow still takes the tent of its size, and a Size 1 Inner Glow takes the same published
+/// taps through main's own #14924 branch, untouched by this one.
+#[test]
+fn size_one_outer_glow_convolves_the_cpus_kernel() {
+    use crate::plan::Kernel;
+    use photocraft_doc::{FxPaint, Glow, GlowSource, GlowTechnique};
+    let light = GlobalLight::default();
+    let softer = |size: f32| Glow {
+        common: FxCommon::new(BlendMode::Normal, 1.0),
+        paint: FxPaint::Color(photocraft_color::Color::BLACK),
+        technique: GlowTechnique::Softer,
+        spread: 0.0,
+        size,
+        contour: Contour::Linear,
+        anti_alias: false,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    };
+    let blurs = |e: &Effect| {
+        program(e, &light, false)
+            .stages
+            .iter()
+            .filter(|st| st.kernel == Kernel::MBlur)
+            .map(|st| (st.radius, st.lut.clone().map(|l| (*l).clone()).unwrap_or_default()))
+            .collect::<Vec<_>>()
+    };
+    let one = blurs(&Effect::OuterGlow(softer(1.0)));
+    assert_eq!(one.len(), 2, "two separable passes over the Size 1 outer glow map");
+    let (r1, w1) = photocraft_compose::effects::size_one_kernel();
+    for (radius, lut) in &one {
+        assert_eq!(*radius, r1, "the Size 1 kernel radius");
+        assert_eq!(lut.as_slice(), w1.as_slice(), "the taps the CPU map applies");
+    }
+    let (r10, w10) = photocraft_compose::effects::tent_kernel(10.0);
+    let ten = blurs(&Effect::OuterGlow(softer(10.0)));
+    assert_eq!(ten.len(), 2, "a Size 10 outer glow still blurs twice");
+    for (radius, lut) in &ten {
+        assert_eq!(*radius, r10);
+        assert_eq!(lut.as_slice(), w10.as_slice(), "Size 10 stays on the tent");
+    }
+    let inner1 = blurs(&Effect::InnerGlow(softer(1.0)));
+    assert_eq!(inner1.len(), 2, "main's #14924 arm: a Size 1 inner glow now blurs with the Size 1 taps");
+    for (radius, lut) in &inner1 {
+        assert_eq!(*radius, r1);
+        assert_eq!(lut.as_slice(), w1.as_slice(), "the inner Size 1 program takes the same published taps");
+    }
+}
+
+/// The second review thread on this PR asks what the Size 1 branch does to semi-transparent and
+/// anti-aliased source pixels, whose behaviour issue #14950 leaves unmeasured. The glow program
+/// takes its kernel from the effect settings alone and reads only the layer's shape: no distance
+/// field, no second input, so this side has nothing to gate a source-alpha rule on. Convolving the
+/// published `size_one_kernel` over the reviewer's input (the issue's rectangle at alpha 0.5) the
+/// way `fs_mblur` does lands on exactly the numbers the CPU's `size_one_blur` gives for the same
+/// rectangle, pinned in compose `outer_glow_size_one_tests::size_one_at_half_alpha_adds_the_quarter_ramp_of_the_review`:
+/// 0.125 on the first pixel above a half-alpha edge, 0.375 on the edge pixel, 0 two pixels out.
+#[test]
+fn size_one_kernel_convolve_matches_the_cpu_on_a_half_alpha_edge() {
+    use photocraft_doc::{Glow, GlowSource, GlowTechnique};
+    let (w, h) = (40usize, 30usize);
+    let mut v = vec![0.0f32; w * h];
+    for y in 5..25 {
+        for x in 10..30 {
+            v[y * w + x] = 0.5;
+        }
+    }
+    let (r, taps) = photocraft_compose::effects::size_one_kernel();
+    let r = i64::from(r);
+    let (wi, hi) = (w as i64, h as i64);
+    let at = |s: &[f32], x: i64, y: i64| -> f32 { if x < 0 || y < 0 || x >= wi || y >= hi { 0.0 } else { s[(y * wi + x) as usize] } };
+    // Two separable passes with the published taps, zero outside the region: `fs_mblur`.
+    let mut tmp = vec![0.0f32; v.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = 0.0;
+            for (i, tap) in taps.iter().enumerate() {
+                acc += at(&v, x + i as i64 - r, y) * *tap;
+            }
+            tmp[(y * wi + x) as usize] = acc;
+        }
+    }
+    let mut out = vec![0.0f32; v.len()];
+    for y in 0..hi {
+        for x in 0..wi {
+            let mut acc = 0.0;
+            for (i, tap) in taps.iter().enumerate() {
+                acc += at(&tmp, x, y + i as i64 - r) * *tap;
+            }
+            out[(y * wi + x) as usize] = acc;
+        }
+    }
+    assert_eq!(out[4 * w + 20], 0.125, "one pixel above a half-alpha edge, as on the CPU");
+    assert_eq!(out[5 * w + 20], 0.375, "the half-alpha edge pixel itself, as on the CPU");
+    assert_eq!(out[3 * w + 20], 0.0, "nothing two pixels out");
+    // And the program really does read only the shape: a source-alpha gate would need a new input.
+    let light = GlobalLight::default();
+    let p = program(
+        &Effect::OuterGlow(Glow {
+            common: FxCommon::new(BlendMode::Normal, 1.0),
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size: 1.0,
+            contour: Contour::Linear,
+            anti_alias: false,
+            range: 0.5,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        }),
+        &light,
+        false,
+    );
+    assert!(p.fields.is_empty(), "the Size 1 Softer glow program asks for no distance field");
+    assert!(
+        p.stages.iter().all(|st| matches!(st.a, Some(In::Shape) | Some(In::Val(_)))),
+        "every stage reads the layer shape or the previous stage, never a per-pixel alpha input"
+    );
+}
+
 /// #14934: the GPU's Inner Shadow program takes the same sub-pixel source offset as the CPU's
 /// `shadow_map` - without a device, by asking what stages the effect builds. The measured gate
 /// (Anti-aliased on, Gaussian contour, the inner branch) is what adds the stage; a Linear contour
