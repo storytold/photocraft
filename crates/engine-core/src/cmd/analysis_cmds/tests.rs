@@ -319,7 +319,7 @@ fn deleting_an_earlier_count_group_keeps_the_active_group() {
 fn log_delete_and_csv_export() {
     let mut s = session(10, 10, 8);
     assert!(!s.is_enabled("measurementLog.delete"));
-    s.execute("image.analysis.recordMeasurements", json!({"dateTime": "t"})).unwrap();
+    s.execute("image.analysis.recordMeasurements", json!({"source": "selection", "dateTime": "t"})).unwrap();
     s.execute("image.analysis.rulerTool", json!({"start": [0, 0], "end": [3, 4]})).unwrap();
     s.execute("image.analysis.recordMeasurements", json!({"source": "ruler", "dateTime": "t"})).unwrap();
     let r = s.execute("measurementLog.list", json!({})).unwrap();
@@ -591,4 +591,22 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert_eq!(a.bounds, b.bounds);
         assert!(b.histogram.is_empty());
     }
+}
+
+#[test]
+fn auto_record_measurements_requires_an_active_source() {
+    let mut s = session(160, 120, 8);
+    s.execute("image.analysis.selectDataPoints", json!({"reset": true})).unwrap();
+    // No selection, ruler or count markers: auto mode refuses and leaves the log empty.
+    assert!(s.execute("image.analysis.recordMeasurements", json!({"source": "auto"})).is_err());
+    let list = s.execute("measurementLog.list", json!({})).unwrap();
+    assert_eq!(list["rows"].as_array().map(Vec::len), Some(0));
+
+    // After Select All, auto mode records the 19,200 px² selection row.
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("image.analysis.recordMeasurements", json!({"source": "auto"})).unwrap();
+    let list = s.execute("measurementLog.list", json!({})).unwrap();
+    let rows = list["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["values"]["area"].as_f64(), Some(19200.0));
 }
