@@ -457,13 +457,26 @@ fn fields_set_position(f: &mut DialogFields, left: f64, top: f64) {
 /// The document's flattened picture at the preview size, mirrored for Emulsion Down (the sheet
 /// draws the picture unmirrored in the box). The texture lives in the context's memory under the
 /// document's id and revision, and the scratch read-error generation (`crate::scratch_reads`).
-fn picture(ctx: &egui::Context, doc: &photocraft_doc::Document, revision: u64, mirror: bool) -> egui::load::SizedTexture {
-    let key = egui::Id::unique(("print-thumb", doc.id.0, revision, mirror, crate::scratch_reads::generation()));
+fn picture(ctx: &egui::Context, doc: &photocraft_doc::Document, revision: u64, mirror: bool, rotate: bool) -> egui::load::SizedTexture {
+    let key = egui::Id::unique(("print-thumb", doc.id.0, revision, mirror, rotate, crate::scratch_reads::generation()));
     let tex: Option<std::sync::Arc<egui::TextureHandle>> = ctx.data(|d| d.get_temp(key));
     let tex = tex.unwrap_or_else(|| {
         let th = photocraft_compose::thumbnail(doc, 400);
-        let (w, h) = (th.width as usize, th.height as usize);
+        let (source_w, source_h) = (th.width as usize, th.height as usize);
+        let (mut w, mut h) = (source_w, source_h);
         let mut pixels = th.pixels.clone();
+        if rotate {
+            let mut rotated = vec![0; pixels.len()];
+            for y in 0..source_h {
+                for x in 0..source_w {
+                    let source = (y * source_w + x) * 4;
+                    let target = ((source_w - 1 - x) * source_h + y) * 4;
+                    rotated[target..target + 4].copy_from_slice(&pixels[source..source + 4]);
+                }
+            }
+            pixels = rotated;
+            (w, h) = (source_h, source_w);
+        }
         if mirror {
             for row in pixels.chunks_exact_mut(w * 4) {
                 let mut mirrored = Vec::with_capacity(row.len());
@@ -498,7 +511,7 @@ fn build_sheet(ctx: &egui::Context, doc: &photocraft_doc::Document, revision: u6
     marks.registration = l.marks.registration;
     marks.description = fields.bool("description").unwrap_or(false);
     marks.labels = fields.bool("labels").unwrap_or(false);
-    Some(PrintSheet::new(egui::vec2(pw as f32, ph as f32), image, picture(ctx, doc, revision, l.emulsion_down), readout.into()).marks(marks))
+    Some(PrintSheet::new(egui::vec2(pw as f32, ph as f32), image, picture(ctx, doc, revision, l.emulsion_down, l.rotate_image), readout.into()).marks(marks))
 }
 
 /// Serves the open Print dialog and files its answer; called once per frame by `file_ui::take`.
@@ -677,9 +690,9 @@ mod scratch_tests {
         use photocraft_doc::{ColorMode, Document, SampleType};
         let ctx = egui::Context::default();
         let doc = Document::new("Print", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
-        let first = super::picture(&ctx, &doc, 3, false).id;
-        assert_eq!(super::picture(&ctx, &doc, 3, false).id, first, "the same revision keeps its picture");
+        let first = super::picture(&ctx, &doc, 3, false, false).id;
+        assert_eq!(super::picture(&ctx, &doc, 3, false, false).id, first, "the same revision keeps its picture");
         crate::scratch_reads::tests::simulate_read_error_transition();
-        assert_ne!(super::picture(&ctx, &doc, 3, false).id, first, "the picture draws again after the transition");
+        assert_ne!(super::picture(&ctx, &doc, 3, false, false).id, first, "the picture draws again after the transition");
     }
 }
