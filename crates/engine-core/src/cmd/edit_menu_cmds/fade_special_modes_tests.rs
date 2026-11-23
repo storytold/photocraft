@@ -14,7 +14,7 @@ const SAMPLES: [(i32, i32); 3] = [(300, 75), (100, 225), (300, 225)];
 /// The issue's test document at `depth`: 400×300 px, a white `Background` and an opaque pixel
 /// layer `Paint` with red, blue, green and grey blocks and a yellow square.
 fn blocks(depth: u32) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 400, "height": 300, "depth": depth, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
     for (x, y, w, h, color) in [
@@ -117,7 +117,7 @@ fn a_16_bit_layer_keeps_the_mix() {
 /// the mix does: the new colour at the opacity's alpha. Where it was opaque, the blend changes.
 #[test]
 fn a_pixel_transparent_before_the_step_fades_to_the_new_colour_at_the_opacity() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 40, "height": 20, "depth": 8, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "T"})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
