@@ -38,6 +38,12 @@ pub fn tone_luts(adj: &Adjustment) -> [Vec<f32>; 4] {
 /// [`tone_luts`] for samples with `quantum` steps per unit (Levels works on whole levels; see
 /// [`levels_q`]).
 pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
+    tone_luts_qc(adj, quantum, true)
+}
+
+/// [`tone_luts_q`]; `curve_levels` false leaves an 8-bit RGB Curves channel's output where the
+/// spline put it instead of on a whole level (see [`tone_luts_depth_in`]).
+fn tone_luts_qc(adj: &Adjustment, quantum: Option<f32>, curve_levels: bool) -> [Vec<f32>; 4] {
     let x = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
     match adj {
         Adjustment::Levels { master, per_channel, space, black } => {
@@ -55,7 +61,7 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
             // the row is flat across a level and the table cannot blend two levels' results at a
             // document sample - the way [`levels_q`] is exact at every level. 16-bit and float
             // documents were not measured, nor CMYK and Lab curves, so only the 8-bit quantum.
-            let level = (*space == ToneSpace::Rgb && quantum == Some(EIGHT_BIT_LEVELS)).then_some(EIGHT_BIT_LEVELS);
+            let level = (curve_levels && *space == ToneSpace::Rgb && quantum == Some(EIGHT_BIT_LEVELS)).then_some(EIGHT_BIT_LEVELS);
             let row = |c: &[CurvePoint], level: Option<f32>| match level {
                 Some(q) => {
                     let channel = curve_lut_mode(c, *pencil);
@@ -79,13 +85,20 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
 /// [`levels_float`], sampled on 0..1 and kept in 0..1 for LUT consumers. Float RGB rendering
 /// evaluates the formula directly instead, so samples and results outside that domain survive.
 pub fn tone_luts_depth(adj: &Adjustment, depth: Option<SampleType>) -> [Vec<f32>; 4] {
+    tone_luts_depth_in(adj, depth, true)
+}
+
+/// [`tone_luts_depth`]; `curve_levels` false for the RGB Curves that stand in for a CMYK
+/// document's ink curves on the split route (`cmyk_split`): the exact ink path doesn't put CMYK
+/// curves on whole levels, so neither may their stand-ins, or the two routes part by a level.
+pub fn tone_luts_depth_in(adj: &Adjustment, depth: Option<SampleType>, curve_levels: bool) -> [Vec<f32>; 4] {
     match (adj, depth) {
         (Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. }, Some(SampleType::F32)) => {
             let x = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
             let row = |c: &LevelsChannel| (0..LUT_SIZE).map(|k| levels_float(master, levels_float(c, x(k))).clamp(0.0, 1.0)).collect();
             [row(&per_channel[0]), row(&per_channel[1]), row(&per_channel[2]), (0..LUT_SIZE).map(x).collect()]
         }
-        _ => tone_luts_q(adj, depth.and_then(crate::adjustment_quantum)),
+        _ => tone_luts_qc(adj, depth.and_then(crate::adjustment_quantum), curve_levels),
     }
 }
 
