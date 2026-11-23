@@ -98,5 +98,5 @@ pub(super) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
 
     let warnings = if parsed.has_user_metadata { vec!["Paint.NET document metadata was not imported".into()] } else { Vec::new() };
-    Ok(ImportResult { initial_view: None, document, warnings, source_read_only: true, preview_only: false })
+    Ok(ImportResult { initial_view: None, document, warnings, source_read_only: true, preview_only: false, historical_xcf_sample_order: None })
 }

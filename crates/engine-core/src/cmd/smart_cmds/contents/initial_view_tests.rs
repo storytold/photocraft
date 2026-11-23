@@ -32,6 +32,7 @@ fn child_import(invalid: bool) -> (photocraft_io::ImportResult, LayerId, LayerId
             warnings: vec!["Source import note".into()],
             source_read_only: true,
             preview_only: false,
+            historical_xcf_sample_order: None,
         },
         first_id,
         second_id,

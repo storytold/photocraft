@@ -404,5 +404,9 @@ pub(crate) fn import_with_samples(name: &str, bytes: &[u8], ctl: &Interrupt<'_>,
     mapper.report.attach(&mut document, &mut mapper.warnings);
     let initial_view = mapper.view.finish(&document, &image_metadata, selected_path, &mut mapper.warnings);
     ctl.progress(1.0);
-    Ok(ImportResult { initial_view, document, warnings: mapper.warnings.finish(), source_read_only: true, preview_only: false })
+    let historical_xcf_sample_order = request.and_then(|_| match options.historical_order {
+        crate::HistoricalXcfOrder::Explicit(order) => Some(order),
+        _ => None,
+    });
+    Ok(ImportResult { initial_view, document, warnings: mapper.warnings.finish(), source_read_only: true, preview_only: false, historical_xcf_sample_order })
 }

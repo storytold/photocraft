@@ -22,6 +22,7 @@ fn imported(read_only: bool, invalid: bool) -> photocraft_io::ImportResult {
         document,
         source_read_only: read_only,
         preview_only: false,
+        historical_xcf_sample_order: None,
         warnings: vec!["Decode note".into()],
         initial_view: Some(NativeInitialView {
             selected_layers: vec![selected],

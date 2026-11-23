@@ -1052,7 +1052,14 @@ fn import_parsed_with_limits(
     if doc.layers.is_empty() && !conv.noted.contains(&"raster-panic") {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
-    Ok(ImportResult { initial_view: None, document: doc, warnings: conv.warnings, source_read_only: false, preview_only: false })
+    Ok(ImportResult {
+        initial_view: None,
+        document: doc,
+        warnings: conv.warnings,
+        source_read_only: false,
+        preview_only: false,
+        historical_xcf_sample_order: None,
+    })
 }
 
 /// One count-only warning bounds disclosure independently of the number or length of data URLs.

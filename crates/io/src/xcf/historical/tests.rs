@@ -55,6 +55,7 @@ fn explicit_historical_order_preserves_exact_color_mask_channel_and_selection_sa
                 let wrapped = gzip(&plain);
                 for (name, bytes) in [("source.xcf", plain.as_slice()), ("source.bin", wrapped.as_slice())] {
                     let imported = crate::import_with_options(name, bytes, &options(order)).unwrap();
+                    assert_eq!(imported.historical_xcf_sample_order, Some(order));
                     let expected = if gray { vec![0xbeef as f32 / 65535., 1.] } else { vec![0x1234 as f32 / 65535., 0xabcd as f32 / 65535., 42. / 65535., 1.] };
                     assert_eq!(first_pixel(&imported.document), expected, "v{version} gray={gray} {order:?}");
                     assert_eq!(imported.document.layers[0].mask.as_ref().unwrap().surface.read_region(Rect::new(0, 0, 1, 1)), vec![0x7fff as f32 / 65535.]);
@@ -79,7 +80,9 @@ fn required_choice_signal_allows_retry_of_the_exact_retained_source_without_chan
     assert!(Arc::ptr_eq(&source, &original));
     let retried = crate::import_with_options("source.xcf", &source, &options(SampleOrder::LittleEndian)).unwrap();
     assert_eq!(first_pixel(&retried.document)[0], 0x1234 as f32 / 65535.);
+    assert_eq!(retried.historical_xcf_sample_order, Some(SampleOrder::LittleEndian));
     let compatible = crate::import("source.xcf", &source).unwrap();
+    assert_eq!(compatible.historical_xcf_sample_order, None);
     assert_eq!(first_pixel(&compatible.document)[0], 0x3412 as f32 / 65535., "the existing default remains big-endian, never a heuristic");
     assert_ne!(first_pixel(&compatible.document), first_pixel(&retried.document));
 }
@@ -96,6 +99,7 @@ fn modern_and_byte_wide_sources_ignore_historical_choices_and_do_not_emit_histor
         let compatible = crate::import("source.xcf", source).unwrap();
         for policy in [HistoricalOrder::RequireExplicit, HistoricalOrder::Explicit(SampleOrder::LittleEndian)] {
             let imported = crate::import_with_options("source.xcf", source, &ImportOptions { historical_xcf_order: policy, ..Default::default() }).unwrap();
+            assert_eq!(imported.historical_xcf_sample_order, None);
             assert_eq!(first_pixel(&imported.document), first_pixel(&compatible.document));
             assert!(imported.document.metadata.import_conversion.is_none());
         }

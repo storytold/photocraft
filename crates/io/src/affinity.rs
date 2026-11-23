@@ -63,7 +63,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrup
                 warnings.push(format!("Affinity: {} shapes beyond the import's memory limit were left without a pixel cache.", b.uncached_shapes));
             }
             // Save never writes back over the Affinity file.
-            Ok(ImportResult { initial_view: None, document, warnings, source_read_only: true, preview_only: false })
+            Ok(ImportResult { initial_view: None, document, warnings, source_read_only: true, preview_only: false, historical_xcf_sample_order: None })
         }
         Err(native) => preview(name, bytes, &native),
     }
