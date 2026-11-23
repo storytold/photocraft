@@ -162,6 +162,7 @@ pub(crate) fn run_import(app: &mut PhotocraftApp, cmd: &str, what: &str, stem: &
 
 #[cfg(test)]
 mod tests {
+    use photocraft_engine::presets::PresetsExt;
     use std::sync::Arc;
 
     use craft::host::{PickKind, Picked, ScriptedFiles};
@@ -211,7 +212,7 @@ mod tests {
         assert!(prompt(&app).is_none(), "a new group imports without asking");
         assert!(app.ui.status.ends_with("brushes from Kit"), "{}", app.ui.status);
         // The user edits one of its brushes.
-        let edited = std::sync::Arc::make_mut(&mut app.session.tools.presets).iter_mut().find(|p| p.group == "Kit").unwrap();
+        let edited = std::sync::Arc::make_mut(&mut *app.session.tools.presets).iter_mut().find(|p| p.group == "Kit").unwrap();
         edited.brush.size = 77.0;
         let edited = edited.name.clone();
 
@@ -255,7 +256,7 @@ mod tests {
             GrdGradient { name: "Ember".into(), stops: vec![stop(0.0, GrdColor::Foreground), stop(1.0, GrdColor::Rgb([1.0, 0.0, 0.0]))], ..Default::default() };
         let grd = write(&[ember]);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        let groups = |app: &PhotocraftApp, g: &str| app.session.presets.gradients.iter().filter(|x| x.name == g).count();
+        let groups = |app: &PhotocraftApp, g: &str| app.session.presets().gradients.iter().filter(|x| x.name == g).count();
         open(&mut app, "Fire.grd", &grd).unwrap().unwrap();
         assert_eq!(groups(&app, "Fire"), 1);
         assert!(prompt(&app).is_none(), "a new group imports without asking");
@@ -299,7 +300,7 @@ mod tests {
         }
         assert!(!app.ui.status_error, "{}", app.ui.status);
         assert_eq!(app.session.tools.current_preset.as_deref(), Some("Leaf"));
-        let TipShape::Sampled(tip) = &app.session.tools.brush.tip else { panic!("sampled tip expected") };
+        let TipShape::Sampled(tip) = &*app.session.tools.brush.tip else { panic!("sampled tip expected") };
         assert_eq!((tip.width, tip.height), (3, 8));
         assert!(is_shown(&app, "brushes"), "the Brushes tab shows the new brush");
     }
