@@ -73,7 +73,7 @@ class ArchivePolicy(unittest.TestCase):
         icon = self.stage / "photocraft-nightly.png"
         icon.unlink()
         icon.symlink_to(self.stage / "README.md")
-        with self.assertRaisesRegex(ValueError, "regular file"):
+        with self.assertRaisesRegex(ValueError, "regular file|symlinks or aliases"):
             ARCHIVE.linux_archive(self.stage, self.output)
         self.assertFalse(self.output.exists())
 
@@ -155,6 +155,19 @@ class ArchivePolicy(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ARCHIVE.linux_archive(self.stage, output)
             self.assertFalse((Path(external) / "nightly.tar.gz").exists())
+
+    def test_nonflat_member_name_refuses_and_output_is_cleaned(self):
+        original = tarfile.TarFile.gettarinfo
+        for bad in ("../escape", "/absolute", "nested/name", "x/../photocraft"):
+            with self.subTest(name=bad):
+                def renamed(archive, *args, **kwargs):
+                    info = original(archive, *args, **kwargs)
+                    info.name = bad
+                    return info
+                with mock.patch.object(tarfile.TarFile, "gettarinfo", renamed):
+                    with self.assertRaises(ValueError):
+                        ARCHIVE.linux_archive(self.stage, self.output)
+                self.assertFalse(self.output.exists())
 
     def test_member_read_budget_refuses_before_output(self):
         (self.stage / "OFL-Large.txt").write_bytes(b"x" * 65)

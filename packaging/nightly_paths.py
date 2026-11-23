@@ -10,6 +10,13 @@ from pathlib import Path
 import stat
 
 
+def _component(name):
+    # A descriptor-relative open must name exactly one entry in its directory.
+    if not name or name in (".", "..") or os.path.basename(name) != name:
+        raise ValueError("build path components must be single names")
+    return os.path.basename(name)
+
+
 class OwnedBuildRoot:
     def __enter__(self):
         self.directory = Path.cwd()
@@ -40,15 +47,26 @@ class OwnedBuildRoot:
             raise ValueError("resolved path escapes the owned build directory")
         return relative
 
-    def _parent(self, path):
+    def _checked_parts(self, path):
         relative = self._relative(path)
+        root = os.path.realpath(self.directory)
+        lexical = os.path.join(root, *relative.parts)
+        target = os.path.realpath(lexical)
+        if target == root or os.path.commonpath([root, target]) != root:
+            raise ValueError("resolved path escapes the owned build directory")
+        if target != lexical:
+            raise ValueError("build path must not pass through symlinks or aliases")
+        return [_component(part) for part in os.path.relpath(target, root).split(os.sep)]
+
+    def _parent(self, path):
+        parts = self._checked_parts(path)
         current = os.dup(self.fd)
         try:
-            for part in relative.parts[:-1]:
-                next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
+            for part in parts[:-1]:
+                next_fd = os.open(_component(part), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
                 os.close(current)
                 current = next_fd
-            return current, relative.name
+            return current, parts[-1]
         except OSError as error:
             os.close(current)
             raise ValueError("build path parents must be non-symlink directories") from error
@@ -58,7 +76,7 @@ class OwnedBuildRoot:
         parent, name = self._parent(path)
         try:
             try:
-                descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                descriptor = os.open(_component(name), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
             except OSError as error:
                 raise ValueError("build input must be a regular file without aliases") from error
         finally:
@@ -82,7 +100,7 @@ class OwnedBuildRoot:
         parent, name = self._parent(path)
         try:
             try:
-                descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                descriptor = os.open(_component(name), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
             except OSError as error:
                 raise ValueError("build stage must be a non-symlink directory") from error
         finally:
@@ -101,6 +119,7 @@ class OwnedBuildRoot:
     @contextlib.contextmanager
     def create(self, path):
         parent, name = self._parent(path)
+        name = _component(name)
         try:
             descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o666, dir_fd=parent)
             info = os.fstat(descriptor)
@@ -112,7 +131,7 @@ class OwnedBuildRoot:
                 try:
                     current = os.stat(name, dir_fd=parent, follow_symlinks=False)
                     if (current.st_dev, current.st_ino) == identity:
-                        os.unlink(name, dir_fd=parent)
+                        os.unlink(_component(name), dir_fd=parent)
                 except FileNotFoundError:
                     pass
                 raise

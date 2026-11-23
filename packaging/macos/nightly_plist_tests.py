@@ -116,7 +116,7 @@ class NightlyMetadata(unittest.TestCase):
         external = self.root / "sentinel"
         external.write_bytes(sentinel)
         self.output.symlink_to(external)
-        with self.assertRaises(FileExistsError):
+        with self.assertRaisesRegex(ValueError, "symlinks or aliases"):
             POLICY.write_plist(self.template, self.output, VERSION, COMMIT)
         self.assertEqual(external.read_bytes(), sentinel)
         self.assertTrue(self.output.is_symlink())

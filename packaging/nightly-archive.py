@@ -74,12 +74,21 @@ def verify_headers(root, output):
 def linux_archive(stage, output):
     with OwnedBuildRoot() as root:
         entries = checked_entries(root, stage)
+        stage_root = os.path.realpath(os.path.join(root.directory, stage))
         total = 0
         with root.create(output) as outgoing:
             with tarfile.open(fileobj=outgoing, mode="w:gz", format=tarfile.USTAR_FORMAT) as archive:
                 for entry in entries:
                     with root.reader(entry, MAX_MEMBER_BYTES) as incoming:
                         info = archive.gettarinfo(fileobj=incoming, arcname=entry.name)
+                        # Members stay flat names that resolve inside the stage they came from.
+                        member = os.path.normpath(info.name)
+                        if member != info.name or os.path.isabs(member) or os.path.basename(member) != member or member in ("", ".", ".."):
+                            raise ValueError(f"nightly member name must be a flat file name: {info.name}")
+                        destination = os.path.realpath(os.path.join(stage_root, member))
+                        if os.path.commonpath([stage_root, destination]) != stage_root:
+                            raise ValueError(f"nightly member resolves outside its stage: {info.name}")
+                        info.name = member
                         total += info.size
                         if info.size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
                             raise ValueError("nightly stage grew beyond its read bound")
