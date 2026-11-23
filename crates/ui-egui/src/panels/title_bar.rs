@@ -35,31 +35,34 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// name (and the dot) remains, since the tabs already name the file (#5037). A Copyrighted document's title starts
 /// with the tab's "© ", whether the name shows or not (#13993).
 pub(crate) fn title_text(app: &PhotocraftApp) -> String {
-    let show_name = app.session.prefs().interface.show_file_name_in_title;
-    app.session
-        .active()
-        .map(|d| {
-            let name = if show_name { d.doc.name.as_str() } else { "PhotoCraft" };
-            format!("{}{name}{}", crate::canvas::tabs::copyright_prefix(app, d), if d.is_dirty() { "  •" } else { "" })
-        })
-        .unwrap_or_else(|| "PhotoCraft".into())
+    title_text_for(app, crate::os_window::identity())
 }
 
-/// The OS window title: the active document's name suffixed with the app name (a `*` prefix
-/// marks unsaved changes, like the `•` in the app-drawn title), or just the app name with no
-/// document open. With Preferences › Interface › Show File Name In Title off, the file name
-/// drops out and only the app name (and the `*`) remains (#5037). A Copyrighted document's name,
-/// or the app name standing in for it, carries the tab's "© " prefix (#13993).
+fn title_text_for(app: &PhotocraftApp, identity: crate::os_window::LaunchIdentity) -> String {
+    let active = app.session.active();
+    let document = active.map(|d| (d.doc.name.as_str(), d.is_dirty()));
+    let mark = active.map(|d| crate::canvas::tabs::copyright_prefix(app, d)).unwrap_or_default();
+    crate::channel_titles::drawn_title(
+        crate::os_window::name_for(identity),
+        document,
+        app.session.prefs().interface.show_file_name_in_title,
+        identity == crate::os_window::LaunchIdentity::NightlyV1,
+        mark,
+    )
+}
+
+/// The OS window title retains its channel through document/dirty/preference changes.
+/// Stable formatting is unchanged; Nightly never falls back to the stable brand name. A Copyrighted
+/// document's name, or the app name standing in for it, carries the tab's "© " prefix (#13993).
 pub fn window_title(app: &PhotocraftApp) -> String {
-    if !app.session.prefs().interface.show_file_name_in_title {
-        let active = app.session.active();
-        let dirty = if active.is_some_and(|d| d.is_dirty()) { "*" } else { "" };
-        return format!("{dirty}{}PhotoCraft", active.map(|d| crate::canvas::tabs::copyright_prefix(app, d)).unwrap_or_default());
-    }
-    app.session
-        .active()
-        .map(|d| format!("{}{} \u{2014} PhotoCraft", if d.is_dirty() { "*" } else { "" }, crate::canvas::tabs::titled_name(app, d)))
-        .unwrap_or_else(|| "PhotoCraft".into())
+    window_title_for(app, crate::os_window::identity())
+}
+
+fn window_title_for(app: &PhotocraftApp, identity: crate::os_window::LaunchIdentity) -> String {
+    let active = app.session.active();
+    let document = active.map(|d| (d.doc.name.as_str(), d.is_dirty()));
+    let mark = active.map(|d| crate::canvas::tabs::copyright_prefix(app, d)).unwrap_or_default();
+    crate::channel_titles::os_title(crate::os_window::name_for(identity), document, app.session.prefs().interface.show_file_name_in_title, mark)
 }
 
 #[cfg(test)]

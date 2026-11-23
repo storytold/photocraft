@@ -6,6 +6,7 @@ use crate::{PhotocraftApp, Services};
 use craft::settings::testing::MemoryFiles;
 use craft::settings::{Location, OpenOptions, SettingsStore};
 use craft::ui::patterns::preferences::PrefValue;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -205,7 +206,8 @@ fn harness_with_services(services: Services) -> egui_kittest::Harness<'static, B
 }
 
 /// Auto draws the detected system language on first launch while keeping the Auto preference; no or
-/// unsupported system languages draw English.
+/// unsupported system languages draw English. Which language a tag picks is plain logic, checked for
+/// every case; drawing differs only by script, so one app each draws Latin, CJK and Cyrillic.
 #[test]
 fn first_launch_renders_the_system_language_without_overwriting_auto() {
     if !needs_catalogs() {
@@ -228,6 +230,10 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
         (&["sw-KE", "is-IS"], "en"),
     ];
     for (tags, code) in cases {
+        assert_eq!(system::with_system_tags(tags, || Lang::from_pref("auto")), lang(code), "{tags:?}");
+    }
+    let drawn: [(&[&str], &str); 3] = [(&["fr-CA"], "fr"), (&["ja-JP"], "ja"), (&["ru-RU"], "ru")];
+    for (tags, code) in drawn {
         system::with_system_tags(tags, || {
             with_language(Lang::EN, || {
                 let h = harness();
