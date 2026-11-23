@@ -473,13 +473,14 @@ impl<'a> Planner<'a> {
     }
 
     /// Blending Options › Advanced Blending: knockout (shallow and deep, also of clipped layers)
-    /// and Transparency Shapes Layer off without effects run on the GPU (`knocked_out`). Clipped
-    /// layers blended individually, Blend Interior Effects as Group with effects, Transparency
-    /// Shapes Layer off with effects or a special-eight blend, and masks hiding effects have no
-    /// GPU pass: documents using them are composited on the CPU (`photocraft_compose::advanced`).
+    /// and Transparency Shapes Layer off without effects run on the GPU (`knocked_out`), as do
+    /// clipped layers blended individually (`clipped_individually`). Blend Interior Effects as
+    /// Group with effects, Transparency Shapes Layer off with effects or a special-eight blend,
+    /// and masks hiding effects have no GPU pass: documents using them are composited on the CPU
+    /// (`photocraft_compose::advanced`).
     /// Layers at the reference editor's defaults pass this check for free.
-    fn check_advanced(&self, layer: &Layer, clipped: &[Layer]) -> Result<(), Unsupported> {
-        if let Some(option) = advanced_on_cpu(layer, clipped) {
+    fn check_advanced(&self, layer: &Layer) -> Result<(), Unsupported> {
+        if let Some(option) = advanced_on_cpu(layer) {
             return Err(Unsupported(format!("Advanced Blending on `{}`: {option} (composited on the CPU)", layer.name)));
         }
         Ok(())
@@ -493,11 +494,45 @@ impl<'a> Planner<'a> {
         if self.visits > MAX_PLAN_VISITS {
             return Err(Unsupported("too many nested layers to plan for the GPU (composited on the CPU)".into()));
         }
-        self.check_advanced(layer, clipped)?;
+        if photocraft_compose::advanced::clips_individually(layer, clipped) {
+            return self.clipped_individually(layer, clipped, backdrop, ko);
+        }
+        self.check_advanced(layer)?;
         self.restricted(layer, backdrop, |s, b| match ko {
             Some(target) => s.knocked_out(layer, target, false, b, |s, b| s.layer_any(layer, clipped, b)),
             None => s.layer_any(layer, clipped, b),
         })
+    }
+
+    /// `compose::advanced::composite_clipped_individually_with` (Blend Clipped Layers as Group
+    /// off): the base alone (with its knockout `ko`, restrictions and Blend If), then each visible
+    /// clipped layer composited in its own mode onto the result and mixed back towards it by the
+    /// base's shape (content alpha with masks) times the base's opacity. A clipped layer's shallow
+    /// knockout stops at the backdrop beneath the base, which lives only for this clipping group.
+    /// Consumes `backdrop` and `ko`.
+    fn clipped_individually(&mut self, layer: &'a Layer, clipped: &'a [Layer], backdrop: Slot, ko: Option<Slot>) -> Result<Slot, Unsupported> {
+        let floor = if clipped.iter().any(|c| c.visible && c.advanced.knockout == Knockout::Shallow) { Some(self.retain(backdrop)) } else { None };
+        let mut b = self.layer(layer, &[], backdrop, ko)?;
+        let clip = self.content(layer)?;
+        let opacity = layer.opacity.clamp(0.0, 1.0);
+        for c in clipped.iter().filter(|c| c.visible) {
+            let before = self.retain(b);
+            let t = self.knockout_target(c, floor)?;
+            let after = self.layer(c, &[], b, t)?;
+            let mut p = Pass::new(Kernel::Lerp, 0);
+            p.a = Some(before);
+            p.b = Some(after);
+            p.c = Some(self.retain(clip));
+            p.flags = F_MIX_C;
+            p.params[0] = [0.0; 4];
+            p.opacity = opacity;
+            b = self.emit(p);
+        }
+        self.release(clip);
+        if let Some(floor) = floor {
+            self.release(floor);
+        }
+        Ok(b)
     }
 
     /// `compose::restore_channels`: `after` with the channels a layer leaves out taken from
@@ -673,7 +708,7 @@ impl<'a> Planner<'a> {
         if clip.is_some_and(|c| c.is_empty()) {
             // Nothing to draw (an empty layer, or a group of them).
             for c in &visible_clipped {
-                self.check_advanced(c, &[])?;
+                self.check_advanced(c)?;
             }
             return Ok(backdrop);
         }
@@ -880,7 +915,7 @@ impl<'a> Planner<'a> {
     /// composite_atop: `layer` onto `base`, restricted to the base's alpha, honouring the
     /// layer's channel restrictions.
     fn atop(&mut self, layer: &'a Layer, base: Slot) -> Result<Slot, Unsupported> {
-        self.check_advanced(layer, &[])?;
+        self.check_advanced(layer)?;
         self.restricted(layer, base, |s, b| s.atop_any(layer, b))
     }
 

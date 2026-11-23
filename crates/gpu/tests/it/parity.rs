@@ -596,11 +596,10 @@ fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     check(&mut g, &doc, "bounded admission");
     assert!(g.comp.composite_cache_bytes() <= 1 << 20);
     assert!(diff_rect(&mut g, &doc, doc.bounds(), "bounded cache keeps its hits").unwrap().prefix_hits > 0);
-    // Blend Clipped Layers as Group off still composites on the CPU (knockout no longer does).
-    doc.layers[0].advanced.blend_clipped = false;
-    let mut clipped = noise_layer("clipped", PixelFormat::RGBA8, doc.bounds(), 9, 0.2);
-    clipped.clipped = true;
-    doc.layers.insert(1, clipped);
+    // Transparency Shapes Layer off with a special-eight blend still composites on the CPU
+    // (knockout and clipped layers blended individually no longer do).
+    doc.layers[2].advanced.transparency_shapes = false;
+    doc.layers[2].blend = BlendMode::ColorDodge;
     assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_err());
     assert_eq!(g.comp.composite_cache_bytes(), 0);
 }

@@ -1,6 +1,7 @@
-//! Advanced Blending knockout on the GPU: shallow and deep knockouts (top level, isolated and
-//! pass-through groups, clipping groups) must match the CPU compositor within the parity
-//! tolerance, and the document must render on the GPU (a refusal fails the check).
+//! Advanced Blending on the GPU: shallow and deep knockouts (top level, isolated and pass-through
+//! groups, clipping groups) and Blend Clipped Layers as Group off (below the knockout tests) must
+//! match the CPU compositor within the parity tolerance, and the document must render on the GPU
+//! (a refusal fails the check).
 
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Adjustment, BlendRange, Document, Effect, Fill, Knockout, Layer, LayerContent};
@@ -42,6 +43,24 @@ fn group(name: &str, pass_through: bool, children: Vec<Layer>) -> Layer {
 /// `check` that also names the case.
 fn run(g: &mut Gpu, d: &Document, what: &str, knockout: Knockout) {
     check(g, d, &format!("{what}, {knockout:?}"));
+}
+
+/// A clipping group on `base` with Blend Clipped Layers as Group off: a Normal clipped layer at
+/// opacity 0.7 and a Multiply one above it.
+fn clipped_pair(d: &Document, mut base: Layer, base_opacity: f32) -> Vec<Layer> {
+    base.advanced.blend_clipped = false;
+    base.opacity = base_opacity;
+    let mut c1 = noise_layer("clipped 1", d.pixel_format(), Rect::new(8, 8, 44, 34), 7, 0.5);
+    c1.clipped = true;
+    c1.opacity = 0.7;
+    let mut c2 = noise_layer("clipped 2", d.pixel_format(), Rect::new(2, 10, 38, 30), 8, 0.4);
+    c2.clipped = true;
+    c2.blend = BlendMode::Multiply;
+    vec![base, c1, c2]
+}
+
+fn clip_base(d: &Document) -> Layer {
+    noise_layer("base", d.pixel_format(), Rect::new(4, 4, 40, 34), 6, 0.5)
 }
 
 #[test]
@@ -334,4 +353,122 @@ fn the_remaining_advanced_blending_options_are_refused() {
     let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
         .expect_err("the GPU must refuse a special-eight blend without transparency shapes");
     assert!(e.to_string().contains("Transparency Shapes Layer off with a Color Dodge"), "{e}");
+}
+
+#[test]
+fn clipped_layers_blended_individually_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for (opacity, fill) in [(1.0, 1.0), (0.6, 1.0), (0.6, 0.5)] {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut base = clip_base(&d);
+        base.fill_opacity = fill;
+        let layers = clipped_pair(&d, base, opacity);
+        d.layers.extend(layers);
+        check(&mut g, &d, &format!("pixel base, opacity {opacity}, fill {fill}"));
+    }
+    // A clipped layer in Screen mode, and a hidden clipped layer next to a visible one.
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    let mut layers = clipped_pair(&d, clip_base(&d), 0.8);
+    layers[2].blend = BlendMode::Screen;
+    let mut hidden = noise_layer("hidden", d.pixel_format(), d.bounds(), 11, 0.9);
+    hidden.clipped = true;
+    hidden.visible = false;
+    layers.insert(2, hidden);
+    d.layers.extend(layers);
+    check(&mut g, &d, "screen clipped layer and a hidden one");
+}
+
+#[test]
+fn clipped_layers_blended_individually_on_groups_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for pass in [false, true] {
+        for opacity in [1.0, 0.6] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let inner = noise_layer("inner", d.pixel_format(), Rect::new(0, 0, 40, 34), 5, 0.4);
+            let layers = clipped_pair(&d, group("base group", pass, vec![inner]), opacity);
+            d.layers.extend(layers);
+            check(&mut g, &d, &format!("group base (pass-through {pass}), opacity {opacity}"));
+        }
+    }
+}
+
+#[test]
+fn individually_clipped_knockouts_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for knockout in KNOCKOUTS {
+        for base_knockout in [Knockout::None, Knockout::Shallow, Knockout::Deep] {
+            for opacity in [1.0, 0.6] {
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                let mut base = clip_base(&d);
+                base.advanced.knockout = base_knockout;
+                let mut layers = clipped_pair(&d, base, opacity);
+                layers[1].advanced.knockout = knockout;
+                d.layers.extend(layers);
+                run(&mut g, &d, &format!("base knockout {base_knockout:?}, opacity {opacity}"), knockout);
+            }
+        }
+    }
+}
+
+/// An opaque fill base is not skipped over: a clipped shallow knockout reveals the layers
+/// beneath it.
+#[test]
+fn individually_clipped_shallow_knockout_reaches_beneath_an_opaque_fill() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    let mut fill = Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::rgba(0.2, 0.5, 0.8, 1.0))));
+    fill.advanced.blend_clipped = false;
+    let mut c = ko_layer(&d, 3, Knockout::Shallow);
+    c.clipped = true;
+    d.layers.extend([fill, c]);
+    check(&mut g, &d, "shallow knockout under an opaque fill base");
+}
+
+#[test]
+fn individually_clipped_layers_with_masks_restrictions_and_blend_if_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for opacity in [1.0, 0.6] {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut base = clip_base(&d);
+        base.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+        let layers = clipped_pair(&d, base, opacity);
+        d.layers.extend(layers);
+        check(&mut g, &d, &format!("masked base, opacity {opacity}"));
+
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut layers = clipped_pair(&d, clip_base(&d), opacity);
+        layers[1].excluded_channels = 0b010;
+        layers[2].blend_if.set(0, [BlendRange { black: [60, 120], white: [255, 255] }, BlendRange::FULL]);
+        d.layers.extend(layers);
+        check(&mut g, &d, &format!("clipped channel restrictions and Blend If, opacity {opacity}"));
+    }
+}
+
+#[test]
+fn individually_clipped_layers_in_groups_and_depths_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for pass in [false, true] {
+        for knockout in KNOCKOUTS {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let mut layers = clipped_pair(&d, clip_base(&d), 0.7);
+            layers[1].advanced.knockout = knockout;
+            d.layers.push(group("group", pass, layers));
+            run(&mut g, &d, &format!("inside a group (pass-through {pass})"), knockout);
+        }
+    }
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = doc(depth, true);
+        d.layers.push(underlay(&d, 2));
+        let layers = clipped_pair(&d, clip_base(&d), 0.6);
+        d.layers.extend(layers);
+        check(&mut g, &d, &format!("{depth:?}"));
+    }
 }

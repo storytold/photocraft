@@ -75,7 +75,7 @@ fn mix(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 
 /// Whether any Advanced Blending option changes how `layer` (with its clipping group `clipped`)
 /// composites. This is the full set the CPU path implements. The GPU compositor runs knockout
-/// itself and sends the rest (clipped layers blended individually, Blend Interior Effects as
+/// and clipped layers blended individually itself and sends the rest (Blend Interior Effects as
 /// Group with effects, Transparency Shapes Layer off with effects or a special-eight blend, and
 /// masks hiding effects) to the CPU path; its own gate is `plan::lower::advanced_on_cpu`.
 pub fn advanced_active(layer: &Layer, clipped: &[Layer]) -> bool {

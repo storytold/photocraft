@@ -29,21 +29,20 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
     Placement { origin, cs: (a.cos(), a.sin()), inv_scale }
 }
 
-/// The Advanced Blending option that keeps `layer` (with its clipping group `clipped`) on the CPU
-/// compositor, if any. This is everything `compose::advanced_active` rejects except knockout,
-/// which the GPU runs itself (`Planner::knocked_out`): Transparency Shapes Layer off is also
-/// supported while the layer has no effects and does not blend in the special eight, where its
-/// only effect is the knockout shape (the layer's masks alone).
-pub(super) fn advanced_on_cpu(layer: &Layer, clipped: &[Layer]) -> Option<&'static str> {
+/// The Advanced Blending option that keeps `layer` on the CPU compositor, if any. This is
+/// everything `compose::advanced_active` rejects except knockout (`Planner::knocked_out`) and
+/// Blend Clipped Layers as Group off (`Planner::clipped_individually`), which the GPU runs
+/// itself: Transparency Shapes Layer off is also supported while the layer has no effects and
+/// does not blend in the special eight, where its only effect is the knockout shape (the
+/// layer's masks alone).
+pub(super) fn advanced_on_cpu(layer: &Layer) -> Option<&'static str> {
     let a = &layer.advanced;
     if a.is_default() {
         return None;
     }
     let fx = photocraft_compose::effects::has_effects(layer);
     let shapeless_blend = photocraft_compose::psblend::fill_is_special(layer.blend) && !matches!(layer.content, LayerContent::Adjustment(_));
-    if photocraft_compose::advanced::clips_individually(layer, clipped) {
-        Some("Blend Clipped Layers as Group off")
-    } else if a.blend_interior && fx {
+    if a.blend_interior && fx {
         Some("Blend Interior Effects as Group")
     } else if !a.transparency_shapes && fx {
         Some("Transparency Shapes Layer off with layer effects")

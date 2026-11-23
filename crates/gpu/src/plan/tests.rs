@@ -331,6 +331,10 @@ fn opaque_fill_layers_skip_what_they_cover() {
     translucent.layers[5].content = LayerContent::Fill(Fill::Solid(Color::rgba(1.0, 0.0, 0.0, 0.5)));
     assert!(!photocraft_compose::occludes_below(&translucent.layers[5], ColorMode::Rgb));
     assert!(photocraft_compose::occludes_below(&d.layers[5], ColorMode::Rgb));
+    // Clipped layers blended individually may knock out to what is beneath the fill.
+    let mut individually = d.clone();
+    individually.layers[5].advanced.blend_clipped = false;
+    assert!(!photocraft_compose::occludes_below(&individually.layers[5], ColorMode::Rgb));
 }
 
 #[test]
@@ -385,7 +389,7 @@ fn blend_if_params_pack_every_range_exactly() {
 }
 
 #[test]
-fn advanced_blending_falls_back_to_the_cpu_except_knockout() {
+fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     use photocraft_doc::Knockout;
     let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     let mut l = Layer::raster("ko", d.pixel_format());
@@ -413,7 +417,7 @@ fn advanced_blending_falls_back_to_the_cpu_except_knockout() {
     let mut c = l.clone();
     c.clipped = true;
     d.layers.push(c.clone());
-    assert!(plan(&d).is_err(), "clipped layers blended individually");
+    assert!(plan(&d).is_ok(), "clipped layers blended individually");
     d.layers[1].advanced.blend_clipped = true;
     assert!(plan(&d).is_ok());
     d.layers[2].advanced.knockout = Knockout::Shallow;
