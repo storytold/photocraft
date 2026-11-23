@@ -153,3 +153,6 @@ fn evidence_attachment_preserves_existing_future_reports_and_other_metadata() {
     assert!(Arc::ptr_eq(&existing, document.metadata.import_conversion.as_ref().unwrap()));
     assert_eq!(document.metadata.text.last().unwrap(), &("Original field".into(), "Original value".into()));
 }
+
+#[cfg(any(unix, windows))]
+mod source_tests;

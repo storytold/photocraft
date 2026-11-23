@@ -338,6 +338,16 @@ pub fn specs() -> Vec<CommandSpec> {
         // grant memory use nobody approved (#10897). It also releases the queued source on both
         // answers, so it must not be replayed as a step that expects a missing preflight.
         CommandSpec {
+            id: "file.resolveHistoricalXcfOpen",
+            label: "Resolve Historical XCF Open",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"id":u64,"historicalXcfSampleOrder":"little-endian|big-endian"?,"cancel":bool=false,"background":bool=true} (one-shot answer for the exact retained Open; not recorded)"##,
+            enabled: always,
+            run: crate::jobs::answer_historical_open,
+            journal: false,
+        },
+        CommandSpec {
             id: "file.approveMemory",
             label: "Approve High Memory PSD Import",
             menu: &[],
@@ -352,7 +362,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"centerOnSelection":bool=false (as File > Place Embedded: centre on a hard-edged rectangular selection, over center, and remove the selection in the same step),"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"centerOnSelection":bool=false (as File > Place Embedded: centre on a hard-edged rectangular selection, over center, and remove the selection in the same step),"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame),"historicalXcfSampleOrder":"little-endian|big-endian"? (raster Place Embedded only; required for unmarked multibyte XCF4–11)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),

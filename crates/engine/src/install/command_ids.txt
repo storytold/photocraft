@@ -46,6 +46,7 @@ tools.swapColors
 tools.defaultColors
 session.inspect
 document.inspect
+document.importReport
 document.activate
 document.move
 command.list
@@ -477,6 +478,7 @@ file.revert
 file.saveACopy
 file.openAs
 file.openAsSmartObject
+file.resolveHistoricalXcfOpen
 file.approveMemory
 file.placeEmbedded
 file.placeLinked

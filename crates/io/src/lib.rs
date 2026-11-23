@@ -641,6 +641,29 @@ pub struct HistoricalXcfSampleOrderRequest {
     pub bits_per_sample: u32,
 }
 
+/// One opt-in verified path-read handoff, not a queue or filesystem capability.
+/// Hosts supply their remaining aggregate allowance and must reserve/count it
+/// across concurrent jobs before publishing a pending request. Capacity is
+/// charged, because truncating an encoded Vec does not release its allocation.
+#[cfg(any(unix, windows))]
+#[derive(Debug)]
+pub struct HistoricalXcfSourceCapture {
+    byte_limit: u64,
+    bytes: Option<std::sync::Arc<Vec<u8>>>,
+}
+
+#[cfg(any(unix, windows))]
+impl HistoricalXcfSourceCapture {
+    pub fn new(byte_limit: u64) -> Self {
+        Self { byte_limit, bytes: None }
+    }
+
+    /// Consume this handoff once; subsequent calls return None.
+    pub fn take(&mut self) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.bytes.take()
+    }
+}
+
 impl std::fmt::Display for HistoricalXcfSampleOrderRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -741,7 +764,9 @@ pub fn import_for_open_with(name: &str, bytes: &[u8], opts: &ImportOptions, ctl:
     import_for_open_with_as(name, bytes, None, opts, ctl)
 }
 
-fn import_for_open_with_as(
+/// Cancellable Open with an explicit decoder; native hosts retain the damaged
+/// document signal as well as the caller's exact import options.
+pub fn import_for_open_with_as(
     name: &str,
     bytes: &[u8],
     as_ext: Option<&str>,
@@ -904,6 +929,59 @@ pub fn import_file_for_open_verified(
     ctl: &photocraft_raster::Interrupt,
     identity_out: &mut Option<FileIdentity>,
 ) -> Result<(ImportResult, bool), IoError> {
+    import_file_for_open_verified_inner(name, path, None, expected, opts, ctl, identity_out, None)
+}
+
+/// Opt-in continuation support for a historical XCF choice. On that typed refusal,
+/// retain the exact encoded allocation read from the identified handle, within
+/// the caller's remaining pending-source allowance. No path is reopened and no
+/// source is published on cancellation, identity change or another import error.
+/// Normal imports and the compatible direct-IO sample-order default are unchanged.
+#[cfg(any(unix, windows))]
+pub fn import_file_for_open_verified_with_historical_source(
+    name: &str,
+    path: &std::path::Path,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    capture: &mut HistoricalXcfSourceCapture,
+) -> Result<(ImportResult, bool), IoError> {
+    capture.bytes = None;
+    import_file_for_open_verified_inner(name, path, None, expected, opts, ctl, identity_out, Some(capture))
+}
+
+/// Forced-decoder counterpart of [`import_file_for_open_verified_with_historical_source`].
+/// The same identified handle supplies the retained source; forced decoding never
+/// takes the unrelated streaming PSD/EXR fast paths.
+#[cfg(any(unix, windows))]
+#[allow(clippy::too_many_arguments)]
+pub fn import_file_for_open_verified_as_with_historical_source(
+    name: &str,
+    path: &std::path::Path,
+    as_ext: &str,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    capture: &mut HistoricalXcfSourceCapture,
+) -> Result<(ImportResult, bool), IoError> {
+    capture.bytes = None;
+    import_file_for_open_verified_inner(name, path, Some(as_ext), expected, opts, ctl, identity_out, Some(capture))
+}
+
+#[cfg(any(unix, windows))]
+#[allow(clippy::too_many_arguments)]
+fn import_file_for_open_verified_inner(
+    name: &str,
+    path: &std::path::Path,
+    as_ext: Option<&str>,
+    expected: Option<&FileIdentity>,
+    opts: &ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    identity_out: &mut Option<FileIdentity>,
+    capture: Option<&mut HistoricalXcfSourceCapture>,
+) -> Result<(ImportResult, bool), IoError> {
     let read_failed = |e: std::io::Error| IoError::Read(format!("{}: {e}", path.display()));
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let source = craft_psd::FileSource::open(path).map_err(read_failed)?;
@@ -920,7 +998,9 @@ pub fn import_file_for_open_verified(
     // the identity from it after parsing, and never from a path that may point elsewhere now.
     let watch = source.file().try_clone().map_err(read_failed)?;
     let mut magic = [0u8; 4];
-    let psd = !has_extension(name, photocraft_format::EXTENSION) && craft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
+    let psd =
+        as_ext.is_none() && !has_extension(name, photocraft_format::EXTENSION) && craft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
+    let mut historical_source = None;
     let result = if psd {
         import_source_with_options(name, craft_psd::Source::new(source), ctl, opts)
     } else {
@@ -933,7 +1013,7 @@ pub fn import_file_for_open_verified(
         // layouts, and EXR headers the band decoder refuses, are read whole below.
         let mut streamed = None;
         let format_name = path.file_name().and_then(|name| name.to_str()).unwrap_or(name);
-        if photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
+        if as_ext.is_none() && photocraft_formats::detect(format_name, &magic) == Some(photocraft_formats::Format::OpenExr) {
             let before = photocraft_raster::spill::read_error_generation();
             if let Some(mut result) = exr_native::import(&mut file, ctl)? {
                 // A rewrite in place while the blocks were read must not become the document.
@@ -952,18 +1032,37 @@ pub fn import_file_for_open_verified(
             Some(result) => Ok((result, false)),
             None => {
                 let bytes = photocraft_format::read::read_all(&mut file, craft_psd::ReadAt::len(&source)).map_err(read_failed)?;
-                import_for_open_with(name, &bytes, opts, ctl)
+                let result = import_for_open_with_as(name, &bytes, as_ext, opts, ctl);
+                if matches!(&result, Err(IoError::HistoricalXcfSampleOrderRequired(_)))
+                    && let Some(capture) = &capture
+                {
+                    let capacity = u64::try_from(bytes.capacity()).unwrap_or(u64::MAX);
+                    if capacity > capture.byte_limit {
+                        return Err(IoError::OutOfMemory(format!(
+                            "the retained historical XCF source needs {capacity} bytes, exceeding the remaining {}-byte source allowance",
+                            capture.byte_limit
+                        )));
+                    }
+                    historical_source = Some(std::sync::Arc::new(bytes));
+                }
+                result
             }
         }
     };
     // An approval pause must describe a file that still has the identity it was estimated with;
     // an approved resume must have decoded that file, not a rewrite that raced the decode.
-    if expected.is_some() || matches!(&result, Err(IoError::PsdApprovalRequired { .. })) {
+    if expected.is_some() || historical_source.is_some() || matches!(&result, Err(IoError::PsdApprovalRequired { .. })) {
         let after = FileIdentity::of_handle(&watch).map_err(read_failed)?;
         if after != identity {
             return Err(IoError::SourceChanged);
         }
+        if historical_source.is_some() {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+        }
         *identity_out = Some(after);
+    }
+    if let Some(capture) = capture {
+        capture.bytes = historical_source;
     }
     result
 }

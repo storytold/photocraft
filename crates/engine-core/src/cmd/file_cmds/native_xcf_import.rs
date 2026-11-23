@@ -1,5 +1,5 @@
-//! The two Session-backed Open import entrypoints explicitly admit native XCF
-//! tone preparation. Place/Smart Object and sessionless IO helpers stay inert.
+//! Session-backed Open and raster Place Embedded explicitly admit native XCF
+//! tone preparation. Smart/frame/linked and sessionless IO helpers stay inert.
 use crate::{EngineError, Result};
 use serde_json::Value;
 

@@ -48,6 +48,7 @@ fn document_with(d: &DocState, detail: bool) -> Value {
         "mode": format!("{:?}", doc.mode),
         "depth": doc.depth.bits(),
         "resolution": doc.resolution_dpi,
+        "importConversion": crate::cmd::import_report_cmds::summary(doc.metadata.import_conversion.as_ref()),
         "activeLayer": d.active_layer.map(|l| l.0),
         "selectedLayers": selected.iter().map(|l| l.0).collect::<Vec<_>>(),
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),

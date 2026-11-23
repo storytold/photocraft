@@ -250,3 +250,5 @@ fn ordinary_svg_import_remains_unchanged_inside_the_explicit_open_scope() {
     assert_eq!(photocraft_compose::flatten(&session.active().unwrap().doc).into_px(), expected);
     assert_eq!(photocraft_io::native_xcf_tones::preparation_count(), before);
 }
+
+mod raster_place_tests;

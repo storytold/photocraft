@@ -79,6 +79,9 @@ impl PlaceSteps {
 
     /// One unit of work; `Some` when the place is prepared.
     fn advance(&mut self, ctx: &JobCtx, deadline: Instant) -> Result<Option<Prepared>> {
+        // A privately prepared/cooperative dispatch must retain the same request
+        // policy as a native worker while evaluating generated native stages.
+        let _authority = crate::jobs::render_authorization_scope(self.input.native_authorization);
         match std::mem::replace(&mut self.stage, Stage::Spent) {
             Stage::Decode => {
                 self.read(ctx)?;
@@ -89,8 +92,12 @@ impl PlaceSteps {
                     Some(png) => self.stage = Stage::DecodePng(Box::new(png)),
                     None => {
                         let imported = ctx
-                            .stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&input.name, bytes, &input.opts, ctl))
+                            .stage(0.0, 0.6, "Decoding", |ctl| {
+                                let decode = || photocraft_io::import_with_options_and_interrupt(&input.name, bytes, &input.opts, ctl);
+                                if input.prepare_native_xcf { super::native_xcf_import::with_authority(input.native_authorization, decode) } else { decode() }
+                            })
                             .map_err(|e| self.io_error(e))?;
+                        ctx.check()?;
                         self.decoded(imported, false, ctx)?;
                     }
                 }

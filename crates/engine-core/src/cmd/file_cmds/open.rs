@@ -391,6 +391,10 @@ pub(crate) struct PlaceInput {
     pub(super) ppi: f64,
     pub(super) fmt: PixelFormat,
     pub(super) opts: photocraft_io::ImportOptions,
+    /// Raster-only imports can prepare native controls before flattening. Smart
+    /// sources need persisted interpretation metadata before they can opt in.
+    pub(super) prepare_native_xcf: bool,
+    pub(super) native_authorization: Option<fn(&str, &Value) -> Result<()>>,
     /// Preferences ▸ General ▸ Resize Image During Place, unless the params say otherwise.
     pub(super) fit: bool,
     /// Preferences ▸ General ▸ Always Create Smart Objects When Placing, unless the params say
@@ -433,18 +437,25 @@ impl PlaceInput {
             let [a, b, c, d, _, _] = f.transform.m;
             (a.hypot(b), c.hypot(d))
         });
-        // Not into a frame, whose image fills the frame.
         let on_selection = if frame.is_none() && p.get("centerOnSelection").and_then(Value::as_bool) == Some(true) { selection_centre(&d.doc) } else { None };
-        let approve = match p.get("approveHighMemory") {
-            None | Some(Value::Null) => false,
-            Some(Value::Bool(b)) => *b,
-            Some(_) => {
-                return Err(EngineError::BadParams { cmd: "file.placeEmbedded".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
+        let smart = linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing);
+        let prepare_native_xcf = !smart && frame.is_none();
+        let cmd = if linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" };
+        let base = crate::jobs::import_options(prefs);
+        let parsed = super::sample_order::import_options_from_params(base, p, cmd)?;
+        let opts = if prepare_native_xcf {
+            parsed
+        } else {
+            if matches!(parsed.historical_xcf_order, photocraft_io::HistoricalXcfOrder::Explicit(_)) {
+                return Err(EngineError::BadParams {
+                    cmd: cmd.into(),
+                    msg: "explicit historical XCF order currently requires raster Place Embedded (smartObject:false, frame:false)".into(),
+                });
             }
+            // Do not change compatible Smart/linked imports until their source
+            // interpretation and linked identity can survive cache eviction.
+            photocraft_io::ImportOptions { historical_xcf_order: base.historical_xcf_order, ..parsed }
         };
-        let mut opts = crate::jobs::import_options(prefs);
-        opts.psd_high_memory_approved = approve;
-        opts.psd_approved_estimate = None;
         Ok(Self {
             name: name.to_string(),
             canvas,
@@ -452,11 +463,13 @@ impl PlaceInput {
             ppi: f64::from(d.doc.resolution_dpi),
             fmt: d.doc.pixel_format(),
             opts,
+            prepare_native_xcf,
+            native_authorization: prepare_native_xcf.then_some(s.authorize).flatten(),
             // The implicit `fit` is Preferences ▸ General ▸ Resize Image During Place (on by default).
             fit: p.get("fit").and_then(Value::as_bool).unwrap_or(prefs.general.resize_image_during_place),
             // Preferences ▸ General ▸ Always Create Smart Objects When Placing (on by default): off,
             // an embedded place lands as a plain pixel layer.
-            smart: linked.is_some() || p.get("smartObject").and_then(Value::as_bool).unwrap_or(prefs.general.always_create_smart_objects_when_placing),
+            smart,
             doc: match &file {
                 PlaceFile::Bytes(bytes) => (frame.is_some() || photocraft_io::is_svg_input(name, bytes)).then(|| Arc::clone(&d.doc)),
                 PlaceFile::Path(_) => Some(Arc::clone(&d.doc)),

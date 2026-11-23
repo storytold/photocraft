@@ -229,3 +229,6 @@ pub(super) fn update_all(s: &mut Session) -> Result<Value> {
 
 #[cfg(test)]
 mod initial_view_tests;
+
+#[cfg(test)]
+mod command_validation_tests;
