@@ -6,6 +6,7 @@
 //! provides the Help › System Info text (including the monitor profile in use).
 
 use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -208,8 +209,8 @@ pub fn system_info_json(app: &PhotocraftApp) -> serde_json::Value {
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "gpu": app.perf.gpu_info,
-        "monitor": app.session.color.monitor_status(),
-        "displays": app.session.color.display_statuses(),
+        "monitor": app.session.color().monitor_status(),
+        "displays": app.session.color().display_statuses(),
         "lines": system_info(app),
     })
 }

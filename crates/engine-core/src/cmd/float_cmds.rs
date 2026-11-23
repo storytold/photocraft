@@ -424,6 +424,17 @@ pub(crate) fn before_command(s: &mut Session, id: &str) -> Result<Option<Value>>
     }
 }
 
+/// The `before_command` hook. A command that may not run leaves a floating selection floating
+/// (#13169): it is refused before the piece drops, without a History step (dispatch checks one
+/// that may run again once the piece has dropped, on the pixels and selection it will change).
+/// Then [`before_command`]: the piece drops before any other command, and Undo puts it back.
+pub(crate) fn before_dispatch(s: &mut Session, id: &str, spec: &CommandSpec, params: &Value) -> Result<Option<Value>> {
+    if drops_for(s, id) {
+        s.admit(id, spec, params)?;
+    }
+    before_command(s, id)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

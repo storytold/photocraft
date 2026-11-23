@@ -5,6 +5,7 @@
 //! cancelling a profile question retains its existing behaviour of cancelling the whole queue.
 //! Files that finish reading while a prompt is up wait their turn.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use craft::color_ui::ui::{ProfileAction, ProfileMismatchDialog, ProfileMode, ProfileQuestion};
@@ -374,7 +375,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     let supplied_document = doc.id;
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
-            && let Err(e) = app.session.color.resolve_open(&mut doc, action)
+            && let Err(e) = app.session.color().resolve_open(&mut doc, action)
         {
             if let Some(provider) = app.services.file_provider.as_ref() {
                 provider.abandon_opening_document(supplied_document, Some(&e.to_string()));
@@ -387,7 +388,7 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         // A damage-only hold has no colour question: apply the policy as the engine's open does,
         // then admit it as the smart object document it is (name, history label, snapshot).
         let ignore_exif = app.session.prefs().file_handling.ignore_exif_profile_tag;
-        app.session.color.open_policy(&mut doc, ignore_exif);
+        app.session.color().open_policy(&mut doc, ignore_exif);
         photocraft_engine::file_cmds::admit_as_smart_object(&mut app.session, doc)
     } else {
         app.session.open_document(doc, None).0

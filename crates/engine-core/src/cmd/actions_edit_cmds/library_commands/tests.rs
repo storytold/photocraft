@@ -1,12 +1,14 @@
 use crate::Session;
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::{Action, ActionStep, PLAY_SHORTCUT_PREFIX};
+use crate::preset_store::PresetStoreExt;
 use crate::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
 use craft_psd::atn::{AtnAction, AtnFile, write};
 use craft_psd::descriptor::UnicodeString;
 use serde_json::json;
 
 fn names(s: &Session) -> Vec<&str> {
-    s.actions.list.actions().iter().map(|action| action.name.as_str()).collect()
+    s.actions().list.actions().iter().map(|action| action.name.as_str()).collect()
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -31,30 +33,30 @@ fn set(caption: &str, action: Option<(&str, u16)>) -> Vec<u8> {
 fn confirmed_clear_restores_both_shortcut_maps_without_document_history() {
     let mut s = crate::session();
     s.execute("file.new", json!({"width":8,"height":8})).unwrap();
-    s.actions.list.push(Action::new("Original", Vec::new())).unwrap();
-    s.actions.list.new_set("Empty").unwrap();
+    s.actions_mut().list.push(Action::new("Original", Vec::new())).unwrap();
+    s.actions_mut().list.new_set("Empty").unwrap();
     let shortcut = format!("{PLAY_SHORTCUT_PREFIX}Original");
     s.edit_prefs(|prefs| {
         prefs.shortcuts.insert(shortcut.clone(), "F2".into());
         prefs.alternate_shortcuts.insert(shortcut.clone(), vec!["F3".into()]);
         prefs.shortcuts.insert("file.save".into(), "Ctrl+S".into());
     });
-    let revision = s.actions.list.revision();
+    let revision = s.actions().list.revision();
     let history = s.active().unwrap().history.past_len();
     assert!(s.execute("actions.clearAll", json!({"confirm":false})).is_err());
-    assert_eq!(s.actions.list.revision(), revision);
+    assert_eq!(s.actions().list.revision(), revision);
     s.execute("actions.record", json!({"action":0})).unwrap();
     assert!(s.execute("actions.clearAll", json!({"confirm":true})).is_err());
     s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(s.execute("actions.clearAll", json!({"confirm":true})).unwrap()["cleared"], 1);
-    assert!(s.actions.list.actions().is_empty() && s.actions.list.sets().is_empty());
+    assert!(s.actions().list.actions().is_empty() && s.actions().list.sets().is_empty());
     assert!(!s.prefs().shortcuts.contains_key(&shortcut));
     assert!(!s.prefs().alternate_shortcuts.contains_key(&shortcut));
     assert_eq!(s.prefs().shortcuts["file.save"], "Ctrl+S");
     assert_eq!(crate::actions_edit_cmds::undo_library_label(&s), Some("Undo Clear All Actions"));
     s.execute("actions.undoLibrary", json!({})).unwrap();
     assert_eq!(names(&s), ["Original"]);
-    assert_eq!(s.actions.list.sets(), ["Empty"]);
+    assert_eq!(s.actions().list.sets(), ["Empty"]);
     assert_eq!(s.prefs().shortcuts[&shortcut], "F2");
     assert_eq!(s.prefs().alternate_shortcuts[&shortcut], ["F3"]);
     assert_eq!(s.active().unwrap().history.past_len(), history);
@@ -78,23 +80,23 @@ fn reset_appends_a_numbered_set_and_persists_it() {
     let store = MemBackend::default();
     let mut s = crate::session();
     s.attach_preset_store(open(Box::new(store.clone())));
-    s.actions.list.new_set("Existing").unwrap();
+    s.actions_mut().list.new_set("Existing").unwrap();
     assert!(s.execute("actions.reset", json!({"confirm":true,"mode":"bad"})).is_err());
     assert_eq!(s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap()["set"], "PhotoCraft Basics");
     assert_eq!(s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap()["set"], "PhotoCraft Basics 2");
-    assert_eq!(s.actions.list.sets(), ["PhotoCraft Basics", "PhotoCraft Basics 2", "Existing"]);
+    assert_eq!(s.actions().list.sets(), ["PhotoCraft Basics", "PhotoCraft Basics 2", "Existing"]);
     assert_eq!(names(&s), ["Invert Colors", "Desaturate", "Invert Colors 2", "Desaturate 2"]);
-    assert_eq!(s.actions.list.actions()[0].steps[0].command, "image.adjustments.invert");
-    assert_eq!(s.actions.list.actions()[1].steps[0].command, "image.adjustments.desaturate");
+    assert_eq!(s.actions().list.actions()[0].steps[0].command, "image.adjustments.invert");
+    assert_eq!(s.actions().list.actions()[1].steps[0].command, "image.adjustments.desaturate");
     s.sync_preset_store();
     let mut reopened = crate::session();
     reopened.attach_preset_store(open(Box::new(store)));
-    assert_eq!(reopened.actions.list.actions(), s.actions.list.actions());
-    assert_eq!(reopened.actions.list.sets(), s.actions.list.sets());
+    assert_eq!(reopened.actions().list.actions(), s.actions().list.actions());
+    assert_eq!(reopened.actions().list.sets(), s.actions().list.sets());
     s.execute("actions.reset", json!({"confirm":true,"mode":"replace"})).unwrap();
-    assert_eq!(s.actions.list.sets(), ["PhotoCraft Basics"]);
+    assert_eq!(s.actions().list.sets(), ["PhotoCraft Basics"]);
     s.execute("actions.undoLibrary", json!({})).unwrap();
-    assert_eq!(s.actions.list.sets(), reopened.actions.list.sets());
+    assert_eq!(s.actions().list.sets(), reopened.actions().list.sets());
     assert!(s.execute("actions.undoLibrary", json!({})).is_err());
 }
 
@@ -102,7 +104,7 @@ fn reset_appends_a_numbered_set_and_persists_it() {
 fn whole_replace_validates_the_tail_and_keeps_every_set_in_order() {
     let mut s = crate::session();
     s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
-    let prior = s.actions.list.actions().to_vec();
+    let prior = s.actions().list.actions().to_vec();
     let mut archive = set("Repeated", Some(("Action", 2)));
     archive.extend_from_slice(&set("Empty", None)[4..]);
     archive.extend_from_slice(&set("Repeated", Some(("Action", 3)))[4..]);
@@ -110,10 +112,10 @@ fn whole_replace_validates_the_tail_and_keeps_every_set_in_order() {
     bad.pop();
     assert!(s.execute("actions.replace", json!({"confirm":true,"data":b64(&bad)})).is_err());
     assert!(s.execute("actions.replace", json!({"data":b64(&archive)})).is_err());
-    assert_eq!(s.actions.list.actions(), prior);
+    assert_eq!(s.actions().list.actions(), prior);
     let result = s.execute("actions.replace", json!({"confirm":true,"data":b64(&archive)})).unwrap();
     assert_eq!(result["sets"], json!(["Repeated", "Empty", "Repeated 2"]));
-    assert_eq!(s.actions.list.sets(), ["Repeated", "Repeated 2", "Empty"]);
+    assert_eq!(s.actions().list.sets(), ["Repeated", "Repeated 2", "Empty"]);
     assert_eq!(names(&s), ["Action", "Action 2"]);
     assert_eq!(s.prefs().shortcuts[&format!("{PLAY_SHORTCUT_PREFIX}Action")], "F2");
     assert_eq!(s.prefs().shortcuts[&format!("{PLAY_SHORTCUT_PREFIX}Action 2")], "F3");
@@ -123,7 +125,7 @@ fn whole_replace_validates_the_tail_and_keeps_every_set_in_order() {
     assert!(empty["actions"].as_array().unwrap().is_empty());
     assert_eq!(crate::actions_edit_cmds::undo_library_label(&s), Some("Undo Replace Actions"));
     s.execute("actions.undoLibrary", json!({})).unwrap();
-    assert_eq!(s.actions.list.actions(), prior);
+    assert_eq!(s.actions().list.actions(), prior);
 }
 
 // Two actions one set gives the same name keep their own function keys.
@@ -147,7 +149,7 @@ fn whole_replace_resolves_unqualified_calls_in_their_own_set() {
     archive.extend_from_slice(&second[4..]);
     s.execute("actions.replace", json!({"confirm":true,"data":b64(&archive)})).unwrap();
     assert_eq!(names(&s), ["Child", "Child 2", "Parent"]);
-    assert_eq!(s.actions.list.actions()[2].steps[0].params["action"], "Child 2");
+    assert_eq!(s.actions().list.actions()[2].steps[0].params["action"], "Child 2");
 }
 
 // A call that names its action's set reaches that set's action, renamed or not, and names the set
@@ -169,7 +171,7 @@ fn whole_replace_follows_explicit_atn_set_scopes() {
     let mut s = crate::session();
     let result = s.execute("actions.replace", json!({"confirm":true,"data":b64(&archive)})).unwrap();
     assert_eq!(result["actions"], json!(["Target", "Target 2", "Caller"]));
-    let list = s.actions.list.actions();
+    let list = s.actions().list.actions();
     let calls: Vec<&serde_json::Value> = list[2].steps.iter().map(|step| &step.params).collect();
     assert_eq!((calls[0]["action"].as_str(), calls[0]["set"].as_str()), (Some("Target 2"), Some("Second")));
     assert_eq!(crate::file_cmds::batch_action(list, calls[0]).unwrap(), 1);
@@ -212,7 +214,7 @@ fn shortcut_only_clear_restores_orphan_bindings_on_undo() {
     assert!(!s.prefs().alternate_shortcuts.contains_key(orphan));
     assert_eq!(s.prefs().alternate_shortcuts["file.save"], ["F4"]);
     s.execute("actions.undoLibrary", json!({})).unwrap();
-    assert!(s.actions.list.actions().is_empty());
+    assert!(s.actions().list.actions().is_empty());
     assert_eq!(s.prefs().shortcuts[orphan], "F2");
     assert_eq!(s.prefs().alternate_shortcuts[orphan], ["F3"]);
 }
@@ -223,7 +225,7 @@ fn pre_attachment_replacement_persists_without_reloading_disk_and_keeps_undo() {
         let store = MemBackend::default();
         store.write(ACTIONS_FILE, br#"{"version":1,"actions":[{"name":"Disk","set":"Saved"}]}"#).unwrap();
         let mut s = crate::session();
-        s.actions.list.push(Action::new("Early", Vec::new())).unwrap();
+        s.actions_mut().list.push(Action::new("Early", Vec::new())).unwrap();
         s.execute("actions.reset", json!({"confirm":true,"mode":"replace"})).unwrap();
         if undo_before_attachment {
             s.execute("actions.undoLibrary", json!({})).unwrap();
@@ -234,17 +236,17 @@ fn pre_attachment_replacement_persists_without_reloading_disk_and_keeps_undo() {
             continue;
         }
 
-        assert_eq!(s.actions.list.sets(), ["PhotoCraft Basics"]);
+        assert_eq!(s.actions().list.sets(), ["PhotoCraft Basics"]);
         assert_eq!(names(&s), ["Invert Colors", "Desaturate"]);
         let mut reopened = crate::session();
         assert!(reopened.attach_preset_store(open(Box::new(store.clone()))).is_empty());
-        assert_eq!(reopened.actions.list.actions(), s.actions.list.actions());
+        assert_eq!(reopened.actions().list.actions(), s.actions().list.actions());
         s.execute("actions.undoLibrary", json!({})).unwrap();
         assert_eq!(names(&s), ["Early"]);
         s.sync_preset_store();
         let mut reopened = crate::session();
         assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
-        assert_eq!(reopened.actions.list.actions(), s.actions.list.actions());
+        assert_eq!(reopened.actions().list.actions(), s.actions().list.actions());
     }
 }
 
@@ -253,16 +255,16 @@ fn pre_attachment_clear_remains_authoritative_after_an_ordinary_edit() {
     let store = MemBackend::default();
     store.write(ACTIONS_FILE, br#"{"version":1,"actions":[{"name":"Disk"}]}"#).unwrap();
     let mut s = crate::session();
-    s.actions.list.push(Action::new("Early", Vec::new())).unwrap();
+    s.actions_mut().list.push(Action::new("Early", Vec::new())).unwrap();
     s.execute("actions.clearAll", json!({"confirm":true})).unwrap();
     s.execute("actions.newSet", json!({"name":"New"})).unwrap();
     assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
-    assert!(s.actions.list.actions().is_empty());
-    assert_eq!(s.actions.list.sets(), ["New"]);
+    assert!(s.actions().list.actions().is_empty());
+    assert_eq!(s.actions().list.sets(), ["New"]);
     let mut reopened = crate::session();
     assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
-    assert!(reopened.actions.list.actions().is_empty());
-    assert_eq!(reopened.actions.list.sets(), ["New"]);
+    assert!(reopened.actions().list.actions().is_empty());
+    assert_eq!(reopened.actions().list.sets(), ["New"]);
 }
 
 #[test]
@@ -272,16 +274,16 @@ fn empty_pre_attachment_clear_replaces_the_saved_library() {
         store.write(ACTIONS_FILE, br#"{"version":1,"actions":[{"name":"Disk"}]}"#).unwrap();
         let mut s = crate::session();
         assert_eq!(s.execute("actions.clearAll", json!({"confirm":true})).unwrap()["cleared"], 0);
-        let revision = s.actions.list.revision();
+        let revision = s.actions().list.revision();
         assert_eq!(s.execute("actions.clearAll", json!({"confirm":true})).unwrap()["cleared"], 0);
-        assert_eq!(s.actions.list.revision(), revision, "a second empty clear keeps the first undo");
+        assert_eq!(s.actions().list.revision(), revision, "a second empty clear keeps the first undo");
         if undo {
             s.execute("actions.undoLibrary", json!({})).unwrap();
         }
         assert!(s.attach_preset_store(open(Box::new(store.clone()))).is_empty());
-        assert_eq!(s.actions.list.actions().first().map(|action| action.name.as_str()), undo.then_some("Disk"));
+        assert_eq!(s.actions().list.actions().first().map(|action| action.name.as_str()), undo.then_some("Disk"));
         let mut reopened = crate::session();
         assert!(reopened.attach_preset_store(open(Box::new(store))).is_empty());
-        assert_eq!(reopened.actions.list.actions(), s.actions.list.actions());
+        assert_eq!(reopened.actions().list.actions(), s.actions().list.actions());
     }
 }

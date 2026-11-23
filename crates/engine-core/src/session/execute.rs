@@ -1,8 +1,5 @@
 use super::history::{fix_selection, visibility_changes};
-use super::{
-    Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, layer_multi_cmds, retouch_cmds,
-    smart_cmds,
-};
+use super::{Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, retouch_cmds, smart_cmds};
 use crate::color_channels;
 
 impl Session {
@@ -59,13 +56,11 @@ impl Session {
         self.live_commit = None;
     }
 
-    /// The per-command value checks `dispatch` and `precheck` share, in the order `dispatch` runs them.
+    /// The per-command value checks `dispatch` and `precheck` share: the documented keys, then the
+    /// `check_params` hooks.
     pub(crate) fn validate_params(&self, id: &str, spec: &crate::registry::CommandSpec, params: &Value) -> Result<()> {
-        if id == "file.new" {
-            crate::document_preset_cmds::validate_new_params(self, params)?;
-        }
         crate::param_check::check(spec, params)?;
-        crate::filters::validate_params(id, params)
+        crate::registry::hooks().check_params.iter().try_for_each(|check| check(self, id, params))
     }
 
     /// Check a call without running it: the command exists, its params have the shape
@@ -346,7 +341,7 @@ impl Session {
         // document, seconds on the CPU path, #1773), a new or deleted layer's bounds (a
         // duplicate or a paste), and everything when that can't be bounded. A command may still
         // report its own, tighter damage after this.
-        let damage = layer_multi_cmds::step_damage(&before, &st.doc);
+        let damage = crate::damage::step_damage(&before, &st.doc);
         let keep_clean = st.keeps_clean(&before);
         #[cfg(any(test, debug_assertions))]
         let hint_before = before.clone();
@@ -378,15 +373,15 @@ impl Session {
             self.hint_before = Some(hint_before);
         }
         if damage.is_none_or(|d| !d.is_empty()) {
-            // Free the mask early; a stale entry would only miss (it is keyed by pixels).
-            self.subject_cache = Default::default();
-            self.object_finder = Default::default();
+            for edited in &crate::registry::hooks().pixels_edited {
+                edited(self);
+            }
         }
         Ok(r)
     }
 
     /// A command's own rect for the pixels its latest [`Session::edit`] changed: sub-tile precise
-    /// for a brush dab, where the edit's own damage ([`layer_multi_cmds::step_damage`]) has tile
+    /// for a brush dab, where the edit's own damage ([`crate::layer_multi_cmds::step_damage`]) has tile
     /// precision. The redraw area becomes the intersection of the two, so a hint can only narrow
     /// it (or bound a change `step_damage` can't). The hint is first grown as `step_damage` grows
     /// a change (by a mask's feather and by effects, `grow_hint`), so the intersection keeps a
@@ -398,7 +393,7 @@ impl Session {
             && let Some(st) = self.active()
             && st.doc.id == before.id
         {
-            let misses = layer_multi_cmds::hint_misses(&before, &st.doc, rect);
+            let misses = crate::damage::hint_misses(&before, &st.doc, rect);
             if misses > 0 {
                 let step = st.history.undo_label().unwrap_or("?");
                 eprintln!("warning: `{step}` hinted damage {rect:?} that misses {misses} changed tile(s); the canvas may not redraw them");
@@ -406,7 +401,7 @@ impl Session {
             }
         }
         let Some(st) = self.active_mut() else { return };
-        let rect = layer_multi_cmds::grow_hint(&st.doc, rect);
+        let rect = crate::damage::grow_hint(&st.doc, rect);
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
         st.record_damage();
     }
@@ -416,7 +411,7 @@ impl Session {
 /// Image › Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
 /// other `plugin.*` commands manage plug-ins). Catalogue queries still answer.
 fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
-    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == crate::plugin_cmds::RUN)
+    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == "plugin.run")
         && id != "image.adjustments.invert"
         && !id.ends_with(".list")
         // Only the Filter Gallery answers `{"list": true}` with its catalogue; other commands ignore it.
