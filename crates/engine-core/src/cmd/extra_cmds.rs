@@ -224,7 +224,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let (surf, lock) = crate::channel_cmds::target_surface(doc, Some(id), target)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
-            crate::fill_cmds::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;
+            crate::pixel_fill::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;
             surf.prune();
         }
         Ok(())
@@ -538,7 +538,7 @@ pub(crate) fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, i
 /// If `id` is the Background ([`photocraft_doc::Document::background`], whatever its name), turns
 /// it into a normal layer ("Layer 0"), as Photoshop does before an edit the Background can't
 /// take (moving, transforming, exposing transparency, a style). Other layers are left alone.
-pub(crate) fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
+pub fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
     if let Some(l) = doc.background_mut().filter(|l| l.id == id) {
         unlock_background(l);
     }

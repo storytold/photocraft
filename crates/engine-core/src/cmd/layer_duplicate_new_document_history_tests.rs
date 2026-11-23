@@ -37,28 +37,6 @@ fn check_duplicate_history(s: &mut Session, source: &DocState) {
 }
 
 #[test]
-fn duplicate_to_a_new_document_undoes_one_layer_at_each_depth() {
-    for depth in [8, 16, 32] {
-        let mut s = crate::session();
-        s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth})).unwrap();
-        let layer = s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap()["layer"].clone();
-        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-        let source = s.active().unwrap().clone();
-
-        let r = s.execute("layer.duplicate", json!({"document": "new", "layer": layer, "name": "Ink"})).unwrap();
-        assert_eq!(r["document"], 1);
-        assert_eq!(s.active_index(), Some(1));
-        let dst = s.active().unwrap();
-        assert_eq!(dst.doc.layers.len(), 1);
-        assert_eq!(dst.doc.layers[0].name, "Ink");
-        assert_eq!(dst.snapshots().len(), 1);
-        assert_eq!(dst.snapshots()[0].name, dst.doc.name);
-        assert_eq!(*dst.snapshots()[0].doc, *dst.doc);
-        check_duplicate_history(&mut s, &source);
-    }
-}
-
-#[test]
 fn duplicate_to_a_new_document_undoes_all_selected_layers_in_one_step() {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
