@@ -209,13 +209,14 @@ impl B {
     fn bevel_fields(&mut self, width: f32) -> [In; 2] {
         [FieldKind::BevelInside, FieldKind::BevelOutside].map(|k| self.field(k, width))
     }
-    /// `Map::shifted` by whole pixels (`invert`: of `1 - a`); identity shifts of the plain map
-    /// are skipped.
+    /// `Map::shifted`, whole-pixel or sub-pixel (`invert`: of `1 - a`, per tap as the CPU inverts
+    /// its map before sampling); identity shifts of the plain map are skipped. A sub-pixel shift
+    /// reads the tap beyond its base, so the radius ceils rather than truncates.
     fn shift(&mut self, src: In, dx: f32, dy: f32, outside: f32, invert: bool) -> In {
         if dx == 0.0 && dy == 0.0 && !invert {
             return src;
         }
-        let r = dx.abs().max(dy.abs()) as i32;
+        let r = dx.abs().max(dy.abs()).ceil() as i32;
         self.push(stage(Kernel::MShift, Some(src), None, [dx, dy, outside, f32::from(u8::from(invert))], r))
     }
     /// `dilate(src, r)` given `dist_outside(src)`.

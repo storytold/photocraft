@@ -84,6 +84,16 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
 /// isn't copied. The Work Path becomes the shape's path, so it is no longer selected in the Paths
 /// panel.
 pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
+    // #12910 measured: with the Pen in an Indexed Color document the reference application shows this
+    // alert with OK and changes nothing, so return before the draft is touched or any command runs.
+    // The alert names the tool: #12840 measures the Freeform Pen with different wording, and the
+    // other tools that share this button were not measured and keep today's behaviour. The engine's
+    // `path.toShape` is left alone, as the issue's alert is the button's.
+    if app.ui.tool == Tool::Pen && indexed_document(app) {
+        let message = crate::i18n::fmt(tl!(crate::tools::brush_refusal::INDEXED), &[("tool", tl!("pen tool"))]);
+        crate::dialogs::alerts::alert(app, message);
+        return Ok(Value::Null);
+    }
     super::cancel_stale_pen(app);
     if let Some(pen) = app.ui.pen.clone().filter(|p| p.draft.knots.len() >= 2) {
         let r = super::pen::make_shape_from_draft(app, &pen)?;
@@ -97,6 +107,13 @@ pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
         app.ui.selected_path = None;
     }
     Ok(r)
+}
+
+/// Whether the active document is Indexed Color: the colour mode the reference application refuses the
+/// Pen for (#12910; the Freeform Pen's own wording is #12840). Bitmap, Duotone and Multichannel were
+/// not measured and keep today's behaviour.
+pub(super) fn indexed_document(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Indexed)
 }
 
 /// The path Make Shape makes a shape from without a draft: [`active_path_name`] when it is the

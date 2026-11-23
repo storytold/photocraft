@@ -54,7 +54,7 @@ fn boxes(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<([f64; 4], [f64; 4])> 
         !d.is_background(*id) && !selected.iter().any(|s| *s == *id || d.path_of(*id).zip(d.path_of(*s)).is_some_and(|(p, q)| p.starts_with(&q)))
     });
     let boxes = a.map(|a| (a, hovered.and_then(|id| crate::snap_ui::tree_rect(d, id)).unwrap_or(canvas)));
-    app.move_distance = Some(Cache { doc, revision, at, group, selected, boxes });
+    app.move_distance = Some(Cache { doc, revision, at, group, selected: selected.to_vec(), boxes });
     boxes
 }
 

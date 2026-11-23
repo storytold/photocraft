@@ -632,6 +632,7 @@ fn invoke_export_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> R
                 // Several layers (artboards, say) selected: one file each (#3629).
                 let layers = app.session.active().map(|document| document.selected_layers()).unwrap_or_default();
                 if layers.len() > 1 {
+                    let layers = layers.to_vec();
                     Some(Ok(json!({"dialog": crate::export_dialog::open_layers(app, &layers)?.value()})))
                 } else {
                     Some(Ok(json!({"dialog": crate::export_dialog::open_layer(app, selected)?.value()})))

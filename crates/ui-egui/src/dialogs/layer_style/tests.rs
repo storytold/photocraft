@@ -2,6 +2,7 @@ use egui::vec2;
 use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_doc::effects::{BevelTechnique, FxPaint, GlowSource};
 use photocraft_doc::{BlendMode, BlendRange, Effect, Knockout, StrokeFx};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::*;
@@ -681,7 +682,7 @@ fn new_style_saves_pending_state_and_a_swatch_apply_restores_it() {
     h.run_steps(3);
     // The preset is saved at once under the default name "Style".
     assert_eq!(h.state().framework.dialogs.stack().top(), Some(id), "New Style… opens no other dialog");
-    let preset = h.state().session.presets.styles.iter().flat_map(|g| g.items.iter()).find(|st| st.name == "Style").expect("the preset is created");
+    let preset = h.state().session.presets().styles.iter().flat_map(|g| g.items.iter()).find(|st| st.name == "Style").expect("the preset is created");
     assert_eq!(preset.effects.len(), 1, "only the enabled instance is saved");
     assert_eq!(preset.opacity, Some(0.4), "the pending opacity is saved");
 
@@ -789,4 +790,17 @@ fn an_existing_outer_glow_is_edited_with_its_own_values() {
     assert!((g.common.opacity * 100.0 - 75.0).abs() < 1e-4 && (g.size - 5.0).abs() < 1e-4, "OK kept {g:?}");
     let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
     assert_eq!(hex(c), "#ffffbe", "OK kept the colour");
+}
+
+/// The preview swatch draws over the patterns' pixels: a tile that fails to read and recovers keeps the draft's render
+/// hash, and the swatch still keys a new picture, so it does not keep the zeros it read during the error.
+#[test]
+fn the_preview_swatch_follows_a_scratch_read_error_transition() {
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, Some(EffectKind::PatternOverlay.key())).unwrap();
+    let key = swatch_key(draft(&app, id));
+    assert_eq!(swatch_key(draft(&app, id)), key, "nothing changed: the same picture");
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    assert_eq!(draft(&app, id).render_hash(), key.1, "the draft is unchanged");
+    assert_ne!(swatch_key(draft(&app, id)), key, "the swatch draws again");
 }
