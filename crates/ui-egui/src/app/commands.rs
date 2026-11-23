@@ -221,6 +221,9 @@ impl PhotocraftApp {
                 }
             }
             Err(e) => {
+                if id == "file.scripts.imageProcessor" && e == "There were no source files that could be opened by PhotoCraft." {
+                    crate::dialogs::alerts::alert(self, e.clone());
+                }
                 self.ui.status = translated_refusal(e).map_or_else(|| e.clone(), |reason| tl!(reason).into());
                 self.ui.status_error = true;
                 // The reference application refuses a locked type layer (#14499) and a missing
@@ -443,4 +446,27 @@ fn translated_refusal(error: &str) -> Option<&'static str> {
     [BRIGHTNESS_CONTRAST_UNAVAILABLE, BRIGHTNESS_CONTRAST_EMPTY]
         .into_iter()
         .find(|reason| error == *reason || error.strip_suffix(reason).is_some_and(|rest| rest.ends_with(": ")))
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod image_processor_empty_source_tests {
+    use super::*;
+
+    #[test]
+    fn confirming_image_processor_with_no_source_replaces_the_form_with_an_alert() {
+        let input = tempfile::tempdir().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = app.ctx().clone();
+        crate::menus::invoke(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+        let id = app.framework.dialogs.stack().top().unwrap();
+        let output = input.path().join("processed");
+        app.framework.dialogs.set_json_field(&ctx, id, "input", json!(input.path())).unwrap();
+        app.framework.dialogs.set_json_field(&ctx, id, "output", json!(output)).unwrap();
+
+        crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+        assert!(app.framework.dialogs.get_dyn(id).is_none());
+        assert_eq!(crate::dialogs::alerts::alerts(&app).len(), 1);
+        assert_eq!(app.ui.status, "There were no source files that could be opened by PhotoCraft.");
+        assert!(!output.exists());
+    }
 }

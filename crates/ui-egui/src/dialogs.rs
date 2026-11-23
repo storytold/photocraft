@@ -299,6 +299,9 @@ pub(crate) mod params {
             if let (Some(action), Some(footer)) = (footer, family.and_then(|family| family.footer)) {
                 footer(app, ctx, id, &action);
             }
+            if key.as_deref() == Some(image_processor_ui::COMMAND) {
+                image_processor_ui::take_settings_action(app, ctx, id);
+            }
         }
     }
 
@@ -481,6 +484,8 @@ pub(crate) fn take_results(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for taker in TAKERS {
         taker(app, ctx);
     }
+    // Color Settings' Settings menu follows each pick and edit, a script's `ui.dialog.set` included (#14229).
+    crate::filter_dialog::reconcile_color_settings(app, ctx);
 }
 
 /// One pass of the dialogs: the guide edit follows its dialog, the palette shows, the filter preview and the Preferences window are fed, the
