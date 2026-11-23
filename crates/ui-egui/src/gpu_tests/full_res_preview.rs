@@ -49,9 +49,9 @@ fn control(h: &mut Harness, method: &str, params: Value) {
     h.run_steps(3);
 }
 
-fn columns_document(width: i32, height: i32) -> Document {
+fn columns_document(width: i32, height: i32) -> Result<Document, &'static str> {
     let mut doc = Document::with_background("columns", Size::new(width as u32, height as u32), ColorMode::Rgb, SampleType::U8, Color::WHITE);
-    let s = doc.layers[0].surface_mut().expect("background pixels");
+    let s = doc.layers.first_mut().and_then(|layer| layer.surface_mut()).ok_or("missing background pixels")?;
     let row: Vec<f32> = (0..width)
         .flat_map(|x| {
             let v = if x % 2 == 0 { 0.0 } else { 1.0 };
@@ -62,13 +62,13 @@ fn columns_document(width: i32, height: i32) -> Document {
         let end = (y + 64).min(height);
         s.write_region(Rect::new(0, y, width, end), &row.repeat((end - y) as usize));
     }
-    doc
+    Ok(doc)
 }
 
-fn setup(h: &mut Harness, zoom: f32) {
+fn setup(h: &mut Harness, zoom: f32) -> Result<(), &'static str> {
     {
         let app = h.state_mut();
-        let doc = columns_document(W, H);
+        let doc = columns_document(W, H)?;
         assert_eq!(crate::proxy::factor(&doc), 1, "the fixture is below the production threshold");
         assert_eq!(crate::proxy::app_factor(app, &doc), 2, "the test must exercise a twofold reduction");
         app.session.add_document(doc, None);
@@ -77,6 +77,7 @@ fn setup(h: &mut Harness, zoom: f32) {
     }
     control(h, "ui.set", json!({"zoom": zoom, "center": [W / 2, H / 2]}));
     h.run_steps(4);
+    Ok(())
 }
 
 /// Whether the canvas draws on the GPU (the previews under test are the GPU canvas's).
@@ -89,28 +90,29 @@ fn on_gpu(h: &mut Harness) -> bool {
     gpu
 }
 
-fn low_res(h: &mut Harness, on: bool) {
-    h.state_mut().run("prefs.set", json!({"path": "performance.lowResolutionPreviews", "value": on})).expect("prefs.set");
+fn low_res(h: &mut Harness, on: bool) -> Result<(), String> {
+    h.state_mut().run("prefs.set", json!({"path": "performance.lowResolutionPreviews", "value": on}))?;
     h.run_steps(4);
+    Ok(())
 }
 
 /// Luma along a row inside the visible document, to the left of centred dialogs.
-fn row(h: &mut Harness) -> Vec<i32> {
+fn row(h: &mut Harness) -> Result<Vec<i32>, &'static str> {
     h.run_steps(4);
-    let view = crate::canvas::active_view(h.state()).expect("the canvas has been shown");
+    let view = crate::canvas::active_view(h.state()).ok_or("the canvas has not been shown")?;
     let image = egui::Rect::from_two_pos(view.to_screen(Point::ORIGIN), view.to_screen(Point::new(f64::from(W), f64::from(H))));
     let visible = view.rect.intersect(image);
     // Windows CI uses a software rasterizer. A render timeout need not drop the submitted work.
-    let img = (0..3).find_map(|_| h.render().ok()).expect("render");
+    let img = (0..3).find_map(|_| h.render().ok()).ok_or("could not render the canvas")?;
     let (x0, y) = (visible.min.x.ceil() as u32 + 12, visible.min.y.ceil() as u32 + 12);
     let x1 = x0 + 48;
     assert!(visible.contains(egui::pos2(x1 as f32, y as f32)), "sample row is inside the visible image");
-    (x0..x1)
+    Ok((x0..x1)
         .map(|x| {
             let p = img.get_pixel(x, y).0;
             (i32::from(p[0]) * 3 + i32::from(p[1]) * 6 + i32::from(p[2])) / 10
         })
-        .collect()
+        .collect())
 }
 
 /// Fraction of neighbouring screen pixels that differ like black and white.
@@ -127,14 +129,14 @@ fn mean(r: &[i32]) -> f32 {
 /// previews on; zoomed out to 50 % the default drag runs on the reduced copy (only the black columns, inverted), and with
 /// them off it matches the committed view (the columns' mipmapped grey).
 #[test]
-fn adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off() {
+fn adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off() -> Result<(), String> {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut h) = harness() else { return };
-    setup(&mut h, 1.0);
+    let Some(mut h) = harness() else { return Ok(()) };
+    setup(&mut h, 1.0)?;
     if !on_gpu(&mut h) {
-        return;
+        return Ok(());
     }
-    assert!(columns(&row(&mut h)) > 0.9, "the canvas shows the 1 px columns at 100 %");
+    assert!(columns(&row(&mut h)?) > 0.9, "the canvas shows the 1 px columns at 100 %");
     let layer = {
         let app = h.state_mut();
         app.run("layer.newAdjustmentLayer.invert", json!({})).expect("adjustment layer");
@@ -143,67 +145,70 @@ fn adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off() {
         app.live_adjust = Some((id, json!({})));
         id
     };
-    let at_100 = row(&mut h);
+    let at_100 = row(&mut h)?;
     assert!(columns(&at_100) > 0.9, "default at 100 %: the drag is never coarser than the screen ({})", columns(&at_100));
     control(&mut h, "ui.set", json!({"zoom": 0.5, "center": [W / 2, H / 2]}));
     h.state_mut().live_adjust = None;
-    let committed = mean(&row(&mut h));
+    let committed = mean(&row(&mut h)?);
     assert!((60.0..220.0).contains(&committed), "zoomed out the inverted columns average to grey ({committed})");
     h.state_mut().live_adjust = Some((layer, json!({})));
-    let reduced = mean(&row(&mut h));
+    let reduced = mean(&row(&mut h)?);
     assert!(reduced > 225.0, "default at 50 %: the reduced copy keeps only the (inverted) black columns ({reduced})");
-    low_res(&mut h, false);
+    low_res(&mut h, false)?;
     h.state_mut().live_adjust = Some((layer, json!({})));
-    let full = mean(&row(&mut h));
+    let full = mean(&row(&mut h)?);
     assert!((full - committed).abs() < 8.0, "low-res previews off: the drag matches the committed view ({full} vs {committed})");
+    Ok(())
 }
 
 /// A filter dialog's live preview is never coarser than the screen either (#6326): at 100 % every
 /// column shows with low-resolution previews on; zoomed out to 50 % the default preview runs on
 /// the reduced copy (only the black columns), and with them off it matches the committed view.
 #[test]
-fn filter_dialog_previews_at_full_resolution_when_low_res_is_off() {
+fn filter_dialog_previews_at_full_resolution_when_low_res_is_off() -> Result<(), String> {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut h) = harness() else { return };
-    setup(&mut h, 0.5);
+    let Some(mut h) = harness() else { return Ok(()) };
+    setup(&mut h, 0.5)?;
     if !on_gpu(&mut h) {
-        return;
+        return Ok(());
     }
-    let committed = mean(&row(&mut h));
+    let committed = mean(&row(&mut h)?);
     assert!((60.0..220.0).contains(&committed), "zoomed out the columns average to grey ({committed})");
     control(&mut h, "ui.set", json!({"zoom": 1.0, "center": [W / 2, H / 2]}));
     // Offset 0, 0 leaves the pixels as they are: any change is the preview's resolution.
     let _dialog = crate::filter_dialog::open(h.state_mut(), "filter.other.offset").expect("Offset dialog");
-    let at_100 = row(&mut h);
+    let at_100 = row(&mut h)?;
     assert!(columns(&at_100) > 0.9, "default at 100 %: the preview is never coarser than the screen ({})", columns(&at_100));
     control(&mut h, "ui.set", json!({"zoom": 0.5, "center": [W / 2, H / 2]}));
-    let reduced = mean(&row(&mut h));
+    let reduced = mean(&row(&mut h)?);
     assert!(reduced < 30.0, "default at 50 %: the reduced copy keeps only the black columns ({reduced})");
-    low_res(&mut h, false);
-    let full = mean(&row(&mut h));
+    low_res(&mut h, false)?;
+    let full = mean(&row(&mut h)?);
     assert!((full - committed).abs() < 8.0, "low-res previews off: the preview matches the committed view ({full} vs {committed})");
+    Ok(())
 }
 
 #[test]
-fn adjustment_dialog_zoomed_out_skips_the_reduced_copy_when_low_res_is_off() {
+fn adjustment_dialog_zoomed_out_skips_the_reduced_copy_when_low_res_is_off() -> Result<(), String> {
     let _gpu = photocraft_testkit::gpu_lock();
-    let Some(mut h) = harness() else { return };
-    setup(&mut h, 0.5);
+    let Some(mut h) = harness() else { return Ok(()) };
+    setup(&mut h, 0.5)?;
     if !on_gpu(&mut h) {
-        return;
+        return Ok(());
     }
-    let committed = mean(&row(&mut h));
+    let committed = mean(&row(&mut h)?);
     assert!((60.0..220.0).contains(&committed), "zoomed out the columns average to grey ({committed})");
     let _dialog = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.levels").expect("Levels dialog");
     h.run_steps(4);
     let proxy = crate::adjust_preview::gpu_proxy(h.state_mut(), 0, 0.5).expect("default: zoomed out on the reduced copy");
     assert_eq!(proxy.k, 2);
-    let reduced = mean(&row(&mut h));
+    let reduced = mean(&row(&mut h)?);
     assert!(reduced < 30.0, "the reduced copy keeps only the black columns ({reduced})");
-    low_res(&mut h, false);
+    low_res(&mut h, false)?;
     assert!(crate::adjust_preview::gpu_proxy(h.state_mut(), 0, 0.5).is_none(), "off: no reduced copy");
-    let full = mean(&row(&mut h));
+    let full = mean(&row(&mut h)?);
     assert!((full - committed).abs() < 8.0, "off: the preview matches the committed view ({full} vs {committed})");
+    Ok(())
 }
 
 /// Check the encoded texture directly, before canvas painting or adjustment previews.
@@ -222,7 +227,7 @@ fn compositor_chunks_keep_their_columns() {
     // Keep three chunks across and two down, with a partial chunk on both axes.
     let width = 2 * photocraft_gpu::CHUNK + 24;
     let height = photocraft_gpu::CHUNK + 24;
-    let doc = columns_document(width as i32, height as i32);
+    let doc = columns_document(width as i32, height as i32).expect("columns document");
     let refresh = gpu.refresh(doc.id.0, &doc, None, None);
     assert!(gpu.fault().is_none(), "GPU fault after canvas refresh: {:?}", gpu.fault());
     if refresh.kind == "full" {
