@@ -49,12 +49,12 @@ const SLIDER_KINDS: [&str; 11] = [
     "selectiveColor",
 ];
 
-fn app_harness(kind: &str, mode: &str, depth: u32) -> Harness<'static, PhotocraftApp> {
+fn app_harness(kind: &str, mode: &str, depth: u32) -> Harness<'static, Box<PhotocraftApp>> {
     app_harness_with(kind, mode, depth, 1.0 / 60.0, crate::Services::default())
 }
 
 /// [`app_harness`] with the app's `services` (a file source the test scripts).
-fn app_harness_with(kind: &str, mode: &str, depth: u32, step_dt: f32, services: crate::Services) -> Harness<'static, PhotocraftApp> {
+fn app_harness_with(kind: &str, mode: &str, depth: u32, step_dt: f32, services: crate::Services) -> Harness<'static, Box<PhotocraftApp>> {
     let (kind, mode) = (kind.to_string(), mode.to_string());
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).with_step_dt(step_dt).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -79,7 +79,7 @@ fn app_harness_with(kind: &str, mode: &str, depth: u32, step_dt: f32, services: 
     h
 }
 
-fn layer(h: &Harness<'_, PhotocraftApp>) -> (LayerId, Adjustment) {
+fn layer(h: &Harness<'_, Box<PhotocraftApp>>) -> (LayerId, Adjustment) {
     let st = h.state().session.active().unwrap();
     let id = st.active_layer.unwrap();
     match &st.doc.layer(id).unwrap().content {
@@ -88,24 +88,25 @@ fn layer(h: &Harness<'_, PhotocraftApp>) -> (LayerId, Adjustment) {
     }
 }
 
-fn history_len(h: &Harness<'_, PhotocraftApp>) -> usize {
+fn history_len(h: &Harness<'_, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
-fn drag(h: &mut Harness<'_, PhotocraftApp>, from: Pos2, to: Pos2) {
+fn drag(h: &mut Harness<'_, Box<PhotocraftApp>>, from: Pos2, to: Pos2) {
     h.hover_at(from);
     h.run_steps(1);
     h.drag_at(from);
     h.run_steps(1);
-    for i in 1..=6 {
-        h.hover_at(from + (to - from) * (i as f32 / 6.0));
+    // Three moves give the gesture several previews before its one commit, which is what the history check needs.
+    for i in 1..=3 {
+        h.hover_at(from + (to - from) * (i as f32 / 3.0));
         h.run_steps(1);
     }
     h.drop_at(to);
     h.run_steps(3);
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2) {
     h.hover_at(at);
     h.run_steps(1);
     h.drag_at(at);
@@ -114,7 +115,7 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     h.run_steps(3);
 }
 
-fn label_rect(h: &Harness<'_, PhotocraftApp>, text: &str) -> Option<Rect> {
+fn label_rect(h: &Harness<'_, Box<PhotocraftApp>>, text: &str) -> Option<Rect> {
     // The last caption: the Properties header repeats the kind's name above its controls.
     // `get_by_label` hides a caption that names a control, so ask for the label node itself;
     // a checkbox paints its caption as the control, so fall back to the last matching widget.
@@ -125,7 +126,7 @@ fn label_rect(h: &Harness<'_, PhotocraftApp>, text: &str) -> Option<Rect> {
 }
 
 /// The rectangles of the editor's sliders, top to bottom.
-fn sliders(h: &Harness<'_, PhotocraftApp>) -> Vec<Rect> {
+fn sliders(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<Rect> {
     let mut rects: Vec<Rect> = h.query_all_by_role(Role::Slider).map(|n| n.rect()).collect();
     rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
     rects
@@ -137,8 +138,21 @@ fn sliders(h: &Harness<'_, PhotocraftApp>) -> Vec<Rect> {
 #[test]
 fn every_adjustment_layer_edits_through_properties() {
     for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("gray", 8), ("cmyk", 8), ("lab", 16)] {
-        for kind in ALL_KINDS {
-            let mut h = app_harness(kind, mode, depth);
+        // One app per document setting, not one per kind: each kind deletes the previous kind's layer and adds its
+        // own over the same two-tone background, so its editor opens on the stack a fresh app had (the Properties
+        // session is per layer, `PropertiesAdjust::new`). Every kind still runs in every mode and depth: the
+        // composite of each adjustment differs per mode and depth, and no other test runs all of them.
+        let mut h = app_harness(ALL_KINDS[0], mode, depth);
+        for (i, kind) in ALL_KINDS.into_iter().enumerate() {
+            if i > 0 {
+                let (previous, _) = layer(&h);
+                h.state_mut().run("layer.delete", json!({"layer": previous.0})).unwrap();
+                h.state_mut().run(&format!("layer.newAdjustmentLayer.{kind}"), json!({})).unwrap();
+                // The Properties panel shows the new layer's editor on the next frame; the second leaves its widgets
+                // laid out for the queries below.
+                h.run_steps(2);
+            }
+            assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 2, "{kind} {mode}: the background and this kind's layer");
             let (_, before) = layer(&h);
             let steps = history_len(&h);
             let slider = sliders(&h).first().copied();
@@ -214,7 +228,7 @@ fn color_balance_of(a: &Adjustment) -> ([f32; 3], [f32; 3], [f32; 3], bool) {
 }
 
 /// The tone radio Color Balance shows as chosen.
-fn shown_tone(h: &Harness<'_, PhotocraftApp>) -> Option<&'static str> {
+fn shown_tone(h: &Harness<'_, Box<PhotocraftApp>>) -> Option<&'static str> {
     ["Shadows", "Midtones", "Highlights"].into_iter().find(|name| h.query_all_by_label(name).any(|n| n.accesskit_node().toggled() == Some(Toggled::True)))
 }
 
@@ -239,7 +253,7 @@ fn color_balance_properties_history_and_reset_like_photoshop() {
     h.run_steps(4);
     h.state_mut().session.select_layer(id).unwrap();
     h.run_steps(4);
-    let cb = |h: &Harness<'_, PhotocraftApp>| color_balance_of(&layer(h).1);
+    let cb = |h: &Harness<'_, Box<PhotocraftApp>>| color_balance_of(&layer(h).1);
     let track = *sliders(&h).first().expect("the Cyan · Red slider");
     let before = history_len(&h);
     // Two clicks far apart (not a double-click): the second follows the first within one step.
@@ -309,7 +323,7 @@ fn photo_filter_color(a: &Adjustment) -> [f32; 3] {
 }
 
 /// Clicks the colour well labelled `label` and returns the Color Picker it opened.
-fn open_picker(h: &mut Harness<'_, PhotocraftApp>, label: &str) -> craft::ui::dialog::DialogId {
+fn open_picker(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) -> craft::ui::dialog::DialogId {
     // The panel scrolls: bring the well into view before the pointer goes to it.
     h.get_by_role_and_label(Role::ColorWell, label).scroll_to_me();
     h.run_steps(2);
@@ -318,7 +332,7 @@ fn open_picker(h: &mut Harness<'_, PhotocraftApp>, label: &str) -> craft::ui::di
     crate::color_picker_ui::top(h.state()).expect("the colour well opens the Color Picker")
 }
 
-fn show_in_picker(h: &mut Harness<'_, PhotocraftApp>, picker: craft::ui::dialog::DialogId, hex: &str) {
+fn show_in_picker(h: &mut Harness<'_, Box<PhotocraftApp>>, picker: craft::ui::dialog::DialogId, hex: &str) {
     let color = Srgba::from_hex(hex).expect("a hex colour");
     h.state_mut().framework.dialogs.get_mut_by_id::<ColorPickerDialog>(picker).expect("the picker is open").set_color(PickedColor::rgb(color));
     h.run_steps(3);

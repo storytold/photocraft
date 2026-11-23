@@ -8,7 +8,7 @@ use super::*;
 use crate::canvas::{ToolEvent, tool_event};
 
 /// A 64 × 64 document with a painted layer active, black foreground, `tool`.
-pub(in crate::tools) fn app(tool: Tool) -> PhotocraftApp {
+pub(in crate::tools) fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();

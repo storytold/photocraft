@@ -8,7 +8,7 @@ use super::*;
 use crate::canvas::testing::{ToolEvent, tool_event};
 
 /// A document whose active layer is a `kind` layer over a white Background.
-pub(super) fn app_with(kind: Kind) -> PhotocraftApp {
+pub(super) fn app_with(kind: Kind) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     // Strokes and filters finish in the pass that asks for them, so the history counts are settled at once.
     app.background_jobs = false;

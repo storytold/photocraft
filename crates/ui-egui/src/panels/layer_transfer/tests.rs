@@ -31,7 +31,7 @@ fn to_doc(view: &craft::behavior::CanvasView, p: Pos2) -> [f64; 2] {
 
 /// Lays the open documents out side by side, as Window › Arrange › 2-up Vertical does, and returns the
 /// two tiles `(document, rect)`.
-fn tile(h: &mut Harness<'_, PhotocraftApp>) -> Vec<(usize, Rect)> {
+fn tile(h: &mut Harness<'_, Box<PhotocraftApp>>) -> Vec<(usize, Rect)> {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.twoUpVertical", json!({})).unwrap();
     h.run_steps(3);
@@ -40,7 +40,7 @@ fn tile(h: &mut Harness<'_, PhotocraftApp>) -> Vec<(usize, Rect)> {
 
 /// "source-doc" (40×30) with a red 10×10 square at (4, 6) on layer "paint", and "dest-doc"
 /// (60×50). The source is active.
-fn harness() -> (Harness<'static, PhotocraftApp>, LayerId) {
+fn harness() -> (Harness<'static, Box<PhotocraftApp>>, LayerId) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 40, "height": 30, "name": "source-doc"})).unwrap();
     let paint = LayerId(s.execute("layer.new.layer", json!({"name": "paint"})).unwrap()["layer"].as_u64().unwrap());
@@ -59,19 +59,19 @@ fn harness() -> (Harness<'static, PhotocraftApp>, LayerId) {
 
 /// A document tab of the strip, found by its accessible name (the document's name, then its detail). The document's
 /// canvas carries the name too, so the query takes the tab.
-fn tab(h: &Harness<'_, PhotocraftApp>, name: &str) -> Pos2 {
+fn tab(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> Pos2 {
     let name = name.to_owned();
     h.get_by(move |n| n.role() == egui::accesskit::Role::Tab && n.label().is_some_and(|l| l.starts_with(&name))).rect().center()
 }
 
 /// Press at `path[0]`, move through the rest (a few frames at each) and release at the last
 /// point with `release` held.
-fn drag_along(h: &mut Harness<'_, PhotocraftApp>, path: &[Pos2], release: Modifiers) {
+fn drag_along(h: &mut Harness<'_, Box<PhotocraftApp>>, path: &[Pos2], release: Modifiers) {
     drag_along_pressed(h, path, Modifiers::NONE, release);
 }
 
 /// [`drag_along`], with `press` held from the press on (⌥ for a Move-tool copy).
-fn drag_along_pressed(h: &mut Harness<'_, PhotocraftApp>, path: &[Pos2], press: Modifiers, release: Modifiers) {
+fn drag_along_pressed(h: &mut Harness<'_, Box<PhotocraftApp>>, path: &[Pos2], press: Modifiers, release: Modifiers) {
     let first = path[0];
     h.event(egui::Event::ModifiersChanged(press));
     h.event(egui::Event::PointerMoved(first));
@@ -94,7 +94,7 @@ fn drag_along_pressed(h: &mut Harness<'_, PhotocraftApp>, path: &[Pos2], press: 
 }
 
 /// The copy in "dest-doc" (its active layer) and its bounds.
-fn copy(h: &Harness<'_, PhotocraftApp>) -> (String, Rect) {
+fn copy(h: &Harness<'_, Box<PhotocraftApp>>) -> (String, Rect) {
     let st = h.state().session.active().unwrap();
     assert_eq!(st.doc.name, "dest-doc", "the destination is shown");
     let l = st.active_layer.and_then(|id| st.doc.layer(id)).unwrap();
@@ -102,7 +102,7 @@ fn copy(h: &Harness<'_, PhotocraftApp>) -> (String, Rect) {
     (l.name.clone(), Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32)))
 }
 
-fn source_square(h: &Harness<'_, PhotocraftApp>, paint: LayerId) -> photocraft_geom::Rect {
+fn source_square(h: &Harness<'_, Box<PhotocraftApp>>, paint: LayerId) -> photocraft_geom::Rect {
     let doc = &h.state().session.documents()[0].doc;
     photocraft_engine::layer_multi_cmds::layer_bounds(doc.layer(paint).unwrap()).unwrap()
 }
@@ -221,7 +221,7 @@ fn an_option_drag_of_a_moved_float_onto_a_tab_keeps_the_source_float() {
 
 /// A moved float in "source-doc", the Move tool, and an ⌥-press on it, moved a little so the
 /// drag has dropped the float and floats its copy. Returns the tab of "dest-doc".
-fn option_drag_of_a_moved_float(h: &mut Harness<'_, PhotocraftApp>) -> Pos2 {
+fn option_drag_of_a_moved_float(h: &mut Harness<'_, Box<PhotocraftApp>>) -> Pos2 {
     h.state_mut().ui.tool = Tool::Move;
     h.state_mut().run("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
     h.state_mut().run("select.float", json!({"dx": 5, "dy": 0})).unwrap();
@@ -239,7 +239,7 @@ fn option_drag_of_a_moved_float(h: &mut Harness<'_, PhotocraftApp>) -> Pos2 {
     tab(h, "dest-doc")
 }
 
-fn release_at(h: &mut Harness<'_, PhotocraftApp>, p: Pos2) {
+fn release_at(h: &mut Harness<'_, Box<PhotocraftApp>>, p: Pos2) {
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(3);
@@ -256,7 +256,7 @@ fn an_edit_during_an_option_drag_of_a_float_is_not_taken_back_by_a_tab_hover() {
         h.event(egui::Event::PointerMoved(over_tab + vec2(0.0, k as f32)));
         h.run_steps(1);
     }
-    let opacity = |h: &Harness<'_, PhotocraftApp>| h.state().session.documents()[0].doc.layer(paint).unwrap().opacity;
+    let opacity = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().session.documents()[0].doc.layer(paint).unwrap().opacity;
     assert!((opacity(&h) - 0.3).abs() < 1e-6, "the hover took the opacity edit back");
     release_at(&mut h, over_tab);
     assert!((opacity(&h) - 0.3).abs() < 1e-6, "the release took the opacity edit back");

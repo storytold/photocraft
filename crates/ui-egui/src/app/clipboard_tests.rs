@@ -1,4 +1,5 @@
 use super::*;
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::sync::{Arc, Mutex};
 
 #[test]
@@ -174,7 +175,7 @@ fn action_vector_paste_reads_the_current_svg_source() {
     let mut app = PhotocraftApp::new(Session::new(), services);
     app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(photocraft_engine::actions_cmds::Action::new("SVG", vec![photocraft_engine::actions_cmds::ActionStep::new("edit.paste", json!({"as": "shape"}))]))
         .unwrap();
@@ -330,7 +331,7 @@ fn newer_unexported_copies_do_not_track_an_older_os_signature() {
                 write_fails.store(true, Ordering::SeqCst);
                 app.session.edit_prefs(|prefs| prefs.general.export_clipboard = !disable_export);
                 app.run(copy_id, serde_json::json!({})).unwrap();
-                let copied = app.session.clipboard.clone().unwrap();
+                let copied = app.session.clipboard.as_ref().cloned().unwrap();
                 assert!(app.clip_unmirrored && !app.clip_external);
                 assert_eq!(app.os_clip_sig, old_signature);
                 assert_eq!(copied.surface.rgba(0, 0), [0.0, 0.0, 1.0, 1.0]);
@@ -394,7 +395,7 @@ fn failed_clipboard_reads_do_not_paste_an_external_or_missing_copy() {
 }
 
 /// An app whose OS clipboard is `os`, counting every read in `reads`.
-fn app_with_os_clipboard(os: &OsClip, reads: &Arc<std::sync::atomic::AtomicUsize>) -> PhotocraftApp {
+fn app_with_os_clipboard(os: &OsClip, reads: &Arc<std::sync::atomic::AtomicUsize>) -> Box<PhotocraftApp> {
     let (b, n) = (os.clone(), reads.clone());
     let get = move || {
         n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -519,7 +520,7 @@ fn copy_with_the_mask_targeted_copies_the_mask_not_the_pixels() {
     app.ui.mask_target = true;
     let app_ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &app_ctx, "edit.copy", serde_json::json!({})).unwrap();
-    let clip = app.session.clipboard.clone().expect("the mask was copied");
+    let clip = app.session.clipboard.as_ref().cloned().expect("the mask was copied");
     let st = app.session.active().unwrap();
     let (w, h) = (st.doc.size.width as i32, st.doc.size.height as i32);
     assert_eq!(
@@ -600,7 +601,7 @@ type SvgClip = Arc<Mutex<Result<Option<Vec<u8>>, String>>>;
 
 /// An app whose OS clipboard holds the SVG `svg` and the bitmap `image`, exporting nothing
 /// (so an internal copy stays newer than what the OS clipboard holds).
-fn app_with_svg_and_image(svg: &SvgClip, image: &OsClip) -> PhotocraftApp {
+fn app_with_svg_and_image(svg: &SvgClip, image: &OsClip) -> Box<PhotocraftApp> {
     let (s, i) = (svg.clone(), image.clone());
     let services = Services {
         clipboard_get_svg: Some(Box::new(move || s.lock().unwrap().clone())),

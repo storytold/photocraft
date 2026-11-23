@@ -1,6 +1,6 @@
 use super::*;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.session.execute("file.new", json!({"width": 90, "height": 60, "depth": 16})).unwrap();
     app.session.execute("layer.new.layer", json!({})).unwrap();
@@ -180,7 +180,7 @@ fn native_component_gallery_previews_match_commit_and_capture_the_target() {
 
 /// A 240×160 layer with gradients, edges and fine detail, so every gallery filter has
 /// something to draw.
-fn photo_app() -> PhotocraftApp {
+fn photo_app() -> Box<PhotocraftApp> {
     let (w, h) = (240, 160);
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.session.execute("file.new", json!({"width": w, "height": h, "depth": 16})).unwrap();
@@ -361,7 +361,7 @@ fn glow_color_keeps_exact_floats_until_a_new_pick_and_stores_linear() {
     ui(&mut app, json!({"params": {"glowColor": [0.123456, 0.234567, 0.345678]}})).unwrap();
     let ctx = app.ctx().clone();
     let mut h = egui_kittest::Harness::builder().with_context(ctx.clone()).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             app.framework.dialogs.run(ui);
             take(app, ui.ctx());
         },

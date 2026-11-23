@@ -5,7 +5,7 @@
 use crate::PhotocraftApp;
 use serde_json::json;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {

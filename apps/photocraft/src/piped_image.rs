@@ -83,7 +83,8 @@ mod tests {
     use photocraft_engine::Session;
     use photocraft_ui_egui::Services;
 
-    fn app() -> PhotocraftApp {
+    /// The app under test, boxed as `PhotocraftApp::new` returns it.
+    fn app() -> Box<PhotocraftApp> {
         let services = Services {
             import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
                 photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())

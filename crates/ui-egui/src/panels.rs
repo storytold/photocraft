@@ -2,8 +2,7 @@
 
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
 #[cfg(test)]
-use egui::Rect;
-use egui::vec2;
+use egui::{Rect, vec2};
 use photocraft_color::BlendMode;
 use photocraft_doc::LayerId;
 use photocraft_engine::history_source_cmds::HistorySource;
@@ -17,6 +16,7 @@ use crate::{PhotocraftApp, icons};
 pub mod actions;
 pub mod adjust_ui;
 pub mod apply_color;
+pub mod apply_data_set_ui;
 pub(crate) mod blend_preview;
 #[cfg(test)]
 mod blend_rows_tests;
@@ -59,7 +59,7 @@ mod properties;
 pub(crate) mod region_versions;
 pub(crate) mod registry;
 pub mod smart_ui;
-mod status_bar;
+pub(crate) mod status_bar;
 pub mod swatches_ui;
 pub(super) mod timeline_ui;
 pub(crate) mod title_bar;
@@ -75,6 +75,7 @@ pub(crate) use info::{SamplerReadouts, sampler_readouts};
 pub(crate) use layers::blend_options;
 pub(crate) use layers_tree::listed_filter;
 pub use options_bar::options_bar;
+pub(crate) use status_bar::document_window_status;
 pub use status_bar::status_bar;
 pub use title_bar::{title_bar, window_title};
 pub(crate) use toolbar::QUICK_MASK;
@@ -151,7 +152,7 @@ mod swatch_type_tests {
         let mut h = Harness::builder()
             .with_context(app.ctx().clone())
             .with_size(vec2(300.0, 300.0))
-            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::panels::color::panel(app, ui), app);
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::panels::color::panel(app, ui), app);
         h.run_steps(4);
         assert_eq!(h.state().session.tools.foreground, fg);
         let st = h.state().session.active().unwrap();
