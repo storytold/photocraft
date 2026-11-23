@@ -194,7 +194,7 @@ use filters::{blending_options, delete_filter, edit_filters, move_filter, set_fi
 pub(crate) use placing::detach_psd;
 pub(crate) use placing::{affine_homography, set_placement, shift_smart, transform_placement};
 use placing::{convert, reset_transform, shift_layer, via_copy};
-pub use placing::{layer_to_smart, layers_to_smart, placement};
+pub use placing::{layer_to_smart, layers_to_smart, placed_box, placement};
 use rendering::refresh_or_fail;
 #[cfg(test)]
 pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};

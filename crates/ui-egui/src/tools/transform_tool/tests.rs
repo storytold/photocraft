@@ -2215,3 +2215,71 @@ fn an_unskewed_box_shows_its_horizontal_skew_as_zero() {
     h.run_steps(2);
     assert_eq!(h.get_by_label("Horizontal skew").value().as_deref(), Some("0"));
 }
+
+// ---- A smart object's box keeps referencing its own bounds ----
+
+/// The smart object on the active layer.
+fn active_smart(app: &PhotocraftApp) -> photocraft_doc::SmartObject {
+    let st = app.session.active().unwrap();
+    match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+        photocraft_doc::LayerContent::Smart(sm) => sm.clone(),
+        _ => panic!("not a smart object"),
+    }
+}
+
+/// A smart object scaled to half and turned 30 degrees by `edit.transform`.
+fn turned_smart_object() -> Box<PhotocraftApp> {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.session.execute("edit.transform", json!({"scaleX": 50, "scaleY": 50, "rotate": 30})).unwrap();
+    app.sync_views();
+    app
+}
+
+/// The Free Transform of a smart object that was rotated and committed reopens on the object: its box is
+/// turned with it, its fields (read off the frame and the box) are relative to the original placement, and
+/// closing it untouched changes nothing.
+#[test]
+fn a_turned_smart_object_reopens_aligned_and_closes_untouched_without_a_step() {
+    let mut app = turned_smart_object();
+    let (before, steps) = (active_smart(&app), app.session.active().unwrap().history.past_len());
+    let ctx = app.ctx().clone();
+    begin(&mut app, &ctx).unwrap();
+    let t = open(&app);
+    let q = quad_of(t);
+    let top = (q[1][1] - q[0][1]).atan2(q[1][0] - q[0][0]);
+    let turned = before.transform.m[1].atan2(before.transform.m[0]);
+    assert!(top.abs() > 1e-3 && (top - turned).abs() < 1e-6, "the box's top edge runs along the object's turned x axis: {top} vs {turned}");
+    let r = rect_of(t);
+    let scale = (q[1][0] - q[0][0]).hypot(q[1][1] - q[0][1]) / (r[2] - r[0]);
+    assert!((scale - before.transform.m[0].hypot(before.transform.m[1])).abs() < 1e-6, "the width is the object's cumulative scale");
+    assert!(t.untouched() && t.doc_map().is_some(), "opened as the object is");
+    commit(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.transform.is_none(), "the box closed");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "no history step");
+    assert_eq!(active_smart(&app).transform, before.transform, "the placement is as it was");
+}
+
+/// Scaling the reopened box composes onto the placement once: the object ends where the box it showed was
+/// scaled to, with its rotation kept (not applied twice).
+#[test]
+fn scaling_a_reopened_smart_object_box_keeps_its_rotation() {
+    let mut app = turned_smart_object();
+    let ctx = app.ctx().clone();
+    begin(&mut app, &ctx).unwrap();
+    let (opened, pivot) = (quad_of(open(&app)), open(&app).session.pivot());
+    let want = opened.map(|[x, y]| [pivot.x + 2.0 * (x - pivot.x), pivot.y + 2.0 * (y - pivot.y)]);
+    scale_box(&mut app, 2.0, 2.0);
+    assert!(!open(&app).untouched());
+    commit(&mut app);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    let (s, _) = photocraft_engine::smart_cmds::placed_box(&st.doc, layer).expect("still a smart object with a box");
+    let h = photocraft_engine::smart_cmds::placement(&active_smart(&app));
+    for (corner, want) in [(s[0], s[1]), (s[2], s[1]), (s[2], s[3]), (s[0], s[3])].into_iter().zip(want) {
+        let got = h.apply(corner.0, corner.1);
+        assert!((got.0 - want[0]).abs() < 1e-6 && (got.1 - want[1]).abs() < 1e-6, "{corner:?} lands on {got:?}, not {want:?}");
+    }
+}
