@@ -392,6 +392,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
             let r = frame.turned_bounds();
             PixelRect::new(r.x0.floor() as i32, r.y0.floor() as i32, r.x1.ceil() as i32, r.y1.ceil() as i32)
         });
+        // What a crop that grows the canvas adds to a Background previews in its fill colour, as on the monitor.
+        let region_fill = region.and_then(|_| crate::crop_ui::grown_fill(app, doc)).and_then(|c| {
+            let (display, _) = super::display::canvas_display(app, doc, output);
+            let one = photocraft_compose::Buffer::filled(DRect::from_xywh(0, 0, 1, 1), [c[0], c[1], c[2], 1.0]);
+            super::display::display_image(display.as_deref(), &one).pixels.first().copied()
+        });
         let app: &PhotocraftApp = app;
         let (gpu, composite) = match prepared {
             Some(Prepared::Gpu(picture)) => (Some(picture), None),
@@ -401,7 +407,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
         let overlay = overlay.map(|prep| prep.source(app));
         let bounds = gpu.as_ref().map(GpuPicture::bounds).or_else(|| composite.as_ref().map(|c| c.bounds())).unwrap_or_else(|| doc.bounds());
         let mapping = (bounds != doc.bounds()).then(|| placement(bounds));
-        let frame = Frame { checker: checker.as_ref(), edge, mapping, pattern, region };
+        let frame = Frame { checker: checker.as_ref(), edge, mapping, pattern, region, region_fill };
         if let Some(picture) = &gpu {
             frame.apply(RasterDisplay::painted(label.clone(), size, picture.clone().into_paint())).picture().show_at(ui, body.rect);
         } else if let Some(composite) = &composite {
@@ -578,6 +584,8 @@ struct Frame<'c> {
     mapping: Option<Homography>,
     pattern: bool,
     region: Option<PixelRect>,
+    /// The colour of the region past the document (a crop's grown Background), over the checkerboard.
+    region_fill: Option<Color32>,
 }
 
 impl Frame<'_> {
@@ -593,6 +601,10 @@ impl Frame<'_> {
         };
         let display = match self.region {
             Some(region) => display.extent(Extent::Region(region)),
+            None => display,
+        };
+        let display = match self.region_fill {
+            Some(fill) => display.region_fill(fill),
             None => display,
         };
         if self.pattern { display.extent(Extent::Tiled) } else { display }
@@ -678,7 +690,10 @@ mod tests {
                     view.rect.top()
                 );
             }
-            let room = |length: f32, document: f64| if overscroll { f64::from(length) - document } else { 0.0 };
+            // With Overscroll the track reaches into the pasteboard until 100 screen points of the document (all of a
+            // shorter one) stay in view at the opposite edge (#16328): the document plus, on each side, the visible
+            // length less those points. The scroll room is that less the visible length.
+            let room = |length: f32, document: f64| if overscroll { f64::from(length) + document - 2.0 * document.min(100.0) } else { 0.0 };
             let x_room = room(view.rect.width(), 400.0);
             let y_room = room(view.rect.height(), 300.0);
             assert_eq!(horizontal.accesskit_node().max_numeric_value(), Some(x_room), "horizontal scroll room with Overscroll {overscroll}");
