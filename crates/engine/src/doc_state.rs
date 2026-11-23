@@ -31,9 +31,9 @@ pub struct DocState {
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
     pub channel_view: channel_cmds::ChannelView,
-    /// The channel views undo brings back, by the id of the history state they belong to: the
-    /// state New Channel or Calculations started from (#14683). View state, not history.
-    pub(crate) undo_channel_views: Vec<(u64, channel_cmds::ChannelView)>,
+    /// The channel views undo brings back, by the step they belong to: the ids of the history
+    /// states New Channel or Calculations started from and made (#14683). View state, not history.
+    pub(crate) undo_channel_views: Vec<(u64, u64, channel_cmds::ChannelView)>,
     /// Select › Isolate Layers: the Layers panel lists only these layers (empty = off; view state).
     pub isolated_layers: Vec<LayerId>,
     /// Painting symmetry preset or sampled path (tool state, not document pixels).

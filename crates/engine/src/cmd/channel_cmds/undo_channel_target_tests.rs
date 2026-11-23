@@ -88,3 +88,34 @@ fn other_steps_do_not_restore_the_view() {
     assert!(s.undo());
     assert_eq!(view(&s).target, ChannelTarget::Color(1));
 }
+
+/// New Channel from Red, undone, then a selection made from the same state with Green targeted:
+/// undo of the selection lands on the state New Channel started from but undoes the selection, so
+/// Green stays targeted.
+#[test]
+fn undo_of_a_later_step_from_the_same_state_keeps_the_target() {
+    let mut s = session();
+    s.execute("channel.target", json!({"channel": "red"})).unwrap();
+    s.execute("channel.new", json!({})).unwrap();
+    assert!(s.undo());
+    s.execute("channel.target", json!({"channel": "green"})).unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 10, "height": 10})).unwrap();
+    assert!(s.undo());
+    assert_eq!(view(&s).target, ChannelTarget::Color(1));
+}
+
+/// The remembered view stays with the New Channel step: every undo of it, after any number of
+/// redos, returns to Red.
+#[test]
+fn every_undo_of_new_channel_returns_to_red() {
+    let mut s = session();
+    s.execute("channel.target", json!({"channel": "red"})).unwrap();
+    s.execute("channel.new", json!({})).unwrap();
+    for round in 0..3 {
+        assert!(s.undo());
+        assert_eq!(view(&s).target, ChannelTarget::Color(0), "undo {round}");
+        s.execute("channel.target", json!({"channel": "blue"})).unwrap();
+        assert!(s.redo());
+        assert_eq!(doc(&s).channels.len(), 1);
+    }
+}
