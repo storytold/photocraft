@@ -373,8 +373,6 @@ fn identity_leaves_pixels_alone_and_detail_has_stages() {
     let stages = per_pixel(&p, 64, 32, false, None).unwrap();
     let out = g.dev.develop(&g.device, &g.queue, None, &src, Some(1), [64, 32], &stages).unwrap();
     assert_eq!(out, src, "the CPU develop returns early, unclipped");
-    // The stages hand Detail over (craft-libs#3101), but the pass has no Detail stage yet, so the
-    // dialog keeps these on the CPU (`camera_raw_gpu::gpu_stages` in photocraft-ui-egui).
     for set in [cr! { sharpen_amount: 10.0}, cr! { noise_luminance: 10.0, clarity: 20.0}, cr! { noise_color: 10.0, dehaze: 20.0}] {
         assert!(spatial(&set) && per_pixel(&set, 64, 32, false, Some((0.0, 1.0))).is_some_and(|s| s.detail.is_some()), "{set:?}");
     }
