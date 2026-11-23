@@ -1151,9 +1151,10 @@ fn load_and_clean_brush_refuse_bad_params_and_keep_the_paint() {
         assert!(s.execute("brush.mixer.load", bad.clone()).is_err(), "{bad}");
         assert_eq!(s.tools.mixer, before, "{bad}");
     }
-    // Clean Brush takes no params, so anything extra is ignored, without a document too.
+    // Clean Brush takes no params: anything extra is refused (#7596), without a document too.
     let mut empty = crate::session();
-    empty.execute("brush.mixer.clean", json!({"color": [], "junk": {"x": null}})).unwrap();
+    assert!(empty.execute("brush.mixer.clean", json!({"color": [], "junk": {"x": null}})).is_err());
+    empty.execute("brush.mixer.clean", json!({})).unwrap();
     empty.execute("brush.mixer.load", json!({"color": null})).unwrap();
     assert_eq!(empty.tools.mixer.reservoir, Some(empty.tools.foreground));
 }
