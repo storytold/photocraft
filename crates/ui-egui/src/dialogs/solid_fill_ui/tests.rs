@@ -9,7 +9,7 @@ use serde_json::json;
 use super::*;
 use crate::color_picker_ui::testing;
 
-fn harness(ppp: f32) -> (Harness<'static, PhotocraftApp>, LayerId) {
+fn harness(ppp: f32) -> (Harness<'static, Box<PhotocraftApp>>, LayerId) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": 16})).unwrap();
     let id = LayerId(s.execute("layer.newFillLayer.solidColor", json!({"color": "#33669980"})).unwrap()["layer"].as_u64().unwrap());
@@ -28,7 +28,7 @@ fn harness(ppp: f32) -> (Harness<'static, PhotocraftApp>, LayerId) {
 }
 
 /// A CMYK document with no fill layer yet.
-fn cmyk_app() -> PhotocraftApp {
+fn cmyk_app() -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     s.execute("image.mode.cmyk", json!({})).unwrap();

@@ -17,7 +17,7 @@ use crate::state::Tool;
 pub(super) const HORIZONTAL: [&str; 3] = ["Left align text", "Center text", "Right align text"];
 pub(super) const VERTICAL: [&str; 3] = ["Align text to the top", "Center text vertically", "Align text to the bottom"];
 
-pub(super) fn new_app(tool: Tool) -> PhotocraftApp {
+pub(super) fn new_app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 400})).unwrap();
     app.sync_views();
@@ -31,7 +31,7 @@ fn text_layer(app: &mut PhotocraftApp, orientation: &str) -> LayerId {
     LayerId(made["layer"].as_u64().unwrap())
 }
 
-pub(super) fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(super) fn bar(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_context(ctx).with_size(egui::vec2(1200.0, 60.0)).build_app(
         |ui, app: &mut PhotocraftApp| {
@@ -45,10 +45,10 @@ pub(super) fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 
 /// The bar drawn without the app's frame logic: that logic ends a text edit whose document is not the
 /// active one, and the bar's own decision for such an edit is what the caller tests.
-fn bar_without_frame_logic(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn bar_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_context(ctx).with_size(egui::vec2(1200.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             ui.horizontal(|ui| super::options_bar(app, ui));
         },
         app,
@@ -58,7 +58,7 @@ fn bar_without_frame_logic(app: PhotocraftApp) -> Harness<'static, PhotocraftApp
 }
 
 /// Which of the two button sets the bar shows; panics on a mix or neither.
-pub(super) fn shown(h: &Harness<'static, PhotocraftApp>) -> [&'static str; 3] {
+pub(super) fn shown(h: &Harness<'static, Box<PhotocraftApp>>) -> [&'static str; 3] {
     let has = |label: &str| h.query_by_label(label).is_some();
     match (has(VERTICAL[0]) && has(VERTICAL[2]), has(HORIZONTAL[0]) && has(HORIZONTAL[2])) {
         (true, false) => VERTICAL,
@@ -68,7 +68,7 @@ pub(super) fn shown(h: &Harness<'static, PhotocraftApp>) -> [&'static str; 3] {
     }
 }
 
-pub(super) fn lit(h: &Harness<'static, PhotocraftApp>, label: &str) -> bool {
+pub(super) fn lit(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> bool {
     h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True)
 }
 

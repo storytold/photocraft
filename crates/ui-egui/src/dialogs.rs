@@ -467,6 +467,7 @@ pub(crate) const TAKERS: &[fn(&mut PhotocraftApp, &egui::Context)] = &[
     crate::layers_panel_ui::take,
     crate::slice_ui::take,
     crate::crop_presets::take,
+    crate::panels::apply_data_set_ui::take,
     crate::variables_ui::take,
     crate::actions::dialogs::take_stops,
 ];
@@ -507,6 +508,7 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Re
     }
     // Automation confirming a dialog that stands for a command is judged as that command, whichever way the answer
     // arrives (a control request or synthetic input).
+    #[cfg(not(target_arch = "wasm32"))]
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
         && let Some((command, params)) = crate::control::dialogs::hosted_command(app, id)
@@ -514,6 +516,7 @@ pub fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Re
         authorize(&command, &params)?;
     }
     // Synthetic input answering Save on the unsaved-changes prompt is judged as `file.save`, as a control answer is.
+    #[cfg(not(target_arch = "wasm32"))]
     if app.automation_input && crate::control::dialogs::is_save_answer(app, id) {
         crate::discard_ui::authorize_save(app, false)?;
     }
@@ -659,7 +662,7 @@ fn convert_blend_mode(key: &str, value: &mut Value) {
     }
     let Some(mode) = value.get_mut("mode") else { return };
     if let Some(blend) = mode.as_str().and_then(crate::panels::layers_tree::blend_of) {
-        *mode = Value::String(crate::panels::layers_tree::blend_key(blend));
+        *mode = Value::String(blend.key().to_string());
     }
 }
 
@@ -696,10 +699,13 @@ pub(super) mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub(crate) mod canvas_input;
 pub mod channel_options_ui;
+#[cfg(test)]
+mod color_lookup_no_remember_tests;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
+pub(crate) mod conditional_mode_change_dialog;
 pub mod count_group_name_ui;
 pub mod credits;
 pub mod dds_options_ui;
@@ -727,6 +733,7 @@ pub(crate) mod image_processor_ui;
 pub mod jpeg_options_ui;
 pub mod layer_picker;
 pub mod layer_style;
+pub(crate) mod lens_batch_ui;
 pub mod liquify_ui;
 pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
@@ -744,6 +751,11 @@ mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
+#[cfg(test)]
+mod rotate_canvas_layout_tests;
+pub(crate) mod rotate_canvas_ui;
+#[cfg(test)]
+mod scale_effects_layout_tests;
 pub mod screen_picker;
 pub mod select_mask_ui;
 pub mod shape_dialog;

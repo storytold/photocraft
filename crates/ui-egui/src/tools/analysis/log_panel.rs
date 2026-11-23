@@ -2,7 +2,8 @@
 
 use craft::behavior::{ColumnKey, ColumnWidth, DisplayOrder, IconId, ItemSource, Selection};
 use craft::ui::buttons::{Button, IconButton};
-use craft::ui::contract::{Bind, ColumnSpec, Props as _, Show as _, ShowCollection as _};
+use craft::ui::contract::{Bind, ColumnSpec, Props as _, Show as _, ShowCollection as _, ShowContainer as _};
+use craft::ui::layout_components::Row as LayoutRow;
 use craft::ui::list::ListRow;
 use craft::ui::runtime::env::Label;
 use craft::ui::table::Table;
@@ -59,7 +60,7 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         log.iter().map(|r| Row { id: r.id, cells: columns.iter().map(|(key, _)| (ColumnKey::new(key), cell_text(r.values.get(*key)))).collect() }).collect();
     let ids: Vec<u64> = rows.iter().map(|r| r.id).collect();
 
-    ui.horizontal(|ui| {
+    LayoutRow::new().show(ui, |ui, _| {
         if Button::new(Label::from(tl!("Record Measurements"))).show(ui).clicked() {
             let ctx = ui.ctx().clone();
             let _ = crate::menus::invoke(app, &ctx, "image.analysis.recordMeasurements", json!({}));

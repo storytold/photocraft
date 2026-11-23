@@ -1,7 +1,7 @@
 //! Tests for the headless GPU backend, capability isolation, cache mutation, and CPU/GPU parity.
 
 #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
-mod tests {
+mod gpu_tests {
     use std::fs;
 
     use photocraft_codecs::decode;

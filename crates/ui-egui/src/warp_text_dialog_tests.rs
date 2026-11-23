@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::PhotocraftApp;
 
 /// A document with one type layer, active.
-fn app_with_type() -> PhotocraftApp {
+fn app_with_type() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 200})).unwrap();
     app.run("type.create", json!({"x": 20, "y": 120, "text": "Warp", "size": 60})).unwrap();
@@ -41,9 +41,9 @@ fn steps(app: &PhotocraftApp) -> usize {
 }
 
 /// The open dialogs drawn over `app`, as the window shows them.
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+pub(crate) fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(900.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 crate::dialogs::run(app, ui);
             }
@@ -63,7 +63,7 @@ fn set(app: &mut PhotocraftApp, id: DialogId, key: &str, value: Value) {
 
 /// Set dialog values as the sliders and dropdowns would, and compute the canvas preview as a
 /// frame of the canvas does.
-fn edit_and_preview(h: &mut Harness<'_, PhotocraftApp>, id: DialogId, values: Value) {
+fn edit_and_preview(h: &mut Harness<'_, Box<PhotocraftApp>>, id: DialogId, values: Value) {
     for (k, v) in values.as_object().unwrap() {
         set(h.state_mut(), id, k, v.clone());
     }
@@ -157,7 +157,7 @@ fn an_unknown_warp_style_opens_at_none_with_the_layers_values() {
     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
         t.warp = Some(TextWarp { style: "warpCustom".into(), value: 12.0, horizontal_distortion: -5.0, vertical_distortion: 7.0, horizontal: false });
     }
-    st.doc = std::sync::Arc::new(doc);
+    *st.doc_mut() = std::sync::Arc::new(doc);
     let (_, fields) = open(&mut app);
     assert_eq!(shown(&fields), ("none", 12.0, -5.0, 7.0, "vertical"));
 }

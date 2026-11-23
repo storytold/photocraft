@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.sync_views();
@@ -19,7 +19,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn zoom(h: &Harness<'static, PhotocraftApp>) -> f32 {
+fn zoom(h: &Harness<'static, Box<PhotocraftApp>>) -> f32 {
     h.state().current_zoom()
 }
 
@@ -29,18 +29,18 @@ fn max_zoom() -> f32 {
 }
 
 /// The values of the dialog opened last, as automation lists them (`ui.inspect`).
-fn dialog_fields(h: &Harness<'static, PhotocraftApp>) -> serde_json::Value {
+fn dialog_fields(h: &Harness<'static, Box<PhotocraftApp>>) -> serde_json::Value {
     h.state().framework.dialogs.open_dialogs().into_iter().last().and_then(|d| d.fields).expect("an open dialog with values")
 }
 
-fn open_dialog(h: &mut Harness<'static, PhotocraftApp>) {
+fn open_dialog(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     crate::dialogs::open_command_dialog(h.state_mut(), "image.adjustments.brightnessContrast", "Brightness/Contrast…").unwrap();
     h.run_steps(3);
     assert!(h.state().dialog_open());
 }
 
 /// A point on the canvas well away from the centred dialog.
-fn free_canvas(h: &Harness<'static, PhotocraftApp>) -> Pos2 {
+fn free_canvas(h: &Harness<'static, Box<PhotocraftApp>>) -> Pos2 {
     let r = h.state().last_canvas_rect;
     pos2(r.left() + 60.0, r.bottom() - 60.0)
 }
@@ -94,12 +94,12 @@ fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
     assert!(!h.state().dialog_open());
 }
 
-fn press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, pressed: bool) {
+fn press(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, pressed: bool) {
     h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-fn picker_color(h: &Harness<'static, PhotocraftApp>) -> String {
+fn picker_color(h: &Harness<'static, Box<PhotocraftApp>>) -> String {
     dialog_fields(h)["color"].as_str().unwrap().to_string()
 }
 
@@ -205,7 +205,7 @@ fn curves_picker_samples_document_coordinates_through_the_view_transform() {
 }
 
 /// A wheel event of `dy` lines with `modifiers` held.
-fn wheel(h: &Harness<'static, PhotocraftApp>, dy: f32, modifiers: Modifiers) {
+fn wheel(h: &Harness<'static, Box<PhotocraftApp>>, dy: f32, modifiers: Modifiers) {
     h.event_modifiers(
         egui::Event::MouseWheel {
             source: egui::MouseWheelSource::Unknown,
@@ -219,14 +219,14 @@ fn wheel(h: &Harness<'static, PhotocraftApp>, dy: f32, modifiers: Modifiers) {
 }
 
 /// The document point under screen point `p` (no flip).
-fn doc_at(h: &Harness<'static, PhotocraftApp>, p: Pos2) -> [f32; 2] {
+fn doc_at(h: &Harness<'static, Box<PhotocraftApp>>, p: Pos2) -> [f32; 2] {
     let v = &h.state().ui.views[0];
     let c = h.state().last_canvas_rect.center();
     [v.center[0] + (p.x - c.x) / v.zoom, v.center[1] + (p.y - c.y) / v.zoom]
 }
 
 /// The whole window (status bar and Navigator included) on a 400 × 300 document.
-fn app_window() -> Harness<'static, PhotocraftApp> {
+fn app_window() -> Harness<'static, Box<PhotocraftApp>> {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
@@ -254,16 +254,21 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     let r = h.state().last_canvas_rect;
     let p = pos2(r.center().x - 150.0, r.center().y - 90.0);
     // The document point under `p`, through the canvas view as its last pass showed it.
-    let doc_at = |h: &Harness<'static, PhotocraftApp>, p: Pos2| {
+    let doc_at = |h: &Harness<'static, Box<PhotocraftApp>>, p: Pos2| {
         let d = crate::canvas::testing::view(h.state()).expect("the canvas has shown").to_doc(p);
         [d.x as f32, d.y as f32]
     };
     h.hover_at(p);
     h.run_steps(2);
     let d0 = doc_at(&h, p);
+    // Frames after each notch (0.25 s each, the harness's default step): a notch lands within two (egui's wheel
+    // smoothing reaches 90 % in 0.1 s and takes the rest under one point at once), and the old clamp pulled the zoom
+    // back on every frame, so three show it: the zoom and centre
+    // after them are the ones the old thirty left.
+    const NOTCH_STEPS: usize = 3;
     for _ in 0..14 {
         wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(30);
+        h.run_steps(NOTCH_STEPS);
     }
     assert_eq!(zoom(&h), max_zoom(), "a notch past the limit lands on it exactly");
     let d1 = doc_at(&h, p);
@@ -271,13 +276,13 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
     let c = h.state().ui.views[0].center;
     for _ in 0..4 {
         wheel(&h, 1.0, Modifiers::ALT);
-        h.run_steps(30);
+        h.run_steps(NOTCH_STEPS);
     }
     assert_eq!(zoom(&h), max_zoom());
     assert_eq!(h.state().ui.views[0].center, c, "at the limit the image doesn't move");
     // One notch back: 12800 / 1.1, still around the pointer.
     wheel(&h, -1.0, Modifiers::ALT);
-    h.run_steps(30);
+    h.run_steps(NOTCH_STEPS);
     assert!((zoom(&h) - max_zoom() / 1.1).abs() < 1e-2, "{}", zoom(&h));
     let d2 = doc_at(&h, p);
     assert!((d2[0] - d0[0]).abs() < 0.02 && (d2[1] - d0[1]).abs() < 0.02, "{d0:?} -> {d2:?}");
@@ -329,19 +334,19 @@ fn type_tool_alt_arrows_kern_the_pair() {
     use photocraft_doc::text::Kerning;
     let mut h = harness();
     let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "AVA To", "size": 40, "font": "Inter"})).unwrap()["layer"].as_u64().unwrap();
-    let text = |h: &Harness<'static, PhotocraftApp>| {
+    let text = |h: &Harness<'static, Box<PhotocraftApp>>| {
         let st = h.state().session.active().unwrap();
         match &st.doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
             photocraft_doc::LayerContent::Text(t) => t.clone(),
             _ => panic!("not text"),
         }
     };
-    let kern = |h: &Harness<'static, PhotocraftApp>| {
+    let kern = |h: &Harness<'static, Box<PhotocraftApp>>| {
         let t = text(h);
         let r = t.char_runs();
         (r[0].style.kerning, r[0].style.kern, r.len())
     };
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.entries().len();
+    let steps = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().history.entries().len();
     let metric = photocraft_text::shared().lock().unwrap().pair_kerning(&text(&h), 72.0, 0).unwrap().round();
     edit_type(&mut h, id, 1, 1);
     let s0 = steps(&h);
@@ -373,7 +378,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
 
 /// Starts a type editing session on `layer` with `anchor..caret` selected, as a click on the text
 /// with the Type tool does.
-fn edit_type(h: &mut Harness<'static, PhotocraftApp>, layer: u64, anchor: usize, caret: usize) {
+fn edit_type(h: &mut Harness<'static, Box<PhotocraftApp>>, layer: u64, anchor: usize, caret: usize) {
     let app = h.state_mut();
     app.run("layer.select", json!({"layer": layer, "mode": "replace"})).unwrap();
     let ctx = crate::canvas::testing::ctx(app);
@@ -384,7 +389,7 @@ fn edit_type(h: &mut Harness<'static, PhotocraftApp>, layer: u64, anchor: usize,
     h.run_steps(2);
 }
 
-fn type_layer(h: &Harness<'static, PhotocraftApp>, id: u64) -> photocraft_doc::TextLayer {
+fn type_layer(h: &Harness<'static, Box<PhotocraftApp>>, id: u64) -> photocraft_doc::TextLayer {
     match &h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
         photocraft_doc::LayerContent::Text(t) => t.clone(),
         _ => panic!("not text"),
@@ -392,7 +397,7 @@ fn type_layer(h: &Harness<'static, PhotocraftApp>, id: u64) -> photocraft_doc::T
 }
 
 /// The character style of character `c` of a type layer.
-fn char_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocraft_doc::text::CharStyle {
+fn char_style(h: &Harness<'static, Box<PhotocraftApp>>, id: u64, c: usize) -> photocraft_doc::text::CharStyle {
     let t = type_layer(h, id);
     let byte = t.text.char_indices().nth(c).map_or(t.text.len(), |(i, _)| i);
     let mut end = 0;
@@ -407,7 +412,7 @@ fn char_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocr
 }
 
 /// The paragraph style of the paragraph holding character `c`.
-fn para_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocraft_doc::text::ParagraphStyle {
+fn para_style(h: &Harness<'static, Box<PhotocraftApp>>, id: u64, c: usize) -> photocraft_doc::text::ParagraphStyle {
     let t = type_layer(h, id);
     let byte = t.text.char_indices().nth(c).map_or(t.text.len(), |(i, _)| i);
     let mut end = 0;
@@ -421,7 +426,7 @@ fn para_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocr
         .style
 }
 
-fn history(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn history(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().session.active().unwrap().history.entries()
 }
 
@@ -522,7 +527,7 @@ fn type_tool_format_keys_step_leading_baseline_and_tracking() {
     let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "Hello world", "size": 10})).unwrap()["layer"].as_u64().unwrap();
     edit_type(&mut h, id, 0, 5);
     let before = history(&h).len();
-    let press = |h: &mut Harness<'static, PhotocraftApp>, m: Modifiers, k: Key| {
+    let press = |h: &mut Harness<'static, Box<PhotocraftApp>>, m: Modifiers, k: Key| {
         h.key_press_modifiers(m, k);
         h.run_steps(2);
     };
@@ -707,7 +712,7 @@ fn escape_with_a_dialog_open_cancels_the_dialog_not_the_selection() {
 
 /// How much of the 400 × 300 document is on screen: the visible document span on each axis,
 /// clipped to the image (0 when the image has left the view on that axis).
-fn visible_image(h: &Harness<'static, PhotocraftApp>) -> [f32; 2] {
+fn visible_image(h: &Harness<'static, Box<PhotocraftApp>>) -> [f32; 2] {
     let r = h.state().last_canvas_rect;
     let (a, b) = (doc_at(h, r.min), doc_at(h, r.max));
     [(b[0].min(400.0) - a[0].max(0.0)).max(0.0), (b[1].min(300.0) - a[1].max(0.0)).max(0.0)]

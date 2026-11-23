@@ -13,14 +13,14 @@ use craft::color_ui::ui::{ColorPanelCommand, ColorPanelMode, ColorPanelRamp};
 use crate::PhotocraftApp;
 use crate::theme::AppTheme;
 
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
 /// The Color tab of `kind` for `app`, alone in a 300 x 400 pt group that it fills.
-fn color_tab_of(kind: AppTheme, app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn color_tab_of(kind: AppTheme, app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(300.0, 400.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 crate::panels::panel_docking::probe::body(app, ui, "color");
             }
@@ -106,7 +106,7 @@ fn options_persist_restore_and_follow_outside_changes() {
 
 /// The Color tab in `mode` with a document holding one selected black rectangle, the Rectangle tool
 /// in hand, foreground blue and background red, editing the background well if `background`.
-fn color_tab_with_a_shape(mode: ColorPanelMode, background: bool) -> Harness<'static, PhotocraftApp> {
+fn color_tab_with_a_shape(mode: ColorPanelMode, background: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = new_app();
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.sync_views();
@@ -120,7 +120,7 @@ fn color_tab_with_a_shape(mode: ColorPanelMode, background: bool) -> Harness<'st
 }
 
 /// Types `text` into the first channel's number field (Hue, Red) and commits it with Enter.
-fn type_first_channel(h: &mut Harness<'_, PhotocraftApp>, text: &str) {
+fn type_first_channel(h: &mut Harness<'_, Box<PhotocraftApp>>, text: &str) {
     h.query_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().click();
     h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);

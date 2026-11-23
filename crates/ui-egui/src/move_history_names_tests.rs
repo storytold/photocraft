@@ -11,7 +11,7 @@ use crate::canvas::ToolEvent;
 use crate::state::Tool;
 
 /// A 64x64 document with one painted layer (8..24)^2, selected, and the Move tool active.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.sync_views();
