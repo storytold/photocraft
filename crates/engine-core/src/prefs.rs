@@ -1831,27 +1831,6 @@ pub struct ScriptEvents {
     pub bindings: Vec<ScriptBinding>,
 }
 
-/// Written through [`strip_nulls`]: TOML has no null, and the store refuses a document holding one
-/// at any depth. A null in these files always means "not set", which a missing key reads as too.
-impl Serialize for SavedPrefs {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        let mut v = self.prefs.to_json();
-        if let Value::Object(m) = &mut v {
-            // Match inks by their RGB stand-in through SettingsStore's concurrent table merge.
-            m.insert("toolColors".into(), tool_colors::encode(&self.prefs.tool_colors));
-            m.insert("colorSettings".into(), serde_json::to_value(&self.color_settings).map_err(serde::ser::Error::custom)?);
-            m.insert("presets".into(), self.presets.clone());
-        }
-        strip_nulls(&mut v);
-        v.serialize(serializer)
-    }
-}
-
-impl craft::settings::Settings for SavedPrefs {
-    const APP_ID: &'static str = "photocraft";
-    const SCHEMA_VERSION: u32 = 1;
-}
-
 /// Removes every null from `v`: object entries holding null and null list items, at any depth.
 pub fn strip_nulls(v: &mut Value) {
     match v {
