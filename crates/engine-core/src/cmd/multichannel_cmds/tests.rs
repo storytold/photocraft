@@ -234,3 +234,118 @@ fn flat_export_prints_the_inks() {
     // Solid process black ink, not paper.
     assert!(px[0] < 0.3 && px[3] > 0.99, "{px:?}");
 }
+
+#[test]
+fn deleting_one_process_channel_keeps_other_planes_and_is_one_edit() {
+    let cases = [
+        ("rgb", 8, &["Cyan", "Yellow"][..]),
+        ("rgb", 16, &["Cyan", "Yellow"]),
+        ("rgb", 32, &["Cyan", "Yellow"]),
+        ("cmyk", 8, &["Cyan", "Yellow", "Black"]),
+        ("cmyk", 16, &["Cyan", "Yellow", "Black"]),
+        ("lab", 8, &["Alpha 1", "Alpha 3"]),
+        ("lab", 16, &["Alpha 1", "Alpha 3"]),
+    ];
+    for (mode, depth, names) in cases {
+        let mut s = session(mode, depth);
+        s.execute("channel.new", json!({"name":"Saved mask", "fill":"white"})).unwrap();
+        s.execute("select.rect", json!({"x":0, "y":0, "width":4, "height":4})).unwrap();
+        s.execute("channel.newSpot", json!({"name":"Separate ink", "color":"#224466", "solidity":62})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("channel.setVisible", json!({"channel":1, "visible":false})).unwrap();
+        let solo = mode != "rgb" || depth != 32;
+        if !solo {
+            s.execute("channel.setVisible", json!({"channel":{"color":2}, "visible":true})).unwrap();
+        }
+        let before = doc(&s).clone();
+        assert_eq!(before.channels[1].surface.sample_channel(1, 1, 0), 1.0, "the preserved spot has a painted plate");
+        let before_pixels = pixels(&s);
+        let active = s.active().unwrap().active_layer;
+        let history = s.active().unwrap().history.past_len();
+        let before_view = s.active().unwrap().channel_view.clone();
+
+        assert_eq!(s.execute("channel.delete", json!({"channel":{"color":1}})).unwrap(), Value::Null);
+        let after = doc(&s);
+        assert_eq!(after.mode, ColorMode::Multichannel);
+        assert_eq!(after.depth, before.depth);
+        assert!(after.layers.is_empty());
+        assert_eq!(after.channels.iter().take(names.len()).map(|ink| ink.name.as_str()).collect::<Vec<_>>(), names);
+        assert!(after.channels[..names.len()].iter().all(|ink| ink.spot.is_some()));
+        assert_eq!(&after.channels[names.len()..], &before.channels);
+        assert_retained_ink_samples(&before, after, &before_pixels, tol(depth));
+        assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Alpha(names.len()));
+        assert_eq!(s.active().unwrap().channel_view.alpha_visible, [vec![false; names.len()], before_view.alpha_visible].concat());
+        let color_hidden = if solo { vec![true; 3] } else { Vec::new() };
+        assert_eq!(s.active().unwrap().channel_view.color_hidden, color_hidden, "keep solo alpha and discard partial native choices");
+        assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+        if mode == "rgb" && depth == 16 {
+            let bytes = photocraft_format::save_to_bytes(after, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+            assert_eq!(reopened.mode, ColorMode::Multichannel);
+            assert_eq!(reopened.channels, after.channels);
+        }
+
+        assert!(s.undo());
+        assert_eq!(doc(&s).mode, before.mode);
+        assert_eq!(doc(&s).layers.iter().map(|layer| layer.id).collect::<Vec<_>>(), before.layers.iter().map(|layer| layer.id).collect::<Vec<_>>());
+        assert_eq!(s.active().unwrap().active_layer, active);
+        assert_eq!(pixels(&s), before_pixels);
+        assert_eq!(doc(&s).channels, before.channels);
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+}
+
+fn assert_retained_ink_samples(before: &Document, after: &Document, before_pixels: &[f32], tolerance: f32) {
+    let retained = (0..before.mode.color_channels()).filter(|&component| component != 1);
+    let stride = before.pixel_format().channels();
+    for (ink, component) in after.channels.iter().zip(retained) {
+        let samples = ink.surface.read_region(after.bounds());
+        assert_eq!(samples.len(), before_pixels.len() / stride);
+        for (&actual, px) in samples.iter().zip(before_pixels.chunks_exact(stride)) {
+            let expected = if before.mode == ColorMode::Cmyk { px[component] } else { 1.0 - px[component] };
+            assert!((actual - expected).abs() <= tolerance, "{:?}/{:?}, component {component}: {actual} vs {expected}", before.mode, before.depth);
+        }
+    }
+}
+
+#[test]
+fn deleting_a_process_channel_requires_an_explicit_in_range_index() {
+    let mut s = session("rgb", 8);
+    let before = s.active().unwrap().doc.clone();
+    let history = s.active().unwrap().history.past_len();
+    for channel in [json!(0), json!("composite"), json!("red"), json!({"color":3}), json!({"color":-1}), json!({"color":u64::MAX})] {
+        assert!(s.execute("channel.delete", json!({"channel":channel})).is_err(), "{channel}");
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
+        assert_eq!(s.active().unwrap().history.past_len(), history);
+    }
+    assert!(s.is_enabled("channel.delete"), "the RGB document needs no saved alpha channels");
+    s.execute("channel.target", json!({"channel":{"color":0}})).unwrap();
+    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Color(0));
+    s.execute("channel.delete", json!({"channel":{"color":0}})).unwrap();
+    assert_eq!(ink_names(doc(&s)), ["Magenta", "Yellow"]);
+    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Composite, "only the Multichannel view remains");
+    assert!(s.active().unwrap().channel_view.color_hidden.is_empty());
+
+    let mut gray = session("grayscale", 8);
+    gray.execute("channel.new", json!({"name":"Gray mask"})).unwrap();
+    assert!(gray.execute("channel.delete", json!({"channel":{"color":0}})).is_err());
+    assert_eq!(doc(&gray).mode, ColorMode::Grayscale);
+    assert_eq!(doc(&gray).channels[0].name, "Gray mask");
+}
+
+#[test]
+fn deleting_a_process_channel_refuses_an_over_budget_canvas_atomically() {
+    let mut s = Session::new();
+    let area = photocraft_geom::Size::new(100_000, 100_000);
+    s.add_document(Document::new("Sparse canvas", area, ColorMode::Rgb, SampleType::U8), None);
+    let st = s.active().unwrap();
+    let before = st.doc.clone();
+    let revision = st.revision;
+    let history = st.history.past_len();
+    let error = s.execute("channel.delete", json!({"channel":{"color":1}})).unwrap_err().to_string();
+    assert!(error.contains("working memory"), "{error}");
+    let after = s.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&after.doc, &before));
+    assert_eq!(after.revision, revision);
+    assert_eq!(after.history.past_len(), history);
+}
