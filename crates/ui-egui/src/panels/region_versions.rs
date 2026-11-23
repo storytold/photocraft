@@ -11,6 +11,7 @@
 use std::hash::{Hash, Hasher};
 
 use craft::ui::contract::{MemoProps, MemoView};
+use photocraft_engine::link_watch::LinkWatchExt as _;
 
 use super::PhotocraftApp;
 use crate::color_picker_ui::PickWindow;
@@ -348,7 +349,6 @@ mod tests {
     /// panel shows the missing mark and greys Embed, and moves it back when the file returns (#14121).
     #[test]
     fn a_link_found_missing_or_back_moves_the_properties_version() {
-        use photocraft_engine::link_watch::LinkWatchExt as _;
         let directory = tempfile::tempdir().unwrap();
         let (file, away) = (directory.path().join("linked.png"), directory.path().join("away.png"));
         let mut source = photocraft_engine::Session::new();
