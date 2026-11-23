@@ -16,13 +16,18 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 /// Places a `w`×`h` PNG into a 400×300 document, centred on the canvas centre; returns the
 /// command's result, the smart object's transform and the left/top edge of its pixels.
 fn place(name: &str, w: u32, h: u32, depth: u32) -> (Value, [f64; 6], (i32, i32)) {
+    place_at(name, w, h, depth, [200.0, 150.0])
+}
+
+/// [`place`] centred on `center` instead of the canvas centre.
+fn place_at(name: &str, w: u32, h: u32, depth: u32, center: [f64; 2]) -> (Value, [f64; 6], (i32, i32)) {
     let dir = std::env::temp_dir().join(format!("photocraft-place-fractional-{}-{name}-{depth}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.png"));
     std::fs::write(&path, png(w, h)).unwrap();
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 400, "height": 300, "depth": depth})).unwrap();
-    let r = s.execute("file.placeEmbedded", json!({"path": path.to_string_lossy(), "fit": true, "smartObject": true, "center": [200.0, 150.0]})).unwrap();
+    let r = s.execute("file.placeEmbedded", json!({"path": path.to_string_lossy(), "fit": true, "smartObject": true, "center": center})).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let d = s.active().unwrap();
     let layer = d.doc.layer(d.active_layer.unwrap()).unwrap();
@@ -52,4 +57,15 @@ fn a_whole_pixel_offset_is_unchanged() {
     assert_eq!(m, [1.0, 0.0, 0.0, 1.0, 150.0, 120.0]);
     assert_eq!(r["bounds"], json!([150.0, 120.0, 250.0, 180.0]));
     assert_eq!((x0, y0), (150, 120));
+}
+
+/// A negative half-pixel offset keeps today's whole-pixel placement (not measured in the
+/// reference): 100×60 centred at 49.5,150 starts at -1 in the transform, the box and the pixels,
+/// while the other axis is unaffected.
+#[test]
+fn a_negative_half_pixel_offset_is_unchanged() {
+    let (r, m, (x0, y0)) = place_at("negative", 100, 60, 8, [49.5, 150.0]);
+    assert_eq!(m, [1.0, 0.0, 0.0, 1.0, -1.0, 120.0]);
+    assert_eq!(r["bounds"], json!([-1.0, 120.0, 99.0, 180.0]));
+    assert_eq!((x0, y0), (-1, 120));
 }

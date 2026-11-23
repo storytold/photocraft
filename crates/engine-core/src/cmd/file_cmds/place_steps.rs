@@ -241,8 +241,10 @@ impl PlaceSteps {
         let input = &self.input;
         let (cw, ch) = input.canvas;
         // Only a smart object placed outside a frame keeps the half pixel (#14114); a pixel layer
-        // and a frame's image keep today's whole-pixel offset.
-        let (dx, dy) = if input.smart && input.frame.is_none() { (dx, dy) } else { (dx.round(), dy.round()) };
+        // and a frame's image keep today's whole-pixel offset, and so does a negative offset (which
+        // way the reference rounds it was not measured), axis by axis.
+        let keep = |v: f64| if input.smart && input.frame.is_none() && v >= 0.0 { v } else { v.round() };
+        let (dx, dy) = (keep(dx), keep(dy));
         let placement = input.frame.as_ref().map_or(Affine { m: [scale, 0.0, 0.0, scale, dx, dy] }, |(_, f)| {
             f.transform.mul(&Affine { m: [scale / cw, 0.0, 0.0, scale / ch, dx / cw, dy / ch] })
         });
