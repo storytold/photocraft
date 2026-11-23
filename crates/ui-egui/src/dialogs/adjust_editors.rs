@@ -10,6 +10,7 @@
 //! The function reads no input and drains no queue: a second pass in one frame shows the value as the first left it and
 //! reports only its own events and asks.
 
+use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
 use craft::behavior::{EditEvent, EditEvents, Mixed};
@@ -287,7 +288,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             lifted(out.events, |values| AdjustValue::Posterize { values })
         }
         ("hueSaturation", AdjustValue::HueSaturation { value }) => {
-            let out = HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).context(context).show(ui);
+            let out = HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).adjusted(&values::hue_saturation_adjusted).context(context).show(ui);
             lifted(out.edit.events, |value| AdjustValue::HueSaturation { value })
         }
         ("colorBalance", AdjustValue::ColorBalance { value }) => {
@@ -434,7 +435,7 @@ pub fn gradient_presets(app: &PhotocraftApp) -> Vec<GradientGroup> {
         StopColor::Rgb(rgb) => *rgb,
     };
     app.session
-        .presets
+        .presets()
         .gradients
         .iter()
         .map(|group| {

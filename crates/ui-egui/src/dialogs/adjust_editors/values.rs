@@ -438,6 +438,15 @@ pub fn to_params(value: &AdjustValue, cx: &ValueCx, edited: bool) -> Value {
     write_params(value, cx)
 }
 
+/// What a colour of the image becomes under a Hue/Saturation value: the engine's adjustment run over that one colour
+/// (the editor's range swatches and spectrum bar).
+pub fn hue_saturation_adjusted(value: &HueSaturation, color: Srgba) -> Srgba {
+    let cx = ValueCx::default();
+    let params = write_params(&AdjustValue::HueSaturation { value: *value }, &cx);
+    let Ok(adjustment) = adjust_params::from_params("hueSaturation", &params, None, cx.mode) else { return color };
+    Srgba::from_array(photocraft_compose::adjust::adjust_color(&adjustment, color.to_array()))
+}
+
 fn write_params(value: &AdjustValue, cx: &ValueCx) -> Value {
     let mut out = object(&cx.base);
     match value {
@@ -514,6 +523,12 @@ fn write_params(value: &AdjustValue, cx: &ValueCx) -> Value {
         }
         AdjustValue::GradientMap { value } => write_gradient_map(&mut out, value),
         AdjustValue::SelectiveColor { value } => {
+            // The rows carry every range: the single-colour values and `relative` the dialog was opened with would be
+            // read after them (and over them) by the engine. `colors`, the chosen row, stays: without those values it
+            // changes nothing.
+            for key in ["cyan", "magenta", "yellow", "black", "relative"] {
+                out.remove(key);
+            }
             out.insert("method".into(), json!(if value.method == SelectiveMethod::Absolute { "absolute" } else { "relative" }));
             for (key, row) in photocraft_engine::adjust_cmds::RANGES.iter().zip(value.ranges) {
                 out.insert((*key).into(), json!(row));
@@ -625,6 +640,23 @@ mod tests {
         s.execute("file.new", json!({"width": 32, "height": 24, "mode": mode, "depth": depth})).unwrap();
         s.execute("channel.target", json!({"colors": [0, 2]})).unwrap();
         s
+    }
+
+    #[test]
+    fn hue_saturation_swatches_run_the_engines_adjustment() {
+        let red = Srgba::from_array([1.0, 0.0, 0.0, 1.0]);
+        let blue = Srgba::from_array([0.0, 0.0, 1.0, 1.0]);
+        let same = |a: Srgba, b: Srgba| a.to_array().iter().zip(b.to_array()).all(|(x, y)| (x - y).abs() < 1e-3);
+        let neutral = HueSaturation::default();
+        assert!(same(hue_saturation_adjusted(&neutral, red), red));
+        let mut shifted = neutral;
+        shifted.hue = 60.0;
+        let moved = hue_saturation_adjusted(&shifted, red).to_array();
+        assert!(moved[1] > 0.5 && moved[0] > 0.5 && moved[2] < 0.2, "red turns yellow: {moved:?}");
+        let mut reds = neutral;
+        reds.ranges[0].hue = 60.0;
+        assert!(same(hue_saturation_adjusted(&reds, blue), blue), "a Reds-only edit leaves blue");
+        assert!(!same(hue_saturation_adjusted(&reds, red), red));
     }
 
     #[test]

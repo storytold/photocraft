@@ -7,8 +7,9 @@
 use craft::behavior::IconId;
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::{Checkbox, Segmented};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
+use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::IconSpec;
 use photocraft_engine::eraser_cmds::{MAGIC_ERASER_BITMAP_ERROR, MAGIC_ERASER_INDEXED_ERROR};
@@ -197,12 +198,18 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
             Entry::new("contiguous".to_string(), tl!("Contiguous")),
             Entry::new("findEdges".to_string(), tl!("Find Edges")),
         ];
-        let picked = Select::new(tl!("Limits:"), Bind::given(o.bg_limits.clone()), &limits)
-            .tooltip(tl!("How far to let the erasing spread").to_owned())
-            .show(ui)
-            .events
-            .committed()
-            .cloned();
+        // In a `Field`, as Color Replacement's Limits: a bare control's label only names it (#16338).
+        let picked = Field::new(tl!("Limits:"))
+            .show(ui, |ui, _| {
+                Select::new(tl!("Limits:"), Bind::given(o.bg_limits.clone()), &limits)
+                    .tooltip(tl!("How far to let the erasing spread").to_owned())
+                    .show(ui)
+                    .events
+                    .committed()
+                    .cloned()
+            })
+            .inner
+            .flatten();
         if let Some(limits) = picked {
             o.bg_limits = limits;
         }
