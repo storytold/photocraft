@@ -2,7 +2,7 @@
 //! past them becomes the closest one and, once the field is left, the reference's "Closest value
 //! inserted" alert says so; letters are not taken.
 
-use craft::ui::dialog::{DialogId, HostedAlert};
+use craft::ui::dialog::{DialogId, HostedAlert, StackDialog};
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui::accesskit::Role;
 use egui_kittest::Harness;
