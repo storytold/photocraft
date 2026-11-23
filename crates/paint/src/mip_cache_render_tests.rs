@@ -8,7 +8,7 @@ use photocraft_geom::Point;
 fn contexts_share_primary_and_dual_mips_across_settings_and_symmetry_passes() {
     let tip = GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0);
     let brush = BrushSettings {
-        tip: TipShape::Sampled(tip.clone()),
+        tip: TipShape::Sampled(tip.clone()).into(),
         dual_brush: DualBrush { enabled: true, tip: TipShape::Sampled(tip), ..Default::default() },
         ..Default::default()
     };
@@ -28,15 +28,15 @@ fn contexts_share_primary_and_dual_mips_across_settings_and_symmetry_passes() {
 fn loading_or_replacing_a_stored_tip_never_reuses_its_preview_mips() {
     let preview = GrayTile::from_fn(8, 8, |_, _| 0.1);
     let stored = StoredTile { key: "unchanged-key".into(), width: 32, height: 32, preview: Arc::new(preview), full: None };
-    let mut brush = BrushSettings { tip: TipShape::Stored(stored.clone()), ..Default::default() };
+    let mut brush = BrushSettings { tip: TipShape::Stored(stored.clone()).into(), ..Default::default() };
     let before = BrushContext::new(&brush);
     let full = GrayTile::from_fn(32, 32, |_, _| 0.9);
-    brush.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(full.clone())), ..stored.clone() });
+    brush.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(full.clone())), ..stored.clone() }).into();
     let loaded = BrushContext::new(&brush);
     assert!(!Arc::ptr_eq(before.tip.as_ref().unwrap(), loaded.tip.as_ref().unwrap()));
     assert_eq!(loaded.tip.as_ref().unwrap().levels, Mips::new(&full).levels);
     let replacement = GrayTile::from_fn(32, 32, |_, _| 0.3);
-    brush.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(replacement.clone())), ..stored });
+    brush.tip = TipShape::Stored(StoredTile { full: Some(Arc::new(replacement.clone())), ..stored }).into();
     let replaced = BrushContext::new(&brush);
     assert!(!Arc::ptr_eq(loaded.tip.as_ref().unwrap(), replaced.tip.as_ref().unwrap()));
     assert_eq!(replaced.tip.as_ref().unwrap().levels, Mips::new(&replacement).levels);
@@ -46,7 +46,7 @@ fn loading_or_replacing_a_stored_tip_never_reuses_its_preview_mips() {
 fn cached_and_uncached_strokes_match_exactly_at_native_depths_and_modes() {
     let tip = GrayTile::from_fn(31, 17, |x, y| ((x * 13 + y * 7) % 31) as f32 / 30.0);
     let brush = BrushSettings {
-        tip: TipShape::Sampled(tip.clone()),
+        tip: TipShape::Sampled(tip.clone()).into(),
         dual_brush: DualBrush { enabled: true, size: 19.0, tip: TipShape::Sampled(tip.clone()), ..Default::default() },
         size: 27.0,
         angle: 0.4,

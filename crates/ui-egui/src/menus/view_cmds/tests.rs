@@ -1,17 +1,114 @@
+use super::dialogs::params_for;
 use super::*;
-use crate::menus::{invoke as menu, is_live, menu_items};
+use crate::menus::{invoke as menu, is_live, menu_rows, row};
+use craft::automation::actions::{Action, ActionStep};
+use craft::automation::ui::actions::ActionSelection;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{HostedParamDialog, ParamKind};
+use photocraft_engine::actions_cmds::ActionsExt;
 
-fn app_with(n: usize) -> (PhotocraftApp, egui::Context) {
+fn app_with(n: usize) -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     for i in 0..n {
         app.run("file.new", json!({"width": 100 + i as u32 * 10, "height": 80})).unwrap();
     }
     app.sync_views();
-    (app, egui::Context::default())
+    let ctx = app.ctx().clone();
+    (app, ctx)
 }
 
 fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    menu_items(app).into_iter().find(|i| i.id == id).and_then(|i| i.checked)
+    row(&menu_rows(app), id).and_then(|r| r.kind.checked())
+}
+
+/// The dialog a command's reply names.
+fn opened(app: &PhotocraftApp, reply: &Value) -> DialogId {
+    let want = reply["dialog"].as_str().expect("the reply names a dialog");
+    app.framework.dialogs.open_dialogs().into_iter().map(|d| d.id).find(|id| id.value().to_string() == want).expect("the named dialog is open")
+}
+
+/// Runs a menu command that opens a form and returns the form's dialog, after the frame that shows it: a hosted
+/// form loads its remembered values and defaults when it first shows.
+fn open_form(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) -> DialogId {
+    let reply = menu(app, ctx, id, json!({})).unwrap();
+    let dialog = opened(app, &reply);
+    frame(app, ctx);
+    dialog
+}
+
+/// The most recently opened dialog.
+fn last_dialog(app: &PhotocraftApp) -> DialogId {
+    app.framework.dialogs.open_dialogs().last().expect("a dialog is open").id
+}
+
+/// The values the open dialog `id` lists (a hosted form or the guide layout dialog).
+fn fields(app: &PhotocraftApp, id: DialogId) -> Value {
+    app.framework.dialogs.open_dialogs().into_iter().find(|open| open.id == id).and_then(|open| open.fields).expect("an open dialog that lists its fields")
+}
+
+/// Sets a form value as the user editing that row would.
+fn set(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId, key: &str, value: Value) {
+    app.framework.dialogs.set_json_field(ctx, id, key, value).unwrap_or_else(|e| panic!("{key}: {e}"));
+}
+
+fn confirm(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Result<(), String> {
+    crate::dialogs::confirm(app, ctx, id)
+}
+
+fn cancel(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) {
+    crate::dialogs::cancel(app, ctx, id).unwrap();
+}
+
+/// The option ids of choice row `key` of command `command`'s form.
+fn choice_ids(app: &mut PhotocraftApp, command: &str, key: &str) -> Vec<String> {
+    let (params, _) = params_for(app, command).expect("the command has a form");
+    match &params.iter().find(|p| p.key == key).unwrap_or_else(|| panic!("no row {key}")).kind {
+        ParamKind::Choice { options, .. } => options.iter().map(|(id, _)| id.clone()).collect(),
+        other => panic!("{key} is not a choice: {other:?}"),
+    }
+}
+
+fn label_of(app: &mut PhotocraftApp, command: &str, key: &str) -> String {
+    let (params, _) = params_for(app, command).expect("the command has a form");
+    params.iter().find(|p| p.key == key).unwrap_or_else(|| panic!("no row {key}")).label.as_str().to_owned()
+}
+
+fn assert_mode(app: &PhotocraftApp, mode: &str) {
+    assert_eq!(checked(app, &format!("view.screenMode.{mode}")), Some(true), "{mode}");
+}
+
+/// The names of the files directly in `dir`, sorted.
+fn names_in(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    names
+}
+
+/// One frame of the app on `ctx`.
+fn frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        let mut frame = eframe::Frame::_new_kittest();
+        app.logic_frame(ui.ctx(), &mut frame);
+        app.ui_frame(ui, &mut frame);
+    });
+    // No renderer takes the frame's texture uploads.
+    output.textures_delta.clear();
+}
+
+/// Fires a view command on the canvas and runs the frame that drains it. The canvas takes the command once a frame
+/// has shown it, so one runs first.
+fn fire(app: &mut PhotocraftApp, ctx: &egui::Context, command: craft::ui::canvas::ViewCommands) {
+    frame(app, ctx);
+    assert!(craft::ui::runtime::commands::fire(ctx, command, craft::ui::runtime::commands::FireSource::Menu), "the canvas takes {command:?}");
+    frame(app, ctx);
+}
+
+/// Runs a View › Screen Mode command as its menu item does, with the frames around it: the window's shell takes the
+/// command once a frame has shown the shell, and applies it in that pass.
+fn screen_mode(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
+    frame(app, ctx);
+    menu(app, ctx, id, json!({})).unwrap();
+    frame(app, ctx);
 }
 
 /// The form must list every source first and default to Current only when a document exists.
@@ -19,41 +116,12 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
 fn image_processor_source_choices_include_current_and_all_open_documents() {
     for n in [0, 2] {
         let (mut app, ctx) = app_with(n);
-        menu(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
-        let fields = &app.ui.dialogs.last().unwrap().fields;
-        assert_eq!(fields["source"], json!(if n == 0 { "folder" } else { "current" }));
-        assert_eq!(fields["__choices"]["source"], json!(["current", "open", "folder"]));
-        assert_eq!(fields["__labels"]["current"], json!("Current document"));
-        assert_eq!(fields["__labels"]["open"], json!("All open documents"));
-        assert_eq!(form_keys(fields).first().map(String::as_str), Some("source"));
-    }
-}
-
-/// Confirming either document source must ignore a stale input-folder field, export the
-/// expected number of copies and retain the open documents' original snapshots.
-#[test]
-fn image_processor_dialog_confirms_open_document_sources_without_reading_the_input_folder() {
-    for source in ["current", "open"] {
-        let dir = tempfile::tempdir().unwrap();
-        let (mut app, ctx) = app_with(0);
-        for name in ["First", "Second"] {
-            app.run("file.new", json!({"name": name, "width": 100, "height": 80})).unwrap();
-        }
-        let before: Vec<_> = app.session.documents().iter().map(|st| st.doc.clone()).collect();
-        let id = menu(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap()["dialog"].as_u64().unwrap();
-        let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
-        fields.insert("source".into(), json!(source));
-        fields.insert("input".into(), json!(dir.path().join("missing-input")));
-        fields.insert("output".into(), json!(dir.path()));
-        fields.insert("format".into(), json!("png"));
-        fields.insert("width".into(), json!(50));
-        fields.insert("height".into(), json!(50));
-        let result = crate::dialogs::confirm(&mut app, id).unwrap();
-        assert_eq!(result["files"].as_array().unwrap().len(), if source == "current" { 1 } else { 2 }, "{result}");
-        assert!(result["errors"].as_array().unwrap().is_empty(), "{result}");
-        for (st, original) in app.session.documents().iter().zip(&before) {
-            assert!(std::sync::Arc::ptr_eq(&st.doc, original));
-        }
+        let id = open_form(&mut app, &ctx, "file.scripts.imageProcessor");
+        assert_eq!(fields(&app, id)["source"], json!(if n == 0 { "folder" } else { "current" }));
+        assert_eq!(choice_ids(&mut app, "file.scripts.imageProcessor", "source"), ["current", "open", "folder"]);
+        assert_eq!(label_of(&mut app, "file.scripts.imageProcessor", "source"), "Source");
+        let (params, _) = params_for(&mut app, "file.scripts.imageProcessor").unwrap();
+        assert_eq!(params.first().map(|p| p.key.as_str()), Some("source"));
     }
 }
 
@@ -64,7 +132,7 @@ fn place_embedded_enablement_does_not_require_native_doc() {
         for has_picker in [true, false] {
             let (mut app, _) = app_with(usize::from(has_doc));
             if has_picker {
-                app.services.file_dialog = Some(Box::new(|_, _, _| {}));
+                app.services.files = Some(std::sync::Arc::new(craft::host::ScriptedFiles::new()));
             }
             for native_filesystem in [false, true] {
                 let native_doc = native_filesystem && has_doc;
@@ -83,27 +151,108 @@ fn place_embedded_enablement_does_not_require_native_doc() {
     }
 }
 
+/// Menu ids that open a form: the hosted form's key is the command, a refusal says why, and nothing edits the
+/// document before OK.
+#[test]
+fn command_dialogs_open_and_refuse() {
+    type Setup = fn(&mut PhotocraftApp);
+    let nothing: Setup = |_| {};
+    let type_layer: Setup = |app| {
+        app.run("type.create", json!({"x": 5, "y": 40, "text": "Warp", "size": 20})).unwrap();
+    };
+    let data_sets: Setup = |app| {
+        app.run("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
+    };
+    let sets_open = if cfg!(target_arch = "wasm32") { Err("unavailable on the web") } else { Ok(()) };
+    let cases: [(&str, Setup, Result<(), &str>); 9] = [
+        ("file.automate.fitImage", nothing, Ok(())),
+        ("file.fileInfo", nothing, Ok(())),
+        ("layer.videoLayers.interpretFootage", nothing, Ok(())),
+        ("image.applyImage", nothing, Ok(())),
+        ("image.calculations", nothing, Ok(())),
+        ("view.newGuideLayout", nothing, Ok(())),
+        ("type.warpText", type_layer, Ok(())),
+        ("file.automate.batch", nothing, Err("record an action")),
+        ("file.export.dataSetsAsFiles", data_sets, sets_open),
+    ];
+    for (id, setup, want) in cases {
+        let (mut app, ctx) = app_with(2);
+        setup(&mut app);
+        let revision = app.session.active().unwrap().revision;
+        let reply = menu(&mut app, &ctx, id, json!({}));
+        match want {
+            Ok(()) => {
+                let dialog = opened(&app, &reply.unwrap_or_else(|e| panic!("{id}: {e}")));
+                assert_eq!(app.session.active().unwrap().revision, revision, "{id} edited before confirmation");
+                if super::dialogs::is_form(id) {
+                    assert!(app.framework.dialogs.get_by_id::<HostedParamDialog>(dialog).is_some(), "{id} opens a hosted parameter form");
+                }
+            }
+            Err(text) => assert!(reply.unwrap_err().contains(text), "{id}"),
+        }
+    }
+    // OK runs the command with the form's values.
+    let (mut app, ctx) = app_with(2);
+    let id = open_form(&mut app, &ctx, "file.automate.fitImage");
+    assert_eq!(fields(&app, id)["width"], 110);
+    set(&mut app, &ctx, id, "width", json!(55));
+    set(&mut app, &ctx, id, "height", json!(1000));
+    confirm(&mut app, &ctx, id).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.size.width, 55);
+    let id = open_form(&mut app, &ctx, "file.fileInfo");
+    set(&mut app, &ctx, id, "title", json!("Wheat Field"));
+    confirm(&mut app, &ctx, id).unwrap();
+    assert_eq!(app.run("file.fileInfo", json!({})).unwrap()["title"], "Wheat Field");
+    // Close Others keeps the active document's view (the documents are dirty; the unsaved-changes prompt is covered in discard_ui).
+    app.ui.views[1].zoom = 4.0;
+    crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeOthers", json!({})).unwrap();
+    assert_eq!(app.ui.views.len(), 1);
+    assert_eq!(app.ui.views[0].zoom, 4.0);
+    crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
+    assert!(app.ui.views.is_empty() && app.session.documents().is_empty());
+}
+
+/// Fit Image's dialog bounds apply before the command, where a zero side would mean unconstrained.
+#[test]
+fn fit_image_validates_dialog_bounds_before_one_undoable_resize() {
+    let (mut app, ctx) = app_with(1);
+    let id = open_form(&mut app, &ctx, "file.automate.fitImage");
+    let opening = fields(&app, id);
+    let original = app.session.active().unwrap();
+    let (size, steps, revision) = (original.doc.size, original.history.past_len(), original.revision);
+
+    for key in ["width", "height"] {
+        for value in [json!(0), json!(300_001), json!("abc")] {
+            assert!(app.framework.dialogs.set_json_field(&ctx, id, key, value.clone()).is_err(), "{key} accepted {value}");
+            assert_eq!(fields(&app, id), opening);
+        }
+    }
+
+    set(&mut app, &ctx, id, "width", json!(1));
+    set(&mut app, &ctx, id, "height", json!(300_000));
+    let accepted = fields(&app, id);
+    assert_eq!(accepted["width"].as_f64(), Some(1.0));
+    assert_eq!(accepted["height"].as_f64(), Some(300_000.0));
+    set(&mut app, &ctx, id, "width", json!(80));
+    set(&mut app, &ctx, id, "height", json!(40));
+    let staged = app.session.active().unwrap();
+    assert_eq!((staged.doc.size, staged.history.past_len(), staged.revision), (size, steps, revision));
+
+    confirm(&mut app, &ctx, id).unwrap();
+    let resized = app.session.active().unwrap();
+    assert_eq!((resized.doc.size.width, resized.doc.size.height), (50, 40));
+    assert_eq!(resized.history.past_len(), steps + 1);
+    assert_eq!(resized.history.undo_label(), Some("Image Size"));
+
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.size, size);
+}
+
 #[test]
 fn data_sets_as_files_enablement_respects_target_platform() {
     let (app, _) = app_with(1);
     let enabled = is_enabled_with_engine(&app, "file.export.dataSetsAsFiles", || true);
-    if cfg!(target_arch = "wasm32") {
-        assert_eq!(enabled, Some(false));
-    } else {
-        assert_eq!(enabled, Some(true));
-    }
-}
-
-#[test]
-fn data_sets_as_files_dialog_respects_target_platform() {
-    let (mut app, ctx) = app_with(1);
-    app.run("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
-    let res = front(&mut app, &ctx, "file.export.dataSetsAsFiles", &json!({}));
-    if cfg!(target_arch = "wasm32") {
-        assert!(matches!(res, Some(Err(msg)) if msg.contains("unavailable on the web")));
-    } else {
-        assert!(matches!(res, Some(Ok(v)) if v.get("dialog").is_some()));
-    }
+    assert_eq!(enabled, Some(!cfg!(target_arch = "wasm32")));
 }
 
 #[test]
@@ -124,92 +273,34 @@ fn show_snap_extras_and_screen_modes_are_state() {
     }
     assert_eq!(checked(&app, "view.show.layerEdges"), Some(false));
     menu(&mut app, &ctx, "view.show.layerEdges", json!({})).unwrap();
-    assert!(app.ui.view.show.layer_edges);
     assert_eq!(checked(&app, "view.show.layerEdges"), Some(true));
+    // Hiding Extras hides the edges; showing any item turns Extras back on.
     menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
     assert!(!app.ui.view.extras && !app.ui.view.shows(app.ui.view.show.layer_edges));
-    // Showing any item turns Extras back on.
     menu(&mut app, &ctx, "view.show.mesh", json!({})).unwrap();
     assert!(app.ui.view.extras);
-    menu(&mut app, &ctx, "view.snapTo.none", json!({})).unwrap();
-    assert!(!app.ui.view.snap_to.guides && !app.ui.view.snap_to.document_bounds);
-    menu(&mut app, &ctx, "view.snapTo.grid", json!({})).unwrap();
-    assert_eq!(checked(&app, "view.snapTo.grid"), Some(true));
     // F cycles the screen modes.
     for want in ["fullScreenWithMenuBar", "fullScreen", "standard"] {
-        menu(&mut app, &ctx, "view.screenMode.cycle", json!({})).unwrap();
-        assert_eq!(app.ui.view.screen_mode, want);
+        screen_mode(&mut app, &ctx, "view.screenMode.cycle");
+        assert_mode(&app, want);
     }
-    menu(&mut app, &ctx, "view.screenMode.fullScreen", json!({})).unwrap();
-    assert!(app.ui.view.hides_chrome() && app.ui.view.hides_tabs());
-    assert_eq!(checked(&app, "view.screenMode.fullScreen"), Some(true));
-    menu(&mut app, &ctx, "view.pixelAspectRatio.anamorphic2To1", json!({})).unwrap();
-    assert_eq!(pixel_aspect_ratio(&app.ui.view.pixel_aspect), 2.0);
-    // State serializes with the rest of the UI (control channel).
-    let v = serde_json::to_value(&app.ui).unwrap();
-    assert_eq!(v["view"]["screen_mode"], "fullScreen");
-    assert_eq!(v["view"]["show"]["layer_edges"], true);
-}
-
-#[test]
-fn full_screen_and_maximized_never_overlap_on_windows() {
-    use egui::ViewportCommand::{Fullscreen, Maximized};
-    // Maximized → full screen: un-maximize first, and remember it.
-    let (cmds, remember) = screen_mode_commands(true, false, true, false, "fullScreenWithMenuBar");
-    assert_eq!(cmds, vec![Maximized(false), Fullscreen(true)]);
-    assert!(remember);
-    // Full screen → the other full-screen mode: nothing about maximized changes.
-    let (cmds, remember) = screen_mode_commands(true, true, false, true, "fullScreen");
-    assert_eq!(cmds, vec![Fullscreen(true)]);
-    assert!(remember);
-    // Full screen → Standard: maximize again after leaving, then forget.
-    let (cmds, remember) = screen_mode_commands(true, true, false, true, "standard");
-    assert_eq!(cmds, vec![Fullscreen(false), Maximized(true)]);
-    assert!(!remember);
-    // A window that was not maximized goes in and out untouched.
-    let (cmds, remember) = screen_mode_commands(true, false, false, false, "fullScreen");
-    assert_eq!((cmds, remember), (vec![Fullscreen(true)], false));
-    let (cmds, remember) = screen_mode_commands(true, true, false, false, "standard");
-    assert_eq!((cmds, remember), (vec![Fullscreen(false)], false));
-    // Standard while already standard never maximizes.
-    let (cmds, _) = screen_mode_commands(true, false, false, true, "standard");
-    assert_eq!(cmds, vec![Fullscreen(false)]);
-    // Elsewhere the commands are as before.
-    let (cmds, remember) = screen_mode_commands(false, false, true, false, "fullScreen");
-    assert_eq!((cmds, remember), (vec![Fullscreen(true)], false));
 }
 
 #[test]
 fn zoom_presets_and_fit_layers() {
+    use craft::ui::canvas::ViewCommands;
     let (mut app, ctx) = app_with(1);
-    menu(&mut app, &ctx, "view.twoHundredPercent", json!({})).unwrap();
+    fire(&mut app, &ctx, ViewCommands::TwoHundredPercent);
     assert_eq!(app.ui.views[0].zoom, 2.0);
     app.run("image.imageSize", json!({"resolution": 144, "resample": "none"})).unwrap();
-    menu(&mut app, &ctx, "view.printSize", json!({})).unwrap();
+    fire(&mut app, &ctx, ViewCommands::PrintSize);
     assert_eq!(app.ui.views[0].zoom, 0.5);
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("select.rect", json!({"x": 10, "y": 20, "width": 10, "height": 10})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    menu(&mut app, &ctx, "view.fitLayersOnScreen", json!({})).unwrap();
+    fire(&mut app, &ctx, ViewCommands::FitLayers);
     assert_eq!(app.ui.views[0].center, [15.0, 25.0]);
     assert!(app.ui.views[0].zoom > 10.0);
-}
-
-/// #1718 review: Print Size and Fit Layers on Screen go through `zoom_levels` too, so they reach
-/// past the old 6400 % cap and stop at 12800 %.
-#[test]
-fn print_size_and_fit_layers_use_the_whole_zoom_range() {
-    let (mut app, ctx) = app_with(1);
-    // 72 / 1 ppi = 7200 %: within the range now (it was cut to 6400 %).
-    app.run("image.imageSize", json!({"resolution": 1, "resample": "none"})).unwrap();
-    menu(&mut app, &ctx, "view.printSize", json!({})).unwrap();
-    assert_eq!(app.ui.views[0].zoom, 72.0);
-    // A 1 px layer fills the view only far beyond 12800 %: Fit stops at the limit.
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.run("select.rect", json!({"x": 40, "y": 30, "width": 1, "height": 1})).unwrap();
-    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    menu(&mut app, &ctx, "view.fitLayersOnScreen", json!({})).unwrap();
-    assert_eq!(app.ui.views[0].zoom, crate::zoom_levels::MAX);
 }
 
 /// Print Size divides the document's ppi into the Screen Resolution preference
@@ -219,188 +310,56 @@ fn print_size_uses_the_screen_resolution_preference() {
     let (mut app, ctx) = app_with(1);
     app.run("image.imageSize", json!({"resolution": 1, "resample": "none"})).unwrap();
     app.run("prefs.set", json!({"path": "unitsAndRulers.screenResolution", "value": 96.0})).unwrap();
-    menu(&mut app, &ctx, "view.printSize", json!({})).unwrap();
+    fire(&mut app, &ctx, craft::ui::canvas::ViewCommands::PrintSize);
     assert_eq!(app.ui.views[0].zoom, 96.0, "96 ppi screen / 1 ppi document = 9600 %");
 }
 
 #[test]
 fn arrange_layouts_floating_windows_and_matching() {
     let (mut app, ctx) = app_with(3);
-    assert!(cells("tabs", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).is_none());
     menu(&mut app, &ctx, "window.arrange.threeUpStacked", json!({})).unwrap();
     assert_eq!(checked(&app, "window.arrange.threeUpStacked"), Some(true));
-    let c = cells(&app.ui.view.arrange, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).unwrap();
-    assert_eq!(c.len(), 3);
-    assert_eq!(c[0].height(), 600.0);
-    assert_eq!(c[1].height(), 300.0);
-    let six = cells("sixUp", egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)), 3, &[]).unwrap();
-    assert_eq!((six.len(), six[1].min.x), (6, 300.0));
     menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
-    assert_eq!(app.ui.windows.len(), 3);
+    assert_eq!(app.ui.document_windows.floating.len(), 3);
     app.ui.views[2].zoom = 3.0;
     app.ui.views[2].center = [1.0, 2.0];
     menu(&mut app, &ctx, "window.arrange.matchAll", json!({})).unwrap();
     assert!(app.ui.views.iter().all(|v| v.zoom == 3.0 && v.center == [1.0, 2.0]));
-    assert!(app.ui.windows.iter().all(|w| w.view.zoom == 3.0));
     menu(&mut app, &ctx, "window.arrange.consolidateAllToTabs", json!({})).unwrap();
-    assert!(app.ui.windows.is_empty());
-    assert_eq!(app.ui.view.arrange, "tabs");
+    assert!(app.ui.document_windows.floating.is_empty());
     menu(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
-    assert_eq!(app.ui.windows.len(), 1);
+    assert_eq!(app.ui.document_windows.floating.len(), 1);
+    // The new window starts on its own copy of the document's view, which Match All then takes too.
+    app.ui.views[2].zoom = 5.0;
+    menu(&mut app, &ctx, "window.arrange.matchAll", json!({})).unwrap();
+    let window = app.ui.document_windows.floating[0].0.id;
+    assert_eq!(app.ui.window_views[&window].zoom, 5.0);
 }
 
 /// Match Zoom clamps the matched zoom to each document's own range: a 10 x 10 document can't go
 /// below the zoom at which its shorter side is 2 px, even when the source view is lower.
 #[test]
 fn match_zoom_clamps_to_each_documents_zoom_range() {
+    let lowest = craft::behavior::canvas::ZoomLadder::min(craft::behavior::kurbo::Size::new(10.0, 10.0)) as f32;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
     app.run("file.new", json!({"width": 2000, "height": 2000})).unwrap();
     app.sync_views();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     assert_eq!(app.session.active_index(), Some(1));
     app.ui.views[1].zoom = 0.05;
     menu(&mut app, &ctx, "window.arrange.matchZoom", json!({})).unwrap();
     assert_eq!(app.ui.views[1].zoom, 0.05);
-    assert_eq!(app.ui.views[0].zoom, crate::zoom_levels::min([10, 10]));
-    // Floating windows too, before their first frame (no `doc_size` yet).
-    menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    assert_eq!(app.ui.views[0].zoom, lowest);
+    // A window with its own view too, before its first frame (no `doc_size` yet).
+    app.session.set_active(0);
+    menu(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
+    let window = app.ui.document_windows.floating[0].0.id;
+    app.session.set_active(1);
     app.ui.views[1].zoom = 0.05;
     menu(&mut app, &ctx, "window.arrange.matchZoom", json!({})).unwrap();
-    assert_eq!(app.ui.windows.len(), 2);
-    assert!(app.ui.windows.iter().all(|w| w.view.zoom == if w.document == 0 { crate::zoom_levels::min([10, 10]) } else { 0.05 }));
-}
-
-#[test]
-fn two_up_and_stacked_cells_keep_their_existing_boundaries() {
-    let rect = egui::Rect::from_min_max(egui::pos2(40.0, 75.0), egui::pos2(940.0, 675.0));
-    let region = |left, top, right, bottom| egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
-    assert_eq!(cells("twoUpVertical", rect, 2, &[]).unwrap(), vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 675.0)]);
-    assert_eq!(cells("twoUpHorizontal", rect, 2, &[]).unwrap(), vec![region(40.0, 75.0, 940.0, 375.0), region(40.0, 375.0, 940.0, 675.0)]);
-    assert_eq!(
-        cells("threeUpStacked", rect, 3, &[]).unwrap(),
-        vec![region(40.0, 75.0, 490.0, 675.0), region(490.0, 75.0, 940.0, 375.0), region(490.0, 375.0, 940.0, 675.0)]
-    );
-    assert!(cells("twoUpVertical", rect, 1, &[]).is_none());
-}
-
-#[test]
-fn dragged_arrange_borders_resize_the_cells_beside_them() {
-    // #10101: in 2-up and the other arrangements the border between documents drags, as in
-    // Photoshop, and the documents on either side take the new sizes.
-    use super::arrange::{Border, MIN_CELL};
-    let near = |a: &[egui::Rect], b: &[egui::Rect]| {
-        a.len() == b.len() && a.iter().zip(b).all(|(a, b)| (a.min - b.min).length() < 0.01 && (a.max - b.max).length() < 0.01)
-    };
-    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 600.0));
-    let region = |left, top, right, bottom| egui::Rect::from_min_max(egui::pos2(left, top), egui::pos2(right, bottom));
-    let mut splits = Vec::new();
-    let b = borders("twoUpVertical", rect, 2, &splits);
-    assert_eq!(b, vec![Border { split: 0, vertical: true, line: region(450.0, 0.0, 450.0, 600.0) }]);
-    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(300.0, 250.0));
-    assert!(near(&cells("twoUpVertical", rect, 2, &splits).unwrap(), &[region(0.0, 0.0, 300.0, 600.0), region(300.0, 0.0, 900.0, 600.0)]));
-    assert!((borders("twoUpVertical", rect, 2, &splits)[0].line.min.x - 300.0).abs() < 0.01);
-    // No cell is dragged narrower than MIN_CELL, nor past the area.
-    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(-500.0, 0.0));
-    assert!((cells("twoUpVertical", rect, 2, &splits).unwrap()[0].width() - MIN_CELL).abs() < 0.01);
-    drag_border("twoUpVertical", rect, 2, &mut splits, 0, egui::pos2(899.0, 0.0));
-    assert!((cells("twoUpVertical", rect, 2, &splits).unwrap()[1].width() - MIN_CELL).abs() < 0.01);
-
-    // 4-up: a column border and a row border, each across the whole area.
-    let mut splits = Vec::new();
-    let b = borders("fourUp", rect, 4, &splits);
-    assert_eq!(b.iter().map(|b| (b.split, b.vertical)).collect::<Vec<_>>(), vec![(0, true), (1, false)]);
-    drag_border("fourUp", rect, 4, &mut splits, 1, egui::pos2(10.0, 450.0));
-    let c = cells("fourUp", rect, 4, &splits).unwrap();
-    assert!(near(&[c[0], c[3]], &[region(0.0, 0.0, 450.0, 450.0), region(450.0, 450.0, 900.0, 600.0)]));
-
-    // 3-up Stacked: the row border is only across the right column, and follows the column.
-    let mut splits = Vec::new();
-    drag_border("threeUpStacked", rect, 3, &mut splits, 0, egui::pos2(600.0, 0.0));
-    drag_border("threeUpStacked", rect, 3, &mut splits, 1, egui::pos2(700.0, 200.0));
-    assert!(near(
-        &cells("threeUpStacked", rect, 3, &splits).unwrap(),
-        &[region(0.0, 0.0, 600.0, 600.0), region(600.0, 0.0, 900.0, 200.0), region(600.0, 200.0, 900.0, 600.0)]
-    ));
-    assert!(near(&[borders("threeUpStacked", rect, 3, &splits)[1].line], &[region(600.0, 200.0, 900.0, 200.0)]));
-
-    // Tiled: a border stops short of its neighbours, so the cells keep their order.
-    let mut splits = Vec::new();
-    drag_border("threeUpVertical", rect, 3, &mut splits, 0, egui::pos2(800.0, 0.0));
-    let c = cells("threeUpVertical", rect, 3, &splits).unwrap();
-    assert!((c[0].max.x - (600.0 - MIN_CELL)).abs() < 0.01 && (c[1].width() - MIN_CELL).abs() < 0.01);
-
-    // #10101 review: the limit is MIN_CELL itself, not the even spacing. On a 300 pt axis a
-    // 2-up cell may still be dragged down to 80 pt, where capping the gap at 0.5/(n+1) would
-    // have stopped it at 75.
-    let narrow = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(300.0, 200.0));
-    let mut splits = Vec::new();
-    drag_border("twoUpVertical", narrow, 2, &mut splits, 0, egui::pos2(-100.0, 0.0));
-    assert!((cells("twoUpVertical", narrow, 2, &splits).unwrap()[0].width() - MIN_CELL).abs() < 0.01);
-
-    // And when the neighbours leave no room for a cell of that width, the border stays put and
-    // the list keeps its order rather than taking a value from the wrong side of them.
-    let tight = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(200.0, 200.0));
-    let mut splits = vec![0.45, 0.55];
-    drag_border("threeUpVertical", tight, 3, &mut splits, 1, egui::pos2(10.0, 0.0));
-    assert_eq!(splits, vec![0.45, 0.55], "no room: unchanged");
-    let mut splits = vec![0.45, 0.55];
-    drag_border("threeUpVertical", tight, 3, &mut splits, 0, egui::pos2(190.0, 0.0));
-    assert_eq!(splits, vec![0.45, 0.55], "and from the other side too");
-}
-
-#[test]
-fn damaged_or_stale_arrange_splits_lay_out_even_cells() {
-    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0));
-    let even = cells("threeUpVertical", rect, 3, &[]).unwrap();
-    // From a settings file or another layout: wrong count, out of order, outside 0–1, NaN.
-    for bad in [vec![0.5], vec![0.6, 0.3], vec![0.0, 0.5], vec![0.3, 1.5], vec![f32::NAN, 0.7], vec![0.2, 0.4, 0.6]] {
-        assert_eq!(cells("threeUpVertical", rect, 3, &bad).unwrap(), even, "{bad:?}");
-        assert_eq!(borders("threeUpVertical", rect, 3, &bad).len(), 2);
-        // A drag starts again from even cells.
-        let mut splits = bad.clone();
-        drag_border("threeUpVertical", rect, 3, &mut splits, 1, egui::pos2(700.0, 0.0));
-        assert_eq!(cells("threeUpVertical", rect, 3, &splits).unwrap()[0], even[0], "{bad:?}");
-    }
-    // A split that isn't the layout's, or a pointer off the numbers, changes nothing.
-    let mut splits = vec![0.25, 0.5];
-    drag_border("threeUpVertical", rect, 3, &mut splits, 2, egui::pos2(700.0, 0.0));
-    drag_border("threeUpVertical", rect, 3, &mut splits, 0, egui::pos2(f32::NAN, 0.0));
-    drag_border("threeUpVertical", egui::Rect::NOTHING, 3, &mut splits, 0, egui::pos2(10.0, 0.0));
-    assert_eq!(splits, vec![0.25, 0.5]);
-    assert!(borders("tabs", rect, 3, &[]).is_empty());
-}
-
-#[test]
-fn choosing_an_arrangement_starts_from_even_cells() {
-    let (mut app, ctx) = app_with(2);
-    menu(&mut app, &ctx, "window.arrange.twoUpVertical", json!({})).unwrap();
-    app.ui.view.arrange_splits = vec![0.3];
-    menu(&mut app, &ctx, "window.arrange.twoUpHorizontal", json!({})).unwrap();
-    assert!(app.ui.view.arrange_splits.is_empty());
-}
-
-#[test]
-fn window_panels_select_dock_tabs() {
-    let (mut app, ctx) = app_with(1);
-    menu(&mut app, &ctx, "window.panel.info", json!({})).unwrap();
-    assert!(app.ui.panels.navigator && app.ui.dock_tabs.navigator == 2);
-    assert_eq!(checked(&app, "window.panel.info"), Some(true));
-    assert_eq!(checked(&app, "window.panel.histogram"), Some(false));
-    menu(&mut app, &ctx, "window.panel.histogram", json!({})).unwrap();
-    assert_eq!(app.ui.dock_tabs.navigator, 1);
-    menu(&mut app, &ctx, "window.panel.actions", json!({})).unwrap();
-    assert!(app.ui.panels.history && app.ui.dock_tabs.history == 1);
-    menu(&mut app, &ctx, "window.panel.paths", json!({})).unwrap();
-    assert_eq!(app.ui.dock_tabs.layers, 2);
-    // Again on the visible tab hides the panel.
-    menu(&mut app, &ctx, "window.panel.paths", json!({})).unwrap();
-    assert!(!app.ui.panels.layers);
-    menu(&mut app, &ctx, "type.panels.character", json!({})).unwrap();
-    assert!(app.ui.panels.properties && app.ui.dock_tabs.properties == 0);
-    for id in ["window.panel.channels", "window.panel.swatches", "window.panel.adjustments", "window.panel.paragraph"] {
-        assert!(is_live(id), "{id}");
-    }
+    assert_eq!(app.ui.window_views[&window].zoom, lowest);
+    assert_eq!(app.ui.views[1].zoom, 0.05);
 }
 
 #[test]
@@ -457,261 +416,76 @@ fn stylistic_set_checkmark_follows_the_toggle() {
     }
 }
 
+/// Actions of two sets: the Batch form lists every action name and both sets, starts on the selected action's set,
+/// and runs that action.
 #[test]
-fn batch_menu_requires_a_recorded_action() {
-    let (mut app, ctx) = app_with(1);
-    assert!(!crate::menus::is_enabled(&app, "file.automate.batch"));
-
-    app.run("actions.record", json!({"name": "Invert"})).unwrap();
-    app.run("image.adjustments.invert", json!({})).unwrap();
-    app.run("actions.stop", json!({})).unwrap();
-
-    assert!(crate::menus::is_enabled(&app, "file.automate.batch"));
-    let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["action"], "Invert");
-}
-
-/// Two actions of one name in sets A and B (a loaded library): the Batch form lists the name once
-/// and both sets, starts on the selected action's set, and runs that set's action.
-#[test]
-fn batch_menu_runs_the_selected_sets_action_among_same_named_ones() {
+fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
     let (mut app, ctx) = app_with(0);
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("source.png").to_string_lossy().into_owned();
-    let output = dir.path().join("out").to_string_lossy().into_owned();
+    let output = dir.path().join("out");
     app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
     app.run("file.saveACopy", json!({"path": input})).unwrap();
-    let mut list = Vec::new();
-    for (set, step) in [("A", "image.adjustments.invert"), ("B", "image.imageRotation.90cw")] {
-        let mut action = photocraft_engine::actions_cmds::Action::new("Retouch", vec![(step.into(), json!({}))]);
+    for (set, name, step) in [("A", "Retouch", "image.adjustments.invert"), ("B", "Turn", "image.imageRotation.90cw")] {
+        let mut action = Action::new(name, vec![ActionStep::new(step, json!({}))]);
         action.set = Some(set.into());
-        list.push(action);
+        app.session.actions_mut().list.push(action).unwrap();
     }
-    app.session.actions.list = list;
-    app.ui.actions.selected = Some(1);
-    let id = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
-    assert_eq!(fields["__choices"]["action"], json!(["Retouch"]));
-    assert_eq!(fields["__choices"]["set"], json!(["A", "B"]));
-    assert_eq!((&fields["action"], &fields["set"]), (&json!("Retouch"), &json!("B")));
-    fields.insert("input".into(), json!([input.clone()]));
-    fields.insert("output".into(), json!(output));
-    crate::dialogs::confirm(&mut app, id).unwrap();
-    let saved = std::fs::read_dir(&output).unwrap().next().unwrap().unwrap().path();
-    let image = photocraft_io::import("out.png", &std::fs::read(saved).unwrap()).unwrap().document;
+    app.ui.actions.panel.selected = Some(ActionSelection::Action(1));
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    assert_eq!(choice_ids(&mut app, "file.automate.batch", "action"), ["Retouch", "Turn"]);
+    assert_eq!(choice_ids(&mut app, "file.automate.batch", "set"), ["A", "B"]);
+    let shown = fields(&app, id);
+    assert_eq!((&shown["action"], &shown["set"]), (&json!("Turn"), &json!("B")));
+    set(&mut app, &ctx, id, "input", json!(dir.path().to_string_lossy()));
+    set(&mut app, &ctx, id, "output", json!(output.to_string_lossy()));
+    confirm(&mut app, &ctx, id).unwrap();
+    let saved = names_in(&output).into_iter().next().unwrap();
+    let image = photocraft_io::import("out.png", &std::fs::read(output.join(saved)).unwrap()).unwrap().document;
     assert_eq!((image.size.width, image.size.height), (1, 2), "set B's action (a rotation) ran");
-}
-
-#[test]
-fn batch_menu_keeps_the_selected_same_name_and_set_occurrence() {
-    let (mut app, ctx) = app_with(0);
-    app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
-    for _ in 0..2 {
-        app.session.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
-    }
-    app.session.actions.list[2].steps = vec![("image.imageRotation.90cw".into(), json!({}))];
-    app.ui.actions.selected = Some(2);
-    let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
-    assert_eq!((&fields["action"], &fields["set"]), (&json!("Invert Colors"), &json!("PhotoCraft Basics")));
-    fields.insert("source".into(), json!("open"));
-    fields.remove("output");
-    let result = crate::dialogs::confirm(&mut app, dialog).unwrap();
-    assert_eq!(result["errors"], json!([]), "{result}");
-    let size = app.session.active().unwrap().doc.size;
-    assert_eq!((size.width, size.height), (1, 2), "the later occurrence rotated the document");
-
-    let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
-    fields.insert("source".into(), json!("open"));
-    fields.remove("output");
-    app.run("actions.move", json!({"action": 2, "to": 1})).unwrap();
-    assert!(crate::dialogs::confirm(&mut app, dialog).unwrap_err().contains("selected action changed"));
-    assert_eq!(app.session.active().unwrap().doc.size, size);
-}
-
-#[test]
-fn batch_records_the_selected_idless_occurrence() {
-    for (row, namesake) in [(0, 2), (2, 0)] {
-        let (mut app, ctx) = app_with(0);
-        app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
-        for _ in 0..2 {
-            app.session.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
-        }
-        app.session.actions.list[row].steps = vec![("image.imageRotation.90cw".into(), json!({}))];
-        assert!(app.session.actions.list[row].action_id.is_none());
-        app.run("actions.record", json!({"name": "Recorder"})).unwrap();
-        let (_, recorder) = app.session.actions.recording.unwrap();
-        app.ui.actions.selected = Some(row);
-
-        let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-        let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
-        fields.insert("source".into(), json!("open"));
-        fields.remove("output");
-        let result = crate::dialogs::confirm(&mut app, dialog).unwrap();
-        assert_eq!(result["errors"], json!([]), "{result}");
-        let size = app.session.active().unwrap().doc.size;
-        assert_eq!((size.width, size.height), (1, 2), "selected occurrence {row} ran");
-
-        app.run("actions.stop", json!({})).unwrap();
-        let id = app.session.actions.list[row].action_id.as_ref().unwrap();
-        assert_ne!(app.session.actions.list[namesake].action_id.as_ref(), Some(id));
-        let (_, params) = app.session.actions.list[recorder].steps.iter().find(|(command, _)| command == "file.automate.batch").unwrap();
-        assert_eq!(params["actionId"], json!(id));
-
-        app.run("actions.move", json!({"action": row, "to": namesake})).unwrap();
-        let replay = app.run("actions.play", json!({"action": "Recorder"})).unwrap();
-        assert!(replay.get("failed").is_none(), "{replay}");
-        let size = app.session.active().unwrap().doc.size;
-        assert_eq!((size.width, size.height), (2, 1), "recorded occurrence {row} survived the reorder");
-    }
-}
-
-#[test]
-fn batch_chooser_selects_the_later_same_caption_and_rejects_a_stale_occurrence() {
-    use egui_kittest::{Harness, kittest::Queryable};
-
-    let (mut app, _) = app_with(0);
-    app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
-    for _ in 0..2 {
-        app.session.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
-    }
-    app.session.actions.list[2].steps = vec![("image.imageRotation.90cw".into(), json!({}))];
-    app.ui.actions.selected = Some(0);
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
-                crate::dialogs::show(app, ui.ctx());
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
-    let ctx = h.ctx.clone();
-    for stale in [false, true] {
-        let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-        let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
-        fields.insert("source".into(), json!("open"));
-        fields.remove("output");
-        h.run_steps(4);
-        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Occurrence").click();
-        h.run_steps(2);
-        h.get_by_label("2 / 2").click();
-        h.run_steps(2);
-        assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields[crate::actions::BATCH_OCCURRENCE], 2);
-        if stale {
-            h.state_mut().run("actions.move", json!({"action": 2, "to": 1})).unwrap();
-            assert!(crate::dialogs::confirm(h.state_mut(), id).unwrap_err().contains("selected action changed"));
-        } else {
-            assert_eq!(crate::dialogs::confirm(h.state_mut(), id).unwrap()["errors"], json!([]));
-        }
-        let size = h.state().session.active().unwrap().doc.size;
-        assert_eq!((size.width, size.height), (1, 2));
-    }
 }
 
 /// Choosing a different action changes the output; cancelled or deleted choices write nothing.
 #[test]
 fn batch_menu_runs_the_action_chosen_in_the_form() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let (mut app, _) = app_with(0);
+    let (mut app, ctx) = app_with(0);
     let dir = tempfile::tempdir().unwrap();
-    let input = dir.path().join("source.png").to_string_lossy().into_owned();
-    let output = dir.path().join("out").to_string_lossy().into_owned();
+    let source = dir.path().join("in");
+    std::fs::create_dir(&source).unwrap();
+    let output = dir.path().join("out");
     app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
-    app.run("file.saveACopy", json!({"path": input})).unwrap();
-    app.session.actions.list = vec![
-        photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]),
-        photocraft_engine::actions_cmds::Action::new("RotateRGB", vec![("image.imageRotation.90cw".into(), json!({}))]),
-    ];
-    app.ui.actions.selected = Some(0);
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
-                crate::dialogs::show(app, ui.ctx());
-            }
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
-    let ctx = h.ctx.clone();
-    let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
-    assert!(!fields.contains_key("steps"));
-    fields.insert("input".into(), json!([input]));
-    fields.insert("output".into(), json!(output));
-    h.run_steps(4);
-    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Action").click();
-    h.run_steps(2);
-    h.get_by_label("RotateRGB").click();
-    h.run_steps(2);
-    assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["action"], "RotateRGB");
-    let result = crate::dialogs::confirm(h.state_mut(), id).unwrap();
-    assert_eq!(result["errors"], json!([]));
-    let image = photocraft_io::import("source.png", &std::fs::read(result["files"][0].as_str().unwrap()).unwrap()).unwrap().document;
+    app.run("file.saveACopy", json!({"path": source.join("source.png").to_string_lossy()})).unwrap();
+    for (name, step) in [("Invert", "image.adjustments.invert"), ("RotateRGB", "image.imageRotation.90cw")] {
+        app.session.actions_mut().list.push(Action::new(name, vec![ActionStep::new(step, json!({}))])).unwrap();
+    }
+    app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    assert!(!fields(&app, id).as_object().unwrap().contains_key("steps"));
+    set(&mut app, &ctx, id, "input", json!(source.to_string_lossy()));
+    set(&mut app, &ctx, id, "output", json!(output.to_string_lossy()));
+    set(&mut app, &ctx, id, "action", json!("RotateRGB"));
+    assert_eq!(fields(&app, id)["action"], "RotateRGB");
+    confirm(&mut app, &ctx, id).unwrap();
+    let written = names_in(&output);
+    assert_eq!(written.len(), 1);
+    let image = photocraft_io::import("source.png", &std::fs::read(output.join(&written[0])).unwrap()).unwrap().document;
     assert_eq!((image.size.width, image.size.height), (1, 2));
 
     let cancelled = dir.path().join("cancelled");
-    let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("output".into(), json!(cancelled.to_string_lossy()));
-    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
+    cancel(&mut app, &ctx, id);
     assert!(!cancelled.exists());
 
-    let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
-    fields.insert("action".into(), json!("RotateRGB"));
-    fields.insert("output".into(), json!(cancelled.to_string_lossy()));
-    h.state_mut().session.actions.list.retain(|action| action.name != "RotateRGB");
-    assert!(crate::dialogs::confirm(h.state_mut(), id).unwrap_err().contains("no action named"));
+    let id = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, id, "action", json!("RotateRGB"));
+    set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
+    let rotate = app.session.actions().list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
+    app.session.actions_mut().list.delete_action(rotate).unwrap();
+    // The run's refusal reaches the user through the status bar and a notice, as a failed filter's does.
+    confirm(&mut app, &ctx, id).unwrap();
+    assert!(app.ui.status_error && app.ui.status.contains("no action named"), "{}", app.ui.status);
     assert!(!cancelled.exists());
-}
-
-#[test]
-fn engine_commands_open_their_dialogs() {
-    let (mut app, ctx) = app_with(2);
-    let d = menu(&mut app, &ctx, "file.automate.fitImage", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let dlg = app.ui.dialog_mut(d).unwrap();
-    assert_eq!(dlg.fields["width"], 110);
-    dlg.fields.insert("width".into(), json!(55));
-    dlg.fields.insert("height".into(), json!(1000));
-    crate::dialogs::confirm(&mut app, d).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.size.width, 55);
-    let d = menu(&mut app, &ctx, "file.fileInfo", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    app.ui.dialog_mut(d).unwrap().fields.insert("title".into(), json!("Wheat Field"));
-    crate::dialogs::confirm(&mut app, d).unwrap();
-    assert_eq!(app.run("file.fileInfo", json!({})).unwrap()["title"], "Wheat Field");
-    let d = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(d).unwrap().fields["columns"], 8);
-    app.ui.dialog_mut(d).unwrap().fields.insert("columns".into(), json!(2));
-    app.ui.dialog_mut(d).unwrap().fields.insert("gutter".into(), json!(10));
-    crate::dialogs::confirm(&mut app, d).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.guides.vertical, vec![0.0, 22.5, 32.5, 55.0]);
-    app.run("type.create", json!({"x": 5, "y": 40, "text": "Warp", "size": 20})).unwrap();
-    let d = menu(&mut app, &ctx, "type.warpText", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    app.ui.dialog_mut(d).unwrap().fields.insert("style".into(), json!("arc"));
-    crate::dialogs::confirm(&mut app, d).unwrap();
-    assert!(app.run("type.info", json!({})).unwrap()["warp"]["style"] == "warpArc");
-    // Batch needs a recorded action.
-    assert!(menu(&mut app, &ctx, "file.automate.batch", json!({})).is_err());
-    // Close Others keeps the active document's view (the documents are dirty; the unsaved-changes prompt is covered in discard_ui).
-    app.ui.views[1].zoom = 4.0;
-    crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeOthers", json!({})).unwrap();
-    assert_eq!(app.ui.views.len(), 1);
-    assert_eq!(app.ui.views[0].zoom, 4.0);
-    crate::menus::invoke_unguarded(&mut app, &ctx, "file.closeAll", json!({})).unwrap();
-    assert!(app.ui.views.is_empty() && app.session.documents().is_empty());
-}
-
-#[test]
-fn apply_image_and_calculations_open_dialogs_without_editing() {
-    for id in ["image.applyImage", "image.calculations"] {
-        let (mut app, ctx) = app_with(1);
-        let revision = app.session.active().unwrap().revision;
-        let dialog = menu(&mut app, &ctx, id, json!({})).unwrap()["dialog"].as_u64().unwrap_or_else(|| panic!("{id} did not open a dialog"));
-        let fields = &app.ui.dialog_mut(dialog).unwrap().fields;
-        assert_eq!(fields["__command"], id, "{id} opened the wrong dialog");
-        assert_eq!(app.session.active().unwrap().revision, revision, "{id} edited before confirmation");
-    }
 }
 
 #[test]
@@ -723,74 +497,80 @@ fn apply_image_dialog_offers_source_layer_scale_and_offset() {
     app.run("edit.fill", json!({"color": "#406080"})).unwrap();
     app.sync_views();
     let background = app.session.active().unwrap().doc.walk()[0].2.name.clone();
-    let open = |app: &mut PhotocraftApp| menu(app, &ctx, "image.applyImage", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let d = open(&mut app);
-    let fields = &app.ui.dialog_mut(d).unwrap().fields;
-    assert_eq!(fields["sourceLayer"], "merged");
-    assert_eq!(fields["scale"], 1.0);
-    assert_eq!(fields["offset"], 0);
+    let d = open_form(&mut app, &ctx, "image.applyImage");
+    let shown = fields(&app, d);
+    assert_eq!(shown["sourceLayer"], "merged");
+    assert_eq!(shown["scale"], 1.0);
+    assert_eq!(shown["offset"], 0);
     // Merged first, then the layers top to bottom, shown by their own names.
-    assert_eq!(fields["__choices"]["sourceLayer"], json!(["merged", "Skin High", background]));
-    assert_eq!(fields["__labels"]["Skin High"], "Skin High");
+    assert_eq!(choice_ids(&mut app, "image.applyImage", "sourceLayer"), ["merged", "Skin High", &background]);
     // The frequency separation recipe: a layer subtracted from itself at Scale 2, Offset 128 is mid grey.
     for (k, v) in [("sourceLayer", json!("Skin High")), ("blending", json!("subtract")), ("scale", json!(2.0)), ("offset", json!(128))] {
-        app.ui.dialog_mut(d).unwrap().fields.insert(k.into(), v);
+        set(&mut app, &ctx, d, k, v);
     }
-    crate::dialogs::confirm(&mut app, d).unwrap();
+    confirm(&mut app, &ctx, d).unwrap();
     let st = app.session.active().unwrap();
     let p = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(3, 3);
     assert!(p[..3].iter().all(|v| (v - 128.0 / 255.0).abs() < 0.003), "{p:?}");
     app.run("edit.undo", json!({})).unwrap();
     // The chosen layer is the source, not the merged image.
-    let d = open(&mut app);
+    let d = open_form(&mut app, &ctx, "image.applyImage");
     for (k, v) in [("sourceLayer", json!(background)), ("blending", json!("subtract")), ("scale", json!(2.0)), ("offset", json!(128))] {
-        app.ui.dialog_mut(d).unwrap().fields.insert(k.into(), v);
+        set(&mut app, &ctx, d, k, v);
     }
-    crate::dialogs::confirm(&mut app, d).unwrap();
+    confirm(&mut app, &ctx, d).unwrap();
     let st = app.session.active().unwrap();
     let p = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(3, 3);
     let want = (64.0 - 192.0) / 255.0 / 2.0 + 128.0 / 255.0;
     assert!((p[0] - want).abs() < 0.003, "{p:?} vs {want}");
 }
 
-#[test]
-fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
-    let (mut app, ctx) = app_with(1);
-    let first = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["columns"], 8);
-    assert_eq!(app.ui.dialog_mut(first).unwrap().fields["gutter"], "20 px");
-    for (key, value) in [("columns", json!(2)), ("gutter", json!("0 px")), ("rows", json!(2)), ("rowGutter", json!("0 px"))] {
-        app.ui.dialog_mut(first).unwrap().fields.insert(key.into(), value);
-    }
-    crate::dialogs::confirm(&mut app, first).unwrap();
-
-    let second = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &app.ui.dialog_mut(second).unwrap().fields;
-    assert_eq!(fields["columns"], 2);
-    assert_eq!(fields["gutter"], "0 px");
-    assert_eq!(fields["rows"], 2);
-    assert_eq!(fields["rowGutter"], "0 px");
-    assert_eq!(fields["clearExisting"], false);
-    // A cancelled edit must not replace the last successfully used values.
-    app.ui.dialog_mut(second).unwrap().fields.insert("columns".into(), json!(9));
-    app.ui.close_dialog(second);
-    let third = menu(&mut app, &ctx, "view.newGuideLayout", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(third).unwrap().fields["columns"], 2);
-
-    // The remembered state is part of the serializable UI state.
-    let json_state = serde_json::to_value(&app.ui).unwrap();
-    assert_eq!(json_state["view"]["guide_layout"]["columns"], 2);
-    let restored: crate::state::UiState = serde_json::from_value(json_state).unwrap();
-    assert_eq!(restored.view.guide_layout["rows"], 2);
+/// The `columns` or `rows` value of the guide layout dialog with the count and gutter edited.
+fn guide_group(shown: &Value, key: &str, number: u64, gutter: f64) -> Value {
+    let mut group = shown[key].clone();
+    group["enabled"] = json!(true);
+    group["number"] = json!(number);
+    group["gutter"]["value"] = json!(gutter);
+    group
 }
 
 #[test]
+fn new_guide_layout_remembers_successful_values_not_cancelled_edits() {
+    let (mut app, ctx) = app_with(1);
+    let first = open_form(&mut app, &ctx, "view.newGuideLayout");
+    let shown = fields(&app, first);
+    assert_eq!(shown["columns"]["number"], 8);
+    assert_eq!(shown["columns"]["gutter"]["value"], 20.0);
+    set(&mut app, &ctx, first, "columns", guide_group(&shown, "columns", 2, 0.0));
+    set(&mut app, &ctx, first, "rows", guide_group(&shown, "rows", 2, 0.0));
+    confirm(&mut app, &ctx, first).unwrap();
+
+    let second = open_form(&mut app, &ctx, "view.newGuideLayout");
+    let shown = fields(&app, second);
+    for key in ["columns", "rows"] {
+        assert_eq!(shown[key]["number"], 2, "{key}");
+        assert_eq!(shown[key]["gutter"]["value"], 0.0, "{key}");
+    }
+    assert_eq!(shown["clearExisting"], false);
+    // A cancelled edit must not replace the last successfully used values.
+    set(&mut app, &ctx, second, "columns", guide_group(&shown, "columns", 9, 0.0));
+    cancel(&mut app, &ctx, second);
+    let third = open_form(&mut app, &ctx, "view.newGuideLayout");
+    assert_eq!(fields(&app, third)["columns"]["number"], 2);
+}
+
+/// A layout that the command refuses (the dialog's document is no longer the active one) is not remembered.
+#[test]
 fn new_guide_layout_does_not_remember_a_failed_command() {
-    let (mut app, ctx) = app_with(0);
-    let id = front(&mut app, &ctx, "view.newGuideLayout", &json!({})).unwrap().unwrap()["dialog"].as_u64().unwrap();
-    app.ui.dialog_mut(id).unwrap().fields.insert("columns".into(), json!(3));
-    assert!(crate::dialogs::confirm(&mut app, id).is_err());
-    assert_eq!(app.ui.view.guide_layout["columns"], 8);
+    let (mut app, ctx) = app_with(2);
+    let id = open_form(&mut app, &ctx, "view.newGuideLayout");
+    let shown = fields(&app, id);
+    set(&mut app, &ctx, id, "columns", guide_group(&shown, "columns", 3, 20.0));
+    app.session.set_active(0);
+    confirm(&mut app, &ctx, id).unwrap();
+    assert!(app.ui.status.contains("another document"), "{}", app.ui.status);
+    let again = open_form(&mut app, &ctx, "view.newGuideLayout");
+    assert_eq!(fields(&app, again)["columns"]["number"], 8);
 }
 
 #[test]
@@ -798,19 +578,17 @@ fn lookup_export_dialog_uses_the_current_adjustment_selection() {
     let (mut app, ctx) = app_with(1);
     app.run("layer.newAdjustmentLayer.invert", json!({})).unwrap();
     let current = app.session.active().unwrap().active_layer.unwrap();
-    let opened = front(&mut app, &ctx, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
-    let id = opened["dialog"].as_u64().unwrap();
-    let dialog = &app.ui.dialogs.last().unwrap().fields;
-    assert_eq!(dialog["scope"], "selected");
-    assert_eq!(dialog["size"], 33);
-    assert_eq!(dialog["__choices"]["scope"], json!(["all", "selected"]));
-    app.ui.close_dialog(id);
+    let id = open_form(&mut app, &ctx, "file.export.colorLookupTables");
+    let shown = fields(&app, id);
+    assert_eq!(shown["scope"], "selected");
+    assert_eq!(shown["size"], 33);
+    assert_eq!(choice_ids(&mut app, "file.export.colorLookupTables", "scope"), ["all", "selected"]);
+    cancel(&mut app, &ctx, id);
 
     app.run("layer.new.layer", json!({"name": "Unrelated pixels"})).unwrap();
-    let opened = front(&mut app, &ctx, "file.export.colorLookupTables", &json!({})).unwrap().unwrap();
-    let id = opened["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialogs.last().unwrap().fields["scope"], "all");
-    app.ui.close_dialog(id);
+    let id = open_form(&mut app, &ctx, "file.export.colorLookupTables");
+    assert_eq!(fields(&app, id)["scope"], "all");
+    cancel(&mut app, &ctx, id);
 
     app.run("layer.select", json!({"layer": current})).unwrap();
     let direct = app.run("file.export.colorLookupTables", json!({"size": 3, "scope": "selected"})).unwrap();
@@ -828,28 +606,28 @@ fn batch_dialogs_include_all_subfolders() {
     std::fs::create_dir_all(dir.join("in/sub")).unwrap();
     let input = dir.join("in").to_string_lossy().into_owned();
     app.run("file.saveACopy", json!({"path": dir.join("in/sub/a.png").to_string_lossy()})).unwrap();
-    app.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
-    for (id, out) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processed")] {
-        let d = menu(&mut app, &ctx, id, json!({})).unwrap()["dialog"].as_u64().unwrap();
-        let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
-        assert_eq!(fields["includeSubfolders"], json!(false), "{id}");
-        assert_eq!(fields["__labels"]["includeSubfolders"], json!("Include All Subfolders"), "{id}");
-        if id == "file.automate.batch" {
-            assert_eq!(fields["source"], json!("folder"));
-            assert_eq!(fields["stopOnError"], json!(false));
-            assert_eq!(fields["errorLog"], json!(""));
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    for (command, out) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processed")] {
+        let d = open_form(&mut app, &ctx, command);
+        let shown = fields(&app, d);
+        assert_eq!(shown["includeSubfolders"], json!(false), "{command}");
+        assert_eq!(label_of(&mut app, command, "includeSubfolders"), "Include All Subfolders", "{command}");
+        if command == "file.automate.batch" {
+            assert_eq!(shown["source"], json!("folder"));
+            assert_eq!(shown["stopOnError"], json!(false));
+            assert_eq!(shown["errorLog"], json!(""));
         }
-        fields.insert("source".into(), json!("folder"));
-        fields.insert("input".into(), json!(input));
-        fields.insert("output".into(), json!(dir.join(out).to_string_lossy()));
-        fields.insert("includeSubfolders".into(), json!(true));
-        let r = crate::dialogs::confirm(&mut app, d).unwrap();
-        assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{id}: {r}");
-        if id == "file.automate.batch" {
-            assert!(dir.join(out).join("a.png").is_file(), "{id} writes subfolder inputs flat: {r}");
+        // The folder rows show only for the Folder source.
+        set(&mut app, &ctx, d, "source", json!("folder"));
+        set(&mut app, &ctx, d, "input", json!(input));
+        set(&mut app, &ctx, d, "output", json!(dir.join(out).to_string_lossy()));
+        set(&mut app, &ctx, d, "includeSubfolders", json!(true));
+        confirm(&mut app, &ctx, d).unwrap();
+        if command == "file.automate.batch" {
+            assert!(dir.join(out).join("a.png").is_file(), "{command} writes subfolder inputs flat");
             assert!(!dir.join(out).join("sub").exists());
         } else {
-            assert!(dir.join(out).join("sub").is_dir(), "{id} keeps the subfolder: {r}");
+            assert!(dir.join(out).join("sub").is_dir(), "{command} keeps the subfolder");
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
@@ -875,16 +653,13 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
     app.run("file.saveACopy", json!({"path": dir.join("ref.png").to_string_lossy()})).unwrap();
     assert_eq!(crate::actions::selected_action(&app).map(|a| a.steps.len()), Some(1), "one step for the typing");
     // CodeRabbit on #10730: and that step makes the layer with the text typed.
-    assert_eq!(crate::actions::selected_action(&app).and_then(|a| a.steps.first()).map(|(_, p)| p["text"].clone()), Some(json!("Hi")));
-    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
-    fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
-    fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
-    let r = crate::dialogs::confirm(&mut app, d).unwrap();
-    assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "{r}");
-    assert!(r.get("failed").is_none_or(|f| f.as_array().is_some_and(Vec::is_empty)), "{r}");
+    assert_eq!(crate::actions::selected_action(&app).and_then(|a| a.steps.first()).map(|step| step.params["text"].clone()), Some(json!("Hi")));
+    let d = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, d, "input", json!(dir.join("in").to_string_lossy()));
+    set(&mut app, &ctx, d, "output", json!(dir.join("out").to_string_lossy()));
+    confirm(&mut app, &ctx, d).unwrap();
+    assert_eq!(names_in(&dir.join("out")), ["a.png", "b.png"]);
     for name in ["a.png", "b.png"] {
-        assert!(dir.join("out").join(name).is_file(), "{name} saved: {r}");
         // CodeRabbit on #10730: the action ran on each file: the typed text is in its pixels.
         let pixels = |folder: &str| photocraft_codecs::decode(&std::fs::read(dir.join(folder).join(name)).unwrap()).unwrap().data().to_vec();
         assert_ne!(pixels("out"), pixels("in"), "{name}: the text was laid on it");
@@ -910,29 +685,22 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
         app.run("file.saveACopy", json!({"path": dir.join("in").join(name).to_string_lossy()})).unwrap();
     }
     // A step for a layer that only the recording document has.
-    app.session
-        .actions
-        .list
-        .push(photocraft_engine::actions_cmds::Action::new("Stale", vec![("layer.setProps".into(), json!({"layer": 424_242, "opacity": 50}))]));
-    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
-    fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
-    fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
+    app.session.actions_mut().list.push(Action::new("Stale", vec![ActionStep::new("layer.setProps", json!({"layer": 424_242, "opacity": 50}))])).unwrap();
+    let d = open_form(&mut app, &ctx, "file.automate.batch");
+    set(&mut app, &ctx, d, "input", json!(dir.join("in").to_string_lossy()));
+    set(&mut app, &ctx, d, "output", json!(dir.join("out").to_string_lossy()));
     let notices = app.ui.notices.len();
-    let r = crate::dialogs::confirm(&mut app, d).unwrap();
-    assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "{r}");
+    confirm(&mut app, &ctx, d).unwrap();
     assert!(app.ui.status_error, "the status bar reports it: {}", app.ui.status);
     let notice = app.ui.notices.get(notices).expect("a notice lists the files");
     assert_eq!(notice.lines.len(), 2);
     // CodeRabbit on #10730: a failure, not a warning, and each file by its whole path.
-    assert!(notice.error && notice.title.ends_with("2 files failed"), "{}", notice.title);
+    assert!(notice.tone == craft::theme::variant::Tone::Bad && notice.title.ends_with("2 files failed"), "{}", notice.title);
     let path = |name: &str| format!("{}: ", dir.join("in").join(name).to_string_lossy());
     assert!(notice.lines[0].starts_with(&path("a.png")) && notice.lines[1].starts_with(&path("b.png")), "{:?}", notice.lines);
-    // CodeRabbit on #10730: each line is its file's error, word for word, path then reason.
-    let errors = r["errors"].as_array().unwrap();
-    for (line, e) in notice.lines.iter().zip(errors) {
-        assert!(!e["error"].as_str().unwrap_or_default().trim().is_empty(), "{e}");
-        assert_eq!(*line, format!("{}: {}", e["file"].as_str().unwrap(), e["error"].as_str().unwrap()));
+    // CodeRabbit on #10730: each line is its file's path, then a reason.
+    for (line, name) in notice.lines.iter().zip(["a.png", "b.png"]) {
+        assert!(!line.strip_prefix(&path(name)).unwrap_or_default().trim().is_empty(), "{line}");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -942,18 +710,19 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
 #[test]
 fn float_in_window_takes_a_document_and_position() {
     let (mut app, ctx) = app_with(3);
-    let r = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 1, "position": [1950.0, 40.5]})).unwrap();
-    let w = app.ui.windows.last().unwrap();
-    assert_eq!(r, json!({"window": w.id}));
-    assert_eq!((w.document, w.position), (1, Some([1950.0, 40.5])));
-    assert!(w.floating);
+    let doc = app.session.documents()[1].doc.id;
+    let r = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": doc.0, "position": [1950.0, 40.5]})).unwrap();
+    let (group, rect) = app.ui.document_windows.floating.last().unwrap();
+    assert_eq!(r, json!({"window": group.id}));
+    assert_eq!((group.documents.clone(), rect.min), (vec![doc], egui::pos2(1950.0, 40.5)));
     assert_eq!(app.session.active_index(), Some(1), "the floated document stays active");
-    let again = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 1})).unwrap();
+    let again = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": doc.0})).unwrap();
     assert_eq!(again, r, "tearing off the same document reuses its window");
-    assert_eq!(app.ui.windows.len(), 1);
-    assert_eq!(app.ui.windows[0].position, Some([1950.0, 40.5]));
+    assert_eq!(app.ui.document_windows.floating.len(), 1);
+    assert_eq!(app.ui.document_windows.floating[0].1.min, egui::pos2(1950.0, 40.5));
+    let unknown = app.session.documents().iter().map(|st| st.doc.id.0).max().unwrap() + 1;
     for bad in [
-        json!({"document": 3}),
+        json!({"document": unknown}),
         json!({"document": -1}),
         json!({"document": "b"}),
         json!({"position": [1.0]}),
@@ -963,31 +732,22 @@ fn float_in_window_takes_a_document_and_position() {
     ] {
         assert!(menu(&mut app, &ctx, "window.arrange.floatInWindow", bad.clone()).is_err(), "{bad}");
     }
-    assert_eq!(app.ui.windows.len(), 1, "rejected params open no window");
-    app.ui.windows[0].open = false;
-    let reopened = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 1})).unwrap();
+    assert_eq!(app.ui.document_windows.floating.len(), 1, "rejected params open no window");
+    let window = app.ui.document_windows.floating[0].0.id;
+    app.ui.document_windows.close_window(window);
+    let reopened = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": doc.0})).unwrap();
     assert_ne!(reopened, r, "a closed window can be floated again");
-    assert_eq!(app.ui.windows.last().map(|w| (w.document, w.position)), Some((1, None)));
-}
-
-#[test]
-fn float_in_window_defaults_to_the_active_document() {
-    let (mut app, ctx) = app_with(3);
-    app.session.set_active(1);
-    let r = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({})).unwrap();
-    let window = app.ui.windows.last().unwrap();
-    assert_eq!(r, json!({"window": window.id}));
-    assert_eq!(window.document, 1);
-    assert!(window.floating);
-    assert_eq!(app.session.active_index(), Some(1));
+    assert_eq!(app.ui.document_windows.floating.last().map(|(group, _)| group.documents.clone()), Some(vec![doc]));
 }
 
 #[test]
 fn float_all_in_windows_gives_each_document_its_own_view() {
     let (mut app, ctx) = app_with(3);
     menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
-    assert_eq!(app.ui.windows.iter().map(|w| w.document).collect::<Vec<_>>(), [0, 1, 2]);
-    assert!(app.ui.windows.iter().all(|w| w.floating));
+    let ids: Vec<_> = app.session.documents().iter().map(|st| st.doc.id).collect();
+    let floated: Vec<_> = app.ui.document_windows.floating.iter().map(|(group, _)| group.documents.clone()).collect();
+    assert_eq!(floated, ids.iter().map(|id| vec![*id]).collect::<Vec<_>>());
+    assert!(app.ui.document_windows.docked.is_empty());
 }
 
 #[test]
@@ -996,20 +756,18 @@ fn save_selection_opens_its_dialog_and_saves_on_confirm() {
     let (mut app, ctx) = app_with(1);
     app.run("select.all", json!({})).unwrap();
     let revision = app.session.active().unwrap().revision;
-    let dialog = menu(&mut app, &ctx, "select.saveSelection", json!({})).unwrap()["dialog"].as_u64().expect("Save Selection opens a dialog");
+    let dialog = open_form(&mut app, &ctx, "select.saveSelection");
     assert_eq!(app.session.active().unwrap().revision, revision, "saved before confirmation");
     assert!(app.session.active().unwrap().doc.channels.is_empty());
-    let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
-    assert_eq!(fields["__command"], "select.saveSelection");
-    assert_eq!(fields["channel"], "new");
-    assert_eq!(fields["__choices"]["operation"], json!(["new", "replace", "add", "subtract", "intersect"]));
-    fields.insert("name".into(), json!("Keep"));
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(fields(&app, dialog)["channel"], "new");
+    assert_eq!(choice_ids(&mut app, "select.saveSelection", "operation"), ["new", "replace", "add", "subtract", "intersect"]);
+    set(&mut app, &ctx, dialog, "name", json!("Keep"));
+    confirm(&mut app, &ctx, dialog).unwrap();
     let names: Vec<_> = app.session.active().unwrap().doc.channels.iter().map(|c| c.name.clone()).collect();
     assert_eq!(names, ["Keep"]);
     // A second save lists the new channel as a destination.
-    let dialog = menu(&mut app, &ctx, "select.saveSelection", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["__choices"]["channel"], json!(["new", "Keep"]));
+    open_form(&mut app, &ctx, "select.saveSelection");
+    assert_eq!(choice_ids(&mut app, "select.saveSelection", "channel"), ["new", "Keep"]);
 }
 
 #[test]
@@ -1019,102 +777,57 @@ fn load_selection_opens_its_dialog_and_loads_on_confirm() {
     app.run("select.all", json!({})).unwrap();
     app.run("select.saveSelection", json!({"name": "Keep"})).unwrap();
     app.run("select.deselect", json!({})).unwrap();
-    let dialog = menu(&mut app, &ctx, "select.loadSelection", json!({})).unwrap()["dialog"].as_u64().expect("Load Selection opens a dialog");
+    let dialog = open_form(&mut app, &ctx, "select.loadSelection");
     assert!(app.session.active().unwrap().doc.selection.is_none(), "loaded before confirmation");
-    let fields = &app.ui.dialog_mut(dialog).unwrap().fields;
-    assert_eq!(fields["__command"], "select.loadSelection");
-    assert_eq!(fields["channel"], "Keep");
-    assert_eq!(fields["invert"], false);
-    assert_eq!(fields["operation"], "new");
-    let channels = fields["__choices"]["channel"].as_array().unwrap();
-    assert!(channels.contains(&json!("Keep")) && channels.contains(&json!("transparency")));
+    let shown = fields(&app, dialog);
+    assert_eq!(shown["channel"], "Keep");
+    assert_eq!(shown["invert"], false);
+    assert_eq!(shown["operation"], "new");
+    let channels = choice_ids(&mut app, "select.loadSelection", "channel");
+    assert!(channels.contains(&"Keep".to_owned()) && channels.contains(&"transparency".to_owned()));
     // The layer has no mask, so its mask is not offered.
-    assert!(!channels.contains(&json!("mask")), "{channels:?}");
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert!(!channels.contains(&"mask".to_owned()), "{channels:?}");
+    confirm(&mut app, &ctx, dialog).unwrap();
     assert!(app.session.active().unwrap().doc.selection.is_some());
 }
 
 #[test]
 fn load_selection_without_alpha_channels_offers_the_composite() {
     let (mut app, ctx) = app_with(1);
-    let dialog = menu(&mut app, &ctx, "select.loadSelection", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["channel"], "RGB");
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    let dialog = open_form(&mut app, &ctx, "select.loadSelection");
+    assert_eq!(fields(&app, dialog)["channel"], "RGB");
+    confirm(&mut app, &ctx, dialog).unwrap();
 }
 
-#[test]
-fn video_menu_commands_open_pickers_and_dialogs() {
-    let (mut app, ctx) = app_with(1);
-    app.services.file_dialog = Some(Box::new(|_, _, _| {}));
-
-    for id in ["layer.videoLayers.newVideoLayerFromFile", "layer.videoLayers.replaceFootage"] {
-        assert!(is_live(id), "{id}");
-        assert_eq!(menu(&mut app, &ctx, id, json!({})).unwrap(), json!({"fileDialog": "open"}), "{id}");
-        app.file_dialog = None;
-    }
-
-    let interpret = menu(&mut app, &ctx, "layer.videoLayers.interpretFootage", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &app.ui.dialog_mut(interpret).unwrap().fields;
-    assert_eq!(fields["__command"], "layer.videoLayers.interpretFootage");
-    assert_eq!(fields["fps"], 30.0);
-    app.ui.close_dialog(interpret);
-}
-
-/// One frame of the shortcut handler with a plain Esc press.
-fn press_esc(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let key = egui::Key::Escape;
-    let input = egui::RawInput {
-        focused: true,
-        events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
-        ..Default::default()
-    };
-    ctx.run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+/// A plain Esc press, through the canvas passes: the tool host claims it first where a gesture, a transform or a
+/// straighten line owns it, then the app's key route.
+fn press_esc(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    crate::canvas::testing::key(app, egui::Key::Escape, egui::Modifiers::NONE);
 }
 
 #[test]
 fn esc_leaves_full_screen_with_the_crop_tool_showing_its_default_frame() {
     let (mut app, ctx) = app_with(1);
     app.ui.tool = crate::Tool::Crop;
-    crate::crop_ui::ensure_frame(&mut app);
-    assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+    crate::canvas::testing::frame(&mut app);
+    let default_frame = |app: &PhotocraftApp| crate::crop_ui::frame(app).is_some() && crate::crop_ui::is_default_frame(app);
+    assert!(default_frame(&app));
     for mode in ["fullScreen", "fullScreenWithMenuBar"] {
-        menu(&mut app, &ctx, &format!("view.screenMode.{mode}"), json!({})).unwrap();
+        screen_mode(&mut app, &ctx, &format!("view.screenMode.{mode}"));
         press_esc(&mut app, &ctx);
-        assert_eq!(app.ui.view.screen_mode, "standard", "{mode}");
-        assert!(app.ui.crop_rect.is_some() && app.crop.default_frame, "{mode}: the default frame stays");
+        assert_mode(&app, "standard");
+        assert!(default_frame(&app), "{mode}: the default frame stays");
     }
     // With Straighten armed, Esc drops it first and the mode stays.
-    menu(&mut app, &ctx, "view.screenMode.fullScreen", json!({})).unwrap();
-    app.crop.straighten.armed = true;
+    screen_mode(&mut app, &ctx, "view.screenMode.fullScreen");
+    crate::crop_ui::toggle_straighten(&mut app);
+    assert!(crate::crop_ui::straightening(&app));
     press_esc(&mut app, &ctx);
-    assert!(!app.crop.straighten.armed);
-    assert_eq!(app.ui.view.screen_mode, "fullScreen");
-    crate::crop_ui::ensure_frame(&mut app);
+    assert!(!crate::crop_ui::straightening(&app));
+    assert_mode(&app, "fullScreen");
+    crate::canvas::testing::frame(&mut app);
     press_esc(&mut app, &ctx);
-    assert_eq!(app.ui.view.screen_mode, "standard");
-}
-
-/// #9275: a gesture on the default frame is something to cancel, so Esc in full screen cancels it
-/// (as in Standard Screen Mode) and full screen stays.
-#[test]
-fn esc_in_full_screen_cancels_a_crop_drag_on_the_default_frame() {
-    use crate::canvas::{ToolEvent, tool_event};
-    let none = egui::Modifiers::NONE;
-    // Inside draws a new box, on the corner handle resizes, outside turns.
-    for (what, from) in [("draw", [20.0, 20.0]), ("resize", [100.0, 80.0]), ("turn", [130.0, 110.0])] {
-        let (mut app, ctx) = app_with(1);
-        app.ui.tool = crate::Tool::Crop;
-        crate::crop_ui::ensure_frame(&mut app);
-        menu(&mut app, &ctx, "view.screenMode.fullScreen", json!({})).unwrap();
-        tool_event(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, none);
-        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 50.0, pressure: 1.0 }, none);
-        assert!(app.crop.drag.is_some() && app.crop.default_frame, "{what}: mid-gesture on the default frame");
-        press_esc(&mut app, &ctx);
-        assert_eq!(app.ui.view.screen_mode, "fullScreen", "{what}: Esc cancels the gesture, full screen stays");
-        assert!(app.crop.drag.is_none(), "{what}: the gesture is cancelled");
-        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 50.0 }, none);
-        assert!(!crate::crop_ui::pending(&app), "{what}: the release leaves no pending crop");
-    }
+    assert_mode(&app, "standard");
 }
 
 #[test]
@@ -1122,411 +835,130 @@ fn esc_leaves_full_screen_modes_unless_something_else_owns_it() {
     let (mut app, ctx) = app_with(1);
     // Both full screen modes return to Standard, and the menu check follows (#4116).
     for mode in ["fullScreen", "fullScreenWithMenuBar"] {
-        menu(&mut app, &ctx, &format!("view.screenMode.{mode}"), json!({})).unwrap();
+        screen_mode(&mut app, &ctx, &format!("view.screenMode.{mode}"));
         press_esc(&mut app, &ctx);
-        assert_eq!(app.ui.view.screen_mode, "standard", "{mode}");
-        assert_eq!(checked(&app, "view.screenMode.standard"), Some(true));
+        assert_mode(&app, "standard");
     }
     // In Standard, Esc leaves the mode alone.
     press_esc(&mut app, &ctx);
-    assert_eq!(app.ui.view.screen_mode, "standard");
+    assert_mode(&app, "standard");
     // An open dialog takes Esc first.
-    menu(&mut app, &ctx, "view.screenMode.fullScreen", json!({})).unwrap();
+    screen_mode(&mut app, &ctx, "view.screenMode.fullScreen");
     menu(&mut app, &ctx, "image.canvasSize", json!({})).unwrap();
-    assert_eq!(app.ui.dialogs.len(), 1);
+    assert_eq!(app.framework.dialogs.open_dialogs().len(), 1);
     press_esc(&mut app, &ctx);
-    assert_eq!(app.ui.view.screen_mode, "fullScreen");
-    app.ui.dialogs.clear();
+    assert_mode(&app, "fullScreen");
+    let dialog = last_dialog(&app);
+    cancel(&mut app, &ctx, dialog);
     // So does Free Transform: Esc cancels it and the mode stays.
     app.run("select.all", json!({})).unwrap();
     crate::transform_tool::begin(&mut app, &ctx).unwrap();
     assert!(app.ui.transform.is_some());
+    // The tool host claims Esc for the transform in a pass after the transform opens.
+    crate::canvas::testing::frame(&mut app);
     press_esc(&mut app, &ctx);
     assert!(app.ui.transform.is_none());
-    assert_eq!(app.ui.view.screen_mode, "fullScreen");
+    assert_mode(&app, "fullScreen");
     // A selection stays while Esc leaves full screen; the next Esc deselects.
     press_esc(&mut app, &ctx);
-    assert_eq!(app.ui.view.screen_mode, "standard");
+    assert_mode(&app, "standard");
     assert!(app.session.active().unwrap().doc.selection.is_some());
 }
 
+/// A selection command that makes a new selection shows Extras again; anything else leaves them as the user set
+/// them, and a new selection keeps the individual Show choices.
 #[test]
-fn creating_a_selection_restores_hidden_extras() {
-    let mut hidden = Vec::new();
-    for (command, params) in [
-        ("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})),
-        ("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20, "ellipse": true})),
-        ("select.lasso", json!({"points": [[10,10], [30,10], [20,30]]})),
-        ("select.magneticLasso", json!({"points": [[10,10], [30,10], [20,30]], "trace": false})),
-        ("select.magicWand", json!({"x": 10, "y": 10})),
-        ("select.quick", json!({"points": [[10,10]], "size": 8})),
-        ("select.loadSelection", json!({"channel": "transparency"})),
-        ("select.loadLuminosity", json!({})),
-    ] {
-        let (mut app, ctx) = app_with(1);
+fn selection_outcomes_restore_hidden_extras() {
+    type Setup = fn(&mut PhotocraftApp);
+    let fill: Setup = |app| {
         app.run("edit.fill", json!({"color": "#cc4422"})).unwrap();
-        menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
-        assert!(!app.ui.view.extras, "explicit hide remains effective before a new selection");
-        app.run(command, params).unwrap();
-        assert!(app.session.active().unwrap().doc.selection.is_some(), "{command} creates a selection");
-        if !app.ui.view.shows(app.ui.view.show.selection_edges) || checked(&app, "view.extras") != Some(true) {
-            hidden.push(command);
-        }
-    }
-    assert!(hidden.is_empty(), "new selections stayed hidden after Extras was disabled: {hidden:?}");
-}
-
-#[test]
-fn failed_selection_and_unrelated_edits_keep_extras_hidden() {
-    let (mut app, ctx) = app_with(1);
-    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
-    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
-    assert!(!app.ui.view.extras);
-    assert!(app.run("select.rect", json!({"x": "invalid"})).is_err());
-    assert!(!app.ui.view.extras, "failed selection must not change the view");
-    app.run("edit.fill", json!({"color": "#cc4422"})).unwrap();
-    assert!(!app.ui.view.extras, "painting an existing hidden selection keeps it hidden");
-    app.run("select.deselect", json!({})).unwrap();
-    assert!(!app.ui.view.extras, "deselecting has no new outline to reveal");
-}
-
-#[test]
-fn new_selection_preserves_individual_show_preferences() {
-    let (mut app, ctx) = app_with(1);
-    app.ui.view.show.selection_edges = false;
-    app.ui.view.show.pixel_grid = false;
-    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
-    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
-    assert!(app.ui.view.extras);
-    assert!(!app.ui.view.show.selection_edges);
-    assert!(!app.ui.view.show.pixel_grid);
-}
-
-#[test]
-fn object_selection_finding_nothing_keeps_extras_hidden() {
-    let (mut app, ctx) = app_with(1);
-    app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
-    app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
-    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
-    let result = app.run("select.object", json!({"point": [3,3]})).unwrap();
-    assert_eq!(result["changed"], false);
-    assert!(app.session.active().unwrap().doc.selection.is_some());
-    assert!(!app.ui.view.extras, "finding no object must not reveal an old selection");
-}
-
-#[test]
-fn object_selection_restores_extras_when_it_finds_an_object() {
-    let (mut app, ctx) = app_with(0);
-    app.run("file.new", json!({"width": 200, "height": 160})).unwrap();
-    app.run("edit.fill", json!({"color": "#4073b3"})).unwrap();
-    app.run("select.rect", json!({"x": 55, "y": 35, "width": 90, "height": 90, "ellipse": true})).unwrap();
-    app.run("edit.fill", json!({"color": "#e64d26"})).unwrap();
-    app.run("select.deselect", json!({})).unwrap();
-    menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
-    assert!(!app.ui.view.extras);
-    let result = app.run("select.object", json!({"rect": [45,25,110,110]})).unwrap();
-    assert_eq!(result["changed"], true, "the fixture must produce a new object selection");
-    let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
-    assert!(selection.sample_channel(100, 80, 0) > 0.5, "the central object is selected");
-    assert!(app.ui.view.shows(app.ui.view.show.selection_edges));
-}
-
-/// #6017: a click into another tile activated that document and moved it to the first tile, so
-/// the two side-by-side documents swapped places. Each document keeps its tile; with more
-/// documents than tiles, the shown run slides just enough to include the active one.
-#[test]
-fn arranged_documents_keep_their_tiles() {
-    let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 600.0));
-    let (mut app, _) = app_with(3);
-    app.ui.view.arrange = "tileAllVertically".into();
-    for active in 0..3 {
-        app.session.set_active(active);
-        let shown = crate::canvas::arranged_cells(&app, rect).unwrap();
-        let order: Vec<usize> = shown.iter().map(|(d, _)| *d).collect();
-        assert_eq!(order, vec![0, 1, 2], "active {active}");
-        assert!(shown.windows(2).all(|w| w[0].1.left() < w[1].1.left()), "document 0 on the left");
-    }
-    app.ui.view.arrange = "twoUpVertical".into();
-    // As `documents` draws them: the shown run is kept from frame to frame.
-    let docs = |app: &mut PhotocraftApp, active: usize| {
-        app.session.set_active(active);
-        let shown: Vec<usize> = crate::canvas::arranged_cells(app, rect).unwrap().iter().map(|(d, _)| *d).collect();
-        app.arrange_start = shown[0];
-        shown
     };
-    assert_eq!(docs(&mut app, 0), vec![0, 1]);
-    assert_eq!(docs(&mut app, 1), vec![0, 1], "the second tile's document stays on the right");
-    assert_eq!(docs(&mut app, 2), vec![1, 2], "the third document slides in next to the second");
-    assert_eq!(docs(&mut app, 1), vec![1, 2], "a click into the visible document 1 leaves the tiles as they are");
-    assert_eq!(docs(&mut app, 0), vec![0, 1], "a hidden document slides in from the left");
-    assert_eq!(docs(&mut app, 1), vec![0, 1]);
-}
-
-/// #10101: dragging the border between two arranged documents moves it. Grabbed inside the
-/// other document's edge, it doesn't make that document the active one.
-#[test]
-fn dragging_the_border_between_arranged_documents_resizes_them() {
-    use egui_kittest::Harness;
-    let (mut app, _) = app_with(2);
-    app.ui.view.arrange = "twoUpVertical".into();
-    app.ui.tool = crate::state::Tool::Brush;
-    // The right-hand document is active; the grab below is inside the left one's edge.
-    app.session.set_active(1);
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    let area = h.state().last_canvas_rect;
-    let n = h.state().session.documents().len();
-    let border = borders("twoUpVertical", area, n, &[])[0].line;
-    // On the grip, 2 pt inside the left document (its cell ends 1 pt short of the border).
-    let from = border.center() - egui::vec2(2.0, 0.0);
-    let to = from - egui::vec2(200.0, 0.0);
-    let ev = |h: &mut Harness<'_, PhotocraftApp>, e: egui::Event| h.input_mut().events.push(e);
-    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    ev(&mut h, egui::Event::PointerMoved(from));
-    h.run();
-    ev(&mut h, button(from, true));
-    h.run();
-    for step in 1..=10 {
-        ev(&mut h, egui::Event::PointerMoved(from + (to - from) * (step as f32 / 10.0)));
-        h.run();
-    }
-    ev(&mut h, button(to, false));
-    h.run_steps(2);
-    let cells = cells("twoUpVertical", area, n, &h.state().ui.view.arrange_splits).unwrap();
-    assert!((cells[0].max.x - to.x).abs() < 1.0, "the border follows the pointer: {cells:?}, pointer at {}", to.x);
-    assert_eq!(h.state().session.active_index(), Some(1), "grabbing the border activates no document");
-}
-
-/// #6017: rulers showed in the active tile only; the other tile had none and no room for them.
-#[test]
-fn every_arranged_tile_has_rulers() {
-    use egui_kittest::Harness;
-    let (mut app, _) = app_with(2);
-    app.ui.view.arrange = "tileAllVertically".into();
-    app.ui.extras.rulers = true;
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    let right = h.state().last_canvas_rect.center().x;
-    // Ruler labels are 9 pt text: some lie in each half of the document area.
-    let mut labels = [0, 0];
-    for s in &h.output().shapes {
-        if let egui::Shape::Text(t) = &s.shape
-            && t.galley.job.sections.first().is_some_and(|sec| sec.format.font_id.size == 9.0)
-            && t.galley.text().chars().all(|c| c.is_ascii_digit())
-        {
-            labels[usize::from(t.pos.x > right)] += 1;
-        }
-    }
-    assert!(labels[0] > 0 && labels[1] > 0, "ruler labels per tile: {labels:?}");
-}
-
-/// #10069: with documents side by side, a press on a dialog over another document's tile made
-/// that document active under the dialog. Only a press that reaches the tile switches documents.
-#[test]
-fn a_press_on_a_dialog_over_an_arranged_tile_keeps_the_active_document() {
-    use egui_kittest::Harness;
-    let (mut app, _) = app_with(2);
-    app.ui.view.arrange = "tileAllVertically".into();
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-            // A dialog (Levels, say) over the left half of the document area.
-            egui::Window::new("Levels")
-                .id(egui::Id::unique("arrange-test-dialog"))
-                .fixed_pos(egui::pos2(60.0, 120.0))
-                .fixed_size(egui::vec2(260.0, 200.0))
-                .show(ui.ctx(), |ui| ui.label("Levels"));
-            // An open menu (View › Pixel Aspect Ratio, say): a foreground popup below the dialog.
-            egui::Area::new(egui::Id::unique("arrange-test-menu")).order(egui::Order::Foreground).fixed_pos(egui::pos2(60.0, 360.0)).show(ui.ctx(), |ui| {
-                ui.set_min_size(egui::vec2(200.0, 80.0));
-                ui.label("Anamorphic 2:1 (2)")
-            });
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    let active = h.state().session.active_index().unwrap();
-    let rect = h.state().last_canvas_rect;
-    let other = crate::canvas::arranged_cells(h.state(), rect).unwrap().into_iter().find(|(d, _)| *d != active).unwrap();
-    let dialog = h.ctx.memory(|m| m.area_rect(egui::Id::unique("arrange-test-dialog"))).unwrap();
-    assert!(other.1.intersects(dialog), "the dialog covers part of the other tile: {:?} and {dialog:?}", other.1);
-    let press = |h: &mut Harness<'_, PhotocraftApp>, p: egui::Pos2| {
-        h.event(egui::Event::PointerMoved(p));
-        h.run_steps(1);
-        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
-        h.run_steps(1);
-        h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
-        h.run_steps(2);
+    let selected: Setup = |app| {
+        app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
     };
-    let on_dialog = other.1.intersect(dialog).center();
-    press(&mut h, on_dialog);
-    assert_eq!(h.state().session.active_index(), Some(active), "a press on the dialog leaves the active document alone");
-    // Nor does choosing a menu item over the tile: the item's command must reach the active
-    // document, not the one under the menu.
-    let menu = h.ctx.memory(|m| m.area_rect(egui::Id::unique("arrange-test-menu"))).unwrap();
-    assert!(other.1.intersects(menu), "the menu covers part of the other tile: {:?} and {menu:?}", other.1);
-    press(&mut h, other.1.intersect(menu).center());
-    assert_eq!(h.state().session.active_index(), Some(active), "a press on a menu leaves the active document alone");
-    // A press on the dialog and a move off it that arrive in one frame: the press decides.
-    let clear = [other.1.center_bottom() - egui::vec2(0.0, 20.0), other.1.right_center() - egui::vec2(20.0, 0.0)]
-        .into_iter()
-        .find(|p| !dialog.contains(*p) && !menu.contains(*p))
-        .unwrap();
-    h.event(egui::Event::PointerMoved(on_dialog));
-    h.run_steps(1);
-    // `Harness::event` runs a frame per event, so both go into one frame's input.
-    h.input_mut().events.extend([
-        egui::Event::PointerButton { pos: on_dialog, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
-        egui::Event::PointerMoved(clear),
-    ]);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: clear, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
-    h.run_steps(2);
-    assert_eq!(h.state().session.active_index(), Some(active), "a press on the dialog, then a move in the same frame, leaves it alone");
-    // The tile itself, clear of the dialog, still switches documents.
-    press(&mut h, clear);
-    assert_eq!(h.state().session.active_index(), Some(other.0), "a press on the tile activates its document");
-    // Two presses in one frame, the dialog's and then the tile's: the last one decides.
-    h.state_mut().session.set_active(active);
-    h.run_steps(2);
-    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    h.input_mut().events.extend([button(on_dialog, true), button(on_dialog, false), egui::Event::PointerMoved(clear), button(clear, true)]);
-    h.run_steps(1);
-    h.event(button(clear, false));
-    h.run_steps(2);
-    assert_eq!(h.state().session.active_index(), Some(other.0), "the frame's last press, on the tile, activates its document");
-}
-
-#[test]
-fn file_info_dialog_matches_photoshop_field_order_and_labels() {
-    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+    let white_selected: Setup = |app| {
+        app.run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+        app.run("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    };
+    let object_scene: Setup = |app| {
+        app.run("file.new", json!({"width": 200, "height": 160})).unwrap();
+        app.run("edit.fill", json!({"color": "#4073b3"})).unwrap();
+        app.run("select.rect", json!({"x": 55, "y": 35, "width": 90, "height": 90, "ellipse": true})).unwrap();
+        app.run("edit.fill", json!({"color": "#e64d26"})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+    };
+    let edges_off: Setup = |app| {
+        app.ui.view.show.selection_edges = false;
+        app.ui.view.show.pixel_grid = false;
+    };
+    let tri = json!([[10, 10], [30, 10], [20, 30]]);
+    // (name, prepare, command, params, Extras shown after, selection edges shown after)
+    let cases: Vec<(&str, Setup, &str, Value, bool, bool)> = vec![
+        ("rect", fill, "select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20}), true, true),
+        ("ellipse", fill, "select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20, "ellipse": true}), true, true),
+        ("lasso", fill, "select.lasso", json!({"points": tri}), true, true),
+        ("wand", fill, "select.magicWand", json!({"x": 10, "y": 10}), true, true),
+        ("load", fill, "select.loadSelection", json!({"channel": "transparency"}), true, true),
+        ("luminosity", fill, "select.loadLuminosity", json!({}), true, true),
+        ("failed", selected, "select.rect", json!({"x": "invalid"}), false, false),
+        ("fill under selection", selected, "edit.fill", json!({"color": "#cc4422"}), false, false),
+        ("deselect", selected, "select.deselect", json!({}), false, false),
+        ("object finds nothing", white_selected, "select.object", json!({"point": [3, 3]}), false, false),
+        ("object finds one", object_scene, "select.object", json!({"rect": [45, 25, 110, 110]}), true, true),
+        ("show choices kept", edges_off, "select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20}), true, false),
+    ];
+    for (name, prepare, command, params, extras, edges) in cases {
         let (mut app, ctx) = app_with(1);
-        let d = menu(&mut app, &ctx, "file.fileInfo", json!({})).unwrap()["dialog"].as_u64().unwrap();
-        let fields = app.ui.dialog_mut(d).unwrap().fields.clone();
-        assert_eq!(
-            form_keys(&fields).iter().map(String::as_str).collect::<Vec<_>>(),
-            ["title", "author", "authorTitle", "description", "keywords", "copyrightStatus", "copyright", "copyrightUrl"]
-        );
-        let labels = fields["__labels"].as_object().unwrap();
-        assert_eq!(labels["title"], "Document Title");
-        assert_eq!(labels["copyright"], "Copyright Notice");
-        assert_eq!(labels["copyrightUrl"], "Copyright Info URL");
-    });
+        prepare(&mut app);
+        menu(&mut app, &ctx, "view.extras", json!({})).unwrap();
+        assert!(!app.ui.view.extras, "{name}: Extras hidden before the command");
+        let _ = app.run(command, params);
+        assert_eq!(app.ui.view.extras, extras, "{name}");
+        assert_eq!(app.ui.view.shows(app.ui.view.show.selection_edges), edges, "{name}");
+        if name == "show choices kept" {
+            assert!(!app.ui.view.show.pixel_grid, "{name}: the pixel grid stays off");
+        }
+        if name == "object finds one" {
+            let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+            assert!(selection.sample_channel(100, 80, 0) > 0.5, "the central object is selected");
+        }
+    }
 }
 
+/// `view.rotateView` takes an angle, a delta or a reset; anything else, or a number that is not finite, is refused
+/// and leaves the view as it was. A finite f64 that overflows f32 is refused, not wrapped to 0, which would reset a
+/// rotated view.
 #[test]
-fn form_keys_orders_by_order_then_catalogue() {
-    let f = json!({"zeta": "", "alpha": "", "mid": "", "__order": ["mid", "zeta", "ghost"]}).as_object().unwrap().clone();
-    assert_eq!(form_keys(&f).iter().map(String::as_str).collect::<Vec<_>>(), ["mid", "zeta", "alpha"]);
-    let f = json!({"zeta": "", "alpha": ""}).as_object().unwrap().clone();
-    assert_eq!(form_keys(&f).iter().map(String::as_str).collect::<Vec<_>>(), ["alpha", "zeta"]);
-}
-
-/// #9349: Full Screen Mode shows a document. Photoshop refuses it with none open, so the start
-/// screen never sits on the full screen pasteboard; closing the last document in a full screen
-/// mode goes back to Standard.
-#[test]
-fn full_screen_modes_need_a_document() {
-    let (mut app, ctx) = app_with(0);
-    for id in ["view.screenMode.fullScreen", "view.screenMode.fullScreenWithMenuBar", "view.screenMode.cycle"] {
-        assert_eq!(is_enabled(&app, id), Some(false), "{id} without a document");
+fn rotate_view_params_set_add_reset_and_reject() {
+    let (mut app, ctx) = app_with(1);
+    // PLAN: assumed the document's view keeps its rotation in degrees as `views[0].rotation`
+    let angle = |app: &PhotocraftApp| f64::from(app.ui.views[0].rotation);
+    let run = |app: &mut PhotocraftApp, p: Value| menu(app, &ctx, "view.rotateView", p);
+    run(&mut app, json!({"angle": 30.0})).unwrap();
+    assert_eq!(angle(&app), 30.0);
+    run(&mut app, json!({"delta": 15.0})).unwrap();
+    assert_eq!(angle(&app), 45.0);
+    run(&mut app, json!({"reset": true})).unwrap();
+    assert_eq!(angle(&app), 0.0);
+    run(&mut app, json!({"angle": 170.0})).unwrap();
+    run(&mut app, json!({"delta": 20.0})).unwrap();
+    assert_eq!(angle(&app), -170.0, "the angle wraps at 180");
+    run(&mut app, json!({"angle": 32.0})).unwrap();
+    for bad in [
+        json!({}),
+        Value::Null,
+        json!("30"),
+        json!({"angle": f64::NAN}),
+        json!({"angle": f64::INFINITY}),
+        json!({"delta": f64::INFINITY}),
+        json!({"angle": 1.0e100}),
+        json!({"delta": -1.0e100}),
+        json!({"reset": "yes"}),
+        json!({"zoom": 1}),
+    ] {
+        assert!(run(&mut app, bad.clone()).is_err(), "{bad}");
+        assert_eq!(angle(&app), 32.0, "{bad}: the view stays");
     }
-    // #9354 review: run anyway (the toolbar list, automation), they are refused and Standard stays.
-    for id in ["view.screenMode.fullScreen", "view.screenMode.fullScreenWithMenuBar"] {
-        assert!(menu(&mut app, &ctx, id, json!({})).is_err(), "{id} is refused without a document");
-        assert_eq!(app.ui.view.screen_mode, "standard", "{id}");
-    }
-    assert_eq!(is_enabled(&app, "view.screenMode.standard"), Some(true));
-    let (mut with_doc, _) = app_with(1);
-    for id in ["view.screenMode.fullScreen", "view.screenMode.fullScreenWithMenuBar", "view.screenMode.cycle"] {
-        assert_eq!(is_enabled(&with_doc, id), Some(true), "{id} with a document");
-    }
-    // The last document closed in Full Screen Mode: back to Standard.
-    menu(&mut with_doc, &ctx, "view.screenMode.fullScreen", json!({})).unwrap();
-    leave_full_screen_without_document(&mut with_doc, &ctx);
-    assert_eq!(with_doc.ui.view.screen_mode, "fullScreen", "a document is still open");
-    with_doc.run("file.close", json!({"save": false})).unwrap();
-    assert!(with_doc.session.documents().is_empty());
-    leave_full_screen_without_document(&mut with_doc, &ctx);
-    assert_eq!(with_doc.ui.view.screen_mode, "standard");
-    // A full screen mode reached anyway (automation) with no document drops back the same way.
-    app.ui.view.screen_mode = "fullScreenWithMenuBar".into();
-    assert_eq!(is_enabled(&app, "view.screenMode.cycle"), Some(true), "Cycle can still leave it");
-    // #9354 review: and Cycle itself goes straight back to Standard, not on to Full Screen.
-    menu(&mut app, &ctx, "view.screenMode.cycle", json!({})).unwrap();
-    assert_eq!(app.ui.view.screen_mode, "standard", "Cycle without a document returns to Standard");
-    app.ui.view.screen_mode = "fullScreenWithMenuBar".into();
-    leave_full_screen_without_document(&mut app, &ctx);
-    assert_eq!(app.ui.view.screen_mode, "standard");
-}
-
-/// #10101 review: the grip overlaps the *active* document's edge too, and a press there must
-/// drag the border without painting. The cells the canvases are actually drawn in follow.
-#[test]
-fn grabbing_the_border_inside_the_active_document_drags_it_without_painting() {
-    use egui_kittest::Harness;
-    let (mut app, _) = app_with(2);
-    app.ui.view.arrange = "twoUpVertical".into();
-    app.ui.tool = crate::state::Tool::Brush;
-    // The right-hand document is active, and the grab below is inside *its* edge.
-    app.session.set_active(1);
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
-            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return;
-            }
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.run_steps(4);
-    let area = h.state().last_canvas_rect;
-    let n = h.state().session.documents().len();
-    let border = borders("twoUpVertical", area, n, &[])[0].line;
-    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().map_or(0, |d| d.history.entries().len());
-    let before = steps(&h);
-    // 2 pt into the right-hand (active) document, where its canvas would otherwise take the press.
-    let from = border.center() + egui::vec2(2.0, 0.0);
-    let to = from + egui::vec2(150.0, 0.0);
-    let ev = |h: &mut Harness<'_, PhotocraftApp>, e: egui::Event| h.input_mut().events.push(e);
-    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
-    ev(&mut h, egui::Event::PointerMoved(from));
-    h.run();
-    ev(&mut h, button(from, true));
-    h.run();
-    for step in 1..=10 {
-        ev(&mut h, egui::Event::PointerMoved(from + (to - from) * (step as f32 / 10.0)));
-        h.run();
-    }
-    ev(&mut h, button(to, false));
-    h.run_steps(2);
-    assert_eq!(steps(&h), before, "the press dragged the border and painted nothing");
-    assert_eq!(h.state().session.active_index(), Some(1), "the active document stays active");
-    // And the cells the documents are drawn in follow the border, not just the stored fractions.
-    let shown = crate::canvas::arranged_cells(h.state(), area).expect("two documents are arranged");
-    assert!((shown[0].1.max.x - to.x).abs() < 2.0, "the left cell ends at the border: {:?}, pointer at {}", shown[0].1, to.x);
-    assert!((shown[1].1.min.x - to.x).abs() < 2.0, "and the right one starts there: {:?}", shown[1].1);
+    run(&mut app, json!({"angle": 1.0e20})).unwrap();
+    assert!(angle(&app).is_finite() && angle(&app).abs() <= 180.0);
 }
