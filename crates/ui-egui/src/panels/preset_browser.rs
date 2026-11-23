@@ -695,6 +695,28 @@ pub(crate) fn shape_ref(key: &str, with_position: bool) -> Value {
     }
 }
 
+/// Where the shape of the panel `key` ([`shape_keys`]) is in `groups`: (group index, index in the group). A key with a
+/// group and position is that shape while it still has the key's name, and otherwise (the library changed since) the
+/// first shape of the name, as [`finish_custom_shape`] falls back to.
+pub(crate) fn shape_at(groups: &[photocraft_engine::presets::Group<ShapePreset>], key: &str) -> Option<(usize, usize)> {
+    let r = shape_ref(key, true);
+    let name = r["preset"].as_str().unwrap_or(key);
+    let exact = || {
+        let gi = groups.iter().position(|g| Some(g.name.as_str()) == r["group"].as_str())?;
+        let ii = usize::try_from(r["position"].as_u64()?).ok()?;
+        groups.get(gi)?.items.get(ii).filter(|s| s.name == name).map(|_| (gi, ii))
+    };
+    exact().or_else(|| groups.iter().enumerate().find_map(|(gi, g)| g.items.iter().position(|s| s.name == name).map(|ii| (gi, ii))))
+}
+
+/// The shape the Custom Shape tool draws: the one the Shapes panel or the picker chose last ([`shape_at`]).
+pub(crate) fn chosen_shape(app: &PhotocraftApp) -> Option<ShapePreset> {
+    let mut groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    let (gi, ii) = shape_at(&groups, app.ui.presets_ui.shape())?;
+    let group = groups.get_mut(gi)?;
+    (ii < group.items.len()).then(|| group.items.swap_remove(ii))
+}
+
 /// The shape name in the panel `key`.
 pub(crate) fn shape_name(key: &str) -> String {
     shape_ref(key, false)["preset"].as_str().unwrap_or(key).to_string()
@@ -1005,10 +1027,42 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, panel: PresetPanel, names
             Act::CustomShapeTool => app.ui.tool = Tool::CustomShape,
             Act::ToolPreset(name) => tool_presets::select(app, &name),
             Act::Run(command, params) => {
+                let renamed = renamed_shape(app, panel, &event);
                 let Some(reply) = run(app, &command, params) else { continue };
                 after(app, ctx, panel, &event, &reply);
+                if let Some(at) = renamed {
+                    keep_renamed_shape(app, &event, at, selected.as_deref());
+                }
             }
         }
+    }
+}
+
+/// The group name and position of the shape a Shapes panel rename of `event` renames, taken before the rename.
+fn renamed_shape(app: &PhotocraftApp, panel: PresetPanel, event: &PresetEvent<PresetKey>) -> Option<(String, usize)> {
+    let PresetEvent::Rename { key: PresetKey::Item(key), .. } = event else { return None };
+    if panel.id != SHAPES.id {
+        return None;
+    }
+    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    let (gi, ii) = shape_at(&groups, key)?;
+    Some((groups.get(gi)?.name.clone(), ii))
+}
+
+/// After a Shapes panel rename, the `selected` key (and the Custom Shape tool's shape) that was the renamed shape gets its
+/// new key: its new name, or, when another shape has that name too, the name with its group and position `at`, so it
+/// stays this shape (#14291).
+fn keep_renamed_shape(app: &mut PhotocraftApp, event: &PresetEvent<PresetKey>, (group, position): (String, usize), selected: Option<&str>) {
+    let PresetEvent::Rename { key: PresetKey::Item(old), .. } = event else { return };
+    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
+    let keys = shape_keys(&groups);
+    let Some(new) = groups.iter().position(|g| g.name == group).and_then(|gi| keys.get(gi)?.get(position)).cloned() else { return };
+    let ui = &mut app.ui.presets_ui;
+    if selected == Some(old.as_str()) {
+        ui.selected.insert(SHAPES.id.into(), new.clone());
+    }
+    if ui.custom_shape == *old {
+        ui.custom_shape = new;
     }
 }
 

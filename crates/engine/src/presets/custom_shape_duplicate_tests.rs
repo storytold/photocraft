@@ -106,3 +106,39 @@ fn a_bad_position_is_an_error_that_changes_nothing() {
     assert_eq!(library(&s), [("TriS".to_string(), 3), ("TriS".to_string(), 4)]);
     assert_eq!(s.active().unwrap().doc.walk().len(), 1, "no shape layer was placed");
 }
+
+/// Two custom shapes named "  RectA  " (Define Custom Shape keeps the spaces): the position and the exact name pick
+/// the second, and the name alone the first.
+#[test]
+fn a_name_with_spaces_is_matched_as_it_is() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    for knots in [json!([[10, 10], [90, 10], [50, 80]]), json!([[100, 100], [200, 100], [200, 200], [100, 200]])] {
+        s.execute("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": knots}]}})).unwrap();
+        s.execute("edit.defineCustomShape", json!({"name": "  RectA  "})).unwrap();
+    }
+    assert_eq!(placed_knots(&mut s, json!({"preset": "  RectA  ", "group": CUSTOM_GROUP, "position": 1})), 4);
+    assert_eq!(placed_knots(&mut s, json!({"preset": "  RectA  "})), 3);
+    assert!(s.execute("shape.presets.place", json!({"preset": " Heart "})).is_ok(), "a padded name still finds a preset");
+    edit(&mut s, json!({"action": "rename", "preset": "  RectA  ", "group": CUSTOM_GROUP, "position": 1, "name": "Square"})).unwrap();
+    assert_eq!(library(&s), [("  RectA  ".to_string(), 3), ("Square".to_string(), 4)]);
+    edit(&mut s, json!({"action": "delete", "preset": "  RectA  "})).unwrap();
+    assert_eq!(library(&s), [("Square".to_string(), 4)]);
+}
+
+/// A custom shape named like a built-in one ("Heart"): naming the Custom Shapes group renames or deletes the custom
+/// one, and the built-in stays.
+#[test]
+fn the_custom_group_reaches_a_custom_shape_named_like_a_built_in_one() {
+    let mut s = two_tris();
+    edit(&mut s, json!({"action": "rename", "preset": "TriS", "group": CUSTOM_GROUP, "position": 0, "name": "Heart"})).unwrap();
+    let built_in = |s: &Session| s.presets.shapes.iter().flat_map(|g| &g.items).filter(|i| i.name == "Heart").count();
+    let before = built_in(&s);
+    assert!(before > 0, "a built-in Heart");
+    edit(&mut s, json!({"action": "rename", "preset": "Heart", "group": CUSTOM_GROUP, "name": "Mine"})).unwrap();
+    assert_eq!(library(&s), [("Mine".to_string(), 3), ("TriS".to_string(), 4)]);
+    edit(&mut s, json!({"action": "rename", "preset": "TriS", "group": CUSTOM_GROUP, "name": "Heart"})).unwrap();
+    edit(&mut s, json!({"action": "delete", "preset": "Heart", "group": CUSTOM_GROUP})).unwrap();
+    assert_eq!(library(&s), [("Mine".to_string(), 3)]);
+    assert_eq!(built_in(&s), before, "the built-in Heart is untouched");
+}

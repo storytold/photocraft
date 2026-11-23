@@ -303,16 +303,25 @@ fn lookup(s: &Session, name: &str, group: Option<&str>, cmd: &str) -> Result<Sha
     Ok(groups[gi].items[ii].clone())
 }
 
+/// The `preset` param as given: Define Custom Shape keeps a name's leading and trailing spaces, so a name is not
+/// trimmed (#14291). `None` when it is missing or blank.
+fn preset_name(p: &Value) -> Option<&str> {
+    p.get("preset").and_then(Value::as_str).filter(|n| !n.trim().is_empty())
+}
+
 /// The shape `p` names, as (group index, index in the group) of [`all_groups`]: `position` in `group` when given (two
 /// custom shapes can share a name, #14291), else the first shape named `preset` (in `group` when given). With both,
 /// `preset` must be the name at `position`, so a position that went stale is refused rather than another shape used.
 /// `None` without `position` or `preset`.
 fn locate(s: &Session, p: &Value, cmd: &str) -> Result<Option<(usize, usize)>> {
     let groups = all_groups(s);
-    let name = str_param(p, "preset");
+    let name = preset_name(p);
     let Some(position) = p.get("position") else {
         let Some(name) = name else { return Ok(None) };
-        let found = find(&groups, name, str_param(p, "group")).ok_or_else(|| bad(cmd, format!("no shape \"{name}\" (see shape.presets.list)")))?;
+        let group = str_param(p, "group");
+        let found = find(&groups, name, group)
+            .or_else(|| find(&groups, name.trim(), group))
+            .ok_or_else(|| bad(cmd, format!("no shape \"{name}\" (see shape.presets.list)")))?;
         return Ok(Some(found));
     };
     let position = position.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(cmd, "`position` must be a whole number from 0"))?;
@@ -468,10 +477,11 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     // Define Custom Shape results live in the edit state; rename/delete them there. They are the last group of
     // `all_groups`, and may share a name, so a `position` picks one of them (#14291); a name alone is the first.
     let custom = |s: &Session| -> Result<Option<usize>> {
+        // Without a position, the first shape of the name in `group` (in every group without one; a preset of that name
+        // comes first), and only a custom one is renamed or deleted here; an unknown name gets the presets' error.
         if p.get("position").is_none() {
-            let Some(n) = str_param(p, "preset") else { return Ok(None) };
-            let mine = str_param(p, "group").is_none_or(|g| g == CUSTOM_GROUP) && find(&s.presets.shapes, n, None).is_none();
-            return Ok(s.edit_state.custom_shapes.iter().position(|c| c.name == n).filter(|_| mine));
+            let found = locate(s, p, CMD).ok().flatten();
+            return Ok(found.filter(|(gi, _)| *gi == s.presets.shapes.len()).map(|(_, ii)| ii));
         }
         let Some((gi, ii)) = locate(s, p, CMD)? else { return Ok(None) };
         Ok((gi == s.presets.shapes.len()).then_some(ii))

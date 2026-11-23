@@ -6,7 +6,7 @@ use photocraft_doc::{LayerContent, LayerId};
 use photocraft_engine::presets::shapes::{CUSTOM_GROUP, all_groups};
 use serde_json::json;
 
-use super::{Act, PresetEvent, PresetKey, SHAPES, act, finish_custom_shape, shape_keys, shape_place, shape_ref};
+use super::{Act, PresetEvent, PresetFooterEvent, PresetKey, SHAPES, act, apply, finish_custom_shape, shape_keys, shape_place, shape_ref};
 use crate::PhotocraftApp;
 
 /// An app with two custom shapes named "TriS": a triangle, then a square.
@@ -39,6 +39,10 @@ fn library(app: &PhotocraftApp) -> Vec<(String, usize)> {
 fn perform(app: &mut PhotocraftApp, event: PresetEvent<PresetKey>) {
     let Some(Act::Run(command, params)) = act(SHAPES, &event, &[], None) else { panic!("{event:?} runs no command") };
     app.run(&command, params).unwrap();
+}
+
+fn active_layer(app: &PhotocraftApp) -> photocraft_doc::LayerId {
+    app.session.active().unwrap().active_layer.unwrap()
 }
 
 fn active_shape_knots(app: &PhotocraftApp) -> usize {
@@ -87,11 +91,15 @@ fn placing_the_second_places_it() {
     assert!(r["layer"].as_u64().map(LayerId).is_some());
     assert_eq!(active_shape_knots(&app), 4, "the panel places the square");
     // The Custom Shape tool draws the shape the panel or picker chose.
+    let placed = active_layer(&app);
     app.ui.presets_ui.custom_shape = second;
     finish_custom_shape(&mut app, [20.0, 20.0, 100.0, 100.0], true, json!(null), json!(null));
+    assert_ne!(active_layer(&app), placed, "the tool draws a new layer");
     assert_eq!(active_shape_knots(&app), 4, "the tool draws the square");
+    let square = active_layer(&app);
     app.ui.presets_ui.custom_shape = custom_keys(&app)[0].clone();
     finish_custom_shape(&mut app, [20.0, 20.0, 100.0, 100.0], true, json!(null), json!(null));
+    assert_ne!(active_layer(&app), square, "the first draws a layer of its own");
     assert_eq!(active_shape_knots(&app), 3, "and the triangle for the first");
 }
 
@@ -105,4 +113,43 @@ fn a_stale_key_falls_back_to_the_name() {
     finish_custom_shape(&mut app, [20.0, 20.0, 100.0, 100.0], true, json!(null), json!(null));
     assert_eq!(active_shape_knots(&app), 4);
     assert!(!app.ui.status_error, "no error left behind: {}", app.ui.status);
+}
+
+/// Renaming the selected second "TriS" keeps it selected by its own key, also when the new name is another shape's:
+/// the footer's Delete then deletes it, not the first "TriS".
+#[test]
+fn a_renamed_selection_keeps_its_shape() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let panel = |app: &mut PhotocraftApp, event| apply(app, &ctx, SHAPES, &[], &[], vec![event]);
+    let second = custom_keys(&app)[1].clone();
+    app.ui.presets_ui.selected.insert(SHAPES.id.into(), second.clone());
+    panel(&mut app, PresetEvent::rename(PresetKey::Item(second.clone()), "TriS"));
+    assert_eq!(app.ui.presets_ui.selected.get(SHAPES.id), Some(&second), "renamed to its own name");
+    panel(&mut app, PresetEvent::rename(PresetKey::Item(second.clone()), "Square"));
+    assert_eq!(app.ui.presets_ui.selected.get(SHAPES.id).map(String::as_str), Some("Square"), "a unique name is its key");
+    panel(&mut app, PresetEvent::rename(PresetKey::Item("Square".into()), "TriS"));
+    assert_eq!(app.ui.presets_ui.selected.get(SHAPES.id), Some(&second), "a shared name keys it by its position");
+    panel(&mut app, PresetEvent::Footer(PresetFooterEvent::Delete));
+    assert_eq!(library(&app), [("TriS".to_string(), 3)], "Delete deletes the renamed square");
+}
+
+/// A Custom Shape tool drag with a path operation adds the chosen one of two "TriS" to the active shape layer.
+#[test]
+fn a_drag_with_a_path_operation_adds_the_chosen_shape() {
+    use crate::tools::vector_ui::shapes::{finish_drag, kind_of};
+    use craft::draw::geometry::ShapeGeometry;
+    let mut app = app();
+    app.ui.tool = crate::Tool::CustomShape;
+    let second = custom_keys(&app)[1].clone();
+    app.run("shape.presets.place", shape_place(&app, &second, None)).unwrap();
+    let (layer, layers) = (active_layer(&app), app.session.active().unwrap().doc.walk().len());
+    app.ui.presets_ui.custom_shape = second;
+    app.ui.tool_options.shape_path_op = "combine".into();
+    let geometry = ShapeGeometry::Custom { rect: craft::behavior::kurbo::Rect::new(20.0, 20.0, 120.0, 120.0), keep_proportions: true };
+    finish_drag(&mut app, kind_of(crate::Tool::CustomShape), &geometry, craft::keymap::Mods::default());
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().doc.walk().len(), layers, "no new layer");
+    assert_eq!(active_layer(&app), layer);
+    assert_eq!(active_shape_knots(&app), 8, "the square joins the square");
 }
