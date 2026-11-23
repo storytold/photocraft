@@ -141,7 +141,7 @@ mod values_tests {
                 levels_values(0.125, 0.875, 0.25, 0.75, ctl).unwrap(),
             ),
         ] {
-            let mapped = map(&binary, ctl).unwrap();
+            let mapped = map(&binary.record, ctl).unwrap();
             assert_eq!(mapped, numeric);
         }
     }
