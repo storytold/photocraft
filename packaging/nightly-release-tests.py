@@ -71,6 +71,31 @@ def literal_off(condition):
     return depth == 0
 
 
+NIGHTLY_PLATFORMS = ("windows-x86_64", "linux-x86_64", "macos-aarch64")
+
+
+def producer_platforms(source):
+    """Read the one producer job's literal platform list; a narrow source guard, not YAML.
+
+    One producer run builds every listed platform for one all-or-nothing release, so the
+    list must be a compact JSON list of distinct known platforms that keeps Windows.
+    """
+    rows = re.findall(r"(?m)^      platforms: (.*)$", source)
+    if len(rows) != 1:
+        raise ValueError("exactly one producer platform list is required")
+    literal = re.fullmatch(r"'(\[[^']*\])'", rows[0])
+    if literal is None:
+        raise ValueError("the platform list must be one single-quoted literal")
+    platforms = json.loads(literal[1])
+    if not isinstance(platforms, list) or json.dumps(platforms, separators=(",", ":")) != literal[1]:
+        raise ValueError("the platform list must be compact JSON")
+    if len(set(platforms)) != len(platforms) or not set(platforms) <= set(NIGHTLY_PLATFORMS):
+        raise ValueError("platforms must be distinct known nightly targets")
+    if "windows-x86_64" not in platforms:
+        raise ValueError("the Windows row stays in the producer")
+    return platforms
+
+
 class Response:
     status = 204
 
@@ -205,24 +230,39 @@ class TrustedSourcePreparation(unittest.TestCase):
         self.assertEqual(set(entries), expected, "classify exact fixtures, never production helpers or wildcard scope")
         self.assertEqual(len(entries), len(expected), "duplicate fixture classification")
 
-    def test_policy_example_keeps_explicit_v2_and_no_actor_authority(self):
+    def test_policy_example_keeps_explicit_v3_and_no_actor_authority(self):
         policy = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
         expected = {"schema", "repository", "repository_id", "producer_workflow_id",
                     "producer_workflow_path", "producer_tooling_revision", "producer_workflow_ref",
                     "signer_workflow_path", "signer_tooling_revision", "release_branch", "manual_actors",
-                    "automatic_signer_actors", "platform", "max_age_seconds", "candidate_policy",
-                    "unsigned_artifact_name", "max_artifact_bytes", "windows_publisher_subject"}
-        self.assertEqual(set(policy), expected, "no v1 fallback or implicit actor-field migration")
-        self.assertEqual(policy["schema"], "craft-nightly-release-policy/v2")
+                    "automatic_signer_actors", "max_age_seconds", "candidate_policy",
+                    "max_artifact_bytes", "platforms"}
+        self.assertEqual(set(policy), expected, "no single-platform v2 fields or implicit migration")
+        self.assertEqual(policy["schema"], "craft-nightly-release-policy/v3")
         self.assertEqual(policy["manual_actors"], [])
         self.assertEqual(policy["automatic_signer_actors"], [])
         for key in ("repository_id", "producer_workflow_id", "producer_tooling_revision",
                     "producer_workflow_ref", "signer_tooling_revision", "max_age_seconds",
-                    "unsigned_artifact_name", "max_artifact_bytes", "windows_publisher_subject"):
+                    "max_artifact_bytes"):
             with self.subTest(unresolved=key):
                 self.assertIsNone(policy[key], "the example must not invent production authority")
-        installed = ROOT / ".github/nightly-signing-policy.json"
-        self.assertFalse(installed.exists() or installed.is_symlink(), "activation is a separately reviewed change")
+        for installed in (".github/nightly-signing-policy.json", ".github/nightly-linux-signing-key.asc"):
+            path = ROOT / installed
+            with self.subTest(installed=installed):
+                self.assertFalse(path.exists() or path.is_symlink(), "activation is a separately reviewed change")
+
+    def test_policy_platforms_are_exactly_what_the_producer_builds(self):
+        policy = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
+        built = producer_platforms((ROOT / ".github/workflows/nightly.yml").read_text())
+        self.assertIn("linux-x86_64", built)
+        self.assertEqual(set(policy["platforms"]), set(built), "a built platform without policy, or the reverse")
+        trust = {"windows-x86_64": "publisher_subject", "linux-x86_64": "fingerprint"}
+        for platform, row in policy["platforms"].items():
+            with self.subTest(platform=platform):
+                self.assertEqual(set(row), {"unsigned_artifact_name", "trust"})
+                self.assertEqual(set(row["trust"]), {trust[platform]}, "each platform has only its own trust anchor")
+                self.assertIsNone(row["unsigned_artifact_name"])
+                self.assertIsNone(row["trust"][trust[platform]], "the example must not invent a trust anchor")
 
     def test_candidate_example_has_exact_v3_fields_without_provider_scope_claim(self):
         candidate = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())["candidate_policy"]
@@ -244,6 +284,32 @@ class TrustedSourcePreparation(unittest.TestCase):
                 self.assertEqual(len(conditions), len(headers), "every job needs a literal-off condition")
                 for scalar, folded in conditions:
                     self.assertTrue(literal_off(folded if scalar == ">-" else scalar), "nightly activation requires reviewed test update")
+
+    def test_one_producer_and_one_signer_job_carry_every_platform(self):
+        for name, job in (("nightly.yml", "unsigned"), ("nightly-sign.yml", "release")):
+            jobs = (ROOT / ".github/workflows" / name).read_text().split("\njobs:\n", 1)[1]
+            with self.subTest(workflow=name):
+                self.assertEqual(re.findall(r"(?m)^  ([^\s#][^:]*):", jobs), [job],
+                                 "a platform is a list entry, not a separately activatable job")
+        signer = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
+        self.assertNotRegex(signer, r"(?m)^\s*platforms?:", "the release policy, not the caller, admits platforms")
+
+    def test_malformed_or_narrowed_platform_lists_are_rejected(self):
+        source = (ROOT / ".github/workflows/nightly.yml").read_text()
+        current = "platforms: '[\"windows-x86_64\",\"linux-x86_64\"]'"
+        self.assertIn(current, source)
+        for new in ("platforms: '[\"linux-x86_64\"]'",
+                    "platforms: '[\"windows-x86_64\",\"linux-x86_64\",\"linux-x86_64\"]'",
+                    "platforms: '[\"windows-x86_64\",\"linux-arm64\"]'",
+                    "platforms: '[\"windows-x86_64\", \"linux-x86_64\"]'",
+                    "platforms: [\"windows-x86_64\",\"linux-x86_64\"]",
+                    "platforms: ${{ vars.NIGHTLY_PLATFORMS }}",
+                    "platforms: '{\"windows-x86_64\":1}'",
+                    current + "\n      " + current):
+            with self.subTest(change=new), self.assertRaises(ValueError):
+                producer_platforms(source.replace(current, new))
+        with self.assertRaises(ValueError):
+            producer_platforms(source.replace("      " + current + "\n", ""))
 
     def test_dormancy_guard_rejects_activation_and_top_level_or(self):
         for condition in ("true", "vars.ENABLE_NIGHTLY", "false || true", "false && true || true",

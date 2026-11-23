@@ -1,5 +1,5 @@
 {
-  "schema": "craft-nightly-release-policy/v2",
+  "schema": "craft-nightly-release-policy/v3",
   "repository": "storytold/photocraft",
   "repository_id": null,
   "producer_workflow_id": null,
@@ -10,7 +10,6 @@
   "signer_tooling_revision": null,
   "release_branch": "release",
   "manual_actors": [],
-  "platform": "windows-x86_64",
   "max_age_seconds": null,
   "candidate_policy": {
     "schema": "craft-nightly-candidate-policy/v3",
@@ -30,8 +29,20 @@
       "debt": null
     }
   },
-  "unsigned_artifact_name": null,
   "max_artifact_bytes": null,
-  "windows_publisher_subject": null,
-  "automatic_signer_actors": []
+  "automatic_signer_actors": [],
+  "platforms": {
+    "windows-x86_64": {
+      "unsigned_artifact_name": null,
+      "trust": {
+        "publisher_subject": null
+      }
+    },
+    "linux-x86_64": {
+      "unsigned_artifact_name": null,
+      "trust": {
+        "fingerprint": null
+      }
+    }
+  }
 }

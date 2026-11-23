@@ -1,4 +1,4 @@
-# Windows release-ref nightly: source preparation
+# Windows and Linux release-ref nightly: source preparation
 
 **Not activated or qualified.** No production signing policy is installed. The producer and
 signer workflows are dormant `.yml` registrations, not an activated signing pipeline.
@@ -10,6 +10,18 @@ Shared tooling is pinned to `077d4657f71527141717a0dfbc908a217460eabf`, the craf
 main commit that merged [#330](https://github.com/storytold/craft-common-actions/pull/330); this is
 reviewed source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
+
+**Linux x86_64 row (dormant).** The producer caller lists `platforms: '["windows-x86_64","linux-x86_64"]'`
+on its single, still literally-off job: one producer run builds every listed platform for one
+all-or-nothing release, and the release-ref signer admits platforms only from the protected policy,
+so there is no separate Linux caller job. The pinned `077d4657` shared revision has **no
+`platforms` input and no Linux leg**, and its release validator admits only `windows-x86_64`.
+The agreed shared interface (`platforms` on `nightly-unsigned.yml`, policy v3 below) must land in a
+reviewed public commit and the callers must be re-pinned to it before any activation; dispatching
+against the current pin would be refused as an undefined input. The shared Linux leg runs the app's
+unchanged `packaging/linux/nightly.sh --arch x86_64` (GUI-only `photocraft-<version>-linux-x86_64-nightly.tar.gz`).
+A local build of that script is not a native launch: launch, profile isolation beside stable and
+the Launcher install still need Linux desktop QA.
 This is not a hosted no-key test, a native signing result or a working nightly feed.
 
 ## Ownership and interface
@@ -49,7 +61,8 @@ This is not a hosted no-key test, a native signing result or a working nightly f
 empty debt set, invented workflow ID or guessed publisher subject. The adjacent
 [`nightly-signing-policy.example.json`](nightly-signing-policy.example.json) is intentionally
 invalid (`null` unresolved values), not installable configuration. Install only independently
-read, reviewed real values under explicit schema `craft-nightly-release-policy/v2`:
+read, reviewed real values under explicit schema `craft-nightly-release-policy/v3` (v2 top-level fields
+without `platform`, `unsigned_artifact_name` and `windows_publisher_subject`, plus a `platforms` map):
 
 | Field | Required source of authority |
 |---|---|
@@ -57,14 +70,16 @@ read, reviewed real values under explicit schema `craft-nightly-release-policy/v
 | `producer_workflow_id`, `producer_workflow_path` | Real default-branch registration ID and `.github/workflows/nightly.yml` |
 | `producer_tooling_revision`, `producer_workflow_ref` | Approved shared unsigned producer/attester commit and exact reusable path at that commit |
 | `signer_workflow_path`, `signer_tooling_revision` | `.github/workflows/nightly-sign.yml` and reviewed public shared signer commit |
-| `release_branch`, `platform` | `release`, `windows-x86_64` only |
+| `release_branch`, `platforms` keys | `release`; exactly the producer's `platforms` list and the targets admitted in the shared registry (`windows-x86_64`, `linux-x86_64`) |
 | `manual_actors` | Empty by default; reviewed manual producer/signer and rerun authority only |
 | `automatic_signer_actors` | Empty by default; separate reviewed automatic-only authority for signer attempt 1 after authenticating a scheduled producer attempt 1; no manual producer or rerun grant |
-| `max_age_seconds`, `max_artifact_bytes`, `unsigned_artifact_name` | Reviewed bounded age/size and fixed unsigned artifact kind/prefix; actual upload/discovery name is that prefix + `-` + authenticated producer run ID + `-` + authenticated producer attempt, never a caller pattern or substitution |
+| `max_age_seconds`, `max_artifact_bytes`, `platforms.<platform>.unsigned_artifact_name` | Reviewed bounded age/size and each platform's fixed unsigned artifact kind/prefix; actual upload/discovery name is that prefix + `-` + authenticated producer run ID + `-` + authenticated producer attempt, never a caller pattern or substitution |
 | `candidate_policy` | Full reviewed `craft-nightly-candidate-policy/v3` with real required workflow/job/check/app IDs, Sonar organization/project/issue types/conditions and exact approved debt fingerprints; provider configuration is trusted as resolved, not a pinned scan inventory |
-| `windows_publisher_subject` | Exact independently reviewed protected policy string used by both signer and fresh credentialless Windows publisher; nonempty, at most 2048 characters, no CR/LF/NUL; verified native subject must match exactly, never an artifact/caller input |
+| `platforms.linux-x86_64.trust.fingerprint` | Full primary fingerprint of the stable Linux release key, independently reviewed; the release checkout must also hold exactly that one public key at `.github/nightly-linux-signing-key.asc`, and the existing `LINUX_SIGNING_KEY` must be in the `release` environment only |
+| `platforms.windows-x86_64.trust.publisher_subject` | Exact independently reviewed protected policy string used by both signer and fresh credentialless Windows publisher; nonempty, at most 2048 characters, no CR/LF/NUL; verified native subject must match exactly, never an artifact/caller input |
 
-Live admission requires explicit policy v2; historical v1 retains its exact old fields and
+Live admission requires explicit policy v3 once the shared parser lands it; v2 is single-platform
+Windows only and is not silently migrated. Historical v1 retains its exact old fields and
 broad manual-list semantics, and is not silently migrated or accepted for live admission. The
 v2 actor lists are separate, bounded and case-normalized; overlaps refuse. An automatic-only
 actor may authorize **only signer attempt 1**, after the validator authenticates a **scheduled
