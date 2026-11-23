@@ -369,10 +369,6 @@ fn on_sampler(app: &PhotocraftApp, x: f64, y: f64) -> bool {
 mod triangle_alt_eyedropper_tests;
 
 #[cfg(test)]
-#[path = "../tools/vector_ui/custom_shape_alt_eyedropper_tests.rs"]
-mod custom_shape_alt_eyedropper_tests;
-
-#[cfg(test)]
 #[path = "../brush_shift_alt_sampler_tests.rs"]
 mod brush_shift_alt_sampler_tests;
 

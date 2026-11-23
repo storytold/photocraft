@@ -94,6 +94,31 @@ fn review_point_resize_exports_with_null_optional_values() {
     }
 }
 
+/// A null percentage is omitted at playback too, so an exported step and the native command agree.
+#[test]
+fn review_null_percent_is_omitted_by_the_native_resize() {
+    for params in
+        [json!({"width":72,"units":"pt","resample":"nearest","scaleStyles":false,"percent":null}), json!({"width":30,"resample":"nearest","percent":null})]
+    {
+        let mut without = params.clone();
+        without.as_object_mut().unwrap().remove("percent");
+        let mut expected = sized_document(20, 10, 144);
+        expected.execute("image.imageSize", without).unwrap();
+        let mut actual = sized_document(20, 10, 144);
+        actual.execute("image.imageSize", params.clone()).expect("a null percent must not refuse the resize");
+        assert_eq!(actual.active().unwrap().doc.size, expected.active().unwrap().doc.size);
+        let action = Action::new("Recorded", vec![ActionStep::new("image.imageSize", params)]);
+        let (bytes, skipped) = atn_cmds::export("Identifiers", &[&action], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let imported = atn_cmds::import(&bytes).unwrap();
+        let mut replayed = sized_document(20, 10, 144);
+        replayed.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        let result = replayed.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        assert_eq!(replayed.active().unwrap().doc.size, expected.active().unwrap().doc.size);
+    }
+}
+
 /// The native default resampler must be explicit in a physical-size recording.
 #[test]
 fn review_point_resize_exports_the_default_resampler() {

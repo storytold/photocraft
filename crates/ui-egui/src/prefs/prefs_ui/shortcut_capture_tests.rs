@@ -6,6 +6,7 @@
 use craft::keymap::{Binding, CommandRef, Policy};
 use egui::{Event, Key, Modifiers};
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::prefs::{bindable_items, normalize_shortcut};
 use serde_json::json;
 
@@ -71,6 +72,37 @@ fn toolbar_shortcut_can_be_captured_and_restored_on_restart() {
     restarted.run_steps(2);
     tap(&mut restarted, Key::F6, Modifiers::NONE);
     assert_eq!(restarted.state().ui.tool, crate::state::Tool::Pencil);
+}
+
+#[test]
+fn closing_keyboard_shortcuts_while_recording_restores_app_hotkeys() {
+    use crate::state::Tool;
+
+    let mut session = photocraft_engine::Session::new();
+    session.prefs.edit(|p| p.interface.language = "en".into());
+    let mut h = harness_with(session);
+    edit_and_ok(&mut h, "tools.select.pencil", "F6");
+    h.state_mut().ui.tool = Tool::Move;
+    crate::prefs_ui::open_shortcuts(h.state_mut(), 0);
+    h.run_steps(2);
+
+    h.get_by_label("Search by key").click();
+    h.run_steps(2);
+    assert!(crate::prefs_ui::recording(h.state()), "the recorder is waiting for a key");
+    tap(&mut h, Key::F6, Modifiers::NONE);
+    assert!(h.query_all_by_label("Search:").any(|node| node.accesskit_node().value().as_deref() == Some("F6")), "the recorder took F6");
+    assert_eq!(h.state().ui.tool, Tool::Move, "F6 leaves the tool alone during recording");
+    assert!(!crate::prefs_ui::recording(h.state()), "the chord ended the search recording");
+
+    h.get_by_label("Search by key").click();
+    h.run_steps(2);
+    assert!(crate::prefs_ui::recording(h.state()), "recording again before the dialog closes");
+    assert!(super::shortcuts::cancel(h.state_mut()), "Cancel closes the active dialog");
+    h.run_steps(2);
+    assert!(!crate::prefs_ui::shortcuts_open(h.state()), "the modal is gone");
+
+    tap(&mut h, Key::F6, Modifiers::NONE);
+    assert_eq!(h.state().ui.tool, Tool::Pencil, "F6 selects Pencil again after the dialog closes");
 }
 
 #[test]

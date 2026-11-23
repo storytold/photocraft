@@ -7,7 +7,8 @@ use std::cell::Cell;
 use craft::behavior::{EditEvent, EditEvents, Mixed};
 use craft::imaging::ui::curve::{Curve, CurveEditor};
 use craft::ui::buttons::Button;
-use craft::ui::contract::{Bind, BodyCx, Show as _};
+use craft::ui::contract::{Bind, BodyCx, Show as _, ShowContainer as _};
+use craft::ui::layout_components::Row;
 use photocraft_engine::prefs::PressureCurve;
 
 /// The editor's levels: the plot's whole units, so the points keep their unit-square values as percent.
@@ -40,7 +41,7 @@ pub fn editor(ui: &mut egui::Ui, label: &str, points: &mut Vec<[f32; 2]>) -> Edi
         .max_points(PressureCurve::MAX_POINTS)
         .fields(false)
         .between(|ui: &mut egui::Ui, _: &mut BodyCx<'_>| {
-            ui.horizontal(|ui| {
+            Row::new().show(ui, |ui, _| {
                 for (at, (name, _)) in PRESETS.iter().enumerate() {
                     if Button::new(tl!(name)).show(ui).clicked() {
                         preset.set(Some(at));
