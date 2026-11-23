@@ -207,3 +207,69 @@ fn other_kinds_keep_their_defaults() {
     let shown = style_params_json(&draft(&app, id).style.effect(fx).unwrap().params);
     assert_eq!(shown["opacity"], style_params_json(&defaults(EffectKind::ColorOverlay))["opacity"]);
 }
+
+/// The layer's effects, as the document holds them.
+fn layer_effects(app: &PhotocraftApp) -> Vec<photocraft_doc::Effect> {
+    let state = app.session.active().unwrap();
+    state.doc.layer(state.active_layer.unwrap()).unwrap().effects.items.clone()
+}
+
+/// A loaded overlay can carry more colour stops than a command takes (a file has no limit). After an
+/// opacity-only OK on it, the next new overlay must still apply (#16354 review).
+#[test]
+fn a_recalled_gradient_with_more_stops_than_a_command_takes_still_applies() {
+    use photocraft_color::Color;
+    use photocraft_engine::layer_style::MAX_STOPS;
+
+    let mut app = app_with_layer(20);
+    app.run("layer.layerStyle.gradientOverlay", json!({})).unwrap();
+    let state = app.session.active_mut().unwrap();
+    let active_layer = state.active_layer.unwrap();
+    let loaded = &mut std::sync::Arc::make_mut(state.doc_mut()).layer_mut(active_layer).unwrap().effects.items[0];
+    let photocraft_doc::Effect::GradientOverlay { gradient, interpolation, .. } = loaded else { panic!("expected overlay") };
+    let n = MAX_STOPS + 1;
+    gradient.stops = (0..n).map(|i| (i as f32 / (n - 1) as f32, Color::rgb(i as f32 / (n - 1) as f32, 0.0, 0.0))).collect();
+    *interpolation = None;
+
+    let id = open_gradient(&mut app);
+    let fx = first_of(&app, id, GRADIENT);
+    edit(&mut app, id, |d| d.set_param(fx, "opacity", StyleValue::Number(60.0)));
+    ok(&mut app, id);
+    assert!(!app.ui.status_error, "the loaded overlay applies: {}", app.ui.status);
+
+    new_document(&mut app);
+    let id = open_gradient(&mut app);
+    assert_eq!(page(&app, id)["opacity"], json!(60.0), "the rest of the last OK is recalled");
+    ok(&mut app, id);
+    assert!(!app.ui.status_error, "the new overlay applies: {}", app.ui.status);
+    assert_eq!(layer_effects(&app).len(), 1, "the new overlay is on the layer");
+}
+
+/// Reset to Default must not keep a remembered key that neither Make Default nor the factory values
+/// give: a recalled Smoothness 0 goes back to the engine's default (no key). An explicit Make Default
+/// Smoothness still wins (#16354 review).
+#[test]
+fn reset_to_default_drops_a_remembered_smoothness_no_default_gives() {
+    let mut app = app_with_layer(20);
+    let factory = untouched_page(&mut app);
+    assert!(factory.get("smoothness").is_none(), "the factory page has no smoothness: {factory}");
+    app.run("layer.layerStyle.gradientOverlay", json!({"from": "#ff0000", "to": "#0000ff", "method": "classic", "smoothness": 0})).unwrap();
+    let id = open_gradient(&mut app);
+    let fx = first_of(&app, id, GRADIENT);
+    edit(&mut app, id, |d| d.set_param(fx, "opacity", StyleValue::Number(60.0)));
+    ok(&mut app, id);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+
+    new_document(&mut app);
+    let id = open_gradient(&mut app);
+    assert_eq!(page(&app, id)["smoothness"].as_f64(), Some(0.0), "the last OK's smoothness is recalled");
+    let fx = first_of(&app, id, GRADIENT);
+    reset_to_default(&mut app, id, fx);
+    let reset = page(&app, id);
+    assert_eq!(reset.get("smoothness"), None, "reset keeps no remembered smoothness: {reset}");
+    assert_eq!(reset["method"], factory["method"]);
+
+    app.run("layer.layerStyle.makeDefault", json!({"kind": GRADIENT.key(), "params": {"smoothness": 50}})).unwrap();
+    reset_to_default(&mut app, id, fx);
+    assert_eq!(page(&app, id)["smoothness"].as_f64(), Some(50.0), "Make Default's smoothness wins");
+}

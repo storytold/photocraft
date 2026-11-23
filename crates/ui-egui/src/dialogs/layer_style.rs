@@ -585,6 +585,14 @@ fn remember_last_ok(host: &craft::host::Host, style: &LayerStyle) {
         // Settings are TOML, which has no null: a value the grammar left empty is not stored.
         if let Some(o) = values.as_object_mut() {
             o.retain(|_, v| !v.is_null());
+            // A loaded gradient can hold more stops than a command takes (a file has no limit). A
+            // new instance submits its stops, so such a gradient is not remembered: the next one
+            // opens with the default gradient and the rest of this OK.
+            let too_many = |key: &str| o.get(key).and_then(Value::as_array).is_some_and(|a| a.len() > photocraft_engine::layer_style::MAX_STOPS);
+            if too_many(gradient_field::KEY) || too_many(gradient_field::OPACITY_KEY) {
+                o.remove(gradient_field::KEY);
+                o.remove(gradient_field::OPACITY_KEY);
+            }
         }
         last_ok(*kind).store(host, &values);
     }
@@ -993,9 +1001,16 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
         // leaves out goes back to the page's factory value instead of keeping the last OK's.
         params = params.over(&EffectSpec::photoshop(kind).defaults);
     }
+    let remembers = REMEMBERS_LAST_OK.contains(&kind);
     if let Some(d) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(dialog) {
+        let keys: Vec<String> = params.0.keys().cloned().collect();
         for (key, value) in params.0 {
             d.draft_mut().set_param(instance, &key, value);
+        }
+        // A key neither default gives (Smoothness) may still hold the last OK's value: it goes, so
+        // the engine's default for a missing key applies. The loaded snapshot (`fx`) stays.
+        if remembers && let Some(e) = d.draft_mut().style.effect_mut(instance) {
+            e.params.0.retain(|key, _| key == "fx" || keys.contains(key));
         }
     }
 }
