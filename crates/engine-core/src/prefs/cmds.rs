@@ -1,3 +1,4 @@
+use crate::color_cmds::ColorExt;
 use super::customize::{keyboard_shortcuts, menus};
 use super::validate::{SECTIONS, get_path, keyed};
 use super::{CommandSpec, EngineError, Map, Result, Session, ToolbarCustomization, Value, json};
@@ -31,29 +32,29 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "give `path` and `value`, or `values: {path: value, …}`"));
     }
     // All or nothing: validate against a scratch copy first.
-    let (saved_prefs, saved_color) = (s.prefs().clone(), s.color.settings.clone());
+    let (saved_prefs, saved_color) = (s.prefs().clone(), s.color().settings.clone());
     let mut color_changed = false;
     for (path, v) in &changes {
         match super::saved::set_pref(s, path, v.clone(), false) {
             Ok(touched) => color_changed |= touched,
             Err(e) => {
                 s.prefs.edit(|p| *p = saved_prefs);
-                s.color.settings = saved_color;
+                s.color_mut().settings = saved_color;
                 return Err(bad(cmd, e));
             }
         }
     }
-    if color_changed && let Err(e) = crate::color_cmds::validate_settings(&s.color.settings) {
+    if color_changed && let Err(e) = crate::color_cmds::validate_settings(&s.color().settings) {
         s.prefs.edit(|p| *p = saved_prefs);
-        s.color.settings = saved_color;
+        s.color_mut().settings = saved_color;
         return Err(bad(cmd, e));
     }
     // `colorSettings.blendTextGamma` and `spotDotGain` live in the compositor too, as
     // `edit.colorSettings` sets them. Process-wide: only a colour change moves them, so another
     // session's values survive this one's unrelated preferences.
     if color_changed {
-        photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
-        photocraft_compose::multichannel::set_spot_dot_gain(s.color.settings.spot_dot_gain);
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
     }
     s.apply_prefs();
     let view = super::saved::prefs_view(s);
@@ -72,7 +73,7 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     match path {
-        Some("colorSettings") => s.color.settings = Default::default(),
+        Some("colorSettings") => s.color_mut().settings = Default::default(),
         // One colour setting: `Preferences` has no `colorSettings`, so take the default
         // from `ColorSettings` and route it like `prefs.set` does.
         Some(path) if path.starts_with("colorSettings.") => {
@@ -82,7 +83,7 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
             super::saved::set_pref(s, path, def, true).map_err(|e| bad("prefs.reset", e))?;
         }
         None => {
-            s.color.settings = Default::default();
+            s.color_mut().settings = Default::default();
             s.edit_prefs(|p| p.reset(None)).map_err(|e| bad("prefs.reset", e))?;
         }
         Some(path) => {
@@ -93,8 +94,8 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.prefs.edit(|_| ());
     if path.is_none_or(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
-        photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
-        photocraft_compose::multichannel::set_spot_dot_gain(s.color.settings.spot_dot_gain);
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
     }
     s.apply_prefs();
     if path.is_some_and(|path| keyed(path).is_some()) {

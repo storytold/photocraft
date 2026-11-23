@@ -2,6 +2,7 @@
 //! Color Picker dialog and from colour popovers, runs through these functions. The capture, the
 //! capture windows, the loupe and the pixel mapping are the framework's
 //! (`craft::color_ui::ui::{ScreenPick, ScreenColorPicker}`).
+use photocraft_engine::color_cmds::ColorExt;
 use crate::PhotocraftApp;
 use craft::color_ui::ui::{ScreenColorPicker, ScreenPickGesture, ScreenPickerWords};
 use craft::theme::Srgba;
@@ -57,7 +58,7 @@ pub fn cancel(app: &mut PhotocraftApp) {
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A frame sampled during a held drag converts from the monitor's profile to sRGB; only a running pick needs it.
     if app.screen_pick.busy() {
-        app.screen_pick.set_monitor(&app.session.color.monitor());
+        app.screen_pick.set_monitor(&app.session.color().monitor());
     }
     ScreenColorPicker::new(&mut app.screen_pick, "PhotoCraft").show(ui);
     // The status is taken here rather than in `tick`: the words come from the Env, which needs a

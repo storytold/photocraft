@@ -8,6 +8,7 @@
 //! with the one after its undo, and failed on Windows CI that way). Keep any other test that
 //! changes the gamma in this file.
 
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::Session;
 use serde_json::json;
 
@@ -15,7 +16,7 @@ use serde_json::json;
 fn blend_text_gamma_setting() {
     let _process = crate::lock(&crate::PROCESS);
     let mut s = Session::new();
-    assert!((s.color.settings.blend_text_gamma - 1.45).abs() < 1e-6);
+    assert!((s.color().settings.blend_text_gamma - 1.45).abs() < 1e-6);
     assert!(s.execute("edit.colorSettings", json!({"blendTextGamma": 3.0})).is_err());
     // The compositor's (application-wide) gamma follows the setting.
     s.execute("edit.colorSettings", json!({"blendTextGamma": 1.45})).unwrap();
@@ -26,12 +27,12 @@ fn blend_text_gamma_setting() {
     s.execute("edit.colorSettings", json!({"blendTextGamma": 1.8})).unwrap();
     assert!((photocraft_compose::psblend::text_gamma() - 1.8).abs() < 1e-6);
     s.execute("edit.colorSettings", json!({"blendTextGamma": true})).unwrap();
-    assert!((s.color.settings.blend_text_gamma - 1.45).abs() < 1e-6);
+    assert!((s.color().settings.blend_text_gamma - 1.45).abs() < 1e-6);
     assert!((photocraft_compose::psblend::text_gamma() - 1.45).abs() < 1e-6);
 
     // `prefs.set` and `prefs.reset` on `colorSettings` move the compositor's gamma too (#987).
     // Same function, not a second test: tests in one binary run concurrently.
-    let in_sync = |s: &Session| (photocraft_compose::psblend::text_gamma() - s.color.settings.blend_text_gamma).abs() < 1e-6;
+    let in_sync = |s: &Session| (photocraft_compose::psblend::text_gamma() - s.color().settings.blend_text_gamma).abs() < 1e-6;
     s.execute("edit.colorSettings", json!({"blendTextGamma": 1.8})).unwrap();
     s.execute("prefs.set", json!({"path": "colorSettings.blendTextGamma", "value": 1.0})).unwrap();
     assert_eq!(photocraft_compose::psblend::text_gamma(), 1.0);

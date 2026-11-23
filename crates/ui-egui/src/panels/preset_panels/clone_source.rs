@@ -1,6 +1,7 @@
 //! The Clone Source panel: five source slots, the slot's offset, scale, rotation and flips, and the overlay options.
 //! Every edit is a `cloneSource.*` engine command.
 
+use photocraft_engine::presets::PresetsExt;
 use craft::behavior::{EditEvent, GestureId, Mixed};
 use craft::ui::buttons::{Button, ToggleButton};
 use craft::ui::choice::Checkbox;
@@ -57,7 +58,7 @@ fn toggle(ui: &mut egui::Ui, label: &str, value: bool) -> Option<bool> {
 
 /// The `cloneSource` registry body.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let cs = app.session.presets.clone.clone();
+    let cs = app.session.presets().clone.clone();
     let slot = cs.active().clone();
     let mut select = None;
     Row::new().show(ui, |ui, _| {

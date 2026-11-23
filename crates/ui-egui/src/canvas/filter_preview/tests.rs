@@ -1,3 +1,4 @@
+use photocraft_engine::color_cmds::ColorExt;
 use super::*;
 use craft::ui::dialog::DialogId;
 use serde_json::{Map, Value, json};
@@ -311,7 +312,7 @@ fn indexed_matte_preview_matches_commit_and_refreshes_tool_colors_inline_and_on_
                     });
                     let preview = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap();
                     let mut applied = photocraft_engine::Session::new();
-                    applied.color.settings = app.session.color.settings.clone();
+                    applied.color_mut().settings = app.session.color().settings.clone();
                     applied.tools.foreground = colors.0;
                     applied.tools.background = colors.1;
                     applied.add_document((*source).clone(), None);
@@ -391,7 +392,7 @@ fn cross_scale_indexed_matte_preview_rejects_old_tool_colors_from_cached_and_wor
     let old_worker = old.clone();
     let doc = app.session.documents()[0].doc.clone();
     let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
-    let color = app.session.color.settings.clone();
+    let color = app.session.color().settings.clone();
     let (release_old, wait_old) = std::sync::mpsc::channel();
     app.filter_preview_worker
         .start(old_worker.clone(), ctx.clone(), move |_| {

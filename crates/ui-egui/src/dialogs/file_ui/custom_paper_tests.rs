@@ -1,5 +1,6 @@
 //! #3820: edit custom paper through the real Print dialog, preview it, and print safely to PDF.
 //! The dialog host is crate-private, so these are unit tests of the app.
+use photocraft_engine::print_cmds::PrintExt;
 use craft::print::ui::HostedPrint;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue};
@@ -31,7 +32,7 @@ fn app() -> (Box<PhotocraftApp>, DialogId) {
 fn app_remembering(paper: Option<Value>) -> (Box<PhotocraftApp>, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     // Print lists this printer and does not ask the spooler.
-    app.session.printer_source = Some(std::sync::Arc::new(|| {
+    *app.session.printer_source_mut() = Some(std::sync::Arc::new(|| {
         vec![craft::print::Printer { name: "Test native printer".into(), default: true, two_sided: None, description: String::new() }]
     }));
     app.run("file.new", json!({"width": 120, "height": 80, "name": "Custom paper"})).unwrap();

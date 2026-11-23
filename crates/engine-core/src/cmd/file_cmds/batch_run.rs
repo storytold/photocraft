@@ -1,3 +1,5 @@
+use crate::color_cmds::ColorExt;
+use crate::actions_cmds::ActionsExt;
 use super::open::import_at_raw_ppi;
 use super::paths::{extension, file_name, join, list_files, list_images, read_file, sanitize, stem, write_file};
 use super::processing::parse_steps;
@@ -860,7 +862,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
     let called = match p.get("calledActions") {
-        None | Some(Value::Null) => s.actions.called.clone(),
+        None | Some(Value::Null) => s.actions().called.clone(),
         // A droplet brings the actions it calls (#2794) and plays from those alone.
         Some(v) => {
             let actions: Vec<crate::actions_cmds::Action> =
@@ -880,7 +882,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         parse_steps(act)?
     } else {
         // The caller selects the source; calledActions supplies only its internal namespace.
-        let index = batch_action(s.actions.playable().actions(), p)?;
+        let index = batch_action(s.actions().playable().actions(), p)?;
         let (_, action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
         called_name = Some(action.name.clone());
         action.enabled_steps().map(|(_, step)| (step.command.clone(), step.params.clone())).collect()
@@ -954,7 +956,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mut playback_stack = s.recording.playback_stack.clone();
     playback_stack.extend(called_name);
-    let actions = crate::actions_cmds::ActionState { list: s.actions.list.clone(), called, ..Default::default() };
+    let actions = crate::actions_cmds::ActionState { list: s.actions().list.clone(), called, ..Default::default() };
     let run = crate::ActionRecording {
         playing: if named { s.recording.playing.saturating_add(1) } else { s.recording.playing },
         playback_stack,
@@ -983,7 +985,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         // The nesting depth and shared budget of the levels above travel with the run too.
         let previous_shared = std::mem::replace(&mut s.recording.budget_shared, run.budget_shared);
         let previous_depth = std::mem::replace(&mut s.recording.batch_depth, run.batch_depth);
-        let previous_called = std::mem::replace(&mut s.actions.called, actions.called);
+        let previous_called = std::mem::replace(&mut s.actions_mut().called, actions.called);
         let owns_history = s.action_history.is_none() && s.prefs().actions.create_single_history_state;
         if owns_history {
             crate::actions_cmds::begin_document_history(s, &action_name);
@@ -996,7 +998,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         s.recording.playback_stack = previous_stack;
         s.recording.budget_shared = previous_shared;
         s.recording.batch_depth = previous_depth;
-        s.actions.called = previous_called;
+        s.actions_mut().called = previous_called;
         if previous_playing == 0 && !previous_shared {
             s.recording.playback_steps = previous_steps;
         }
@@ -1025,7 +1027,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let raw_ppi = super::open::raw_open_resolution(s);
     let action_prefs = s.prefs().actions.clone();
     let prefs = s.prefs.clone();
-    let color_settings = s.color.settings.clone();
+    let color_settings = s.color().settings.clone();
     let raw_settings = s.batch_raw_open.as_ref().unwrap_or(&s.prefs().raw_defaults).clone();
     let script_count = s.recording.script_steps;
     let outputs: Vec<(String, String)> = if save_and_close {
@@ -1070,10 +1072,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 let _ = check_folder_format;
                 if quiet_profiles || quiet_raw {
                     scratch.prefs = prefs.clone();
-                    scratch.color.settings = color_settings.clone();
+                    scratch.color_mut().settings = color_settings.clone();
                     if quiet_profiles {
-                        scratch.color.settings.ask_on_mismatch = false;
-                        scratch.color.settings.ask_on_missing = false;
+                        scratch.color_mut().settings.ask_on_mismatch = false;
+                        scratch.color_mut().settings.ask_on_missing = false;
                     }
                     scratch.authorize = authorize;
                     if quiet_raw {
@@ -1155,7 +1157,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     Ok(())
                 };
                 scratch.authorize = authorize;
-                scratch.actions = actions.clone();
+                *scratch.actions_mut() = actions.clone();
                 scratch.recording = run.clone();
                 scratch.recording.playback_steps = carried.get();
                 scratch.recording.script_steps = script_steps.get();
@@ -1459,6 +1461,7 @@ fn preserve_exr(bytes: &[u8]) -> Result<()> {
 
 #[cfg(test)]
 mod action_history_tests {
+    use crate::actions_cmds::ActionsExt;
     use super::*;
     use crate::actions_cmds::{Action, ActionStep};
     use std::cell::RefCell;
@@ -1524,7 +1527,7 @@ mod action_history_tests {
             }
             steps.push(ActionStep::new("layer.renameLayer", json!({"name":"Final"})));
             let action_steps = if nested {
-                s.actions.list.push(Action::new("Child", steps)).unwrap();
+                s.actions_mut().list.push(Action::new("Child", steps)).unwrap();
                 vec![ActionStep::new("actions.play", json!({"action":"Child"}))]
             } else {
                 steps
@@ -1535,8 +1538,8 @@ mod action_history_tests {
                 s.execute("file.automate.createDroplet", json!({"path":path,"name":"Named","steps":action_steps,"output":output,"shim":false})).unwrap();
                 s.execute("file.automate.runDroplet", json!({"droplet":path,"input":paths})).unwrap()
             } else if named {
-                let index = s.actions.list.actions().len();
-                s.actions.list.push(Action::new("Named", action_steps)).unwrap();
+                let index = s.actions().list.actions().len();
+                s.actions_mut().list.push(Action::new("Named", action_steps)).unwrap();
                 s.execute("file.automate.batch", json!({"action":index,"input":paths,"output":output})).unwrap()
             } else {
                 s.execute("file.automate.batch", json!({"action":"Named","steps":action_steps,"input":paths,"output":output})).unwrap()
@@ -1577,13 +1580,13 @@ mod action_history_tests {
             let before: Vec<_> = s.documents().iter().map(|st| (st.doc.clone(), st.history.past_len())).collect();
             let steps = vec![ActionStep::new("layer.renameLayer", json!({"name":"Prefix"})), ActionStep::new("layer.renameLayer", json!({"name":"Final"}))];
             let params = if named {
-                s.actions.list.push(Action::new("Opened batch", steps)).unwrap();
+                s.actions_mut().list.push(Action::new("Opened batch", steps)).unwrap();
                 json!({"source":"open","action":0})
             } else {
                 json!({"source":"open","action":"Opened batch","steps":steps})
             };
             if parent {
-                s.actions
+                s.actions_mut()
                     .list
                     .push(Action::new(
                         "Parent",
@@ -1630,8 +1633,8 @@ mod action_history_tests {
             let mut s = crate::session();
             s.execute("file.new", json!({"width":4,"height":4})).unwrap();
             s.execute("actions.setHistory", json!({"singleState":true})).unwrap();
-            s.actions.list.push(Action::new("Original", vec![])).unwrap();
-            let library = serde_json::to_value(s.actions.list.actions()).unwrap();
+            s.actions_mut().list.push(Action::new("Original", vec![])).unwrap();
+            let library = serde_json::to_value(s.actions().list.actions()).unwrap();
             let before = s.active().unwrap().doc.clone();
             if parent {
                 crate::actions_cmds::begin_document_history(&mut s, "Parent");
@@ -1646,7 +1649,7 @@ mod action_history_tests {
                 )
                 .unwrap();
             assert_eq!(result["errors"].as_array().unwrap().len(), 1, "{result}");
-            assert_eq!(serde_json::to_value(s.actions.list.actions()).unwrap(), library);
+            assert_eq!(serde_json::to_value(s.actions().list.actions()).unwrap(), library);
             if parent {
                 assert_eq!(s.action_history.as_ref().unwrap().name, "Parent");
                 s.execute("layer.renameLayer", json!({"name":"Parent tail"})).unwrap();

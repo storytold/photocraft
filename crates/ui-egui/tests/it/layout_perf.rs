@@ -7,6 +7,7 @@
 #[path = "../support/layout_doc.rs"]
 mod layout_doc;
 
+use photocraft_engine::color_cmds::ColorExt;
 use egui::{Event, Modifiers, PointerButton, Pos2};
 use egui_kittest::Harness;
 use photocraft_doc::{Document, LayerContent, LayerId};

@@ -2,6 +2,8 @@
 //! preset libraries ([`SavedPrefs`]), how it is read, and the session methods that move it in and
 //! out.
 
+use crate::presets::PresetsExt;
+use crate::color_cmds::ColorExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -184,9 +186,9 @@ impl SavedPrefsExt for Session {
     fn prefs_value(&self) -> Value {
         let mut v = self.prefs().to_json();
         if let Value::Object(m) = &mut v {
-            m.insert("colorSettings".into(), serde_json::to_value(&self.color.settings).unwrap_or(Value::Null));
+            m.insert("colorSettings".into(), serde_json::to_value(&self.color().settings).unwrap_or(Value::Null));
             m.insert("version".into(), json!(PREFS_VERSION));
-            m.insert("presets".into(), self.presets.to_json(self));
+            m.insert("presets".into(), self.presets().to_json(self));
         }
         v
     }
@@ -198,7 +200,7 @@ impl SavedPrefsExt for Session {
     }
 
     fn saved_prefs(&self) -> SavedPrefs {
-        SavedPrefs { prefs: self.prefs().clone(), color_settings: self.color.settings.clone(), presets: self.presets.to_json(self) }
+        SavedPrefs { prefs: self.prefs().clone(), color_settings: self.color().settings.clone(), presets: self.presets().to_json(self) }
     }
 
     fn set_saved_prefs(&mut self, saved: SavedPrefs) -> Vec<InvalidPref> {
@@ -208,16 +210,16 @@ impl SavedPrefsExt for Session {
         // or by a 64-bit build; a hand-edited 0) loads as the nearest value it does. Otherwise
         // Apply from another Preferences tab, which validates every value, would reject it.
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
-        self.color.settings = color_settings;
+        self.color_mut().settings = color_settings;
         // A number outside 0..MAX reads, but `validate_settings` would then refuse every later
         // Color Settings edit: reset it like an unreadable value.
-        let gain = self.color.settings.spot_dot_gain;
+        let gain = self.color().settings.spot_dot_gain;
         if !(gain.is_finite() && (0.0..=photocraft_compose::multichannel::MAX_SPOT_DOT_GAIN).contains(&gain)) {
             invalid.push(InvalidPref { keys: vec!["colorSettings".into(), "spotDotGain".into()], value: json!(gain) });
-            self.color.settings.spot_dot_gain = photocraft_compose::multichannel::SPOT_DOT_GAIN;
+            self.color_mut().settings.spot_dot_gain = photocraft_compose::multichannel::SPOT_DOT_GAIN;
         }
-        photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
-        photocraft_compose::multichannel::set_spot_dot_gain(self.color.settings.spot_dot_gain);
+        photocraft_compose::psblend::set_text_gamma(self.color().settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(self.color().settings.spot_dot_gain);
         self.prefs.edit(|p| *p = prefs);
         self.load_presets_json(presets);
         self.apply_prefs();
@@ -229,7 +231,7 @@ impl SavedPrefsExt for Session {
 pub(super) fn prefs_view(s: &Session) -> Value {
     let mut v = s.prefs().to_json();
     if let Value::Object(m) = &mut v {
-        m.insert("colorSettings".into(), serde_json::to_value(&s.color.settings).unwrap_or(Value::Null));
+        m.insert("colorSettings".into(), serde_json::to_value(&s.color().settings).unwrap_or(Value::Null));
     }
     // Old clients read the single-theme preference: the theme the appearance mode shows.
     if let Some(interface) = v.get_mut("interface").and_then(Value::as_object_mut) {
@@ -247,7 +249,7 @@ pub(super) fn set_pref(s: &mut Session, path: &str, value: Value, validate_color
     if let Some(rest) =
         path.strip_prefix("colorSettings").filter(|r| r.is_empty() || r.strip_prefix('.').is_some_and(|c| c.split('.').all(|part| !part.is_empty())))
     {
-        let mut cur = serde_json::to_value(&s.color.settings).map_err(|e| e.to_string())?;
+        let mut cur = serde_json::to_value(&s.color().settings).map_err(|e| e.to_string())?;
         let rest = rest.trim_start_matches('.');
         if rest.is_empty() {
             cur = value;
@@ -258,7 +260,7 @@ pub(super) fn set_pref(s: &mut Session, path: &str, value: Value, validate_color
         if validate_color {
             crate::color_cmds::validate_settings(&next)?;
         }
-        s.color.settings = next;
+        s.color_mut().settings = next;
         s.prefs.edit(|_| ());
         return Ok(true);
     }

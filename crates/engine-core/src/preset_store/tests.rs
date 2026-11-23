@@ -1,3 +1,5 @@
+use crate::preset_store::PresetStoreExt;
+use crate::actions_cmds::ActionsExt;
 use super::*;
 use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use serde_json::json;
@@ -812,9 +814,9 @@ fn stored_action_ids_move_to_names_on_load() {
         prefs.shortcuts.insert(format!("actions.playById:{id}"), "F6".into());
     });
     s.attach_preset_store(open(Box::new(mem.clone())));
-    let names: Vec<&str> = s.actions.list.actions().iter().map(|action| action.name.as_str()).collect();
+    let names: Vec<&str> = s.actions().list.actions().iter().map(|action| action.name.as_str()).collect();
     assert_eq!(names, ["Same", "Same 2", "Caller"]);
-    assert_eq!(s.actions.list.actions()[2].steps[0].params, json!({"action": "Same 2"}));
+    assert_eq!(s.actions().list.actions()[2].steps[0].params, json!({"action": "Same 2"}));
     assert_eq!(s.prefs().shortcuts.get("actions.play:Same 2").map(String::as_str), Some("F6"));
     assert!(!s.prefs().shortcuts.keys().any(|key| key.starts_with("actions.playById:")));
     let saved = String::from_utf8(mem.files.lock().unwrap()[ACTIONS_FILE].clone()).unwrap();

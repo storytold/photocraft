@@ -27,6 +27,7 @@
 //! - While a job runs on a document, commands that would edit that document are disabled with a
 //!   message naming the job (queries and document-independent commands still run).
 
+use crate::color_cmds::ColorExt;
 use std::any::Any;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
@@ -1201,7 +1202,7 @@ impl Session {
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
     /// (per layer for PSD/PSB) and cancellation, then add the document like
-    /// [`Session::open_document`] (Color Settings policies apply). `name` names the document.
+    /// [`ColorExt::open_document`](crate::color_cmds::ColorExt::open_document) (Color Settings policies apply). `name` names the document.
     /// The job's result is `{document, docId, name, warnings, color}`; on wasm it runs inline.
     /// `document` is the tab index at apply time; resolve `docId` before handling a delayed
     /// completion, since earlier handlers may have moved or closed tabs. When
@@ -1386,7 +1387,7 @@ impl Session {
                     crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
                     let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
                     let damaged = confirm_damage && damaged;
-                    let question = s.color.open_question(&r.document).filter(|_| !raw);
+                    let question = s.color().open_question(&r.document).filter(|_| !raw);
                     if damaged || question.is_some() {
                         let held = s.hold_open(r.document, r.source_read_only);
                         return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));

@@ -564,13 +564,13 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1))?;
     let target = sampled_target(&d.doc, d.active_layer, all_layers);
     let canvas = d.doc.bounds();
-    let region = match s.object_finder.lookup(&d.doc, target, x, y) {
+    let region = match s.object_finder().lookup(&d.doc, target, x, y) {
         Some(r) => Some(r),
         None => {
             let doc = std::sync::Arc::clone(&d.doc);
             let found = find_object(&doc, d.active_layer, all_layers, x, y).map(std::sync::Arc::new);
             if let Some(r) = &found {
-                s.object_finder.insert(&doc, target, std::sync::Arc::clone(r));
+                s.object_finder_mut().insert(&doc, target, std::sync::Arc::clone(r));
             }
             found
         }
@@ -580,7 +580,7 @@ fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Val
     let out = apply(s, "Object Selection", region.as_deref(), mode(p, "replace"))?;
     if let Some(d) = s.active() {
         let doc = std::sync::Arc::clone(&d.doc);
-        s.object_finder.follow(&doc);
+        s.object_finder_mut().follow(&doc);
     }
     Ok(out)
 }

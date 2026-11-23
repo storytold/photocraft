@@ -1,6 +1,7 @@
 //! The Gradient tool's options-bar cells: Mode (live Gradient or Classic gradient), the gradient swatch, the style,
 //! and for the Classic gradient the blend mode and Opacity, then Reverse and Dither.
 
+use photocraft_engine::presets::PresetsExt;
 use craft::draw::ui::gradient::{GradientFillWords, GradientStyle, GradientSwatch};
 use craft::ui::choice::{Checkbox, Segmented};
 use craft::ui::contract::{Bind, Entry, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel};
@@ -42,7 +43,7 @@ pub(crate) fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A selected gradient fill layer is edited live whatever the stored choice: the Mode cell reads Gradient and is greyed.
     let locked_live = fill_layer_active(app);
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    let tool_stops = stops::of_preset(&app.session.presets.gradient, fg, bg);
+    let tool_stops = stops::of_preset(&app.session.presets().gradient, fg, bg);
     let sampler = stops::sampler(fg, bg);
     let words = Env::of(ui).words::<GradientFillWords>();
     let styles: Vec<Entry<GradientStyle>> = GradientStyle::ALL.iter().map(|style| Entry::new(*style, style.label(&words)).icon(style.icon())).collect();

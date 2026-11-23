@@ -1,6 +1,7 @@
 //! Saving and restoring the workspace: what the preferences keep, what a save leaves to the host, and what
 //! a workspace switch restores.
 
+use photocraft_engine::prefs::SavedPrefsExt;
 use craft::behavior::dock::{Action, Workspace};
 use craft::color_ui::ui::ColorPanelMode;
 use serde_json::json;

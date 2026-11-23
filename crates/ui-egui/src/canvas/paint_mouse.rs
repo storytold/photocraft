@@ -8,6 +8,7 @@
 //! [`secondary_takes`] says what a secondary press does for the paint tool; [`context_popup`] is the
 //! one router that says which popup a press the tool refused opens, for every canvas tool.
 
+use photocraft_engine::preset_store::PresetStoreExt;
 use craft::keymap::Mods;
 use photocraft_engine::BrushSettings;
 use photocraft_engine::prefs::RightClickPaint;

@@ -1,3 +1,4 @@
+use photocraft_engine::color_cmds::ColorExt;
 use craft::menu::{LANGUAGE_COMMAND, THEME_COMMAND};
 
 use super::invoke::{panel_alias, proof_preset, workspace_id};
@@ -165,7 +166,7 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     }
     if id == "view.proofColors" || id == "view.gamutWarning" {
         let Some(d) = app.session.active() else { return Some(false) };
-        let pv = app.session.color.proof(d.doc.id);
+        let pv = app.session.color().proof(d.doc.id);
         return Some(if id == "view.proofColors" { pv.enabled } else { pv.gamut_warning });
     }
     if let Some(rest) = id.strip_prefix("window.workspace.") {

@@ -1,5 +1,6 @@
 //! #1120: workspace selection/reset must apply useful layouts, including saved layouts.
 
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::Session;
 use photocraft_ui_egui::dock;
 use photocraft_ui_egui::{PhotocraftApp, menus};

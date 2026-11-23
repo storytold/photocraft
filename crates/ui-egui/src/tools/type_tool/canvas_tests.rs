@@ -3,6 +3,7 @@
 //! view flip and layer transform; size edits apply at layer and selection scope, for native and
 //! PSD-round-tripped text, as one history step per drag.
 
+use photocraft_engine::color_cmds::ColorExt;
 use crate::app::framework::BuildApp;
 use craft::keymap::Mods;
 use craft::text::ui::character::{CharacterControls, ParagraphControls};

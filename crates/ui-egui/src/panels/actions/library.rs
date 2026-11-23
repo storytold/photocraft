@@ -6,6 +6,7 @@
 //! OK runs only while the list is at the revision it was asked at, and the command must pass both
 //! the authorization it was asked under and the current one.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::ui::actions::{ActionsWords, LibraryPrompt};
 use craft::host::{PickRequest, Picked};
 use craft::ui::dialog::{PromptAnswer, PromptChoice};
@@ -36,7 +37,7 @@ struct Asked {
 impl Asked {
     fn now(app: &PhotocraftApp) -> Self {
         let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
-        Asked { revision: app.session.actions.list.revision(), gate, automated: app.automation_input || gate.is_some() }
+        Asked { revision: app.session.actions().list.revision(), gate, automated: app.automation_input || gate.is_some() }
     }
 
     /// The asking authorization and the current one both allow `command` with `params`.
@@ -110,7 +111,7 @@ pub(super) fn replace(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     app.ask_file(request, move |app, picked| {
         idle(app, REPLACE)?;
-        if app.session.actions.list.revision() != asked.revision {
+        if app.session.actions().list.revision() != asked.revision {
             return Err(tl!("The actions changed. Request Replace Actions again.").into());
         }
         let (name, bytes, path) = match picked {
@@ -167,7 +168,7 @@ pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut
 fn confirm(app: &mut PhotocraftApp, held: Held, append: bool) -> Result<Value, String> {
     let command = command(&held.prompt);
     idle(app, command)?;
-    if app.session.actions.list.revision() != held.asked.revision {
+    if app.session.actions().list.revision() != held.asked.revision {
         return Err(tl!("The Actions library changed. Choose the command again.").into());
     }
     let params = match (&held.prompt, held.data) {

@@ -471,6 +471,7 @@ fn open_recent_gate(app: &PhotocraftApp, path: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use photocraft_engine::color_cmds::ColorExt;
     use super::*;
 
     #[cfg(not(target_arch = "wasm32"))]

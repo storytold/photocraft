@@ -1,3 +1,4 @@
+use photocraft_engine::color_cmds::ColorExt;
 use super::convert::{RawStart, apply_raw_conversions, open_pixels, open_raw_pixels, output_sharpening, raw_conversions};
 use super::sidecar::{read_sidecar, write_sidecar};
 use super::{CameraRaw, LayerId, PhotocraftApp, Rect, Value, json};

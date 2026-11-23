@@ -1,3 +1,4 @@
+use photocraft_engine::prefs::SavedPrefsExt;
 use super::appearance::{display_scale, selected_theme};
 use super::*;
 use crate::theme::{AppTheme, Tokens};

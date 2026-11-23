@@ -1,5 +1,6 @@
 //! Behavioural checks for switching languages in a running shell.
 
+use photocraft_engine::prefs::SavedPrefsExt;
 use super::*;
 use crate::prefs_ui::{apply_window, open_preferences, set_draft, window_open};
 use crate::{PhotocraftApp, Services};

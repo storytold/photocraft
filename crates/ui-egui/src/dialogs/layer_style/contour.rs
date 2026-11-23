@@ -1,6 +1,7 @@
 //! Layer Style contours: the engine's contour parameters as the framework's `Contour`, the user's
 //! contour library, and the Contour Editor opened as a child of the Layer Style dialog.
 
+use photocraft_engine::presets::PresetsExt;
 use craft::imaging::layer_style::{Contour, ContourPoint};
 use craft::imaging::ui::layer_style::{ContourAction, ContourEditorDialog, ContourRequest, HostedLayerStyle};
 use craft::ui::dialog::{DialogId, DialogResult};
@@ -55,7 +56,7 @@ pub(super) fn to_param(c: &Contour) -> Value {
 
 /// The user's contour library.
 pub(super) fn user_contours(app: &PhotocraftApp) -> Vec<Contour> {
-    app.session.presets.contours.iter().map(from_doc).collect()
+    app.session.presets().contours.iter().map(from_doc).collect()
 }
 
 /// The engine's interpolation of a contour's points (levels `0..=255` on both axes) as one output
@@ -145,7 +146,7 @@ pub(super) fn library_action(app: &mut PhotocraftApp, action: ContourAction) {
                 Ok(json!({"path": path}))
             })
         }),
-        ContourAction::Delete(i) => match app.session.presets.contours.get(i).map(name_of) {
+        ContourAction::Delete(i) => match app.session.presets().contours.get(i).map(name_of) {
             Some(name) => app.run("layer.layerStyle.contours.delete", json!({"name": name})),
             None => Err("no such contour".into()),
         },

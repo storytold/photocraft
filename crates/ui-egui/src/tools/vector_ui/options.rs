@@ -1,3 +1,4 @@
+use photocraft_engine::presets::PresetsExt;
 use craft::behavior::EditEvent;
 use craft::color_ui::ui::Paint;
 use craft::draw::ui::pen::PathOptionsPopover;
@@ -451,12 +452,12 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let was_linked = app.ui.arrow_default == Some(target);
     let mut linked = was_linked;
     let recent_colors: Vec<Srgba> = crate::paint_picker::recent_colors(&app.session).into_iter().map(|c| Srgba::new(c[0], c[1], c[2], 1.0)).collect();
-    let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets.gradients, fg, bg);
-    let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets.gradient, recent: &mut app.ui.recent_gradients, fg, bg };
+    let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets().gradients, fg, bg);
+    let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets().gradient, recent: &mut app.ui.recent_gradients, fg, bg };
     let current = [sh.fill.clone(), sh.stroke.as_ref().map(|s| s.paint.clone())];
     let mut library = crate::shape_paint_ui::ChipLibrary::new(
         &recent_colors,
-        &app.session.presets.swatches,
+        &app.session.presets().swatches,
         &mut app.ui.paint_folders,
         gradients,
         &mut app.ui.shape_gradient_state,

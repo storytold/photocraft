@@ -196,14 +196,14 @@ fn keep<T>(kept: &Kept<T>, source: Option<&PrinterSource>, value: T) {
 
 /// Lists the printers; called with the spooler lock held.
 fn list_system_printers(s: &Session) -> Vec<craft_print::Printer> {
-    let list = match stand_in_printers(s.printer_source.as_ref(), cfg!(target_arch = "wasm32")) {
+    let list = match stand_in_printers(s.printer_source(), cfg!(target_arch = "wasm32")) {
         Some(source) => source(),
         None => {
             SYSTEM_LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             system_printers_now()
         }
     };
-    keep(&LAST_PRINTERS, s.printer_source.as_ref(), list.clone());
+    keep(&LAST_PRINTERS, s.printer_source(), list.clone());
     list
 }
 
@@ -229,14 +229,14 @@ fn stand_in_printers(source: Option<&PrinterSource>, browser: bool) -> Option<&P
 
 /// Lists the GDI route's printers; called with the spooler lock held.
 fn list_rgb_printers(s: &Session) -> RgbPrinters {
-    let list = match &s.printer_source {
+    let list = match s.printer_source() {
         Some(source) => stand_in_rgb_printers(source, cfg!(windows)),
         None => {
             SYSTEM_LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             craft_print::rgb::printers()
         }
     };
-    keep(&LAST_RGB_PRINTERS, s.printer_source.as_ref(), list.clone());
+    keep(&LAST_RGB_PRINTERS, s.printer_source(), list.clone());
     list
 }
 
@@ -264,17 +264,17 @@ pub fn rgb_printers(s: &Session) -> RgbPrinters {
 /// the same source, or `Unsupported` if that source has no cached list.
 pub fn rgb_printers_without_waiting(s: &Session) -> RgbPrinters {
     try_with_spooler(|| list_rgb_printers(s))
-        .or_else(|| last(&LAST_RGB_PRINTERS, s.printer_source.as_ref()))
+        .or_else(|| last(&LAST_RGB_PRINTERS, s.printer_source()))
         .unwrap_or(Err(craft_print::rgb::PrintError::Unsupported))
 }
 
 /// Lists printers for the Print dialog. While the system spooler is busy, returns the cached
 /// list for the same source, or an empty list if that source has no cached list.
 pub fn printers_without_waiting(s: &mut Session) -> Value {
-    if stand_in_printers(s.printer_source.as_ref(), cfg!(target_arch = "wasm32")).is_none() && system_spooler().is_none() {
+    if stand_in_printers(s.printer_source(), cfg!(target_arch = "wasm32")).is_none() && system_spooler().is_none() {
         return system_printers(s, &json!({})).unwrap_or_default();
     }
-    let list = try_with_spooler(|| list_system_printers(s)).or_else(|| last(&LAST_PRINTERS, s.printer_source.as_ref())).unwrap_or_default();
+    let list = try_with_spooler(|| list_system_printers(s)).or_else(|| last(&LAST_PRINTERS, s.printer_source())).unwrap_or_default();
     printers_answer(list)
 }
 
@@ -490,7 +490,7 @@ fn cups_spool(job: &PrintJob) -> std::result::Result<String, SpoolError> {
 /// server and where there is no `lp` (a sandbox).
 fn system_printers(s: &mut Session, p: &Value) -> Result<Value> {
     let named = p.get("printServer").and_then(Value::as_str).filter(|v| !v.is_empty());
-    if named.is_none() && (stand_in_printers(s.printer_source.as_ref(), cfg!(target_arch = "wasm32")).is_some() || system_spooler().is_some()) {
+    if named.is_none() && (stand_in_printers(s.printer_source(), cfg!(target_arch = "wasm32")).is_some() || system_spooler().is_some()) {
         return Ok(printers_answer(system_printer_list(s)));
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
@@ -1037,7 +1037,7 @@ fn do_print(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let params = p.clone();
     let worker_params = params.clone();
     let command = cmd.to_string();
-    let spooler = s.print_spooler.clone();
+    let spooler = s.print_spooler().cloned();
     if send && !dry {
         // Session::execute remains synchronous; the desktop's Session::start snapshots here
         // and runs PDF composition and the potentially slow driver on a worker.

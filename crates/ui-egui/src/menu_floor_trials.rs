@@ -3,6 +3,7 @@
 //! the menu model is built only when a fact it shows changed, never for a tool option or a button release, and the
 //! held model always equals a fresh build.
 
+use photocraft_engine::presets::PresetsExt;
 use craft::ui::runtime::measure::{MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_key_bytes};
 use egui::{Event, Pos2, vec2};
 use egui_kittest::Harness;
@@ -23,7 +24,7 @@ fn harness(documents: usize, recent: usize, swatches: usize) -> H {
         for _ in 0..documents {
             s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
         }
-        s.presets.edit(|presets| {
+        s.presets_mut().edit(|presets| {
             if let Some(group) = presets.swatches.first_mut()
                 && let Some(entry) = group.entries.first().cloned()
             {

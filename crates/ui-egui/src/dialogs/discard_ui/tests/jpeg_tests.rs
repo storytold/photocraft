@@ -1,5 +1,6 @@
 //! JPEG Options on Save As and Save a Copy (FILE-215-19): the quality and format it asks for, the
 //! scripted `quality` / `jpegFormat` that skip it, and recording and playback.
+use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use crate::jpeg_options_ui::{self, REMEMBER_KEY, Remembered};
 use craft::automation::actions::ActionStep;
@@ -73,7 +74,7 @@ pub(super) fn set_field(h: &mut Prompted, field: &str, value: Value) {
 
 /// The steps of the first recorded action.
 pub(super) fn steps(h: &Prompted) -> &Vec<ActionStep> {
-    &h.state().session.actions.list.action(0).unwrap().steps
+    &h.state().session.actions().list.action(0).unwrap().steps
 }
 
 /// Save As to a JPEG asks first, starting at the Export preferences' quality (85 → 10, Maximum)

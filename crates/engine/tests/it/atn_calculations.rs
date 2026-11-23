@@ -1,4 +1,5 @@
 //! Recorded Calculations Make forms, using the measured reference and ScriptListener types.
+use photocraft_engine::actions_cmds::ActionsExt;
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
@@ -75,7 +76,7 @@ fn alpha(s: &Session, index: usize) -> Vec<f32> {
 }
 
 fn play(s: &mut Session, action: Action) -> Value {
-    s.actions.list = ActionList::from_file(ActionsFile::new(vec![action], Vec::new()));
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(vec![action], Vec::new()));
     s.execute("actions.play", json!({"action": "Calculate"})).unwrap()
 }
 

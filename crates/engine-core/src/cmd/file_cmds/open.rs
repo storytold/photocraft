@@ -1,3 +1,4 @@
+use crate::color_cmds::ColorExt;
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, PlaceSteps, Result, Session, Value, json, str_param};
 
@@ -213,7 +214,7 @@ pub fn open_bytes_as_with_options(
             path
         }
     };
-    if raw_settings.is_some() && s.color.open_question(&doc).is_some() {
+    if raw_settings.is_some() && s.color().open_question(&doc).is_some() {
         return Err(EngineError::Other(format!("{name}: a color profile question requires interactive opening or suppressWarnings")));
     }
     // Color Settings policies (preserve / convert / discard the embedded profile).

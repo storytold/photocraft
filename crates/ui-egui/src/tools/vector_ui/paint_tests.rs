@@ -1,4 +1,5 @@
 //! Pointer, keyboard, colour precision and history regressions for shape appearance controls.
+use photocraft_engine::presets::PresetsExt;
 use super::*;
 use crate::shape_options::set_tool_paint;
 use crate::shape_paint_ui::color_of;
@@ -511,7 +512,7 @@ fn stroke_swatch_gradient_tab_sets_the_next_shapes_stroke() {
     assert_eq!(h.state().ui.tool_options.stroke_width, 3.0, "choosing a gradient enables the stroke");
     h.get_by_label("Blue 01").click();
     h.run_steps(2);
-    let presets = h.state().session.presets.gradients.clone();
+    let presets = h.state().session.presets().gradients.clone();
     let blue = presets.iter().flat_map(|g| &g.items).find(|p| p.name == "Blue 01").unwrap();
     let (fg, bg) = (h.state().session.tools.foreground, h.state().session.tools.background);
     let blue_stops = blue.fill_stops(fg, bg).0;

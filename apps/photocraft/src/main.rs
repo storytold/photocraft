@@ -62,6 +62,8 @@ mod tablet;
 mod ui_state;
 mod window_frame;
 
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::print_cmds::PrintExt;
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::Prefix;
@@ -575,7 +577,7 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "linux")]
             let session = {
                 let mut session = Session::new();
-                session.print_spooler = print_portal::spooler();
+                *session.print_spooler_mut() = print_portal::spooler();
                 session
             };
             #[cfg(not(target_os = "linux"))]

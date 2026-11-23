@@ -5,6 +5,8 @@ the same offsets. `test_regions` finds a crate's test code: whole files reached 
 `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) `mod x;`, and the `#[cfg(test)]` items and bare `#[test]`
 functions of other files (the test harness compiles `#[test]` functions only in test builds).
 `#[cfg(any(test, ...))]` items are not test code: other builds compile them too.
+`edited_definitions` finds a branch's edits to definitions a step moved or changed, for the steps'
+`branch` modes.
 """
 import os, re, subprocess
 
@@ -155,3 +157,70 @@ def git(*args, check=True):
 def git_show(ref, path):
     r = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True, text=True)
     return r.stdout if r.returncode == 0 else None
+
+
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? ")
+
+
+def definition_lines(src, item):
+    """1-based (first, last) lines of `item` (`"fn name"`, `"struct Name"`, ...) in `src`, its doc
+    comments and attributes included."""
+    masked = mask(src)
+    kind, name = item.split()
+    m = re.search(rf"^[ \t]*(?:pub(?:\([a-z:]+\))?\s+)?{kind}\s+{re.escape(name)}\b", masked, re.M)
+    if not m:
+        return None
+    i, depth = m.end(), 0
+    while i < len(masked):
+        c = masked[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        elif c == ";" and depth == 0:
+            break
+        i += 1
+    lines = src.splitlines()
+    first = src.count("\n", 0, m.start()) + 1
+    while first > 1 and lines[first - 2].lstrip().startswith(("///", "#[")):
+        first -= 1
+    return first, src.count("\n", 0, i) + 1
+
+
+def edited_definitions(base, head, items, roots):
+    """The `(file, item)` pairs of `items` that the branch `base..head` edits: a changed line names the
+    item, or a hunk's old-side lines overlap the item's definition in `base`. `file` is relative to
+    whichever of `roots` (directory prefixes ending in `/`) holds it."""
+    diff = subprocess.run(["git", "diff", "-U0", base, head, "--", *roots], capture_output=True, text=True, check=True).stdout
+    current = None
+    hunks, ranges, paths = {}, {}, {}
+    for line in diff.splitlines():
+        if line.startswith("--- "):
+            path = line[4:].removeprefix("a/")
+            current = None
+            if path != "/dev/null":
+                current = path
+                for root in roots:
+                    current = current.removeprefix(root)
+                paths[current] = path
+        elif line.startswith("+++ "):
+            continue
+        elif current and (h := HUNK.match(line)):
+            start, count = int(h[1]), int(h[2] or 1)
+            # A pure insertion (count 0) sits after `start`.
+            ranges.setdefault(current, []).append((start, start + max(count, 1) - 1) if count else (start, start + 1))
+        elif line.startswith(("+", "-")) and current:
+            hunks.setdefault(current, []).append(line[1:])
+    out = []
+    for file, item in items:
+        name = item.split()[1]
+        named = any(re.search(rf"\b{re.escape(name)}\b", line) for line in hunks.get(file, []))
+        inside = False
+        if file in ranges and (src := git_show(base, paths[file])) is not None:
+            span = definition_lines(src, item)
+            inside = span is not None and any(a <= span[1] and b >= span[0] for a, b in ranges[file])
+        if named or inside:
+            out.append((file, item))
+    return out
