@@ -321,6 +321,8 @@ pub struct UiState {
     /// Character/Paragraph Styles, Glyphs and Check Spelling (see `type_panels_ui`).
     #[serde(default)]
     pub type_panels: crate::type_panels_ui::TypePanelsUi,
+    #[serde(skip)]
+    pub(crate) find_replace: crate::dialogs::find_replace_ui::FindReplaceUi,
     /// The font menus' filter bar (classes, favourites, variable, similar); kept for the session.
     #[serde(skip)]
     pub(crate) font_filters: craft::font_manager::picker::FontFilters,
@@ -499,6 +501,7 @@ impl Default for UiState {
             layer_comp_selected: None,
             presets_ui: Default::default(),
             type_panels: Default::default(),
+            find_replace: Default::default(),
             font_filters: Default::default(),
             analysis: Default::default(),
             timeline: Default::default(),

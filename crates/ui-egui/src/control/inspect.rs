@@ -94,6 +94,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     let mut dialogs = craft::automation::dialogs::inspect(&app.framework.dialogs);
     crate::layer_style::describe_params(app, &mut dialogs);
     crate::discard_ui::describe(app, &mut dialogs);
+    if let (Some(find), Some(dialogs)) = (crate::dialogs::find_replace_ui::inspect(app), dialogs.as_array_mut()) {
+        dialogs.insert(0, find);
+    }
     // Keyboard Shortcuts and Menus draws beneath the host's dialogs, outside the host (#15544).
     if let (Some(shortcuts), Some(list)) = (crate::prefs_ui::shortcuts::inspect(app), dialogs.as_array_mut()) {
         list.insert(0, shortcuts);

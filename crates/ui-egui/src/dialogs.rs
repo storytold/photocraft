@@ -495,6 +495,7 @@ pub fn run(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::filter_dialog::reconcile_match_color(app);
     filter_preview_ui::feed(app, ui.ctx());
     crate::prefs_ui::feed(app);
+    find_replace_ui::show(app, ui.ctx());
     app.framework.dialogs.run(ui);
     take_results(app, &ui.ctx().clone());
 }
@@ -723,6 +724,7 @@ pub mod filter_dialog;
 pub(super) mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod filter_preview_worker;
+pub(crate) mod find_replace_ui;
 pub(crate) mod format_prompts;
 pub mod gallery_ui;
 pub(crate) mod guide_edit;
