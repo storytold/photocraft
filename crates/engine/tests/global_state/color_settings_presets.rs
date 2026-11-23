@@ -3,7 +3,7 @@
 //! In the `global_state` binary, beside `spot_dot_gain.rs` and `text_gamma.rs`, for the same
 //! reason: a setup sets the process-wide Spot dot gain and Blend Text Colors Using Gamma, which
 //! other tests' Multichannel and type renders read. The setups themselves are checked value by
-//! value in `crates/engine/src/color_settings_presets_tests.rs`.
+//! value in `crates/engine-core/src/color_settings_presets_tests.rs`.
 
 use photocraft_compose::multichannel::{SPOT_DOT_GAIN, spot_dot_gain};
 use photocraft_compose::psblend::TEXT_GAMMA;

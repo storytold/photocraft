@@ -11,7 +11,7 @@ use craft::ui::dialog::dialog_id;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param};
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Label;
-use photocraft_engine::color_cmds::{COLOR_SETTINGS_PRESETS, CUSTOM_SETTINGS, ColorSettings, is_settings_preset, preset_setup};
+use photocraft_engine::color_cmds::{COLOR_SETTINGS_PRESETS, CUSTOM_SETTINGS, ColorExt, ColorSettings, is_settings_preset, preset_setup};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -70,7 +70,7 @@ pub(crate) fn reconcile(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(applied) = f.get(APPLIED).and_then(Value::as_str).map(str::to_string) else {
         // Opening: the controls hold the stored setup's values. A `ui.dialog.set` that picked
         // another entry before the first pass loads it.
-        if shown != entry_of(Some(&app.session.color.settings.preset)) {
+        if shown != entry_of(Some(&app.session.color().settings.preset)) {
             load(app, ctx, &f, &shown);
             return;
         }
@@ -115,7 +115,7 @@ pub(crate) fn reconcile(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// "Monitor Color" takes the monitor profile the dialog shows as its working RGB.
 fn load(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>, name: &str) {
     let monitor = f.get("monitorProfile").and_then(Value::as_str).unwrap_or("auto");
-    let monitor_rgb = app.session.color.monitor_rgb_for(monitor);
+    let monitor_rgb = app.session.color().monitor_rgb_for(monitor);
     let id = dialog_id(COMMAND);
     if let Some(Value::Object(setup)) = preset_setup(&ColorSettings::default(), name, &monitor_rgb).and_then(|c| serde_json::to_value(c).ok()) {
         for (k, v) in setup {
@@ -134,7 +134,7 @@ fn load(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>, na
 /// The working RGB Monitor Color gave (in `base`) is no longer the one the shown monitor profile gives.
 fn monitor_rgb_moved(app: &PhotocraftApp, f: &Map<String, Value>, base: &Map<String, Value>) -> bool {
     let monitor = f.get("monitorProfile").and_then(Value::as_str).unwrap_or("auto");
-    base.get("workingRgb").and_then(Value::as_str) != Some(app.session.color.monitor_rgb_for(monitor).as_str())
+    base.get("workingRgb").and_then(Value::as_str) != Some(app.session.color().monitor_rgb_for(monitor).as_str())
 }
 
 /// Writes `value` under `key` of the open dialog: the menu's entry as text, the bookkeeping as JSON.

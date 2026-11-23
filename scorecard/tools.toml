@@ -164,7 +164,7 @@ id = "TOOL-214-8"
 target = "A measured ruler angle prefills Image Rotation > Arbitrary (0.01 deg)"
 status = "done"
 issue = 214
-note = "analysis_ui.rs: image.rotation.arbitrary opens seeded with the ruler angle and the direction that straightens it; arbitrary_rotation_starts_at_the_ruler_angle checks 5.7106 deg within 1e-3 and cw/ccw for three measured lines"
+note = "tools/analysis: image.rotation.arbitrary opens seeded with the ruler angle and the direction that straightens it; arbitrary_rotation_starts_at_the_ruler_angle checks 5.7106 deg within 1e-3 and cw/ccw for three measured lines"
 
 [[item]]
 id = "TOOL-214-9"

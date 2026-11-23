@@ -3,6 +3,7 @@
 
 use craft::behavior::dock::{Action, Workspace};
 use craft::color_ui::ui::ColorPanelMode;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::json;
 
 use super::*;
