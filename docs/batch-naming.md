@@ -36,8 +36,7 @@ returns its per-file results with `errorLogError` instead of `errorLog`.
 Unknown tokens, unmatched braces, invalid parameter types, path separators, reserved filename
 characters, excessive filename length (255 UTF-8 bytes), and serial overflow are rejected before
 export writes begin. Starting serial must be an integer from 0 to 4,294,967,295; the Batch
-dialog's **Starting serial** field takes 0 to 9,999, as Photoshop's does, and counts an empty
-field as 0.
+dialog's **Starting serial** field takes 0 to 9,999, as Photoshop's does.
 A custom template that resolves to an existing input file is also rejected before processing;
 the same guard checks default flat output names. This prevents an early result from destroying
 a later unread input. Ordinary per-file read,

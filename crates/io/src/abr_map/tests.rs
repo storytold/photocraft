@@ -177,7 +177,7 @@ fn v6_settings_map_onto_brush_sections() {
         let p = &imp.presets[0];
         assert_eq!((p.name.as_str(), p.group.as_str(), p.builtin), ("Kitchen Sink", "Test", false));
         let b = &p.brush;
-        let TipShape::Sampled(tile) = &b.tip else { panic!("sampled tip expected") };
+        let TipShape::Sampled(tile) = &*b.tip else { panic!("sampled tip expected") };
         assert_eq!((tile.width, tile.height), (16, 8));
         assert_eq!((tile.data[0], tile.data[1]), (65535, 0));
         assert_eq!((b.size, b.angle, b.roundness, b.spacing, b.flip_x, b.flip_y), (64.0, 30.0, 0.8, 0.4, true, false));
@@ -210,7 +210,7 @@ fn v6_settings_map_onto_brush_sections() {
         assert!(imp.warnings.iter().any(|w| w.contains("someFutureKey")), "{:?}", imp.warnings);
         // The computed preset.
         let r = &imp.presets[1].brush;
-        assert_eq!((r.tip.clone(), r.size, r.hardness, r.spacing, r.pressure_size), (TipShape::Round, 19.0, 0.0, 0.1, false));
+        assert_eq!(((*r.tip).clone(), r.size, r.hardness, r.spacing, r.pressure_size), (TipShape::Round, 19.0, 0.0, 0.1, false));
     }
 }
 
@@ -322,7 +322,7 @@ fn big_tips_are_downsampled() {
     let s = AbrSample { id: "$big".into(), width: 3000, height: 1500, depth: 8, data: vec![200; 3000 * 1500] };
     let bytes = write_v6(2, &[s], &[], &[], true).unwrap();
     let imp = read_abr(&bytes, "g").unwrap();
-    let TipShape::Sampled(t) = &imp.presets[0].brush.tip else { panic!() };
+    let TipShape::Sampled(t) = &*imp.presets[0].brush.tip else { panic!() };
     assert_eq!((t.width, t.height), (MAX_TIP_EDGE, 1250));
     assert_eq!(imp.presets[0].brush.size, 3000.0);
     assert!(imp.warnings.iter().any(|w| w.contains("downsampled")));
