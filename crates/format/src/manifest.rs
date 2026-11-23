@@ -326,6 +326,10 @@ pub enum ContentM {
         contents_id: Option<u64>,
         source: SmartSourceM,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        historical_xcf_sample_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        historical_xcf_link_digest: Option<[u8; 32]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         vector_preview: Option<VectorPreviewM>,
         transform: Affine,
         smart_filters: Vec<SmartFilter>,

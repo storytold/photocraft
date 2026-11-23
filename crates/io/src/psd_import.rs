@@ -732,6 +732,8 @@ impl Ctx<'_> {
         let mut sm = SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
+            historical_xcf_sample_order: None,
+            historical_xcf_link_digest: None,
             vector_preview,
             transform,
             smart_filters: stack.filters,

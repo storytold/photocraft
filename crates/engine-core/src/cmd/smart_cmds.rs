@@ -68,17 +68,37 @@ pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
 
 /// Reuse the central format decision made by this render operation.
 fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<Document> {
-    decode_source_import(file_name, bytes, svg).map(|imported| imported.document)
+    decode_source_classified_with_order(file_name, bytes, svg, None)
 }
 
-fn decode_source_import(file_name: &str, bytes: &[u8], svg: bool) -> Result<photocraft_io::ImportResult> {
+/// Decode an explicitly interpreted embedded source without changing legacy callers.
+pub fn decode_source_with_order(file_name: &str, bytes: &[u8], order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
+    decode_source_classified_with_order(file_name, bytes, photocraft_io::svg::is_svg(bytes), order)
+}
+
+fn decode_source_classified_with_order(file_name: &str, bytes: &[u8], svg: bool, order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
+    decode_source_import_with_order(file_name, bytes, svg, order).map(|imported| imported.document)
+}
+
+fn decode_source_import_with_order(
+    file_name: &str,
+    bytes: &[u8],
+    svg: bool,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<photocraft_io::ImportResult> {
     if svg {
         // This API has no warning channel. Stack/source caches and contents edits must not
         // turn a partial SVG import into silently complete smart-object contents.
         return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
-    crate::file_cmds::import_result_with(file_name, bytes, &photocraft_io::ImportOptions::default())
+    let historical_xcf_order = order.map_or(photocraft_io::HistoricalXcfOrder::Default, |order| {
+        photocraft_io::HistoricalXcfOrder::Explicit(match order {
+            photocraft_doc::HistoricalXcfSampleOrder::BigEndian => photocraft_io::HistoricalXcfSampleOrder::BigEndian,
+            photocraft_doc::HistoricalXcfSampleOrder::LittleEndian => photocraft_io::HistoricalXcfSampleOrder::LittleEndian,
+        })
+    });
+    crate::file_cmds::import_result_with(file_name, bytes, &photocraft_io::ImportOptions { historical_xcf_order, ..Default::default() })
         .map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
@@ -133,13 +153,16 @@ fn embed_all_linked(s: &mut Session, _p: &Value) -> Result<Value> {
             };
             other(format!("the linked file can't be read: {path}"))
         })?;
+        rendering::check_historical_link(smart(doc, *id)?, &bytes)?;
         sources.push(SmartSource::Embedded { file_name, bytes });
     }
     let parent = doc.id;
     let contents: Vec<SmartContentsId> = ids.iter().map(|id| smart(doc, *id).map(|sm| sm.contents_id)).collect::<Result<_>>()?;
     s.edit("Embed All Linked", |doc, _| {
         for (id, src) in ids.iter().zip(sources) {
-            smart_mut(doc, *id)?.source = src;
+            let object = smart_mut(doc, *id)?;
+            object.source = src;
+            object.historical_xcf_link_digest = None;
             refresh_or_fail(doc, *id)?;
         }
         Ok(())

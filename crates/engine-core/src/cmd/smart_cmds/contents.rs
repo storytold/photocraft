@@ -26,7 +26,15 @@ pub(super) fn set_source(
 ) -> Result<Value> {
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let new = make(&doc.metadata, &smart(doc, id)?.source)?;
+    let object = smart(doc, id)?;
+    if !keep_psd && object.historical_xcf_sample_order.is_some() {
+        // Changing storage/source needs its own interpreted snapshot transaction.
+        return Err(other("replace or relink an interpreted historical XCF through an explicit sample-order workflow"));
+    }
+    let new = make(&doc.metadata, &object.source)?;
+    if let SmartSource::Embedded { bytes, .. } = &new {
+        super::rendering::check_historical_link(object, bytes)?;
+    }
     set_shared_source(s, id, label, keep_psd, new)
 }
 
@@ -37,7 +45,12 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
         let changed = instances(doc, contents_id);
         let mut warnings = std::collections::BTreeSet::new();
         for &instance in &changed {
-            smart_mut(doc, instance)?.source = new.clone();
+            let object = smart_mut(doc, instance)?;
+            object.source = new.clone();
+            object.historical_xcf_link_digest = None;
+            if !keep_psd {
+                object.historical_xcf_sample_order = None;
+            }
             if !keep_psd {
                 detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
             }
@@ -77,7 +90,10 @@ pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, byt
 
 /// The file name and bytes of smart object `id`'s contents.
 pub fn contents_of(doc: &Document, id: LayerId) -> Result<(String, Arc<Vec<u8>>)> {
-    source_bytes(&doc.metadata, &smart(doc, id)?.source).ok_or_else(|| other("the smart object's contents are unavailable"))
+    let object = smart(doc, id)?;
+    let source = source_bytes(&doc.metadata, &object.source).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    super::rendering::check_historical_link(object, &source.1)?;
+    Ok(source)
 }
 
 /// Writes the smart object's file as it is. To a path with another extension (a `.png` for
@@ -98,7 +114,8 @@ pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
         crate::file_cmds::write_file(path, &bytes)?;
         return Ok(json!({"path": path, "fileName": name, "bytes": bytes.len(), "converted": false}));
     }
-    let contents = decode_source(&name, &bytes)?;
+    let order = smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?.historical_xcf_sample_order;
+    let contents = super::decode_source_with_order(&name, &bytes, order)?;
     let r = photocraft_io::export(&contents, path, &photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() })
         .map_err(|e| other(format!("can't export the contents as {}: {e}", base_name(path))))?;
     crate::file_cmds::write_file(path, &r.bytes)?;
@@ -117,10 +134,12 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
         s.set_active(index);
         return Ok(json!({"document": index, "parentLayer": id.0}));
     }
-    let source = &smart(&st.doc, id)?.source;
+    let object = smart(&st.doc, id)?;
+    let source = &object.source;
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
         .ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    let imported = super::decode_source_import(&name, &bytes, photocraft_io::svg::is_svg(&bytes))?;
+    super::rendering::check_historical_link(object, &bytes)?;
+    let imported = super::decode_source_import_with_order(&name, &bytes, photocraft_io::svg::is_svg(&bytes), object.historical_xcf_sample_order)?;
     admit_contents_import(s, parent, id, contents_id, name, imported)
 }
 
@@ -171,6 +190,8 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
             };
             let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
             sm.source = SmartSource::Embedded { file_name: format!("{stem}.pcraft"), bytes: bytes.clone() };
+            sm.historical_xcf_sample_order = None;
+            sm.historical_xcf_link_digest = None;
             detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
             refresh_or_fail(doc, id)?;
         }

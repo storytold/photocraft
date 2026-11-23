@@ -1,7 +1,5 @@
 use super::filters::smart;
-use super::source::{
-    SourceImage, cache_get, cache_key, cache_put, convert_svg_source, source_bytes, source_surface_from_buffer, svg_source_image_in, vector_scale,
-};
+use super::source::{SourceImage, cache_get, cache_put, convert_svg_source, source_bytes, source_surface_from_buffer, svg_source_image_in, vector_scale};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
     SmartSource, Stage, StageKey, Surface, Value, affine_homography, other, placement, stack_cache,
@@ -12,12 +10,19 @@ use std::sync::{Mutex, Weak};
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
 /// group's layers) combined per pixel with `mode`. Cached like [`super::source_image`], keyed by mode.
 pub fn stack_image(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode) -> Result<SourceImage> {
-    stack_image_classified(file_name, bytes, fmt, mode, None)
+    stack_image_classified(file_name, bytes, fmt, mode, None, None)
 }
 
-fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode: photocraft_doc::StackMode, svg: Option<bool>) -> Result<SourceImage> {
+fn stack_image_classified(
+    file_name: &str,
+    bytes: &[u8],
+    fmt: PixelFormat,
+    mode: photocraft_doc::StackMode,
+    svg: Option<bool>,
+    order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
+) -> Result<SourceImage> {
     use photocraft_algo::stack::Stat;
-    let mut key = cache_key(bytes, fmt);
+    let mut key = super::source::source_cache_key_with_order(file_name, bytes, fmt, svg, order);
     // Keep the filename in the key because fallback import uses it to choose a format.
     // Use a separate domain from entries that predate plain SVG completeness checks.
     key.0 = *blake3::hash(&[&key.0[..], b"stack-source-v3:", blake3::hash(file_name.as_bytes()).as_bytes(), mode.id().as_bytes()].concat()).as_bytes();
@@ -25,7 +30,7 @@ fn stack_image_classified(file_name: &str, bytes: &[u8], fmt: PixelFormat, mode:
         return Ok(img);
     }
     let svg = svg.unwrap_or_else(|| photocraft_io::svg::is_svg(bytes));
-    let doc = super::decode_source_classified(file_name, bytes, svg)?;
+    let doc = super::decode_source_classified_with_order(file_name, bytes, svg, order)?;
     let layers: &[Layer] = match doc.layers.as_slice() {
         [only] if only.is_group() => only.children().unwrap_or_default(),
         all => all,
@@ -217,10 +222,12 @@ fn place_with_svg(
         });
     }
     let img = match sm.stack_mode {
-        Some(mode) if is_svg => convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg))?, doc)?,
+        Some(mode) if is_svg => {
+            convert_svg_source(stack_image_classified(name, bytes, PixelFormat::RGBA32F, mode, Some(is_svg), sm.historical_xcf_sample_order)?, doc)?
+        }
         None if is_svg => svg(bytes, 1.0)?,
-        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg))?,
-        None => super::source::source_image_classified(name, bytes, fmt, is_svg)?,
+        Some(mode) => stack_image_classified(name, bytes, fmt, mode, Some(is_svg), sm.historical_xcf_sample_order)?,
+        None => super::source::source_image_classified_with_order(name, bytes, fmt, is_svg, sm.historical_xcf_sample_order)?,
     };
     // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
     // frame) would otherwise fill memory before any allocation could fail.
@@ -341,6 +348,17 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
         .map_or_else(|| bytes.clone(), |preview| preview.svg.clone())
 }
 
+/// Reject annotations on linked bytes before classification, preview substitution or cache lookup.
+pub(super) fn check_historical_link(sm: &SmartObject, bytes: &[u8]) -> Result<()> {
+    if matches!(sm.source, SmartSource::Linked { .. }) && sm.historical_xcf_sample_order.is_some() {
+        let expected = sm.historical_xcf_link_digest.ok_or_else(|| other("the historical XCF link needs a verified sample-order choice"))?;
+        if expected != *blake3::hash(bytes).as_bytes() {
+            return Err(other("the linked historical XCF bytes changed; relink and choose their sample byte order"));
+        }
+    }
+    Ok(())
+}
+
 /// The box of a smart object's source in source pixels (what its warp's `us`/`vs` span), or `None`
 /// when the source can't be read.
 ///
@@ -350,12 +368,17 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 /// keeps the strict layered import it renders with.
 pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
     let (name, bytes) = source_bytes(&doc.metadata, &sm.source)?;
+    check_historical_link(sm, &bytes).ok()?;
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();
     let r = match sm.stack_mode {
         None if photocraft_io::svg::is_svg(&bytes) => photocraft_io::svg::bounded_canvas_bounds(&bytes, 24_000_000).ok()?,
-        Some(mode) => stack_image(&name, &bytes, fmt, mode).ok()?.bounds,
-        None => super::source::source_image(&name, &bytes, fmt).ok()?.bounds,
+        Some(mode) => stack_image_classified(&name, &bytes, fmt, mode, None, sm.historical_xcf_sample_order).ok()?.bounds,
+        None => {
+            super::source::source_image_classified_with_order(&name, &bytes, fmt, photocraft_io::svg::is_svg(&bytes), sm.historical_xcf_sample_order)
+                .ok()?
+                .bounds
+        }
     };
     Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
 }
@@ -480,6 +503,7 @@ pub fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderS
         return render(doc, sm).map(|surface| (surface, Vec::new()));
     }
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
+    check_historical_link(sm, &bytes)?;
     if !photocraft_io::svg::is_svg(&bytes) {
         // Keep the same source snapshot for fallback, including authorized linked reads.
         return render_in_with_source(doc, sm, &JobCtx::new(), Some((name, bytes))).map(|surface| (surface, Vec::new()));
@@ -510,6 +534,7 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
     }
     let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
+    check_historical_link(sm, &original)?;
     let bytes = display_source(sm, &original);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
     // Plain SVG uses the original strict vector path. Gzip sources use ordinary
