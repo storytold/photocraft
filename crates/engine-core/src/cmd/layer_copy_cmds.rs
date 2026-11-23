@@ -369,7 +369,12 @@ pub(crate) fn duplicate_to_new_document(s: &mut Session, p: &Value) -> Result<Va
     if !layered(sdoc.mode) {
         return Err(EngineError::Other(format!("layers can't be duplicated with a {:?} document", sdoc.mode)));
     }
-    let doc_name = p.get("documentName").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string).unwrap_or_else(|| format!("{} copy", sdoc.name));
+    let doc_name = p
+        .get("documentName")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::cmd::file_cmds::untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n)));
     let mut nd = Document::new(doc_name, sdoc.size, sdoc.mode, sdoc.depth);
     nd.resolution_dpi = sdoc.resolution_dpi;
     nd.icc_profile.clone_from(&sdoc.icc_profile);

@@ -288,7 +288,7 @@ fn duplicate_to_a_new_document_keeps_size_pixels_and_place_at_every_depth() {
         assert_eq!(*src, source_before, "the source is untouched");
         assert_eq!(dst.size, src.size, "same canvas, as Photoshop");
         assert_eq!((dst.mode, dst.depth, dst.resolution_dpi), (src.mode, src.depth, src.resolution_dpi));
-        assert_eq!(dst.name, format!("{} copy", src.name));
+        assert_eq!(dst.name, "Untitled-1");
         let layers = r["layers"].as_array().unwrap();
         assert_eq!(layers.len(), 1);
         let id = LayerId(layers[0].as_u64().unwrap());
