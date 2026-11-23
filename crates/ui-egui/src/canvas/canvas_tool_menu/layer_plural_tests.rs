@@ -169,3 +169,30 @@ fn delete_layers_still_deletes_the_selected_layers() {
         assert!(st.doc.layer(photocraft_doc::LayerId(id)).is_none(), "layer {id} deleted");
     }
 }
+
+/// The greying is limited to the measured case, several pixel layers: with two shape layers
+/// selected, Blending Options…, Color Range… and Load Selection… follow `menus::is_enabled`.
+#[test]
+fn with_two_shape_layers_selected_the_one_layer_rows_follow_the_menu_bar() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let shape = |app: &mut PhotocraftApp, rect: [u32; 4]| {
+        app.run("shape.create", json!({"kind": "rect", "rect": rect, "fill": "#3070c0"})).unwrap()["layer"].as_u64().unwrap()
+    };
+    let first = shape(&mut app, [4, 4, 10, 10]);
+    shape(&mut app, [30, 20, 10, 10]);
+    app.run("layer.select", json!({"layer": first, "mode": "add"})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Count;
+    let ctx = app.ctx().clone();
+    assert_eq!(selected(&app), 2);
+    right_click(&mut app, 50.0, 40.0);
+    let entries = inspected(&mut app, &ctx);
+    assert!(!entries.is_empty(), "the Count tool's layer menu is open");
+    let rows = ["layer.layerStyle.blendingOptions", "select.colorRange", "select.loadSelection"];
+    for id in rows {
+        let enabled = entries.iter().find(|e| e.0 == id).map(|e| e.2);
+        assert_eq!(enabled, Some(crate::menus::is_enabled(&app, id)), "{id}");
+    }
+    assert!(rows.iter().any(|id| crate::menus::is_enabled(&app, id)), "the menu bar enables one of them, so the case tells the rules apart");
+}

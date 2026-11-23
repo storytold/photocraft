@@ -753,6 +753,15 @@ fn several_layers_selected(app: &PhotocraftApp) -> bool {
     app.session.active().is_some_and(|st| st.selected_layers().len() > 1)
 }
 
+/// Several layers are selected in the front document, every one a pixel layer: the case #12358
+/// measured on the Count tool's layer menu.
+fn several_pixel_layers_selected(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| {
+        let selected = st.selected_layers();
+        selected.len() > 1 && selected.iter().all(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_))))
+    })
+}
+
 /// Is a path with at least two points being drawn with the Pen?
 pub(crate) fn pen_pending(app: &PhotocraftApp) -> bool {
     app.ui.pen.as_ref().is_some_and(|p| p.draft.knots.len() >= 2)
@@ -1372,12 +1381,13 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if inside_selection(menu) && command == "select.loadSelection" {
         return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
     }
-    // #12358, measured on the Count tool's layer menu: with several layers selected, Blending
-    // Options…, Color Range… and Load Selection… work on one layer, so they are greyed. The other
-    // tools' layer menus weren't measured with several layers and keep `menus::is_enabled`.
+    // #12358, measured on the Count tool's layer menu: with several pixel layers selected,
+    // Blending Options…, Color Range… and Load Selection… work on one layer, so they are greyed.
+    // Other layer kinds and the other tools' layer menus weren't measured with several layers and
+    // keep `menus::is_enabled`.
     if menu.tool == Tool::Count
         && matches!(command, "layer.layerStyle.blendingOptions" | "select.colorRange" | "select.loadSelection")
-        && several_layers_selected(app)
+        && several_pixel_layers_selected(app)
     {
         return false;
     }
