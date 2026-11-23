@@ -758,8 +758,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 Err(e) => return Some(Err(e)),
             };
             let linked = id == "file.placeLinked";
-            let ctx = ctx.clone();
-            Some(app.pick_file_bytes(move |app, name, bytes| {
+            let (ctx, queue_ctx) = (ctx.clone(), ctx.clone());
+            let place = move |app: &mut PhotocraftApp, name: String, bytes: Vec<u8>| {
                 if app.ui.transform.is_some() {
                     return Err("Commit or cancel the transform first".into());
                 }
@@ -771,6 +771,25 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                     crate::transform_tool::begin_placed(app, &ctx)?;
                 }
                 Ok(result)
+            };
+            if linked {
+                return Some(app.pick_file_bytes(place));
+            }
+            // Place Embedded takes several files (#14107); one file is placed as before.
+            Some(app.pick_files_bytes(move |app, files| match <[crate::file_dialog::PickedFile; 1]>::try_from(files) {
+                Ok([file]) => {
+                    let (name, bytes) = file.read()?;
+                    place(app, name, bytes)
+                }
+                Err(files) => {
+                    if app.ui.transform.is_some() {
+                        return Err("Commit or cancel the transform first".into());
+                    }
+                    app.refocus(doc)?;
+                    let count = files.len();
+                    app.place_picked(&queue_ctx, doc, files);
+                    Ok(json!({ "files": count }))
+                }
             }))
         }
         "layer.smartObjects.replaceContents" => {
