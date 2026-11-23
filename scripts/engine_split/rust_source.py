@@ -100,10 +100,10 @@ def block_end(masked, start):
 def module_file(parent, name, attrs, inline=(), root=False):
     """The file of `mod name;` declared in `parent` with attributes `attrs`, inside the inline
     modules whose directories are `inline` (outermost first), or None. A crate root (`root`, any
-    file name) and a `mod.rs` hold their children beside them; any other file in a directory of
-    its own name."""
+    file name) and a `mod.rs` hold their children beside them; any other file (a `lib.rs` reached
+    through `#[path]` too) in a directory of its own name."""
     d = os.path.dirname(parent)
-    if not root and os.path.basename(parent) not in ("lib.rs", "mod.rs", "main.rs"):
+    if not root and os.path.basename(parent) != "mod.rs":
         d = os.path.join(d, os.path.basename(parent)[:-3])
     d = os.path.join(d, *inline)
     p = PATH_ATTR.search(attrs)
@@ -119,14 +119,15 @@ def module_file(parent, name, attrs, inline=(), root=False):
 
 
 def inline_mods(src, masked, pos):
-    """The directories of the inline `mod x { .. }` blocks around `pos`, outermost first: each
-    module's `#[path]`, else its name."""
-    dirs = []
+    """The inline `mod x { .. }` blocks around `pos`, outermost first, as (directory, test): the
+    directory is the module's `#[path]`, else its name; test, whether a `#[cfg(test)]` holds it."""
+    mods = []
     for m in INLINE_MOD.finditer(masked, 0, pos):
         if block_end(masked, m.start(2)) > pos:
-            p = PATH_ATTR.search(src[m.start(1) : m.end(1)])
-            dirs.append(p.group(1) if p else m.group(2))
-    return dirs
+            attrs = src[m.start(1) : m.end(1)]
+            p = PATH_ATTR.search(attrs)
+            mods.append((p.group(1) if p else m.group(2), bool(CFG_TEST.search(attrs))))
+    return mods
 
 
 def test_regions(root_file):
@@ -141,9 +142,11 @@ def test_regions(root_file):
         regions[f] = None if is_test else []
         for d in MOD_DECL.finditer(m):
             attrs = src[d.start(1) : d.end(1)]
-            child = module_file(f, d.group(2), attrs, inline_mods(src, m, d.start()), root)
+            mods = inline_mods(src, m, d.start())
+            child = module_file(f, d.group(2), attrs, [dir_ for dir_, _ in mods], root)
             if child:
-                todo.append((child, is_test or bool(CFG_TEST.search(attrs)), False))
+                in_test = any(test for _, test in mods)
+                todo.append((child, is_test or in_test or bool(CFG_TEST.search(attrs)), False))
         if not is_test:
             regions[f] = item_ranges(m)
     return regions
@@ -171,7 +174,7 @@ def compiled_files(roots):
         src = open(f).read()
         m = mask(src)
         for d in MOD_DECL.finditer(m):
-            child = module_file(f, d.group(2), src[d.start(1) : d.end(1)], inline_mods(src, m, d.start()), f in roots_)
+            child = module_file(f, d.group(2), src[d.start(1) : d.end(1)], [dir_ for dir_, _ in inline_mods(src, m, d.start())], f in roots_)
             if child:
                 todo.append(os.path.normpath(child))
     return seen
