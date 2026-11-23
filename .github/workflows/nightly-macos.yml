@@ -80,3 +80,12 @@ jobs:
         run: bash packaging/macos/nightly.sh --arch aarch64
       - name: Check the archive and the bundle's version
         run: bash packaging/macos/nightly-verify.sh --expect unsigned --input "$RUNNER_TEMP/nightly-dist/photocraft-$PHOTOCRAFT_VERSION-macos-aarch64-nightly.zip"
+      # Keeps the verified unsigned zip briefly for keyless signer tests and hand testing. Unsigned only.
+      - name: Keep the unsigned archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: photocraft-nightly-macos-aarch64-unsigned
+          path: ${{ runner.temp }}/nightly-dist/photocraft-${{ env.PHOTOCRAFT_VERSION }}-macos-aarch64-nightly.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
