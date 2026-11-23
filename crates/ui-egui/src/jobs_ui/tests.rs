@@ -1423,3 +1423,152 @@ fn background_place_without_open_keeps_an_unrelated_tab_active() {
     let unrelated = &ready.unrelated;
     assert!(Arc::ptr_eq(&ready.app.session.active().unwrap().doc, unrelated));
 }
+
+type SmartPickerSources = [(std::path::PathBuf, Vec<u8>); 2];
+
+fn smart_picker_sources() -> (tempfile::TempDir, SmartPickerSources) {
+    let directory = tempfile::tempdir().unwrap();
+    let sources = [("image2.png", "#ff0000"), ("image10.png", "#00ff00")].map(|(name, color)| {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":2,"height":1,"background":color})).unwrap();
+        let bytes = photocraft_io::export(&session.active().unwrap().doc, name, &Default::default()).unwrap().bytes;
+        let path = directory.path().join(name);
+        std::fs::write(&path, &bytes).unwrap();
+        (path, bytes)
+    });
+    (directory, sources)
+}
+
+/// Drive the native File menu and Files service, rather than bypassing the picker with
+/// the starter. Its returned order is intentionally different from natural name order.
+fn pick_smart_opens(app: &mut PhotocraftApp, paths: Vec<std::path::PathBuf>) -> Vec<JobId> {
+    let files = Arc::new(craft::host::ScriptedFiles::held());
+    app.services.files = Some(files.clone());
+    app.session.color_mut().settings.ask_on_missing = false;
+    app.session.color_mut().settings.ask_on_mismatch = false;
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(app, &ctx, "file.openAsSmartObject", json!({})).unwrap();
+    assert_eq!(files.open(), 1);
+    assert_eq!(files.requests().last().unwrap().kind, craft::host::PickKind::OpenMany);
+    files.answer(craft::host::Picked::Paths(paths)).unwrap();
+    app.poll_file_dialog();
+    assert_eq!(files.open(), 0);
+    app.jobs.opens.iter().map(|open| open.job).collect()
+}
+
+fn assert_picked_smart_sources(app: &PhotocraftApp, sources: &SmartPickerSources) {
+    let opened: Vec<_> = app.session.documents().iter().skip(2).collect();
+    assert_eq!(opened.iter().map(|state| state.doc.name.as_str()).collect::<Vec<_>>(), ["image2-1", "image10-1"]);
+    for ((state, (path, bytes)), expected) in opened.iter().zip(sources).zip([[1., 0., 0., 1.], [0., 1., 0., 1.]]) {
+        assert_eq!(state.doc.size, photocraft_geom::Size::new(2, 1));
+        assert!(state.path.is_none() && !state.is_dirty(), "Smart Object Open is untitled");
+        assert_eq!(state.doc.layers.len(), 1);
+        let photocraft_doc::LayerContent::Smart(object) = &state.doc.layers[0].content else { panic!("embedded Smart Object") };
+        let photocraft_doc::SmartSource::Embedded { file_name, bytes: embedded } = &object.source else { panic!("embedded source") };
+        assert_eq!(file_name, path.file_name().unwrap().to_str().unwrap());
+        assert_eq!(embedded.as_slice(), bytes.as_slice());
+        assert_eq!(std::fs::read(path).unwrap(), *bytes);
+        let pixel = object.cache.as_ref().unwrap().pixel(0, 0);
+        for (actual, expected) in pixel.iter().copied().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6, "{pixel:?}");
+        }
+        assert_eq!(state.history.entries(), ["Open As Smart Object"]);
+    }
+}
+
+fn complete_smart_picker_before_shell(ready: &mut ReadyPlace, sources: &SmartPickerSources, open_first: bool) {
+    let jobs = pick_smart_opens(&mut ready.app, vec![sources[1].0.clone(), sources[0].0.clone()]);
+    assert_eq!(jobs.len(), 2);
+    assert_eq!(ready.app.jobs.opens.iter().map(|open| open.name.as_str()).collect::<Vec<_>>(), ["image2.png", "image10.png"]);
+    // Reverse actual Smart Object completion to prove tab order comes from the
+    // picker's captured OpenOrder rather than worker completion order.
+    for job in jobs.iter().rev() {
+        ready.app.session.wait_job(*job).unwrap();
+    }
+    ready.events.extend(ready.app.session.poll_jobs());
+    assert_eq!(ready.events.len(), 3);
+    if open_first {
+        ready.events.rotate_left(1);
+    }
+}
+
+#[test]
+fn native_smart_picker_completions_wait_for_place_and_keep_source_order_in_either_event_order() {
+    let (_directory, sources) = smart_picker_sources();
+    for open_first in [false, true] {
+        for commit in [false, true] {
+            let mut ready = ready_place(false);
+            complete_smart_picker_before_shell(&mut ready, &sources, open_first);
+            present_place_and_open(&mut ready);
+            let ctx = ready.app.ctx().clone();
+            super::tick(&mut ready.app, &ctx);
+            assert!(ready.app.jobs.focus.is_none(), "ended Smart Open cards release focus");
+            assert_eq!(ready.app.session.active().unwrap().doc.id, ready.target.id);
+            assert_eq!(ready.app.held_opens.len(), 2);
+            assert!(ready.app.ui.transform.as_ref().is_some_and(|transform| transform.made == Some(crate::state::MadeLayer::Place)));
+            if commit {
+                crate::transform_tool::commit(&mut ready.app);
+            } else {
+                crate::transform_tool::cancel(&mut ready.app);
+            }
+            let started = Instant::now();
+            while ready.app.session.has_jobs() {
+                assert!(started.elapsed() < Duration::from_secs(30), "Place transform timed out");
+                let ctx = ready.app.ctx().clone();
+                super::tick(&mut ready.app, &ctx);
+                std::thread::yield_now();
+            }
+            let ctx = ready.app.ctx().clone();
+            crate::open_prompt::take(&mut ready.app, &ctx);
+            assert_picked_smart_sources(&ready.app, &sources);
+            assert!(ready.app.held_opens.is_empty());
+            assert!(ready.app.ui.recent_files.is_empty(), "Open as Smart Object does not bind the source as an opened file");
+            let target = ready.app.session.documents().iter().find(|state| state.doc.id == ready.target.id).unwrap();
+            assert_eq!(target.doc.layers.len(), ready.target.layers.len() + usize::from(commit));
+            let unrelated = ready.app.session.documents().iter().find(|state| state.doc.id == ready.unrelated.id).unwrap();
+            assert!(Arc::ptr_eq(&unrelated.doc, &ready.unrelated));
+        }
+    }
+}
+
+#[test]
+fn cancelling_a_native_picked_smart_open_preserves_place_focus_and_never_publishes_it() {
+    let (_directory, sources) = smart_picker_sources();
+    let mut ready = ready_place(false);
+    let jobs = pick_smart_opens(&mut ready.app, vec![sources[0].0.clone()]);
+    assert_eq!(jobs.len(), 1);
+    assert!(super::cancel(&mut ready.app, jobs[0]));
+    ready.app.session.join_cancelled_jobs();
+    assert!(matches!(ready.app.session.wait_job(jobs[0]), Err(photocraft_engine::EngineError::Cancelled)));
+    ready.events.extend(ready.app.session.poll_jobs());
+    present_place_and_open(&mut ready);
+    let ctx = ready.app.ctx().clone();
+    super::tick(&mut ready.app, &ctx);
+    assert!(ready.app.jobs.focus.is_none());
+    assert_eq!(ready.app.session.documents().len(), 2);
+    assert_eq!(ready.app.session.active().unwrap().doc.id, ready.target.id);
+    assert!(ready.app.jobs.opens.is_empty() && ready.app.held_opens.is_empty());
+    assert!(ready.app.ui.transform.as_ref().is_some_and(|transform| transform.made == Some(crate::state::MadeLayer::Place)));
+    crate::transform_tool::cancel(&mut ready.app);
+    assert_eq!(ready.app.session.active().unwrap().doc.layers.len(), ready.target.layers.len());
+    assert_eq!(std::fs::read(&sources[0].0).unwrap(), sources[0].1);
+}
+
+#[test]
+fn native_smart_picker_completions_do_not_start_place_transform_over_an_unrelated_tab() {
+    let (_directory, sources) = smart_picker_sources();
+    for open_first in [false, true] {
+        let mut ready = ready_place(true);
+        complete_smart_picker_before_shell(&mut ready, &sources, open_first);
+        present_place_and_open(&mut ready);
+        let ctx = ready.app.ctx().clone();
+        super::tick(&mut ready.app, &ctx);
+        assert!(ready.app.jobs.focus.is_none());
+        assert!(ready.app.ui.transform.is_none());
+        assert_picked_smart_sources(&ready.app, &sources);
+        let unrelated = ready.app.session.documents().iter().find(|state| state.doc.id == ready.unrelated.id).unwrap();
+        assert!(Arc::ptr_eq(&unrelated.doc, &ready.unrelated));
+        let target = ready.app.session.documents().iter().find(|state| state.doc.id == ready.target.id).unwrap();
+        assert_eq!(target.doc.layers.len(), ready.target.layers.len() + 1);
+    }
+}
