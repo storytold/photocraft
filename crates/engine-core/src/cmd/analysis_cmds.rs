@@ -1042,7 +1042,7 @@ fn base_row(s: &mut Session, d: &Document, source: &str, label: &str, now: &str)
 
 fn feature_values(m: &mut Map<String, Value>, f: &Feature, count: usize, factor: f64) {
     m.insert("count".into(), json!(count));
-    m.insert("area".into(), json!(round4(f.area * factor * factor)));
+    m.insert("area".into(), json!(f.area * factor * factor));
     m.insert("perimeter".into(), json!(round4(f.perimeter * factor)));
     m.insert("circularity".into(), json!(round4(f.circularity())));
     m.insert("height".into(), json!(round4(f64::from(f.bounds.height()) * factor)));
