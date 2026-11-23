@@ -5,6 +5,7 @@ use craft::automation::actions::{Action, ActionStep};
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{HostedParamDialog, ParamKind};
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app_with(n: usize) -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -428,7 +429,7 @@ fn batch_menu_starts_on_the_selected_actions_set_and_runs_its_action() {
     for (set, name, step) in [("A", "Retouch", "image.adjustments.invert"), ("B", "Turn", "image.imageRotation.90cw")] {
         let mut action = Action::new(name, vec![ActionStep::new(step, json!({}))]);
         action.set = Some(set.into());
-        app.session.actions.list.push(action).unwrap();
+        app.session.actions_mut().list.push(action).unwrap();
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(1));
     let id = open_form(&mut app, &ctx, "file.automate.batch");
@@ -455,7 +456,7 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
     app.run("file.saveACopy", json!({"path": source.join("source.png").to_string_lossy()})).unwrap();
     for (name, step) in [("Invert", "image.adjustments.invert"), ("RotateRGB", "image.imageRotation.90cw")] {
-        app.session.actions.list.push(Action::new(name, vec![ActionStep::new(step, json!({}))])).unwrap();
+        app.session.actions_mut().list.push(Action::new(name, vec![ActionStep::new(step, json!({}))])).unwrap();
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     let id = open_form(&mut app, &ctx, "file.automate.batch");
@@ -479,8 +480,8 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, id, "action", json!("RotateRGB"));
     set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
-    let rotate = app.session.actions.list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
-    app.session.actions.list.delete_action(rotate).unwrap();
+    let rotate = app.session.actions().list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
+    app.session.actions_mut().list.delete_action(rotate).unwrap();
     // The run's refusal reaches the user through the status bar and a notice, as a failed filter's does.
     confirm(&mut app, &ctx, id).unwrap();
     assert!(app.ui.status_error && app.ui.status.contains("no action named"), "{}", app.ui.status);
@@ -605,7 +606,7 @@ fn batch_dialogs_include_all_subfolders() {
     std::fs::create_dir_all(dir.join("in/sub")).unwrap();
     let input = dir.join("in").to_string_lossy().into_owned();
     app.run("file.saveACopy", json!({"path": dir.join("in/sub/a.png").to_string_lossy()})).unwrap();
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     for (command, out) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processed")] {
         let d = open_form(&mut app, &ctx, command);
         let shown = fields(&app, d);
@@ -684,7 +685,7 @@ fn a_batch_that_fails_on_its_files_says_which_and_why() {
         app.run("file.saveACopy", json!({"path": dir.join("in").join(name).to_string_lossy()})).unwrap();
     }
     // A step for a layer that only the recording document has.
-    app.session.actions.list.push(Action::new("Stale", vec![ActionStep::new("layer.setProps", json!({"layer": 424_242, "opacity": 50}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Stale", vec![ActionStep::new("layer.setProps", json!({"layer": 424_242, "opacity": 50}))])).unwrap();
     let d = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, d, "input", json!(dir.join("in").to_string_lossy()));
     set(&mut app, &ctx, d, "output", json!(dir.join("out").to_string_lossy()));

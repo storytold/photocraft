@@ -32,27 +32,37 @@ fn every_compositor_pipeline_builds() {
     // One instance per backend: `Backends::all()` only enables the others on one instance, and
     // `request_adapter` then returns the single default adapter, so the other backends' own
     // translation went untested. One adapter per backend keeps a second, unrelated adapter of the
-    // same backend (a dual-GPU laptop's integrated GPU) out of the run.
-    for (backends, compiler) in [(wgpu::Backends::DX12, wgpu::Dx12Compiler::Fxc), (wgpu::Backends::all(), wgpu::Dx12Compiler::Auto)] {
+    // same backend (a dual-GPU laptop's integrated GPU) out of the run. The second pass names DXC
+    // rather than `Auto`: without `dxcompiler.dll`, as on the Windows runners, `Auto` falls back to
+    // FXC and built every pipeline with FXC a second time (#15929), while a DXC that does not load
+    // leaves DX12 out of that pass.
+    for (backends, compiler) in [(wgpu::Backends::DX12, wgpu::Dx12Compiler::Fxc), (wgpu::Backends::all(), wgpu::Dx12Compiler::default_dynamic_dxc())] {
+        let required = cfg!(windows) && matches!(compiler, wgpu::Dx12Compiler::Fxc);
         for backend in backends.iter() {
             let instance = wgpu::Instance::new(describe(backend, compiler.clone()));
             // The Windows runners always have a WARP adapter on DX12, so a missing one there means
             // the check this test exists for silently did not run. Any other backend is a plain
-            // skip: `Backends::all()` also names backends this platform does not provide.
+            // skip: `Backends::all()` also names backends this platform does not provide, and
+            // DX12 through DXC needs a `dxcompiler.dll`.
             let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
-                #[cfg(windows)]
-                assert!(backend != wgpu::Backends::DX12, "no adapter on Windows: the DX12/FXC pipeline check did not run");
+                assert!(!required, "no adapter on Windows: the DX12/FXC pipeline check did not run");
                 continue;
             };
             let Ok((device, _queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else {
-                #[cfg(windows)]
-                assert!(backend != wgpu::Backends::DX12, "no device on Windows: the DX12/FXC pipeline check did not run");
+                assert!(!required, "no device on Windows: the DX12/FXC pipeline check did not run");
                 continue;
             };
             let info = adapter.get_info();
             let format = Compositor::preferred_acc_format(&adapter);
             // Draws build only the pipelines they use; this builds every one.
-            let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+            // GLES shares one adapter-context lock. Building every pipeline on
+            // available_parallelism() threads panics with "Could not lock adapter
+            // context. This is most-likely a deadlock." on the artcraft k8s runners,
+            // which expose both Vulkan and GL on llvmpipe and can report dozens of CPUs.
+            let threads = match info.backend {
+                wgpu::Backend::Gl => 1,
+                _ => std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+            };
             if let Err(e) = Compositor::try_new_with_format_threads(&device, format, threads) {
                 panic!("{:?} adapter {} (driver {}): {e}", info.backend, info.name, info.driver_info);
             }

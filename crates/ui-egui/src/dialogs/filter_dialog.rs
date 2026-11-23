@@ -8,6 +8,7 @@
 //! The preview runs the *same engine command* on the downsampled proxy document (pixel-sized
 //! parameters scaled by the proxy factor), so what you preview is what you get.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use craft::behavior::NumberCodec;
@@ -460,7 +461,7 @@ fn command_defaults(app: &PhotocraftApp, command: &str, params: &[Param]) -> Map
         proof_setup_defaults(app, &mut map);
     }
     if command == "edit.colorSettings"
-        && let Ok(Value::Object(current)) = serde_json::to_value(&app.session.color.settings)
+        && let Ok(Value::Object(current)) = serde_json::to_value(&app.session.color().settings)
     {
         map.extend(current.into_iter().filter(|(key, _)| params.iter().any(|p| p.key == *key)));
     }
@@ -877,7 +878,7 @@ fn assign_profile_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>)
     let Some(st) = app.session.active() else { return };
     let Some(spec) = photocraft_engine::commands::find("edit.assignProfile") else { return };
     let space = photocraft_engine::color_cmds::mode_space(st.doc.mode);
-    let fits = |name: &str| name == "none" || app.session.color.resolve(name, Some(&st.doc), None).is_ok_and(|p| p.color_space == space);
+    let fits = |name: &str| name == "none" || app.session.color().resolve(name, Some(&st.doc), None).is_ok_and(|p| p.color_space == space);
     let builtin: Vec<String> = Param::parse_list(spec.params)
         .into_iter()
         .filter(|p| p.key == "profile")
@@ -944,7 +945,7 @@ fn global_light_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
 /// Proof Setup reflects the active document's current proofing condition, never remembered values.
 fn proof_setup_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     let Some(st) = app.session.active() else { return };
-    let pv = app.session.color.proof(st.doc.id);
+    let pv = app.session.color().proof(st.doc.id);
     fields.insert("profile".into(), json!(pv.setup.name));
     fields.insert("intent".into(), json!(pv.setup.intent.id()));
     fields.insert("bpc".into(), json!(pv.setup.bpc));
@@ -1207,7 +1208,7 @@ pub(crate) fn preview_document_for_target(
         scale_preview_params(command, &mut p, run_k);
     }
     let mut s = photocraft_engine::Session::new();
-    s.color.settings = color.clone();
+    s.color_mut().settings = color.clone();
     if let Some((foreground, background)) = tool_colors {
         s.tools.foreground = foreground;
         s.tools.background = background;
@@ -1375,6 +1376,9 @@ pub struct FilterPreviewKey {
     pub params: Value,
     pub k: u32,
     pub tool_colors: ([f32; 4], [f32; 4]),
+    /// The scratch read-error generation (`crate::scratch_reads`): a tile that fails to read and recovers changes
+    /// the pixels without a new revision, and a preview computed during the error must not be kept.
+    pub scratch: u64,
 }
 
 #[cfg(test)]

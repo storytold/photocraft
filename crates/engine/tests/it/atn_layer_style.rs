@@ -4,6 +4,7 @@ use craft_psd::{
     descriptor::{Class, Descriptor, Id, MAX_DEPTH, ObjectArray, ReferenceItem, UnicodeString, Value as D},
 };
 use photocraft_doc::{Document, Effect, LayerId};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionStep},
@@ -145,7 +146,7 @@ fn create_layers_playback_matches_native_effect_layers_and_undo_at_each_depth() 
         let (mut recorded, source) = fixture(depth);
         let before = recorded.active().unwrap().doc.clone();
         let past = recorded.active().unwrap().history.past_len();
-        recorded.actions.list.push(action(vec![item(CREATE, create())])).unwrap();
+        recorded.actions_mut().list.push(action(vec![item(CREATE, create())])).unwrap();
         let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none(), "{depth}: {result}");
@@ -176,7 +177,7 @@ fn scale_effects_playback_matches_native_settings_and_undo_at_each_depth() {
                 recorded.execute("actions.setHistory", json!({"singleState":single_state})).unwrap();
                 let before = recorded.active().unwrap().doc.clone();
                 let past = recorded.active().unwrap().history.past_len();
-                recorded.actions.list.push(action(vec![item(SCALE, scale(percent))])).unwrap();
+                recorded.actions_mut().list.push(action(vec![item(SCALE, scale(percent))])).unwrap();
                 let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
                 assert_eq!(result["ran"], 1);
                 assert!(result.get("failed").is_none(), "{depth}/{percent}: {result}");
@@ -202,7 +203,7 @@ fn scale_then_create_layers_matches_native_sequence() {
         recorded.execute("actions.setHistory", json!({"singleState":single_state})).unwrap();
         let before = recorded.active().unwrap().doc.clone();
         let past = recorded.active().unwrap().history.past_len();
-        recorded.actions.list.push(action(vec![item(SCALE, scale(200.0)), item(CREATE, create())])).unwrap();
+        recorded.actions_mut().list.push(action(vec![item(SCALE, scale(200.0)), item(CREATE, create())])).unwrap();
         let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 2);
         assert!(result.get("failed").is_none());
@@ -369,7 +370,7 @@ fn layer_style_malformed_records_stay_kept_without_an_edit() {
         let before = s.active().unwrap().doc.clone();
         let past = s.active().unwrap().history.past_len();
         for action in loaded.actions {
-            s.actions.list.push(action).unwrap();
+            s.actions_mut().list.push(action).unwrap();
         }
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 0);
@@ -390,7 +391,7 @@ fn miskeyed_effects_reference_stays_whole_without_a_blank_layer_edit() {
     let before = s.active().unwrap().doc.clone();
     let past = s.active().unwrap().history.past_len();
     for action in loaded.actions.clone() {
-        s.actions.list.push(action).unwrap();
+        s.actions_mut().list.push(action).unwrap();
     }
     let result = s.execute("actions.play", json!({"action": 0})).unwrap();
     // Play before checking import classification: the old path actually creates a blank layer.
@@ -426,7 +427,7 @@ fn ordinary_layer_make_remains_a_legitimate_control() {
         assert_eq!(a.steps[0].command, "layer.new.layer");
         let (mut s, source) = fixture(8);
         let before = s.active().unwrap().doc.clone();
-        s.actions.list.push(a).unwrap();
+        s.actions_mut().list.push(a).unwrap();
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none());
@@ -470,7 +471,7 @@ fn nested_effects_references_stay_whole_without_a_blank_layer_edit() {
             let before = s.active().unwrap().doc.clone();
             let past = s.active().unwrap().history.past_len();
             for action in loaded.actions.clone() {
-                s.actions.list.push(action).unwrap();
+                s.actions_mut().list.push(action).unwrap();
             }
             let result = s.execute("actions.play", json!({"action": 0})).unwrap();
             // Playback precedes classification so the baseline exposes the actual blank-layer edit.
@@ -514,7 +515,7 @@ fn ordinary_layer_make_native_export_matches_native_playback() {
         let (mut recorded, source) = fixture(8);
         let before = recorded.active().unwrap().doc.clone();
         let past = recorded.active().unwrap().history.past_len();
-        recorded.actions.list.push(a).unwrap();
+        recorded.actions_mut().list.push(a).unwrap();
         let result = recorded.execute("actions.play", json!({"action": 0})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none());
