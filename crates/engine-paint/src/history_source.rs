@@ -65,3 +65,7 @@ pub fn refuse_other_format(st: &DocState, source: &Document) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "history_brush_format_mismatch_tests.rs"]
+mod history_brush_format_mismatch_tests;
