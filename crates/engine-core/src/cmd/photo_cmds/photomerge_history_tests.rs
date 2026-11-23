@@ -78,8 +78,8 @@ fn blend_on_is_one_auto_blend_layers_step_targeting_every_source() {
         let st = s.active().unwrap();
         assert_eq!(st.active_layer, st.doc.top_layer(), "{layout}: the top layer stays the key layer");
         // The first snapshot stays, named after the document.
-        assert_eq!(st.snapshots.len(), 1, "{layout}");
-        assert_eq!(st.snapshots[0].name, st.doc.name, "{layout}");
+        assert_eq!(st.snapshots().len(), 1, "{layout}");
+        assert_eq!(st.snapshots()[0].name, st.doc.name, "{layout}");
     }
 }
 

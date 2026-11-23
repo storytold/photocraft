@@ -1061,7 +1061,10 @@ fn open_photomerge_result(s: &mut Session, doc: Document, unblended: Option<Docu
         st.history.set_current_label(label);
         // The first snapshot (History Options › Automatically Create First Snapshot) is the
         // document before the step; without it the state before the step is not kept.
-        if let (Some(d), Some(first)) = (unblended, st.snapshots.first_mut().filter(|snap| snap.id == 0)) {
+        if let Some(d) = unblended
+            && st.snapshots().first().is_some_and(|snap| snap.id == 0)
+            && let Some(first) = st.snapshots_mut().first_mut()
+        {
             first.doc = std::sync::Arc::new(d);
         }
     }
