@@ -42,7 +42,7 @@ fn refused(s: &mut Session, path: &str, fields: Value) -> String {
 #[test]
 fn notes_txt_with_the_measured_defaults_opens_as_its_bytes_in_a_4_by_4_grayscale_document() {
     let path = notes_file("measured", NOTES);
-    let mut s = Session::new();
+    let mut s = crate::session();
     open_raw(&mut s, &path, json!({"width": 4, "height": 4, "channels": 1, "depth": 8, "byteOrder": "mac", "interleaved": true, "header": 0})).unwrap();
     assert_eq!(s.documents().len(), 1);
     let st = s.active().unwrap();
@@ -61,7 +61,7 @@ fn notes_txt_with_the_measured_defaults_opens_as_its_bytes_in_a_4_by_4_grayscale
 #[test]
 fn width_and_height_alone_take_the_other_fields_from_raw_options_defaults() {
     let path = notes_file("defaults", NOTES);
-    let mut s = Session::new();
+    let mut s = crate::session();
     open_raw(&mut s, &path, json!({"width": 4, "height": 4})).unwrap();
     assert_eq!(gray_bytes(&s), NOTES);
     // Null is the same as leaving a field out.
@@ -72,7 +72,7 @@ fn width_and_height_alone_take_the_other_fields_from_raw_options_defaults() {
 #[test]
 fn the_width_and_height_given_shape_the_rows() {
     let path = notes_file("shape", NOTES);
-    let mut s = Session::new();
+    let mut s = crate::session();
     open_raw(&mut s, &path, json!({"width": 8, "height": 2})).unwrap();
     let doc = &s.active().unwrap().doc;
     assert_eq!((doc.size.width, doc.size.height), (8, 2));
@@ -88,7 +88,7 @@ fn a_header_is_skipped_before_the_first_pixel() {
     let mut bytes = b"HDR".to_vec();
     bytes.extend_from_slice(NOTES);
     let path = notes_file("header", &bytes);
-    let mut s = Session::new();
+    let mut s = crate::session();
     open_raw(&mut s, &path, json!({"width": 4, "height": 4, "header": 3})).unwrap();
     assert_eq!(gray_bytes(&s), NOTES);
 }
@@ -96,7 +96,7 @@ fn a_header_is_skipped_before_the_first_pixel() {
 #[test]
 fn the_document_is_never_saved_back_over_the_raw_file() {
     let path = notes_file("read-only", NOTES);
-    let mut s = Session::new();
+    let mut s = crate::session();
     open_raw(&mut s, &path, json!({"width": 4, "height": 4})).unwrap();
     let st = s.active().unwrap();
     assert!(st.source_read_only);
@@ -107,7 +107,7 @@ fn the_document_is_never_saved_back_over_the_raw_file() {
 #[test]
 fn sizes_the_file_cannot_fill_are_refused_without_a_document() {
     let path = notes_file("misfit", NOTES);
-    let mut s = Session::new();
+    let mut s = crate::session();
     for (fields, says) in [
         // More bytes than the file has, and fewer.
         (json!({"width": 5, "height": 4}), "take 20 bytes, but the file has 16"),
@@ -138,7 +138,7 @@ fn sizes_the_file_cannot_fill_are_refused_without_a_document() {
 fn layouts_whose_result_was_not_measured_are_refused_even_when_they_fit() {
     // 16 bytes fit 2 × 4 at 16 bits, 2 × 2 with 4 channels and 2 × 2 at 32 bits exactly.
     let path = notes_file("unmeasured", NOTES);
-    let mut s = Session::new();
+    let mut s = crate::session();
     for fields in [
         json!({"width": 2, "height": 4, "depth": 16, "byteOrder": "ibm"}),
         json!({"width": 2, "height": 2, "channels": 4}),
@@ -153,7 +153,7 @@ fn layouts_whose_result_was_not_measured_are_refused_even_when_they_fit() {
 #[test]
 fn malformed_raw_options_are_parameter_errors() {
     let path = notes_file("params", NOTES);
-    let mut s = Session::new();
+    let mut s = crate::session();
     for (fields, says) in [
         (json!({"height": 4}), "Photoshop Raw needs \"width\""),
         (json!({"width": 4}), "Photoshop Raw needs \"height\""),
@@ -180,7 +180,7 @@ fn malformed_raw_options_are_parameter_errors() {
 #[test]
 fn raw_options_fields_only_apply_to_the_raw_type() {
     let path = notes_file("other-type", NOTES);
-    let mut s = Session::new();
+    let mut s = crate::session();
     // A bare `raw` is still the camera raw type: a text file isn't one.
     let bare = s.execute("file.openAs", json!({"path": path, "as": "raw"})).unwrap_err().to_string();
     assert!(bare.contains("could not be opened as RAW"), "{bare}");
