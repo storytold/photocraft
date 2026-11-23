@@ -1,4 +1,5 @@
 use super::*;
+use crate::color_cmds::ColorExt;
 use std::sync::Arc;
 fn bytes(little: bool) -> Vec<u8> {
     let mut b = crate::jobs::historical_fixture::historical_rgba16();
