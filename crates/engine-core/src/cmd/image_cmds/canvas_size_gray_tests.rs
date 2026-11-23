@@ -34,14 +34,39 @@ fn top_alpha(s: &Session, x: i32, y: i32) -> f32 {
 const GROW: fn(&str) -> Value = |color| json!({"width": 500, "height": 400, "anchor": "topLeft", "extensionColor": color});
 
 #[test]
-fn gray_extends_the_background_with_128_gray_at_every_depth() {
-    for depth in [8, 16, 32] {
+fn gray_extends_the_background_with_128_gray_at_8_and_16_bits() {
+    for depth in [8, 16] {
         let mut s = doc(depth);
         s.execute("image.canvasSize", GROW("gray")).unwrap();
         assert_eq!(read(&mut s, 450, 350), [128, 128, 128], "depth {depth}: the new area");
         assert_eq!(read(&mut s, 10, 10), [255, 255, 255], "depth {depth}: the old Background keeps its pixels");
         assert_eq!(top_alpha(&s, 450, 350), 0.0, "depth {depth}: only the Background is filled");
     }
+}
+
+/// The Background's stored colour at pixel (x, y).
+fn background_value(s: &Session, x: i32, y: i32) -> [f32; 4] {
+    s.active().unwrap().doc.background().unwrap().surface().unwrap().rgba(x, y)
+}
+
+/// A 32-bit document holds linear light: its Gray is the value an 8-bit grey 128 becomes when the
+/// document is converted to 32 bits (0.2159), not 128/255.
+#[test]
+fn gray_in_a_32_bit_document_is_linear_grey_128() {
+    let mut converted = crate::session();
+    converted.execute("file.new", json!({"width": 4, "height": 4, "depth": 8, "background": "white"})).unwrap();
+    converted.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    converted.execute("image.mode.bits32", json!({})).unwrap();
+    let want = background_value(&converted, 1, 1);
+    assert!((want[0] - 0.2159).abs() < 0.002, "converted grey 128: {want:?}");
+    let mut s = doc(32);
+    s.execute("image.canvasSize", GROW("gray")).unwrap();
+    let got = background_value(&s, 450, 350);
+    for i in 0..3 {
+        assert!((got[i] - want[i]).abs() < 1e-4, "channel {i}: {got:?} vs {want:?}");
+    }
+    assert_eq!(got[3], 1.0);
+    assert_eq!(background_value(&s, 10, 10)[..3], [1.0, 1.0, 1.0], "the old Background keeps its pixels");
 }
 
 #[test]

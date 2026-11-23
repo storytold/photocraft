@@ -684,8 +684,18 @@ fn extension_color(s: &Session, p: &Value) -> [f32; 4] {
         "foreground" => s.tools.foreground,
         "white" => [1.0; 4],
         "black" => [0.0, 0.0, 0.0, 1.0],
-        // The reference application's Gray: 128,128,128 (#14543).
-        "gray" => [128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0],
+        // The reference application's Gray: 128,128,128 (#14543). A 32-bit document holds linear
+        // light, so there it is grey 128 decoded as `change_depth` decodes it (0.2159).
+        "gray" => {
+            let v = 128.0 / 255.0;
+            let v = match s.active().map(|d| (d.doc.mode, d.doc.depth)) {
+                Some((mode @ (ColorMode::Rgb | ColorMode::Grayscale), SampleType::F32)) => {
+                    photocraft_compose::adjust::Transfer::for_document(mode, SampleType::U8).decode(v)
+                }
+                _ => v,
+            };
+            [v, v, v, 1.0]
+        }
         "transparent" => [0.0; 4],
         hex if hex.starts_with('#') => {
             let h = hex.trim_start_matches('#');
