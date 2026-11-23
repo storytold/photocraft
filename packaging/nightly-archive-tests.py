@@ -156,18 +156,21 @@ class ArchivePolicy(unittest.TestCase):
                 ARCHIVE.linux_archive(self.stage, output)
             self.assertFalse((Path(external) / "nightly.tar.gz").exists())
 
-    def test_nonflat_member_name_refuses_and_output_is_cleaned(self):
-        original = tarfile.TarFile.gettarinfo
-        for bad in ("../escape", "/absolute", "nested/name", "x/../photocraft"):
-            with self.subTest(name=bad):
-                def renamed(archive, *args, **kwargs):
-                    info = original(archive, *args, **kwargs)
-                    info.name = bad
-                    return info
-                with mock.patch.object(tarfile.TarFile, "gettarinfo", renamed):
-                    with self.assertRaises(ValueError):
-                        ARCHIVE.linux_archive(self.stage, self.output)
-                self.assertFalse(self.output.exists())
+    def test_nonflat_member_name_refuses(self):
+        stage_root = os.path.realpath(self.stage)
+        with open(self.stage / "README.md", "rb") as incoming:
+            for bad in ("../escape", "/absolute", "nested/name", "x/../README.md", "", ".", ".."):
+                with self.subTest(name=bad), self.assertRaises(ValueError):
+                    ARCHIVE.member_info(stage_root, bad, incoming)
+
+    def test_member_header_matches_what_gettarinfo_records(self):
+        stage_root = os.path.realpath(self.stage)
+        for name in sorted(self.required):
+            with self.subTest(name=name), open(self.stage / name, "rb") as incoming:
+                ours = ARCHIVE.member_info(stage_root, name, incoming)
+                with tarfile.open(fileobj=__import__("io").BytesIO(), mode="w") as reference:
+                    theirs = reference.gettarinfo(fileobj=incoming, arcname=name)
+                self.assertEqual(ours.get_info(), theirs.get_info())
 
     def test_member_read_budget_refuses_before_output(self):
         (self.stage / "OFL-Large.txt").write_bytes(b"x" * 65)
@@ -180,15 +183,15 @@ class ArchivePolicy(unittest.TestCase):
     def test_member_growth_is_rechecked_before_copy_and_output_is_cleaned(self):
         growing = self.stage / "OFL-Growing.txt"
         growing.write_bytes(b"x" * 32)
-        original = ARCHIVE.tarfile.TarFile.gettarinfo
+        original = ARCHIVE.member_info
 
-        def grow_before_stat(archive, *args, **kwargs):
-            if kwargs.get("arcname") == growing.name:
+        def grow_before_stat(stage_root, name, incoming):
+            if name == growing.name:
                 growing.write_bytes(b"x" * 65)
-            return original(archive, *args, **kwargs)
+            return original(stage_root, name, incoming)
 
         with mock.patch.object(ARCHIVE, "MAX_MEMBER_BYTES", 64), \
-                mock.patch.object(ARCHIVE.tarfile.TarFile, "gettarinfo", grow_before_stat):
+                mock.patch.object(ARCHIVE, "member_info", grow_before_stat):
             with self.assertRaises(ValueError):
                 ARCHIVE.linux_archive(self.stage, self.output)
         self.assertFalse(self.output.exists())

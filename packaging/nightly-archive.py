@@ -4,10 +4,13 @@
 The stage and archive must both remain under that independently chosen root.
 No native build, platform signing, or malicious-same-UID sandbox is implied.
 """
+import grp
 import gzip
 import os
 import pathlib
+import pwd
 import re
+import stat
 import sys
 import tarfile
 
@@ -47,6 +50,37 @@ def checked_entries(root, stage):
     return entries
 
 
+def member_info(stage_root, name, incoming):
+    """Header for one stage file, built from the file this run opened rather than from the archive.
+
+    Members are flat names that resolve directly inside the stage they came from.
+    """
+    if os.path.isabs(name) or os.path.basename(name) != name or name in ("", ".", ".."):
+        raise ValueError(f"nightly member name must be a flat file name: {name}")
+    destination = os.path.realpath(os.path.join(stage_root, name))
+    if not destination.startswith(stage_root + os.sep) or os.path.dirname(destination) != stage_root:
+        raise ValueError(f"nightly member resolves outside its stage: {name}")
+    status = os.fstat(incoming.fileno())
+    if not stat.S_ISREG(status.st_mode):
+        raise ValueError(f"nightly member must be a regular file: {name}")
+    # The same fields TarFile.gettarinfo records for a regular file.
+    info = tarfile.TarInfo(os.path.basename(destination))
+    info.type = tarfile.REGTYPE
+    info.mode = stat.S_IMODE(status.st_mode)
+    info.uid, info.gid = status.st_uid, status.st_gid
+    info.size = status.st_size
+    info.mtime = status.st_mtime
+    try:
+        info.uname = pwd.getpwuid(status.st_uid).pw_name
+    except KeyError:
+        pass
+    try:
+        info.gname = grp.getgrgid(status.st_gid).gr_name
+    except KeyError:
+        pass
+    return info
+
+
 def verify_headers(root, output):
     # Bounded ordinary headers, not a transparent PAX/GNU-normalizing reader.
     total = 0
@@ -80,15 +114,7 @@ def linux_archive(stage, output):
             with tarfile.open(fileobj=outgoing, mode="w:gz", format=tarfile.USTAR_FORMAT) as archive:
                 for entry in entries:
                     with root.reader(entry, MAX_MEMBER_BYTES) as incoming:
-                        info = archive.gettarinfo(fileobj=incoming, arcname=entry.name)
-                        # Members stay flat names that resolve inside the stage they came from.
-                        if os.path.isabs(info.name) or os.path.basename(info.name) != info.name or info.name in ("", ".", ".."):
-                            raise ValueError(f"nightly member name must be a flat file name: {info.name}")
-                        destination = os.path.realpath(os.path.join(stage_root, info.name))
-                        if not destination.startswith(stage_root + os.sep) or os.path.dirname(destination) != stage_root:
-                            raise ValueError(f"nightly member resolves outside its stage: {info.name}")
-                        # The recorded name is the checked destination's own name.
-                        info.name = os.path.basename(destination)
+                        info = member_info(stage_root, entry.name, incoming)
                         total += info.size
                         if info.size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
                             raise ValueError("nightly stage grew beyond its read bound")
