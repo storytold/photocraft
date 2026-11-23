@@ -484,6 +484,8 @@ pub(crate) fn take_results(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for taker in TAKERS {
         taker(app, ctx);
     }
+    // Color Settings' Settings menu follows each pick and edit, a script's `ui.dialog.set` included (#14229).
+    crate::filter_dialog::reconcile_color_settings(app, ctx);
 }
 
 /// One pass of the dialogs: the guide edit follows its dialog, the palette shows, the filter preview and the Preferences window are fed, the
