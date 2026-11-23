@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use craft::ui::contract::Bind;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
-use craft::ui::runtime::env::Label;
+use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::runtime::memory::SaveKey;
 use serde_json::{Value, json};
 
@@ -24,7 +24,7 @@ const LOCATIONS: [(&str, &str); 3] = [("inside", "Inside"), ("center", "Center")
 fn rows(foreground: [f32; 3]) -> Vec<Param> {
     let locations = LOCATIONS.iter().map(|(k, l)| (k.to_string(), Label::from(tl!(l)))).collect();
     let mut rows = vec![
-        Param::new("width", tl!("Width:"), ParamKind::number(Some(1.0), Some(250.0), 1.0, 1.0, 0)),
+        Param::new("width", tl!("Width:"), ParamKind::number(Some(1.0), Some(250.0), 1.0, 1.0, 0)).unit(UnitKind::Pixels),
         Param::new("color", tl!("Color:"), ParamKind::color(Some(foreground))),
         Param::new("location", tl!("Location:"), ParamKind::radio(locations, Some("center".into()))),
     ];
@@ -43,7 +43,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     }
     let [r, g, b, _] = app.session.tools.foreground;
     let rows = rows([r, g, b]);
-    let title = Label::from(tl!("Stroke…"));
+    let title = Label::from(tl!("Stroke"));
     open_param(app, COMMAND, DialogFields::new(), held, move |fields| {
         ParamDialog::new(COMMAND, title.clone(), Cow::Owned(rows.clone())).values(Bind::bound(fields)).remember(SaveKey::named(REMEMBER))
     })

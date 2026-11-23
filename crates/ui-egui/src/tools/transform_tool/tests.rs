@@ -6,6 +6,7 @@ use craft::draw::ui::transform::{TransformChoice, TransformEdit, TransformMenuWo
 use craft::i18n::WordSet;
 use craft::imaging::trace::{MaskSource, outline};
 use craft::imaging::ui::warp::{CylinderValues, WarpMesh, WarpSplit};
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::preview::AbovePlan;
 use super::warp::{cylinder_edit, cylinder_values, grid_edit};
@@ -1223,7 +1224,7 @@ fn nested_group_preview_excludes_its_siblings() {
 
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let target_pixels = doc.layers.pop().unwrap();
     let mut sibling = Layer::raster("sibling", PixelFormat::RGBA8);
     sibling.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(12, 12, 20, 20), &[0.0, 0.0, 1.0, 1.0]);
@@ -1239,7 +1240,7 @@ fn artboard_preview_app(background: photocraft_doc::ArtboardBackground) -> (Box<
     use photocraft_doc::{Artboard, Layer};
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let red = doc.layers.pop().unwrap();
     let red_id = red.id;
     let mut blue = Layer::raster("covering blue", photocraft_color::PixelFormat::RGBA8);
@@ -1251,7 +1252,7 @@ fn artboard_preview_app(background: photocraft_doc::ArtboardBackground) -> (Box<
         ab.background = background;
         g.artboard = Some(ab);
     }
-    doc.layers = vec![board];
+    doc.layers = vec![board].into();
     (app, board_id, red_id)
 }
 
@@ -1318,7 +1319,7 @@ fn nested_group_preview_detaches_every_clipped_ancestor() {
 
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let target_pixels = doc.layers.pop().unwrap();
     let target = Layer::group("target", vec![target_pixels]);
     let target_id = target.id;
@@ -1340,7 +1341,7 @@ fn several_preview_detaches_clipped_ancestors() {
     use photocraft_doc::Layer;
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
     let st = app.session.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let first = doc.layers.pop().unwrap();
     let first_id = first.id;
     let mut second = Layer::raster("second", PixelFormat::RGBA8);
@@ -1634,9 +1635,9 @@ fn transform_preview_preserves_displayed_profile_colors() {
                 Ok(())
             })
             .unwrap();
-        app.session.color.settings.monitor_profile = monitor.into();
+        app.session.color_mut().settings.monitor_profile = monitor.into();
         let st = app.session.active().unwrap();
-        let display = app.session.color.canvas_display(&st.doc).unwrap();
+        let display = app.session.color().canvas_display(&st.doc).unwrap();
         assert_eq!(!display.is_identity(), wide_gamut || monitor != "srgb");
         let composite = photocraft_compose::render(&st.doc, bounds);
         let expected = crate::canvas::display_image(Some(&display), &composite);
@@ -1683,7 +1684,7 @@ fn preview_applies_the_linked_mask() {
 #[test]
 fn transform_selection_tint_is_not_document_color() {
     let mut app = app_with_square(8, photocraft_geom::Rect::new(0, 0, 8, 8));
-    app.session.color.settings.monitor_profile = "display-p3".into();
+    app.session.color_mut().settings.monitor_profile = "display-p3".into();
     app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
     let ctx = gpu_ctx();
     begin_selection(&mut app, &ctx).unwrap();
@@ -1708,9 +1709,9 @@ fn transform_covering_layer_uses_the_same_monitor_profile() {
             Ok(())
         })
         .unwrap();
-    app.session.color.settings.monitor_profile = "display-p3".into();
+    app.session.color_mut().settings.monitor_profile = "display-p3".into();
     let doc = app.session.active().unwrap().doc.clone();
-    let display = app.session.color.canvas_display(&doc).unwrap();
+    let display = app.session.color().canvas_display(&doc).unwrap();
     let expected = [lower, upper].map(|id| {
         let mut solo = (*doc).clone();
         for layer in &mut solo.layers {
@@ -2180,4 +2181,37 @@ fn a_waiting_new_layer_click_keeps_the_layer_it_was_made_on() {
     let at = |id| order.iter().position(|l| *l == id).unwrap();
     assert_eq!(at(new), at(placed) + 1, "the new layer sits right above the layer selected at the click: {order:?}");
     assert_eq!(st.active_layer, Some(new));
+}
+
+/// #15547: once Escape or Enter ends Free Transform, the options bar shows the active tool's members again in the
+/// next frame, not the transform fields.
+#[test]
+fn ending_the_transform_brings_back_the_tools_options_bar() {
+    use egui_kittest::kittest::Queryable as _;
+    for key in [egui::Key::Escape, egui::Key::Enter] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.ui.tool = Tool::Gradient;
+        let mut h = harness(app, egui::vec2(1400.0, 900.0));
+        h.run_steps(4);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("Reverse").is_none(), "the transform fields replace the Gradient members");
+        h.key_press(key);
+        h.run_steps(2);
+        assert!(h.state().ui.transform.is_none(), "{key:?} ended the transform");
+        assert!(h.query_by_label("Reverse").is_some(), "after {key:?} the Gradient members are back");
+    }
+}
+
+/// #15548: Free Transform on an unturned, unskewed box shows the horizontal skew as "0", not "-0".
+#[test]
+fn an_unskewed_box_shows_its_horizontal_skew_as_zero() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = harness(app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24)), egui::vec2(1400.0, 900.0));
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Horizontal skew").value().as_deref(), Some("0"));
 }

@@ -8,6 +8,7 @@
 //! [`note_alerts`].
 
 use craft::behavior::Selection;
+use photocraft_engine::color_cmds::ColorExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -48,8 +49,8 @@ mod count_group_name_tests;
 mod count_size_alert_tests;
 
 /// The registry ids of the two panels the menu items toggle.
-const MEASUREMENT_LOG: &str = "measurementLog";
-const NOTES: &str = "notes";
+pub(crate) const MEASUREMENT_LOG: &str = "measurementLog";
+pub(crate) const NOTES: &str = "notes";
 
 /// The Count tool options bar's number (#11764): with one group (or none), its markers; with two
 /// or more, the markers of the visible groups, then the current group's in brackets (0 while it
@@ -114,7 +115,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
             // A check item with no document too: an item's kind never changes (native menus).
             let kind = id.strip_prefix("view.proofSetup.").and_then(photocraft_engine::proof_sim::ProofKind::from_id)?;
             let Some(d) = app.session.active() else { return Some(false) };
-            let pv = app.session.color.proof(d.doc.id);
+            let pv = app.session.color().proof(d.doc.id);
             Some(pv.enabled && pv.setup.kind == kind)
         }
     }

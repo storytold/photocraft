@@ -33,7 +33,7 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> DialogId {
     let command = if command == FROM_LAYERS { FROM_LAYERS } else { NEW_GROUP };
     let name = app.session.active().map(|st| st.doc.next_layer_name("Group")).unwrap_or_else(|| "Group 1".into());
     // The window title, as in Photoshop.
-    let title = if command == FROM_LAYERS { tl!("New Group from Layers…") } else { tl!("New Group…") };
+    let title = if command == FROM_LAYERS { tl!("New Group from Layers") } else { tl!("New Group") };
     params::open_param(app, command, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
         let rows = vec![
             Param::new("name", tl!("Name:"), ParamKind::text(name.clone())),
