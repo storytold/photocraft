@@ -176,6 +176,21 @@ fn paint_dialog_target<C>(which: ShapePaint, fg: C, bg: C) -> Option<(crate::sha
     }
 }
 
+/// The Align Edges checkbox of the Triangle and Ellipse tools, after the shape bar. The Triangle's
+/// is greyed in Path mode (#13370); the Ellipse's only in Pixels mode (#13237).
+fn align_edges_checkbox(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+    if !matches!(tool, Tool::Triangle | Tool::EllipseShape) {
+        return;
+    }
+    Divider::vertical().show(ui);
+    let mode = app.ui.tool_options.shape_mode;
+    let enabled = if tool == Tool::Triangle { mode == VectorMode::Shape } else { mode != VectorMode::Pixels };
+    let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(enabled).show(ui);
+    if let Some(next) = on.value().copied() {
+        app.ui.tool_options.align_edges = next;
+    }
+}
+
 pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, paint: bool) {
     // Path mode edits only the next outline: an active shape layer is not the target.
     let target = if paint { selected_shape(&app.session) } else { None };
@@ -225,15 +240,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         .chips(|which, chip, chip_ui| decorate_chip(chip, which, &mut library, chip_ui))
         .show(ui);
     let (fill_gradient, stroke_gradient) = (library.gradient(ShapePaint::Fill), library.gradient(ShapePaint::Stroke));
-    if tool == Tool::Triangle {
-        Divider::vertical().show(ui);
-        // Only a shape layer has pixel edges to align: greyed in Path mode (#13370).
-        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
-        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
-        if let Some(next) = on.value().copied() {
-            app.ui.tool_options.align_edges = next;
-        }
-    }
+    align_edges_checkbox(app, ui, tool);
 
     let mut recent: Option<[f32; 3]> = None;
     let mut remembered: Vec<Fill> = Vec::new();
