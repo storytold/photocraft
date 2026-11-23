@@ -1,8 +1,9 @@
-//! Camera Raw's GPU preview pass against the CPU develop (the oracle), stage by stage, at 8, 16
-//! and 32 bits. Skips, with a message, when there is no adapter or device or it can't render
-//! `Rgba32Float`; with `WGPU_BACKEND` set those fail instead, as in `parity.rs`. A pipeline that
-//! doesn't build on an adapter that can run it fails. The shader itself is validated without a
-//! GPU ([`the_shader_validates_without_a_gpu`]), so a WGSL error fails on every runner.
+//! Camera Raw's GPU preview pass against the CPU develop (the oracle), stage by stage, at an
+//! integer depth (8 or 16 bits) and at 32 bits (see [`depths`]). Skips, with a message, when
+//! there is no adapter or device or it can't render `Rgba32Float`; with `WGPU_BACKEND` set those
+//! fail instead, as in `parity.rs`. A pipeline that doesn't build on an adapter that can run it
+//! fails. The shader itself is validated without a GPU ([`the_shader_validates_without_a_gpu`]),
+//! so a WGSL error fails on every runner.
 
 use photocraft_algo::camera_raw::{self as raw, CameraRaw, DevelopInputs, StoredVignetteStyle, Wheel};
 use photocraft_gpu::{CameraRawDevelop, DeviceHealth, Fault};
@@ -135,6 +136,15 @@ enum Depth {
 
 const DEPTHS: [Depth; 3] = [Depth::Eight, Depth::Sixteen, Depth::Float];
 
+/// The depths the `i`th case of a set runs at: one integer depth and 32 bits. 8 and 16 bits both
+/// develop with `float = false` (the dialog hands the develop only `float`, see
+/// `crates/ui-egui/src/dialogs/camera_raw_gpu.rs`), so they share every line of the CPU develop
+/// and the pass and differ only in how [`image`] quantizes the input; cases alternate between
+/// them so both quantizations still run.
+fn depths(i: usize) -> [Depth; 2] {
+    [DEPTHS[i % 2], Depth::Float]
+}
+
 fn hash(i: usize, c: u64) -> f32 {
     let mut z = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ c.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
     z = (z ^ (z >> 29)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -208,8 +218,8 @@ fn check(name: &str, sets: &[Case]) {
 
 fn check_at(name: &str, sets: &[Case], size: (usize, usize)) {
     let Some(mut g) = gpu() else { return };
-    for p in sets {
-        for depth in DEPTHS {
+    for (i, p) in sets.iter().enumerate() {
+        for depth in depths(i) {
             let d = compare_at(&mut g, p, depth, size);
             eprintln!("{name} {depth:?}: max |GPU - CPU| = {d:.2e}");
         }
@@ -363,8 +373,10 @@ fn identity_leaves_pixels_alone_and_detail_has_no_pass() {
     let stages = per_pixel(&p, 64, 32, false, None).unwrap();
     let out = g.dev.develop(&g.device, &g.queue, None, &src, Some(1), [64, 32], &stages).unwrap();
     assert_eq!(out, src, "the CPU develop returns early, unclipped");
+    // The stages hand Detail over (craft-libs#3101), but the pass has no Detail stage yet, so the
+    // dialog keeps these on the CPU (`camera_raw_gpu::gpu_stages` in photocraft-ui-egui).
     for set in [cr! { sharpen_amount: 10.0}, cr! { noise_luminance: 10.0, clarity: 20.0}, cr! { noise_color: 10.0, dehaze: 20.0}] {
-        assert!(spatial(&set) && per_pixel(&set, 64, 32, false, Some((0.0, 1.0))).is_none(), "{set:?}");
+        assert!(spatial(&set) && per_pixel(&set, 64, 32, false, Some((0.0, 1.0))).is_some_and(|s| s.detail.is_some()), "{set:?}");
     }
     // Whites and Blacks need the image's points, unless a spatial stage's passes measure them.
     assert!(per_pixel(&cr! { whites: 10.0}, 64, 32, false, None).is_none());
@@ -439,15 +451,17 @@ fn shadows_and_highlights_on_tiny_odd_and_flat_frames() {
         let stages = per_pixel(&p, 3, 3, false, None).unwrap();
         assert!(g.dev.develop(&g.device, &g.queue, None, &image(w, h, Depth::Eight), None, [w as u32, h as u32], &stages).is_err());
     }
-    for size in [(3, 3), (5, 3), (37, 23), (300, 7)] {
-        for depth in DEPTHS {
-            let d = compare_at(&mut g, &p, depth, size);
-            eprintln!("shadows/highlights {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
-        }
+    // One depth per size, in turn: the size decides the pyramid and the edges, the depth only the
+    // input's quantization and whether the result clips, which `shadows_and_highlights` checks
+    // at every depth.
+    for (i, size) in [(3, 3), (5, 3), (37, 23), (300, 7)].into_iter().enumerate() {
+        let depth = DEPTHS[i % DEPTHS.len()];
+        let d = compare_at(&mut g, &p, depth, size);
+        eprintln!("shadows/highlights {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
     }
-    // A flat frame has no range to filter.
+    // A flat frame has no range to filter. It isn't quantized, so one integer depth.
     let flat = vec![[0.4, 0.35, 0.3, 1.0]; 64 * 48];
-    for depth in DEPTHS {
+    for depth in depths(0) {
         compare_image(&mut g, &p, depth, &flat, (64, 48));
     }
 }
@@ -480,7 +494,7 @@ fn shadows_and_highlights_with_per_pixel_stages() {
     check_at(
         "shadows/highlights + per pixel",
         &[
-            all.clone(),
+            all,
             // Whites and Blacks measured after the filter, both directions.
             cr! { shadows: 60.0, whites: 70.0, blacks: -45.0},
             cr! { highlights: -60.0, whites: -60.0, blacks: 50.0, exposure: -0.4},
@@ -488,13 +502,9 @@ fn shadows_and_highlights_with_per_pixel_stages() {
         ],
         (171, 48),
     );
-    // At the dialog's proxy width, at one depth: the depth only changes how the input is
-    // quantized (8 and 16 bits both develop with `float = false`), and every depth already ran
-    // above at 171×48. The long side is what matters here (subsampled pyramid levels); the short
-    // one only needs to keep several levels, so the frame is a strip.
-    let Some(mut g) = gpu() else { return };
-    let d = compare_at(&mut g, &all, Depth::Sixteen, (858, 120));
-    eprintln!("shadows/highlights + per pixel 858x120: max |GPU - CPU| = {d:.2e}");
+    // The dialog's proxy width (the pyramid levels and range cells at that size) runs in
+    // `clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages`, whose first set
+    // has Shadows and Highlights too.
 }
 
 /// Asserts that each of `sets` moves some pixel of the test image by over 2 %, so a comparison
@@ -584,21 +594,22 @@ fn clarity_texture_and_dehaze_on_tiny_and_odd_frames() {
     let Some(mut g) = gpu() else { return };
     let p = cr! { dehaze: 45.0, clarity: 50.0, texture: 60.0, whites: 20.0, blacks: -20.0};
     // Without Shadows and Highlights even 1 and 2 pixel frames develop on the GPU.
-    for size in [(1, 1), (2, 2), (40, 2), (3, 3), (5, 3), (37, 23), (300, 7)] {
-        for depth in DEPTHS {
-            let d = compare_at(&mut g, &p, depth, size);
-            eprintln!("clarity/texture/dehaze {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
-        }
+    // One depth per size, in turn, as in `shadows_and_highlights_on_tiny_odd_and_flat_frames`;
+    // `clarity_texture_and_dehaze` checks the stages at every depth.
+    for (i, size) in [(1, 1), (2, 2), (40, 2), (3, 3), (5, 3), (37, 23), (300, 7)].into_iter().enumerate() {
+        let depth = DEPTHS[i % DEPTHS.len()];
+        let d = compare_at(&mut g, &p, depth, size);
+        eprintln!("clarity/texture/dehaze {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
     }
     // Texture's blur on a small proxy is too narrow to change anything; the stage still runs.
     let narrow = cr! { texture: 80.0, contrast: 10.0, pixel_scale: 0.1};
     assert!(per_pixel(&narrow, 64, 48, true, None).and_then(|s| s.texture).is_some_and(|t| t.radii.is_empty()));
-    for depth in DEPTHS {
+    for depth in depths(1) {
         compare_at(&mut g, &narrow, depth, (64, 48));
     }
-    // A flat frame: no haze to find, no detail to raise.
+    // A flat frame: no haze to find, no detail to raise. Not quantized, so one integer depth.
     let flat = vec![[0.4, 0.35, 0.3, 1.0]; 64 * 48];
-    for depth in DEPTHS {
+    for depth in depths(0) {
         compare_image(&mut g, &p, depth, &flat, (64, 48));
     }
 }
@@ -620,25 +631,28 @@ fn dehaze_opens_the_dark_channel_like_the_cpu() {
             [c[0], c[1], c[2], 1.0]
         })
         .collect();
-    for dehaze in [100.0, 60.0, -40.0] {
-        for depth in DEPTHS {
-            let d = compare_image(&mut g, &cr! { dehaze: dehaze }, depth, &src, (w, h));
-            eprintln!("dehaze {dehaze} on the tower {depth:?}: max |GPU - CPU| = {d:.2e}");
-        }
+    // The scene isn't quantized, so the depth only picks `float` (whether the result clips); one
+    // per strength, both in turn.
+    for (dehaze, depth) in [(100.0, Depth::Float), (60.0, Depth::Eight), (-40.0, Depth::Float)] {
+        let d = compare_image(&mut g, &cr! { dehaze: dehaze }, depth, &src, (w, h));
+        eprintln!("dehaze {dehaze} on the tower {depth:?}: max |GPU - CPU| = {d:.2e}");
     }
 }
 
 #[test]
 fn dehaze_remakes_its_copy_when_the_white_balance_changes() {
     let Some(mut g) = gpu() else { return };
-    let src = image(858, 572, Depth::Eight);
+    // The dialog's proxy width, so the copy is subsampled as there; the cache key doesn't hold the
+    // size, so the frame is a strip.
+    let (w, h) = (858, 120);
+    let src = image(w, h, Depth::Eight);
     // Same source key throughout: the copy is cached by it and by the white balance.
     for temperature in [25.0, -40.0, -40.0, 0.0] {
         let p = cr! { dehaze: 50.0, temperature};
         let mut cpu = src.clone();
-        develop(&mut cpu, 858, 572, &p, false);
-        let stages = per_pixel(&p, 858, 572, false, None).unwrap();
-        let out = g.dev.develop(&g.device, &g.queue, None, &src, Some(3), [858, 572], &stages).unwrap();
+        develop(&mut cpu, w, h, &p, false);
+        let stages = per_pixel(&p, w, h, false, None).unwrap();
+        let out = g.dev.develop(&g.device, &g.queue, None, &src, Some(3), [w as u32, h as u32], &stages).unwrap();
         let d = out.iter().zip(&cpu).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
         assert!(d <= TOL, "temperature {temperature}: off by {d}");
     }
