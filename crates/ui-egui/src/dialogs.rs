@@ -103,6 +103,11 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
+        ParamFamily {
+            check: Some(crate::view_cmds::dialogs::batch_check),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == "file.automate.batch", filter_dialog::run)
+        },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
