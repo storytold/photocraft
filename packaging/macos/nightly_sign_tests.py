@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 import zipfile
 
@@ -338,6 +339,28 @@ class Verify(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.f.bundle(gui="#!/bin/sh\necho 'PhotoCraft 0.23.1 (stable)'\n")
         self.assertNotEqual(self.verify("--expect", "unsigned").returncode, 0)
+
+    def test_the_launcher_profile_form_must_answer_promptly_and_cleanly(self):
+        answer = f"echo 'PhotoCraft {VERSION} (nightly-v1)'"
+        # The shared producer smoke's exact form, with a fresh profile directory.
+        exact = ('#!/bin/sh\nif [ "$1" = --launch-profile ]; then\n'
+                 '  [ "$#" = 5 ] && [ "$2" = nightly-v1 ] && [ "$3" = --profile-root ] && [ -d "$4" ] && [ "$5" = --version ] || exit 7\n'
+                 f'fi\n{answer}\n')
+        self.f.bundle(gui=exact)
+        result = self.verify("--expect", "unsigned")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        hangs = f'#!/bin/sh\n[ "$1" != --launch-profile ] || exec /bin/sleep 60\n{answer}\n'
+        self.f.bundle(gui=hangs)
+        started = time.monotonic()
+        result = self.verify("--expect", "unsigned")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("within 15 s", result.stdout)
+        self.assertLess(time.monotonic() - started, 45, "a hanging query is ended, not waited for")
+        noisy = f'#!/bin/sh\n[ "$1" != --launch-profile ] || echo refusal >&2\n{answer}\n'
+        self.f.bundle(gui=noisy)
+        result = self.verify("--expect", "unsigned")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("standard error", result.stdout)
 
     def test_a_signed_check_needs_the_signature_ticket_and_team(self):
         self.f.bundle()

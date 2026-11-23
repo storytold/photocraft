@@ -9,8 +9,10 @@
 # without extended attributes. `signed` (the feed artifact): Developer ID of the team (--team, else
 # NIGHTLY_APPLE_TEAM_ID), hardened runtime, secure timestamp, stapled ticket, Gatekeeper accepts it as
 # notarized. `unsigned` (nightly.sh's compile output, e.g. pull-request CI) checks no signature.
-# Last, the bundle's GUI runs `--version` with an empty environment and must print exactly
-# `PhotoCraft <version> (nightly-v1)`.
+# Last, the bundle's GUI answers its version query with an empty environment, both plainly and in the
+# Launcher's form `--launch-profile nightly-v1 --profile-root <fresh dir> --version` (the shared producer
+# smoke): each must exit 0 within 15 seconds, print exactly `PhotoCraft <version> (nightly-v1)` and
+# write nothing to standard error.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=nightly-lib.sh
@@ -23,7 +25,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || mac_nightly_die "missing $1 value"
       case "$1" in --input) INPUT="$2" ;; --expect) EXPECT="$2" ;; --team) TEAM="$2" ;; esac
       shift 2 ;;
-    -h | --help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,15p' "$0"; exit 0 ;;
     *) mac_nightly_die "unsupported argument: $1" ;;
   esac
 done
@@ -56,8 +58,16 @@ if [[ "$EXPECT" == signed ]]; then
   mac_nightly_check_assessment "$assessment" || mac_nightly_die 'Gatekeeper does not accept the bundle as notarized'
 fi
 
-mkdir -m 700 "$WORK/home" "$WORK/tmp"
-actual="$(env -i HOME="$WORK/home" TMPDIR="$WORK/tmp/" PATH=/usr/bin:/bin "$APP/Contents/MacOS/PhotoCraft" --version)" \
-  || mac_nightly_die 'the version query failed'
-[[ "$actual" == "PhotoCraft $VERSION (nightly-v1)" ]] || mac_nightly_die "the bundle reports '$actual', not PhotoCraft $VERSION (nightly-v1)"
-echo "==> verified ($EXPECT): $actual"
+# macOS has no timeout(1): perl's alarm survives its exec and ends a query that hangs (a dialog, say).
+query() {
+  local out
+  out="$(env -i HOME="$WORK/home" TMPDIR="$WORK/tmp/" PATH=/usr/bin:/bin \
+    /usr/bin/perl -e 'alarm 15; exec @ARGV or die' "$APP/Contents/MacOS/PhotoCraft" "$@" 2>"$WORK/stderr")" \
+    || mac_nightly_die "the version query ($*) failed or did not finish within 15 s"
+  [[ ! -s "$WORK/stderr" ]] || mac_nightly_die "the version query ($*) wrote to standard error: $(head -c 2000 "$WORK/stderr")"
+  [[ "$out" == "PhotoCraft $VERSION (nightly-v1)" ]] || mac_nightly_die "the version query ($*) reports '$out', not PhotoCraft $VERSION (nightly-v1)"
+}
+mkdir -m 700 "$WORK/home" "$WORK/tmp" "$WORK/profile"
+query --version
+query --launch-profile nightly-v1 --profile-root "$WORK/profile" --version
+echo "==> verified ($EXPECT): PhotoCraft $VERSION (nightly-v1), plain and in the Launcher's profile form"
