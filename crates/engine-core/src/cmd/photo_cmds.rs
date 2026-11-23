@@ -1031,6 +1031,8 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
 /// order) holding the `aligned` pixels, in source order, without seam masks.
 fn unblended_layers(doc: &Document, aligned: Vec<Surface>) -> Document {
     let mut d = doc.clone();
+    // One aligned surface per layer: a mismatch would leave layers blended in the snapshot.
+    debug_assert_eq!(d.layers.len(), aligned.len(), "one aligned surface per Photomerge layer");
     // `children[0]` is the bottom layer, the last source.
     for (l, px) in d.layers.iter_mut().zip(aligned.into_iter().rev()) {
         l.content = LayerContent::Raster(px);
