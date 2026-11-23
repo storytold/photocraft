@@ -176,6 +176,22 @@ fn paint_dialog_target<C>(which: ShapePaint, fg: C, bg: C) -> Option<(crate::sha
     }
 }
 
+/// The Align Edges checkbox at the end of the Triangle (#13370) and Line (#13252) tools' bars. Only a shape layer has
+/// pixel edges to align, so it is greyed in Path and Pixels mode. The Line tool keeps its own setting.
+fn align_edges_checkbox(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
+    if !matches!(tool, Tool::Triangle | Tool::Line) {
+        return;
+    }
+    Divider::vertical().show(ui);
+    let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
+    let o = &mut app.ui.tool_options;
+    let setting = if tool == Tool::Line { &mut o.line_align_edges } else { &mut o.align_edges };
+    let on = Checkbox::new(Bind::given(*setting)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
+    if let Some(next) = on.value().copied() {
+        *setting = next;
+    }
+}
+
 pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, paint: bool) {
     // Path mode edits only the next outline: an active shape layer is not the target.
     let target = if paint { selected_shape(&app.session) } else { None };
@@ -225,15 +241,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         .chips(|which, chip, chip_ui| decorate_chip(chip, which, &mut library, chip_ui))
         .show(ui);
     let (fill_gradient, stroke_gradient) = (library.gradient(ShapePaint::Fill), library.gradient(ShapePaint::Stroke));
-    if tool == Tool::Triangle {
-        Divider::vertical().show(ui);
-        // Only a shape layer has pixel edges to align: greyed in Path mode (#13370).
-        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
-        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
-        if let Some(next) = on.value().copied() {
-            app.ui.tool_options.align_edges = next;
-        }
-    }
+    align_edges_checkbox(app, ui, tool);
 
     let mut recent: Option<[f32; 3]> = None;
     let mut remembered: Vec<Fill> = Vec::new();

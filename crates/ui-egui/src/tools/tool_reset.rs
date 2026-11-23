@@ -251,6 +251,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             corner_radius,
             polygon_sides,
             line_weight,
+            line_align_edges,
             arrow_start,
             arrow_end,
             arrow_width,

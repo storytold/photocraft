@@ -156,6 +156,10 @@ pub struct ToolOptions {
     /// Shape tools' Align Edges: snap the drawn shape's box to whole pixels. On by default; the
     /// Triangle tool shows it, enabled in Shape mode only (#13370); the other shape tools always snap.
     pub align_edges: bool,
+    /// The Line tool's own Align Edges (#13252): on by default, the line's ends and a horizontal or
+    /// vertical line's sides on pixel edges; off, the drag's fractional points and weight are kept. Shown after
+    /// Weight, enabled in Shape mode only.
+    pub line_align_edges: bool,
     pub polygon_sides: u32,
     pub line_weight: f32,
     /// Line arrowheads.
@@ -499,6 +503,7 @@ impl Default for ToolOptions {
             shape_stroke_gradient: None,
             corner_radius: 0.0,
             align_edges: true,
+            line_align_edges: true,
             polygon_sides: 5,
             line_weight: 1.0,
             arrow_start: false,

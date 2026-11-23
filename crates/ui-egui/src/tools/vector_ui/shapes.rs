@@ -123,17 +123,22 @@ fn whole_box(rect: &Rect, whole: bool) -> Option<Rect> {
     (w >= 1.0 && h >= 1.0).then(|| Rect::new(x0, y0, x0 + w, y0 + h))
 }
 
-/// Whether a drag of `kind` lands on whole pixels. Align Edges (#13370) is the Triangle tool's
-/// option, and only in Shape mode, where its checkbox is enabled; the other Shape tools, and a
-/// greyed checkbox, still snap.
+/// Whether a drag of `kind` lands on whole pixels. Align Edges is the Triangle tool's (#13370) and the
+/// Line tool's own (#13252) option, and only in Shape mode, where its checkbox is enabled; the other
+/// Shape tools, and a greyed checkbox, still snap.
 pub(super) fn snaps_to_pixels(app: &PhotocraftApp, kind: ShapeKind) -> bool {
     let o = &app.ui.tool_options;
-    !(kind == ShapeKind::Triangle && o.shape_mode == super::VectorMode::Shape && !o.align_edges)
+    let off = match kind {
+        ShapeKind::Triangle => !o.align_edges,
+        ShapeKind::Line => !o.line_align_edges,
+        _ => false,
+    };
+    !(off && o.shape_mode == super::VectorMode::Shape)
 }
 
 /// `geometry` as a drag commits it: boxes on whole pixels, a line aligned to pixel edges
 /// ([`align_line_edges`]; `keep_angle` for a ⇧-constrained one). `whole` off keeps a box's
-/// fractions ([`snaps_to_pixels`]). `None` when too small to draw.
+/// fractions and a line's ends and weight ([`snaps_to_pixels`]). `None` when too small to draw.
 /// The one place the rounding lives: `shape_outline` and `finish_drag` both call it.
 fn snapped(geometry: &ShapeGeometry, keep_angle: bool, whole: bool) -> Option<ShapeGeometry> {
     Some(match geometry {
@@ -145,6 +150,9 @@ fn snapped(geometry: &ShapeGeometry, keep_angle: bool, whole: bool) -> Option<Sh
         ShapeGeometry::Line { from, to, weight } => {
             if from.distance(*to) < 1.0 {
                 return None;
+            }
+            if !whole {
+                return Some(geometry.clone());
             }
             let (a, b, weight) = align_line_edges([from.x, from.y], [to.x, to.y], weight.max(1.0), keep_angle)?;
             ShapeGeometry::Line { from: Point::new(a[0], a[1]), to: Point::new(b[0], b[1]), weight }
