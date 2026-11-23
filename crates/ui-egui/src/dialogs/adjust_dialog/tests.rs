@@ -7,7 +7,6 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use crate::adjust_editors::values;
-use crate::tone::{self, HistSource};
 
 fn app_with_image() -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
@@ -740,11 +739,6 @@ fn selective_app() -> Box<PhotocraftApp> {
     s.execute("edit.fill", json!({"color": "#2030c0"})).unwrap();
     s.execute("select.deselect", json!({})).unwrap();
     PhotocraftApp::new(s, crate::Services::default())
-}
-
-fn pixel(app: &PhotocraftApp, x: usize, y: usize) -> [f32; 4] {
-    let st = app.session.active().unwrap();
-    photocraft_compose::render(&st.doc, st.doc.bounds()).px[y * 64 + x]
 }
 
 /// Recorded parameters the editor cannot read never reach the engine: the dialog refuses to open or OK refuses.
