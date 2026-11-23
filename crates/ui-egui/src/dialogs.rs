@@ -782,6 +782,16 @@ pub mod tiff_options_ui;
 pub mod vp_ui;
 pub mod wide_angle_ui;
 
+/// The alert a finished Artboards to PDF shows (#13657): "Artboards To PDF was successful." with
+/// the PDF's path on a second line, titled after the command. `result` is the command's; a job
+/// reports it when it lands (`jobs_ui`), and a result without a `path` (a job still running, or
+/// Document Per Artboard) shows nothing.
+pub(crate) fn artboards_to_pdf_done(app: &mut PhotocraftApp, result: &Value) {
+    let Some(path) = result.get("path").and_then(Value::as_str) else { return };
+    let message = format!("{}\n{path}", tl!("Artboards To PDF was successful."));
+    alerts::show(app, craft::ui::dialog::Alert::new("Artboards To PDF", message));
+}
+
 /// Confirm and cancel a dialog from a test, on the app's own context.
 #[cfg(test)]
 pub(crate) mod testing {
@@ -807,14 +817,4 @@ pub(crate) mod testing {
         let ctx = app.ctx().clone();
         crate::testing::run_ui(&ctx, Default::default(), |ui| super::run(app, ui));
     }
-}
-
-/// The alert a finished Artboards to PDF shows (#13657): "Artboards To PDF was successful." with
-/// the PDF's path on a second line, titled after the command. `result` is the command's; a job
-/// reports it when it lands (`jobs_ui`), and a result without a `path` (a job still running, or
-/// Document Per Artboard) shows nothing.
-pub(crate) fn artboards_to_pdf_done(app: &mut PhotocraftApp, result: &Value) {
-    let Some(path) = result.get("path").and_then(Value::as_str) else { return };
-    let message = format!("{}\n{path}", tl!("Artboards To PDF was successful."));
-    alerts::show(app, craft::ui::dialog::Alert::new("Artboards To PDF", message));
 }
