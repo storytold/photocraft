@@ -36,24 +36,30 @@ The conversion report describes how each GIMP layer filter was handled. Editor O
 Embedded and rooted automation Open can turn supported Exposure and Brightness/Contrast stages
 into editable Smart Filters when the session authorizes the native commands. RGB float layers
 can also retain a Levels stage with normalized ascending endpoints and full-strength settings.
-The report records that these stages use PhotoCraft's native rendering rules.
+Qualified RGB sources can retain Invert, Posterize, Vibrance, Saturation, Channel Mixer and Sepia
+stages. The report records that these stages use PhotoCraft's native rendering rules.
 A single masked Exposure in an XCF 22 file can retain independent filter opacity and coverage on an
 opaque 8-bit or 16-bit RGB raster layer when the stored mask covers the image frame and uses supported settings.
-Supported graph chains consisting of sequential Invert stages open as ordinary native Invert filters.
-One unmasked, full-strength source-over graph can place an inverted copy over the original as two
-editable layers inside a Smart Object. Unsupported stages, other graph branches, and unresolved
-blend settings keep the saved layer pixels. The report can retain the original source records
-for inspection within its storage limits. Floating
-selection attachment and item-set behavior remain outside the native mapping.
+Supported graph chains can contain sequential Invert, Exposure, Brightness/Contrast and Levels
+stages. One unmasked, full-strength source-over graph can place the filtered owner over its
+original as two editable layers inside a Smart Object. Unsupported stages, graph branches,
+coverage and unresolved blend settings keep the saved layer pixels. The report can retain
+the original records for inspection within its storage limits. Floating selection attachment
+and item-set behavior remain outside the native mapping.
 
 Ordinary background Open on the desktop prompts for a sample byte order when a multi-byte XCF 4–11
-file leaves it unspecified. Open As and raster Place Embedded also accept an explicit order. CLI `convert`, `info`, `run`, and
+file leaves it unspecified. Open As, raster Place Embedded and Smart Object workflows accept an
+explicit order. Historical linked Smart Objects bind the order to a verified source revision.
+CLI `convert`, `info`, `run`, and
 `batch` accept `--historical-xcf-sample-order` with `little-endian` or `big-endian`. In Batch, a
 recorded Open As of the same source inherits this order when the step has no explicit choice.
 Each nested Batch has its own scope. PhotoCraft records the order used in the
 native document's conversion report. Text color blobs have a separate source
 encoding. Text that needs a float color with an unknown byte order keeps the saved raster, and the
 report can retain the original configuration for inspection. Portable numeric colors remain editable.
+Rooted automation can use `holdHistoricalXcf` on `doc.open` and answer the resulting request with
+`doc.resolveHistoricalXcfOpen`. The MCP tools expose the equivalent behavior. The answer applies
+to the exact bytes held by that backend.
 
 ## Blend modes
 
