@@ -1984,10 +1984,11 @@ impl Session {
             }
         }
         photocraft_compose::set_effect_cache_budget(budget);
-        crate::transform_cmds::set_budget(u64::from(self.prefs().performance.effective_memory_usage_mb()) << 20);
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
-        crate::plugin_cmds::sync_prefs(self);
+        for applied in &crate::registry::hooks().prefs_applied {
+            applied(self);
+        }
     }
 
     /// Re-apply History's byte limit after the scratch disk paused (a write, create or

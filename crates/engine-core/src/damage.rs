@@ -1,7 +1,7 @@
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_compose::Ancestors;
-
-use super::{Document, Layer, LayerContent, LayerId, Rect, VideoData};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, VideoData};
+use photocraft_geom::Rect;
 
 /// Calls `f` with the rect of every tile that differs between two surfaces of the same format and
 /// default pixel: a tile only one side has, or a different copy-on-write tile pointer at the same
@@ -853,7 +853,7 @@ const SHAPE_BOUNDS_BAND_PX: u64 = 1 << 20;
 /// everything it can draw (its path, stroke and feather), unclipped, and measured from that. A fill
 /// that shows everywhere (an inverted path, or below 100 % density) has no extent of its own and
 /// keeps the canvas-clipped measure (`None`).
-pub(super) fn shape_pixel_bounds(sh: &photocraft_doc::ShapeLayer, canvas: Rect, sample: SampleType) -> Option<Rect> {
+pub(crate) fn shape_pixel_bounds(sh: &photocraft_doc::ShapeLayer, canvas: Rect, sample: SampleType) -> Option<Rect> {
     if unbounded_fill(sh) {
         return None;
     }
