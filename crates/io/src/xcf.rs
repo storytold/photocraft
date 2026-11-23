@@ -227,7 +227,11 @@ impl Mapper<'_, '_> {
             return Ok(());
         }
         let options = NativeOptions { resolution: self.resolution, offset: (source.x, source.y), colors: self.text_colors.as_ref() };
-        let mapping = text_source::map_layer(layer, &text, options, &mut self.text_budget, &mut self.record_budget, self.ctl)?;
+        let mapping = if source.link {
+            Mapping::Preserved { reason: "the link record takes precedence over its text configuration".into(), source_reason: None }
+        } else {
+            text_source::map_layer(layer, &text, options, &mut self.text_budget, &mut self.record_budget, self.ctl)?
+        };
         match &mapping {
             Mapping::Missing => self.warnings.layer(&layer.name, "is a text layer and opens as pixels"),
             Mapping::Converted { notes } => {

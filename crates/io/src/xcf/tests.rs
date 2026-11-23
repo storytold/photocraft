@@ -710,6 +710,43 @@ fn linked_layers_open_cached_pixels_with_short_or_correct_property_lengths() {
 }
 
 #[test]
+fn a_link_record_conflicting_with_editable_text_keeps_the_saved_raster() {
+    let markup = br#"(text "Editable source") (font-size 12) (box-mode fixed) (box-width 16) (box-height 16)"#;
+    for linked in [false, true] {
+        let mut img = TestImage::rgb8(1, 1);
+        img.version = 26;
+        let mut layer = TestLayer::rgba("Text", 1, 1, vec![17, 31, 57, 255]);
+        let mut parasite = W { out: Vec::new(), wide: true };
+        parasite.string("gimp-text-layer");
+        parasite.u32(0);
+        parasite.u32(markup.len() as u32);
+        parasite.out.extend_from_slice(markup);
+        layer.props.push((21, parasite.out));
+        if linked {
+            let mut link = W { out: Vec::new(), wide: true };
+            link.u32(1);
+            link.string("saved.png");
+            link.u32(1);
+            link.u32(1);
+            layer.props.push((48, link.out));
+        }
+        img.layers.push(layer);
+        let imported = open(&img.write()).unwrap();
+        let layer = &imported.document.layers[0];
+        if linked {
+            assert!(matches!(layer.content, LayerContent::Raster(_)));
+            assert_eq!(layer.surface().unwrap().pixel(0, 0), [17. / 255., 31. / 255., 57. / 255., 1.]);
+            let Some(photocraft_doc::import_conversion::ImportConversion::Report(report)) = imported.document.metadata.import_conversion.as_deref() else {
+                panic!("retained link evidence")
+            };
+            assert!(report.attachments.iter().any(|attachment| attachment.bytes.as_slice() == markup));
+        } else {
+            assert!(matches!(layer.content, LayerContent::Text(_)));
+        }
+    }
+}
+
+#[test]
 fn truncated_and_oversized_link_layer_fields_are_errors() {
     let mut payload = W { out: Vec::new(), wide: true };
     payload.u32(1);
