@@ -6,7 +6,7 @@ use photocraft_ui_egui::{PhotocraftApp, Services, canvas, dialogs, guide_select,
 use serde_json::{Value, json};
 
 struct Driver {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     ctx: egui::Context,
     time: f64,
 }

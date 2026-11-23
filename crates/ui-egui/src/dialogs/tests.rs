@@ -10,7 +10,7 @@ use serde_json::json;
 use super::*;
 
 /// A filter dialog over a 256×256 layer, with the preview the canvas computed for it on screen.
-fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, DialogId) {
+fn filter_dialog_with_preview(background: bool) -> (Box<PhotocraftApp>, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.background_jobs = background;
     app.run("file.new", serde_json::json!({"width": 256, "height": 256, "background": "#3366cc"})).unwrap();
@@ -29,6 +29,7 @@ fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, DialogId) {
         params: serde_json::json!({"radius": 4.0}),
         k: 1,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     app.filter_preview = Some(crate::filter_dialog::FilterPreview { key, result: result.map(std::sync::Arc::new), committing: false });
     (app, id)
@@ -144,10 +145,7 @@ fn the_one_time_move_stores_owned_dialog_values_once_and_leaves_engine_read_keys
     assert!(!table("photocraft.filter.gaussianBlur").unwrap().contains_key("preview"), "a null drops");
     assert!(table("craft_draw.shape.create.ellipse").is_some(), "a routed key lands under its library scope");
     assert!(table("photocraft.shape.create.ellipse").is_none());
-    assert_eq!(
-        table("photocraft.edit.fill").unwrap().get("mode"),
-        Some(&toml::Value::String(crate::panels::layers_tree::blend_key(photocraft_color::BlendMode::ColorBurn)))
-    );
+    assert_eq!(table("photocraft.edit.fill").unwrap().get("mode"), Some(&toml::Value::String(photocraft_color::BlendMode::ColorBurn.key().to_string())));
     let mut left: Vec<&str> = prefs.dialogs.keys().map(String::as_str).collect();
     left.sort_unstable();
     let mut kept = vec!["file.print", "ui.layersPanelOptions", "file.export.saveForWebLegacy", live_shape_prompt::PREF];

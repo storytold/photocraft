@@ -62,7 +62,7 @@ pub(super) fn open_pen_stroke_param(app: &PhotocraftApp) -> Value {
 
 /// The paint the next shape's fill (`stroke` false) or stroke takes: the options bar's gradient,
 /// else the foreground / background colour.
-fn tool_paint(app: &PhotocraftApp, stroke: bool) -> photocraft_doc::Fill {
+pub(super) fn tool_paint(app: &PhotocraftApp, stroke: bool) -> photocraft_doc::Fill {
     let (gradient, color) = tool_paint_source(app, stroke);
     gradient.clone().unwrap_or_else(|| solid_paint(color))
 }
@@ -321,12 +321,12 @@ fn path_op_of(op: &str) -> photocraft_doc::vector::PathOp {
     }
 }
 
-/// A Line tool drag is one History step named after the tool, as in Photoshop (#13244); the
-/// other Shape tools keep the commands' own names.
+/// The tool's History label for a new shape layer or a Work Path edit, when defined.
 pub(crate) fn tool_history_name(kind: ShapeKind) -> Option<&'static str> {
     match kind {
         ShapeKind::Line => Some("Line Tool"),
         ShapeKind::Triangle => Some("Triangle Tool"),
+        ShapeKind::Ellipse => Some("Ellipse Tool"),
         _ => None,
     }
 }
@@ -468,7 +468,7 @@ mod triangle_history_ui_tests {
     use super::*;
     use crate::canvas::testing;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
         app.ui.tool = Tool::Triangle;

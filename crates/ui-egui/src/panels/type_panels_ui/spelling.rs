@@ -31,10 +31,13 @@ pub struct SpellDialog {
 }
 
 /// The engine's misspellings, as the raw JSON items of `edit.checkSpelling`. A single-layer check without a layer
-/// lists nothing: an absent opening layer must not adopt the newly active one.
+/// lists nothing: an absent opening layer must not adopt the newly active one. Check All Layers starts at the opening
+/// layer, or top to bottom (null) without one (#14174).
 fn list(app: &mut PhotocraftApp, all_layers: bool, layer: Option<LayerId>, ignore: &[String]) -> Vec<Value> {
     let mut p = json!({ "action": "list", "allLayers": all_layers, "ignore": ignore, "suggestions": 8 });
-    if !all_layers {
+    if all_layers {
+        p["from"] = json!(layer.map(|l| l.0));
+    } else {
         let Some(layer) = layer else { return Vec::new() };
         p["layer"] = json!(layer.0);
     }
@@ -122,7 +125,7 @@ pub(crate) fn close_spelling(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(d) = app.ui.type_panels.spell.take() else { return };
     let mut recording_error = None;
-    if app.session.actions.recording.is_some() && run(app, "edit.checkSpelling", json!({ "allLayers": d.all_layers })).is_none() {
+    if app.session.recording.target.is_some() && run(app, "edit.checkSpelling", json!({ "allLayers": d.all_layers })).is_none() {
         recording_error = Some(app.ui.status.clone());
     }
     if let Some(token) = d.resume {
@@ -197,10 +200,11 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 mod tests {
     use craft::ui::dialog::StackDialog as _;
     use photocraft_engine::actions_cmds::ActionStep;
+    use photocraft_engine::actions_cmds::ActionsExt;
 
     use super::*;
 
-    fn app_with_text(text: &str) -> PhotocraftApp {
+    fn app_with_text(text: &str) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 300, "height": 120, "background": "white"})).unwrap();
         app.run("type.create", json!({"x": 10, "y": 60, "text": text})).unwrap();
@@ -290,8 +294,12 @@ mod tests {
         app.run("actions.stop", json!({})).unwrap();
         assert!(app.ui.type_panels.spell.is_none());
         assert!(!app.framework.dialogs.is_open::<CheckSpellingDialog>());
-        let action = app.session.actions.list.action(0).unwrap();
+        let action = app.session.actions().list.action(0).unwrap();
         assert_eq!(action.steps, vec![ActionStep::new("edit.checkSpelling", json!({"allLayers": false}))]);
         assert_eq!(action.dialogs.iter().copied().collect::<Vec<_>>(), [0]);
     }
 }
+
+#[cfg(test)]
+#[path = "../type_spell_order_ui_tests.rs"]
+mod spell_order_ui_tests;

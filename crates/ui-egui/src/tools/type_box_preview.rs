@@ -449,12 +449,12 @@ mod tests {
     use photocraft_doc::text::TextShape;
 
     /// An app with one paragraph text layer in a box, open for editing.
-    fn app_with_box() -> (PhotocraftApp, LayerId) {
+    fn app_with_box() -> (Box<PhotocraftApp>, LayerId) {
         app_with_box_and(crate::Services::default())
     }
 
     /// [`app_with_box`] with the given shell services.
-    fn app_with_box_and(services: crate::Services) -> (PhotocraftApp, LayerId) {
+    fn app_with_box_and(services: crate::Services) -> (Box<PhotocraftApp>, LayerId) {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
         app.sync_views();

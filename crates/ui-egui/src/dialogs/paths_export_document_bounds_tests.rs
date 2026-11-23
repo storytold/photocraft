@@ -9,7 +9,7 @@ use crate::PhotocraftApp;
 
 const COMMAND: &str = "file.export.pathsToIllustrator";
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
     app

@@ -13,6 +13,7 @@
 //! each frame on the GPU (with a readback, about 7 ms here), otherwise only the app's logic runs.
 //! `PHOTOCRAFT_GPU_SYNC=1` makes a canvas refresh wait for the GPU.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use egui::{Event, Modifiers, PointerButton, Pos2};
@@ -24,7 +25,7 @@ use photocraft_ui_egui::{PhotocraftApp, Services};
 use rayon::prelude::*;
 use serde_json::json;
 
-type H = egui_kittest::Harness<'static, PhotocraftApp>;
+type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
