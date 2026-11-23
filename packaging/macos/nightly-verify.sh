@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || mac_nightly_die "missing $1 value"
       case "$1" in --input) INPUT="$2" ;; --expect) EXPECT="$2" ;; --team) TEAM="$2" ;; esac
       shift 2 ;;
-    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,13p' "$0"; exit 0 ;;
     *) mac_nightly_die "unsupported argument: $1" ;;
   esac
 done
