@@ -240,6 +240,9 @@ mod tabs_tests;
 mod doc_window_dialog_tests;
 
 #[cfg(test)]
+mod document_window_title_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -262,9 +265,10 @@ mod rotation_preview_isolation_tests {
 
     use super::*;
 
-    /// Opens the filter dialog of `command` and returns its id.
+    /// Opens the filter dialog of `command` with its Preview box and returns its id. Rotate Canvas has no Preview
+    /// (#14462); its size-changing preview (#1436) is reached through `open_previewing`.
     fn open(app: &mut PhotocraftApp, command: &str) -> DialogId {
-        let id = crate::filter_dialog::open(app, command).expect("the dialog opens");
+        let id = crate::filter_dialog::open_previewing(app, command).expect("the dialog opens");
         // The Preview box is on from the dialog's first drawn pass.
         for _ in 0..2 {
             crate::smart_filter_dialog::tests::pass(app);
@@ -614,11 +618,11 @@ mod zoom_animation_tests {
 mod display_memo_tests;
 
 #[cfg(test)]
-mod cpu_background_tests;
+mod cpu_background_gpu_tests;
 
 #[cfg(test)]
-#[path = "canvas/blend_viewport_tests.rs"]
-mod blend_viewport_regression;
+#[path = "canvas/blend_viewport_gpu_tests.rs"]
+mod blend_viewport_gpu_tests;
 
 #[cfg(test)]
 #[path = "canvas/pixel_alignment_tests.rs"]

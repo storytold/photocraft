@@ -82,35 +82,6 @@ fn redrawn_since(app: &mut PhotocraftApp, ctx: &egui::Context, seen: Revision) -
     prep.source(app).damage(seen).map(|r| i64::from(r.width()) * i64::from(r.height()))
 }
 
-#[test]
-fn gpu_display_luts_are_per_display() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
-        eprintln!("skipping: no GPU adapter");
-        return;
-    };
-    let mut app = app_on_two_displays();
-    app.set_wgpu(rs);
-    let doc = app.session.documents()[0].doc.clone();
-    let key = doc.id.0;
-    // sRGB on the sRGB display needs no LUT; on the P3 display it does.
-    assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
-    assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
-    let gpu = app.gpu.clone().unwrap();
-    let (s1, s4) = (gpu.display_lut_signature(key, 1).unwrap(), gpu.display_lut_signature(key, 4).unwrap());
-    assert_ne!(s1.0, s4.0);
-    assert!(gpu.has_display_lut(key, 4) && !gpu.has_display_lut(key, 1));
-    // Drawing one window leaves the other's LUT alone.
-    for _ in 0..3 {
-        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
-        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
-    }
-    assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
-    assert!(gpu.has_display_lut(key, 4));
-    // The shared texture's key is the same for both displays.
-    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
-}
-
 /// The GPU canvas texture of a Multichannel document is filled by the CPU compositor, so its
 /// key carries the ink preview (Color Settings › Spot) like the CPU canvas key does.
 #[test]
@@ -688,6 +659,21 @@ fn a_secondary_canvas_hand_pans_while_a_transform_is_open() {
     assert_eq!(box_key(&app), box_before, "the drag didn't touch the box");
 }
 
+/// The canvas can paint a batch as a nested list, which keeps its place in egui's final paint order.
+fn flattened_paint_shapes(output: &egui::FullOutput) -> Vec<&egui::Shape> {
+    fn open<'a>(shape: &'a egui::Shape, into: &mut Vec<&'a egui::Shape>) {
+        match shape {
+            egui::Shape::Vec(list) => list.iter().for_each(|shape| open(shape, into)),
+            shape => into.push(shape),
+        }
+    }
+    let mut shapes = Vec::new();
+    for clipped in &output.shapes {
+        open(&clipped.shape, &mut shapes);
+    }
+    shapes
+}
+
 #[test]
 fn guides_draw_over_the_transform_preview_and_under_its_box() {
     // #5086: a guide crossing a layer under Free Transform was hidden behind the preview of
@@ -721,16 +707,7 @@ fn guides_draw_over_the_transform_preview_and_under_its_box() {
     // At 100 % centred on the document, screen and document coordinates coincide.
     let layer = Rect::from_min_max(pos2(100.0, 100.0), pos2(200.0, 160.0));
     let near = |r: Rect| (r.min - layer.min).length() < 1.0 && (r.max - layer.max).length() < 1.0;
-    fn open<'a>(shape: &'a egui::Shape, into: &mut Vec<&'a egui::Shape>) {
-        match shape {
-            egui::Shape::Vec(list) => list.iter().for_each(|shape| open(shape, into)),
-            shape => into.push(shape),
-        }
-    }
-    let mut shapes = Vec::new();
-    for clipped in &out.shapes {
-        open(&clipped.shape, &mut shapes);
-    }
+    let shapes = flattened_paint_shapes(&out);
     let position = |pred: &dyn Fn(&egui::Shape) -> bool| shapes.iter().position(|s| pred(s));
     // The moving pixels: the mesh that spans the layer's box.
     let preview = position(&|s| matches!(s, egui::Shape::Mesh(m) if near(m.calc_bounds())));
@@ -743,6 +720,74 @@ fn guides_draw_over_the_transform_preview_and_under_its_box() {
     };
     assert!(preview < guide, "the guide ({guide}) draws over the transform preview ({preview})");
     assert!(guide < frame, "the box ({frame}) draws over the guide ({guide})");
+}
+
+#[test]
+fn marching_ants_draw_over_a_guide_on_the_selection_edge() {
+    use craft::behavior::kurbo::Point;
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = app.ctx().clone();
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.run("select.rect", json!({"x": 100, "y": 100, "width": 100, "height": 60})).unwrap();
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": 100})).unwrap();
+    app.ui.tool = Tool::RectMarquee;
+    app.ui.extras.rulers = false;
+    app.ui.extras.grid = false;
+    app.ui.extras.guides = true;
+    app.ui.view.extras = true;
+    app.ui.view.show.canvas_guides = true;
+    app.ui.view.show.selection_edges = true;
+    app.sync_views();
+
+    let mut view = app.ui.views[0].clone();
+    view.zoom = 1.0;
+    view.center = [200.0, 150.0];
+    view.clear_pending();
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+    let draw = |app: &mut PhotocraftApp| {
+        let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            canvas_view(app, ui, CanvasHost::main(0), rect, view.clone(), true);
+        });
+        output.textures_delta.clear();
+        output
+    };
+
+    let output = draw(&mut app);
+    let shown = active_view(&app).expect("the canvas view");
+    let edge = Rect::from_two_pos(shown.to_screen(Point::new(100.0, 100.0)), shown.to_screen(Point::new(100.0, 160.0)));
+    let pixel = output.pixels_per_point.recip();
+    let is_guide = |shape: &egui::Shape| {
+        let egui::Shape::LineSegment { points, .. } = shape else { return false };
+        points.iter().all(|p| (p.x - edge.left()).abs() <= pixel)
+            && points[0].y.min(points[1].y) < edge.top() - pixel
+            && points[0].y.max(points[1].y) > edge.bottom() + pixel
+    };
+    let is_ants = |shape: &egui::Shape| {
+        let bounds = match shape {
+            egui::Shape::Mesh(mesh) => mesh.calc_bounds(),
+            egui::Shape::Rect(rect) => rect.rect,
+            egui::Shape::LineSegment { points, .. } => Rect::from_two_pos(points[0], points[1]),
+            _ => return false,
+        };
+        // A strip or dash on the selection edge, allowing for the framework's device-pixel snap.
+        bounds.height() > 0.0
+            && bounds.width() <= 2.0 * pixel
+            && (bounds.center().x - edge.left()).abs() <= pixel
+            && bounds.top() >= edge.top() - pixel
+            && bounds.bottom() <= edge.bottom() + 2.0 * pixel
+    };
+    let shapes = flattened_paint_shapes(&output);
+    let guide = shapes.iter().position(|shape| is_guide(shape)).expect("the guide spanning the selection");
+    let ants = shapes.iter().position(|shape| is_ants(shape)).expect("the ants along the left edge");
+    assert!(guide < ants, "the guide ({guide}) paints before the ants ({ants})");
+
+    app.ui.view.show.selection_edges = false;
+    let output = draw(&mut app);
+    let shapes = flattened_paint_shapes(&output);
+    assert!(shapes.iter().any(|shape| is_guide(shape)), "hiding selection edges leaves the guide");
+    assert!(!shapes.iter().any(|shape| is_ants(shape)), "the edge paint belongs to the ants");
 }
 
 #[test]
@@ -1000,8 +1045,8 @@ fn a_tiled_document_follows_navigator_and_status_bar_zoom() {
 
 /// #11276: a document floating in its own window zooms from the zoom typed into the status bar
 /// and into the Navigator, as a tabbed one does; the window doesn't keep or write back an older
-/// copy of the view. Only the typed zoom fields are driven here, not the Navigator's slider or
-/// zoom buttons.
+/// copy of the view. #16415: so does the zoom typed into the floating window's own status bar.
+/// Only the typed zoom fields are driven here, not the Navigator's slider or zoom buttons.
 #[test]
 fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     use egui_kittest::kittest::{NodeT, Queryable};
@@ -1024,7 +1069,7 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
     // A Navigator in a column of icons shows in a flyout, which the click into the status bar closes: expand its column
     // so the panel stays while both fields are typed into.
     let navigator = "navigator".to_owned();
-    if h.state().ui.docking.layout.opens_in_flyout(&navigator) {
+    if h.state().ui.docking.layout().opens_in_flyout(&navigator) {
         crate::panel_docking::apply(h.state_mut(), vec![craft::behavior::dock::Action::set_iconic(navigator.clone(), false)]).unwrap();
         h.state_mut().ui.flyout = None;
         crate::panel_docking::show_panel(h.state_mut(), "navigator", Some(true)).unwrap();
@@ -1047,9 +1092,20 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         f.sort_by(|a, b| a.left().total_cmp(&b.left()));
         f
     };
-    assert_eq!(fields(&h).len(), 2, "the status bar's and the Navigator's zoom fields");
-    for (field, typed, want) in [(0, "200", 2.0), (1, "50", 0.5), (0, "300", 3.0), (1, "100", 1.0)] {
-        let at = fields(&h)[field].center();
+    // The main status bar's field lies lowest, the Navigator's furthest right, the floating window's status bar's is the
+    // third.
+    let pick = |f: &[egui::Rect], which: &str| -> egui::Rect {
+        let lowest = f.iter().copied().max_by(|a, b| a.bottom().total_cmp(&b.bottom())).unwrap_or(egui::Rect::NOTHING);
+        let right = f.iter().copied().max_by(|a, b| a.left().total_cmp(&b.left())).unwrap_or(egui::Rect::NOTHING);
+        match which {
+            "status" => lowest,
+            "navigator" => right,
+            _ => f.iter().copied().find(|r| *r != lowest && *r != right).unwrap_or(egui::Rect::NOTHING),
+        }
+    };
+    assert_eq!(fields(&h).len(), 3, "the status bar's, the Navigator's and the floating window's zoom fields");
+    for (field, typed, want) in [("status", "200", 2.0), ("navigator", "50", 0.5), ("window", "300", 3.0), ("navigator", "100", 1.0)] {
+        let at = pick(&fields(&h), field).center();
         h.event(egui::Event::PointerMoved(at));
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
         h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
@@ -1057,8 +1113,9 @@ fn a_floating_document_follows_navigator_and_status_bar_zoom() {
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.event(egui::Event::Text(typed.into()));
         h.key_press(egui::Key::Enter);
-        h.run_steps(2);
-        h.run_steps(58);
+        // The harness steps 1/4 s a frame, so 10 frames after Enter are 2.5 s: well past the 150 ms zoom ease, with
+        // frames after it in which the window could write its view back (60 frames, 15 s, before #15652).
+        h.run_steps(10);
         assert!(h.state().ui.window_views.is_empty(), "the window keeps no copy of the view");
         assert!(
             (h.state().ui.views[0].zoom - want).abs() < 1e-3,
@@ -1097,4 +1154,37 @@ fn free_transform_redraws_only_the_moving_layer_when_the_box_opens_and_closes() 
     let committed = damage_since(&app, 0, (rev, key ^ dk), (rev + 1, 0), dk, (rev, Some(moved))).expect("committing too");
     assert!(committed.contains(20, 20) && committed.contains(139, 49), "{committed:?}");
     assert!(damage_since(&app, 0, (rev, key ^ dk), (rev + 2, 0), dk, (rev + 1, Some(moved))).is_none(), "a later revision isn't ours");
+}
+
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn gpu_display_luts_are_per_display() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let mut app = app_on_two_displays();
+        app.set_wgpu(rs);
+        let doc = app.session.documents()[0].doc.clone();
+        let key = doc.id.0;
+        // sRGB on the sRGB display needs no LUT; on the P3 display it does.
+        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
+        assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
+        let gpu = app.gpu.clone().unwrap();
+        let (s1, s4) = (gpu.display_lut_signature(key, 1).unwrap(), gpu.display_lut_signature(key, 4).unwrap());
+        assert_ne!(s1.0, s4.0);
+        assert!(gpu.has_display_lut(key, 4) && !gpu.has_display_lut(key, 1));
+        // Drawing one window leaves the other's LUT alone.
+        for _ in 0..3 {
+            assert_eq!(sync_display_lut(&mut app, &doc, key, Some(1)), 0);
+            assert_eq!(sync_display_lut(&mut app, &doc, key, Some(4)), 3);
+        }
+        assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
+        assert!(gpu.has_display_lut(key, 4));
+        // The shared texture's key is the same for both displays.
+        assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
+    }
 }

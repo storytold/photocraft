@@ -234,13 +234,15 @@ for partial sets; [scope, tests and visual evidence](multi-channel-editing.md).
 
 ## Panels and workspace
 
-30 of 35 Window-menu panels exist (measured). Missing: Libraries, Comments, Contextual Task Bar,
-Discover, Generative variations. Dock tabs: Layers, Channels, Paths, History, Actions, Layer
-Comps, Properties, Adjustments, Navigator, Histogram, Info, Color, Swatches, Character,
-Paragraph; the rest open as in-app floating windows.
+Missing Window-menu panels: Libraries, Comments, Discover, Generative variations. Contextual
+Task Bar is partially implemented for Crop, Frame and ordinary Free Transform (see below).
+Dock tabs: Layers, Channels, Paths, History, Actions, Layer Comps, Properties, Adjustments,
+Navigator, Histogram, Info, Color, Swatches, Character, Paragraph; the rest open as in-app
+floating windows.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
+| Contextual Task Bar for Crop, Frame and ordinary Free Transform | partial | Crop: presets, Straighten and pending Cancel/Done; Frame: Import/Replace Image and Fit Content to Frame; Free Transform: quarter-turn rotations, flips and Cancel/Done (#11104). These contexts follow the Window toggle and hide for dialogs; Free Transform draws on the active document's primary canvas. Crop Generative Expand is still absent. The Free Transform bar is limited to the ordinary Box phase; Warp, Transform Selection and Content-Aware Scale retain their existing controls. `crop_task_bar.rs`, `frame_tool/task_bar.rs`, `transform_task_bar.rs`, `canvas/document_display.rs` |
 | Character and Paragraph controls without a type target | done | #5556; persistent Type tool defaults feed new point, box and mask text; existing text still edits in its selected scope (`type_tool.rs`, `type_tool_tests.rs`) |
 | Panel groups float and tear off into OS windows | missing | UI-217-5, #1828, #1213 |
 | Drag panels to reorder and regroup | partial | dock tabs reorder within their group (#2272, #2774); regrouping open (#2305) |

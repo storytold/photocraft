@@ -6,6 +6,7 @@ use craft::color_ui::ui::gradient::StopRef;
 use craft::draw::ui::gradient::{GradientFill, GradientFillEditor, GradientRef};
 use craft::ui::contract::{Bind, ShowContainer as _};
 use craft::ui::patterns::presets::PresetState;
+use craft::ui::runtime::env::with_env;
 use craft::ui::sections::Section;
 use photocraft_doc::Layer;
 use serde_json::json;
@@ -38,23 +39,27 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) ->
     let mut requested = None;
     let mut pick = None;
     let mut selected = None;
-    ui.push_id(("gradient-properties", document, layer.id.0), |ui| {
-        // The body can run twice in a pass; only the run that read the input has events, and they are kept.
-        let _ = Section::new(tl!("Gradient").to_string()).show(ui, |ui, _| {
-            let mut state = PresetState::<GradientRef>::default();
-            let out = GradientFillEditor::new(tl!("Gradient").to_string(), Bind::bound(&mut value), &[], Bind::bound(&mut state)).sampled(sampled).show(ui);
-            if out.events.iter().next().is_some() {
-                events = out.events.iter().cloned().collect();
-            }
-            if out.color_requested.is_some() {
-                requested = out.color_requested;
-            }
-            if out.screen_pick.is_some() {
-                pick = out.screen_pick;
-            }
-            selected = out.selected;
-        });
-    });
+    with_env(
+        ui,
+        |set| set.id_salt = Some(egui::Id::unique(("gradient-properties", document, layer.id.0))),
+        |ui| {
+            // The body can run twice in a pass; only the run that read the input has events, and they are kept.
+            let _ = Section::new(tl!("Gradient").to_string()).show(ui, |ui, _| {
+                let mut state = PresetState::<GradientRef>::default();
+                let out = GradientFillEditor::new(tl!("Gradient").to_string(), Bind::bound(&mut value), &[], Bind::bound(&mut state)).sampled(sampled).show(ui);
+                if out.events.iter().next().is_some() {
+                    events = out.events.iter().cloned().collect();
+                }
+                if out.color_requested.is_some() {
+                    requested = out.color_requested;
+                }
+                if out.screen_pick.is_some() {
+                    pick = out.screen_pick;
+                }
+                selected = out.selected;
+            });
+        },
+    );
     for event in &events {
         match event {
             EditEvent::Set { after, .. } | EditEvent::Commit { after, .. } => {

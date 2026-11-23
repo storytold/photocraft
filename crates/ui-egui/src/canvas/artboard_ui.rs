@@ -3,6 +3,8 @@
 //! the document is `layer.artboard.set` and friends. View › Fit Artboard on Screen is the
 //! canvas's `ViewCommands::FitArtboard`, aimed at the active frame `pages` marks.
 
+use std::sync::Arc;
+
 use craft::behavior::EditEvent;
 use craft::behavior::kurbo::{Rect as DocRect, Size};
 use craft::draw::ui::artboard::{ArtboardBackground as BoardBackground, ArtboardItem, ArtboardPreset, ArtboardProperties};
@@ -23,10 +25,12 @@ fn doc_rect(r: photocraft_geom::Rect) -> DocRect {
 /// One frame per artboard of document `idx`, in `doc.artboards()` order. The active layer's board
 /// is the active frame, the others are marked inactive. The frames carry no fill: the document
 /// picture paints each board's background.
-pub(crate) fn pages(app: &PhotocraftApp, idx: usize) -> Vec<PageFrame> {
-    let Some(st) = app.session.documents().get(idx) else { return Vec::new() };
-    let active = st.active_layer.and_then(|id| st.doc.artboard_of(id));
-    st.doc.artboards().into_iter().map(|(id, name, a)| PageFrame::new(doc_rect(a.rect)).name(name).active(active == Some(id))).collect()
+pub(crate) fn pages(app: &PhotocraftApp, idx: usize) -> Arc<[PageFrame]> {
+    let Some(st) = app.session.documents().get(idx) else { return Arc::new([]) };
+    app.doc_queries.pages(&app.session, st, || {
+        let active = st.active_layer.and_then(|id| st.doc.artboard_of(id));
+        st.doc.artboards().into_iter().map(|(id, name, a)| PageFrame::new(doc_rect(a.rect)).name(name).active(active == Some(id))).collect()
+    })
 }
 
 /// Where visible layers outside the boards draw: Photoshop shows those over the pasteboard, so a

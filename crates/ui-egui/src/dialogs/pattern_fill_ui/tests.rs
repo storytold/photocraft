@@ -146,7 +146,7 @@ fn an_imported_out_of_range_fill_keeps_its_fields_when_the_phase_changes() {
     // A PSD may carry values outside the dialog's ranges; opening never rewrites them.
     {
         let st = app.session.active_mut().unwrap();
-        let doc = Arc::make_mut(&mut st.doc);
+        let doc = Arc::make_mut(st.doc_mut());
         let LayerContent::Fill(Fill::Pattern { name, id: pattern, .. }) = &doc.layer(id).unwrap().content else { panic!() };
         let (name, pattern) = (name.clone(), pattern.clone());
         doc.layer_mut(id).unwrap().content =
@@ -290,7 +290,7 @@ fn a_new_fill_dialog_rejects_a_changed_insertion_layer() {
     assert_eq!(st.doc.layers.len(), before.layers.len() + 1);
     // No active layer is a valid insertion context too.
     let layers = st.doc.layers.len();
-    app.session.active_mut().unwrap().active_layer = None;
+    app.session.active_mut().unwrap().set_active_layer(None);
     let dialog = open_new(&mut app).unwrap();
     assert!(drag_target(&app).is_some());
     assert!(display_doc(&mut app, 0).is_some());
@@ -326,4 +326,25 @@ fn a_replaced_or_deleted_edit_target_is_not_previewed_or_committed() {
     refused(&mut app, dialog);
     assert_eq!(*app.session.active().unwrap().doc, *deleted);
     assert_eq!(steps(&app), count, "a stale OK adds no History step");
+}
+
+/// The picker paints its swatches by texture id and doesn't ask the texture cache again, so the dialog owns them:
+/// emptying the cache (as it frees textures once it holds more than its capacity) leaves every swatch, and closing
+/// the dialog frees them (#16252).
+#[test]
+fn the_open_dialog_keeps_its_swatch_textures_when_the_texture_cache_lets_go() {
+    use craft::ui::primitives::textures::TextureCache;
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    let allocated = |ctx: &egui::Context| ctx.tex_manager().read().num_allocated();
+    TextureCache::clear(&ctx);
+    let before = allocated(&ctx);
+    let patterns = app.session.patterns.items.len();
+    assert!(patterns > 0, "the library has patterns");
+    crate::menus::invoke(&mut app, &ctx, cmds::CREATE, json!({})).unwrap();
+    let dialog = app.framework.dialogs.open_dialogs()[0].id;
+    TextureCache::clear(&ctx);
+    assert!(allocated(&ctx) >= before + patterns, "the {patterns} swatches outlive the cache");
+    cancel(&mut app, dialog);
+    assert_eq!(allocated(&ctx), before, "closing the dialog frees them");
 }
