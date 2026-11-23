@@ -3,6 +3,7 @@
 //! luminance (#11940). The swatch goes through the sRGB tone curve (sGray), not the document's Dot
 //! Gain curve, which would give 153.
 
+use crate::brush_cmds::LiveStrokeExt;
 use crate::Session;
 use serde_json::json;
 

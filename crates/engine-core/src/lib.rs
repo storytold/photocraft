@@ -78,15 +78,12 @@ pub use cmd as commands;
 pub use cmd::actions_cmds;
 pub use cmd::actions_edit_cmds;
 pub use cmd::adjust_cmds;
-pub use cmd::adjustment_brush_cmds;
 pub use cmd::align_cmds;
 pub use cmd::analysis_cmds;
 pub use cmd::artboard_cmds;
 pub use cmd::atn_cmds;
 pub use cmd::automate_cmds;
 pub use cmd::background_cmds;
-pub use cmd::brush_cmds;
-pub use cmd::brush_key_cmds;
 pub use cmd::brush_preset_cmds;
 pub use cmd::channel_cmds;
 pub use cmd::color_cmds;
@@ -98,14 +95,10 @@ pub use cmd::distort_cmds;
 pub use cmd::document_preset_cmds;
 pub use cmd::edit_cmds;
 pub use cmd::edit_menu_cmds;
-pub use cmd::eraser_cmds;
 pub use cmd::export_preset_cmds;
 pub use cmd::exr_cmds;
 pub use cmd::extra_cmds;
-pub use cmd::face_cmds;
 pub use cmd::file_cmds;
-pub use cmd::fill_cmds;
-pub use cmd::fill_key_cmds;
 pub use cmd::float_cmds;
 pub use cmd::font_library_cmds;
 pub use cmd::frame_cmds;
@@ -136,22 +129,17 @@ pub use cmd::migrate_cmds;
 pub use cmd::mode_cmds;
 pub use cmd::multichannel_cmds;
 pub use cmd::notes_cmds;
-pub use cmd::paint_cmds;
 pub use cmd::path_edit_cmds;
 pub use cmd::pattern_cmds;
 pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
 pub use cmd::photo_cmds;
-pub use cmd::pick_cmds;
 pub use cmd::plugin_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
 pub use cmd::rasterize_style_cmds;
-pub use cmd::redeye_cmds;
 pub use cmd::render_cmds;
-pub use cmd::retouch_cmds;
 pub use cmd::sample_cmds;
-pub use cmd::sampler_cmds;
 pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;
@@ -159,7 +147,6 @@ pub use cmd::smart_cmds;
 pub use cmd::smart_svg_cmds;
 pub use cmd::smartselect_cmds;
 pub use cmd::solid_fill_cmds;
-pub use cmd::stamp_cmds;
 pub use cmd::style_asl_cmds;
 pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
@@ -347,18 +334,10 @@ pub struct Session {
 }
 
 #[cfg(test)]
-mod brush_pressure_size_default_tests;
-#[cfg(test)]
 mod embed_all_linked_tests;
 #[cfg(test)]
-mod eraser_gray_background_tests;
-#[cfg(test)]
 mod fill_layer_mode_tests;
-#[cfg(test)]
-mod mixer_indexed_bitmap_tests;
 
-#[cfg(test)]
-mod mixer_toggle_commands_tests;
 #[cfg(test)]
 mod pattern_mode_tests;
 #[cfg(test)]
@@ -372,8 +351,4 @@ mod fx_mode_tests;
 #[cfg(test)]
 mod dense_budget_tests;
 
-#[cfg(test)]
-mod brush_clear_background_tests;
 pub mod command_hints;
-#[cfg(test)]
-mod pencil_auto_erase_exact_tests;

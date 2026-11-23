@@ -6,8 +6,8 @@
 use photocraft_doc::{Adjustment, ColorMode, Layer, LayerContent, LayerMask, SampleType};
 use serde_json::{Value, json};
 
-use super::adjust_params::adjustment_kind;
-use super::layer_params::{mask_at_depth, selection_mask};
+use crate::commands::adjust_params::adjustment_kind;
+use crate::commands::layer_params::{mask_at_depth, selection_mask};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
@@ -234,7 +234,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         json!({"layer": id.0, "created": true, "damage": [damage.x0, damage.y0, damage.width(), damage.height()]})
     };
     // The new layer's mask is the target, and the colours are the stroke's.
-    super::channel_cmds::target_layer_mask(s);
+    crate::commands::channel_cmds::target_layer_mask(s);
     s.tools.foreground = fg;
     s.tools.background = bg;
     Ok(result)

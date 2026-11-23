@@ -1,3 +1,4 @@
+use crate::retouch_cmds::LiveRetouchExt;
 use super::*;
 use crate::color_cmds::ColorExt;
 use crate::presets::PresetsExt;

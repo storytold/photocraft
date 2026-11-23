@@ -1,4 +1,4 @@
-use crate::cmd::{CommandSpec, has_pixel_or_channel};
+use crate::commands::{CommandSpec, has_pixel_or_channel};
 
 /// Edit menu: Fill.
 pub fn specs() -> Vec<CommandSpec> {

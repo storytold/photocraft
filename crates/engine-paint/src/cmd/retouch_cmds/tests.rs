@@ -1,3 +1,4 @@
+use crate::retouch_cmds::LiveRetouchExt;
 use super::*;
 use crate::presets::PresetsExt;
 use photocraft_color::ColorMode;
