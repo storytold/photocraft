@@ -518,10 +518,18 @@ fn relight_with_lights_changes_pixels() {
 fn relight_ignores_out_of_range_legacy_fields_when_lights_are_given() {
     let mut s = relight_session(16, 16);
     let p = json!({"intensity": 101, "angle": 999, "elevation": -5, "warmth": 500, "lights": [{"intensity": 50}]});
+    s.precheck("filter.render.relight", &p).unwrap();
     s.execute("filter.render.relight", p).unwrap();
-    // Without a light list they are still checked, and the shared fields always are.
-    for p in [json!({"intensity": 101}), json!({"ambient": 101, "lights": [{}]}), json!({"softness": 0, "lights": [{}]})] {
+    // Without lights the legacy fields still apply; shared fields and the explicit list stay strict.
+    for p in [
+        json!({"intensity": 101}),
+        json!({"ambient": 101, "lights": [{}]}),
+        json!({"softness": 0, "lights": [{}]}),
+        json!({"angle": 999, "lights": []}),
+        json!({"lights": [{}], "unexpected": true}),
+    ] {
         let mut s = relight_session(16, 16);
+        assert!(s.precheck("filter.render.relight", &p).is_err(), "{p}");
         assert!(s.execute("filter.render.relight", p.clone()).is_err(), "{p}");
     }
 }
