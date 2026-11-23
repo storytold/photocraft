@@ -14,6 +14,7 @@
 use craft::layers::ui::panel::{LayersDrag, document_hash};
 use craft::ui::canvas::ToolHost;
 use craft::ui::runtime::drag;
+use craft::ui::runtime::windows::WindowHost;
 use photocraft_doc::{DocId, LayerId};
 use serde_json::json;
 
@@ -33,7 +34,7 @@ struct Transfer {
     selection_only: bool,
 }
 
-fn key() -> egui::Id {
+pub(super) fn key() -> egui::Id {
     egui::Id::unique("pc-layer-transfer")
 }
 
@@ -241,7 +242,10 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// windows use their own view transform, so selected pixels and plain layers both land at the
 /// visible drop point.
 fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 2]>)> {
-    // Floating windows take priority over docked canvas cells behind them.
+    let desktop_p = WindowHost::of(app.ctx()).facts(egui::ViewportId::ROOT).map_or(p, |main| p + main.inner.min.to_vec2());
+    // Floating windows stay above the main window (enforced via WindowLevel::Palette in window setup)
+    // and are ordered back-to-front in `app.ui.document_windows.floating`, so reverse iteration hits
+    // the topmost floating window under the pointer before checking the main canvas underneath.
     for (group, window_rect) in app.ui.document_windows.floating.iter().rev() {
         if crate::canvas::document_windows::is_minimized(app.ctx(), group.id) {
             continue;
@@ -249,14 +253,25 @@ fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 
         let Some(shown) = group.shown.or_else(|| group.documents.first().copied()) else { continue };
         let Some(d) = crate::canvas::tabs::document_index(app, shown) else { continue };
         let host = CanvasHost { idx: d, window: Some(group.id) };
-        if let Some(space) = ToolHost::shown_space(app.ctx(), host.canvas_id())
-            && space.view.rect.contains(p)
-        {
-            let at = space.view.to_doc(p);
-            return Some((d, Some([at.x, at.y])));
-        }
-        let bounds = crate::canvas::document_windows::maximized_bounds(app.ctx(), group.id).unwrap_or(*window_rect);
-        if bounds.contains(p) {
+        if let Some(facts) = crate::canvas::document_windows::viewport_facts(app.ctx(), group.id) {
+            let bounds = facts.outer.unwrap_or(facts.inner);
+            if bounds.contains(desktop_p) {
+                let local_p = desktop_p - facts.inner.min.to_vec2();
+                if let Some(space) = ToolHost::shown_space(app.ctx(), host.canvas_id())
+                    && space.view.rect.contains(local_p)
+                {
+                    let at = space.view.to_doc(local_p);
+                    return Some((d, Some([at.x, at.y])));
+                }
+                return Some((d, None));
+            }
+        } else if window_rect.contains(p) {
+            if let Some(space) = ToolHost::shown_space(app.ctx(), host.canvas_id())
+                && space.view.rect.contains(p)
+            {
+                let at = space.view.to_doc(p);
+                return Some((d, Some([at.x, at.y])));
+            }
             return Some((d, None));
         }
     }
@@ -289,8 +304,8 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     {
         if app.session.active_index() != Some(dest) {
             app.session.set_active(dest);
-            app.jobs.focus = None;
         }
+        app.jobs.focus = None;
         if let Some(frame) = crate::frame_tool::frame_at(app, at)
             && let [source] = t.layers.as_slice()
         {
@@ -320,8 +335,8 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     }
     if app.session.active_index() != Some(dest) {
         app.session.set_active(dest);
-        app.jobs.focus = None;
     }
+    app.jobs.focus = None;
 }
 
 /// The dragged layers' name next to the pointer, for a Move-tool transfer.

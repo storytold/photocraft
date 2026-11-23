@@ -468,6 +468,8 @@ fn drop_target_at_uses_maximized_bounds_for_maximized_floating_window() {
         },
     );
 
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
     let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
     let _ = h.ctx.run_ui(input, |_| {});
 
@@ -514,6 +516,8 @@ fn drop_target_at_skips_minimized_floating_windows() {
         },
     );
 
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
     let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
     let _ = h.ctx.run_ui(input, |_| {});
 
@@ -523,4 +527,156 @@ fn drop_target_at_skips_minimized_floating_windows() {
     let p = normal_rect.center();
     let target = super::target_at(h.state(), p);
     assert_ne!(target.map(|(d, _)| d), Some(1), "drop should not target a minimized floating window");
+}
+
+#[test]
+fn drop_target_at_translates_root_pointer_to_desktop_coordinates() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let group_id = h.state().ui.document_windows.floating[1].0.id;
+    let desktop_bounds = Rect::from_min_size(egui::pos2(500.0, 50.0), vec2(200.0, 200.0));
+    h.state_mut().ui.document_windows.floating[1].1 = desktop_bounds;
+
+    let vp = egui::ViewportId::from_hash_of(("test-desktop-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let root_origin = egui::pos2(100.0, 50.0);
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports
+        .insert(egui::ViewportId::ROOT, egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(root_origin, vec2(1200.0, 900.0))), ..Default::default() });
+    viewports.insert(
+        vp,
+        egui::ViewportInfo { inner_rect: Some(desktop_bounds), outer_rect: Some(desktop_bounds), native_pixels_per_point: Some(1.0), ..Default::default() },
+    );
+
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+    let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(input, |_| {});
+
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let p = egui::pos2(450.0, 10.0);
+    assert!(!desktop_bounds.contains(p), "root-local p is outside desktop bounds");
+    assert!(desktop_bounds.contains(p + root_origin.to_vec2()), "translated desktop point is inside bounds");
+
+    let target = super::target_at(h.state(), p);
+    assert_eq!(target, Some((1, None)), "drop hits the floating window using translated desktop coordinates");
+}
+
+#[test]
+fn drop_clears_jobs_focus_when_destination_already_active() {
+    let (mut h, paint) = harness();
+    let ctx = h.ctx.clone();
+
+    // 1. Cross-document drop with dest already active:
+    h.state_mut().session.set_active(1);
+    let job = photocraft_engine::jobs::JobId(42);
+    h.state_mut().jobs.focus = Some(job);
+    assert_eq!(h.state().jobs.focus, Some(job));
+
+    let t = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t));
+
+    super::drop(h.state_mut(), &ctx, 1, None);
+    assert_eq!(h.state().jobs.focus, None, "jobs.focus should be cleared after cross-doc drop even when dest is already active");
+
+    // 2. Same-document drop with dest already active:
+    h.state_mut().session.set_active(0);
+    h.state_mut().jobs.focus = Some(job);
+    assert_eq!(h.state().jobs.focus, Some(job));
+
+    let t_same = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t_same));
+
+    super::drop(h.state_mut(), &ctx, 0, Some([10.0, 10.0]));
+    assert_eq!(h.state().jobs.focus, None, "jobs.focus should be cleared after same-doc drop when dest is already active");
+}
+
+#[test]
+fn drop_target_at_ignores_floating_canvas_when_outside_window_bounds() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let group_id = h.state().ui.document_windows.floating[1].0.id;
+    // Window 1 is placed far away on the desktop
+    let desktop_bounds = Rect::from_min_size(egui::pos2(1500.0, 500.0), vec2(400.0, 300.0));
+    h.state_mut().ui.document_windows.floating[1].1 = desktop_bounds;
+
+    let vp = egui::ViewportId::from_hash_of(("test-faraway-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 900.0))), ..Default::default() },
+    );
+    viewports.insert(
+        vp,
+        egui::ViewportInfo { inner_rect: Some(desktop_bounds), outer_rect: Some(desktop_bounds), native_pixels_per_point: Some(1.0), ..Default::default() },
+    );
+
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports: viewports.clone(), ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+    let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(input, |_| {});
+
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    // A pointer at (100, 100) on the root window might fall inside window 1's local canvas rect,
+    // but desktop_p (100, 100) is outside window 1's desktop bounds (1500, 500).
+    let p = egui::pos2(100.0, 100.0);
+    let target = super::target_at(h.state(), p);
+    assert_ne!(target.map(|(d, _)| d), Some(1), "drop at (100, 100) must not hit floating window located at (1500, 500)");
+}
+
+#[test]
+fn drop_target_at_uses_root_pointer_for_embedded_floating_windows() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let embedded_rect = Rect::from_min_size(egui::pos2(200.0, 100.0), vec2(300.0, 200.0));
+    h.state_mut().ui.document_windows.floating[1].1 = embedded_rect;
+
+    // Simulate root window having an offset on desktop
+    let root_origin = egui::pos2(500.0, 400.0);
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports
+        .insert(egui::ViewportId::ROOT, egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(root_origin, vec2(1200.0, 900.0))), ..Default::default() });
+    let root_input = egui::RawInput { viewport_id: egui::ViewportId::ROOT, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(root_input, |_| {});
+
+    // Embedded window has no viewport facts (it's embedded).
+    let p = egui::pos2(250.0, 150.0);
+    assert!(embedded_rect.contains(p), "root-local p is inside embedded_rect");
+    assert!(!embedded_rect.contains(p + root_origin.to_vec2()), "desktop_p is outside embedded_rect");
+
+    let target = super::target_at(h.state(), p);
+    assert_eq!(target.map(|(d, _)| d), Some(1), "drop hits embedded floating window using root-local coordinates");
 }
