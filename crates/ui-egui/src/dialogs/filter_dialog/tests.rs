@@ -2,6 +2,8 @@ use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamKind};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 
 use super::*;
 
@@ -112,7 +114,7 @@ fn indexed_matte_tool_seeds_use_document_encoded_rgb() {
     use craft::cms::Transform;
 
     let mut session = photocraft_engine::Session::new();
-    session.color.settings.working_rgb = "display-p3".into();
+    session.color_mut().settings.working_rgb = "display-p3".into();
     session.execute("file.new", json!({"width": 2, "height": 2, "background": "transparent"})).unwrap();
     session.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
     let mut app = PhotocraftApp::new(session, crate::Services::default());
@@ -121,9 +123,9 @@ fn indexed_matte_tool_seeds_use_document_encoded_rgb() {
     let colors = rows::indexed_matte_defaults(&app);
 
     let doc = app.session.active().unwrap().doc.clone();
-    let source = app.session.color.working(photocraft_doc::ColorMode::Rgb);
+    let source = app.session.color().working(photocraft_doc::ColorMode::Rgb);
     let destination = photocraft_engine::color_cmds::document_profile(&doc);
-    let transform = Transform::new(&source, &destination, app.session.color.settings.intent(), app.session.color.settings.bpc).unwrap();
+    let transform = Transform::new(&source, &destination, app.session.color().settings.intent(), app.session.color().settings.bpc).unwrap();
     for (value, input) in [("foreground", [0.2, 0.4, 0.8]), ("background", [0.8, 0.4, 0.2])] {
         let mut output = [0.0; 16];
         transform.eval(&input, &mut output).unwrap();
@@ -338,12 +340,12 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     let d_fresh = open(&mut app, "view.proofSetup").unwrap();
     assert_eq!(fields_of(&app, d_fresh).text("profile"), Some("working-cmyk"));
     ok(&mut app, d_fresh);
-    assert_eq!(app.session.color.proof(doc1_id).setup.name, "working-cmyk");
+    assert_eq!(app.session.color().proof(doc1_id).setup.name, "working-cmyk");
 
     // 1. A preset sets sRGB and turns Proof Colors on.
     crate::menus::invoke(&mut app, &ctx, "view.proofSetup.internetStandardRgb", Value::Null).unwrap();
-    assert_eq!(app.session.color.proof(doc1_id).setup.name, "srgb");
-    assert!(app.session.color.proof(doc1_id).enabled);
+    assert_eq!(app.session.color().proof(doc1_id).setup.name, "srgb");
+    assert!(app.session.color().proof(doc1_id).enabled);
 
     // 2. The dialog starts with the document's condition; an unchanged OK keeps it and Proof Colors on.
     let d_id = open(&mut app, "view.proofSetup").unwrap();
@@ -353,7 +355,7 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     assert_eq!(f.bool("bpc"), Some(true));
     assert_eq!(f.bool("simulatePaper"), Some(false));
     ok(&mut app, d_id);
-    let pv = app.session.color.proof(doc1_id);
+    let pv = app.session.color().proof(doc1_id);
     assert_eq!(pv.setup.name, "srgb");
     assert!(pv.enabled);
 
@@ -368,7 +370,7 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     // 4. Cancel keeps the document.
     set(&mut app, d_id, "profile", json!("display-p3"));
     cancel(&mut app, d_id);
-    assert_eq!(app.session.color.proof(doc1_id).setup.name, "srgb");
+    assert_eq!(app.session.color().proof(doc1_id).setup.name, "srgb");
 
     // 5. Each document opens the dialog at its own condition.
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -389,8 +391,8 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     // 6. An edit in the dialog updates the active document only.
     set(&mut app, d_id1, "profile", json!("adobe-rgb-compat"));
     ok(&mut app, d_id1);
-    assert_eq!(app.session.color.proof(doc1_id).setup.name, "adobe-rgb-compat");
-    assert_eq!(app.session.color.proof(doc2_id).setup.name, "display-p3");
+    assert_eq!(app.session.color().proof(doc1_id).setup.name, "adobe-rgb-compat");
+    assert_eq!(app.session.color().proof(doc2_id).setup.name, "display-p3");
 }
 
 /// #12820: OK in Custom Proof Setup is the proof condition after a restart: a new document there
@@ -433,9 +435,9 @@ fn restart_keeps_proof_setup(app: &PhotocraftApp, profile: &str) -> Box<Photocra
     let mut restarted = PhotocraftApp::new(session, crate::Services::default());
     restarted.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     let id = restarted.session.active().unwrap().doc.id;
-    assert_eq!(restarted.session.color.proof(id).setup.name, profile);
+    assert_eq!(restarted.session.color().proof(id).setup.name, profile);
     restarted.run("view.proofColors", json!({})).unwrap();
-    let pv = restarted.session.color.proof(id);
+    let pv = restarted.session.color().proof(id);
     assert_eq!((pv.setup.name.as_str(), pv.enabled), (profile, true));
     restarted
 }

@@ -7,6 +7,7 @@
 //! draft as `StyleValue::Other` so everything the dialog doesn't model (gradient strokes, imported
 //! contours, PSD data) survives an apply.
 
+use photocraft_engine::presets::PresetsExt;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -482,7 +483,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let layer_id = st.active_layer?;
     let layer = st.doc.layer(layer_id)?.clone();
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
-    let user: Map<String, Value> = app.session.presets.layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let user: Map<String, Value> = app.session.presets().layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let keys = blend_keys();
     let specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
@@ -595,7 +596,7 @@ fn pattern_rows(patterns: &[(String, String)], _: &Env) -> Vec<PresetRow<String>
 fn gradient_presets(app: &PhotocraftApp) -> Vec<(String, GradientStops)> {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     app.session
-        .presets
+        .presets()
         .gradients
         .iter()
         .flat_map(|g| g.items.iter())
@@ -616,7 +617,7 @@ struct StylePresets {
 
 /// The Styles page's presets.
 fn style_presets(app: &mut PhotocraftApp) -> PresetSource<'static, String> {
-    let groups = app.session.presets.styles.iter().map(|group| (group.name.clone(), group.items.iter().map(|st| st.name.clone()).collect())).collect();
+    let groups = app.session.presets().styles.iter().map(|group| (group.name.clone(), group.items.iter().map(|st| st.name.clone()).collect())).collect();
     let inputs = StylePresets { groups, library: StyleLibrary::held(app) };
     PresetSource::new(inputs, PresetFns::new(style_rows).thumb(style_thumb))
 }

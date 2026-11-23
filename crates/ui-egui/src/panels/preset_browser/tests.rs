@@ -2,6 +2,7 @@ use super::*;
 use craft::behavior::{EditEvent, Mixed};
 use craft::keymap::Mods;
 use craft::ui::contract::{MemoKey, ReorderMove};
+use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
 fn group(name: &str) -> PresetKey {
@@ -192,7 +193,7 @@ fn pattern_and_style_pictures_follow_a_scratch_read_error_transition() {
 
 /// The flat list of the app's style presets.
 fn styles(app: &PhotocraftApp) -> Vec<StylePreset> {
-    app.session.presets.styles.iter().flat_map(|group| group.items.iter().cloned()).collect()
+    app.session.presets().styles.iter().flat_map(|group| group.items.iter().cloned()).collect()
 }
 
 /// #16221: a style's picture key covers its effect values and the patterns' pixels: a same-named style with as many
