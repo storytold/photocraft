@@ -1,4 +1,4 @@
-//! Tests that run paint commands, moved from the engine-core `image_cmds` tests: 12 test(s).
+//! Tests that run paint commands, moved from the engine-core `image_cmds` tests: 13 test(s).
 
 mod canvas_size_center_offset_tests {
     use serde_json::{Value, json};
@@ -339,5 +339,46 @@ mod tests {
             }
             s.execute("history.undo", json!({})).unwrap();
         }
+    }
+}
+
+mod canvas_size_gray_tests {
+    use serde_json::{Value, json};
+
+    use photocraft_engine::Session;
+
+    /// A 400 x 300 document at `depth` with a white Background and an empty layer "Top" above it.
+    fn doc(depth: u32) -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 300, "depth": depth, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
+        s
+    }
+
+    /// The Background's stored colour at pixel (x, y).
+    fn background_value(s: &Session, x: i32, y: i32) -> [f32; 4] {
+        s.active().unwrap().doc.background().unwrap().surface().unwrap().rgba(x, y)
+    }
+
+    const GROW: fn(&str) -> Value = |color| json!({"width": 500, "height": 400, "anchor": "topLeft", "extensionColor": color});
+
+    /// A 32-bit document holds linear light: its Gray is the value an 8-bit grey 128 becomes when the
+    /// document is converted to 32 bits (0.2159), not 128/255.
+    #[test]
+    fn gray_in_a_32_bit_document_is_linear_grey_128() {
+        let mut converted = Session::new();
+        converted.execute("file.new", json!({"width": 4, "height": 4, "depth": 8, "background": "white"})).unwrap();
+        converted.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+        converted.execute("image.mode.bits32", json!({})).unwrap();
+        let want = background_value(&converted, 1, 1);
+        assert!((want[0] - 0.2159).abs() < 0.002, "converted grey 128: {want:?}");
+        let mut s = doc(32);
+        s.execute("image.canvasSize", GROW("gray")).unwrap();
+        let got = background_value(&s, 450, 350);
+        for i in 0..3 {
+            assert!((got[i] - want[i]).abs() < 1e-4, "channel {i}: {got:?} vs {want:?}");
+        }
+        assert_eq!(got[3], 1.0);
+        assert_eq!(background_value(&s, 10, 10)[..3], [1.0, 1.0, 1.0], "the old Background keeps its pixels");
     }
 }
