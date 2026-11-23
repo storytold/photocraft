@@ -821,9 +821,8 @@ pub(crate) fn is_auto_named(l: &Layer, typed: Option<&str>) -> bool {
     if psd_name_is_fixed(l) {
         return false;
     }
-    let auto = layer_name(&t.text);
-    // Duplicate Layer names a copy of "Title copy" "Title copy 2", not "Title copy copy".
-    l.name == auto || (typed != Some(l.name.as_str()) && copy_root(&l.name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto)))
+    // A duplicate's name the user typed is theirs.
+    l.name == layer_name(&t.text) || (typed != Some(l.name.as_str()) && photocraft_doc::text::is_auto_layer_name(&l.name, &t.text))
 }
 
 /// Whether a layer read from a PSD carries a name Photoshop keeps when the text changes. Photoshop
@@ -849,12 +848,6 @@ pub(crate) fn note_typed_name(s: &mut Session, id: LayerId, name: &str) {
     if let Some(d) = s.active_mut() {
         d.typed_names.insert(id, name.to_string());
     }
-}
-
-/// The name a Duplicate Layer copy was made from: "Title" for "Title copy" or "Title copy 2".
-fn copy_root(name: &str) -> Option<&str> {
-    let (root, rest) = name.rsplit_once(" copy")?;
-    (rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))).then_some(root)
 }
 
 /// The name a type layer gets from its text ([`photocraft_doc::text::auto_layer_name`]).

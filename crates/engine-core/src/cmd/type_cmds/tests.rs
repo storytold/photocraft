@@ -314,6 +314,29 @@ fn a_type_layer_made_here_follows_its_text_after_a_psd_round_trip() {
     assert_eq!(layer_name_of(&s, byline), "Byline", "renamed: keeps its name after reopening");
 }
 
+/// A duplicated type layer ("Title copy", "Title copy 2") still follows its text after a PSD save
+/// and reopen, made here or copied from a PSD layer whose name Photoshop took from its text
+/// (`rend`): the save records the copy's name as the text's.
+#[test]
+fn a_duplicated_type_layer_follows_its_text_after_a_psd_round_trip() {
+    let mut s = session();
+    let made = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Title"})).unwrap()["layer"].as_u64().unwrap();
+    let read = s.execute("type.create", json!({"x": 0, "y": 80, "text": "Heading"})).unwrap()["layer"].as_u64().unwrap();
+    let l = std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(LayerId(read)).unwrap();
+    l.psd_id = Some(u32::try_from(read).unwrap());
+    l.psd_blocks.push((*b"lnsr", std::sync::Arc::new(b"rend".to_vec())));
+    for id in [made, made, read] {
+        s.execute("layer.select", json!({"layer": id})).unwrap();
+        s.execute("layer.duplicate", json!({})).unwrap();
+    }
+    let mut s = reopened_as_psd(&s);
+    for (name, text) in [("Title copy", "Subtitle"), ("Title copy 2", "Caption"), ("Heading copy", "Footer")] {
+        let id = text_layer_named(&s, name);
+        s.execute("type.edit", json!({"layer": id, "text": text})).unwrap();
+        assert_eq!(layer_name_of(&s, id), text, "{name} follows its text after reopening");
+    }
+}
+
 /// A PSD type layer whose name Photoshop marks as given by hand (`layr`) keeps it after a save
 /// and reopen, even though the name equals its text.
 #[test]

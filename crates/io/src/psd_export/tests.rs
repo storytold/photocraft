@@ -214,7 +214,8 @@ fn a_kept_txt2_goes_with_the_last_type_layer() {
 /// A type layer is written with the name source (`lnsr`) the engine reads back, between `luni`
 /// and `lyid` as Photoshop writes it: a kept `rend` becomes `layr` once the layer is renamed, a
 /// kept `layr` stays, a PSD layer without one gets `layr`, and a layer made here `rend` while
-/// its name is its text's. Other layers keep their own block as it was.
+/// its name is its text's (a duplicate's "Title copy" included). Other layers keep their own
+/// block as it was.
 #[test]
 fn type_layers_are_written_with_the_name_source_the_engine_reads() {
     let mut doc = Document::new("t", photocraft_geom::Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
@@ -222,13 +223,16 @@ fn type_layers_are_written_with_the_name_source_the_engine_reads() {
     // Name, text, the `lnsr` read from the file, whether the layer came from a PSD, and the
     // `lnsr` written.
     type Case = (&'static str, &'static str, Option<&'static [u8; 4]>, bool, &'static [u8; 4]);
-    let cases: [Case; 6] = [
+    let cases: [Case; 8] = [
         ("Renamed", "Title", Some(b"rend"), true, b"layr"),
         ("Title", "Title", Some(b"rend"), true, b"rend"),
         ("name", "name", Some(b"layr"), true, b"layr"),
         ("name", "name", None, true, b"layr"),
         ("Title", "Title", None, false, b"rend"),
         ("Byline", "Caption", None, false, b"layr"),
+        // A duplicate's name is its text's too, as the engine renames it.
+        ("Title copy", "Title", None, false, b"rend"),
+        ("Title copy 2", "Title", Some(b"rend"), true, b"rend"),
     ];
     for (i, (name, s, src, from_psd, _)) in cases.iter().enumerate() {
         let mut l = Layer::new(*name, text(s));

@@ -165,12 +165,13 @@ fn psd_background(doc: &Document) -> Option<photocraft_doc::LayerId> {
 /// The name source (`lnsr`) a type layer is written with, so that reopening the file keeps the
 /// rule the engine renames type layers by: `rend` lets the name follow the text, `layr` keeps it.
 /// A source read from the file is kept, except `rend` on a layer renamed since (its name no
-/// longer the one its text gives). A layer read from a PSD without one keeps its name, as on
-/// import; a layer made here is `rend` while it still has its text's name. `None` for other
+/// longer one its text gives, [`photocraft_doc::text::is_auto_layer_name`], which counts a
+/// duplicate's "Title copy" as the text's). A layer read from a PSD without one keeps its name,
+/// as on import; a layer made here is `rend` while it still has its text's name. `None` for other
 /// layers, whose preserved blocks are written as they are.
 fn type_name_source(l: &Layer) -> Option<[u8; 4]> {
     let LayerContent::Text(t) = &l.content else { return None };
-    let auto = l.name == photocraft_doc::text::auto_layer_name(&t.text);
+    let auto = photocraft_doc::text::is_auto_layer_name(&l.name, &t.text);
     let read = l.psd_blocks.iter().find(|(key, _)| key == b"lnsr").map(|(_, src)| src.as_slice());
     Some(match read {
         Some(b"rend") if !auto => *b"layr",

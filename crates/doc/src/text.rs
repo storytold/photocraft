@@ -304,6 +304,20 @@ pub fn auto_layer_name(text: &str) -> String {
     if name.is_empty() { "Type Layer".into() } else { name }
 }
 
+/// Whether `name` is one a type layer reading `text` gets automatically, so it follows the
+/// text: the text's name ([`auto_layer_name`]), or a Duplicate Layer copy of it ("Title copy",
+/// "Title copy 2"; a copy of "Title copy" is "Title copy 2", not "Title copy copy").
+pub fn is_auto_layer_name(name: &str, text: &str) -> bool {
+    let auto = auto_layer_name(text);
+    name == auto || copy_root(name).is_some_and(|root| root == copy_root(&auto).unwrap_or(&auto))
+}
+
+/// The name a Duplicate Layer copy was made from: "Title" for "Title copy" or "Title copy 2".
+fn copy_root(name: &str) -> Option<&str> {
+    let (root, rest) = name.rsplit_once(" copy")?;
+    (rest.is_empty() || rest.strip_prefix(' ').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))).then_some(root)
+}
+
 #[cfg(test)]
 mod tests {
     /// Ensures `TextShape::Path` serializes backward-compatibly without an `"end"` field when `end` is `None`.
