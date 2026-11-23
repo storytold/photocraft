@@ -12,6 +12,7 @@ def main() -> int:
         ("photo_archive_suite", "nightly-archive-tests.py"),
         ("photo_plist_suite", "macos/nightly_plist_tests.py"),
         ("photo_release_dispatch_suite", "nightly-release-tests.py"),
+        ("photo_mac_sign_suite", "macos/nightly_sign_tests.py"),
     ):
         spec = importlib.util.spec_from_file_location(name, here / relative)
         module = importlib.util.module_from_spec(spec)

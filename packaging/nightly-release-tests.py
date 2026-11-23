@@ -286,7 +286,8 @@ class TrustedSourcePreparation(unittest.TestCase):
         self.assertEqual(len(inclusions), 1)
         entries = inclusions[0].split(",")
         expected = {"packaging/nightly-tests.py", "packaging/nightly-archive-tests.py",
-                    "packaging/macos/nightly_plist_tests.py", "packaging/windows/nightly-package-tests.ps1",
+                    "packaging/macos/nightly_plist_tests.py", "packaging/macos/nightly_sign_tests.py",
+                    "packaging/windows/nightly-package-tests.ps1",
                     "packaging/windows/nightly-signing-tests.ps1", "packaging/nightly-release-tests.py"}
         self.assertEqual(set(entries), expected, "classify exact fixtures, never production helpers or wildcard scope")
         self.assertEqual(len(entries), len(expected), "duplicate fixture classification")
