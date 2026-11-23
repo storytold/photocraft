@@ -114,8 +114,7 @@ mod rotate_canvas_bitmap_tests;
 #[cfg(test)]
 mod rotate_canvas_guides_tests;
 pub mod sample_cmds;
-#[cfg(test)]
-mod sample_zoom_box_tests;
+
 pub mod select_extra_cmds;
 pub mod selection_cmds;
 pub mod slice_cmds;

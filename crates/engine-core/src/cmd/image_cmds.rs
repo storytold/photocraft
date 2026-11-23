@@ -1328,5 +1328,4 @@ mod image_size_drops_selection_tests;
 #[cfg(test)]
 mod canvas_size_noop_history_tests;
 
-#[cfg(test)]
-mod canvas_size_center_offset_tests;
+

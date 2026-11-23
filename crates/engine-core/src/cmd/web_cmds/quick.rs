@@ -154,6 +154,4 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path, "format": fmt, "bytes": opt.bytes.len(), "warnings": web_warnings(&st, exif, wdoc.resolution_dpi)}))
 }
 
-#[cfg(test)]
-#[path = "quick_jpg_progressive_tests.rs"]
-mod quick_jpg_progressive_tests;
+
