@@ -1110,7 +1110,10 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         }
         _ => {
             let mut m = base_row(s, &d, source, &label, &now);
-            m.insert("count".into(), json!(d.measurement.count_total()));
+            // Measurement Log records only markers in visible Count groups; total marker count
+            // still includes hidden groups (#16512).
+            let visible: usize = d.measurement.count_groups.iter().filter(|g| g.visible).map(|g| g.points.len()).sum();
+            m.insert("count".into(), json!(visible));
             rows.push(m);
         }
     }
