@@ -80,7 +80,7 @@ fn the_row_menu_greys_artboard_from_group_like_the_layer_menu() {
     let enabled = |app: &PhotocraftApp, id: LayerId| {
         let st = app.session.active().unwrap();
         let tree = PhotoLayers::new(app, st, &Default::default(), false, None);
-        let menu = row_menu(&tree, &MenuTarget::new(Some(LayerRowKey::Layer(id))));
+        let menu = row_menu(app, &tree, &MenuTarget::new(Some(LayerRowKey::Layer(id))));
         menu.iter().find(|e| e.value() == Some(&FROM_GROUP.to_string())).map(|e| e.is_enabled()).expect("the entry is shown")
     };
     assert!(enabled(&app, group), "a top-level group can become an artboard");
