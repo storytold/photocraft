@@ -12,7 +12,7 @@ const CMD: &str = "edit.colorSettings";
 
 fn setup(name: &str) -> ColorSettings {
     let s = crate::session();
-    s.color.preset_settings(&s.color.settings, name).unwrap()
+    s.color().preset_settings(&s.color().settings, name).unwrap()
 }
 
 #[test]
@@ -69,8 +69,8 @@ fn each_setup_sets_the_measured_values() {
 #[test]
 fn monitor_color_takes_a_named_monitor_profile() {
     let mut s = crate::session();
-    s.color.settings.monitor_profile = "display-p3".into();
-    let c = s.color.preset_settings(&s.color.settings, "Monitor Color").unwrap();
+    s.color_mut().settings.monitor_profile = "display-p3".into();
+    let c = s.color().preset_settings(&s.color().settings, "Monitor Color").unwrap();
     assert_eq!(c.working_rgb, "display-p3");
     // The monitor profile itself is not part of the setup.
     assert_eq!(c.monitor_profile, "display-p3");
@@ -81,6 +81,25 @@ fn monitor_color_takes_a_named_monitor_profile() {
     // With `auto` and no display profile read, it is sRGB.
     let r = s.execute(CMD, json!({"preset": "Monitor Color", "monitorProfile": "auto"})).unwrap();
     assert_eq!((&r["preset"], &r["settings"]["workingRgb"]), (&json!("Monitor Color"), &json!("srgb")));
+}
+
+#[test]
+fn a_later_monitor_profile_change_makes_monitor_color_custom() {
+    let mut s = crate::session();
+    let r = s.execute(CMD, json!({"preset": "Monitor Color", "monitorProfile": "srgb"})).unwrap();
+    assert_eq!((&r["preset"], &r["settings"]["workingRgb"]), (&json!("Monitor Color"), &json!("srgb")));
+    // Monitor Color would now set Display P3, so the sRGB values left behind are Custom.
+    let r = s.execute(CMD, json!({"monitorProfile": "display-p3"})).unwrap();
+    assert_eq!((&r["preset"], &r["settings"]["workingRgb"]), (&json!(CUSTOM_SETTINGS), &json!("srgb")));
+    // A monitor change that leaves the setup as Monitor Color would set it keeps the name.
+    let r = s.execute(CMD, json!({"preset": "Monitor Color", "monitorProfile": "srgb"})).unwrap();
+    assert_eq!(r["preset"], "Monitor Color");
+    let r = s.execute(CMD, json!({"monitorProfile": "auto"})).unwrap();
+    assert_eq!(r["preset"], "Monitor Color");
+    // Other setups don't follow the monitor profile.
+    s.execute(CMD, json!({"preset": "North America Prepress 2"})).unwrap();
+    let r = s.execute(CMD, json!({"monitorProfile": "display-p3"})).unwrap();
+    assert_eq!(r["preset"], "North America Prepress 2");
 }
 
 #[test]
@@ -96,10 +115,10 @@ fn fresh_settings_are_custom() {
 fn a_scripted_setup_is_stored_and_reported() {
     let mut s = crate::session();
     // Blend Text Colors Using Gamma off: a scripted setup turns it back on at 1.45.
-    s.color.settings.blend_text_gamma = 1.0;
+    s.color_mut().settings.blend_text_gamma = 1.0;
     let r = s.execute(CMD, json!({"preset": "North America Prepress 2"})).unwrap();
     assert_eq!(r["preset"], "North America Prepress 2");
-    let c = &s.color.settings;
+    let c = &s.color().settings;
     assert_eq!(c.preset, "North America Prepress 2");
     assert_eq!((c.working_rgb.as_str(), c.policy_rgb, c.ask_on_missing), ("adobe-rgb-compat", Policy::Preserve, true));
     assert_eq!(c.blend_text_gamma, photocraft_compose::psblend::TEXT_GAMMA);
@@ -144,7 +163,7 @@ fn the_dialogs_ok_keeps_the_name_with_its_own_text_gamma() {
     params["bpc"] = json!(false);
     let r = s.execute(CMD, params).unwrap();
     assert_eq!(r["preset"], CUSTOM_SETTINGS);
-    assert!(!s.color.settings.bpc);
+    assert!(!s.color().settings.bpc);
 }
 
 #[test]
@@ -153,7 +172,7 @@ fn a_setup_with_a_differing_value_is_custom() {
     let r = s.execute(CMD, json!({"preset": "Monitor Color", "policyRgb": "preserve"})).unwrap();
     assert_eq!(r["preset"], CUSTOM_SETTINGS);
     // The setup's other values still apply.
-    let c = &s.color.settings;
+    let c = &s.color().settings;
     assert_eq!((c.policy_rgb, c.policy_cmyk, c.working_gray.as_str()), (Policy::Preserve, Policy::Off, "gray-gamma-2.2"));
 }
 
@@ -163,18 +182,18 @@ fn custom_keeps_the_values() {
     s.execute(CMD, json!({"preset": "North America General Purpose 2"})).unwrap();
     let r = s.execute(CMD, json!({"preset": CUSTOM_SETTINGS})).unwrap();
     assert_eq!(r["preset"], CUSTOM_SETTINGS);
-    assert!(!s.color.settings.ask_on_mismatch, "the setup's values stay");
+    assert!(!s.color().settings.ask_on_mismatch, "the setup's values stay");
 }
 
 #[test]
 fn a_bad_preset_is_an_error_and_changes_nothing() {
     let mut s = crate::session();
     s.execute(CMD, json!({"preset": "North America General Purpose 2"})).unwrap();
-    let before = s.color.settings.clone();
+    let before = s.color().settings.clone();
     for bad in [json!(null), json!("Europe"), json!(""), json!("custom"), json!(3), json!(true), json!(["Monitor Color"]), json!({"name": "Monitor Color"})] {
         let e = s.execute(CMD, json!({"preset": bad.clone(), "bpc": false})).unwrap_err();
         assert!(matches!(e, EngineError::BadParams { .. }), "{bad}: {e}");
-        assert_eq!(s.color.settings, before, "{bad}");
+        assert_eq!(s.color().settings, before, "{bad}");
     }
     // A stored name the menu doesn't have (a hand-edited preferences file) is refused too.
     let mut c = before.clone();

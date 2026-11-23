@@ -62,11 +62,20 @@ fn tone_luts_qc(adj: &Adjustment, quantum: Option<f32>, curve_levels: bool) -> [
             // document sample - the way [`levels_q`] is exact at every level. 16-bit and float
             // documents were not measured, nor CMYK and Lab curves, so only the 8-bit quantum.
             let level = (curve_levels && *space == ToneSpace::Rgb && quantum == Some(EIGHT_BIT_LEVELS)).then_some(EIGHT_BIT_LEVELS);
+            // Both curves are evaluated at the 256 exact levels, not read between two entries of
+            // the 4096-entry table: a pencil step between levels 128 and 129 would otherwise give
+            // level 128 a small fraction that rounds up to level 4 and wakes a composite step there.
+            let master_levels = if *space == ToneSpace::Lab { curve_samples::<LEVELS>(&[]) } else { curve_samples_mode::<LEVELS>(master, *pencil) };
             let row = |c: &[CurvePoint], level: Option<f32>| match level {
                 Some(q) => {
-                    let channel = curve_lut_mode(c, *pencil);
-                    let at_level = |v: f32| whole_levels(v, Some(q));
-                    (0..LUT_SIZE).map(|k| lut(&m, at_level(lut(&channel, at_level(x(k)))))).collect()
+                    let channel = curve_samples_mode::<LEVELS>(c, *pencil);
+                    let index = |v: f32| (whole_levels(v, Some(q)) * q).round().clamp(0.0, q) as usize;
+                    (0..LUT_SIZE)
+                        .map(|k| {
+                            let ch = channel.get(index(x(k))).copied().unwrap_or(0.0);
+                            master_levels.get(index(ch)).copied().unwrap_or(0.0)
+                        })
+                        .collect()
                 }
                 None => curve_lut_mode(c, *pencil).iter().map(|&v| lut(&m, v)).collect(),
             };
@@ -420,13 +429,26 @@ pub fn curve_lut_mode(points: &[CurvePoint], pencil: bool) -> Vec<f32> {
 /// A pencil-drawn Curves map (see [`photocraft_doc::adjust::curve_map`]): straight segments
 /// between its entries, constant outside the first/last, clamped to 0..=1, sampled into a LUT.
 pub fn curve_map_lut(points: &[CurvePoint]) -> Vec<f32> {
+    curve_map_samples::<LUT_SIZE>(points)
+}
+
+/// Whole 8-bit levels: the sample count [`tone_luts_qc`] evaluates an 8-bit RGB Curves at.
+const LEVELS: usize = 256;
+
+/// [`curve_lut_mode`] sampled at `N` evenly spaced inputs including both end points.
+fn curve_samples_mode<const N: usize>(points: &[CurvePoint], pencil: bool) -> Vec<f32> {
+    if pencil { curve_map_samples::<N>(points) } else { curve_samples::<N>(points) }
+}
+
+/// [`curve_map_lut`] sampled at `N` evenly spaced inputs including both end points.
+fn curve_map_samples<const N: usize>(points: &[CurvePoint]) -> Vec<f32> {
     let mut pts: Vec<(f32, f32)> = points.iter().filter(|p| p.input.is_finite() && p.output.is_finite()).map(|p| (p.input, p.output)).collect();
     pts.sort_by(|a, b| a.0.total_cmp(&b.0));
     pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
-    let ident = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
-    let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { return (0..LUT_SIZE).map(ident).collect() };
+    let ident = |k: usize| k as f32 / N.saturating_sub(1).max(1) as f32;
+    let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { return (0..N).map(ident).collect() };
     let mut seg = 0;
-    (0..LUT_SIZE)
+    (0..N)
         .map(|k| {
             let xv = ident(k);
             if xv <= first.0 {

@@ -163,5 +163,6 @@ fn deleting_a_custom_set_waits_for_confirmation_and_dialog_ok() {
         .expect("the confirmation offers Cancel");
     cancel.click();
     h.run_steps(3);
+    assert!(h.query_by_label("Delete the set “Painting”?").is_none(), "Cancel closes the confirmation");
     assert!(h.state().prefs_rt.shortcuts.as_ref().unwrap().profiles.sets().contains_key("Painting"));
 }

@@ -397,7 +397,7 @@ fn refusal(app: &PhotocraftApp, command: &str) -> String {
 
 /// Why a dialog did not open: `Some` is the editor's refusal of these parameters, to show the user (a CMYK Channel
 /// Mixer, #8047); `None` means there is no dialog for them.
-type Refused = Option<String>;
+pub(crate) type Refused = Option<String>;
 
 /// Opens a neutral adjustment dialog using the current edit target.
 pub fn open_neutral(app: &mut PhotocraftApp, command: &str) -> Option<DialogId> {
@@ -411,7 +411,7 @@ pub(crate) fn open_with_params(app: &mut PhotocraftApp, command: &str, params: &
 }
 
 /// [`open_with_params`], with the reason it did not open.
-fn open_with_params_checked(app: &mut PhotocraftApp, command: &str, params: &Value) -> Result<DialogId, Refused> {
+pub(crate) fn open_with_params_checked(app: &mut PhotocraftApp, command: &str, params: &Value) -> Result<DialogId, Refused> {
     let params = if params.is_null() { json!({}) } else { Value::Object(params.as_object().ok_or(None)?.clone()) };
     let params = complete_params(app, command, &params).unwrap_or(params);
     let mut params = app.with_mask_target(command, params);

@@ -135,3 +135,19 @@ fn the_point_order_of_each_curve_does_not_change_the_result() {
         assert_eq!(gray8(&adj, g), gray8(&measured(), g), "gray {g} with the points listed in reverse");
     }
 }
+
+/// A pencil channel step between levels 128 and 129 leaves level 128 at exactly zero on its way to
+/// the composite curve: read between two table entries it came out as a fraction that rounded to
+/// level 4, where the composite's own step turned it into 255.
+#[test]
+fn a_pencil_channel_step_reaches_the_composite_at_its_exact_level() {
+    let adj = Adjustment::Curves {
+        master: pts(&[(0, 0), (3, 0), (4, 255), (5, 0), (255, 0)]),
+        per_channel: [pts(&[(0, 0), (128, 0), (129, 255), (255, 255)]), pts(STRAIGHT), pts(STRAIGHT)],
+        space: ToneSpace::Rgb,
+        black: Vec::new(),
+        pencil: true,
+    };
+    assert_eq!(gray8(&adj, 128)[0], 0);
+    assert_eq!(gray8(&adj, 4)[0], 0, "level 4 maps to 0 through the channel, then 0 through the composite");
+}

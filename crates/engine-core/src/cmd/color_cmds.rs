@@ -191,6 +191,9 @@ pub const COLOR_SETTINGS_PRESETS: [&str; 13] = [
     "North America Web/Internet",
 ];
 
+/// The named setup whose working RGB follows the monitor profile.
+const MONITOR_COLOR: &str = "Monitor Color";
+
 /// The RGB entry of "Monitor Color": the monitor profile (see [`ColorState::monitor_rgb_for`]).
 const MONITOR_RGB: &str = "monitor";
 
@@ -1445,7 +1448,7 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some(m) = p.get("monitorProfile").and_then(Value::as_str) {
                 from.monitor_profile = m.to_string();
             }
-            s.color.preset_settings(&from, name)
+            s.color().preset_settings(&from, name)
         }
         _ => None,
     };
@@ -1509,9 +1512,12 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(_), _) => CUSTOM_SETTINGS.into(),
         // No preset given: any change but the monitor profile makes the values Custom.
         (None, _) => {
-            let old = &s.color.settings;
+            let old = &s.color().settings;
             let unchanged = ColorSettings { monitor_profile: old.monitor_profile.clone(), preset: old.preset.clone(), ..next.clone() } == *old;
-            if unchanged && is_settings_preset(&old.preset) { old.preset.clone() } else { CUSTOM_SETTINGS.into() }
+            // "Monitor Color" takes its working RGB from the monitor profile, so a new monitor
+            // profile keeps the name only while the setup still is what it would set now.
+            let still_monitor_color = old.preset != MONITOR_COLOR || s.color().preset_settings(&next, MONITOR_COLOR).is_some_and(|m| same_setup(&next, &m));
+            if unchanged && still_monitor_color && is_settings_preset(&old.preset) { old.preset.clone() } else { CUSTOM_SETTINGS.into() }
         }
     };
     validate_settings(&next).map_err(|msg| EngineError::BadParams { cmd: cmd.into(), msg })?;

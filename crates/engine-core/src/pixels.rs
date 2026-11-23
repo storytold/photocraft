@@ -283,8 +283,10 @@ fn adjusted_channels(s: &Surface, r: Rect, selection: Option<&Surface>, op: impl
             let Some(out) = out.get_mut(..colors) else { continue };
             out.copy_from_slice(ch);
             op(out);
+            // `v·(1−k) + o·k`, as in [`mix_through_selection`]: exact at full coverage, even over
+            // huge 32-bit values whose difference from the result would round it away (#9483).
             for (v, o) in ch.iter_mut().zip(out.iter()) {
-                *v += (o - *v) * k;
+                *v = *v * (1.0 - k) + o * k;
             }
         }
     }

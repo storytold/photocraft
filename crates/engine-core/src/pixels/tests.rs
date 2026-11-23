@@ -518,6 +518,18 @@ fn full_coverage_keeps_the_edit_over_huge_hdr_values() {
     }
 }
 
+/// The same for an edit of a CMYK layer's own channels: a result of 0.5 over a stored cyan of
+/// 2^26 came out as 0, the difference rounding the stored value away.
+#[test]
+fn full_coverage_keeps_a_stored_channel_edit_over_huge_hdr_values() {
+    let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true);
+    let mut s = Surface::new(fmt);
+    let big = 67_108_864.0_f32;
+    s.write_pixel(0, 0, &[big, 0.25, 0.25, 0.25, 1.0]);
+    let out = adjusted_channels(&s, Rect::new(0, 0, 1, 1), None, |ch| ch.iter_mut().for_each(|v| *v = 0.5));
+    assert_eq!(out[..4], [0.5, 0.5, 0.5, 0.5]);
+}
+
 /// Remapping walks the stored tiles, not the dense rectangle around them: two pixels a million
 /// pixels apart (a ~4 TB rectangle) flip to their mirrored places.
 #[test]
