@@ -123,7 +123,7 @@ fn a_copy_with_the_same_layer_ids_still_applies_the_box() {
     assert!(app.session.set_active(1));
     let st = app.session.active().unwrap();
     assert_ne!(st.doc.id, a);
-    assert_eq!((st.active_layer, st.selected_layers()), (Some(layer), vec![layer]), "the copy has the same layer active and selected");
+    assert_eq!((st.active_layer, st.selected_layers()), (Some(layer), &[layer][..]), "the copy has the same layer active and selected");
     end_if_left(&mut app);
     assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "the box ended");
     assert_eq!(app.session.active().unwrap().doc.id, b);

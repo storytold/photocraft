@@ -262,7 +262,7 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     let switched_document = preview_doc_id.is_some_and(|id| id != st.doc.id);
     // The box's own document, which stays open in its tab when another one is picked.
     let home = match preview_doc_id {
-        Some(id) => app.session.documents().iter().find(|d| d.doc.id == id),
+        Some(id) => app.session.documents().iter().find(|d| d.doc.id == id).map(|d| &**d),
         None => Some(st),
     };
 
