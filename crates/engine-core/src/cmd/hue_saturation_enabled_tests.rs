@@ -90,6 +90,22 @@ fn an_empty_layer_stops_with_the_empty_layer_alert() {
     assert_eq!(steps(&s), before, "no history state");
 }
 
+/// A layer whose pixels were all erased is empty too: the Eraser clears alpha and keeps the colour
+/// bytes, which a byte-wise bounds scan would count as content.
+#[test]
+fn an_erased_layer_stops_with_the_empty_layer_alert() {
+    let mut s = doc();
+    let erase = json!({"points": [[-10, 15], [50, 15]], "size": 120, "erase": true, "brush": {"hardness": 1.0}});
+    s.execute("paint.stroke", erase).unwrap();
+    let before = steps(&s);
+    let err = s.execute(HS, params()).unwrap_err().to_string();
+    assert!(err.contains(HUE_SATURATION_EMPTY), "{err}");
+    assert_eq!(steps(&s), before, "no history state");
+    // A pixel painted again makes the layer non-empty.
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    assert_works(&mut s, "painted again");
+}
+
 #[test]
 fn hue_saturation_keeps_working_where_it_worked() {
     let mut s = doc();
