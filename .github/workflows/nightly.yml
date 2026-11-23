@@ -22,13 +22,13 @@ jobs:
       actions: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@077d4657f71527141717a0dfbc908a217460eabf
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@REPIN_TO_MERGED_SHARED_SIGNER_SHA
     with:
-      tooling-revision: 077d4657f71527141717a0dfbc908a217460eabf
+      tooling-revision: REPIN_TO_MERGED_SHARED_SIGNER_SHA
       app-name: photocraft
       manual-actors: '[]'
       craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
-      # One producer run builds every listed platform for one all-or-nothing release. The pinned
-      # shared revision has no `platforms` input or Linux leg; re-pin only to a reviewed commit
-      # that defines both before any activation.
-      platforms: '["windows-x86_64","linux-x86_64"]'
+      # One producer run builds every listed platform for one all-or-nothing release. The pin is a
+      # local placeholder for the unmerged shared Linux/macOS signer; replace it in both callers
+      # with that reviewed merged commit before this is published or activated.
+      platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'

@@ -9,6 +9,8 @@ from pathlib import Path
 import re
 import tempfile
 import textwrap
+import base64
+import hashlib
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -72,6 +74,65 @@ def literal_off(condition):
 
 
 NIGHTLY_PLATFORMS = ("windows-x86_64", "linux-x86_64", "macos-aarch64")
+# Each platform's one trust field in policy v3, and the public stable identity it must name.
+NIGHTLY_TRUST = {
+    "windows-x86_64": ("publisher_subject",
+                       "CN=Learning Machines Inc, O=Learning Machines Inc, L=Atlanta, S=Georgia, C=US"),
+    "linux-x86_64": ("fingerprint", "2B76741B414AAD6CD33E631213A005C0B9D7C3ED"),
+    "macos-aarch64": ("apple_team_id", "DJ6XS33FX8"),
+}
+LINUX_KEY = ROOT / ".github/nightly-linux-signing-key.asc"
+
+
+def openpgp_primary_fingerprints(armored):
+    """Return the v4 fingerprints of every primary public-key packet in one armored block.
+
+    A narrow reader for the committed public key, not a general OpenPGP parser: anything
+    other than one well-formed public-key block refuses.
+    """
+    lines = armored.strip().splitlines()
+    if lines[:1] != ["-----BEGIN PGP PUBLIC KEY BLOCK-----"] or lines[-1:] != ["-----END PGP PUBLIC KEY BLOCK-----"]:
+        raise ValueError("exactly one armored public key block is required")
+    body = lines[1:-1]
+    if "" not in body:
+        raise ValueError("armor header separator missing")
+    body = body[body.index("") + 1:]
+    if not body or not body[-1].startswith("="):
+        raise ValueError("armor checksum missing")
+    data = base64.b64decode("".join(body[:-1]), validate=True)
+    fingerprints, offset = [], 0
+    while offset < len(data):
+        header = data[offset]
+        if not header & 0x80:
+            raise ValueError("invalid packet header")
+        if header & 0x40:
+            tag, offset = header & 0x3F, offset + 1
+            first = data[offset]
+            if first < 192:
+                length, offset = first, offset + 1
+            elif first < 224:
+                length, offset = ((first - 192) << 8) + data[offset + 1] + 192, offset + 2
+            elif first == 255:
+                length, offset = int.from_bytes(data[offset + 1:offset + 5], "big"), offset + 5
+            else:
+                raise ValueError("partial packet lengths are not a public key")
+        else:
+            tag, kind, offset = (header >> 2) & 0x0F, header & 0x03, offset + 1
+            if kind == 3:
+                raise ValueError("indeterminate packet length")
+            size = 1 << kind
+            length, offset = int.from_bytes(data[offset:offset + size], "big"), offset + size
+        packet = data[offset:offset + length]
+        if len(packet) != length:
+            raise ValueError("truncated packet")
+        if tag == 5 or tag == 7:
+            raise ValueError("secret key material must never be committed")
+        if tag == 6:
+            if packet[:1] != b"\x04":
+                raise ValueError("only v4 primary keys are expected")
+            fingerprints.append(hashlib.sha1(b"\x99" + length.to_bytes(2, "big") + packet).hexdigest().upper())
+        offset += length
+    return fingerprints
 
 
 def producer_platforms(source):
@@ -246,23 +307,19 @@ class TrustedSourcePreparation(unittest.TestCase):
                     "max_artifact_bytes"):
             with self.subTest(unresolved=key):
                 self.assertIsNone(policy[key], "the example must not invent production authority")
-        for installed in (".github/nightly-signing-policy.json", ".github/nightly-linux-signing-key.asc"):
-            path = ROOT / installed
-            with self.subTest(installed=installed):
-                self.assertFalse(path.exists() or path.is_symlink(), "activation is a separately reviewed change")
+        path = ROOT / ".github/nightly-signing-policy.json"
+        self.assertFalse(path.exists() or path.is_symlink(), "installing the policy is a separately reviewed activation")
 
     def test_policy_platforms_are_exactly_what_the_producer_builds(self):
         policy = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
         built = producer_platforms((ROOT / ".github/workflows/nightly.yml").read_text())
-        self.assertIn("linux-x86_64", built)
+        self.assertEqual(built, list(NIGHTLY_PLATFORMS), "one release carries Windows, Linux and macOS")
         self.assertEqual(set(policy["platforms"]), set(built), "a built platform without policy, or the reverse")
-        trust = {"windows-x86_64": "publisher_subject", "linux-x86_64": "fingerprint"}
         for platform, row in policy["platforms"].items():
+            field, _ = NIGHTLY_TRUST[platform]
             with self.subTest(platform=platform):
                 self.assertEqual(set(row), {"unsigned_artifact_name", "trust"})
-                self.assertEqual(set(row["trust"]), {trust[platform]}, "each platform has only its own trust anchor")
-                self.assertIsNone(row["unsigned_artifact_name"])
-                self.assertIsNone(row["trust"][trust[platform]], "the example must not invent a trust anchor")
+                self.assertEqual(set(row["trust"]), {field}, "each platform has only its own trust anchor")
 
     def test_candidate_example_has_exact_v3_fields_without_provider_scope_claim(self):
         candidate = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())["candidate_policy"]
@@ -296,10 +353,12 @@ class TrustedSourcePreparation(unittest.TestCase):
 
     def test_malformed_or_narrowed_platform_lists_are_rejected(self):
         source = (ROOT / ".github/workflows/nightly.yml").read_text()
-        current = "platforms: '[\"windows-x86_64\",\"linux-x86_64\"]'"
+        current = "platforms: '[\"windows-x86_64\",\"linux-x86_64\",\"macos-aarch64\"]'"
         self.assertIn(current, source)
         for new in ("platforms: '[\"linux-x86_64\"]'",
+                    "platforms: '[\"linux-x86_64\",\"macos-aarch64\"]'",
                     "platforms: '[\"windows-x86_64\",\"linux-x86_64\",\"linux-x86_64\"]'",
+                    "platforms: '[\"windows-x86_64\",\"macos-x86_64\"]'",
                     "platforms: '[\"windows-x86_64\",\"linux-arm64\"]'",
                     "platforms: '[\"windows-x86_64\", \"linux-x86_64\"]'",
                     "platforms: [\"windows-x86_64\",\"linux-x86_64\"]",
@@ -364,6 +423,57 @@ class TrustedSourcePreparation(unittest.TestCase):
                 self.assertNotRegex(executable, r"(?im)^\s*[^\s:#]*cache[^\s:#]*:")
                 self.assertNotRegex(executable, r"(?im)^\s*(?:environment|secrets):")
                 self.assertNotIn("secrets.", executable)
+
+
+class NightlyTrustAnchors(unittest.TestCase):
+    """The public stable identities each platform's signed nightly must carry (all three platforms)."""
+
+    def setUp(self):
+        self.policy = json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())
+
+    def test_each_platform_row_names_its_fixed_artifact_kind_and_stable_identity(self):
+        self.assertEqual(set(self.policy["platforms"]), set(NIGHTLY_TRUST))
+        for platform, (field, value) in NIGHTLY_TRUST.items():
+            row = self.policy["platforms"][platform]
+            with self.subTest(platform=platform):
+                self.assertEqual(row["unsigned_artifact_name"], f"nightly-unsigned-{platform}",
+                                 "the artifact kind is fixed by platform, never a caller pattern")
+                self.assertEqual(row["trust"], {field: value}, "trust must be stable's public identity")
+
+    def test_trust_values_have_the_shapes_the_shared_signer_accepts(self):
+        rows = self.policy["platforms"]
+        self.assertRegex(rows["macos-aarch64"]["trust"]["apple_team_id"], r"^[A-Z0-9]{10}$")
+        self.assertRegex(rows["linux-x86_64"]["trust"]["fingerprint"], r"^[0-9A-F]{40}$")
+        subject = rows["windows-x86_64"]["trust"]["publisher_subject"]
+        self.assertTrue(0 < len(subject) <= 2048 and not set(subject) & {"\r", "\n", "\0"})
+
+    def test_committed_linux_key_is_exactly_the_one_stable_public_key(self):
+        self.assertFalse(LINUX_KEY.is_symlink(), "the key file must be a regular committed file")
+        armored = LINUX_KEY.read_text(encoding="ascii")
+        self.assertEqual(armored.count("-----BEGIN PGP"), 1, "exactly one armored block")
+        self.assertEqual(openpgp_primary_fingerprints(armored), [NIGHTLY_TRUST["linux-x86_64"][1]],
+                         "exactly one primary key, and it is the stable release key the policy trusts")
+
+    def test_key_reader_refuses_secret_or_extra_material(self):
+        armored = LINUX_KEY.read_text(encoding="ascii")
+        for change in (armored.replace("PUBLIC KEY BLOCK", "PRIVATE KEY BLOCK"),
+                       armored.replace("-----END PGP PUBLIC KEY BLOCK-----\n", ""),
+                       "Comment: extra\n" + armored):
+            with self.subTest(change=change[:40]), self.assertRaises(ValueError):
+                openpgp_primary_fingerprints(change)
+
+    def test_both_callers_use_one_shared_pin_in_uses_and_tooling_revision(self):
+        pins = set()
+        for name, callee in (("nightly.yml", "nightly-unsigned.yml"), ("nightly-sign.yml", "nightly-release.yml")):
+            source = (ROOT / ".github/workflows" / name).read_text()
+            uses = re.findall(r"(?m)^    uses: storytold/craft-common-actions/\.github/workflows/"
+                              + re.escape(callee) + r"@(\S+)$", source)
+            tooling = re.findall(r"(?m)^      tooling-revision: (\S+)$", source)
+            with self.subTest(workflow=name):
+                self.assertEqual(len(uses), 1)
+                self.assertEqual(tooling, uses, "the defining workflow SHA and tooling input must match")
+            pins.update(uses)
+        self.assertEqual(len(pins), 1, "producer and signer must pin the same shared commit")
 
 
 if __name__ == "__main__":

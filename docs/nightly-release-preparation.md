@@ -1,4 +1,4 @@
-# Windows and Linux release-ref nightly: source preparation
+# Windows, Linux and macOS release-ref nightly: source preparation
 
 **Not activated or qualified.** No production signing policy is installed. The producer and
 signer workflows are dormant `.yml` registrations, not an activated signing pipeline.
@@ -6,22 +6,27 @@ All three jobs remain literally disabled. There is no
 schedule or platform secret grant. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `077d4657f71527141717a0dfbc908a217460eabf`, the craft-common-actions
-main commit that merged [#330](https://github.com/storytold/craft-common-actions/pull/330); this is
+Shared tooling is pinned to the local placeholder `REPIN_TO_MERGED_SHARED_SIGNER_SHA` in both
+callers. It stands for the craft-common-actions commit that merges the multi-platform signer
+(policy v3, the `platforms` input and the Linux and macOS legs), which is not merged yet. This
+tree must not be published or activated until both callers name that reviewed merged commit
+in `uses` and `tooling-revision`; the earlier pin, `077d4657` (#330), is Windows-only. A pin is
 reviewed source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
 
-**Linux x86_64 row (dormant).** The producer caller lists `platforms: '["windows-x86_64","linux-x86_64"]'`
-on its single, still literally-off job: one producer run builds every listed platform for one
-all-or-nothing release, and the release-ref signer admits platforms only from the protected policy,
-so there is no separate Linux caller job. The pinned `077d4657` shared revision has **no
-`platforms` input and no Linux leg**, and its release validator admits only `windows-x86_64`.
-The agreed shared interface (`platforms` on `nightly-unsigned.yml`, policy v3 below) must land in a
-reviewed public commit and the callers must be re-pinned to it before any activation; dispatching
-against the current pin would be refused as an undefined input. The shared Linux leg runs the app's
-unchanged `packaging/linux/nightly.sh --arch x86_64` (GUI-only `photocraft-<version>-linux-x86_64-nightly.tar.gz`).
-A local build of that script is not a native launch: launch, profile isolation beside stable and
-the Launcher install still need Linux desktop QA.
+**Platform rows (dormant).** The producer caller lists
+`platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'` on its single, still literally-off
+job: one producer run builds every listed platform for one all-or-nothing release (one failed or
+skipped platform stops that night's release, Windows included), and the release-ref signer admits
+platforms only from the protected policy, so there is no separate Linux or macOS caller job and
+the signer caller has no platform input. The shared Linux leg runs the app's
+`packaging/linux/nightly.sh --arch x86_64` (GUI-only `photocraft-<version>-linux-x86_64-nightly.tar.gz`)
+and signs with the stable OpenPGP key; the macOS leg runs `packaging/macos/nightly.sh --arch aarch64`
+unsigned on main, then `packaging/macos/nightly-sign.sh` (stable `import-cert.sh`, Developer ID,
+hardened runtime, notarization and stapling) and `nightly-verify.sh` from the protected release
+checkout. Those scripts are owned by PhotoCraft's Linux and macOS packaging authors, not by these
+callers. Neither leg has run on hosted runners: launch, profile isolation beside stable and the
+Launcher install still need Linux and macOS desktop QA.
 This is not a hosted no-key test, a native signing result or a working nightly feed.
 
 ## Ownership and interface
@@ -33,6 +38,10 @@ This is not a hosted no-key test, a native signing result or a working nightly f
   `producer_run_id` and `producer_run_attempt` to the fixed `nightly-sign.yml` on `release`.
   No checkout, artifact parsing, application code or release environment is used here.
   Its filters are not authorization: a writer can edit main transport.
+- `.github/nightly-linux-signing-key.asc`: the stable Linux release public key, byte for byte the
+  `release-signing-key.asc` published with v0.23.1 (one ed25519 primary key,
+  `2B76741B414AAD6CD33E631213A005C0B9D7C3ED`, with one signing subkey). The shared Linux verifier
+  reads it from the protected release checkout, never from a release asset. Public material only.
 - `.github/workflows/nightly-sign.yml`: dormant top-level registration, intended to be identical on
   main/release after reviewed promotion. It rejects wrong repository/event/actual branch,
   including same-name tags. Its constant whole-run concurrency is distinct from stable,
@@ -58,9 +67,13 @@ This is not a hosted no-key test, a native signing result or a working nightly f
 ## Missing real configuration (all activation blockers)
 
 `.github/nightly-signing-policy.json` is deliberately absent: there is no authorizing root,
-empty debt set, invented workflow ID or guessed publisher subject. The adjacent
+empty debt set or invented workflow ID, and installing it is a separate activation step. The adjacent
 [`nightly-signing-policy.example.json`](nightly-signing-policy.example.json) is intentionally
-invalid (`null` unresolved values), not installable configuration. Install only independently
+invalid (`null` unresolved values), not installable configuration. Its `platforms` rows do carry
+the reviewed public values: each fixed `nightly-unsigned-<platform>` artifact kind and stable's
+identities, read from the v0.23.1 release (Windows Authenticode leaf subject in Windows form,
+the Linux release key's primary fingerprint, and the Developer ID team `DJ6XS33FX8` from the
+macOS CLI's code signature). Install only independently
 read, reviewed real values under explicit schema `craft-nightly-release-policy/v3` (v2 top-level fields
 without `platform`, `unsigned_artifact_name` and `windows_publisher_subject`, plus a `platforms` map):
 
@@ -70,12 +83,13 @@ without `platform`, `unsigned_artifact_name` and `windows_publisher_subject`, pl
 | `producer_workflow_id`, `producer_workflow_path` | Real default-branch registration ID and `.github/workflows/nightly.yml` |
 | `producer_tooling_revision`, `producer_workflow_ref` | Approved shared unsigned producer/attester commit and exact reusable path at that commit |
 | `signer_workflow_path`, `signer_tooling_revision` | `.github/workflows/nightly-sign.yml` and reviewed public shared signer commit |
-| `release_branch`, `platforms` keys | `release`; exactly the producer's `platforms` list and the targets admitted in the shared registry (`windows-x86_64`, `linux-x86_64`) |
+| `release_branch`, `platforms` keys | `release`; exactly the producer's `platforms` list and the targets admitted in the shared registry (`windows-x86_64`, `linux-x86_64`, `macos-aarch64`) |
 | `manual_actors` | Empty by default; reviewed manual producer/signer and rerun authority only |
 | `automatic_signer_actors` | Empty by default; separate reviewed automatic-only authority for signer attempt 1 after authenticating a scheduled producer attempt 1; no manual producer or rerun grant |
 | `max_age_seconds`, `max_artifact_bytes`, `platforms.<platform>.unsigned_artifact_name` | Reviewed bounded age/size and each platform's fixed unsigned artifact kind/prefix; actual upload/discovery name is that prefix + `-` + authenticated producer run ID + `-` + authenticated producer attempt, never a caller pattern or substitution |
 | `candidate_policy` | Full reviewed `craft-nightly-candidate-policy/v3` with real required workflow/job/check/app IDs, Sonar organization/project/issue types/conditions and exact approved debt fingerprints; provider configuration is trusted as resolved, not a pinned scan inventory |
 | `platforms.linux-x86_64.trust.fingerprint` | Full primary fingerprint of the stable Linux release key, independently reviewed; the release checkout must also hold exactly that one public key at `.github/nightly-linux-signing-key.asc`, and the existing `LINUX_SIGNING_KEY` must be in the `release` environment only |
+| `platforms.macos-aarch64.trust.apple_team_id` | Stable's ten-character Developer ID team (`DJ6XS33FX8`, Learning Machines LLC), confirmed from a stable signature; never a repository variable. The six stable `APPLE_*`/`KEYCHAIN_PASSWORD` names must be in the `release` environment only |
 | `platforms.windows-x86_64.trust.publisher_subject` | Exact independently reviewed protected policy string used by both signer and fresh credentialless Windows publisher; nonempty, at most 2048 characters, no CR/LF/NUL; verified native subject must match exactly, never an artifact/caller input |
 
 Live admission requires explicit policy v3 once the shared parser lands it; v2 is single-platform
@@ -110,9 +124,9 @@ preactivation review and qualification. These are source behaviors, not hosted/c
 
 Confirm the shared parser's final exact fields; unknown/missing/null values must refuse.
 Do not derive policy, code/tool paths, trust anchors or ignored debt from a candidate archive.
-The reviewed Windows publisher subject and independently pinned signing tools are also
-unresolved; configure them only through the reviewed shared/release contract, not a guessed
-app value or an override from main. The unchanged stable `release.yml` forwards Windows/Azure
+Independently pinned signing tools are also unresolved; configure them, and the trust values
+above, only through the reviewed shared/release contract, never a guessed app value or an
+override from main. The unchanged stable `release.yml` forwards Windows/Azure
 secret names from caller scope, while the nightly signer forwards none. Before activation,
 verify the existing `release` environment holds the required names and that repository or
 organization scopes do not expose signing copies to main. Environment-only missing values
@@ -182,6 +196,10 @@ per-run human approval is introduced by candidate-v3; provider gaps remain block
 synthetic, locally generated event fixtures and a mocked HTTPS opener. It verifies fixed
 routing, refusal before contact and no retry; it does not contact GitHub or prove admission,
 cryptography, native signing, hosted concurrency, or the shared candidate-v3 implementation.
+It checks that the policy example's platforms equal the producer list, that each row names its
+fixed artifact kind and stable identity, that `.github/nightly-linux-signing-key.asc` holds exactly
+one public primary key whose fingerprint is the policy's, and that both callers share one pin in
+`uses` and `tooling-revision`.
 The same suite covers all three callers for the no-cache/no-platform-secret boundary,
 requires every nightly job to stay explicitly off (a top-level OR cannot override false),
 and refuses any registered nightly schedule. It also rejects changed root serialization: the fixed PhotoCraft nightly group, `queue: max`,
