@@ -1,7 +1,7 @@
 //! Linked choices bind to a verified encoded revision. Transactions render from one read.
 use super::{
-    Arc, Document, EngineError, LayerId, Result, Session, SmartContentsId, SmartSource, Value, base_name, contents_of, detach_psd, instances, json, layer_param,
-    other, path_param, smart, smart_mut, unapplied_filters,
+    Arc, Document, EngineError, LayerId, Result, Session, SmartContentsId, SmartSource, Value, base_name, contents_of, detach_psd, instances, json,
+    layer_param, other, path_param, smart, smart_mut, unapplied_filters,
 };
 use crate::jobs::JobCtx;
 use photocraft_doc::HistoricalXcfSampleOrder as Order;
