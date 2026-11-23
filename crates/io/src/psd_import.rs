@@ -78,6 +78,8 @@ pub(crate) struct Ctx<'a> {
     pub plld_sizes: std::collections::HashMap<String, Option<(f64, f64)>>,
     /// Shared vector previews are hashed/parsed once, under a per-file work budget.
     pub vector_previews: crate::vector_preview::ImportCache,
+    /// Hash each immutable embedded payload once even when many placed layers share its UUID.
+    pub historical_xcf_digests: std::collections::HashMap<String, Option<[u8; 32]>>,
     /// Cancellation and progress for background opens (checked per layer record).
     pub ctl: photocraft_raster::Interrupt<'a>,
     /// Layer records decoded so far, out of `total` (progress).
@@ -729,11 +731,23 @@ impl Ctx<'_> {
                 crate::linked::embedded_payload_in_blocks(global.iter().map(|(_, key, data)| (key, data.as_slice())), &id).map(|(_, source)| source)
             })
         });
+        let historical = rec
+            .blocks
+            .iter()
+            .filter(|block| block.key == crate::smart_xcf_order::PSD_KEY && !block.is_foreign_order())
+            .find_map(|block| crate::smart_xcf_order::parse(&block.data))
+            .and_then(|order| {
+                let digest = self.historical_xcf_digests.entry(id.clone()).or_insert_with(|| {
+                    let blocks = self.global.iter().map(|(_, key, data)| (key, data.as_slice()));
+                    crate::linked::embedded_payload_in_blocks(blocks, &id).map(|(_, bytes)| *blake3::hash(bytes).as_bytes())
+                });
+                digest.map(|digest| (order, digest))
+            });
         let mut sm = SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
-            historical_xcf_sample_order: None,
-            historical_xcf_link_digest: None,
+            historical_xcf_sample_order: historical.map(|(order, _)| order),
+            historical_xcf_link_digest: historical.map(|(_, digest)| digest),
             vector_preview,
             transform,
             smart_filters: stack.filters,
@@ -892,10 +906,10 @@ pub(crate) fn group_depth(file: &PsdFile) -> usize {
 /// Most pixel bytes the smart-filter `FEid` sources may keep decoded across one import.
 const MAX_UNFILTERED_BYTES: u64 = 1 << 30;
 
-const LAYER_INFO_KEYS: [&[u8; 4]; 50] = [
+const LAYER_INFO_KEYS: [&[u8; 4]; 51] = [
     b"luni", b"lyid", b"lnsr", b"lsct", b"lsdk", b"lspf", b"lclr", b"iOpa", b"clbl", b"infx", b"knko", b"tsly", b"lmgm", b"vmgm", b"brst", b"shmd", b"fxrp",
     b"lfx2", b"lfxs", b"lmfx", b"lrFX", b"lyvr", b"sn2P", b"cust", b"CgEd", b"vmsk", b"vsms", b"vogk", b"vowv", b"vstk", b"vscg", b"artb", b"artd", b"abdd",
-    b"FMsk", b"PxSc", b"PxSD", b"cinf", b"ffxi", b"shpa", b"anFX", b"SoCo", b"GdFl", b"PtFl", b"TySh", b"tySh", b"SoLd", b"SoLE", b"PlLd", b"plLd",
+    b"FMsk", b"PxSc", b"PxSD", b"cinf", b"ffxi", b"shpa", b"anFX", b"SoCo", b"GdFl", b"PtFl", b"TySh", b"tySh", b"SoLd", b"SoLE", b"PlLd", b"plLd", b"pcXO",
 ];
 
 /// The key of an adjustment layer whose type no mapper knows (#6575), e.g. Photoshop 4's
@@ -1361,6 +1375,7 @@ fn psd_to_document_global(
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
         vector_previews: Default::default(),
+        historical_xcf_digests: Default::default(),
         ctl: *ctl,
         done: 0,
         uniform: Default::default(),

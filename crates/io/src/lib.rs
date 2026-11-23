@@ -85,6 +85,7 @@ pub mod renderer;
 pub use renderer::{BandRenderer, CpuRenderer, RenderBand, RenderError};
 pub mod slices_map;
 pub mod smart_map;
+mod smart_xcf_order;
 pub mod svg;
 mod text_import;
 pub mod text_styles_map;
