@@ -401,7 +401,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     }
     let fmt = PixelFormat::new(ColorMode::Rgb, depth, true);
     let mut document = Document::new(name, Size::new(w, h), ColorMode::Rgb, depth);
-    document.layers = build(nodes, &reader.images, fmt, &mut reader.budget, ctl)?;
+    document.layers = build(nodes, &reader.images, fmt, &mut reader.budget, ctl)?.into();
     let xres = image.xres;
     let yres = image.yres;
     if xres > 0.0 && xres < 1.0e6 {
@@ -508,6 +508,12 @@ impl Writer<'_> {
         }
         if layer.clipped {
             self.warnings.layer(&layer.name, "OpenRaster has no clipping masks; these layers were saved unclipped");
+        }
+        if layer.excluded_channels != 0 {
+            self.warnings.layer(&layer.name, "OpenRaster drops channel blending restrictions from editable layers");
+        }
+        if !layer.blend_if.is_default() {
+            self.warnings.layer(&layer.name, "OpenRaster drops Blend If settings from editable layers");
         }
         if !layer.effects.items.is_empty() || layer.effects.psd_raw.is_some() {
             self.warnings.layer(&layer.name, "layer styles are not saved to OpenRaster");
