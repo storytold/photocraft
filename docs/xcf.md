@@ -37,7 +37,10 @@ Embedded and rooted automation Open can turn supported Exposure and Brightness/C
 into editable Smart Filters when the session authorizes the native commands. RGB float layers
 can also retain a Levels stage with normalized ascending endpoints and full-strength settings.
 Qualified RGB sources can retain Invert, Posterize, Vibrance, Saturation, Channel Mixer and Sepia
-stages. The report records that these stages use PhotoCraft's native rendering rules.
+stages. Qualified spatial effects can use native Gaussian Blur, Box Blur, Motion Blur,
+Unsharp Mask and High Pass. The report records that these stages use PhotoCraft's native
+rendering rules. Effects requiring unresolved resources or generated lookups keep the saved
+pixels and source evidence.
 A single masked Exposure in an XCF 22 file can retain independent filter opacity and coverage on an
 opaque 8-bit or 16-bit RGB raster layer when the stored mask covers the image frame and uses supported settings.
 Supported graph chains can contain sequential Invert, Exposure, Brightness/Contrast and Levels
