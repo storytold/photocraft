@@ -728,13 +728,23 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     // becomes jpeg.width, and so on). Doing this earlier dropped those rows.
     // Drop display-only and other keys a closed schema does not take (Bitmap's Input row is
     // `inputResolution`; dispatch would reject it and OK would leave the document unchanged).
-    if let Some(spec) = photocraft_engine::commands::find(command)
-        && let Some(schema) = photocraft_engine::param_schema::of(spec)
-        && !schema.open()
-        && !photocraft_engine::is_incomplete(command)
-    {
+    // Conditional Mode Change's doc is open for its target mode's options: its keys are `from`, `to` and what that
+    // mode's command takes (#13678).
+    let conditional = command == crate::dialogs::conditional_mode_change_dialog::COMMAND;
+    let schema_of =
+        if conditional { map.get("to").and_then(Value::as_str).and_then(crate::dialogs::conditional_mode_change_dialog::target_dialog) } else { Some(command) };
+    let schema = schema_of
+        .and_then(photocraft_engine::commands::find)
+        .and_then(photocraft_engine::param_schema::of)
+        .filter(|schema| !schema.open() && !schema_of.is_some_and(photocraft_engine::is_incomplete));
+    if schema.is_some() || conditional {
         const KEEP: &[&str] = &["coalesce", "target", "layer", "channel", "targetChannel", "document"];
-        map.retain(|key, _| key.starts_with('_') || KEEP.contains(&key.as_str()) || schema.has_key(key));
+        map.retain(|key, _| {
+            key.starts_with('_')
+                || KEEP.contains(&key.as_str())
+                || (conditional && matches!(key.as_str(), "from" | "to"))
+                || schema.is_some_and(|schema| schema.has_key(key))
+        });
     }
     params_of(&map)
 }

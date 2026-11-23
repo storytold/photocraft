@@ -109,7 +109,7 @@ fn sources_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut craft::ui::
 const PENDING: &str = "conditionalModeChange";
 
 /// The targets whose own dialog (as from Image › Mode) asks for the options first (#13678).
-fn target_dialog(to: &str) -> Option<&'static str> {
+pub(crate) fn target_dialog(to: &str) -> Option<&'static str> {
     match to {
         "bitmap" => Some("image.mode.bitmap"),
         "duotone" => Some("image.mode.duotone"),
