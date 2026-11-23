@@ -163,6 +163,30 @@ fn chosen_paths_are_read_in_turn_and_a_missing_one_is_reported() {
     assert!(app.drop_places.is_empty());
 }
 
+/// With a Frame layer selected, the chosen files don't fill it one over another: each is placed
+/// as its own layer with its own box, and the frame stays empty.
+#[test]
+fn several_files_with_a_frame_selected_are_each_placed_as_their_own_layer() {
+    let ctx = egui::Context::default();
+    let (mut app, _) = app_picking(three_contents());
+    let frame = app.run("layer.new.frame", json!({"x": 2, "y": 2, "width": 10, "height": 10})).unwrap()["layer"].as_u64().unwrap();
+    let frame = photocraft_doc::LayerId(frame);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(frame), "the frame is selected");
+    let steps = history_steps(&app);
+    place_embedded(&mut app, &ctx);
+    for (i, name) in ["first", "second", "third"].into_iter().enumerate() {
+        assert_eq!(active_name(&app), name);
+        place_box(&app);
+        crate::transform_tool::commit(&mut app);
+        assert_eq!(history_steps(&app), steps + i + 1);
+        app.place_next_dropped(&ctx);
+    }
+    assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
+    assert!(names(&app).ends_with(&["first".to_string(), "second".to_string(), "third".to_string()]), "{:?}", names(&app));
+    let doc = &app.session.active().unwrap().doc;
+    assert!(doc.layer(frame).unwrap().children().is_none_or(<[_]>::is_empty), "nothing filled the frame");
+}
+
 /// With Skip Transform when Placing on, all the chosen files are placed and committed at once, one
 /// history state each, without Free Transform.
 #[test]
