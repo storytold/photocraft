@@ -1203,6 +1203,10 @@ fn thirty_two_bit_export_keeps_colour_in_exr_and_png() {
         craft_cms::Profile::parse(png_icc).unwrap().same_colors(craft_cms::Builtin::LinearSrgb.profile()),
         "PNG export of a 32-bit document must embed linear sRGB, not sRGB"
     );
+    let png_px = png_doc.layers[0].surface().unwrap().pixel(0, 0);
+    for (got, want) in png_px.iter().zip([0.23455f32, 0.57758, 0.02122]) {
+        assert!((got - want).abs() < 1e-3, "PNG pixel {png_px:?} vs {want}");
+    }
 
     // Untagged / non-ICC export (BMP) converts from linear sRGB back to 8-bit sRGB 133/200/40.
     let bmp = photocraft_io::export(d, "out.bmp", &photocraft_io::ExportOptions::default()).unwrap();

@@ -1239,7 +1239,10 @@ fn plan_depth_crossing(doc: &Document, current: SampleType, depth: SampleType) -
                         };
                         (DepthTone::DefaultTransfer(default_transfer), Some(bytes))
                     }
-                    Some(_) => (DepthTone::None, None),
+                    // 32-bit float documents always hold linear light (including older files tagged
+                    // with an encoded profile), so narrow through the transfer curve while keeping
+                    // the existing encoded profile.
+                    Some(_) => (DepthTone::DefaultTransfer(default_transfer), None),
                 }
             }
         }
@@ -1262,7 +1265,7 @@ fn plan_depth_crossing(doc: &Document, current: SampleType, depth: SampleType) -
                 match own {
                     None => (DepthTone::DefaultTransfer(default_transfer), None),
                     Some(ref p) if is_linear(p) => (DepthTone::DefaultTransfer(default_transfer), Some(Builtin::DotGain20Compat.profile().to_bytes())),
-                    Some(_) => (DepthTone::None, None),
+                    Some(_) => (DepthTone::DefaultTransfer(default_transfer), None),
                 }
             }
         }
