@@ -203,7 +203,7 @@ fn bucket_fill_contiguous() {
 fn bucket_null_color_uses_native_foreground_inks() {
     for depth in [8, 16, 32] {
         let cyan = [1.0f32, 0.0, 0.0, 0.0];
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 10, "height": 10, "mode": "cmyk", "depth": depth, "background": "transparent"})).unwrap();
 
         let rgb = photocraft_color::convert::cmyk_to_rgb(cyan).map(|c| c.clamp(0.0, 1.0));

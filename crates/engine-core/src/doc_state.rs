@@ -634,12 +634,11 @@ mod selected_tests {
 
 #[cfg(test)]
 mod cmyk_same_rgb_diagnostic_tests {
-    use crate::Session;
     use serde_json::json;
 
     #[test]
     fn foreground_and_background_keep_distinct_inks_with_same_rgb() {
-        let mut s = Session::new();
+        let mut s = crate::session();
 
         let foreground = [0.0, 0.0, 0.0, 1.0];
         let background = [0.5, 0.5, 0.5, 1.0];
@@ -673,7 +672,7 @@ mod cmyk_same_rgb_diagnostic_tests {
 
     #[test]
     fn mask_target_keeps_its_own_cmyk_associations() {
-        let mut s = Session::new();
+        let mut s = crate::session();
 
         let foreground = [0.0, 0.0, 0.0, 1.0];
         let mask_inks = [0.5, 0.5, 0.5, 1.0];

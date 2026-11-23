@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn foreground_and_background_with_same_rgb_fill_distinct_native_cmyk_inks() {
         for depth in [8, 16, 32] {
-            let mut s = Session::new();
+            let mut s = crate::session();
 
             s.execute("file.new", json!({"width": 4, "height": 4, "depth": depth})).unwrap();
             s.execute("image.mode.cmyk", json!({})).unwrap();

@@ -47,8 +47,8 @@ pub(super) fn encode(value: &Value) -> Value {
     let defaults = crate::ToolState::saved_colors([crate::ToolState::PIXEL_COLORS, crate::ToolState::MASK_COLORS], &[]);
     let mut selections = serde_json::Map::new();
     for (key, pair, role) in ROLES {
-        let rgba = value.get(key).unwrap_or(&defaults[key]);
-        let rgb = serde_json::from_value::<[f32; 4]>(rgba.clone()).ok().map(|v| [v[0], v[1], v[2]]);
+        let rgba = serde_json::from_value::<[f32; 4]>(value.get(key).unwrap_or(&defaults[key]).clone()).ok().filter(|v| v.iter().all(|n| n.is_finite()));
+        let rgb = rgba.map(|v| [v[0], v[1], v[2]]);
         let association = value.get("cmykRoles").and_then(|v| v.get(pair)).and_then(|v| v.get(role));
         let explicit = association
             .and_then(|v| v.get(0).and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok()).filter(|v| Some(*v) == rgb).and_then(|_| v.get(1)))
@@ -59,24 +59,29 @@ pub(super) fn encode(value: &Value) -> Value {
                 (Some(key) == rgb).then(|| v.get(1).cloned()).flatten()
             })
         };
-        let inks = explicit.or_else(|| (!value.get("cmykRoles").is_some_and(Value::is_array)).then(legacy).flatten()).unwrap_or_else(|| json!([]));
+        let inks = explicit
+            .or_else(|| (!value.get("cmykRoles").is_some_and(Value::is_array)).then(legacy).flatten())
+            .and_then(|v| serde_json::from_value::<[f32; 4]>(v).ok())
+            .filter(|v| v.iter().all(|n| (0.0..=1.0).contains(n)))
+            .map(|v| json!(v))
+            .unwrap_or_else(|| json!([]));
         let association_key = rgb_key(rgb.unwrap_or_default());
         let mut links = value.get("savedRoleInks").and_then(|v| v.get(key)).and_then(Value::as_object).cloned().unwrap_or_default();
         links.insert(association_key, inks);
-        selections.insert(key.into(), json!({"color":rgba, "inks":links}));
+        selections.insert(key.into(), json!({"color":rgba.map(|v| json!(v)).unwrap_or_else(|| defaults[key].clone()), "inks":links}));
     }
     // Retain the keys read from disk for SettingsStore's known-key deletion bookkeeping.
     // A fresh tool choice writes a bounded map, so older keys are removed rather than treated as unknown.
     let mut picks = value.get("savedPickEntries").and_then(Value::as_object).cloned().unwrap_or_default();
     if let Some(entries) = value.get("cmykPicks").and_then(Value::as_array) {
         for (order, entry) in entries.iter().enumerate() {
-            let Some(rgb) = entry.get(0).and_then(|v| serde_json::from_value::<[f32; 3]>(v.clone()).ok()) else { continue };
-            if rgb.iter().any(|v| !v.is_finite()) {
+            let Ok((rgb, inks)) = serde_json::from_value::<([f32; 3], [f32; 4])>(entry.clone()) else { continue };
+            if rgb.iter().any(|v| !v.is_finite()) || inks.iter().any(|v| !(0.0..=1.0).contains(v)) {
                 continue;
             }
             let key = rgb_key(rgb);
             let rank = value.get("cmykPickOrder").and_then(|v| v.get(&key)).and_then(Value::as_u64).filter(|v| *v <= i64::MAX as u64).unwrap_or(order as u64);
-            picks.insert(key, json!({"value":entry, "order":rank}));
+            picks.insert(key, json!({"value":[json!(rgb), json!(inks)], "order":rank}));
         }
     }
     json!({"selections":selections, "picks":picks})

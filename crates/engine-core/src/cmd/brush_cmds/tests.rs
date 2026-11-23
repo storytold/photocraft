@@ -764,7 +764,7 @@ fn replacing_a_stroke_with_background_replaces_its_native_inks() {
                 let fg_inks = [0.6, 0.4, 0.4, 1.0];
                 let bg_inks = [0.0, 0.0, 0.0, 1.0];
                 let rgb = photocraft_color::convert::cmyk_to_rgb(fg_inks).map(|v| v.clamp(0.0, 1.0));
-                let mut s = Session::new();
+                let mut s = crate::session();
                 s.execute("file.new", json!({"width": 20, "height": 20, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
                 let mut colors = json!({"foreground": rgb, "foregroundCmyk": fg_inks, "background": rgb});
                 if native_background {

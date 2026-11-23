@@ -24,7 +24,7 @@ fn partial_cmyk_fill_blends_native_inks_and_alpha() {
     for depth in [8, 16, 32] {
         for alpha in [0.0_f32, 0.5, 1.0] {
             for preserve in [false, true] {
-                let mut s = Session::new();
+                let mut s = crate::session();
                 s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "depth": depth, "background": "transparent"})).unwrap();
                 s.edit("seed", |doc, _| {
                     let surf = doc.layers[0].surface_mut().unwrap();
