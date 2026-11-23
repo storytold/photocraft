@@ -592,3 +592,29 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert!(b.histogram.is_empty());
     }
 }
+
+#[test]
+fn active_faint_selection_records_count_zero_with_blank_geometry() {
+    use photocraft_color::PixelFormat;
+    use photocraft_raster::Surface;
+
+    for level in [64u8, 126u8] {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 4, "height": 4, "background": "white"})).unwrap();
+        s.edit("selection", |doc, _| {
+            let mut sel = Surface::new(PixelFormat::GRAY8);
+            sel.fill_rect(Rect::new(0, 0, 4, 4), &[f32::from(level) / 255.0]);
+            doc.selection = Some(sel);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+        let list = s.execute("measurementLog.list", json!({})).unwrap();
+        assert_eq!(list["rows"].as_array().map(Vec::len), Some(1), "level {level}");
+        let values = &list["rows"][0]["values"];
+        assert_eq!(values["count"].as_u64(), Some(0), "level {level}");
+        assert!(values.get("area").is_none(), "level {level}: area should be blank");
+        assert!(values.get("width").is_none(), "level {level}: width should be blank");
+        assert!(values.get("height").is_none(), "level {level}: height should be blank");
+    }
+}
