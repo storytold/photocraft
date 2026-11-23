@@ -147,8 +147,8 @@ fn chosen_paths_are_read_in_turn_and_a_missing_one_is_reported() {
     // The dialog's order, not name order: b first.
     assert_eq!(names(&app), ["Background", "b"]);
     assert_eq!(place_box(&app), [10.0, 10.0, 30.0, 20.0]);
-    // Waiting files hold their paths, not their contents.
-    assert!(app.drop_places.iter().all(|(_, p)| matches!(p, DropPlace::Path(_))));
+    // Waiting files hold their paths, not their contents, and won't fill a selected frame.
+    assert!(app.drop_places.iter().all(|(_, p)| matches!(p, DropPlace::At { source, frame: None } if matches!(**source, DropPlace::Path(_)))));
     crate::transform_tool::commit(&mut app);
     app.place_next_dropped(&ctx);
     assert_eq!(app.ui.notices.iter().filter(|n| n.tone == crate::notices::Tone::Bad && n.title.contains("gone.png")).count(), 1);
