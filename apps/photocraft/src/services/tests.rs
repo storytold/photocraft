@@ -245,7 +245,8 @@ fn recovered_documents_survive_a_second_crash_until_saved_or_closed() {
     let red = index_of(&app, RED);
     app.run("file.close", json!({"document": red})).unwrap();
     // Saving marks the revision saved (the file write itself is the save service's job).
-    assert!(app.session.set_active(index_of(&app, BLUE)));
+    let blue = index_of(&app, BLUE);
+    assert!(app.session.set_active(blue));
     let st = app.session.active_mut().unwrap();
     st.saved_revision = st.revision;
     prefs_ui::tick(&mut app, &ctx, std::time::Instant::now());
