@@ -33,7 +33,7 @@ use serde_json::{Value, json};
 
 use crate::budgets::{BatchReplyBudget, write_reply};
 use crate::security::{
-    AUTH_DEADLINE, AuthDeadlineStream, ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, authentication_reply,
+    AUTH_DEADLINE, AuthDeadlineStream, AuthStep, ConnectionLimiter, LineRead, MAX_BATCH_STEPS, MAX_CONNECTIONS, MAX_REQUEST_BYTES, ServerHandshake,
     configure_stream, discard_rest_of_line, read_bounded_line, repeat_auth_reply,
 };
 use crate::{AutomationError, Headless};
@@ -167,10 +167,21 @@ impl Headless {
             }
             "doc.new" => self.command_run("file.new", p),
             "doc.save" => {
+                // A malformed Save As request must not become an implicit save to the stored path.
+                if !p.is_object() {
+                    return Err(bad("doc.save params must be an object"));
+                }
+                for key in ["path", "format"] {
+                    if p.get(key).is_some_and(|value| !value.is_null() && !value.is_string()) {
+                        return Err(bad(format!("`{key}` must be a string")));
+                    }
+                }
                 let tga_bits = photocraft_engine::file_cmds::tga_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
+                let pdf_spot_plates = photocraft_engine::file_cmds::pdf_spot_plates_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
                 let mut opts = photocraft_io::ExportOptions {
                     tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
                     tga_bits,
+                    pdf_spot_plates,
                     pcraft_full_composite: photocraft_engine::file_cmds::pcraft_full_composite_param(&p, "doc.save")
                         .map_err(|e| bad(e.to_string()))?
                         .unwrap_or(false),
@@ -221,6 +232,15 @@ impl Headless {
             }
             "doc.inspect" => self.inspect(index_of(&p)?),
             "doc.render" => {
+                // Invalid file requests must not fall back to a base64 response.
+                if !p.is_object() {
+                    return Err(bad("doc.render params must be an object"));
+                }
+                let path = match p.get("path") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(path)) => Some(path.as_str()),
+                    Some(_) => return Err(bad("`path` must be a string")),
+                };
                 let max = match p.get("maxSide") {
                     None => 1024,
                     Some(value) => {
@@ -230,7 +250,7 @@ impl Headless {
                 let png = self.render_png(index_of(&p)?, max)?;
                 // A GPU to CPU fallback is reported with this reply, not on the next save.
                 let warnings = self.drain_diagnostics();
-                let mut reply = match str_of(&p, "path") {
+                let mut reply = match path {
                     Some(path) => {
                         self.write_render(&PathBuf::from(path), &png)?;
                         json!({"path": path, "bytes": png.len()})
@@ -251,7 +271,13 @@ impl Headless {
                 let i = index_of(&p)?.ok_or_else(|| bad("doc.select needs `index`"))?;
                 self.select(i)
             }
-            "doc.close" => self.close(index_of(&p)?),
+            "doc.close" => {
+                // A non-object would look like a missing index and close the active document.
+                if !p.is_object() {
+                    return Err(bad("doc.close params must be an object"));
+                }
+                self.close(index_of(&p)?)
+            }
             "batch" => self.batch(&p),
             "methods" => Ok(json!(METHODS)),
             other => Err(bad(format!("{} (try `methods`)", photocraft_engine::command_hints::unknown_method(other, METHODS)))),
@@ -375,6 +401,7 @@ fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token:
     let mut reader = std::io::BufReader::new(AuthDeadlineStream::new(read, auth_deadline));
     let mut out = stream;
     let mut line = String::new();
+    let mut handshake = ServerHandshake::new();
     let mut authenticated = false;
     loop {
         match read_bounded_line(&mut reader, &mut line)? {
@@ -392,19 +419,19 @@ fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token:
             LineRead::Line if line.trim().is_empty() => continue,
             LineRead::Line => {}
         }
-        let reply = if authenticated {
-            repeat_auth_reply(&line).unwrap_or_else(|| respond(h, &line))
+        let (reply, step) = if authenticated {
+            (repeat_auth_reply(&line).unwrap_or_else(|| respond(h, &line)), AuthStep::Authenticated)
         } else {
-            let (reply, ok) = authentication_reply(&line, token);
-            authenticated = ok;
-            if ok {
+            let (reply, step) = handshake.reply(&line, token);
+            if step == AuthStep::Authenticated {
+                authenticated = true;
                 reader.get_mut().authenticated()?;
             }
-            reply
+            (reply, step)
         };
         write_reply(&mut out, &reply)?;
         out.flush()?;
-        if !authenticated {
+        if step == AuthStep::Rejected {
             return Ok(());
         }
     }

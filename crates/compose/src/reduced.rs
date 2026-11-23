@@ -26,15 +26,20 @@ pub fn thumbnail_size(doc: &Document, max_side: u32) -> (u32, u32) {
 
 /// [`thumbnail`] as straight-alpha floats (for callers that colour-convert it first).
 pub fn thumbnail_buffer(doc: &Document, max_side: u32) -> Buffer {
+    let (w, h) = thumbnail_size(doc, max_side);
+    match thumbnail_proxy(doc, max_side) {
+        Some(proxy) => render_reduced(&proxy, w, h),
+        None => render_reduced(doc, w, h),
+    }
+}
+
+/// The downsampled proxy [`thumbnail`] reduces `doc` from (about twice the thumbnail's size), or
+/// `None` when it reduces the document itself.
+pub fn thumbnail_proxy(doc: &Document, max_side: u32) -> Option<Document> {
     let b = doc.bounds();
     let longest = b.width().max(b.height()).max(1);
-    let (w, h) = thumbnail_size(doc, max_side);
     let k = longest / max_side.max(1).saturating_mul(2);
-    if k >= 2 && doc.size.area() > PROXY_THUMBNAIL_PIXELS && proxy::proxy_faithful(doc) {
-        render_reduced(&proxy::proxy_document(doc, k), w, h)
-    } else {
-        render_reduced(doc, w, h)
-    }
+    (k >= 2 && doc.size.area() > PROXY_THUMBNAIL_PIXELS && proxy::proxy_faithful(doc)).then(|| proxy::proxy_document(doc, k))
 }
 
 /// The document's composite area-averaged (premultiplied) down to `w`×`h` (clamped to the
@@ -56,6 +61,18 @@ pub fn render_reduced_rect(doc: &Document, rect: Rect, w: u32, h: u32) -> Buffer
 /// `damage` misses the document), so a reduced canvas texture can update only what a stroke touched.
 pub fn render_reduced_damage(doc: &Document, w: u32, h: u32, damage: Rect) -> Buffer {
     render_reduced_in_bands(doc, doc.bounds(), w, h, Some(damage), 0)
+}
+
+/// The composite of area `rect` reduced by the whole `factor`: output pixel `t` is the premultiplied average of the
+/// area's pixels `[t·factor, (t+1)·factor)` counted from the area's own origin, clipped to the area, so the result is
+/// `rect`'s size divided by `factor`, rounded up. A canvas display reads its texture regions this way; the cells follow
+/// the region, not multiples of `factor` in the document (a detail region need not start on one).
+pub fn render_reduced_by(doc: &Document, rect: Rect, factor: u32) -> Buffer {
+    match render_reduced_cells(doc, rect, Cells::Factor(factor), None, 0, true, &mut ReducedStats::default(), Interrupt::NONE) {
+        Ok(buf) => buf,
+        // Only an interrupt fails a reduction, and this one has none.
+        Err(_) => Buffer::transparent(Rect::EMPTY),
+    }
 }
 
 /// [`render_reduced_rect`] (or, with `damage`, [`render_reduced_damage`]) of area `b` with an

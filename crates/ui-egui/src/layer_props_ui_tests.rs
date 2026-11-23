@@ -7,10 +7,10 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 
-fn app() -> Harness<'static, PhotocraftApp> {
+fn app() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
         app.run("layer.new.layer", json!({})).unwrap();
         app
@@ -37,14 +37,14 @@ fn the_layers_panel_locks_every_selected_layer() {
     assert!(!locked(ids[0]), "the unselected Background doesn't");
 }
 
-/// The Basic layout's single lock toggle also locks every selected layer.
+/// The panel's Lock all locks every selected layer.
 #[test]
-fn the_basic_lock_toggle_locks_every_selected_layer() {
+fn lock_all_locks_every_selected_layer() {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::Studio);
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("prefs.set", json!({"path": "interface.theme", "value": crate::theme::ThemeKind::Studio.id()})).unwrap();
-        app.ui.theme = crate::theme::ThemeKind::Studio;
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::studio());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+        app.save_theme(&crate::theme::AppTheme::studio()).unwrap();
+        app.ui.theme = crate::theme::AppTheme::studio();
         app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
         app
     });
@@ -52,7 +52,7 @@ fn the_basic_lock_toggle_locks_every_selected_layer() {
     let b = h.state_mut().run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     h.state_mut().run("layer.select", json!({"layer": a, "mode": "add"})).unwrap();
     h.run_steps(4);
-    h.get_by_label("Lock layer").click();
+    h.get_by_label("Lock all").click();
     h.run_steps(3);
     let st = h.state().session.active().unwrap();
     let locked = |id: u64| st.doc.layer(photocraft_doc::LayerId(id)).unwrap().locks.all;
