@@ -69,7 +69,7 @@ pub(crate) enum ToolCommand {
     PaintBucket,
     #[command(label = "Horizontal Type Tool", icon = "type", kind = "tool", group = "T", default = "T", alias = "tools.select.type")]
     Type,
-    #[command(label = "Vertical Type Tool", icon = "type", kind = "tool", group = "T", default = "T", alias = "tools.select.verticalType")]
+    #[command(label = "Vertical Type Tool", icon = "type-vertical", kind = "tool", group = "T", default = "T", alias = "tools.select.verticalType")]
     VerticalType,
     #[command(label = "Horizontal Type Mask Tool", icon = "type_mask", kind = "tool", group = "T", default = "T", alias = "tools.select.horizontalTypeMask")]
     HorizontalTypeMask,
