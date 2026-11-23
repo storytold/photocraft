@@ -60,6 +60,10 @@ pub struct OpenParams {
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
+    /// Explicit sample order for unmarked multibyte XCF 4-11: little-endian or big-endian.
+    /// Missing or null leaves the question unanswered; no host-native order is inferred.
+    #[serde(default)]
+    pub historical_xcf_sample_order: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -546,6 +550,7 @@ fn png_result(png: &[u8], note: String) -> CallToolResult {
 /// hard amounts, because no approval can raise that ceiling, and adds the free memory when
 /// measured memory set the limit.
 fn attach_memory_error_details(obj: &mut Value, err: &AutomationError) {
+    crate::attach_historical_error_details(obj, err);
     let Some(obj) = obj.as_object_mut() else { return };
     match err {
         AutomationError::Import(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram })
@@ -811,17 +816,25 @@ impl PhotocraftMcp {
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
-        let approve = p.approve_high_memory;
-        if let Some(r) = self.headless_op(move |h| h.open_with_approval(&path, approve)).await {
+        let mut params = json!({"path": p.path});
+        if p.approve_high_memory {
+            params["approveHighMemory"] = json!(true);
+        }
+        if let Some(order) = p.historical_xcf_sample_order {
+            params["historicalXcfSampleOrder"] = json!(order);
+        }
+        // Validate the same explicit controls before reading a scoped source or
+        // forwarding to a GUI host; the engine owns their interpretation.
+        let options = match files::import_options_from_params(&params) {
+            Ok(options) => options,
+            Err(error) => return to_result(Err(error)),
+        };
+        if let Some(r) = self.headless_op(move |h| h.open_with_options(&path, &options)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        let mut params = json!({"path": p.path});
-        if approve {
-            params["approveHighMemory"] = json!(true);
-        }
         to_result(b.call("app.open", params).await)
     }
 
@@ -1697,12 +1710,56 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(10), app).await.unwrap().unwrap();
     }
 
+    #[tokio::test]
+    async fn mcp_open_order_parameter_remains_explicit_and_strict() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let omitted: OpenParams = serde_json::from_value(json!({"path":"source.xcf"})).unwrap();
+        assert!(omitted.historical_xcf_sample_order.is_none());
+        assert!(serde_json::from_value::<OpenParams>(json!({"path":"source.xcf","historical_xcf_sample_order":1})).is_err());
+        assert!(crate::files::import_options_from_params(&json!({"historicalXcfSampleOrder":"native"})).is_err());
+
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bridge = BridgeClient::new(listener.local_addr().unwrap().to_string(), TOKEN).unwrap().with_timeout(std::time::Duration::from_secs(5));
+        let mcp = PhotocraftMcp::with_backend(Backend::Bridge(Arc::new(bridge)));
+        let orders = [Some("little-endian"), Some("big-endian"), None];
+        let invalid =
+            mcp.doc_open(Parameters(serde_json::from_value(json!({"path":"source.xcf","historical_xcf_sample_order":"native"})).unwrap())).await.unwrap();
+        assert_eq!(invalid.is_error, Some(true));
+        let app = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (read, mut write) = socket.into_split();
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            assert!(fake_app_handshake(&mut lines, &mut write, TOKEN).await);
+            for order in orders {
+                let request: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                assert_eq!(request["method"], "app.open");
+                assert_eq!(request["params"]["path"], "source.xcf");
+                assert!(request["params"].get("approveHighMemory").is_none());
+                assert_eq!(request["params"].get("historicalXcfSampleOrder").map(|value| value.as_str().unwrap()), order);
+                let reply = json!({"id": request["id"], "ok": true, "result": {"opened": true}});
+                write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            }
+        });
+        for order in orders {
+            let mut arguments = json!({"path": "source.xcf"});
+            if let Some(order) = order {
+                arguments["historical_xcf_sample_order"] = json!(order);
+            }
+            let result = mcp.doc_open(Parameters(serde_json::from_value(arguments).unwrap())).await.unwrap();
+            assert_ne!(result.is_error, Some(true), "{result:?}");
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), app).await.unwrap().unwrap();
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_doc_open_schema_and_structured_error() {
         let schema = &PhotocraftMcp::tool_router().map["doc_open"].attr.input_schema;
         assert_eq!(schema["properties"]["approve_high_memory"]["type"], "boolean");
         let omitted: OpenParams = serde_json::from_value(json!({"path": "file.psd"})).unwrap();
         assert!(!omitted.approve_high_memory);
+        assert!(omitted.historical_xcf_sample_order.is_none());
+        assert!(schema["properties"].get("historical_xcf_sample_order").is_some());
         let approved: OpenParams = serde_json::from_value(json!({"path": "file.psd", "approve_high_memory": true})).unwrap();
         assert!(approved.approve_high_memory);
         for invalid in [Value::Null, json!("true"), json!(1)] {

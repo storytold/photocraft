@@ -109,7 +109,11 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == "file.automate.batch", filter_dialog::run)
         },
-        ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
+        ParamFamily {
+            footer: Some(crate::view_cmds::dialogs::footer_action),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run)
+        },
         crate::prefs_ui::PRESETS_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
         crate::actions::dialogs::NEW_SET_FAMILY,
@@ -811,3 +815,5 @@ pub(crate) mod testing {
         crate::testing::run_ui(&ctx, Default::default(), |ui| super::run(app, ui));
     }
 }
+
+pub(crate) mod historical_open;

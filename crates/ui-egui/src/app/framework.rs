@@ -719,7 +719,7 @@ impl PhotocraftApp {
     /// Whether a dialog is open, PhotoCraft's own or a framework one: the canvas, shortcuts, menus and tools under it
     /// take no input.
     pub fn dialog_open(&self) -> bool {
-        !self.framework.dialogs.stack().is_empty()
+        self.ui.import_report.open || !self.framework.dialogs.stack().is_empty()
     }
 
     /// How many dialogs are open, PhotoCraft's own and framework ones.

@@ -119,6 +119,9 @@ pub(crate) struct ConvertArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for unmarked high-depth XCF 4–11; never inferred
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order)]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     /// PDF import resolution in DPI (default 300)
     #[arg(long, value_name = "DPI", value_parser = pdf_dpi)]
     pub(crate) pdf_dpi: Option<f32>,
@@ -135,6 +138,15 @@ pub(crate) struct ConvertArgs {
     pub(crate) export: ExportArgs,
 }
 
+/// Accept only the historical flag's explicit spellings, never platform or sample guesses.
+fn historical_xcf_sample_order(value: &str) -> Result<photocraft_io::HistoricalXcfSampleOrder, &'static str> {
+    match value {
+        "little-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::LittleEndian),
+        "big-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::BigEndian),
+        _ => Err("expected little-endian or big-endian"),
+    }
+}
+
 /// Print the document as JSON (size, mode, depth, layer tree)
 #[derive(Args)]
 pub(crate) struct InfoArgs {
@@ -145,6 +157,9 @@ pub(crate) struct InfoArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for unmarked high-depth XCF 4–11; never inferred
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order)]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
     #[arg(long)]
     pub(crate) detail: bool,
@@ -179,6 +194,9 @@ pub(crate) struct RunArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Explicit sample byte order for unmarked high-depth XCF 4–11; requires FILE
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order, conflicts_with = "new")]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
@@ -239,6 +257,9 @@ pub(crate) struct BatchArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// Sample byte order for historical XCF inputs and same-source Open As steps in this Batch
+    #[arg(long, value_name = "little-endian|big-endian", value_parser = historical_xcf_sample_order)]
+    pub(crate) historical_xcf_sample_order: Option<photocraft_io::HistoricalXcfSampleOrder>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]

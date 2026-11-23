@@ -351,3 +351,48 @@ fn imported_mask_preview_ends_when_its_owner_or_mask_no_longer_exists() {
         assert!(crate::mask_view_cmds::current(session.active().unwrap()).is_none(), "{action}");
     }
 }
+
+#[test]
+fn fresh_import_view_snapshot_is_one_shot_and_preserves_applied_native_targets() {
+    let mut source = crate::session();
+    source.execute("file.new", json!({"width":8,"height":6})).unwrap();
+    source.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    source.execute("channel.new", json!({})).unwrap();
+    let mut doc = (*source.active().unwrap().doc).clone();
+    doc.paths.push(photocraft_doc::vector::NamedPath { name: "Saved path".into(), ..Default::default() });
+    let layer = doc.layers[0].id;
+    let view = NativeInitialView {
+        selected_layers: vec![layer],
+        active_layer: Some(layer),
+        target: NativeImportTarget::LayerMask,
+        show_layer_mask: true,
+        visible_alpha_channels: vec![0],
+        samplers: vec![[2., 3.]],
+        selected_path: Some(0),
+        selected_path_identity: Some(photocraft_io::initial_view::path_identity(&doc.paths[0])),
+    };
+    let mut session = crate::session();
+    let (_, warning) = session.admit_import_with_initial_view(doc, Some("source.xcf".into()), true, Some(view.clone()));
+    assert!(warning.is_none());
+    let before = session.active().unwrap().doc.clone();
+    let state = session.active_mut().unwrap();
+    assert_eq!(state.take_fresh_import_view(), Some(view));
+    assert!(state.take_fresh_import_view().is_none());
+    assert!(Arc::ptr_eq(&state.doc, &before));
+    assert_eq!(state.history.past_len(), 0);
+    assert!(!state.is_dirty());
+}
+
+#[test]
+fn import_view_snapshot_refuses_ordinary_or_edited_documents() {
+    for imported_view in [false, true] {
+        let mut session = crate::session();
+        let doc = Document::new("pending", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        session.admit_import_with_initial_view(doc, None, false, imported_view.then(|| NativeInitialView { samplers: vec![[1., 1.]], ..Default::default() }));
+        if imported_view {
+            session.execute("layer.new.layer", json!({})).unwrap();
+        }
+        assert!(session.active_mut().unwrap().take_fresh_import_view().is_none());
+        assert!(session.active_mut().unwrap().take_fresh_import_view().is_none());
+    }
+}

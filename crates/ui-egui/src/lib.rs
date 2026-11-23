@@ -42,6 +42,7 @@ pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
+pub mod import_report;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
 pub mod levels_clipping;
@@ -689,6 +690,7 @@ pub struct PhotocraftApp {
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,
     /// PSD files whose memory preflight requires user approval before pixel decoding (see `open_prompt`).
     pub(crate) held_memory_prompts: std::collections::VecDeque<open_prompt::MemoryPrompt>,
+    pub(crate) held_historical_opens: std::collections::VecDeque<dialogs::historical_open::Pending>,
     pub(crate) prompt_order: std::collections::VecDeque<open_prompt::PromptKind>,
     pub(crate) held_record_again: Option<actions::record_again::Held>,
     pub(crate) held_insert_menu: Option<actions::menu_item::Held>,

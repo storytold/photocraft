@@ -2,14 +2,54 @@ use super::paths::{file_name, read_file, stem, template_name};
 use super::{Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, PlaceSteps, Result, Session, Value, json, str_param};
 use crate::color_cmds::ColorExt;
 
-/// Replace only the file choice before either authorization gate; malformed params stay invalid.
+impl Session {
+    /// Give a fresh host Batch input's recorded Open As steps an explicit default for that
+    /// source. Called actions share this input. Nested Batch operations have their own scope.
+    pub fn bind_batch_open_sample_order(&mut self, path: &std::path::Path, order: photocraft_io::HistoricalXcfSampleOrder) {
+        self.batch_open_sample_order = photocraft_io::FileIdentity::of_path(path).ok().map(|identity| crate::state::BatchOpenSampleOrder {
+            path: path.to_owned(),
+            identity,
+            order,
+            depth: self.recording.batch_depth,
+        });
+    }
+}
+
+/// Apply per-input defaults before either authorization gate; malformed params stay invalid.
 pub(crate) fn batch_open_params(s: &Session, id: &str, params: &Value) -> Option<Value> {
-    let binding = s.batch_open.as_ref()?;
     if !matches!(id, "file.openAs" | "file.openExrParts") || !(params.is_object() || params.is_null()) {
         return None;
     }
-    let mut effective = if params.is_null() { super::json!({}) } else { params.clone() };
-    effective.as_object_mut()?.insert("path".into(), Value::String(binding.path.clone()));
+    let replacement = s.batch_open.as_ref().map(|binding| binding.path.as_str());
+    let path = replacement.or_else(|| params.get("path").and_then(Value::as_str));
+    let order = if id == "file.openAs" && matches!(params.get("historicalXcfSampleOrder"), None | Some(Value::Null)) {
+        s.batch_open_sample_order
+            .as_ref()
+            .zip(path)
+            .filter(|(binding, path)| {
+                binding.depth == s.recording.batch_depth
+                    && super::paths::same_file(&binding.path, path)
+                    && photocraft_io::FileIdentity::of_path(std::path::Path::new(path)).is_ok_and(|identity| identity == binding.identity)
+            })
+            .map(|(binding, _)| binding.order)
+    } else {
+        None
+    };
+    if replacement.is_none() && order.is_none() {
+        return None;
+    }
+    let mut effective = if params.is_null() { json!({}) } else { params.clone() };
+    let fields = effective.as_object_mut()?;
+    if let Some(path) = replacement {
+        fields.insert("path".into(), Value::String(path.to_owned()));
+    }
+    if let Some(order) = order {
+        let value = match order {
+            photocraft_io::HistoricalXcfSampleOrder::LittleEndian => "little-endian",
+            photocraft_io::HistoricalXcfSampleOrder::BigEndian => "big-endian",
+        };
+        fields.insert("historicalXcfSampleOrder".into(), Value::String(value.into()));
+    }
     Some(effective)
 }
 

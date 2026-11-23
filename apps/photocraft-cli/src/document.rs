@@ -26,6 +26,20 @@ fn refuse_overwriting_input(in_place: bool, input: &Path, output: &Path) -> Resu
     Ok(())
 }
 
+/// Apply the admitted source's write policy to aliases as well as its original
+/// spelling. The caller rechecks before publication when commands ran in between.
+fn refuse_overwriting_import_only_source(read_only: bool, input: &Path, output: &Path) -> Result {
+    // --in-place permits rewriting writable formats; it cannot turn an
+    // import-only source (or its filesystem alias) into a writable destination.
+    if read_only && photocraft_engine::file_cmds::same_file(input, output) {
+        return Err(CliError::Other(format!(
+            "{} is the protected import-only source; choose a different export destination even with --in-place",
+            output.display()
+        )));
+    }
+    Ok(())
+}
+
 /// `N` or `N-M`, 1-based and inclusive, into a normalized `(first, last)`.
 fn parse_pdf_pages(s: &str) -> Result<(u32, u32)> {
     let (a, b) = s.split_once('-').unwrap_or((s, s));
@@ -44,6 +58,11 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     refuse_overwriting_input(a.in_place, input, output)?;
     let import_opts = photocraft_io::ImportOptions {
         psd_high_memory_approved: a.approve_high_memory,
+        // A noninteractive conversion cannot ask later; require a source-specific
+        // choice for unmarked historical samples instead of guessing an order.
+        historical_xcf_order: a
+            .historical_xcf_sample_order
+            .map_or(photocraft_io::HistoricalXcfOrder::RequireExplicit, photocraft_io::HistoricalXcfOrder::Explicit),
         pdf_dpi: a.pdf_dpi.unwrap_or(300.0),
         pdf_pages: a.pdf_pages.as_deref().map(parse_pdf_pages).transpose()?,
         pdf_editable: a.pdf_editable,
@@ -57,6 +76,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     warn_dedup(err, &missing_font_warnings(&o.document), &mut seen_warnings);
     let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
     let mut renderer = policy.create_renderer();
+    refuse_overwriting_import_only_source(o.source_read_only, input, output)?;
     let ws = match renderer.as_mut() {
         Some(renderer) => files::save_with_renderer(&o.document, output, a.export.format.as_deref(), &opts, None, Some(&mut **renderer)),
         None => files::save(&o.document, output, a.export.format.as_deref(), &opts, None),
@@ -74,7 +94,14 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
-    let opened = h.open_with_approval(file, a.approve_high_memory)?;
+    let options = photocraft_io::ImportOptions {
+        psd_high_memory_approved: a.approve_high_memory,
+        historical_xcf_order: a
+            .historical_xcf_sample_order
+            .map_or(photocraft_io::HistoricalXcfOrder::RequireExplicit, photocraft_io::HistoricalXcfOrder::Explicit),
+        ..Default::default()
+    };
+    let opened = h.open_with_options(file, &options)?;
     let mut doc = match (a.detail, h.session.active()) {
         (true, Some(st)) => photocraft_engine::inspect::document_detail(st),
         _ => h.inspect(None)?,
@@ -117,6 +144,7 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
     // Opening, running commands and exporting can all notice the same missing font:
     // one `run` invocation reports each warning line at most once.
     let mut reported_fonts = std::collections::HashSet::<String>::new();
+    let mut protected_source: Option<&Path> = None;
     // clap's `source` group gives exactly one of the two, and its `work` group a --cmd or --out.
     if let Some(new) = &a.new {
         h.command_run("file.new", new.clone()).map_err(CliError::New)?;
@@ -125,7 +153,21 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         if let Some(out) = &a.out {
             refuse_overwriting_input(a.in_place, file, out)?;
         }
-        let o = h.open_with_approval(file, a.approve_high_memory)?;
+        let options = photocraft_io::ImportOptions {
+            psd_high_memory_approved: a.approve_high_memory,
+            historical_xcf_order: a
+                .historical_xcf_sample_order
+                .map_or(photocraft_io::HistoricalXcfOrder::RequireExplicit, photocraft_io::HistoricalXcfOrder::Explicit),
+            ..Default::default()
+        };
+        let o = h.open_with_options(file, &options)?;
+        if h.session.active().is_some_and(|state| state.source_read_only) {
+            protected_source = Some(file.as_path());
+            if let Some(output) = &a.out {
+                // Reject before any command can act on an output alias.
+                refuse_overwriting_import_only_source(true, file, output)?;
+            }
+        }
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);
@@ -168,6 +210,9 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         h.session.active().map(|st| missing_font_warnings(&st.doc)).unwrap_or_default().into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
     warn_all(err, &remaining);
     if let Some(o) = a.out.as_deref() {
+        if let Some(source) = protected_source {
+            refuse_overwriting_import_only_source(true, source, o)?;
+        }
         let saved = h.save(None, Some(o), a.export.format.as_deref(), &opts);
         // Report GPU diagnostics even when the export fails: the fallback reason is queued
         // during the failed export and would otherwise be lost on the error path.
@@ -287,5 +332,41 @@ mod missing_font_warning_tests {
         assert_eq!(code, 0, "{stderr}");
         assert!(!stderr.contains("font '"), "{stderr}");
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod historical_order_tests;
+
+#[cfg(test)]
+mod historical_controls_tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn missing_historical_order_remains_a_typed_import_error_for_info_and_run() {
+        let folder = tempfile::tempdir().unwrap();
+        let source = folder.path().join("source.xcf");
+        let output = folder.path().join("unadmitted.pcraft");
+        let bytes = historical_order_tests::rgb16(10, false);
+        std::fs::write(&source, &bytes).unwrap();
+        for command in ["info", "run"] {
+            let mut parameters = vec![OsString::from(command), source.as_os_str().to_owned()];
+            if command == "run" {
+                parameters.extend([OsString::from("--out"), output.as_os_str().to_owned()]);
+            }
+            let parsed = crate::args::parse(&parameters).unwrap();
+            let error = match parsed.command {
+                crate::args::Command::Info(arguments) => info(&arguments, &mut Vec::new()).unwrap_err(),
+                crate::args::Command::Run(arguments) => run_cmds(&arguments, &mut Vec::new(), &mut Vec::new()).unwrap_err(),
+                _ => panic!("unexpected parsed command"),
+            };
+            assert!(matches!(
+                error,
+                CliError::Automation(photocraft_automation::AutomationError::Import(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(_)))
+            ));
+            assert!(!output.exists());
+            assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        }
     }
 }

@@ -772,6 +772,7 @@ struct PanelSet {
     panels_legacy: Option<Value>,
     mask_target: Option<bool>,
     updates_open: Option<bool>,
+    import_report: Option<bool>,
     vector_mask_target: Option<bool>,
     filter_mask_target: Option<bool>,
     selection_mode: Option<u64>,
@@ -847,6 +848,7 @@ impl PanelSet {
             panels_legacy,
             mask_target: bool_field(p, "maskTarget")?,
             updates_open: bool_field(p, "updatesOpen")?,
+            import_report: bool_field(p, "importReport")?,
             vector_mask_target: bool_field(p, "vectorMaskTarget")?,
             filter_mask_target: filter_mask_target_param(app, p)?,
             selection_mode: uint_field(p, "selectionMode")?,
@@ -887,6 +889,13 @@ impl PanelSet {
                 app.target_mask_over_colour_rows();
             }
             app.sync_mask_targets();
+        }
+        if let Some(show) = self.import_report {
+            if show {
+                crate::import_report::open(app);
+            } else {
+                app.ui.import_report = Default::default();
+            }
         }
         if let Some(open) = self.updates_open {
             app.ui.updates_open = open;
@@ -1326,8 +1335,7 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
             Some(path) => match p.get("approveHighMemory") {
-                None | Some(Value::Null) => app_open(app, path, false),
-                Some(Value::Bool(approved)) => app_open(app, path, *approved),
+                None | Some(Value::Null) | Some(Value::Bool(_)) => app_open(app, path, p),
                 Some(_) => err("expected boolean for `approveHighMemory`"),
             },
             None => err("missing `path`"),
@@ -1353,8 +1361,13 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
 }
 
 /// The `app.open` control method: opens a path through the configured automation read
-/// capability, with optional high-memory approval.
-fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Reply {
+/// capability, with explicit import controls validated before source acquisition.
+fn app_open(app: &mut PhotocraftApp, path: &str, params: &Value) -> Reply {
+    let base = photocraft_engine::jobs::import_options(app.session.prefs());
+    let options = match photocraft_engine::file_cmds::import_options_from_params(base, params, "app.open") {
+        Ok(options) => options,
+        Err(error) => return err(error.to_string()),
+    };
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1364,7 +1377,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Reply {
     };
     Reply::from_result(opened.and_then(|crate::AutomationReadResult { name, bytes, save_path }| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
+        let warnings = app.open_automation_bytes_with_options(&name, &bytes, &options)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             let recent = automation_location(app, path);

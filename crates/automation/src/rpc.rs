@@ -64,6 +64,7 @@ pub const METHODS: &[&str] = &[
 /// Adds the structured memory fields (`required`, soft and hard limits and measured capacity)
 /// from a typed admission error to a JSON error object, so clients can offer approval.
 fn attach_memory_error_details(obj: &mut Value, err: &AutomationError) {
+    crate::attach_historical_error_details(obj, err);
     match err {
         AutomationError::Import(photocraft_io::IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram })
         | AutomationError::Engine(photocraft_engine::EngineError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram, .. }) => {
@@ -141,12 +142,8 @@ impl Headless {
             "session.list" => Ok(self.session_list()),
             "doc.open" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.open needs `path`"))?;
-                let approve = match p.get("approveHighMemory") {
-                    None | Some(Value::Null) => false,
-                    Some(Value::Bool(b)) => *b,
-                    Some(_) => return Err(bad("`approveHighMemory` must be a boolean")),
-                };
-                self.open_with_approval(&PathBuf::from(path), approve)
+                let options = crate::files::import_options_from_params(&p)?;
+                self.open_with_options(&PathBuf::from(path), &options)
             }
             "doc.place" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.place needs `path`"))?;

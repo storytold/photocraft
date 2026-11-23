@@ -28,6 +28,13 @@ pub(crate) struct BatchOpen {
     pub read_only: bool,
 }
 
+pub(crate) struct BatchOpenSampleOrder {
+    pub path: std::path::PathBuf,
+    pub identity: photocraft_io::FileIdentity,
+    pub order: photocraft_io::HistoricalXcfSampleOrder,
+    pub depth: u8,
+}
+
 // ---------------------------------------------------------------------------------------------
 // Clipboard (`edit_cmds`)
 

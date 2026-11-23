@@ -199,6 +199,8 @@ pub struct Session {
     documents_generation: u64,
     /// Override Open belongs only to one Batch scratch session, never to caller preferences.
     pub(crate) batch_open: Option<state::BatchOpen>,
+    /// A host Batch input's recorded Open As default, scoped to that input and Batch depth.
+    pub(crate) batch_open_sample_order: Option<state::BatchOpenSampleOrder>,
     /// Import diagnostics retained by a Batch scratch that suppresses only profile prompts.
     pub(crate) batch_open_notices: Option<Vec<Value>>,
     /// Frozen RAW workflow settings for one noninteractive Batch input.

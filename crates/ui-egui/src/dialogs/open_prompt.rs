@@ -65,6 +65,7 @@ pub struct Held {
 pub(crate) enum PromptKind {
     Memory,
     Open,
+    Historical(u64),
 }
 
 /// An un-decoded PSD file whose preflight estimate requires user approval.
@@ -87,7 +88,11 @@ pub struct MemoryPrompt {
 
 /// Whether a file that just finished reading has to wait: one earlier in the queue does.
 pub fn waiting(app: &PhotocraftApp) -> bool {
-    !app.held_opens.is_empty() || !app.held_memory_prompts.is_empty()
+    app.jobs.place.is_some()
+        || crate::transform_tool::placing(app)
+        || !app.held_opens.is_empty()
+        || !app.held_memory_prompts.is_empty()
+        || !app.held_historical_opens.is_empty()
 }
 
 /// Opens `held` now, or queues it behind the file whose prompt is up.
@@ -102,6 +107,7 @@ pub fn has_open_dialog(app: &PhotocraftApp) -> bool {
     app.framework.dialogs.is_open::<ProfileMismatchDialog>()
         || alerts::prompt_tagged::<DamageTag>(app).is_some()
         || alerts::prompt_tagged::<MemoryTag>(app).is_some()
+        || super::historical_open::is_open(app)
 }
 
 /// The result pump (`dialogs::TAKERS`): closes a damage or memory prompt whose file left the queue
@@ -110,6 +116,7 @@ pub fn has_open_dialog(app: &PhotocraftApp) -> bool {
 /// results already stored, so a second pass in one frame finds nothing to apply twice.
 pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     close_stale(app, ctx);
+    super::historical_open::take(app, ctx);
     match app.framework.dialogs.take::<ProfileMismatchDialog>() {
         Some(DialogResult::Ok(profile)) => {
             let action = engine_action(profile.action);
@@ -161,10 +168,16 @@ pub(crate) fn answer_prompt(app: &mut PhotocraftApp, _ctx: &egui::Context, answe
 
 /// Opens queued files in order until one needs its prompt, which is shown if it isn't yet.
 pub fn advance(app: &mut PhotocraftApp) {
+    // A completed Open must not take the target away while Place prepares or owns its box.
+    if app.jobs.place.is_some() || crate::transform_tool::placing(app) {
+        return;
+    }
+    super::historical_open::discard_stale(app);
     // Reconcile legacy callers that populated held queues directly.
     if app.prompt_order.is_empty() {
         app.prompt_order.extend(std::iter::repeat_n(PromptKind::Open, app.held_opens.len()));
         app.prompt_order.extend(std::iter::repeat_n(PromptKind::Memory, app.held_memory_prompts.len()));
+        app.prompt_order.extend(app.held_historical_opens.iter().map(|pending| PromptKind::Historical(pending.id)));
     }
     if has_open_dialog(app) {
         return;
@@ -172,6 +185,11 @@ pub fn advance(app: &mut PhotocraftApp) {
     loop {
         match app.prompt_order.front() {
             None => return,
+            Some(PromptKind::Historical(request)) => {
+                let request = *request;
+                super::historical_open::show(app, request);
+                return;
+            }
             Some(PromptKind::Memory) => {
                 if let Some(front) = app.held_memory_prompts.front().cloned() {
                     show_memory(app, &front);
@@ -263,8 +281,15 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
         return Err("answer the damaged PSD confirmation first".into());
     }
     let Some(action) = action else {
-        let dropped = app.held_opens.len() + app.held_memory_prompts.len();
-        let name = app.held_opens.front().map(|h| h.name.clone()).or_else(|| app.held_memory_prompts.front().map(|m| m.name.clone())).unwrap_or_default();
+        let dropped = app.held_opens.len() + app.held_memory_prompts.len() + app.held_historical_opens.len();
+        let name = app
+            .held_opens
+            .front()
+            .map(|h| h.name.clone())
+            .or_else(|| app.held_memory_prompts.front().map(|m| m.name.clone()))
+            .or_else(|| app.held_historical_opens.front().map(|h| h.name.clone()))
+            .unwrap_or_default();
+        super::historical_open::cancel_all(app)?;
         for m in app.held_memory_prompts.drain(..) {
             app.session.cancel_pending_preflight(m.id);
         }

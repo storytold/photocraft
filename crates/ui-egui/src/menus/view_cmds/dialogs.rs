@@ -58,14 +58,28 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
     let image_processor = id == image_processor_ui::COMMAND;
+    let report = id == "file.fileInfo" && crate::import_report::available(app);
     if image_processor {
         image_processor_ui::settings_opened(app.ctx());
     }
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
         derive(&key, fields);
         let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
-        if image_processor { image_processor_ui::settings_footer(dialog) } else { dialog }
+        if image_processor {
+            image_processor_ui::settings_footer(dialog)
+        } else if report {
+            dialog.extra_buttons(vec![("importReport".to_owned(), Label::from(tl!("Import Conversion Report")))])
+        } else {
+            dialog
+        }
     })
+}
+
+/// Open the read-only report from File Info without applying its editable metadata form.
+pub(crate) fn footer_action(app: &mut PhotocraftApp, _: &egui::Context, _: DialogId, action: &str) {
+    if action == "importReport" && crate::import_report::available(app) {
+        crate::import_report::open(app);
+    }
 }
 
 /// Brings a form's shell keys up to date with the values they follow, before each pass, OK and automation write (the

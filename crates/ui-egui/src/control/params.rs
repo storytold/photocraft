@@ -8,6 +8,7 @@ use super::{Reply, Value, json};
 /// changed (#412).
 pub const UI_SET_FIELDS: [&str; 57] = [
     "updatesOpen",
+    "importReport",
     "tool",
     "strokeTrace",
     "panels",

@@ -6,10 +6,12 @@ use crate::{EngineError, Result, Session};
 
 impl crate::DocState {
     /// Transfer a just-admitted import's view when the host must defer its tab
-    /// behind an earlier Open confirmation. This is not a general view snapshot:
+    /// behind an earlier Open confirmation or Place hold. This is not a general view snapshot:
     /// an edited document or an ordinary native reopen has no fresh import hint.
     pub fn take_fresh_import_view(&mut self) -> Option<photocraft_io::NativeInitialView> {
         if !std::mem::take(&mut self.import_initial_view_applied)
+            || self.revision != 1
+            || self.view_revision != 0
             || self.history.past_len() != 0
             || self.history.can_redo()
             || self.revision != self.saved_revision

@@ -133,7 +133,17 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             // Steps that play another action find it in the set; the session's playback stack
             // stops an action that calls itself.
             h.session.actions_mut().list = ActionList::from_file(ActionsFile::new(set.clone(), Vec::new()));
-            h.open_with_approval(input, a.approve_high_memory)?;
+            let import_options = photocraft_io::ImportOptions {
+                psd_high_memory_approved: a.approve_high_memory,
+                historical_xcf_order: a
+                    .historical_xcf_sample_order
+                    .map_or(photocraft_io::HistoricalXcfOrder::RequireExplicit, photocraft_io::HistoricalXcfOrder::Explicit),
+                ..Default::default()
+            };
+            if let Some(order) = a.historical_xcf_sample_order {
+                h.session.bind_batch_open_sample_order(input, order);
+            }
+            h.open_with_options(input, &import_options)?;
             for (id, p) in &actions {
                 if photocraft_engine::actions_cmds::shell_view_command(id)
                     || photocraft_engine::actions_cmds::shell_save_command(id)
@@ -434,3 +444,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
+
+#[cfg(test)]
+mod historical_order_tests;

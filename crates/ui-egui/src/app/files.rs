@@ -161,13 +161,21 @@ impl PhotocraftApp {
 
     /// [`Self::open_automation_bytes`] with the caller's high-memory approval for the imported bytes.
     pub fn open_automation_bytes_with_approval(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
+        let mut options = photocraft_engine::jobs::import_options(self.session.prefs());
+        options.psd_high_memory_approved = approved;
+        self.open_automation_bytes_with_options(name, bytes, &options)
+    }
+
+    /// Open already-authorized bytes with the caller's validated import policy.
+    /// Script events and profile-path policies stay disabled as on the approval-only path.
+    pub fn open_automation_bytes_with_options(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let events_enabled = self.session.prefs().script_events.enabled;
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
         }
         let result = match preset_files_ui::open(self, name, bytes) {
             Some(r) => r.map(|()| Vec::new()),
-            None => self.import_automation_document(name, bytes, approved),
+            None => self.import_automation_document(name, bytes, options),
         };
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
@@ -177,18 +185,16 @@ impl PhotocraftApp {
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
     /// events and no Color Settings policy (which may read user-configured profile paths).
-    fn import_automation_document(&mut self, name: &str, bytes: &[u8], approved: bool) -> Result<Vec<String>, String> {
+    fn import_automation_document(&mut self, name: &str, bytes: &[u8], options: &photocraft_io::ImportOptions) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
-        opts.psd_high_memory_approved = approved;
         // Like inline Open, XCF needs the complete typed result: tuple adapters
         // cannot carry its source protection or the one-time saved editing view.
         // Other formats keep the configured importer and its existing policy.
         let (mut doc, mut warnings, initial_view, source_read_only) = if photocraft_io::is_xcf_input(name, bytes) {
-            let imported = photocraft_io::import_with_options(name, bytes, &opts).map_err(|error| error.to_string())?;
+            let imported = photocraft_io::import_with_options(name, bytes, options).map_err(|error| error.to_string())?;
             (imported.document, imported.warnings, imported.initial_view, imported.source_read_only)
         } else {
-            let (doc, warnings) = import(name, bytes, &opts)?;
+            let (doc, warnings) = import(name, bytes, options)?;
             (doc, warnings, None, photocraft_io::affinity::is_affinity(bytes))
         };
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);

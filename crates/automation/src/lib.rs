@@ -70,3 +70,13 @@ impl From<craft::automation::AutomationError> for AutomationError {
         }
     }
 }
+
+/// A retryable interpretation question is data, not a retained source capability.
+/// Keep both protocols aligned without recovering fields from the display string.
+pub(crate) fn attach_historical_error_details(object: &mut serde_json::Value, error: &AutomationError) {
+    if let AutomationError::Import(photocraft_io::IoError::HistoricalXcfSampleOrderRequired(question)) = error
+        && let Some(object) = object.as_object_mut()
+    {
+        object.insert("historicalXcfSampleOrderRequired".into(), serde_json::json!({"version": question.version, "bitsPerSample": question.bits_per_sample}));
+    }
+}

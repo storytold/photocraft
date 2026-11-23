@@ -1,7 +1,7 @@
 # GIMP XCF documents
 
 PhotoCraft opens GIMP's native `.xcf` files and gzip, bzip2, and XZ wrapped XCF files with their layers, read only. File ›
-Open, recent files, drops, the CLI (`convert`, `info`, `batch`) and automation (`doc.open`, MCP)
+Open, recent files, drops, the CLI (`convert`, `info`, `run`, `batch`) and automation (`doc.open`, MCP)
 use the same importer in `photocraft-io` (`crates/io/src/xcf.rs`). The shared
 [`craft-xcf` reader](https://github.com/storytold/craft-libs/tree/main/crates/xcf) recognizes the
 `gimp xcf ` signature, reads the wrapper and records, and delivers source samples one tile at a time.
@@ -44,8 +44,12 @@ blend settings keep the saved layer pixels. The
 report can retain the original source records for inspection within its storage limits. Floating
 selection attachment and item-set behavior remain outside the native mapping.
 
-Open As accepts an explicit sample order for unmarked multi-byte XCF 4–11 files. PhotoCraft records
-the order used in the native document's conversion report. Text color blobs have a separate source
+Ordinary background Open on the desktop prompts for a sample byte order when a multi-byte XCF 4–11
+file leaves it unspecified. Open As also accepts an explicit order. CLI `convert`, `info`, `run`, and
+`batch` accept `--historical-xcf-sample-order` with `little-endian` or `big-endian`. In Batch, a
+recorded Open As of the same source inherits this order when the step has no explicit choice.
+Each nested Batch has its own scope. PhotoCraft records the order used in the
+native document's conversion report. Text color blobs have a separate source
 encoding. Text that needs a float color with an unknown byte order keeps the saved raster, and the
 report can retain the original configuration for inspection. Portable numeric colors remain editable.
 
