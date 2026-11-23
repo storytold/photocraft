@@ -3,7 +3,7 @@
 use craft::ui::contract::{Bind, Entry};
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
-use craft::ui::patterns::presets::{HostedPresetManager, PresetEvent, PresetRow};
+use craft::ui::patterns::presets::{HostedPresetManager, PresetEvent};
 use craft::ui::runtime::env::Label;
 use serde_json::{Value, json};
 
@@ -11,7 +11,7 @@ use crate::PhotocraftApp;
 use crate::dialogs::params::ParamFamily;
 
 /// The Preset Manager: the preset kind picked by its id, and the preset by its index in that kind's list.
-type Manager = HostedPresetManager<String, usize>;
+type Manager = HostedPresetManager<String>;
 
 /// The command and dialog key of Export/Import Presets.
 const IO: &str = "edit.presets.exportImportPresets";
@@ -30,22 +30,20 @@ fn actions_for(kind: &str) -> Vec<(Label, Option<Label>)> {
     if kind == "brushes" { vec![(tl!("Load…").into(), Some(tl!("Import brushes (.abr)").into()))] } else { Vec::new() }
 }
 
-/// The presets of `kind`, one row per name, keyed by index.
-fn load_rows(app: &mut PhotocraftApp, kind: &str) -> Vec<PresetRow<usize>> {
-    let names = app
-        .session
+/// The names of `kind`'s presets, in order (the manager keys each by its index).
+fn load_names(app: &mut PhotocraftApp, kind: &str) -> Vec<String> {
+    app.session
         .execute("edit.presets.presetManager", json!({"kind": kind}))
         .ok()
         .and_then(|v| v.get(kind).cloned())
         .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-        .unwrap_or_default();
-    names.into_iter().enumerate().map(|(index, name)| PresetRow::item(index, name, 0)).collect()
+        .unwrap_or_default()
 }
 
 /// Opens the Preset Manager on Brushes.
 pub(crate) fn open_manager(app: &mut PhotocraftApp) -> DialogId {
     let mut manager = Manager::new(tl!("Preset Manager"), kinds(), "brushes".to_string());
-    manager.rows(load_rows(app, "brushes"));
+    manager.names(load_names(app, "brushes"));
     manager.actions(actions_for("brushes"));
     app.framework.dialogs.open(manager)
 }
@@ -115,9 +113,9 @@ fn take_manager(app: &mut PhotocraftApp) {
     if taken.actions.contains(&0) {
         let _ = app.open_dialog_file();
     }
-    let rows = load_rows(app, &kind);
+    let names = load_names(app, &kind);
     if let Some(manager) = app.framework.dialogs.get_mut::<Manager>() {
-        manager.rows(rows);
+        manager.names(names);
         if kind_changed {
             manager.actions(actions_for(&kind));
         }

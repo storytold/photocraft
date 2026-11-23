@@ -123,6 +123,7 @@ pub(crate) fn options_of(f: &Map<String, Value>) -> ExportOptions {
             "bicubicSharper" => Resample::BicubicSharper,
             "bilinear" => Resample::Bilinear,
             "nearest" => Resample::NearestNeighbor,
+            "preserveDetails" => Resample::PreserveDetails,
             _ => Resample::Automatic,
         };
     }
@@ -152,6 +153,7 @@ pub(crate) fn settings_from(options: &ExportOptions, source: PixelSize) -> Map<S
         Resample::BicubicSharper => "bicubicSharper",
         Resample::Bilinear => "bilinear",
         Resample::NearestNeighbor => "nearest",
+        Resample::PreserveDetails => "preserveDetails",
         // The dialog offers only `RESAMPLE_CHOICES`; a method outside it cannot be chosen.
         _ => DEFAULT_RESAMPLE,
     };
@@ -201,9 +203,10 @@ pub(crate) struct ExportOpen {
     picking: bool,
     /// The newest preview the dialog asked for that is not fully answered yet.
     work: Option<PreviewWork>,
-    /// The newest request made, with the working profile it was made under: a change of the working
-    /// profile alters the preview of an untagged document without changing the settings.
-    last: Option<(u64, ExportOptions, Option<String>)>,
+    /// The newest request made, with the working profile and the scratch read-error generation it was made under: a
+    /// change of the working profile alters the preview of an untagged document without changing the settings, and a
+    /// tile that fails to read and recovers alters the pixels without a new revision (`crate::scratch_reads`).
+    last: Option<(u64, ExportOptions, Option<String>, u64)>,
 }
 
 /// One preview request being answered: the proxy preview first, then the exact size estimate.
@@ -225,9 +228,17 @@ fn dialog_formats() -> Vec<ExportFormat> {
     formats
 }
 
-/// The resample methods the engine's Image Size implements, in `export_resample`'s order.
-const RESAMPLE_CHOICES: [Resample; 6] =
-    [Resample::Automatic, Resample::Bicubic, Resample::BicubicSmoother, Resample::BicubicSharper, Resample::Bilinear, Resample::NearestNeighbor];
+/// The resample methods the engine's Image Size implements, Preserve Details included (#13737), in the order of the
+/// engine's `RESAMPLE`.
+const RESAMPLE_CHOICES: [Resample; 7] = [
+    Resample::Bicubic,
+    Resample::Automatic,
+    Resample::BicubicSharper,
+    Resample::BicubicSmoother,
+    Resample::Bilinear,
+    Resample::NearestNeighbor,
+    Resample::PreserveDetails,
+];
 
 /// The saved export presets as the dialog's library: the engine's list in its order, each preset's
 /// settings read with [`options_of`].
@@ -379,7 +390,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
     }
     // Capture all sources before showing the dialog: changing selection or document while it
     // is open cannot change which layers get exported.
-    let docs = exportable_layers(&st.doc, &layers)?;
+    let docs = exportable_layers(&st.doc, layers)?;
     let suggested = format!("{}.png", export_name(&st.doc.name));
     app.pick_export(&suggested, move |app, path| {
         if !path.to_ascii_lowercase().ends_with(".png") {
@@ -871,13 +882,14 @@ fn drive(app: &mut PhotocraftApp, ctx: &egui::Context, open: &mut ExportOpen) ->
             dialog.cancel_requests();
         }
     }
-    // The settings did not change but the working profile did: ask again for the same revision.
+    // The settings did not change but the working profile or the scratch read-error generation did: ask again for the
+    // same revision.
     let wanted = wanted.or_else(|| {
-        let (revision, options, hash) = open.last.as_ref()?;
-        (working_profile_hash(app) != *hash).then(|| PreviewRequest::new(*revision, options.clone()))
+        let (revision, options, hash, scratch) = open.last.as_ref()?;
+        (working_profile_hash(app) != *hash || crate::scratch_reads::generation() != *scratch).then(|| PreviewRequest::new(*revision, options.clone()))
     });
     if let Some(request) = wanted {
-        open.last = Some((request.revision, request.options.clone(), working_profile_hash(app)));
+        open.last = Some((request.revision, request.options.clone(), working_profile_hash(app), crate::scratch_reads::generation()));
         open.work = start_preview(app, open, request);
     }
     answer_preview(app, ctx, open);
@@ -930,7 +942,7 @@ fn start_preview(app: &PhotocraftApp, open: &ExportOpen, request: PreviewRequest
     let profile = effective_source_profile(app, &doc);
     let signature = format!("{}:{}", Value::Object(settings.clone()), profile.content_hash());
     let layer = open.layers.first().map(|layer| layer.0);
-    let key = egui::Id::unique(("export-preview", doc.id.0, st.revision, layer));
+    let key = egui::Id::unique(("export-preview", doc.id.0, st.revision, layer, crate::scratch_reads::generation()));
     Some(PreviewWork { revision: request.revision, settings, signature, key, doc, profile, answered: None })
 }
 
@@ -1297,6 +1309,8 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     Ok(r)
 }
 
+#[cfg(test)]
+mod preserve_details_tests;
 #[cfg(test)]
 mod srgb_default_tests;
 #[cfg(test)]
