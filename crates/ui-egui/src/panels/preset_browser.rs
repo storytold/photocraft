@@ -667,6 +667,35 @@ fn shape_thumb(inputs: &PanelInputs<Vec<Swatch>>, cx: &ContentPainterCx, rect: R
     }
 }
 
+/// The options-bar picker's thumbnails: its swatches, and whether the chosen view is Text Only, which paints no
+/// raster at all (the shared browser's List view otherwise shows the same small thumbnail as Small List, #13725
+/// review).
+#[derive(Clone, MemoProps)]
+struct ShapePickerThumbs {
+    swatches: Vec<Swatch>,
+    text_only: bool,
+}
+
+impl ShapePickerThumbs {
+    /// `swatches` at `view`: `text_only` is what actually tells Text Only apart from Small List, since
+    /// `shape_picker_view_state` gives both the same (List, small) (#13725 review).
+    fn new(swatches: Vec<Swatch>, view: ShapeView) -> Self {
+        ShapePickerThumbs { swatches, text_only: view == ShapeView::TextOnly }
+    }
+}
+
+/// The options-bar picker's thumbnail: `shape_thumb`'s raster, or nothing at Text Only.
+fn shape_picker_thumb(inputs: &PanelInputs<ShapePickerThumbs>, cx: &ContentPainterCx, rect: Rect, info: ThumbInfo<'_, PresetKey>) {
+    if inputs.thumbs.text_only {
+        return;
+    }
+    if let PresetKey::Item(key) = info.key
+        && let Some(swatch) = swatch_of(&inputs.thumbs.swatches, key)
+    {
+        swatch.paint(cx, rect.shrink(2.0));
+    }
+}
+
 /// Window › Shapes: a click picks the shape for the Custom Shape tool, a double click places it, and a drop on the
 /// canvas places it where it lands.
 pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -729,8 +758,8 @@ fn keep_picker_state(presets: &mut PresetUi, id: &str, state: PresetState<String
 }
 
 /// The picker's view at a view mode: a view mode and a thumbnail zoom, for the browser's `PresetState`. The framework
-/// has no "no thumbnail" list row, so Text Only is List at the smallest zoom (a small thumbnail stays, closest
-/// available match).
+/// has no "no thumbnail" list row, so Text Only is List at the smallest zoom, same as Small List; `shape_picker_thumb`
+/// is what actually paints no raster at Text Only, telling the two apart (#13725 review).
 fn shape_picker_view_state(view: ShapeView) -> (PresetView, f64) {
     let range = THUMB_RANGE.range();
     let (small, large) = (*range.start(), *range.end());
@@ -837,11 +866,13 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|shape| (shape.name.clone(), shape.name.clone())).collect() })
         .collect();
     let swatches: Vec<Swatch> = groups.into_iter().flat_map(|group| group.items).map(shape_swatch).collect();
-    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, SHAPES, folders, swatches), shape_thumb);
+    let view = app.ui.presets_ui.shape_picker_view;
+    let thumbs = ShapePickerThumbs::new(swatches, view);
+    let source = panel_source(PanelInputs::new(&app.ui.presets_ui, SHAPES, folders, thumbs), shape_picker_thumb);
     let mut value = Some(PresetKey::Item(app.ui.presets_ui.shape().to_string()));
     let before = value.clone();
     let mut state = app.ui.presets_ui.browsers.get(ID).cloned().unwrap_or_default();
-    (state.view, state.zoom) = shape_picker_view_state(app.ui.presets_ui.shape_picker_view);
+    (state.view, state.zoom) = shape_picker_view_state(view);
     let picked = PresetPicker::new(tl!("Shape"), Bind::bound(&mut value), &source, Bind::bound(&mut state))
         .columns(7)
         .browser_id(shape_picker_browser_id())

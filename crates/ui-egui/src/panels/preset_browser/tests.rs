@@ -303,3 +303,16 @@ fn the_patterns_are_held_until_the_library_changes() {
     assert!(!Arc::ptr_eq(&first, &grown));
     assert!(grown.iter().any(|pattern| pattern.id == "held-test-extra"));
 }
+
+/// #13725 review: Text Only and Small List give the shared browser the same (List, small) view state — the
+/// framework has no thumbnail-free list row — so it is `ShapePickerThumbs::text_only`, not the view state, that
+/// must tell them apart; otherwise the two options render identically.
+#[test]
+fn text_only_paints_no_thumbnail_unlike_small_list() {
+    assert_eq!(shape_picker_view_state(ShapeView::TextOnly), shape_picker_view_state(ShapeView::SmallList), "same framework view and zoom");
+    let swatch = shape_swatch(photocraft_engine::presets::shapes::ShapePreset { name: "Heart".into(), path: Default::default(), id: None });
+    let text_only = ShapePickerThumbs::new(vec![swatch.clone()], ShapeView::TextOnly);
+    let small_list = ShapePickerThumbs::new(vec![swatch], ShapeView::SmallList);
+    assert!(text_only.text_only, "Text Only paints no raster");
+    assert!(!small_list.text_only, "Small List keeps its thumbnail");
+}
