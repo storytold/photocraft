@@ -44,19 +44,37 @@ fn layer_path(doc: &Document, active: Option<LayerId>) -> Option<&Path> {
     shape.or_else(|| l.vector_mask.as_ref().map(|v| &v.path).filter(ok))
 }
 
-/// `targeted` stored together with the active layer's path, at their document positions: the
-/// targeted path joins as a shape of its own, and every subpath is closed.
-fn with_layer_path(layer: &Path, targeted: Path) -> Path {
-    let mut out = layer.clone();
+/// Whether `p`'s area is the union of its shape components: no subpath after the first
+/// subtracts, intersects or excludes (the first one always acts as "combine").
+fn only_adds(p: &Path) -> bool {
+    p.subpaths.iter().skip(1).all(|s| matches!(s.op, PathOp::Combine | PathOp::Join))
+}
+
+/// `targeted` stored together with the active layer's path, at their document positions, so the
+/// stored shape fills the area of each. Subpath operations fold in order, so a part that
+/// subtracts, intersects or excludes goes first and the part that only adds follows it as a shape
+/// of its own; every subpath is closed. `None` when no order keeps both areas: both parts cut, one
+/// is inverted, or their fill rules differ.
+fn with_layer_path(layer: &Path, targeted: Path) -> Option<Path> {
+    if layer.inverted || targeted.inverted || layer.fill_rule != targeted.fill_rule {
+        return None;
+    }
+    let (mut out, rest) = if only_adds(&targeted) {
+        (layer.clone(), targeted)
+    } else if only_adds(layer) {
+        (targeted, layer.clone())
+    } else {
+        return None;
+    };
     let first = out.subpaths.len();
-    out.subpaths.extend(targeted.subpaths);
+    out.subpaths.extend(rest.subpaths);
     if let Some(s) = out.subpaths.get_mut(first) {
         s.op = PathOp::Combine;
     }
     for s in &mut out.subpaths {
         s.closed = true;
     }
-    out
+    Some(out)
 }
 
 pub(super) fn can_define_shape(s: &Session) -> std::result::Result<(), String> {
@@ -70,7 +88,12 @@ pub(super) fn define_custom_shape(s: &mut Session, p: &Value) -> Result<Value> {
     let path = current_path(&st.doc, st.active_layer, spec).ok_or_else(|| bad("edit.defineCustomShape", "no such path"))?;
     // A targeted path is stored together with the active shape layer's path or vector mask.
     let path = match spec.and(layer_path(&st.doc, st.active_layer)) {
-        Some(layer) => with_layer_path(layer, path),
+        Some(layer) => with_layer_path(layer, path).ok_or_else(|| {
+            bad(
+                "edit.defineCustomShape",
+                "the targeted path and the active layer's path can't be stored as one shape: both subtract, intersect or exclude, one is inverted, or their fill rules differ",
+            )
+        })?,
         None => path,
     };
     let name = p

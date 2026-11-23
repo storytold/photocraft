@@ -169,3 +169,62 @@ fn without_a_targeted_path_the_active_shape_layer_alone_is_stored_as_before() {
     f.select(f.rect);
     assert_eq!(f.define("Rect", json!({})), rect_path());
 }
+
+/// Fill coverage of `p` over the test document.
+fn area(p: &Path) -> Vec<f32> {
+    photocraft_vector::path_coverage(p, photocraft_geom::Rect::new(0, 0, 600, 400))
+}
+
+/// `stored` fills exactly what `a` or `b` fills on its own.
+fn fills_the_union(stored: &Path, a: &Path, b: &Path) -> bool {
+    let (s, a, b) = (area(stored), area(a), area(b));
+    s.iter().zip(a.iter().zip(&b)).all(|(s, (a, b))| (s - a.max(*b)).abs() < 1e-3)
+}
+
+/// A square from `x, y`, `w` pixels wide, with `op`.
+fn square(x: f64, y: f64, w: f64, op: PathOp) -> Subpath {
+    Subpath::polygon(&[(x, y), (x + w, y), (x + w, y + w), (x, y + w)]).with_op(op)
+}
+
+#[test]
+fn a_cut_in_either_path_stays_inside_that_paths_own_area() {
+    // Overlapping Rect (200,100 to 350,200), with a hole whose corner lies inside Rect: stored with
+    // the layer, the hole must not cut into the rectangle.
+    let holed = Path::new(vec![square(300.0, 150.0, 150.0, PathOp::Combine), square(320.0, 170.0, 60.0, PathOp::Subtract)]);
+    let plain = Path::new(vec![square(320.0, 170.0, 60.0, PathOp::Combine)]);
+    for (layer, targeted) in [(rect_path(), holed.clone()), (holed, plain)] {
+        let mut f = fixture();
+        let (rect, l, t) = (f.rect, layer.clone(), targeted.clone());
+        f.edit(move |doc| {
+            if let LayerContent::Shape(sh) = &mut doc.layer_mut(rect).unwrap().content {
+                sh.path = l;
+            }
+            doc.paths.push(NamedPath { name: "Target".into(), path: t, psd_raw: None });
+        });
+        f.select(f.rect);
+        let stored = f.define("Both", json!({"path": "Target"}));
+        assert!(holds_exactly(&stored, &[layer.clone(), targeted.clone()]), "both paths: {:?}", anchors(&stored));
+        assert!(fills_the_union(&stored, &layer, &targeted), "the layer and the targeted path each keep their own area");
+    }
+}
+
+#[test]
+fn paths_that_cannot_keep_both_areas_are_refused() {
+    let holed = || Path::new(vec![square(300.0, 150.0, 150.0, PathOp::Combine), square(320.0, 170.0, 60.0, PathOp::Subtract)]);
+    let inverted = Path { inverted: true, ..tri_path() };
+    let even_odd = Path { fill_rule: photocraft_doc::vector::FillRule::EvenOdd, ..tri_path() };
+    for (case, layer, targeted) in [("both cut", holed(), holed()), ("inverted", rect_path(), inverted), ("fill rules differ", rect_path(), even_odd)] {
+        let mut f = fixture();
+        let rect = f.rect;
+        f.edit(move |doc| {
+            if let LayerContent::Shape(sh) = &mut doc.layer_mut(rect).unwrap().content {
+                sh.path = layer;
+            }
+            doc.paths.push(NamedPath { name: "Target".into(), path: targeted, psd_raw: None });
+        });
+        f.select(f.rect);
+        let before = f.s.edit_state.custom_shapes.len();
+        assert!(f.s.execute(CMD, json!({"path": "Target", "name": case})).is_err(), "{case}: refused");
+        assert_eq!(f.s.edit_state.custom_shapes.len(), before, "{case}: nothing was stored");
+    }
+}
