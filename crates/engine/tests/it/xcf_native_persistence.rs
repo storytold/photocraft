@@ -149,7 +149,7 @@ fn misnamed_plain_and_gzip_xcf_keep_source_protection_and_native_reopen_independ
             session.execute("file.saveACopy", json!({"path":native})).unwrap();
             session.saved_to(native.to_str().unwrap().into());
             let state = session.active().unwrap();
-            assert!(!state.source_read_only);
+            assert!(state.source_read_only, "the import origin stays protected after the writable save path is adopted");
             assert_eq!(state.path.as_deref(), native.to_str());
             assert_eq!(state.protected_import_source.as_deref(), input.to_str(), "Save As keeps the source guard for this session");
             assert!(photocraft_engine::file_cmds::check_import_destination(state, input.to_str().unwrap()).is_err());
