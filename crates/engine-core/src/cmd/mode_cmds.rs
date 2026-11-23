@@ -89,7 +89,7 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// [`rotate_arbitrary`]; `image_rotation` is true on the Image Rotation path and decides two
-/// things there: count points stay where they were (#11762) and the selection is dropped, in the
+/// things there: the angle rounds to hundredths of a degree, count points stay where they were (#11762) and the selection is dropped, in the
 /// same history step, so one undo brings it back (#14507). The Crop tool's straighten turn and the
 /// Ruler's Straighten pass false: they move count points with the image and warp the selection.
 /// `keep_guides` turns the guides with the canvas (#14508, measured for Image Rotation > Arbitrary)
@@ -106,6 +106,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
         "ccw" => -angle,
         d => return Err(bad(CMD, format!("direction `{d}` (cw|ccw)"))),
     };
+    let deg = if image_rotation { (deg * 100.0).round() % 36_000.0 / 100.0 } else { deg };
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
     }
@@ -953,3 +954,6 @@ mod color_table_index_tests;
 #[cfg(test)]
 #[path = "rotate_canvas_interpolation_pref_tests.rs"]
 mod rotate_canvas_interpolation_pref_tests;
+#[cfg(test)]
+#[path = "rotate_canvas_tiny_angle_tests.rs"]
+mod rotate_canvas_tiny_angle_tests;

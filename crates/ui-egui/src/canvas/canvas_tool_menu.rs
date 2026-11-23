@@ -104,10 +104,11 @@ pub struct CanvasToolMenu {
     /// Opened with the Content-Aware Move tool inside the active selection (#12194).
     #[serde(default)]
     pub inside_selection: bool,
-    /// Opened with the Delete Anchor Point or Convert Point tool over an anchor or a segment of the
-    /// targeted path (#12771, #12744): the engine command that entry runs and its params. It heads
-    /// the path menu, above a separator. The third part is the document id and revision it was read
-    /// from: the knot index means something only there, so the entry expires once either moves on.
+    /// Opened with the Delete Anchor Point or Convert Point tool, or the Pen (#12771, #12744,
+    /// #12915), over an anchor or a segment of the targeted path: the engine command that entry
+    /// runs and its params. It heads the path menu, above a separator. The third part is the
+    /// document id and revision it was read from: the knot index means something only there, so
+    /// the entry expires once either moves on.
     #[serde(default)]
     pub point: Option<(String, Value, (u64, u64))>,
 }
@@ -1039,6 +1040,26 @@ fn point_at(app: &PhotocraftApp, target: PathRef, hit: BezierHit) -> Option<(Str
     Some((command.to_string(), params, stamp))
 }
 
+/// The Pen's menu takes the `target`/`hit` the right-click reported as its point entry only in
+/// the measured configuration (#12915): the Pen in Path mode with no path being drawn, and the
+/// part on a CLOSED subpath. Its overlay reports the hit exactly as the anchor tools' does (the
+/// Auto Add/Delete mode the Pen runs by default). The Shape-mode and Pixels-mode right-click and
+/// an open path's parts are not measured and keep today's plain list, and so does every other case.
+/// The gate reads no modifiers: `capture` never receives the click's, and with ⌥ held the overlay
+/// is Convert, which senses the closed path's anchors and straight segments as well, so the row
+/// appears there too - observed and pinned, not measured.
+fn pen_point_allowed(app: &PhotocraftApp, target: PathRef, hit: &BezierHit) -> bool {
+    if app.ui.pen.is_some() || app.ui.tool_options.vector_mode != craft::draw::ui::VectorMode::Path {
+        return false;
+    }
+    let subpath = match *hit {
+        BezierHit::Anchor { knot, .. } => knot.subpath,
+        BezierHit::Segment { segment, .. } => segment.subpath,
+        _ => return false,
+    };
+    crate::direct_select::path_of(app, &target).is_some_and(|path| path.subpaths.get(subpath).is_some_and(|sub| sub.closed))
+}
+
 const POINT_DELETE: &str = "path.deleteAnchor";
 const POINT_ADD: &str = "path.addAnchor";
 
@@ -1547,6 +1568,10 @@ fn capture(app: &mut PhotocraftApp, menu: &mut CanvasToolMenu, doc: [f64; 2], po
         {
             select_right_clicked_anchor(app, target, [knot.subpath, knot.knot]);
         }
+    } else if menu.tool == Tool::Pen && menu.has_path {
+        // The Pen's overlay reports the right-click's hit as the anchor tools' does; only the
+        // measured configuration heads the menu with the entry (#12915).
+        menu.point = point.filter(|(target, hit)| pen_point_allowed(app, *target, hit)).and_then(|(target, hit)| point_at(app, target, hit));
     }
     menu.inside_selection = menu.tool == Tool::ContentAwareMove && selected_at(app, doc);
     if menu.tool == Tool::ColorSampler {
@@ -1862,6 +1887,9 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 pub(crate) mod count_tests;
+
+#[cfg(test)]
+mod pen_anchor_row_tests;
 
 #[cfg(test)]
 mod pen_free_transform_label_tests;

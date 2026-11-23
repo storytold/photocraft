@@ -295,6 +295,143 @@ fn a_hidden_layer_keeps_the_button_and_the_click_shows_the_alert() {
     assert!(ruler(st).is_some(), "the ruler line is still there");
 }
 
+/// The messages of the alerts open on the host.
+fn alerts(app: &PhotocraftApp) -> Vec<String> {
+    app.framework
+        .dialogs
+        .open_dialogs()
+        .into_iter()
+        .filter(|d| d.key.as_deref() == Some("alert"))
+        .filter_map(|d| Some(d.fields.as_ref()?["message"].as_str()?.to_string()))
+        .collect()
+}
+
+/// Closes every alert the host has open.
+fn close_alerts(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let ids: Vec<_> = app.framework.dialogs.open_dialogs().into_iter().filter(|d| d.key.as_deref() == Some("alert")).map(|d| d.id).collect();
+    for id in ids {
+        app.framework.dialogs.cancel_by_id(ctx, id);
+    }
+}
+
+#[test]
+fn placing_color_sampler_reveals_closed_info_panel() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    // Close the Info panel.
+    let _ = crate::panel_docking::show_panel(&mut app, "info", Some(false));
+    assert!(!crate::panel_docking::is_checked(&app, "info"));
+
+    // Placing a sampler inside the canvas opens the Info panel (#11745).
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    up(&mut app, 25.0, 30.0);
+    assert!(crate::panel_docking::is_checked(&app, "info"));
+
+    // Placing a second sampler while the panel is already open leaves it open without error.
+    down(&mut app, 45.0, 50.0, egui::Modifiers::NONE);
+    up(&mut app, 45.0, 50.0);
+    assert!(crate::panel_docking::is_checked(&app, "info"));
+
+    // A click on an existing sampler (starting a move or selection) does not reopen a closed panel.
+    let _ = crate::panel_docking::show_panel(&mut app, "info", Some(false));
+    assert!(!crate::panel_docking::is_checked(&app, "info"));
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    up(&mut app, 25.0, 30.0);
+    assert!(!crate::panel_docking::is_checked(&app, "info"));
+}
+
+#[test]
+fn placing_color_sampler_in_docked_workspace_leaves_info_panel_open() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    // Dock the Info panel in an expanded column and close it.
+    app.run("window.panel.move", json!({"panel": "info", "anchor": "layers", "zone": "top"})).unwrap();
+    let _ = crate::panel_docking::show_panel(&mut app, "info", Some(false));
+    assert!(!crate::panel_docking::is_checked(&app, "info"));
+
+    // Placing a sampler inside the canvas reveals the Info panel (#11745).
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    up(&mut app, 25.0, 30.0);
+    assert!(crate::panel_docking::is_checked(&app, "info"));
+}
+
+#[test]
+fn color_sampler_limit_opens_alert_dialog_instead_of_status_note() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    for i in 0..10 {
+        let x = 10.0 + (i as f64) * 10.0;
+        down(&mut app, x, 20.0, egui::Modifiers::NONE);
+        up(&mut app, x, 20.0);
+    }
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 10);
+    assert!(alerts(&app).is_empty());
+
+    // Prepare non-empty status and closed Info panel to verify state is cleared and panel is untouched.
+    app.ui.status = "Previous status".into();
+    app.ui.status_error = true;
+    let _ = crate::panel_docking::show_panel(&mut app, "info", Some(false));
+    assert!(!crate::panel_docking::is_checked(&app, "info"));
+
+    // The 11th click opens the limit alert dialog instead of a status-bar note (#11743).
+    down(&mut app, 150.0, 20.0, egui::Modifiers::NONE);
+    up(&mut app, 150.0, 20.0);
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 10);
+    assert_eq!(app.ui.status, "");
+    assert!(!app.ui.status_error);
+    // Limit rejection does not reveal or change the Info panel.
+    assert!(!crate::panel_docking::is_checked(&app, "info"));
+
+    let dialogs = alerts(&app);
+    assert_eq!(dialogs, ["Could not create a new sampler because the maximum number of samplers is 10."]);
+    assert_eq!(dialogs, [super::canvas::MAX_SAMPLERS_ALERT]);
+}
+
+#[test]
+fn color_sampler_limit_alert_also_for_alt_click_off_a_point() {
+    // Measured in the reference application: Alt+click off a point adds a point like a plain
+    // click, so at 10 points it opens the same alert; Alt+click on a point deletes it, no alert.
+    let (mut app, ctx) = app();
+    app.ui.tool = Tool::ColorSampler;
+    for i in 0..10 {
+        let x = 10.0 + (i as f64) * 10.0;
+        down(&mut app, x, 20.0, egui::Modifiers::NONE);
+        up(&mut app, x, 20.0);
+    }
+    down(&mut app, 150.0, 20.0, egui::Modifiers::ALT);
+    up(&mut app, 150.0, 20.0);
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 10);
+    let dialogs = alerts(&app);
+    assert_eq!(dialogs, ["Could not create a new sampler because the maximum number of samplers is 10."]);
+    assert_eq!(dialogs, [super::canvas::MAX_SAMPLERS_ALERT]);
+
+    close_alerts(&mut app, &ctx);
+    down(&mut app, 10.0, 20.0, egui::Modifiers::ALT);
+    up(&mut app, 10.0, 20.0);
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 9);
+    assert!(alerts(&app).is_empty());
+}
+
+#[test]
+fn color_sampler_drag_error_reports_to_status_bar_without_dialog() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    // Place a sampler
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    up(&mut app, 25.0, 30.0);
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 1);
+
+    // Start dragging the sampler point
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    // Clear samplers while drag is in flight
+    app.run("view.colorSamplers.clear", json!({})).unwrap();
+
+    // Release the drag inside canvas: move fails because point no longer exists
+    up(&mut app, 50.0, 50.0);
+    assert!(app.ui.status.contains("no sample point"), "status was: {}", app.ui.status);
+    assert!(alerts(&app).is_empty());
+}
+
 /// The height of the number painted beside the first Count marker of a document whose group has `label_size`, read
 /// from the frame's text shapes.
 fn count_number_height(label_size: u32) -> f32 {

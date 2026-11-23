@@ -149,7 +149,7 @@ fn starting_values_match_the_reference() {
     assert_eq!(adj("blackWhite"), Adjustment::BlackWhite { weights: [40.0, 60.0, 40.0, 60.0, 20.0, 80.0], tint: None });
     let Adjustment::PhotoFilter { density, preserve_luminosity, .. } = adj("photoFilter") else { panic!() };
     assert!(close(density, 0.25) && preserve_luminosity);
-    let Adjustment::ChannelMixer { matrix, monochrome } = adj("channelMixer") else { panic!() };
+    let Adjustment::ChannelMixer { matrix, monochrome, .. } = adj("channelMixer") else { panic!() };
     assert!(!monochrome);
     let want = [[0.8, 0.1, 0.1, 0.05], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
     assert!(matrix.iter().flatten().zip(want.iter().flatten()).all(|(a, b)| close(*a, *b)), "{matrix:?}");
