@@ -3,7 +3,7 @@ use super::{
     DocId, Document, HashMap, PhotocraftApp, Session, UiState, Value, actions, canvas, delete_layer_prompt, discard_ui, file_open, gpu_canvas, gpu_status,
     histogram_panel, i18n, jobs_ui, json, kys_import, last_brush, layers_panel_ui, mask_thumbs_ui, mask_trash_prompt, monitor_status, native_menu, notices,
     open_prompt, paint_mouse, panel_docking, panels, prefs_ui, preset_files_ui, screen_picker, shortcuts, smart_svg_ui, state, stroke_trace, stylus, theme,
-    tool_memory, transform_tool, type_tool, type_transform, updates_ui, vector_ui, view_cmds, work_area,
+    tool_memory, transform_tool, type_tool, type_transform, updates_ui, vector_ui, view_cmds,
 };
 
 mod clipboard;
@@ -68,8 +68,11 @@ impl PhotocraftApp {
             remove_pending: Vec::new(),
             remove_pending_target: None,
             remove_trail: None,
+            texture_serials: Default::default(),
             menu_model: None,
             toolbar_slots: Default::default(),
+            dock_model: Default::default(),
+            preset_art: Default::default(),
             move_preview: None,
             move_hover: None,
             move_distance: None,
@@ -96,6 +99,7 @@ impl PhotocraftApp {
             last_canvas_layer: egui::LayerId::background(),
             ppp: 1.0,
             drop_canvas_rect: None,
+            dock_drop_rect: None,
             ctx,
             frame_preview: None,
             drop_places: Default::default(),
@@ -111,6 +115,8 @@ impl PhotocraftApp {
             filter_live: craft::imaging::ui::LivePreview::new(craft::imaging::ui::PreviewLane::Dialog),
             adjust_open: None,
             adjust_session: None,
+            properties_hidden: 0,
+            properties_tracked: false,
             dialog_dropper: None,
             layer_style_child: None,
             color_targets: HashMap::new(),
@@ -272,6 +278,8 @@ impl eframe::App for PhotocraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
         self.framework_before_input(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::text::installed_fonts::on_input(raw_input);
         if let Some(tablet_poll) = self.services.tablet_poll.as_mut() {
             tablet_poll(raw_input.focused);
         }
@@ -294,6 +302,10 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Hands the runtime the native window (on Windows it answers the window's hit test) and
+        // maximizes a window bigger than its display (1440 × 900 on 1366 × 768) once (#315).
+        #[cfg(not(target_arch = "wasm32"))]
+        craft::ui::shell::embed::before_ui(ui.ctx(), frame);
         #[cfg(test)]
         if let Some(mut body) = self.framework.test_body.take() {
             body(ui, self);
@@ -338,3 +350,6 @@ mod clipboard_tests;
 
 #[cfg(test)]
 mod apply_data_set_alert_tests;
+
+#[cfg(test)]
+mod apply_data_set_missing_file_tests;
