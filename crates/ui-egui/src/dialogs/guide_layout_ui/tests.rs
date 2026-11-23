@@ -226,7 +226,7 @@ fn percent_is_of_the_selected_artboard_and_stays_percent() {
 
 /// A launch on the preferences kept in `files` (the settings store's file, in memory), with a document open: the
 /// next start after a quit when `files` already holds what an earlier launch saved.
-fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> PhotocraftApp {
+fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> Box<PhotocraftApp> {
     let options = craft::settings::OpenOptions::new(craft::settings::Location::Dir("/memory/photocraft-guide-layout".into())).files(files.clone());
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width":1200,"height":800})).unwrap();
@@ -235,9 +235,9 @@ fn launch(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> Phot
 
 /// `app` under the app's own frame (its hooks around each pass, as eframe runs them), so what the framework saves
 /// reaches the preferences and the settings file as in the running app.
-fn framed(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn framed(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     use crate::app::framework::BuildApp;
-    let mut h = Harness::<'static, PhotocraftApp>::builder()
+    let mut h = Harness::<'static, Box<PhotocraftApp>>::builder()
         .with_size(egui::vec2(1400.0, 900.0))
         .build_app(|ui: &mut egui::Ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
     h.run_steps(2);
@@ -246,7 +246,7 @@ fn framed(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 
 /// A launch whose saved values hold `layout` as the remembered New Guide Layout, written through the settings store as
 /// a hand-edited or damaged file would be read.
-fn launch_with_saved(layout: Value) -> Harness<'static, PhotocraftApp> {
+fn launch_with_saved(layout: Value) -> Harness<'static, Box<PhotocraftApp>> {
     let files = std::sync::Arc::new(craft::settings::testing::MemoryFiles::new());
     let mut first = framed(launch(&files));
     let ctx = first.ctx.clone();
@@ -257,7 +257,7 @@ fn launch_with_saved(layout: Value) -> Harness<'static, PhotocraftApp> {
 }
 
 /// The layout the last OK saved, if any.
-fn saved(h: &Harness<'static, PhotocraftApp>) -> Option<Value> {
+fn saved(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<Value> {
     saved_value::<Option<Value>>(h.state().ctx(), &REMEMBERED)
 }
 
