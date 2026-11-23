@@ -1714,3 +1714,77 @@ fn every_raster_refusal_reason_is_reported_once() {
     assert_eq!(dropped("rasterising limit"), 1, "{:?}", result.warnings);
     assert_eq!(dropped("too much memory"), 1, "{:?}", result.warnings);
 }
+
+fn utf16_svg(text: &str, little: bool) -> Vec<u8> {
+    let mut bytes = if little { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
+    bytes.extend(text.encode_utf16().flat_map(|unit| if little { unit.to_le_bytes() } else { unit.to_be_bytes() }));
+    bytes
+}
+
+#[test]
+fn bom_utf16_plain_and_gzip_follow_public_svg_import_and_strict_bounded_routes() {
+    use std::io::Write;
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3"><desc>創作 🌿</desc><rect width="2" height="3" fill="#00ff00"/></svg>"##;
+    let reference = import_svg_bounded_images_strict("Reference.svg", svg.as_bytes(), 1000).unwrap();
+    let expected = photocraft_compose::flatten(&reference.document).px;
+    for little in [true, false] {
+        let plain = utf16_svg(svg, little);
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&plain).unwrap();
+        let gzip = encoder.finish().unwrap();
+        for (name, bytes) in [("Drawing.svg", &plain), ("Drawing.svgz", &gzip)] {
+            // The current public router delegates recognition to photocraft-formats.
+            assert!(crate::is_svg_input(name, bytes));
+            let ordinary = crate::import(name, bytes).unwrap();
+            let strict = import_svg_bounded_images_strict(name, bytes, 1000).unwrap();
+            for imported in [ordinary, strict] {
+                assert_eq!(imported.document.size, Size::new(2, 3));
+                assert_eq!(photocraft_compose::flatten(&imported.document).px, expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn bom_utf16_keeps_ordinary_omission_warnings_and_strict_rejection() {
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3"><rect width="2" height="3" fill="red"/><image width="1" height="1" href="data:image/png;base64,AA=="/></svg>"#;
+    for little in [true, false] {
+        let bytes = utf16_svg(svg, little);
+        let ordinary = crate::import("Optional.svg", &bytes).unwrap();
+        assert!(ordinary.warnings.iter().any(|warning| warning.contains("unreadable") || warning.contains("omitted")), "{:?}", ordinary.warnings);
+        assert!(photocraft_compose::flatten(&ordinary.document).px.iter().any(|pixel| pixel[0] > pixel[1] && pixel[3] > 0.));
+        assert!(import_svg_bounded_images_strict("Optional.svg", &bytes, 1000).is_err());
+    }
+}
+
+#[test]
+fn bom_utf16_decoding_rejects_invalid_units_and_bounds_utf8_expansion() {
+    for little in [true, false] {
+        // Eight admitted UTF-16 bytes (including BOM) expand to nine UTF-8
+        // bytes: the decoded allowance must be checked independently.
+        let bytes = utf16_svg("漢漢漢", little);
+        assert_eq!(bytes.len(), 8);
+        assert_eq!(svg_xml_text(&bytes, 9).unwrap(), "漢漢漢");
+        assert!(svg_xml_text(&bytes, 8).unwrap_err().to_string().contains("decoded SVG text exceeds"));
+        let mut odd = bytes.clone();
+        odd.push(0);
+        assert!(svg_xml_text(&odd, 100).unwrap_err().to_string().contains("not valid UTF-16"));
+        let mut surrogate = if little { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
+        surrogate.extend(if little { 0xd800u16.to_le_bytes() } else { 0xd800u16.to_be_bytes() });
+        for malformed in [odd, surrogate] {
+            assert!(crate::import("Malformed.svg", &malformed).is_err());
+            assert!(import_svg_bounded_images_strict("Malformed.svg", &malformed, 1000).is_err());
+        }
+    }
+}
+
+#[test]
+fn bom_utf16_depth_is_checked_after_decoding_before_native_parsing() {
+    let text = format!("<svg xmlns='http://www.w3.org/2000/svg'>{}</svg>", "<g>".repeat(MAX_XML_DEPTH) + &"</g>".repeat(MAX_XML_DEPTH));
+    for little in [true, false] {
+        let bytes = utf16_svg(&text, little);
+        for error in [crate::import("Deep.svg", &bytes).unwrap_err(), import_svg_bounded_images_strict("Deep.svg", &bytes, 1000).unwrap_err()] {
+            assert!(error.to_string().contains("elements are nested more than"), "{error}");
+        }
+    }
+}
