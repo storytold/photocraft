@@ -13,7 +13,7 @@ use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolHostResponse, T
 use craft::ui::primitives::{Draw, PaintShape, StrokeColor, StrokeWidth};
 use craft::ui::style::DataColor;
 
-use super::defaults::default_style_params;
+use super::defaults::{default_style_params, mask_style_from_active_layer};
 use super::editing::begin_edit;
 use super::layout::{hit_layer, offset_at};
 
@@ -218,14 +218,28 @@ fn press_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64, mods: 
 /// The `type.create` parameters a Type-tool gesture ending now starts from: the placeholder or
 /// empty text, the tool's orientation and the options bar's styles. The caller adds the geometry
 /// (`box` for a dragged paragraph, `x`/`y` for point text), and [`create_layer`] adds the session's
-/// `coalesce` key.
-pub(crate) fn create_params(app: &PhotocraftApp) -> serde_json::Value {
+/// `coalesce` key. `is_box` says whether the gesture that ends was a paragraph drag, which #12077's
+/// mask style applies only to a click.
+pub(crate) fn create_params(app: &PhotocraftApp, is_box: bool) -> serde_json::Value {
+    let mask = app.ui.tool.is_type_mask();
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The
     // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
     // vertical mask's placeholder is not measured yet, so it keeps starting empty.
     let placeholder = app.ui.tool != crate::state::Tool::VerticalTypeMask && app.session.prefs().type_.fill_new_type_layers_with_placeholder;
     let text = if placeholder { PLACEHOLDER } else { "" };
     let mut p = default_style_params(app);
+    // #12077: the measured case - a click, not a paragraph box, with the Horizontal Type Mask over
+    // a horizontal text layer - starts the mask in that layer's font, style and size, as the
+    // options bar shows them for the layer. The vertical mask and a box drag are not measured in
+    // the issue, so they keep today's tool options.
+    if mask
+        && !is_box
+        && app.ui.tool == crate::state::Tool::HorizontalTypeMask
+        && let Some(style) = mask_style_from_active_layer(app)
+        && let (Some(params), Some(style)) = (p.as_object_mut(), style.as_object())
+    {
+        params.extend(style.clone());
+    }
     p["text"] = json!(text);
     p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
     p
@@ -289,7 +303,7 @@ fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], alt_at_p
     // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
     // on the path on its outline. The Type Mask tools ignore paths.
     let target = if !mask && !is_box { path_target(app, start[0], start[1]) } else { None };
-    let mut p = create_params(app);
+    let mut p = create_params(app, is_box);
     if is_box {
         p["box"] = json!([start[0].min(end[0]).round(), start[1].min(end[1]).round(), w.round(), h.round()]);
     } else {
@@ -397,3 +411,7 @@ mod mask_placeholder_tests;
 #[cfg(test)]
 #[path = "mask_click_text_layer_tests.rs"]
 mod mask_click_text_layer_tests;
+
+#[cfg(test)]
+#[path = "mask_active_layer_style_tests.rs"]
+mod mask_active_layer_style_tests;
