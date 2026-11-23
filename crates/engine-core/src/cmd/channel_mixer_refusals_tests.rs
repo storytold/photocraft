@@ -8,9 +8,9 @@
 
 use serde_json::{Value, json};
 
-use crate::Session;
 use crate::adjust_cmds::{CHANNEL_MIXER_EMPTY, CHANNEL_MIXER_UNAVAILABLE};
 use crate::channel_cmds::ChannelTarget;
+use crate::{EngineError, Session};
 
 const MIXER: &str = "image.adjustments.channelMixer";
 
@@ -150,6 +150,38 @@ fn an_empty_pixel_layer_refuses_channel_mixer_with_the_empty_layer_message() {
     // Enabled (the reference application only answers when it runs), then refused.
     assert!(s.is_enabled(MIXER));
     refused(&mut s, swap(), CHANNEL_MIXER_EMPTY, "empty layer");
+    // The reference application's words, checked apart from the constant that produces them.
+    match s.execute(MIXER, swap()) {
+        Err(EngineError::Other(m)) => assert_eq!(m, "Could not complete the Channel Mixer command because the active layer is empty."),
+        other => panic!("empty layer: {other:?}"),
+    }
+}
+
+/// A layer whose pixels were all erased is empty too: the Eraser clears alpha and keeps the colour
+/// bytes, which a byte-wise bounds scan would count as content.
+#[test]
+fn an_erased_layer_refuses_channel_mixer_with_the_empty_layer_message() {
+    let mut s = session(8, "rgb");
+    let erase = json!({"points": [[-10, 8], [26, 8]], "size": 60, "erase": true, "brush": {"hardness": 1.0}});
+    s.execute("paint.stroke", erase).unwrap();
+    assert_eq!(active_rgba(&s, 6, 6)[3], 0.0, "erased");
+    refused(&mut s, swap(), CHANNEL_MIXER_EMPTY, "erased layer");
+}
+
+/// A refused Channel Mixer leaves a floating selection floating: the mode refusal is checked
+/// before the piece drops, so nothing moves and no History state is added.
+#[test]
+fn a_refused_channel_mixer_leaves_a_floating_piece_floating() {
+    let mut s = session(8, "gray");
+    s.execute("select.rect", json!({"x": 4, "y": 4, "width": 8, "height": 8})).unwrap();
+    s.execute("select.float", json!({"dx": 2, "dy": 0})).unwrap();
+    let (before, layer) = (steps(&s), active_rgba(&s, 4, 6));
+    let err = s.execute(MIXER, swap());
+    assert!(matches!(err, Err(EngineError::Disabled(..))), "{err:?}");
+    let st = s.active().unwrap();
+    assert!(st.floating.is_some(), "the piece still floats");
+    assert_eq!(steps(&s), before, "no History state");
+    assert_eq!(active_rgba(&s, 4, 6), layer, "nothing dropped");
 }
 
 #[test]
@@ -161,13 +193,18 @@ fn channel_mixer_keeps_working_where_it_did() {
         assert!(p[0] < 0.01 && p[2] > 0.99, "rgb {depth}: red and blue swapped: {p:?}");
     }
     let mut s = session(8, "cmyk");
-    works(&mut s, json!({}), "cmyk");
+    works(&mut s, swap(), "cmyk");
+    let p = active_rgba(&s, 6, 6);
+    assert!(p[2] > p[0] + 0.3, "cmyk: red and blue swapped: {p:?}");
 
     // Lock Transparent Pixels and a selection.
     let mut s = session(8, "rgb");
     s.execute("layer.lockLayers", json!({"transparency": true})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
     works(&mut s, swap(), "locked transparency with a selection");
+    let (inside, outside) = (active_rgba(&s, 6, 6), active_rgba(&s, 10, 6));
+    assert!(inside[0] < 0.01 && inside[2] > 0.99, "inside the selection: blue: {inside:?}");
+    assert!(outside[0] > 0.99 && outside[2] < 0.01, "outside the selection: still red: {outside:?}");
 
     // A smart object records a smart filter.
     let mut s = session(8, "rgb");

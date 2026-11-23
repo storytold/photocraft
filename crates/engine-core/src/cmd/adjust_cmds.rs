@@ -388,10 +388,30 @@ pub(crate) fn channel_mixer_refusal(s: &Session, p: &Value) -> Result<()> {
     let id = crate::commands::layer_param(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    if matches!(layer.content, LayerContent::Raster(_)) && crate::layer_multi_cmds::layer_bounds(layer).is_none() {
+    if let LayerContent::Raster(surface) = &layer.content
+        && !has_visible_pixels(surface)?
+    {
         return Err(EngineError::Other(CHANNEL_MIXER_EMPTY.into()));
     }
     Ok(())
+}
+
+/// Whether `s` has a pixel the layer shows, as the reference application's "the active layer is
+/// empty" counts it: alpha above 0, so pixels the Eraser cleared (it keeps their colour bytes) are
+/// empty. A tile that can't be read from scratch storage is an error, not an empty layer.
+fn has_visible_pixels(s: &Surface) -> Result<bool> {
+    let fmt = s.format();
+    if !fmt.alpha || s.default_pixel().last().is_none_or(|a| *a > 0.0) {
+        return Ok(!s.content_bounds().is_empty());
+    }
+    let (alpha, bpp) = (fmt.channels() - 1, fmt.bytes_per_pixel());
+    for (_, tile) in s.tiles() {
+        let bytes = tile.try_bytes().map_err(photocraft_raster::AllocationError::ScratchRead)?;
+        if bytes.chunks_exact(bpp).any(|px| photocraft_color::read_sample(px, fmt.sample, alpha) > 0.0) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
