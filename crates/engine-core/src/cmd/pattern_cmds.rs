@@ -503,7 +503,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Patterns…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".pat file"?,"data":base64 bytes? (instead of a path)} → {imported:[ids],count}"##,
+            params: r##"{"path":".pat file"?,"data":base64 bytes? (instead of a path),"group":string? (file name; accepted, currently unused: patterns go to the library)} → {imported:[ids],count}"##,
             enabled: always,
             journal: true,
             run: import,
