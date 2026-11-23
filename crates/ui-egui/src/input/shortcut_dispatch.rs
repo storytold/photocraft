@@ -266,7 +266,11 @@ pub(crate) fn command_rows(app: &PhotocraftApp) -> Vec<CommandDef> {
         push_row(&mut rows, &mut index, def);
     }
     for (letter, first) in crate::tool_shortcuts::group_letters() {
-        let label = format!("Next {}", first.label());
+        // A letter the user gave tools of another group names the tools it cycles now (#14208).
+        let label = match crate::tool_shortcuts::first_with_letter(app, letter).unwrap_or(first) {
+            now if now.key() != letter => format!("Next {} ({letter})", now.label()),
+            now => format!("Next {}", now.label()),
+        };
         let mut def = app_row(&next_in_group_id(letter), &label).with_path(vec!["Tools".into(), label.clone()]);
         def.defaults.extend(binding(&format!("Shift+{}", letter.to_ascii_uppercase())));
         push_row(&mut rows, &mut index, def);
@@ -627,10 +631,11 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, fired: &[F
                     Some(letter) => {
                         let step = tool_step(app, f);
                         pick_tool(app, letter, step, true, f.time);
+                        crate::spring_tools::held_by(app, id, letter);
                     }
                     None => crate::tool_memory::select(app, tool),
                 },
-                FirePhase::Release => crate::spring_tools::released(app, crate::tool_shortcuts::letter(app, tool).unwrap_or(tool.key()), f.time),
+                FirePhase::Release => crate::spring_tools::command_released(app, id, crate::tool_shortcuts::letter(app, tool).unwrap_or(tool.key()), f.time),
                 FirePhase::Repeat => {}
             }
             continue;

@@ -105,3 +105,48 @@ fn a_group_default_letter_assigned_explicitly_keeps_cycling() {
         assert_eq!(h.state().ui.tool, want);
     }
 }
+
+/// Q is held for Lasso when the binding moves Lasso off Q: the key-up still releases the Q its press
+/// stored, so the spring gives the previous tool back.
+#[test]
+fn a_binding_change_while_held_still_releases_the_letter() {
+    let mut h = lassos_on_q(true);
+    h.event(egui::Event::Key { key: Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.state().ui.tool, Tool::Lasso);
+    assert_eq!(h.state().ui.spring.as_ref().map(|s| s.keys.clone()), Some(vec!['Q']));
+    assign(h.state_mut(), "N", &[Tool::Lasso]);
+    h.run_steps(30);
+    h.event(egui::Event::Key { key: Key::Q, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(4);
+    assert_eq!(h.state().ui.spring, None);
+    assert_eq!(h.state().ui.tool, Tool::Brush);
+}
+
+/// The Shift+letter row of a default letter names the tools that letter cycles now.
+fn next_in_group_label(app: &PhotocraftApp, letter: char) -> Option<String> {
+    let id = crate::shortcut_dispatch::next_in_group_id(letter);
+    crate::shortcut_dispatch::command_rows(app).into_iter().find(|r| r.command.id == id).map(|r| r.label)
+}
+
+/// B given to the three lassos and taken from the brushes: Shift+B's row names Lasso, keeps its id and
+/// binding, and the rows of letters nobody changed keep their labels.
+#[test]
+fn a_reassigned_default_letter_names_the_tools_it_cycles() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    assert_eq!(next_in_group_label(&app, 'B').as_deref(), Some("Next Brush Tool"));
+    let brushes: Vec<Tool> = Tool::ALL.into_iter().filter(|t| t.key() == 'B').collect();
+    assign(&mut app, "", &brushes);
+    assign(&mut app, "B", &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso]);
+    assert_eq!(next_in_group_label(&app, 'B').as_deref(), Some("Next Lasso Tool (B)"));
+    let id = crate::shortcut_dispatch::next_in_group_id('B');
+    let row = crate::shortcut_dispatch::command_rows(&app).into_iter().find(|r| r.command.id == id).unwrap();
+    assert_eq!(row.defaults, craft::keymap::Binding::parse("Shift+B").into_iter().collect::<Vec<_>>());
+    assert_eq!(next_in_group_label(&app, 'W').as_deref(), Some("Next Object Selection Tool"));
+    let mut h = app_harness(app);
+    h.state_mut().ui.tool = Tool::Move;
+    tap(&mut h, Key::B, Modifiers::NONE);
+    assert_eq!(h.state().ui.tool, Tool::Lasso);
+    tap(&mut h, Key::B, Modifiers::SHIFT);
+    assert_eq!(h.state().ui.tool, Tool::PolygonLasso);
+}

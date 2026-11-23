@@ -40,6 +40,10 @@ pub struct Spring {
     pub tool: Tool,
     /// The tool letters held, oldest first.
     pub keys: Vec<char>,
+    /// Each held tool command with the letter its press stored, so its key-up releases that letter even when
+    /// the binding changes while the key is down.
+    #[serde(default)]
+    pub commands: Vec<(String, char)>,
     /// Input time of the first press (`Fired::time`).
     pub since: f64,
     /// Input time the last held letter came up (`Fired::time` of its release); `None` while a letter is down.
@@ -64,10 +68,26 @@ pub fn key_of(letter: char) -> Option<egui::Key> {
 pub fn released(app: &mut PhotocraftApp, letter: char, at: f64) {
     if let Some(s) = app.ui.spring.as_mut() {
         s.keys.retain(|k| *k != letter);
+        s.commands.retain(|(_, k)| *k != letter);
         if s.keys.is_empty() {
             s.up = Some(at);
         }
     }
+}
+
+/// The tool command `command` pressed the held `letter`: its key-up ([`command_released`]) releases that letter.
+pub fn held_by(app: &mut PhotocraftApp, command: &str, letter: char) {
+    if let Some(s) = app.ui.spring.as_mut().filter(|s| s.keys.contains(&letter)) {
+        s.commands.retain(|(c, _)| c != command);
+        s.commands.push((command.to_string(), letter));
+    }
+}
+
+/// The key of the tool command `command` came up at `at`: releases the letter its press stored ([`held_by`]),
+/// else `letter`, the one the command has now.
+pub fn command_released(app: &mut PhotocraftApp, command: &str, letter: char, at: f64) {
+    let stored = app.ui.spring.as_ref().and_then(|s| s.commands.iter().find(|(c, _)| c == command)).map(|(_, k)| *k);
+    released(app, stored.unwrap_or(letter), at);
 }
 
 /// A tool letter switched the tool from `before` (the switch is already made). `plain` is false
@@ -94,6 +114,7 @@ pub fn pressed(app: &mut PhotocraftApp, letter: char, before: Tool, plain: bool,
         previous: before,
         tool,
         keys: vec![letter],
+        commands: Vec::new(),
         since: at,
         up: None,
         used: false,

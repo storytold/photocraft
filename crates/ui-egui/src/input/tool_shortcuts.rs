@@ -50,6 +50,11 @@ fn user_letter(app: &PhotocraftApp, tool: Tool) -> Option<char> {
     chars.next().is_none().then(|| c.to_ascii_uppercase())
 }
 
+/// The first tool, in toolbar order, that the tool keys give `letter` ([`letter`]): the one its Shift+letter row names.
+pub(crate) fn first_with_letter(app: &PhotocraftApp, letter: char) -> Option<Tool> {
+    Tool::ALL.into_iter().filter(|t| self::letter(app, *t) == Some(letter)).min_by_key(|t| crate::panels::toolbar::toolbar_position(*t))
+}
+
 /// The letters users gave to several tools that are no tool's default, each with its first tool in toolbar
 /// order: each needs its own Shift+letter cycle row (#14208).
 pub(crate) fn shared_letters(app: &PhotocraftApp) -> Vec<(char, Tool)> {
