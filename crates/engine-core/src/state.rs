@@ -430,6 +430,6 @@ pub fn builtin() -> Vec<Pattern> {
 /// A file's size and modification time (nanoseconds since 1970).
 pub type Stamp = (u64, u128);
 
-/// Stamps of a document's linked files taken on a worker thread: (document id, [(file, layer
-/// ids, stamp)]).
-pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Vec<u64>, Option<Stamp>)>)>>>;
+/// Stamps of a document's linked files taken on a worker thread: (document id, [(stored path,
+/// the file it resolved to, layer ids, stamp)]).
+pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Option<std::path::PathBuf>, Vec<u64>, Option<Stamp>)>)>>>;
