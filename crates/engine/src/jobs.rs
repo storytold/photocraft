@@ -1789,11 +1789,13 @@ impl Session {
         // A command that may not run leaves a floating selection floating (#13169): it is refused
         // before the piece drops, without a History step. One that may run is checked again
         // below, once the piece has dropped, on the pixels and selection it will change.
-        if crate::float_cmds::drops_for(self, id) {
+        // Artboard from Group run on a layer it doesn't convert does nothing, so the piece stays (#14560).
+        let leaves_piece = id == "layer.new.artboardFromGroup" && crate::artboard_cmds::from_group_does_nothing(self, &params);
+        if !leaves_piece && crate::float_cmds::drops_for(self, id) {
             self.admit(id, spec, &params)?;
         }
         // A floating selection drops before any other command (Undo puts it back instead).
-        if let Some(v) = crate::float_cmds::before_command(self, id)? {
+        if !leaves_piece && let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
         }
         // Pixel commands follow the Channels panel target unless the caller names one.

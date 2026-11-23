@@ -146,3 +146,39 @@ fn a_single_group_still_gives_100_100_to_600_450() {
         assert_eq!(children(&d.s, d.group), ["Red", "Blue"], "{depth} bit");
     }
 }
+
+#[test]
+fn selected_layers_on_both_sides_keep_their_side_of_the_group() {
+    let mut d = document(8);
+    // Root, bottom to top: Background, A, A2, Group 1 (Red, Blue), Green.
+    let (a, a2) =
+        d.s.edit("Below", |doc, _| {
+            let a = square(doc, "A", RED, [1.0, 1.0, 0.0, 1.0]);
+            let a2 = square(doc, "A2", BLUE, [0.0, 1.0, 1.0, 1.0]);
+            let ids = (a.id, a2.id);
+            doc.layers.insert(1, a2);
+            doc.layers.insert(1, a);
+            Ok(ids)
+        })
+        .unwrap();
+    select(&mut d.s, &[a, a2, d.group, d.green], d.group);
+    d.s.execute(CMD, json!({})).unwrap();
+    assert_eq!(children(&d.s, d.group), ["A", "A2", "Red", "Blue", "Green"], "Green stays above the group's layers");
+}
+
+#[test]
+fn run_directly_on_a_pixel_layer_leaves_a_floating_selection_floating() {
+    let mut d = document(8);
+    select(&mut d.s, &[d.green], d.green);
+    d.s.execute("select.rect", json!({"x": 650, "y": 50, "width": 100, "height": 100})).unwrap();
+    d.s.execute("select.float", json!({"dx": 10, "dy": 0})).unwrap();
+    let before = steps(&d.s);
+    d.s.execute(CMD, json!({})).unwrap();
+    assert!(crate::float_cmds::floating(d.s.active().unwrap()).is_some(), "the piece still floats");
+    assert_eq!(steps(&d.s), before, "no history step");
+    // Run on the group by id, it drops the piece first (its own step) and makes the board.
+    d.s.execute(CMD, json!({"layer": d.group.0})).unwrap();
+    assert!(crate::float_cmds::floating(d.s.active().unwrap()).is_none(), "the piece dropped");
+    assert_eq!(steps(&d.s), before + 2, "the drop and the board");
+    assert!(board(&d.s, d.group).is_some());
+}

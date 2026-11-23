@@ -371,7 +371,7 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     let background = if apply_background { background_param(p, cmd)?.unwrap_or_default() } else { ArtboardBackground::White };
     // Run directly (a script, a recorded action) on a layer that is not a top-level plain group,
     // or on an artboard, it does nothing: no history step and no error, so playback goes on (#14560).
-    if !d.doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none()) {
+    if !is_plain_top_group(&d.doc, id) {
         return Ok(json!({}));
     }
     let others = selected_with_group(s, &d.doc, id);
@@ -387,10 +387,12 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
             .unwrap_or(canvas);
         // The other selected layers move in, those above the group over its layers and those below
         // under them, keeping their order.
-        let group_at = doc.path_of(id).and_then(|path| path.first().copied()).ok_or(EngineError::NoLayer(id))?;
+        // Positions are read before any removal shifts them.
+        let root_at = |o: LayerId| doc.path_of(o).and_then(|path| path.first().copied()).ok_or(EngineError::NoLayer(o));
+        let group_at = root_at(id)?;
+        let at: Vec<usize> = others.iter().map(|o| root_at(*o)).collect::<Result<_>>()?;
         let (mut below, mut above) = (Vec::new(), Vec::new());
-        for o in &others {
-            let at = doc.path_of(*o).and_then(|path| path.first().copied()).ok_or(EngineError::NoLayer(*o))?;
+        for (o, at) in others.iter().zip(at) {
             let layer = doc.remove(*o).ok_or(EngineError::NoLayer(*o))?;
             if at < group_at { below.push(layer) } else { above.push(layer) }
         }
@@ -410,6 +412,18 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
+}
+
+/// Is `id` a top-level layer group that is not an artboard, the layer Artboard from Group converts?
+fn is_plain_top_group(doc: &Document, id: LayerId) -> bool {
+    doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none())
+}
+
+/// Does Artboard from Group, called directly with `p`, do nothing (its layer is not a top-level
+/// plain group)? `Session::dispatch` then leaves a floating selection floating: no drop and no
+/// History step (#14560).
+pub(crate) fn from_group_does_nothing(s: &Session, p: &Value) -> bool {
+    p.is_object() && s.active().is_some_and(|d| crate::commands::layer_param(s, p).is_ok_and(|id| !is_plain_top_group(&d.doc, id)))
 }
 
 /// The selected layers Artboard from Group takes in with the group `id` (#14560), bottom to top:
