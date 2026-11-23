@@ -523,11 +523,13 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
             let r = Rect::new(px, py, px + 1, py + 1);
             f.bounds = if f.bounds.is_empty() { r } else { f.bounds.union(&r) };
             if let Some(gray) = gray {
-                let g = f64::from(gray[y * w + x]);
+                let raw = f64::from(gray[y * w + x]);
+                f.histogram[(raw.clamp(0.0, 1.0) * 255.0).round() as usize] += 1;
+                // Photoshop stores 16-bit channels as integer levels in 0..=32768 (#16518).
+                let g = if range == 32768.0 { (raw.clamp(0.0, 1.0) * 32768.0).round() / 32768.0 } else { raw };
                 f.gray_min = f.gray_min.min(g);
                 f.gray_max = f.gray_max.max(g);
                 sums[l as usize] += g;
-                f.histogram[(g.clamp(0.0, 1.0) * 255.0).round() as usize] += 1;
                 values[l as usize].push((g.clamp(0.0, 1.0) * median_scale).round() as u16);
             }
         }
@@ -592,15 +594,7 @@ fn selection_mask(d: &Document, r: Rect, n: usize) -> Vec<bool> {
 
 fn gray_image(d: &Document, r: Rect) -> Vec<f32> {
     let buf = photocraft_compose::render(d, r);
-    let quant16 = d.depth == SampleType::U16;
-    buf.px
-        .par_iter()
-        .map(|p| {
-            let g = 0.30 * p[0] + 0.59 * p[1] + 0.11 * p[2];
-            // Photoshop stores 16-bit channels as integer levels in 0..=32768 (#16518).
-            if quant16 { (g.clamp(0.0, 1.0) * 32768.0).round() / 32768.0 } else { g }
-        })
-        .collect()
+    buf.px.par_iter().map(|p| 0.30 * p[0] + 0.59 * p[1] + 0.11 * p[2]).collect()
 }
 
 fn selection_rows(d: &Document, needs_gray: bool) -> Result<(Feature, Vec<Feature>)> {

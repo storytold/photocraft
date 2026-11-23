@@ -629,4 +629,9 @@ fn grayscale_16_measurements_match_photoshop_32768_levels() {
     assert_eq!(mix["integratedDensity"].as_f64(), Some(327680.0));
     assert_eq!(mix["histogram"][64].as_u64(), Some(4));
     assert_eq!(mix["histogram"][191].as_u64(), Some(12));
+
+    // Boundary 385/65535 keeps unquantised histogram bin 1 while reporting 193 in 0..=32768.
+    let edge = measure([385, 385, 385, 385]);
+    assert_eq!(edge["grayMean"].as_f64(), Some(193.0));
+    assert_eq!(edge["histogram"][1].as_u64(), Some(16));
 }
