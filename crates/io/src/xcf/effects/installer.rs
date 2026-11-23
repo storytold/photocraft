@@ -1,5 +1,6 @@
 //! Optional private preparation of ordinary native raster Smart Objects.
 //! No source operation is evaluated and no owner is mutated by this module.
+mod over;
 mod pixel;
 
 use super::{Mapping, MaskRequirement};
@@ -92,6 +93,9 @@ pub(in crate::xcf) fn prepare(
     budgets: &mut Budgets<'_>,
     ctl: &Interrupt<'_>,
 ) -> Result<PreparedRaster> {
+    if stages.iter().any(|stage| stage.over_original) {
+        return over::prepare(source_owner, owner, bounds, document, stages, budgets, ctl);
+    }
     prepare_plan(source_owner, owner, bounds, document, Plan::Plain(stages), budgets, ctl)
 }
 

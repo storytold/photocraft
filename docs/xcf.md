@@ -32,9 +32,17 @@ and document policies. A signature match also opens XCF files with a different e
 | Compression | none, RLE, zlib |
 | XCF versions | 0 to 26 (GIMP 1.x to 3.2); newer files open with a note, unknown parts skipped |
 
-GIMP layer filters appear in the conversion report. Their saved source records can be retained
-within report limits for inspection, and PhotoCraft keeps the saved layer pixels. Floating
-selection attachment and item-set behavior are outside the native mapping.
+The conversion report describes how each GIMP layer filter was handled. An Open request with native
+filter permission can turn supported Exposure and Brightness/Contrast stages on raster layers into
+editable Smart Filters. The report records that the stages use PhotoCraft's native rendering rules.
+A single masked Exposure in an XCF 22 file can retain independent filter opacity and coverage on an
+opaque 8-bit or 16-bit RGB raster layer when the stored mask covers the image frame and uses supported settings.
+Supported graph chains consisting of sequential Invert stages open as ordinary native Invert filters.
+One unmasked, full-strength source-over graph can place an inverted copy over the original as two
+editable layers inside a Smart Object. Unsupported stages, other graph branches, and unresolved
+blend settings keep the saved layer pixels. The
+report can retain the original source records for inspection within its storage limits. Floating
+selection attachment and item-set behavior remain outside the native mapping.
 
 Open As accepts an explicit sample order for unmarked multi-byte XCF 4–11 files. PhotoCraft records
 the order used in the native document's conversion report. Text color blobs have a separate source

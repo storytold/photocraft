@@ -246,3 +246,25 @@ fn assert_archived_stage_masks(source: &[u8], effects: &[&ConversionEntry]) {
     assert_eq!(mask_offsets.len(), 2);
     assert_ne!(mask_offsets[0], mask_offsets[1]);
 }
+
+#[test]
+fn archived_binary_graph_source_only_route_keeps_pixels_and_exact_native_evidence() {
+    let source = fixture("graph-original-over-inverted.xcf");
+    let imported = photocraft_io::import("graph-original-over-inverted.xcf", &source).unwrap();
+    assert!(imported.source_read_only && !imported.preview_only);
+    assert_eq!(imported.document.layers.len(), 1);
+    let owner = &imported.document.layers[0];
+    let surface = owner.surface().expect("unverified graph envelope must not replace the original owner");
+    // Original procedural producer input, not the saved filtered preview.
+    assert_eq!(surface.rgba(0, 0), [17. / 255., 13. / 255., 29. / 255., 64. / 255.]);
+    let effects: Vec<_> = report(&imported.document).entries.iter().filter(|entry| entry.feature_code == "xcf.layer_effect").collect();
+    assert_eq!(effects.len(), 1);
+    assert_eq!(effects[0].source_description, "gegl:gegl");
+    assert_eq!(effects[0].disposition, ConversionDisposition::RetainedUnapplied);
+    assert_eq!(effects[0].reason, ConversionReason::NativeLimitation);
+    // This source has unverified blend/composite-space words, an auxiliary mask
+    // and an extra `error` argument. Its filename is not native admission proof.
+    assert_attachment_source(&imported.document, &source);
+    let reopened = reopen(&imported.document);
+    assert_attachment_source(&reopened, &source);
+}

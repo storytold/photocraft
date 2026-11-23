@@ -104,6 +104,26 @@ fn session() -> crate::Session {
     session.execute("edit.colorSettings", json!({"askOnMismatch":false,"askOnMissing":false,"policyRgb":"preserve"})).unwrap();
     session
 }
+
+#[test]
+fn authorized_binary_graph_renders_from_native_source_after_reopen() {
+    let mut session = session();
+    crate::file_cmds::open_bytes_as(&mut session, "binary-over.xcf", &photocraft_io::native_xcf_tones::fixtures::binary_over(), Some("xcf"), None).unwrap();
+    let doc = &session.active().unwrap().doc;
+    let saved = photocraft_format::save_to_bytes(doc, &Default::default()).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+    let LayerContent::Smart(smart) = &reopened.layers[0].content else { panic!("native binary graph owner") };
+    assert!(smart.smart_filters.is_empty());
+    let expected = smart.cache.as_ref().unwrap().rgba(0, 0);
+    let mut source_only = smart.clone();
+    source_only.cache = None;
+    let result = crate::smart_cmds::render(&reopened, &source_only).unwrap().unwrap().rgba(0, 0);
+    for (actual, expected) in result.into_iter().zip(expected) {
+        assert!((actual - expected).abs() < 0.000002, "{actual} versus {expected}");
+    }
+    assert!(result[0] > 0.7 && result[2] < 0.1, "preserve signed/HDR compositing and the selected branch order: {result:?}");
+    assert!((result[3] - 0.75).abs() < 0.000001);
+}
 fn deny_contrast(command: &str, _: &Value) -> Result<()> {
     if command == "image.adjustments.brightnessContrast" { Err(EngineError::Other("contrast request denied".into())) } else { Ok(()) }
 }

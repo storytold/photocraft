@@ -2,10 +2,15 @@
 //! Shared craft-xcf owns all framing/configuration decoding. This adapter does
 //! not read masks, render pixels, mutate owners or publish a native stage.
 
+#[cfg(test)]
+mod binary_over_tests;
 pub(super) mod coverage;
 pub(super) mod installer;
 #[cfg(test)]
 mod levels_tests;
+mod linear_graph;
+#[cfg(test)]
+mod linear_graph_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]
@@ -38,6 +43,8 @@ pub(super) enum Failure {
     Unsupported(&'static str),
     #[error("stored effect exceeds native control range: {0}")]
     Range(&'static str),
+    #[error("stored graph preparation allowance exhausted")]
+    Limit,
 }
 
 type Result<T> = std::result::Result<T, Failure>;
@@ -64,6 +71,9 @@ pub(super) struct Mapping {
     /// Filters stay full-strength. Apply the source envelope exactly once around
     /// the compound stage, after complete private preparation/mask admission.
     pub filters: Vec<SmartFilter>,
+    /// One verified import-time topology: original input below its inverted copy.
+    /// Materialized as two ordinary native layers, never serialized as a rule.
+    pub over_original: bool,
     pub envelope: Envelope,
     pub notes: Vec<&'static str>,
 }
@@ -71,11 +81,22 @@ pub(super) struct Mapping {
 /// None means another adapter may own this identity. A known but rejected stage
 /// must remain unapplied with disclosure; cancellation must propagate as fatal.
 pub(super) fn map(source: &OwnedEffect<'_>, ctl: &Interrupt<'_>) -> Result<Option<Mapping>> {
+    map_inner(source, None, ctl)
+}
+
+/// Graph syntax shares the effect document's nonrefundable work/storage budget.
+/// Existing scalar-only callers retain `map`; live import must use this entrypoint.
+pub(super) fn map_with_budget(source: &OwnedEffect<'_>, budget: &mut craft_xcf::effects::Budget, ctl: &Interrupt<'_>) -> Result<Option<Mapping>> {
+    map_inner(source, Some(budget), ctl)
+}
+
+fn map_inner(source: &OwnedEffect<'_>, graph_budget: Option<&mut craft_xcf::effects::Budget>, ctl: &Interrupt<'_>) -> Result<Option<Mapping>> {
     ctl.check().map_err(|_| Failure::Cancelled)?;
     let effect = &source.record;
     let supported = matches!(effect.operation, "gegl:brightness-contrast" | "gegl:exposure" | "gegl:levels")
         || point_color::supports(effect.operation)
-        || spatial::supports(effect.operation);
+        || spatial::supports(effect.operation)
+        || (effect.operation == "gegl:gegl" && graph_budget.is_some());
     if !supported {
         return Ok(None);
     }
@@ -102,17 +123,24 @@ pub(super) fn map(source: &OwnedEffect<'_>, ctl: &Interrupt<'_>) -> Result<Optio
         0 | 28 | 62 => BlendMode::Normal,
         _ => return Err(Failure::Unsupported("source effect blend mode is outside the initial native adapter")),
     };
-    let (filters, note) = if spatial::supports(effect.operation) {
-        spatial::map(effect, ctl)?
+    let (filters, note, over_original) = if effect.operation == "gegl:gegl" {
+        let budget = graph_budget.ok_or(Failure::Unsupported("graph preparation requires the shared document allowance"))?;
+        linear_graph::map(effect, budget, ctl)?
+    } else if spatial::supports(effect.operation) {
+        let (filters, note) = spatial::map(effect, ctl)?;
+        (filters, note, false)
     } else if point_color::supports(effect.operation) {
-        point_color::map(effect, ctl)?
+        let (filters, note) = point_color::map(effect, ctl)?;
+        (filters, note, false)
     } else {
-        tone::map(effect, ctl)?
+        let (filters, note) = tone::map(effect, ctl)?;
+        (filters, note, false)
     };
     ctl.check().map_err(|_| Failure::Cancelled)?;
     Ok(Some(Mapping {
         owner: source.owner,
         filters,
+        over_original,
         envelope: Envelope {
             visible: effect.visible,
             opacity: effect.opacity,

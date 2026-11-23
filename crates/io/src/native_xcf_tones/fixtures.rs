@@ -13,53 +13,95 @@ pub struct MaskedExposureFixture {
     pub mask_offset: u64,
 }
 
-pub fn masked_exposure(options: MaskedExposureOptions) -> MaskedExposureFixture {
-    struct W(Vec<u8>);
-    impl W {
-        fn word(&mut self, v: u32) {
-            self.0.extend_from_slice(&v.to_be_bytes());
-        }
-        fn ptr(&mut self, v: usize) {
-            self.0.extend_from_slice(&(v as u64).to_be_bytes());
-        }
-        fn slot(&mut self) -> usize {
-            let at = self.0.len();
-            self.ptr(0);
-            at
-        }
-        fn patch(&mut self, slot: usize) {
-            let value = self.0.len() as u64;
-            self.0[slot..slot + 8].copy_from_slice(&value.to_be_bytes());
-        }
-        fn text(&mut self, value: &str) {
-            self.word(value.len() as u32 + 1);
-            self.0.extend_from_slice(value.as_bytes());
-            self.0.push(0);
-        }
-        fn prop(&mut self, kind: u32, data: &[u8]) {
-            self.word(kind);
-            self.word(data.len() as u32);
-            self.0.extend_from_slice(data);
-        }
-        fn end(&mut self) {
-            self.word(0);
-            self.word(0);
-        }
-        fn hierarchy(&mut self, width: u32, height: u32, bpp: u32, data: &[u8]) {
-            for value in [width, height, bpp] {
-                self.word(value);
-            }
-            let level = self.slot();
-            self.ptr(0);
-            self.patch(level);
-            self.word(width);
-            self.word(height);
-            let tile = self.slot();
-            self.ptr(0);
-            self.patch(tile);
-            self.0.extend_from_slice(data);
-        }
+struct W(Vec<u8>);
+impl W {
+    fn word(&mut self, v: u32) {
+        self.0.extend_from_slice(&v.to_be_bytes());
     }
+    fn ptr(&mut self, v: usize) {
+        self.0.extend_from_slice(&(v as u64).to_be_bytes());
+    }
+    fn slot(&mut self) -> usize {
+        let at = self.0.len();
+        self.ptr(0);
+        at
+    }
+    fn patch(&mut self, slot: usize) {
+        let value = self.0.len() as u64;
+        self.0[slot..slot + 8].copy_from_slice(&value.to_be_bytes());
+    }
+    fn text(&mut self, value: &str) {
+        self.word(value.len() as u32 + 1);
+        self.0.extend_from_slice(value.as_bytes());
+        self.0.push(0);
+    }
+    fn prop(&mut self, kind: u32, data: &[u8]) {
+        self.word(kind);
+        self.word(data.len() as u32);
+        self.0.extend_from_slice(data);
+    }
+    fn end(&mut self) {
+        self.word(0);
+        self.word(0);
+    }
+    fn hierarchy(&mut self, width: u32, height: u32, bpp: u32, data: &[u8]) {
+        for value in [width, height, bpp] {
+            self.word(value);
+        }
+        let level = self.slot();
+        self.ptr(0);
+        self.patch(level);
+        self.word(width);
+        self.word(height);
+        let tile = self.slot();
+        self.ptr(0);
+        self.patch(tile);
+        self.0.extend_from_slice(data);
+    }
+}
+pub fn binary_over() -> Vec<u8> {
+    let mut w = W(b"gimp xcf v026\0".to_vec());
+    for value in [1, 1, 0, 600] {
+        w.word(value);
+    }
+    w.prop(17, &[0]);
+    w.end();
+    let layer = w.slot();
+    for _ in 0..3 {
+        w.ptr(0);
+    }
+    w.patch(layer);
+    for value in [1, 1, 1] {
+        w.word(value);
+    }
+    w.text("Graph owner");
+    w.prop(7, &28u32.to_be_bytes());
+    w.prop(8, &1u32.to_be_bytes());
+    w.end();
+    let pixels = w.slot();
+    w.ptr(0);
+    let effect = w.slot();
+    w.ptr(0);
+    w.patch(pixels);
+    let raw: Vec<_> = [-0.25f32, 0.25, 2., 0.5].into_iter().flat_map(f32::to_be_bytes).collect();
+    w.hierarchy(1, 1, 16, &raw);
+    w.patch(effect);
+    for text in ["Binary source over", "", "gegl:gegl", "0:0"] {
+        w.text(text);
+    }
+    w.prop(7, &28u32.to_be_bytes());
+    w.prop(8, &1u32.to_be_bytes());
+    let mut argument = W(Vec::new());
+    argument.text("string");
+    argument.word(4);
+    argument.text("id=in over aux=[ref=in invert-linear]");
+    w.prop(45, &argument.0);
+    w.end();
+    w.ptr(0);
+    w.0
+}
+
+pub fn masked_exposure(options: MaskedExposureOptions) -> MaskedExposureFixture {
     let mut w = W(b"gimp xcf v022\0".to_vec());
     for value in [
         4,

@@ -3,6 +3,7 @@
 
 mod color;
 mod effects;
+mod graph_lowering;
 mod historical;
 mod metadata;
 mod metadata_packets;

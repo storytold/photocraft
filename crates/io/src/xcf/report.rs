@@ -117,7 +117,12 @@ impl<'a> Report<'a> {
             let mut reason = ConversionReason::InvalidOptionalData;
             let mut note = None;
             if let Some(effect) = &effect {
-                match super::effects::map(effect, ctl) {
+                let mapping = if effect.record.operation == "gegl:gegl" {
+                    super::effects::map_with_budget(effect, &mut self.decode, ctl)
+                } else {
+                    super::effects::map(effect, ctl)
+                };
+                match mapping {
                     Ok(Some(mapping)) => {
                         reason = ConversionReason::NativePolicy;
                         note = mapping.notes.first().copied();
@@ -132,6 +137,11 @@ impl<'a> Report<'a> {
                         reason = ConversionReason::MissingMapping;
                     }
                     Err(super::effects::Failure::Cancelled) => return Err(IoError::Cancelled),
+                    Err(super::effects::Failure::Limit) => {
+                        self.limited = true;
+                        eligible = false;
+                        reason = ConversionReason::RetentionLimit;
+                    }
                     Err(super::effects::Failure::Invalid(_)) => eligible = false,
                     Err(super::effects::Failure::Unsupported(_) | super::effects::Failure::Range(_)) => {
                         eligible = false;
