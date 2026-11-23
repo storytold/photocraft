@@ -182,3 +182,30 @@ fn run_directly_on_a_pixel_layer_leaves_a_floating_selection_floating() {
     assert_eq!(steps(&d.s), before + 2, "the drop and the board");
     assert!(board(&d.s, d.group).is_some());
 }
+
+#[test]
+fn run_directly_on_a_layer_that_is_not_there_is_an_error() {
+    for depth in [8, 16, 32] {
+        let mut d = document(depth);
+        let before = steps(&d.s);
+        let doc = d.s.active().unwrap().doc.clone();
+        let err = d.s.execute(CMD, json!({"layer": 999_999})).expect_err("an unknown layer id is an error");
+        assert!(err.to_string().contains("no such layer"), "{depth} bit: {err}");
+        assert_eq!(steps(&d.s), before, "{depth} bit: no history step");
+        assert!(std::sync::Arc::ptr_eq(&doc, &d.s.active().unwrap().doc), "{depth} bit: the document is unchanged");
+    }
+}
+
+#[test]
+fn an_unknown_layer_is_an_error_that_leaves_a_floating_selection_floating() {
+    let mut d = document(8);
+    select(&mut d.s, &[d.green], d.green);
+    d.s.execute("select.rect", json!({"x": 650, "y": 50, "width": 100, "height": 100})).unwrap();
+    d.s.execute("select.float", json!({"dx": 10, "dy": 0})).unwrap();
+    let before = steps(&d.s);
+    for layer in [json!(999_999), json!("No Such Layer")] {
+        assert!(d.s.execute(CMD, json!({"layer": layer})).is_err(), "{layer}: an error");
+        assert!(crate::float_cmds::floating(d.s.active().unwrap()).is_some(), "{layer}: the piece still floats");
+        assert_eq!(steps(&d.s), before, "{layer}: no history step");
+    }
+}

@@ -369,6 +369,10 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let canvas = d.doc.bounds();
     let background = if apply_background { background_param(p, cmd)?.unwrap_or_default() } else { ArtboardBackground::White };
+    // A layer that is not there is an error, as for other layer commands.
+    if d.doc.layer(id).is_none() {
+        return Err(EngineError::NoLayer(id));
+    }
     // Run directly (a script, a recorded action) on a layer that is not a top-level plain group,
     // or on an artboard, it does nothing: no history step and no error, so playback goes on (#14560).
     if !is_plain_top_group(&d.doc, id) {
@@ -419,9 +423,9 @@ fn is_plain_top_group(doc: &Document, id: LayerId) -> bool {
     doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none())
 }
 
-/// Does Artboard from Group, called directly with `p`, do nothing (its layer is not a top-level
-/// plain group)? `Session::dispatch` then leaves a floating selection floating: no drop and no
-/// History step (#14560).
+/// Does Artboard from Group, called directly with `p`, leave the document alone (its layer is not
+/// a top-level plain group: a no-op, or an error when no layer has that id)? `Session::dispatch`
+/// then leaves a floating selection floating: no drop and no History step (#14560).
 pub(crate) fn from_group_does_nothing(s: &Session, p: &Value) -> bool {
     p.is_object() && s.active().is_some_and(|d| crate::commands::layer_param(s, p).is_ok_and(|id| !is_plain_top_group(&d.doc, id)))
 }
