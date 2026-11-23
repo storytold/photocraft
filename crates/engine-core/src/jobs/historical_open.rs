@@ -125,6 +125,18 @@ impl Session {
         settings: Settings,
         byte_limit: u64,
     ) -> Result<Value> {
+        let id = self.store_historical_open(name, source, question, settings, byte_limit)?;
+        Ok(json!({"heldHistoricalXcfOpen": id, "historicalXcfSampleOrderRequired": {"version": question.version, "bitsPerSample": question.bits_per_sample}}))
+    }
+
+    fn store_historical_open(
+        &mut self,
+        name: String,
+        source: OpenSource,
+        question: HistoricalXcfSampleOrderRequest,
+        settings: Settings,
+        byte_limit: u64,
+    ) -> Result<u64> {
         // A path is not an admitted continuation: confirmation must never reopen it.
         if !matches!(source, OpenSource::Bytes(_)) {
             return Err(EngineError::Other("historical Open requires its verified encoded bytes".into()));
@@ -139,7 +151,33 @@ impl Session {
         self.jobs.historical_opens.try_reserve(1).map_err(|_| EngineError::Other("cannot reserve a historical Open decision".into()))?;
         self.jobs.next_historical_open = id;
         self.jobs.historical_opens.push(Held { id, name, source, question, settings });
-        Ok(json!({"heldHistoricalXcfOpen": id, "historicalXcfSampleOrderRequired": {"version": question.version, "bitsPerSample": question.bits_per_sample}}))
+        Ok(id)
+    }
+
+    /// Retain already-authorized encoded bytes after a host receives the typed
+    /// historical question. This grants no path authority or document admission;
+    /// the host remains responsible for matching its own request identities.
+    pub fn retain_authorized_historical_xcf_bytes(
+        &mut self,
+        name: &str,
+        bytes: std::sync::Arc<Vec<u8>>,
+        question: HistoricalXcfSampleOrderRequest,
+        options: &ImportOptions,
+    ) -> Result<u64> {
+        let mut options = *options;
+        options.historical_xcf_order = HistoricalXcfOrder::RequireExplicit;
+        let settings = Settings { options, as_ext: None, origin: None };
+        self.store_historical_open(name.into(), OpenSource::Bytes(bytes), question, settings, Self::MAX_PENDING_PREFLIGHT_BYTES)
+    }
+
+    /// Borrow the exact retained interpretation without consuming it or opening
+    /// a path. A host must check that it owns this identity before exposing data.
+    /// Failed host decoding/admission can retry; success or cancellation releases
+    /// the request through `cancel_historical_xcf_open`.
+    pub fn historical_xcf_open_bytes(&self, id: u64) -> Option<(std::sync::Arc<Vec<u8>>, ImportOptions)> {
+        let held = self.jobs.historical_opens.iter().find(|held| held.id == id)?;
+        let OpenSource::Bytes(bytes) = &held.source else { return None };
+        Some((bytes.clone(), held.settings.options))
     }
 
     /// Whether this exact request is still available. IDs are never reused.

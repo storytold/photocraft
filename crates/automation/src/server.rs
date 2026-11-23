@@ -64,6 +64,23 @@ pub struct OpenParams {
     /// Missing or null leaves the question unanswered; no host-native order is inferred.
     #[serde(default)]
     pub historical_xcf_sample_order: Option<String>,
+    /// Headless read-root workspaces only: retain the exact admitted bytes if a
+    /// historical order question is required. Default false keeps the typed error.
+    #[serde(default)]
+    pub hold_historical_xcf: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResolveHistoricalXcfOpenParams {
+    /// Request identity returned by this backend's opt-in doc_open.
+    pub id: u64,
+    /// Explicit interpretation, little-endian or big-endian, unless cancelling.
+    #[serde(default)]
+    pub historical_xcf_sample_order: Option<String>,
+    /// Release only this owned question without importing it.
+    #[serde(default)]
+    pub cancel: bool,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -829,13 +846,34 @@ impl PhotocraftMcp {
             Ok(options) => options,
             Err(error) => return to_result(Err(error)),
         };
-        if let Some(r) = self.headless_op(move |h| h.open_with_options(&path, &options)).await {
+        let hold = p.hold_historical_xcf;
+        if let Some(r) = self.headless_op(move |h| if hold { h.open_with_historical_hold(&path, &options) } else { h.open_with_options(&path, &options) }).await
+        {
             return to_result(r);
+        }
+        if hold {
+            return to_result(Err(AutomationError::BadRequest(
+                "historical source holds require a scoped headless backend; use the GUI's existing dialog controls in bridge mode".into(),
+            )));
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
         to_result(b.call("app.open", params).await)
+    }
+
+    #[tool(
+        description = "Headless read-root workspaces: answer or cancel one historical XCF request returned by doc_open with hold_historical_xcf. Uses only the retained bytes and original import options; accepts no path or new approval. GUI bridge sessions use their existing dialog controls."
+    )]
+    async fn doc_resolve_historical_xcf_open(&self, Parameters(p): Parameters<ResolveHistoricalXcfOpenParams>) -> Result<CallToolResult, McpError> {
+        let mut params = json!({"id":p.id,"cancel":p.cancel});
+        if let Some(order) = p.historical_xcf_sample_order {
+            params["historicalXcfSampleOrder"] = json!(order);
+        }
+        match self.headless_op(move |headless| headless.resolve_historical_xcf_open(&params)).await {
+            Some(result) => to_result(result),
+            None => to_result(Err(AutomationError::BadRequest("historical source resolution requires its scoped headless backend".into()))),
+        }
     }
 
     #[tool(
@@ -1752,6 +1790,22 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(5), app).await.unwrap().unwrap();
     }
 
+    #[tokio::test]
+    async fn headless_hold_controls_never_fall_through_to_a_gui_bridge() {
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bridge = BridgeClient::new(listener.local_addr().unwrap().to_string(), TOKEN).unwrap().with_timeout(std::time::Duration::from_millis(100));
+        let mcp = PhotocraftMcp::with_backend(Backend::Bridge(Arc::new(bridge)));
+        let held = mcp.doc_open(Parameters(serde_json::from_value(json!({"path":"source.xcf","hold_historical_xcf":true})).unwrap())).await.unwrap();
+        assert_eq!(held.is_error, Some(true));
+        let answer = mcp.doc_resolve_historical_xcf_open(Parameters(serde_json::from_value(json!({"id":1,"cancel":true})).unwrap())).await.unwrap();
+        assert_eq!(answer.is_error, Some(true));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept()).await.is_err(),
+            "no remote acquisition or GUI-owned answer is attempted"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_doc_open_schema_and_structured_error() {
         let schema = &PhotocraftMcp::tool_router().map["doc_open"].attr.input_schema;
@@ -1760,6 +1814,8 @@ mod tests {
         assert!(!omitted.approve_high_memory);
         assert!(omitted.historical_xcf_sample_order.is_none());
         assert!(schema["properties"].get("historical_xcf_sample_order").is_some());
+        assert!(!omitted.hold_historical_xcf);
+        assert_eq!(schema["properties"]["hold_historical_xcf"]["type"], "boolean");
         let approved: OpenParams = serde_json::from_value(json!({"path": "file.psd", "approve_high_memory": true})).unwrap();
         assert!(approved.approve_high_memory);
         for invalid in [Value::Null, json!("true"), json!(1)] {

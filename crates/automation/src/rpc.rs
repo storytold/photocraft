@@ -7,7 +7,9 @@
 //! Methods (camelCase params):
 //! - `engine.execute {command, params?, wait?}` / `engine.commands {filter?}`
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210)
-//! - `session.list`, `doc.open {path}`, `doc.new {…file.new params}`,
+//! - `session.list`, `doc.open {path, holdHistoricalXcf?}` (opt-in rooted retention),
+//!   `doc.resolveHistoricalXcfOpen {id, historicalXcfSampleOrder?, cancel?}` (owned held bytes only),
+//!   `doc.new {…file.new params}`,
 //!   `doc.place {path, scale?, fit?, center?, index?}` (#2810: the read root is the scope,
 //!   the counterpart of the refused ambient `file.placeEmbedded`),
 //!   `doc.replaceSmartObject {path, layer?, index?}` (#8061: the same scope for
@@ -46,6 +48,7 @@ pub const METHODS: &[&str] = &[
     "engine.commands",
     "session.list",
     "doc.open",
+    "doc.resolveHistoricalXcfOpen",
     "doc.place",
     "doc.replaceSmartObject",
     "doc.new",
@@ -143,8 +146,14 @@ impl Headless {
             "doc.open" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.open needs `path`"))?;
                 let options = crate::files::import_options_from_params(&p)?;
-                self.open_with_options(&PathBuf::from(path), &options)
+                let hold = match p.get("holdHistoricalXcf") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(value)) => *value,
+                    _ => return Err(bad("holdHistoricalXcf must be a boolean")),
+                };
+                if hold { self.open_with_historical_hold(&PathBuf::from(path), &options) } else { self.open_with_options(&PathBuf::from(path), &options) }
             }
+            "doc.resolveHistoricalXcfOpen" => self.resolve_historical_xcf_open(&p),
             "doc.place" => {
                 let path = str_of(&p, "path").ok_or_else(|| bad("doc.place needs `path`"))?;
                 if p.get("approveHighMemory").is_some_and(|v| !v.is_boolean()) {

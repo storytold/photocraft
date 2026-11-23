@@ -489,3 +489,189 @@ fn rooted_native_authority_cannot_admit_data_from_outside_or_absent_read_roots()
     assert_eq!(photocraft_io::native_xcf_tones::preparation_count(), preparations);
     assert_eq!(std::fs::read(fixture.outside.join("source.xcf")).unwrap(), source);
 }
+
+fn owned_hold(headless: &mut Headless) -> u64 {
+    let question = headless.handle("doc.open", json!({"path":"source.xcf","holdHistoricalXcf":true})).unwrap();
+    assert_eq!(question["historicalXcfSampleOrderRequired"], json!({"version":10,"bitsPerSample":16}));
+    let id = question["heldHistoricalXcfOpen"].as_u64().unwrap();
+    assert!(headless.session.holds_historical_xcf_open(id));
+    id
+}
+fn held_weak(headless: &Headless, id: u64) -> std::sync::Weak<Vec<u8>> {
+    let (bytes, _) = headless.session.historical_xcf_open_bytes(id).unwrap();
+    Arc::downgrade(&bytes)
+}
+
+#[test]
+fn scoped_held_open_retries_exact_bytes_after_source_removal_and_replays_native() {
+    for order in ["little-endian", "big-endian"] {
+        let fixture = Fixture::new();
+        let mut headless = fixture.headless();
+        let before = headless.session.active().unwrap().doc.clone();
+        let options = photocraft_io::ImportOptions {
+            max_group_depth: 3,
+            pdf_dpi: 144.,
+            psd_high_memory_approved: true,
+            psd_approved_estimate: Some(512),
+            historical_xcf_order: photocraft_io::HistoricalXcfOrder::RequireExplicit,
+            ..Default::default()
+        };
+        let question = headless.open_with_historical_hold(std::path::Path::new("source.xcf"), &options).unwrap();
+        let id = question["heldHistoricalXcfOpen"].as_u64().unwrap();
+        assert!(Arc::ptr_eq(&before, &headless.session.active().unwrap().doc));
+        let (bytes, captured) = headless.session.historical_xcf_open_bytes(id).unwrap();
+        assert_eq!(bytes.as_slice(), historical_rgba16());
+        assert_eq!(captured, options);
+        let weak = Arc::downgrade(&bytes);
+        drop(bytes);
+        std::fs::remove_file(fixture.read.join("source.xcf")).unwrap();
+        let result = headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":id,"historicalXcfSampleOrder":order})).unwrap();
+        assert_eq!(result["id"], id);
+        assert_pixel(&headless, order);
+        assert!(!headless.session.holds_historical_xcf_open(id));
+        assert!(weak.upgrade().is_none(), "success releases the encoded source allocation");
+        assert!(headless.session.active().unwrap().source_read_only);
+        assert!(headless.session.active().unwrap().path.is_none());
+        let admitted = headless.session.active().unwrap().doc.clone();
+        assert!(headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":id,"historicalXcfSampleOrder":order})).is_err());
+        assert!(Arc::ptr_eq(&admitted, &headless.session.active().unwrap().doc));
+        headless.handle("doc.save", json!({"path":"replay.pcraft"})).unwrap();
+        let report = headless.session.active().unwrap().doc.metadata.import_conversion.clone();
+        headless.handle("doc.open", json!({"path":"replay.pcraft"})).unwrap();
+        assert_pixel(&headless, order);
+        assert!(!headless.session.active().unwrap().source_read_only);
+        assert_eq!(headless.session.active().unwrap().doc.metadata.import_conversion, report);
+    }
+}
+
+#[test]
+fn scoped_held_answers_reject_foreign_ids_new_paths_and_approvals_without_consuming() {
+    let fixture = Fixture::new();
+    let mut headless = fixture.headless();
+    let first = owned_hold(&mut headless);
+    let second = owned_hold(&mut headless);
+    let external = outside_backend_hold(&mut headless, historical_rgba16());
+    let first_bytes = held_weak(&headless, first);
+    let second_bytes = held_weak(&headless, second);
+    let before = headless.session.active().unwrap().doc.clone();
+    for params in [
+        json!({"id":first,"historicalXcfSampleOrder":"native"}),
+        json!({"id":first,"cancel":"true"}),
+        json!({"id":first,"cancel":true,"historicalXcfSampleOrder":"big-endian"}),
+        json!({"id":first,"historicalXcfSampleOrder":"big-endian","path":fixture.outside.join("source.xcf")}),
+        json!({"id":first,"historicalXcfSampleOrder":"big-endian","approveHighMemory":true}),
+        json!({"id":first}),
+        json!({"id":0,"cancel":true}),
+        json!({"id":external,"historicalXcfSampleOrder":"big-endian"}),
+        json!({"id":external,"cancel":true}),
+        json!({"id":u64::MAX,"cancel":true}),
+    ] {
+        assert!(headless.handle("doc.resolveHistoricalXcfOpen", params).is_err());
+        assert!(headless.session.holds_historical_xcf_open(first));
+        assert!(headless.session.holds_historical_xcf_open(second));
+        assert!(headless.session.holds_historical_xcf_open(external));
+        assert!(Arc::ptr_eq(&before, &headless.session.active().unwrap().doc));
+    }
+    let mut foreign = fixture.headless();
+    assert!(foreign.handle("doc.resolveHistoricalXcfOpen", json!({"id":first,"cancel":true})).is_err());
+    let cancelled = headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":first,"cancel":true})).unwrap();
+    assert_eq!(cancelled, json!({"id":first,"cancelled":true}));
+    assert!(first_bytes.upgrade().is_none());
+    assert!(second_bytes.upgrade().is_some());
+    assert!(headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":first,"cancel":true})).is_err());
+    headless.session.cancel_historical_xcf_open(second);
+    assert!(headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":second,"historicalXcfSampleOrder":"big-endian"})).is_err());
+    assert!(second_bytes.upgrade().is_none());
+    assert!(headless.session.holds_historical_xcf_open(external));
+    let denied = headless.handle("doc.open", json!({"path":fixture.outside.join("source.xcf"),"holdHistoricalXcf":true})).unwrap_err();
+    assert!(matches!(denied, photocraft_automation::AutomationError::BadRequest(_)));
+    assert_eq!(std::fs::read(fixture.outside.join("source.xcf")).unwrap(), historical_rgba16());
+}
+
+#[test]
+fn scoped_held_questions_share_engine_limits_and_failed_decode_remains_retryable() {
+    let fixture = Fixture::new();
+    let mut headless = fixture.headless();
+    let mut external = Vec::new();
+    for _ in 1..photocraft_engine::CoreSession::MAX_PENDING_PREFLIGHTS {
+        external.push(outside_backend_hold(&mut headless, historical_rgba16()));
+    }
+    let own = owned_hold(&mut headless);
+    let weak = held_weak(&headless, own);
+    assert!(headless.handle("doc.open", json!({"path":"source.xcf","holdHistoricalXcf":true})).is_err());
+    assert!(headless.session.holds_historical_xcf_open(own));
+    headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":own,"cancel":true})).unwrap();
+    assert!(weak.upgrade().is_none());
+    let next = owned_hold(&mut headless);
+    assert_ne!(next, own, "released identities cannot target a later source");
+    assert!(external.iter().all(|id| headless.session.holds_historical_xcf_open(*id)));
+    headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":next,"cancel":true})).unwrap();
+    for id in external {
+        headless.session.cancel_historical_xcf_open(id);
+    }
+    let mut broken = historical_rgba16();
+    broken.pop(); // Header/record structure remains valid; the pixel payload is truncated.
+    std::fs::write(fixture.read.join("source.xcf"), broken).unwrap();
+    let retry = owned_hold(&mut headless);
+    let weak = held_weak(&headless, retry);
+    let before = headless.session.active().unwrap().doc.clone();
+    assert!(headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":retry,"historicalXcfSampleOrder":"big-endian"})).is_err());
+    assert!(headless.session.holds_historical_xcf_open(retry));
+    assert!(Arc::ptr_eq(&before, &headless.session.active().unwrap().doc));
+    assert!(weak.upgrade().is_some());
+    headless.handle("doc.resolveHistoricalXcfOpen", json!({"id":retry,"cancel":true})).unwrap();
+    assert!(weak.upgrade().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_owned_hold_selects_only_its_source_and_preserves_native_replay() {
+    let fixture = Fixture::new();
+    let state = Arc::new(Mutex::new(fixture.headless()));
+    let client = connect(PhotocraftMcp::with_backend(Backend::Headless(state.clone()))).await;
+    let first = call(&client, json!({"path":"source.xcf","hold_historical_xcf":true})).await;
+    assert_ne!(first.is_error, Some(true));
+    let first = reply(&first)["heldHistoricalXcfOpen"].as_u64().unwrap();
+    let mut different = historical_rgba16();
+    let samples = [0x4567u16, 0x6789, 0x2345, 0xffff].into_iter().flat_map(u16::to_be_bytes).collect::<Vec<_>>();
+    let start = different.len() - samples.len();
+    different[start..].copy_from_slice(&samples);
+    std::fs::write(fixture.read.join("source.xcf"), different).unwrap();
+    let second = call(&client, json!({"path":"source.xcf","hold_historical_xcf":true})).await;
+    let second = reply(&second)["heldHistoricalXcfOpen"].as_u64().unwrap();
+    assert_ne!(first, second);
+    std::fs::remove_file(fixture.read.join("source.xcf")).unwrap();
+    let second_result = tool(&client, "doc_resolve_historical_xcf_open", json!({"id":second,"historical_xcf_sample_order":"big-endian"})).await;
+    assert_ne!(second_result.is_error, Some(true));
+    assert_eq!(reply(&second_result)["id"], second);
+    {
+        let headless = state.lock().unwrap();
+        assert!(headless.session.holds_historical_xcf_open(first));
+        assert!(!headless.session.holds_historical_xcf_open(second));
+        assert_eq!(
+            headless.session.active().unwrap().doc.layers[0].surface().unwrap().pixel(0, 0),
+            [0x4567u16, 0x6789, 0x2345, 0xffff].map(|value| f32::from(value) / 65535.)
+        );
+    }
+    let first_result = tool(&client, "doc_resolve_historical_xcf_open", json!({"id":first,"historical_xcf_sample_order":"big-endian"})).await;
+    assert_ne!(first_result.is_error, Some(true));
+    assert_pixel(&state.lock().unwrap(), "big-endian");
+    let again = tool(&client, "doc_resolve_historical_xcf_open", json!({"id":first,"cancel":true})).await;
+    assert_eq!(again.is_error, Some(true));
+    let saved = tool(&client, "doc_save", json!({"path":"replay.pcraft"})).await;
+    assert_ne!(saved.is_error, Some(true));
+    let native = call(&client, json!({"path":"replay.pcraft"})).await;
+    assert_ne!(native.is_error, Some(true));
+    assert_pixel(&state.lock().unwrap(), "big-endian");
+    assert!(!state.lock().unwrap().session.active().unwrap().source_read_only);
+    std::fs::write(fixture.read.join("source.xcf"), historical_rgba16()).unwrap();
+    let admitted = state.lock().unwrap().session.active().unwrap().doc.clone();
+    let pending = call(&client, json!({"path":"source.xcf","hold_historical_xcf":true})).await;
+    let pending = reply(&pending)["heldHistoricalXcfOpen"].as_u64().unwrap();
+    let bytes = held_weak(&state.lock().unwrap(), pending);
+    let cancelled = tool(&client, "doc_resolve_historical_xcf_open", json!({"id":pending,"cancel":true})).await;
+    assert_ne!(cancelled.is_error, Some(true));
+    assert_eq!(reply(&cancelled), json!({"id":pending,"cancelled":true}));
+    assert!(bytes.upgrade().is_none());
+    assert!(Arc::ptr_eq(&admitted, &state.lock().unwrap().session.active().unwrap().doc));
+    client.cancel().await.unwrap();
+}
