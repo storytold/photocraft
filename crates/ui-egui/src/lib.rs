@@ -37,6 +37,10 @@ pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_memo;
 pub mod gpu_status;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod gpu_tests {
+    mod full_res_preview;
+}
 mod history_keys;
 pub mod home_recent_ui;
 pub mod i18n;
@@ -407,6 +411,9 @@ pub struct PhotocraftApp {
     control: Option<craft::automation::ControlChannel>,
     /// Live (uncommitted) adjustment edit shown on canvas while a slider is dragged.
     pub live_adjust: Option<(photocraft_doc::LayerId, Value)>,
+    /// Lets GPU tests use small fixtures while exercising large-document preview decisions.
+    #[cfg(test)]
+    preview_test_area_multiplier: u64,
     /// Frames rendered (for tests and the status bar).
     pub frame: u64,
     /// What the notice stack keeps between frames: the pointer rest that gives a fresh auto-hide

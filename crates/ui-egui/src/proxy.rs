@@ -5,12 +5,17 @@
 use craft::imaging::ui::live_preview::ProxyPlan;
 use photocraft_doc::Document;
 
+use crate::PhotocraftApp;
+
 /// Target pixel count for previews (fast enough to composite every frame on CPU).
 pub const PREVIEW_PIXELS: u64 = 2_500_000;
 
 /// Downscale factor for a document, or 1 when it's already small.
 pub fn factor(doc: &Document) -> u32 {
-    let px = doc.size.area();
+    factor_for_area(doc.size.area())
+}
+
+fn factor_for_area(px: u64) -> u32 {
     if px <= PREVIEW_PIXELS * 2 {
         return 1;
     }
@@ -19,13 +24,26 @@ pub fn factor(doc: &Document) -> u32 {
 
 /// Whether live previews may run on a reduced copy (Preferences › Performance › Low Resolution
 /// Previews, on by default). Off, every live preview renders at full resolution.
-pub fn reduced_previews(app: &crate::PhotocraftApp) -> bool {
+pub fn reduced_previews(app: &PhotocraftApp) -> bool {
     app.session.prefs().performance.low_resolution_previews
 }
 
 /// Downscale factor of a live preview of `doc`: [`factor`], or 1 when reduced previews are off.
 pub fn preview_factor(doc: &Document, reduced: bool) -> u32 {
     if reduced { factor(doc) } else { 1 }
+}
+
+/// Pixel count for choosing preview resolution. Tests can scale the decision's input
+/// while the fixture's real dimensions still govern rendering and allocation.
+pub(crate) fn planning_area(_app: &PhotocraftApp, doc: &Document) -> u64 {
+    let area = doc.size.area();
+    #[cfg(test)]
+    let area = area.saturating_mul(_app.preview_test_area_multiplier);
+    area
+}
+
+pub(crate) fn app_factor(app: &PhotocraftApp, doc: &Document) -> u32 {
+    if reduced_previews(app) { factor_for_area(planning_area(app, doc)) } else { 1 }
 }
 
 /// A live preview's factor `k` capped for a view at `zoom` (physical screen pixels per document
@@ -48,6 +66,10 @@ mod tests {
     fn factor_scales_with_size() {
         let small = Document::new("s", Size::new(1000, 1000), ColorMode::Rgb, SampleType::U8);
         assert_eq!(factor(&small), 1);
+        let boundary = Document::new("threshold", Size::new(2500, 2000), ColorMode::Rgb, SampleType::U8);
+        let above = Document::new("above threshold", Size::new(2501, 2000), ColorMode::Rgb, SampleType::U8);
+        assert_eq!(factor(&boundary), 1);
+        assert_eq!(factor(&above), 2);
         let big = Document::new("b", Size::new(6016, 6016), ColorMode::Rgb, SampleType::U8);
         let k = factor(&big);
         assert!((3..=5).contains(&k), "{k}");

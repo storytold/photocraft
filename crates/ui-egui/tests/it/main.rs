@@ -56,7 +56,6 @@ mod gpu_tests {
     mod color_managed_canvas;
     mod display_shadows;
     mod drag_preview_canvas;
-    mod full_res_preview;
     mod live_stroke_canvas;
     mod pattern_preview_canvas;
     mod ui_scale_canvas;

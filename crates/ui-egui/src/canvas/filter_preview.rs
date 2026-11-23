@@ -30,8 +30,8 @@ mod tests;
 /// the very stall this avoids.
 pub(crate) fn filter_preview_factor(app: &PhotocraftApp, doc: &Document, cmd: &str, params: &serde_json::Value) -> u32 {
     // A smart filter edit re-renders the whole stack: every stage constrains the factor.
-    let k = crate::filter_dialog::smart_preview_factor(doc, cmd, params, crate::proxy::preview_factor(doc, crate::proxy::reduced_previews(app)));
-    if cfg!(target_arch = "wasm32") { k } else { crate::proxy::view_factor(k, app.current_zoom(), doc.size.area()) }
+    let k = crate::filter_dialog::smart_preview_factor(doc, cmd, params, crate::proxy::app_factor(app, doc));
+    if cfg!(target_arch = "wasm32") { k } else { crate::proxy::view_factor(k, app.current_zoom(), crate::proxy::planning_area(app, doc)) }
 }
 
 /// The open adjustment dialog (a plain one or a Smart Filter edit) while its preview shows: its dialog id and what OK
@@ -345,11 +345,11 @@ pub(super) fn ensure_proxy_preview(app: &mut PhotocraftApp, idx: usize, zoom: f3
         (st.doc.id, st.revision, st.doc.clone())
     };
     // Low-resolution previews off: k is 1 and the canvas shows `display_doc` (full size).
-    let mut k = crate::proxy::preview_factor(&doc, crate::proxy::reduced_previews(app));
+    let mut k = crate::proxy::app_factor(app, &doc);
     // Zoomed in, a proxy coarser than the screen showed the drag in k-pixel blocks (#5764): when
     // the wgpu compositor draws the full-size document, use a proxy only as coarse as the screen
     // (none at 50 % and closer). Otherwise the full size would be a CPU composite per change.
-    let fine = crate::proxy::view_factor(k, zoom, doc.size.area());
+    let fine = crate::proxy::view_factor(k, zoom, crate::proxy::planning_area(app, &doc));
     if fine < k && app.gpu.as_ref().is_some_and(|g| g.supports(&doc)) {
         k = fine;
     }
