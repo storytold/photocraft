@@ -319,9 +319,12 @@ mod tests {
     #[test]
     fn a_large_selection_shows_a_coarse_result_then_the_exact_one() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 600, "height": 400})).unwrap();
+        // The selection is just past the engine's full-resolution preview budget (256 x 256 pixels), the one condition
+        // for the coarse stage; the solve's cost grows with the selection and the canvas, so both stay as small as the
+        // move to x 250..507 allows (#15652).
+        app.run("file.new", json!({"width": 520, "height": 280})).unwrap();
         app.run("paint.pencil", json!({"points": [[150, 160], [170, 160]], "size": 12, "color": "#0000ff"})).unwrap();
-        app.run("select.rect", json!({"x": 10, "y": 10, "width": 300, "height": 300})).unwrap();
+        app.run("select.rect", json!({"x": 10, "y": 10, "width": 257, "height": 256})).unwrap();
         app.ui.tool = Tool::ContentAwareMove;
         app.ui.tool_options.cam_transform_on_drop = false;
         let m = egui::Modifiers::NONE;
