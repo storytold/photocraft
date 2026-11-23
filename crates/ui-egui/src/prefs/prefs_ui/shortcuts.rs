@@ -4,7 +4,7 @@
 //! The session holds everything the dialog edits: the draft keymap, the shortcut sets, the Menus
 //! draft and the text of a set waiting to be reviewed. Cancel drops it and the runtime never saw
 //! a change; OK writes the preferences once ([`save_keys`], then the menus), and the runtime's
-//! keymap follows the new preferences revision (`shortcut_dispatch::overrides`).
+//! keymap follows the new shortcut preferences (`shortcut_dispatch::overrides`).
 //!
 //! The Toolbar tab is not here: Edit › Toolbar opens the toolbar drawer.
 
@@ -15,9 +15,11 @@ use craft::keymap::{Builtins, CommandRef, ImportOptions, Keymap, NoneDefined, Ov
 use craft::menu::Row;
 use craft::menu::shortcuts::{Area, ConflictMode, DialogState, DialogTab, Format, Options, Outcome, ShortcutWords, ShortcutsDialog, kys_error_text};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Text;
+use craft::ui::layout_components::Row as LayoutRow;
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::Env;
+use craft::ui::runtime::env::{Env, with_env};
 use craft::ui::runtime::windows;
 use photocraft_engine::keymap_defs;
 use photocraft_engine::prefs::{MenuCustomization, Preferences};
@@ -79,7 +81,12 @@ pub(crate) fn profiles_of(prefs: &Preferences) -> Profiles {
 /// runtime's keymap is built for, and the preferences' bindings as overrides.
 pub(crate) fn draft_keymap(app: &PhotocraftApp) -> Keymap {
     let platform = windows::os_of(app.ctx());
-    Keymap::new(crate::shortcut_dispatch::command_rows(app).into_iter().chain(crate::shortcut_dispatch::bridged_rows()).collect(), Scopes::new(), platform)
+    // The runtime catalog's held rows while they are current; built here before the first frame holds them.
+    let rows = match app.framework.catalog_rows_at(app.session.actions.list.revision()) {
+        Some(rows) => rows.to_vec(),
+        None => crate::shortcut_dispatch::command_rows(app),
+    };
+    Keymap::new(rows.into_iter().chain(crate::shortcut_dispatch::bridged_rows()).collect(), Scopes::new(), platform)
         .with_reserved(reserved::system(platform))
         .with_overrides(keymap_defs::prefs_overrides(app.session.prefs()))
 }
@@ -310,36 +317,40 @@ fn menus_body(ui: &mut egui::Ui, rows: &[Row], draft: &mut MenusDraft) -> bool {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, height, items.len(), |ui, range| {
         for row in &items[range] {
             let id = row.command.id.as_str();
-            ui.push_id(id, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{} › {}", row.path.join(" › "), row.label));
-                    // Items that can't be hidden (File › Close, Save…, Edit › Menus…) have no visibility
-                    // control at all, as in the reference application (#5096, #14335).
-                    if MenuCustomization::hideable(id) {
-                        let visible = !draft.hidden.contains(id);
-                        let shown = Checkbox::new(Bind::given(visible)).label(tl!("Visible").to_string()).show(ui);
-                        match shown.events.value() {
-                            Some(&true) => {
-                                draft.hidden.remove(id);
+            with_env(
+                ui,
+                |set| set.id_salt = Some(egui::Id::unique(id)),
+                |ui| {
+                    LayoutRow::new().show(ui, |ui, _| {
+                        Text::new(format!("{} › {}", row.path.join(" › "), row.label)).show(ui);
+                        // Items that can't be hidden (File › Close, Save…, Edit › Menus…) have no visibility
+                        // control at all, as in the reference application (#5096, #14335).
+                        if MenuCustomization::hideable(id) {
+                            let visible = !draft.hidden.contains(id);
+                            let shown = Checkbox::new(Bind::given(visible)).label(tl!("Visible").to_string()).show(ui);
+                            match shown.events.value() {
+                                Some(&true) => {
+                                    draft.hidden.remove(id);
+                                }
+                                Some(&false) => {
+                                    draft.hidden.insert(id.to_owned());
+                                }
+                                None => {}
                             }
-                            Some(&false) => {
-                                draft.hidden.insert(id.to_owned());
+                        }
+                        let current = draft.colors.get(id).map_or("none", String::as_str).to_owned();
+                        let current = COLORS.iter().copied().find(|c| *c == current).unwrap_or("none");
+                        let picked = Select::new(tl!("Color").to_string(), Bind::given(current), &colors).show(ui);
+                        if let Some(&color) = picked.events.value() {
+                            if color == "none" {
+                                draft.colors.remove(id);
+                            } else {
+                                draft.colors.insert(id.to_owned(), color.to_owned());
                             }
-                            None => {}
                         }
-                    }
-                    let current = draft.colors.get(id).map_or("none", String::as_str).to_owned();
-                    let current = COLORS.iter().copied().find(|c| *c == current).unwrap_or("none");
-                    let picked = Select::new(tl!("Color").to_string(), Bind::given(current), &colors).show(ui);
-                    if let Some(&color) = picked.events.value() {
-                        if color == "none" {
-                            draft.colors.remove(id);
-                        } else {
-                            draft.colors.insert(id.to_owned(), color.to_owned());
-                        }
-                    }
-                });
-            });
+                    });
+                },
+            );
         }
     });
     *draft != before

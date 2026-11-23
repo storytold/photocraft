@@ -2,9 +2,9 @@
 //! `tools.setColors` (one history step per gesture) and recolour what is selected (`apply_color`).
 
 use craft::behavior::EditEvent;
-use craft::color_ui::ui::{ColorPanel, ColorPanelCommand, ColorPanelMenu, PanelTarget, PickedColor};
+use craft::color_ui::ui::{ColorPanel, ColorPanelCommand, ColorPanelMenu, ColorPanelState, PanelTarget, PickedColor};
 use craft::theme::Srgba;
-use craft::ui::contract::Bind;
+use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox};
 use serde_json::json;
 
 use super::PhotocraftApp;
@@ -12,20 +12,64 @@ use super::PhotocraftApp;
 /// The Color tab: the panel in the view its panel menu picked (#6000).
 pub(crate) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let colors = [srgba(app.session.tools.foreground), srgba(app.session.tools.background)];
-    let dynamic = app.session.prefs().interface.dynamic_color_sliders;
-    let out = ColorPanel::new(Bind::bound(&mut app.ui.color_panel.panel), colors).dynamic_tracks(dynamic).show(ui);
+    let mut sent = Vec::new();
+    let props =
+        ColorProps { colors, dynamic: app.session.prefs().interface.dynamic_color_sliders, state: app.ui.color_panel.panel, out: Outbox::new(&mut sent) };
+    let _ = MemoView::new("color-panel", props, color_view).show(ui);
+    for event in sent {
+        match event {
+            ColorEvent::State(state) => app.ui.color_panel.panel = state,
+            ColorEvent::Edit(target, event) => set_color(app, target, &event),
+            ColorEvent::PickColor(target) => {
+                crate::color_picker_ui::open(app, target_name(target));
+            }
+            ColorEvent::AddToSwatches(target) => {
+                let color = colors[usize::from(target == PanelTarget::Background)];
+                if let Err(e) = app.run("swatches.add", json!({"color": color.to_hex()})) {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                }
+            }
+        }
+    }
+}
+
+/// Every input of the Color tab's view: the tool colours, the slider option and the panel's settings.
+#[derive(MemoProps)]
+struct ColorProps<'a> {
+    colors: [Srgba; 2],
+    dynamic: bool,
+    state: ColorPanelState,
+    out: Outbox<'a, ColorEvent>,
+}
+
+/// What a run of the Color tab's view reports.
+enum ColorEvent {
+    /// The panel's settings changed.
+    State(ColorPanelState),
+    /// A colour edit.
+    Edit(PanelTarget, EditEvent<PickedColor>),
+    /// The Color Picker was asked for.
+    PickColor(PanelTarget),
+    /// Add to Swatches was chosen.
+    AddToSwatches(PanelTarget),
+}
+
+/// The Color tab's view.
+fn color_view(props: &mut ColorProps<'_>, ui: &mut egui::Ui) {
+    let before = props.state;
+    let out = ColorPanel::new(Bind::bound(&mut props.state), props.colors).dynamic_tracks(props.dynamic).show(ui);
+    if props.state != before {
+        props.out.send(ColorEvent::State(props.state));
+    }
     for (target, event) in out.edits {
-        set_color(app, target, &event);
+        props.out.send(ColorEvent::Edit(target, event));
     }
     if let Some(target) = out.pick_color.and_then(|request| PanelTarget::from_key(&request.key)) {
-        crate::color_picker_ui::open(app, target_name(target));
+        props.out.send(ColorEvent::PickColor(target));
     }
     if let Some(target) = out.add_to_swatches {
-        let color = colors[usize::from(target == PanelTarget::Background)];
-        if let Err(e) = app.run("swatches.add", json!({"color": color.to_hex()})) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
+        props.out.send(ColorEvent::AddToSwatches(target));
     }
 }
 

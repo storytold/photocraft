@@ -107,7 +107,7 @@ fn invalid_copies_do_not_flush_recording_and_valid_step_copies_keep_recording() 
     s.execute("actions.record", json!({"name": "Recording"})).unwrap();
     s.execute("select.all", json!({})).unwrap();
     let before = s.actions.list.clone();
-    let recording = s.actions.recording;
+    let recording = s.recording.target;
     let revision = s.active().unwrap().revision;
     for params in [
         json!({}),
@@ -119,12 +119,12 @@ fn invalid_copies_do_not_flush_recording_and_valid_step_copies_keep_recording() 
     ] {
         assert!(s.execute("actions.duplicate", params.clone()).is_err(), "{params}");
         assert_eq!(s.actions.list, before);
-        assert_eq!(s.actions.recording, recording);
+        assert_eq!(s.recording.target, recording);
         assert_eq!(s.active().unwrap().revision, revision);
     }
     s.execute("actions.duplicate", json!({"action": 0, "step": 0})).unwrap();
     assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("select.all", json!({})); 2]);
-    assert!(s.actions.recording.is_some());
+    assert!(s.recording.target.is_some());
     s.execute("select.deselect", json!({})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(s.actions.list.actions()[0].steps.len(), 3);
