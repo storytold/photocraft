@@ -196,7 +196,7 @@ pub(super) fn custom_constraints_of(app: &PhotocraftApp) -> BoxConstraints {
 }
 
 /// The picked custom shape preset's size `[w, h]` from its path bounds, the same bounds `fit` maps:
-/// `None` when nothing is picked, the preset is gone, or its path has no bounds. The two
+/// `None` when nothing is picked, the preset is gone, or its path has no usable bounds. The two
 /// preset-driven options then have nothing to hold the drag to, so it draws the dragged box.
 fn preset_size(app: &PhotocraftApp) -> Option<(f64, f64)> {
     let name = app.ui.presets_ui.shape();
@@ -210,13 +210,14 @@ fn preset_size(app: &PhotocraftApp) -> Option<(f64, f64)> {
         .map(|s| &s.path)
         .or_else(|| app.session.edit_state.custom_shapes.iter().find(|c| c.name == name).map(|c| &c.path))?;
     let (x0, y0, x1, y1) = path.control_bounds()?;
-    (x0.is_finite() && y0.is_finite() && x1 > x0 && y1 > y0).then_some((x1 - x0, y1 - y0))
+    let usable = x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite() && x1 > x0 && y1 > y0;
+    usable.then_some((x1 - x0, y1 - y0))
 }
 
 /// `o`'s gear over a preset of `native` size, the mapping [`custom_constraints_of`] applies.
 /// A 0 in a Fixed Size field is an empty field, as it starts, and a non-finite one is no size: the
 /// framework's `box_drag` treats a pair with an empty part as no constraint.
-pub(super) fn custom_constraints(o: &ToolOptions, native: Option<(f64, f64)>) -> BoxConstraints {
+fn custom_constraints(o: &ToolOptions, native: Option<(f64, f64)>) -> BoxConstraints {
     let field = |v: f32| (v.is_finite() && v > 0.0).then_some(f64::from(v));
     let mut c = BoxConstraints::default();
     c.from_center = o.custom_from_center;
