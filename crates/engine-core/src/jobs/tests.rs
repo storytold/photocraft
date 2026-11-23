@@ -1,3 +1,4 @@
+use crate::actions_cmds::ActionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::{Duration, Instant};
@@ -1119,7 +1120,7 @@ fn admit(_: &str, _: &Value) -> Result<()> {
 
 /// Whether the action named `name` is marked as written by automation.
 fn marked(s: &Session, name: &str) -> bool {
-    s.actions.list.actions().iter().find(|a| a.name == name).unwrap().automation
+    s.actions().list.actions().iter().find(|a| a.name == name).unwrap().automation
 }
 
 /// A background step a gated client starts during the user's recording marks the recorded action

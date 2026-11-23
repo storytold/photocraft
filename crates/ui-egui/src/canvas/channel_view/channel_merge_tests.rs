@@ -1,5 +1,6 @@
 //! Channel-edit regressions retained across the shared UI migration.
 use super::*;
+use photocraft_engine::color_cmds::ColorExt;
 
 #[test]
 fn filter_mask_views_use_the_filter_masks_own_feather() {
@@ -55,7 +56,7 @@ fn display_conversion_precedes_spot_overlay_on_a_solo_colour_channel() {
     let mut spot = AlphaChannel::new("spot", surface);
     spot.spot = Some((photocraft_color::Color::rgb(1.0, 0.0, 0.0), 1.0));
     doc.channels.push(spot);
-    let display = photocraft_engine::Session::new().color.canvas_display(&doc).unwrap();
+    let display = photocraft_engine::Session::new().color().canvas_display(&doc).unwrap();
     assert!(!display.is_identity());
     let mut view = ChannelView { color_hidden: vec![true, false, true], ..Default::default() };
     let tinted = Look { in_color: true, ..Look::default() };
@@ -89,11 +90,11 @@ fn solo_channel_keeps_its_display_pixels_through_transform_start_and_cancel() {
         let mut app = PhotocraftApp::new(session, crate::Services::default());
         app.sync_views();
         let icc = |id: &str| Some(resolve_profile(id, None, None).unwrap().to_bytes());
-        app.session.color.set_displays(Ok(vec![
+        app.session.color_mut().set_displays(Ok(vec![
             Display { id: 1, name: "sRGB".into(), frame: [0.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("srgb") },
             Display { id: 4, name: "Display P3".into(), frame: [100.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("display-p3") },
         ]));
-        app.session.color.main_display = Some(1);
+        app.session.color_mut().main_display = Some(1);
         app.run("prefs.set", json!({"values":{"interface.showChannelsInColor":true}})).unwrap();
         app.run("channel.target", json!({"channel":"green"})).unwrap();
         let ctx = egui::Context::default();

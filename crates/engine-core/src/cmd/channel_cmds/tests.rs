@@ -1,4 +1,5 @@
 use super::*;
+use crate::color_cmds::ColorExt;
 use photocraft_color::SampleType;
 
 fn session_depth(depth: u32) -> Session {

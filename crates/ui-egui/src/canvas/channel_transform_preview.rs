@@ -1,6 +1,7 @@
 //! Channel transforms preview through the normal compositor and current channel eyes.
 //! The captured proxy is immutable; geometry is resampled only when it changes, never per frame.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -388,11 +389,11 @@ pub(crate) fn texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, 
         preview.recovered(&mut app.ui.status, &mut app.ui.status_error);
     }
     let inks = crate::channel_view::prints_inks(&preview.shown, &view);
-    let screen_key = if inks { crate::channel_view::Screen::key(&app.session.color, &preview.shown, output) } else { 0 };
+    let screen_key = if inks { crate::channel_view::Screen::key(app.session.color(), &preview.shown, output) } else { 0 };
     let key = (view.clone(), look, display_key ^ screen_key.rotate_left(17));
     if preview.shown.scratch_health().is_ok() && preview.textures.get(&output).is_none_or(|entry| entry.view.as_ref() != Some(&key)) {
         let generation = photocraft_raster::spill::read_error_generation();
-        let screen = if inks { crate::channel_view::Screen::of(&app.session.color, &preview.shown, output) } else { crate::channel_view::Screen::default() };
+        let screen = if inks { crate::channel_view::Screen::of(app.session.color(), &preview.shown, output) } else { crate::channel_view::Screen::default() };
         let image = limit_image(preview.image(&view, look, display.as_deref(), &screen), ctx.input(|i| i.max_texture_side));
         // Match the ordinary canvas at native resolution. A proxy, sparse display reduction
         // or renderer-limited upload still needs filtered magnification of its reduced texels.
@@ -483,11 +484,11 @@ mod tests {
 
         let mut a = app();
         let icc = |id: &str| Some(resolve_profile(id, None, None).unwrap().to_bytes());
-        a.session.color.set_displays(Ok(vec![
+        a.session.color_mut().set_displays(Ok(vec![
             Display { id: 1, name: "sRGB".into(), frame: [0.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("srgb") },
             Display { id: 4, name: "Display P3".into(), frame: [100.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("display-p3") },
         ]));
-        a.session.color.main_display = Some(1);
+        a.session.color_mut().main_display = Some(1);
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         a.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
         assert_eq!(a.session.active().unwrap().channel_view.visible_colors(3), 3);
@@ -539,11 +540,11 @@ mod tests {
 
         let mut a = app();
         let icc = |id: &str| Some(resolve_profile(id, None, None).unwrap().to_bytes());
-        a.session.color.set_displays(Ok(vec![
+        a.session.color_mut().set_displays(Ok(vec![
             Display { id: 1, name: "sRGB".into(), frame: [0.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("srgb") },
             Display { id: 4, name: "Display P3".into(), frame: [100.0, 0.0, 100.0, 100.0], profile_name: None, icc: icc("display-p3") },
         ]));
-        a.session.color.main_display = Some(1);
+        a.session.color_mut().main_display = Some(1);
         a.run("prefs.set", json!({"values":{"interface.showChannelsInColor":true}})).unwrap();
         a.run("channel.target", json!({"channel":"green"})).unwrap();
         assert_eq!(a.session.active().unwrap().channel_view.visible_colors(3), 1);
@@ -1197,14 +1198,14 @@ mod tests {
         }
         // Display conversion is view state too, including while a refused box stays open.
         let icc = photocraft_engine::color_cmds::resolve_profile("display-p3", None, None).unwrap().to_bytes();
-        a.session.color.set_displays(Ok(vec![photocraft_engine::display_color::Display {
+        a.session.color_mut().set_displays(Ok(vec![photocraft_engine::display_color::Display {
             id: 4,
             name: "Display P3".into(),
             frame: [0.0, 0.0, 100.0, 100.0],
             profile_name: None,
             icc: Some(icc),
         }]));
-        a.session.color.main_display = Some(4);
+        a.session.color_mut().main_display = Some(4);
         assert_eq!(texture(&mut a, &ctx, 0, None), Some(id));
         let actual = uploaded_preview_pixels(&ctx, id).expect("display changes must also refresh a refused preview");
         let st = a.session.active().unwrap();

@@ -12,6 +12,7 @@ use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui::load::SizedTexture;
 use egui::{Pos2, pos2};
 use photocraft_doc::Document;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::Value;
 
 use crate::PhotocraftApp;
@@ -97,7 +98,7 @@ fn picture(app: &PhotocraftApp, ctx: &egui::Context, id: DialogId) -> Option<Opt
     // Both textures follow the canvas's view and invalidate if a scratch tile fails to read or recovers.
     let (_, display_key) = crate::canvas::canvas_display(app, &st.doc, None);
     let spot_key =
-        if crate::channel_view::prints_inks(&st.doc, &st.channel_view) { crate::channel_view::Screen::key(&app.session.color, &st.doc, None) } else { 0 };
+        if crate::channel_view::prints_inks(&st.doc, &st.channel_view) { crate::channel_view::Screen::key(app.session.color(), &st.doc, None) } else { 0 };
     let view_keys = [display_key, spot_key, crate::scratch_reads::generation()];
     let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer, view_keys);
     if cache.view.as_ref() != Some(&view) {
@@ -188,7 +189,7 @@ fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) 
     let (display, _) = crate::canvas::canvas_display(app, doc, None);
     let overlay = app.session.active().and_then(|st| {
         let screen = if crate::channel_view::prints_inks(doc, &st.channel_view) {
-            crate::channel_view::Screen::of(&app.session.color, doc, None)
+            crate::channel_view::Screen::of(app.session.color(), doc, None)
         } else {
             crate::channel_view::Screen::default()
         };
@@ -291,14 +292,14 @@ mod tests {
         let mut old_pixels = None;
         for profile in ["srgb", "display-p3"] {
             let icc = resolve_profile(profile, None, None).unwrap().to_bytes();
-            app.session.color.set_displays(Ok(vec![Display {
+            app.session.color_mut().set_displays(Ok(vec![Display {
                 id: 4,
                 name: "Display".into(),
                 frame: [0.0, 0.0, 100.0, 100.0],
                 profile_name: None,
                 icc: Some(icc),
             }]));
-            app.session.color.main_display = Some(4);
+            app.session.color_mut().main_display = Some(4);
             let mut output = ctx.run_ui(Default::default(), |ui| feed(&mut app, ui.ctx()));
             let cache = ctx.data(|d| d.get_temp::<Cache>(id)).unwrap();
             let tex = cache.original.unwrap().tex;
@@ -344,14 +345,14 @@ mod tests {
         app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
         app.run("edit.fill", json!({"color": "#4080c0"})).unwrap();
         let icc = resolve_profile("display-p3", None, None).unwrap().to_bytes();
-        app.session.color.set_displays(Ok(vec![Display {
+        app.session.color_mut().set_displays(Ok(vec![Display {
             id: 4,
             name: "Display P3".into(),
             frame: [0.0, 0.0, 100.0, 100.0],
             profile_name: None,
             icc: Some(icc),
         }]));
-        app.session.color.main_display = Some(4);
+        app.session.color_mut().main_display = Some(4);
         app.run("prefs.set", json!({"values":{"interface.showChannelsInColor":true}})).unwrap();
         app.run("channel.target", json!({"channel":"green"})).unwrap();
         let ctx = egui::Context::default();

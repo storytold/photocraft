@@ -1,4 +1,6 @@
 use super::*;
+use crate::prefs::SavedPrefsExt;
+use crate::presets::PresetsExt;
 use craft_psd::aco::{AcoColor, AcoSwatch};
 use craft_psd::ase::{AseColor, AseEntry, AseFile, AseKind, AseSwatch};
 use photocraft_paint::tile::{b64_decode, b64_encode};
@@ -6,7 +8,7 @@ use photocraft_paint::tile::{b64_decode, b64_encode};
 use crate::presets::swatches::color_model;
 
 fn names(s: &Session) -> Vec<String> {
-    s.presets.swatches.iter().flat_map(|g| g.entries.iter().map(|i| i.name.clone())).collect()
+    s.presets().swatches.iter().flat_map(|g| g.entries.iter().map(|i| i.name.clone())).collect()
 }
 
 fn export_bytes(s: &mut Session, p: Value) -> Vec<u8> {
@@ -31,7 +33,7 @@ fn add_from_foreground_and_explicit_models() {
     s.tools.foreground = [1.0, 0.5, 0.0, 1.0];
     let r = s.execute("swatches.add", json!({})).unwrap();
     assert_eq!((r["name"].as_str(), r["group"].as_str()), (Some("Color Swatch 1"), Some("Grays")));
-    assert_eq!(s.presets.swatches[0].entries.last().unwrap().color, SwatchColor::Rgb([1.0, 0.5, 0.0]));
+    assert_eq!(s.presets().swatches[0].entries.last().unwrap().color, SwatchColor::Rgb([1.0, 0.5, 0.0]));
     let r = s.execute("swatches.add", json!({})).unwrap();
     assert_eq!(r["name"], "Color Swatch 2");
     // CMYK into a new group at the front, spot.
@@ -39,7 +41,7 @@ fn add_from_foreground_and_explicit_models() {
         .execute("swatches.add", json!({"name": "Ink", "group": "Print", "index": 0, "kind": "spot", "color": {"model": "cmyk", "values": [100, 0, 0, 0]}}))
         .unwrap();
     assert_eq!(r["group"], "Print");
-    let g = s.presets.swatches.last().unwrap();
+    let g = s.presets().swatches.last().unwrap();
     assert_eq!(g.entries[0], SwatchEntry { name: "Ink".into(), color: SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]), kind: SwatchKind::Spot });
     // Names stay unique.
     let r = s.execute("swatches.add", json!({"name": "Ink"})).unwrap();
@@ -84,24 +86,24 @@ fn using_a_cmyk_swatch_remembers_its_inks() {
 fn rename_delete_move_and_groups() {
     let mut s = crate::session();
     // A group moves to an index, clamped to the list, and the change is saved with the prefs.
-    let rev = s.presets.revision();
+    let rev = s.presets().revision();
     let r = s.execute("swatches.moveGroup", json!({"group": "Dark", "to": 0})).unwrap();
     assert_eq!(r, json!({"group": "Dark", "position": 0}));
-    assert_eq!(s.presets.swatches[0].name, "Dark");
-    assert_ne!(s.presets.revision(), rev, "a group move is a preset change");
+    assert_eq!(s.presets().swatches[0].name, "Dark");
+    assert_ne!(s.presets().revision(), rev, "a group move is a preset change");
     let r = s.execute("swatches.moveGroup", json!({"group": "Dark", "to": 999})).unwrap();
     assert_eq!(r["position"], 4);
-    assert_eq!(s.presets.swatches[4].name, "Dark");
+    assert_eq!(s.presets().swatches[4].name, "Dark");
     assert!(s.execute("swatches.moveGroup", json!({"group": "Nope", "to": 0})).is_err());
     s.execute("swatches.rename", json!({"swatch": "Black", "name": "Ink Black"})).unwrap();
     assert!(names(&s).contains(&"Ink Black".to_string()));
     assert!(s.execute("swatches.rename", json!({"swatch": "Ink Black", "name": "White"})).is_err(), "duplicate");
     // Reorder within the group, then into another group.
     s.execute("swatches.move", json!({"swatch": "White", "position": 0})).unwrap();
-    assert_eq!(s.presets.swatches[0].entries[0].name, "White");
+    assert_eq!(s.presets().swatches[0].entries[0].name, "White");
     let r = s.execute("swatches.move", json!({"swatch": "White", "to": "Dark", "position": 1})).unwrap();
     assert_eq!(r, json!({"group": "Dark", "position": 1}));
-    assert_eq!(s.presets.swatches[4].entries[1].name, "White");
+    assert_eq!(s.presets().swatches[4].entries[1].name, "White");
     // Out-of-range positions clamp.
     let r = s.execute("swatches.move", json!({"swatch": "White", "position": 999_999})).unwrap();
     assert_eq!(r["position"], 10);
@@ -114,7 +116,7 @@ fn rename_delete_move_and_groups() {
     assert!(s.execute("swatches.renameGroup", json!({"group": "Favourites", "name": "Dark"})).is_err());
     let r = s.execute("swatches.deleteGroup", json!({"group": "Favourites", "keepSwatches": true})).unwrap();
     assert_eq!(r["kept"], 2);
-    assert!(s.presets.swatches[4].entries.iter().any(|i| i.name == "Red"), "kept in the group above");
+    assert!(s.presets().swatches[4].entries.iter().any(|i| i.name == "Red"), "kept in the group above");
     s.execute("swatches.deleteGroup", json!({"group": "Mine 1"})).unwrap();
     // Delete several by name, and one by index.
     let r = s.execute("swatches.delete", json!({"swatch": ["Red", "Blue", "Red"]})).unwrap();
@@ -128,21 +130,21 @@ fn rename_delete_move_and_groups() {
     s.execute("swatches.reset", json!({"append": true})).unwrap();
     assert_eq!(names(&s).len(), 92);
     assert!(names(&s).contains(&"Black 2".to_string()));
-    assert_eq!(s.presets.swatches[5].name, "Grays 1");
+    assert_eq!(s.presets().swatches[5].name, "Grays 1");
 }
 
 #[test]
 fn changes_persist_with_the_preferences() {
     let mut s = crate::session();
     s.execute("swatches.add", json!({"name": "Keep me", "color": {"model": "lab", "values": [40, 12.5, -7.25]}})).unwrap();
-    let saved = s.presets.to_json(&s);
+    let saved = s.presets().to_json(&s);
     let mut t = crate::session();
     t.load_presets_json(saved);
-    assert_eq!(t.presets.swatches, s.presets.swatches);
+    assert_eq!(t.presets().swatches, s.presets().swatches);
     // A prefs file from before swatches existed keeps the defaults.
     let mut u = crate::session();
     u.load_presets_json(json!({"gradients": null}));
-    assert_eq!(u.presets.swatches, default_swatches());
+    assert_eq!(u.presets().swatches, default_swatches());
 }
 
 #[test]
@@ -160,9 +162,9 @@ fn aco_round_trip_keeps_16_bit_values_and_books() {
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "group": "Pro", "mode": "replace"})).unwrap();
     assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("aco"), Some(6)));
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the colour book is reported");
-    assert_eq!(s.presets.swatches.len(), 1);
-    assert_eq!(s.presets.swatches[0].entries[3].color, SwatchColor::Lab([53.21, -128.0, 127.0]));
-    assert_eq!(color_model(&s.presets.swatches[0].entries[4].color), "gray");
+    assert_eq!(s.presets().swatches.len(), 1);
+    assert_eq!(s.presets().swatches[0].entries[3].color, SwatchColor::Lab([53.21, -128.0, 127.0]));
+    assert_eq!(color_model(&s.presets().swatches[0].entries[4].color), "gray");
     assert_eq!(export_bytes(&mut s, json!({"format": "aco"})), file, "byte-identical .aco");
     // On disk too, with the group taken from the file name.
     let dir = std::env::temp_dir().join(format!("pc-swatch-{}", std::process::id()));
@@ -194,8 +196,8 @@ fn act_round_trip_loads_a_photoshop_color_table() {
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "group": "Table", "mode": "replace"})).unwrap();
     assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("act"), Some(256)));
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the transparent color is reported");
-    assert_eq!(s.presets.swatches[0].entries[0].color, SwatchColor::Rgb([1.0, 1.0, 1.0]));
-    assert_eq!(s.presets.swatches[0].entries[1].name, "Swatch 2");
+    assert_eq!(s.presets().swatches[0].entries[0].color, SwatchColor::Rgb([1.0, 1.0, 1.0]));
+    assert_eq!(s.presets().swatches[0].entries[1].name, "Swatch 2");
     // Sniffed by length without a format, and by extension from a path.
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "mode": "replace"})).unwrap();
     assert_eq!(r["format"].as_str(), Some("act"));
@@ -236,7 +238,7 @@ fn act_that_starts_like_an_aco_is_still_an_act() {
     let mut s = crate::session();
     let r = s.execute("swatches.import", json!({"data": b64_encode(&file), "mode": "replace"})).unwrap();
     assert_eq!((r["format"].as_str(), r["count"].as_u64()), (Some("aco"), Some(10)));
-    assert_eq!(s.presets.swatches[0].entries[9].name, format!("{:0>25}", 9));
+    assert_eq!(s.presets().swatches[0].entries[9].name, format!("{:0>25}", 9));
 }
 
 #[test]
@@ -261,7 +263,7 @@ fn ase_round_trip_keeps_groups_floats_and_kinds() {
     assert_eq!(r["groups"], json!(["Exchange", "Brand"]));
     assert_eq!(r["count"], 4);
     assert_eq!(r["warnings"].as_array().unwrap().len(), 1, "the unknown model is reported");
-    let brand = s.presets.swatches.iter().find(|g| g.name == "Brand").unwrap();
+    let brand = s.presets().swatches.iter().find(|g| g.name == "Brand").unwrap();
     assert_eq!(brand.entries[0].kind, SwatchKind::Spot);
     assert_eq!(brand.entries[1].color, SwatchColor::Lab([50.0, 20.0, -30.0]));
     assert_eq!(brand.entries[2].color, SwatchColor::Gray(0.75));
@@ -300,7 +302,7 @@ fn ase_round_trip_keeps_groups_floats_and_kinds() {
 #[test]
 fn bad_params_fail_gracefully() {
     let mut s = crate::session();
-    let before = s.presets.swatches.clone();
+    let before = s.presets().swatches.clone();
     let cases: &[(&str, Value)] = &[
         ("swatches.add", json!({"color": "#12"})),
         ("swatches.add", json!({"color": {"model": "lab"}})),
@@ -355,7 +357,7 @@ fn bad_params_fail_gracefully() {
     std::fs::write(&file, b"x").unwrap();
     assert!(s.execute("swatches.export", json!({"path": file.join("x.aco").to_string_lossy()})).is_err());
     std::fs::remove_file(&file).ok();
-    assert_eq!(s.presets.swatches, before, "failed commands change nothing");
+    assert_eq!(s.presets().swatches, before, "failed commands change nothing");
     // Empty library: the swatch commands are disabled, not crashing.
     s.execute("swatches.delete", json!({"swatch": names(&s)})).unwrap();
     for g in ["Grays", "RGB", "Pastel", "Pure", "Dark"] {
@@ -393,13 +395,13 @@ fn unnamed_groups_are_numbered_in_linear_time() {
     std::thread::spawn(move || {
         let mut s = crate::session();
         s.execute("swatches.newGroup", json!({"name": "Ink 2"})).unwrap();
-        let n = MAX_GROUPS - s.presets.swatches.len();
+        let n = MAX_GROUPS - s.presets().swatches.len();
         let paper = AseSwatch { name: "Paper".into(), color: AseColor::Gray(1.0), kind: AseKind::Process };
         let mut entries = vec![AseEntry::Group { name: String::new(), swatches: Vec::new() }; n];
         entries[0] = AseEntry::Group { name: String::new(), swatches: vec![paper] };
         let file = b64_encode(&craft_psd::ase::write(&AseFile { entries }).unwrap());
         let r = s.execute("swatches.import", json!({"data": file, "group": "Ink"})).unwrap();
-        assert_eq!(s.presets.swatches.len(), MAX_GROUPS);
+        assert_eq!(s.presets().swatches.len(), MAX_GROUPS);
         let names: Vec<String> = r["groups"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
         let _ = tx.send(names);
     });
@@ -434,7 +436,7 @@ fn repeated_group_names_take_the_first_free_number() {
 fn values_beyond_f32_range_are_rejected_so_presets_survive_a_restart() {
     let mut s = crate::session();
     s.execute("swatches.add", json!({"name": "Keep me", "color": {"model": "lab", "values": [40, 12.5, -7.25]}})).unwrap();
-    let before = s.presets.swatches.clone();
+    let before = s.presets().swatches.clone();
     for (model, values) in [
         ("hsb", json!([1e39, 100, 100])),
         ("hsb", json!([-1e39, 100, 100])),
@@ -446,11 +448,11 @@ fn values_beyond_f32_range_are_rejected_so_presets_survive_a_restart() {
         let r = s.execute("swatches.add", json!({"name": "Bad", "color": {"model": model, "values": values}}));
         assert!(matches!(r, Err(crate::EngineError::BadParams { .. })), "{model} {values}: {r:?}");
     }
-    assert_eq!(s.presets.swatches, before, "a rejected colour leaves the library unchanged");
+    assert_eq!(s.presets().swatches, before, "a rejected colour leaves the library unchanged");
     // The largest f32 hue is still accepted and stays finite.
     s.execute("swatches.add", json!({"name": "Big hue", "color": {"model": "hsb", "values": [f64::from(f32::MAX), 100, 100]}})).unwrap();
     let mut t = crate::session();
     t.load_prefs_json(&s.prefs_to_json()).unwrap();
-    assert_eq!(t.presets.swatches, s.presets.swatches, "user swatches survive a save and reload");
+    assert_eq!(t.presets().swatches, s.presets().swatches, "user swatches survive a save and reload");
     assert!(names(&t).contains(&"Keep me".to_string()));
 }

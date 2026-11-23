@@ -16,6 +16,7 @@ use egui::Color32;
 use photocraft_color::PixelFormat;
 use photocraft_doc::{AlphaChannel, ColorMode, Document};
 use photocraft_engine::channel_cmds::{ChannelView, color_count};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::mask_view_cmds::MaskViewMode;
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba, to_rgba};
@@ -586,7 +587,7 @@ impl Overlay {
         let look = Look::of(&app.session);
         let inks = prints_inks(doc, &view);
         let (screen, screen_key) =
-            if inks { (Screen::of(&app.session.color, doc, display), Screen::key(&app.session.color, doc, display)) } else { (Screen::default(), 0) };
+            if inks { (Screen::of(app.session.color(), doc, display), Screen::key(app.session.color(), doc, display)) } else { (Screen::default(), 0) };
         let (display, display_key) = crate::canvas::canvas_display(app, doc, display);
         let key = view_key(&view, look) ^ screen_key.rotate_left(17) ^ display_key;
         Some(Overlay { view, look, active: st.active_layer, screen, display, key })

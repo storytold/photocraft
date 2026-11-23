@@ -8,6 +8,7 @@
 //! command drops them, as one "Move" history step. A selected native colour set cannot float;
 //! its selected samples preview directly and commit on release, with the same drag feedback.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use photocraft_doc::{DocId, Document, LayerId};
@@ -264,7 +265,7 @@ pub(crate) fn channel_texture(app: &mut PhotocraftApp, idx: usize, output: Optio
     };
     // A single GPU texture is shared by document windows. A window on another output can
     // require a different display encoding; let its CPU preview own that conversion.
-    if output != app.session.color.main_display {
+    if output != app.session.color().main_display {
         return None;
     }
     if let Some(p) = app.move_gpu_preview.as_mut() {

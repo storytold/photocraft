@@ -19,36 +19,11 @@ macro_rules! paste_target {
 }
 pub(crate) use paste_target;
 
-/// Pixels on the session clipboard, with where they came from (for Paste in Place).
-#[derive(Clone, Debug, craft_ui_macros::PlainData)]
-pub struct Clip {
-    /// Original SVG snapshot, when available. The raster mirror belongs to the same source.
-    pub svg: Option<std::sync::Arc<Vec<u8>>>,
-    /// Native colour indices for a multi-component clip, in channel order. Singletons are grayscale.
-    pub components: Option<Vec<usize>>,
-    pub surface: Surface,
-    pub bounds: Rect,
-    /// The copied layer itself, when Copy took a whole layer that Paste should recreate rather
-    /// than rasterize (see [`whole_layer`]): a scratch document in the source's colour holding it.
-    /// `surface` still holds its pixels, for Paste Into, masks, channels and other apps.
-    pub layers: Option<Box<Document>>,
-    /// The source document's resolution (ppi): File › New from the clipboard takes it, as
-    /// Photoshop's Clipboard preset does. None for an image from another app.
-    pub resolution: Option<f32>,
-    /// The document the pixels were copied from: Paste keeps them in place only there, and
-    /// centres them in any other (#8945). None for an image from another app.
-    pub source: Option<DocId>,
-    /// The artboard the pixels were copied from (its id and rect at the time), when they came
-    /// from one: Paste into another board of the same document keeps their place on the board
-    /// ([`board_shift`], #8788). None outside boards, across several, or for a copied board.
-    pub board: Option<(LayerId, Rect)>,
-}
+pub use crate::state::Clip;
 
-impl Clip {
-    /// Prepare bounded original SVG and its raster mirror before installing the clipboard.
-    pub fn from_svg(bytes: &[u8]) -> Result<Self> {
-        super::vector_clipboard::from_svg(bytes)
-    }
+/// A clipboard of `bytes`, an SVG: the bounded original and its raster mirror.
+pub fn clip_from_svg(bytes: &[u8]) -> Result<Clip> {
+    super::vector_clipboard::from_svg(bytes)
 }
 
 /// Photoshop's layer-based copy (CC 2018 on): with no selection, Copy takes the active layer
