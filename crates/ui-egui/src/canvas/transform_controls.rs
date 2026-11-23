@@ -63,7 +63,7 @@ fn framed_layers(app: &PhotocraftApp, pressed: bool) -> Vec<&photocraft_doc::Lay
     let Some(st) = app.session.active() else { return Vec::new() };
     let selected = st.selected_layers();
     let several = selected.len() > 1;
-    selected.into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| several || !crate::doc_props_ui::is_background(&st.doc, l)).collect()
+    selected.iter().filter_map(|&id| st.doc.layer(id)).filter(|l| several || !crate::doc_props_ui::is_background(&st.doc, l)).collect()
 }
 
 /// Move tool › Show Transform Controls: the boxes Free Transform would open on the selected
@@ -110,7 +110,7 @@ pub(crate) fn begin_controls(app: &mut PhotocraftApp, ctx: &egui::Context) -> Co
     if framed(app, true).is_none() {
         return ControlsPress::Missed;
     }
-    let background = app.session.active().is_some_and(|st| photocraft_engine::transform_cmds::background_among(&st.doc, &st.selected_layers()).is_some());
+    let background = app.session.active().is_some_and(|st| photocraft_engine::transform_cmds::background_among(&st.doc, st.selected_layers()).is_some());
     if background {
         // PLAN: assumed `dialogs::alerts::alert(app: &mut PhotocraftApp, message: &str)` (dialogs-w21).
         crate::dialogs::alerts::alert(app, tl!(CONTROLS_LOCKED));
