@@ -3,15 +3,18 @@
 
 use craft::behavior::geometry::{DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft};
 use craft::behavior::kurbo::Point;
-use craft::behavior::{CancelReason, PointerButton};
+use craft::behavior::{CancelReason, Cursor, CursorBadge, CursorIcon, PaintedCursor, PointerButton};
 use craft::imaging::ui::select::paint_outline;
 use craft::keymap::Mods;
 use craft::ui::canvas::{CanvasTool, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
+use egui::Vec2;
 
 use super::options::selected_shape;
 use super::pen::pen_path_op;
 use super::{PenOwner, PhotocraftApp};
+use crate::direct_select::{PathRef, still_valid};
+use crate::state::Tool;
 
 /// Whether a primary press may begin a trace this pass, decided by the host from the app's state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -23,6 +26,14 @@ pub(crate) enum Admit {
     Locked,
     /// A fitted path whose commit failed is the user's draft: another trace neither retries nor replaces it.
     Busy,
+}
+
+/// An open Work Path subpath's last anchor, where a normal Freeform gesture can start.
+#[derive(Clone, Copy)]
+struct WorkPathEnd {
+    subpath: usize,
+    point: Point,
+    selected: bool,
 }
 
 /// A finished trace: its points, the straight-segment indices, the pen owner and the vector owner.
@@ -42,6 +53,10 @@ pub(crate) struct FreeformPenTool {
     pub(crate) target: Option<super::VectorOwner>,
     /// The finished trace (its points and the indices of those reached by a straight segment) until `drain` commits it.
     pub(crate) closed: Option<(Vec<Point>, Vec<usize>)>,
+    /// The Work Path end points and their current selection in this pass.
+    ends: Vec<WorkPathEnd>,
+    /// The subpath the press started on, until the trace closes or cancels.
+    continuation: Option<usize>,
     /// The modifiers of the last pass, to report changes to the draft.
     mods: Mods,
 }
@@ -56,6 +71,8 @@ impl Default for FreeformPenTool {
             owner: None,
             target: None,
             closed: None,
+            ends: Vec::new(),
+            continuation: None,
             mods: Mods::NONE,
         }
     }
@@ -79,6 +96,46 @@ impl FreeformPenTool {
         self.admit = admit;
     }
 
+    /// The measured case is a normal Freeform trace into the displayed Work Path.
+    pub(super) fn work_path_ends(&mut self, app: &PhotocraftApp, document: usize) {
+        self.ends.clear();
+        if self.admit != Admit::Open
+            || app.session.active_index() != Some(document)
+            || self.draft.is_open()
+            || app.ui.selected_path.as_deref() != Some("work")
+            || app.ui.tool_options.vector_mode != craft::draw::ui::VectorMode::Path
+            || super::targeted_vector_mask_id(app).is_some()
+        {
+            return;
+        }
+        let Some(path) = app.session.active().and_then(|st| st.doc.work_path.as_ref()) else { return };
+        let selection = &app.ui.direct_selection;
+        let work_selected = selection.target == Some(PathRef::Work) && still_valid(app, selection);
+        self.ends.extend(path.subpaths.iter().enumerate().filter_map(|(subpath, sub)| {
+            if sub.closed || sub.knots.len() < 2 {
+                return None;
+            }
+            let anchor = sub.knots.last()?.anchor;
+            let last = sub.knots.len() - 1;
+            let selected = work_selected && (selection.anchors.contains(&[subpath, last]) || selection.segment == Some([subpath, last - 1]));
+            Some(WorkPathEnd { subpath, point: Point::new(anchor.x, anchor.y), selected })
+        }));
+    }
+
+    /// The closest endpoint within the Pen tool's usual screen-point reach.
+    fn end_at(&self, pointer: &ToolPointer, cx: &ToolContext<'_>) -> Option<WorkPathEnd> {
+        if pointer.mods.alt || pointer.mods.cmd || self.draft.is_open() {
+            return None;
+        }
+        let view = cx.space()?.view;
+        self.ends
+            .iter()
+            .map(|end| (view.to_screen(end.point).distance(pointer.pos), end))
+            .filter(|(distance, _)| *distance <= cx.slop)
+            .min_by(|(a, end_a), (b, end_b)| a.total_cmp(b).then(end_b.selected.cmp(&end_a.selected)))
+            .map(|(_, end)| *end)
+    }
+
     /// Whether a press was refused for a locked shape since the last call; the host words the refusal.
     pub(super) fn take_refused(&mut self) -> bool {
         std::mem::take(&mut self.refused)
@@ -96,6 +153,11 @@ impl FreeformPenTool {
         let (points, straight) = self.closed.take()?;
         let owner = self.owner.take()?;
         Some((points.iter().map(|p| [p.x, p.y, 1.0]).collect(), straight, owner, self.target.take()))
+    }
+
+    /// The opened path chosen at press time, consumed with the finished trace.
+    pub(super) fn take_continuation(&mut self) -> Option<usize> {
+        self.continuation.take()
     }
 }
 
@@ -141,6 +203,13 @@ impl CanvasTool for FreeformPenTool {
             }
         }
         let Some(at) = sample(pointer, cx) else { return ToolAction::Ignored };
+        if !self.draft.is_open() {
+            self.continuation = match self.end_at(pointer, cx) {
+                Some(end) if end.selected => Some(end.subpath),
+                Some(_) => return ToolAction::Done,
+                None => None,
+            };
+        }
         // With nothing selected, ⌥ starts straight segments at once: the Freeform Pen never subtracts.
         let event = if self.draft.is_open() && pointer.clicks >= 2 { self.draft.close() } else { self.draft.press(at, false) };
         self.apply(event);
@@ -176,6 +245,7 @@ impl CanvasTool for FreeformPenTool {
         self.draft.cancel();
         self.owner = None;
         self.target = None;
+        self.continuation = None;
     }
 
     /// Between clicks: Enter closes, Escape cancels, Backspace and Delete retract.
@@ -192,6 +262,7 @@ impl CanvasTool for FreeformPenTool {
                 self.draft.cancel();
                 self.owner = None;
                 self.target = None;
+                self.continuation = None;
             }
             ToolKey::Delete { .. } => {
                 self.draft.retract();
@@ -205,6 +276,14 @@ impl CanvasTool for FreeformPenTool {
         paint_outline(&self.draft, draw, cx);
     }
 
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if cx.pointer.as_ref().and_then(|pointer| self.end_at(pointer, cx)).is_some_and(|end| end.selected) {
+            // The nib is at the lower left of the same 24-point icon box the Pen uses.
+            return Cursor::Painted(PaintedCursor::tool(crate::icons::tool_icon(Tool::FreeformPen), Vec2::Y * 24.0, Some(CursorBadge::Continue)));
+        }
+        Cursor::System(CursorIcon::Default)
+    }
+
     fn command_form(&self) -> ToolPath {
         ToolPath::Freehand("the Path commands take the same trace as points")
     }
@@ -213,3 +292,7 @@ impl CanvasTool for FreeformPenTool {
 #[cfg(test)]
 #[path = "freeform_pen_tests.rs"]
 mod freeform_pen_tests;
+
+#[cfg(test)]
+#[path = "freeform_continue_endpoint_tests.rs"]
+mod freeform_continue_endpoint_tests;

@@ -130,7 +130,7 @@ fn shift_click_adds_shape_layers_one_after_another() {
     drag(&mut app, [30.0, 30.0], [0.0, 0.0], egui::Modifiers::NONE);
     drag(&mut app, [100.0, 30.0], [0.0, 0.0], egui::Modifiers::SHIFT);
     drag(&mut app, [30.0, 120.0], [0.0, 0.0], egui::Modifiers::SHIFT);
-    let mut selected = app.session.active().unwrap().selected_layers();
+    let mut selected = app.session.active().unwrap().selected_layers().to_vec();
     selected.sort_by_key(|l| l.0);
     assert_eq!(selected, ids);
 }
