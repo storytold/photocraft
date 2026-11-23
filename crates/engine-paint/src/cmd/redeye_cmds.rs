@@ -215,7 +215,7 @@ fn runs_unchanged(doc: &Document, id: Option<LayerId>, p: &Value, first: (i32, i
 }
 
 fn enabled(s: &Session) -> std::result::Result<(), String> {
-    crate::commands::has_paintable(s)?;
+    crate::cmd::has_paintable(s)?;
     if crate::channel_cmds::edits_channel(s) {
         return Ok(());
     }

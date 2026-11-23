@@ -221,7 +221,7 @@ fn image_paint(doc: &photocraft_doc::Document, cmd: &str) -> Result<(Vec<f32>, u
         Ok(())
     });
     let area = bounds.ok_or_else(|| bad(cmd, "the image contains no paint (all white or transparent)"))?;
-    let max = crate::brush_cmds::MAX_TIP;
+    let max = crate::brush_defs::MAX_TIP;
     if area.width().max(area.height()) > max {
         return Err(bad(cmd, format!("the painted part of the image is too large for a brush tip ({}×{}; max {max} px)", area.width(), area.height())));
     }
@@ -263,7 +263,7 @@ fn import_image(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let doc = crate::file_cmds::import(decode_name, &bytes)?;
     let (v, w, h) = image_paint(&doc, cmd)?;
-    let (brush, tw, th) = crate::brush_cmds::sampled_brush(cmd, &v, w, h)?;
+    let (brush, tw, th) = crate::brush_defs::sampled_brush(cmd, &v, w, h)?;
     let name = UniqueNames::new(s.tools.presets.iter().map(|x| x.name.as_str())).unique(&name);
     std::sync::Arc::make_mut(&mut *s.tools.presets).push(photocraft_paint::BrushPreset {
         name: name.clone(),

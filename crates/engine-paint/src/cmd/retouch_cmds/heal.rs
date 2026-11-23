@@ -113,11 +113,11 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 /// empty one, gives an error.
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let source_doc = crate::history_source_cmds::paint_source(st, p, cmd)?;
+    let source_doc = crate::history_source::paint_source(st, p, cmd)?;
     // Here, so the live preview refuses too. Only the History Brush: the Art History Brush and
     // Erase to History were not measured and keep converting.
     if cmd == "paint.historyBrush" && !flag(p, "eraseToHistory", false) {
-        crate::history_source_cmds::refuse_other_format(st, &source_doc)?;
+        crate::history_source::refuse_other_format(st, &source_doc)?;
     }
     let missing = || EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into());
     match crate::channel_cmds::read_target_surface(source_doc.as_ref(), id, p) {
@@ -246,11 +246,11 @@ enum SpotType {
 ///
 /// Photoshop 25.4 (measured): a dab changes exactly the brush's footprint, and Content-Aware takes
 /// its texture from around it, as Edit › Fill does from its window
-/// ([`crate::fill_cmds::sampling_window`] of the stroke's bounds), which is what this samples.
+/// ([`crate::content_sampling::sampling_window`] of the stroke's bounds), which is what this samples.
 fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: SpotType, all: bool, sel: Option<&Surface>, lock: bool) -> Result<Rect> {
     let (bounds, cov) = coverage("paint.spotHealing", stroke)?;
     let size = stroke.brush.size;
-    let region_rect = crate::fill_cmds::sampling_window(bounds, pre.bounds());
+    let region_rect = crate::content_sampling::sampling_window(bounds, pre.bounds());
     if region_rect.is_empty() {
         return Ok(Rect::EMPTY);
     }

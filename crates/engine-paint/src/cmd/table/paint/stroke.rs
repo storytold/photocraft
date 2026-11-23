@@ -1,4 +1,5 @@
-use crate::commands::{CommandSpec, has_paintable};
+use crate::cmd::has_paintable;
+use crate::commands::{CommandSpec};
 
 /// Painting: the stroke command.
 pub fn specs() -> Vec<CommandSpec> {

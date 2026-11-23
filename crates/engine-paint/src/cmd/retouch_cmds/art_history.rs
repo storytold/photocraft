@@ -164,7 +164,7 @@ fn stamp_region(
 }
 
 /// The reference application's alerts for the refusals below (#12638); a hidden target is
-/// [`crate::hidden_target::ART_HISTORY_HIDDEN`].
+/// [`photocraft_engine_core::hidden_target::ART_HISTORY_HIDDEN`].
 pub const LOCKED: &str = "Could not use the art history brush because the layer is locked.";
 pub const GROUP: &str = "Could not use the art history brush because the pixels in a group cannot be edited without merging the group.";
 pub const LACKS_LAYER: &str = "Could not use the art history brush because the history state lacks a corresponding layer.";
@@ -200,7 +200,7 @@ fn pixel_target(p: &Value) -> bool {
 /// bits ([`refuse_format`]), then a target layer the source state lacks. A mask or channel target
 /// keeps the History Brush's texts for the source refusals (not measured).
 fn source_surface(s: &Session, id: Option<photocraft_doc::LayerId>, p: &Value) -> Result<photocraft_raster::Surface> {
-    use crate::history_source_cmds::{SourceRefusal, checked_source, paint_source};
+    use crate::history_source::{SourceRefusal, checked_source, paint_source};
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let pixels = pixel_target(p);
     let doc = if pixels {

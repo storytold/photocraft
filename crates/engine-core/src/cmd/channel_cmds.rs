@@ -138,12 +138,21 @@ pub(crate) use refs::source_spec;
 pub use refs::{Blending, ChanRef, parse_ref};
 use selection::{load_selection, quick_mask, save_selection};
 use spot::{is_flat, merge, merge_spot, mergeable, split};
+pub use targeting::{FILL_KEY_IDS, follows_filter_mask, follows_target, follows_vector_mask_target, gray_target, read_target_surface};
 use targeting::{SLOT_KEY, target_cmd, target_slot};
 pub(crate) use targeting::{
-    Target, channel_surface_for_filter, clear_channel, clear_color_channel, color_restriction, edits_channel, filter_mask_layer, inject_target, invert_region,
-    is_channel_target, is_spot_target, mask_target_enabled, restrict_to_color, routed, target_layer_mask, target_of, target_surface, targeted_channel,
+    channel_surface_for_filter, clear_channel, clear_color_channel, filter_mask_layer, invert_region,
+    is_spot_target, mask_target_enabled, routed, targeted_channel,
 };
-pub use targeting::{follows_filter_mask, follows_target, follows_vector_mask_target, gray_target, read_target_surface};
+pub use targeting::target_layer_mask;
+pub use targeting::Target;
+pub use targeting::color_restriction;
+pub use targeting::edits_channel;
+pub use targeting::inject_target;
+pub use targeting::is_channel_target;
+pub use targeting::restrict_to_color;
+pub use targeting::target_of;
+pub use targeting::target_surface;
 pub use tone_target::{ToneTarget, resolve_tone_target};
 pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};

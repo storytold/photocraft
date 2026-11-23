@@ -11,11 +11,13 @@ mod action_history;
 mod actions_record;
 pub mod adjust_params;
 pub mod allocation;
+pub mod brush_defs;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
 mod clip_group;
 pub mod color_channels;
+pub mod content_sampling;
 mod crop_fill;
 mod damage;
 pub mod display_color;
@@ -25,7 +27,7 @@ pub mod filters_ext;
 mod group_options;
 pub mod guide_layout;
 pub mod hidden_target;
-mod hooks;
+pub mod hooks;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
@@ -40,6 +42,7 @@ pub mod new_layer;
 mod param_check;
 pub use param_check::is_incomplete;
 pub mod param_schema;
+pub mod pixel_fill;
 mod pixels;
 pub mod prefs;
 pub mod preset_store;
@@ -167,12 +170,14 @@ pub use cmd::vp_cmds;
 pub use cmd::warp_cmds;
 pub use cmd::web_cmds;
 pub use cmd::wia_cmds;
+pub use state::LiveCommit;
 pub use doc_state::{CopiedStyle, DocState, DocStateInputs, PRECHECKED, ToolState, selected_in};
 pub use error::{EngineError, Result};
-pub use install::{install, session};
+pub use install::{command_tables, install, register, session};
 pub use session::move_item;
 use session::restore_target;
-pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};
+pub(crate) use session::{carry_visibility, visibility_changes};
+pub use session::fix_selection;
 
 /// A type layer for [`Session::refresh_type_layers`]: in the open document, or in its first
 /// History snapshot (the document as opened) when `first_snapshot`. The caller picks each against
@@ -186,13 +191,13 @@ pub struct TypeLayerRef {
 
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.
-pub(crate) fn pixels_mut(l: &mut photocraft_doc::Layer) -> Result<&mut photocraft_raster::Surface> {
+pub fn pixels_mut(l: &mut photocraft_doc::Layer) -> Result<&mut photocraft_raster::Surface> {
     let id = l.id;
     l.surface_mut().ok_or_else(|| EngineError::Other(format!("layer {id:?} has no pixels")))
 }
 
 /// The active document's active layer, for `enabled` predicates.
-pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_doc::Layer, String> {
+pub fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_doc::Layer, String> {
     let d = s.active().ok_or("no document open")?;
     d.active_layer.and_then(|id| d.doc.layer(id)).ok_or_else(|| "no active layer".into())
 }
@@ -305,8 +310,8 @@ pub struct Session {
     /// ([`LinkWatchExt::missing_links`](crate::link_watch::LinkWatchExt::missing_links)). Written only when the set changes, so its revision says when the list did.
     link_missing: craft_tracked::Tracked<std::collections::HashSet<(u64, String)>>,
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
-    /// ([`Session::offer_live_stroke`]).
-    pub(crate) live_commit: Option<state::LiveCommit>,
+    /// (`photocraft_engine_paint::brush_cmds::LiveStrokeExt` and `retouch_cmds::LiveRetouchExt` offer it).
+    pub live_commit: Option<state::LiveCommit>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].

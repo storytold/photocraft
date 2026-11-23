@@ -18,6 +18,7 @@ use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
+use crate::layer_place::is_empty_pixel_layer;
 use crate::{EngineError, Result, Session};
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
@@ -80,23 +81,6 @@ fn stamp_visible(s: &mut Session, p: &Value) -> Result<Value> {
     })?;
     select_only(s, id);
     Ok(json!({ "layer": id.0 }))
-}
-
-/// A plain, unlocked pixel layer with no pixels, mask, clipping or video: safe to stamp into.
-/// Pixels it has only through a visible default pixel (no tiles stored) count as pixels.
-pub(crate) fn is_empty_pixel_layer(doc: &Document, id: LayerId) -> bool {
-    let Some(l) = doc.layer(id) else { return false };
-    let locks = doc.effective_locks(id);
-    // Only the default pixel's alpha counts: a mode or profile conversion keeps it transparent but
-    // gives its colour channels other values (no ink in CMYK, a neutral a/b in Lab).
-    matches!(&l.content, LayerContent::Raster(s)
-        if s.content_bounds().is_empty() && s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0))
-        && l.video.is_none()
-        && l.visible
-        && l.mask.is_none()
-        && l.vector_mask.is_none()
-        && !l.clipped
-        && !(locks.all || locks.pixels || locks.transparency)
 }
 
 fn stamp_down(s: &mut Session, p: &Value) -> Result<Value> {

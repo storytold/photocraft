@@ -39,6 +39,7 @@ photocraft-automation = { path = "crates/automation" }
 photocraft-plugins = { path = "crates/plugins" }
 photocraft-engine = { path = "crates/engine" }
 photocraft-engine-core = { path = "crates/engine-core" }
+photocraft-engine-paint = { path = "crates/engine-paint" }
 photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
@@ -121,7 +122,7 @@ todo = "warn"
 # Every cl command selects these packages: each brings features the others lack, so a command that drops one
 # builds a second copy of egui, photocraft-io or craft-affinity and of everything above them.
 selection = [
-    "photocraft-ui-egui", "photocraft-engine", "photocraft-engine-core", "photocraft", "photocraft-algo", "photocraft-automation",
+    "photocraft-ui-egui", "photocraft-engine", "photocraft-engine-core", "photocraft-engine-paint", "photocraft", "photocraft-algo", "photocraft-automation",
     "photocraft-text", "photocraft-tablet", "photocraft-cli", "photocraft-paint", "photocraft-io", "photocraft-gpu",
 ]
 # Crates whose new builds cl names after a command, besides the framework's.
@@ -150,7 +151,8 @@ craft-imaging = ["default", "screen-testing", "ui"]
 [workspace.metadata.cl.default_seconds]
 "photocraft-ui-egui/photocraft_ui_egui" = 389.0
 "photocraft-ui-egui/it" = 221.0
-"photocraft-engine-core/photocraft_engine_core" = 97.0
+"photocraft-engine-core/photocraft_engine_core" = 62.0
+"photocraft-engine-paint/photocraft_engine_paint" = 35.0
 
 # Dependencies carry no debug info: their frames in a backtrace lose file:line, and the target dir
 # and link times shrink. The test profile inherits both settings.
@@ -181,6 +183,8 @@ opt-level = 0
 [profile.test.package.photocraft-engine]
 opt-level = 0
 [profile.test.package.photocraft-engine-core]
+opt-level = 0
+[profile.test.package.photocraft-engine-paint]
 opt-level = 0
 
 # Only the exhaustive rounding proof needs maximum optimization; algo stays at its usual level.

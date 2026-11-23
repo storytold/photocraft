@@ -258,6 +258,9 @@ def import_names(crate, files=None):
     regions = test_regions(lib) if os.path.exists(lib) else {}
     files = files if files is not None else tree_files(crate_src(crate))
     own = OWN | {u.split("/")[-1] for u in units(crate)}
+    if os.path.exists(lib):
+        # Modules the crate's root declares itself (beside the moved ones).
+        own |= {d.group(2) for d in MOD_DECL.finditer(mask(read(lib)))}
     used, in_code = set(), set()
     for f in files:
         masked = mask(read(f))

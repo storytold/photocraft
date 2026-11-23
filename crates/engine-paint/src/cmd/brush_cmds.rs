@@ -11,13 +11,18 @@ use photocraft_geom::Rect;
 use photocraft_paint::mixer::MixerSettings;
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
-use photocraft_paint::{
-    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke_clipped,
-};
+use photocraft_paint::{BrushPreset, BrushSettings, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke_clipped};
+// The sampled-tip tile type, which the tests build tips from.
+#[cfg(test)]
+use photocraft_paint::GrayTile;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
-use crate::commands::{CommandSpec, has_paintable, is_mask_target, paint_surface};
+pub use crate::brush_defs::MAX_TIP;
+use crate::brush_defs::{sampled_brush, validate_brush};
+use crate::cmd::has_paintable;
+use crate::commands::{CommandSpec, is_mask_target, paint_surface};
+use crate::preset_store::forget_deleted_preset;
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -169,31 +174,6 @@ pub fn merge_brush(base: &BrushSettings, patch: &Value, cmd: &str) -> Result<Bru
     Ok(out)
 }
 
-/// Rejects brush sizes and Scatter amounts outside their documented ranges, before a brush is
-/// stored or painted with.
-pub(crate) fn validate_brush(brush: &BrushSettings, cmd: &str) -> Result<()> {
-    let max = photocraft_paint::MAX_BRUSH_SIZE;
-    if !brush.size.is_finite() || brush.size > max {
-        return Err(bad(cmd, format!("brush size must be finite and at most {max} px")));
-    }
-    if brush.dual_brush.enabled && (!brush.dual_brush.size.is_finite() || brush.dual_brush.size > max) {
-        return Err(bad(cmd, format!("dual brush size must be finite and at most {max} px")));
-    }
-    // Scatter may exceed 1 (100 %) but not the 1000 % maximum: a huge amount pushed dab centres to
-    // infinity (#977). `{:?}` keeps 1e38 short and shows infinity as `inf`.
-    let scatter_max = photocraft_paint::MAX_SCATTER;
-    let in_range = |v: f32| (0.0..=scatter_max).contains(&v);
-    let sc = brush.scattering.scatter.jitter;
-    if brush.scattering.enabled && !in_range(sc) {
-        return Err(bad(cmd, format!("scatter amount {sc:?} is out of range: it must be between 0 and {scatter_max} (1000 %)")));
-    }
-    let ds = brush.dual_brush.scatter;
-    if brush.dual_brush.enabled && !in_range(ds) {
-        return Err(bad(cmd, format!("dual brush scatter amount {ds:?} is out of range: it must be between 0 and {scatter_max} (1000 %)")));
-    }
-    Ok(())
-}
-
 fn find_preset<'a>(s: &'a Session, name: &str, cmd: &str) -> Result<&'a BrushPreset> {
     photocraft_paint::presets::find(&s.tools.presets, name).ok_or_else(|| bad(cmd, format!("no brush preset named `{name}`")))
 }
@@ -302,7 +282,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 return Ok(l.bounds);
             }
             let sel = doc.selection.clone();
-            let table = crate::mode_cmds::paint_color_table(doc, p);
+            let table = paint_color_table(doc, p);
             let canvas = doc.bounds();
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
             let clip = paintable_area(canvas, surf);
@@ -310,7 +290,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             erase_locked(&mut brush, lock, bg);
             if auto_erase {
                 // A stroke in the table's colour starts on what the foreground painted as.
-                let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
+                let fg = table.as_ref().map_or(fg, |t| table_color(t, fg));
                 // Not in #11940: Pencil Auto Erase keeps the plain background colour.
                 apply_auto_erase(&mut brush, surf, pts.first(), fg, raw_bg);
             }
@@ -340,7 +320,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 render_stroke_clipped(surf, &brush, &pts, sel.as_ref(), lock, zoom, Some(clip))
             };
             if let (Some(table), Some(pre)) = (&table, &unpainted) {
-                crate::mode_cmds::keep_in_color_table(table, pre, surf, damage);
+                keep_in_color_table(table, pre, surf, damage);
             }
             Ok(damage)
         })
@@ -583,11 +563,27 @@ fn fill_region(s: &mut Session, p: &Value, label: &str, brush: BrushSettings, pt
                 }
             }
             let coverage = photocraft_algo::selection::mask_to_surface(&cov, bounds);
-            crate::fill_cmds::blend_color_mask(surf, bounds, color, picked, &coverage, mode, opacity, lock)?;
+            crate::pixel_fill::blend_color_mask(surf, bounds, color, picked, &coverage, mode, opacity, lock)?;
             Ok(bounds)
         })
     })?;
     Ok(damage_json(s, dmg))
+}
+
+/// The session's offer of a finished live Brush, Eraser or Pencil stroke.
+pub trait LiveStrokeExt {
+    /// Offer a finished live stroke to the next command: a `paint.stroke` / `paint.pencil` whose
+    /// params match it exactly takes its pixels instead of rendering the stroke again (its result
+    /// then says `"fromLive": true`); any other command drops the offer. The command still runs
+    /// through the normal dispatch, so authorization, the journal and history are unchanged.
+    fn offer_live_stroke(&mut self, live: LiveStroke) -> Result<()>;
+}
+
+impl LiveStrokeExt for Session {
+    fn offer_live_stroke(&mut self, live: LiveStroke) -> Result<()> {
+        self.live_commit = Some(live.into_commit()?);
+        Ok(())
+    }
 }
 
 /// A `paint.stroke` rendered while it is drawn, onto a copy of the active document, so the canvas
@@ -623,7 +619,7 @@ pub struct LiveStroke {
     base: (photocraft_doc::DocId, u64),
 }
 
-pub use crate::state::LiveCommit;
+pub use photocraft_engine_core::LiveCommit;
 
 impl LiveStroke {
     /// Start from `paint.stroke` params; their `points` are rendered.
@@ -650,14 +646,14 @@ impl LiveStroke {
         let base = (st.doc.id, st.revision);
         let mut doc = (*st.doc).clone();
         let sel = doc.selection.clone();
-        let table = crate::mode_cmds::paint_color_table(&doc, p);
+        let table = paint_color_table(&doc, p);
         let canvas = doc.bounds();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         let clip = paintable_area(canvas, surf);
         let bg = crate::color_cmds::swatch_in_doc(s, s.tools.background);
         erase_locked(&mut brush, lock, bg);
         if pencil && flag(p, "autoErase", false) {
-            let fg = table.as_ref().map_or(fg, |t| crate::mode_cmds::table_color(t, fg));
+            let fg = table.as_ref().map_or(fg, |t| table_color(t, fg));
             apply_auto_erase(&mut brush, surf, pts.first(), fg, s.tools.background);
         }
         let renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom).with_clip(clip);
@@ -777,9 +773,9 @@ impl LiveStroke {
             Ok(dmg)
         })?;
         // The preview shows the pixels the commit keeps (see `stroke_with`).
-        if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.params) {
+        if let Some(table) = paint_color_table(&self.doc, &self.params) {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-            crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, dmg);
+            keep_in_color_table(&table, &self.pre, surf, dmg);
         }
         Ok(dmg)
     }
@@ -1025,17 +1021,6 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "count": s.tools.presets.len() }))
 }
 
-/// After preset `name` was deleted (here or in Edit › Presets › Preset Manager): the current
-/// brush no longer comes from a preset, and the library is saved.
-pub(crate) fn forget_deleted_preset(s: &mut Session, name: &str) {
-    if s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(name)) {
-        s.tools.current_preset = None;
-        // The remembered brush names the preset it was picked from: the name went away.
-        s.tools.brush_changed();
-    }
-    s.brush_presets_changed();
-}
-
 /// Overwrite an existing preset with the current brush (or the current brush plus a `brush`
 /// patch), in place: no new preset, the position, name and group stay. The preset defaults to the
 /// one the current brush was picked from. A built-in that is updated becomes the user's preset
@@ -1079,9 +1064,6 @@ fn has_selection_and_pixels(s: &Session) -> std::result::Result<(), String> {
     s.active().ok_or("no document")?;
     Ok(())
 }
-
-/// Largest sampled tip side (like Photoshop's 5000 px limit, kept smaller for preset size).
-pub const MAX_TIP: u32 = 2500;
 
 fn define_from_selection(s: &mut Session, p: &Value) -> Result<Value> {
     define_from_selection_with_renderer(s, p, |doc, area, sink| photocraft_compose::try_render_bands(doc, area, 0, sink))
@@ -1187,39 +1169,6 @@ fn define_from_selection_with_renderer(
     s.tools.current_preset = Some(name.clone());
     s.tools.brush_changed();
     Ok(json!({ "name": name, "width": tw, "height": th }))
-}
-
-/// A sampled-tip brush from a paint-amount map (`w`×`h`, row-major, 0 = no paint, 1 = full):
-/// cropped to the painted extent, at most [`MAX_TIP`] px a side. Shared by Define Brush Preset
-/// and importing an image file as a brush (`brush.presets.importImage`).
-pub(crate) fn sampled_brush(cmd: &str, v: &[f32], w: usize, h: usize) -> Result<(BrushSettings, u32, u32)> {
-    let at = |x: usize, y: usize| v.get(y * w + x).copied().unwrap_or(0.0);
-    // Crop to the painted extent.
-    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
-    for y in 0..h {
-        for x in 0..w {
-            if at(x, y) > 1e-4 {
-                x0 = x0.min(x);
-                y0 = y0.min(y);
-                x1 = x1.max(x + 1);
-                y1 = y1.max(y + 1);
-            }
-        }
-    }
-    if x1 <= x0 || y1 <= y0 {
-        return Err(bad(cmd, "the pixels contain no paint (all white or transparent)"));
-    }
-    let (tw, th) = ((x1 - x0) as u32, (y1 - y0) as u32);
-    if tw.max(th) > MAX_TIP {
-        return Err(bad(cmd, format!("too large for a brush tip ({tw}×{th}; max {MAX_TIP} px)")));
-    }
-    let mut data = Vec::with_capacity((tw * th) as usize);
-    for y in y0..y1 {
-        data.extend((x0..x1).map(|x| at(x, y)));
-    }
-    let tip = GrayTile::from_f32(tw, th, &data);
-    let brush = BrushSettings { tip: TipShape::Sampled(tip).into(), size: tw.max(th) as f32, spacing: 0.25, pressure_size: false, ..BrushSettings::default() };
-    Ok((brush, tw, th))
 }
 
 pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1519,7 +1468,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "paint.colorReplacement",
             "Color Replacement Tool",
             r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":1..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
-            crate::commands::has_paintable,
+            crate::cmd::has_paintable,
             color_replacement,
             true
         ),
@@ -1553,6 +1502,62 @@ pub fn specs() -> Vec<CommandSpec> {
             true
         ),
     ]
+}
+
+/// The colour table painting on `p`'s target must stay inside: an Indexed Color document's,
+/// when the target is layer pixels (masks and channels are gray, not indexed).
+fn paint_color_table(doc: &photocraft_doc::Document, p: &Value) -> Option<photocraft_doc::ColorTable> {
+    let pixels = crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
+    doc.color_table.clone().filter(|_| pixels && doc.mode == photocraft_color::ColorMode::Indexed)
+}
+
+/// The colour `c` paints as in a document with `table` (see [`keep_in_color_table`]).
+fn table_color(table: &photocraft_doc::ColorTable, c: [f32; 4]) -> [f32; 4] {
+    let mut px = [c];
+    if !table.colors.is_empty() {
+        photocraft_algo::quantize::quantize(&mut px, 1, &table.colors, photocraft_algo::quantize::Dither::None, 0.0, table.transparent.map(usize::from));
+    }
+    let [c] = px;
+    c
+}
+
+/// Map the pixels of `r` that the stroke changed (they differ from `pre`) to their nearest
+/// colour-table entry, as the Indexed Color conversion does with no dither, so painting never
+/// leaves the table (#8669). One tile at a time: a long stroke's bounds can span the canvas.
+fn keep_in_color_table(table: &photocraft_doc::ColorTable, pre: &Surface, surf: &mut Surface, r: Rect) {
+    if table.colors.is_empty() {
+        return;
+    }
+    let fmt = surf.format();
+    let n = fmt.channels();
+    let mut enc = [0.0f32; 8];
+    for tc in r.tiles() {
+        let t = tc.rect().intersect(&r);
+        if t.is_empty() || !surf.has_tiles_in(t) {
+            continue;
+        }
+        let (before, mut data) = (pre.read_region(t), surf.read_region(t));
+        let (mut changed, mut px) = (Vec::new(), Vec::new());
+        for (i, (q, b)) in data.chunks_exact(n).zip(before.chunks_exact(n)).enumerate() {
+            if q != b {
+                changed.push(i);
+                px.push(photocraft_raster::to_rgba(&fmt, q));
+            }
+        }
+        if px.is_empty() {
+            continue;
+        }
+        let w = px.len();
+        photocraft_algo::quantize::quantize(&mut px, w, &table.colors, photocraft_algo::quantize::Dither::None, 0.0, table.transparent.map(usize::from));
+        let mut mapped = changed.into_iter().zip(px).peekable();
+        for (i, q) in data.chunks_exact_mut(n).enumerate() {
+            if let Some((_, c)) = mapped.next_if(|(j, _)| *j == i) {
+                photocraft_raster::from_rgba_into(&fmt, c, &mut enc);
+                q.iter_mut().zip(enc).for_each(|(d, v)| *d = v);
+            }
+        }
+        surf.write_region(t, &data);
+    }
 }
 
 #[cfg(test)]
