@@ -185,9 +185,18 @@ fn unmeasured_cases_keep_making_a_new_layer() {
     // Two shape layers selected.
     let mut app = self::app();
     drag(&mut app, [100.0, 100.0], [200.0, 200.0], Modifiers::NONE, Modifiers::NONE);
-    let st = app.session.active_mut().unwrap();
-    st.selected_layers =
-        st.doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|&id| matches!(st.doc.layer(id).map(|l| &l.content), Some(LayerContent::Shape(_)))).collect();
+    let st = app.session.active().unwrap();
+    let shapes: Vec<u64> = st
+        .doc
+        .walk()
+        .into_iter()
+        .map(|(_, _, l)| l.id)
+        .filter(|&id| matches!(st.doc.layer(id).map(|l| &l.content), Some(LayerContent::Shape(_))))
+        .map(|id| id.0)
+        .collect();
+    for (i, layer) in shapes.iter().enumerate() {
+        app.run("layer.select", json!({"layer": layer, "mode": if i == 0 { "replace" } else { "add" }})).unwrap();
+    }
     assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
     let (layers, _) = counts(&app);
     drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::SHIFT, Modifiers::SHIFT);

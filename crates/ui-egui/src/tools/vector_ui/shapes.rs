@@ -226,15 +226,17 @@ fn report(app: &mut PhotocraftApp, e: String) {
     app.ui.status_error = true;
 }
 
-/// Finish a Shape-tool drag with the geometry the framework tool committed (⇧ and ⌥ are already in
-/// it): Path mode adds the outline to the Work Path, Custom Shape places the preset, the others
-/// make a shape layer. A geometry too small to draw changes nothing.
+/// [`finish_drag_pressed`] with no modifiers held at the press.
+#[cfg(test)]
 pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) {
     finish_drag_pressed(app, kind, geometry, mods, Mods::default());
 }
 
-/// [`finish_drag`] for a canvas drag: `mods` are the modifiers held at the release, `press` the ones
-/// held at the press, which can pick the path operation ([`press_path_op`]).
+/// Finish a Shape-tool drag with the geometry the framework tool committed (⇧ and ⌥ are already in
+/// it): Path mode adds the outline to the Work Path, Custom Shape places the preset, the others
+/// make a shape layer. A geometry too small to draw changes nothing. `mods` are the modifiers held
+/// at the release, `press` the ones held at the press, which can pick the path operation
+/// ([`press_path_op`]).
 pub fn finish_drag_pressed(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods, press: Mods) {
     let Some(geometry) = snapped(geometry, mods.shift, snaps_to_pixels(app, kind)) else { return };
     if draws_path(&app.ui.tool_options) {
