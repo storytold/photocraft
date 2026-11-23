@@ -185,7 +185,7 @@ impl CameraRawGpu {
 }
 
 #[cfg(test)]
-mod tests {
+mod gpu_tests {
     use super::*;
     use crate::camera_raw_ui::proxy::ProxyJob;
     use craft::imaging::ui::raw_develop::RawPreviewRequest;
@@ -270,7 +270,8 @@ mod tests {
         assert!(pixels > 0, "{what}: the proxy has no pixels");
         assert_eq!((gpu.len(), cpu.len()), (pixels, pixels), "{what}: GPU and CPU pixel counts");
         for (side, px) in [("GPU", gpu), ("CPU", cpu)] {
-            assert!(px.iter().flatten().all(|c| c.is_finite()), "{what}: a non-finite {side} channel");
+            let bad = px.iter().position(|q| !q.iter().all(|c| c.is_finite()));
+            assert!(bad.is_none(), "{what}: a non-finite {side} channel at pixel {bad:?}");
         }
         gpu.iter().zip(cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max)
     }
@@ -310,7 +311,9 @@ mod tests {
     #[test]
     fn every_stage_but_calibration_develops_on_the_gpu_like_the_cpu() {
         let _gpu = photocraft_testkit::gpu_lock();
-        for depth in [8, 16, 32] {
+        // 8 and 32 bits: the dialog hands the develop only `float` (32-bit or not, `camera_raw_ui/convert.rs`), so 16
+        // bits takes 8 bits' path; every depth's develop is the gpu crate's `tests/it/camera_raw.rs` (#15652).
+        for depth in [8, 32] {
             let Some(mut app) = gpu_app(depth) else { return };
             force_pass(&app);
             open_raw(&mut app);
@@ -354,10 +357,14 @@ mod tests {
                 assert!(worst <= TOL, "{depth}-bit, {spatial:?}: off by {worst}");
             }
             // And Detail: sharpening and noise reduction, alone (Whites and Blacks measured on
-            // the CPU before it) and after every other stage.
+            // the CPU before it, or not set) and after every other stage.
             for detail in [
                 cr!(per_pixel.clone() => sharpen_amount: 60.0, sharpen_masking: 30.0),
                 cr!(per_pixel.clone() => noise_luminance: 40.0, noise_color: 50.0),
+                cr!(exposure: 0.4, sharpen_amount: 40.0),
+                cr!(exposure: 0.4, noise_luminance: 30.0),
+                cr!(exposure: 0.4, noise_color: 25.0),
+                cr!(per_pixel.clone() => noise_luminance: 30.0, dehaze: 20.0),
                 cr!(toned.clone() => sharpen_amount: 80.0, noise_luminance: 30.0, noise_color: 40.0, clarity: 30.0, texture: 25.0, dehaze: 20.0),
             ] {
                 let (backend, gpu, cpu) = developed(&app, detail.clone());

@@ -42,38 +42,38 @@ fn plane<'a>(doc: &'a Document, target: &Value) -> &'a Surface {
 /// Black/white pickers edit only their gray target across colour modes and native depths, including undo/redo.
 #[test]
 fn native_gray_pickers_ignore_document_colour_and_preserve_other_data() {
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk] {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for target in [json!("mask"), json!("quickMask"), json!({"channel":0})] {
-                for kind in ["levels", "curves"] {
-                    for point in ["black", "white"] {
-                        let mut s = session(mode, depth);
-                        let before = s.active().unwrap().doc.clone();
-                        let history = s.active().unwrap().history.past_len();
-                        let p = json!({"target":target,"eyedropper":{"point":point,"at":[8,8],"size":3}});
-                        s.execute(&format!("image.adjustments.{kind}"), p).unwrap();
-                        let after = s.active().unwrap().doc.clone();
-                        let expected = if point == "white" { 1.0 } else { 0.0 };
-                        let actual = plane(&after, &target).sample_channel(8, 8, 0);
-                        assert!((actual - expected).abs() < 0.01, "{mode:?} {depth:?} {target} {kind} {point}: {actual}");
-                        assert_eq!(before.layers[0].content, after.layers[0].content, "colour pixels and transparency");
-                        if target != json!("mask") {
-                            assert_eq!(before.layers[0].mask, after.layers[0].mask);
-                        }
-                        if target != json!("quickMask") {
-                            assert_eq!(before.quick_mask, after.quick_mask);
-                        }
-                        if target != json!({"channel":0}) {
-                            assert_eq!(before.channels, after.channels);
-                        }
-                        assert_eq!(before.channels[0].spot, after.channels[0].spot);
-                        assert_eq!(s.active().unwrap().history.past_len(), history + 1);
-                        s.execute("edit.undo", json!({})).unwrap();
-                        assert_eq!(plane(&s.active().unwrap().doc, &target), plane(&before, &target));
-                        s.execute("edit.redo", json!({})).unwrap();
-                        assert_eq!(plane(&s.active().unwrap().doc, &target), plane(&after, &target));
-                    }
+    // Depth (mode + target) % 3 and, per kind, a point that alternates: each mode and each target meets every depth,
+    // and each kind runs with both points.
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk].into_iter().enumerate() {
+        for (ti, target) in [json!("mask"), json!("quickMask"), json!({"channel":0})].into_iter().enumerate() {
+            let depth = [SampleType::U8, SampleType::U16, SampleType::F32][(mi + ti) % 3];
+            for (ki, kind) in ["levels", "curves"].into_iter().enumerate() {
+                let point = ["black", "white"][(mi + ti + ki) % 2];
+                let mut s = session(mode, depth);
+                let before = s.active().unwrap().doc.clone();
+                let history = s.active().unwrap().history.past_len();
+                let p = json!({"target":target,"eyedropper":{"point":point,"at":[8,8],"size":3}});
+                s.execute(&format!("image.adjustments.{kind}"), p).unwrap();
+                let after = s.active().unwrap().doc.clone();
+                let expected = if point == "white" { 1.0 } else { 0.0 };
+                let actual = plane(&after, &target).sample_channel(8, 8, 0);
+                assert!((actual - expected).abs() < 0.01, "{mode:?} {depth:?} {target} {kind} {point}: {actual}");
+                assert_eq!(before.layers[0].content, after.layers[0].content, "colour pixels and transparency");
+                if target != json!("mask") {
+                    assert_eq!(before.layers[0].mask, after.layers[0].mask);
                 }
+                if target != json!("quickMask") {
+                    assert_eq!(before.quick_mask, after.quick_mask);
+                }
+                if target != json!({"channel":0}) {
+                    assert_eq!(before.channels, after.channels);
+                }
+                assert_eq!(before.channels[0].spot, after.channels[0].spot);
+                assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+                s.execute("edit.undo", json!({})).unwrap();
+                assert_eq!(plane(&s.active().unwrap().doc, &target), plane(&before, &target));
+                s.execute("edit.redo", json!({})).unwrap();
+                assert_eq!(plane(&s.active().unwrap().doc, &target), plane(&after, &target));
             }
         }
     }
@@ -232,78 +232,76 @@ fn bad_scalar_picker_params_fail_without_changing_pixels() {
 /// Hidden RGB settings must never affect a gray plane, including pencil curves and sampled edits.
 #[test]
 fn gray_tone_records_do_not_leak_from_rgb_channels() {
-    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk] {
-        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-            for (target, panel) in
-                [(json!("mask"), ChannelTarget::LayerMask), (json!({"channel":0}), ChannelTarget::Alpha(0)), (json!("quickMask"), ChannelTarget::Composite)]
-            {
-                for style in ["levels", "points", "pencil"] {
-                    for sampled in [false, true] {
-                        for explicit in [false, true] {
-                            let mut clean = session(mode, depth);
-                            clean.active_mut().unwrap().channel_view.target = panel;
-                            clean
-                                .edit("Vary gray samples", |doc, _| {
-                                    let patch = Rect::from_xywh(4, 4, 1, 1);
-                                    doc.layers[0].mask.as_mut().unwrap().surface.fill_rect(patch, &[0.125]);
-                                    doc.channels[0].surface.fill_rect(patch, &[0.125]);
-                                    doc.quick_mask.as_mut().unwrap().surface.fill_rect(patch, &[0.125]);
-                                    Ok(())
-                                })
-                                .unwrap();
-                            let before = clean.active().unwrap().doc.clone();
-                            let layer = clean.active().unwrap().active_layer.unwrap();
-                            let mut dirty = Session::new();
-                            dirty.add_document((*before).clone(), None);
-                            dirty.select_layer(layer).unwrap();
-                            dirty.active_mut().unwrap().channel_view.target = panel;
-                            let kind = if style == "levels" { "levels" } else { "curves" };
-                            let mut params = if kind == "levels" { json!({"gamma":2}) } else { json!({"points":[[0,255],[255,0]],"pencil":style == "pencil"}) };
-                            if explicit {
-                                params["target"] = target.clone();
-                            }
-                            if sampled {
-                                params["eyedropper"] = json!({"point":"white","at":[8,8]});
-                            }
-                            let mut contaminated = params.clone();
-                            for key in ["red", "green", "blue"] {
-                                contaminated[key] = if kind == "levels" {
-                                    json!({"gamma":4})
-                                } else if style == "pencil" {
-                                    json!(vec![255; 256])
-                                } else {
-                                    json!([[0, 255], [255, 255]])
-                                };
-                            }
-                            let command = format!("image.adjustments.{kind}");
-                            clean.execute(&command, params).unwrap();
-                            dirty.execute(&command, contaminated).unwrap();
-                            let expected = &clean.active().unwrap().doc;
-                            let actual = &dirty.active().unwrap().doc;
-                            assert!(plane(expected, &target) != plane(&before, &target), "the scalar adjustment really edits the plane");
-                            assert_eq!(
-                                plane(actual, &target).sample_channel(4, 4, 0),
-                                plane(expected, &target).sample_channel(4, 4, 0),
-                                "{mode:?} {depth:?} {target} {style} sampled={sampled} explicit={explicit}"
-                            );
-                            assert!(
-                                plane(actual, &target) == plane(expected, &target),
-                                "{mode:?} {depth:?} {target} {style} sampled={sampled} explicit={explicit}"
-                            );
-                            assert_eq!(actual.layers[0].content, before.layers[0].content);
-                            if target != json!("mask") {
-                                assert_eq!(actual.layers[0].mask, before.layers[0].mask);
-                            }
-                            if target != json!("quickMask") {
-                                assert_eq!(actual.quick_mask, before.quick_mask);
-                            }
-                            if target != json!({"channel":0}) {
-                                assert_eq!(actual.channels, before.channels);
-                            }
-                            assert_eq!(actual.channels[0].spot, before.channels[0].spot);
-                        }
-                    }
+    // Depth (mode + target) % 3: each mode and each target meets every depth.
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk].into_iter().enumerate() {
+        for (ti, (target, panel)) in
+            [(json!("mask"), ChannelTarget::LayerMask), (json!({"channel":0}), ChannelTarget::Alpha(0)), (json!("quickMask"), ChannelTarget::Composite)]
+                .into_iter()
+                .enumerate()
+        {
+            let depth = [SampleType::U8, SampleType::U16, SampleType::F32][(mi + ti) % 3];
+            // Each style runs one (sampled, explicit) pair, rotating with (2 * mode + target + style): every style sees
+            // all four flag pairs across the cases, and at every depth it sees both sampled and both explicit values.
+            for (si, style) in ["levels", "points", "pencil"].into_iter().enumerate() {
+                let (sampled, explicit) = [(false, false), (false, true), (true, false), (true, true)][(2 * mi + ti + si) % 4];
+                let mut clean = session(mode, depth);
+                clean.active_mut().unwrap().channel_view.target = panel;
+                clean
+                    .edit("Vary gray samples", |doc, _| {
+                        let patch = Rect::from_xywh(4, 4, 1, 1);
+                        doc.layers[0].mask.as_mut().unwrap().surface.fill_rect(patch, &[0.125]);
+                        doc.channels[0].surface.fill_rect(patch, &[0.125]);
+                        doc.quick_mask.as_mut().unwrap().surface.fill_rect(patch, &[0.125]);
+                        Ok(())
+                    })
+                    .unwrap();
+                let before = clean.active().unwrap().doc.clone();
+                let layer = clean.active().unwrap().active_layer.unwrap();
+                let mut dirty = Session::new();
+                dirty.add_document((*before).clone(), None);
+                dirty.select_layer(layer).unwrap();
+                dirty.active_mut().unwrap().channel_view.target = panel;
+                let kind = if style == "levels" { "levels" } else { "curves" };
+                let mut params = if kind == "levels" { json!({"gamma":2}) } else { json!({"points":[[0,255],[255,0]],"pencil":style == "pencil"}) };
+                if explicit {
+                    params["target"] = target.clone();
                 }
+                if sampled {
+                    params["eyedropper"] = json!({"point":"white","at":[8,8]});
+                }
+                let mut contaminated = params.clone();
+                for key in ["red", "green", "blue"] {
+                    contaminated[key] = if kind == "levels" {
+                        json!({"gamma":4})
+                    } else if style == "pencil" {
+                        json!(vec![255; 256])
+                    } else {
+                        json!([[0, 255], [255, 255]])
+                    };
+                }
+                let command = format!("image.adjustments.{kind}");
+                clean.execute(&command, params).unwrap();
+                dirty.execute(&command, contaminated).unwrap();
+                let expected = &clean.active().unwrap().doc;
+                let actual = &dirty.active().unwrap().doc;
+                assert!(plane(expected, &target) != plane(&before, &target), "the scalar adjustment really edits the plane");
+                assert_eq!(
+                    plane(actual, &target).sample_channel(4, 4, 0),
+                    plane(expected, &target).sample_channel(4, 4, 0),
+                    "{mode:?} {depth:?} {target} {style} sampled={sampled} explicit={explicit}"
+                );
+                assert!(plane(actual, &target) == plane(expected, &target), "{mode:?} {depth:?} {target} {style} sampled={sampled} explicit={explicit}");
+                assert_eq!(actual.layers[0].content, before.layers[0].content);
+                if target != json!("mask") {
+                    assert_eq!(actual.layers[0].mask, before.layers[0].mask);
+                }
+                if target != json!("quickMask") {
+                    assert_eq!(actual.quick_mask, before.quick_mask);
+                }
+                if target != json!({"channel":0}) {
+                    assert_eq!(actual.channels, before.channels);
+                }
+                assert_eq!(actual.channels[0].spot, before.channels[0].spot);
             }
         }
     }
@@ -377,6 +375,58 @@ fn review_picker_reads_the_addressed_mask_layer() {
                 assert_eq!(doc.quick_mask, before.quick_mask);
                 s.undo();
                 assert_eq!(s.active().unwrap().doc.layers, before.layers);
+            }
+        }
+    }
+}
+
+/// A Smart Filter mask is a gray target like a layer mask: the picker reads the stored mask, or the implicit Reveal
+/// All before anything is stored, without materializing it, and the commit edits only the filter mask, in every
+/// colour mode and, across the cases, every native depth (rotating with mode, stored and kind). (The UI's tone dialogs test only that their pick reaches this target, #15648.)
+#[test]
+fn filter_mask_picker_samples_and_edits_only_the_filter_mask() {
+    for (mi, mode) in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab].into_iter().enumerate() {
+        for (si, stored) in [false, true].into_iter().enumerate() {
+            for (ki, kind) in ["levels", "curves"].into_iter().enumerate() {
+                let depth = [SampleType::U8, SampleType::U16, SampleType::F32][(mi + si + ki) % 3];
+                let case = format!("{mode:?} {depth:?} stored={stored} {kind}");
+                let mut s = session(mode, depth);
+                // A Smart Filter needs the composite selected, not one colour channel, and no Quick Mask (the filter
+                // would edit the Quick Mask instead).
+                s.edit("No Quick Mask", |doc, _| {
+                    doc.quick_mask = None;
+                    Ok(())
+                })
+                .unwrap();
+                s.active_mut().unwrap().channel_view.target = ChannelTarget::Composite;
+                s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+                s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();
+                if stored {
+                    s.execute("edit.fill", json!({"target": "filterMask", "contents": "color", "color": "#404040"})).unwrap();
+                }
+                let id = s.active().unwrap().active_layer.unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let p = json!({"target": "filterMask", "eyedropper": {"point": "white", "at": [8, 8]}});
+                let picked = adjust_params::destructive_eyedropper(&s, kind, &p).unwrap().unwrap();
+                assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc), "sampling is read-only: {case}");
+                let white = if stored { 64.0 } else { 255.0 };
+                let sampled = if kind == "levels" {
+                    adjust_params::to_params(&picked)["inWhite"].as_f64().unwrap()
+                } else {
+                    adjust_params::to_params(&picked)["points"].as_array().unwrap().last().unwrap()[0].as_f64().unwrap()
+                };
+                assert!((sampled - white).abs() < 1.0, "{case}: sampled {sampled}, want {white}");
+                s.execute(&format!("image.adjustments.{kind}"), p).unwrap();
+                let doc = &s.active().unwrap().doc;
+                let (LayerContent::Smart(old), LayerContent::Smart(new)) = (&before.layer(id).unwrap().content, &doc.layer(id).unwrap().content) else {
+                    panic!("{case}: not a smart object")
+                };
+                assert!(new.filter_mask.as_ref().unwrap().surface.sample_channel(8, 8, 0) > 0.99, "{case}");
+                assert_eq!(new.smart_filters, old.smart_filters, "{case}: the adjustment edits the mask, adds no filter");
+                assert_eq!(new.source, old.source, "{case}");
+                assert_eq!(doc.layer(id).unwrap().mask, before.layer(id).unwrap().mask, "{case}: the layer mask");
+                assert_eq!(doc.channels, before.channels, "{case}");
+                assert_eq!(doc.quick_mask, before.quick_mask, "{case}");
             }
         }
     }

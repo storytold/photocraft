@@ -34,8 +34,8 @@ fn authorize(app: &PhotocraftApp, held: &Held, id: &str, params: &Value) -> Resu
 fn unchanged(app: &PhotocraftApp, held: &Held) -> Result<(), String> {
     super::suspended_guard(app, COMMAND)?;
     if held.selection.get("revision").and_then(Value::as_u64) != Some(app.session.actions.list.revision())
-        || app.session.actions.recording.is_some()
-        || app.session.actions.playing > 0
+        || app.session.recording.target.is_some()
+        || app.session.recording.playing > 0
     {
         return Err(tl!("The actions changed. Request Record Again again.").into());
     }

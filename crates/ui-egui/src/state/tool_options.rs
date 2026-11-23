@@ -6,6 +6,16 @@ use craft::imaging::ui::select::MagneticSettings;
 use super::tool::Tool;
 use super::{Deserialize, Serialize};
 
+/// Object Selection › gear › Object Finder Mode (#12857).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObjectFinderMode {
+    /// Auto Refresh: the finder re-analyses the document after every edit.
+    #[default]
+    Auto,
+    /// Manual Refresh: the finder re-analyses only when Refresh is clicked.
+    Manual,
+}
+
 /// Options-bar state for tools (Photoshop keeps these per tool).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -18,6 +28,10 @@ pub struct ToolOptions {
     pub sample_all: SampleAllLayers,
     /// Object Selection › Object Finder: hovering highlights the object a click selects (#4087).
     pub object_finder: bool,
+    /// Object Selection › gear › Object Subtract; stored only, today's subtract behaviour is unchanged (#12857).
+    pub object_subtract: bool,
+    /// Object Selection › gear › Object Finder Mode: when the finder re-analyses (#12857).
+    pub object_finder_mode: ObjectFinderMode,
     /// Object Selection › Hard Edge (#12855): off, the result gets a softer, slightly wider rim.
     pub object_hard_edge: bool,
     /// Remove tool: the fill goes to a new layer above the target (Photoshop's Create a new layer).
@@ -25,6 +39,16 @@ pub struct ToolOptions {
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
     /// collect as a tint on the canvas and ↩ applies them together (Esc drops them).
     pub remove_after_each_stroke: bool,
+    /// Adjustment Brush: the Adjustment dropdown's entry (`photocraft_engine::adjustment_brush_cmds::ENTRIES`).
+    pub adjustment_brush_kind: String,
+    /// Adjustment Brush: Subtract (paints black into the mask) instead of Add.
+    pub adjustment_brush_subtract: bool,
+    /// Adjustment Brush: the Overlay checkbox (its tint over the mask is #12520).
+    pub adjustment_brush_overlay: bool,
+    /// Adjustment Brush: the active layer the dropdown last followed, so selecting another
+    /// adjustment layer sets it once and a pick in the dropdown sticks.
+    #[serde(skip)]
+    pub adjustment_brush_followed: Option<u64>,
     pub feather: f32,
     /// linear | radial | angle | reflected | diamond
     pub gradient_style: String,
@@ -412,9 +436,15 @@ impl Default for ToolOptions {
             anti_alias: true,
             sample_all: SampleAllLayers::default(),
             object_finder: true,
+            object_subtract: true,
+            object_finder_mode: ObjectFinderMode::Auto,
             object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
+            adjustment_brush_kind: photocraft_engine::adjustment_brush_cmds::DEFAULT_KIND.into(),
+            adjustment_brush_subtract: false,
+            adjustment_brush_overlay: false,
+            adjustment_brush_followed: None,
             feather: 0.0,
             gradient_style: "linear".into(),
             gradient_reverse: false,

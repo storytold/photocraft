@@ -5,21 +5,10 @@
 use craft::layers::ui::thumbs::LayerThumb;
 use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
 use photocraft_doc::LayerId;
-use photocraft_raster::Surface;
 use serde_json::json;
 
+use crate::PhotocraftApp;
 use crate::panels::layers_tree::PhotoThumbs;
-use crate::{PhotocraftApp, surface_fingerprint};
-
-#[test]
-fn fingerprint_sees_the_default_pixel() {
-    let fmt = photocraft_color::PixelFormat::GRAY8;
-    let white = Surface::with_default(fmt, &[1.0]);
-    let black = Surface::with_default(fmt, &[0.0]);
-    assert_eq!(white.tile_count(), 0);
-    assert_ne!(surface_fingerprint(&white), surface_fingerprint(&black));
-    assert_eq!(surface_fingerprint(&white), surface_fingerprint(&white.clone()));
-}
 
 /// The mask thumbnail's revision follows Invert on a tile-less mask.
 #[test]

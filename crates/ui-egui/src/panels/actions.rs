@@ -238,7 +238,7 @@ pub(crate) fn new_action_set(app: &PhotocraftApp) -> Option<String> {
 /// Start recording: into action `into`, or into a new action in [`new_action_set`] when `None`.
 /// The recorded action is selected and shown open, with its set open.
 pub(crate) fn begin_recording(app: &mut PhotocraftApp, into: Option<usize>) {
-    if app.session.actions.recording.is_some() {
+    if app.session.recording.target.is_some() {
         return;
     }
     let params = match into {
@@ -355,7 +355,7 @@ fn apply_event(app: &mut PhotocraftApp, event: ActionsEvent) -> Result<(), Strin
         ActionsEvent::BeginRecording { into, .. } => begin_recording(app, into),
         ActionsEvent::NewAction => begin_recording(app, None),
         ActionsEvent::StopRecording => {
-            if !playback::stop(app) && app.session.actions.recording.is_some() {
+            if !playback::stop(app) && app.session.recording.target.is_some() {
                 app.run("actions.stop", json!({}))?;
             }
         }
