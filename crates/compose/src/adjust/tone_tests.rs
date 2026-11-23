@@ -900,9 +900,19 @@ fn cmyk_channel_mixer_mixes_the_inks() {
     more_cyan[0][4] = 0.3;
     let more_cyan =
         Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: false, cmyk: Some(more_cyan) };
-    let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), c);
-    apply_in(&more_cyan, &mut b, Transfer::Srgb, Some(SampleType::U8), ColorMode::Cmyk);
-    assert!(b.px[0][0] < round_trip[0] - 0.05, "more cyan ink takes red away: {:?}", b.px[0]);
+    for mode in [ColorMode::Cmyk, ColorMode::Rgb] {
+        let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), c);
+        apply_in(&more_cyan, &mut b, Transfer::Srgb, Some(SampleType::U8), mode);
+        assert!(b.px[0][0] < round_trip[0] - 0.05, "{mode:?}: more cyan ink takes red away: {:?}", b.px[0]);
+    }
+    // In a 32-bit document an identity mixer keeps samples past 0..1, and an edit still applies.
+    let hdr = [2.0, 0.5, 0.25, 1.0];
+    let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), hdr);
+    apply_in(&mixer, &mut b, Transfer::Gamma(1.0), Some(SampleType::F32), ColorMode::Rgb);
+    assert!((0..3).all(|i| (b.px[0][i] - hdr[i]).abs() < 1e-5), "identity keeps the HDR highlight: {:?}", b.px[0]);
+    let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), hdr);
+    apply_in(&more_cyan, &mut b, Transfer::Gamma(1.0), Some(SampleType::F32), ColorMode::Rgb);
+    assert!(b.px[0][0] > 1.0 && b.px[0][0] < hdr[0] - 0.05, "more cyan takes red away and keeps it HDR: {:?}", b.px[0]);
 }
 
 /// Photoshop's own CMYK Channel Mixer (photoshop corpus cmyk16 channel-mixer.psd, made with

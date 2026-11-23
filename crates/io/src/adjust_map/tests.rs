@@ -472,6 +472,15 @@ fn malformed_channel_mixers_are_unsupported() {
     );
     let ours = write(&Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: false, cmyk: None });
     assert!(matches!(parse(b"mixr", &ours[0].1, None, Channels::Other), Adjustment::ChannelMixer { .. }));
+    // Our RGB layout in a CMYK document (written before CMYK mixers were read: its fourth record
+    // repeats the red row) keeps its RGB reading: read as ink rows, the black ink became the cyan mix.
+    let legacy = [[0.8, 0.2, 0.0, 0.05], [0.1, 0.9, 0.0, 0.0], [0.0, 0.3, 0.7, 0.0]];
+    let block = write(&Adjustment::ChannelMixer { matrix: legacy, monochrome: false, cmyk: None });
+    assert!(
+        matches!(parse(b"mixr", &block[0].1, None, Channels::Cmyk), Adjustment::ChannelMixer { cmyk: None, matrix, .. } if matrix == legacy),
+        "{:?}",
+        parse(b"mixr", &block[0].1, None, Channels::Cmyk)
+    );
     assert!(matches!(parse(b"mixr", &[0, 1, 0, 0, 0, 100], None, Channels::Rgb), Adjustment::Unsupported { .. }));
 }
 

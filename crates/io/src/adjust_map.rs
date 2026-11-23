@@ -168,7 +168,7 @@ pub fn unreadable_reason(key: &[u8; 4], data: &[u8]) -> Option<String> {
 /// composite record first, then one per document channel (see [`Channels`]).
 pub fn parse(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>, channels: Channels) -> Adjustment {
     // A CMYK document's mixer has Photoshop's four ink outputs.
-    if key == b"mixr" && channels == Channels::Cmyk {
+    if key == b"mixr" && channels == Channels::Cmyk && !legacy_rgb_mixer(data) {
         return parse_cmyk_mixer(data).unwrap_or_else(|| unsupported(key, data));
     }
     // In other modes a mixer using the fourth (black) source has no RGB meaning: keep it raw.
@@ -682,6 +682,17 @@ fn parse_channel_mixer(d: &[u8]) -> Option<Adjustment> {
 /// image has no black ink). A monochrome block may carry only its first record (the mix the
 /// black ink gets); no Photoshop sample of one exists yet, and an unedited one is saved back as
 /// it was read.
+/// A Channel Mixer block PhotoCraft wrote in its RGB layout before CMYK mixers were read
+/// ([`encode::channel_mixer`]): its fourth record repeats the first and no record uses the black
+/// source. Read as CMYK rows, that fourth record would set the black ink to the cyan mix
+/// (`K' = C`), so such a block in a CMYK document keeps the RGB reading it had. A CMYK block
+/// whose black output is exactly the cyan mix with no black source would read the same way.
+fn legacy_rgb_mixer(d: &[u8]) -> bool {
+    let record = |r: usize| d.get(4 + r * 10..4 + (r + 1) * 10);
+    let no_black = (0..4).all(|r| record(r).and_then(|rec| rec.get(6..8)) == Some(&[0, 0][..]));
+    d.len() == 44 && no_black && record(0).is_some() && record(0) == record(3)
+}
+
 fn parse_cmyk_mixer(d: &[u8]) -> Option<Adjustment> {
     if be16(d, 0)? != 1 {
         return None;

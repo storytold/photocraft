@@ -215,6 +215,31 @@ fn a_control_set_before_the_first_pass_shows_custom() {
 }
 
 #[test]
+fn reset_set_before_the_first_pass_shows_custom() {
+    let name = "North America General Purpose 2";
+    let stored = preset_setup(&ColorSettings::default(), name, "srgb").unwrap();
+    for (value, expected) in [(json!(true), CUSTOM_SETTINGS), (json!(false), name)] {
+        let mut app = app_with(stored.clone());
+        let id = open_dialog(&mut app, 0);
+        dialog_set(&mut app, id, "reset", value.clone());
+        assert_eq!(fields(&app, id)["preset"], expected, "reset {value}");
+    }
+}
+
+#[test]
+fn monitor_color_follows_a_monitor_profile_set_before_the_first_pass() {
+    let stored = preset_setup(&ColorSettings { monitor_profile: "srgb".into(), ..ColorSettings::default() }, "Monitor Color", "srgb").unwrap();
+    let mut app = app_with(stored);
+    let id = open_dialog(&mut app, 0);
+    dialog_set(&mut app, id, "monitorProfile", json!("display-p3"));
+    let f = fields(&app, id);
+    assert_eq!((&f["preset"], &f["workingRgb"]), (&json!("Monitor Color"), &json!("display-p3")), "loaded at once");
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
+    let c = &app.session.color().settings;
+    assert_eq!((c.preset.as_str(), c.working_rgb.as_str()), ("Monitor Color", "display-p3"));
+}
+
+#[test]
 fn a_setup_set_before_the_first_pass_loads_too() {
     let expected = preset_setup(&ColorSettings::default(), "Europe Prepress 3", "srgb").unwrap();
     let mut app = app_with(ColorSettings::default());

@@ -204,10 +204,19 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
         Adjustment::ChannelMixer { cmyk: Some(rows), monochrome, .. } => {
             // A CMYK mixer outside a CMYK document: on the screen colour's separation.
             use photocraft_color::convert::{cmyk_to_rgb, rgb_to_cmyk};
+            // In a 32-bit document the change is added as a difference of two round trips, as
+            // [`tone::tone_in_space`] does, so samples past 0..1 the separation clips keep their
+            // magnitude (an identity mixer leaves an HDR highlight as it is).
+            let float = depth == Some(SampleType::F32);
             map_rgb(buf, |c| {
-                let mut ink = rgb_to_cmyk(c);
-                mix_inks(rows, *monochrome, &mut ink);
-                cmyk_to_rgb(ink)
+                let ink = rgb_to_cmyk(c);
+                let mut mixed = ink;
+                mix_inks(rows, *monochrome, &mut mixed);
+                if !float {
+                    return cmyk_to_rgb(mixed);
+                }
+                let (before, after) = (cmyk_to_rgb(ink), cmyk_to_rgb(mixed));
+                std::array::from_fn(|i| c[i] + after[i] - before[i])
             })
         }
         Adjustment::ChannelMixer { matrix, monochrome, .. } if depth == Some(SampleType::F32) => {

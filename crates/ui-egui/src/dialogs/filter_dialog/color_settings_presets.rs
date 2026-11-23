@@ -80,8 +80,14 @@ pub(crate) fn reconcile(app: &mut PhotocraftApp, ctx: &egui::Context) {
             set_hidden(app, APPLIED, json!(CUSTOM_SETTINGS));
             return;
         }
+        let base = tracked(&f);
+        // A monitor profile set before the first pass moves Monitor Color's working RGB too.
+        if shown == MONITOR_COLOR && monitor_rgb_moved(app, &f, &base) {
+            load(app, ctx, &f, &shown);
+            return;
+        }
         set_hidden(app, APPLIED, json!(shown));
-        set_hidden(app, BASE, Value::Object(tracked(&f)));
+        set_hidden(app, BASE, Value::Object(base));
         return;
     };
     if shown != applied {
@@ -137,10 +143,12 @@ fn load(app: &mut PhotocraftApp, ctx: &egui::Context, f: &Map<String, Value>, na
     set_hidden(app, BASE, Value::Object(base));
 }
 
-/// A tracked control no longer shows the stored Color Settings' value.
+/// A tracked control no longer shows the stored Color Settings' value (for Reset, which the
+/// settings don't hold, its opening value: off).
 fn differs_from_stored(app: &PhotocraftApp, f: &Map<String, Value>) -> bool {
     let Ok(Value::Object(stored)) = serde_json::to_value(&app.session.color().settings) else { return false };
-    tracked(f).iter().any(|(k, v)| stored.get(k).is_some_and(|s| !same(s, v)))
+    let opening = |k: &str| stored.get(k).cloned().or_else(|| (k == "reset").then_some(Value::Bool(false)));
+    tracked(f).iter().any(|(k, v)| opening(k).is_some_and(|s| !same(&s, v)))
 }
 
 /// The working RGB Monitor Color gave (in `base`) is no longer the one the shown monitor profile gives.
