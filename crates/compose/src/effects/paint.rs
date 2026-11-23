@@ -1,4 +1,4 @@
-use super::blur::{blur, dilate};
+use super::blur::{blur, dilate, size_one_blur};
 use super::distance::{dist_inside, dist_outside};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
@@ -453,7 +453,15 @@ pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bo
     let mut m = src.shifted(dx + aa, dy + aa, if inner { 1.0 } else { 0.0 });
     let (r, bw) = spread_split(s.size, s.spread);
     m = dilate(&m, r);
-    blur(&mut m, bw);
+    if inner && s.size == 1.0 && s.spread == 0.0 {
+        // #14933: a Size 1 inner shadow with Choke 0. At that width the box blur is the identity
+        // (`box_width` floors it at 1 px), so the map keeps the hard inverted alpha and the clip to
+        // the layer below removes the shadow completely. The reference application keeps a
+        // quarter-strength shadow on the first pixel inside every edge: `SIZE_ONE_TAPS`.
+        size_one_blur(&mut m);
+    } else {
+        blur(&mut m, bw);
+    }
     let mut m = apply_contour(m, &s.contour);
     noise(&mut m, s.noise, origin.0, origin.1);
     if inner {
