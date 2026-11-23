@@ -1,5 +1,8 @@
 //! Linked choices bind to a verified encoded revision. Transactions render from one read.
-use super::*;
+use super::{
+    Arc, Document, EngineError, LayerId, Result, Session, SmartContentsId, SmartSource, Value, base_name, contents_of, detach_psd, instances, json, layer_param,
+    other, path_param, smart, smart_mut, unapplied_filters,
+};
 use crate::jobs::JobCtx;
 use photocraft_doc::HistoricalXcfSampleOrder as Order;
 
@@ -77,9 +80,6 @@ fn prepare_change(doc: &Document, id: LayerId, change: &Change, ctx: &JobCtx) ->
     let mut warnings = std::collections::BTreeSet::new();
     for &id in &layers {
         ctx.check()?;
-        warnings.extend(
-            unapplied_filters(smart(&document, id)?).into_iter().map(|name| format!("the {name} smart filter is not supported, so it was not applied")),
-        );
         warnings.extend(
             unapplied_filters(smart(&document, id)?).into_iter().map(|name| format!("the {name} smart filter is not supported, so it was not applied")),
         );
