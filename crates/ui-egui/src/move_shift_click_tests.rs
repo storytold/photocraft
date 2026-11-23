@@ -105,6 +105,31 @@ fn point_clicks_toggle_members_but_keep_the_singleton_and_plain_multi_selection(
     assert_eq!(f.bounds(), before, "selection-only gestures move no pixels");
 }
 
+/// ⌘/Ctrl held at the press inverts Auto-Select for that drag: with it on, the selected layer moves and nothing
+/// is picked; with it off, the layer under the pointer is picked and moves.
+#[test]
+fn command_inverts_auto_select_for_that_drag() {
+    let mut f = Fixture::new();
+    let [a, b, _] = f.layers;
+    f.select(&[b]);
+    let before = f.bounds();
+    f.gesture([14.0, 14.0], [4.0, 14.0], Modifiers::COMMAND);
+    f.assert_selected(&[b]);
+    assert_eq!(f.bounds()[2], before[2].translate(-10, 0), "the selected layer moved");
+    assert_eq!(f.bounds()[1], before[1], "A under the pointer did not");
+
+    f.app.ui.tool_options.move_auto_select = false;
+    let before = f.bounds();
+    f.gesture([14.0, 14.0], [14.0, 20.0], Modifiers::NONE);
+    f.assert_selected(&[b]);
+    assert_eq!(f.bounds()[2], before[2].translate(0, 6), "off: the selected layer moves");
+    assert_eq!(f.bounds()[1], before[1]);
+    let before = f.bounds();
+    f.gesture([14.0, 14.0], [14.0, 20.0], Modifiers::COMMAND);
+    f.assert_selected(&[a]);
+    assert_eq!(f.bounds()[1], before[1].translate(0, 6), "off: ⌘ picks the layer under the pointer");
+}
+
 #[test]
 fn group_auto_select_picks_and_moves_the_enclosing_group() {
     let mut f = Fixture::new();
