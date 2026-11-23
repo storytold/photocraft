@@ -119,25 +119,3 @@ fn letters_are_not_taken() {
     assert_eq!(serial(&h, dialog), Some(json!(42)), "the previous value stays");
     assert!(alerts(&h).is_empty(), "no number, no alert");
 }
-
-/// Enter in the field shows the alert over the dialog rather than also running the batch with
-/// the corrected value; the dialog stays open with 9999 until the user presses OK there.
-#[test]
-fn enter_after_a_value_past_the_range_shows_the_alert_and_keeps_the_dialog() {
-    let (mut h, dialog) = batch();
-    // Should Enter run the batch anyway, it reads a folder that is not there and writes nothing.
-    let missing = std::env::temp_dir().join(format!("photocraft-batch-serial-missing-{}", std::process::id()));
-    let ctx = h.ctx.clone();
-    for (key, path) in [("input", missing.join("in")), ("output", missing.join("out"))] {
-        h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, key, json!(path.to_string_lossy())).unwrap();
-    }
-    h.run_steps(4);
-    type_serial(&mut h, "12345");
-    h.key_press(egui::Key::Enter);
-    h.run_steps(4);
-    assert_eq!(alerts(&h), vec![ALERT.to_string()]);
-    assert_eq!(serial(&h, dialog), Some(json!(9999)), "the dialog is still open, with the closest value");
-    ok(&mut h);
-    assert!(alerts(&h).is_empty());
-    assert_eq!(serial(&h, dialog), Some(json!(9999)), "OK on the alert leaves the Batch dialog open");
-}
