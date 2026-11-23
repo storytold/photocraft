@@ -1,5 +1,5 @@
 //! Existing native pixel paths, with private scene admission and no source evaluator.
-use super::*;
+use super::{Adjustment, Buffer, Document, Interrupt, Rect, Refusal, Result, SmartFilter, Surface, Transfer, add, adjust, check, mul, native_adjustment};
 use photocraft_algo::FilterParams;
 pub(super) fn params(f: &SmartFilter) -> Option<Result<FilterParams>> {
     if !matches!(
