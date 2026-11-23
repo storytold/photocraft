@@ -10,6 +10,8 @@
 //! The container lives in `craft-psd` (`asl`), the mapping onto effects in `photocraft-io`
 //! (`asl_map`).
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -27,7 +29,7 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 }
 
 fn has_styles(s: &Session) -> std::result::Result<(), String> {
-    if s.presets.styles.iter().any(|g| !g.items.is_empty()) { Ok(()) } else { Err("no styles".into()) }
+    if s.presets().styles.iter().any(|g| !g.items.is_empty()) { Ok(()) } else { Err("no styles".into()) }
 }
 
 const IMPORT: &str = "style.presets.importAsl";
@@ -57,7 +59,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         pattern_ids.push(pat.id.clone());
         s.patterns.upsert(pat);
     }
-    let styles = &mut s.presets.styles;
+    let styles = &mut s.presets_mut().styles;
     if replace {
         styles.retain(|g| g.name != group);
     }
@@ -78,7 +80,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             g.items.push(preset);
         }
     }
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"group": group, "imported": names, "count": names.len(), "patterns": pattern_ids, "warnings": imp.warnings}))
 }
 
@@ -93,14 +95,15 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
             list.iter()
                 .map(|n| {
                     let name = n.as_str().ok_or_else(|| bad(EXPORT, "`styles` must be a list of style names"))?;
-                    let (gi, ii) = find(&s.presets.styles, name, group).ok_or_else(|| bad(EXPORT, format!("no style \"{name}\" (see style.presets.list)")))?;
-                    s.presets.styles.get(gi).and_then(|g| g.items.get(ii)).cloned().ok_or_else(|| bad(EXPORT, format!("no style \"{name}\"")))
+                    let (gi, ii) =
+                        find(&s.presets().styles, name, group).ok_or_else(|| bad(EXPORT, format!("no style \"{name}\" (see style.presets.list)")))?;
+                    s.presets().styles.get(gi).and_then(|g| g.items.get(ii)).cloned().ok_or_else(|| bad(EXPORT, format!("no style \"{name}\"")))
                 })
                 .collect::<Result<_>>()?
         }
         None => match group {
-            Some(g) => s.presets.styles.iter().find(|x| x.name == g).ok_or_else(|| bad(EXPORT, format!("no style group \"{g}\"")))?.items.clone(),
-            None => s.presets.styles.iter().flat_map(|g| g.items.iter().cloned()).collect(),
+            Some(g) => s.presets().styles.iter().find(|x| x.name == g).ok_or_else(|| bad(EXPORT, format!("no style group \"{g}\"")))?.items.clone(),
+            None => s.presets().styles.iter().flat_map(|g| g.items.iter().cloned()).collect(),
         },
     };
     if chosen.is_empty() {
@@ -176,14 +179,14 @@ mod tests {
     #[test]
     fn export_then_import_round_trips_a_group() {
         let mut s = session();
-        let before = s.presets.styles.clone();
+        let before = s.presets().styles.clone();
         let r = s.execute(EXPORT, json!({"group": "Text Effects"})).unwrap();
         let n = before.iter().find(|g| g.name == "Text Effects").unwrap().items.len();
         assert_eq!(r["count"], n);
         let data = r["data"].as_str().unwrap().to_string();
         let r = s.execute(IMPORT, json!({"data": data, "group": "Back"})).unwrap();
         assert_eq!(r["count"], n);
-        let back = s.presets.styles.iter().find(|g| g.name == "Back").unwrap().items.clone();
+        let back = s.presets().styles.iter().find(|g| g.name == "Back").unwrap().items.clone();
         let orig = &before.iter().find(|g| g.name == "Text Effects").unwrap().items;
         for (a, b) in back.iter().zip(orig) {
             // Names stay unique across the library: "Gold" comes back as "Gold 2".
@@ -196,23 +199,23 @@ mod tests {
         let fx = &s.active().unwrap().doc.layers.last().unwrap().effects.items;
         assert_eq!(fx.len(), orig[0].effects.len());
         // Re-import replaces the group instead of adding another.
-        let groups = s.presets.styles.len();
+        let groups = s.presets().styles.len();
         s.execute(IMPORT, json!({"data": data, "group": "Back"})).unwrap();
-        assert_eq!(s.presets.styles.len(), groups);
+        assert_eq!(s.presets().styles.len(), groups);
     }
 
     #[test]
     fn a_file_named_like_a_built_in_group_keeps_that_group() {
         let mut s = session();
-        let basics = s.presets.styles.iter().find(|g| g.name == "Basics").unwrap().items.clone();
+        let basics = s.presets().styles.iter().find(|g| g.name == "Basics").unwrap().items.clone();
         let data = s.execute(EXPORT, json!({"group": "Text Effects"})).unwrap()["data"].as_str().unwrap().to_string();
         for _ in 0..2 {
             let r = s.execute(IMPORT, json!({"data": data, "group": "Basics"})).unwrap();
             assert_eq!(r["group"], "Basics 2");
         }
-        assert_eq!(s.presets.styles.iter().find(|g| g.name == "Basics").unwrap().items, basics);
+        assert_eq!(s.presets().styles.iter().find(|g| g.name == "Basics").unwrap().items, basics);
         // Re-importing replaces the copy instead of adding another.
-        assert_eq!(s.presets.styles.iter().filter(|g| g.name.starts_with("Basics")).count(), 2);
+        assert_eq!(s.presets().styles.iter().filter(|g| g.name.starts_with("Basics")).count(), 2);
     }
 
     #[test]
@@ -225,7 +228,7 @@ mod tests {
         s.execute("style.presets.new", json!({"name": "Blended", "group": "Mine", "layer": id.0})).unwrap();
         let data = s.execute(EXPORT, json!({"styles": ["Blended"]})).unwrap()["data"].as_str().unwrap().to_string();
         s.execute(IMPORT, json!({"data": data, "group": "Again"})).unwrap();
-        let st = s.presets.styles.iter().find(|g| g.name == "Again").unwrap().items[0].clone();
+        let st = s.presets().styles.iter().find(|g| g.name == "Again").unwrap().items[0].clone();
         assert_eq!(st.blend, Some(l.blend));
         assert!((st.opacity.unwrap() - l.opacity).abs() < 1e-4);
         assert!((st.fill_opacity.unwrap() - l.fill_opacity).abs() < 1e-4);
@@ -303,7 +306,7 @@ mod tests {
         let mut s = session();
         let good = s.execute(EXPORT, json!({"group": "Basics"})).unwrap()["data"].as_str().unwrap().to_string();
         let raw = b64_decode(&good).unwrap();
-        let styles = s.presets.styles.clone();
+        let styles = s.presets().styles.clone();
         let pats = s.patterns.items.len();
         let empty = b64_encode(&asl_map::write_asl(&[], &[]).unwrap());
         for p in [
@@ -322,7 +325,7 @@ mod tests {
         ] {
             assert!(s.execute(IMPORT, p.clone()).is_err(), "{p}");
         }
-        assert_eq!(s.presets.styles, styles);
+        assert_eq!(s.presets().styles, styles);
         assert_eq!(s.patterns.items.len(), pats);
         for p in [
             json!({"group": "No Such Group"}),
@@ -336,7 +339,7 @@ mod tests {
         ] {
             assert!(s.execute(EXPORT, p.clone()).is_err(), "{p}");
         }
-        s.presets.styles.clear();
+        s.presets_mut().styles.clear();
         assert!(s.execute(EXPORT, json!({})).is_err());
     }
 }

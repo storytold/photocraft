@@ -200,6 +200,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 mod tests {
     use craft::ui::dialog::StackDialog as _;
     use photocraft_engine::actions_cmds::ActionStep;
+    use photocraft_engine::actions_cmds::ActionsExt;
 
     use super::*;
 
@@ -293,7 +294,7 @@ mod tests {
         app.run("actions.stop", json!({})).unwrap();
         assert!(app.ui.type_panels.spell.is_none());
         assert!(!app.framework.dialogs.is_open::<CheckSpellingDialog>());
-        let action = app.session.actions.list.action(0).unwrap();
+        let action = app.session.actions().list.action(0).unwrap();
         assert_eq!(action.steps, vec![ActionStep::new("edit.checkSpelling", json!({"allLayers": false}))]);
         assert_eq!(action.dialogs.iter().copied().collect::<Vec<_>>(), [0]);
     }

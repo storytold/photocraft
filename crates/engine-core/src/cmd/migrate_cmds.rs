@@ -2,6 +2,8 @@
 //! presets file (another install's preferences, or an exported preset library) into the current
 //! library, appending groups the library doesn't already have (by name). Headless and scriptable.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde_json::{Value, json};
 
 use crate::presets::{Group, PresetState};
@@ -35,7 +37,7 @@ fn migrate(s: &mut Session, p: &Value) -> Result<Value> {
 
     // Work out what is new against the library as it is, and write the presets only when something
     // is added: a write through `&mut` moves their revision, and every view that shows them runs again.
-    let ps: &PresetState = &s.presets;
+    let ps: &PresetState = s.presets();
     let gradients = new_groups(&ps.gradients, groups(&v, "gradients"));
     let styles = new_groups(&ps.styles, groups(&v, "styles"));
     let shapes = new_groups(&ps.shapes, groups(&v, "shapes"));
@@ -57,13 +59,13 @@ fn migrate(s: &mut Session, p: &Value) -> Result<Value> {
     let (g, st, sh, pt, tp) = (gradients.len(), styles.len(), shapes.len(), pattern_groups.len(), tool_presets.len());
     let total = g + st + sh + pt + tp;
     if total > 0 {
-        let ps: &mut PresetState = &mut s.presets;
+        let ps: &mut PresetState = s.presets_mut();
         ps.gradients.extend(gradients);
         ps.styles.extend(styles);
         ps.shapes.extend(shapes);
         ps.pattern_groups.extend(pattern_groups);
         ps.tool_presets.extend(tool_presets);
-        s.presets_changed();
+        presets_changed(s);
     }
     let mut counts = serde_json::Map::new();
     counts.insert("gradients".into(), json!(g));
@@ -90,12 +92,14 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prefs::SavedPrefsExt;
+    use crate::presets::PresetsExt;
 
     #[test]
     fn merges_new_groups_only() {
         let mut s = crate::session();
-        let before = s.presets.gradients.len();
-        let existing = s.presets.gradients[0].name.clone();
+        let before = s.presets().gradients.len();
+        let existing = s.presets().gradients[0].name.clone();
         // A presets file with one new gradient group and one that already exists.
         let file = std::env::temp_dir().join(format!("pc-migrate-{}.json", std::process::id()));
         let data = json!({
@@ -108,21 +112,21 @@ mod tests {
         });
         std::fs::write(&file, serde_json::to_string(&data).unwrap()).unwrap();
         let prefs_rev = s.prefs.rev();
-        let presets_rev = s.presets.revision();
+        let presets_rev = s.presets().revision();
         let r = s.execute("edit.presets.migratePresets", json!({"path": file.to_string_lossy()})).unwrap();
         assert_eq!(r["added"]["gradients"], 1, "only the new group is added");
-        assert_eq!(s.presets.gradients.len(), before + 1);
-        assert!(s.presets.gradients.iter().any(|g| g.name == "My Imported Set"));
+        assert_eq!(s.presets().gradients.len(), before + 1);
+        assert!(s.presets().gradients.iter().any(|g| g.name == "My Imported Set"));
         assert_eq!(s.prefs.rev(), prefs_rev + 1, "migration marks preferences dirty");
-        assert_ne!(s.presets.revision(), presets_rev);
+        assert_ne!(s.presets().revision(), presets_rev);
         // Idempotent: migrating again adds nothing.
         let prefs_rev = s.prefs.rev();
-        let presets_rev = s.presets.revision();
+        let presets_rev = s.presets().revision();
         let saved = s.prefs_to_json();
         let r2 = s.execute("edit.presets.migratePresets", json!({"path": file.to_string_lossy()})).unwrap();
         assert_eq!(r2["migrated"], 0);
         assert_eq!(s.prefs.rev(), prefs_rev, "duplicate groups do not dirty preferences");
-        assert_eq!(s.presets.revision(), presets_rev);
+        assert_eq!(s.presets().revision(), presets_rev);
         assert_eq!(s.prefs_to_json(), saved);
         let _ = std::fs::remove_file(file);
     }
@@ -146,11 +150,11 @@ mod tests {
                 }
                 std::fs::write(&file, serde_json::to_string(&data).unwrap()).unwrap();
                 let prefs_rev = s.prefs.rev();
-                let presets_rev = s.presets.revision();
+                let presets_rev = s.presets().revision();
                 let r = s.execute("edit.presets.migratePresets", json!({"path": file.to_string_lossy()})).unwrap();
                 assert_eq!(r["migrated"], 1, "{key}, wrapped={wrapped}");
                 assert_eq!(s.prefs.rev(), prefs_rev + 1, "{key}, wrapped={wrapped}: preferences must be saved");
-                assert_ne!(s.presets.revision(), presets_rev);
+                assert_ne!(s.presets().revision(), presets_rev);
                 let saved = s.prefs_to_json();
                 let mut restored = crate::session();
                 restored.load_prefs_json(&saved).unwrap();
@@ -171,7 +175,7 @@ mod tests {
         };
         // A damaged entry no longer discards the good ones; blank and overlong names are skipped.
         let mut s = crate::session();
-        let before = s.presets.tool_presets.len();
+        let before = s.presets().tool_presets.len();
         let r = migrate(
             &mut s,
             json!({"tool_presets": [
@@ -183,20 +187,20 @@ mod tests {
             ]}),
         );
         assert_eq!(r["added"]["toolPresets"], 2);
-        assert_eq!(s.presets.tool_presets.len(), before + 2);
-        assert!(s.presets.tool_presets.iter().any(|t| t.name == "4x6 print"));
-        let padded = s.presets.tool_presets.iter().find(|t| t.name == "Padded").expect("trimmed name");
+        assert_eq!(s.presets().tool_presets.len(), before + 2);
+        assert!(s.presets().tool_presets.iter().any(|t| t.name == "4x6 print"));
+        let padded = s.presets().tool_presets.iter().find(|t| t.name == "Padded").expect("trimmed name");
         assert_eq!(padded.options, json!({}));
         // What was imported survives the next launch.
         let mut restored = crate::session();
         restored.load_prefs_json(&s.prefs_to_json()).unwrap();
-        assert_eq!(restored.presets.tool_presets, s.presets.tool_presets);
+        assert_eq!(restored.presets().tool_presets, s.presets().tool_presets);
         // The library stays within MAX_PRESETS.
         let mut s = crate::session();
         let many: Vec<Value> = (0..MAX_PRESETS + 500).map(|i| json!({"name": format!("p{i}"), "tool": "brush"})).collect();
-        let before = s.presets.tool_presets.len();
+        let before = s.presets().tool_presets.len();
         let r = migrate(&mut s, json!({"tool_presets": many}));
-        assert_eq!(s.presets.tool_presets.len(), MAX_PRESETS);
+        assert_eq!(s.presets().tool_presets.len(), MAX_PRESETS);
         assert_eq!(r["added"]["toolPresets"], MAX_PRESETS - before);
         let _ = std::fs::remove_file(file);
     }
