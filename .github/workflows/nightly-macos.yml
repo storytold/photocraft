@@ -15,10 +15,10 @@ on:
 permissions:
   contents: read
 
-# As ci.yml: a newer push to a labelled PR cancels its older run; adding any label but `full-ci`
-# gets a group of its own, so it neither runs anything nor cancels a run.
+# A newer push to a labelled PR cancels its older run. Any event that will not build (no `full-ci`
+# label, or another label added) gets a group of its own, so it never cancels a real build.
 concurrency:
-  group: nightly-macos-${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && github.ref || github.run_id }}
+  group: nightly-macos-${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci') && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
