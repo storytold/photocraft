@@ -1,12 +1,8 @@
 //! Tests that run paint commands, moved from the engine-core `selection_cmds` tests: 5 test(s).
 
-use photocraft_engine::color_cmds::ColorExt;
-use photocraft_geom::Rect;
 use serde_json::json;
 
-
 use photocraft_engine::Session;
-
 
 /// 800 × 600, white, with a grey ramp of ten 40 px blocks from x 100 (100, 105, …, 145).
 fn ramp() -> Session {
@@ -21,16 +17,13 @@ fn ramp() -> Session {
     s
 }
 
-
 fn wand(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
     s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode})).unwrap();
 }
 
-
 fn wand_global(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
     s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "contiguous": false})).unwrap();
 }
-
 
 /// The columns of row 400 that are at least half selected: (first, end), or `None`. Every
 /// column in between must be selected too, so a hole in the run fails the test.
@@ -44,7 +37,6 @@ fn selected(s: &Session) -> Option<(i32, i32)> {
     Some((first as i32, last as i32 + 1))
 }
 
-
 /// Greys 100 to 130 (x 100–380) selected, as tolerance 32 on the first block selects them, plus
 /// the Anti-alias fringe: column 380 of grey 135 at about 251/255, as measured in #11776.
 fn ramp_selected() -> Session {
@@ -54,7 +46,6 @@ fn ramp_selected() -> Session {
     s
 }
 
-
 #[test]
 fn a_seed_outside_the_selection_subtracts_nothing() {
     let mut s = ramp_selected();
@@ -63,14 +54,12 @@ fn a_seed_outside_the_selection_subtracts_nothing() {
     assert_eq!(selected(&s), Some((100, 381)), "unchanged");
 }
 
-
 #[test]
 fn a_seed_outside_the_selection_intersects_to_nothing() {
     let mut s = ramp_selected();
     wand(&mut s, 480, 32.0, "intersect");
     assert_eq!(selected(&s), None);
 }
-
 
 #[test]
 fn a_seed_inside_the_selection_works_as_before() {
@@ -85,7 +74,6 @@ fn a_seed_inside_the_selection_works_as_before() {
     assert_eq!(selected(&s), Some((219, 381)));
 }
 
-
 #[test]
 fn contiguous_off_keeps_the_global_match() {
     // Without Contiguous the seed's colour matches everywhere, as before: greys 115–145 are
@@ -97,7 +85,6 @@ fn contiguous_off_keeps_the_global_match() {
     wand_global(&mut s, 480, 32.0, "intersect");
     assert_eq!(selected(&s), Some((219, 381)));
 }
-
 
 #[test]
 fn without_a_selection_subtract_and_intersect_select_nothing() {

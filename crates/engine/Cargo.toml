@@ -27,6 +27,7 @@ craft-affinity = { workspace = true, features = ["synth"] }
 craft-cms = { workspace = true }
 craft-develop-model = { workspace = true }
 craft-psd = { workspace = true }
+flate2 = { workspace = true }
 photocraft-algo = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-color = { workspace = true }

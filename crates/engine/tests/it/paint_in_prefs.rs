@@ -1,20 +1,13 @@
 //! Tests that run paint commands, moved from the engine-core `prefs` tests: 2 test(s).
 
-use serde_json::{json};
-use photocraft_engine::{Session};
-use photocraft_engine::prefs::*;
-
-use photocraft_engine::color_cmds::ColorExt;
-
-use photocraft_engine::prefs::SavedPrefsExt;
-
+use photocraft_engine::Session;
+use serde_json::json;
 
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
     s
 }
-
 
 #[test]
 fn keyboard_shortcuts_reassign_and_reset() {
@@ -37,7 +30,6 @@ fn keyboard_shortcuts_reassign_and_reset() {
     let r = s.execute("edit.keyboardShortcuts", json!({"filter": "gaussian"})).unwrap();
     assert!(r["commands"].as_array().unwrap().iter().any(|c| c["id"] == "filter.blur.gaussianBlur"));
 }
-
 
 /// #249: temporary tools (held keys) and the fill / colour keys are bindable like commands.
 #[test]

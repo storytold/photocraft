@@ -16,7 +16,8 @@ pub use photocraft_engine_core::Session as CoreSession;
 pub use photocraft_engine_core::*;
 // The painting commands' modules, at the paths they had inside the engine.
 pub use photocraft_engine_paint::{
-    adjustment_brush_cmds, brush_cmds, brush_key_cmds, eraser_cmds, face_cmds, fill_cmds, fill_key_cmds, paint_cmds, pick_cmds, redeye_cmds, retouch_cmds, sampler_cmds, stamp_cmds,
+    adjustment_brush_cmds, brush_cmds, brush_key_cmds, eraser_cmds, face_cmds, fill_cmds, fill_key_cmds, paint_cmds, pick_cmds, redeye_cmds, retouch_cmds,
+    sampler_cmds, stamp_cmds,
 };
 
 mod install;
@@ -29,8 +30,8 @@ pub mod commands {
     pub use crate::{command_specs, find};
     pub use photocraft_engine_core::cmd::*;
     pub use photocraft_engine_paint::cmd::{
-        adjustment_brush_cmds, brush_cmds, brush_key_cmds, eraser_cmds, face_cmds, fill_cmds, fill_key_cmds, paint_cmds, pick_cmds, redeye_cmds, retouch_cmds, sampler_cmds,
-        stamp_cmds,
+        adjustment_brush_cmds, brush_cmds, brush_key_cmds, eraser_cmds, face_cmds, fill_cmds, fill_key_cmds, paint_cmds, pick_cmds, redeye_cmds, retouch_cmds,
+        sampler_cmds, stamp_cmds,
     };
 }
 pub use commands as cmd;

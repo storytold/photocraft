@@ -1,13 +1,9 @@
 //! Tests that run paint commands, moved from the engine-core `rotate_canvas_interpolation_pref` tests: 6 test(s).
 
-use photocraft_engine::color_cmds::ColorExt;
-use photocraft_doc::{Layer};
-use serde_json::{json};
-use photocraft_engine::{Session};
-use photocraft_engine::cmd::*;
+use photocraft_engine::Session;
+use serde_json::json;
 
 use photocraft_engine::prefs::Interpolation;
-
 
 fn green_edge_doc() -> Session {
     let mut s = Session::new();
@@ -17,7 +13,6 @@ fn green_edge_doc() -> Session {
     s.execute("select.deselect", json!({})).unwrap();
     s
 }
-
 
 /// Row pixels as 8-bit triples, x0..x1 at y (the rotated Background is layers[0]).
 fn row(s: &Session, y: i32, x0: i32, x1: i32) -> Vec<[u8; 3]> {
@@ -29,7 +24,6 @@ fn row(s: &Session, y: i32, x0: i32, x1: i32) -> Vec<[u8; 3]> {
         })
         .collect()
 }
-
 
 /// Every Background pixel, row-major, as 8-bit triples.
 fn snapshot(s: &Session) -> Vec<[u8; 3]> {
@@ -45,22 +39,18 @@ fn snapshot(s: &Session) -> Vec<[u8; 3]> {
         .collect()
 }
 
-
 fn is_white(p: &[u8; 3]) -> bool {
     p[0] >= 250 && p[1] >= 250 && p[2] >= 250
 }
-
 
 fn is_green(p: &[u8; 3]) -> bool {
     p[0] <= 5 && p[1] >= 250 && p[2] <= 5
 }
 
-
 /// Pixels neither white nor green: soft (resampled) edge pixels.
 fn soft(r: &[[u8; 3]]) -> usize {
     r.iter().filter(|p| !is_white(p) && !is_green(p)).count()
 }
-
 
 /// Rotate 30° with the preference set to `pref` and no `interpolation` param; the edge row.
 fn rotate_with_pref(pref: Interpolation) -> Vec<[u8; 3]> {
@@ -70,14 +60,12 @@ fn rotate_with_pref(pref: Interpolation) -> Vec<[u8; 3]> {
     row(&s, 230, 205, 236)
 }
 
-
 /// Rotate 30° with an explicit param on default preferences; the edge row.
 fn rotate_with_param(tag: &str) -> Vec<[u8; 3]> {
     let mut s = green_edge_doc();
     s.execute("image.rotation.arbitrary", json!({"angle": 30, "interpolation": tag})).unwrap();
     row(&s, 230, 205, 236)
 }
-
 
 #[test]
 fn absent_param_uses_the_nearest_neighbor_preference() {
@@ -87,7 +75,6 @@ fn absent_param_uses_the_nearest_neighbor_preference() {
     assert_eq!(r, rotate_with_param("nearest"), "the preference acts as the `nearest` param does");
 }
 
-
 #[test]
 fn absent_param_uses_the_bilinear_preference() {
     let r = rotate_with_pref(Interpolation::Bilinear);
@@ -95,7 +82,6 @@ fn absent_param_uses_the_bilinear_preference() {
     assert_eq!(r, rotate_with_param("bilinear"), "the preference acts as the `bilinear` param does");
     assert_ne!(r, rotate_with_param("bicubic"), "the preference is not ignored");
 }
-
 
 #[test]
 fn absent_param_with_a_bicubic_preference_stays_bicubic() {
@@ -105,7 +91,6 @@ fn absent_param_with_a_bicubic_preference_stays_bicubic() {
         assert_eq!(r, rotate_with_param("bicubic"), "{pref:?}");
     }
 }
-
 
 #[test]
 fn explicit_interpolation_param_beats_the_preference() {
@@ -120,14 +105,12 @@ fn explicit_interpolation_param_beats_the_preference() {
     assert_eq!(soft(&row(&s, 230, 205, 236)), 0, "a `nearest` param still gives hard edges");
 }
 
-
 #[test]
 fn not_measured_preferences_keep_todays_bicubic_result() {
     for pref in [Interpolation::BicubicSmoother, Interpolation::BicubicSharper, Interpolation::PreserveDetails] {
         assert_eq!(rotate_with_pref(pref), rotate_with_param("bicubic"), "{pref:?}");
     }
 }
-
 
 #[test]
 fn rotated_crop_and_straighten_ignore_the_interpolation_preference() {

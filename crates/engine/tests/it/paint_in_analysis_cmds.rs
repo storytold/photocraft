@@ -1,12 +1,9 @@
 //! Tests that run paint commands, moved from the engine-core `analysis_cmds` tests: 1 test(s).
 
+use photocraft_doc::Document;
+use photocraft_engine::Session;
+use serde_json::json;
 use std::sync::Arc;
-use photocraft_doc::{Document};
-use rayon::prelude::*;
-use serde_json::{json};
-use photocraft_engine::{Session};
-use photocraft_engine::analysis_cmds::*;
-
 
 fn session(w: u32, h: u32, depth: u32) -> Session {
     let mut s = Session::new();
@@ -14,11 +11,9 @@ fn session(w: u32, h: u32, depth: u32) -> Session {
     s
 }
 
-
 fn d(s: &Session) -> Arc<Document> {
     s.active().unwrap().doc.clone()
 }
-
 
 #[test]
 fn straighten_layer_and_image() {

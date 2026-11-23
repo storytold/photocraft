@@ -1,6 +1,5 @@
 //! Tests that run paint commands, moved from the engine-core `layer_copy_cmds` tests: 16 test(s).
 
-use photocraft_engine::color_cmds::ColorExt;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 
 use photocraft_doc::{Document, LayerContent, LayerId, Pattern};
@@ -11,9 +10,7 @@ use photocraft_raster::Surface;
 
 use serde_json::{Value, json};
 
-
 use photocraft_engine::Session;
-
 
 /// Document 0 (`w`×`h`, `depth`) with a red 10×10 square at (4, 6) on layer "paint" above the
 /// Background, and document 1 (60×50, 8-bit RGB). Document 0 is active.
@@ -29,16 +26,13 @@ fn two_docs(w: u32, h: u32, depth: u32) -> (Session, LayerId) {
     (s, paint)
 }
 
-
 fn doc(s: &Session, i: usize) -> &Document {
     &s.documents()[i].doc
 }
 
-
 fn copied(r: &Value) -> LayerId {
     LayerId(r["layers"][0].as_u64().unwrap())
 }
-
 
 #[test]
 fn selection_only_copy_preserves_source_and_soft_coverage_across_documents() {
@@ -62,7 +56,6 @@ fn selection_only_copy_preserves_source_and_soft_coverage_across_documents() {
     }
 }
 
-
 #[test]
 fn selection_only_copy_rejects_a_floating_layer_mask() {
     let (mut s, paint) = two_docs(40, 30, 8);
@@ -79,7 +72,6 @@ fn selection_only_copy_rejects_a_floating_layer_mask() {
     assert_eq!(doc(&s, 1).layers.len(), 1);
 }
 
-
 #[test]
 fn selection_only_copy_rejects_missing_selection_and_wrong_parameter_type() {
     let (mut s, _) = two_docs(40, 30, 8);
@@ -89,11 +81,9 @@ fn selection_only_copy_rejects_missing_selection_and_wrong_parameter_type() {
     }
 }
 
-
 fn bounds(s: &Session, i: usize, id: LayerId) -> Rect {
     photocraft_engine::layer_multi_cmds::layer_bounds(doc(s, i).layer(id).unwrap()).unwrap()
 }
-
 
 #[test]
 fn copies_the_selected_layers_above_the_destinations_active_layer_in_one_step() {
@@ -117,7 +107,6 @@ fn copies_the_selected_layers_above_the_destinations_active_layer_in_one_step() 
     assert_eq!(doc(&s, 1).layers.len(), 1);
 }
 
-
 #[test]
 fn converts_to_the_destinations_depth_and_colour_mode() {
     for depth in [8, 16, 32] {
@@ -134,7 +123,6 @@ fn converts_to_the_destinations_depth_and_colour_mode() {
         assert!(px[0] > 0.1 && px[0] < 0.9 && px[1] == 1.0, "red as a mid grey, opaque: {px:?}");
     }
 }
-
 
 #[test]
 fn places_the_copies_centred_on_the_canvas_on_a_point_or_offset() {
@@ -153,7 +141,6 @@ fn places_the_copies_centred_on_the_canvas_on_a_point_or_offset() {
     assert_eq!(doc(&s, 1).layers.len(), 4);
 }
 
-
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);
@@ -166,7 +153,6 @@ fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order(
     assert_eq!(r["layers"].as_array().unwrap().len(), 2);
     assert_eq!(s.active().unwrap().selected_layers().len(), 2, "the copies are selected");
 }
-
 
 #[test]
 fn the_sources_patterns_come_along_once() {
@@ -185,7 +171,6 @@ fn the_sources_patterns_come_along_once() {
     s.execute("layer.copyToDocument", json!({"document": 1})).unwrap();
     assert_eq!(doc(&s, 1).patterns.iter().filter(|p| p.id == pat.id).count(), 1, "not twice");
 }
-
 
 #[test]
 fn bad_params_and_states_fail_without_changing_anything() {
@@ -224,7 +209,6 @@ fn bad_params_and_states_fail_without_changing_anything() {
     assert!(!s.is_enabled(cmd));
 }
 
-
 /// One painted layer, `depth`-bit RGB, as the only layer above the Background.
 fn one_doc(depth: u32) -> (Session, LayerId) {
     let mut s = Session::new();
@@ -235,7 +219,6 @@ fn one_doc(depth: u32) -> (Session, LayerId) {
     s.execute("select.deselect", json!({})).unwrap();
     (s, paint)
 }
-
 
 #[test]
 fn duplicate_to_a_new_document_keeps_size_pixels_and_place_at_every_depth() {
@@ -267,7 +250,6 @@ fn duplicate_to_a_new_document_keeps_size_pixels_and_place_at_every_depth() {
     }
 }
 
-
 #[test]
 fn duplicate_to_a_new_document_names_the_copy_and_the_document() {
     let (mut s, _) = one_doc(8);
@@ -276,7 +258,6 @@ fn duplicate_to_a_new_document_names_the_copy_and_the_document() {
     assert_eq!(doc(&s, 1).layers[0].name, "Ink");
     assert_eq!(r["layer"].as_u64(), r["layers"][0].as_u64());
 }
-
 
 #[test]
 fn duplicate_to_a_new_document_carries_every_selected_layer_in_order() {
@@ -293,7 +274,6 @@ fn duplicate_to_a_new_document_carries_every_selected_layer_in_order() {
     let back = &doc(&s, 1).layers[0];
     assert!(back.locks.transparency && back.locks.position);
 }
-
 
 #[test]
 fn duplicate_to_a_new_document_cuts_smart_objects_loose_as_a_batch() {
@@ -313,7 +293,6 @@ fn duplicate_to_a_new_document_cuts_smart_objects_loose_as_a_batch() {
     assert_eq!(contents(&s, 1, ids[0]), contents(&s, 1, ids[1]), "sharing survives within the batch");
     assert_ne!(contents(&s, 1, ids[0]), contents(&s, 0, original), "independent of the source");
 }
-
 
 #[test]
 fn duplicate_destinations_that_are_not_new_fail_cleanly() {
@@ -342,7 +321,6 @@ fn duplicate_destinations_that_are_not_new_fail_cleanly() {
     s.execute("layer.duplicate", json!({})).unwrap();
 }
 
-
 #[test]
 fn a_named_duplicate_takes_the_name_in_one_step() {
     let (mut s, paint) = two_docs(40, 30, 8);
@@ -355,7 +333,6 @@ fn a_named_duplicate_takes_the_name_in_one_step() {
     let r = s.execute("layer.copyToDocument", json!({"document": 1, "name": "Ink"})).unwrap();
     assert_eq!(doc(&s, 1).layer(copied(&r)).unwrap().name, "Ink");
 }
-
 
 #[test]
 fn a_copied_group_cannot_nest_the_destination_past_the_group_depth_limit() {
@@ -382,9 +359,4 @@ fn a_copied_group_cannot_nest_the_destination_past_the_group_depth_limit() {
     let e = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [group.0]})).unwrap_err();
     assert!(e.to_string().contains("deeper than"), "{e}");
     assert_eq!(*doc(&s, 1), before, "nothing was copied");
-}
-
-
-fn close(a: f32, b: f32) -> bool {
-    (a - b).abs() <= 1e-4 * b.abs().max(1.0)
 }

@@ -6619,6 +6619,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-psd",
  "exr",
+ "flate2",
  "photocraft-algo",
  "photocraft-color",
  "photocraft-compose",

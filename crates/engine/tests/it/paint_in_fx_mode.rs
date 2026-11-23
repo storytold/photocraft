@@ -1,13 +1,10 @@
 //! Tests that run paint commands, moved from the engine-core `fx_mode` tests: 4 test(s).
 
-
 use photocraft_engine::Session;
 
 use serde_json::{Value, json};
 
-
 const KINDS: [&str; 9] = ["dropShadow", "innerShadow", "outerGlow", "innerGlow", "satin", "colorOverlay", "gradientOverlay", "stroke", "bevelEmboss"];
-
 
 fn session(mode: &str, depth: u32) -> Session {
     let mut s = Session::new();
@@ -18,7 +15,6 @@ fn session(mode: &str, depth: u32) -> Session {
     s.execute("select.deselect", json!({})).unwrap();
     s
 }
-
 
 /// The modes of every colour stored in the active layer's effects (any `{mode, c, alpha}`).
 fn effect_colour_modes(s: &Session) -> Vec<String> {
@@ -43,13 +39,11 @@ fn effect_colour_modes(s: &Session) -> Vec<String> {
     out
 }
 
-
 fn pixel(s: &mut Session, x: i32, y: i32) -> [f32; 4] {
     let v = s.execute("document.pixel", json!({"x": x, "y": y})).unwrap();
     let a: Vec<f32> = v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap() as f32).collect();
     [a[0], a[1], a[2], a[3]]
 }
-
 
 fn mode_name(mode: &str) -> &'static str {
     match mode {
@@ -59,13 +53,11 @@ fn mode_name(mode: &str) -> &'static str {
     }
 }
 
-
 fn assert_in_mode(s: &Session, mode: &str, what: &str) {
     let modes = effect_colour_modes(s);
     assert!(!modes.is_empty(), "{what}: no colours found");
     assert!(modes.iter().all(|m| m == mode_name(mode)), "{what}: colours {modes:?} in a {mode} document");
 }
-
 
 #[test]
 fn every_effect_command_stores_colours_in_the_document_mode() {
@@ -80,7 +72,6 @@ fn every_effect_command_stores_colours_in_the_document_mode() {
     }
 }
 
-
 #[test]
 fn the_layer_style_dialog_stores_colours_in_the_document_mode() {
     for mode in ["gray", "cmyk"] {
@@ -90,7 +81,6 @@ fn the_layer_style_dialog_stores_colours_in_the_document_mode() {
         assert_in_mode(&s, mode, &format!("{mode} layer.layerStyle.replace"));
     }
 }
-
 
 #[test]
 fn a_red_color_overlay_is_grey_in_a_grayscale_document() {
@@ -102,7 +92,6 @@ fn a_red_color_overlay_is_grey_in_a_grayscale_document() {
         assert!((p[0] - 0.299).abs() < 0.01 && p[0] == p[1] && p[1] == p[2], "{depth}-bit: {p:?}");
     }
 }
-
 
 #[test]
 fn a_style_pasted_or_applied_into_a_grayscale_document_converts() {

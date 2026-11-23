@@ -1,17 +1,14 @@
 //! Tests that run paint commands, moved from the engine-core `fill_layer_mode` tests: 2 test(s).
 
-
 use photocraft_engine::Session;
 
 use photocraft_doc::{ColorMode, Fill, LayerContent};
 
-use serde_json::{json};
-
+use serde_json::json;
 
 const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
-
 
 fn session(mode: &str, depth: u32) -> Session {
     let mut s = Session::new();
@@ -21,13 +18,11 @@ fn session(mode: &str, depth: u32) -> Session {
     s
 }
 
-
 fn pixel(s: &mut Session, x: i32, y: i32) -> [f32; 4] {
     let v = s.execute("document.pixel", json!({"x": x, "y": y})).unwrap();
     let a: Vec<f32> = v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap() as f32).collect();
     [a[0], a[1], a[2], a[3]]
 }
-
 
 /// The composite of `color` painted with Edit › Fill on a new pixel layer: what a fill layer of
 /// that colour must look like.
@@ -38,11 +33,9 @@ fn painted(mode: &str, depth: u32, color: [f32; 4]) -> [f32; 4] {
     pixel(&mut s, 10, 10)
 }
 
-
 fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
     a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= tol)
 }
-
 
 fn active_fill(s: &Session) -> Fill {
     let st = s.active().unwrap();
@@ -52,7 +45,6 @@ fn active_fill(s: &Session) -> Fill {
     }
 }
 
-
 fn fill_colors(f: &Fill) -> Vec<photocraft_doc::Color> {
     match f {
         Fill::Solid(c) => vec![*c],
@@ -61,14 +53,12 @@ fn fill_colors(f: &Fill) -> Vec<photocraft_doc::Color> {
     }
 }
 
-
 fn assert_in_mode(s: &Session, mode: ColorMode, what: &str) {
     let f = active_fill(s);
     for c in fill_colors(&f) {
         assert_eq!(c.mode, mode, "{what}: {f:?}");
     }
 }
-
 
 #[test]
 fn solid_color_fill_matches_edit_fill() {
@@ -86,7 +76,6 @@ fn solid_color_fill_matches_edit_fill() {
         }
     }
 }
-
 
 #[test]
 fn gradient_edits_keep_colours_in_the_document_mode() {

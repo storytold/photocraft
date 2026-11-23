@@ -1,12 +1,8 @@
 //! Tests that run paint commands, moved from the engine-core `dense_budget` tests: 1 test(s).
 
-
-
 use serde_json::json;
 
-
 use photocraft_engine::Session;
-
 
 #[test]
 fn face_detection_on_a_huge_empty_canvas_is_refused() {

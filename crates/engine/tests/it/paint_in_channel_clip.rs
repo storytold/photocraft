@@ -1,35 +1,20 @@
 //! Tests that run paint commands, moved from the engine-core `channel_clip` tests: 2 test(s).
 
-use serde_json::{json};
-use photocraft_engine::{Session};
-
-use photocraft_geom::Rect;
-
+use photocraft_engine::Session;
+use serde_json::json;
 
 const W: i32 = 40;
 
 const H: i32 = 20;
-
-
-/// A white document whose left half is #336699: red 0.2, green 0.4, blue 0.6 there.
-fn session(depth: u32) -> Session {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": W, "height": H, "depth": depth})).unwrap();
-    photocraft_engine::tests::fill_active(&mut s, Some(Rect::new(0, 0, W / 2, H)), "#336699");
-    s
-}
-
 
 fn px(s: &Session, x: i32, y: i32) -> Vec<f32> {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y)
 }
 
-
 fn near(a: &[f32], b: &[f32]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3)
 }
-
 
 #[test]
 fn cmyk_channels_copy_and_paste_as_tone() {
@@ -55,7 +40,6 @@ fn cmyk_channels_copy_and_paste_as_tone() {
         assert!((p[3] - left[0]).abs() < 2e-3 && near(&p[..3], &left[..3]), "depth {depth}: black = old cyan, {p:?} vs {left:?}");
     }
 }
-
 
 #[test]
 fn spot_channels_copy_and_paste_as_tone() {

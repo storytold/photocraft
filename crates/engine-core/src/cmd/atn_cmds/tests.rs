@@ -5979,11 +5979,6 @@ fn wave_with_a_fractional_scale_is_kept() {
     assert!(!kept(distort("Wave", desc("null").with("SclH", D::Integer(100)).with("SclV", D::Integer(100)))));
 }
 
-fn pixel(s: &mut Session) -> Vec<f64> {
-    let v = s.execute("document.pixel", json!({"x": 1, "y": 1})).unwrap();
-    v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap()).collect()
-}
-
 /// CodeRabbit on batch 11: a pattern step that names its pattern only by `patternName` exports
 /// that name, rather than a step with no pattern (which plays the current one).
 #[test]

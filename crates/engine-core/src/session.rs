@@ -8,5 +8,5 @@ mod history;
 mod layers;
 
 pub use documents::move_item;
-pub(crate) use history::{carry_visibility, restore_target, visibility_changes};
 pub use history::fix_selection;
+pub(crate) use history::{carry_visibility, restore_target, visibility_changes};

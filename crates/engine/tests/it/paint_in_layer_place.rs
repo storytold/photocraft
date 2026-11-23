@@ -1,12 +1,10 @@
 //! Tests that run paint commands, moved from the engine-core `layer_place` tests: 4 test(s).
 
-use photocraft_doc::{Layer};
 use photocraft_doc::{Document, LayerId};
 
 use serde_json::{Value, json};
 
 use photocraft_engine::Session;
-
 
 /// Background, then `A` and `B` (`B` active).
 fn session() -> (Session, LayerId, LayerId) {
@@ -17,36 +15,29 @@ fn session() -> (Session, LayerId, LayerId) {
     (s, a, b)
 }
 
-
 fn id(v: Value) -> LayerId {
     LayerId(v["layer"].as_u64().unwrap())
 }
-
 
 fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
 
-
 fn top(s: &Session) -> Vec<LayerId> {
     doc(s).layers.iter().map(|l| l.id).collect()
 }
-
 
 fn children(s: &Session, group: LayerId) -> Vec<LayerId> {
     doc(s).layer(group).unwrap().children().unwrap().iter().map(|l| l.id).collect()
 }
 
-
 fn set_expanded(s: &mut Session, group: LayerId, expanded: bool) {
     s.execute("layer.setExpanded", json!({"layer": group.0, "expanded": expanded})).unwrap();
 }
 
-
 fn select(s: &mut Session, layer: LayerId) {
     s.execute("layer.select", json!({"layer": layer.0})).unwrap();
 }
-
 
 /// The clipping rule Photoshop follows on every insert (#2203): a new layer is clipped exactly
 /// when the layer just above its slot is clipped.
@@ -92,7 +83,6 @@ fn a_new_layer_joins_the_clipping_mask_it_lands_in() {
     assert!(clipped(&s, l));
 }
 
-
 #[test]
 fn a_pasted_layer_goes_into_an_open_group() {
     let (mut s, a, _) = session();
@@ -104,7 +94,6 @@ fn a_pasted_layer_goes_into_an_open_group() {
     let pasted = id(s.execute("edit.paste", json!({})).unwrap());
     assert_eq!(children(&s, into), vec![pasted]);
 }
-
 
 /// Any lock on an open group still lets New Layer, New Group and new adjustment and fill layers in,
 /// as in Photoshop (checked with Lock All). A layer that is edited right after it is made (Type,
@@ -159,7 +148,6 @@ fn locked_groups_take_new_layers_but_not_the_ones_edited_at_once() {
     let plain = id(s.execute("layer.new.layer", json!({})).unwrap());
     assert_eq!(children(&s, inner), vec![plain]);
 }
-
 
 /// Stamp Visible goes directly above an open active group, never inside it: the stamp is the
 /// composite already, and inside it the group's opacity, mode or mask would apply to it again.

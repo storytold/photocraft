@@ -1,19 +1,15 @@
 //! Tests that run paint commands, moved from the engine-core `actions_cmds` tests: 5 test(s).
 
-use photocraft_engine::{Session};
+use photocraft_engine::Session;
 use photocraft_engine::actions_cmds::*;
 
 use photocraft_engine::actions_cmds::ActionsExt;
 
-use photocraft_engine::preset_store::PresetStoreExt;
-
 use serde_json::json;
-
 
 fn pixel(s: &Session, layer: usize, x: i32, y: i32) -> Vec<f32> {
     s.active().unwrap().doc.layers[layer].surface().unwrap().pixel(x, y)
 }
-
 
 /// CopyCat's shape: Edit Contents, change the contents, Save. The Save step has no file to
 /// write: it updates the smart object, headless too.
@@ -39,7 +35,6 @@ fn save_in_edit_contents_updates_the_smart_object() {
     assert!(s.execute("actions.play", json!({"action": "Save"})).unwrap().get("failed").is_some());
 }
 
-
 fn record_red(s: &mut Session, depth: u32) {
     s.execute("file.new", json!({"width": 40, "height": 40, "depth": depth})).unwrap();
     s.execute("actions.record", json!({"name": "Red"})).unwrap();
@@ -50,7 +45,6 @@ fn record_red(s: &mut Session, depth: u32) {
     let _ = s.execute("actions.list", json!({}));
     s.execute("actions.stop", json!({})).unwrap();
 }
-
 
 #[test]
 fn record_keeps_only_replayable_steps() {
@@ -64,7 +58,6 @@ fn record_keeps_only_replayable_steps() {
     assert_eq!(listed["actions"][0]["steps"], 3);
     assert!(listed["recording"].is_null());
 }
-
 
 #[test]
 /// Playback on a different document must match native edits at every depth, independent of history grouping.
@@ -86,7 +79,6 @@ fn play_on_another_document_matches_pixels_at_each_depth() {
         assert_eq!(s.recording.playing, 0);
     }
 }
-
 
 #[test]
 fn recorded_layer_drag_replays_on_another_document() {
@@ -251,7 +243,6 @@ fn recorded_layer_drag_replays_on_another_document() {
         assert!(s.execute("layer.moveTo", bad.clone()).is_err(), "{bad}");
     }
 }
-
 
 /// AUTO-219-4: a recording made on one document replays on a second one — a crop, a filter,
 /// a selection fill and styled text all act on the document the replay runs in.

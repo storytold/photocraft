@@ -1,12 +1,8 @@
 //! Tests that run paint commands, moved from the engine-core `vector_cmds` tests: 2 test(s).
 
-use photocraft_doc::{Document, Path};
-use photocraft_engine::{Session};
+use photocraft_doc::Document;
+use photocraft_engine::Session;
 use serde_json::json;
-
-
-use photocraft_engine::vector_cmds::*;
-
 
 fn session(w: u32, h: u32, depth: u32) -> Session {
     let mut s = Session::new();
@@ -14,11 +10,9 @@ fn session(w: u32, h: u32, depth: u32) -> Session {
     s
 }
 
-
 fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
-
 
 /// #2978: Simulate Pressure tapers the stroke at both ends (the brush's size follows pen
 /// pressure); without it the stroke is as wide near its ends as in the middle.
@@ -42,7 +36,6 @@ fn stroke_path_simulate_pressure_tapers_both_ends() {
     let (end, middle) = (coverage(false, 26), coverage(false, 100));
     assert!(middle >= 18 && end + 2 >= middle, "plain: {end} px near the start, {middle} px in the middle");
 }
-
 
 /// #2978: Stroke Path runs the other brush-based tools along the path (here the Blur tool) as one
 /// history step, and only the path.stroke call is journalled, so an action replays it once.

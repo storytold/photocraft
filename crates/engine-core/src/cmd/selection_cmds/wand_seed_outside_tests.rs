@@ -2,8 +2,6 @@
 //! seed through the current selection only. A seed outside the selection subtracts nothing and
 //! intersects to nothing.
 
-
-
 #[test]
 fn the_fill_passes_only_pixels_at_least_half_selected() {
     use photocraft_algo::selection::wand_region_within;

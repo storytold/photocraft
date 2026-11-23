@@ -1,5 +1,5 @@
-use crate::brush_cmds::LiveStrokeExt;
 use super::*;
+use crate::brush_cmds::LiveStrokeExt;
 
 fn session(w: u32, h: u32) -> Session {
     let mut s = crate::session();

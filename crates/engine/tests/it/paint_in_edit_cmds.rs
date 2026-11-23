@@ -1,30 +1,14 @@
 //! Tests that run paint commands, moved from the engine-core `edit_cmds` tests: 11 test(s).
 
-use photocraft_doc::{LayerId};
+use photocraft_doc::LayerId;
+use photocraft_engine::Session;
 use photocraft_geom::Rect;
-use serde_json::{json};
-use photocraft_engine::{Session};
-use photocraft_engine::edit_cmds::*;
-
-
-fn session() -> Session {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.edit("paint", |doc, a| {
-        doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 10, 50, 30), &[1.0, 0.0, 0.0, 1.0]);
-        Ok(())
-    })
-    .unwrap();
-    s
-}
-
+use serde_json::json;
 
 fn active_bounds(s: &Session) -> Rect {
     let st = s.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds()
 }
-
 
 /// #368: the clipboard as a document of its own, from New from Clipboard or a Paste with
 /// nothing open, at every depth.
@@ -62,7 +46,6 @@ fn new_from_clipboard_and_paste_with_no_document() {
         assert!(s.execute("edit.pasteSpecial.pasteInPlace", json!({})).is_ok(), "into the new document");
     }
 }
-
 
 /// #2901 (P10/P11): Paste, Paste in Place and Paste Into recomposite only where the pasted
 /// layer draws, not the whole document; nothing outside that changes, and undo brings back
@@ -105,7 +88,6 @@ fn paste_damages_only_the_pasted_layer() {
     }
 }
 
-
 /// #1035: a `depth`-bit document with a blue-grey square copied from layer `src` (at
 /// (5,5)-(15,15)) and an active layer `m` above it with a hide-all mask.
 fn mask_target_session(depth: u32) -> (Session, LayerId, LayerId) {
@@ -121,18 +103,15 @@ fn mask_target_session(depth: u32) -> (Session, LayerId, LayerId) {
     (s, src, m)
 }
 
-
 /// The luminosity of `src`'s pixel at (`x`, `y`): what a paste into a mask writes there.
 fn luminosity(s: &Session, src: LayerId, x: i32, y: i32) -> f32 {
     let p = s.active().unwrap().doc.layer(src).unwrap().surface().unwrap().rgba(x, y);
     photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]])
 }
 
-
 fn mask_at(s: &Session, id: LayerId, x: i32, y: i32) -> f32 {
     s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().value(x, y)
 }
-
 
 #[test]
 fn paste_into_a_targeted_mask_writes_the_luminosity_in_one_step() {
@@ -153,7 +132,6 @@ fn paste_into_a_targeted_mask_writes_the_luminosity_in_one_step() {
         assert_eq!(mask_at(&s, m, 10, 10), 0.0, "{depth}-bit: undo restores the mask");
     }
 }
-
 
 #[test]
 fn copy_with_the_mask_targeted_takes_the_mask_as_grayscale() {
@@ -183,7 +161,6 @@ fn copy_with_the_mask_targeted_takes_the_mask_as_grayscale() {
     }
 }
 
-
 #[test]
 fn an_untouched_mask_copies_the_whole_canvas_at_its_default() {
     let (mut s, _, _) = mask_target_session(8);
@@ -192,7 +169,6 @@ fn an_untouched_mask_copies_the_whole_canvas_at_its_default() {
     assert_eq!(r["bounds"], json!([0, 0, 40, 40]), "a plain Reveal All mask still transfers");
     assert!(s.clipboard.as_ref().cloned().unwrap().surface.rgba(20, 20)[0] > 0.99);
 }
-
 
 #[test]
 fn mask_copy_takes_only_the_selection() {
@@ -209,7 +185,6 @@ fn mask_copy_takes_only_the_selection() {
     assert!((clip.surface.rgba(9, 9)[0] - 0.75).abs() < 2.0 / 255.0);
     assert!(clip.surface.rgba(5, 5)[3] < 0.01, "nothing outside the selection");
 }
-
 
 #[test]
 fn a_copied_mask_travels_to_another_document() {
@@ -228,7 +203,6 @@ fn a_copied_mask_travels_to_another_document() {
     assert!(mask_at(&s, n, 30, 30) < 0.01, "it replaced the reveal-all mask there");
 }
 
-
 #[test]
 fn paste_follows_the_mask_view_and_is_placed_like_a_paste() {
     let (mut s, src, m) = mask_target_session(8);
@@ -241,7 +215,6 @@ fn paste_follows_the_mask_view_and_is_placed_like_a_paste() {
     assert_eq!(mask_at(&s, m, 10, 10), 0.0);
     assert_eq!(s.active().unwrap().doc.layers.len(), 3, "Background, src, m");
 }
-
 
 #[test]
 fn paste_into_and_outside_a_targeted_mask_keep_to_the_selection() {
@@ -261,7 +234,6 @@ fn paste_into_and_outside_a_targeted_mask_keep_to_the_selection() {
     assert!((mask_at(&s, m, 7, 7) - lum).abs() < 2.0 / 255.0);
 }
 
-
 #[test]
 fn paste_follows_a_targeted_alpha_channel() {
     let (mut s, src, _) = mask_target_session(8);
@@ -272,7 +244,6 @@ fn paste_follows_a_targeted_alpha_channel() {
     assert!((c.sample_channel(10, 10, 0) - lum).abs() < 2.0 / 255.0);
     assert_eq!(s.active().unwrap().doc.layers.len(), 3, "no new layer");
 }
-
 
 #[test]
 fn paste_into_a_missing_mask_or_channel_is_an_error() {

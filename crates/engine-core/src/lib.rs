@@ -170,14 +170,14 @@ pub use cmd::vp_cmds;
 pub use cmd::warp_cmds;
 pub use cmd::web_cmds;
 pub use cmd::wia_cmds;
-pub use state::LiveCommit;
 pub use doc_state::{CopiedStyle, DocState, DocStateInputs, PRECHECKED, ToolState, selected_in};
 pub use error::{EngineError, Result};
 pub use install::{command_tables, install, register, session};
+pub use session::fix_selection;
 pub use session::move_item;
 use session::restore_target;
 pub(crate) use session::{carry_visibility, visibility_changes};
-pub use session::fix_selection;
+pub use state::LiveCommit;
 
 /// A type layer for [`Session::refresh_type_layers`]: in the open document, or in its first
 /// History snapshot (the document as opened) when `first_snapshot`. The caller picks each against
@@ -343,13 +343,10 @@ mod embed_all_linked_tests;
 #[cfg(test)]
 mod fill_layer_mode_tests;
 
-
 #[cfg(test)]
 mod second_keys_zoom_actions_tests;
 #[cfg(test)]
 mod tests;
-
-
 
 #[cfg(test)]
 mod dense_budget_tests;

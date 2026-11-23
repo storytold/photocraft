@@ -1,20 +1,15 @@
 //! Tests that run paint commands, moved from the engine-core `smart_cmds` tests: 5 test(s).
 
-
-use std::sync::{Arc};
-use photocraft_doc::{Layer, LayerContent, SmartObject};
-use photocraft_geom::{Rect};
-use serde_json::{Value, json};
+use photocraft_doc::{LayerContent, SmartObject};
 use photocraft_engine::{Result, Session};
-use photocraft_engine::smart_cmds::*;
-
+use photocraft_geom::Rect;
+use serde_json::{Value, json};
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
 
 const W: i32 = 64;
 
 const H: i32 = 48;
-
 
 /// A `depth`-bit document with one empty layer.
 fn session(depth: u64) -> Session {
@@ -23,7 +18,6 @@ fn session(depth: u64) -> Session {
     s.execute("layer.new.layer", json!({})).unwrap();
     s
 }
-
 
 /// Paints a textured block on the active layer, partly outside the canvas (top-left), so
 /// conversion has to keep off-canvas pixels and crop/translate correctly.
@@ -46,11 +40,9 @@ fn paint(s: &mut Session) {
     .unwrap();
 }
 
-
 fn flat(s: &Session) -> Vec<[f32; 4]> {
     photocraft_compose::flatten(&s.active().unwrap().doc).into_px()
 }
-
 
 fn active_smart(s: &Session) -> SmartObject {
     let d = s.active().unwrap();
@@ -60,18 +52,9 @@ fn active_smart(s: &Session) -> SmartObject {
     }
 }
 
-
 fn convert(s: &mut Session) -> u64 {
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap()
 }
-
-
-fn active_layer(s: &Session) -> Layer {
-    let d = s.active().unwrap();
-    d.doc.layer(d.active_layer.unwrap()).unwrap().clone()
-}
-
-
 
 /// A vertical black stroke over x = 8 into the filter mask, as the Brush tool sends it.
 fn stroke(s: &mut Session, target: Option<&str>) -> Result<Value> {
@@ -81,7 +64,6 @@ fn stroke(s: &mut Session, target: Option<&str>) -> Result<Value> {
     }
     s.execute("paint.stroke", p)
 }
-
 
 /// ⌥-click on the filter mask thumbnail shows it; painting then goes into it without a target.
 #[test]
@@ -107,7 +89,6 @@ fn a_shown_filter_mask_takes_the_paint() {
     assert!(s.execute("view.layerMask", json!({"mask": 3})).is_err());
     assert_eq!(s.active().unwrap().channel_view, before);
 }
-
 
 #[test]
 fn a_shown_filter_mask_wins_over_color_selection_for_cut_and_clear() {
@@ -138,7 +119,6 @@ fn a_shown_filter_mask_wins_over_color_selection_for_cut_and_clear() {
     }
 }
 
-
 #[test]
 fn copying_the_filter_mask_never_copies_the_layer_mask() {
     for depth in DEPTHS {
@@ -164,7 +144,6 @@ fn copying_the_filter_mask_never_copies_the_layer_mask() {
     }
 }
 
-
 #[test]
 fn an_explicit_layer_checks_filter_mask_eligibility() {
     let mut s = session(8);
@@ -182,7 +161,6 @@ fn an_explicit_layer_checks_filter_mask_eligibility() {
     assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
     assert_eq!(s.active().unwrap().history.past_len(), steps);
 }
-
 
 /// Gaussian Blur with the filter mask targeted softens the mask's edge (the usual way to feather
 /// it), re-renders the smart object, and adds no second smart filter.

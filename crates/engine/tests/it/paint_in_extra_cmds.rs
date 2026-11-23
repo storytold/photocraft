@@ -1,11 +1,9 @@
 //! Tests that run paint commands, moved from the engine-core `extra_cmds` tests: 3 test(s).
 
 use photocraft_doc::{Document, Layer, LayerContent};
+use photocraft_engine::Session;
 use photocraft_geom::Rect;
-use serde_json::{json};
-use photocraft_engine::{Session};
-use photocraft_engine::extra_cmds::*;
-
+use serde_json::json;
 
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
@@ -14,11 +12,9 @@ fn session(depth: u32) -> Session {
     s
 }
 
-
 fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
-
 
 #[test]
 fn equalize_average_and_clouds_edit_the_targeted_channel() {
@@ -98,17 +94,14 @@ fn equalize_average_and_clouds_edit_the_targeted_channel() {
     }
 }
 
-
 fn active(s: &Session) -> &Layer {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap()
 }
 
-
 fn pixel(s: &Session, x: i32, y: i32) -> Vec<f32> {
     active(s).surface().unwrap().pixel(x, y)
 }
-
 
 fn paint_square(s: &mut Session, r: Rect, c: [f32; 4]) {
     s.edit("paint", |doc, a| {
@@ -117,7 +110,6 @@ fn paint_square(s: &mut Session, r: Rect, c: [f32; 4]) {
     })
     .unwrap();
 }
-
 
 #[test]
 fn reveal_all_skips_erased_pixels() {
@@ -140,7 +132,6 @@ fn reveal_all_skips_erased_pixels() {
         assert_eq!((doc(&s).size.width, doc(&s).size.height), (26, 30), "{depth}");
     }
 }
-
 
 #[test]
 fn rasterize_smart_object_layer() {

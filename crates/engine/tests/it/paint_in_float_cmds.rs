@@ -1,14 +1,12 @@
 //! Tests that run paint commands, moved from the engine-core `float_cmds` tests: 5 test(s).
 
 use photocraft_doc::{Document, LayerId};
-use photocraft_engine::{Session};
+use photocraft_engine::Session;
 use photocraft_geom::Rect;
 
 use serde_json::json;
 
-
 use photocraft_engine::float_cmds::*;
-
 
 /// An 80×60 transparent document whose layer is painted red over (10..30)²; (10..30)² selected.
 fn session() -> (Session, LayerId) {
@@ -24,11 +22,9 @@ fn session() -> (Session, LayerId) {
     (s, id)
 }
 
-
 fn alpha(d: &Document, id: LayerId, x: i32, y: i32) -> f32 {
     d.layer(id).unwrap().surface().unwrap().rgba(x, y)[3]
 }
-
 
 /// Copying leaves the original pixels, at every depth; the move is one undo step.
 #[test]
@@ -51,12 +47,10 @@ fn a_copy_leaves_the_original_at_every_depth_in_one_undo_step() {
     }
 }
 
-
 /// Coverage of `d`'s selection at (x, y).
 fn selected(d: &Document, x: i32, y: i32) -> f32 {
     d.selection.as_ref().map_or(0.0, |s| s.sample_channel(x, y, 0))
 }
-
 
 /// #7538: a marquee drawn loosely around an object on a transparent layer shrinks to the object
 /// once its pixels move, as in Photoshop, at every depth and when moving a copy.
@@ -85,7 +79,6 @@ fn moving_shrinks_the_selection_to_the_moved_pixels_at_every_depth() {
         }
     }
 }
-
 
 /// #7538: an anti-aliased shape moved, dropped, then moved again from its shrunk selection leaves
 /// nothing behind. With the selection shrunk to the pixels' alpha, the second move left
@@ -121,7 +114,6 @@ fn moving_again_from_the_shrunk_selection_leaves_no_edge_behind() {
     }
 }
 
-
 /// After a refused command the piece of [`session`], floated 15 px right, still floats: the
 /// document, its selection and its History are as they were before the command (#13169).
 fn assert_still_floating(s: &Session, id: LayerId, steps: usize, what: &str) {
@@ -131,7 +123,6 @@ fn assert_still_floating(s: &Session, id: LayerId, steps: usize, what: &str) {
     assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), Rect::new(10, 10, 30, 30), "{what}: the selection did not move");
     assert_eq!(st.history.past_len(), steps, "{what}: no History step");
 }
-
 
 #[test]
 fn a_command_refused_on_a_hidden_layer_leaves_the_piece_floating() {
@@ -147,7 +138,6 @@ fn a_command_refused_on_a_hidden_layer_leaves_the_piece_floating() {
     assert!(refused.unwrap_err().to_string().contains(photocraft_engine::hidden_target::HIDDEN));
     assert_still_floating(&s, id, steps, "Brush on a hidden layer");
 }
-
 
 /// The issue's own case: the Magic Eraser in an Indexed Color document answers with its alert
 /// (#12032) and leaves the moved piece floating.

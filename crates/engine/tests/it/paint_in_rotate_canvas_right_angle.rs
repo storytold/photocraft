@@ -1,13 +1,11 @@
 //! Tests that run paint commands, moved from the engine-core `rotate_canvas_right_angle` tests: 1 test(s).
 
-use photocraft_engine::color_cmds::ColorExt;
-use photocraft_doc::{Document};
+use photocraft_doc::Document;
+use photocraft_engine::Session;
 use photocraft_geom::Rect;
-use serde_json::{json};
-use photocraft_engine::{Session};
+use serde_json::json;
 
 use photocraft_doc::Size;
-
 
 const ARBITRARY: &str = "image.rotation.arbitrary";
 
@@ -16,7 +14,6 @@ const CW: &str = "image.imageRotation.90cw";
 const CCW: &str = "image.imageRotation.90ccw";
 
 const HALF: &str = "image.imageRotation.180";
-
 
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
@@ -38,11 +35,9 @@ fn session(depth: u32) -> Session {
     s
 }
 
-
 fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
-
 
 #[test]
 fn arbitrary_right_angles_match_the_dedicated_rotation_commands() {

@@ -1,11 +1,9 @@
 //! Tests that run paint commands, moved from the engine-core `gradient_fill_cmds` tests: 2 test(s).
 
-use photocraft_engine::presets::PresetsExt;
-use serde_json::{Value, json};
 use photocraft_engine::gradient_fill_cmds::*;
+use serde_json::{Value, json};
 
 use photocraft_engine::Session;
-
 
 fn session(depth: u32, background: &str) -> Session {
     let mut s = Session::new();
@@ -13,14 +11,11 @@ fn session(depth: u32, background: &str) -> Session {
     s
 }
 
-
 fn layer_count(s: &Session) -> usize {
     s.active().unwrap().doc.layers.len()
 }
 
-
 const STYLES: [&str; 5] = ["linear", "radial", "angle", "reflected", "diamond"];
-
 
 /// Pixel parity: a live gradient composites exactly like painting the same drag.
 fn parity(depth: u32, background: &str, extra: Value, select: bool, tol: f32) {
@@ -63,7 +58,6 @@ fn parity(depth: u32, background: &str, extra: Value, select: bool, tol: f32) {
     }
 }
 
-
 #[test]
 fn live_gradient_renders_like_the_classic_gradient() {
     let stops = json!({"stops": [[0, "#ff2000"], [0.4, "#20c040"], [1, "#1010e0"]], "dither": false});
@@ -73,7 +67,6 @@ fn live_gradient_renders_like_the_classic_gradient() {
     parity(16, "transparent", json!({"gradient": "Foreground to Transparent", "dither": true}), false, 1.01 / 255.0);
     parity(32, "transparent", json!({"gradient": "Black, White", "transparency": [[0, 65], [1, 0]], "dither": false}), false, 1e-4);
 }
-
 
 #[test]
 fn classic_gradient_still_paints_pixels() {

@@ -1,12 +1,14 @@
 //! Tests that run paint commands, moved from the engine-core `preset_store` tests: 15 test(s).
 
-use std::sync::{Arc};
-use photocraft_paint::tile::PREVIEW_SIDE;
-use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, TipShape};
+/// Mirrors `preset_store::tip_file`: a tip's file name inside the store.
+fn tip_file(hash: &str) -> String {
+    format!("{}/{hash}.{}", photocraft_engine::preset_store::TIPS_DIR, photocraft_engine::preset_store::TIP_EXT)
+}
+
 use photocraft_engine::Session;
 use photocraft_engine::preset_store::*;
-
-use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_paint::tile::PREVIEW_SIDE;
+use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, PresetCaptures, TipShape};
 
 use photocraft_engine::preset_store::PresetStoreExt;
 
@@ -16,10 +18,8 @@ use serde_json::json;
 
 use std::path::PathBuf;
 
-
 /// A fresh, empty directory under the system temp dir (tests never write anywhere else).
 struct TempDir(PathBuf);
-
 
 impl TempDir {
     fn new(tag: &str) -> Self {
@@ -36,13 +36,11 @@ impl TempDir {
     }
 }
 
-
 impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
-
 
 /// A session with the store in `dir` attached.
 fn session(dir: &TempDir) -> (Session, Vec<String>) {
@@ -51,28 +49,23 @@ fn session(dir: &TempDir) -> (Session, Vec<String>) {
     (s, w)
 }
 
-
 fn tip8(w: u32, h: u32, seed: u32) -> GrayTile {
     GrayTile::from_fn(w, h, |x, y| ((x * 7 + y * 13 + seed) % 256) as f32 / 255.0)
 }
-
 
 fn tip16(w: u32, h: u32, seed: u32) -> GrayTile {
     let data = (0..w * h).map(|i| (i.wrapping_mul(2654435761).wrapping_add(seed) >> 16) as u16).collect();
     GrayTile { width: w, height: h, data }
 }
 
-
 fn sampled(name: &str, group: &str, tip: GrayTile) -> BrushPreset {
     let brush = BrushSettings { size: 42.0, spacing: 0.1, tip: TipShape::Sampled(tip).into(), ..Default::default() };
     BrushPreset { name: name.into(), brush, builtin: false, group: group.into(), folder: Vec::new(), captures: Default::default() }
 }
 
-
 fn user(s: &Session) -> Vec<BrushPreset> {
     s.tools.presets.iter().filter(|p| !p.builtin).cloned().collect()
 }
-
 
 #[test]
 fn empty_stores_preserve_shared_builtin_presets() {
@@ -88,11 +81,10 @@ fn empty_stores_preserve_shared_builtin_presets() {
     assert!(!std::sync::Arc::ptr_eq(&first.tools.presets, &second.tools.presets));
 }
 
-
 #[test]
 fn saved_airbrush_group_keeps_legacy_and_explicit_rates_across_reopen() {
     let mem = MemBackend::default();
-    let group = json!({"format": GROUP_FORMAT, "version": 1, "group": "Airbrush", "presets": [
+    let group = json!({"format": "photocraft-brush-group", "version": 1, "group": "Airbrush", "presets": [
         {"name": "Legacy Airbrush", "brush": {"buildUp": true}},
         {"name": "Custom Airbrush", "brush": {"buildUp": true, "buildUpRate": 35}},
         {"name": "Regular Brush", "brush": {}},
@@ -116,7 +108,6 @@ fn saved_airbrush_group_keeps_legacy_and_explicit_rates_across_reopen() {
     assert_eq!(reopened.tools.brush.build_up_rate, 20.0);
 }
 
-
 #[test]
 fn sessions_have_no_store_by_default() {
     let mut s = Session::new();
@@ -124,7 +115,6 @@ fn sessions_have_no_store_by_default() {
     s.execute("brush.presets.save", json!({"name": "Mine"})).unwrap();
     assert!(s.preset_store().is_none());
 }
-
 
 #[test]
 fn commands_persist_and_delete_removes_from_disk() {
@@ -150,7 +140,6 @@ fn commands_persist_and_delete_removes_from_disk() {
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Doodle").is_none());
 }
 
-
 /// The New Brush Preset dialog's boxes (#4490) are saved with the preset and come back with it;
 /// a preset saved without them reloads with the default captures and writes no field for them.
 #[test]
@@ -166,7 +155,6 @@ fn preset_captures_persist() {
     let written: String = dir.files().iter().filter(|f| !f.starts_with("tips/")).map(|f| std::fs::read_to_string(dir.0.join(f)).unwrap_or_default()).collect();
     assert_eq!(written.matches("\"captures\"").count(), 1, "only the preset with boxes records them");
 }
-
 
 #[test]
 fn imported_abr_group_persists() {
@@ -202,7 +190,6 @@ fn imported_abr_group_persists() {
     assert!(!dir.files().iter().any(|f| f.ends_with(".pcbrushes") || f.starts_with("tips/")), "{:?}", dir.files());
 }
 
-
 #[test]
 fn deleted_builtins_stay_deleted_and_overrides_replace_them() {
     let dir = TempDir::new("builtins");
@@ -221,7 +208,6 @@ fn deleted_builtins_stay_deleted_and_overrides_replace_them() {
     let n = dir.files().iter().filter(|f| f.ends_with(".pcbrushes")).count();
     assert_eq!(n, 1);
 }
-
 
 #[test]
 fn reordering_presets_and_groups_persists() {
@@ -258,7 +244,6 @@ fn reordering_presets_and_groups_persists() {
     assert!(t.tools.presets.iter().all(|p| p.group != "Washes" && p.group != "Inks"));
 }
 
-
 #[test]
 fn write_failures_are_warnings() {
     let dir = TempDir::new("readonly");
@@ -272,7 +257,6 @@ fn write_failures_are_warnings() {
     assert!(!w.is_empty());
     let _ = std::fs::remove_file(&dir.0);
 }
-
 
 // ------------------------------------------------------------------ on-demand tips (#1843)
 
@@ -290,7 +274,6 @@ fn library(n: u32, side: u32) -> (Session, MemBackend) {
     (s, mem)
 }
 
-
 /// Bitmap samples a preset library holds (full tips, or previews of stored ones not loaded).
 fn library_samples(s: &Session) -> usize {
     let b = |p: &BrushPreset| {
@@ -303,11 +286,9 @@ fn library_samples(s: &Session) -> usize {
     s.tools.presets.iter().flat_map(b).flatten().sum()
 }
 
-
 fn cache(s: &Session) -> TipCacheStats {
     s.preset_store().unwrap().tip_cache()
 }
-
 
 #[test]
 fn reopening_a_library_decodes_no_tips_and_using_a_brush_decodes_only_its_own() {
@@ -352,7 +333,6 @@ fn reopening_a_library_decodes_no_tips_and_using_a_brush_decodes_only_its_own() 
     assert_eq!(picked.brush.tip, t.tools.brush.tip);
 }
 
-
 #[test]
 fn the_decoded_tip_cache_stays_within_its_budget() {
     let (s, mem) = library(6, 256);
@@ -380,7 +360,6 @@ fn the_decoded_tip_cache_stays_within_its_budget() {
     assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()));
 }
 
-
 /// A stored tip the brush holds unloaded (its file failed to load at startup and is back) loads on the next brush
 /// edit, and the brush keeps the loaded bitmap instead of the unloaded tip it compares equal to (#16252).
 #[test]
@@ -401,7 +380,6 @@ fn a_brush_edit_keeps_a_stored_tip_that_loads_only_now() {
     t.execute("tools.setBrush", json!({"brush": {"size": 40}})).unwrap();
     assert_eq!(t.tools.brush.tip.revision(), revision, "an unchanged loaded tip keeps its revision");
 }
-
 
 #[test]
 fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
@@ -451,7 +429,6 @@ fn missing_corrupt_or_unknown_tips_fail_when_used_without_panicking() {
     assert!(headless.execute("brush.presets.list", json!({"full": true})).is_ok());
 }
 
-
 #[test]
 fn a_group_file_that_failed_to_load_is_not_overwritten() {
     // e.g. written by a newer PhotoCraft: skipped on load, so a save must not replace it.
@@ -466,7 +443,6 @@ fn a_group_file_that_failed_to_load_is_not_overwritten() {
     assert_eq!(mem.files.lock().unwrap().get(&file), Some(&newer), "a file the store could not read was overwritten");
     assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty());
 }
-
 
 /// #9317: a defined or imported pattern survives a restart, as in Photoshop; the built-in
 /// patterns are never written, and deleting the last user pattern removes the file.

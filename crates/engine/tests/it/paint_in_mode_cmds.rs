@@ -1,23 +1,11 @@
 //! Tests that run paint commands, moved from the engine-core `mode_cmds` tests: 7 test(s).
 
-use photocraft_color::{ColorMode};
-use photocraft_doc::{Document, LayerContent, Size};
-use serde_json::{json};
-use photocraft_engine::{Session};
-use photocraft_engine::mode_cmds::*;
-
-use photocraft_engine::color_cmds::ColorExt;
+use photocraft_color::ColorMode;
+use photocraft_doc::{Document, Size};
+use photocraft_engine::Session;
+use serde_json::json;
 
 use photocraft_geom::Rect;
-
-
-fn session(w: u32, h: u32, depth: u64, mode: &str) -> Session {
-    let mut s = Session::new();
-    s.execute("file.new", json!({"width": w, "height": h, "depth": depth, "mode": mode})).unwrap();
-    paint(&mut s, |x, y| [x as f32 / w as f32, y as f32 / h as f32, 0.5, 1.0]);
-    s
-}
-
 
 fn paint(s: &mut Session, f: impl Fn(i32, i32) -> [f32; 4]) {
     s.edit("setup", |doc, active| {
@@ -36,11 +24,9 @@ fn paint(s: &mut Session, f: impl Fn(i32, i32) -> [f32; 4]) {
     .unwrap();
 }
 
-
 fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
-
 
 fn colours(d: &Document) -> std::collections::HashSet<[u8; 3]> {
     let surf = d.layers[0].surface().unwrap();
@@ -55,7 +41,6 @@ fn colours(d: &Document) -> std::collections::HashSet<[u8; 3]> {
     }
     set
 }
-
 
 #[test]
 fn rotate_arbitrary_rotates_grouped_locked_children_and_preserves_lock() {
@@ -98,7 +83,6 @@ fn rotate_arbitrary_rotates_grouped_locked_children_and_preserves_lock() {
     let d_cw = doc(&s);
     assert_eq!(photocraft_compose::flatten(&d_arb).px, photocraft_compose::flatten(d_cw).px);
 }
-
 
 #[test]
 fn rotate_arbitrary_turns_unlinked_layer_masks() {
@@ -152,7 +136,6 @@ fn rotate_arbitrary_turns_unlinked_layer_masks() {
     }
 }
 
-
 /// A white 16×16 document in Indexed Color with the two-entry black/white table (#8669's repro).
 fn black_white_indexed(transparency: bool) -> Session {
     let mut s = Session::new();
@@ -171,7 +154,6 @@ fn black_white_indexed(transparency: bool) -> Session {
     s
 }
 
-
 #[test]
 fn brush_stroke_stays_in_indexed_color_table() {
     let mut s = black_white_indexed(false);
@@ -185,7 +167,6 @@ fn brush_stroke_stays_in_indexed_color_table() {
     assert!(colours(doc(&s)).iter().all(|c| table.colors.contains(c)), "off-table pixels: {:?}", colours(doc(&s)));
     assert_eq!(doc(&s).mode, ColorMode::Indexed);
 }
-
 
 #[test]
 fn brush_stroke_keeps_indexed_transparency_binary() {
@@ -202,7 +183,6 @@ fn brush_stroke_keeps_indexed_transparency_binary() {
     assert!(colours(d).iter().all(|c| table.colors.contains(c)), "off-table pixels: {:?}", colours(d));
 }
 
-
 #[test]
 fn live_brush_preview_matches_indexed_commit() {
     let mut s = black_white_indexed(false);
@@ -216,7 +196,6 @@ fn live_brush_preview_matches_indexed_commit() {
         assert_eq!(live.rgba(x, y), committed.rgba(x, y), "preview/commit at ({x},{y})");
     }
 }
-
 
 #[test]
 fn indexed_brush_stroke_leaves_pixels_it_did_not_paint() {
@@ -235,7 +214,6 @@ fn indexed_brush_stroke_leaves_pixels_it_did_not_paint() {
     assert_eq!(surf.rgba(13, 2), [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(surf.rgba(8, 8), [0.0, 0.0, 0.0, 1.0]);
 }
-
 
 #[test]
 fn pencil_auto_erase_knows_the_indexed_foreground() {

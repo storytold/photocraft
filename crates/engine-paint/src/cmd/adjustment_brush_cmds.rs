@@ -6,9 +6,9 @@
 use photocraft_doc::{Adjustment, ColorMode, Layer, LayerContent, LayerMask, SampleType};
 use serde_json::{Value, json};
 
+use crate::commands::CommandSpec;
 use crate::commands::adjustment_kind;
 use crate::commands::{mask_at_depth, selection_mask};
-use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "paint.adjustmentBrush";

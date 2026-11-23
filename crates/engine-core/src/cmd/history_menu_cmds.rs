@@ -103,16 +103,6 @@ mod tests {
 
     use super::*;
 
-    /// A document with three steps after Open: entries Open, New Layer, Fill, Fill.
-    fn session() -> Session {
-        let mut s = crate::session();
-        s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
-        s.execute("layer.new.layer", json!({})).unwrap();
-        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-        s.execute("edit.fill", json!({"color": "#00ff00"})).unwrap();
-        s
-    }
-
     fn entries(s: &Session) -> Vec<String> {
         s.active().unwrap().history.entries()
     }

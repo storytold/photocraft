@@ -1,5 +1,4 @@
 use super::*;
-use crate::smartselect_cmds::SmartSelectExt;
 use photocraft_algo::segment::Rng;
 
 /// A document whose background shows `px(x, y)` (RGB, 0–1), at the given depth.

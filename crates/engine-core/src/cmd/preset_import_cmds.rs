@@ -463,7 +463,6 @@ mod tests {
     }
     use super::*;
     use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
-    use craft_psd::descriptor::{Descriptor, UnicodeString};
 
     fn abr_v2() -> Vec<u8> {
         let tip = AbrSample { id: String::new(), width: 6, height: 4, depth: 8, data: vec![255; 24] };

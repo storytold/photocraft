@@ -16,6 +16,7 @@ mod atn_content_aware_fill;
 mod atn_crystallize_cell_size;
 mod atn_dialog_filters;
 mod atn_direct_adjustments;
+mod atn_fixtures;
 mod atn_layer_style;
 mod atn_mapped_identifiers;
 mod atn_newer_events;

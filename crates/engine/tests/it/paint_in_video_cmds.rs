@@ -1,20 +1,18 @@
 //! Tests that run paint commands, moved from the engine-core `video_cmds` tests: 5 test(s).
 
-use photocraft_doc::{LayerContent};
-use photocraft_engine::{Session};
+use photocraft_doc::LayerContent;
+use photocraft_engine::Session;
 use photocraft_engine::video_cmds::*;
 
 use photocraft_doc::LayerId;
 
 use serde_json::json;
 
-
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
     s
 }
-
 
 fn write_png(path: &str, w: u32, h: u32, color: &str) {
     let mut s = Session::new();
@@ -23,13 +21,11 @@ fn write_png(path: &str, w: u32, h: u32, color: &str) {
     std::fs::write(path, bytes).unwrap();
 }
 
-
 fn tmpdir(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("pc-video-{}-{name}", std::process::id()));
     let _ = std::fs::create_dir_all(&d);
     d.to_string_lossy().into_owned()
 }
-
 
 #[test]
 fn animated_gif_keeps_transparency() {
@@ -58,14 +54,12 @@ fn animated_gif_keeps_transparency() {
     assert_eq!(px[3 * 8 + 3], [1.0, 0.0, 0.0, 1.0], "the square stays red");
 }
 
-
 fn layer_px(s: &Session, id: LayerId) -> Vec<f32> {
     match &s.active().unwrap().doc.layer(id).unwrap().content {
         LayerContent::Raster(r) => r.pixel(2, 2),
         _ => panic!("not a raster"),
     }
 }
-
 
 /// #1288: a fill on a video frame survives scrubbing away and back, and reaches Render Video.
 #[test]
@@ -98,7 +92,6 @@ fn edits_to_a_frame_survive_scrubbing_and_render() {
     assert!(q[2] > 0.99 && q[0] < 0.01, "rendered frame 1 is blue: {q:?}");
 }
 
-
 #[test]
 fn imported_video_restore_frame_and_all_keep_source_pixels() {
     let dir = tmpdir("original-footage");
@@ -122,7 +115,6 @@ fn imported_video_restore_frame_and_all_keep_source_pixels() {
     assert!(s.undo(), "restoration stays in history");
 }
 
-
 #[test]
 fn show_altered_video_switches_between_original_and_edited_frames() {
     let dir = tmpdir("show-altered-original");
@@ -142,7 +134,6 @@ fn show_altered_video_switches_between_original_and_edited_frames() {
     s.execute("layer.videoLayers.showAlteredVideo", json!({})).unwrap();
     assert_eq!(layer_px(&s, id), vec![0.0, 0.0, 1.0, 1.0], "switching back reveals the blue edit");
 }
-
 
 #[test]
 fn restoring_blank_video_frames_still_produces_blank_frames() {

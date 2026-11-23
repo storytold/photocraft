@@ -1,18 +1,12 @@
 //! Tests that run paint commands, moved from the engine-core `jobs` tests: 2 test(s).
 
-use photocraft_engine::color_cmds::ColorExt;
-use photocraft_engine::actions_cmds::ActionsExt;
-
 use std::time::{Duration, Instant};
 
-
 use serde_json::json;
-
 
 use photocraft_engine::jobs::*;
 
 use photocraft_engine::Session;
-
 
 /// A document `w`×`h` with a textured pixel layer (so blurs change every pixel).
 fn session(w: u32, h: u32) -> Session {
@@ -36,13 +30,11 @@ fn session(w: u32, h: u32) -> Session {
     s
 }
 
-
 fn pixels(s: &Session) -> Vec<f32> {
     let d = s.active().unwrap();
     let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
     l.surface().unwrap().read_region(d.doc.bounds())
 }
-
 
 /// Poll until job `id` ends (or 60 s pass); returns its event.
 fn wait_event(s: &mut Session, id: JobId) -> JobEvent {
@@ -56,14 +48,12 @@ fn wait_event(s: &mut Session, id: JobId) -> JobEvent {
     }
 }
 
-
 fn job(r: Started) -> JobId {
     match r {
         Started::Job(id) => id,
         Started::Done(v) => panic!("expected a background job, ran inline: {v}"),
     }
 }
-
 
 #[test]
 fn content_aware_move_runs_as_a_job() {
@@ -90,7 +80,6 @@ fn content_aware_move_runs_as_a_job() {
     assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
     assert_eq!(pixels(&s), before.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().read_region(before.bounds()));
 }
-
 
 #[test]
 fn remove_runs_as_a_job() {

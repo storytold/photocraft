@@ -8,7 +8,11 @@
 
 // The core items this crate's code names as `crate::x`, so the code reads as it did inside core
 // (photocraft#15710).
-use photocraft_engine_core::{DocState, EngineError, Result, Session, active_layer_of, adjust_params, allocation, brush_defs, brush_preset_cmds, channel_cmds, color_channels, color_cmds, commands, content_sampling, extra_cmds, fix_selection, float_cmds, history_source_cmds, jobs, layer_multi_cmds, layer_place, pattern_cmds, pixel_fill, pixels_mut, preset_store, presets, sample_cmds, selection_cmds, symmetry_cmds, transform_cmds};
+use photocraft_engine_core::{
+    DocState, EngineError, Result, Session, active_layer_of, adjust_params, allocation, brush_defs, brush_preset_cmds, channel_cmds, color_channels,
+    color_cmds, commands, content_sampling, extra_cmds, fix_selection, float_cmds, history_source_cmds, jobs, layer_multi_cmds, layer_place, pattern_cmds,
+    pixel_fill, pixels_mut, preset_store, presets, sample_cmds, selection_cmds, symmetry_cmds, transform_cmds,
+};
 #[cfg(test)]
 use photocraft_engine_core::{command_specs, hidden_target, param_schema, prefs};
 

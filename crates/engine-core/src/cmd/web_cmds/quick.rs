@@ -153,5 +153,3 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     crate::automate_cmds::fire_event(s, "export");
     Ok(json!({"path": path, "format": fmt, "bytes": opt.bytes.len(), "warnings": web_warnings(&st, exif, wdoc.resolution_dpi)}))
 }
-
-

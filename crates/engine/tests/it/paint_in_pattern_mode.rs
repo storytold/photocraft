@@ -1,12 +1,10 @@
 //! Tests that run paint commands, moved from the engine-core `pattern_mode` tests: 2 test(s).
 
-
 use photocraft_engine::Session;
 
 use photocraft_doc::ColorMode;
 
 use serde_json::json;
-
 
 /// Defines a blue-and-yellow RGB pattern from a scratch document and returns its id.
 fn colour_pattern(s: &mut Session) -> String {
@@ -20,26 +18,21 @@ fn colour_pattern(s: &mut Session) -> String {
     r["pattern"].as_str().unwrap().to_string()
 }
 
-
 fn pixel(s: &mut Session, x: i32, y: i32) -> [f32; 4] {
     let v = s.execute("document.pixel", json!({"x": x, "y": y})).unwrap();
     let a: Vec<f32> = v.as_array().unwrap().iter().map(|c| c.as_f64().unwrap() as f32).collect();
     [a[0], a[1], a[2], a[3]]
 }
 
-
 fn close(a: [f32; 4], b: [f32; 4], tol: f32) -> bool {
     a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= tol)
 }
-
 
 fn neutral(p: [f32; 4]) -> bool {
     p[0] == p[1] && p[1] == p[2]
 }
 
-
 const XS: [i32; 4] = [1, 5, 9, 14];
-
 
 /// The composite where `pat` is painted with Edit › Fill on a pixel layer of a new document.
 fn painted(s: &mut Session, mode: &str, depth: u32, pat: &str) -> Vec<[f32; 4]> {
@@ -49,11 +42,9 @@ fn painted(s: &mut Session, mode: &str, depth: u32, pat: &str) -> Vec<[f32; 4]> 
     XS.iter().map(|x| pixel(s, *x, 3)).collect()
 }
 
-
 fn pattern_mode(s: &Session) -> ColorMode {
     s.active().unwrap().doc.patterns[0].surface.format().mode
 }
-
 
 #[test]
 fn pattern_fills_paint_like_edit_fill_in_every_mode() {
@@ -77,7 +68,6 @@ fn pattern_fills_paint_like_edit_fill_in_every_mode() {
         }
     }
 }
-
 
 #[test]
 fn a_grayscale_round_trip_keeps_the_pattern_colours() {

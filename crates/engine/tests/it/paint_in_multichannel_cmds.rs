@@ -1,10 +1,8 @@
 //! Tests that run paint commands, moved from the engine-core `multichannel_cmds` tests: 4 test(s).
 
-use photocraft_doc::{Document};
-use serde_json::{json};
-use photocraft_engine::{Session};
-use photocraft_engine::multichannel_cmds::*;
-
+use photocraft_doc::Document;
+use photocraft_engine::Session;
+use serde_json::json;
 
 fn session(mode: &str, depth: u64) -> Session {
     let mut s = Session::new();
@@ -29,11 +27,9 @@ fn session(mode: &str, depth: u64) -> Session {
     s
 }
 
-
 fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
-
 
 #[test]
 fn flattens_layers_and_keeps_alpha_channels() {
@@ -58,7 +54,6 @@ fn flattens_layers_and_keeps_alpha_channels() {
     assert_eq!(doc(&s).channels.len(), 1);
     assert!(doc(&s).layers[0].surface().unwrap().pixel(1, 1)[0] < 0.01);
 }
-
 
 #[test]
 fn targeted_alpha_channel_stays_targeted_across_conversions() {
@@ -87,7 +82,6 @@ fn targeted_alpha_channel_stays_targeted_across_conversions() {
     assert_eq!(view(&s).target, ChannelTarget::Composite);
 }
 
-
 #[test]
 fn psd_stores_ink_as_dark() {
     let mut s = session("grayscale", 8);
@@ -97,7 +91,6 @@ fn psd_stores_ink_as_dark() {
     let merged = file.decode_merged().unwrap();
     assert!(merged.iter().all(|&b| b == 0), "solid black ink is stored as 0");
 }
-
 
 #[test]
 fn flat_export_prints_the_inks() {

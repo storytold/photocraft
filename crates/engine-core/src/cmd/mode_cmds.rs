@@ -896,4 +896,3 @@ mod tests;
 
 #[cfg(test)]
 mod color_table_index_tests;
-

@@ -1,17 +1,8 @@
 //! Tests that run paint commands, moved from the engine-core `presets` tests: 12 test(s).
 
-
-use photocraft_engine::prefs::SavedPrefsExt;
-
-use photocraft_engine::presets::PresetsExt;
-
-use serde_json::{json};
-
+use serde_json::json;
 
 use photocraft_engine::Session;
-
-use photocraft_doc::{LayerId};
-
 
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
@@ -19,17 +10,10 @@ fn session(depth: u32) -> Session {
     s
 }
 
-
-fn active(s: &Session) -> LayerId {
-    s.active().unwrap().active_layer.unwrap()
-}
-
-
 fn layer_px(s: &Session, x: i32, y: i32) -> Vec<f32> {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y)
 }
-
 
 #[test]
 fn rainbow_gradient_presets() {
@@ -57,7 +41,6 @@ fn rainbow_gradient_presets() {
     assert!(layer_px(&s, 32, 5)[3] > 0.95, "middle opaque: {:?}", layer_px(&s, 32, 5));
 }
 
-
 #[test]
 fn gradient_tool_uses_selected_preset_at_every_depth() {
     for depth in [8, 16, 32] {
@@ -79,7 +62,6 @@ fn gradient_tool_uses_selected_preset_at_every_depth() {
     }
 }
 
-
 #[test]
 fn foreground_to_transparent_paints_alpha() {
     let mut s = session(8);
@@ -91,7 +73,6 @@ fn foreground_to_transparent_paints_alpha() {
     let mid = layer_px(&s, 32, 5)[3];
     assert!((mid - 0.5).abs() < 0.05, "{mid}");
 }
-
 
 /// `gradient.presets.stop` edits the Gradient tool's current gradient in place (the stops the
 /// Gradient Editor window shows): a new stop takes the colour under it, a "foreground" stop stays
@@ -132,7 +113,6 @@ fn preset_stop_edits_the_current_gradient() {
     assert!(s.execute("gradient.presets.stop", json!({"action": "midpoint", "index": 0, "location": 0.4})).is_err());
 }
 
-
 /// A many-stop gradient survives editor gymnastics: five adds build a seven-stop ramp, a stop
 /// dragged past its neighbour keeps the list sorted, the paint follows the edited stops, and
 /// trimming back down ends at a plain two-stop gradient.
@@ -167,7 +147,6 @@ fn preset_stop_survives_a_complex_many_stop_ramp() {
     assert_eq!(stops, json!([[0.0, "#000000"], [1.0, "#ffffff"]]).as_array().unwrap().clone(), "{stops:?}");
 }
 
-
 /// An opacity hole paints where it is put, follows a move, and once the gradient is fully
 /// opaque again the stored opacity stops normalize away (no pinned 100 % ends).
 #[test]
@@ -193,7 +172,6 @@ fn preset_stop_opacity_hole_moves_and_normalizes() {
     assert_eq!(v["current"]["transparency"], json!([]), "{v}");
 }
 
-
 /// The edited current gradient saves as a preset, and re-selecting it paints the same pixels.
 #[test]
 fn edited_preset_saves_and_roundtrips() {
@@ -207,7 +185,6 @@ fn edited_preset_saves_and_roundtrips() {
     let px = layer_px(&s, 32, 10);
     assert!(px[0] > 0.9 && px[1] < 0.1, "{px:?}");
 }
-
 
 /// Issue #465: explicit `transparency` stops apply with `colors`, a `gradient` preset, explicit
 /// `stops` and the current gradient alike.
@@ -246,7 +223,6 @@ fn paint_gradient_honours_explicit_transparency_stops() {
     }
 }
 
-
 // ------------------------------------------------------------------ tool presets
 
 #[test]
@@ -277,7 +253,6 @@ fn tool_presets_save_filter_select() {
     assert!(s.execute("tool.presets.new", json!({"name": "x"})).is_err());
 }
 
-
 /// An Art History Brush preset captures the brush's opacity and selecting it restores it.
 #[test]
 fn art_history_brush_preset_carries_the_opacity() {
@@ -289,7 +264,6 @@ fn art_history_brush_preset_carries_the_opacity() {
     assert_eq!(r["tool"], "artHistoryBrush");
     assert!((s.tools.brush.opacity - 0.4).abs() < 1e-6, "{}", s.tools.brush.opacity);
 }
-
 
 // ------------------------------------------------------------------ clone source
 
@@ -312,7 +286,6 @@ fn clone_doc(depth: u32) -> Session {
     s
 }
 
-
 #[test]
 fn clone_source_slots_and_identity_matches_offset() {
     for depth in [8, 16, 32] {
@@ -333,7 +306,6 @@ fn clone_source_slots_and_identity_matches_offset() {
         assert!((px[0] - 20.0 / 63.0).abs() < 0.01, "{px:?}");
     }
 }
-
 
 #[test]
 fn clone_source_flip_scale_rotation() {

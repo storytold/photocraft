@@ -1,17 +1,15 @@
 //! Tests that run paint commands, moved from the engine-core `transform_cmds` tests: 3 test(s).
 
 use photocraft_color::PixelFormat;
-use photocraft_geom::{Rect};
-use photocraft_raster::{Surface};
-use serde_json::{json};
-use photocraft_engine::{Session};
+use photocraft_engine::Session;
 use photocraft_engine::transform_cmds::*;
-
+use photocraft_geom::Rect;
+use photocraft_raster::Surface;
+use serde_json::json;
 
 fn session() -> Session {
     session_depth(8)
 }
-
 
 fn session_depth(depth: u32) -> Session {
     let mut s = Session::new();
@@ -25,7 +23,6 @@ fn session_depth(depth: u32) -> Session {
     .unwrap();
     s
 }
-
 
 #[test]
 fn feathered_selection_identity_transform_preserves_pixels() {
@@ -65,7 +62,6 @@ fn feathered_selection_identity_transform_preserves_pixels() {
     assert!(s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 0, 0]})).is_err(), "locked layer refuses identity transform");
 }
 
-
 #[test]
 fn relative_params_scale_and_rotate_about_the_frame_centre() {
     let mut s = Session::new();
@@ -91,7 +87,6 @@ fn relative_params_scale_and_rotate_about_the_frame_centre() {
         assert!(s.execute("edit.transform", bad.clone()).is_err(), "{bad}");
     }
 }
-
 
 /// Free Transform of a layer's own transparency (⌘-click its thumbnail) takes all of it and leaves
 /// no ghost where it was, as Photoshop does and as Move already did (#5595). Photoshop 2025, an

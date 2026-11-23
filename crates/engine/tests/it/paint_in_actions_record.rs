@@ -1,12 +1,10 @@
 //! Tests that run paint commands, moved from the engine-core `actions_record` tests: 2 test(s).
 
-use photocraft_doc::{LayerContent};
 use photocraft_doc::LayerId;
 
 use serde_json::{Value, json};
 
-use photocraft_engine::{Session};
-
+use photocraft_engine::Session;
 
 fn session() -> Session {
     let mut s = Session::new();
@@ -14,16 +12,13 @@ fn session() -> Session {
     s
 }
 
-
 fn new_layer(s: &mut Session, name: &str) -> u64 {
     s.execute("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap()
 }
 
-
 fn background(s: &Session) -> u64 {
     s.active().unwrap().doc.layers[0].id.0
 }
-
 
 #[test]
 fn frame_action_keeps_the_layer_it_wraps() {
@@ -49,7 +44,6 @@ fn frame_action_keeps_the_layer_it_wraps() {
         "the replayed frame wraps Picture"
     );
 }
-
 
 #[test]
 fn a_recording_replays_on_a_document_with_other_layer_ids() {

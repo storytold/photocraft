@@ -1,6 +1,6 @@
-use crate::retouch_cmds::LiveRetouchExt;
 use super::*;
 use crate::presets::PresetsExt;
+use crate::retouch_cmds::LiveRetouchExt;
 use photocraft_color::ColorMode;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];

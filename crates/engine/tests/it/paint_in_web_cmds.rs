@@ -3,16 +3,12 @@
 use photocraft_engine::Session;
 use serde_json::json;
 
-use photocraft_engine::web_cmds::*;
-
-
 fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-quick-jpg-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d.to_string_lossy().into_owned()
 }
-
 
 /// A 64×48 8-bit document: a white background with a flat blue block over its left half.
 fn session() -> Session {
@@ -23,7 +19,6 @@ fn session() -> Session {
     s.execute("select.deselect", json!({})).unwrap();
     s
 }
-
 
 /// The marker of the file's frame header (0xC0 baseline, 0xC2 progressive), found by walking the
 /// marker segments in front of the first scan.
@@ -46,19 +41,16 @@ fn sof_marker(bytes: &[u8]) -> Option<u8> {
     None
 }
 
-
 fn rgba8(bytes: &[u8]) -> Vec<u8> {
     let img = photocraft_codecs::decode(bytes).unwrap();
     assert_eq!(img.dimensions(), (64, 48));
     img.convert(photocraft_codecs::ChannelLayout::Rgba, photocraft_codecs::SampleType::U8).data().to_vec()
 }
 
-
 fn max_channel_diff(a: &[u8], b: &[u8]) -> u8 {
     assert_eq!(a.len(), b.len());
     a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
 }
-
 
 #[test]
 fn quick_export_jpg_is_progressive_at_every_quality() {
@@ -92,7 +84,6 @@ fn quick_export_jpg_is_progressive_at_every_quality() {
         assert_eq!(sof_marker(&std::fs::read(&baseline).unwrap()), Some(0xC0), "Save for Web at quality {q} stays baseline by default");
     }
 }
-
 
 #[test]
 fn quick_export_jpg_opens_again_with_the_same_pixels() {

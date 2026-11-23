@@ -1,13 +1,9 @@
 //! Tests that run paint commands, moved from the engine-core `adjust_cmds` tests: 2 test(s).
 
-use photocraft_doc::{Document, Rect};
-use serde_json::{json};
-use photocraft_engine::{Session};
-use photocraft_engine::adjust_cmds::*;
-
+use photocraft_engine::Session;
+use serde_json::json;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];
-
 
 fn session(depth: u64, mode: &str) -> Session {
     let mut s = Session::new();
@@ -15,7 +11,6 @@ fn session(depth: u64, mode: &str) -> Session {
     paint(&mut s, |x, y| [0.1 + x as f32 / 60.0, 0.2 + y as f32 / 50.0, 0.6 - x as f32 / 120.0, 1.0]);
     s
 }
-
 
 fn paint(s: &mut Session, f: impl Fn(i32, i32) -> [f32; 4]) {
     s.edit("setup", |doc, active| {
@@ -34,30 +29,15 @@ fn paint(s: &mut Session, f: impl Fn(i32, i32) -> [f32; 4]) {
     .unwrap();
 }
 
-
 fn rgba(s: &Session, x: i32, y: i32) -> [f32; 4] {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)
 }
 
-
-/// Every pixel of the active layer, row by row.
-fn pixels(s: &Session) -> Vec<[f32; 4]> {
-    let b = doc(s).bounds();
-    (b.y0..b.y1).flat_map(|y| (b.x0..b.x1).map(move |x| (x, y))).map(|(x, y)| rgba(s, x, y)).collect()
-}
-
-
-fn doc(s: &Session) -> &Document {
-    &s.active().unwrap().doc
-}
-
-
 fn mask_at(s: &Session, x: i32, y: i32) -> f32 {
     let d = s.active().unwrap();
     d.doc.layer(d.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0)
 }
-
 
 /// #2456: Edit > Fill (and the fill keys) fill the targeted mask of an adjustment layer.
 #[test]
@@ -74,7 +54,6 @@ fn fill_works_on_an_adjustment_layers_mask() {
     s.execute("edit.fill", json!({"contents": "white", "target": "mask"})).unwrap();
     assert_eq!(mask_at(&s, 3, 3), 1.0);
 }
-
 
 /// #5335: Curves (⌘M) edits the targeted layer mask, saved channel or Quick Mask at every depth.
 #[test]

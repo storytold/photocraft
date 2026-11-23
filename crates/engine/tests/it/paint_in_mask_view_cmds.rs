@@ -1,12 +1,10 @@
 //! Tests that run paint commands, moved from the engine-core `mask_view_cmds` tests: 7 test(s).
 
-use photocraft_doc::LayerId;
-use serde_json::{Value, json};
-use photocraft_engine::{Session};
+use photocraft_engine::Session;
 use photocraft_engine::mask_view_cmds::*;
+use serde_json::{Value, json};
 
 use photocraft_geom::Rect;
-
 
 /// 40×20 document: Background, then "Masked" (red, mask hiding the left half) on top.
 fn session() -> (Session, u64, u64) {
@@ -22,12 +20,10 @@ fn session() -> (Session, u64, u64) {
     (s, masked, bg)
 }
 
-
 /// The view as `document.inspect` reports it.
 fn view(s: &Session) -> Value {
     photocraft_engine::inspect::document(s.active().unwrap())["layerMaskView"].clone()
 }
-
 
 #[test]
 fn modes_toggle_and_show_in_inspect_without_history() {
@@ -49,7 +45,6 @@ fn modes_toggle_and_show_in_inspect_without_history() {
     assert_eq!(st.last_damage, Some(Rect::EMPTY), "no recomposite");
 }
 
-
 #[test]
 fn a_mask_view_never_alters_pixels() {
     let (mut s, masked, _) = session();
@@ -62,7 +57,6 @@ fn a_mask_view_never_alters_pixels() {
         assert_eq!(px(&s), composite, "{mode}: same composite");
     }
 }
-
 
 #[test]
 fn painting_in_mask_view_paints_the_mask() {
@@ -84,7 +78,6 @@ fn painting_in_mask_view_paints_the_mask() {
     assert!(l.surface().unwrap().sample_channel(5, 5, 1) > 0.9);
 }
 
-
 #[test]
 fn the_view_ends_with_its_layer_or_mask() {
     let (mut s, masked, bg) = session();
@@ -100,7 +93,6 @@ fn the_view_ends_with_its_layer_or_mask() {
     s.undo();
     assert!(s.active().unwrap().channel_view.layer_mask.is_none(), "undo doesn't bring a stale view back");
 }
-
 
 #[test]
 fn bad_params_and_no_mask_fail_gracefully() {
@@ -127,7 +119,6 @@ fn bad_params_and_no_mask_fail_gracefully() {
     assert!(empty.execute(ID, json!({"mode": "gray"})).is_err());
 }
 
-
 #[test]
 fn load_selection_from_a_vector_mask() {
     let (mut s, masked, _) = session();
@@ -148,7 +139,6 @@ fn load_selection_from_a_vector_mask() {
     s.execute("layer.vectorMask.delete", json!({})).unwrap();
     assert!(s.execute("select.loadSelection", json!({"channel": "vectorMask"})).is_err());
 }
-
 
 /// #1765: `\` (`layer.toggleMaskOverlay`) shows the active layer's mask as a rubylith and hides it
 /// again; without a mask (or a document) it is disabled and errors instead of panicking.

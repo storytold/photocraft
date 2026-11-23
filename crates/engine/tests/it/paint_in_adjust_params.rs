@@ -1,14 +1,16 @@
 //! Tests that run paint commands, moved from the engine-core `adjust_params` tests: 11 test(s).
 
-use photocraft_engine::Session;
-use serde_json::json;
+/// Mirrors `adjust_params::MAX_FITTED_POINTS`.
+const MAX_FITTED_POINTS: usize = 16;
+
 use photocraft_color::ColorMode;
 use photocraft_doc::Adjustment;
 use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, ToneSpace};
-use serde_json::{Value};
-use photocraft_engine::{EngineError};
+use photocraft_engine::EngineError;
+use photocraft_engine::Session;
 use photocraft_engine::adjust_params::*;
-
+use serde_json::Value;
+use serde_json::json;
 
 const KINDS: [&str; 15] = [
     "invert",
@@ -27,7 +29,6 @@ const KINDS: [&str; 15] = [
     "gradientMap",
     "selectiveColor",
 ];
-
 
 /// A non-default parameter set per kind (RGB channel keys for Levels/Curves).
 pub(crate) fn sample(kind: &str) -> Value {
@@ -52,14 +53,12 @@ pub(crate) fn sample(kind: &str) -> Value {
     }
 }
 
-
 fn curves_parts(a: &Adjustment) -> (&[CurvePoint], &[Vec<CurvePoint>; 3]) {
     match a {
         Adjustment::Curves { master, per_channel, .. } => (master, per_channel),
         _ => panic!("expected curves"),
     }
 }
-
 
 fn tone_output(adjustment: &Adjustment, sample: [f32; 3]) -> [f32; 3] {
     let luts = photocraft_compose::adjust::tone_luts(adjustment);
@@ -72,7 +71,6 @@ fn tone_output(adjustment: &Adjustment, sample: [f32; 3]) -> [f32; 3] {
         row.get(lower).copied().unwrap_or(0.0) * (1.0 - fraction) + row.get(upper).copied().unwrap_or(0.0) * fraction
     })
 }
-
 
 #[test]
 fn curves_eyedropper_param_drives_the_command() {
@@ -98,7 +96,6 @@ fn curves_eyedropper_param_drives_the_command() {
         assert!(s.execute("image.adjustments.curves", json!({"eyedropper": bad})).is_err(), "{bad}");
     }
 }
-
 
 /// The Properties panel's pickers on a Curves adjustment layer (UI-217-15): one undoable step
 /// that samples the image below the layer, so a repeated click keeps the same curve.
@@ -128,7 +125,6 @@ fn layer_eyedropper_samples_below_the_curves_layer() {
     assert!(s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "white", "at": [1, 1]}})).is_err(), "Levels and Curves only");
 }
 
-
 /// #3127: on a smart object the eyedropper param records the adjustment it resolved to as
 /// the smart filter, not the raw sample (which re-rendered as an identity).
 #[test]
@@ -144,13 +140,13 @@ fn eyedropper_on_a_smart_object_records_the_resolved_adjustment() {
     }
 }
 
-
 /// Levels' Set White/Neutral Gray Point (#3116): the white point maps the sampled colour to
 /// white at 8 and 16 bit, the gray point neutralises a tinted grey at its luma on a Levels
 /// layer as one undoable step, and bad picks fail.
 #[test]
 fn levels_eyedroppers_set_white_and_neutral_gray() {
-    let pixel = |s: &mut photocraft_engine::Session| -> Vec<f32> { serde_json::from_value(s.execute("document.pixel", json!({"x": 2, "y": 2})).unwrap()).unwrap() };
+    let pixel =
+        |s: &mut photocraft_engine::Session| -> Vec<f32> { serde_json::from_value(s.execute("document.pixel", json!({"x": 2, "y": 2})).unwrap()).unwrap() };
     for depth in [8, 16] {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
@@ -183,7 +179,6 @@ fn levels_eyedroppers_set_white_and_neutral_gray() {
     s.execute("image.adjustments.levels", json!({"eyedropper": {"point": "black", "color": [1.0, 1.0, 1.0]}})).unwrap();
 }
 
-
 /// A colourful 16×16 document (`mode`, `depth`) for command tests.
 fn colourful(mode: &str, depth: u32) -> photocraft_engine::Session {
     let mut s = Session::new();
@@ -196,13 +191,11 @@ fn colourful(mode: &str, depth: u32) -> photocraft_engine::Session {
     s
 }
 
-
 fn pixels(s: &photocraft_engine::Session) -> Vec<Vec<f32>> {
     let d = s.active().unwrap();
     let bg = d.doc.layers[0].surface().unwrap();
     [(2, 2), (10, 2), (2, 10), (10, 10)].iter().map(|&(x, y)| bg.pixel(x, y)).collect()
 }
-
 
 #[test]
 fn destructive_commands_apply_their_params_at_every_depth() {
@@ -225,7 +218,6 @@ fn destructive_commands_apply_their_params_at_every_depth() {
         }
     }
 }
-
 
 #[test]
 fn curves_pencil_maps_draw_smooth_and_convert_back() {
@@ -256,7 +248,6 @@ fn curves_pencil_maps_draw_smooth_and_convert_back() {
     }
 }
 
-
 #[test]
 fn destructive_levels_dont_clip_in_32_bit() {
     // Input 15..230, gamma 1.3, output 10..245: integer documents stop at the output range,
@@ -281,7 +272,6 @@ fn destructive_levels_dont_clip_in_32_bit() {
     }
 }
 
-
 #[test]
 fn cmyk_and_lab_documents_use_their_channels() {
     let mut s = colourful("cmyk", 8);
@@ -302,7 +292,6 @@ fn cmyk_and_lab_documents_use_their_channels() {
     let l = s.active().unwrap().doc.layer(id).unwrap().clone();
     assert!(matches!(l.content, photocraft_doc::LayerContent::Adjustment(Adjustment::Curves { space: ToneSpace::Cmyk, .. })));
 }
-
 
 #[test]
 fn set_adjustment_merges_and_resets() {
@@ -325,7 +314,6 @@ fn set_adjustment_merges_and_resets() {
         assert_eq!(adj(&s), kept);
     }
 }
-
 
 #[test]
 fn commands_reject_bad_params_gracefully() {

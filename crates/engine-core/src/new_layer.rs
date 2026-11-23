@@ -104,10 +104,10 @@ pub(crate) fn parse(p: &Value) -> Result<NewLayer> {
 
 #[cfg(test)]
 mod tests {
+    use crate::Session;
     use photocraft_doc::{BlendMode, LabelColor};
     use photocraft_geom::Rect;
     use serde_json::json;
-    use crate::Session;
 
     /// A document with a busy Background: every pixel a different colour.
     fn busy(mode: &str, depth: u32) -> Session {

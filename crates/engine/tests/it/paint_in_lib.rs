@@ -1,12 +1,10 @@
 //! Tests that run paint commands, moved from the engine-core `lib` tests: 21 test(s).
 
+use photocraft_doc::LayerId;
 use photocraft_engine::Session;
-use std::sync::Arc;
-use photocraft_doc::{LayerId};
 use serde_json::Value;
 
 use serde_json::json;
-
 
 fn session_with_doc() -> Session {
     let mut s = Session::new();
@@ -14,11 +12,9 @@ fn session_with_doc() -> Session {
     s
 }
 
-
 fn px(s: &mut Session, x: i32, y: i32) -> Vec<f32> {
     serde_json::from_value(s.execute("document.pixel", json!({"x": x, "y": y})).unwrap()).unwrap()
 }
-
 
 #[test]
 fn an_edit_after_a_new_fill_layer_on_a_selection_reaches_the_whole_layer() {
@@ -41,7 +37,6 @@ fn an_edit_after_a_new_fill_layer_on_a_selection_reaches_the_whole_layer() {
     }
 }
 
-
 #[test]
 fn a_new_adjustment_mask_can_be_painted_immediately() {
     for depth in [8, 16, 32] {
@@ -59,7 +54,6 @@ fn a_new_adjustment_mask_can_be_painted_immediately() {
     }
 }
 
-
 #[test]
 fn threshold_and_hue_params() {
     let mut s = session_with_doc();
@@ -69,7 +63,6 @@ fn threshold_and_hue_params() {
     s.execute("layer.setAdjustment", json!({"level": 10})).unwrap();
     assert_eq!(px(&mut s, 0, 0), vec![1.0, 1.0, 1.0, 1.0]);
 }
-
 
 #[test]
 fn paint_stroke_and_selection() {
@@ -84,7 +77,6 @@ fn paint_stroke_and_selection() {
     s.execute("paint.stroke", json!({"points": [[4, 30], [60, 30]], "size": 6, "erase": false})).unwrap();
     assert_eq!(px(&mut s, 50, 30), vec![0.0, 0.0, 0.0, 1.0], "foreground is black");
 }
-
 
 #[test]
 fn undo_and_redo_restore_the_targeted_layers() {
@@ -142,7 +134,6 @@ fn undo_and_redo_restore_the_targeted_layers() {
     assert_eq!(target(&s), copies);
 }
 
-
 #[test]
 fn fill_clear_and_masks() {
     let mut s = session_with_doc();
@@ -157,7 +148,6 @@ fn fill_clear_and_masks() {
     assert_eq!(px(&mut s, 5, 5), vec![1.0, 1.0, 1.0, 1.0]);
     assert_eq!(px(&mut s, 20, 20), vec![0.0, 1.0, 0.0, 1.0]);
 }
-
 
 #[test]
 fn clipping_and_merge_and_flatten() {
@@ -180,7 +170,6 @@ fn clipping_and_merge_and_flatten() {
     assert_eq!(px(&mut s, 5, 5), vec![0.0, 0.0, 1.0, 1.0]);
 }
 
-
 #[test]
 fn canvas_flips_and_rotation() {
     let mut s = Session::new();
@@ -201,7 +190,6 @@ fn canvas_flips_and_rotation() {
     s.execute("image.imageRotation.180", json!({})).unwrap();
     assert_eq!(px(&mut s, 0, 0), vec![1.0, 0.0, 0.0, 1.0]);
 }
-
 
 #[test]
 fn group_effect_maps_follow_child_visibility_and_opacity() {
@@ -244,7 +232,6 @@ fn group_effect_maps_follow_child_visibility_and_opacity() {
     }
 }
 
-
 /// With no document open, a document command says so instead of only `enabled: false` (#3664).
 #[test]
 fn command_list_tells_no_document_from_other_preconditions() {
@@ -272,7 +259,6 @@ fn command_list_tells_no_document_from_other_preconditions() {
     assert_eq!(deselect["disabledReason"], "no selection");
 }
 
-
 #[test]
 fn translate_moves_pixels_and_respects_locks() {
     let mut s = session_with_doc();
@@ -289,7 +275,6 @@ fn translate_moves_pixels_and_respects_locks() {
     assert!(s.execute("layer.translate", json!({"dx": 1, "dy": 0})).is_err());
 }
 
-
 #[test]
 fn damage_is_reported_for_strokes_only() {
     let mut s = session_with_doc();
@@ -304,7 +289,6 @@ fn damage_is_reported_for_strokes_only() {
     let d = s.active().unwrap().last_damage.unwrap();
     assert!(d.contains(15, 10) && d.width() < 30);
 }
-
 
 #[test]
 fn edits_that_change_no_pixels_report_empty_damage() {
@@ -324,16 +308,15 @@ fn edits_that_change_no_pixels_report_empty_damage() {
     assert_ne!(s.active().unwrap().last_damage, Some(photocraft_geom::Rect::EMPTY));
 }
 
-
 #[test]
 fn same_pixels_ignores_the_selection_but_not_layers() {
     let mut s = session_with_doc();
     let a = s.active().unwrap().doc.clone();
     s.execute("select.all", json!({})).unwrap();
     let b = s.active().unwrap().doc.clone();
-    assert!(layer_multi_cmds::same_pixels(&a, &b));
+    assert!(photocraft_engine::layer_multi_cmds::same_pixels(&a, &b));
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    assert!(!layer_multi_cmds::same_pixels(&b, &s.active().unwrap().doc));
+    assert!(!photocraft_engine::layer_multi_cmds::same_pixels(&b, &s.active().unwrap().doc));
     // A pathologically deep group nest is treated as changed (bounded walk), never a crash.
     let mut deep = (*b).clone();
     let mut l = photocraft_doc::Layer::group("g", Vec::new());
@@ -341,9 +324,8 @@ fn same_pixels_ignores_the_selection_but_not_layers() {
         l = photocraft_doc::Layer::group("g", vec![l]);
     }
     deep.layers.push(l);
-    assert!(!layer_multi_cmds::same_pixels(&deep, &deep.clone()));
+    assert!(!photocraft_engine::layer_multi_cmds::same_pixels(&deep, &deep.clone()));
 }
-
 
 /// ⌥-dragging a Layers panel row: `copy` leaves the layer where it is and drops a duplicate at the
 /// target, as one "Duplicate Layer" step, with the copy active.
@@ -394,7 +376,6 @@ fn move_to_copy_places_a_duplicate_in_one_step() {
     assert_eq!(names(&s), ["Background", "A", "B", "G"]);
 }
 
-
 /// #2259: the commands behind the arrow-key nudges take the `coalesce` key, so a run of them is
 /// one step an agent can drive too, and one Undo takes the whole run back.
 #[test]
@@ -436,7 +417,6 @@ fn translate_and_transform_selection_coalesce_into_one_step() {
     assert_eq!(sel(&s), 10);
 }
 
-
 #[test]
 fn painting_can_target_the_layer_mask() {
     let mut s = Session::new();
@@ -462,7 +442,6 @@ fn painting_can_target_the_layer_mask() {
     assert!(m(&s, 2, 20) < 0.1 && m(&s, 38, 20) > 0.9);
 }
 
-
 #[test]
 fn layer_locks_are_set_and_enforced() {
     let mut s = Session::new();
@@ -478,7 +457,6 @@ fn layer_locks_are_set_and_enforced() {
     let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert!(l.locks.position && !l.locks.pixels);
 }
-
 
 #[test]
 fn all_lock_blocks_painting_a_mask_but_pixels_lock_does_not() {
@@ -508,7 +486,6 @@ fn all_lock_blocks_painting_a_mask_but_pixels_lock_does_not() {
     s.execute("edit.undo", json!({})).unwrap();
     assert!(mask_value(&s) > 0.99, "undo restores the mask");
 }
-
 
 #[test]
 fn merge_down_on_a_group_merges_the_group() {
@@ -547,7 +524,6 @@ fn merge_down_on_a_group_merges_the_group() {
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(group)).is_some());
 }
-
 
 #[test]
 fn sessions_share_builtin_brushes_until_edited() {

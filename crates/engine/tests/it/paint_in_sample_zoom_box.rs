@@ -1,12 +1,8 @@
 //! Tests that run paint commands, moved from the engine-core `sample_zoom_box` tests: 8 test(s).
 
-use photocraft_doc::{Size};
-use photocraft_geom::{Rect};
 use serde_json::{Value, json};
 
-
 use photocraft_engine::Session;
-
 
 /// The issue's test document: 800 × 600 RGB/8 white; on a pixel layer a red (220,30,30) block at
 /// 100,100–300,250, 2 px black / 2 px white stripes at 350,100–450,200 (black at x 350–351,
@@ -33,7 +29,6 @@ fn test_document() -> Session {
     s
 }
 
-
 /// A black 400 × 400 document with one white pixel at 200,200 (the issue's probe).
 fn probe() -> Session {
     let mut s = Session::new();
@@ -46,7 +41,6 @@ fn probe() -> Session {
     s
 }
 
-
 /// The 8-bit RGB read at document pixel (x, y).
 fn read(s: &mut Session, x: i32, y: i32, size: u32, zoom: Option<f64>) -> [i64; 3] {
     let mut p = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": size});
@@ -58,11 +52,9 @@ fn read(s: &mut Session, x: i32, y: i32, size: u32, zoom: Option<f64>) -> [i64; 
     [c(0), c(1), c(2)]
 }
 
-
 fn grey(v: i64) -> [i64; 3] {
     [v, v, v]
 }
-
 
 #[test]
 fn at_100_percent_the_test_document_reads_the_measured_table() {
@@ -92,7 +84,6 @@ fn at_100_percent_the_test_document_reads_the_measured_table() {
     }
 }
 
-
 #[test]
 fn without_a_zoom_the_box_stays_the_centred_square() {
     // Today's values from the issue: 3 by 3 at stripes x 351 reads 85, red edge 232,105,105.
@@ -102,7 +93,6 @@ fn without_a_zoom_the_box_stays_the_centred_square() {
     assert_eq!(read(&mut s, 100, 150, 3, None), [232, 105, 105]);
     assert_eq!(read(&mut s, 351, 150, 11, None), grey(162));
 }
-
 
 #[test]
 fn the_probe_at_100_percent_reads_16_for_3_by_3_and_7_for_5_by_5() {
@@ -120,13 +110,11 @@ fn the_probe_at_100_percent_reads_16_for_3_by_3_and_7_for_5_by_5() {
     }
 }
 
-
 #[test]
 fn at_50_percent_3_by_3_covers_8_by_8_document_pixels() {
     let mut s = probe();
     assert_eq!(read(&mut s, 200, 200, 3, Some(0.5)), grey(4), "255 / 64");
 }
-
 
 #[test]
 fn above_100_percent_it_is_the_centred_square() {
@@ -139,7 +127,6 @@ fn above_100_percent_it_is_the_centred_square() {
     }
 }
 
-
 #[test]
 fn point_sample_is_one_pixel_at_every_zoom() {
     let mut s = probe();
@@ -149,7 +136,6 @@ fn point_sample_is_one_pixel_at_every_zoom() {
     }
 }
 
-
 #[test]
 fn a_far_zoomed_out_box_is_capped_and_clipped_not_a_panic() {
     let mut s = probe();
@@ -157,9 +143,11 @@ fn a_far_zoomed_out_box_is_capped_and_clipped_not_a_panic() {
     let v = read(&mut s, 0, 0, 101, Some(0.01));
     assert!(v.iter().all(|c| (0..=1).contains(c)), "one white pixel in a canvas-wide average: {v:?}");
     let rect = photocraft_engine::cmd::sample_cmds::sample_rect_at(200.5, 200.5, 101, Some(0.01), photocraft_geom::Rect::new(0, 0, 100_000, 100_000)).unwrap();
-    assert!(rect.width() <= photocraft_engine::cmd::sample_cmds::MAX_ZOOM_BOX && rect.height() <= photocraft_engine::cmd::sample_cmds::MAX_ZOOM_BOX, "{rect:?}");
+    assert!(
+        rect.width() <= photocraft_engine::cmd::sample_cmds::MAX_ZOOM_BOX && rect.height() <= photocraft_engine::cmd::sample_cmds::MAX_ZOOM_BOX,
+        "{rect:?}"
+    );
 }
-
 
 #[test]
 fn a_bad_zoom_is_an_error_not_a_panic() {
