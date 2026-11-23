@@ -1,0 +1,15 @@
+pub(super) mod alt_grab;
+pub(super) mod blend_keys;
+pub mod hold_keys;
+pub mod nudge_bundle;
+pub(super) mod opacity_keys;
+pub mod shortcut_dispatch;
+pub mod shortcuts;
+pub mod spring_tools;
+pub mod stylus;
+pub(super) mod tool_shortcuts;
+pub mod touch_twins;
+pub mod window_keys;
+
+#[cfg(test)]
+mod magic_eraser_digit_keys_tests;

@@ -14,24 +14,13 @@ use photocraft_doc::{
 use photocraft_geom::{Affine, Size};
 use serde::{Deserialize, Serialize};
 
-/// Current manifest version written by this build.
-pub const FORMAT_VERSION: u32 = 1;
+pub use craft_pcraft_format::{FORMAT_VERSION, Hash, TileRef};
 
-/// Hex-encoded BLAKE3 hash (64 chars).
-pub type Hash = String;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Manifest {
-    pub format_version: u32,
-    /// Free-form writer identification, e.g. `photocraft-format 0.1.0`.
-    pub generator: String,
-    pub document: DocM,
-    /// Optional previews present in the bundle.
-    #[serde(default)]
-    pub thumbnail: Option<String>,
-    #[serde(default)]
-    pub composite: Option<String>,
-}
+/// The manifest: craft-pcraft-format's envelope (`format_version`, `generator`, the optional
+/// `thumbnail` and `composite` previews) around the document [`DocM`]. A save with the full-size
+/// composite adds a `full_composite` member after the envelope; [`crate::read_full_composite`]
+/// reads it.
+pub type Manifest = craft_pcraft_format::Manifest<DocM>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocM {
@@ -71,6 +60,9 @@ pub struct DocM {
     /// Indexed Color palette.
     #[serde(default)]
     pub color_table: Option<photocraft_doc::ColorTable>,
+    /// Indexed Color pixel indices, where known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_indices: Option<ColorIndicesM>,
     /// Duotone inks.
     #[serde(default)]
     pub duotone: Option<photocraft_doc::Duotone>,
@@ -154,11 +146,12 @@ pub struct NamedPathM {
     pub psd_raw: Option<Hash>,
 }
 
+/// [`photocraft_doc::ColorIndices`]: the layer (by id) and its pixels' indices. Saved only while
+/// they hold for the layer as saved, so the layer's own pixels are the recorded ones on open.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TileRef {
-    pub tx: i32,
-    pub ty: i32,
-    pub hash: Hash,
+pub struct ColorIndicesM {
+    pub layer: u64,
+    pub indices: SurfaceM,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -223,6 +216,8 @@ pub struct LayerM {
     pub effects: EffectsM,
     pub label: LabelColor,
     pub content: ContentM,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<photocraft_doc::Frame>,
     /// (4-char key as hex, blob)
     pub psd_blocks: Vec<(String, Hash)>,
     pub psd_id: Option<u32>,
@@ -259,6 +254,9 @@ pub enum ContentM {
         /// Artboard (Layer › New › Artboard).
         #[serde(default)]
         artboard: Option<photocraft_doc::Artboard>,
+        /// A Photoshop Frame's stroke, drawn along the group's vector mask.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_stroke: Option<ShapeStroke>,
     },
     Adjustment {
         adjustment: Adjustment,
@@ -297,6 +295,14 @@ pub enum ContentM {
         stroke: Option<ShapeStroke>,
         #[serde(default)]
         live: Option<LiveShape>,
+        /// Arrow parameters stored separately for backward compatibility.
+        /// Older PhotoCraft versions ignore this optional field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arrow_live: Option<LiveShape>,
+        /// A live triangle, stored apart from `live` because builds from before the kind cannot
+        /// read it there; they ignore this field and open the shape as its saved path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        triangle_live: Option<LiveShape>,
         /// The path's density as the fill's mask; older files have none (100 %).
         #[serde(default = "full_density")]
         density: f32,
@@ -309,6 +315,8 @@ pub enum ContentM {
         #[serde(default)]
         contents_id: Option<u64>,
         source: SmartSourceM,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vector_preview: Option<VectorPreviewM>,
         transform: Affine,
         smart_filters: Vec<SmartFilter>,
         cache: Option<SurfaceM>,
@@ -325,6 +333,13 @@ pub enum ContentM {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         perspective: Option<[f64; 9]>,
     },
+}
+
+/// The native source remains separate from this optional display-only SVG blob.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VectorPreviewM {
+    pub source_hash: [u8; 32],
+    pub svg: Hash,
 }
 
 fn full_density() -> f32 {
@@ -370,6 +385,8 @@ fn default_channel_opacity() -> f32 {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MetadataM {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_conversion: Option<ImportConversionM>,
     pub xmp: Option<String>,
     pub exif: Option<Hash>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -378,6 +395,14 @@ pub struct MetadataM {
     pub psd_resources: Vec<(u16, String, Hash)>,
     /// (signature hex, key hex, blob)
     pub psd_global_blocks: Vec<(String, String, Hash)>,
+}
+
+/// Optional historical information. Both record and binary payloads use the normal blob store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportConversionM {
+    pub schema_version: u32,
+    pub record: Hash,
+    pub attachments: Vec<Hash>,
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ From the repository root, after installing the toolchain and target above:
 ```sh
 ./examples/plugins/invert-rs/build.sh --check
 sha256sum crates/plugins/tests/fixtures/invert.wasm
-cargo test -p photocraft-plugins --test abi
+cargo test -p photocraft-plugins --test it abi::
 ```
 
 `--check` builds the module and uses `cmp` to compare it byte-for-byte with the committed

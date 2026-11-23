@@ -181,9 +181,18 @@ pub fn gen_doc(mode: ColorMode, depth: SampleType, f: Features) -> Document {
             Adjustment::ColorBalance { shadows: [10.0, 0.0, -5.0], midtones: [0.0, 20.0, 0.0], highlights: [-30.0, 0.0, 15.0], preserve_luminosity: true },
             Adjustment::BlackWhite { weights: [50.0, 60.0, 40.0, 60.0, 20.0, 70.0], tint: Some([1.0, 0.8, 0.6]) },
             Adjustment::PhotoFilter { color: [1.0, f32::from(32768u16) / 65535.0, 0.0], density: 0.25, preserve_luminosity: false },
-            Adjustment::ChannelMixer { matrix: [[0.8, 0.2, 0.0, 0.0], [0.0, 1.0, 0.0, 0.1], [0.1, 0.0, 0.9, 0.0]], monochrome: false },
+            Adjustment::ChannelMixer { matrix: [[0.8, 0.2, 0.0, 0.0], [0.0, 1.0, 0.0, 0.1], [0.1, 0.0, 0.9, 0.0]], monochrome: false, cmyk: None },
         ];
-        let adjs = adjs.into_iter().chain(colour.into_iter().filter(|_| mode != ColorMode::Grayscale));
+        // A CMYK document's Channel Mixer has ink outputs (#8047).
+        let colour = colour.into_iter().map(|a| match a {
+            Adjustment::ChannelMixer { monochrome, .. } if mode == ColorMode::Cmyk => Adjustment::ChannelMixer {
+                matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+                monochrome,
+                cmyk: Some([[0.8, 0.2, 0.0, 0.1, 0.0], [0.0, 1.0, 0.0, 0.0, 0.1], [0.1, 0.0, 0.9, 0.0, 0.0], [0.2, 0.2, 0.2, 0.8, -0.05]]),
+            },
+            other => other,
+        });
+        let adjs = adjs.into_iter().chain(colour.filter(|_| mode != ColorMode::Grayscale));
         for (i, a) in adjs.enumerate() {
             let mut l = Layer::new(format!("adj {i}"), LayerContent::Adjustment(a));
             l.opacity = g(if i % 2 == 0 { 255 } else { 128 });
@@ -236,6 +245,12 @@ fn color_close(a: &Color, b: &Color, ctx: &str) {
 
 pub fn assert_layers_eq(a: &Layer, b: &Layer, path: &str) {
     let ctx = format!("{path}/{}", a.name);
+    assert_layer_properties(a, b, &ctx);
+    assert_layer_mask_eq(a, b, &ctx);
+    assert_layer_content_eq(a, b, &ctx);
+}
+
+fn assert_layer_properties(a: &Layer, b: &Layer, ctx: &str) {
     assert_eq!(a.name, b.name, "{ctx}: name");
     assert_eq!(a.visible, b.visible, "{ctx}: visible");
     assert_eq!(a.locks, b.locks, "{ctx}: locks");
@@ -259,6 +274,9 @@ pub fn assert_layers_eq(a: &Layer, b: &Layer, path: &str) {
         let other = b.fill_cache.as_ref().expect("fill cache kept");
         surface_eq(&fc.surface, &other.surface, &format!("{ctx}: fill cache"));
     }
+}
+
+fn assert_layer_mask_eq(a: &Layer, b: &Layer, ctx: &str) {
     match (&a.mask, &b.mask) {
         (None, None) => {}
         (Some(x), Some(y)) => {
@@ -270,28 +288,27 @@ pub fn assert_layers_eq(a: &Layer, b: &Layer, path: &str) {
         }
         _ => panic!("{ctx}: mask presence differs"),
     }
+}
+
+fn assert_layer_content_eq(a: &Layer, b: &Layer, ctx: &str) {
     match (&a.content, &b.content) {
-        (LayerContent::Raster(x), LayerContent::Raster(y)) => surface_eq(x, y, &ctx),
+        (LayerContent::Raster(x), LayerContent::Raster(y)) => surface_eq(x, y, ctx),
         (LayerContent::Group(x), LayerContent::Group(y)) => {
             assert_eq!(x.expanded, y.expanded, "{ctx}: expanded");
             assert_eq!(x.children.len(), y.children.len(), "{ctx}: child count");
             for (p, q) in x.children.iter().zip(&y.children) {
-                assert_layers_eq(p, q, &ctx);
+                assert_layers_eq(p, q, ctx);
             }
         }
         (LayerContent::Adjustment(x), LayerContent::Adjustment(y)) => assert_eq!(x, y, "{ctx}: adjustment"),
-        (LayerContent::Fill(Fill::Solid(x)), LayerContent::Fill(Fill::Solid(y))) => color_close(x, y, &ctx),
+        (LayerContent::Fill(Fill::Solid(x)), LayerContent::Fill(Fill::Solid(y))) => color_close(x, y, ctx),
         (LayerContent::Fill(x), LayerContent::Fill(y)) => assert_eq!(x, y, "{ctx}: fill"),
         (LayerContent::Text(x), LayerContent::Text(y)) => {
             assert_eq!(x.text, y.text, "{ctx}: text");
-            surface_eq(x.cache.as_ref().unwrap(), y.cache.as_ref().unwrap(), &ctx);
+            surface_eq(x.cache.as_ref().unwrap(), y.cache.as_ref().unwrap(), ctx);
         }
-        (LayerContent::Shape(x), LayerContent::Shape(y)) => {
-            surface_eq(x.cache.as_ref().unwrap(), y.cache.as_ref().unwrap(), &ctx);
-        }
-        (LayerContent::Smart(x), LayerContent::Smart(y)) => {
-            surface_eq(x.cache.as_ref().unwrap(), y.cache.as_ref().unwrap(), &ctx);
-        }
+        (LayerContent::Shape(x), LayerContent::Shape(y)) => surface_eq(x.cache.as_ref().unwrap(), y.cache.as_ref().unwrap(), ctx),
+        (LayerContent::Smart(x), LayerContent::Smart(y)) => surface_eq(x.cache.as_ref().unwrap(), y.cache.as_ref().unwrap(), ctx),
         (x, y) => panic!("{ctx}: kind {} vs {}", x.kind_name(), y.kind_name()),
     }
 }
@@ -352,7 +369,7 @@ fn tone_space(mode: ColorMode) -> photocraft_doc::adjust::ToneSpace {
 /// - blocks with inner lengths (`PlLd`, `SoLd`, `SoLE`, `lnk2`/`lnk3`/`lnkD`, `lfx2`)
 ///   re-parse exactly (`TaggedBlock::check_structure`).
 pub fn strict_block_errors(bytes: &[u8]) -> Vec<String> {
-    let file = match photocraft_psd::PsdFile::from_bytes(bytes) {
+    let file = match craft_psd::PsdFile::from_bytes(bytes) {
         Ok(f) => f,
         Err(e) => return vec![format!("parse: {e}")],
     };
@@ -366,8 +383,8 @@ pub fn strict_block_errors(bytes: &[u8]) -> Vec<String> {
         let pad = li.padding.as_ref().map_or(body % 2, |p| p.len() as u64);
         // In a global `Lr16`/`Lr32` block the padding to 4 follows the block, outside its length.
         let after = match &file.layer_info_placement {
-            photocraft_psd::LayerInfoPlacement::GlobalBlock { padding, .. } => padding.as_ref().map_or((4 - (body + pad) % 4) % 4, |p| p.len() as u64),
-            photocraft_psd::LayerInfoPlacement::Section => 0,
+            craft_psd::LayerInfoPlacement::GlobalBlock { padding, .. } => padding.as_ref().map_or((4 - (body + pad) % 4) % 4, |p| p.len() as u64),
+            craft_psd::LayerInfoPlacement::Section => 0,
         };
         if (body + pad + after) % 4 != 0 {
             errs.push(format!("layer info: {body} bytes + {pad} padding is not a multiple of 4"));

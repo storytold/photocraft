@@ -4,10 +4,17 @@
 //!
 //! `--json` writes the report `cargo xtask perf` reads: `{"rows": [{"name", "samples_ms"}]}`.
 //! `--quick` runs the list on a 1500×1000 layer instead, for `cargo xtask perf --quick`.
-use photocraft_algo::*;
+use photocraft_algo::{
+    BlurPath, BlurQuality, BlurShape, DepthSource, Distribution, FieldPin, FilterParams, IrisPin, Light, SmartBlurMode, SpinPin, TextureChannel, apply,
+    output_area,
+};
 use photocraft_color::PixelFormat;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
+
+/// Rows per band when hashing an output region: the hash sequence must match hashing the whole
+/// region, so bands walk `y` in order, but the buffer stays a few MB instead of the layer's 384 MB.
+const HASH_BAND_ROWS: usize = 64;
 
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
@@ -92,6 +99,21 @@ fn main() {
             let out = apply(&s, &p, area, r, None);
             let ms = t.elapsed().as_secs_f64() * 1e3;
             samples.push(ms);
+            // FNV-1a 64 over the output's raw f32 bytes, in row order: "same pixels" as a
+            // comparison, not a promise. Hashing byte bands of rows keeps the sequence identical
+            // to hashing the whole region while holding a few MB instead of the layer's 384 MB.
+            let mut hash = 0xcbf29ce484222325u64;
+            let mut buf = Vec::new();
+            for y in (r.y0..r.y1).step_by(HASH_BAND_ROWS) {
+                let band = Rect::new(r.x0, y, r.x1, (y + HASH_BAND_ROWS as i32).min(r.y1));
+                out.read_region_into(band, &mut buf);
+                for v in &buf {
+                    for byte in v.to_bits().to_le_bytes() {
+                        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+                    }
+                }
+            }
+            eprintln!("HASH {name} {hash:016x}");
             drop(out);
         }
         let mut sorted = samples.clone();

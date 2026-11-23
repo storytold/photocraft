@@ -35,7 +35,8 @@ fn newly_created_layer_masks_follow_document_depth() {
                 }
                 let before = s.active().unwrap().doc.clone();
                 let history = s.active().unwrap().history.past_len();
-                s.execute(command, json!({"color": "#000000"})).unwrap();
+                let params = if command.starts_with("layer.newFillLayer") { json!({"color": "#000000"}) } else { json!({}) };
+                s.execute(command, params).unwrap();
                 let d = s.active().unwrap();
                 let m = mask(&d.doc);
                 assert_eq!(m.surface.format(), PixelFormat::new(ColorMode::Grayscale, sample, false), "{command}, {depth}-bit {mode}");
@@ -45,12 +46,10 @@ fn newly_created_layer_masks_follow_document_depth() {
                 assert_eq!(m.value(20, 20), white);
                 if selected {
                     assert_eq!(m.value(0, 0), 0.0);
-                    if command == "layer.layerMask.revealSelection" {
-                        // The selection became the mask: Photoshop drops it, as Hide Selection does.
-                        assert!(d.doc.selection.is_none(), "{command}: the selection is dropped");
-                    } else {
-                        assert_eq!(d.doc.selection, before.selection, "the selection is unchanged");
-                    }
+                    // The selection became the mask: Photoshop drops it, as Hide Selection does
+                    // (#5251; new fill and adjustment layers too, #8801).
+                    assert!(d.doc.selection.is_none(), "{command}: the selection is dropped");
+                    assert!(before.selection.is_some());
                 } else {
                     assert_eq!(m.surface.tile_count(), 0, "uniform masks stay sparse");
                     assert_eq!(m.value(-300_000, 300_000), white);
@@ -72,7 +71,6 @@ fn soft_mask_edits_match_after_native_and_psd_reopen() {
         let mut s = session(depth, "rgb");
         s.execute("select.rect", json!({"x": 8, "y": 6, "width": 40, "height": 32, "antiAlias": false})).unwrap();
         s.execute("layer.newFillLayer.solidColor", json!({"color": "#000000"})).unwrap();
-        s.execute("select.deselect", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let native = photocraft_format::save_to_bytes(&before, &Default::default()).unwrap();
         let psd = photocraft_io::export(&before, "psd", &Default::default()).unwrap();
@@ -130,7 +128,8 @@ fn mask_creation_preserves_selection_coverage_and_existing_masks() {
             })
             .unwrap();
             let before = s.active().unwrap().doc.clone();
-            s.execute(command, json!({"from": [0, 0], "to": [64, 48]})).unwrap();
+            let params = if command == "gradient.fill.create" { json!({"from": [0, 0], "to": [64, 48]}) } else { json!({}) };
+            s.execute(command, params).unwrap();
             let after = &s.active().unwrap().doc;
             let added = after.layer(s.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
             assert_eq!(
@@ -138,8 +137,8 @@ fn mask_creation_preserves_selection_coverage_and_existing_masks() {
                 before.selection.as_ref().unwrap().read_region(before.bounds()),
                 "{depth}-bit coverage is unchanged"
             );
-            let kept = if command == "layer.layerMask.revealSelection" { None } else { before.selection.clone() };
-            assert_eq!(after.selection, kept, "{command}");
+            // The selection went into the mask, so it is dropped (#8801, #12196).
+            assert!(after.selection.is_none(), "{command}");
             assert_eq!(after.layers[0].mask, before.layers[0].mask, "creating a mask does not requantize an existing mask");
         }
     }
