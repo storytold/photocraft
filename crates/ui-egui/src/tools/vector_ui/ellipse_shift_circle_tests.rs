@@ -1,17 +1,16 @@
 //! #13222: ⇧ while dragging with the Ellipse tool makes a circle from the shorter side of the
 //! drag, as in the reference application, not the longer one; ⇧⌥ centres that circle on the
-//! press. The drag preview (`shape_bounds`) shows the same box as the layer the drag makes.
+//! press. The drag preview is the framework tool's own paint of the same geometry.
 
 use egui::Modifiers;
 use photocraft_doc::{LayerContent, LiveShape};
 use serde_json::json;
 
-use super::shape_bounds;
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
@@ -40,16 +39,11 @@ fn ellipse_rect(app: &PhotocraftApp) -> [f64; 4] {
     }
 }
 
-fn preview(app: &PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) -> [f64; 4] {
-    shape_bounds(&app.ui.tool_options, Tool::EllipseShape, from, to, mods).expect("a box")
-}
-
 #[test]
 fn shift_makes_a_circle_from_the_shorter_side() {
     let mut app = app();
     drag(&mut app, [400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT);
     assert_eq!(ellipse_rect(&app), [400.0, 300.0, 100.0, 100.0]);
-    assert_eq!(preview(&app, [400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT), [400.0, 300.0, 500.0, 400.0]);
 }
 
 #[test]
@@ -57,7 +51,6 @@ fn shift_uses_the_shorter_side_when_the_drag_is_taller_than_wide() {
     let mut app = app();
     drag(&mut app, [400.0, 300.0], [450.0, 500.0], Modifiers::SHIFT);
     assert_eq!(ellipse_rect(&app), [400.0, 300.0, 50.0, 50.0]);
-    assert_eq!(preview(&app, [400.0, 300.0], [450.0, 500.0], Modifiers::SHIFT), [400.0, 300.0, 450.0, 350.0]);
 }
 
 #[test]
@@ -66,11 +59,11 @@ fn shift_alt_centres_the_shorter_side_circle_on_the_press() {
     let mods = Modifiers::SHIFT | Modifiers::ALT;
     drag(&mut app, [400.0, 300.0], [600.0, 400.0], mods);
     assert_eq!(ellipse_rect(&app), [300.0, 200.0, 200.0, 200.0]);
-    assert_eq!(preview(&app, [400.0, 300.0], [600.0, 400.0], mods), [300.0, 200.0, 500.0, 400.0]);
 }
 
 #[test]
 fn shift_keeps_the_drag_direction_up_and_left() {
-    let app = app();
-    assert_eq!(preview(&app, [400.0, 300.0], [200.0, 200.0], Modifiers::SHIFT), [300.0, 200.0, 400.0, 300.0]);
+    let mut app = app();
+    drag(&mut app, [400.0, 300.0], [200.0, 200.0], Modifiers::SHIFT);
+    assert_eq!(ellipse_rect(&app), [300.0, 200.0, 100.0, 100.0]);
 }
