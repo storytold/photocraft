@@ -917,7 +917,7 @@ impl<'a> Planner<'a> {
         self.effect_layer_base(&mut work);
         self.effect_paints(&mut work);
         self.effect_vector_stroke(&mut work);
-        self.effect_inside_strokes(&mut work);
+        self.effect_inside_strokes(&mut work)?;
         self.effect_inner_bevel(&mut work);
         self.effect_alpha(&mut work);
         self.effect_outside_strokes(&mut work);
@@ -1097,7 +1097,7 @@ impl<'a> Planner<'a> {
         work.l = l;
     }
 
-    fn effect_inside_strokes(&mut self, work: &mut EffectState<'a>) {
+    fn effect_inside_strokes(&mut self, work: &mut EffectState<'a>) -> Result<(), Unsupported> {
         let layer = work.layer;
         let rev = work.rev.clone();
         let fx = work.fx;
@@ -1111,23 +1111,37 @@ impl<'a> Planner<'a> {
         for &(i, e) in &rev {
             if let Effect::Stroke(st) = e {
                 let (in_w, _) = stroke_widths(st);
-                if in_w > 0.0 {
-                    let paint = self.fx_paint(&st.paint, anchor);
-                    l = self.paint(
-                        l,
-                        content,
-                        Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)),
-                        &paint,
-                        st.common.blend,
-                        st.common.opacity,
-                        if st.common.blend == BlendMode::Normal { F_GATE | F_REPLACE } else { F_GATE },
-                        clip,
-                        photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
-                    );
+                if in_w <= 0.0 {
+                    continue;
                 }
+                // #15000: with Overprint off the band replaces the layer's own pixels and the
+                // stroke's own mode blends with what lies UNDER the layer; with Overprint on it
+                // blends over the layer's own pixels. `fs_fxpaint` blends into one chain, and the
+                // shader has no coverage-driven knockout of the layer chain, so the plan cannot
+                // split the band by pixel opacity the way the CPU does: every configuration where
+                // the flag has an effect composites on the CPU, as the Stroke Emboss guard above
+                // does, and both paths agree. What stays here paints exactly as before the flag
+                // was read (Overprint off with a Normal mode, and the unmeasured configurations).
+                if photocraft_compose::effects::stroke_overprint_shown(layer, st, self.cx.mode) && (st.overprint || st.common.blend != BlendMode::Normal) {
+                    let why = if st.overprint { "Overprint on" } else { "Overprint off in a blend mode" };
+                    return Err(Unsupported(format!("inside stroke {why} on `{}` (composited on the CPU)", layer.name)));
+                }
+                let paint = self.fx_paint(&st.paint, anchor);
+                l = self.paint(
+                    l,
+                    content,
+                    Cov::Map(map(i, 1), (in_w + 0.5).clamp(0.0, 1.0)),
+                    &paint,
+                    st.common.blend,
+                    st.common.opacity,
+                    if st.common.blend == BlendMode::Normal { F_GATE | F_REPLACE } else { F_GATE },
+                    clip,
+                    photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
+                );
             }
         }
         work.l = l;
+        Ok(())
     }
 
     fn effect_inner_bevel(&mut self, work: &mut EffectState<'a>) {

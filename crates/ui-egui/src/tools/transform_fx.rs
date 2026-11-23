@@ -136,7 +136,7 @@ fn compose(doc: &Document, work: &Layer, plan: &StylePlan, content: &StyledConte
         let y0 = shown.y0.saturating_add((i * BAND_ROWS) as i32);
         let band = Rect::new(shown.x0, y0, shown.x1, y0.saturating_add((px.len() / width.max(1)) as i32));
         let mut over = Buffer::transparent(band);
-        effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, bounds, &doc.patterns);
+        effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, bounds, &doc.patterns, doc.mode);
         // Copied, not moved out, so `over` hands its band back to the scratch pool on drop.
         for (o, p) in px.iter_mut().zip(over.px.iter().copied()) {
             *o = p;
@@ -330,6 +330,36 @@ mod tests {
         }
     }
 
+    /// #15000 review round 2: the preview composites the resampled layer over transparency, so
+    /// the "opaque backdrop under the layer" condition the issue measured never holds there: an
+    /// Inside stroke at 50 % opacity with Overprint on previews today's replace path (the band
+    /// pixel carries the stroke's own alpha over nothing), not the document's blend over the
+    /// layer's pixels, and the flag moves nothing in the preview. Pinned, not redesigned: making
+    /// the preview match the document would mean compositing it onto the document's backdrop.
+    #[test]
+    fn an_inside_stroke_with_overprint_previews_today_s_rule_on_transparency() {
+        let inside = |overprint: bool| {
+            Effect::Stroke(StrokeFx {
+                common: FxCommon::new(BlendMode::Normal, 0.5),
+                size: 4.0,
+                position: StrokePosition::Inside,
+                paint: FxPaint::Color(Color::rgb(1.0, 0.0, 0.0)),
+                overprint,
+            })
+        };
+        let quad = rect_quad([60.0, 60.0, 140.0, 140.0]);
+        let (off, plan) = composite(&styled(vec![inside(false)]), 20, 20, quad, 1.0);
+        let (on, _) = composite(&styled(vec![inside(true)]), 20, 20, quad, 1.0);
+        assert_eq!(off.pixels, on.pixels, "the preview composites over transparency: the flag must not move it");
+        // In the document this band (2 px inside a 4 px inside stroke) is 127.0.127.5 over the
+        // blue layer; the preview keeps today's rule: the stroke over nothing - measured at this
+        // head: the band pixel is 128.0.0 with the stroke's own 50 % alpha.
+        let p = at(&on, &plan, 62.0, 100.0);
+        assert!(p.r() == 128 && p.g() == 0 && p.b() == 0 && (p.a() as i32 - 128).abs() <= 2, "band pixel {p:?}");
+        // Past the band the block's own colour is untouched.
+        assert!(is(at(&on, &plan, 100.0, 100.0), FILL));
+    }
+
     /// The style is laid on in parallel bands: the result is the one a single pass gives.
     #[test]
     fn bands_join_without_a_seam() {
@@ -350,7 +380,7 @@ mod tests {
         let anchor = (f64::from(bounds.x0), f64::from(bounds.y0));
         let maps = effects::build_maps(&work, shape, content_rect, &doc.global_light, &TextureCtx { rect: content_rect, patterns: &doc.patterns, anchor });
         let mut whole = Buffer::transparent(shown);
-        effects::composite_with_effects(&work, &crop(&content, shown), &mut whole, &maps, bounds, &doc.patterns);
+        effects::composite_with_effects(&work, &crop(&content, shown), &mut whole, &maps, bounds, &doc.patterns, doc.mode);
         assert!(banded.pixels == image(&whole).pixels, "banded and whole composites differ");
         assert!(banded.pixels.iter().any(|p| is(*p, RED)) && banded.pixels.iter().any(|p| is(*p, GREEN)) && banded.pixels.iter().any(|p| is(*p, FILL)));
     }

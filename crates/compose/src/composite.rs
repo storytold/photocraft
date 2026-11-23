@@ -591,7 +591,7 @@ fn composite_layer_effects_with<A: BufferAlloc>(layer: &Layer, clipped: &[Layer]
     advanced::composite_clipped_with(clipped, &mut content, cx, alloc)?;
     let vstroke = parts.as_ref().map(|(s, m)| effects::VectorStroke { stroke: s, mask: m.as_deref() });
     let maps = effect_maps_with(layer, rect, cx, alloc)?;
-    effects::composite_with_effects_prepared_with(layer, &content, backdrop, (&maps, vstroke), effects_frame(layer, cx.canvas), cx.patterns, alloc)?;
+    effects::composite_with_effects_prepared_with(layer, &content, backdrop, (&maps, vstroke), effects_frame(layer, cx.canvas), cx.patterns, alloc, cx.mode)?;
     if let Some((_, mask)) = parts {
         recycle_mask(mask);
     }
@@ -702,7 +702,16 @@ fn composite_atop_any_with<A: BufferAlloc>(layer: &Layer, base: &mut Buffer, cx:
             p[3] = 1.0;
         }
         let maps = effect_maps_with(layer, rect, cx, alloc)?;
-        effects::composite_with_effects_prepared_with(layer, &content, &mut opaque, (&maps, vstroke), effects_frame(layer, cx.canvas), cx.patterns, alloc)?;
+        effects::composite_with_effects_prepared_with(
+            layer,
+            &content,
+            &mut opaque,
+            (&maps, vstroke),
+            effects_frame(layer, cx.canvas),
+            cx.patterns,
+            alloc,
+            cx.mode,
+        )?;
         if let Some((_, mask)) = parts {
             recycle_mask(mask);
         }

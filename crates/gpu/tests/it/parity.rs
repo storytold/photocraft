@@ -1105,6 +1105,32 @@ fn hard_stop_effects_and_gradient_maps_request_cpu() {
     assert!(photocraft_gpu::plan(&d).is_ok());
 }
 
+/// #15249 review: an inside stroke at Normal with Overprint off and on on a layer that itself
+/// blends in Multiply, at Advanced Blending defaults. The review claimed the CPU knockout and the
+/// GPU chain split for a layer blend other than Normal; this measures the CPU/GPU pixels for the
+/// configuration the planner draws, and the plan tests pin that the Blend-Interior variant of the
+/// claim never reaches the GPU at all (Advanced Blending composites on the CPU). Both sides keep
+/// the pre-flag rule for such a layer, so they must agree for Overprint off and on.
+#[test]
+fn inside_stroke_on_a_multiply_layer_matches_cpu_and_gpu() {
+    let Some(mut g) = gpu() else { return };
+    for overprint in [false, true] {
+        let mut d = base_doc(64, 48);
+        let mut l = Layer::raster("stroke", PixelFormat::RGBA8);
+        l.blend = BlendMode::Multiply;
+        l.surface_mut().unwrap().fill_rect(Rect::new(8, 6, 56, 42), &[0.8, 0.4, 0.1, 1.0]);
+        l.effects.items = vec![Effect::Stroke(StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 0.9),
+            size: 10.0,
+            position: StrokePosition::Inside,
+            paint: FxPaint::Color(Color::rgb(0.2, 0.1, 0.9)),
+            overprint,
+        })];
+        d.layers.push(l);
+        check(&mut g, &d, &format!("inside Normal stroke, Multiply layer, Overprint {overprint}"));
+    }
+}
+
 #[test]
 fn fills_and_dissolve() {
     let Some(mut g) = gpu() else { return };

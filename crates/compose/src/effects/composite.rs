@@ -227,13 +227,52 @@ pub(super) fn blends_inside(layer: &Layer) -> bool {
     })
 }
 
-/// Composites `content` (the layer's own pixels over `big`, alpha already
-/// masked, clipped layers applied) plus its effects into `backdrop`.
-pub fn composite_with_effects(layer: &Layer, content: &Buffer, backdrop: &mut Buffer, maps: &FxMaps, layer_bounds: Rect, patterns: &[Pattern]) {
-    let prepared = PreparedPatterns::new(patterns, PREPARED_PATTERN_BYTES);
-    composite_with_effects_prepared(layer, content, backdrop, maps, layer_bounds, &prepared, None);
+/// `true` where an inside stroke's Overprint flag changes how the layer composites it (#15000).
+/// The issue measured a solid-colour stroke over an RGB pixel layer at full fill, on an opaque
+/// backdrop, in an RGB document with the layer blending in Normal; gradient and pattern paint, a
+/// layer that is not pixels, a Fill below 100 %, a layer in another blend mode, and a CMYK or Lab
+/// document are not measured and keep today's behaviour, where neither compositor reads the flag.
+/// A layer blending in another mode matters for the knockout: with Blend Interior Effects as Group
+/// its band would come back unmultiplied where today's path multiplies it (the GPU composites such
+/// layers on the CPU anyway - `advanced_active`). So is a layer with more than one stroke reaching
+/// inside it: the issue measured one stroke, and an upper stroke blending over a lower one's
+/// knocked-out band is a rule it did not measure (`stacked_inside_strokes_keep_today_s_pixels`). So
+/// is a stroke at 0 % opacity, which today paints nothing
+/// (`zero_opacity_inside_stroke_keeps_the_layer_s_own_pixels`). The GPU planner calls this too, so
+/// the two agree on which rule applies.
+pub fn stroke_overprint_shown(layer: &Layer, st: &photocraft_doc::StrokeFx, doc_mode: photocraft_color::ColorMode) -> bool {
+    let inside_strokes = layer.effects.items.iter().filter(|e| e.enabled() && matches!(e, Effect::Stroke(s) if stroke_widths(s).0 > 0.0)).count();
+    doc_mode == photocraft_color::ColorMode::Rgb
+        && layer.blend == BlendMode::Normal
+        && matches!(st.paint, FxPaint::Color(_))
+        && st.common.opacity > 0.0
+        && inside_strokes == 1
+        && layer.fill_opacity >= 1.0
+        && matches!(&layer.content, photocraft_doc::LayerContent::Raster(_))
+        && layer.surface().is_some_and(|s| s.format().mode == photocraft_color::ColorMode::Rgb)
 }
 
+/// How far below 1 a pixel's alpha may sit and still count as the opaque layer pixel and opaque
+/// backdrop the issue measured (its document is opaque everywhere under the stroke's band).
+const OPAQUE_EPS: f32 = 1.0e-6;
+
+/// Composites `content` (the layer's own pixels over `big`, alpha already
+/// masked, clipped layers applied) plus its effects into `backdrop`. `doc_mode` is the
+/// document's colour mode, which the Overprint rule reads.
+pub fn composite_with_effects(
+    layer: &Layer,
+    content: &Buffer,
+    backdrop: &mut Buffer,
+    maps: &FxMaps,
+    layer_bounds: Rect,
+    patterns: &[Pattern],
+    doc_mode: photocraft_color::ColorMode,
+) {
+    let prepared = PreparedPatterns::new(patterns, PREPARED_PATTERN_BYTES);
+    composite_with_effects_prepared(layer, content, backdrop, maps, layer_bounds, &prepared, None, doc_mode);
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn composite_with_effects_prepared(
     layer: &Layer,
     content: &Buffer,
@@ -242,13 +281,15 @@ pub(crate) fn composite_with_effects_prepared(
     layer_bounds: Rect,
     patterns: &PreparedPatterns<'_>,
     vstroke: Option<VectorStroke<'_>>,
+    doc_mode: photocraft_color::ColorMode,
 ) {
-    match composite_with_effects_prepared_with(layer, content, backdrop, (maps, vstroke), layer_bounds, patterns, &InfallibleBufferAlloc) {
+    match composite_with_effects_prepared_with(layer, content, backdrop, (maps, vstroke), layer_bounds, patterns, &InfallibleBufferAlloc, doc_mode) {
         Ok(()) => {}
         Err(never) => match never {},
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn composite_with_effects_prepared_with<A: BufferAlloc>(
     layer: &Layer,
     content: &Buffer,
@@ -257,9 +298,10 @@ pub(crate) fn composite_with_effects_prepared_with<A: BufferAlloc>(
     layer_bounds: Rect,
     patterns: &PreparedPatterns<'_>,
     alloc: &A,
+    doc_mode: photocraft_color::ColorMode,
 ) -> Result<(), A::Error> {
     let (maps, vstroke) = prepared;
-    let pass = EffectPass::new(layer, maps, content.rect, layer_bounds, patterns, vstroke.as_ref());
+    let pass = EffectPass::new(layer, maps, content.rect, layer_bounds, patterns, vstroke.as_ref(), doc_mode);
     let big = pass.big;
     let shape = pass.effect_shape(content);
     let rect = backdrop.rect;
@@ -289,7 +331,7 @@ pub(crate) fn composite_with_effects_prepared_with<A: BufferAlloc>(
     let fields = pass.stroke_fields(!strokes.is_empty());
     pass.paint_interior(&mut lay, &shape);
     pass.paint_vector_stroke(&mut lay, &shape);
-    pass.paint_inside_strokes_with(&mut lay, &shape, &strokes, &fields, alloc)?;
+    pass.paint_inside_strokes_with(&mut lay, (&mut work, content), &shape, &strokes, &fields, alloc)?;
     pass.paint_bevel(&mut lay, BevelPaint::Inner, Some(&shape));
     // The shape's own alpha.
     for (p, a) in lay.px.iter_mut().zip(&shape.v) {
@@ -341,6 +383,8 @@ struct EffectPass<'a> {
     maps: &'a FxMaps,
     patterns: &'a PreparedPatterns<'a>,
     vstroke: Option<&'a VectorStroke<'a>>,
+    /// The document's colour mode (read by the stroke Overprint rule, #15000).
+    doc_mode: photocraft_color::ColorMode,
     /// The region effects are painted over: the content's rect.
     big: Rect,
     w: usize,
@@ -362,6 +406,7 @@ impl<'a> EffectPass<'a> {
         layer_bounds: Rect,
         patterns: &'a PreparedPatterns<'a>,
         vstroke: Option<&'a VectorStroke<'a>>,
+        doc_mode: photocraft_color::ColorMode,
     ) -> Self {
         let sb = layer_bounds;
         Self {
@@ -369,6 +414,7 @@ impl<'a> EffectPass<'a> {
             maps,
             patterns,
             vstroke,
+            doc_mode,
             big,
             w: big.width() as usize,
             h: big.height() as usize,
@@ -557,14 +603,27 @@ impl<'a> EffectPass<'a> {
 
     /// Strokes. Inside parts are painted over the layer (bottom instance first); outside parts
     /// are slid beneath it, so the first listed (top) instance is processed first.
+    ///
+    /// Overprint off (Photoshop's default, #15000): where the band lies on the layer's own pixels
+    /// it **replaces** them, and the stroke's own blend mode and opacity work on what lies under
+    /// the layer (`work`). Measured on the issue's document: Inside 10 at 50 % opacity gives
+    /// 64.64.192 in the band and Inside 10 Multiply gives 0.0.128, half blue / blue multiplied
+    /// with the grey Background, not with the layer's own orange, which would give 127.64.128 and
+    /// 0.0.0. Overprint on paints those latter two: the stroke blends over the layer's own pixels.
+    /// [`stroke_overprint_shown`] and [`OPAQUE_EPS`] hold the configurations the issue measured;
+    /// every other pixel of the band keeps today's behaviour ([`EffectPass::paint_band_over_layer`]).
+    ///
+    /// `under` is the backdrop under the layer (`work`) and the layer's own `content`.
     fn paint_inside_strokes_with<A: BufferAlloc>(
         &self,
         lay: &mut Buffer,
+        under: (&mut Buffer, &Buffer),
         shape: &Map,
         strokes: &[&photocraft_doc::StrokeFx],
         fields: &StrokeFields,
         alloc: &A,
     ) -> Result<(), A::Error> {
+        let (work, content) = under;
         for st in strokes.iter().rev().copied() {
             let (in_w, _) = stroke_widths(st);
             if in_w <= 0.0 {
@@ -574,25 +633,83 @@ impl<'a> EffectPass<'a> {
             for ((mv, a), dv) in m.v.iter_mut().zip(&shape.v).zip(&fields.din) {
                 *mv = if inside(*a) { (in_w + 0.5 - dv).clamp(0.0, 1.0) } else { 0.0 };
             }
-            if st.common.blend == BlendMode::Normal {
-                // A Normal stroke replaces the layer under it instead of blending with it
-                // (Photoshop): at 50 % opacity an opaque pixel under the stroke turns into the
-                // stroke colour at 50 % alpha, not a 50/50 mix.
-                let mut stroke_px = alloc.filled(self.big, [0.0; 4])?;
-                paint_fx(&mut stroke_px, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, BlendMode::Normal, st.common.opacity, self.patterns);
-                for ((p, s), cov) in lay.px.iter_mut().zip(&stroke_px.px).zip(&m.v) {
-                    if s[3] <= 0.0 {
-                        continue;
-                    }
-                    let kept = p[3] * (1.0 - cov.clamp(0.0, 1.0));
-                    let alpha = kept + s[3];
-                    if alpha > 0.0 {
-                        *p = [(p[0] * kept + s[0] * s[3]) / alpha, (p[1] * kept + s[1] * s[3]) / alpha, (p[2] * kept + s[2] * s[3]) / alpha, alpha.min(1.0)];
+            if !stroke_overprint_shown(self.layer, st, self.doc_mode) {
+                self.paint_band_over_layer(lay, &m, st, alloc)?;
+                continue;
+            }
+            // Split the band: the issue measured whole pixels of it, where the layer's own pixels
+            // fully cover the pixel and the backdrop beneath it is opaque. Only those take the
+            // Overprint rule. A partly covered edge of the band keeps today's path: a stroke that
+            // covers 75 % of a pixel replaces 75 % of the layer there, which blending 75 % of the
+            // stroke into the backdrop and compositing the rest of the layer over it is not
+            // (`inside_stroke_respects_partial_edge_coverage`).
+            // (`lay` is no use for the opacity test: a layer merged into its backdrop before its
+            // interior effects paints opaque there even with half-transparent pixels.) `shape` is
+            // not enough either: with Transparency Shapes Layer off it is the whole layer, so the
+            // content's own alpha decides
+            // (`half_transparent_pixels_without_transparency_shapes_layer_ignore_overprint`).
+            // `m`, `shown`, `rest` and `content` are all `self.w` x `self.h`, so one `i` indexes them.
+            let (w, h) = (self.w, self.h);
+            let (mut shown, mut rest) = (Map { w, h, v: alloc.scalar_filled(self.big, 0.0)? }, Map { w, h, v: alloc.scalar_filled(self.big, 0.0)? });
+            for (i, cov) in m.v.iter().enumerate() {
+                let whole = *cov >= 1.0 - OPAQUE_EPS
+                    && shape.v.get(i).is_some_and(|a| *a >= 1.0 - OPAQUE_EPS)
+                    && content.px.get(i).is_some_and(|p| p[3] >= 1.0 - OPAQUE_EPS)
+                    && work.px.get(i).is_some_and(|p| p[3] >= 1.0 - OPAQUE_EPS);
+                if whole {
+                    shown.v[i] = *cov;
+                } else {
+                    rest.v[i] = *cov;
+                }
+            }
+            if !shown.v.iter().any(|c| *c > 0.0) {
+                self.paint_band_over_layer(lay, &rest, st, alloc)?;
+                continue;
+            }
+            let (frame, blend, opacity) = (self.stroke_frame(st), st.common.blend, st.common.opacity);
+            if st.overprint {
+                // Overprint on: the stroke over the layer's own pixels (127.64.128 at 50 % opacity
+                // over orange, 0.0.0 in Multiply).
+                paint_fx(lay, &shown, &st.paint, frame, self.anchor, self.big, blend, opacity, self.patterns);
+            } else {
+                // Overprint off: the stroke blended with what lies under the layer (64.64.192 and
+                // 0.0.128), and the layer's own pixels knocked out under the band.
+                paint_fx(work, &shown, &st.paint, frame, self.anchor, self.big, blend, opacity, self.patterns);
+                for (p, cov) in lay.px.iter_mut().zip(&shown.v) {
+                    if *cov > 0.0 {
+                        p[3] *= 1.0 - cov.clamp(0.0, 1.0);
                     }
                 }
-            } else {
-                paint_fx(lay, &m, &st.paint, self.stroke_frame(st), self.anchor, self.big, st.common.blend, st.common.opacity, self.patterns);
             }
+            self.paint_band_over_layer(lay, &rest, st, alloc)?;
+        }
+        Ok(())
+    }
+
+    /// The band of an inside stroke painted as before the Overprint flag was read: a Normal stroke
+    /// replaces the layer under it, every other mode blends over the layer's own pixels.
+    fn paint_band_over_layer<A: BufferAlloc>(&self, lay: &mut Buffer, m: &Map, st: &photocraft_doc::StrokeFx, alloc: &A) -> Result<(), A::Error> {
+        if !m.v.iter().any(|c| *c > 0.0) {
+            return Ok(());
+        }
+        if st.common.blend == BlendMode::Normal {
+            // A Normal stroke replaces the layer under it instead of blending with it
+            // (Photoshop): at 50 % opacity an opaque pixel under the stroke turns into the
+            // stroke colour at 50 % alpha, not a 50/50 mix.
+            let mut stroke_px = alloc.filled(self.big, [0.0; 4])?;
+            paint_fx(&mut stroke_px, m, &st.paint, self.stroke_frame(st), self.anchor, self.big, BlendMode::Normal, st.common.opacity, self.patterns);
+            for ((p, s), cov) in lay.px.iter_mut().zip(&stroke_px.px).zip(&m.v) {
+                if s[3] <= 0.0 {
+                    continue;
+                }
+                let kept = p[3] * (1.0 - cov.clamp(0.0, 1.0));
+                let alpha = kept + s[3];
+                if alpha > 0.0 {
+                    *p = [(p[0] * kept + s[0] * s[3]) / alpha, (p[1] * kept + s[1] * s[3]) / alpha, (p[2] * kept + s[2] * s[3]) / alpha, alpha.min(1.0)];
+                }
+            }
+        } else {
+            paint_fx(lay, m, &st.paint, self.stroke_frame(st), self.anchor, self.big, st.common.blend, st.common.opacity, self.patterns);
         }
         Ok(())
     }
@@ -876,7 +993,7 @@ mod outside_stroke_allocation_tests {
         let patterns = PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES);
         let texture = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
         let maps = build_maps(&layer, shape.v.clone(), rect, &GlobalLight::default(), &texture);
-        let pass = EffectPass::new(&layer, &maps, rect, rect, &patterns, None);
+        let pass = EffectPass::new(&layer, &maps, rect, rect, &patterns, None, photocraft_color::ColorMode::Rgb);
         let strokes: Vec<_> = layer.effects.items.iter().filter_map(|effect| if let Effect::Stroke(stroke) = effect { Some(stroke) } else { None }).collect();
         assert!(strokes.iter().any(|stroke| stroke_widths(stroke).1 > 0.0));
         let fields = pass.stroke_fields(true);
@@ -917,7 +1034,7 @@ mod outside_stroke_allocation_tests {
         let patterns = PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES);
         let texture = TextureCtx { rect, patterns: &[], anchor: (0.0, 0.0) };
         let maps = build_maps(&layer, shape.v.clone(), rect, &GlobalLight::default(), &texture);
-        let pass = EffectPass::new(&layer, &maps, rect, rect, &patterns, None);
+        let pass = EffectPass::new(&layer, &maps, rect, rect, &patterns, None, photocraft_color::ColorMode::Rgb);
         let strokes: Vec<_> = layer.effects.items.iter().filter_map(|effect| if let Effect::Stroke(stroke) = effect { Some(stroke) } else { None }).collect();
         assert!(strokes.iter().any(|stroke| stroke_widths(stroke).1 > 0.0));
         let fields = pass.stroke_fields(true);
