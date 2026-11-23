@@ -6,6 +6,7 @@ use std::sync::{LazyLock, OnceLock};
 use serde_json::{Value, json};
 
 use crate::hooks::Hooks;
+use crate::slots::SlotInit;
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -39,13 +40,25 @@ pub struct Install {
     pub commands: Vec<Table>,
     /// The pipeline hooks of the crates whose tables these are.
     pub(crate) hooks: Hooks,
+    /// The session slots of the crates whose tables these are, one per type.
+    pub(crate) slots: Vec<SlotInit>,
+}
+
+impl Install {
+    /// Give every session a slot of `T` ([`Session::slot`]); a type already registered keeps its one.
+    pub(crate) fn slot<T: Default + Send + 'static>(&mut self) {
+        let init = SlotInit::of::<T>();
+        if !self.slots.iter().any(|s| s.id() == init.id()) {
+            self.slots.push(init);
+        }
+    }
 }
 
 /// Install `install` for this process. Installing the same tables again (the same names in the
 /// same order) does nothing. Different tables are refused with [`EngineError::InstallConflict`],
 /// and from then on every command fails with it and the registry lists nothing.
-/// Only the tables are compared: each crate's `register` adds its hooks with its tables, so the
-/// same tables come with the same hooks.
+/// Only the tables are compared: each crate's `register` adds its hooks and slots with its tables,
+/// so the same tables come with the same hooks and slots.
 pub fn install(install: Install) -> Result<()> {
     INSTALLED.install(install)
 }
@@ -64,6 +77,18 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
 pub(crate) fn hooks() -> &'static Hooks {
     static NO_HOOKS: LazyLock<Hooks> = LazyLock::new(Hooks::default);
     INSTALLED.installed().map_or(&*NO_HOOKS, |install| &install.hooks)
+}
+
+/// The installed session slots; none before an install or after a conflicting one (a session made
+/// then reports the install at its first command, and at each slot it reads).
+pub(crate) fn slot_inits() -> &'static [SlotInit] {
+    INSTALLED.installed().map_or(&[], |install| install.slots.as_slice())
+}
+
+/// Why a session has no slot of a type: the install's error, or [`EngineError::NotInstalled`] when
+/// the crate that registers it was not installed before the session was made.
+pub(crate) fn slot_error() -> EngineError {
+    INSTALLED.installed().err().unwrap_or(EngineError::NotInstalled)
 }
 
 /// The installed command `id`, for running it: [`EngineError::NotInstalled`] before an install,

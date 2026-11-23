@@ -153,10 +153,13 @@ pub fn install() -> Result<()> {
         .clone()
 }
 
-/// This crate's pipeline hooks, grouped by the crate that will own them. Until the engine crates are
-/// cut out of this one, it holds every engine hook. A stage runs its hooks in the order written
+/// This crate's session slots and pipeline hooks, grouped by the crate that will own them. Until the
+/// engine crates are cut out of this one, it holds every engine hook. A stage runs its hooks in the order written
 /// here: store comes last so that `sync_preset_store` runs after the other after-command hooks.
 fn register(install: &mut Install) {
+    // Session slots, by owner crate. store:
+    install.slot::<Option<crate::preset_store::PresetStore>>();
+
     let hooks = &mut install.hooks;
 
     // model
@@ -171,6 +174,8 @@ fn register(install: &mut Install) {
     hooks.recorded_steps.push(("layerComp.apply", |s, _, p, _| Some(crate::comps_cmds::recorded_apply(s, p.clone()))));
     hooks.recorded_steps.push(("edit.checkSpelling", |_, _, p, _| crate::type_spell_cmds::records(p).then(|| crate::type_spell_cmds::recorded_step(p))));
     hooks.prefs_applied.push(|s| crate::transform_cmds::set_budget(u64::from(s.prefs().performance.effective_memory_usage_mb()) << 20));
+    // An edited Edit Contents document updates its parent as it closes.
+    hooks.document_closing.push(crate::smart_cmds::on_close);
 
     // paint
     hooks.coalesce_journal.push(crate::brush_cmds::coalesce_journal);
@@ -181,6 +186,17 @@ fn register(install: &mut Install) {
     hooks.run_params.push(crate::filters_ext::journal_shape_path);
     hooks.after_command.push(crate::edit_menu_cmds::after_command);
     hooks.prefs_applied.push(|s| crate::plugin_cmds::sync_prefs(s));
+    hooks.document_closing.push(|s, index| {
+        if let Some(id) = s.docs.get(index).map(|d| d.doc.id) {
+            s.subject_cache.forget_doc(id);
+            s.object_finder.forget_doc(id);
+        }
+    });
+    // Select Subject's and Object Finder's results are keyed by pixels: free them early.
+    hooks.pixels_edited.push(|s| {
+        s.subject_cache = Default::default();
+        s.object_finder = Default::default();
+    });
 
     // files
     hooks.request_params.push(crate::file_cmds::batch_open_params);
@@ -191,6 +207,14 @@ fn register(install: &mut Install) {
     // store
     hooks.check_params.push(|s, id, p| if id == "file.new" { crate::document_preset_cmds::validate_new_params(s, p) } else { Ok(()) });
     hooks.after_command.push(|s, _, _| s.sync_preset_store());
+    // Clone sources set in a closing document keep their point but stop reading it, and keep its
+    // id from a document opened later.
+    hooks.document_closing.push(|s, index| {
+        if let Some(id) = s.docs.get(index).map(|d| d.doc.id) {
+            s.presets.clone.forget_doc(id);
+        }
+    });
+    hooks.doc_id_reserved.push(|s, id| s.presets.clone.slots.iter().any(|slot| slot.document == Some(id)));
 }
 
 /// A session with this crate's commands installed: what this crate's tests start from.

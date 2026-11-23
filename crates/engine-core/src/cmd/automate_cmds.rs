@@ -12,8 +12,7 @@
 //! bound in Preferences (`scriptEvents`) and fired by [`fire_event`]: the engine fires New,
 //! Close, Print and Export itself; the app shell fires Start, Open and Save.
 
-use photocraft_doc::{DocId, Layer, LayerContent};
-use serde::{Deserialize, Serialize};
+use photocraft_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -40,22 +39,7 @@ fn reject_extendscript(cmd: &str, path: &str) -> Result<()> {
     }
 }
 
-/// Session state of the File-menu commands (not saved, not history).
-#[derive(Clone, Debug, Default)]
-pub struct FileMenuState {
-    /// View › Lock Slices.
-    pub slices_locked: bool,
-    /// Documents with File › Generate › Image Assets on.
-    pub image_assets: craft_tracked::Tracked<Vec<DocId>>,
-    /// File › Print settings used last (Print One Copy repeats them).
-    pub last_print: Option<Value>,
-    /// Save for Web settings used last.
-    pub last_web: Option<Value>,
-    /// Results of the most recent script event (for inspection), newest last, capped.
-    pub event_log: Vec<Value>,
-    /// Set while event scripts run, so their commands don't fire events recursively.
-    pub firing: bool,
-}
+pub use crate::state::FileMenuState;
 
 // ---------- scripts ----------
 
@@ -198,27 +182,7 @@ pub const EVENTS: [(&str, &str); 8] = [
     ("everything", "Everything"),
 ];
 
-/// One event → script binding.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ScriptBinding {
-    pub event: String,
-    /// A script file (see [`parse_script`]).
-    pub script: Option<String>,
-    /// Or inline steps (an action).
-    pub steps: Option<Value>,
-    /// Display name (the action's name).
-    pub name: String,
-}
-
-/// Preferences › Script Events Manager.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct ScriptEvents {
-    /// "Enable Events to Run Scripts/Actions".
-    pub enabled: bool,
-    pub bindings: Vec<ScriptBinding>,
-}
+pub use crate::prefs::{ScriptBinding, ScriptEvents};
 
 fn script_events(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.scripts.scriptEventsManager";

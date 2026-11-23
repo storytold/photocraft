@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use photocraft_engine::Session;
 use photocraft_engine::paint::{Pattern, TipShape};
+use photocraft_engine::preset_store::PresetStoreExt;
 use serde_json::json;
 
 fn memory() -> String {

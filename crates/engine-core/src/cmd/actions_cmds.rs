@@ -26,11 +26,13 @@ use crate::{EngineError, Result, Session};
 /// The action model is craft-automation's: one list type for the engine, the CLI and the panel.
 pub use craft::automation::actions::{Action, ActionColor, ActionList, ActionStep, ActionsFile, moved_index};
 
+pub use crate::action_history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
+pub(crate) use crate::action_history::{
+    before_edit as before_action_edit, begin_document_history, finish_document_history, history_policy_in_use, history_rows, reconcile_history_removal,
+};
 pub(crate) use crate::actions_record::tool_stroke;
 pub use crate::actions_record::{replayable, shell_save_command, shell_view_command};
-pub(crate) use crate::action_history::ActionHistory;
-pub use crate::action_history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
-pub(crate) use crate::action_history::{before_edit as before_action_edit, begin_document_history, finish_document_history, history_rows, reconcile_history_removal};
+pub use crate::prefs::{PLAY_SHORTCUT_PREFIX, is_action_key};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -81,8 +83,8 @@ pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 /// How deep batches and droplets may run inside one another (a droplet whose steps run a droplet).
 pub const MAX_BATCH_DEPTH: u8 = 4;
 
-/// The actions list and the recording / playback flags. The list holds its own sets and
-/// revision (the preset store skips unchanged writes by [`ActionList::revision`]).
+/// The actions list and what Clear All, Reset or Replace keep for their undo. The list holds its own
+/// sets and revision (the preset store skips unchanged writes by [`ActionList::revision`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActionState {
     /// The recorded actions, their sets and their revision: the user's list, the only one stored.
@@ -90,35 +92,12 @@ pub struct ActionState {
     /// The actions a running Batch brought along (a droplet's `calledActions`). Playback finds the
     /// actions it calls here first ([`playable`](Self::playable)); the user's list stays in place.
     pub called: Option<ActionList>,
-    /// Painting-tool strokes are recorded only when the user enables them for this session.
-    pub record_tools: bool,
-    /// Journal length when recording started, and the action index being recorded into.
-    pub recording: Option<(usize, usize)>,
-    /// Nesting depth of `actions.play`, bounded by the playback stack limit.
-    pub playing: u8,
-    /// Active action names, for cycle detection in engine and desktop playback.
-    pub playback_stack: Vec<String>,
-    /// Number of steps executed by the current top-level playback tree.
-    pub playback_steps: u64,
-    /// Set for a batch nested in a played action or another batch: the playback counter it carries
-    /// is shared by every input, so a played action inside it does not restart the count.
-    pub budget_shared: bool,
-    /// How many batches (`file.automate.batch`, and droplets through it) are running inside one
-    /// another: each runs its steps in a scratch session that carries this on, plus one.
-    pub batch_depth: u8,
-    /// How many scripts (`file.scripts.browse`) are running inside one another.
-    pub script_depth: u8,
-    /// Steps run by the current top-level script and everything it calls.
-    pub script_steps: u64,
     /// What the undo of the last Clear All, Reset or Replace restores beside the list (which keeps
     /// its own, [`ActionList::library_undo`]): the action shortcuts and the document history marks.
     pub library_undo: Option<Box<crate::actions_edit_cmds::LibraryUndo>>,
     /// Clear All, Reset or Replace ran before the preset store attached: the list is the whole
     /// library, so attaching writes it instead of merging the stored one in.
     pub(crate) replaced_before_attachment: bool,
-    /// Bumped by each `actions.record`, so a background job knows whether the recording it was
-    /// started in is still the one running when its result lands.
-    pub take: u64,
 }
 
 impl ActionState {
@@ -963,17 +942,9 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 
-/// Prefix of the persisted shortcut override that plays a named action (`actions.play:<name>`).
-pub const PLAY_SHORTCUT_PREFIX: &str = "actions.play:";
-
 /// Prefix of the shortcut keys PhotoCraft files of the Actions library commands era stored per
 /// action id (`actions.playById:<id>`); [`name_id_shortcuts`] moves them to names on load.
 const PLAY_BY_ID_PREFIX: &str = "actions.playById:";
-
-/// Whether a shortcut key plays an action: it belongs to the Actions library, not to a set.
-pub fn is_action_key(key: &str) -> bool {
-    key.starts_with(PLAY_SHORTCUT_PREFIX)
-}
 
 /// Remove the function keys (primary and alternate) of the actions `names`.
 pub(crate) fn remove_shortcuts<'a>(s: &mut Session, names: impl IntoIterator<Item = &'a str>) {
@@ -1142,11 +1113,6 @@ fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
     s.actions.list.set_color(idx, chosen).map_err(|e| list_error(cmd, e))?;
     let name = s.actions.list.actions()[idx].name.clone();
     Ok(json!({"action": name, "color": color}))
-}
-
-/// Active playback and retained dialog continuations keep their chosen history policy.
-pub(crate) fn history_policy_in_use(s: &Session) -> bool {
-    s.recording.playing != 0 || s.action_history.is_some() || s.paused_action_history.iter().any(|lease| lease.strong_count() != 0)
 }
 
 /// Create a single history state alone; `actions.setPlayback` sets it with the performance mode.

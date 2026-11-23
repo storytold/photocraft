@@ -11,6 +11,7 @@ use craft::automation::actions::{ActionList, ActionListError, LibraryEdit};
 use serde_json::{Value, json};
 
 use crate::actions_cmds::{Action, ActionStep, ActionsFile, is_action_key, list_error, not_playing};
+use crate::preset_store::PresetStoreExt;
 use crate::{Result, Session};
 
 use super::bad;

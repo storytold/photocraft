@@ -1,3 +1,5 @@
+use photocraft_engine::preset_store::PresetStoreExt;
+
 use super::{JobEvent, JobOutcome, PhotocraftApp, Started, Value, json, prefs};
 
 /// View › Rulers follows `unitsAndRulers.showRulers` when the preference changes (at launch, from

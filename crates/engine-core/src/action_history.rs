@@ -39,6 +39,11 @@ pub(crate) struct ActionHistory {
     before: Vec<BeforeDocument>,
 }
 
+/// Active playback and retained dialog continuations keep their chosen history policy.
+pub(crate) fn history_policy_in_use(s: &Session) -> bool {
+    s.recording.playing != 0 || s.action_history.is_some() || s.paused_action_history.iter().any(|lease| lease.strong_count() != 0)
+}
+
 /// The outer play owns one lazy scope; nested plays share its document snapshots.
 pub(crate) fn begin(s: &mut Session, name: &str) {
     if s.action_history.is_none() && s.prefs().actions.create_single_history_state {

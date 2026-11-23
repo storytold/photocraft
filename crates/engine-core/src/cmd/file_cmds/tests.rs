@@ -397,7 +397,7 @@ fn batch_override_open_authorizes_effective_path_and_carries_failure_budget() {
     let intact = std::fs::read(&existing).unwrap();
     let mut s = crate::session();
     s.actions.list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", json!({"path":"/recorded.png","as":"png"}))])).unwrap();
-    s.batch_open = Some(BatchOpen { path: first.clone(), sources: Vec::new(), raw_ppi: 300.0, read_only: false });
+    s.batch_open = Some(crate::state::BatchOpen { path: first.clone(), sources: Vec::new(), raw_ppi: 300.0, read_only: false });
     assert!(matches!(s.execute("file.openAs", json!([1])), Err(EngineError::BadParams { .. })));
     assert!(s.documents().is_empty());
     s.batch_open = None;
@@ -3128,10 +3128,10 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         s.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
         s.recording.playing = 16;
         s.recording.playback_stack = (0..16).map(|i| format!("Parent{i}")).collect();
-        let before = s.actions.clone();
+        let before = (s.actions.clone(), s.recording.clone());
         let error = s.execute("file.automate.batch", params.clone()).unwrap_err();
         assert!(error.to_string().contains("nesting exceeds 16"), "{error}");
-        assert_eq!(s.actions, before);
+        assert_eq!((s.actions.clone(), s.recording.clone()), before);
         assert!(!std::path::Path::new(&output).exists());
 
         s.recording.playing = 0;
@@ -3214,7 +3214,7 @@ fn named_batch_allows_nested_work_and_preserves_authorization() {
         if denied {
             s.authorize = Some(deny_invert);
         }
-        let before = s.actions.clone();
+        let before = (s.actions.clone(), s.recording.clone());
         let result = s.execute("file.automate.batch", json!({"action": "Outer", "input": [input], "output": output, "format": "png"})).unwrap();
         if denied {
             assert_eq!(result["files"], json!([]), "{result}");
@@ -3226,7 +3226,7 @@ fn named_batch_allows_nested_work_and_preserves_authorization() {
             let saved = photocraft_io::import("red.png", &std::fs::read(join(&inner, "red.png")).unwrap()).unwrap().document;
             assert_eq!(photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).px[0], [0.0, 1.0, 1.0, 1.0]);
         }
-        assert_eq!(s.actions, before);
+        assert_eq!((s.actions.clone(), s.recording.clone()), before);
     }
 }
 

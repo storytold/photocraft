@@ -27,7 +27,7 @@ use photocraft_doc::{Fill, Layer, LayerContent, Path, Subpath};
 use photocraft_engine::{
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
     atn_cmds,
-    edit_cmds::Clip,
+    edit_cmds::clip_from_svg,
 };
 use photocraft_geom::{Point, Size};
 use serde_json::Value;

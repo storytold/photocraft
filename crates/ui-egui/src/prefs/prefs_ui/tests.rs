@@ -10,6 +10,7 @@ use craft::theme::ThemeId;
 use craft::ui::patterns::preferences::{PrefValue, SettingsDraft};
 use egui::{Color32, vec2};
 use photocraft_engine::prefs::{self, AppearanceMode};
+use photocraft_engine::preset_store::PresetStoreExt;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

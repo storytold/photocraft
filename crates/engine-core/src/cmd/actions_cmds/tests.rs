@@ -1195,10 +1195,10 @@ fn delete_one_step_while_recording_keeps_journal_and_remaining_steps() {
     s.execute("layer.new.layer", json!({"name": "Removed"})).unwrap();
     let journal = s.journal.clone();
     let rev = s.actions.list.revision();
-    let before = s.actions.clone();
+    let before = (s.actions.clone(), s.recording.clone());
     for step in [json!(-1), json!(2), json!(0.5), json!(null), json!("0"), json!(u64::MAX)] {
         assert!(s.execute("actions.delete", json!({"action": 0, "step": step})).is_err());
-        assert_eq!(s.actions, before, "invalid deletion is atomic");
+        assert_eq!((s.actions.clone(), s.recording.clone()), before, "invalid deletion is atomic");
     }
     assert_eq!(pending_steps(&s, 0).count(), 2);
     let result = s.execute("actions.delete", json!({"action": 0, "step": 1})).unwrap();
@@ -1315,7 +1315,7 @@ fn move_pending_steps_is_atomic_persists_and_changes_playback_order() {
     for name in ["One", "Two", "Three"] {
         s.execute("layer.new.layer", json!({"name": name})).unwrap();
     }
-    let before = s.actions.clone();
+    let before = (s.actions.clone(), s.recording.clone());
     for params in [
         json!({"action":0,"step":0,"to":3}),
         json!({"action":0,"step":99,"to":0}),
@@ -1324,7 +1324,7 @@ fn move_pending_steps_is_atomic_persists_and_changes_playback_order() {
         json!({"action":0,"to":null}),
     ] {
         assert!(s.execute("actions.move", params).is_err());
-        assert_eq!(s.actions, before);
+        assert_eq!((s.actions.clone(), s.recording.clone()), before);
     }
     let journal = s.journal.clone();
     s.execute("actions.move", json!({"action":0,"step":0,"to":2})).unwrap();
