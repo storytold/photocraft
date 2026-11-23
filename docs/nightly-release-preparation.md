@@ -52,7 +52,7 @@ This is not a hosted no-key test, a native signing result or a working nightly f
   request inputs are consistently `producer_run_id` and `producer_run_attempt`, while
   `tooling-revision` keeps its existing hyphen spelling. Confirm the final landed interface
   before any future pin update or activation. Unsigned inputs are `tooling-revision`, `app-name`,
-  `manual-actors` (default `[]`) and `craft-fonts-ref`; PhotoCraft's title is reviewed source,
+  `manual-actors` (default `[]`), `craft-fonts-ref` and `platforms`; PhotoCraft's title is reviewed source,
   not an `app-title` input. The reusable caller grants maximum permissions only; each
   callee job must narrow them independently.
   Shared code owns attestation validation, candidate quality, archive bounds, native signing,
@@ -88,7 +88,7 @@ without `platform`, `unsigned_artifact_name` and `windows_publisher_subject`, pl
 | `max_age_seconds`, `max_artifact_bytes`, `platforms.<platform>.unsigned_artifact_name` | Reviewed bounded age/size and each platform's fixed unsigned artifact kind/prefix; actual upload/discovery name is that prefix + `-` + authenticated producer run ID + `-` + authenticated producer attempt, never a caller pattern or substitution |
 | `candidate_policy` | Full reviewed `craft-nightly-candidate-policy/v3` with real required workflow/job/check/app IDs, Sonar organization/project/issue types/conditions and exact approved debt fingerprints; provider configuration is trusted as resolved, not a pinned scan inventory |
 | `platforms.linux-x86_64.trust.fingerprint` | Full primary fingerprint of the stable Linux release key, independently reviewed; the release checkout must also hold exactly that one public key at `.github/nightly-linux-signing-key.asc`, and the existing `LINUX_SIGNING_KEY` must be in the `release` environment only |
-| `platforms.macos-aarch64.trust.apple_team_id` | Stable's ten-character Developer ID team (`DJ6XS33FX8`, Learning Machines LLC), confirmed from a stable signature; never a repository variable. The six stable `APPLE_*`/`KEYCHAIN_PASSWORD` names must be in the `release` environment only |
+| `platforms.macos-aarch64.trust.apple_team_id` | Stable's ten-character Developer ID team `DJ6XS33FX8`, read from the stable v0.23.1 macOS code signature, whose leaf is `CN=Developer ID Application: Learning Machines LLC (DJ6XS33FX8), OU=DJ6XS33FX8, O=Learning Machines LLC`. The Windows certificate names a different entity, `Learning Machines Inc`; only the team ID `DJ6XS33FX8` is enforced on macOS. Never a repository variable. The six stable `APPLE_*`/`KEYCHAIN_PASSWORD` names must be in the `release` environment only |
 | `platforms.windows-x86_64.trust.publisher_subject` | Exact independently reviewed protected policy string used by both signer and fresh credentialless Windows publisher; nonempty, at most 2048 characters, no CR/LF/NUL; verified native subject must match exactly, never an artifact/caller input |
 
 Live admission requires explicit policy v3 once the shared parser lands it; v2 is single-platform

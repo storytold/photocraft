@@ -40,8 +40,9 @@ changes are required: publishing a newer stable GitHub Release makes it discover
    - `.github/workflows/nightly-sign.yml`, `.github/nightly-signing-policy.json`, and
      every transitive reusable workflow/action pin;
    - `packaging/windows/sign.ps1`, its signing configuration, tool installers and imports;
-   - future macOS nightly signing/import scripts and entitlements, and Linux signing/public
-     trust configuration;
+   - the macOS nightly signing scripts (`packaging/macos/nightly-sign.sh`, `nightly-verify.sh`,
+     `nightly-lib.sh`, `import-cert.sh`) and entitlements, and the Linux public key
+     `.github/nightly-linux-signing-key.asc`;
    - **every other workflow that can reach the `release` environment**, including reusable
      callees, dynamic environment selection and changed executable dependencies. A new
      workflow outside the named nightly paths is not exempt.
@@ -76,7 +77,7 @@ in the dialog.
 
 ## Release-ref nightly preparation
 
-The Windows-first source preparation is documented in
+The Windows, Linux and macOS source preparation is documented in
 [`nightly-release-preparation.md`](nightly-release-preparation.md). It is not an activated
 signing or publication pipeline. Stable `release.yml`, its schedule, tags, concurrency,
 environment values and environment rules are unchanged.
