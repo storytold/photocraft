@@ -21,5 +21,6 @@ cp "$NIGHTLY_GUI" "$STAGE/photocraft"
 chmod 755 "$STAGE/photocraft"
 cp "$ROOT/assets/app-icon/photocraft-nightly.png" "$STAGE/photocraft-nightly.png"
 nightly_copy_notices "$STAGE"
-python3 "$ROOT/packaging/nightly-archive.py" linux "$STAGE" "$NIGHTLY_WORK/archive.tar.gz"
+# The private mktemp cwd is the helper authority root, not a CLI path parent.
+(cd "$NIGHTLY_WORK" && python3 "$ROOT/packaging/nightly-archive.py" linux stage archive.tar.gz)
 nightly_publish_archive "$NIGHTLY_WORK/archive.tar.gz" "$OUTPUT"

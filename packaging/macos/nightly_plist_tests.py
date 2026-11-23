@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generated metadata/sentinel fixtures; no native binary, signature, archive or network."""
 import importlib.util
+import os
 from pathlib import Path
 import plistlib
 import runpy
@@ -21,7 +22,10 @@ class NightlyMetadata(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.root = Path(self.directory.name)
+        self.root = Path(self.directory.name).resolve()
+        previous = Path.cwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, previous)
         self.template = self.root / "Info.plist.in"
         self.original = (HERE / "Info.plist.in").read_bytes()
         self.template.write_bytes(self.original)
@@ -116,6 +120,82 @@ class NightlyMetadata(unittest.TestCase):
             POLICY.write_plist(self.template, self.output, VERSION, COMMIT)
         self.assertEqual(external.read_bytes(), sentinel)
         self.assertTrue(self.output.is_symlink())
+
+
+    def test_template_outside_build_root_refuses_before_output(self):
+        with tempfile.TemporaryDirectory() as external:
+            template = Path(external) / "Info.plist.in"
+            template.write_bytes(self.original)
+            with self.assertRaises(ValueError):
+                POLICY.write_plist(template, self.output, VERSION, COMMIT)
+            self.assertFalse(self.output.exists())
+            self.assertEqual(template.read_bytes(), self.original)
+
+    def test_output_outside_build_root_refuses_before_write(self):
+        with tempfile.TemporaryDirectory() as external:
+            output = Path(external) / "Info.plist"
+            with self.assertRaises(ValueError):
+                POLICY.write_plist(self.template, output, VERSION, COMMIT)
+            self.assertFalse(output.exists())
+
+    def test_parent_traversal_refuses_even_to_an_owned_sibling(self):
+        with tempfile.TemporaryDirectory(dir=self.root.parent) as external:
+            output = Path("..") / Path(external).name / "Info.plist"
+            with self.assertRaises(ValueError):
+                POLICY.write_plist(self.template, output, VERSION, COMMIT)
+            self.assertFalse((Path(external) / "Info.plist").exists())
+
+    def test_symlinked_output_parent_refuses(self):
+        with tempfile.TemporaryDirectory() as external:
+            alias = self.root / "alias"
+            alias.symlink_to(external, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                POLICY.write_plist(self.template, alias / "Info.plist", VERSION, COMMIT)
+            self.assertFalse((Path(external) / "Info.plist").exists())
+
+    def test_template_read_is_bounded_before_output(self):
+        self.template.write_bytes(plistlib.dumps({"CFBundlePackageType": "APPL", "fixture": "x" * 300000}))
+        with self.assertRaises(ValueError):
+            POLICY.write_plist(self.template, self.output, VERSION, COMMIT)
+        self.assertFalse(self.output.exists())
+
+    def test_nonprivate_build_root_refuses(self):
+        self.root.chmod(0o755)
+        try:
+            with self.assertRaises(ValueError):
+                POLICY.write_plist(self.template, self.output, VERSION, COMMIT)
+            self.assertFalse(self.output.exists())
+        finally:
+            self.root.chmod(0o700)
+
+
+    def test_output_keeps_normal_new_file_permissions_inside_private_root(self):
+        previous = os.umask(0o022)
+        try:
+            reference = self.root / "reference"
+            reference.write_bytes(b"generated ordinary output")
+            POLICY.write_plist(self.template, self.output, VERSION, COMMIT)
+        finally:
+            os.umask(previous)
+        self.assertEqual(self.output.stat().st_mode & 0o777, reference.stat().st_mode & 0o777)
+
+    def test_open_parent_anchor_prevents_a_later_alias_redirect(self):
+        parent = self.root / "stage"
+        parent.mkdir()
+        retained = self.root / "retained-stage"
+        destination = parent / "Info.plist"
+        original = POLICY.OwnedBuildRoot._parent
+        with tempfile.TemporaryDirectory() as external:
+            def swap_after_parent_open(root, path):
+                descriptor, name = original(root, path)
+                if Path(path) == destination:
+                    parent.rename(retained)
+                    parent.symlink_to(external, target_is_directory=True)
+                return descriptor, name
+            with mock.patch.object(POLICY.OwnedBuildRoot, "_parent", swap_after_parent_open):
+                POLICY.write_plist(self.template, destination, VERSION, COMMIT)
+            self.assertFalse((Path(external) / "Info.plist").exists())
+            self.assertEqual(plistlib.loads((retained / "Info.plist").read_bytes())["PhotoCraftVersion"], VERSION)
 
 
 if __name__ == "__main__":
