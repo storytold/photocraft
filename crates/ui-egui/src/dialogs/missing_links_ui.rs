@@ -79,7 +79,7 @@ impl MissingLinksDialog {
 
 /// The dialog id of document `document`'s dialog.
 fn id_of(document: DocId) -> DialogId {
-    dialog_id(&format!("{KEY}.{}", document.0))
+    dialog_id(format!("{KEY}.{}", document.0))
 }
 
 impl StackDialog for MissingLinksDialog {
