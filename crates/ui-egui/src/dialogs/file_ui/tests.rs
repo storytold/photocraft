@@ -564,6 +564,17 @@ fn the_printable_area_goes_only_with_a_print_to_the_printer() {
     assert!(print_params(&f).get("printable").is_none());
 }
 
+#[test]
+fn print_confirmation_uses_the_native_system_dialog_for_printer_output() {
+    let mut app = app();
+    *app.session.system_print_dialog_mut() = Some(Arc::new(|_, _| Ok(photocraft_engine::print_cmds::SystemPrintOutcome::Cancelled)));
+    let fields = DialogFields::new();
+    let result = super::print::print_confirm(&mut app, &fields).unwrap();
+    assert_eq!(result["systemDialog"], true);
+    assert_eq!(result["cancelled"], true);
+    assert_eq!(result["sent"], false);
+}
+
 /// #7410: File › Print opens with the settings of the last print, also those remembered from
 /// an earlier session (the preferences), before anything was printed in this one.
 #[test]

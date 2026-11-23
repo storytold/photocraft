@@ -205,7 +205,8 @@ pub(super) fn sections(fields: &DialogFields) -> Vec<PrintSection> {
     let (on_key, on_value) = on("colorHandling");
     let mark = |key: &str, label: &'static str| Param::new(key, label, ParamKind::bool(false));
 
-    vec![
+    #[allow(unused_mut)]
+    let mut sections = vec![
         PrintSection::new(
             tl!("Color Management"),
             vec![
@@ -272,7 +273,22 @@ pub(super) fn sections(fields: &DialogFields) -> Vec<PrintSection> {
             tl!("Save as PDF"),
             vec![Param::new("output", tl!("Save as PDF"), ParamKind::text("")).hint(tl!("(print to the printer)")).browse(PathKind::SaveFile)],
         ),
-    ]
+    ];
+    #[cfg(windows)]
+    sections.insert(
+        0,
+        PrintSection::new(
+            tl!("Printer Setup"),
+            vec![Param::custom("__openPrinterSettings", tl!("Print Settings…"), |ui, fields, _| {
+                let response = ui.button(tl!("Print Settings…"));
+                if response.clicked() {
+                    fields.set("__openPrinterSettings", FieldValue::Bool(true));
+                }
+                response
+            })],
+        ),
+    );
+    sections
 }
 
 /// The system's printers, as the engine lists them without waiting: the driver list where the
@@ -311,6 +327,44 @@ fn refresh_printers(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if !listed {
             dialog.request_refresh();
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+/// Opens the selected Windows printer driver's settings dialog and returns its updated DEVMODE.
+#[cfg(windows)]
+fn open_driver_settings(printer: &str, current: Option<&str>) -> Result<Option<String>, String> {
+    let current = current.and_then(|hex| craft_print::rgb::DevMode::from_hex(hex).ok());
+    match photocraft_engine::print_cmds::try_with_spooler(|| craft_print::rgb::settings_dialog(printer, current.as_ref(), None)) {
+        Some(Ok(Some(settings))) => Ok(Some(settings.to_hex())),
+        Some(Ok(None)) => Ok(None),
+        Some(Err(error)) => Err(error.to_string()),
+        None => Err(photocraft_engine::print_cmds::SPOOLER_BUSY.into()),
+    }
+}
+
+/// Reads the selected driver's paper and printable area after its settings dialog returns.
+#[cfg(windows)]
+fn driver_page(fields: &mut DialogFields, printer: &str) {
+    let settings = fields.text("printerSettings").and_then(|hex| craft_print::rgb::DevMode::from_hex(hex).ok());
+    match photocraft_engine::print_cmds::try_with_spooler(|| craft_print::rgb::page(printer, settings.as_ref())) {
+        Some(Ok(page)) => {
+            // The hosted form's Paper row is a choice, so represent the driver's exact page as
+            // the editable Custom choice rather than putting an array into a choice field.
+            fields.set("paper", FieldValue::Text("custom".into()));
+            fields.set("paperWidth", FieldValue::Number(page.paper.0));
+            fields.set("paperHeight", FieldValue::Number(page.paper.1));
+            fields.set("printable", FieldValue::Json(json!([page.printable.0, page.printable.1, page.printable.2, page.printable.3])));
+            fields.set("orientation", FieldValue::Text(if page.paper.0 > page.paper.1 { "landscape" } else { "portrait" }.into()));
+            fields.remove("__pageError");
+        }
+        Some(Err(error)) => {
+            fields.remove("printable");
+            fields.set("__pageError", FieldValue::Text(error.to_string()));
+        }
+        None => {
+            fields.set("__pageError", FieldValue::Text(photocraft_engine::print_cmds::SPOOLER_BUSY.into()));
+            fields.remove("printable");
         }
     }
 }
@@ -466,6 +520,38 @@ pub(super) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let moves = dialog.take_moves();
     let browse = dialog.requests_mut().take_path();
     let mut fields = dialog.fields_mut().clone();
+    #[cfg(windows)]
+    let open_settings = fields.bool("__openPrinterSettings") == Some(true);
+    #[cfg(windows)]
+    let selected_printer = dialog
+        .json_fields()
+        .and_then(|value| value.get("printer").and_then(Value::as_str).map(str::to_owned))
+        .unwrap_or_default();
+    #[cfg(windows)]
+    if open_settings {
+        dialog.fields_mut().remove("__openPrinterSettings");
+    }
+    #[cfg(windows)]
+    drop(dialog);
+    #[cfg(windows)]
+    if open_settings {
+        let current = fields.text("printerSettings").map(str::to_owned);
+        match open_driver_settings(&selected_printer, current.as_deref()) {
+            Ok(Some(settings)) => {
+                fields.set("printerSettings", FieldValue::Text(settings));
+                driver_page(&mut fields, &selected_printer);
+            }
+            Ok(None) => {}
+            Err(error) => fields.set("__pageError", FieldValue::Text(error)),
+        }
+        if let Some(dialog) = app.framework.dialogs.get_mut::<HostedPrint>() {
+            for (key, value) in fields.iter() {
+                dialog.fields_mut().set(key, value.clone());
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = &mut fields;
     if refresh {
         refresh_printers(app, ctx);
     }
@@ -539,6 +625,8 @@ pub(super) fn print_params(f: &DialogFields) -> Value {
     }
     // The ruler unit is the dialog's own display setting; `file.print` takes no `units`.
     p.remove("units");
+    p.remove("__openPrinterSettings");
+    p.remove("__pageError");
     // The driver's printable area belongs to a print to the printer, not to a file or a dry run.
     if f.text("output").is_some_and(|output| !output.is_empty()) || f.bool("dryRun") == Some(true) {
         p.remove("printable");
@@ -553,7 +641,10 @@ pub(super) fn print_params(f: &DialogFields) -> Value {
 /// Submits the dialog parameters to `file.print`, propagating command errors unchanged.
 /// Updates the status for completed results only; pending jobs report completion later.
 pub(super) fn print_confirm(app: &mut PhotocraftApp, f: &DialogFields) -> Result<Value, String> {
-    let r = app.run("file.print", print_params(f))?;
+    let mut p = print_params(f);
+    let saves_pdf = p.get("output").and_then(Value::as_str).is_some_and(|path| !path.is_empty());
+    p["systemDialog"] = json!(photocraft_engine::print_cmds::PrintExt::system_print_dialog(&*app.session).is_some() && !saves_pdf && f.bool("dryRun") != Some(true));
+    let r = app.run("file.print", p)?;
     if r["pending"] != json!(true) {
         print_status(app, &r);
     }
@@ -561,8 +652,12 @@ pub(super) fn print_confirm(app: &mut PhotocraftApp, f: &DialogFields) -> Result
 }
 
 pub(crate) fn print_status(app: &mut PhotocraftApp, r: &Value) {
-    app.ui.status = if let Some(printer) = r["spooler"]["printer"].as_str() {
+    app.ui.status = if r["cancelled"] == json!(true) {
+        crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", tl!("Print"))])
+    } else if let Some(printer) = r["spooler"]["printer"].as_str() {
         crate::i18n::fmt(tl!("Sent to {printer}"), &[("printer", printer)])
+    } else if r["systemDialog"] == json!(true) && r["sent"] == json!(true) {
+        tl!("Sent to the printer").to_string()
     } else if r["sent"] == json!(true) {
         let template = "Sent to the printer ({spooler})";
         crate::i18n::fmt(tl!(template), &[("spooler", r["spooler"].as_str().unwrap_or(""))])

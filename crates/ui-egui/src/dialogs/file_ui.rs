@@ -15,8 +15,6 @@ mod web;
 #[path = "file_ui/web_preview.rs"]
 mod web_preview;
 
-#[cfg(test)]
-use print::leave_driver_page;
 pub use print::open_print;
 pub(crate) use print::print_status;
 #[cfg(test)]
