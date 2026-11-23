@@ -285,3 +285,38 @@ fn a_second_click_on_a_bright_corrected_pupil_leaves_the_skin_alone() {
     }
     assert_eq!(at(&px, 200, 150), [200, 150, 120], "the skin is left alone");
 }
+
+#[test]
+fn a_click_on_skin_filling_a_small_canvas_changes_nothing() {
+    // On a 64×64 canvas the engine clips the read window to the canvas, so a skin region that
+    // fills it never reaches the search circle; it reaches the clipped window edge instead and
+    // must still count as a miss, not as a pupil (#16148 review).
+    let side = 64usize;
+    let before = vec![px8(SKIN); side * side];
+    let mut px = before.clone();
+    assert_eq!(apply(&mut px, side, side, (32, 32), (0, 0), 50.0, 50.0), 0);
+    assert_eq!(px, before, "the skin is left alone");
+}
+
+#[test]
+fn a_pupil_inside_a_clipped_canvas_is_still_corrected() {
+    // Same 64×64 canvas, with an eye fully inside it: the pupil does not touch the window edge.
+    let side = 64usize;
+    let mut px: Vec<[f32; 4]> = (0..side * side)
+        .map(|i| {
+            let (x, y) = (i % side, i / side);
+            px8(if in_disc(x, y, 32.0, 32.0, 10.0) {
+                RED
+            } else if in_disc(x, y, 32.0, 32.0, 22.0) {
+                WHITE
+            } else {
+                SKIN
+            })
+        })
+        .collect();
+    let n = apply(&mut px, side, side, (32, 32), (0, 0), 50.0, 50.0);
+    assert!(n > 250, "the whole pupil changes ({n} px)");
+    let q = px[32 * side + 32];
+    assert!((q[0] - q[1]).abs() < 1e-5 && (q[0] - q[2]).abs() < 1e-5, "centre {q:?} is not neutral");
+    assert_eq!(px[0], px8(SKIN), "the skin is left alone");
+}

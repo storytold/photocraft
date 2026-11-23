@@ -26,7 +26,7 @@ fn fill(s: &mut Session, rect: [i32; 4], ellipse: bool, color: &str) {
 /// 800x600, skin 200,150,120; Eye A (white r=40, red pupil r=18, 4x4 highlight) at (200,200) and
 /// the orange eye (pupil 230,120,60) at (680,450).
 fn test_doc(mode: &str, depth: u64) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 800, "height": 600, "mode": mode, "depth": depth})).unwrap();
     s.execute("edit.fill", json!({"contents": "color", "color": "#c89678"})).unwrap();
     fill(&mut s, [160, 160, 80, 80], true, "#ffffff");
@@ -123,4 +123,18 @@ fn pupil_size_and_darken_change_the_whole_pupil_and_keep_the_reference_order() {
     let (d1, d100) = (centre(50, 1), centre(50, 100));
     assert!((d1 - 68).abs() <= 15, "Darken 1 centre {d1}");
     assert!(d100 <= 15, "Darken 100 centre {d100}");
+}
+
+#[test]
+fn a_click_on_skin_filling_a_small_canvas_leaves_it_alone() {
+    // The read window is clipped to the 64×64 canvas, so the skin never reaches the search circle;
+    // the click is still a miss (#16148 review).
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 64, "height": 64, "mode": "rgb", "depth": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#c89678"})).unwrap();
+    let r = s.execute("paint.redEye", json!({"x": 32, "y": 32}));
+    assert!(r.as_ref().map_or(true, |v| v["pixels"].as_u64().unwrap_or(0) == 0), "{r:?}");
+    for (x, y) in [(0, 0), (32, 32), (63, 63), (10, 50)] {
+        assert_eq!(rgb8(&s, x, y), [200, 150, 120], "({x},{y})");
+    }
 }

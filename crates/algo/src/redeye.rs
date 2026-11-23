@@ -142,7 +142,10 @@ fn flood_keep(mask: &mut [bool], w: usize, h: usize, seed: usize) {
 /// at least a quarter filled. The skin around an eye is red too, but it always runs out to the
 /// search circle, so a click whose nearest red is the skin (a repeat click on a corrected pupil, or
 /// a click on the iris) changes nothing. A pupil reaching past the circle is not corrected either.
-fn is_pupil_shaped(mask: &[bool], w: usize, origin: (i32, i32), click: (i32, i32), radius: f32) -> bool {
+/// A region touching the edge of the window is rejected too: the window reaches past the search
+/// circle unless the engine clipped it to the canvas, so such a region runs on past the canvas edge
+/// and is not known to be a whole pupil (skin filling a small canvas, #16148 review).
+fn is_pupil_shaped(mask: &[bool], w: usize, h: usize, origin: (i32, i32), click: (i32, i32), radius: f32) -> bool {
     let (mut n, mut x0, mut y0, mut x1, mut y1) = (0usize, usize::MAX, usize::MAX, 0usize, 0usize);
     for (i, on) in mask.iter().enumerate() {
         if !*on || w == 0 {
@@ -151,7 +154,7 @@ fn is_pupil_shaped(mask: &[bool], w: usize, origin: (i32, i32), click: (i32, i32
         let (x, y) = (i % w, i / w);
         let dx = origin.0.saturating_add(x as i32).saturating_sub(click.0);
         let dy = origin.1.saturating_add(y as i32).saturating_sub(click.1);
-        if !within_search(dx, dy, radius - 1.0) {
+        if !within_search(dx, dy, radius - 1.0) || x == 0 || y == 0 || x + 1 >= w || y + 1 >= h {
             return false;
         }
         n = n.saturating_add(1);
@@ -257,7 +260,7 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, click: (i32, i32), origin:
         return 0;
     };
     flood_keep(&mut hard, w, h, seed);
-    if !is_pupil_shaped(&hard, w, origin, click, radius) {
+    if !is_pupil_shaped(&hard, w, h, origin, click, radius) {
         return 0;
     }
     let Some(pupil) = measure(px, &hard, w) else {
