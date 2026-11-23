@@ -456,8 +456,9 @@ pub(crate) const COLOR_BALANCE_UNAVAILABLE: &str = "The command \"Color Balance\
 pub(crate) const COLOR_BALANCE_EMPTY: &str = "Could not complete the Color Balance command because the active layer is empty.";
 
 /// Color Balance's precondition (#14416): not in a Grayscale or Multichannel document, nor on a
-/// hidden pixel layer, as in the reference application; otherwise [`has_adjustable`]'s. Bitmap is
-/// refused by the shared Bitmap gate and a targeted layer mask by `mask_target_enabled`.
+/// hidden pixel layer in an RGB, CMYK, Lab or Indexed document, as in the reference application;
+/// otherwise [`has_adjustable`]'s, as for a hidden layer in the modes not measured (Duotone).
+/// Bitmap is refused by the shared Bitmap gate and a targeted layer mask by `mask_target_enabled`.
 pub(crate) fn color_balance_enabled(s: &Session) -> std::result::Result<(), String> {
     use photocraft_color::ColorMode;
     let p = crate::channel_cmds::inject_target(s, COLOR_BALANCE_ID, Value::Null);
