@@ -9,9 +9,7 @@ const H: i32 = 20;
 fn session(depth: u32) -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": depth})).unwrap();
-    s.execute("select.rect", json!({"x": 0, "y": 0, "width": W / 2, "height": H})).unwrap();
-    s.execute("edit.fill", json!({"color": "#336699"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
+    crate::tests::fill_active(&mut s, Some(Rect::new(0, 0, W / 2, H)), "#336699");
     s
 }
 

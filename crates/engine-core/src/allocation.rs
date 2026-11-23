@@ -2,7 +2,7 @@
 
 use crate::{EngineError, Result};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "failpoints"))]
 thread_local! {
     static FAIL_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
@@ -35,7 +35,7 @@ pub(crate) fn read_file_within(path: impl AsRef<std::path::Path>, max: u64) -> s
 /// Reserve a vector for a known number of operation results.
 pub(crate) fn capacity<T>(len: usize, purpose: &str) -> Result<Vec<T>> {
     let bytes = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| error(purpose, "requested size overflowed"))?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "failpoints"))]
     if failpoint_hits() {
         return Err(error(purpose, "not enough memory"));
     }
@@ -47,7 +47,7 @@ pub(crate) fn capacity<T>(len: usize, purpose: &str) -> Result<Vec<T>> {
 /// `Vec::push` that reports an allocation failure instead of aborting; each call is one
 /// attempt for the test failpoints.
 pub(crate) fn try_push<T>(out: &mut Vec<T>, value: T, purpose: &str) -> Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "failpoints"))]
     if failpoint_hits() {
         return Err(error(purpose, "not enough memory"));
     }
@@ -59,7 +59,7 @@ pub(crate) fn try_push<T>(out: &mut Vec<T>, value: T, purpose: &str) -> Result<(
 /// Check an operation boundary where downstream encoders/decoders allocate internally.
 /// The test-only failpoint lets command tests prove their transaction boundary.
 pub(crate) fn checkpoint(purpose: &str) -> Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "failpoints"))]
     if failpoint_hits() {
         return Err(error(purpose, "not enough memory"));
     }
@@ -105,22 +105,23 @@ pub(crate) fn error(purpose: &str, detail: &str) -> EngineError {
     EngineError::Other(format!("not enough memory for {purpose} ({detail}); the document was not changed"))
 }
 
-#[cfg(test)]
-pub(crate) fn fail_next_for_test() {
+/// Fail the next fallible allocation or checkpoint on this thread, then stop.
+#[cfg(any(test, feature = "failpoints"))]
+pub fn fail_next_for_test() {
     FAIL_NEXT.with(|flag| flag.set(true));
 }
 
 /// Fail the fallible allocation or checkpoint after `skip` clean attempts, then stop.
 /// `fail_after_for_test(0)` is equivalent to [`fail_next_for_test`].
-#[cfg(test)]
-pub(crate) fn fail_after_for_test(skip: usize) {
+#[cfg(any(test, feature = "failpoints"))]
+pub fn fail_after_for_test(skip: usize) {
     FAIL_AFTER.with(|flag| flag.set(Some(skip)));
 }
 
 /// Whether a test failpoint trips here: the single-shot flag, or the counted flag
 /// once its `skip` attempts have passed cleanly earlier. The shot does not advance the
 /// counted flag: a one-shot failure is not itself a clean attempt.
-#[cfg(test)]
+#[cfg(any(test, feature = "failpoints"))]
 fn failpoint_hits() -> bool {
     if FAIL_NEXT.with(|flag| flag.replace(false)) {
         return true;
