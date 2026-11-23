@@ -8,7 +8,7 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
     app.run("paint.pencil", json!({"points": [[16, 30], [28, 30]], "size": 4, "color": "#0000ff"})).unwrap();
@@ -37,7 +37,8 @@ fn fresh_start_and_reset_tool_leave_transform_on_drop_on() {
     assert!(app.ui.tool_options.cam_transform_on_drop, "a fresh start leaves Transform On Drop on");
     app.ui.tool = Tool::ContentAwareMove;
     app.ui.tool_options.cam_transform_on_drop = false;
-    crate::menus::invoke(&mut app, &egui::Context::default(), crate::tools::tool_reset::RESET, json!({})).unwrap();
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &app_ctx, crate::tools::tool_reset::RESET, json!({})).unwrap();
     assert!(app.ui.tool_options.cam_transform_on_drop, "Reset Tool turns Transform On Drop back on");
 }
 

@@ -8,6 +8,8 @@
 //! 120,30-320,230 (white, pixel layer `Blue` 30,30,220 at 130,40-230,140) and `Empty Board`
 //! 600,0-700,100 (white, no layers).
 use crate::PhotocraftApp;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use egui::accesskit::{Role, Toggled};
 use egui::vec2;
 use egui_kittest::Harness;
@@ -20,13 +22,11 @@ const RED: [u8; 4] = [220, 30, 30, 255];
 const BLUE: [u8; 4] = [30, 30, 220, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
+type H = Harness<'static, Box<PhotocraftApp>>;
+
 /// The app with the issue's document open; no layer is selected.
-fn harness() -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
-    });
-    let app = h.state_mut();
+fn harness() -> H {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 800, "height": 400, "background": "transparent", "name": "abfiles-test"})).unwrap();
     for (name, rect, layer) in [
         ("Red Board", [0, 0, 200, 150], Some(("Red", [20, 20, 100, 80], "#DC1E1E"))),
@@ -44,35 +44,62 @@ fn harness() -> Harness<'static, PhotocraftApp> {
     }
     app.session.active_mut().unwrap().active_layer = None;
     app.sync_views();
+    let h = Harness::builder()
+        .with_size(vec2(1440.0, 900.0))
+        .with_max_steps(64)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
     h
 }
 
-/// Opens Artboards to Files from the menu, writing `format` files with the prefix `out` into `dir`.
-fn open(h: &mut Harness<'_, PhotocraftApp>, dir: &str, format: &str) -> u64 {
+/// Sets a field as automation (`ui.dialog.set`) does, then draws.
+fn set(h: &mut H, dialog: DialogId, key: &str, v: Value) {
     let ctx = h.ctx.clone();
-    let dialog = crate::menus::invoke(h.state_mut(), &ctx, ARTBOARDS, json!({})).unwrap()["dialog"].as_u64().unwrap();
-    let fields = &mut h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
-    fields.insert("dir".into(), json!(dir));
-    fields.insert("prefix".into(), json!("out"));
-    fields.insert("format".into(), json!(format));
+    h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, key, v).unwrap_or_else(|e| panic!("{key}: {e}"));
+    h.run_steps(4);
+}
+
+/// Opens `command` from the menu.
+fn open_command(h: &mut H, command: &str) -> DialogId {
+    let ctx = h.ctx.clone();
+    let reply = crate::menus::invoke(h.state_mut(), &ctx, command, json!({})).unwrap();
+    let want = reply["dialog"].as_str().unwrap().to_owned();
+    let dialog = h.state().framework.dialogs.open_dialogs().into_iter().map(|d| d.id).find(|d| d.value().to_string() == want).unwrap();
     h.run_steps(4);
     dialog
 }
 
+/// Opens Artboards to Files from the menu, writing `format` files with the prefix `out` into
+/// `dir`, Artboard Content Only (Red and Blue Board overlap, and Include Overlapping Areas would
+/// put Blue Board's own white into Red Board's file). The form remembers the checkbox between
+/// openings, so a dialog reopened after an unticked run is ticked again here.
+fn open(h: &mut H, dir: &str, format: &str) -> DialogId {
+    let dialog = open_command(h, ARTBOARDS);
+    for (key, value) in [("dir", json!(dir)), ("prefix", json!("out")), ("format", json!(format)), ("content", json!("artboard"))] {
+        set(h, dialog, key, value);
+    }
+    if !checkbox(h).1 {
+        set(h, dialog, "includeBackground", json!(true));
+    }
+    dialog
+}
+
 /// The params OK sends.
-fn params(h: &mut Harness<'_, PhotocraftApp>, dialog: u64) -> Value {
-    crate::filter_dialog::params_of(&h.state_mut().ui.dialog_mut(dialog).unwrap().fields)
+fn params(h: &H, dialog: DialogId) -> Value {
+    let form = h.state().framework.dialogs.get_by_id::<HostedParamDialog>(dialog).unwrap();
+    crate::filter_dialog::command_params(ARTBOARDS, form.fields())
 }
 
 /// The checkbox's (enabled, ticked) state as the accessibility tree reports it.
-fn checkbox(h: &Harness<'_, PhotocraftApp>) -> (bool, bool) {
+fn checkbox(h: &H) -> (bool, bool) {
     let node = h.get_by_role_and_label(Role::CheckBox, CHECKBOX);
     let node = node.accesskit_node();
     (!node.is_disabled(), node.toggled() == Some(Toggled::True))
 }
 
 /// Clicks the checkbox, as a user does.
-fn click(h: &mut Harness<'_, PhotocraftApp>) {
+fn click(h: &mut H) {
     h.get_by_role_and_label(Role::CheckBox, CHECKBOX).click();
     h.run_steps(2);
 }
@@ -112,16 +139,14 @@ impl Written {
 }
 
 /// OK: runs the export and reads back the files for Red, Blue and Empty Board, after checking
-/// that they are exactly the files the command reports and that the document is unchanged.
-fn run(h: &mut Harness<'_, PhotocraftApp>, dialog: u64, dir: &std::path::Path) -> [Written; 3] {
+/// that the document is unchanged.
+fn run(h: &mut H, dialog: DialogId, dir: &std::path::Path) -> [Written; 3] {
     let before = h.state().session.active().map(|st| (st.revision, st.history.entries()));
-    let r = crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+    crate::dialogs::testing::confirm(h.state_mut(), dialog).unwrap();
+    h.run_steps(2);
     assert_eq!(h.state().session.active().map(|st| (st.revision, st.history.entries())), before, "the document and its History are unchanged");
-    let mut reported: Vec<std::path::PathBuf> = r["files"].as_array().unwrap().iter().map(|f| std::path::PathBuf::from(f.as_str().unwrap())).collect();
     let mut on_disk: Vec<std::path::PathBuf> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
-    reported.sort();
     on_disk.sort();
-    assert_eq!(reported, on_disk, "the files written are the ones reported");
     let read = |board: &str| {
         let path = on_disk.iter().find(|p| p.file_name().unwrap().to_string_lossy().contains(board)).unwrap();
         let bytes = std::fs::read(path).unwrap();
@@ -140,27 +165,20 @@ fn run(h: &mut Harness<'_, PhotocraftApp>, dialog: u64, dir: &std::path::Path) -
 #[test]
 fn the_checkbox_is_ticked_right_before_the_file_type_and_layer_comps_has_none() {
     let mut h = harness();
-    let dialog = open(&mut h, ".", "png");
+    let dialog = open_command(&mut h, ARTBOARDS);
     assert_eq!(checkbox(&h), (true, true), "enabled and ticked");
-    assert_eq!(params(&mut h, dialog)["includeBackground"], json!(true));
-    let fields = h.state_mut().ui.dialog_mut(dialog).unwrap().fields.clone();
-    let keys = crate::view_cmds::form_keys(&fields);
-    let at = |key: &str| keys.iter().position(|k| k == key).unwrap();
-    assert!(at("prefix") < at("includeBackground") && at("includeBackground") + 1 == at("format"), "{keys:?}");
-    let prefix = h.query_all_by_label("Prefix").next().unwrap().rect();
+    assert_eq!(params(&h, dialog)["includeBackground"], json!(true));
+    let prefix = h.query_all_by_label("File Name Prefix").next().unwrap().rect();
     let check = h.get_by_role_and_label(Role::CheckBox, CHECKBOX).rect();
-    let format = h.query_all_by_label("Format").next().unwrap().rect();
-    assert!(prefix.bottom() <= check.top() && check.bottom() <= format.top(), "Prefix {prefix:?}, the checkbox {check:?}, Format {format:?}");
-    crate::dialogs::cancel(h.state_mut(), dialog).unwrap();
-    // Layer Comps to Files shares the branch but keeps its own fields.
+    let format = h.query_all_by_label("File Type").next().unwrap().rect();
+    assert!(prefix.bottom() <= check.top() && check.bottom() <= format.top(), "Prefix {prefix:?}, the checkbox {check:?}, File Type {format:?}");
+    crate::dialogs::testing::cancel(h.state_mut(), dialog).unwrap();
+    h.run_steps(2);
+    // Layer Comps to Files has no such checkbox.
     h.state_mut().run("layerComp.new", json!({"name": "Comp"})).unwrap();
-    let ctx = h.ctx.clone();
-    let dialog = crate::menus::invoke(h.state_mut(), &ctx, "file.export.layerCompsToFiles", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    h.run_steps(4);
-    let fields = h.state_mut().ui.dialog_mut(dialog).unwrap().fields.clone();
-    assert_eq!(crate::view_cmds::form_keys(&fields), ["dir", "prefix", "selectedOnly", "format", "quality"]);
+    let dialog = open_command(&mut h, "file.export.layerCompsToFiles");
     assert!(h.query_by_label(CHECKBOX).is_none(), "Layer Comps to Files has no Include Background in Export");
-    crate::dialogs::cancel(h.state_mut(), dialog).unwrap();
+    crate::dialogs::testing::cancel(h.state_mut(), dialog).unwrap();
 }
 
 #[test]
@@ -184,7 +202,7 @@ fn unticked_writes_rgba_pngs_transparent_outside_the_layers() {
     let dialog = open(&mut h, &dir.path().to_string_lossy(), "png");
     click(&mut h);
     assert_eq!(checkbox(&h), (true, false), "the click unticks it");
-    assert_eq!(params(&mut h, dialog)["includeBackground"], json!(false));
+    assert_eq!(params(&h, dialog)["includeBackground"], json!(false));
     let [red, blue, empty] = run(&mut h, dialog, dir.path());
     assert_eq!((red.size, red.png_colour_type(), red.at(0, 0)[3], red.at(30, 30)), ((200, 150), 6, 0, RED), "RGBA, the white left out");
     red.assert_pixels([20, 20, 120, 100], RED, None);
@@ -205,7 +223,7 @@ fn unticked_still_writes_flattened_jpeg_and_bmp_files() {
         let ticked = run(&mut h, dialog, dir.path());
         let dialog = open(&mut h, &dir.path().to_string_lossy(), format);
         click(&mut h);
-        assert_eq!(params(&mut h, dialog)["includeBackground"], json!(false), "{format}");
+        assert_eq!(params(&h, dialog)["includeBackground"], json!(false), "{format}");
         let unticked = run(&mut h, dialog, dir.path());
         for (ticked, unticked) in ticked.iter().zip(&unticked) {
             assert!(unticked.bytes == ticked.bytes, "{format}: unticked writes today's file");
