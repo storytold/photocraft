@@ -506,7 +506,7 @@ fn a_cancelled_warp_stops_in_a_selected_linked_mask() {
 /// bad input is refused.
 #[test]
 fn a_smart_objects_warp_is_edited_and_stored_in_source_space() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 8, "y": 16, "width": 32, "height": 16})).unwrap();
@@ -575,7 +575,7 @@ fn a_smart_objects_warp_is_edited_and_stored_in_source_space() {
 /// object itself would fit; without the selection the same warp goes ahead.
 #[test]
 fn a_contents_warp_prices_the_selection_it_moves() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
@@ -599,7 +599,7 @@ fn a_contents_warp_prices_the_selection_it_moves() {
 /// smart object, and refuses a placement that would make an absurd layer, all without a step.
 #[test]
 fn a_contents_warp_takes_its_linked_mask_along_and_respects_locks_and_size() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
@@ -643,7 +643,7 @@ fn a_contents_warp_takes_its_linked_mask_along_and_respects_locks_and_size() {
 /// The contents warp moves the selection outline with the contents, as a warp of the layer does.
 #[test]
 fn a_contents_warp_moves_the_selection_with_the_contents() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
@@ -665,7 +665,7 @@ fn a_contents_warp_moves_the_selection_with_the_contents() {
 /// rather than collapsing onto it.
 #[test]
 fn a_contents_warp_prices_the_meshs_reach_and_moves_what_is_outside() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
@@ -760,7 +760,7 @@ fn a_flat_split_grid_is_kept_on_a_smart_object() {
 /// under an affine placement, or past the horizon, is refused.
 #[test]
 fn a_warp_reaching_towards_the_vanishing_point_is_kept_under_a_perspective() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 600, "height": 450})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 150, "y": 125, "width": 302, "height": 202})).unwrap();

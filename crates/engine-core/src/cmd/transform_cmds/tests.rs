@@ -913,7 +913,7 @@ fn a_stroked_soft_shapes_frame_matches_the_hard_shapes() {
 /// the upright rect. Bad `from` values are refused without a History step.
 #[test]
 fn from_transforms_from_where_the_box_started() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 30, "y": 40, "width": 40, "height": 20})).unwrap();
@@ -1043,7 +1043,7 @@ fn step_name_transform_path_is_the_only_name_taken() {
 #[test]
 fn a_perspective_squeezed_toward_a_point_commits_the_box() {
     for half in [30.0, 5.0, 1.0, 0.25, 0.03] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         s.edit("paint", |doc, active| {

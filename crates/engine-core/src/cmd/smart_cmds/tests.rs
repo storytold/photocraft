@@ -1662,7 +1662,7 @@ fn native_digest_cache_misses_after_copy_on_write_and_keeps_recently_used_source
 /// position-locked smart object.
 #[test]
 fn reset_transform_takes_the_linked_mask_along_and_respects_locks() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 128, "height": 128})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 20, "y": 20, "width": 40, "height": 30})).unwrap();
@@ -1779,7 +1779,7 @@ fn convert_to_layers_keeps_a_layers_pixels_past_the_contents_canvas() {
             Some(cache),
         )),
     ));
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.add_document(parent, None);
     convert_to_layers(&mut s);
     let l = active_layer(&s);
