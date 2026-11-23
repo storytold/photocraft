@@ -103,9 +103,11 @@ fn gzipped_svg_stack_retains_ordinary_import_for_misnamed_sources() {
         assert!(ordinary.warnings.iter().any(|warning| warning.contains("embedded image was omitted")));
         assert!(decode_source(name, &bytes).is_err());
         smart.stack_mode = Some(photocraft_doc::StackMode::Mean);
-        let rendered = render(doc, &smart).unwrap().unwrap();
-        assert_eq!(rendered.rgba(1, 1), [1., 0., 0., 1.]);
-        assert_eq!(source_box(doc, &smart), Some([0., 0., 2., 2.]));
+        for _ in 0..2 {
+            let rendered = render(doc, &smart).unwrap().unwrap();
+            assert_eq!(rendered.rgba(1, 1), [1., 0., 0., 1.]);
+            assert_eq!(source_box(doc, &smart), Some([0., 0., 2., 2.]));
+        }
     }
 }
 
@@ -140,7 +142,7 @@ fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
 }
 
 #[test]
-fn complete_svgz_replacement_keeps_encoded_bytes_and_existing_encoding_refusals() {
+fn complete_svgz_replacement_keeps_encoded_bytes_and_accepts_supported_utf16() {
     let xml = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>"#;
     let bytes = gzip(xml.as_bytes());
     for source_name in ["complete.svgz", "complete.gz", "complete.psd", "without-extension"] {
@@ -160,16 +162,24 @@ fn complete_svgz_replacement_keeps_encoded_bytes_and_existing_encoding_refusals(
         assert_eq!(photocraft_compose::flatten(&decoded).get(1, 1), [1., 0., 0., 1.]);
     }
     assert!(decode_source("explicit.af", &bytes).is_err(), "the explicit Affinity route must retain priority");
-    // The shared classifier reads UTF-16, but the app's SVG parser still requires
-    // UTF-8. Recognition must not turn an existing format refusal into success.
+    // BOM-marked UTF-16 is now an intentional ordinary and strict SVG input.
+    // Replacement must keep its encoded source, not silently rewrite it to UTF-8.
     for little in [true, false] {
         let mut encoded = if little { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
         for unit in xml.encode_utf16() {
             encoded.extend_from_slice(&if little { unit.to_le_bytes() } else { unit.to_be_bytes() });
         }
+        let malformed = gzip(&[encoded.as_slice(), &[0]].concat()); // Odd final UTF-16 byte.
         let encoded = gzip(&encoded);
-        assert!(photocraft_io::import("unsupported.svgz", &encoded).is_err());
-        assert!(decode_source("unsupported.svgz", &encoded).is_err());
+        assert_eq!(photocraft_io::import("supported.svgz", &encoded).unwrap().document.size, Size::new(2, 2));
+        assert_eq!(decode_source("supported.svgz", &encoded).unwrap().size, Size::new(2, 2));
+        let mut s = session(8);
+        paint(&mut s);
+        let id = LayerId(convert(&mut s));
+        replace_contents_bytes(&mut s, id, "supported.svgz", encoded.clone()).unwrap();
+        assert_eq!(contents_of(&s.active().unwrap().doc, id).unwrap().1.as_slice(), encoded);
+        assert!(photocraft_io::import("malformed.svgz", &malformed).is_err());
+        assert!(decode_source("malformed.svgz", &malformed).is_err());
     }
 }
 

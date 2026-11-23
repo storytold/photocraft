@@ -63,17 +63,19 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
-    decode_source_classified(file_name, bytes, photocraft_io::svg::is_svg(bytes))
-}
-
-/// Reuse the central format decision made by this render operation.
-fn decode_source_classified(file_name: &str, bytes: &[u8], svg: bool) -> Result<Document> {
-    decode_source_classified_with_order(file_name, bytes, svg, None)
+    decode_source_with_order(file_name, bytes, None)
 }
 
 /// Decode an explicitly interpreted embedded source without changing legacy callers.
 pub fn decode_source_with_order(file_name: &str, bytes: &[u8], order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
-    decode_source_classified_with_order(file_name, bytes, photocraft_io::svg::is_svg(bytes), order)
+    // Direct contents decoding (including Replace) has no omission-warning channel.
+    // Classified render paths retain their existing ordinary gzip import contract.
+    if let Some(imported) =
+        photocraft_io::try_import_smart_object_svg(file_name, bytes, 24_000_000).map_err(|error| crate::error::io_open_error(file_name, error))?
+    {
+        return Ok(imported.document);
+    }
+    decode_source_classified_with_order(file_name, bytes, false, order)
 }
 
 fn decode_source_classified_with_order(file_name: &str, bytes: &[u8], svg: bool, order: Option<photocraft_doc::HistoricalXcfSampleOrder>) -> Result<Document> {
@@ -91,11 +93,6 @@ fn decode_source_import_with_order(
         // turn a partial SVG import into silently complete smart-object contents.
         return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
             .map_err(|error| crate::error::io_open_error(file_name, error));
-    }
-    if let Some(imported) =
-        photocraft_io::try_import_smart_object_svg(file_name, bytes, 24_000_000).map_err(|error| crate::error::io_open_error(file_name, error))?
-    {
-        return Ok(imported);
     }
     let historical_xcf_order = order.map_or(photocraft_io::HistoricalXcfOrder::Default, |order| {
         photocraft_io::HistoricalXcfOrder::Explicit(match order {
