@@ -5,7 +5,7 @@
 use craft::behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft::behavior::{Axis, EditEvent};
 use craft::theme::Rgba;
-use craft::ui::canvas::{Guide, GuideKey, GuideLine, Rulers};
+use craft::ui::canvas::{Guide, GuideDrag, GuideKey, GuideLine, Rulers};
 use craft::ui::canvas_controls::{CanvasGrid, GridLine, Guides, GuidesOutput};
 use craft::ui::contract::{Bind, Show as _};
 use craft::ui::runtime::env::UnitKind;
@@ -91,27 +91,30 @@ fn moves_with_command(app: &PhotocraftApp, tool: Tool) -> bool {
     takes && idle
 }
 
+/// The rulers of document `host.idx`'s canvas, which the canvas shows along its top and left edges while View >
+/// Rulers is on: the view lies inside them. `zero` holds the zero point they edit; the document's own is set here.
+/// Only the active document's canvas takes the pointer. [`run_rulers`] runs what they reported.
+pub(crate) fn strips<'a>(app: &PhotocraftApp, host: CanvasHost, zero: &'a mut Point) -> Option<Rulers<'a>> {
+    let doc = app.session.documents().get(host.idx)?.doc.clone();
+    *zero = Point::new(doc.ruler_origin[0], doc.ruler_origin[1]);
+    let primary = app.session.active_index() == Some(host.idx);
+    app.ui.extras.rulers.then(|| Rulers::new("Rulers", Bind::bound(zero)).interactive(primary).units(&UNIT_KINDS[..]))
+}
+
 /// The view extras of document `host.idx`'s canvas, in the canvas body after the selection overlay and before the
-/// tools: the grid, the rulers and the guides, with every edit run as its engine command. Only the active document's
+/// tools: the grid and the guides, with every edit run as its engine command. Only the active document's
 /// canvas takes the pointer; another tile or window shows them as they are. Returns the guides' output, which
 /// `canvas_tool_menu::run` reads for the guide menu.
-pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, host: CanvasHost) -> Option<GuidesOutput> {
+pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, host: CanvasHost, ruler: Option<GuideDrag>) -> Option<GuidesOutput> {
     let doc = app.session.documents().get(host.idx).map(|state| state.doc.clone())?;
     let primary = app.session.active_index() == Some(host.idx);
-    let full = ui.max_rect();
+    let content = ui.max_rect();
     let prefs = app.session.prefs();
     let g = prefs.guides_grid_and_slices.clone();
     let ppi = prefs.units_and_rulers.point_size.per_inch();
     let (w, h) = (f64::from(doc.size.width), f64::from(doc.size.height));
     let zero = Point::new(doc.ruler_origin[0], doc.ruler_origin[1]);
     let page = DocRect::new(0.0, 0.0, w, h);
-
-    // The rulers go first: the guides read the guide a ruler drag reports in the same pass.
-    let rulers = app.ui.extras.rulers.then(|| {
-        let mut shown_zero = zero;
-        Rulers::new("Rulers", Bind::bound(&mut shown_zero)).interactive(primary).units(&UNIT_KINDS[..]).show_at(ui, full)
-    });
-    let content = rulers.as_ref().map_or(full, |r| r.content_rect());
 
     if app.ui.extras.grid && app.ui.view.extras {
         let major = grid_major_px(&g, f64::from(doc.resolution_dpi.max(1.0)), [w, h], ppi);
@@ -138,12 +141,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, host: CanvasHost)
         (None, None) => (doc.guides.clone(), preference),
     };
     let visible = app.ui.extras.guides && app.ui.view.shows(app.ui.view.show.canvas_guides);
-    let pending = rulers.as_ref().and_then(|r| r.guide).filter(|_| !previewing);
     // A guide dragged out of a ruler is placed with the guides hidden, and placing it shows them.
-    if !visible && !previewing && pending.is_none() {
-        if let Some(rulers) = &rulers {
-            run_rulers(app, rulers);
-        }
+    if !visible && !previewing && ruler.is_none() {
         return None;
     }
     let shown = guides_of(&list, color, guide_line(g.guide_style), app.ui.extras.lock_guides);
@@ -165,13 +164,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, host: CanvasHost)
     if let Some(key) = selected {
         guides = guides.selected_guide(key);
     }
-    if let Some(drag) = pending {
-        guides = guides.pending(drag);
-    }
     let output = guides.show_at(ui, content);
-    if let Some(rulers) = &rulers {
-        run_rulers(app, rulers);
-    }
     // A preview's guides are not the document's: nothing they report is an edit.
     if primary && !previewing {
         let ctx = ui.ctx().clone();
@@ -181,7 +174,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, host: CanvasHost)
 }
 
 /// The rulers' zero point and unit pick, as engine commands.
-fn run_rulers(app: &mut PhotocraftApp, rulers: &craft::ui::canvas::RulersOutput) {
+pub(crate) fn run_rulers(app: &mut PhotocraftApp, rulers: &craft::ui::canvas::RulersOutput) {
     let result = match rulers.zero.events.ended() {
         // A double click on the corner and the menu's Reset Zero Point set the origin back.
         Some(EditEvent::Set { after, .. }) if *after == Point::ZERO => app.run("view.resetRulerOrigin", json!({})).map(drop),

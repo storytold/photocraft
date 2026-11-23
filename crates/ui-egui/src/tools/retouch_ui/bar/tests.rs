@@ -13,14 +13,14 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 
 /// The options bar of `app`, rendered through the real host on the app's own context.
-fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn bar(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h =
         Harness::builder().with_size(vec2(1600.0, 200.0)).with_context(app.ctx().clone()).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     h.run_steps(4);
     h
 }
 
-fn new_app(width: u32, height: u32) -> PhotocraftApp {
+fn new_app(width: u32, height: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": width, "height": height})).unwrap();
     app

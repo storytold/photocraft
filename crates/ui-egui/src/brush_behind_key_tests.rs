@@ -11,7 +11,7 @@ use crate::brush_mode_menu::{self, Item};
 use crate::state::Tool;
 
 /// Create a test document for the selected tool, optionally with a transparent layer.
-fn app(tool: Tool, transparent_layer: bool) -> PhotocraftApp {
+fn app(tool: Tool, transparent_layer: bool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     if transparent_layer {

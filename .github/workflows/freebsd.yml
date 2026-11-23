@@ -8,16 +8,10 @@ name: FreeBSD
 # The VM build takes one to several hours, so it runs nightly on main rather than on every push
 # or dependency change: a drifted dependency still shows up within a day. PRs that change the
 # FreeBSD packaging itself still run it.
+# Nightly and on demand only: FreeBSD never runs on pull requests or pushes and never blocks a release.
 on:
-  push:
-    branches: [release]
   schedule:
     - cron: "17 2 * * *"
-  pull_request:
-    paths:
-      - .github/workflows/freebsd.yml
-      - packaging/freebsd/**
-      - packaging/env.sh
   workflow_dispatch:
 
 concurrency:
@@ -32,7 +26,7 @@ jobs:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/freebsd.yml@main
     with:
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
       # Build every target with the profile the tests use. Plain `cargo build --all-targets` builds
       # test targets with the dev profile, so ui-egui's lib tests (about 390k lines, 7700 tests)
       # were compiled at opt-level 1 rather than Cargo.toml's test-profile opt-level 0, and that

@@ -110,7 +110,7 @@ fn marquee_add_subtract_match_dense_combination_across_tiles() {
                 let mut old = Surface::new(PixelFormat::GRAY8);
                 old.fill_rect(Rect::from_xywh(240, 0, 40, 40), &[0.6]);
                 old.fill_rect(Rect::from_xywh(768, 256, 9, 7), &[0.4]);
-                std::sync::Arc::make_mut(&mut session.active_mut().unwrap().doc).selection = Some(old.clone());
+                std::sync::Arc::make_mut(session.active_mut().unwrap().doc_mut()).selection = Some(old.clone());
                 let shape = if ellipse {
                     sel::ellipse_surface(r, area, true)
                 } else {

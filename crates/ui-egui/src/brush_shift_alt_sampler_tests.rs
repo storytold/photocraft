@@ -12,7 +12,7 @@ use crate::state::Tool;
 const SHIFT_ALT: Modifiers = Modifiers { alt: true, ctrl: false, shift: true, mac_cmd: false, command: false };
 
 /// A 400 × 300 document, a red layer to sample, blue foreground.
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();

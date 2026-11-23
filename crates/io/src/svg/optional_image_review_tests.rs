@@ -1,12 +1,277 @@
 use super::*;
 use std::io::Write;
 
+fn assert_incomplete_image_is_disclosed(text: &str) {
+    for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+        let imported = crate::import("damaged.svg", &bytes).unwrap();
+        assert_omission_warning(&imported, 1);
+        assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [1., 0., 0., 1.]);
+        let bounded = import_svg_bounded_images("damaged.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+        assert_omission_warning(&bounded, 1);
+        assert!(import_svg_preview_with_work("damaged.svg", &bytes, MAX_RASTER_PIXELS).is_err());
+        assert!(import_svg_bounded_images_strict("damaged.svg", &bytes, MAX_RASTER_PIXELS).is_err());
+        assert!(rasterize(&bytes, 1.).is_err());
+        assert!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).is_err());
+        let (pixels, warnings) = rasterize_bounded_with_warnings(&bytes, 1., MAX_RASTER_PIXELS).unwrap();
+        assert_eq!(pixels.get(1, 1), [1., 0., 0., 1.]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("SVG: 1 embedded "));
+        assert!(warnings[0].len() < 256);
+        assert!(!warnings[0].contains("data:"));
+        // A warning-aware parse cannot make a later strict render accept an omission.
+        assert!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).is_err());
+        assert!(rasterize_rgba8(&bytes).is_err());
+    }
+}
+
+#[test]
+fn valid_twelve_bit_jpeg_rejected_by_the_svg_renderer_is_disclosed() {
+    // ISO/IEC 10918-1 marker syntax: one 8x8, 12-bit gray DCT block.
+    // Unit quantization, zero DC difference and EOB yield a constant mid-gray.
+    // This is generated data, not a camera or third-party binary fixture.
+    fn segment(out: &mut Vec<u8>, marker: u8, payload: &[u8]) {
+        out.extend_from_slice(&[0xff, marker]);
+        out.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+        out.extend_from_slice(payload);
+    }
+    let mut jpeg = vec![0xff, 0xd8];
+    let mut quantization = vec![0];
+    quantization.extend_from_slice(&[1; 64]);
+    segment(&mut jpeg, 0xdb, &quantization);
+    segment(&mut jpeg, 0xc1, &[12, 0, 8, 0, 8, 1, 1, 0x11, 0]);
+    let mut tables = Vec::new();
+    for class in [0x00, 0x10] {
+        tables.extend_from_slice(&[class, 1]);
+        tables.extend_from_slice(&[0; 15]);
+        tables.push(0); // One one-bit code: DC category zero / AC end-of-block.
+    }
+    segment(&mut jpeg, 0xc4, &tables);
+    segment(&mut jpeg, 0xda, &[1, 1, 0, 0, 63, 0]);
+    jpeg.extend_from_slice(&[0x3f, 0xff, 0xd9]); // DC=0, EOB=0, then six pad bits.
+    let decoded = photocraft_codecs::decode(&jpeg).expect("valid extended sequential JPEG");
+    assert_eq!(decoded.dimensions(), (8, 8));
+    // Match resvg's actual JPEG backend/output policy, rather than the broader
+    // shared codec which also supports valid 12-bit and arithmetic JPEG files.
+    let kind = usvg::ImageKind::JPEG(Arc::new(jpeg.clone()));
+    let mut pixels_left = MAX_RASTER_PIXELS;
+    assert_eq!(
+        draw::validate_raster(&kind, MAX_RASTER_PIXELS, &mut pixels_left),
+        Err(draw::RasterValidationFailure::Invalid),
+        "fixture must exercise the shared renderer capability gap"
+    );
+    for mime in ["image/jpeg", "text/plain"] {
+        let direct = drawing(&url(mime, &jpeg));
+        assert_incomplete_image_is_disclosed(&direct);
+        for child in [direct.as_bytes().to_vec(), gzip(direct.as_bytes())] {
+            assert_incomplete_image_is_disclosed(&drawing(&url("image/svg+xml", &child)));
+        }
+    }
+}
+
+#[test]
+fn corrupt_png_pixels_with_valid_dimensions_are_disclosed_before_rasterization() {
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let mut png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let mut at = 8;
+    loop {
+        let length = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+        if &png[at + 4..at + 8] == b"IDAT" {
+            assert!(length >= 2);
+            png[at + 8..at + 10].fill(0); // Invalid zlib header, with an honest chunk CRC.
+            let checksum = crc32fast::hash(&png[at + 4..at + 8 + length]);
+            png[at + 8 + length..at + 12 + length].copy_from_slice(&checksum.to_be_bytes());
+            break;
+        }
+        at += length + 12;
+    }
+    assert_eq!(photocraft_codecs::probe_allocation_size(&png).unwrap(), (2, 2));
+    assert!(tiny_skia::Pixmap::decode_png(&png).is_err());
+    let direct = drawing(&url("image/png", &png));
+    assert_incomplete_image_is_disclosed(&direct);
+    for child in [direct.as_bytes().to_vec(), gzip(direct.as_bytes())] {
+        assert_incomplete_image_is_disclosed(&drawing(&url("image/svg+xml", &child)));
+    }
+}
+
+#[test]
+fn malformed_data_image_hrefs_are_disclosed_before_the_parser_discards_them() {
+    let direct = drawing("data:image/png;base64,A");
+    assert_incomplete_image_is_disclosed(&direct);
+    assert_incomplete_image_is_disclosed(&direct.replace("href=", "xmlns:xlink=\"http://www.w3.org/1999/xlink\" xlink:href="));
+    assert_incomplete_image_is_disclosed(&direct.replace("base64,A", "base64,&#65;"));
+    for child in [direct.as_bytes().to_vec(), gzip(direct.as_bytes())] {
+        assert_incomplete_image_is_disclosed(&drawing(&url("image/svg+xml", &child)));
+    }
+}
+
+fn assert_no_omission_or_unexpected_import_warning(imported: &ImportResult) {
+    assert!(omission_warnings(imported).is_empty(), "{:?}", imported.warnings);
+    assert!(
+        imported.warnings.iter().all(|warning| warning == "SVG: embedded images are pixel layers"),
+        "only the existing pixel-layer information is expected: {:?}",
+        imported.warnings
+    );
+}
+
+fn assert_ignored_data_image_stays_quiet(text: &str) {
+    for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+        let imported = crate::import("ignored.svg", &bytes).unwrap();
+        assert_no_omission_or_unexpected_import_warning(&imported);
+        assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [1., 0., 0., 1.]);
+        let strict = import_svg_bounded_images_strict("ignored.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+        assert_no_omission_or_unexpected_import_warning(&strict);
+        import_svg_preview_with_work("ignored.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+        let (pixels, warnings) = rasterize_bounded_with_warnings(&bytes, 1., MAX_RASTER_PIXELS).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(pixels.get(1, 1), [1., 0., 0., 1.]);
+        assert_eq!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).unwrap().get(1, 1), [1., 0., 0., 1.]);
+        assert_eq!(rasterize(&bytes, 1.).unwrap().get(1, 1), [1., 0., 0., 1.]);
+    }
+}
+
+#[test]
+fn malformed_non_image_data_hrefs_stay_ignored_in_open_and_strict_rendering() {
+    for href in [
+        "data:application/octet-stream;base64,A",
+        "data:application/octet-stream;base64",
+        "data:APPLICATION/OCTET-STREAM;BASE64,A",
+        "data:text/css;base64,A",
+        "data:application/octet-stream;base64#fragment,not-the-delimiter",
+    ] {
+        let text = drawing(href);
+        assert_ignored_data_image_stays_quiet(&text);
+        assert_ignored_data_image_stays_quiet(&text.replace("href=", "xmlns:x='http://www.w3.org/1999/xlink' x:href="));
+        for child in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+            assert_ignored_data_image_stays_quiet(&drawing(&url("image/svg+xml", &child)));
+        }
+    }
+}
+
+#[test]
+fn default_and_explicit_plain_data_failures_keep_image_omission_policy() {
+    for href in ["data:text/plain;base64,A", "data:;base64,A", "data:;base64", "data:image/png;base64"] {
+        assert_incomplete_image_is_disclosed(&drawing(href));
+    }
+}
+
+#[test]
+fn ignored_non_image_repair_preserves_hidden_foreign_and_valid_image_controls() {
+    for content in [
+        "<image display='none' width='2' height='2' href='data:application/octet-stream;base64'/>",
+        "<foreign:image xmlns:foreign='urn:unrelated' width='2' height='2' href='data:application/octet-stream;base64,A'/>",
+        "<image width='2' height='2' xmlns:x='http://www.w3.org/1999/xlink' x:href='data:image/png;base64,A' href='data:application/octet-stream;base64,A'/>",
+    ] {
+        let text = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{content}</svg>");
+        assert_ignored_data_image_stays_quiet(&text);
+    }
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    let text = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><image width='2' height='2' href='{}'/><image width='2' height='2' href='data:application/octet-stream;base64,A'/></svg>",
+        url("image/png", &png)
+    );
+    let imported = crate::import("mixed.svg", text.as_bytes()).unwrap();
+    assert_eq!(imported.warnings, vec!["SVG: embedded images are pixel layers"]);
+    assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [0., 1., 0., 1.]);
+    let strict = import_svg_bounded_images_strict("mixed.svg", text.as_bytes(), MAX_RASTER_PIXELS).unwrap();
+    assert_eq!(strict.warnings, vec!["SVG: embedded images are pixel layers"]);
+    assert_eq!(rasterize_bounded(text.as_bytes(), 1., MAX_RASTER_PIXELS).unwrap().get(1, 1), [0., 1., 0., 1.]);
+}
+
+#[test]
+fn malformed_nested_declarations_are_not_removed_into_valid_images() {
+    let child = b"<?xml bogus?><svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='green'/></svg>";
+    for bytes in [child.to_vec(), gzip(child)] {
+        assert_incomplete_image_is_disclosed(&drawing(&url("image/svg+xml", &bytes)));
+    }
+}
+
+#[test]
+fn used_data_images_with_mismatched_image_mime_are_disclosed() {
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    assert_eq!(photocraft_codecs::decode(&png).unwrap().dimensions(), (2, 2));
+    for mime in ["image/jpeg", "image/jpg"] {
+        let direct = drawing(&url(mime, &png));
+        assert_incomplete_image_is_disclosed(&direct);
+        for child in [direct.as_bytes().to_vec(), gzip(direct.as_bytes())] {
+            assert_incomplete_image_is_disclosed(&drawing(&url("image/svg+xml", &child)));
+        }
+    }
+}
+
+#[test]
+fn complete_renderer_raster_formats_and_plain_text_sniffing_stay_usable() {
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    for (format, mime) in [
+        (photocraft_codecs::Format::Png, "image/png"),
+        (photocraft_codecs::Format::Jpeg, "image/jpeg"),
+        (photocraft_codecs::Format::Gif, "image/gif"),
+        (photocraft_codecs::Format::WebP, "image/webp"),
+    ] {
+        let encoded = photocraft_codecs::encode(&image, format, &Default::default()).unwrap();
+        for mime in [mime, "text/plain"] {
+            let text = drawing(&url(mime, &encoded));
+            let imported = crate::import("complete.svg", text.as_bytes()).unwrap();
+            assert!(omission_warnings(&imported).is_empty(), "{format:?}: {:?}", imported.warnings);
+            let pixel = rasterize_bounded(text.as_bytes(), 1., MAX_RASTER_PIXELS).unwrap().get(1, 1);
+            assert!(pixel[1] > 0.8 && pixel[0] < 0.2 && pixel[2] < 0.2 && pixel[3] == 1., "{format:?}: {pixel:?}");
+        }
+    }
+}
+
+#[test]
+fn unused_hidden_and_unselected_href_failures_do_not_acquire_warnings() {
+    for content in [
+        "<defs><image id='unused' width='2' height='2' href='data:image/png;base64,A'/></defs>",
+        "<image display='none' width='2' height='2' href='data:image/png;base64,A'/>",
+        "<image width='2' height='2' xmlns:x='http://www.w3.org/1999/xlink' x:href='data:image/png;base64,A' href='application-ignored'/>",
+        "<foreign:image xmlns:foreign='urn:unrelated' width='2' height='2' href='data:image/png;base64,A'/>",
+    ] {
+        let text = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{content}</svg>");
+        for source_text in [text.clone(), drawing(&url("image/svg+xml", text.as_bytes())), drawing(&url("image/svg+xml", &gzip(text.as_bytes())))] {
+            for bytes in [source_text.as_bytes().to_vec(), gzip(source_text.as_bytes())] {
+                let imported = crate::import("unused.svg", &bytes).unwrap();
+                assert!(omission_warnings(&imported).is_empty(), "{content}: {:?}", imported.warnings);
+                assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [1., 0., 0., 1.]);
+                let imported = import_svg_bounded_images("unused.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+                assert!(omission_warnings(&imported).is_empty());
+                let (pixels, warnings) = rasterize_bounded_with_warnings(&bytes, 1., MAX_RASTER_PIXELS).unwrap();
+                assert!(warnings.is_empty(), "{content}: {warnings:?}");
+                assert_eq!(pixels.get(1, 1), [1., 0., 0., 1.]);
+                assert_eq!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).unwrap().get(1, 1), [1., 0., 0., 1.]);
+                assert_eq!(rasterize(&bytes, 1.).unwrap().get(1, 1), [1., 0., 0., 1.]);
+                rasterize_rgba8(&bytes).unwrap();
+                import_svg_preview_with_work("unused.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+                import_svg_bounded_images_strict("unused.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+            }
+        }
+    }
+}
+
 fn url(mime: &str, bytes: &[u8]) -> String {
     let mut value = format!("data:{mime},");
     for byte in bytes {
         value.push_str(&format!("%{byte:02X}"));
     }
     value
+}
+
+#[test]
+fn svgz_content_detection_and_parser_agree_on_later_gzip_members() {
+    let xml = b"<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2'/></svg>";
+    // The first member alone looks like SVG. Detection must validate the
+    // following member as well, even when there is no filename extension.
+    let split = xml.len() - b"</svg>".len();
+    let mut compressed = gzip(&xml[..split]);
+    compressed.extend(gzip(&xml[split..]));
+    assert!(crate::is_svg_input("untitled", &compressed));
+    assert!(rasterize_bounded(&compressed, 1., 16).is_ok());
+
+    let crc = compressed.len() - 8;
+    compressed[crc] ^= 1;
+    assert!(!crate::is_svg_input("untitled", &compressed));
+    assert!(rasterize_bounded(&compressed, 1., 16).is_err());
 }
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -213,5 +478,72 @@ fn malformed_data_urls_and_broken_pixel_payloads_are_disclosed_before_rendering(
         assert!(rasterize_rgba8(text.as_bytes()).is_err());
         assert!(rasterize_bounded(text.as_bytes(), 1., MAX_RASTER_PIXELS).is_err());
         assert!(import_svg_preview_with_work("strict.svg", text.as_bytes(), MAX_RASTER_PIXELS).is_err());
+    }
+}
+
+#[test]
+fn excessive_mime_parameters_preserve_valid_images_and_disclose_only_real_failures() {
+    fn assert_complete_green_image(text: &str) {
+        for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+            let imported = crate::import("valid.svg", &bytes).unwrap();
+            assert_no_omission_or_unexpected_import_warning(&imported);
+            assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [0., 1., 0., 1.]);
+            let strict = import_svg_bounded_images_strict("valid.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+            assert_no_omission_or_unexpected_import_warning(&strict);
+            assert_eq!(photocraft_compose::flatten(&strict.document).get(1, 1), [0., 1., 0., 1.]);
+            import_svg_preview_with_work("valid.svg", &bytes, MAX_RASTER_PIXELS).unwrap();
+            let (pixels, warnings) = rasterize_bounded_with_warnings(&bytes, 1., MAX_RASTER_PIXELS).unwrap();
+            assert!(warnings.is_empty());
+            assert_eq!(pixels.get(1, 1), [0., 1., 0., 1.]);
+            assert_eq!(rasterize_bounded(&bytes, 1., MAX_RASTER_PIXELS).unwrap().get(1, 1), [0., 1., 0., 1.]);
+            assert_eq!(rasterize(&bytes, 1.).unwrap().get(1, 1), [0., 1., 0., 1.]);
+            let (width, height, pixels) = rasterize_rgba8(&bytes).unwrap();
+            assert_eq!((width, height), (2, 2));
+            assert_eq!(pixels, [0, 255, 0, 255].repeat(4));
+        }
+    }
+    let parameters = (0..65).map(|index| format!(";p{index}=x")).collect::<String>();
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    for essence in ["image/png", "text/plain", ""] {
+        let href = url(&format!("{essence}{parameters}"), &png);
+        let text = drawing(&href);
+        assert_complete_green_image(&text);
+        for child in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+            assert_complete_green_image(&drawing(&url("image/svg+xml", &child)));
+        }
+        // Header compaction cannot turn a malformed base64 body or a missing
+        // delimiter into a valid image, including default text/plain MIME.
+        for href in [format!("data:{essence}{parameters};base64,A"), format!("data:{essence}{parameters};base64")] {
+            assert_incomplete_image_is_disclosed(&drawing(&href));
+        }
+    }
+    assert_incomplete_image_is_disclosed(&drawing(&url(&format!("image/unsupported{parameters}"), &png)));
+    let href = format!("data:application/octet-stream{parameters};base64,AA==");
+    assert_ignored_data_image_stays_quiet(&drawing(&href));
+    let image = url(&format!("image/png{parameters}"), &png);
+    for content in [
+        format!("<defs><image id='unused' href='{image}'/></defs>"),
+        format!("<image display='none' width='2' height='2' href='{image}'/>"),
+        format!("<foreign:image xmlns:foreign='urn:unrelated' width='2' height='2' href='{image}'/>"),
+        format!("<image width='2' height='2' xmlns:x='http://www.w3.org/1999/xlink' x:href='{image}' href='{href}'/>"),
+    ] {
+        let text = format!("<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2' fill='red'/>{content}</svg>");
+        assert_ignored_data_image_stays_quiet(&text);
+    }
+}
+
+#[test]
+fn valid_image_at_the_mime_parameter_boundary_keeps_its_pixels() {
+    let image = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, [0, 255, 0].repeat(4)).unwrap();
+    let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    // This helper percent-encodes the payload; 64 parameters hit the separator boundary.
+    let parameters = (0..64).map(|index| format!(";p{index}=x")).collect::<String>();
+    let text = drawing(&url(&format!("image/png{parameters}"), &png));
+    for bytes in [text.as_bytes().to_vec(), gzip(text.as_bytes())] {
+        let imported = crate::import("valid.svg", &bytes).unwrap();
+        assert_eq!(imported.warnings, vec!["SVG: embedded images are pixel layers"]);
+        assert_eq!(photocraft_compose::flatten(&imported.document).get(1, 1), [0., 1., 0., 1.]);
+        assert_eq!(rasterize(&bytes, 1.).unwrap().get(1, 1), [0., 1., 0., 1.]);
     }
 }

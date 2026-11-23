@@ -8,7 +8,7 @@ use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
 use photocraft_ui_egui::crop_ui;
 use serde_json::{Value, json};
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The app with one 64 × 48 document and the Crop tool in Classic Mode, so a drag draws a frame.
 fn harness() -> Harness {

@@ -24,7 +24,7 @@ const ALT: Mods = Mods { alt: true, ..Mods::NONE };
 
 /// The issue's test document: 800 × 600, white Background, a red (220,30,30) pixel layer at
 /// 100,100 to 300,250 (active), black foreground, the Triangle tool in Shape mode.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();

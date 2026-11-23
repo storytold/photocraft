@@ -3,8 +3,9 @@
 
 use super::*;
 use crate::canvas::testing;
+use photocraft_engine::actions_cmds::ActionsExt;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
@@ -369,7 +370,8 @@ fn pen_undo_after_closing_a_shape_reopens_the_path() {
     let knots = close_triangle(&mut app);
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
     menu(&mut app, "edit.undo");
-    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers, "the shape layer is gone");
+    // The shape layer was made on the first anchor (#12909): Undo takes back only the closing.
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the shape layer stays, open again");
     assert_eq!(app.ui.pen.as_ref().unwrap().triples(), knots);
 }
 
@@ -537,7 +539,10 @@ fn redo_leaves_the_same_anchors_redrawn_in_shape_mode_alone() {
     }
     assert!(app.ui.pen.is_none());
     app.ui.tool_options.vector_mode = craft::draw::ui::shape::VectorMode::Shape;
-    three_anchors(&mut app);
+    // Not through clicks: in Shape mode they make the shape layer at once (#12909), a History step that clears Redo.
+    // This is a Shape draft that is not in the document yet.
+    let corners: Vec<[f64; 2]> = knots.iter().map(|k| k[0]).collect();
+    app.ui.pen = Some(PenPath::corners(&corners, capture_pen_owner(&app)));
     assert_eq!(app.ui.pen.as_ref().unwrap().triples(), knots);
     assert!(!crate::menus::is_enabled(&app, "edit.redo"), "Redo greys out over the new draft");
     menu(&mut app, "edit.redo");
@@ -566,20 +571,22 @@ fn undo_gives_back_a_refused_draft_esc_kept_as_the_work_path() {
 }
 
 /// Keep a real refused commit, with an older document edit and a library Undo to route to.
-fn failed_library_draft(tool: Tool, shape: bool) -> PhotocraftApp {
+fn failed_library_draft(tool: Tool, shape: bool) -> Box<PhotocraftApp> {
     let mut app = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("actions.newSet", json!({"name": "Keep"})).unwrap();
     app.run("actions.clearAll", json!({"confirm": true})).unwrap();
     app.ui.tool = tool;
     app.ui.tool_options.vector_mode = if shape { craft::draw::ui::shape::VectorMode::Shape } else { craft::draw::ui::shape::VectorMode::Path };
-    for (x, y) in [(20.0, 20.0), (80.0, 60.0)] {
-        click(&mut app, x, y);
-    }
+    // A refused shape is refused from the first anchor on: the Pen makes its layer then (#12909).
     if shape {
         app.session.authorize =
             Some(|id, _| if id == "shape.create" { Err(photocraft_engine::EngineError::Other("refused shape fixture".into())) } else { Ok(()) });
-    } else {
+    }
+    for (x, y) in [(20.0, 20.0), (80.0, 60.0)] {
+        click(&mut app, x, y);
+    }
+    if !shape {
         app.session.authorize = Some(|id, _| if id == "path.set" { Err(photocraft_engine::EngineError::Other("refused path fixture".into())) } else { Ok(()) });
     }
     assert!(!pen_commit(&mut app, false), "the fixture must actually refuse the commit");
@@ -609,7 +616,7 @@ fn failed_pen_draft_after_tool_switch_leaves_library_undo_to_each_entrypoint() {
                     app.run("edit.undo", json!({})).unwrap();
                 }
             }
-            assert_eq!(app.session.actions.list.sets(), ["Keep"], "{tool:?}, {entry}: the library was restored");
+            assert_eq!(app.session.actions().list.sets(), ["Keep"], "{tool:?}, {entry}: the library was restored");
             assert_eq!(app.ui.pen, draft, "{tool:?}, {entry}: hidden anchors are untouched");
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
         }
@@ -630,7 +637,7 @@ fn active_failed_pen_drafts_keep_anchor_undo_and_library_pending() {
                 menu(&mut app, "edit.undo");
             }
             assert_eq!(app.ui.pen.as_ref().unwrap().draft.knots.len(), 1, "{tool:?}: the active editor owns Undo");
-            assert!(app.session.actions.list.sets().is_empty(), "the library Undo is still pending");
+            assert!(app.session.actions().list.sets().is_empty(), "the library Undo is still pending");
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
         }
     }
@@ -648,7 +655,7 @@ fn hidden_failed_pen_drafts_do_not_take_document_history_steps() {
         assert_eq!(app.session.active().unwrap().history.past_len(), 0, "the document edit was undone");
         assert_eq!(app.ui.pen, draft, "the retained draft was not edited");
         assert!(!crate::menus::is_enabled(&app, "history.stepBackward"), "hidden anchors cannot enable another History step");
-        assert!(app.session.actions.list.sets().is_empty(), "History does not consume the library Undo");
+        assert!(app.session.actions().list.sets().is_empty(), "History does not consume the library Undo");
     }
 }
 
@@ -671,7 +678,7 @@ fn failed_shape_drafts_keep_the_work_path_fallback_on_tool_switch() {
 }
 
 /// A valid Freeform release which the document refuses, not an in-progress lasso gesture.
-fn refused_freeform_library_draft() -> PhotocraftApp {
+fn refused_freeform_library_draft() -> Box<PhotocraftApp> {
     let mut app = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("actions.newSet", json!({"name": "Keep"})).unwrap();
@@ -702,13 +709,13 @@ fn failed_freeform_drafts_keep_same_tool_anchor_undo() {
             _ => menu(&mut app, "history.stepBackward"),
         }
         assert_eq!(app.ui.pen.as_ref().unwrap().triples(), draft.triples()[..2].to_vec(), "{entry}: retain the old fitted-anchor Undo");
-        assert!(app.session.actions.list.sets().is_empty(), "the library Undo stays pending");
+        assert!(app.session.actions().list.sets().is_empty(), "the library Undo stays pending");
         assert_eq!(app.session.active().unwrap().history.past_len(), history);
         switch_tool(&mut app, Tool::Brush);
         let remaining = app.ui.pen.clone();
         assert_eq!(crate::actions::library::edit_undo_label(&app), Some("Undo Clear All Actions"));
         menu(&mut app, "edit.undo");
-        assert_eq!(app.session.actions.list.sets(), ["Keep"]);
+        assert_eq!(app.session.actions().list.sets(), ["Keep"]);
         assert_eq!(app.ui.pen, remaining, "another tool does not edit the failed Freeform draft");
     }
 }
@@ -729,9 +736,44 @@ fn freeform_selection_does_not_claim_a_failed_pen_or_curvature_draft() {
             } else {
                 menu(&mut app, "edit.undo");
             }
-            assert_eq!(app.session.actions.list.sets(), ["Keep"], "{tool:?}: undo the library, not foreign anchors");
+            assert_eq!(app.session.actions().list.sets(), ["Keep"], "{tool:?}: undo the library, not foreign anchors");
             assert_eq!(app.ui.pen, draft);
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
         }
+    }
+}
+
+/// A refused Pen draft is kept (#15488): under another tool, Delete is that tool's (the active layer goes); back under
+/// the Pen that drew it, Delete takes back one anchor at a time, as while drawing, and only the last anchor drops the
+/// draft.
+#[test]
+fn a_kept_pen_draft_takes_delete_only_under_its_own_tool() {
+    for tool in [Tool::Pen, Tool::CurvaturePen] {
+        let mut app = app();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.ui.tool = tool;
+        app.ui.tool_options.vector_mode = craft::draw::ui::shape::VectorMode::Path;
+        three_anchors(&mut app);
+        app.session.authorize = Some(|id, _| if id == "path.set" { Err(photocraft_engine::EngineError::Other("refused path fixture".into())) } else { Ok(()) });
+        assert!(!pen_commit(&mut app, false), "the fixture must actually refuse the commit");
+        app.session.authorize = None;
+        assert_eq!(app.ui.pen.as_ref().unwrap().draft.knots.len(), 3);
+        let layers = app.session.active().unwrap().doc.layers.len();
+        let kept = app.ui.pen.as_ref().unwrap().draft.clone();
+
+        switch_tool(&mut app, Tool::AddAnchorPoint);
+        press(&mut app, egui::Key::Delete, egui::Modifiers::NONE);
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: Delete is the other tool's: the layer goes");
+        assert_eq!(app.ui.pen.as_ref().map(|p| &p.draft), Some(&kept), "{tool:?}: the kept draft is untouched");
+
+        switch_tool(&mut app, tool);
+        for left in [2, 1] {
+            press(&mut app, egui::Key::Delete, egui::Modifiers::NONE);
+            assert_eq!(app.ui.pen.as_ref().map(|p| p.draft.knots.len()), Some(left), "{tool:?}: Delete takes back one anchor ({})", app.ui.status);
+        }
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: no other layer went");
+        press(&mut app, egui::Key::Delete, egui::Modifiers::NONE);
+        assert!(app.ui.pen.is_none(), "{tool:?}: the last anchor drops the draft");
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1, "{tool:?}: the last Delete is the drawing tool's too");
     }
 }

@@ -172,7 +172,7 @@ const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 
 /// One app launch with crash recovery in `dir` (dropping it is the crash: background writes
 /// already queued finish, nothing else runs).
-fn launch(dir: &Path) -> PhotocraftApp {
+fn launch(dir: &Path) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(Session::new(), recovery_services(Some(dir.to_path_buf())));
     let ctx = app.ctx().clone();
     prefs_ui::tick(&mut app, &ctx, std::time::Instant::now());
@@ -245,7 +245,8 @@ fn recovered_documents_survive_a_second_crash_until_saved_or_closed() {
     let red = index_of(&app, RED);
     app.run("file.close", json!({"document": red})).unwrap();
     // Saving marks the revision saved (the file write itself is the save service's job).
-    assert!(app.session.set_active(index_of(&app, BLUE)));
+    let blue = index_of(&app, BLUE);
+    assert!(app.session.set_active(blue));
     let st = app.session.active_mut().unwrap();
     st.saved_revision = st.revision;
     prefs_ui::tick(&mut app, &ctx, std::time::Instant::now());
