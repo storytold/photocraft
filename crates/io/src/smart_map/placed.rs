@@ -43,12 +43,17 @@ fn quad(s: &PlacedSpec<'_>, warp: Option<&Warp>) -> Value {
     Value::List(quad_points(s, warp).into_iter().map(Value::Double).collect())
 }
 
-/// Has the placement moved from the quad a template descriptor stores (`Trnf`)?
+/// Has the placement moved from the quad a template descriptor stores (`Trnf`)? Not when it is that quad with its
+/// sides a hair off an axis put on it, as reading straightens them ([`crate::blocks::on_axis`]): an untouched
+/// placement keeps the file's corners (each save rewrote them straightened).
 pub(super) fn quad_moved(template: &Descriptor, s: &PlacedSpec<'_>, warp: Option<&Warp>) -> bool {
     let Some(Value::List(pts)) = template.get("Trnf") else { return true };
     let old: Vec<f64> = pts.iter().filter_map(|v| crate::blocks::num(Some(v))).collect();
+    let [a0, a1, a2, a3, a4, a5, a6, a7] = old.as_slice() else { return true };
     let new = quad_points(s, warp);
-    old.len() != 8 || old.iter().zip(new).any(|(a, b)| (a - b).abs() > 1e-6 * (1.0 + a.abs()))
+    let apart = |q: &[f64]| q.iter().zip(new).any(|(a, b)| (a - b).abs() > 1e-6 * (1.0 + a.abs()));
+    let straight = crate::blocks::on_axis([[*a0, *a1], [*a2, *a3], [*a4, *a5], [*a6, *a7]]);
+    apart(&old) && apart(straight.as_flattened())
 }
 
 pub(crate) fn enumv(t: &str, v: &str) -> Value {

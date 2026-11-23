@@ -749,6 +749,10 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
             if app.ui.transform.is_none() {
                 crate::transform_tool::begin(app, ctx)?;
             }
+            // From Warp mode the warp is held under the box mode, as the reference does.
+            if app.ui.transform.as_ref().is_some_and(|transform| transform.session.warp().is_some()) {
+                crate::transform_tool::hold_warp(app);
+            }
             let now = ctx.input(|input| input.time);
             if let Some(transform) = app.ui.transform.as_mut() {
                 let _ = transform.session.apply(craft::draw::ui::transform::TransformEdit::Mode(crate::transform_tool::mode_for_command(id)), now);

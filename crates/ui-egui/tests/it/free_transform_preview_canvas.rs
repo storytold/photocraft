@@ -9,6 +9,7 @@
 
 use craft::behavior::kurbo::Point;
 use egui::{Modifiers, PointerButton, Pos2};
+use egui_kittest::kittest::Queryable;
 use photocraft_geom::Rect;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::control::{ControlRequest, handle};
@@ -142,6 +143,103 @@ fn free_transform_shows_the_layer_inside_its_box_on_the_gpu_canvas() {
 #[test]
 fn free_transform_shows_the_layer_inside_its_box_on_the_cpu_canvas() {
     shows_the_layer_inside_the_box(false);
+}
+
+fn is_blue(c: [u8; 3]) -> bool {
+    c[2] > 200 && c[0] < 60 && c[1] < 60
+}
+
+/// Perspective on a smart object, then Warp without a pull: the picture stays as the Perspective drew it, as the
+/// reference shows it. A smart object red over blue (x 60..240, red y 90..150, blue y 150..210), its top narrowed to
+/// x 126..174: the exact map puts the content's middle row at y ≈ 115, a flat grid's control points carried through
+/// the move at y ≈ 126. Document point (135, 120.5) is blue in the first and red in the second.
+fn warp_after_perspective_keeps_the_picture(gpu_canvas: bool) {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness(gpu_canvas) else { return };
+    {
+        let app = h.state_mut();
+        app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).expect("new");
+        app.run("layer.new.layer", json!({})).expect("new layer");
+        app.session
+            .edit("paint", |doc, active| {
+                let id = active.expect("the new layer is active");
+                let surface = doc.layer_mut(id).and_then(|l| l.surface_mut()).expect("a raster layer");
+                surface.fill_rect(Rect::new(60, 90, 240, 150), &[1.0, 0.0, 0.0, 1.0]);
+                surface.fill_rect(Rect::new(60, 150, 240, 210), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .expect("paint");
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).expect("smart object");
+        app.sync_views();
+        app.ui.extras.rulers = false;
+    }
+    control(&mut h, "ui.set", json!({"tool": "move", "zoom": 1.0, "center": [200, 150]}));
+    h.run_steps(3);
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.perspective"}));
+    assert!(h.state().ui.transform.is_some(), "Perspective is open");
+    let (from, to) = (screen(&h, 60.0, 90.0), screen(&h, 126.0, 90.0));
+    pointer_move(&mut h, from);
+    button(&mut h, from, true);
+    for i in 1..=8 {
+        pointer_move(&mut h, from + (to - from) * (i as f32 / 8.0));
+    }
+    button(&mut h, to, false);
+    h.run_steps(4);
+    let persp = rgb_at(&mut h, 135.5, 120.5);
+    assert!(is_blue(persp), "the Perspective foreshortens the red top: {persp:?}");
+
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
+    assert!(h.state().ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()), "in Warp mode");
+    h.run_steps(4);
+    let warp = rgb_at(&mut h, 135.5, 120.5);
+    assert!(is_blue(warp), "Warp shows the picture as the Perspective left it until the warp is pulled: {warp:?}");
+}
+
+#[test]
+fn warp_after_perspective_keeps_the_picture_on_the_gpu_canvas() {
+    warp_after_perspective_keeps_the_picture(true);
+}
+
+#[test]
+fn warp_after_perspective_keeps_the_picture_on_the_cpu_canvas() {
+    warp_after_perspective_keeps_the_picture(false);
+}
+
+/// Right-click over the warp grid in Warp mode opens the transform menu in its Warp form, as the reference does
+/// (#12493): the box modes, Warp with the Split Warp entries, and the rest; Scale picked there leaves Warp mode for the
+/// box, as the Edit menu's Scale does (the warp held under it).
+fn right_click_in_warp_opens_the_transform_menu(gpu_canvas: bool) {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness(gpu_canvas) else { return };
+    setup(&mut h);
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
+    assert!(h.state().ui.transform.as_ref().is_some_and(|t| t.session.warp().is_some()), "in Warp mode");
+    let rows = ["Free Transform", "Scale", "Perspective", "Split Warp Crosswise", "Remove Warp Split", "Puppet Warp", "Flip Vertical"];
+    let before: Vec<usize> = rows.iter().map(|row| h.query_all_by_label(row).count()).collect();
+    let at = screen(&h, 150.0, 150.0);
+    pointer_move(&mut h, at);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(4);
+    for (row, before) in rows.iter().zip(before) {
+        assert!(h.query_all_by_label(row).count() > before, "the Warp menu lists {row}");
+    }
+    h.query_all_by_label("Scale").last().expect("the menu's Scale row").click();
+    h.run_steps(4);
+    let t = h.state().ui.transform.as_ref().expect("the transform stays open");
+    assert!(t.session.warp().is_none(), "Scale picked in the Warp menu leaves Warp mode for the box");
+}
+
+#[test]
+fn right_click_in_warp_opens_the_transform_menu_on_the_gpu_canvas() {
+    right_click_in_warp_opens_the_transform_menu(true);
+}
+
+#[test]
+fn right_click_in_warp_opens_the_transform_menu_on_the_cpu_canvas() {
+    right_click_in_warp_opens_the_transform_menu(false);
 }
 
 /// Escape after a move puts the square back in the frame that cancels: the cancelled preview's moving pixels are not

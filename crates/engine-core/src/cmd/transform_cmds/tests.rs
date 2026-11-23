@@ -908,6 +908,51 @@ fn a_stroked_soft_shapes_frame_matches_the_hard_shapes() {
     }
 }
 
+/// `from` (#3649): a box that opened on a rotated smart object's placement and was moved 10 px
+/// moves it 10 px, with its rotation untouched; without `from` the same quad would be read from
+/// the upright rect. Bad `from` values are refused without a History step.
+#[test]
+fn from_transforms_from_where_the_box_started() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 30, "y": 40, "width": 40, "height": 20})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute("edit.transform", json!({"rotate": 30})).unwrap();
+    let placement = |s: &Session| {
+        let st = s.active().unwrap();
+        let LayerContent::Smart(sm) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("smart") };
+        crate::smart_cmds::placement(sm)
+    };
+    let before = placement(&s);
+    let placed = [[0.0, 0.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]].map(|[x, y]: [f64; 2]| {
+        let (a, b) = before.apply(x, y);
+        [a, b]
+    });
+    let moved = placed.map(|[x, y]| [x + 10.0, y]);
+    let steps = s.active().unwrap().history.past_len();
+    for bad in [json!([[0, 0], [1, 0], [1, 1]]), json!("corners"), json!([[0, 0], [1, 0], [1, 1], ["x", 1]]), json!([[0, 0], [0, 0], [0, 0], [0, 0]])] {
+        assert!(s.execute("edit.transform", json!({"from": bad, "quad": moved})).is_err(), "accepted from = {bad}");
+    }
+    assert!(s.execute("edit.transform", json!({"from": placed})).is_err(), "`from` without `quad`");
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    s.execute("edit.transform", json!({"from": placed, "quad": moved})).unwrap();
+    let after = placement(&s);
+    for (x, y) in [(0.0, 0.0), (40.0, 20.0), (13.0, 7.0)] {
+        let (a, b) = (before.apply(x, y), after.apply(x, y));
+        assert!((b.0 - a.0 - 10.0).abs() < 1e-6 && (b.1 - a.1).abs() < 1e-6, "({x}, {y}): {a:?} -> {b:?}");
+    }
+    // Transform Again repeats the move, not the quad read from the upright rect.
+    s.execute("edit.transform.again", json!({})).unwrap();
+    let again = placement(&s);
+    for (x, y) in [(0.0, 0.0), (40.0, 20.0)] {
+        let (a, b) = (before.apply(x, y), again.apply(x, y));
+        assert!((b.0 - a.0 - 20.0).abs() < 1e-6 && (b.1 - a.1).abs() < 1e-6, "again ({x}, {y}): {a:?} -> {b:?}");
+    }
+}
+
 /// Free Transform of a layer's own transparency (⌘-click its thumbnail) takes all of it and leaves
 /// no ghost where it was, as Photoshop does and as Move already did (#5595). Photoshop 2025, an
 /// anti-aliased 60 px ellipse moved 150 px with Free Transform: no pixel left behind.
@@ -990,4 +1035,25 @@ fn step_name_transform_path_is_the_only_name_taken() {
         assert!(s.execute("edit.transform", wrong).is_err(), "{bad_name}");
     }
     assert_eq!(s.active().unwrap().history.past_len(), steps, "a refused name changes nothing");
+}
+
+/// A Perspective that squeezes the top edge toward a point commits the trapezoid (or triangle) the box shows. The
+/// commit's pre-reduction used to take the scale at the centre and round its frame outward past the map's horizon:
+/// a top 10 px wide spilled to x -65..358, and 2 px or less left a 2 × 1 px layer.
+#[test]
+fn a_perspective_squeezed_toward_a_point_commits_the_box() {
+    for half in [30.0, 5.0, 1.0, 0.25, 0.03] {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(60, 90, 240, 210), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("edit.transform", json!({"rect": [60, 90, 240, 210], "quad": [[150.0 - half, 90], [150.0 + half, 90], [240, 210], [60, 210]]})).unwrap();
+        let b = active_bounds(&s);
+        assert!(b.x0 >= 59 && b.x1 <= 241 && b.y0 >= 89 && b.y1 <= 211, "half {half}: {b:?}");
+        assert!(b.x0 <= 61 && b.x1 >= 239 && b.y0 <= 92 && b.y1 >= 209, "half {half}: {b:?}");
+    }
 }

@@ -41,6 +41,10 @@ pub struct SessionWarp {
     /// The warp is a smart object's stored warp, edited over its unwarped source: the session's frame is the
     /// warp's bounds, not the render's.
     pub stored: bool,
+    /// Warp on a placed smart object: the map from its contents this warp was made with
+    /// ([`OpenPreview::placed_warp`](crate::tools::transform_tool::OpenPreview)), kept with it so Undo and Redo bring
+    /// the map back with the warp (a pull at the horizon squeezes it).
+    pub placed: Option<([f64; 9], bool)>,
 }
 
 impl SessionWarp {
@@ -50,7 +54,7 @@ impl SessionWarp {
         let points = source.points.iter().map(|p| Point::new(p[0], p[1])).collect();
         let bounds = Rect::new(warp.bounds[0], warp.bounds[1], warp.bounds[2], warp.bounds[3]);
         let mesh = WarpMesh::new(source.us, source.vs, points).unwrap_or_else(|| WarpMesh::identity(bounds, 1, 1));
-        Self { warp, mesh, on_type, stored: false }
+        Self { warp, mesh, on_type, stored: false, placed: None }
     }
 }
 
@@ -67,8 +71,9 @@ impl TransformWarp for SessionWarp {
         self.stored.then(|| Rect::new(self.warp.bounds[0], self.warp.bounds[1], self.warp.bounds[2], self.warp.bounds[3]))
     }
 
+    /// A flat warp that still has split lines is kept, as the reference keeps it (its lines come back in Warp mode).
     fn is_identity(&self) -> bool {
-        !self.on_type && self.warp.is_identity()
+        !self.on_type && self.warp.is_plain_identity()
     }
 }
 

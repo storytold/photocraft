@@ -198,7 +198,7 @@ fn place_with_svg(
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
-    if sm.stack_mode.is_none() && sm.warp.is_none() && is_svg {
+    if sm.stack_mode.is_none() && sm.warp.as_ref().is_none_or(|w| w.is_identity()) && is_svg {
         let k = vector_scale(sm);
         let img = svg(bytes, k)?;
         return Ok(match &sm.perspective {
@@ -607,7 +607,7 @@ pub fn refresh(doc: &mut Document, id: LayerId) -> Result<bool> {
     refresh_in(doc, id, &JobCtx::new())
 }
 
-fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<bool> {
+pub(crate) fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<bool> {
     let mut l = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
     if !matches!(l.content, LayerContent::Smart(_)) {
         return Err(other("the layer is not a smart object"));

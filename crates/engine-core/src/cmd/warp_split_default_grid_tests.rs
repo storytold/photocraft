@@ -38,35 +38,41 @@ fn assert_near(got: &[f64], want: &[f64], what: &str) {
 }
 
 const THIRDS_X: [f64; 4] = [200.0, 200.0 + 400.0 / 3.0, 200.0 + 800.0 / 3.0, 600.0];
-const THIRDS_Y: [f64; 4] = [150.0, 250.0, 350.0, 450.0];
+
+// Measured in the reference application (Edit › Transform › Warp, Split buttons on the Default
+// grid of a 302 x 202 smart object; the saved mesh, and dragging the ⅓ points on a split line
+// moves that point alone, as a handle): a split adds only its own line. The ⅓ guides are the
+// patches' handles, drawn; they never become sections.
 
 #[test]
-fn horizontal_split_of_the_default_grid_is_three_columns_by_two_rows() {
+fn horizontal_split_of_the_default_grid_is_one_column_by_two_rows() {
     let mut s = session();
     let m = split_cmd(&mut s, "edit.transform.splitWarpHorizontally", default_grid(), [400.0, 320.0]);
     let (xs, ys) = anchors(&m);
-    assert_near(&xs, &THIRDS_X, "the vertical thirds become anchor columns");
-    assert_near(&ys, &[150.0, 320.0, 450.0], "one row line at the click, the horizontal thirds are gone");
+    assert_near(&xs, &[200.0, 600.0], "no anchor columns at the thirds");
+    assert_near(&ys, &[150.0, 320.0, 450.0], "one row line at the click");
     assert!(m.is_valid());
 }
 
 #[test]
-fn vertical_split_of_the_default_grid_is_two_columns_by_three_rows() {
+fn vertical_split_of_the_default_grid_is_two_columns_by_one_row() {
     let mut s = session();
     let m = split_cmd(&mut s, "edit.transform.splitWarpVertically", default_grid(), [300.0, 200.0]);
     let (xs, ys) = anchors(&m);
-    assert_near(&xs, &[200.0, 300.0, 600.0], "one column line at the click, the vertical thirds are gone");
-    assert_near(&ys, &THIRDS_Y, "the horizontal thirds become anchor rows");
+    assert_near(&xs, &[200.0, 300.0, 600.0], "one column line at the click");
+    assert_near(&ys, &[150.0, 450.0], "no anchor rows at the thirds");
     assert!(m.is_valid());
 }
 
 #[test]
-fn crosswise_split_of_the_default_grid_keeps_both_thirds() {
+fn crosswise_split_of_the_default_grid_is_two_by_two() {
     let mut s = session();
     let m = split_cmd(&mut s, "edit.transform.splitWarpCrosswise", default_grid(), [300.0, 320.0]);
     let (xs, ys) = anchors(&m);
-    assert_near(&xs, &[THIRDS_X[0], 300.0, THIRDS_X[1], THIRDS_X[2], THIRDS_X[3]], "columns");
-    assert_near(&ys, &[150.0, 250.0, 320.0, 350.0, 450.0], "rows");
+    assert_near(&xs, &[200.0, 300.0, 600.0], "columns");
+    assert_near(&ys, &[150.0, 320.0, 450.0], "rows");
+    // The handles stay where the Default grid drew its guides: a third of each new patch.
+    assert!((m.point(1, 0)[0] - (200.0 + 100.0 / 3.0)).abs() < 1e-6, "{:?}", m.point(1, 0));
 }
 
 #[test]
@@ -76,9 +82,9 @@ fn a_split_of_an_already_split_grid_adds_only_its_line() {
     let warp = serde_json::to_value(Warp::custom(rows, BOX)).unwrap();
     let m = split_cmd(&mut s, "edit.transform.splitWarpVertically", warp, [300.0, 200.0]);
     let (xs, ys) = anchors(&m);
-    assert_near(&xs, &[THIRDS_X[0], 300.0, THIRDS_X[1], THIRDS_X[2], THIRDS_X[3]], "one more column");
+    assert_near(&xs, &[200.0, 300.0, 600.0], "one more column");
     assert_near(&ys, &[150.0, 320.0, 450.0], "rows are not rebuilt");
-    // A 3 x 3 grid that is not the Default one: a horizontal split keeps every section.
+    // A 3 x 3 grid: a horizontal split keeps every section.
     let grid = serde_json::to_value(Warp::custom(BezierMesh::identity(BOX, 3, 3), BOX)).unwrap();
     let m = split_cmd(&mut s, "edit.transform.splitWarpHorizontally", grid, [400.0, 320.0]);
     let (xs, ys) = anchors(&m);

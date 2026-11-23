@@ -202,14 +202,17 @@ fn transform_task_bar_tracks_the_rotated_quad() {
     }
 }
 
-/// Warp and Content-Aware Scale keep their own controls, and the Crop bar still draws.
+/// Warp mode keeps the bar, as the reference does (its Done applies the warp); Content-Aware Scale keeps its own
+/// controls, and the Crop bar still draws.
 #[test]
 fn transform_task_bar_keeps_warp_content_aware_scale_and_crop_separate() {
     let mut warp = open_box();
     control(&mut warp, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
     warp.run_steps(4);
     assert!(warp.state().ui.transform.as_ref().unwrap().session.warp().is_some());
-    assert_eq!(bar(&mut warp)["visible"], false);
+    assert_eq!(bar(&mut warp)["visible"], true, "Warp mode shows the bar, as the reference does");
+    click(&mut warp, "Done");
+    assert!(warp.state().ui.transform.is_none(), "the bar's Done applies the warp");
 
     let mut scale = harness();
     control(&mut scale, "ui.menu.invoke", json!({"id": "edit.contentAwareScale"}));

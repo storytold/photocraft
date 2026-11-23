@@ -181,7 +181,7 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
 fn placed_bounds(sm: &SmartObject, size: Size) -> Result<Rect> {
     let (mut w, mut h) = (f64::from(size.width), f64::from(size.height));
     let warp = sm.warp.as_ref().filter(|warp| !warp.is_identity());
-    if sm.warp.is_none() && sm.stack_mode.is_none() {
+    if warp.is_none() && sm.stack_mode.is_none() {
         let scale = crate::smart_cmds::vector_scale(sm);
         w = (w * scale).ceil() / scale;
         h = (h * scale).ceil() / scale;
@@ -189,11 +189,19 @@ fn placed_bounds(sm: &SmartObject, size: Size) -> Result<Rect> {
     let (nx, ny) = if warp.is_some() { (((w / 4.0).ceil() as usize).clamp(1, 512), ((h / 4.0).ceil() as usize).clamp(1, 512)) } else { (1, 1) };
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     let mut sign = None;
+    // Through a perspective, a warp shows from its control points carried into the document
+    // (`photocraft_algo::warp::place_source_projective`): bound that surface.
+    let carried = match (warp, sm.perspective) {
+        (Some(w), Some(m)) => photocraft_algo::warp::warp_in_document(w, &photocraft_algo::transform::Homography(m)),
+        _ => None,
+    };
     for j in 0..=ny {
         for i in 0..=nx {
             let (x, y) = (w * i as f64 / nx as f64, h * j as f64 / ny as f64);
-            let (x, y) = warp.map_or((x, y), |warp| warp.map(x, y));
-            let (x, y) = if let Some(m) = sm.perspective {
+            let (x, y) = if let Some(c) = &carried {
+                c.map(x, y)
+            } else if let Some(m) = sm.perspective {
+                let (x, y) = warp.map_or((x, y), |warp| warp.map(x, y));
                 let denominator = m[6] * x + m[7] * y + m[8];
                 let positive = denominator > 0.0;
                 if !denominator.is_finite() || denominator.abs() < 1e-9 || sign.is_some_and(|prev| prev != positive) {
@@ -202,6 +210,7 @@ fn placed_bounds(sm: &SmartObject, size: Size) -> Result<Rect> {
                 sign = Some(positive);
                 ((m[0] * x + m[1] * y + m[2]) / denominator, (m[3] * x + m[4] * y + m[5]) / denominator)
             } else {
+                let (x, y) = warp.map_or((x, y), |warp| warp.map(x, y));
                 let [a, b, c, d, e, f] = sm.transform.m;
                 (a * x + c * y + e, b * x + d * y + f)
             };

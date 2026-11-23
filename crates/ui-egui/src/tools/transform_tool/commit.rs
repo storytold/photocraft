@@ -17,6 +17,9 @@ pub fn commit(app: &mut PhotocraftApp) {
     if committing(app).is_some() {
         return;
     }
+    // The held warp and the contents' map as the session's mode says, as a pass's drawing would leave them: an Undo
+    // back into Warp mode followed by Enter before any pass (the control channel) committed a stale hold.
+    super::begin::reconcile_held(app);
     let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
     if document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         cancel(app);
@@ -44,11 +47,75 @@ pub fn commit(app: &mut PhotocraftApp) {
         crate::cas_transform::commit(app, &t, options);
         return;
     }
+    // A warp held under a box mode: it is applied as the box has moved it, moved or not.
+    if let Some(held) = preview.as_mut().and_then(|pv| pv.held.take())
+        && result.as_ref().is_none_or(|r| r.warp.is_none())
+    {
+        let quad = result.as_ref().map_or_else(|| t.quad_array(), |r| r.state.quad.map(|p| [p.x, p.y]));
+        let interpolation = result.as_ref().map_or_else(|| t.session.interpolation(), |r| r.interpolation).id();
+        let (warp, placed) = held.given_way(quad);
+        // On a selection or a path the held warp is applied as the box moved it, as the preview showed it (it was
+        // taken and dropped, and only the box applied).
+        if t.selection {
+            let p = json!({"rect": warp.bounds, "warp": warp, "interpolation": interpolation});
+            if let Err(e) = app.run("select.transformSelection", p) {
+                keep_open(app, t, preview, e);
+            }
+            return;
+        }
+        if let Some(target) = &t.path {
+            let mut p = target.clone();
+            p["warp"] = json!(warp);
+            if let Err(e) = app.run("path.transform", p) {
+                keep_open(app, t, preview, e);
+            }
+            return;
+        }
+        let r = match placed {
+            Some((to_doc, moved)) => match photocraft_algo::transform::Homography(to_doc).inverse() {
+                Some(back) => {
+                    let mesh = warp.to_mesh(1, 1).map_points(|p| {
+                        let (x, y) = back.apply(p[0], p[1]);
+                        [x, y]
+                    });
+                    let mut p = json!({"layer": t.layer, "warp": photocraft_geom::warp::Warp::custom(mesh, warp.bounds), "contents": true, "interpolation": interpolation});
+                    if moved {
+                        p["placement"] = json!(to_doc);
+                    }
+                    app.run("edit.transform.warp", p)
+                }
+                None => Err("the box is degenerate".to_string()),
+            },
+            None => app.run("edit.transform.warp", json!({"layer": t.layer, "rect": warp.bounds, "warp": warp, "interpolation": interpolation})),
+        };
+        let made = t.made;
+        land(app, r, t, preview, document, made);
+        return;
+    }
     let Some(result) = result else { return };
     let rect = [result.rect.x0, result.rect.y0, result.rect.x1, result.rect.y1];
     let quad = result.state.quad.map(|p| [p.x, p.y]);
+    // A box that opened on a smart object's placement (#3649) and is still there changes nothing: no step.
+    let start = preview.as_ref().and_then(|pv| pv.placed).map(|placed| placed.start);
+    if result.warp.is_none() && start == Some(quad) {
+        return;
+    }
     let interpolation = result.interpolation.id();
+    let plain_warp = result.warp.as_ref().is_some_and(|w| !w.on_type && !w.stored);
     let warp = result.warp.map(|w| w.warp);
+    // An untouched warp is no warp: on a moved smart object without a warp of its own, a flat grid applies the box's
+    // move alone, as the reference applies it. Stored as a warp, the render would draw it from its control points
+    // carried through the move, which spread the rows evenly: not what the preview showed.
+    let placed_warp = preview.as_ref().and_then(|pv| pv.placed_warp);
+    let warp = warp.filter(|w| app.session.active().and_then(|st| super::warp::flat_placed_warp(&st.doc, t.layer, w, placed_warp)).is_none());
+    // The same on a pixel layer: a flat grid in a box in perspective applies the box's exact map, as the preview shows.
+    let warp = warp
+        .filter(|w| !plain_warp || placed_warp.is_some() || t.selection || t.path.is_some() || super::warp::flat_projective_in_box(w, rect, quad).is_none());
+    // A flat grid dropped above, on a box still at its placement: nothing changes, no step (an identity transform
+    // ran as an edit and added an empty step).
+    if warp.is_none() && start == Some(quad) {
+        return;
+    }
     if t.selection {
         let mut p = json!({"rect": rect, "interpolation": interpolation});
         match &warp {
@@ -79,11 +146,31 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let made = t.made;
-    let r = if let Some(w) = &warp {
+    let placed_warp = preview.as_ref().and_then(|pv| pv.placed_warp);
+    let r = if let Some(w) = &warp
+        && let Some((to_doc, moved)) = placed_warp
+        && let Some(back) = photocraft_algo::transform::Homography(to_doc).inverse()
+    {
+        // Warp mode on a box that opened on a smart object's placement: the control points go back into the
+        // contents' own space and are stored there, with the box's move as the new placement (#8927).
+        let mesh = w.to_mesh(1, 1).map_points(|p| {
+            let (x, y) = back.apply(p[0], p[1]);
+            [x, y]
+        });
+        let mut p = json!({"layer": t.layer, "warp": photocraft_geom::warp::Warp::custom(mesh, w.bounds), "contents": true, "interpolation": interpolation});
+        if moved {
+            p["placement"] = json!(to_doc);
+        }
+        app.run("edit.transform.warp", p)
+    } else if let Some(w) = &warp {
         // The warp's bounds are the frame it was built over (a stored smart warp's, or Warp Text's).
         app.run("edit.transform.warp", json!({"layer": t.layer, "rect": w.bounds, "warp": w, "interpolation": interpolation}))
     } else {
         let mut p = json!({"rect": rect, "quad": quad, "interpolation": interpolation});
+        if let Some(start) = start {
+            // The box opened on a smart object's placement: transform from there (#3649).
+            p["from"] = json!(start);
+        }
         if t.layers.is_empty() {
             p["layer"] = json!(t.layer);
         } else {
@@ -94,6 +181,19 @@ pub fn commit(app: &mut PhotocraftApp) {
         }
         app.run("edit.transform", p)
     };
+    land(app, r, t, preview, document, made);
+}
+
+/// After the commit's engine call `r`: a background job keeps the session open until it lands, a change finishes
+/// the step, an error keeps the box open with it.
+fn land(
+    app: &mut PhotocraftApp,
+    r: Result<serde_json::Value, String>,
+    t: FreeTransform,
+    mut preview: Option<OpenPreview>,
+    document: Option<DocId>,
+    made: Option<MadeLayer>,
+) {
     // A large layer's warp runs in the background: the session stays until the job ends.
     if let Ok(v) = &r
         && let Some(job) = v.get("pending").and_then(serde_json::Value::as_bool).filter(|p| *p).and(v.get("job")).and_then(serde_json::Value::as_u64)
@@ -448,16 +548,45 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
 fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     let Some(t) = app.ui.transform.as_mut() else { return serde_json::Value::Null };
     let had_warp = t.session.warp().is_some();
+    // The warp a Redo out of Warp mode leaves, should that step be a hold (a box mode chosen in Warp mode).
+    let leaving = if redo { t.session.warp().map(|w| w.warp.clone()) } else { None };
+    let was_held = app.transform_preview.as_ref().is_some_and(|pv| pv.held.is_some());
     let moved = if redo { t.session.redo() } else { t.session.undo() };
     if !moved {
         return serde_json::Value::Null;
     }
-    // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs): the step
-    // brings its own box, so only the texels swap.
-    if had_warp != t.session.warp().is_some()
-        && let Some(pv) = app.transform_preview.as_mut()
-    {
-        swap_mode_texels(pv);
+    let (now_warp, start, can_redo) = (t.session.warp().is_some(), t.quad_array(), t.session.can_redo());
+    // The map from the contents the warp now shown was made with: the step brings it back with the warp.
+    let stamped = t.session.warp().map(|w| w.placed);
+    if let Some(pv) = app.transform_preview.as_mut() {
+        // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs), and Warp on a placed smart
+        // object its contents through their map: the step brings its own box, so only those swap.
+        if had_warp != now_warp {
+            swap_mode_texels(pv);
+        }
+        // A hold lives beside the session: an Undo back into Warp notes whether it undid one, and the Redo of that
+        // step holds the warp again, as `hold_warp` does, instead of dropping it.
+        if !redo && !had_warp && now_warp {
+            pv.redo_holds.push(was_held);
+        }
+        if redo
+            && had_warp
+            && !now_warp
+            && pv.redo_holds.pop() == Some(true)
+            && let Some(warp) = leaving
+        {
+            let other = pv.other_texels.take();
+            let placed = other.as_ref().and_then(|o| o.placed_warp);
+            pv.held = Some(super::HeldWarp { warp, start, placed, texture: other.map(|o| o.texture) });
+        }
+        if !can_redo {
+            pv.redo_holds.clear();
+        }
+        if let Some(placed) = stamped
+            && pv.held.is_none()
+        {
+            pv.placed_warp = placed;
+        }
     }
     json!({"transform": app.ui.transform})
 }

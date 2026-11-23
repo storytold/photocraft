@@ -303,7 +303,7 @@ fn fit(s: &mut Session, p: &Value) -> Result<Value> {
     // Transparent margins are part of a placed image. Fitting its painted-pixel bounds would
     // progressively zoom a PNG on every click; use the immutable source canvas instead.
     if let LayerContent::Smart(smart) = &child.content
-        && smart.warp.is_none()
+        && smart.warp.as_ref().is_none_or(|w| w.is_identity())
         && smart.perspective.is_none()
         && let Some([x0, y0, x1, y1]) = crate::smart_cmds::source_box(&st.doc, smart)
     {

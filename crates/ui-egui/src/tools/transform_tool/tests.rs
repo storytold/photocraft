@@ -1,4 +1,6 @@
 use super::*;
+
+mod seq_check;
 use craft::behavior::geometry::quad::BoxState;
 use craft::behavior::kurbo::{Point, Rect, Vec2};
 use craft::behavior::{EditEvent, EditEvents, GestureId, Mixed};
@@ -1449,7 +1451,8 @@ fn warp_mode_drags_anchor_with_handles_splits_and_commits() {
     split(&mut app, "edit.transform.splitWarpCrosswise", None).unwrap();
     let split_m = warp_mesh(&app);
     assert_eq!(split_m.points.last().copied(), Some(Point::new(42.0, 38.0)), "the corner survives the cut");
-    assert!(split_m.us.iter().any(|u| (u - 1.0 / 3.0).abs() < 1e-6) && split_m.us.iter().any(|u| (u - 0.5).abs() < 1e-6));
+    // The split adds only its own lines, as the reference's does: the Default grid's thirds stay drawn handles.
+    assert!(split_m.us.iter().any(|u| (u - 0.5).abs() < 1e-6) && !split_m.us.iter().any(|u| (u - 1.0 / 3.0).abs() < 1e-6), "{:?}", split_m.us);
     commit(&mut app);
     let st = app.session.active().unwrap();
     let b = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
@@ -2201,6 +2204,921 @@ fn ending_the_transform_brings_back_the_tools_options_bar() {
         h.run_steps(2);
         assert!(h.state().ui.transform.is_none(), "{key:?} ended the transform");
         assert!(h.query_by_label("Reverse").is_some(), "after {key:?} the Gradient members are back");
+    }
+}
+
+// ---- Smart objects on the craft session: the box on the placement, the warp in the contents (#3649, #8927) ----
+
+/// A 64 × 64 document whose smart object (a 32 × 24 square) has been turned by `radians` and committed.
+fn turned_smart_object(radians: f64) -> (Box<PhotocraftApp>, egui::Context, LayerId) {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+    let ctx = app.ctx().clone();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    turn_box(&mut app, radians);
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    (app, ctx, id)
+}
+
+/// The smart object `id`'s placement, `[a, b, c, d, e, f]`.
+fn placement_of(app: &PhotocraftApp, id: LayerId) -> [f64; 6] {
+    match &app.session.active().unwrap().doc.layer(id).unwrap().content {
+        LayerContent::Smart(sm) => sm.transform.m,
+        _ => panic!("a smart object"),
+    }
+}
+
+#[test]
+fn the_box_opens_on_a_turned_smart_objects_placement_and_scales_from_there() {
+    let (mut app, ctx, id) = turned_smart_object(0.5);
+    let turned = placement_of(&app, id);
+    assert!((turned[1].atan2(turned[0]) - 0.5).abs() < 1e-6, "{turned:?}");
+    begin(&mut app, &ctx).unwrap();
+    let q = quad_of(open(&app));
+    assert!(((q[1][1] - q[0][1]).atan2(q[1][0] - q[0][0]) - 0.5).abs() < 1e-6, "the box runs at the object's angle: {q:?}");
+    let r = rect_of(open(&app));
+    assert!(((r[2] - r[0]) - 32.0).abs() < 1e-6 && ((r[3] - r[1]) - 24.0).abs() < 1e-6, "the frame is the contents' size: {r:?}");
+    // Enter on the box as it opened changes nothing and adds no step.
+    let steps = app.session.active().unwrap().history.past_len();
+    commit(&mut app);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "an untouched box adds no step");
+    assert_eq!(placement_of(&app, id), turned);
+    // Scaled from there, the object keeps its angle.
+    begin(&mut app, &ctx).unwrap();
+    scale_box(&mut app, 1.5, 1.5);
+    commit(&mut app);
+    land_jobs(&mut app);
+    let scaled = placement_of(&app, id);
+    assert!((scaled[1].atan2(scaled[0]) - 0.5).abs() < 1e-6, "still at its angle: {scaled:?}");
+    assert!((scaled[0].hypot(scaled[1]) - 1.5).abs() < 1e-6, "scaled by half again: {scaled:?}");
+}
+
+#[test]
+fn a_warp_on_a_turned_smart_object_is_stored_in_its_contents_and_keeps_the_placement() {
+    let (mut app, ctx, id) = turned_smart_object(0.5);
+    let turned = placement_of(&app, id);
+    let (doc, source) = {
+        let st = app.session.active().unwrap();
+        let layer = st.doc.layer(id).unwrap();
+        (st.doc.clone(), photocraft_engine::warp_cmds::smart_warp_source(&st.doc, layer).unwrap().0)
+    };
+    let placed = photocraft_engine::warp_cmds::smart_box(&doc, doc.layer(id).unwrap()).unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    // The grid lies on the placement: its corners are the placed corners.
+    let mesh = warp_mesh(&app);
+    let w = mesh.width();
+    let last = mesh.points.len() - 1;
+    for (at, want) in [(0, placed[0]), (w - 1, placed[1]), (last, placed[2]), (last + 1 - w, placed[3])] {
+        let p = mesh.points[at];
+        assert!((p.x - want[0]).abs() < 1e-6 && (p.y - want[1]).abs() < 1e-6, "corner {at}: {p:?} vs {want:?}");
+    }
+    let mut to = mesh.clone();
+    to.points[last] += Vec2::new(6.0, 4.0);
+    pull_mesh(&mut app, 1, to);
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    assert_eq!(placement_of(&app, id), turned, "the placement stays: the warp is the contents'");
+    let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+    let warp = sm.warp.as_ref().expect("a stored warp");
+    assert_eq!(warp.bounds, source.bounds, "over the contents' own box");
+    assert!(!warp.is_identity());
+}
+
+#[test]
+fn a_box_mode_chosen_in_warp_holds_the_warp_and_the_commit_applies_both() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+    let ctx = app.ctx().clone();
+    begin_warp(&mut app, &ctx).unwrap();
+    let mesh = warp_mesh(&app);
+    let last = mesh.points.len() - 1;
+    let mut to = mesh.clone();
+    to.points[last] += Vec2::new(4.0, 4.0);
+    pull_mesh(&mut app, 1, to.clone());
+    hold_warp(&mut app);
+    assert!(open(&app).session.warp().is_none(), "the box is back");
+    assert!(app.transform_preview.as_ref().unwrap().held.is_some(), "with the warp held");
+    move_box(&mut app, 8.0, 0.0);
+    // Warp again carries on with the warp, moved with the box.
+    enter_warp(&mut app, &ctx);
+    for (a, b) in warp_mesh(&app).points.iter().zip(&to.points) {
+        assert!((a.x - (b.x + 8.0)).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9, "{a:?} vs {b:?}");
+    }
+    // Held again and applied: the square is warped and moved.
+    hold_warp(&mut app);
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let st = app.session.active().unwrap();
+    let b = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds();
+    assert_eq!((b.x0, b.y0), (24, 16), "moved 8 px: {b:?}");
+    assert!(b.x1 >= 59 && b.y1 >= 43, "the dragged corner reaches past the square: {b:?}");
+}
+
+#[test]
+fn a_split_of_the_default_grid_adds_only_its_own_lines() {
+    let mesh = WarpMesh::identity(Rect::new(0.0, 0.0, 90.0, 60.0), 1, 1);
+    let cut = super::warp::rule_mesh(&mesh, super::warp::RuleEdit::SplitOnePatch { split: WarpSplit::Cross, s: 0.5, t: 0.5 }, 1.0).unwrap();
+    assert_eq!((cut.columns(), cut.rows()), (2, 2), "the cross alone, not the thirds and the cross");
+}
+
+#[test]
+fn a_pull_moves_the_points_the_reference_moves() {
+    let mesh = WarpMesh::identity(Rect::new(0.0, 0.0, 90.0, 60.0), 1, 1);
+    let got = super::warp::rule_mesh(&mesh, super::warp::RuleEdit::Surface { s: 0.5, t: 0.5, by: [0.0, -10.0] }, 2.0).unwrap();
+    let base = BezierMesh::identity([0.0, 0.0, 90.0, 60.0], 1, 1);
+    // The reference presses half a pixel up and left of the pointer, at (44.5, 29.5) here.
+    let (s, t) = (44.5 / 90.0, 29.5 / 60.0);
+    let mut want = base.clone();
+    want.pull_at(&base.points, s, t, base.eval(s, t), [0.0, -10.0], 46.0);
+    for (g, w) in got.points.iter().zip(&want.points) {
+        assert!((g.x - w[0]).abs() < 1e-9 && (g.y - w[1]).abs() < 1e-9, "{g:?} vs {w:?}");
+    }
+}
+
+#[test]
+fn a_pull_pressed_at_the_grids_corner_keeps_the_pointers_point() {
+    // Half a pixel up and left of the top-left corner is off the surface: the pull presses the corner itself.
+    let base = BezierMesh::identity([0.0, 0.0, 90.0, 60.0], 1, 1);
+    assert_eq!(super::warp::pressed(&base, 0.0, 0.0), (0.0, 0.0));
+    let (s, t) = super::warp::pressed(&base, 1.0, 1.0);
+    assert!((s - 89.5 / 90.0).abs() < 1e-9 && (t - 59.5 / 60.0).abs() < 1e-9, "inside from the far corner: {s} {t}");
+}
+
+#[test]
+fn a_warp_built_over_the_contents_box_lies_on_a_turned_smart_objects_placement() {
+    let (mut app, ctx, id) = turned_smart_object(0.5);
+    let doc = app.session.active().unwrap().doc.clone();
+    let placed = photocraft_engine::warp_cmds::smart_box(&doc, doc.layer(id).unwrap()).unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    // Reset (or a style) builds the warp over the warp's box, the contents' own: it goes to the document through
+    // the placement, where the grid and the preview read it.
+    let bounds = session_warp(&app).warp.bounds;
+    let built = super::warp::placed_doc_warp(&app, Warp::custom(BezierMesh::identity(bounds, 1, 1), bounds));
+    let mesh = built.to_mesh(1, 1);
+    let last = mesh.points.len() - 1;
+    for (at, want) in [(0, placed[0]), (3, placed[1]), (last, placed[2]), (last - 3, placed[3])] {
+        let p = mesh.points[at];
+        assert!((p[0] - want[0]).abs() < 1e-6 && (p[1] - want[1]).abs() < 1e-6, "corner {at}: {p:?} vs {want:?}");
+    }
+}
+
+#[test]
+fn a_smart_objects_held_warp_goes_on_in_its_contents_after_the_box_moves() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+    let ctx = app.ctx().clone();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let source = {
+        let st = app.session.active().unwrap();
+        photocraft_engine::warp_cmds::smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap().0
+    };
+    begin_warp(&mut app, &ctx).unwrap();
+    let mesh = warp_mesh(&app);
+    let last = mesh.points.len() - 1;
+    let mut to = mesh.clone();
+    to.points[last] += Vec2::new(3.0, 3.0);
+    pull_mesh(&mut app, 1, to);
+    hold_warp(&mut app);
+    // A Perspective-like move of the box: its top-left corner pulled in.
+    let mut q = quad_of(open(&app));
+    q[0][0] += 6.0;
+    set_quad(&mut app, q);
+    enter_warp(&mut app, &ctx);
+    let pv = app.transform_preview.as_ref().unwrap();
+    assert!(pv.placed_warp.is_some_and(|(_, moved)| moved), "the warp goes on in the contents, through the moved box");
+    assert_eq!(session_warp(&app).warp.bounds, source.bounds, "over the contents' own box");
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+    assert_eq!(sm.warp.as_ref().map(|w| w.bounds), Some(source.bounds), "stored over the contents");
+    assert!(sm.perspective.is_some(), "the box's move is the new placement");
+}
+
+#[test]
+fn a_pull_under_a_perspective_starts_from_the_pressed_point_of_the_contents() {
+    // The g-vp-lt200 probe: a perspective placement (contents 302 × 202), the surface pressed at document (301, 226)
+    // and pulled 200 px to the left.
+    let to_doc = photocraft_algo::transform::Homography([0.2053, -1.18418, 270.0, 0.0, -0.28647, 125.0, 0.0, -0.00393, 1.0]);
+    let back = to_doc.inverse().unwrap();
+    let contents = BezierMesh::identity([0.0, 0.0, 302.0, 202.0], 1, 1);
+    let doc = contents.map_points(|p| {
+        let (x, y) = to_doc.apply(p[0], p[1]);
+        [x, y]
+    });
+    let mesh = WarpMesh::new(doc.us.clone(), doc.vs.clone(), doc.points.iter().map(|p| Point::new(p[0], p[1])).collect()).unwrap();
+    let (px, py) = back.apply(301.0, 226.0);
+    let (s, t) = contents.param_at([px, py]);
+    let got = super::warp::in_contents(&mesh, super::warp::RuleEdit::Surface { s, t, by: [-200.0, 0.0] }, 1.0, &to_doc, &back).unwrap();
+    // Point 9 in the contents, as pull_at moves it from the pressed point: the contents' point half a document pixel up
+    // and left of the pointer, (300.5, 225.5), found again on the contents. The carried mesh's point at (s, t) lies
+    // 36 px below the press under this perspective, and a pull from there moved it to about -478 instead; a press at
+    // the pointer itself moved it to -614.
+    let (x, y) = back.apply(got.points[9].x, got.points[9].y);
+    assert!((x - -633.48).abs() < 0.5 && (y - 134.67).abs() < 0.01, "{x}, {y}");
+}
+
+#[test]
+fn a_warped_smart_objects_box_keeps_its_warp_for_a_projective_preview() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+    let ctx = app.ctx().clone();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    assert!(app.transform_preview.as_ref().unwrap().warped.is_none(), "no stored warp, nothing kept");
+    cancel(&mut app);
+    app.run("layer.smartObjects.warp", json!({"style": "arc", "bend": 30, "rect": [16, 16, 48, 40]})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let pv = app.transform_preview.as_ref().unwrap();
+    let warped = pv.warped.as_ref().expect("the stored warp is kept for the preview");
+    // Its points are the stored warp's in the contents, its texels the contents unplaced over its box.
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let st = app.session.active().unwrap();
+    let (source, place) = photocraft_engine::warp_cmds::smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap();
+    assert_eq!(warped.bounds, source.bounds);
+    assert_eq!(warped.mesh.points, source.to_mesh(1, 1).points);
+    assert_eq!(warped.place, place.0);
+    assert!(warped.texture.size()[0] > 0);
+}
+
+#[test]
+fn a_warp_pulled_past_the_horizon_squeezes_the_placement_and_one_inside_does_not() {
+    use super::warp::{HORIZON_SQUEEZE, horizon_squeeze};
+    // A perspective whose weight w = 1 - y / 200 falls to nothing at y = 200, over a box 0..100 × 0..100.
+    let m = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0 / 200.0, 1.0];
+    let bounds = [0.0, 0.0, 100.0, 100.0];
+    let inside = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]];
+    assert_eq!(horizon_squeeze(m, &inside, bounds), None, "a warp inside its box stays as placed");
+    // A point pulled to y = 199.9, a hair from the horizon.
+    let pulled = [[0.0, 0.0], [100.0, 0.0], [100.0, 199.9], [0.0, 100.0]];
+    let sq = horizon_squeeze(m, &pulled, bounds).expect("the placement gives way");
+    let placed = photocraft_algo::transform::Homography(m).mul(&photocraft_algo::transform::Homography(sq));
+    let w = |p: [f64; 2]| placed.0[6] * p[0] + placed.0[7] * p[1] + placed.0[8];
+    // The nearest point comes back to HORIZON_SQUEEZE of the far side's weight.
+    let (far, near) = (w([0.0, 0.0]), w([100.0, 199.9]));
+    assert!((near / far - HORIZON_SQUEEZE).abs() < 1e-9, "{near} / {far}");
+}
+
+#[test]
+fn a_split_on_a_default_grid_third_keeps_both_lines() {
+    use super::warp::one_patch_split;
+    // On the one patch a third is no line: the armed cross keeps both lines there, as the reference's does.
+    assert_eq!(one_patch_split(WarpSplit::Cross, 1.0 / 3.0 - 0.002, 0.5), Some(WarpSplit::Cross));
+    // Only the patch's own edges drop a line.
+    assert_eq!(one_patch_split(WarpSplit::Cross, 0.005, 0.5), Some(WarpSplit::Horizontal));
+    assert_eq!(one_patch_split(WarpSplit::Vertical, 0.5, 0.005), Some(WarpSplit::Vertical));
+    assert_eq!(one_patch_split(WarpSplit::Horizontal, 0.5, 0.995), None);
+}
+
+#[test]
+fn a_split_alone_is_kept_when_the_warp_is_applied() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+    let ctx = app.ctx().clone();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    split(&mut app, "edit.transform.splitWarpCrosswise", Some([30.0, 26.0])).unwrap();
+    assert!(!open(&app).session.is_untouched(), "a flat grid with split lines is a change");
+    commit(&mut app);
+    land_jobs(&mut app);
+    let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+    let mesh = sm.warp.as_ref().and_then(|w| w.mesh.as_ref()).expect("the split grid is stored");
+    assert_eq!((mesh.us.len(), mesh.vs.len()), (3, 3), "its lines come back in Warp mode");
+}
+
+#[test]
+fn undo_back_into_warp_takes_the_held_warp_back_into_its_contents() {
+    let (mut app, ctx, id) = turned_smart_object(0.5);
+    let source = {
+        let st = app.session.active().unwrap();
+        photocraft_engine::warp_cmds::smart_warp_source(&st.doc, st.doc.layer(id).unwrap()).unwrap().0
+    };
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let mesh = warp_mesh(&app);
+    let last = mesh.points.len() - 1;
+    let mut to = mesh.clone();
+    to.points[last] += Vec2::new(5.0, 3.0);
+    pull_mesh(&mut app, 1, to);
+    settle(&mut app);
+    // Scale chosen in Warp mode holds the warp; Undo takes the session back into Warp mode.
+    hold_warp(&mut app);
+    settle(&mut app);
+    assert!(app.transform_preview.as_ref().unwrap().held.is_some());
+    let _ = intercept(&mut app, "edit.undo");
+    assert!(open(&app).session.warp().is_some(), "back in Warp mode");
+    super::begin::reconcile_held(&mut app);
+    let pv = app.transform_preview.as_ref().unwrap();
+    assert!(pv.held.is_none() && pv.placed_warp.is_some(), "the warp is the contents' again");
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+    assert_eq!(sm.warp.as_ref().map(|w| w.bounds), Some(source.bounds), "stored over the contents' own box");
+}
+
+/// A Perspective move, then Warp and a pull on the smart object, all undone in the open session: Warp afresh is the
+/// plain Warp, with nothing of the undone move's map from the contents left in it (the user's report: the next warp
+/// behaved as if the perspective were still applied).
+#[test]
+fn undoing_a_warp_on_a_perspective_box_leaves_no_trace_in_the_next_warp() {
+    fn smart() -> (Box<PhotocraftApp>, egui::Context, LayerId) {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+        let ctx = app.ctx().clone();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        begin(&mut app, &ctx).unwrap();
+        (app, ctx, id)
+    }
+    fn pull_and_apply(app: &mut PhotocraftApp, ctx: &egui::Context, id: LayerId) -> Warp {
+        begin_warp(app, ctx).unwrap();
+        settle(app);
+        let mut to = warp_mesh(app);
+        to.points[5] += Vec2::new(-4.0, 2.0);
+        pull_mesh(app, 9, to);
+        settle(app);
+        commit(app);
+        land_jobs(app);
+        assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+        let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+        sm.warp.clone().expect("a stored warp")
+    }
+    let (mut plain, ctx, id) = smart();
+    let expected = pull_and_apply(&mut plain, &ctx, id);
+
+    let (mut app, ctx, id) = smart();
+    let start = quad_of(open(&app));
+    let pivot = open(&app).session.state().pivot;
+    let persp = [[start[0][0] + 6.0, start[0][1]], [start[1][0] - 6.0, start[1][1]], start[2], start[3]];
+    box_events(&mut app, 1, &[BoxState::new(persp.map(|[x, y]| Point::new(x, y)), pivot)]);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    assert!(app.transform_preview.as_ref().unwrap().placed_warp.is_some(), "Warp on the moved box edits the contents");
+    let mut to = warp_mesh(&app);
+    to.points[6] += Vec2::new(3.0, -2.0);
+    pull_mesh(&mut app, 2, to);
+    settle(&mut app);
+    for _ in 0..8 {
+        if open(&app).session.is_untouched() {
+            break;
+        }
+        let _ = intercept(&mut app, "edit.undo");
+        super::begin::reconcile_held(&mut app);
+    }
+    assert!(open(&app).session.is_untouched(), "every step undone");
+    assert_eq!(quad_of(open(&app)), start, "the box is back where it opened");
+    assert!(app.transform_preview.as_ref().unwrap().placed_warp.is_none(), "no map from the contents is left");
+    let got = pull_and_apply(&mut app, &ctx, id);
+    assert_eq!(got.bounds, expected.bounds, "stored over the same box");
+    let (a, b) = (got.mesh.as_ref().expect("a mesh"), expected.mesh.as_ref().expect("a mesh"));
+    for (p, q) in a.points.iter().zip(&b.points) {
+        assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{p:?} vs {q:?}");
+    }
+}
+
+/// Undo out of Warp on a Perspective box's smart object and Redo back in: the warp comes back with its map from the
+/// contents and its texels, and applies as it would have without the round trip.
+#[test]
+fn undo_and_redo_across_warp_on_a_perspective_box_applies_the_same_warp() {
+    fn run(round_trip: bool) -> (Warp, [f64; 6]) {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(16, 16, 48, 40));
+        let ctx = app.ctx().clone();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        begin(&mut app, &ctx).unwrap();
+        let start = quad_of(open(&app));
+        let pivot = open(&app).session.state().pivot;
+        let persp = [[start[0][0] + 6.0, start[0][1]], [start[1][0] - 6.0, start[1][1]], start[2], start[3]];
+        box_events(&mut app, 1, &[BoxState::new(persp.map(|[x, y]| Point::new(x, y)), pivot)]);
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        super::begin::reconcile_held(&mut app);
+        if round_trip {
+            let _ = intercept(&mut app, "edit.undo");
+            super::begin::reconcile_held(&mut app);
+            assert!(open(&app).session.warp().is_none(), "out of Warp");
+            assert!(app.transform_preview.as_ref().unwrap().placed_warp.is_none(), "the box mode has no contents map");
+            let _ = intercept(&mut app, "edit.redo");
+            super::begin::reconcile_held(&mut app);
+            assert!(open(&app).session.warp().is_some(), "back in Warp");
+            assert!(app.transform_preview.as_ref().unwrap().placed_warp.is_some(), "with its map from the contents");
+        }
+        let mut to = warp_mesh(&app);
+        to.points[6] += Vec2::new(3.0, -2.0);
+        pull_mesh(&mut app, 2, to);
+        settle(&mut app);
+        commit(&mut app);
+        land_jobs(&mut app);
+        assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+        let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+        (sm.warp.clone().expect("a stored warp"), placement_of(&app, id))
+    }
+    let (plain, plain_at) = run(false);
+    let (tripped, tripped_at) = run(true);
+    assert_eq!(tripped.bounds, plain.bounds, "stored over the same box");
+    let (a, b) = (tripped.mesh.as_ref().expect("a mesh"), plain.mesh.as_ref().expect("a mesh"));
+    for (p, q) in a.points.iter().zip(&b.points) {
+        assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{p:?} vs {q:?}");
+    }
+    assert_eq!(tripped_at, plain_at, "the same placement");
+}
+
+/// A box mode chosen in Warp mode holds the warp; Undo takes the session back into Warp and Redo must hold it again,
+/// not drop it: Enter then applies what it applies without the round trip (found by the sequence checker).
+#[test]
+fn redo_of_a_box_mode_chosen_in_warp_holds_the_warp_again() {
+    fn run(round_trip: bool) -> (Warp, [f64; 6]) {
+        let (mut app, ctx, id) = turned_smart_object(0.5);
+        begin(&mut app, &ctx).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        super::begin::reconcile_held(&mut app);
+        let mut to = warp_mesh(&app);
+        to.points[5] += Vec2::new(-4.0, 3.0);
+        pull_mesh(&mut app, 2, to);
+        settle(&mut app);
+        hold_warp(&mut app);
+        settle(&mut app);
+        super::begin::reconcile_held(&mut app);
+        assert!(app.transform_preview.as_ref().unwrap().held.is_some(), "Scale chosen in Warp mode holds the warp");
+        if round_trip {
+            let _ = intercept(&mut app, "edit.undo");
+            super::begin::reconcile_held(&mut app);
+            assert!(open(&app).session.warp().is_some(), "Undo is back in Warp mode");
+            let _ = intercept(&mut app, "edit.redo");
+            super::begin::reconcile_held(&mut app);
+            assert!(open(&app).session.warp().is_none(), "Redo is back in the box mode");
+            assert!(app.transform_preview.as_ref().unwrap().held.is_some(), "with the warp held again");
+        }
+        commit(&mut app);
+        land_jobs(&mut app);
+        assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+        let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+        (sm.warp.clone().expect("the held warp is applied"), placement_of(&app, id))
+    }
+    let (plain, plain_at) = run(false);
+    let (tripped, tripped_at) = run(true);
+    assert_eq!(tripped.bounds, plain.bounds);
+    let (a, b) = (tripped.mesh.as_ref().expect("a mesh"), plain.mesh.as_ref().expect("a mesh"));
+    for (p, q) in a.points.iter().zip(&b.points) {
+        assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{p:?} vs {q:?}");
+    }
+    for (a, b) in tripped_at.iter().zip(plain_at) {
+        assert!((a - b).abs() < 1e-9, "{tripped_at:?} vs {plain_at:?}");
+    }
+}
+
+/// A smart object with a stored warp: a turn of its box, Warp, and both undone. Warp afresh edits the stored warp as
+/// a fresh session does, not through the undone turn's map kept for a Redo (found by the sequence checker).
+#[test]
+fn warp_after_undoing_a_turned_warp_on_a_warped_smart_object_is_a_fresh_warp() {
+    fn warped() -> (Box<PhotocraftApp>, egui::Context, LayerId) {
+        let mut app = app_with_square(96, photocraft_geom::Rect::new(16, 16, 48, 40));
+        let ctx = app.ctx().clone();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        begin(&mut app, &ctx).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        let mut to = warp_mesh(&app);
+        to.points[6] += Vec2::new(4.0, -3.0);
+        pull_mesh(&mut app, 1, to);
+        settle(&mut app);
+        commit(&mut app);
+        land_jobs(&mut app);
+        begin(&mut app, &ctx).unwrap();
+        (app, ctx, id)
+    }
+    fn ending(app: &mut PhotocraftApp, ctx: &egui::Context, id: LayerId) -> (Warp, [f64; 6]) {
+        begin_warp(app, ctx).unwrap();
+        settle(app);
+        super::begin::reconcile_held(app);
+        let mut to = warp_mesh(app);
+        to.points[5] += Vec2::new(-3.0, 2.0);
+        pull_mesh(app, 9, to);
+        settle(app);
+        commit(app);
+        land_jobs(app);
+        assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+        let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+        (sm.warp.clone().expect("a stored warp"), placement_of(app, id))
+    }
+    let (mut fresh, ctx, id) = warped();
+    let want = ending(&mut fresh, &ctx, id);
+
+    let (mut app, ctx, id) = warped();
+    turn_box(&mut app, -0.07);
+    settle(&mut app);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    super::begin::reconcile_held(&mut app);
+    for _ in 0..8 {
+        if open(&app).session.is_untouched() {
+            break;
+        }
+        let _ = intercept(&mut app, "edit.undo");
+        super::begin::reconcile_held(&mut app);
+    }
+    assert!(open(&app).session.is_untouched(), "every step undone");
+    let got = ending(&mut app, &ctx, id);
+    assert_eq!(got.0.bounds, want.0.bounds, "stored over the contents' box");
+    for (a, b) in got.1.iter().zip(want.1) {
+        assert!((a - b).abs() < 1e-9, "placement {:?} vs {:?}", got.1, want.1);
+    }
+    let (a, b) = (got.0.mesh.as_ref().expect("a mesh"), want.0.mesh.as_ref().expect("a mesh"));
+    for (p, q) in a.points.iter().zip(&b.points) {
+        assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{p:?} vs {q:?}");
+    }
+}
+
+/// Perspective on a smart object, then Warp without a pull: the reference shows the picture exactly as the Perspective
+/// left it and Enter applies the Perspective alone; the picture changes only once the warp is pulled. A flat grid's
+/// control points carried through the move would spread the rows evenly (the picture popped toward the middle).
+#[test]
+fn warp_after_an_unapplied_perspective_keeps_it_until_the_first_pull() {
+    fn perspective_box() -> (Box<PhotocraftApp>, egui::Context, LayerId) {
+        let mut app = app_with_square(100, photocraft_geom::Rect::new(20, 30, 80, 70));
+        let ctx = app.ctx().clone();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        begin(&mut app, &ctx).unwrap();
+        let pivot = open(&app).session.state().pivot;
+        let quad = [[42.0, 30.0], [58.0, 30.0], [80.0, 70.0], [20.0, 70.0]];
+        box_events(&mut app, 1, &[BoxState::new(quad.map(|[x, y]| Point::new(x, y)), pivot)]);
+        settle(&mut app);
+        (app, ctx, id)
+    }
+    let flat = |app: &PhotocraftApp| {
+        let t = open(app);
+        let w = t.session.warp().expect("in Warp mode");
+        super::warp::flat_placed_warp(&app.session.active().unwrap().doc, t.layer, &w.warp, app.transform_preview.as_ref().unwrap().placed_warp)
+    };
+    // The Perspective applied on its own.
+    let (mut want, _, wid) = perspective_box();
+    commit(&mut want);
+    land_jobs(&mut want);
+    let want_at = placement_of(&want, wid);
+
+    // Warp, untouched: shown and applied as the Perspective.
+    let (mut app, ctx, id) = perspective_box();
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let corners = flat(&app).expect("an untouched grid shows the box's exact map");
+    for (c, q) in corners.iter().zip([[42.0, 30.0], [58.0, 30.0], [80.0, 70.0], [20.0, 70.0]]) {
+        assert!((c[0] - q[0]).abs() < 1e-6 && (c[1] - q[1]).abs() < 1e-6, "{corners:?}");
+    }
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+    assert!(sm.warp.as_ref().is_none_or(|w| w.is_identity()), "no warp stored");
+    for (a, b) in placement_of(&app, id).iter().zip(want_at) {
+        assert!((a - b).abs() < 1e-9, "{:?} vs {want_at:?}", placement_of(&app, id));
+    }
+
+    // A pull ends it: from then on the carried points.
+    let (mut app, ctx, _) = perspective_box();
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let mut to = warp_mesh(&app);
+    to.points[5] += Vec2::new(2.0, 1.0);
+    pull_mesh(&mut app, 2, to);
+    settle(&mut app);
+    assert!(flat(&app).is_none(), "a pulled warp is drawn from its carried points");
+}
+
+/// A Perspective box with its top shortened, Warp, and a long pull from near the short edge diagonally toward the long
+/// one, frame by frame as the warp grid reports it. Past the placement's horizon the carried points went through
+/// infinity, and the grid and the picture flipped from one side to the other with every few pixels of the pull. The
+/// reference's picture passes the horizon once and settles: the placement gives way through the drag, not only when it
+/// lands. No point of the shown grid may jump from far on one side of the box to far on the other between two frames.
+#[test]
+fn a_long_pull_under_a_perspective_does_not_flip() {
+    let mut app = app_with_square(400, photocraft_geom::Rect::new(60, 90, 240, 210));
+    let ctx = app.ctx().clone();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let pivot = open(&app).session.state().pivot;
+    let quad = [[126.0, 90.0], [174.0, 90.0], [240.0, 210.0], [60.0, 210.0]];
+    box_events(&mut app, 1, &[BoxState::new(quad.map(|[x, y]| Point::new(x, y)), pivot)]);
+    settle(&mut app);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let start = warp_mesh(&app);
+    let to_doc = photocraft_algo::transform::Homography(app.transform_preview.as_ref().unwrap().placed_warp.expect("Warp edits the contents").0);
+    let back = to_doc.inverse().unwrap();
+    let gesture = GestureId::new(7);
+    let centre = Point::new(150.0, 150.0);
+    let mut shown = start.points.clone();
+    let last = 400;
+    for d in (5..=last).step_by(5) {
+        let by = [d as f64 / 2f64.sqrt(), d as f64 / 2f64.sqrt()];
+        let pulled = super::warp::in_contents(&start, super::warp::RuleEdit::Surface { s: 0.5, t: 0.1, by }, 1.0, &to_doc, &back).expect("a pulled mesh");
+        let mut events = EditEvents::new();
+        if d == 5 {
+            events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+        }
+        events.push(if d == last { EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled) } else { EditEvent::update(gesture, pulled) });
+        grid_edit(&mut app, &events, false);
+        settle(&mut app);
+        let now = warp_mesh(&app).points;
+        for (i, (p, q)) in now.iter().zip(&shown).enumerate() {
+            assert!(p.x.is_finite() && p.y.is_finite(), "pull {d}: point {i} is not finite");
+            // Through infinity: from far on one side of the box to far on the other in one frame.
+            let crossed = |a: f64, b: f64| a * b < 0.0 && a.abs() > 500.0 && b.abs() > 500.0;
+            assert!(
+                !crossed(p.x - centre.x, q.x - centre.x) && !crossed(p.y - centre.y, q.y - centre.y),
+                "pull {d}: point {i} flipped through infinity: {q:?} -> {p:?}"
+            );
+        }
+        shown = now;
+    }
+    assert!(app.transform_preview.as_ref().unwrap().drag_placed.is_none(), "the drag's start map goes with the release");
+}
+
+/// A warped smart object: Warp and a long pull, a box mode chosen (the warp held), a corner of the box moved, and Warp
+/// again. The move took the held warp's points past the box's horizon, where carried they had gone through infinity:
+/// every point must stay on the picture's side, the map giving way as under a pull (found by the sequence checker).
+#[test]
+fn a_held_warp_moved_by_the_box_stays_on_the_pictures_side_of_its_horizon() {
+    let (mut app, ctx, _) = {
+        let mut app = app_with_square(96, photocraft_geom::Rect::new(16, 16, 48, 40));
+        let ctx = app.ctx().clone();
+        app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        begin(&mut app, &ctx).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        let mut to = warp_mesh(&app);
+        to.points[6] += Vec2::new(4.0, -3.0);
+        pull_mesh(&mut app, 1, to);
+        settle(&mut app);
+        commit(&mut app);
+        land_jobs(&mut app);
+        (app, ctx, id)
+    };
+    begin(&mut app, &ctx).unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    super::begin::reconcile_held(&mut app);
+    let start = warp_mesh(&app);
+    let (a, len) = (4.802292692204863f64, 269.5955745602801f64);
+    let pulled = super::warp::rule_mesh(
+        &start,
+        super::warp::RuleEdit::Surface { s: 0.6616269562899482, t: 0.4973305551415017, by: [len * a.cos(), len * a.sin()] },
+        1.0,
+    )
+    .expect("a pulled mesh");
+    let gesture = GestureId::new(3);
+    let mut events = EditEvents::new();
+    events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+    events.push(EditEvent::commit(gesture, Mixed::Same(start), pulled));
+    grid_edit(&mut app, &events, false);
+    settle(&mut app);
+    hold_warp(&mut app);
+    settle(&mut app);
+    super::begin::reconcile_held(&mut app);
+    let q = quad_of(open(&app));
+    let pivot = open(&app).session.state().pivot;
+    let moved = [[q[0][0] - 1.182275882846704, q[0][1] + 4.621861299596933], q[1], q[2], q[3]];
+    box_events(&mut app, 2, &[BoxState::new(moved.map(|[x, y]| Point::new(x, y)), pivot)]);
+    settle(&mut app);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    super::begin::reconcile_held(&mut app);
+    let (m, _) = app.transform_preview.as_ref().unwrap().placed_warp.expect("Warp edits the contents through the moved box");
+    let back = photocraft_algo::transform::Homography(m).inverse().unwrap();
+    let w = |x: f64, y: f64| m[6] * x + m[7] * y + m[8];
+    let mesh = warp_mesh(&app);
+    let contents: Vec<[f64; 2]> = mesh
+        .points
+        .iter()
+        .map(|p| {
+            let (x, y) = back.apply(p.x, p.y);
+            [x, y]
+        })
+        .collect();
+    let (cx, cy) = (contents.iter().map(|p| p[0]).sum::<f64>() / 16.0, contents.iter().map(|p| p[1]).sum::<f64>() / 16.0);
+    let side = w(cx, cy).signum();
+    for (i, p) in contents.iter().enumerate() {
+        assert!(w(p[0], p[1]) * side > 0.0, "point {i} lies past the horizon (weight {} against {})", w(p[0], p[1]), w(cx, cy));
+    }
+}
+
+/// A surface drag through the pull rule, frame by frame as the canvas reports it (busy until the release).
+fn drag_surface(app: &mut PhotocraftApp, id: u64, s: f64, t: f64, angle: f64, len: f64) {
+    let start = warp_mesh(app);
+    let maps = app.transform_preview.as_ref().and_then(|pv| pv.placed_warp).and_then(|(m, _)| {
+        let h = photocraft_algo::transform::Homography(m);
+        Some((h, h.inverse()?))
+    });
+    let gesture = GestureId::new(id);
+    let frames = (len / 10.0).ceil().max(1.0) as usize;
+    for f in 1..=frames {
+        let d = len * f as f64 / frames as f64;
+        let by = [d * angle.cos(), d * angle.sin()];
+        let edit = super::warp::RuleEdit::Surface { s, t, by };
+        let pulled = match &maps {
+            Some((to_doc, back)) => super::warp::in_contents(&start, edit, 1.0, to_doc, back),
+            None => super::warp::rule_mesh(&start, edit, 1.0),
+        }
+        .expect("a pulled mesh");
+        let mut events = EditEvents::new();
+        if f == 1 {
+            events.push(EditEvent::begin(gesture, Mixed::Same(start.clone()), "Warp".into(), None));
+        }
+        events.push(if f == frames { EditEvent::commit(gesture, Mixed::Same(start.clone()), pulled) } else { EditEvent::update(gesture, pulled) });
+        grid_edit(app, &events, false);
+        let now = app.nudge_bundle.now;
+        app.ui.transform.as_mut().unwrap().session.settle(now, f < frames);
+    }
+}
+
+/// Warp on a smart object under a Distort box: a long pull makes the placement give way, a small pull follows, and
+/// Undo takes the small pull back. The map from the contents comes back with the warp it was made with; it stayed as
+/// the undone pull left it, so the next drag carried the warp through the wrong map and jumped (found by the sequence
+/// checker).
+#[test]
+fn undo_of_a_pull_brings_back_the_map_its_warp_was_made_with() {
+    let (mut app, ctx, _) = turned_smart_object(0.5);
+    begin(&mut app, &ctx).unwrap();
+    let pivot = open(&app).session.state().pivot;
+    let q = quad_of(open(&app));
+    let (sin, cos) = 0.1597282707915736f64.sin_cos();
+    let c = [(q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0, (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0];
+    let turned = q.map(|p| [c[0] + (p[0] - c[0]) * cos - (p[1] - c[1]) * sin, c[1] + (p[0] - c[0]) * sin + (p[1] - c[1]) * cos]);
+    box_events(&mut app, 1, &[BoxState::new(turned.map(|[x, y]| Point::new(x, y)), pivot)]);
+    settle(&mut app);
+    let mut distorted = turned;
+    distorted[2] = [turned[2][0] - 3.5494413803294567, turned[2][1] - 3.1396337075350877];
+    box_events(&mut app, 2, &[BoxState::new(distorted.map(|[x, y]| Point::new(x, y)), pivot)]);
+    settle(&mut app);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    drag_surface(&mut app, 3, 0.4339069484806843, 0.31281510135156776, 1.2864430371535345, 233.2823628870126);
+    settle(&mut app);
+    let (after_long, mesh_long) = (app.transform_preview.as_ref().unwrap().placed_warp, warp_mesh(&app));
+    let mut to = warp_mesh(&app);
+    to.points[5] += Vec2::new(1.8128934714029672, 3.0611538757835515);
+    pull_mesh(&mut app, 4, to);
+    settle(&mut app);
+    let _ = intercept(&mut app, "edit.undo");
+    super::begin::reconcile_held(&mut app);
+    assert_eq!(warp_mesh(&app), mesh_long, "Undo takes the small pull back");
+    assert_eq!(app.transform_preview.as_ref().unwrap().placed_warp, after_long, "with the map that warp was made with");
+}
+
+/// The reference's own state after a long pull of the middle under a Perspective with the top edge at half (its file:
+/// the placement from the warp's box to its stored corners, and the warp's points), and where its open session drew
+/// that grid (read off its screenshot at 50 %, about a pixel each way): the left side's points on the picture's left
+/// side, carried on past the object, the bottom corners far out below it. The grid is drawn through the render's
+/// capped map; through the plain one the corners sat inside the picture (doc y 197) and the grid looked unrelated to
+/// it.
+#[test]
+fn a_long_pulled_warp_under_a_perspective_shows_its_grid_as_the_reference_draws_it() {
+    let placed: [f64; 9] = [
+        0.42195220320486854,
+        -0.3472955765368178,
+        173.41558569614162,
+        -6.391204905766668e-13,
+        0.08072772162426656,
+        96.82079868541324,
+        -7.752258179945735e-16,
+        -0.0011576471111578094,
+        1.0,
+    ];
+    let contents: Vec<[f64; 2]> = vec![
+        [150.0, 125.0],
+        [250.0, 125.0],
+        [350.0, 125.0],
+        [450.0, 125.0],
+        [150.0, 191.66666666666663],
+        [250.1087491285402, 206.59954955455055],
+        [350.1017110638, 205.63311793407522],
+        [450.0000000000002, 191.66666666666663],
+        [150.0, 258.33333333333326],
+        [254.3499651416068, 855.6486488486745],
+        [354.0684425520055, 816.9913840296676],
+        [449.9999999999999, 258.33333333333326],
+        [150.0, 325.0],
+        [250.0310711795829, 329.26653796796677],
+        [350.0290603039429, 328.99041464783096],
+        [450.0, 325.0],
+    ];
+    let h = photocraft_algo::transform::Homography(placed);
+    let stored = WarpMesh::new(
+        vec![0.0, 1.0],
+        vec![0.0, 1.0],
+        contents
+            .iter()
+            .map(|p| {
+                let (x, y) = h.apply(p[0], p[1]);
+                Point::new(x, y)
+            })
+            .collect(),
+    )
+    .unwrap();
+    let shown = super::warp::shown_mesh(&stored, Some(placed), &super::warp::ShownGrids::default());
+    for (i, want) in [(0usize, [226.0, 125.0]), (4, [134.0, 370.0]), (8, [22.0, 664.0]), (12, [-110.0, 1014.0]), (15, [714.0, 1014.0]), (11, [578.0, 664.0])] {
+        let p = shown.points[i];
+        assert!((p.x - want[0]).abs() <= 4.0 && (p.y - want[1]).abs() <= 4.0, "point {i}: {p:?}, the reference drew it at {want:?}");
+    }
+}
+
+/// A preset style picked in the Warp options bar is the preset the engine and a PSD make (`Warp::preset`): Arc is an
+/// envelope. The bar built it without, so the same Arc rendered differently from the command's and was saved so.
+#[test]
+fn a_style_picked_in_the_options_bar_is_the_presets_own() {
+    let mut app = warping_square();
+    super::options_bar::warp_edit(&mut app, craft::imaging::ui::warp::WarpFieldsEdit::Style("warpArc".into()));
+    let w = &session_warp(&app).warp;
+    assert_eq!(w.style, photocraft_geom::warp::WarpStyle::Arc, "{w:?}");
+    let want = photocraft_geom::warp::Warp::preset(w.style, w.bend, w.bounds);
+    assert_eq!(w.envelope, want.envelope, "the bar's Arc is the engine's Arc");
+    assert!(w.envelope);
+}
+
+/// Free Transform on a turned smart object, Warp, and Enter without a pull: nothing changes and no step is added (the
+/// flat grid was dropped after the "box unmoved" check, and an identity transform ran as an edit).
+#[test]
+fn enter_on_an_untouched_warp_of_a_turned_smart_object_adds_no_step() {
+    let (mut app, ctx, id) = turned_smart_object(0.5);
+    let before = placement_of(&app, id);
+    begin(&mut app, &ctx).unwrap();
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    let steps = app.session.active().unwrap().history.past_len();
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "no step");
+    assert_eq!(placement_of(&app, id), before);
+}
+
+/// Transform Selection, Warp, a pull, then a box mode (the warp held, the preview showing it): Enter applies the held
+/// warp to the selection. It was taken and dropped, and the selection stayed as it was.
+#[test]
+fn a_warp_held_on_a_selection_is_applied() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.sync_views();
+    app.session.execute("select.rect", json!({"x": 8, "y": 8, "width": 32, "height": 32})).unwrap();
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &ctx, "select.transformSelection", json!({})).unwrap();
+    assert!(open(&app).selection);
+    begin_warp(&mut app, &ctx).unwrap();
+    settle(&mut app);
+    assert!(open(&app).selection, "still the selection's session");
+    let mut to = warp_mesh(&app);
+    // The bottom edge down by 12 px.
+    for i in [12usize, 13, 14, 15] {
+        to.points[i] += Vec2::new(0.0, 12.0);
+    }
+    pull_mesh(&mut app, 2, to);
+    settle(&mut app);
+    hold_warp(&mut app);
+    settle(&mut app);
+    let mask = |app: &PhotocraftApp| app.session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds());
+    let before = mask(&app);
+    commit(&mut app);
+    land_jobs(&mut app);
+    assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+    let after = mask(&app).expect("a selection");
+    assert!(after.y1 > before.expect("a selection").y1, "the pull moved the outline: {before:?} -> {after:?}");
+}
+
+/// Warp, a pull, a box mode (the warp held), Undo back into Warp, and Enter before any pass draws: the hold is settled
+/// first, so the warp is stored as it is after an ordinary pass (the stale hold was committed as a document warp).
+#[test]
+fn enter_right_after_an_undo_back_into_warp_commits_what_a_pass_would() {
+    fn run(redraw: bool) -> (Option<photocraft_geom::warp::Warp>, [f64; 6]) {
+        let (mut app, ctx, id) = turned_smart_object(0.5);
+        begin(&mut app, &ctx).unwrap();
+        begin_warp(&mut app, &ctx).unwrap();
+        settle(&mut app);
+        let mut to = warp_mesh(&app);
+        to.points[5] += Vec2::new(4.0, 3.0);
+        pull_mesh(&mut app, 2, to);
+        settle(&mut app);
+        hold_warp(&mut app);
+        settle(&mut app);
+        let _ = intercept(&mut app, "edit.undo");
+        if redraw {
+            super::begin::reconcile_held(&mut app);
+        }
+        commit(&mut app);
+        land_jobs(&mut app);
+        assert!(app.ui.transform.is_none(), "{}", app.ui.status);
+        let LayerContent::Smart(sm) = &app.session.active().unwrap().doc.layer(id).unwrap().content else { panic!("a smart object") };
+        (sm.warp.clone(), placement_of(&app, id))
+    }
+    let (now, then) = (run(false), run(true));
+    assert_eq!(now.0, then.0, "the warp");
+    for (a, b) in now.1.iter().zip(then.1) {
+        assert!((a - b).abs() < 1e-9, "{:?} vs {:?}", now.1, then.1);
     }
 }
 

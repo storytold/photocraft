@@ -1,6 +1,7 @@
 //! Free Transform's contextual task bar, using the framework's shared `TaskBar`.
 //! Presets edit the open box; Cancel and Done use the existing session actions.
-//! Crop, Warp, Transform Selection, Content-Aware Scale and Frame keep their controls.
+//! Crop, Transform Selection, Content-Aware Scale and Frame keep their controls. Warp mode shows the same bar, as the
+//! reference does; its rotations and flips are greyed there (the session takes no presets in Warp mode).
 
 use craft::behavior::IconId;
 use craft::draw::ui::transform::TransformPhase;
@@ -42,7 +43,7 @@ fn open_box(app: &PhotocraftApp) -> Option<&FreeTransform> {
         return None;
     }
     app.ui.transform.as_ref().filter(|t| {
-        t.session.phase() == TransformPhase::Box
+        matches!(t.session.phase(), TransformPhase::Box | TransformPhase::Warp)
             && !t.selection
             && t.content_aware.is_none()
             // Main's Frame tool has its own task bar and must keep it.
@@ -65,6 +66,7 @@ pub(crate) fn shown_rect(app: &PhotocraftApp, ctx: &egui::Context) -> Option<[f3
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
     let Some(transform) = open_box(app) else { return };
     let (session, corners) = (transform.id, transform.session.quad());
+    let presets = transform.session.phase() == TransformPhase::Box;
     let ctx = ui.ctx().clone();
     let mut place = app.ui.panels.task_bar;
     let shown = TaskBar::new(tl!("Contextual Task Bar"), &corners, Bind::bound(&mut place)).show(ui, area, |ui, cx| {
@@ -73,12 +75,12 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
             ("rotate_ccw", tl!("Rotate 90° Counter Clockwise"), "edit.transform.rotate90Ccw"),
             ("rotate_cw", tl!("Rotate 90° Clockwise"), "edit.transform.rotate90Cw"),
         ] {
-            if IconButton::new(IconId::new(icon)).label(label).show(ui).clicked() {
+            if IconButton::new(IconId::new(icon)).label(label).enabled(presets).show(ui).clicked() {
                 action = Some(Action::Preset(id));
             }
         }
         for (label, id) in [(tl!("Flip Horizontal"), "edit.transform.flipHorizontal"), (tl!("Flip Vertical"), "edit.transform.flipVertical")] {
-            if Button::new(label).show(ui).clicked() {
+            if Button::new(label).enabled(presets).show(ui).clicked() {
                 action = Some(Action::Preset(id));
             }
         }

@@ -1194,12 +1194,17 @@ fn smart_object_curves_preview_keeps_its_size_on_a_reduced_proxy() {
     assert_eq!(shown.size, crate::proxy::proxy_document(&doc, k).size);
     // The 16 px square at (16, 16) is a 4 px square at (4, 4) on the proxy, not 16 px at (16, 16).
     // Bicubic reduction blends the square's boundary with transparency; compare all alpha
-    // values with a reduced full-size result, and require opacity only in the interior.
+    // values with a reduced full-size result, and require opacity only in the interior. A scaled
+    // smart object reduces with the reference application's two-pass resampler (#12723), not a
+    // plain bicubic, so the blended boundary pixels may differ a little; every other pixel
+    // matches to a level.
     for y in 0..shown.size.height as i32 {
         for x in 0..shown.size.width as i32 {
             let expected = reference.pixel(x, y).last().copied().unwrap();
             let actual = alpha(&shown, x, y);
-            assert!((actual - expected).abs() <= 1.0 / 255.0, "({x}, {y}): alpha {actual}, expected {expected}");
+            let blended = expected > 1.0 / 255.0 && expected < 254.0 / 255.0;
+            let tol = if blended { 0.06 } else { 1.0 / 255.0 };
+            assert!((actual - expected).abs() <= tol, "({x}, {y}): alpha {actual}, expected {expected}");
         }
     }
     for (x, y) in [(5, 5), (5, 6), (6, 6)] {
