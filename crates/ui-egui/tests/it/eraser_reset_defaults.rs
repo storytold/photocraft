@@ -7,7 +7,7 @@ use photocraft_ui_egui::control::{ControlRequest, handle};
 use photocraft_ui_egui::{PhotocraftApp, Tool};
 use serde_json::{Value, json};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
@@ -16,7 +16,7 @@ fn app() -> PhotocraftApp {
 
 /// A control request as the control channel sends it, then the frame's sync.
 fn control(app: &mut PhotocraftApp, method: &str, params: Value) -> Value {
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     let (req, rx) = ControlRequest::new(method, params);
     handle(app, &ctx, &req);
     app.sync_views();

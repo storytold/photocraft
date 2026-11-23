@@ -3,12 +3,13 @@
 //! History. RGB documents keep healing, and the Clone Stamp (not measured) keeps setting its source.
 
 use egui::Modifiers;
-use serde_json::{Value, json};
+use photocraft_engine::presets::PresetsExt;
+use serde_json::json;
 
 use super::tests::{app, stripes};
 use super::*;
 use crate::canvas::{ToolEvent, tool_event};
-use crate::state::DialogKind;
+use crate::tools::brush_refusal::brush_refusal_alert_tests::alerts;
 
 const MESSAGE: &str = "Could not set the clone source because it does not work with Indexed Color images (convert image to RGB Color mode to edit).";
 
@@ -21,31 +22,29 @@ fn click(app: &mut PhotocraftApp, x: f64, mods: Modifiers) {
     tool_event(app, ToolEvent::Up { x, y: 30.0 }, mods);
 }
 
-fn alerts(app: &PhotocraftApp) -> Vec<String> {
-    app.ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message").and_then(Value::as_str).map(str::to_string)).collect()
-}
-
 /// The clone source (the options bar's and the engine's), the layer's pixels and the History length.
 type State = (Option<[f64; 2]>, Option<[f64; 2]>, Vec<f32>, usize);
 
 fn state(app: &PhotocraftApp) -> State {
     let st = app.session.active().unwrap();
     let pixels = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds());
-    (app.ui.clone_source, app.session.presets.clone.active().source, pixels, st.history.past_len())
+    (app.ui.clone_source, app.session.presets().clone.active().source, pixels, st.history.past_len())
 }
 
 /// The alert is up once; OK closes it and leaves `before` as it was.
 fn alerted_once(app: &mut PhotocraftApp, before: &State) {
     assert_eq!(alerts(app), [MESSAGE]);
     assert!(state(app) == *before, "the source, the pixels and the History are unchanged");
-    let id = app.ui.dialogs.iter().find(|d| d.kind == DialogKind::Error).map(|d| d.id).unwrap();
-    crate::dialogs::confirm(app, id).unwrap();
+    let id = app.framework.dialogs.open_dialogs().last().map(|d| d.id).unwrap();
+    let ctx = crate::canvas::testing::ctx(app);
+
+    crate::dialogs::confirm(app, &ctx, id).unwrap();
     assert!(alerts(app).is_empty());
     assert!(state(app) == *before, "OK changes nothing");
 }
 
 /// An Indexed Color document with stripes to heal, the Healing Brush active.
-fn indexed() -> PhotocraftApp {
+fn indexed() -> Box<PhotocraftApp> {
     let mut app = app();
     stripes(&mut app, 4, "pixels");
     to_indexed(&mut app);

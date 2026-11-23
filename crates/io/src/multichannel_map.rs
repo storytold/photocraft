@@ -192,11 +192,12 @@ pub(crate) fn layerless_file(
     // Every other imported resource (print settings, IPTC, the layer-id seed, ...), except the
     // ones that only describe layers and any already written above.
     let written: Vec<u16> = resources.iter().map(|r| r.id).collect();
+    let clipping_flatness = crate::psd_export::imported_clipping_flatness_edit(doc);
     for (id, name, data) in &doc.metadata.psd_resources {
         if LAYER_ONLY_RESOURCES.contains(id) || written.contains(id) || !crate::psd_export::keep_imported_resource(doc, *id, data) || !keep(*id, data) {
             continue;
         }
-        let mut r = ImageResource::new(*id, data.to_vec());
+        let mut r = ImageResource::new(*id, crate::psd_export::imported_resource_data(*id, data, clipping_flatness));
         r.name = crate::psd_export::legacy_name(name);
         resources.push(r);
     }

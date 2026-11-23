@@ -20,7 +20,7 @@ pub use channels::{
     LAB_NEUTRAL, LabOp, apply_cmy, cmy_adjustment, cmyk_channel_adjustment, ink_brightness_contrast_lut, ink_luma, ink_through, lab_channel_adjustment,
     lab_stored_op, stored_channel_adjustment, stored_channels, threshold_white,
 };
-use channels::{apply_lab, legacy_brightness_contrast, legacy_brightness_contrast_hdr};
+use channels::{apply_lab, gray_from_srgb_lightness, legacy_brightness_contrast, legacy_brightness_contrast_hdr};
 use color::gradient;
 pub use color::{
     BalanceCurve, VIBRANCE_BOOST, VIBRANCE_GREY, bayer4, black_white_gray, color_balance_channel, colorize_saturation, hdr_saturation_factor, hsl_to_rgb,
@@ -248,6 +248,7 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
         }
         Adjustment::GradientMap { stops, reverse, dither, .. } => {
             let (w, x0, y0) = (buf.rect.width().max(1) as usize, buf.rect.x0, buf.rect.y0);
+            let gray_lightness = mode == ColorMode::Grayscale && depth != Some(SampleType::F32);
             for (i, p) in buf.px.iter_mut().enumerate() {
                 if p[3] <= 0.0 {
                     continue;
@@ -260,6 +261,9 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                     t = 1.0 - t;
                 }
                 let mut o = gradient(stops, t);
+                if gray_lightness {
+                    o = gray_from_srgb_lightness(o);
+                }
                 if *dither {
                     let d = bayer4(x0 + (i % w) as i32, y0 + (i / w) as i32) / 255.0;
                     o = o.map(|v| (v + d).clamp(0.0, 1.0));
@@ -289,6 +293,14 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
         // Not evaluated: identity (still round-trips through PSD).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => {}
     }
+}
+
+/// What one straight-alpha sRGB colour becomes under `adj` in an 8-bit RGB document: [`apply_in`] over a 1 x 1 buffer,
+/// so a UI preview of a colour runs the code a layer's pixels run.
+pub fn adjust_color(adj: &Adjustment, color: [f32; 4]) -> [f32; 4] {
+    let mut buf = Buffer { rect: photocraft_geom::Rect { x0: 0, y0: 0, x1: 1, y1: 1 }, px: vec![color] };
+    apply_in(adj, &mut buf, Transfer::Srgb, None, ColorMode::Rgb);
+    buf.px[0]
 }
 
 /// Applies an adjustment in a document of colour `mode`: [`apply_depth`], except that in Lab
@@ -396,6 +408,8 @@ mod lookup_tests {
     }
 }
 
+#[cfg(test)]
+mod gradient_map_grayscale_tests;
 #[cfg(test)]
 mod tone_tests;
 
