@@ -95,6 +95,12 @@ pub fn apply_color_replacement(
 pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut(&mut Region, &Footprint) {
     let fmt = pre.format();
     let n = fmt.channels();
+    // The CMYK profile of the document being recoloured, in scope where this effect is built (the
+    // engine enters it for the command, as it does for a Brush stroke). Every conversion to and
+    // from the RGB blend space goes through it, so the inks mean the document's device colour and
+    // not the built-in coated CMYK (#11918). Captured here and re-entered for each dab: a live
+    // preview runs this closure after the command that built it has returned.
+    let cmyk = photocraft_color::convert::active_cmyk_space();
     let mode = match rs.mode {
         ReplaceMode::Hue => BlendMode::Hue,
         ReplaceMode::Saturation => BlendMode::Saturation,
@@ -123,7 +129,7 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
             1.0
         }
     };
-    move |work: &mut Region, fp: &Footprint| {
+    let mut dab = move |work: &mut Region, fp: &Footprint| {
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
         let sampled = match rs.sampling {
             Sampling::Continuous => {
@@ -240,7 +246,8 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 px.copy_from_slice(&enc[..n]);
             }
         }
-    }
+    };
+    move |work: &mut Region, fp: &Footprint| photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || dab(work, fp))
 }
 
 #[cfg(test)]
