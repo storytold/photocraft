@@ -296,7 +296,7 @@ fn process_outputs<'a>(
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
-        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique };
+        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique, rename: None };
         let r = process_one(raw_ppi, path, &out, save, options, &run);
         match r {
             Ok(Some(PublishedOutput { path: out, warning })) => {
@@ -358,7 +358,7 @@ pub(super) fn process_document_copies(
         let notices = std::cell::RefCell::new(Vec::new());
         let input = InputPolicy { prepare: &prepare, notices: &notices };
         let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
-        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false };
+        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false, rename: None };
         match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
             Ok(_) => {
                 written.record(&out, &path);
@@ -381,6 +381,9 @@ struct ProcessOptions<'a> {
     ctx: Option<&'a crate::jobs::JobCtx>,
     input: Option<&'a InputPolicy<'a>>,
     unique: bool,
+    /// The output to use instead of `out`, or `None` to keep it, asked once the input has opened
+    /// so an input that does not open fails as such; an error fails the input.
+    rename: Option<&'a dyn Fn() -> Result<Option<String>>>,
 }
 
 /// Open and process one scratch input, collecting opening diagnostics even on failure.
@@ -405,6 +408,11 @@ fn process_one(
             let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
             scratch.add_document(doc, Some(path.to_string()));
         }
+        let renamed = options.rename.map(|rename| rename()).transpose()?.flatten();
+        if let (Some(written), Some(renamed)) = (options.written, &renamed) {
+            written.check(renamed).map_err(EngineError::Other)?;
+        }
+        let out = renamed.as_deref().unwrap_or(out);
         if let Some(ctx) = options.ctx {
             ctx.publish_batch_preview(path, scratch.active().map(|state| state.doc.clone()));
         }
@@ -623,8 +631,8 @@ struct BatchRun<'a> {
     policy: &'a BatchPolicy,
     input: Option<&'a InputPolicy<'a>>,
     check_duplicates: bool,
-    /// The output for the input at an index when it differs from the planned one; an error
-    /// fails that input.
+    /// The output for the input at an index when it differs from the planned one, asked once
+    /// that input has opened; an error fails that input.
     rename: Option<&'a dyn Fn(usize) -> Result<Option<String>>>,
 }
 
@@ -654,15 +662,24 @@ fn process_batch_outputs_with(
             break;
         }
         ctx.progress(index as f32 / total.max(1) as f32, &format!("{} of {total}: {}", index + 1, file_name(path)));
-        let (out, result) = match rename.map_or(Ok(None), |rename| rename(index)) {
-            Ok(renamed) => {
-                let out = renamed.unwrap_or_else(|| out.clone());
-                let options = ProcessOptions { format: Some(format), written: check_duplicates.then_some(&written), ctx: Some(ctx), input, unique: false };
-                let result = process_one(raw_ppi, path, &out, save, options, f);
-                (out, result)
-            }
-            Err(error) => (out.clone(), Err(FileFailure::from(error))),
+        // The new name is asked for once the input has opened, so an input that does not open
+        // still counts as one (#14875).
+        let renamed = std::cell::RefCell::new(None);
+        let resolve = || -> Result<Option<String>> {
+            let out = rename.map_or(Ok(None), |rename| rename(index))?;
+            renamed.borrow_mut().clone_from(&out);
+            Ok(out)
         };
+        let options = ProcessOptions {
+            format: Some(format),
+            written: check_duplicates.then_some(&written),
+            ctx: Some(ctx),
+            input,
+            unique: false,
+            rename: rename.is_some().then_some(&resolve as &dyn Fn() -> Result<Option<String>>),
+        };
+        let result = process_one(raw_ppi, path, out, save, options, f);
+        let out = renamed.take().unwrap_or_else(|| out.clone());
         if result.is_ok() {
             written.record(&out, path);
         }
