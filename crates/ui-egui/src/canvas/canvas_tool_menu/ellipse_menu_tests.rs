@@ -11,9 +11,11 @@ use serde_json::{Value, json};
 use super::line_menu_tests::{greyed, menu, shown};
 use super::tests::{any_dialog, app, close_dialogs, dialog_open, harness, right_click, screen_of};
 use crate::PhotocraftApp;
-use crate::canvas::testing;
 use crate::state::Tool;
+use craft::draw::geometry::ShapeGeometry;
 use craft::draw::ui::VectorMode;
+use craft::draw::ui::shape_drag::ShapeKind;
+use craft::keymap::Mods;
 
 const PIXEL_MENU: &str = "Define Custom Shape… ― Blending Options… ― Make Selection… · New Guides From Shape · Fill Path… · Stroke Path… ― \
     Rasterize Layer · Rasterize Layer Style · Rasterize Vector Mask ― Free Transform ― Unite Shapes · Subtract Front Shape · \
@@ -46,10 +48,8 @@ fn ellipse_layer() -> Box<PhotocraftApp> {
     let mut app = ellipse_tool(app(), VectorMode::Shape);
     // The measured ellipse had a stroke; without one Copy Complete Stroke greys, as in the Line's menu.
     app.ui.tool_options.stroke_width = 2.0;
-    testing::press(&mut app, [8.0, 8.0], Modifiers::NONE);
-    testing::move_to(&mut app, [16.0, 16.0], Modifiers::NONE);
-    testing::move_to(&mut app, [24.0, 24.0], Modifiers::NONE);
-    testing::release(&mut app, [24.0, 24.0], Modifiers::NONE);
+    let rect = craft::behavior::kurbo::Rect::new(8.0, 8.0, 24.0, 24.0);
+    crate::vector_ui::shapes::finish_drag(&mut app, ShapeKind::Ellipse, &ShapeGeometry::Ellipse { rect }, Mods::default());
     let st = app.session.active().unwrap();
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert_eq!(layer.content.kind_name(), "Shape");

@@ -12,9 +12,11 @@ use serde_json::json;
 use super::line_menu_tests::greyed;
 use super::tests::{app, harness, right_click, screen_of};
 use crate::PhotocraftApp;
-use crate::canvas::testing;
 use crate::state::Tool;
+use craft::behavior::kurbo::{Point, Rect};
+use craft::draw::geometry::ShapeGeometry;
 use craft::draw::ui::VectorMode;
+use craft::keymap::Mods;
 
 /// The shape tools whose Shape-mode menu the issues measured.
 const TOOLS: [Tool; 2] = [Tool::Line, Tool::EllipseShape];
@@ -28,10 +30,13 @@ fn draw(app: &mut PhotocraftApp, tool: Tool, rgb: [f32; 3], from: [f64; 2], to: 
     app.ui.tool = tool;
     app.ui.tool_options.shape_mode = VectorMode::Shape;
     app.session.tools.foreground = [rgb[0], rgb[1], rgb[2], 1.0];
-    testing::press(app, from, Modifiers::NONE);
-    testing::move_to(app, [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0], Modifiers::NONE);
-    testing::move_to(app, to, Modifiers::NONE);
-    testing::release(app, to, Modifiers::NONE);
+    // What the canvas commits on release: the drag's box, or the Line from its press to its release.
+    let weight = f64::from(app.ui.tool_options.line_weight);
+    let geometry = match tool {
+        Tool::Line => ShapeGeometry::Line { from: Point::new(from[0], from[1]), to: Point::new(to[0], to[1]), weight },
+        _ => ShapeGeometry::Ellipse { rect: Rect::new(from[0], from[1], to[0], to[1]) },
+    };
+    crate::vector_ui::shapes::finish_drag(app, crate::vector_ui::kind_of(tool), &geometry, Mods::default());
     let id = app.session.active().unwrap().active_layer.unwrap();
     assert!(fill_of(app, id).is_some(), "{tool:?} drew a filled shape layer");
     id
