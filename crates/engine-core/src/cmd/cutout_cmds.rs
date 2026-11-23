@@ -49,12 +49,25 @@ fn subject_area(l: &Layer, canvas: Rect, sample_all: bool) -> Rect {
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-    check(doc, layer).map_err(EngineError::Other)?;
-    let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
-    let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
-    let area = subject_area(layer, doc.bounds(), sample_all);
+    let (sample_all, refine, area) = {
+        let d = s.active_mut().ok_or(EngineError::NoDocument)?;
+        let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        if matches!(&layer.content, LayerContent::Smart(sm) if sm.cache.is_none()) {
+            let doc = std::sync::Arc::make_mut(d.doc_mut());
+            if !crate::smart_cmds::refresh(doc, id)? {
+                return Err(EngineError::Other("the smart object's pixels are unavailable".into()));
+            }
+        }
+        let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        check(&d.doc, layer).map_err(EngineError::Other)?;
+        if layer.surface().is_none() {
+            return Err(EngineError::Other("the layer has no pixels to sample".into()));
+        }
+        let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
+        let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
+        let area = subject_area(layer, d.doc.bounds(), sample_all);
+        (sample_all, refine, area)
+    };
     crate::jobs::edit_job(
         s,
         "Remove Background",
@@ -350,5 +363,51 @@ mod tests {
         assert!(layer(&s, id).mask.is_some());
         let v = mask_iou(&s, 200, 160, &inside);
         assert!(v >= 0.75, "smart object: IoU {v}");
+    }
+
+    #[test]
+    fn remove_background_renders_smart_object_when_cache_absent() {
+        let (mut s, inside) = disc(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = active_id(&s);
+
+        // Manually clear cache so sm.cache is None
+        s.edit("clear cache", |doc, _| {
+            let l = doc.layer_mut(id).unwrap();
+            let LayerContent::Smart(sm) = &mut l.content else { panic!("not smart") };
+            sm.cache = None;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(layer(&s, id).surface(), None);
+        assert!(s.is_enabled(CMD));
+
+        // Executing the command re-renders cache and succeeds
+        let r = s.execute(CMD, json!({})).unwrap();
+        assert_eq!(r["layer"], id.0);
+        assert!(layer(&s, id).surface().is_some());
+        assert!(layer(&s, id).mask.is_some());
+        let v = mask_iou(&s, 200, 160, &inside);
+        assert!(v >= 0.75, "smart object with re-rendered cache: IoU {v}");
+    }
+
+    #[test]
+    fn remove_background_fails_when_smart_object_has_no_cache_and_cannot_render() {
+        let (mut s, _) = disc(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = active_id(&s);
+
+        // Clear cache and set invalid linked file path so rendering fails
+        s.edit("break source", |doc, _| {
+            let l = doc.layer_mut(id).unwrap();
+            let LayerContent::Smart(sm) = &mut l.content else { panic!("not smart") };
+            sm.cache = None;
+            sm.source = photocraft_doc::SmartSource::Linked { path: "non_existent_file.png".into() };
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(s.execute(CMD, json!({})).is_err());
     }
 }
