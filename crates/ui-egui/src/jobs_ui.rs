@@ -716,9 +716,11 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
-        doc,
-        read_only,
+    let held = |imported: photocraft_engine::jobs::HeldImportedDocument, question, policy_applied| crate::open_prompt::Held {
+        doc: imported.document,
+        read_only: imported.source_read_only,
+        initial_view: imported.initial_view,
+        protected_import_source: imported.protected_import_source,
         damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
         name: name.to_string(),
         path: path.map(str::to_string),
@@ -732,8 +734,8 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     };
     // Held back for the profile prompt (Ask When Opening).
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
-        let (doc, read_only) = app.session.take_held_open(id).ok_or("the open job's document is gone")?;
-        crate::open_prompt::arrive(app, held(doc, read_only, v.get("color").filter(|q| !q.is_null()).cloned(), false));
+        let imported = app.session.take_held_open_with_view(id).ok_or("the open job's document is gone")?;
+        crate::open_prompt::arrive(app, held(imported, v.get("color").filter(|q| !q.is_null()).cloned(), false));
         return Ok(());
     }
     // poll_jobs applies all ready jobs before the shell handles their events. An earlier
@@ -745,8 +747,16 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         && let Some(st) = app.session.close(index)
     {
         let read_only = st.source_read_only;
+        let protected_import_source = st.protected_import_source.clone();
         let doc = Arc::try_unwrap(st.into_document()).unwrap_or_else(|d| (*d).clone());
-        crate::open_prompt::arrive(app, held(doc, read_only, None, true));
+        crate::open_prompt::arrive(
+            app,
+            held(
+                photocraft_engine::jobs::HeldImportedDocument { document: doc, source_read_only: read_only, initial_view: None, protected_import_source },
+                None,
+                true,
+            ),
+        );
         return Ok(());
     }
     if let Some(slot) = tab_slot(app, slot, order) {

@@ -137,6 +137,8 @@ impl PhotocraftApp {
             open_prompt::Held {
                 doc,
                 read_only: photocraft_io::affinity::is_affinity(bytes),
+                initial_view: None,
+                protected_import_source: None,
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),

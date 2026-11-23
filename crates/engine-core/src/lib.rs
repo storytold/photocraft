@@ -28,6 +28,7 @@ mod group_options;
 pub mod guide_layout;
 pub mod hidden_target;
 pub mod hooks;
+mod import_initial_view;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
@@ -302,8 +303,8 @@ pub struct Session {
     pub live_commit: Option<state::LiveCommit>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
-    /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
-    held_opens: Vec<(u64, Document, bool)>,
+    /// payload)`. View-aware hosts take it with [`Session::take_held_open_with_view`].
+    held_opens: Vec<(u64, jobs::HeldImportedDocument)>,
     next_held_open: u64,
     pub(crate) pending_preflights: Vec<jobs::PendingPsdPreflight>,
     next_pending_preflight: u64,

@@ -3,7 +3,11 @@
 
 use super::*;
 use craft_xcf::{Compression, MAX_STRING, TILE};
+use photocraft_geom::Rect;
 use photocraft_raster::Interrupt;
+
+#[path = "tests/streamed_raster.rs"]
+mod streamed_raster;
 
 /// A small XCF writer for tests: version 11+ layout (64-bit pointers) by default.
 pub(super) struct W {
@@ -556,8 +560,9 @@ fn image_parasites_resolution_guides_and_comment() {
     guides.extend_from_slice(&7i32.to_be_bytes());
     guides.push(2);
     img.image_props.push((18, guides));
+    let profile = craft_cms::Builtin::DisplayP3.profile().to_bytes();
     let mut parasites = Vec::new();
-    for (name, data) in [("gimp-comment", &b"hello\0"[..]), ("icc-profile", &[1u8, 2, 3][..])] {
+    for (name, data) in [("gimp-comment", &b"hello\0"[..]), ("icc-profile", profile.as_slice())] {
         parasites.extend_from_slice(&(name.len() as u32 + 1).to_be_bytes());
         parasites.extend_from_slice(name.as_bytes());
         parasites.push(0);
@@ -573,7 +578,62 @@ fn image_parasites_resolution_guides_and_comment() {
     assert_eq!(d.resolution_dpi, 300.0);
     assert_eq!((d.guides.horizontal.as_slice(), d.guides.vertical.as_slice()), (&[4.0][..], &[7.0][..]));
     assert_eq!(d.metadata.text, vec![("Comment".to_string(), "hello".to_string())]);
-    assert_eq!(d.icc_profile.as_deref().map(|p| p.as_slice()), Some(&[1u8, 2, 3][..]));
+    assert_eq!(d.icc_profile, Some(profile));
+}
+
+#[test]
+fn thirty_two_bit_integers_keep_more_than_u16_precision() {
+    let mut img = TestImage::rgb8(1, 1);
+    img.precision = 350;
+    let sample = 0x8000_4000_u32;
+    let data = [sample, 0, 0, u32::MAX].into_iter().flat_map(u32::to_be_bytes).collect();
+    img.layers.push(TestLayer::rgba("Precision", 1, 1, data));
+    let imported = open(&img.write()).unwrap();
+    let doc = imported.document;
+    assert_eq!(doc.depth, SampleType::F32);
+    let red = pixel(&doc.layers[0], 0, 0)[0];
+    assert_eq!(red, (f64::from(sample) / f64::from(u32::MAX)) as f32);
+    assert!(imported.warnings.iter().any(|warning| warning.contains("reduced integer precision")));
+}
+
+#[test]
+fn bulk_f32_keeps_signed_hdr_color_and_bounds_only_coverage() {
+    use crate::{HistoricalXcfOrder, HistoricalXcfSampleOrder, ImportOptions};
+
+    for order in [HistoricalXcfSampleOrder::BigEndian, HistoricalXcfSampleOrder::LittleEndian] {
+        let bytes = |samples: &[f32]| {
+            samples
+                .iter()
+                .flat_map(|sample| match order {
+                    HistoricalXcfSampleOrder::BigEndian => sample.to_be_bytes(),
+                    HistoricalXcfSampleOrder::LittleEndian => sample.to_le_bytes(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut image = TestImage::rgb8(65, 2);
+        image.precision = 600;
+        image.compression = Compression::None;
+        let mut layer = TestLayer::rgba("HDR and coverage", 2, 1, bytes(&[-0.25, 1.75, 0.125, 1.5, 1.25, -0.5, 0.25, -0.5]));
+        layer.x = 63;
+        layer.y = -1;
+        layer.mask = Some(bytes(&[-0.25, 1.25]));
+        image.layers.push(layer);
+        let options = ImportOptions { historical_xcf_order: HistoricalXcfOrder::Explicit(order), ..Default::default() };
+        let imported = crate::import_with_options("hdr.xcf", &image.write(), &options).unwrap();
+        let layer = &imported.document.layers[0];
+        assert_eq!(pixel(layer, 63, -1), [-0.25, 1.75, 0.125, 1.0]);
+        assert_eq!(pixel(layer, 64, -1), [1.25, -0.5, 0.25, 0.0]);
+        let mask = &layer.mask.as_ref().unwrap().surface;
+        assert_eq!(mask.sample_channel(63, -1, 0), 0.0);
+        assert_eq!(mask.sample_channel(64, -1, 0), 1.0);
+        assert!(imported.warnings.iter().any(|note| note.contains("alpha samples outside")));
+        assert!(imported.warnings.iter().any(|note| note.contains("mask samples outside")));
+
+        image.layers[0].data = bytes(&[f32::NAN, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert!(
+            matches!(crate::import_with_options("invalid hdr.xcf", &image.write(), &options), Err(IoError::Xcf(ref error)) if error.contains("not finite"))
+        );
+    }
 }
 
 #[test]
@@ -820,11 +880,14 @@ fn a_narrow_drawable_is_charged_the_tiles_it_stores() {
 /// Blank content keeps no tiles after `prune()`, so it is not charged against the pixel budget.
 #[test]
 fn blank_layers_are_not_charged_for_pruned_tiles() {
-    let mut budget = MAX_PIXEL_BYTES;
-    for _ in 0..4 {
-        let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
-        let px = Pixels { width: 1, height: 300_000, channels: 4, data: vec![0.0; 1_200_000] };
-        write_pixels(&mut surface, &px, 0, 0, &mut budget).unwrap();
+    // Four full-width native tile columns would exceed the retained-byte limit
+    // if transparent tiles accumulated instead of being pruned per drawable.
+    let bytes = streamed_raster::solid_fixture(1, MAX_SIDE, &[0, 0, 0, 0], 4);
+    let imported = open(&bytes).unwrap();
+    assert_eq!(imported.document.layers.len(), 4);
+    for layer in &imported.document.layers {
+        let LayerContent::Raster(surface) = &layer.content else { panic!("native raster") };
+        assert_eq!(surface.tile_count(), 0, "blank source pixels retain no native tiles");
+        assert_eq!(pixel(layer, 0, MAX_SIDE as i32 - 1), [0.; 4]);
     }
-    assert_eq!(budget, MAX_PIXEL_BYTES);
 }

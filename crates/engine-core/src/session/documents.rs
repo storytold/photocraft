@@ -240,22 +240,41 @@ impl Session {
 
     /// Holds a decoded document back from opening (see `held_opens`); returns its id.
     pub(crate) fn hold_open(&mut self, doc: Document, source_read_only: bool) -> u64 {
+        self.hold_open_with_view(doc, source_read_only, None, None)
+    }
+
+    /// Retain the one-time view and known source origin until a prompt is answered.
+    pub(crate) fn hold_open_with_view(
+        &mut self,
+        document: Document,
+        source_read_only: bool,
+        initial_view: Option<photocraft_io::NativeInitialView>,
+        protected_import_source: Option<String>,
+    ) -> u64 {
         self.next_held_open = self.next_held_open.wrapping_add(1);
-        self.held_opens.push((self.next_held_open, doc, source_read_only));
+        self.held_opens.push((self.next_held_open, crate::jobs::HeldImportedDocument { document, source_read_only, initial_view, protected_import_source }));
         self.next_held_open
     }
 
     /// Whether a document held back for its prompt already has `name`.
     pub(crate) fn held_open_named(&self, name: &str) -> bool {
-        self.held_opens.iter().any(|(_, d, _)| d.name == name)
+        self.held_opens.iter().any(|(_, held)| held.document.name == name)
     }
 
     /// Takes a document a background open held back for the profile prompt: the document and
     /// whether its source is read-only. `None` when there is no such document (already taken).
+    /// This legacy projection drops view/origin hints; view-aware hosts use
+    /// [`Self::take_held_open_with_view`] instead.
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
-        let i = self.held_opens.iter().position(|(h, _, _)| *h == id)?;
-        let (_, doc, read_only) = self.held_opens.remove(i);
-        Some((doc, read_only))
+        self.take_held_open_with_view(id).map(|held| (held.document, held.source_read_only))
+    }
+
+    /// Consume a held payload once, preserving optional view and origin for admission.
+    /// Apply the host's answered color policy first, then pass its document, known origin,
+    /// read-only flag and view to [`Self::admit_import_with_initial_view`].
+    pub fn take_held_open_with_view(&mut self, id: u64) -> Option<crate::jobs::HeldImportedDocument> {
+        let i = self.held_opens.iter().position(|(held, _)| *held == id)?;
+        Some(self.held_opens.remove(i).1)
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {

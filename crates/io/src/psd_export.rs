@@ -13,6 +13,7 @@ use photocraft_raster::{Interrupt, Surface};
 use crate::adjust_map;
 use crate::blocks;
 use crate::pixels::{deinterleave, encode_be, psd_depth};
+use crate::psd_appearance::{self, Appearance};
 use crate::psd_import::REGENERATED;
 
 mod banded;
@@ -498,7 +499,7 @@ impl Ex<'_> {
     /// the layer's current parameters; otherwise it is regenerated.
     /// Sets the `TySh` of type layer `t` (of `l`) in its blocks `raw`, warning when the layer can
     /// only be written as pixels.
-    fn type_blocks(&mut self, l: &Layer, t: &photocraft_doc::TextLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>) {
+    fn type_blocks(&mut self, l: &Layer, t: &photocraft_doc::TextLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>, regenerated: &mut Vec<([u8; 4], Vec<u8>)>) {
         if matches!(t.shape, photocraft_doc::text::TextShape::Area { .. }) {
             self.warnings.push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));
         }
@@ -513,6 +514,13 @@ impl Ex<'_> {
         }
         if !raw.iter().any(|(k, _)| k == b"TySh") {
             self.warnings.push(format!("layer \"{}\": text layer written as pixels (no TySh data)", l.name));
+            return;
+        }
+        if t.cache_uses_raster_blending && t.cache.is_some() {
+            regenerated.push((psd_appearance::PSD_KEY, Appearance::Text.encode()));
+        }
+        if t.keep_layer_name {
+            regenerated.push((psd_appearance::FIXED_TEXT_NAME_KEY, psd_appearance::FIXED_TEXT_NAME_V1.to_vec()));
         }
     }
 
@@ -544,6 +552,8 @@ impl Ex<'_> {
         // Regenerate the private preview from its typed, source-bound value. Never retain a
         // stale block after source replacement or rasterization.
         raw.retain(|(key, _)| key != &crate::vector_preview::PSD_KEY);
+        // Regenerate only understood policy tags; future payloads remain inert and verbatim.
+        raw.retain(|(key, bytes)| !psd_appearance::known_tag(key, bytes));
         let mut regenerated: Vec<([u8; 4], Vec<u8>)> = Vec::new();
         // `keys` is in the importer's priority order (`psd_raw` came from the first key present),
         // not file order: Photoshop writes `PlLd` before `SoLd`, and overwriting the first match
@@ -576,8 +586,11 @@ impl Ex<'_> {
                 }
                 let (w, h) = (self.canvas.width(), self.canvas.height());
                 crate::vector_map::shape_blocks(sh, &mut raw, w, h, self.dpi);
+                if sh.cache_preserves_appearance && sh.cache.is_some() {
+                    regenerated.push((psd_appearance::PSD_KEY, Appearance::Shape.encode()));
+                }
             }
-            LayerContent::Text(t) => self.type_blocks(l, t, &mut raw),
+            LayerContent::Text(t) => self.type_blocks(l, t, &mut raw, &mut regenerated),
             LayerContent::Smart(sm) => {
                 if let Some(preview) = self.smart.vector_preview(sm) {
                     raw.push((crate::vector_preview::PSD_KEY, preview.block.clone()));

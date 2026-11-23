@@ -302,6 +302,15 @@ pub fn same_destination(a: impl AsRef<std::path::Path>, b: impl AsRef<std::path:
     false
 }
 
+/// Refuse overwriting a known import-only source, including aliases with a writable suffix.
+/// Hosts must check this before starting a save; it grants no file or resource access.
+pub fn check_import_destination(state: &crate::DocState, destination: &str) -> Result<()> {
+    if state.protected_import_source.as_deref().is_some_and(|source| same_file(source, destination)) {
+        return Err(EngineError::Other("the destination is the import-only source; choose a different native or export path".into()));
+    }
+    Ok(())
+}
+
 /// A path as command results report it: `/` between components, whatever the platform.
 ///
 /// `join` already builds with `/`, but a directory from the caller or from `std::path::absolute`

@@ -1,6 +1,7 @@
 //! The crate's integration tests, linked into one test binary.
 
 mod analysis;
+mod appearance_preservation;
 mod autosave;
 mod camera_raw_roundtrip;
 mod channel_mixer_cmyk;

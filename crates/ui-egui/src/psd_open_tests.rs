@@ -585,6 +585,8 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
         crate::open_prompt::Held {
             doc: photocraft_doc::Document::new("test", photocraft_geom::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
             read_only: false,
+            initial_view: None,
+            protected_import_source: None,
             damage_pending: false,
             name: "profile.psd".into(),
             path: None,
@@ -617,6 +619,8 @@ fn mixed_prompts_follow_arrival_order_fifo() {
         crate::open_prompt::Held {
             doc: photocraft_doc::Document::new("test", photocraft_geom::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
             read_only: false,
+            initial_view: None,
+            protected_import_source: None,
             damage_pending: true,
             name: "first_damage.psd".into(),
             path: None,
@@ -1023,4 +1027,81 @@ fn confirmed_damaged_smart_object_opens_are_admitted_as_smart_objects_with_disti
         assert_eq!(st.history.entries(), ["Open As Smart Object"]);
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A prepared import payload exercises the shell's confirmation boundary independently of
+/// formats that do not yet produce native view hints.
+#[test]
+fn confirmed_held_import_applies_view_and_protected_origin_once() {
+    for decision in ["accept", "decline damage", "cancel profile"] {
+        let mut app = app();
+        let before = app.session.documents().len();
+        let mut doc =
+            photocraft_doc::Document::new("held.xcf", photocraft_geom::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        doc.layers.extend(["source selection", "other"].map(|name| photocraft_doc::Layer::raster(name, photocraft_color::PixelFormat::RGBA8)));
+        let selected = doc.layers[0].id;
+        crate::open_prompt::arrive(
+            &mut app,
+            crate::open_prompt::Held {
+                doc,
+                read_only: true,
+                initial_view: Some(photocraft_io::NativeInitialView {
+                    selected_layers: vec![selected],
+                    active_layer: Some(selected),
+                    samplers: vec![[1., 2.]],
+                    ..Default::default()
+                }),
+                protected_import_source: Some("/imports/held.xcf".into()),
+                damage_pending: true,
+                name: "held.xcf".into(),
+                path: Some("/imports/held.xcf".into()),
+                warnings: vec!["retained source warning".into()],
+                bytes: None,
+                slot: None,
+                order: None,
+                question: Some(json!({"missing": true, "working": "sRGB"})),
+                policy_applied: false,
+                smart_object: false,
+            },
+        );
+        assert_eq!(app.session.documents().len(), before, "no admission before confirmation");
+        crate::open_prompt::answer_damage(&mut app, decision != "decline damage").unwrap();
+        if decision == "decline damage" {
+            assert_eq!(app.session.documents().len(), before);
+            assert!(app.held_opens.is_empty());
+            continue;
+        }
+        assert_eq!(app.session.documents().len(), before, "profile question still owns the payload");
+        crate::open_prompt::answer(&mut app, (decision == "accept").then_some("preserve")).unwrap();
+        assert!(app.held_opens.is_empty());
+        assert!(app.prompt_order.is_empty());
+        if decision == "cancel profile" {
+            assert_eq!(app.session.documents().len(), before);
+            continue;
+        }
+        assert_confirmed_import_state(&app, selected, before);
+        assert!(crate::open_prompt::answer(&mut app, Some("preserve")).is_err());
+        assert_eq!(app.session.documents().len(), before + 1, "a consumed answer cannot admit twice");
+    }
+}
+
+fn assert_confirmed_import_state(app: &PhotocraftApp, selected: photocraft_doc::LayerId, before: usize) {
+    assert_eq!(app.session.documents().len(), before + 1);
+    let state = app.session.active().unwrap();
+    assert_eq!(state.doc.name, "held.xcf");
+    assert_eq!(state.path, None, "the read-only source never becomes a Save destination");
+    assert!(state.source_read_only);
+    assert_eq!(state.protected_import_source.as_deref(), Some("/imports/held.xcf"));
+    assert!(photocraft_engine::file_cmds::check_import_destination(state, "/imports/held.xcf").is_err());
+    assert!(photocraft_engine::file_cmds::check_import_destination(state, "/copies/held.pcraft").is_ok());
+    assert_eq!(state.active_layer, Some(selected));
+    assert_eq!(state.selected_layers, vec![selected]);
+    assert_eq!(state.color_samplers, vec![[1., 2.]]);
+    assert_eq!(state.history.past_len(), 0);
+    assert!(!state.is_dirty());
+    let bytes = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
+    let native = photocraft_io::import("held.pcraft", &bytes).unwrap();
+    assert_eq!(native.document.layers, state.doc.layers);
+    assert!(!native.source_read_only);
+    assert!(native.initial_view.is_none(), "the view is a one-time admission hint");
 }

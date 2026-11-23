@@ -5,7 +5,8 @@
 //! This is view state on [`crate::channel_cmds::ChannelView::layer_mask`], like the Channels
 //! panel's eyes: no history step, a clean document stays clean, and it never changes a pixel.
 //! While a mask is shown, pixel commands without an explicit `target` edit that mask
-//! ([`crate::channel_cmds`]'s target injection), so painting in mask view paints the mask.
+//! ([`crate::channel_cmds`]'s target injection), so painting in a manually shown mask paints it.
+//! An imported preview can show the mask independently of the saved editing target.
 //! The view ends when its layer stops being the active layer or loses its mask ([`fix`]).
 //!
 //! With `"mask":"filter"` the same view shows a smart object's filter mask (⌥-click the filter
@@ -40,6 +41,9 @@ pub struct LayerMaskView {
     pub mode: MaskViewMode,
     /// The smart object's filter mask is shown, not its layer mask.
     pub filter: bool,
+    /// Imported preview leaves editing to the saved channel/layer target.
+    #[serde(skip)]
+    pub(crate) display_only: bool,
 }
 
 /// The mask a view of `l` shows: its layer mask, or (`filter`) its smart filter mask.
@@ -66,6 +70,11 @@ pub fn current(st: &DocState) -> Option<LayerMaskView> {
     let v = st.channel_view.layer_mask?;
     let live = st.active_layer == Some(v.layer) && st.doc.layer(v.layer).is_some_and(|l| viewed_mask(l, v.filter).is_some());
     live.then_some(v)
+}
+
+/// A live mask view that itself targets its mask for editing.
+pub fn editing(st: &DocState) -> Option<LayerMaskView> {
+    current(st).filter(|view| !view.display_only)
 }
 
 /// Drop a mask view that no longer applies (another layer became active, the layer or its mask
@@ -149,7 +158,7 @@ fn set_view(s: &mut Session, p: &Value) -> Result<Value> {
         s.select_layer(layer)?;
     }
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let next = want.map(|mode| LayerMaskView { layer, mode, filter });
+    let next = want.map(|mode| LayerMaskView { layer, mode, filter, display_only: false });
     // "off" for a layer whose mask isn't the one shown leaves the other view alone.
     let applies = next.is_some() || st.channel_view.layer_mask.is_some_and(|v| v.layer == layer && v.filter == filter);
     if applies && st.channel_view.layer_mask != next {

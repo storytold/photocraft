@@ -399,10 +399,10 @@ fn resample_doc_with_styles(doc: &mut Document, cmd: &str, nw: u32, nh: u32, fil
     if let Some(sel) = &doc.selection {
         doc.selection = Some(resize_surface_in_canvas(sel, sx, sy, Resample::Bilinear, canvas));
     }
-    // Vector geometry, guides and marks scale with the pixels; vectors re-render sharp.
+    // Geometry follows the pixels; native vectors re-render while imported shapes keep the requested resampling.
     crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
     doc.size = Size::new(nw, nh);
-    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
+    crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Resampled);
     let Ok(()) = crate::smart_cmds::restore_unrendered(doc, taken, |c| Ok::<_, Infallible>(resize_surface_in_canvas(c, sx, sy, filter, canvas)));
     Ok(())
 }

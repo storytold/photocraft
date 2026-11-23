@@ -885,3 +885,59 @@ fn step_name_transform_path_is_the_only_name_taken() {
     }
     assert_eq!(s.active().unwrap().history.past_len(), steps, "a refused name changes nothing");
 }
+
+#[test]
+fn whole_pixel_free_transform_keeps_imported_text_pixels_until_an_appearance_change() {
+    use photocraft_color::{ColorMode, SampleType};
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut doc = Document::new("Imported type", photocraft_geom::Size::new(12, 12), mode, depth);
+            let mut cache = Surface::new(doc.pixel_format());
+            let source = if mode == ColorMode::Grayscale { vec![0.5, 1.0] } else { vec![1.0, 0.0, 0.0, 1.0] };
+            cache.fill_rect(Rect::new(2, 2, 3, 3), &source);
+            let expected = cache.pixel(2, 2);
+            let authored = Affine::translate(0.25, 0.75);
+            let text = photocraft_doc::TextLayer {
+                text: "Native text".into(),
+                transform: authored,
+                cache: Some(cache),
+                cache_uses_raster_blending: true,
+                keep_layer_name: true,
+                ..Default::default()
+            };
+            let layer = Layer::new("Source name", LayerContent::Text(text));
+            let id = layer.id;
+            doc.layers.push(layer);
+            let mut session = crate::session();
+            session.add_document(doc, None);
+            session.execute("edit.transform", json!({"layer":id.0,"matrix":[1,0,0,1,-5,3],"interpolation":"bicubic"})).unwrap();
+            let LayerContent::Text(text) = &session.active().unwrap().doc.layer(id).unwrap().content else { panic!("editable text") };
+            assert_eq!(text.transform, Affine::translate(-5., 3.).mul(&authored));
+            assert!(text.cache_uses_raster_blending);
+            assert_eq!(text.cache.as_ref().unwrap().pixel(-3, 5), expected, "whole-pixel moves keep samples, including off-canvas pixels");
+            assert!(text.cache.as_ref().unwrap().pixel(2, 2).iter().all(|value| *value == 0.0));
+            session.execute("type.edit", json!({"layer":id.0,"text":"Changed type"})).unwrap();
+            let LayerContent::Text(text) = &session.active().unwrap().doc.layer(id).unwrap().content else { panic!("editable text") };
+            assert_eq!(text.text, "Changed type");
+            assert!(!text.cache_uses_raster_blending, "an actual typography render replaces the imported appearance policy");
+        }
+    }
+}
+
+#[test]
+fn fractional_or_scaled_type_transform_replaces_imported_raster_policy() {
+    for affine in [Affine::translate(0.5, 0.), Affine::scale(2.)] {
+        let mut doc = Document::new("Imported type", photocraft_geom::Size::new(12, 12), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let mut cache = Surface::new(doc.pixel_format());
+        cache.fill_rect(Rect::new(2, 2, 3, 3), &[1., 0., 0., 1.]);
+        let layer = Layer::new(
+            "Type",
+            LayerContent::Text(photocraft_doc::TextLayer { text: "Text".into(), cache: Some(cache), cache_uses_raster_blending: true, ..Default::default() }),
+        );
+        let id = layer.id;
+        doc.layers.push(layer);
+        transform_by(&mut doc, id, affine, Interp::Nearest).unwrap();
+        let LayerContent::Text(text) = &doc.layer(id).unwrap().content else { panic!("editable type") };
+        assert!(!text.cache_uses_raster_blending, "non-whole-pixel appearance changes must rerender");
+    }
+}

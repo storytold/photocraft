@@ -90,6 +90,7 @@ fn live_kind(l: &LiveShape) -> &'static str {
 /// Re-renders a shape layer's cache for `doc` (canvas-clipped, document pixel format).
 pub fn refresh_shape(doc: &Document, sh: &mut ShapeLayer) {
     sh.cache = Some(vector::render_shape(sh, doc.pixel_format(), doc.bounds()));
+    sh.cache_preserves_appearance = false;
 }
 
 /// A staged stroke edit rendered with the same validation and cache refresh as `shape.edit`.

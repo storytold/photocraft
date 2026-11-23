@@ -29,6 +29,7 @@ mod paths;
 mod place_steps;
 mod processing;
 mod raw_open;
+mod sample_order;
 mod save;
 
 pub use batch_naming::plan as plan_batch_names;
@@ -48,8 +49,8 @@ use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
-pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
+pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_import_options, open_bytes_as_with_options, place_bytes, raw_defaults};
+pub(crate) use open::{PlaceInput, apply_place, import, import_result_with, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub(crate) use open::{batch_open_notice, batch_open_params, remember_batch_open};
 pub use open_as_smart_object::admit_as_smart_object;
@@ -60,12 +61,13 @@ pub(crate) use paths::openable_name;
 pub use paths::sanitize;
 pub use paths::stem;
 pub use paths::{
-    extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
-    template_name, untitled_name,
+    check_import_destination, extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination,
+    same_file, saves_in_place, template_name, untitled_name,
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, read_file, read_file_limited, write_file};
 pub(crate) use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
+pub use sample_order::{historical_xcf_sample_order, import_options_from_params};
 pub use save::SaveOpts;
 pub(crate) use save::encode;
 use save::save_a_copy;
@@ -316,7 +318,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"format":str? (alias for as),"approveHighMemory":bool=false (explicitly approve high memory usage),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for unmarked multibyte XCF4–11; never inferred)}"##,
             native,
             open_as
         ),
@@ -468,6 +470,12 @@ mod place_selection_centre_tests;
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/source_protection_tests.rs"]
+mod source_protection_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) use source_protection_tests::import_only_bytes as import_only_source_bytes_for_test;
 
 #[cfg(test)]
 #[path = "file_cmds/batch_log_format_tests.rs"]
