@@ -410,6 +410,8 @@ mod lookup_tests {
 }
 
 #[cfg(test)]
+mod curves_channel_composite_tests;
+#[cfg(test)]
 mod gradient_map_grayscale_tests;
 #[cfg(test)]
 mod tone_tests;
