@@ -4,6 +4,7 @@
 //! tool's are in `vertical_mask_align_buttons_tests` (#12088).
 
 use crate::app::framework::BuildApp;
+use photocraft_engine::color_cmds::ColorExt;
 
 use egui::accesskit::Toggled;
 use egui_kittest::Harness;

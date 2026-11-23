@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
+- Rust: `rust-toolchain.toml` names the release CI builds with, and rustup installs it with the web target on first use (`rust-version` in Cargo.toml is the oldest release the sources support, 1.95).
 - macOS, Windows or Linux. On Linux, install the windowing, GL and GTK development packages:
   - Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`
   - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
@@ -1067,12 +1067,18 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
   turns it on).
 - With the feature on, a missing corpus is a failure ("run `cargo xtask corpus --all`"), never a
   silent skip, and every floor is enforced.
+- The tests that walk `corpus/psd`, `corpus/psd-tools` and `corpus/photoshop` take each
+  directory's fixed sample (`photocraft-testkit`'s `corpus` module: every colour mode and depth,
+  PSD and PSB, every tagged block key outside the large files, each oracle kind, at small canvas
+  sizes), so each test stays near a second. `PHOTOCRAFT_FULL_SWEEP=1` takes every file, as it
+  takes every case of the testkit sweeps; the Affinity test's sampled rows are marked in its table.
+  A sample file a pin removes fails the test: pick its replacement for the sample.
 - If you touch psd, io, codecs, compose, gpu, text or format, run `cargo xtask test-corpus` before
-  you finish.
-- The CI `corpus` job runs `cargo xtask corpus --all` and then `cargo xtask test-corpus` on every PR
-  and on main. `corpus/` is cached with `actions/cache`, keyed on the hash of `corpus_pins.rs` and
-  the manifests. A download happens only when a pin changes; otherwise the cache restores in seconds
-  and is re-verified (sha256) before the tests run. Fork PRs read the base branch's cache.
+  you finish, and `PHOTOCRAFT_FULL_SWEEP=1 cargo xtask test-corpus` when the change could reach
+  files outside the samples.
+- CI: the Linux gate builds the corpus tests in (`PHOTOCRAFT_CORPUS_TESTS=1`) and each test shard
+  runs `cargo xtask corpus --all` first (pinned, sha256-verified, about 20 MB). Pull requests and
+  main run the samples; the nightly run sets `PHOTOCRAFT_FULL_SWEEP=1` and runs every file.
 
 **Our own corpus: [photocraft-corpus](https://github.com/storytold/photocraft-corpus).**
 
@@ -1136,7 +1142,7 @@ the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
 
 These checks use PhotoCraft's own importer and inspector; they do **not** prove that
 Photoshop can open the output or interprets it correctly. The report marks those
-stages `not_run`. The ordinary CI corpus job does not yet run this recipe command or
+stages `not_run`. The ordinary CI gate does not yet run this recipe command or
 upload its artifacts; that integration and the Photoshop judge are separate work.
 
 ## Rendering fidelity (PSD oracle)

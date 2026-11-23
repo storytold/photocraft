@@ -6,6 +6,7 @@ use craft::ui::menu::PanelRow;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
 use photocraft_engine::actions_cmds::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -84,7 +85,11 @@ fn the_panel_menu_offers_the_hosts_rows_with_the_apps_state() {
     assert!(enabled(&app, C::Save));
 
     // Insert Path: on only when the selected path is a saved path.
-    app.session.actions.list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))]))
+        .unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     app.ui.selected_path = Some("Curve".into());
     assert!(!enabled(&app, C::InsertPath), "no path of that name");
@@ -116,7 +121,7 @@ fn the_panel_menu_offers_the_hosts_rows_with_the_apps_state() {
     // Play with a selected set plays the set through the one event mapping.
     let mut member = Action::new("Member", vec![ActionStep::new("layer.new.layer", json!({"name": "FromSet"}))]);
     member.set = Some("Group".into());
-    app.session.actions.list.push(member).unwrap();
+    app.session.actions_mut().list.push(member).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Set("Group".into()));
     app.run("actions.setPlayback", json!({"performance": "accelerated"})).unwrap();
     fire(&mut app, C::Play);
@@ -130,7 +135,11 @@ fn the_panel_menu_offers_the_hosts_rows_with_the_apps_state() {
 #[test]
 fn load_actions_row_greys_while_a_recording_or_playback_holds_the_library() {
     let mut app = app();
-    app.session.actions.list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))]))
+        .unwrap();
     // Idle: every library row is on.
     assert!(enabled(&app, C::Load), "no recording and no playback: the row is on");
     assert!(enabled(&app, C::Save), "an action to save");
@@ -167,14 +176,18 @@ fn new_set_names_the_first_free_set_and_new_action_records_into_it() {
     assert!(!app.dialog_open());
     fire(&mut app, C::NewAction);
     app.run("actions.stop", json!({})).unwrap();
-    let recorded = app.session.actions.list.actions().last().expect("New Action made an action");
+    let recorded = app.session.actions().list.actions().last().expect("New Action made an action");
     assert_eq!(recorded.set.as_deref(), Some("Web"));
 }
 
 #[test]
 fn insert_stop_adds_a_stop_after_the_selected_step() {
     let mut app = app();
-    app.session.actions.list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))]))
+        .unwrap();
     fire(&mut app, C::InsertStop);
     assert!(!app.dialog_open(), "Insert Stop… needs a selected action");
     app.ui.actions.panel.selected = Some(ActionSelection::Step(0, 0));
@@ -183,7 +196,7 @@ fn insert_stop_adds_a_stop_after_the_selected_step() {
     set(&mut app, id, "message", json!("Check the mask"));
     set(&mut app, id, "allowContinue", json!(true));
     ok(&mut app, id);
-    let action = app.session.actions.list.action(0).unwrap();
+    let action = app.session.actions().list.action(0).unwrap();
     assert_eq!(action.steps[1], ActionStep::new(photocraft_engine::atn_cmds::STOP_MESSAGE, json!({"message": "Check the mask", "allowContinue": true})));
     assert!(action.dialogs.contains(&1), "an inserted Stop has its dialog toggle on");
     assert_eq!(app.ui.actions.panel.selected, Some(ActionSelection::Step(0, 1)));
@@ -194,7 +207,7 @@ fn insert_stop_adds_a_stop_after_the_selected_step() {
     let id = top_dialog(&app);
     set(&mut app, id, "message", json!("Last"));
     ok(&mut app, id);
-    let steps = &app.session.actions.list.action(0).unwrap().steps;
+    let steps = &app.session.actions().list.action(0).unwrap().steps;
     assert_eq!(steps.len(), 4);
     assert_eq!(steps[3].params["message"], "Last");
     assert_eq!(app.ui.actions.panel.selected, Some(ActionSelection::Step(0, 3)));
@@ -203,5 +216,5 @@ fn insert_stop_adds_a_stop_after_the_selected_step() {
     let id = top_dialog(&app);
     let app_ctx = app.ctx().clone();
     crate::dialogs::cancel(&mut app, &app_ctx, id).unwrap();
-    assert_eq!(app.session.actions.list.action(0).unwrap().steps.len(), 4);
+    assert_eq!(app.session.actions().list.action(0).unwrap().steps.len(), 4);
 }
