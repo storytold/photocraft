@@ -1726,7 +1726,7 @@ fn bom_utf16_plain_and_gzip_follow_public_svg_import_and_strict_bounded_routes()
     use std::io::Write;
     let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="3"><desc>創作 🌿</desc><rect width="2" height="3" fill="#00ff00"/></svg>"##;
     let reference = import_svg_bounded_images_strict("Reference.svg", svg.as_bytes(), 1000).unwrap();
-    let expected = photocraft_compose::flatten(&reference.document).px;
+    let expected = photocraft_compose::flatten(&reference.document);
     for little in [true, false] {
         let plain = utf16_svg(svg, little);
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -1739,7 +1739,7 @@ fn bom_utf16_plain_and_gzip_follow_public_svg_import_and_strict_bounded_routes()
             let strict = import_svg_bounded_images_strict(name, bytes, 1000).unwrap();
             for imported in [ordinary, strict] {
                 assert_eq!(imported.document.size, Size::new(2, 3));
-                assert_eq!(photocraft_compose::flatten(&imported.document).px, expected);
+                assert_eq!(photocraft_compose::flatten(&imported.document).px, expected.px);
             }
         }
     }
