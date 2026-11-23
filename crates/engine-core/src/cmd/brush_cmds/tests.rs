@@ -1151,9 +1151,10 @@ fn load_and_clean_brush_refuse_bad_params_and_keep_the_paint() {
         assert!(s.execute("brush.mixer.load", bad.clone()).is_err(), "{bad}");
         assert_eq!(s.tools.mixer, before, "{bad}");
     }
-    // Clean Brush takes no params, so anything extra is ignored, without a document too.
+    // Clean Brush takes no params: anything extra is refused (#7596), without a document too.
     let mut empty = crate::session();
-    empty.execute("brush.mixer.clean", json!({"color": [], "junk": {"x": null}})).unwrap();
+    assert!(empty.execute("brush.mixer.clean", json!({"color": [], "junk": {"x": null}})).is_err());
+    empty.execute("brush.mixer.clean", json!({})).unwrap();
     empty.execute("brush.mixer.load", json!({"color": null})).unwrap();
     assert_eq!(empty.tools.mixer.reservoir, Some(empty.tools.foreground));
 }
@@ -1614,4 +1615,36 @@ fn mixer_load_fills_the_reservoir_from_the_canvas_and_keeps_the_foreground() {
     assert_eq!(s.tools.mixer, mixer);
     assert_eq!(s.tools.foreground, foreground);
     assert_eq!(s.active().unwrap().revision, revision);
+}
+
+/// Picking a preset whose stored tip file can no longer be read fails with the tip's name and
+/// leaves the current brush as it was.
+#[test]
+fn picking_a_preset_whose_tip_file_is_broken_keeps_the_current_brush() {
+    use crate::preset_store::{MemBackend, PresetBackend, TIP_EXT, TIPS_DIR, open};
+    let store = MemBackend::default();
+    let mut s = crate::session();
+    s.attach_preset_store(open(Box::new(store.clone())));
+    // A 16-bit tip: the store keeps an 8-bit preview beside it, so the preset still opens when the
+    // full tip's file is broken, and the tip fails only when it is loaded.
+    let data = (0..81u32).map(|i| (i.wrapping_mul(2654435761).wrapping_add(2) >> 16) as u16).collect();
+    let tip = GrayTile { width: 9, height: 9, data };
+    let brush = BrushSettings { size: 42.0, tip: TipShape::Sampled(tip).into(), ..Default::default() };
+    let preset = BrushPreset { name: "Lost".into(), brush, builtin: false, group: "Broken tip".into(), folder: Vec::new(), captures: Default::default() };
+    std::sync::Arc::make_mut(&mut *s.tools.presets).push(preset);
+    s.brush_presets_changed();
+    s.sync_preset_store();
+    // The sync keeps a preview in the preset and the full tip in its own file.
+    let TipShape::Stored(stored) = &*photocraft_paint::presets::find(&s.tools.presets, "Lost").unwrap().brush.tip else { panic!("the tip is stored") };
+    let key = stored.key.clone();
+    let tip_file = format!("{TIPS_DIR}/{key}.{TIP_EXT}");
+    store.write(&tip_file, b"PCTIP1\x10garbage").unwrap();
+
+    // A new session lists the preset; its tip is read only when the preset is picked (#1843).
+    let mut t = crate::session();
+    t.attach_preset_store(open(Box::new(store)));
+    let before = (*t.tools.brush).clone();
+    let err = t.execute("tools.setBrush", json!({"preset": "Lost"})).unwrap_err().to_string();
+    assert!(err.contains(&key), "{err}");
+    assert_eq!(*t.tools.brush, before, "a failed pick leaves the brush alone");
 }

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 const SET_SCALE: &str = "image.analysis.setMeasurementScale";
 const SOURCE: &str = "_atnMeasurementScaleDescriptor";
@@ -59,7 +60,7 @@ fn a_recorded_scale_step_loads_and_saves_back_unchanged() {
         let d = recorded(t);
         let (mut s, r) = load(vec![set_item(d.clone())]);
         assert_eq!(r["unsupported"], json!([]), "{r}");
-        let ActionStep { command: id, params: p } = &s.actions.list.actions()[0].steps[0];
+        let ActionStep { command: id, params: p } = &s.actions().list.actions()[0].steps[0];
         assert_eq!(id, SET_SCALE);
         assert_eq!(
             (&p["preset"], p["pixelLength"].as_f64(), p["logicalLength"].as_f64(), &p["units"]),
@@ -96,7 +97,7 @@ fn a_native_scale_saves_the_measured_form() {
     let d = export_item(SET_SCALE, &p, "S").and_then(|item| item.descriptor).unwrap();
     assert_eq!(d, recorded(scale("measurementScale", 120, 3.0, "mm")));
     let (s, _) = load(vec![set_item(d)]);
-    assert_eq!(s.actions.list.actions()[0].steps[0].params, p);
+    assert_eq!(s.actions().list.actions()[0].steps[0].params, p);
     // `logicalUnits` is the command's other spelling of `units`, and the preset defaults to custom.
     let other = json!({"pixelLength": 120, "logicalLength": 3, "logicalUnits": "mm"});
     assert_eq!(export_item(SET_SCALE, &other, "S").and_then(|item| item.descriptor), Some(recorded(scale("measurementScale", 120, 3.0, "mm"))));
@@ -156,7 +157,7 @@ fn other_forms_keep_the_photoshop_step() {
     for d in forms {
         let (mut s, r) = load(vec![set_item(d.clone())]);
         assert_eq!(r["unsupported"].as_array().map(Vec::len), Some(1), "{d:?}");
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{d:?}");
         assert_eq!(saved(&mut s)[0].descriptor.as_ref().map(Descriptor::to_bytes), Some(d.to_bytes()));
     }
 }
@@ -166,7 +167,7 @@ fn other_forms_keep_the_photoshop_step() {
 #[test]
 fn changed_or_damaged_steps_save_their_settings() {
     let (s, _) = load(vec![set_item(recorded(scale("null", 100, 25.4, "inches")))]);
-    let mut p = s.actions.list.actions()[0].steps[0].params.clone();
+    let mut p = s.actions().list.actions()[0].steps[0].params.clone();
     assert!(p.get(SOURCE).is_some(), "{p}");
     p["units"] = json!("cm");
     assert_eq!(export_item(SET_SCALE, &p, "S").and_then(|item| item.descriptor), Some(recorded(scale("measurementScale", 100, 25.4, "cm"))));

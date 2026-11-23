@@ -5,6 +5,8 @@
 //! Photoshop's "Foreground to Background") and transparency stops, both at `0..=1`. Midpoints are
 //! always 50 %. Built-in colours are our own.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_doc::{Color, Fill, Layer, LayerContent};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -416,32 +418,32 @@ fn tool_preset(s: &Session, p: &Value) -> Result<Option<GradientPreset>> {
         return Ok(None);
     }
     Ok(Some(if let Some(name) = str_param(p, "gradient") {
-        let (gi, ii) = find(&s.presets.gradients, name, None).ok_or_else(|| bad(CMD, format!("no gradient preset \"{name}\"")))?;
-        s.presets.gradients[gi].items[ii].clone().with_transparency(p, CMD)?
+        let (gi, ii) = find(&s.presets().gradients, name, None).ok_or_else(|| bad(CMD, format!("no gradient preset \"{name}\"")))?;
+        s.presets().gradients[gi].items[ii].clone().with_transparency(p, CMD)?
     } else if p.get("stops").is_some() {
         GradientPreset::from_params("Custom", p, CMD)?
     } else {
-        s.presets.gradient.clone().with_transparency(p, CMD)?
+        s.presets().gradient.clone().with_transparency(p, CMD)?
     }))
 }
 
 /// The preset named by `"preset"` (else the current gradient), or explicit `"stops"`.
 fn preset_param(s: &Session, p: &Value, cmd: &str) -> Result<GradientPreset> {
     if let Some(name) = str_param(p, "preset") {
-        let (gi, ii) = find(&s.presets.gradients, name, str_param(p, "group"))
+        let (gi, ii) = find(&s.presets().gradients, name, str_param(p, "group"))
             .ok_or_else(|| bad(cmd, format!("no gradient preset \"{name}\" (see gradient.presets.list)")))?;
-        return Ok(s.presets.gradients[gi].items[ii].clone());
+        return Ok(s.presets().gradients[gi].items[ii].clone());
     }
     if p.get("stops").is_some() {
         return GradientPreset::from_params(str_param(p, "name").unwrap_or("Custom"), p, cmd);
     }
-    Ok(s.presets.gradient.clone())
+    Ok(s.presets().gradient.clone())
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let groups: Vec<Value> =
-        s.presets.gradients.iter().map(|g| json!({"name": g.name, "presets": g.items.iter().map(GradientPreset::to_json).collect::<Vec<_>>()})).collect();
-    Ok(json!({"groups": groups, "current": s.presets.gradient.to_json()}))
+        s.presets().gradients.iter().map(|g| json!({"name": g.name, "presets": g.items.iter().map(GradientPreset::to_json).collect::<Vec<_>>()})).collect();
+    Ok(json!({"groups": groups, "current": s.presets().gradient.to_json()}))
 }
 
 fn active_gradient_fill(s: &Session) -> Option<photocraft_doc::LayerId> {
@@ -467,8 +469,8 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad(CMD_SELECT, "the selected shape layer is locked"));
         }
     }
-    s.presets.gradient = g.clone();
-    s.presets_changed();
+    s.presets_mut().gradient = g.clone();
+    presets_changed(s);
     let mut out = json!({"current": g.to_json()});
     // Clicking a preset with a shape layer selected fills the shape with it (Photoshop, #5568);
     // a gradient fill keeps its angle, style, scale and reverse.
@@ -642,10 +644,10 @@ pub fn apply_preset_stop(g: &GradientPreset, p: &Value, fg: [f32; 4], bg: [f32; 
 }
 
 fn stop(s: &mut Session, p: &Value) -> Result<Value> {
-    let g = apply_preset_stop(&s.presets.gradient, p, s.tools.foreground, s.tools.background, STOP)?;
-    s.presets.gradient = g;
-    s.presets_changed();
-    Ok(json!({"current": s.presets.gradient.to_json()}))
+    let g = apply_preset_stop(&s.presets().gradient, p, s.tools.foreground, s.tools.background, STOP)?;
+    s.presets_mut().gradient = g;
+    presets_changed(s);
+    Ok(json!({"current": s.presets().gradient.to_json()}))
 }
 
 fn apply(s: &mut Session, p: &Value) -> Result<Value> {
@@ -668,19 +670,19 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "gradient.presets.new";
-    let mut g = if p.get("stops").is_some() { GradientPreset::from_params("", p, CMD)? } else { s.presets.gradient.clone() };
-    g.name = unique_name(&s.presets.gradients, str_param(p, "name").unwrap_or("Custom"));
-    let gi = group_index(&mut s.presets.gradients, str_param(p, "group"));
-    s.presets.gradients[gi].items.push(g.clone());
-    let group = s.presets.gradients[gi].name.clone();
-    s.presets_changed();
+    let mut g = if p.get("stops").is_some() { GradientPreset::from_params("", p, CMD)? } else { s.presets().gradient.clone() };
+    g.name = unique_name(&s.presets().gradients, str_param(p, "name").unwrap_or("Custom"));
+    let gi = group_index(&mut s.presets_mut().gradients, str_param(p, "group"));
+    s.presets_mut().gradients[gi].items.push(g.clone());
+    let group = s.presets().gradients[gi].name.clone();
+    presets_changed(s);
     Ok(json!({"name": g.name, "group": group}))
 }
 
 fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let action = req_str(p, "action", "gradient.presets.edit")?.to_string();
-    let r = edit_groups(&mut s.presets.gradients, &action, p, "gradient.presets.edit")?;
-    s.presets_changed();
+    let r = edit_groups(&mut s.presets_mut().gradients, &action, p, "gradient.presets.edit")?;
+    presets_changed(s);
     Ok(r)
 }
 
@@ -689,14 +691,14 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let mut b = builtin();
     if append {
         for g in &mut b {
-            g.name = unique_group(&s.presets.gradients, &g.name);
+            g.name = unique_group(&s.presets().gradients, &g.name);
         }
-        s.presets.gradients.extend(b);
+        s.presets_mut().gradients.extend(b);
     } else {
-        s.presets.gradients = b;
+        s.presets_mut().gradients = b;
     }
-    s.presets_changed();
-    Ok(json!({"groups": s.presets.gradients.len()}))
+    presets_changed(s);
+    Ok(json!({"groups": s.presets().gradients.len()}))
 }
 
 pub(crate) fn unique_group<T>(groups: &[Group<T>], base: &str) -> String {
@@ -735,7 +737,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Gradient Stop",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":"add|move|delete|color|opacity|set","kind":"color|opacity"="color","index":stop number,"location":0..1,"color":"#rrggbb"|"foreground"|"background" (add: default the colour there),"opacity":0..100; set: "stops":[[t 0..1,"#rrggbb"|"foreground"|"background"],…] (2..1024),"transparency":[[t,opacity 0..100],…]? replaces every stop} → {"current"}. Edits the Gradient tool's current gradient (no layer, midpoints stay centred)."##,
+            params: leak(format!(
+                r##"{{"action":"add|move|delete|color|opacity|set","kind":"color|opacity"="color","index":stop number,"location":0..1,"color":"#rrggbb"|"foreground"|"background" (add: default the colour there),"opacity":0..100,{stops}}} → {{"current"}}. Edits the Gradient tool's current gradient (no layer, midpoints stay centred; set replaces every stop, 2..=1024 colour stops)."##
+            )),
             enabled: always,
             run: stop,
             journal: true,

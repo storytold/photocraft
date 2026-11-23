@@ -727,7 +727,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.pixelate.colorHalftone",
             "Color Halftone…",
             ["Filter", "Pixelate"],
-            r##"{"maxRadius":4..127=8,"channel1":-360..360=108,"channel2":-360..360=162,"channel3":-360..360=90,"channel4":-360..360=45}"##
+            r##"{"maxRadius":4..127=8,"channel1":-10000..10000=108,"channel2":-10000..10000=162,"channel3":-10000..10000=90,"channel4":-10000..10000=45}"##
         ),
         cmd!("filter.pixelate.crystallize", "Crystallize…", ["Filter", "Pixelate"], r##"{"cellSize":3..300=10,"seed":u32=0}"##),
         cmd!("filter.pixelate.facet", "Facet", ["Filter", "Pixelate"], "{}"),
@@ -782,7 +782,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.render.fibers",
             "Fibers…",
             ["Filter", "Render"],
-            r##"{"variance":1..64=16,"strength":1..64=4,"seed":u32=0,"foreground":json,"background":json}"##
+            r##"{"variance":1..64=16,"strength":1..64=4,"seed":u32|i32=0 (a negative seed is its 32-bit pattern, as actions record it),"foreground":json,"background":json}"##
         ),
         cmd!(
             "filter.render.lensFlare",
@@ -794,7 +794,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.render.lightingEffects",
             "Lighting Effects…",
             ["Filter", "Render"],
-            r##"{"lightType":"spot|point|infinite","intensity":-100..100=75,"lightX":0..1=0.25,"lightY":0..1=0.2,"lightZ":0..2=0.6,"targetX":0..1=0.5,"targetY":0..1=0.55,"cone":1..89=45,"hotspot":0..100=50,"angle":-180..180=135,"elevation":0..90=45,"gloss":-100..100=0,"metallic":-100..100=0,"exposure":-100..100=0,"ambience":-100..100=8,"texture":"none|red|green|blue|alpha|luminance","height":0..100=50,"whiteIsHigh":bool=true,"lights":json}"##
+            r##"{"lightType":"spot|point|infinite","intensity":-100..100=75,"lightX":0..1=0.25,"lightY":0..1=0.2,"lightZ":0..2=0.6,"targetX":0..1=0.5,"targetY":0..1=0.55,"cone":1..89=45,"hotspot":0..100=50,"angle":-180..180=135,"elevation":0..90=45,"gloss":-100..100=0,"metallic":-100..100=0,"exposure":-100..100=0,"ambience":-100..100=8,"texture":"none|red|green|blue|alpha|luminance","height":0..100=50,"whiteIsHigh":bool=true,"radius":0.01..10=0.8,"color":color,"lights":json}"##
         ),
         CommandSpec {
             id: "filter.render.relight",

@@ -22,10 +22,10 @@ slot read through `preset_store::PresetStoreExt` (`s.preset_store()`, `s.preset_
 Running either mode twice gives the same result. What it cannot do is printed at the end of
 every run.
 """
-import argparse, os, re, subprocess, sys
+import argparse, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rust_source import git, git_show, mask  # noqa: E402
+from rust_source import compiled_files, edited_definitions, git  # noqa: E402
 
 FIELDS = ["record_tools", "recording", "take", "playing", "playback_stack", "playback_steps", "budget_shared", "batch_depth", "script_depth", "script_steps"]
 RENAMED = {"recording": "target"}
@@ -108,77 +108,16 @@ def rewrite(path):
     return False
 
 
-def rust_files(roots):
-    for root in roots:
-        for d, _, files in os.walk(root):
-            if "/target" in d or "/vendor" in d:
-                continue
-            for name in files:
-                if name.endswith(".rs"):
-                    yield os.path.join(d, name)
-
-
 def split():
-    n = sum(rewrite(p) for p in rust_files(["crates", "apps"]))
+    n = sum(rewrite(p) for p in sorted(compiled_files(["crates", "apps"])))
     print(f"session_state split: {n} files rewritten")
 
 
-HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? ")
-
-
-def definition_lines(src, item):
-    """1-based (first, last) lines of `item` in `src`, its doc comments and attributes included."""
-    masked = mask(src)
-    kind, name = item.split()
-    m = re.search(rf"^[ \t]*(?:pub(?:\([a-z:]+\))?\s+)?{kind}\s+{re.escape(name)}\b", masked, re.M)
-    if not m:
-        return None
-    i, depth = m.end(), 0
-    while i < len(masked):
-        c = masked[i]
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        elif c == ";" and depth == 0:
-            break
-        i += 1
-    lines = src.splitlines()
-    first = src.count("\n", 0, m.start()) + 1
-    while first > 1 and lines[first - 2].lstrip().startswith(("///", "#[")):
-        first -= 1
-    return first, src.count("\n", 0, i) + 1
-
-
 def moved_edits(base, head):
-    diff = subprocess.run(["git", "diff", "-U0", base, head, "--", "crates/engine/src", SRC], capture_output=True, text=True, check=True).stdout
-    current = None
-    hunks, ranges, paths = {}, {}, {}
-    for line in diff.splitlines():
-        if line.startswith("--- "):
-            path = line[4:].removeprefix("a/")
-            current = path.removeprefix("crates/engine/src/").removeprefix(SRC) if path != "/dev/null" else None
-            if current:
-                paths[current] = path
-        elif line.startswith("+++ "):
-            continue
-        elif current and (h := HUNK.match(line)):
-            start, count = int(h[1]), int(h[2] or 1)
-            # A pure insertion (count 0) sits after `start`.
-            ranges.setdefault(current, []).append((start, start + max(count, 1) - 1) if count else (start, start + 1))
-        elif line.startswith(("+", "-")) and current:
-            hunks.setdefault(current, []).append(line[1:])
-    for old_file, item, new_file in MOVED:
-        name = item.split()[1]
-        named = any(re.search(rf"\b{re.escape(name)}\b", line) for line in hunks.get(old_file, []))
-        inside = False
-        if old_file in ranges and (src := git_show(base, paths[old_file])) is not None:
-            span = definition_lines(src, item)
-            inside = span is not None and any(a <= span[1] and b >= span[0] for a, b in ranges[old_file])
-        if named or inside:
-            REPORT.append(f"NOT DONE: the branch edits {old_file} near `{item}`; that definition is in {SRC}{new_file} now")
+    new_files = {(old_file, item): new_file for old_file, item, new_file in MOVED}
+    for old_file, item in edited_definitions(base, head, list(new_files), ["crates/engine/src/", SRC]):
+        new_file = new_files[(old_file, item)]
+        REPORT.append(f"NOT DONE: the branch edits {old_file} near `{item}`; that definition is in {SRC}{new_file} now")
 
 
 def branch(base, head):

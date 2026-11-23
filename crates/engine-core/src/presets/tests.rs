@@ -1,3 +1,5 @@
+use crate::prefs::SavedPrefsExt;
+use crate::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -165,7 +167,7 @@ fn preset_stop_edits_the_current_gradient() {
 fn the_tool_gradient_takes_a_whole_set_of_stops() {
     let mut s = session(8);
     let revision = s.active().unwrap().revision;
-    let name = s.presets.gradient.name.clone();
+    let name = s.presets().gradient.name.clone();
     let v = s
         .execute(
             "gradient.presets.stop",
@@ -393,7 +395,7 @@ fn presets_persist_through_preferences_json() {
     // Older preference files without presets keep the defaults.
     let mut u = crate::session();
     u.load_prefs_json("{}").unwrap();
-    assert_eq!(names(&mut u, "gradient.presets.list", "presets").len(), crate::session().presets.gradients.iter().map(|g| g.items.len()).sum::<usize>());
+    assert_eq!(names(&mut u, "gradient.presets.list", "presets").len(), crate::session().presets().gradients.iter().map(|g| g.items.len()).sum::<usize>());
 }
 
 // ------------------------------------------------------------------ patterns
@@ -439,20 +441,20 @@ fn pattern_groups_select_apply_and_sync() {
 fn pattern_sync_writes_only_when_the_groups_change() {
     let mut s = session(8);
     super::patterns::sync(&mut s);
-    let settled = s.presets.revision();
+    let settled = s.presets().revision();
     super::patterns::sync(&mut s);
-    assert_eq!(s.presets.revision(), settled, "groups in line with the library are not written");
+    assert_eq!(s.presets().revision(), settled, "groups in line with the library are not written");
     let mut extra = s.patterns.items[0].clone();
     extra.id = "sync-test-extra".into();
     s.patterns.items.push(extra);
     super::patterns::sync(&mut s);
-    assert_ne!(s.presets.revision(), settled, "a new library pattern joins a group");
-    assert!(s.presets.pattern_groups.iter().any(|g| g.items.iter().any(|id| id == "sync-test-extra")));
-    let joined = s.presets.revision();
+    assert_ne!(s.presets().revision(), settled, "a new library pattern joins a group");
+    assert!(s.presets().pattern_groups.iter().any(|g| g.items.iter().any(|id| id == "sync-test-extra")));
+    let joined = s.presets().revision();
     s.patterns.items.retain(|p| p.id != "sync-test-extra");
     super::patterns::sync(&mut s);
-    assert_ne!(s.presets.revision(), joined, "a deleted pattern leaves its group");
-    assert!(!s.presets.pattern_groups.iter().any(|g| g.items.iter().any(|id| id == "sync-test-extra")));
+    assert_ne!(s.presets().revision(), joined, "a deleted pattern leaves its group");
+    assert!(!s.presets().pattern_groups.iter().any(|g| g.items.iter().any(|id| id == "sync-test-extra")));
 }
 
 #[test]
@@ -523,7 +525,7 @@ fn styles_apply_to_selected_layers_and_new_from_layer() {
     assert_eq!(fx(&s, b), 4);
     assert!(s.execute("style.presets.apply", json!({"preset": "nope"})).is_err());
     // Thumbnails render the effect around the swatch.
-    let st = s.presets.styles[0].items.iter().find(|x| x.name == "Outer Glow").unwrap().clone();
+    let st = s.presets().styles[0].items.iter().find(|x| x.name == "Outer Glow").unwrap().clone();
     let px = super::styles::thumbnail(&s, &st, 48);
     assert_eq!(px.len(), 48 * 48 * 4);
     assert!(px[(4 * 48 + 24) * 4 + 3] == 0 || px[(7 * 48 + 24) * 4 + 3] > 0, "glow reaches outside the square");
@@ -554,7 +556,7 @@ fn styles_with_pattern_overlay_copy_the_pattern() {
     let mut s = session(8);
     s.execute("layer.new.layer", json!({})).unwrap();
     let id = active(&s);
-    s.presets.styles[0].items.push(super::styles::StylePreset {
+    s.presets_mut().styles[0].items.push(super::styles::StylePreset {
         name: "Bricky".into(),
         effects: vec![crate::layer_style::effect_from_params("patternOverlay", &json!({"pattern": "Bricks"})).unwrap()],
         blend: None,
@@ -630,7 +632,7 @@ fn custom_shapes_join_the_shapes_panel() {
     assert!(s.edit_state.custom_shapes.is_empty());
     // New preset from the active shape layer, normalised to the 100 box.
     s.execute("shape.presets.new", json!({"name": "From Layer", "group": "Mine"})).unwrap();
-    let g = s.presets.shapes.iter().find(|g| g.name == "Mine").unwrap();
+    let g = s.presets().shapes.iter().find(|g| g.name == "Mine").unwrap();
     let b = g.items[0].path.control_bounds().unwrap();
     assert!(b.2.max(b.3) > 99.9);
 }
@@ -749,16 +751,16 @@ fn crop_presets_are_tool_presets_that_persist() {
     assert_eq!(r["options"]["toolOptions"]["crop_width"], "4 in");
     // Deleting several is all or nothing.
     assert!(t.execute("tool.presets.edit", json!({"action": "delete", "preset": ["4 x 5 in 300 ppi", "missing"]})).is_err());
-    assert_eq!(t.presets.tool_presets.iter().filter(|p| p.tool == "crop").count(), 2);
+    assert_eq!(t.presets().tool_presets.iter().filter(|p| p.tool == "crop").count(), 2);
     let r = t.execute("tool.presets.edit", json!({"action": "delete", "preset": ["4 x 5 in 300 ppi 2", "4 x 5 in 300 ppi", "4 x 5 in 300 ppi"]})).unwrap();
     assert_eq!(r["deleted"], 2);
-    assert!(t.presets.tool_presets.iter().all(|p| p.tool != "crop"));
+    assert!(t.presets().tool_presets.iter().all(|p| p.tool != "crop"));
 }
 
 #[test]
 fn tool_preset_names_and_params_are_checked() {
     let mut s = crate::session();
-    let n = s.presets.tool_presets.len();
+    let n = s.presets().tool_presets.len();
     let long = "x".repeat(crate::brush_preset_cmds::MAX_NAME + 1);
     for bad in [
         json!({"name": long, "tool": "crop"}),
@@ -772,7 +774,7 @@ fn tool_preset_names_and_params_are_checked() {
     ] {
         assert!(s.execute("tool.presets.new", bad.clone()).is_err(), "{bad}");
     }
-    assert_eq!(s.presets.tool_presets.len(), n);
+    assert_eq!(s.presets().tool_presets.len(), n);
     // An empty or blank name falls back to the tool's; the longest name fits.
     assert_eq!(s.execute("tool.presets.new", json!({"name": "   ", "tool": "crop"})).unwrap()["name"], "crop");
     let max = "é".repeat(crate::brush_preset_cmds::MAX_NAME);
@@ -780,9 +782,9 @@ fn tool_preset_names_and_params_are_checked() {
     assert!(s.execute("tool.presets.edit", json!({"action": "rename", "preset": "crop", "name": long})).is_err());
     assert!(s.execute("tool.presets.edit", json!({"action": "rename", "preset": "crop", "name": "  "})).is_err());
     // The store is capped.
-    while s.presets.tool_presets.len() < super::tools::MAX_PRESETS {
-        let i = s.presets.tool_presets.len();
-        s.presets.tool_presets.push(super::tools::ToolPreset { name: format!("p{i}"), tool: "crop".into(), options: json!({}) });
+    while s.presets().tool_presets.len() < super::tools::MAX_PRESETS {
+        let i = s.presets().tool_presets.len();
+        s.presets_mut().tool_presets.push(super::tools::ToolPreset { name: format!("p{i}"), tool: "crop".into(), options: json!({}) });
     }
     assert!(s.execute("tool.presets.new", json!({"name": "one more", "tool": "crop"})).is_err());
 }
@@ -807,15 +809,15 @@ fn damaged_tool_presets_skip_only_the_bad_entries() {
     ]);
     let mut t = crate::session();
     t.load_prefs_json(&prefs.to_string()).unwrap();
-    let names: Vec<&str> = t.presets.tool_presets.iter().map(|p| p.name.as_str()).collect();
+    let names: Vec<&str> = t.presets().tool_presets.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["Good", "Odd options"]);
-    assert!(t.presets.tool_presets[1].options.is_object());
-    assert!(t.presets.gradients.iter().any(|g| g.items.iter().any(|p| p.name == "Kept")), "other presets still load");
+    assert!(t.presets().tool_presets[1].options.is_object());
+    assert!(t.presets().gradients.iter().any(|g| g.items.iter().any(|p| p.name == "Kept")), "other presets still load");
     // Not an array at all: no tool presets, still no crash.
     prefs["presets"]["tool_presets"] = json!({"a": 1});
     let mut u = crate::session();
     u.load_prefs_json(&prefs.to_string()).unwrap();
-    assert!(u.presets.tool_presets.is_empty());
+    assert!(u.presets().tool_presets.is_empty());
 }
 
 // ------------------------------------------------------------------ clone source
@@ -939,12 +941,12 @@ fn gradient_preset_click_fills_the_selected_shape_layer() {
 fn gradient_preset_click_on_a_locked_shape_changes_nothing() {
     let mut s = session(8);
     let id = LayerId(s.execute("shape.create", json!({"rect": [8, 8, 40, 30], "fill": "#336699"})).unwrap()["layer"].as_u64().unwrap());
-    let (before, gradient) = (shape_fill(&s, id), s.presets.gradient.name.clone());
+    let (before, gradient) = (shape_fill(&s, id), s.presets().gradient.name.clone());
     s.execute("layer.lockLayers", json!({"all": true})).unwrap();
     let err = s.execute("gradient.presets.select", json!({"preset": "Red 01"})).unwrap_err().to_string();
     assert!(err.contains("locked"), "{err}");
     assert_eq!(shape_fill(&s, id), before);
-    assert_eq!(s.presets.gradient.name, gradient);
+    assert_eq!(s.presets().gradient.name, gradient);
 }
 
 // ------------------------------------------------------------------ persistence
@@ -961,7 +963,7 @@ fn a_damaged_preset_set_keeps_the_other_sets() {
         "lockAspect": true, "sizing": "pixels", "metadata": "exif", "profile": "srgb", "embedProfile": false, "tgaBits": "24"
     });
     s.execute("file.export.presets.save", json!({"name": "Web JPEG", "settings": export})).unwrap();
-    let saved = s.presets.to_json(&s);
+    let saved = s.presets().to_json(&s);
     for key in
         ["gradients", "gradient", "styles", "shapes", "pattern_groups", "recent_documents", "custom_shapes", "layer_defaults", "swatches", "export_presets"]
     {
@@ -969,33 +971,33 @@ fn a_damaged_preset_set_keeps_the_other_sets() {
         blob[key] = json!("not a preset set");
         let mut next = crate::session();
         next.load_presets_json(blob);
-        assert_eq!(next.presets.documents, s.presets.documents, "damaged `{key}`");
-        assert_eq!(next.presets.tool_presets.len(), crate::session().presets.tool_presets.len(), "damaged `{key}`");
+        assert_eq!(next.presets().documents, s.presets().documents, "damaged `{key}`");
+        assert_eq!(next.presets().tool_presets.len(), crate::session().presets().tool_presets.len(), "damaged `{key}`");
         if key != "export_presets" {
-            assert_eq!(next.presets.export_presets, s.presets.export_presets, "damaged `{key}`");
+            assert_eq!(next.presets().export_presets, s.presets().export_presets, "damaged `{key}`");
         }
     }
     let mut blob = saved.clone();
     blob["export_presets"] = json!("not a preset set");
     let mut next = crate::session();
     next.load_presets_json(blob);
-    assert!(next.presets.export_presets.is_empty());
-    assert_eq!(next.presets.documents, s.presets.documents);
+    assert!(next.presets().export_presets.is_empty());
+    assert_eq!(next.presets().documents, s.presets().documents);
     let mut blob = saved.clone();
     blob["documents"] = json!("not a preset set");
     let mut next = crate::session();
     next.load_presets_json(blob);
-    assert!(next.presets.documents.is_empty());
-    assert_eq!(next.presets.export_presets, s.presets.export_presets);
+    assert!(next.presets().documents.is_empty());
+    assert_eq!(next.presets().export_presets, s.presets().export_presets);
     // Null sets keep their defaults, as before.
     let mut next = crate::session();
     next.load_presets_json(
         json!({"tool_presets": null, "gradients": null, "documents": saved["documents"].clone(), "export_presets": saved["export_presets"].clone()}),
     );
-    assert_eq!(next.presets.tool_presets.len(), crate::session().presets.tool_presets.len());
-    assert_eq!(next.presets.gradients.len(), crate::session().presets.gradients.len());
-    assert_eq!(next.presets.documents, s.presets.documents);
-    assert_eq!(next.presets.export_presets, s.presets.export_presets);
+    assert_eq!(next.presets().tool_presets.len(), crate::session().presets().tool_presets.len());
+    assert_eq!(next.presets().gradients.len(), crate::session().presets().gradients.len());
+    assert_eq!(next.presets().documents, s.presets().documents);
+    assert_eq!(next.presets().export_presets, s.presets().export_presets);
 }
 
 #[test]
@@ -1008,24 +1010,24 @@ fn restoring_duplicate_gradient_names_preserves_addressable_presets() {
         Group::new("First", vec![GradientPreset::new("Foo", &["#ff0000", "#000000"]), GradientPreset::new("Foo", &["#00ff00", "#000000"])]),
         Group::new("Second", vec![GradientPreset::new("Foo 2", &["#0000ff", "#000000"]), GradientPreset::new("FOO", &["#ffff00", "#000000"])]),
     ];
-    s.presets.gradient = presets[0].items[1].clone();
-    s.presets.gradients = presets;
-    let saved = s.presets.to_json(&s);
+    s.presets_mut().gradient = presets[0].items[1].clone();
+    s.presets_mut().gradients = presets;
+    let saved = s.presets().to_json(&s);
     let mut restored = crate::session();
     restored.load_presets_json(saved.clone());
-    let names: Vec<String> = restored.presets.gradients.iter().flat_map(|g| g.items.iter().map(|p| p.name.clone())).collect();
+    let names: Vec<String> = restored.presets().gradients.iter().flat_map(|g| g.items.iter().map(|p| p.name.clone())).collect();
     assert_eq!(names, ["Foo", "Foo 3", "Foo 2", "FOO"]);
-    assert_eq!(restored.presets.gradient.name, "Foo 3");
-    assert_eq!(restored.presets.gradient.stops, GradientPreset::new("", &["#00ff00", "#000000"]).stops);
+    assert_eq!(restored.presets().gradient.name, "Foo 3");
+    assert_eq!(restored.presets().gradient.stops, GradientPreset::new("", &["#00ff00", "#000000"]).stops);
     for (name, color) in [("Foo 2", "#0000ff"), ("FOO", "#ffff00")] {
         restored.execute("gradient.presets.select", json!({"preset": name})).unwrap();
-        assert_eq!(restored.presets.gradient.stops, GradientPreset::new("", &[color, "#000000"]).stops);
+        assert_eq!(restored.presets().gradient.stops, GradientPreset::new("", &[color, "#000000"]).stops);
     }
-    let current = restored.presets.gradient.clone();
-    let once = restored.presets.to_json(&restored);
+    let current = restored.presets().gradient.clone();
+    let once = restored.presets().to_json(&restored);
     restored.load_presets_json(once);
-    assert_eq!(restored.presets.gradient, current);
-    let names: Vec<String> = restored.presets.gradients.iter().flat_map(|g| g.items.iter().map(|p| p.name.clone())).collect();
+    assert_eq!(restored.presets().gradient, current);
+    let names: Vec<String> = restored.presets().gradients.iter().flat_map(|g| g.items.iter().map(|p| p.name.clone())).collect();
     assert_eq!(names, ["Foo", "Foo 3", "Foo 2", "FOO"]);
 }
 
@@ -1035,16 +1037,16 @@ fn restoring_duplicate_gradient_names_preserves_addressable_presets() {
 fn export_presets_survive_a_presets_json_round_trip() {
     let mut s = crate::session();
     s.execute("file.export.presets.save", json!({"name": "Web", "settings": {"format": "jpg", "quality": 70}})).unwrap();
-    assert_eq!(s.presets.export_presets.len(), 1);
+    assert_eq!(s.presets().export_presets.len(), 1);
 
-    let saved = s.presets.to_json(&s);
+    let saved = s.presets().to_json(&s);
     assert_eq!(saved["export_presets"].as_array().map(Vec::len), Some(1));
 
     let mut restored = crate::session();
     restored.load_presets_json(saved);
-    assert_eq!(restored.presets.export_presets.len(), 1);
-    assert_eq!(restored.presets.export_presets[0].name, "Web");
-    assert_eq!(restored.presets.export_presets[0].settings.format, "jpg");
+    assert_eq!(restored.presets().export_presets.len(), 1);
+    assert_eq!(restored.presets().export_presets[0].name, "Web");
+    assert_eq!(restored.presets().export_presets[0].settings.format, "jpg");
 }
 
 /// A nested command a preset command runs answers to the session's authorization hook: a denied one

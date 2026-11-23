@@ -1,5 +1,6 @@
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
@@ -303,7 +304,7 @@ fn layer_comp_apply_imports_plays_and_undoes() {
         let mut s = crate::session();
         let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
         assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-        assert_eq!(s.actions.list.actions()[0].steps, [ActionStep::new("layerComp.apply", json!({"comp": name}))]);
+        assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("layerComp.apply", json!({"comp": name}))]);
 
         s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
         s.execute("layerComp.new", json!({"name": "Other"})).unwrap();
@@ -345,7 +346,7 @@ fn layer_comp_apply_round_trips_by_name() {
         assert_eq!(file.actions[0].items[0].descriptor, Some(descriptor));
         let mut reloaded = crate::session();
         reloaded.execute("actions.load", json!({"data": saved["data"]})).unwrap();
-        assert_eq!(reloaded.actions.list.actions(), s.actions.list.actions());
+        assert_eq!(reloaded.actions().list.actions(), s.actions().list.actions());
     }
     // Local comp ids and the default comp cannot be resolved to a portable name at export.
     for params in [json!({}), json!({"comp": 1}), json!({"comp": null}), json!({"comp": true}), json!({"comp": []})] {
@@ -374,8 +375,8 @@ fn layer_comp_apply_unknown_references_are_kept_and_stop_playback() {
     let mut s = crate::session();
     let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
     assert_eq!(loaded["unsupported"].as_array().unwrap().len(), items.len());
-    assert!(s.actions.list.actions()[0].steps.iter().all(|st| st.command == PHOTOSHOP_STEP));
-    assert!(s.actions.list.actions()[0].disabled.is_empty());
+    assert!(s.actions().list.actions()[0].steps.iter().all(|st| st.command == PHOTOSHOP_STEP));
+    assert!(s.actions().list.actions()[0].disabled.is_empty());
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     s.execute("layerComp.new", json!({"name": "Comp 1"})).unwrap();
     let before = s.active().unwrap().doc.clone();
@@ -407,7 +408,7 @@ fn load_maps_events_keeps_flags_and_plays() {
         r["unsupported"].as_array().unwrap().iter().map(|u| (u["event"].as_str().unwrap().into(), u["name"].as_str().unwrap().into())).collect();
     assert_eq!(unsupported, [("slct".to_string(), "Select".to_string()), ("syntheticFill".to_string(), "Generative Fill".to_string())]);
 
-    let a = &s.actions.list.actions()[0];
+    let a = &s.actions().list.actions()[0];
     assert_eq!(a.set.as_deref(), Some("Test Set"));
     let ids: Vec<&str> = a.steps.iter().map(|st| st.command.as_str()).collect();
     assert_eq!(
@@ -432,7 +433,7 @@ fn load_maps_events_keeps_flags_and_plays() {
     assert_eq!(a.steps[7].params, json!({"action": "Finish"}));
     assert_eq!(a.dialogs.iter().copied().collect::<Vec<_>>(), [0], "the dialog toggle is kept");
     assert_eq!(a.disabled.iter().copied().collect::<Vec<_>>(), [4, 8], "tool selections are switched off, as is the step the file had off");
-    assert_eq!(s.actions.list.actions()[1].steps, [ActionStep::new("select.inverse", json!({}))]);
+    assert_eq!(s.actions().list.actions()[1].steps, [ActionStep::new("select.inverse", json!({}))]);
 
     // Playback: the mapped steps run, the layer is found by name, and the kept Photoshop step
     // stops the action with its name.
@@ -450,11 +451,11 @@ fn load_maps_events_keeps_flags_and_plays() {
     // Loading the same set again replaces it; a different set with the same action names
     // gets unique names and its Play steps follow.
     s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
-    assert_eq!(s.actions.list.actions().len(), 2);
+    assert_eq!(s.actions().list.actions().len(), 2);
     let r = s.execute("actions.load", json!({"data": b64(&bytes), "set": "Other"})).unwrap();
     assert_eq!(r["actions"], json!(["Soften 2", "Finish 2"]));
-    assert_eq!(s.actions.list.actions()[2].steps[7].params, json!({"action": "Finish 2"}));
-    assert_eq!(s.actions.list.actions()[2].set.as_deref(), Some("Other"));
+    assert_eq!(s.actions().list.actions()[2].steps[7].params, json!({"action": "Finish 2"}));
+    assert_eq!(s.actions().list.actions()[2].set.as_deref(), Some("Other"));
 }
 
 /// A name the file shares with the list is renamed to the first free one, and the file's own names stay: "A" becomes
@@ -465,14 +466,14 @@ fn load_renames_each_play_target_once() {
     let mut s = crate::session();
     let mut mine = Action::new("A", vec![]);
     mine.set = Some("Mine".into());
-    s.actions.list.push(mine).unwrap();
+    s.actions_mut().list.push(mine).unwrap();
     let a = Action::new("A", vec![ActionStep::new("actions.conditional", json!({"if": "always", "then": "A", "else": "A 2"}))]);
     let a2 = Action::new("A 2", vec![ActionStep::new("actions.play", json!({"action": "A"}))]);
     let keys = [("A".to_string(), "F4".to_string())];
     let (bytes, _) = export("File", &[&a, &a2], &keys, false).unwrap();
     let r = s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
     assert_eq!(r["actions"], json!(["A 3", "A 2"]));
-    let get = |n: &str| s.actions.list.actions().iter().find(|a| a.name == n && a.set.as_deref() == Some("File")).unwrap();
+    let get = |n: &str| s.actions().list.actions().iter().find(|a| a.name == n && a.set.as_deref() == Some("File")).unwrap();
     assert_eq!(get("A 2").steps[0].params["action"], "A 3", "plays the file's A, which is now A 3");
     let cond = &get("A 3").steps[0].params;
     assert_eq!((&cond["then"], &cond["else"]), (&json!("A 3"), &json!("A 2")), "{cond}");
@@ -483,12 +484,12 @@ fn load_renames_each_play_target_once() {
     for (name, steps) in [("A", vec![]), ("B", vec![ActionStep::new("actions.play", json!({"action": "A"}))])] {
         let mut a = Action::new(name, steps);
         a.set = Some("File".into());
-        s.actions.list.push(a).unwrap();
+        s.actions_mut().list.push(a).unwrap();
     }
     let (bytes, _) = export("File", &[&Action::new("A", vec![])], &[], false).unwrap();
     let r = s.execute("actions.load", json!({"data": b64(&bytes), "replace": false})).unwrap();
     assert_eq!(r["actions"], json!(["A 2"]));
-    assert_eq!(s.actions.list.actions()[1].steps[0].params, json!({"action": "A"}), "B still plays the A it had");
+    assert_eq!(s.actions().list.actions()[1].steps[0].params, json!({"action": "A"}), "B still plays the A it had");
 }
 
 /// A name over the 1,024-character limit is clipped for the action and for the steps that call it,
@@ -500,13 +501,13 @@ fn load_renames_play_targets_longer_than_the_name_limit() {
     let clipped = "x".repeat(1024);
     let mut mine = Action::new(clipped.clone(), vec![]);
     mine.set = Some("Mine".into());
-    s.actions.list.push(mine).unwrap();
+    s.actions_mut().list.push(mine).unwrap();
     let a = Action::new(long.clone(), vec![]);
     let caller = Action::new("Caller", vec![ActionStep::new("actions.play", json!({"action": long}))]);
     let (bytes, _) = export("File", &[&a, &caller], &[], false).unwrap();
     s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
     let renamed = format!("{clipped} 2");
-    let caller = s.actions.list.actions().iter().find(|a| a.name == "Caller").unwrap();
+    let caller = s.actions().list.actions().iter().find(|a| a.name == "Caller").unwrap();
     assert_eq!(caller.steps[0].params["action"], renamed.as_str());
 }
 
@@ -521,8 +522,8 @@ fn load_clips_an_overlong_set_override() {
     let long = "s".repeat(super::convert::MAX_NAME_CHARS * 4);
     s.execute("actions.load", json!({"data": b64(&bytes), "set": long})).unwrap();
     let clipped = "s".repeat(super::convert::MAX_NAME_CHARS);
-    assert_eq!(s.actions.list.actions().len(), 3);
-    assert!(s.actions.list.actions().iter().all(|a| a.set.as_deref() == Some(clipped.as_str())));
+    assert_eq!(s.actions().list.actions().len(), 3);
+    assert!(s.actions().list.actions().iter().all(|a| a.set.as_deref() == Some(clipped.as_str())));
 }
 
 #[test]
@@ -542,7 +543,7 @@ fn save_round_trips_through_photoshop_events() {
     let mut s = crate::session();
     let bytes = atn::write(&sample()).unwrap();
     s.execute("actions.load", json!({"data": b64(&bytes)})).unwrap();
-    let first = s.actions.list.actions().to_vec();
+    let first = s.actions().list.actions().to_vec();
     let r = s.execute("actions.save", json!({"set": "Test Set"})).unwrap();
     assert_eq!(r["actions"], json!(["Soften", "Finish"]));
     assert_eq!(r["skipped"], json!([]));
@@ -562,10 +563,10 @@ fn save_round_trips_through_photoshop_events() {
     // Loading what was saved gives the same actions.
     let mut t = crate::session();
     t.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
-    assert_eq!(t.actions.list.actions(), first);
+    assert_eq!(t.actions().list.actions(), first);
 
     // A step with no Photoshop equivalent fails unless skipped.
-    s.actions.list.push(Action::new("Ours", vec![ActionStep::new("unsupported.forTest", json!({}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Ours", vec![ActionStep::new("unsupported.forTest", json!({}))])).unwrap();
     let e = s.execute("actions.save", json!({"action": "Ours"})).unwrap_err().to_string();
     assert!(e.contains("unsupported.forTest"), "{e}");
     let r = s.execute("actions.save", json!({"action": "Ours", "skipUnsupported": true})).unwrap();
@@ -581,7 +582,7 @@ fn save_round_trips_through_photoshop_events() {
 fn a_selective_color_step_in_the_scalar_form_keeps_its_values() {
     let back = |params: Value| -> Value {
         let mut s = crate::session();
-        s.actions.list.push(Action::new("A", vec![ActionStep::new("image.adjustments.selectiveColor", params)])).unwrap();
+        s.actions_mut().list.push(Action::new("A", vec![ActionStep::new("image.adjustments.selectiveColor", params)])).unwrap();
         let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
         assert_eq!(r["skipped"], json!([]));
         let imported = import(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
@@ -609,7 +610,7 @@ fn a_selective_color_step_in_the_scalar_form_keeps_its_values() {
     // writing it would export an adjustment that is not the one recorded. `null` is absent, as
     // the command reads it.
     let mut s = crate::session();
-    s.actions.list.push(Action::new("A", vec![ActionStep::new("image.adjustments.selectiveColor", json!({"colors": "reds", "cyan": "35"}))])).unwrap();
+    s.actions_mut().list.push(Action::new("A", vec![ActionStep::new("image.adjustments.selectiveColor", json!({"colors": "reds", "cyan": "35"}))])).unwrap();
     let e = s.execute("actions.save", json!({"action": "A"})).unwrap_err().to_string();
     assert!(e.contains("image.adjustments.selectiveColor"), "{e}");
 
@@ -637,15 +638,15 @@ fn a_setting_the_event_cannot_hold_is_refused() {
         ("layer.setAdjustment", json!({"kind": "exposure", "document": 2, "exposure": -0.75})),
     ] {
         let mut s = crate::session();
-        s.actions.list.push(Action::new("A", vec![ActionStep::new(id, params)])).unwrap();
-        let before = s.actions.list.actions()[0].steps.clone();
+        s.actions_mut().list.push(Action::new("A", vec![ActionStep::new(id, params)])).unwrap();
+        let before = s.actions().list.actions()[0].steps.clone();
         let e = s.execute("actions.save", json!({"action": "A"})).unwrap_err().to_string();
         assert!(e.contains(id), "{id}: {e}");
         // A refused save leaves the action as it was: the step is still there to be played.
-        assert_eq!(s.actions.list.actions()[0].steps, before, "{id}");
+        assert_eq!(s.actions().list.actions()[0].steps, before, "{id}");
         let r = s.execute("actions.save", json!({"action": "A", "skipUnsupported": true})).unwrap();
         assert_eq!(r["skipped"], json!([{"action": "A", "step": 0, "id": id}]), "{id}");
-        assert_eq!(s.actions.list.actions()[0].steps, before, "{id}: skipping a step does not drop it");
+        assert_eq!(s.actions().list.actions()[0].steps, before, "{id}: skipping a step does not drop it");
     }
 }
 
@@ -671,7 +672,7 @@ fn settings_at_the_value_the_event_plays_still_export() {
         ("image.adjustments.equalize", json!({})),
     ] {
         let mut s = crate::session();
-        s.actions.list.push(Action::new("A", vec![ActionStep::new(id, params.clone())])).unwrap();
+        s.actions_mut().list.push(Action::new("A", vec![ActionStep::new(id, params.clone())])).unwrap();
         let r = s.execute("actions.save", json!({"action": "A"})).unwrap_or_else(|e| panic!("{id} {params}: {e}"));
         assert_eq!(r["skipped"], json!([]), "{id} {params}");
     }
@@ -1257,9 +1258,14 @@ fn every_mapped_command_exports_and_imports_back() {
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");
     // Every command the table names exists.
     // (Save is the desktop shell's: recorded by it, replayed by it, written by Batch.)
+    // The paint commands the table names are registered by the engine's paint crate, which
+    // core's own tests may not install.
     for id in EVENTS.iter().flat_map(|e| e.ids.iter()) {
         assert!(
-            crate::commands::find(id).is_some() || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id),
+            crate::commands::find(id).is_some()
+                || PAINT_COMMANDS.contains(id)
+                || crate::actions_cmds::shell_save_command(id)
+                || crate::actions_cmds::shell_view_command(id),
             "the .atn table names an unknown command `{id}`"
         );
     }
@@ -1278,23 +1284,14 @@ fn bucket_round_trip(params: Value) -> Option<Value> {
     }
 }
 
-/// A Paint Bucket step with an explicit colour keeps it through .atn (#7199): replayed on a fresh
-/// document, whose foreground is black, it still fills red. A colour .atn can't hold makes the
+/// A Paint Bucket step with an explicit colour keeps it through .atn (#7199), so a replay on a
+/// document whose foreground is black still fills with it. A colour .atn can't hold makes the
 /// step not export rather than fill with the foreground.
 #[test]
 fn bucket_keeps_an_explicit_color_through_atn() {
-    let fill = |params: &Value| {
-        let mut s = crate::session();
-        s.execute("file.new", json!({"width": 8, "height": 8, "background": "#ffffff"})).unwrap();
-        s.execute("paint.bucket", params.clone()).unwrap();
-        let d = s.active().unwrap();
-        d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().pixel(2, 2)
-    };
     let red = json!({"x": 2, "y": 2, "antiAlias": false, "color": "#ff0000"});
     let back = bucket_round_trip(red.clone()).unwrap();
     assert_eq!(back["color"], "#ff0000", "{back}");
-    assert_eq!(fill(&back), fill(&red));
-    assert_eq!(fill(&back), vec![1.0, 0.0, 0.0, 1.0]);
     // The colour as an array of channels.
     assert_eq!(bucket_round_trip(json!({"x": 1, "y": 1, "color": [0.0, 0.5, 1.0]})).unwrap()["color"], "#0080ff");
     // No colour, or one the command can't read: the foreground, as before.
@@ -1665,11 +1662,11 @@ fn step_commands_and_bad_params_fail_gracefully() {
     ] {
         assert!(s.execute("actions.load", p.clone()).is_err(), "{p}");
     }
-    assert!(s.actions.list.actions().is_empty());
+    assert!(s.actions().list.actions().is_empty());
     for p in [json!({}), json!({"set": "Nope"}), json!({"action": 3}), json!({"path": 7}), json!({"skipUnsupported": "no"}), json!({"set": ""})] {
         assert!(s.execute("actions.save", p.clone()).is_err(), "{p}");
     }
-    s.actions.list.push(Action::new("One", vec![ActionStep::new("select.all", json!({}))])).unwrap();
+    s.actions_mut().list.push(Action::new("One", vec![ActionStep::new("select.all", json!({}))])).unwrap();
     assert!(s.execute("actions.save", json!({"path": ""})).is_err());
     assert!(s.execute("actions.save", json!({})).unwrap()["data"].is_string());
 
@@ -1680,7 +1677,7 @@ fn step_commands_and_bad_params_fail_gracefully() {
         assert!(s.execute(PHOTOSHOP_STEP, p.clone()).is_err(), "{p}");
     }
     // A Photoshop step with a damaged descriptor is left out of a save rather than crashing it.
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new("Broken", vec![ActionStep::new(PHOTOSHOP_STEP, json!({"event": "GsnB", "name": "Blur", "descriptor": b64(b"\x00\x00\x00")}))]))
         .unwrap();
@@ -1692,7 +1689,7 @@ fn step_commands_and_bad_params_fail_gracefully() {
 fn save_writes_the_file_and_the_set_of_the_selected_action() {
     let mut s = crate::session();
     s.execute("actions.load", json!({"data": b64(&atn::write(&sample()).unwrap())})).unwrap();
-    s.actions.list.push(Action::new("Loose", vec![ActionStep::new("select.all", json!({}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Loose", vec![ActionStep::new("select.all", json!({}))])).unwrap();
     let dir = std::env::temp_dir().join(format!("pc-atn-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("Saved.atn");
@@ -1716,14 +1713,14 @@ fn save_writes_the_file_and_the_set_of_the_selected_action() {
 fn save_over_an_existing_file_never_rewrites_it_in_place() {
     use std::io::Read;
     let mut s = crate::session();
-    s.actions.list.push(Action::new("Owned", vec![ActionStep::new("select.all", json!({}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Owned", vec![ActionStep::new("select.all", json!({}))])).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("Owned.atn");
     let p = path.to_string_lossy().to_string();
     s.execute("actions.save", json!({"path": p})).unwrap();
     let before = std::fs::read(&path).unwrap();
     let mut old = std::fs::File::open(&path).unwrap();
-    s.actions.list.push(Action::new("Second", vec![ActionStep::new("select.all", json!({}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Second", vec![ActionStep::new("select.all", json!({}))])).unwrap();
     s.execute("actions.save", json!({"path": p})).unwrap();
     let mut seen = Vec::new();
     old.read_to_end(&mut seen).unwrap();
@@ -2055,13 +2052,13 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
 
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "source"})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#ff0000");
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "template", "background": "transparent"})).unwrap();
     // Reorder tabs before playback: the source remains the previous *opened* document.
     s.execute("document.move", json!({"document": 1, "to": 0})).unwrap();
     let r = s.execute("actions.load", json!({"data": data})).unwrap();
     assert_eq!(r["unsupported"], json!([]), "{r}");
-    let steps = &s.actions.list.actions()[0].steps;
+    let steps = &s.actions().list.actions()[0].steps;
     assert_eq!(steps[0], ActionStep::new("document.activate", json!({"offset": -1})));
     assert_eq!(steps[3], ActionStep::new("document.activate", json!({"offset": 1})));
 
@@ -2074,7 +2071,7 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
     assert_eq!(pixel(&mut s), [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(s.documents()[1].doc.layers.len(), 1, "the source is only copied from");
 
-    let first = s.actions.list.actions().to_vec();
+    let first = s.actions().list.actions().to_vec();
     let r = s.execute("actions.save", json!({"set": "Template"})).unwrap();
     assert_eq!(r["skipped"], json!([]));
     let saved = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
@@ -2091,7 +2088,7 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
     assert!(file.actions[0].items[0].descriptor.as_ref().unwrap().get("DocI").is_none());
     let mut t = crate::session();
     t.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
-    assert_eq!(t.actions.list.actions(), first);
+    assert_eq!(t.actions().list.actions(), first);
     // An absolute tab index has no Photoshop equivalent: it stays out of a strict save.
     assert!(export_item("document.activate", &json!({"document": 0}), "S").is_none());
     assert!(export_item("document.activate", &json!({"document": 0, "offset": 1}), "S").is_none());
@@ -2320,10 +2317,10 @@ fn events_photoshop_only_runs_by_name_export_by_name_and_old_codes_still_import(
     let mut s = crate::session();
     let r = s.execute("actions.load", json!({"data": data})).unwrap();
     assert_eq!(r["unsupported"], json!([]), "{r}");
-    let ids = |i: usize| s.actions.list.actions()[i].steps.iter().map(|st| st.command.clone()).collect::<Vec<_>>();
+    let ids = |i: usize| s.actions().list.actions()[i].steps.iter().map(|st| st.command.clone()).collect::<Vec<_>>();
     assert_eq!(ids(0), ["filter.blur.boxBlur", "filter.blur.surfaceBlur", "layer.flattenImage", "layer.flattenImage"]);
     assert_eq!(ids(1), ["filter.blur.boxBlur", "filter.blur.surfaceBlur", "layer.flattenImage"]);
-    assert_eq!(s.actions.list.actions()[1].steps[1].params, json!({"radius": 5, "threshold": 15}));
+    assert_eq!(s.actions().list.actions()[1].steps[1].params, json!({"radius": 5, "threshold": 15}));
     // Saving them writes the ids Photoshop runs, never the old codes.
     let saved = s.execute("actions.save", json!({"set": "S"})).unwrap();
     let file = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
@@ -2376,7 +2373,7 @@ fn photo_filter_saves_under_the_name_photoshop_runs() {
     let mut t = crate::session();
     let r = t.execute("actions.load", json!({"data": data})).unwrap();
     assert_eq!(r["unsupported"], json!([]), "{r}");
-    for a in t.actions.list.actions() {
+    for a in t.actions().list.actions() {
         assert_eq!(a.steps.len(), 1, "{}", a.name);
         assert_eq!(a.steps[0].command, "image.adjustments.photoFilter", "{}", a.name);
         let mut p = a.steps[0].params.clone();
@@ -2420,7 +2417,7 @@ fn black_white_adjustment_layer_saves_as_photoshops_class_and_old_class_still_im
     let id = "layer.newAdjustmentLayer.blackWhite";
     let params = json!({"reds": 17, "yellows": 83, "greens": -12, "cyans": 107, "blues": 51, "magentas": 133, "tint": true, "tintColor": "#c08040"});
     let mut s = crate::session();
-    s.actions.list.push(Action::new("BW", vec![ActionStep::new(id, params.clone())])).unwrap();
+    s.actions_mut().list.push(Action::new("BW", vec![ActionStep::new(id, params.clone())])).unwrap();
     let r = s.execute("actions.save", json!({"action": "BW"})).unwrap();
     assert_eq!(r["skipped"], json!([]));
     let saved = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
@@ -2431,7 +2428,7 @@ fn black_white_adjustment_layer_saves_as_photoshops_class_and_old_class_still_im
     let mut t = crate::session();
     let r = t.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
     assert_eq!(r["unsupported"], json!([]), "{r}");
-    assert_eq!(t.actions.list.actions()[0].steps, vec![ActionStep::new(id, params)]);
+    assert_eq!(t.actions().list.actions()[0].steps, vec![ActionStep::new(id, params)]);
 
     // Photoshop's minimal Make (no settings) and an old PhotoCraft Make with a setting both load,
     // the setting kept; near misses stay Photoshop steps.
@@ -2443,9 +2440,9 @@ fn black_white_adjustment_layer_saves_as_photoshops_class_and_old_class_still_im
     let data = set_of("S", vec![("A", ["BanW", "BlnW", "BANW", "BlnWx"].into_iter().map(make).collect())]);
     let mut t = crate::session();
     let r = t.execute("actions.load", json!({"data": data})).unwrap();
-    let steps: Vec<&str> = t.actions.list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
+    let steps: Vec<&str> = t.actions().list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
     assert_eq!(steps, [id, id, PHOTOSHOP_STEP, PHOTOSHOP_STEP], "{r}");
-    assert_eq!(t.actions.list.actions()[0].steps[1].params["reds"], 17, "{r}");
+    assert_eq!(t.actions().list.actions()[0].steps[1].params["reds"], 17, "{r}");
 }
 
 /// #11517: a native Black & White coefficient may be fractional, but an ATN long cannot.
@@ -2551,7 +2548,7 @@ fn smart_blur_quality_uses_photoshop_codes() {
     let data = set_of("Blurs", vec![("Smart", items)]);
     let mut s = crate::session();
     s.execute("actions.load", json!({"data": data})).unwrap();
-    let steps = &s.actions.list.actions()[0].steps;
+    let steps = &s.actions().list.actions()[0].steps;
     for ((q, _, quality, mode), ActionStep { command: id, params: p }) in cases.iter().zip(steps) {
         assert_eq!(id, "filter.blur.smartBlur", "{q}");
         assert_eq!(p, &json!({"radius": 6, "threshold": 60, "quality": quality, "mode": mode}), "{q}");
@@ -2955,7 +2952,7 @@ fn numeric_layer_references_refuse_silent_fallback_to_current_selection() {
     };
 
     // Named layer reference exports successfully with Name reference to "A"
-    s.actions.list.push(Action::new("DeleteNamed", vec![ActionStep::new("layer.delete", json!({"layer": "A"}))])).unwrap();
+    s.actions_mut().list.push(Action::new("DeleteNamed", vec![ActionStep::new("layer.delete", json!({"layer": "A"}))])).unwrap();
     let saved_named = s.execute("actions.save", json!({"action": "DeleteNamed"})).unwrap();
     assert_eq!(saved_named["steps"], 1);
     let named_desc = parse_first_desc(&saved_named);
@@ -2965,7 +2962,7 @@ fn numeric_layer_references_refuse_silent_fallback_to_current_selection() {
     }
 
     // Omitted layer reference (target selection) exports successfully with Trgt enumerated reference
-    s.actions.list.push(Action::new("DeleteTarget", vec![ActionStep::new("layer.delete", json!({}))])).unwrap();
+    s.actions_mut().list.push(Action::new("DeleteTarget", vec![ActionStep::new("layer.delete", json!({}))])).unwrap();
     let saved_target = s.execute("actions.save", json!({"action": "DeleteTarget"})).unwrap();
     assert_eq!(saved_target["steps"], 1);
     let target_desc = parse_first_desc(&saved_target);
@@ -2975,7 +2972,7 @@ fn numeric_layer_references_refuse_silent_fallback_to_current_selection() {
     }
 
     // Explicit null layer reference also exports successfully as target selection with Trgt enumerated reference
-    s.actions.list.push(Action::new("DeleteNull", vec![ActionStep::new("layer.delete", json!({"layer": null}))])).unwrap();
+    s.actions_mut().list.push(Action::new("DeleteNull", vec![ActionStep::new("layer.delete", json!({"layer": null}))])).unwrap();
     let saved_null = s.execute("actions.save", json!({"action": "DeleteNull"})).unwrap();
     assert_eq!(saved_null["steps"], 1);
     let null_desc = parse_first_desc(&saved_null);
@@ -2986,12 +2983,12 @@ fn numeric_layer_references_refuse_silent_fallback_to_current_selection() {
 
     // An id beyond the u32 the `Idnt` reference holds cannot be carried and must never silently
     // fall back to the current target; an in-range id exports as the `Idnt` itself (#7246).
-    s.actions.list.push(Action::new("DeleteNumeric", vec![ActionStep::new("layer.delete", json!({"layer": u32::MAX as u64 + 1}))])).unwrap();
-    let before_actions = s.actions.list.actions().to_vec();
+    s.actions_mut().list.push(Action::new("DeleteNumeric", vec![ActionStep::new("layer.delete", json!({"layer": u32::MAX as u64 + 1}))])).unwrap();
+    let before_actions = s.actions().list.actions().to_vec();
     let before_rev = s.active().unwrap().revision;
     let err_delete = s.execute("actions.save", json!({"action": "DeleteNumeric"}));
     assert!(err_delete.is_err(), "strict export must reject numeric layer ID for layer.delete rather than falling back to current target");
-    assert_eq!(s.actions.list.actions(), before_actions, "session actions must remain unchanged when save fails");
+    assert_eq!(s.actions().list.actions(), before_actions, "session actions must remain unchanged when save fails");
     assert_eq!(s.active().unwrap().revision, before_rev, "document revision must remain unchanged when save fails");
     let err_msg = err_delete.unwrap_err().to_string();
     assert!(err_msg.contains("(`layer.delete` with numeric layer 4294967296)"), "error message should name the numeric layer: {err_msg}");
@@ -3013,11 +3010,11 @@ fn numeric_layer_references_refuse_silent_fallback_to_current_selection() {
         ("BringForwardNumeric", "layer.arrange.bringForward", json!({"layer": u32::MAX as u64 + 1})),
         ("SendBackwardNumeric", "layer.arrange.sendBackward", json!({"layer": u32::MAX as u64 + 1})),
     ] {
-        s.actions.list.push(Action::new(name, vec![ActionStep::new(id, params)])).unwrap();
-        let before_actions = s.actions.list.actions().to_vec();
+        s.actions_mut().list.push(Action::new(name, vec![ActionStep::new(id, params)])).unwrap();
+        let before_actions = s.actions().list.actions().to_vec();
         let before_rev = s.active().unwrap().revision;
         assert!(s.execute("actions.save", json!({"action": name})).is_err());
-        assert_eq!(s.actions.list.actions(), before_actions, "session actions must remain unchanged when save fails");
+        assert_eq!(s.actions().list.actions(), before_actions, "session actions must remain unchanged when save fails");
         assert_eq!(s.active().unwrap().revision, before_rev, "document revision must remain unchanged when save fails");
     }
 
@@ -3071,7 +3068,7 @@ fn arbitrary_rotation_keeps_interpolation_through_atn() {
 fn emboss_saves_as_photoshops_event_and_loads_back() {
     let mut s = crate::session();
     let params = json!({"angle": 130, "height": 1, "amount": 70});
-    s.actions.list.push(Action::new("Pore", vec![ActionStep::new("filter.stylize.emboss", params.clone())])).unwrap();
+    s.actions_mut().list.push(Action::new("Pore", vec![ActionStep::new("filter.stylize.emboss", params.clone())])).unwrap();
     let r = s.execute("actions.save", json!({"action": "Pore"})).unwrap();
     assert_eq!(r["skipped"], json!([]));
     let saved = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
@@ -3084,7 +3081,7 @@ fn emboss_saves_as_photoshops_event_and_loads_back() {
     }
     let mut t = crate::session();
     t.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
-    assert_eq!(t.actions.list.actions()[0].steps, vec![ActionStep::new("filter.stylize.emboss", params)]);
+    assert_eq!(t.actions().list.actions()[0].steps, vec![ActionStep::new("filter.stylize.emboss", params)]);
 }
 
 /// A filter recorded against a layer mask must not export as a plain filter that edits the
@@ -3406,7 +3403,7 @@ fn vibrance_adjustment_layer_steps_save_with_the_string_class() {
     let mut s = crate::session();
     let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    let steps = &s.actions.list.actions()[0].steps;
+    let steps = &s.actions().list.actions()[0].steps;
     assert_eq!(steps[1], ActionStep::new("layer.newAdjustmentLayer.vibrance", json!({"vibrance": 10, "saturation": 5})), "{steps:?}");
     assert_eq!((&steps[0], &steps[1]), (&steps[2], &steps[3]), "the old `Vbrn` class imports the same");
     let saved = s.execute("actions.save", json!({"set": "Vibrance"})).unwrap();
@@ -3423,7 +3420,7 @@ fn vibrance_adjustment_layer_steps_save_with_the_string_class() {
     }
     let mut reloaded = crate::session();
     reloaded.execute("actions.load", json!({"data": saved["data"]})).unwrap();
-    assert_eq!(reloaded.actions.list.actions()[0].steps, s.actions.list.actions()[0].steps);
+    assert_eq!(reloaded.actions().list.actions()[0].steps, s.actions().list.actions()[0].steps);
 }
 
 /// Our Vibrance has no `temperature` or `tint`: a recorded Vibrance Set or Make with either one
@@ -3437,7 +3434,7 @@ fn vibrance_steps_with_temperature_or_tint_save_back_unchanged() {
     let data = set_of("Vibrance", vec![("A", vec![item("set", "Set", Some(set.clone())), item("Mk  ", "Make", Some(make.clone()))])]);
     let mut s = crate::session();
     s.execute("actions.load", json!({"data": data})).unwrap();
-    assert!(s.actions.list.actions()[0].steps.iter().all(|st| st.command == "actions.photoshopStep"), "{:?}", s.actions.list.actions()[0].steps);
+    assert!(s.actions().list.actions()[0].steps.iter().all(|st| st.command == "actions.photoshopStep"), "{:?}", s.actions().list.actions()[0].steps);
     let saved = s.execute("actions.save", json!({"set": "Vibrance"})).unwrap();
     let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
     let file = atn::parse(&bytes).unwrap();
@@ -3592,12 +3589,12 @@ fn image_size_explicit_sides_keep_precedence_over_percent() {
             assert_eq!((size.width, size.height), expected, "native {params} at {depth} bits");
 
             let mut recorded = crate::session();
-            recorded.actions.list.push(Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())])).unwrap();
-            let before = recorded.actions.list.clone();
+            recorded.actions_mut().list.push(Action::new("Resize", vec![ActionStep::new("image.imageSize", params.clone())])).unwrap();
+            let before = recorded.actions().list.clone();
             let saved = recorded.execute("actions.save", json!({"action": "Resize"})).unwrap();
             assert_eq!(saved["skipped"], json!([]));
             assert_eq!(saved["steps"], 1);
-            assert_eq!(recorded.actions.list, before);
+            assert_eq!(recorded.actions().list, before);
 
             let mut replay = crate::session();
             let loaded = replay.execute("actions.load", json!({"data": saved["data"]})).unwrap();
@@ -3691,7 +3688,7 @@ fn select_rect_modes_export_without_becoming_replace() {
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
 
     // Default or "replace" mode succeeds
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new("ReplaceAct", vec![ActionStep::new("select.rect", json!({"x": 4, "y": 4, "width": 2, "height": 2, "mode": "replace"}))]))
         .unwrap();
@@ -3699,19 +3696,22 @@ fn select_rect_modes_export_without_becoming_replace() {
     assert_eq!(saved["steps"], 1);
 
     for (mode, event) in [("add", "AddT"), ("subtract", "SbtF"), ("intersect", "IntW")] {
-        s.actions.list.push(Action::new(mode, vec![ActionStep::new("select.rect", json!({"x":4,"y":4,"width":2,"height":2,"mode":mode}))])).unwrap();
-        let before = s.actions.list.actions().to_vec();
+        s.actions_mut().list.push(Action::new(mode, vec![ActionStep::new("select.rect", json!({"x":4,"y":4,"width":2,"height":2,"mode":mode}))])).unwrap();
+        let before = s.actions().list.actions().to_vec();
         let saved = s.execute("actions.save", json!({"action":mode})).unwrap();
         let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
         assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].event.id(), event);
         assert_eq!(import(&bytes).unwrap().actions[0].steps[0].params["mode"], mode);
-        assert_eq!(s.actions.list.actions(), before);
+        assert_eq!(s.actions().list.actions(), before);
     }
 
-    s.actions.list.push(Action::new("Unsupported", vec![ActionStep::new("select.rect", json!({"x":4,"y":4,"width":2,"height":2,"mode":"xor"}))])).unwrap();
-    let before = s.actions.list.actions().to_vec();
+    s.actions_mut()
+        .list
+        .push(Action::new("Unsupported", vec![ActionStep::new("select.rect", json!({"x":4,"y":4,"width":2,"height":2,"mode":"xor"}))]))
+        .unwrap();
+    let before = s.actions().list.actions().to_vec();
     assert!(s.execute("actions.save", json!({"action":"Unsupported"})).is_err());
-    assert_eq!(s.actions.list.actions(), before, "rejected export must leave actions unchanged");
+    assert_eq!(s.actions().list.actions(), before, "rejected export must leave actions unchanged");
 
     // With skipUnsupported: true, unrepresentable modes are reported in skipped
     let skipped = s.execute("actions.save", json!({"action": "Unsupported", "skipUnsupported": true})).unwrap();
@@ -3725,7 +3725,7 @@ fn radial_blur_off_center_strict_export_refuses_silent_recentering() {
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
 
     // Default center (omitted) exports successfully
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new("DefaultCenter", vec![ActionStep::new("filter.blur.radialBlur", json!({"amount": 50, "method": "spin", "quality": "good"}))]))
         .unwrap();
@@ -3733,7 +3733,7 @@ fn radial_blur_off_center_strict_export_refuses_silent_recentering() {
     assert_eq!(saved["steps"], 1);
 
     // Explicit (0.5, 0.5) center also exports successfully
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new(
             "ExplicitDefaultCenter",
@@ -3744,17 +3744,17 @@ fn radial_blur_off_center_strict_export_refuses_silent_recentering() {
     assert_eq!(saved_exp["steps"], 1);
 
     // Off-center radial blur cannot be silently recentered in strict export
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new(
             "OffCenter",
             vec![ActionStep::new("filter.blur.radialBlur", json!({"amount": 50, "method": "spin", "quality": "good", "centerX": 0.1, "centerY": 0.2}))],
         ))
         .unwrap();
-    let before_actions = s.actions.list.actions().to_vec();
+    let before_actions = s.actions().list.actions().to_vec();
     let err = s.execute("actions.save", json!({"action": "OffCenter"}));
     assert!(err.is_err(), "strict export must reject off-center radial blur rather than silently recentering it");
-    assert_eq!(s.actions.list.actions(), before_actions, "actions list must remain unchanged after rejected save");
+    assert_eq!(s.actions().list.actions(), before_actions, "actions list must remain unchanged after rejected save");
 
     // With skipUnsupported: true, off-center radial blur is skipped
     let skipped = s.execute("actions.save", json!({"action": "OffCenter", "skipUnsupported": true})).unwrap();
@@ -3762,24 +3762,24 @@ fn radial_blur_off_center_strict_export_refuses_silent_recentering() {
     assert_eq!(skipped["skipped"][0]["id"], "filter.blur.radialBlur");
 
     // Radial blur targeting a mask must not export as a plain filter that edits pixels
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new(
             "MaskTarget",
             vec![ActionStep::new("filter.blur.radialBlur", json!({"amount": 50, "method": "spin", "quality": "good", "target": "mask"}))],
         ))
         .unwrap();
-    let before_actions = s.actions.list.actions().to_vec();
+    let before_actions = s.actions().list.actions().to_vec();
     let err_mask = s.execute("actions.save", json!({"action": "MaskTarget"}));
     assert!(err_mask.is_err(), "strict export must reject radial blur with non-pixel target");
-    assert_eq!(s.actions.list.actions(), before_actions, "actions list must remain unchanged after rejected save");
+    assert_eq!(s.actions().list.actions(), before_actions, "actions list must remain unchanged after rejected save");
 
     let skipped_mask = s.execute("actions.save", json!({"action": "MaskTarget", "skipUnsupported": true})).unwrap();
     assert_eq!(skipped_mask["steps"], 0);
     assert_eq!(skipped_mask["skipped"][0]["id"], "filter.blur.radialBlur");
 
     // Explicit pixels target exports successfully
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new(
             "PixelsTarget",
@@ -4020,7 +4020,7 @@ fn loaded_camera_raw_filter_steps_save_back_unchanged() {
     let mut s = crate::session();
     let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    assert_eq!(s.actions.list.actions()[0].steps[0].command, "filter.cameraRaw");
+    assert_eq!(s.actions().list.actions()[0].steps[0].command, "filter.cameraRaw");
     let saved_step = |r: &Value| {
         let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
         saved.actions[0].items.first().map(|i| (i.event.clone(), i.dictionary.clone(), i.descriptor.clone()))
@@ -4042,16 +4042,16 @@ fn loaded_camera_raw_filter_steps_save_back_unchanged() {
     assert_eq!(played["ran"], 1, "{played}");
     assert!(played.get("failed").is_none(), "{played}");
     // Edited, it no longer matches what was recorded.
-    let recorded = s.actions.list.actions()[0].steps[0].clone();
+    let recorded = s.actions().list.actions()[0].steps[0].clone();
     let mut edited = recorded.clone();
     edited.params["exposure"] = json!(1.5);
-    s.actions.list.replace_step(0, 0, edited).unwrap();
+    s.actions_mut().list.replace_step(0, 0, edited).unwrap();
     let e = s.execute("actions.save", json!({"action": "A"})).unwrap_err().to_string();
     assert!(e.contains("filter.cameraRaw"), "{e}");
     // Recorded by PhotoCraft: no descriptor to write back.
     let mut plain = recorded;
     plain.params.as_object_mut().unwrap().remove("__atnDescriptor");
-    s.actions.list.replace_step(0, 0, plain).unwrap();
+    s.actions_mut().list.replace_step(0, 0, plain).unwrap();
     let r = s.execute("actions.save", json!({"action": "A", "skipUnsupported": true})).unwrap();
     assert_eq!(r["skipped"].as_array().unwrap().len(), 1, "{r}");
 }
@@ -4074,7 +4074,7 @@ fn camera_raw_filter_steps_with_unknown_keys_stay_photoshop_steps() {
     let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
     let unsupported: Vec<u64> = loaded["unsupported"].as_array().unwrap().iter().map(|u| u["step"].as_u64().unwrap()).collect();
     assert_eq!(unsupported, [0, 1, 2], "{loaded}");
-    let ids: Vec<&str> = s.actions.list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
+    let ids: Vec<&str> = s.actions().list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
     assert_eq!(ids, [PHOTOSHOP_STEP, PHOTOSHOP_STEP, PHOTOSHOP_STEP, "filter.cameraRaw"]);
     // Kept, it still saves back as recorded.
     let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
@@ -4285,7 +4285,7 @@ fn gallery_effect_steps_load_clamp_play_and_save_back() {
     for (code, effect) in [("AccE", "accentedEdges"), ("Ct  ", "cutout"), ("Plst", "plaster")] {
         let (id, p) = gallery_params(gallery_step("GEfc", code, desc("null")));
         assert_eq!(id, format!("filter.gallery.{effect}"));
-        s.actions.list.push(Action::new(code, vec![ActionStep::new(id, p)])).unwrap();
+        s.actions_mut().list.push(Action::new(code, vec![ActionStep::new(id, p)])).unwrap();
         let played = s.execute("actions.play", json!({"action": code})).unwrap();
         assert_eq!(played["ran"], 1, "{code}: {played}");
     }
@@ -4419,7 +4419,7 @@ fn gallery_effect_steps_save_back_as_the_event_they_were_recorded_as() {
     let mut s = crate::session();
     let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    let ids: Vec<&str> = s.actions.list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
+    let ids: Vec<&str> = s.actions().list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
     assert_eq!(ids, ["filter.gallery.accentedEdges", "filter.gallery.cutout", "filter.gallery.accentedEdges"]);
 
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
@@ -4495,7 +4495,7 @@ fn channel_and_color_steps_load_and_save_back() {
     let r = s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
     assert_eq!(r["unsupported"], json!([]));
     assert_eq!(
-        s.actions.list.actions()[0].steps,
+        s.actions().list.actions()[0].steps,
         vec![
             ActionStep::new("channel.split", json!({})),
             ActionStep::new("channel.mergeSpot", json!({})),
@@ -4516,7 +4516,8 @@ fn channel_and_color_steps_load_and_save_back() {
     // Match Color with no reference plays on the image itself.
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
     s.execute("filter.render.clouds", json!({})).unwrap();
-    s.actions.list.push(Action::new("Match", vec![s.actions.list.actions()[0].steps[3].clone()])).unwrap();
+    let step = s.actions().list.actions()[0].steps[3].clone();
+    s.actions_mut().list.push(Action::new("Match", vec![step])).unwrap();
     let played = s.execute("actions.play", json!({"action": "Match"})).unwrap();
     assert_eq!(played["ran"], 1, "{played}");
 }
@@ -4694,12 +4695,12 @@ fn trap_step_without_a_width_saves_back_the_same() {
     };
     let mut s = crate::session();
     s.execute("actions.load", json!({"data": b64(&atn::write(&file).unwrap())})).unwrap();
-    let loaded = s.actions.list.actions().to_vec();
+    let loaded = s.actions().list.actions().to_vec();
     assert_eq!(loaded[0].steps, vec![ActionStep::new("image.trap", json!({"width": 1}))]);
     let saved = s.execute("actions.save", json!({"set": "S"})).unwrap();
     let mut t = crate::session();
     t.execute("actions.load", json!({"data": saved["data"].as_str().unwrap()})).unwrap();
-    assert_eq!(t.actions.list.actions(), loaded);
+    assert_eq!(t.actions().list.actions(), loaded);
 }
 
 /// The Match Color dialog records Source "None" as `"source": -1`, which the command plays
@@ -4740,7 +4741,7 @@ fn select_color_components_import_play_and_round_trip() {
                 assert_eq!(s.execute("channel.list", json!({})).unwrap(), expected, "{mode}/{depth}/{channel}");
                 let saved = s.execute("actions.save", json!({"set": "Components"})).unwrap();
                 let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
-                assert_eq!(import(&bytes).unwrap().actions[0].steps, s.actions.list.actions()[0].steps);
+                assert_eq!(import(&bytes).unwrap().actions[0].steps, s.actions().list.actions()[0].steps);
             }
         }
     }
@@ -4768,7 +4769,7 @@ fn select_color_components_preserve_unsupported_selection_shapes() {
         let data = set_of("Unknown", vec![("Pick", vec![item("select", "Select", Some(selection.clone()))])]);
         let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
         assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
         let target = s.execute("channel.list", json!({})).unwrap();
         let played = s.execute("actions.play", json!({"action": "Pick"})).unwrap();
         assert_eq!(played["failed"]["id"], PHOTOSHOP_STEP);
@@ -4826,16 +4827,16 @@ fn select_channel_export_rejects_nested_color_selections() {
         s.execute("file.new", json!({"width":2,"height":1,"mode":"cmyk"})).unwrap();
         s.execute("channel.target", params.clone()).unwrap();
         assert_eq!(s.active().unwrap().channel_view.selected_colors, colors);
-        s.actions.list.push(Action::new("Nested", vec![ActionStep::new("channel.target", params.clone())])).unwrap();
+        s.actions_mut().list.push(Action::new("Nested", vec![ActionStep::new("channel.target", params.clone())])).unwrap();
         assert!(s.execute("actions.save", json!({"action":"Nested"})).is_err(), "{params} must not become a single Cyan selection");
         let skipped = s.execute("actions.save", json!({"action":"Nested","skipUnsupported":true})).unwrap();
         assert_eq!(skipped["skipped"], json!([{"action":"Nested","step":0,"id":"channel.target"}]));
         let bytes = photocraft_paint::tile::b64_decode(skipped["data"].as_str().unwrap()).unwrap();
         assert!(atn::parse(&bytes).unwrap().actions[0].items.is_empty());
-        assert_eq!(s.actions.list.actions()[0].steps[0].params, params);
+        assert_eq!(s.actions().list.actions()[0].steps[0].params, params);
     }
     let mut s = crate::session();
-    s.actions.list.push(Action::new("Cyan", vec![ActionStep::new("channel.target", json!({"channel":{"color":"CYAN"},"extend":false}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Cyan", vec![ActionStep::new("channel.target", json!({"channel":{"color":"CYAN"},"extend":false}))])).unwrap();
     let saved = s.execute("actions.save", json!({"action":"Cyan"})).unwrap();
     assert_eq!(saved["skipped"], json!([]));
     let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
@@ -4851,26 +4852,26 @@ fn select_channel_export_rejects_mode_specific_gray_objects() {
             let mut s = crate::session();
             s.execute("file.new", json!({"width":2,"height":1,"mode":mode})).unwrap();
             assert_eq!(s.execute("channel.target", params.clone()).is_ok(), mode == "gray");
-            s.actions.list.push(Action::new("Gray object", vec![ActionStep::new("channel.target", params.clone())])).unwrap();
+            s.actions_mut().list.push(Action::new("Gray object", vec![ActionStep::new("channel.target", params.clone())])).unwrap();
             assert!(s.execute("actions.save", json!({"action":"Gray object"})).is_err(), "{mode}/{color} must not become composite");
             let skipped = s.execute("actions.save", json!({"action":"Gray object","skipUnsupported":true})).unwrap();
             assert_eq!(skipped["skipped"], json!([{"action":"Gray object","step":0,"id":"channel.target"}]));
             let bytes = photocraft_paint::tile::b64_decode(skipped["data"].as_str().unwrap()).unwrap();
             assert!(atn::parse(&bytes).unwrap().actions[0].items.is_empty());
-            assert_eq!(s.actions.list.actions()[0].steps[0].params, params);
+            assert_eq!(s.actions().list.actions()[0].steps[0].params, params);
         }
     }
     let mut s = crate::session();
-    s.actions.list.push(Action::new("Portable", vec![ActionStep::new("channel.target", json!({"channel":"composite"}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Portable", vec![ActionStep::new("channel.target", json!({"channel":"composite"}))])).unwrap();
     let saved = s.execute("actions.save", json!({"action":"Portable"})).unwrap();
     assert_eq!(saved["skipped"], json!([]));
     let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
-    assert_eq!(import(&bytes).unwrap().actions[0].steps, s.actions.list.actions()[0].steps);
+    assert_eq!(import(&bytes).unwrap().actions[0].steps, s.actions().list.actions()[0].steps);
     let gray = set_of("Gray", vec![("Pick", vec![item("select", "Select", Some(desc("null").with("null", channel_ord("Gry"))))])]);
     let mut rgb = crate::session();
     rgb.execute("file.new", json!({"width":2,"height":1,"mode":"rgb"})).unwrap();
     rgb.execute("actions.load", json!({"data":gray})).unwrap();
-    assert_eq!(rgb.actions.list.actions()[0].steps[0], ActionStep::new("channel.target", json!({"channel":"composite"})));
+    assert_eq!(rgb.actions().list.actions()[0].steps[0], ActionStep::new("channel.target", json!({"channel":"composite"})));
     assert!(rgb.execute("actions.play", json!({"action":"Pick"})).unwrap().get("failed").is_none());
 }
 
@@ -5268,7 +5269,7 @@ fn newer_feature_steps_load_with_photoshops_defaults() {
             ActionStep::new("filter.sharpen.smartSharpen", mapped(newer("smartSharpen", gaussian_sharpen(&[]))).1),
         ],
     );
-    s.actions.list.push(action).unwrap();
+    s.actions_mut().list.push(action).unwrap();
     let played = s.execute("actions.play", json!({"action": "Paint"})).unwrap();
     assert_eq!(played["ran"], 2, "{played}");
 }
@@ -5552,7 +5553,7 @@ fn newer_feature_selection_steps_play() {
     })
     .unwrap();
     let play = |s: &mut Session, name: &str| {
-        s.actions.list.push(Action::new(name, vec![ActionStep::from(mapped(newer(name, desc("null"))))])).unwrap();
+        s.actions_mut().list.push(Action::new(name, vec![ActionStep::from(mapped(newer(name, desc("null"))))])).unwrap();
         let played = s.execute("actions.play", json!({"action": name})).unwrap();
         assert!(played.get("failed").is_none(), "{name}: {played}");
         assert_eq!(played["ran"], 1, "{name}: {played}");
@@ -5708,7 +5709,7 @@ fn video_other_and_matting_steps_load_play_and_save_back() {
         }
         assert_eq!((steps[0].0.as_str(), &p), (id, &params), "{code}");
         assert_eq!(export_item(id, &steps[0].1, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
-        s.actions.list.push(Action::new(code, vec![ActionStep::new(id, steps[0].1.clone())])).unwrap();
+        s.actions_mut().list.push(Action::new(code, vec![ActionStep::new(id, steps[0].1.clone())])).unwrap();
         let played = s.execute("actions.play", json!({"action": code})).unwrap();
         assert_eq!(played["ran"], 1, "{code}: {played}");
     }
@@ -6099,7 +6100,7 @@ fn distort_filter_steps_load_clamp_play_and_save_back() {
         assert_eq!((got.as_str(), &p), (id, &params), "{code}");
         // Every key, in the order Photoshop records them.
         assert_eq!(export_item(id, &p, "S").unwrap().descriptor.unwrap().items, d.items, "{code}");
-        s.actions.list.push(Action::new(code, vec![ActionStep::new(id, p)])).unwrap();
+        s.actions_mut().list.push(Action::new(code, vec![ActionStep::new(id, p)])).unwrap();
         let played = s.execute("actions.play", json!({"action": code})).unwrap();
         assert_eq!(played["ran"], 1, "{code}: {played}");
     }
@@ -6293,7 +6294,7 @@ fn wave_values_the_command_rejects_are_kept_or_refused() {
         let (id, p) = one_step(distort("Wave", d));
         assert!(export_item(&id, &p, "S").is_some(), "{p} refused");
         let name = format!("W{k}");
-        s.actions.list.push(Action::new(&name, vec![ActionStep::new(id, p.clone())])).unwrap();
+        s.actions_mut().list.push(Action::new(&name, vec![ActionStep::new(id, p.clone())])).unwrap();
         let played = s.execute("actions.play", json!({"action": name})).unwrap();
         assert_eq!(played["ran"], 1, "{p}: {played}");
     }
@@ -6453,7 +6454,7 @@ fn pattern_fill_missing_everywhere_names_the_pattern() {
 #[test]
 fn save_finds_a_set_by_its_exact_name_with_spaces() {
     let mut s = crate::session();
-    s.actions.list.push(Action { set: Some(" Web ".into()), ..Action::new("Old", Vec::new()) }).unwrap();
+    s.actions_mut().list.push(Action { set: Some(" Web ".into()), ..Action::new("Old", Vec::new()) }).unwrap();
     s.execute("actions.record", json!({"name": "New", "set": " Web "})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
     let saved = s.execute("actions.save", json!({"set": " Web "})).unwrap();
@@ -6561,7 +6562,7 @@ fn load_rejects_bad_encodings() {
     for bad in [json!(3), json!(""), json!("nope"), json!("replacement"), json!(["gbk"])] {
         assert!(s.execute("actions.load", json!({"data": b64(&gbk_set()), "encoding": bad})).is_err(), "{bad}");
     }
-    assert!(s.actions.list.actions().is_empty(), "nothing is loaded when the encoding is bad");
+    assert!(s.actions().list.actions().is_empty(), "nothing is loaded when the encoding is bad");
 }
 
 /// Edit › Check Spelling in its recorded form: `spellCheck`, `null` = the `spellCheck` property of
@@ -6790,7 +6791,7 @@ fn gradient_fill_set_imports_midpoints_plays_and_saves_back_unchanged() {
     let mut s = crate::session();
     let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded.clone())])).unwrap())})).unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    let ActionStep { command: id, params: p } = s.actions.list.actions()[0].steps[0].clone();
+    let ActionStep { command: id, params: p } = s.actions().list.actions()[0].steps[0].clone();
     assert_eq!(id, "gradient.fill.set");
     let mut expected = json!({
         "style": "radial", "angle": 30,
@@ -6816,8 +6817,8 @@ fn gradient_fill_set_imports_midpoints_plays_and_saves_back_unchanged() {
     // Default midpoints load as `[]`, which clears the custom ones when played.
     let mut s2 = crate::session();
     s2.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded_gradient([50, 50, 50]))])).unwrap())})).unwrap();
-    assert_eq!(s2.actions.list.actions()[0].steps[0].params["midpoints"], json!([]));
-    s.actions = s2.actions;
+    assert_eq!(s2.actions().list.actions()[0].steps[0].params["midpoints"], json!([]));
+    *s.actions_mut() = s2.actions().clone();
     s.execute("actions.play", json!({"action": "A"})).unwrap();
     let photocraft_doc::Fill::Gradient { midpoints, .. } = active_fill(&s) else { panic!("not a gradient") };
     assert!(midpoints.is_empty() || midpoints.iter().all(|m| *m == 0.5), "{midpoints:?}");
@@ -6828,9 +6829,9 @@ fn gradient_fill_set_imports_midpoints_plays_and_saves_back_unchanged() {
 fn edited_gradient_fill_set_writes_a_fresh_descriptor() {
     let mut s = crate::session();
     s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded_gradient([50, 25, 70]))])).unwrap())})).unwrap();
-    let mut step = s.actions.list.actions()[0].steps[0].clone();
+    let mut step = s.actions().list.actions()[0].steps[0].clone();
     step.params["midpoints"] = json!([0.4, 0.6]);
-    s.actions.list.replace_step(0, 0, step).unwrap();
+    s.actions_mut().list.replace_step(0, 0, step).unwrap();
     let (_, d) = saved_first(&mut s);
     let t = get_obj(d.as_ref().unwrap(), "T   ").unwrap();
     let clrs = get_list(get_obj(t, "Grad").unwrap(), "Clrs").unwrap();
@@ -6838,7 +6839,7 @@ fn edited_gradient_fill_set_writes_a_fresh_descriptor() {
     assert_eq!(mids, vec![50.0, 40.0, 60.0]);
     // Its own import is the edited params.
     let Mapped::Steps(steps) = (event_for(&AtnEvent::Code(*b"setd")).unwrap().from)(d.as_ref().unwrap()) else { panic!("did not import") };
-    let mut edited = without_hidden(&s.actions.list.actions()[0].steps[0].params);
+    let mut edited = without_hidden(&s.actions().list.actions()[0].steps[0].params);
     edited["midpoints"] = json!([0.4, 0.6]);
     normalise(&mut edited);
     assert_eq!(without_hidden(&steps[0].1), edited);
@@ -6852,7 +6853,7 @@ fn gradient_fill_make_imports_plays_and_saves_back_unchanged() {
     let mut s = crate::session();
     let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_make(recorded.clone())])).unwrap())})).unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    assert_eq!(s.actions.list.actions()[0].steps[0].command, "layer.newFillLayer.gradient");
+    assert_eq!(s.actions().list.actions()[0].steps[0].command, "layer.newFillLayer.gradient");
     let (event, d) = saved_first(&mut s);
     assert_eq!(event, AtnEvent::Code(*b"Mk  "));
     assert_eq!(get_obj(get_obj(d.as_ref().unwrap(), "Usng").unwrap(), "Type"), Some(&recorded));
@@ -6971,7 +6972,7 @@ fn blend_layers(depth: u8) -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#808080");
     s
 }
 
@@ -6993,7 +6994,7 @@ fn blend_if_imports_and_plays() {
         assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
         let mut expected = json!({"blendIf": [{"channel": "gray", "thisLayer": [0, 30, 200, 255], "underlying": [10, 10, 240, 250]}, {"channel": "red", "thisLayer": [20, 40, 255, 255]}]});
         normalise(&mut expected);
-        let ActionStep { command: id, params: p } = &s.actions.list.actions()[0].steps[0];
+        let ActionStep { command: id, params: p } = &s.actions().list.actions()[0].steps[0];
         assert_eq!((id.as_str(), p), ("layer.layerStyle.blendingOptions", &expected));
         let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
         assert!(played.get("failed").is_none(), "{played}");
@@ -7014,7 +7015,7 @@ fn blend_if_with_the_dialog_options_is_one_step_and_a_rename_splits() {
     let dialog = desc("Lyr ").with("Opct", pct(40.0)).with("fillOpacity", pct(70.0)).with("Md  ", enm("BlnM", "Mltp")).with("Blnd", blnd.clone());
     let mut s = blend_layers(8);
     s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(dialog.clone())])).unwrap())})).unwrap();
-    let steps = &s.actions.list.actions()[0].steps;
+    let steps = &s.actions().list.actions()[0].steps;
     assert_eq!(steps.len(), 1, "{steps:?}");
     assert_eq!(steps[0].command, "layer.layerStyle.blendingOptions");
     let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
@@ -7029,7 +7030,7 @@ fn blend_if_with_the_dialog_options_is_one_step_and_a_rename_splits() {
     let mut s = blend_layers(8);
     s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Nm  ", text("Renamed")).with("Opct", pct(40.0)).with("Blnd", blnd))])).unwrap())}))
         .unwrap();
-    let ids: Vec<&str> = s.actions.list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
+    let ids: Vec<&str> = s.actions().list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
     assert!(ids.contains(&"layer.setProps") && ids.contains(&"layer.layerStyle.blendingOptions"), "{ids:?}");
     let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
@@ -7046,7 +7047,7 @@ fn blend_if_with_the_recorded_effects_scale_saves_back_unchanged() {
     let dialog = desc("Lyr ").with("Opct", pct(80.0)).with("Blnd", blnd.clone()).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0))));
     let mut s = blend_layers(8);
     s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(dialog.clone())])).unwrap())})).unwrap();
-    let steps = &s.actions.list.actions()[0].steps;
+    let steps = &s.actions().list.actions()[0].steps;
     assert_eq!(steps.len(), 1, "{steps:?}");
     assert_eq!(steps[0].command, "layer.layerStyle.blendingOptions");
     let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
@@ -7094,11 +7095,11 @@ fn save_and_reload(steps: Vec<ActionStep>) -> (Value, Vec<ActionStep>) {
     let mut s = crate::session();
     let mut action = Action::new("A", steps);
     action.set = Some("Review".into());
-    s.actions.list.push(action).unwrap();
+    s.actions_mut().list.push(action).unwrap();
     let saved = s.execute("actions.save", json!({"set": "Review", "skipUnsupported": true})).unwrap();
     let mut fresh = crate::session();
     fresh.execute("actions.load", json!({"data": saved["data"]})).unwrap();
-    (saved["skipped"].clone(), fresh.actions.list.actions()[0].steps.clone())
+    (saved["skipped"].clone(), fresh.actions().list.actions()[0].steps.clone())
 }
 
 /// Calculations plays an omitted blending as Multiply, so Save Actions writes it as Multiply.
@@ -7227,6 +7228,9 @@ fn whole_library_conditional_scopes_roundtrip() {
     assert_eq!(imported.actions[0].steps[0].params["thenSet"], DEFAULT_SET);
     assert_eq!(imported.actions[0].steps[0].params["elseSet"], DEFAULT_SET);
     s.execute("actions.replace", json!({"data":b64(&bytes),"confirm":true})).unwrap();
-    let params = &s.actions.list.actions()[0].steps[0].params;
+    let params = &s.actions().list.actions()[0].steps[0].params;
     assert_eq!((params["then"].as_str(), params["else"].as_str()), (Some("Target"), Some("Target")), "{params}");
 }
+
+/// The commands of the .atn table that the paint crate registers.
+const PAINT_COMMANDS: [&str; 4] = ["edit.fill", "layer.stampVisible", "paint.bucket", "paint.gradient"];

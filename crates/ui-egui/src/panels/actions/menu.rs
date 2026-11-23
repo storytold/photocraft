@@ -3,6 +3,7 @@
 use craft::automation::ui::actions::{ActionsMenuAction, ActionsMenuFacts, ActionsPanelCommands};
 use craft::ui::menu::PanelRow;
 use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_edit_cmds;
 
 use crate::PhotocraftApp;
@@ -31,7 +32,7 @@ pub(crate) fn panel_rows(app: &PhotocraftApp) -> Vec<PanelRow> {
 /// menu does not show.
 pub(crate) fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     let facts = facts(app);
-    let (panel, list) = (&app.ui.actions.panel, &app.session.actions.list);
+    let (panel, list) = (&app.ui.actions.panel, &app.session.actions().list);
     // Load Actions… is the one library row the framework leaves always on. The app's own
     // `actions.load` refuses while a recording or a paced playback holds the library (a load would
     // replace the set the recording writes into), and the reference application greys the row
@@ -67,7 +68,7 @@ struct StatesFacts<'a> {
 pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
     let menu = facts(app);
     let facts = StatesFacts {
-        list: app.session.actions.list.revision(),
+        list: app.session.actions().list.revision(),
         recording: menu.recording,
         path_selected: menu.path_selected,
         waiting: menu.waiting,
@@ -86,7 +87,7 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: 
         return true;
     }
     let facts = facts(app);
-    if let Some(ActionsMenuAction::Event(event)) = command.run(&mut app.ui.actions.panel, &app.session.actions.list, facts) {
+    if let Some(ActionsMenuAction::Event(event)) = command.run(&mut app.ui.actions.panel, &app.session.actions().list, facts) {
         super::apply_actions_events(app, vec![event]);
     }
     true

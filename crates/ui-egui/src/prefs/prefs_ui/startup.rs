@@ -1,3 +1,4 @@
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::preset_store::PresetStoreExt;
 
 use super::{JobEvent, JobOutcome, PhotocraftApp, Started, Value, json, prefs};

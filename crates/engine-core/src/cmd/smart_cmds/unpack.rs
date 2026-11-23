@@ -4,6 +4,7 @@
 //! smart object directly when those fold into it without changing the look. Smart filters are
 //! discarded (the result reports how many).
 
+use crate::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use craft_cms::Intent;
@@ -176,7 +177,7 @@ fn unpacked(so: &Layer, mut layers: Vec<Layer>) -> Layer {
 
 pub(super) fn convert_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
-    let (intent, bpc) = (s.color.settings.intent(), s.color.settings.bpc);
+    let (intent, bpc) = (s.color().settings.intent(), s.color().settings.bpc);
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = &st.doc;
     let so = doc.layer(id).ok_or(EngineError::NoLayer(id))?;

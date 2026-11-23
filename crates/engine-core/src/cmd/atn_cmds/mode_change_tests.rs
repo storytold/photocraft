@@ -4,6 +4,7 @@
 
 use super::stylize_tests::{load_items, saved_items};
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use photocraft_color::ColorMode;
 
 const EVENT: &str = "8cba8cd6-cb66-11d1-bc43-0060b0a13dc4";
@@ -65,7 +66,7 @@ fn every_measured_source_loads_and_saves_back() {
         let d = recorded("Recorded message", &codes, target("Grys"));
         let mut s = load_items(vec![item(d.clone())]);
         let (id, p) = {
-            let step = &s.actions.list.actions()[0].steps[0];
+            let step = &s.actions().list.actions()[0].steps[0];
             (&step.command, &step.params)
         };
         assert_eq!(id, ID, "{codes:?}");
@@ -84,7 +85,7 @@ fn every_native_target_loads_and_the_canonical_form_carries_only_the_settings() 
         let d = recorded("", &["URGB", "ULab"], target(class));
         let s = load_items(vec![item(d.clone())]);
         let (id, p) = {
-            let step = &s.actions.list.actions()[0].steps[0];
+            let step = &s.actions().list.actions()[0].steps[0];
             (&step.command, &step.params)
         };
         assert_eq!((id.as_str(), p), (ID, &json!({"from": ["rgb", "lab"], "to": to})));
@@ -139,7 +140,7 @@ fn a_loaded_step_plays_like_the_reference() {
         (recorded("", &["UGry", "URGB"], target("LbCM")), ColorMode::Lab),
     ] {
         let mut s = load_items(vec![item(d.clone())]);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, ID, "{d:?}");
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, ID, "{d:?}");
         s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
         let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
         assert_eq!(played["ran"], 1, "{played}");
@@ -200,7 +201,7 @@ fn other_forms_keep_the_photoshop_step() {
     }
     for d in forms.into_iter().chain([wrong_type]) {
         let mut s = load_items(vec![item(d.clone())]);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{d:?}");
         let back = saved_items(&mut s);
         assert_eq!((&back[0].event, back[0].descriptor.as_ref().map(Descriptor::to_bytes)), (&AtnEvent::name(EVENT), Some(d.to_bytes())));
         assert_eq!(back[0].dictionary, b"Conditional Mode Change", "{d:?}");
@@ -244,7 +245,7 @@ fn changed_settings_save_into_the_recorded_descriptor() {
         (other_class, changed_other_class),
     ] {
         let s = load_items(vec![item(original.clone())]);
-        let mut p = s.actions.list.actions()[0].steps[0].params.clone();
+        let mut p = s.actions().list.actions()[0].steps[0].params.clone();
         assert!(p.get(SOURCE).is_some(), "{p}");
         assert_eq!(exported(&p), Some(original));
         p["from"] = json!(["cmyk", "rgb"]);
@@ -256,7 +257,7 @@ fn changed_settings_save_into_the_recorded_descriptor() {
         Descriptor::new("cjsp").with("DstM", target(dst)).with("SrcM", src_m(sources)).with("Msge", D::Text(UnicodeString::new_nul("Recorded message")))
     };
     let s = load_items(vec![item(reordered(&["UGry"], "RGBM"))]);
-    let mut p = s.actions.list.actions()[0].steps[0].params.clone();
+    let mut p = s.actions().list.actions()[0].steps[0].params.clone();
     assert_eq!((&p["from"], &p["to"]), (&json!(["grayscale"]), &json!("rgb")), "{p}");
     assert_eq!(exported(&p), Some(reordered(&["UGry"], "RGBM")));
     p["from"] = json!(["cmyk", "rgb"]);

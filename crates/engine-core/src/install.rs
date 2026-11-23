@@ -4,7 +4,10 @@
 
 use std::sync::OnceLock;
 
+use crate::preset_store::PresetStoreExt;
+use crate::presets::PresetsExt;
 use crate::registry::{self, Install, Table};
+use crate::smartselect_cmds::{SmartSelectExt, SubjectCache};
 use crate::{Result, Session};
 
 /// Every command table with its name, in registry order. The order is part of the behaviour
@@ -157,7 +160,17 @@ pub fn install() -> Result<()> {
 /// engine crates are cut out of this one, it holds every engine hook. A stage runs its hooks in the order written
 /// here: store comes last so that `sync_preset_store` runs after the other after-command hooks.
 fn register(install: &mut Install) {
-    // Session slots, by owner crate. store:
+    // Session slots, by owner crate. model:
+    install.slot::<crate::color_cmds::ColorState>();
+    // image
+    install.slot::<SubjectCache>();
+    install.slot::<crate::smartselect_cmds::ObjectFinderCache>();
+    // files
+    install.slot::<crate::actions_cmds::ActionState>();
+    install.slot::<Option<crate::print_cmds::Spooler>>();
+    install.slot::<Option<crate::print_cmds::PrinterSource>>();
+    // store
+    install.slot::<craft_tracked::Tracked<crate::presets::PresetState>>();
     install.slot::<Option<crate::preset_store::PresetStore>>();
 
     let hooks = &mut install.hooks;
@@ -188,14 +201,14 @@ fn register(install: &mut Install) {
     hooks.prefs_applied.push(|s| crate::plugin_cmds::sync_prefs(s));
     hooks.document_closing.push(|s, index| {
         if let Some(id) = s.docs.get(index).map(|d| d.doc.id) {
-            s.subject_cache.forget_doc(id);
-            s.object_finder.forget_doc(id);
+            s.slot_or_default_mut::<SubjectCache>().forget_doc(id);
+            s.object_finder_mut().forget_doc(id);
         }
     });
     // Select Subject's and Object Finder's results are keyed by pixels: free them early.
     hooks.pixels_edited.push(|s| {
-        s.subject_cache = Default::default();
-        s.object_finder = Default::default();
+        *s.slot_or_default_mut::<SubjectCache>() = Default::default();
+        *s.object_finder_mut() = Default::default();
     });
 
     // files
@@ -211,10 +224,10 @@ fn register(install: &mut Install) {
     // id from a document opened later.
     hooks.document_closing.push(|s, index| {
         if let Some(id) = s.docs.get(index).map(|d| d.doc.id) {
-            s.presets.clone.forget_doc(id);
+            s.presets_mut().clone.forget_doc(id);
         }
     });
-    hooks.doc_id_reserved.push(|s, id| s.presets.clone.slots.iter().any(|slot| slot.document == Some(id)));
+    hooks.doc_id_reserved.push(|s, id| s.presets().clone.slots.iter().any(|slot| slot.document == Some(id)));
 }
 
 /// A session with this crate's commands installed: what this crate's tests start from.

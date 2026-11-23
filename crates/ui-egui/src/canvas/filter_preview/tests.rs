@@ -1,5 +1,6 @@
 use super::*;
 use craft::ui::dialog::DialogId;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::{Map, Value, json};
 
 /// The id of the dialog on top of the host's stack: the one a test just opened.
@@ -311,7 +312,7 @@ fn indexed_matte_preview_matches_commit_and_refreshes_tool_colors_inline_and_on_
                     });
                     let preview = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap();
                     let mut applied = photocraft_engine::Session::new();
-                    applied.color.settings = app.session.color.settings.clone();
+                    applied.color_mut().settings = app.session.color().settings.clone();
                     applied.tools.foreground = colors.0;
                     applied.tools.background = colors.1;
                     applied.add_document((*source).clone(), None);
@@ -391,7 +392,7 @@ fn cross_scale_indexed_matte_preview_rejects_old_tool_colors_from_cached_and_wor
     let old_worker = old.clone();
     let doc = app.session.documents()[0].doc.clone();
     let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
-    let color = app.session.color.settings.clone();
+    let color = app.session.color().settings.clone();
     let (release_old, wait_old) = std::sync::mpsc::channel();
     app.filter_preview_worker
         .start(old_worker.clone(), ctx.clone(), move |_| {
@@ -662,4 +663,24 @@ fn a_reopened_dialog_never_paints_the_previous_dialogs_preview() {
         }
         !a.filter_preview_worker.busy()
     });
+}
+
+/// A preview belongs to what the command addresses: another document, layer or mask in the parameters is another
+/// session, while a slider on the same target keeps the session's last frame.
+#[test]
+fn an_addressed_layer_or_mask_is_its_own_preview_session() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+    open_filter(&mut app, "filter.blur.gaussianBlur");
+    let ctx = app.ctx().clone();
+    assert!(ensure_filter_preview(&mut app, 0, &ctx).is_some(), "the preview reaches the canvas");
+    let key = app.filter_preview.as_ref().unwrap().key.clone();
+    let mut slider = key.clone();
+    slider.params["radius"] = json!(9.0);
+    assert!(same_target(&app, &slider), "a slider keeps the session");
+    for (name, value) in [("target", json!("mask")), ("layer", json!(7)), ("document", json!(1))] {
+        let mut other = key.clone();
+        other.params[name] = value;
+        assert!(!same_target(&app, &other), "another {name} is another session");
+    }
 }
