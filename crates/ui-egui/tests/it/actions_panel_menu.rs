@@ -3,6 +3,7 @@
 use craft::automation::ui::actions::{ActionSelection, ActionsPanelCommands};
 use craft::ui::runtime::commands::CommandRef;
 use egui_kittest::Harness;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionStep},
@@ -22,7 +23,7 @@ fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     app.run("file.new", json!({"width":16,"height":12})).unwrap();
     let mut a = Action::new("A", vec![]);
     a.set = Some("S".into());
-    app.session.actions.list.push(a).unwrap();
+    app.session.actions_mut().list.push(a).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     app.ui.actions.panel.expanded.insert("A".into());
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(egui::vec2(1100.0, 900.0)).build_ui_state(|ui, app| dialogs::run(app, ui), app);
@@ -50,7 +51,7 @@ fn fire(h: &mut Harness<'static, Box<PhotocraftApp>>, command: ActionsPanelComma
 
 /// The steps of action `A`.
 fn steps(app: &PhotocraftApp) -> Vec<ActionStep> {
-    app.session.actions.list.action(0).unwrap().steps.clone()
+    app.session.actions().list.action(0).unwrap().steps.clone()
 }
 
 /// The checkbox changes recording policy rather than disabling actual painting.

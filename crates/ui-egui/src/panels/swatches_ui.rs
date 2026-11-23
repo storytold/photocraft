@@ -8,6 +8,8 @@
 //! Import/Replace (`.aco`, `.act`, `.ase`), Export (`.aco`) and Export for Exchange (`.ase`) and Reset. The panel
 //! reports `SwatchEdit`s; [`apply_edit`] maps each to one `swatches.*` engine command.
 
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 use std::ffi::OsStr;
 
 use serde_json::{Value, json};
@@ -53,7 +55,7 @@ pub fn use_swatch(app: &mut PhotocraftApp, name: &str, background: bool) {
 /// The converter that shows CMYK swatches and the colour models behind them: the working CMYK profile's.
 /// `CmykConverter::new` shares the transforms of a profile, so building it per use costs a lookup.
 fn cmyk_converter(app: &PhotocraftApp) -> Option<CmykConverter> {
-    CmykConverter::new(app.session.color.working(photocraft_doc::ColorMode::Cmyk)).ok()
+    CmykConverter::new(app.session.color().working(photocraft_doc::ColorMode::Cmyk)).ok()
 }
 
 /// The words of the panel and of its file entries, from the context's environment, so the names a menu command makes
@@ -68,7 +70,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let foreground = Srgba::from_array(app.session.tools.foreground);
     let converter = cmyk_converter(app);
     let out = {
-        let mut panel = SwatchesPanel::new(&app.session.presets.swatches, Bind::bound(&mut app.ui.swatches), foreground);
+        let mut panel = SwatchesPanel::new(&app.session.presets().swatches, Bind::bound(&mut app.ui.swatches), foreground);
         if let Some(converter) = &converter {
             panel = panel.cmyk(converter);
         }
@@ -84,7 +86,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// A swatch was clicked: select it and set the foreground, or the background with Alt or Cmd/Ctrl held.
 pub(crate) fn apply_used(app: &mut PhotocraftApp, at: SwatchAt, background: bool) {
-    let name = app.session.presets.swatches.get(at.group).and_then(|g| g.entries.get(at.index)).map(|e| e.name.clone());
+    let name = app.session.presets().swatches.get(at.group).and_then(|g| g.entries.get(at.index)).map(|e| e.name.clone());
     if let Some(name) = name {
         app.ui.swatches.selected = Some(SwatchKey::Swatch(name.clone()));
         use_swatch(app, &name, background);
@@ -240,12 +242,12 @@ pub(crate) fn panel_rows(_app: &PhotocraftApp) -> Vec<PanelRow> {
 
 /// The state of each Swatches command: both exports wait for a swatch.
 pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
-    SwatchesMenu::states(&app.session.presets.swatches).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
+    SwatchesMenu::states(&app.session.presets().swatches).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
 }
 
 /// [`command_states`], derived from the presets the swatches live in.
 pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
-    crate::app::framework::derived_states(app, name, &app.session.presets.revision(), || command_states(app))
+    crate::app::framework::derived_states(app, name, &app.session.presets().revision(), || command_states(app))
 }
 
 /// Runs a fired command of the Swatches menu; false for another set's command.
@@ -253,7 +255,7 @@ pub(crate) fn run_fired(app: &mut PhotocraftApp, ctx: &egui::Context, command: &
     let Some(command) = SwatchesCommand::from_ref(command) else { return false };
     let foreground = Srgba::from_array(app.session.tools.foreground);
     let (swatch_words, _) = words(ctx);
-    let out = SwatchesMenu::run_command(&app.session.presets.swatches, &mut app.ui.swatches, command, foreground, &swatch_words);
+    let out = SwatchesMenu::run_command(&app.session.presets().swatches, &mut app.ui.swatches, command, foreground, &swatch_words);
     if let Some(edit) = out.edit {
         apply_edit(app, edit);
     }
@@ -319,7 +321,7 @@ mod tests {
         };
         let steps = |app: &PhotocraftApp| app.session.active().unwrap().history.entries().len();
         let before = steps(&app);
-        let names: Vec<String> = app.session.presets.swatches[0].entries.iter().take(2).map(|s| s.name.clone()).collect();
+        let names: Vec<String> = app.session.presets().swatches[0].entries.iter().take(2).map(|s| s.name.clone()).collect();
         use_swatch(&mut app, &names[0], false);
         let fg = app.session.tools.foreground;
         assert_eq!(fill(&app), Some(Fill::Solid(photocraft_doc::Color::rgba(fg[0], fg[1], fg[2], 1.0))), "{} filled the shape", names[0]);
@@ -359,9 +361,9 @@ mod tests {
         assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "foreground untouched (default black)");
         assert_eq!(app.ui.swatches.selected, Some(SwatchKey::Swatch("Black".into())));
         // The footer's trash deletes the selection.
-        let n = app.session.presets.swatches[0].entries.len();
+        let n = app.session.presets().swatches[0].entries.len();
         apply_edit(&mut app, SwatchEdit::delete("Black".into()));
-        assert_eq!(app.session.presets.swatches[0].entries.len(), n - 1);
+        assert_eq!(app.session.presets().swatches[0].entries.len(), n - 1);
         assert_eq!(app.ui.swatches.selected, None);
     }
 
@@ -371,11 +373,11 @@ mod tests {
         app.session.tools.foreground = [0.5, 0.25, 1.0, 1.0];
         let color = SwatchColor::Rgb([0.5, 0.25, 1.0]);
         apply_edit(&mut app, SwatchEdit::add(Some("Dark".into()), "Color Swatch 1".into(), color));
-        let dark = app.session.presets.swatches.iter().find(|g| g.name == "Dark").unwrap();
+        let dark = app.session.presets().swatches.iter().find(|g| g.name == "Dark").unwrap();
         assert_eq!(dark.entries.last().unwrap().name, "Color Swatch 1", "into the selected swatch's group");
         assert_eq!(app.ui.swatches.rename, Some(SwatchKey::Swatch("Color Swatch 1".into())), "renamed in place");
         add_from_picker(&mut app, PickedColor::cmyk(Srgba::rgb(0.0, 1.0, 1.0), [100.0, 0.0, 0.0, 0.0]));
-        let s = app.session.presets.swatches[0].entries.last().unwrap();
+        let s = app.session.presets().swatches[0].entries.last().unwrap();
         assert_eq!(s.color, photocraft_engine::presets::swatches::SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]));
     }
 
@@ -400,10 +402,10 @@ mod tests {
         }));
         assert!(run_fired(&mut app, &ctx, &CommandRef::from(SwatchesCommand::Import)));
         app.poll_file_dialog();
-        assert_eq!(app.session.presets.swatches.last().unwrap().name, "Ocean");
+        assert_eq!(app.session.presets().swatches.last().unwrap().name, "Ocean");
         assert!(run_fired(&mut app, &ctx, &CommandRef::from(SwatchesCommand::Replace)));
         app.poll_file_dialog();
-        assert_eq!(app.session.presets.swatches.len(), 1, "replace");
+        assert_eq!(app.session.presets().swatches.len(), 1, "replace");
         assert!(run_fired(&mut app, &ctx, &CommandRef::from(SwatchesCommand::ExportExchange)));
         app.poll_file_dialog();
         let written = written.lock().unwrap();
@@ -416,14 +418,14 @@ mod tests {
     #[test]
     fn dragging_a_group_header_reorders_and_persists() {
         let mut app = app();
-        let names: Vec<String> = app.session.presets.swatches.iter().map(|g| g.name.clone()).collect();
+        let names: Vec<String> = app.session.presets().swatches.iter().map(|g| g.name.clone()).collect();
         assert!(names.len() >= 2, "the default library has folders: {names:?}");
         let last = names.last().unwrap().clone();
-        let rev = app.session.presets.revision();
+        let rev = app.session.presets().revision();
         apply_edit(&mut app, SwatchEdit::move_group(last.clone(), 0));
-        let order: Vec<String> = app.session.presets.swatches.iter().map(|g| g.name.clone()).collect();
+        let order: Vec<String> = app.session.presets().swatches.iter().map(|g| g.name.clone()).collect();
         assert_eq!(order[0], last, "the dragged folder moved to the front: {order:?}");
         assert_eq!(order[1], names[0]);
-        assert_ne!(app.session.presets.revision(), rev, "the library saves its new order");
+        assert_ne!(app.session.presets().revision(), rev, "the library saves its new order");
     }
 }

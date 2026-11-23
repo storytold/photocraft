@@ -2,6 +2,7 @@
 //! checked against them.
 
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use photocraft_geom::TILE_SIZE;
 
 fn session(w: u32, h: u32) -> Session {
@@ -536,7 +537,7 @@ fn select_then_edit_in_one_command_is_bounded() {
         ActionStep::new("edit.fill", json!({"color": "#ff0000"})),
         ActionStep::new("select.deselect", json!({})),
     ];
-    s.actions.list.push(crate::actions_cmds::Action::new("A", steps)).unwrap();
+    s.actions_mut().list.push(crate::actions_cmds::Action::new("A", steps)).unwrap();
     let (_, d) = command_damage(&mut s, "actions.play", json!({"action": "A"}));
     assert!(d.contains(300, 300) && d.contains(349, 339), "{d:?}");
     assert!(u64::from(d.width()) * u64::from(d.height()) * 4 < 1024 * 768, "the filled tiles, not the canvas: {d:?}");

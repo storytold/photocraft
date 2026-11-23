@@ -1,5 +1,6 @@
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
@@ -32,15 +33,15 @@ fn opacities(s: &Session) -> Vec<f64> {
 #[test]
 fn the_layers_list_survives_a_strict_roundtrip() {
     let (mut s, first, second) = two_layers();
-    s.actions.list.push(Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": [first, second], "opacity": 0.5}))])).unwrap();
-    s.actions.list.assign_set(0, Some("S".into())).unwrap();
+    s.actions_mut().list.push(Action::new("Targets", vec![ActionStep::new("layer.setProps", json!({"layers": [first, second], "opacity": 0.5}))])).unwrap();
+    s.actions_mut().list.assign_set(0, Some("S".into())).unwrap();
 
     s.execute("actions.play", json!({"action": "Targets"})).unwrap();
     assert_eq!(opacities(&s), [0.5, 0.5]);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(opacities(&s), [1.0, 1.0]);
 
-    let action = s.actions.list.actions()[0].clone();
+    let action = s.actions().list.actions()[0].clone();
     let (bytes, skipped) = export("S", &[&action], &[], false).unwrap();
     assert_eq!(skipped, []);
     let file = atn::parse(&bytes).unwrap();

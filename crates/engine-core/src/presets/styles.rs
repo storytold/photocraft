@@ -5,6 +5,8 @@
 //! The built-in groups are our own designs, built from the same effect params as
 //! `layer.layerStyle.*`.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::{Document, Effect, Layer, Pattern, Size};
 use photocraft_geom::Rect;
@@ -149,13 +151,13 @@ pub fn builtin() -> Vec<Group<StylePreset>> {
 
 pub fn find_style<'a>(s: &'a Session, p: &Value, cmd: &str) -> Result<&'a StylePreset> {
     let name = req_str(p, "preset", cmd)?;
-    let (gi, ii) = find(&s.presets.styles, name, str_param(p, "group")).ok_or_else(|| bad(cmd, format!("no style \"{name}\" (see style.presets.list)")))?;
-    Ok(&s.presets.styles[gi].items[ii])
+    let (gi, ii) = find(&s.presets().styles, name, str_param(p, "group")).ok_or_else(|| bad(cmd, format!("no style \"{name}\" (see style.presets.list)")))?;
+    Ok(&s.presets().styles[gi].items[ii])
 }
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let groups: Vec<Value> =
-        s.presets.styles.iter().map(|g| json!({"name": g.name, "presets": g.items.iter().map(StylePreset::to_json).collect::<Vec<_>>()})).collect();
+        s.presets().styles.iter().map(|g| json!({"name": g.name, "presets": g.items.iter().map(StylePreset::to_json).collect::<Vec<_>>()})).collect();
     Ok(json!({"groups": groups}))
 }
 
@@ -269,7 +271,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .transpose()?;
     let style = StylePreset {
-        name: unique_name(&s.presets.styles, str_param(p, "name").unwrap_or("Style")),
+        name: unique_name(&s.presets().styles, str_param(p, "name").unwrap_or("Style")),
         effects: match listed {
             Some(fx) => fx,
             None => {
@@ -284,17 +286,17 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
         fill_opacity: p.get("fillOpacity").and_then(Value::as_f64).map(|v| (v / 100.0).clamp(0.0, 1.0) as f32).or_else(|| with_blend.then_some(l.fill_opacity)),
         opacity: p.get("opacity").and_then(Value::as_f64).map(|v| (v / 100.0).clamp(0.0, 1.0) as f32).or_else(|| with_blend.then_some(l.opacity)),
     };
-    let gi = group_index(&mut s.presets.styles, str_param(p, "group"));
-    let out = json!({"name": style.name, "group": s.presets.styles[gi].name, "effects": style.effects.len()});
-    s.presets.styles[gi].items.push(style);
-    s.presets_changed();
+    let gi = group_index(&mut s.presets_mut().styles, str_param(p, "group"));
+    let out = json!({"name": style.name, "group": s.presets().styles[gi].name, "effects": style.effects.len()});
+    s.presets_mut().styles[gi].items.push(style);
+    presets_changed(s);
     Ok(out)
 }
 
 fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let action = req_str(p, "action", "style.presets.edit")?.to_string();
-    let r = edit_groups(&mut s.presets.styles, &action, p, "style.presets.edit")?;
-    s.presets_changed();
+    let r = edit_groups(&mut s.presets_mut().styles, &action, p, "style.presets.edit")?;
+    presets_changed(s);
     Ok(r)
 }
 
@@ -302,14 +304,14 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let mut b = builtin();
     if p.get("append").and_then(Value::as_bool).unwrap_or(false) {
         for g in &mut b {
-            g.name = super::gradients::unique_group(&s.presets.styles, &g.name);
+            g.name = super::gradients::unique_group(&s.presets().styles, &g.name);
         }
-        s.presets.styles.extend(b);
+        s.presets_mut().styles.extend(b);
     } else {
-        s.presets.styles = b;
+        s.presets_mut().styles = b;
     }
-    s.presets_changed();
-    Ok(json!({"groups": s.presets.styles.len()}))
+    presets_changed(s);
+    Ok(json!({"groups": s.presets().styles.len()}))
 }
 
 /// Swatch for the Styles panel: the style on a rounded square, `size`² RGBA8 (straight alpha,

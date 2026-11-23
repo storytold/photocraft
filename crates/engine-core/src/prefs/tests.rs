@@ -1,4 +1,6 @@
 use super::*;
+use crate::color_cmds::ColorExt;
+use crate::prefs::SavedPrefsExt;
 
 #[test]
 fn system_title_bar_defaults_to_integrated_and_preserves_saved_choices() {
@@ -275,10 +277,10 @@ fn reset_one_colour_setting() {
     let mut s = session();
     s.execute("prefs.set", json!({"values": {"colorSettings.bpc": false, "colorSettings.workingRgb": "display-p3"}})).unwrap();
     assert_eq!(s.execute("prefs.reset", json!({"path": "colorSettings.bpc"})).unwrap(), json!(true));
-    assert!(s.color.settings.bpc);
-    assert_eq!(s.color.settings.working_rgb, "display-p3", "other colour settings are untouched");
+    assert!(s.color().settings.bpc);
+    assert_eq!(s.color().settings.working_rgb, "display-p3", "other colour settings are untouched");
     s.execute("prefs.reset", json!({"path": "colorSettings.workingRgb"})).unwrap();
-    assert_eq!(s.color.settings, crate::color_cmds::ColorSettings::default());
+    assert_eq!(s.color().settings, crate::color_cmds::ColorSettings::default());
     assert!(s.execute("prefs.reset", json!({"path": "colorSettings.notAField"})).is_err());
 }
 
@@ -402,8 +404,8 @@ fn json_round_trip_tolerates_unknown_and_missing_keys() {
     let mut t = crate::session();
     t.load_prefs_json(&text).unwrap();
     assert_eq!(t.prefs(), s.prefs());
-    assert_eq!(t.color.settings.working_rgb, "display-p3");
-    assert_eq!(t.color.settings.policy_rgb, crate::color_cmds::Policy::Convert);
+    assert_eq!(t.color().settings.working_rgb, "display-p3");
+    assert_eq!(t.color().settings.policy_rgb, crate::color_cmds::Policy::Convert);
     // Older/newer files: unknown keys ignored, missing ones default.
     let mut u = crate::session();
     u.load_prefs_json(r#"{"general": {"beepWhenDone": true, "futureThing": 1}, "someNewSection": {}}"#).unwrap();
@@ -1154,7 +1156,7 @@ fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
         .unwrap();
     assert_eq!(s.prefs().general, General::default());
     assert_eq!(s.prefs().performance.history_states, 20);
-    assert_eq!(s.color.settings.working_rgb, "display-p3", "the rest of the colour settings load");
+    assert_eq!(s.color().settings.working_rgb, "display-p3", "the rest of the colour settings load");
     let paths: Vec<String> = invalid.iter().map(InvalidPref::path).collect();
     assert_eq!(paths, ["general", "colorSettings.askOnMismatch"]);
     // A valid file reports nothing; one that isn't an object still fails as a whole.

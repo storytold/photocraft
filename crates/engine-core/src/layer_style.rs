@@ -1,5 +1,7 @@
 //! `layer.layerStyle.*` commands: add/replace layer effects on a layer.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::effects::PATTERN_SCALE_RANGE;
@@ -1112,8 +1114,8 @@ fn make_default(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(CMD, "`params` must be an object")),
     };
     crate::commands::check_f32_values(CMD, &params)?;
-    s.presets.layer_defaults.insert(kind.to_string(), params);
-    s.presets_changed();
+    s.presets_mut().layer_defaults.insert(kind.to_string(), params);
+    presets_changed(s);
     Ok(json!({"kind": kind}))
 }
 
@@ -1121,7 +1123,7 @@ fn make_default(s: &mut Session, p: &Value) -> Result<Value> {
 fn default_for(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.defaultFor";
     let kind = req_str_kind(p, CMD)?;
-    match s.presets.layer_defaults.get(kind) {
+    match s.presets().layer_defaults.get(kind) {
         Some(v) if v.is_object() => Ok(json!({"params": v, "user": true})),
         _ => Ok(json!({"params": effect_defaults(kind), "user": false})),
     }

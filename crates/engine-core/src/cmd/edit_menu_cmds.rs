@@ -5,6 +5,9 @@
 //! Check Spelling is not implemented: it needs a word list per language, and no permissively
 //! licensed dictionary small enough to bundle (or a pure-Rust checker with one) was available.
 
+use crate::preset_store::PresetStoreExt;
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_doc::vector::Path;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
@@ -211,7 +214,7 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 custom_shapes: if want("customShapes") { s.edit_state.custom_shapes.clone() } else { Vec::new() },
                 tool_presets: if want("tools") {
                     let builtins = crate::presets::tools::builtin();
-                    s.presets.tool_presets.iter().filter(|preset| bool_or(p, "includeBuiltins", false) || !builtins.contains(preset)).cloned().collect()
+                    s.presets().tool_presets.iter().filter(|preset| bool_or(p, "includeBuiltins", false) || !builtins.contains(preset)).cloned().collect()
                 } else {
                     Vec::new()
                 },
@@ -229,7 +232,7 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad(cmd, format!("not a preset file (format `{}`)", file.format)));
             }
             // Validate the whole tool import before changing any preset library.
-            let mut tools = s.presets.tool_presets.clone();
+            let mut tools = s.presets().tool_presets.clone();
             let nt = if want("tools") { file.tool_presets.len() } else { 0 };
             if nt > crate::presets::tools::MAX_PRESETS {
                 return Err(bad(cmd, "too many tool presets"));
@@ -276,8 +279,8 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             if want("tools") {
-                s.presets.tool_presets = tools;
-                s.presets_changed();
+                s.presets_mut().tool_presets = tools;
+                presets_changed(s);
             }
             Ok(json!({"brushes": nb, "customShapes": ns, "tools": nt}))
         }

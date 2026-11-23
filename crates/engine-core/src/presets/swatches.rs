@@ -11,6 +11,7 @@
 //! [`super::PresetState::to_json`]). The default set is `default_swatches()`. The commands live in
 //! `crate::swatch_cmds`; the file formats are craft-color's.
 
+use crate::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use craft_cms::{Builtin, Profile, Transform, TransformOptions};
@@ -180,7 +181,7 @@ pub struct SwatchConv {
 
 fn working(s: Option<&Session>, mode: ColorMode) -> Arc<Profile> {
     let spec = s.map(|s| {
-        let c = &s.color.settings;
+        let c = &s.color().settings;
         match mode {
             ColorMode::Cmyk => c.working_cmyk.clone(),
             ColorMode::Grayscale => c.working_gray.clone(),
@@ -250,6 +251,7 @@ pub fn hex(c: [f32; 3]) -> String {
 mod tests {
     use super::*;
     use crate::presets::PresetState;
+    use crate::presets::PresetsExt;
 
     #[test]
     fn default_library_has_the_forty_six_colours() {
@@ -303,7 +305,7 @@ mod tests {
     #[test]
     fn a_wide_gamut_working_space_changes_cmyk_but_not_rgb() {
         let mut s = crate::session();
-        s.color.settings.working_rgb = "display-p3".into();
+        s.color_mut().settings.working_rgb = "display-p3".into();
         let p3 = SwatchConv::new(&s);
         let srgb = SwatchConv::builtin();
         let cmyk = SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]);
@@ -346,7 +348,7 @@ mod tests {
         ]}]});
         let mut s = crate::session();
         s.load_presets_json(saved);
-        let groups = &s.presets.swatches;
+        let groups = &s.presets().swatches;
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].name, "Old");
         let e = &groups[0].entries;
@@ -354,7 +356,7 @@ mod tests {
         assert_eq!((e[1].color, e[1].kind), (SwatchColor::Lab([50.0, -1.5, 2.25]), SwatchKind::Spot));
         assert_eq!(e[2].color, SwatchColor::Book { space: 3, values: [1, 2, 3, 4] });
         let mut t = crate::session();
-        t.load_presets_json(s.presets.to_json(&s));
-        assert_eq!(t.presets.swatches, s.presets.swatches);
+        t.load_presets_json(s.presets().to_json(&s));
+        assert_eq!(t.presets().swatches, s.presets().swatches);
     }
 }
