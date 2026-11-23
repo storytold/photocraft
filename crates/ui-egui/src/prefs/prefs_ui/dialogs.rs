@@ -14,7 +14,9 @@ use craft::ui::contract::Bind;
 use craft::ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 #[cfg(test)]
 use craft::ui::patterns::preferences::PrefValue;
-use craft::ui::patterns::preferences::{Closed, PageInfo, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage};
+use craft::ui::patterns::preferences::{
+    Closed, PageInfo, PreferencesDraft, PreferencesModel, PreferencesState, PreferencesWindow, RowKind, SettingsDocument, StandardPage,
+};
 use craft::ui::runtime::env::{Words, WordsOverride, with_env};
 use craft::ui::runtime::memory::SaveKey;
 use craft::ui::runtime::requests::ColorRequest;
@@ -41,17 +43,20 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
     }
     if let Some(section) = id.strip_prefix("edit.preferences.") {
         open_preferences(app, section);
-        return Some(Ok(json!({"dialog": "preferences"})));
+        // The id `ui.inspect` lists the window under, as every hosted dialog replies (#15544); the status says why it
+        // did not open.
+        let opened = app.framework.dialogs.get::<PrefsDialog>().map(|d| json!({"dialog": d.id().value().to_string()}));
+        return Some(opened.ok_or_else(|| app.ui.status.clone()));
     }
     let dialog = |d: Result<DialogId, String>| Some(d.map(|d| json!({"dialog": d.value().to_string()})));
     match id {
         "edit.keyboardShortcuts" => {
             super::shortcuts::open(app, 0);
-            Some(Ok(json!({"dialog": "shortcuts"})))
+            Some(Ok(super::shortcuts::control_reply()))
         }
         "edit.menus" => {
             super::shortcuts::open(app, 1);
-            Some(Ok(json!({"dialog": "shortcuts"})))
+            Some(Ok(super::shortcuts::control_reply()))
         }
         "edit.toolbar" => {
             crate::panels::toolbar::open_drawer(app);

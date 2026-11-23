@@ -16,7 +16,7 @@ fn tmp() -> std::path::PathBuf {
 }
 
 fn snapshots(h: &Headless) -> usize {
-    h.session.active().unwrap().snapshots.len()
+    h.session.active().unwrap().snapshots().len()
 }
 
 #[test]
@@ -37,7 +37,7 @@ fn a_document_save_adds_a_snapshot_only_with_the_option() {
     h.handle("doc.save", json!({})).unwrap();
     assert_eq!(snapshots(&h), 2, "the save added one");
     let st = h.session.active().unwrap();
-    assert!(std::sync::Arc::ptr_eq(&st.snapshots[1].doc, &st.doc), "of the document as saved");
+    assert!(std::sync::Arc::ptr_eq(&st.snapshots()[1].doc, &st.doc), "of the document as saved");
     assert!(!st.is_dirty(), "and the document stays saved");
 
     // A flat export is a copy, not a save of the document.
