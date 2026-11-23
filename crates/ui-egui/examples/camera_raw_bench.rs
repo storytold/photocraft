@@ -1,4 +1,5 @@
 //! Real Camera Raw proxy-update timing on a 36 MP document (CPU preparation, not GPU presentation).
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui};
 use serde_json::{Value, json};
 

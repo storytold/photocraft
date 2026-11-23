@@ -38,3 +38,28 @@ fn workspace_encoded_native_bundle_uses_requested_name_without_mutating_source()
     assert_eq!(reopened.name, "Renamed.pcraft");
     assert_eq!(doc.name, "Original", "a copy should not retarget the open document");
 }
+
+#[cfg(unix)]
+#[test]
+fn native_save_preserves_backslashes_in_the_written_filename() {
+    let dir = std::env::temp_dir().join(format!(
+        "pc-native-backslash-name-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let filename = r"Renamed\Copy.pcraft";
+    let path = dir.join(filename);
+    let mut headless = Headless::trusted_local();
+    headless.handle("doc.new", json!({"width": 8, "height": 8, "name": "Original"})).unwrap();
+    let doc = &headless.session.active().unwrap().doc;
+
+    files::save(doc, &path, None, &Default::default(), None).unwrap();
+
+    let manifest = photocraft_format::read_manifest(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(manifest.document.name, filename);
+    assert_eq!(files::open(&path).unwrap().document.name, filename);
+    assert_eq!(doc.name, "Original", "saving a snapshot must not rename the source");
+    drop(headless);
+    std::fs::remove_dir_all(dir).unwrap();
+}

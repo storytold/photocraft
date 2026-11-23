@@ -1,6 +1,7 @@
 //! Background full CPU redraws (#4024) on a device: the GPU tests skip when there is no adapter.
 
 use super::*;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 struct Gpu {
@@ -215,7 +216,7 @@ fn a_state_drawn_before_the_text_gamma_changed_is_composited_again() {
     settle(&mut g);
     g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": false})).expect("hide");
     settle(&mut g);
-    g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    g.harness.state_mut().session.color_mut().settings.blend_text_gamma = 1.0;
     g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": true})).expect("show");
     g.harness.step();
     assert!(g.harness.state().redraws.contains_key(&doc), "served from blocks of the old gamma: {}", g.harness.state().perf.last_refresh);
@@ -231,7 +232,7 @@ fn a_redraw_across_a_text_gamma_change_is_not_kept() {
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
     let held = start_held_redraw(&mut g, doc);
-    g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    g.harness.state_mut().session.color_mut().settings.blend_text_gamma = 1.0;
     drop(held);
     settle(&mut g);
     assert!(g.harness.state().kept.entries.is_empty(), "a composite of two gammas was kept");
@@ -243,11 +244,11 @@ fn a_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
-    let gamma = g.harness.state().session.color.settings.blend_text_gamma;
+    let gamma = g.harness.state().session.color().settings.blend_text_gamma;
     let held = start_held_redraw(&mut g, doc);
-    g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    g.harness.state_mut().session.color_mut().settings.blend_text_gamma = 1.0;
     g.harness.step();
-    g.harness.state_mut().session.color.settings.blend_text_gamma = gamma;
+    g.harness.state_mut().session.color_mut().settings.blend_text_gamma = gamma;
     assert!(g.harness.state().redraws.contains_key(&doc), "the redraw finished before the change back");
     drop(held);
     settle(&mut g);
@@ -261,13 +262,13 @@ fn a_hidden_documents_redraw_across_a_text_gamma_change_and_back_is_not_kept() {
     let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut g) = gpu_app() else { return };
     let doc = cpu_only_document(g.harness.state_mut(), 4096, 3072);
-    let gamma = g.harness.state().session.color.settings.blend_text_gamma;
+    let gamma = g.harness.state().session.color().settings.blend_text_gamma;
     let held = start_held_redraw(&mut g, doc);
     g.harness.state_mut().run("file.new", json!({"width": 64, "height": 64})).expect("another document");
     g.harness.step();
-    g.harness.state_mut().session.color.settings.blend_text_gamma = 1.0;
+    g.harness.state_mut().session.color_mut().settings.blend_text_gamma = 1.0;
     g.harness.step();
-    g.harness.state_mut().session.color.settings.blend_text_gamma = gamma;
+    g.harness.state_mut().session.color_mut().settings.blend_text_gamma = gamma;
     g.harness.step();
     assert!(g.harness.state().redraws.contains_key(&doc), "the hidden document's redraw stopped");
     let i = g.harness.state().session.documents().iter().position(|st| st.doc.id == doc).expect("document");
