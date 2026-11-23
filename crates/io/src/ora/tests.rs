@@ -1,5 +1,5 @@
 use super::*;
-use photocraft_doc::{Adjustment, Color, Fill, LayerMask};
+use photocraft_doc::{Adjustment, BlendRange, Color, Fill, LayerMask};
 
 const CANVAS: Size = Size { width: 70, height: 50 };
 
@@ -42,7 +42,7 @@ fn doc(depth: SampleType) -> Document {
     through_child.blend = BlendMode::LinearLight;
     through_child.locks.all = true;
     let through = Layer::group("Pass <&> \"through\"", vec![through_child]);
-    d.layers = vec![base, off, hidden, group, through];
+    d.layers = vec![base, off, hidden, group, through].into();
     d
 }
 
@@ -93,7 +93,7 @@ fn float_documents_save_as_16_bit() {
     let mut d = doc(SampleType::U16);
     d.depth = SampleType::F32;
     let fmt = PixelFormat::RGBA32F;
-    d.layers = vec![block("Float", fmt, 0, 0, 10, 10, 9)];
+    d.layers = vec![block("Float", fmt, 0, 0, 10, 10, 9)].into();
     let (back, warnings, _) = round_trip(&d);
     assert!(warnings.iter().any(|w| w.contains("16-bit")), "{warnings:?}");
     assert_eq!(back.depth, SampleType::U16);
@@ -540,6 +540,8 @@ fn lossy_documents() -> Vec<(&'static str, Document)> {
             with(&move |d| d.layers.push(l.clone()))
         }),
         ("clipped", with(&|d| d.layers[1].clipped = true)),
+        ("channel blending", with(&|d| d.layers[0].excluded_channels = 1)),
+        ("Blend If", with(&|d| d.layers[0].blend_if.set(0, [BlendRange { black: [128, 128], ..BlendRange::FULL }, BlendRange::FULL]))),
         ("fill opacity", with(&|d| d.layers[0].fill_opacity = 0.5)),
         ("pixel lock", with(&|d| d.layers[0].locks.pixels = true)),
         // Not the bottom layer: with its transparency lock, `Base` would become the Background.
@@ -567,6 +569,8 @@ fn plain_documents_lose_nothing() {
     for depth in [SampleType::U8, SampleType::U16] {
         let mut d = doc(depth);
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?}");
+        d.layers[0].blend_if.ranges = vec![[BlendRange::FULL; 2]; 4];
+        assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} full Blend If ranges");
         d.icc_profile = Some(craft_cms::Builtin::Srgb.profile().to_bytes());
         assert_eq!(losses(&d), Vec::<String>::new(), "{depth:?} tagged sRGB");
         assert_eq!(export(&d).unwrap().warnings, Vec::<String>::new());
