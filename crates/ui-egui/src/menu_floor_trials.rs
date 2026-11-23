@@ -6,6 +6,8 @@
 use craft::ui::runtime::measure::{MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_key_bytes};
 use egui::{Event, Pos2, vec2};
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -22,7 +24,7 @@ fn harness(documents: usize, recent: usize, swatches: usize) -> H {
         for _ in 0..documents {
             s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
         }
-        s.presets.edit(|presets| {
+        s.presets_mut().edit(|presets| {
             if let Some(group) = presets.swatches.first_mut()
                 && let Some(entry) = group.entries.first().cloned()
             {
@@ -155,4 +157,70 @@ fn the_held_menu_model_equals_a_fresh_build_after_each_step() {
     held_is_fresh(&mut h, "closing it");
     h.state_mut().session.saved_to("/tmp/Renamed.psd".into());
     held_is_fresh(&mut h, "a save that renames the document");
+    // Three documents, the first active: moving the second after the third keeps the active document where it was,
+    // and the Window menu's second entry opens the other document now (#16252).
+    for name in ["Second", "Third"] {
+        h.state_mut().session.execute("file.new", json!({"width": 200, "height": 100, "name": name})).unwrap();
+    }
+    h.state_mut().session.set_active(0);
+    held_is_fresh(&mut h, "opening two more documents");
+    assert_eq!(h.state_mut().session.move_document(1, 2), Some(2));
+    held_is_fresh(&mut h, "reordering the documents behind the active one");
+}
+
+#[test]
+fn the_status_bar_sits_inside_the_window_when_its_views_run_and_replay() {
+    let mut h = harness(1, 0, 0);
+    let screen = h.ctx.content_rect();
+    // The status bar's zoom field: the lowest node named Zoom that shows the percentage as its value.
+    let field = |h: &H| {
+        h.query_all_by_label("Zoom")
+            .filter(|n| {
+                let a = n.accesskit_node();
+                a.role() != egui::accesskit::Role::Slider && a.value().is_some() && a.bounding_box().is_some()
+            })
+            .map(|n| n.rect())
+            .max_by(|a, b| a.bottom().total_cmp(&b.bottom()))
+    };
+    // A settled frame replays the bar's views; a status message runs its body again.
+    for step in ["settled", "a status message"] {
+        if step == "a status message" {
+            h.state_mut().ui.status = "Saved".into();
+        }
+        h.run_steps(2);
+        let Some(field) = field(&h) else { panic!("{step}: the status bar shows its zoom field") };
+        assert!(
+            field.bottom() <= screen.bottom() && field.top() >= screen.bottom() - 40.0,
+            "{step}: the zoom field {field:?} sits in the status bar inside the window {screen:?}, not moved down past its edge"
+        );
+    }
+}
+
+/// The status message and the render-path note at the bar's far end are shown in memoized views, whose content the
+/// bar's row does not lay out: each must still stand on the readout's line, in the middle of the bar (#16352).
+#[test]
+fn the_status_message_and_the_trailing_note_stand_on_the_readouts_line() {
+    let mut h = harness(1, 0, 0);
+    let message = "Scratch disk is low on free space";
+    h.state_mut().ui.status = message.into();
+    h.state_mut().ui.status_error = true;
+    let doc = h.state().session.active().map(|st| st.doc.id.0).expect("a document is open");
+    h.state_mut().perf.gpu_layer_fit = Some(crate::canvas::gpu_canvas::LayerFit { doc, needed: 2 << 30, budget: 1 << 30 });
+    h.run_steps(4);
+    let centre = |h: &H, label: &str| {
+        let Some(node) = h.query_all_by_label(label).max_by(|a, b| a.rect().bottom().total_cmp(&b.rect().bottom())) else {
+            panic!("the status bar shows {label:?}")
+        };
+        node.rect().center().y
+    };
+    let readout = centre(&h, "400 px x 300 px (72 ppi)");
+    let Some(bar) = h.query_all_by_role(egui::accesskit::Role::Status).find(|n| n.accesskit_node().label().as_deref() == Some("Status")) else {
+        panic!("the window shows the status bar")
+    };
+    let middle = bar.rect().center().y;
+    assert!((readout - middle).abs() <= 0.5, "the readout is centred at y {readout}, in the middle of the status bar at y {middle}");
+    for label in [message, "GPU Memory Full"] {
+        let y = centre(&h, label);
+        assert!((y - readout).abs() <= 0.5, "{label:?} is centred at y {y}, on the readout's line at y {readout} (#16352)");
+    }
 }

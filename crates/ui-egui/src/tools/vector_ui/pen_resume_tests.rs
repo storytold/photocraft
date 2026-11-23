@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::canvas::testing;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -615,7 +616,7 @@ fn failed_pen_draft_after_tool_switch_leaves_library_undo_to_each_entrypoint() {
                     app.run("edit.undo", json!({})).unwrap();
                 }
             }
-            assert_eq!(app.session.actions.list.sets(), ["Keep"], "{tool:?}, {entry}: the library was restored");
+            assert_eq!(app.session.actions().list.sets(), ["Keep"], "{tool:?}, {entry}: the library was restored");
             assert_eq!(app.ui.pen, draft, "{tool:?}, {entry}: hidden anchors are untouched");
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
         }
@@ -636,7 +637,7 @@ fn active_failed_pen_drafts_keep_anchor_undo_and_library_pending() {
                 menu(&mut app, "edit.undo");
             }
             assert_eq!(app.ui.pen.as_ref().unwrap().draft.knots.len(), 1, "{tool:?}: the active editor owns Undo");
-            assert!(app.session.actions.list.sets().is_empty(), "the library Undo is still pending");
+            assert!(app.session.actions().list.sets().is_empty(), "the library Undo is still pending");
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
         }
     }
@@ -654,7 +655,7 @@ fn hidden_failed_pen_drafts_do_not_take_document_history_steps() {
         assert_eq!(app.session.active().unwrap().history.past_len(), 0, "the document edit was undone");
         assert_eq!(app.ui.pen, draft, "the retained draft was not edited");
         assert!(!crate::menus::is_enabled(&app, "history.stepBackward"), "hidden anchors cannot enable another History step");
-        assert!(app.session.actions.list.sets().is_empty(), "History does not consume the library Undo");
+        assert!(app.session.actions().list.sets().is_empty(), "History does not consume the library Undo");
     }
 }
 
@@ -708,13 +709,13 @@ fn failed_freeform_drafts_keep_same_tool_anchor_undo() {
             _ => menu(&mut app, "history.stepBackward"),
         }
         assert_eq!(app.ui.pen.as_ref().unwrap().triples(), draft.triples()[..2].to_vec(), "{entry}: retain the old fitted-anchor Undo");
-        assert!(app.session.actions.list.sets().is_empty(), "the library Undo stays pending");
+        assert!(app.session.actions().list.sets().is_empty(), "the library Undo stays pending");
         assert_eq!(app.session.active().unwrap().history.past_len(), history);
         switch_tool(&mut app, Tool::Brush);
         let remaining = app.ui.pen.clone();
         assert_eq!(crate::actions::library::edit_undo_label(&app), Some("Undo Clear All Actions"));
         menu(&mut app, "edit.undo");
-        assert_eq!(app.session.actions.list.sets(), ["Keep"]);
+        assert_eq!(app.session.actions().list.sets(), ["Keep"]);
         assert_eq!(app.ui.pen, remaining, "another tool does not edit the failed Freeform draft");
     }
 }
@@ -735,7 +736,7 @@ fn freeform_selection_does_not_claim_a_failed_pen_or_curvature_draft() {
             } else {
                 menu(&mut app, "edit.undo");
             }
-            assert_eq!(app.session.actions.list.sets(), ["Keep"], "{tool:?}: undo the library, not foreign anchors");
+            assert_eq!(app.session.actions().list.sets(), ["Keep"], "{tool:?}: undo the library, not foreign anchors");
             assert_eq!(app.ui.pen, draft);
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
         }

@@ -110,6 +110,9 @@ pub(crate) const DOCUMENT_ITEM: &str = "window.document.";
 mod tests;
 
 #[cfg(test)]
+mod appearance_menu_trials;
+
+#[cfg(test)]
 mod open_recent_position_tests;
 
 #[cfg(test)]
