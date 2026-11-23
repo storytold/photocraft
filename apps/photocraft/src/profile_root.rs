@@ -95,7 +95,17 @@ fn installation_boundary(platform: Platform, exe: &Path) -> Result<PathBuf, Stri
 fn forbidden_roots(platform: Platform, env: &impl Fn(&str) -> Option<OsString>, exe: &Path) -> Result<Vec<PathBuf>, String> {
     let mut roots = match platform {
         Platform::Windows => {
-            ["APPDATA", "LOCALAPPDATA"].into_iter().map(|key| required_base(env, key).map(|p| p.join("Photocraft"))).collect::<Result<Vec<_>, _>>()?
+            let mut roots =
+                ["APPDATA", "LOCALAPPDATA"].into_iter().map(|key| required_base(env, key).map(|p| p.join("Photocraft"))).collect::<Result<Vec<_>, _>>()?;
+            // The MSI's default per-user and per-machine folders (install-policy.wxi). A custom
+            // install folder is not known here; the executable's own folder is fenced below.
+            roots.push(required_base(env, "LOCALAPPDATA")?.join("Programs").join("ArtCraft").join("PhotoCraft"));
+            for key in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+                if let Some(base) = env(key).filter(|v| !v.is_empty()) {
+                    roots.push(absolute(PathBuf::from(base), key)?.join("ArtCraft").join("PhotoCraft"));
+                }
+            }
+            roots
         }
         Platform::Linux => {
             let mut roots =
@@ -104,6 +114,8 @@ fn forbidden_roots(platform: Platform, env: &impl Fn(&str) -> Option<OsString>, 
                     .map(|(key, fallback)| xdg_base(env, key, fallback).map(|p| p.join("photocraft")))
                     .collect::<Result<Vec<_>, _>>()?;
             roots.extend(["/usr/bin/photocraft", "/usr/local/bin/photocraft", "/opt/photocraft"].map(PathBuf::from));
+            // The stable Flatpak keeps its data in its own per-app folder.
+            roots.push(required_base(env, "HOME")?.join(".var/app/ai.storyteller.photocraft"));
             roots
         }
         Platform::Mac => {
@@ -132,7 +144,7 @@ pub fn agent_directory(root: &Path) -> Result<PathBuf, String> {
     private_subdirectory(root, "AgentFiles", "default agent folder")
 }
 
-fn private_subdirectory(root: &Path, name: &str, label: &str) -> Result<PathBuf, String> {
+fn private_subdirectory(root: &Path, name: impl AsRef<Path>, label: &str) -> Result<PathBuf, String> {
     let chosen = canonical_future(&absolute(root.to_path_buf(), "the nightly profile root")?)?;
     let child = canonical_future(&chosen.join(name))?;
     if child == chosen || !child.starts_with(&chosen) {
@@ -141,15 +153,34 @@ fn private_subdirectory(root: &Path, name: &str, label: &str) -> Result<PathBuf,
     Ok(child)
 }
 
+/// Every existing entry directly in the profile (Presets, logs, settings and so on) must resolve
+/// inside it, so a link there cannot point Nightly's writes at another app's data.
+fn entries_stay_inside(root: &Path) -> Result<(), String> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("cannot inspect the nightly profile: {error}")),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot inspect the nightly profile: {e}"))?;
+        private_subdirectory(root, entry.file_name(), "profile entry")?;
+    }
+    Ok(())
+}
+
 /// Recognise the shared portable data namespace in both the supplied and resolved path.
 /// This is not an inventory of arbitrary custom Stable overrides or a Launcher ownership proof.
 fn is_portable_layout(path: &Path, platform: Platform) -> bool {
-    portable_marker(path).is_some()
-        || path.components().any(|component| match component {
-            Component::Normal(name) if platform.ignores_case() => name.to_string_lossy().eq_ignore_ascii_case(PORTABLE_DATA_DIR),
-            Component::Normal(name) => name == PORTABLE_DATA_DIR,
-            _ => false,
-        })
+    // A folder under a portable copy belongs to that copy too. Above the chosen folder itself, a
+    // marker only counts beside a PhotoCraft executable, so an unrelated portable.txt higher up
+    // (in a user folder or at a drive root) does not refuse the profile.
+    path.ancestors().enumerate().any(|(depth, ancestor)| {
+        portable_marker(ancestor).is_some() && (depth == 0 || ["photocraft.exe", "photocraft"].iter().any(|exe| ancestor.join(exe).is_file()))
+    }) || path.components().any(|component| match component {
+        Component::Normal(name) if platform.ignores_case() => name.to_string_lossy().eq_ignore_ascii_case(PORTABLE_DATA_DIR),
+        Component::Normal(name) => name == PORTABLE_DATA_DIR,
+        _ => false,
+    })
 }
 
 /// The writable hook is the app's existing exclusive probe. Keeping it injected lets filesystem
@@ -197,6 +228,7 @@ fn validate_for(
     }
     // Existing aliases under the profile must not redirect the default agent workspace elsewhere.
     agent_directory(&chosen)?;
+    entries_stay_inside(&chosen)?;
     // Recovery can read, adopt, overwrite and sweep entries. Never let its alias leave this
     // private profile, including toward a Stable portable directory not in our known roots.
     private_subdirectory(&chosen, "Recovery", "recovery folder")?;
@@ -214,6 +246,7 @@ fn validate_for(
     }
     agent_directory(&confirmed)?;
     private_subdirectory(&confirmed, "Recovery", "recovery folder")?;
+    entries_stay_inside(&confirmed)?;
     writable(&confirmed).map_err(|e| format!("the nightly profile is not writable: {e}"))?;
     Ok(confirmed)
 }
@@ -512,6 +545,102 @@ mod tests {
         }
         assert!(fixture.check(Platform::Windows, &fixture.exe.parent().unwrap().join("profile")).is_err());
         assert!(fixture.check(Platform::Windows, &fixture.root.join("Launcher/profiles/photocraft")).is_ok());
+    }
+
+    #[test]
+    fn windows_default_msi_install_folders_are_fenced() {
+        let mut fixture = Fixture::new();
+        let local = PathBuf::from(fixture.get("LOCALAPPDATA").unwrap());
+        let per_user = local.join("Programs").join("ArtCraft").join("PhotoCraft");
+        assert!(fixture.check(Platform::Windows, &per_user.join("nightly")).unwrap_err().contains("overlap"));
+        for key in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+            let base = fixture.root.join(format!("machine {key}"));
+            fixture.env.insert(key.into(), base.clone().into_os_string());
+            let machine = base.join("ArtCraft").join("PhotoCraft");
+            assert!(fixture.check(Platform::Windows, &machine.join("nightly")).unwrap_err().contains("overlap"));
+            assert!(!machine.exists());
+        }
+        let sibling = local.join("Programs").join("ArtCraft").join("ArtCraftLauncher").join("nightly").join("photocraft");
+        assert!(fixture.check(Platform::Windows, &sibling).is_ok(), "the Launcher's own Programs sibling is not PhotoCraft's install");
+    }
+
+    #[test]
+    fn folders_under_a_stable_portable_copy_are_refused_before_any_probe() {
+        let fixture = Fixture::new();
+        let portable = fixture.root.join("D/PC");
+        std::fs::create_dir_all(&portable).unwrap();
+        std::fs::write(portable.join("portable.txt"), b"stable portable copy").unwrap();
+        std::fs::write(portable.join("photocraft.exe"), b"stable portable executable, never run").unwrap();
+        for platform in [Platform::Windows, Platform::Linux, Platform::Mac] {
+            for candidate in [portable.join("nightly"), portable.join("deeper/nightly")] {
+                let probed = std::cell::Cell::new(false);
+                let result = validate_for(
+                    platform,
+                    &candidate,
+                    |key| fixture.get(key),
+                    Some(&fixture.exe),
+                    None,
+                    |_| {
+                        probed.set(true);
+                        Ok(())
+                    },
+                );
+                assert!(result.unwrap_err().contains("portable"));
+                assert!(!probed.get());
+                assert!(!candidate.exists());
+            }
+        }
+        // A portable.txt that no PhotoCraft executable sits beside is someone else's file.
+        let unrelated = fixture.root.join("user folder");
+        std::fs::create_dir_all(&unrelated).unwrap();
+        std::fs::write(unrelated.join("portable.txt"), b"another app's marker").unwrap();
+        assert!(fixture.check(Platform::Windows, &unrelated.join("Launcher/nightly/photocraft")).is_ok());
+    }
+
+    #[test]
+    fn linux_fences_the_stable_flatpak_data_folder() {
+        let fixture = Fixture::new();
+        let flatpak = fixture.home().join(".var/app/ai.storyteller.photocraft");
+        for candidate in [flatpak.clone(), flatpak.join("data/nightly")] {
+            assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("overlap"));
+        }
+        assert!(!flatpak.exists());
+        assert!(fixture.check(Platform::Linux, &fixture.home().join(".var/app/ai.storyteller.launcher/nightly")).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn any_profile_entry_alias_must_stay_inside_the_profile() {
+        let fixture = Fixture::new();
+        let stable = fixture.home().join(".config/photocraft/Presets");
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(stable.join("stable-preset"), b"stable preset bytes").unwrap();
+        for name in ["Presets", "logs", "settings.json"] {
+            let private = fixture.root.join(format!("nightly-{name}"));
+            std::fs::create_dir(&private).unwrap();
+            std::os::unix::fs::symlink(&stable, private.join(name)).unwrap();
+            let probed = std::cell::Cell::new(false);
+            let result = validate_for(
+                Platform::Linux,
+                &private,
+                |key| fixture.get(key),
+                Some(&fixture.exe),
+                None,
+                |_| {
+                    probed.set(true);
+                    Ok(())
+                },
+            );
+            assert!(result.is_err(), "{name} must not lead outside the profile");
+            assert!(!probed.get());
+        }
+        let private = fixture.root.join("nightly-inside");
+        std::fs::create_dir_all(private.join("real-presets")).unwrap();
+        std::fs::write(private.join("settings.json"), b"{}").unwrap();
+        std::os::unix::fs::symlink(private.join("real-presets"), private.join("Presets")).unwrap();
+        assert!(fixture.check(Platform::Linux, &private).is_ok(), "regular files and links that stay inside are fine");
+        assert_eq!(std::fs::read(stable.join("stable-preset")).unwrap(), b"stable preset bytes");
+        assert_eq!(std::fs::read_dir(&stable).unwrap().count(), 1);
     }
 
     #[test]

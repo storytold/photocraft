@@ -70,6 +70,8 @@ mod ui_state;
 mod window_frame;
 
 use photocraft_engine::Session;
+#[cfg(target_os = "linux")]
+use photocraft_engine::print_cmds::PrintExt;
 use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::Prefix;
 use photocraft_ui_egui::window_policy::{self, Backend, Frame, TitleBarPref};
@@ -176,7 +178,7 @@ fn control_port_for(cli: Option<u16>, prefs: &photocraft_engine::prefs::Integrat
 }
 
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
-/// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
+/// when it still doesn't fit, `embed::before_ui`), centred on the main monitor. Without
 /// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
 /// different offset every launch (#419). A later launch restores the saved position instead
 /// (`main` turns `centered` off, #4826). Wayland compositors place windows themselves.
@@ -653,6 +655,9 @@ fn main() -> eframe::Result {
         }
     };
     let previous_nightly_unclean = nightly_session.as_ref().is_some_and(nightly_session::Session::previous_unclean);
+    // Set once a window has posted the interruption notice; until then the record must survive.
+    let unclean_notice_shown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let notice_shown_in_callback = unclean_notice_shown.clone();
     let result = eframe::run_native(
         os_window::name_for(os_window::identity()),
         options,
@@ -679,7 +684,7 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "linux")]
             let session = {
                 let mut session = Session::new();
-                session.print_spooler = print_portal::spooler();
+                *session.print_spooler_mut() = print_portal::spooler();
                 session
             };
             #[cfg(not(target_os = "linux"))]
@@ -820,6 +825,8 @@ fn main() -> eframe::Result {
             }
             // Where file drags and drops are (winit 0.30 doesn't say).
             app.services.cursor_pos = cursor::service(cc);
+            // The physical primary button: it ends a floating document window's OS move by its title bar (#16415).
+            app.services.primary_down = cursor::primary_down_service();
             // The custom title bar's undecorated window must stay borderless, or its caption and
             // border offset the content and the pointer on some Windows systems (#2246).
             app.services.window_frame = window_frame::service(cc, integrated_frame);
@@ -875,6 +882,7 @@ fn main() -> eframe::Result {
                     craft::theme::variant::Tone::Neutral,
                     None,
                 );
+                notice_shown_in_callback.store(previous_nightly_unclean, std::sync::atomic::Ordering::Relaxed);
             }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
@@ -890,8 +898,10 @@ fn main() -> eframe::Result {
     );
     // This is a controlled return, even for a handled startup error or CPU relaunch. Release
     // health ownership BEFORE primary IPC, so a successor never observes a stale busy owner.
+    // A renderer failure before the window (and so before the CPU retry) has not shown an
+    // earlier interruption: keep that record so the retry, or the next start, still reports it.
     if let Some(watch) = nightly_session
-        && let Err(error) = watch.complete()
+        && let Err(error) = watch.finish(unclean_notice_shown.load(std::sync::atomic::Ordering::Relaxed))
     {
         log::warn!("Nightly session state was left intact: {error}");
     }
@@ -971,6 +981,8 @@ pub(crate) fn no_child_spawns() -> std::sync::RwLockWriteGuard<'static, ()> {
 
 #[cfg(test)]
 mod tests {
+    use photocraft_engine::prefs::SavedPrefsExt;
+
     /// Schema-probe `ui.ron` shapes *reconstructed* from the documented 0.14/0.15/0.37 layouts,
     /// not recorded machine saves: 0.14 and 0.15 both store the flat window entry, which the
     /// first 0.37 launch rewrites; a 0.37 file is left alone. Keeping all three probes makes a

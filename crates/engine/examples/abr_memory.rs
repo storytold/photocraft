@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use photocraft_engine::Session;
 use photocraft_engine::paint::{Pattern, TipShape};
+use photocraft_engine::preset_store::PresetStoreExt;
 use serde_json::json;
 
 fn memory() -> String {
@@ -72,7 +73,7 @@ fn library_tip_bytes(s: &Session) -> (usize, u64, u64) {
 
 fn report(s: &Session, step: &str) {
     let (n, b, p) = library_tip_bytes(s);
-    let cache = s.preset_store.as_ref().map(|st| st.tip_cache()).unwrap_or_default();
+    let cache = s.preset_store().map(|st| st.tip_cache()).unwrap_or_default();
     println!(
         "{step}: {} | {} presets, {n} full tips in the library ({:.0} MB), previews {:.1} MB, tip cache {} tips {:.0} MB ({} decodes)",
         memory(),
@@ -115,7 +116,7 @@ fn main() {
                 println!("imported {} ({} presets)", f.display(), r["count"]);
             }
             println!("import + store sync: {:.2} s", t.elapsed().as_secs_f64());
-            for w in s.preset_store.as_mut().map(|st| st.take_warnings()).unwrap_or_default() {
+            for w in s.preset_store_mut().map(|st| st.take_warnings()).unwrap_or_default() {
                 println!("warning: {w}");
             }
             report(&s, "after import");

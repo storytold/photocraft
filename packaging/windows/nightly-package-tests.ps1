@@ -21,7 +21,25 @@ foreach ($pair in @(@('PhotoCraft', 'PhotoCraft 0.23.1 (nightly-v1)'), @('PhotoC
   try { Assert-NightlyFlavor $pair[0] $pair[1] '0.23.1-nightly.20261120.17.1.gabcdef012345' } catch { $refused = $true }
   Assert $refused 'stable or mismatched build flavor was accepted'
 }
-Write-Output 'nightly packaging spec, target/version refusal and flavor-binding tests passed'
+$sha = 'abcdef0123456789abcdef0123456789abcdef01'
+$good = '0.23.1-nightly.20261120.17.1.gabcdef012345'
+Assert-NightlySource $good $sha '2026-11-20' $sha ''
+$cases = @(
+  @('missing commit', $good, '', '2026-11-20', $sha, ''),
+  @('short commit', $good, 'abcdef012345', '2026-11-20', $sha, ''),
+  @('uppercase commit', $good, $sha.ToUpper(), '2026-11-20', $sha.ToUpper(), ''),
+  @('version names another commit', '0.23.1-nightly.20261120.17.1.g000000000000', $sha, '2026-11-20', $sha, ''),
+  @('missing date', $good, $sha, '', $sha, ''),
+  @('date differs from version', $good, $sha, '2026-11-21', $sha, ''),
+  @('other commit checked out', $good, $sha, '2026-11-20', ('0' * 40), ''),
+  @('dirty tree', $good, $sha, '2026-11-20', $sha, ' M apps/photocraft/src/main.rs')
+)
+foreach ($case in $cases) {
+  $refused = $false
+  try { Assert-NightlySource $case[1] $case[2] $case[3] $case[4] $case[5] } catch { $refused = $true }
+  Assert $refused "source identity accepted: $($case[0])"
+}
+Write-Output 'nightly packaging spec, target/version refusal, source identity and flavor-binding tests passed'
 
 # Exercise the SAME production notice copier with the real repository layout, then inspect a ZIP.
 if (-not $FixtureRoot -or -not [IO.Path]::IsPathRooted($FixtureRoot)) { throw 'supply an owned absolute -FixtureRoot for the notices/ZIP regression' }
@@ -54,3 +72,24 @@ try {
   if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }
 Write-Output 'nightly mock-repository root and font notices are present in stage and ZIP'
+
+# The source state comes from git itself: the checked-out commit, then a dirty tree.
+$gitRoot = Join-Path $FixtureRoot ("nightly-source-" + [Guid]::NewGuid().ToString('N'))
+try {
+  New-Item -ItemType Directory -Force -Path $gitRoot | Out-Null
+  git -C $gitRoot init -q; git -C $gitRoot -c user.name=fixture -c user.email=fixture@invalid commit -q --allow-empty -m fixture
+  if ($LASTEXITCODE -ne 0) { throw 'cannot create the git fixture' }
+  $head = (git -C $gitRoot rev-parse HEAD).Trim()
+  $state = Get-NightlySourceState $gitRoot
+  Assert ($state.Head -ceq $head -and -not $state.Status) 'clean checkout not reported as clean at HEAD'
+  $version = '0.23.1-nightly.20261120.17.1.g' + $head.Substring(0, 12)
+  Assert-NightlySource $version $head '2026-11-20' $state.Head $state.Status
+  Set-Content -LiteralPath (Join-Path $gitRoot 'untracked.txt') -Value 'dirty'
+  $state = Get-NightlySourceState $gitRoot
+  $refused = $false
+  try { Assert-NightlySource $version $head '2026-11-20' $state.Head $state.Status } catch { $refused = $true }
+  Assert $refused 'a dirty checkout was accepted'
+} finally {
+  if (Test-Path -LiteralPath $gitRoot) { Remove-Item -LiteralPath $gitRoot -Recurse -Force }
+}
+Write-Output 'nightly source state is read from git and a dirty checkout is refused'

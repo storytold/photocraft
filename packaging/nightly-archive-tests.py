@@ -22,7 +22,10 @@ class ArchivePolicy(unittest.TestCase):
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory()
         self.addCleanup(self.scratch.cleanup)
-        self.root = Path(self.scratch.name)
+        self.root = Path(self.scratch.name).resolve()
+        previous = Path.cwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, previous)
         self.stage = self.root / "stage"
         self.stage.mkdir()
         self.output = self.root / "nightly.tar.gz"
@@ -70,7 +73,7 @@ class ArchivePolicy(unittest.TestCase):
         icon = self.stage / "photocraft-nightly.png"
         icon.unlink()
         icon.symlink_to(self.stage / "README.md")
-        with self.assertRaisesRegex(ValueError, "regular file"):
+        with self.assertRaisesRegex(ValueError, "regular file|symlinks or aliases"):
             ARCHIVE.linux_archive(self.stage, self.output)
         self.assertFalse(self.output.exists())
 
@@ -113,6 +116,85 @@ class ArchivePolicy(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             ARCHIVE.linux_archive(self.stage, self.output)
         self.assertEqual(self.output.read_bytes(), b"owned earlier artifact")
+
+
+    def test_archive_output_outside_build_root_refuses(self):
+        with tempfile.TemporaryDirectory() as external:
+            output = Path(external) / "nightly.tar.gz"
+            with self.assertRaises(ValueError):
+                ARCHIVE.linux_archive(self.stage, output)
+            self.assertFalse(output.exists())
+
+    def test_archive_stage_outside_build_root_refuses(self):
+        with tempfile.TemporaryDirectory() as external:
+            stage = Path(external)
+            for name in self.required:
+                (stage / name).write_bytes(b"generated external fixture")
+            with self.assertRaises(ValueError):
+                ARCHIVE.linux_archive(stage, self.output)
+            self.assertFalse(self.output.exists())
+
+    def test_archive_stage_alias_refuses(self):
+        alias = self.root / "stage-alias"
+        alias.symlink_to(self.stage, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            ARCHIVE.linux_archive(alias, self.output)
+        self.assertFalse(self.output.exists())
+
+    def test_archive_output_parent_alias_refuses(self):
+        with tempfile.TemporaryDirectory() as external:
+            alias = self.root / "output-alias"
+            alias.symlink_to(external, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                ARCHIVE.linux_archive(self.stage, alias / "nightly.tar.gz")
+            self.assertFalse((Path(external) / "nightly.tar.gz").exists())
+
+    def test_archive_parent_traversal_refuses(self):
+        with tempfile.TemporaryDirectory(dir=self.root.parent) as external:
+            output = Path("..") / Path(external).name / "nightly.tar.gz"
+            with self.assertRaises(ValueError):
+                ARCHIVE.linux_archive(self.stage, output)
+            self.assertFalse((Path(external) / "nightly.tar.gz").exists())
+
+    def test_nonflat_member_name_refuses(self):
+        stage_root = os.path.realpath(self.stage)
+        with open(self.stage / "README.md", "rb") as incoming:
+            for bad in ("../escape", "/absolute", "nested/name", "x/../README.md", "", ".", ".."):
+                with self.subTest(name=bad), self.assertRaises(ValueError):
+                    ARCHIVE.member_info(stage_root, bad, incoming)
+
+    def test_member_header_matches_what_gettarinfo_records(self):
+        stage_root = os.path.realpath(self.stage)
+        for name in sorted(self.required):
+            with self.subTest(name=name), open(self.stage / name, "rb") as incoming:
+                ours = ARCHIVE.member_info(stage_root, name, incoming)
+                with tarfile.open(fileobj=__import__("io").BytesIO(), mode="w") as reference:
+                    theirs = reference.gettarinfo(fileobj=incoming, arcname=name)
+                self.assertEqual(ours.get_info(), theirs.get_info())
+
+    def test_member_read_budget_refuses_before_output(self):
+        (self.stage / "OFL-Large.txt").write_bytes(b"x" * 65)
+        with mock.patch.object(ARCHIVE, "MAX_MEMBER_BYTES", 64, create=True):
+            with self.assertRaises(ValueError):
+                ARCHIVE.linux_archive(self.stage, self.output)
+        self.assertFalse(self.output.exists())
+
+
+    def test_member_growth_is_rechecked_before_copy_and_output_is_cleaned(self):
+        growing = self.stage / "OFL-Growing.txt"
+        growing.write_bytes(b"x" * 32)
+        original = ARCHIVE.member_info
+
+        def grow_before_stat(stage_root, name, incoming):
+            if name == growing.name:
+                growing.write_bytes(b"x" * 65)
+            return original(stage_root, name, incoming)
+
+        with mock.patch.object(ARCHIVE, "MAX_MEMBER_BYTES", 64), \
+                mock.patch.object(ARCHIVE, "member_info", grow_before_stat):
+            with self.assertRaises(ValueError):
+                ARCHIVE.linux_archive(self.stage, self.output)
+        self.assertFalse(self.output.exists())
 
 
 class ExclusiveOutput(unittest.TestCase):

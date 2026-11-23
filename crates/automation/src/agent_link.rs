@@ -5,6 +5,11 @@
 //! settings folder, and `photocraft-cli mcp` ([`crate::live`]) reads that file on every tool call,
 //! so MCP client configurations never hold a port or a token. Adding PhotoCraft to MCP clients is
 //! the ArtCraft Launcher's job (one entry for every Craft app).
+//!
+//! PhotoCraft's bridge uses challenge authentication: the listener proves it holds the token
+//! before the client sends its own proof, and the token itself is never sent. The connection's
+//! process id identifies the publisher and distinguishes restarts; it does not authenticate the
+//! listener. See [`crate::bridge::BridgeClient`] and `docs/control-protocol.md`.
 
 use std::path::Path;
 

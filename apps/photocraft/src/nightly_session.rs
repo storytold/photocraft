@@ -67,6 +67,16 @@ impl Session {
         self.previous_unclean
     }
 
+    /// Controlled return. If an earlier session's interruption was detected but no window showed
+    /// it yet (a renderer failure before the app callback, including the CPU-retry handoff), the
+    /// record is left for the next owner to report; otherwise this is [`Self::complete`].
+    pub fn finish(self, unclean_notice_shown: bool) -> io::Result<()> {
+        if self.previous_unclean && !unclean_notice_shown {
+            return Ok(());
+        }
+        self.complete()
+    }
+
     /// Controlled event-loop completion includes a handled startup error/CPU handoff, not only
     /// exit0. Clear before releasing primary IPC so a successor cannot miss record ownership.
     /// An unwind, abort, forced exit or killed process never calls this method.
@@ -142,6 +152,27 @@ mod tests {
         let next = Session::begin(Some(&fixture.0), "third", None).unwrap().unwrap();
         assert!(next.previous_unclean());
         next.complete().unwrap();
+        assert!(!fixture.0.join(RECORD).exists());
+    }
+
+    #[test]
+    fn an_interruption_no_window_showed_survives_a_handled_startup_failure() {
+        let _no_spawns = crate::no_child_spawns();
+        let fixture = Fixture::new();
+        drop(Session::begin(Some(&fixture.0), "crashed", None).unwrap().unwrap());
+        // Renderer initialization failed before the app callback: no notice was shown.
+        let failed = Session::begin(Some(&fixture.0), "gpu-failed", None).unwrap().unwrap();
+        assert!(failed.previous_unclean());
+        failed.finish(false).unwrap();
+        // The CPU retry (or the next start) still sees the interruption and shows it.
+        let retry = Session::begin(Some(&fixture.0), "cpu-retry", None).unwrap().unwrap();
+        assert!(retry.previous_unclean());
+        retry.finish(true).unwrap();
+        assert!(!fixture.0.join(RECORD).exists(), "a session that showed the notice clears its record");
+        // Without an earlier interruption, a handled failure still clears normally.
+        let clean = Session::begin(Some(&fixture.0), "clean", None).unwrap().unwrap();
+        assert!(!clean.previous_unclean());
+        clean.finish(false).unwrap();
         assert!(!fixture.0.join(RECORD).exists());
     }
 

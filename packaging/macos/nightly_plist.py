@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
-"""App-owned Nightly bundle metadata; not signing, archive, or native acceptance."""
+"""Nightly metadata: run from a private owned build cwd with a staged template.
+
+All file arguments must stay beneath that cwd; this is not native/signing acceptance.
+"""
 import argparse
 import datetime
 import os
 from pathlib import Path
 import plistlib
 import re
+import sys
+
+# The shared helper location is fixed by this script, not by CLI file arguments.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from nightly_paths import OwnedBuildRoot
+
+MAX_TEMPLATE_BYTES = 256 * 1024
 
 IDENTIFIER = "ai.storyteller.photocraft.nightly"
 ASSOCIATIONS = ("CFBundleDocumentTypes", "CFBundleURLTypes", "UTExportedTypeDeclarations", "UTImportedTypeDeclarations")
@@ -37,26 +47,12 @@ def render(template: bytes, version: str, commit: str) -> bytes:
 
 
 def write_plist(template: Path, destination: Path, version: str, commit: str) -> None:
-    if template.is_symlink() or not template.is_file():
-        raise ValueError("the app plist template must be a regular file")
-    content = render(template.read_bytes(), version, commit)
-    created = None
-    try:
-        with destination.open("xb") as stream:
-            stat = os.fstat(stream.fileno())
-            created = (stat.st_dev, stat.st_ino)
+    with OwnedBuildRoot() as root:
+        content = render(root.read_bytes(template, MAX_TEMPLATE_BYTES), version, commit)
+        with root.create(destination) as stream:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-    except BaseException:
-        if created is not None:
-            try:
-                stat = destination.lstat()
-                if (stat.st_dev, stat.st_ino) == created:
-                    destination.unlink()
-            except FileNotFoundError:
-                pass
-        raise
 
 
 def main() -> None:

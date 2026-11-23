@@ -23,6 +23,27 @@ function Get-NightlyArchiveSpec([string] $Version, [string] $Arch) {
   }
 }
 
+# The same source identity the Linux helper enforces (nightly-common.sh): the version names the
+# commit being built, the date is the original run's, and the tree is clean.
+function Assert-NightlySource([string] $Version, [string] $Sha, [string] $BuildDate, [string] $Head, [string] $Status) {
+  if ($Sha -cnotmatch '^[0-9a-f]{40}\z') { throw 'an exact source commit is required (PHOTOCRAFT_BUILD_SHA)' }
+  if ($Version -cnotmatch '^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+\.\d+\.g[0-9a-f]{12}\z') { throw 'invalid nightly artifact version' }
+  if ($Version.Substring($Version.Length - 12) -cne $Sha.Substring(0, 12)) { throw 'version/source commit mismatch' }
+  if ($BuildDate -cnotmatch '^\d{4}-\d{2}-\d{2}\z') { throw 'the original run-created UTC date is required (PHOTOCRAFT_BUILD_DATE)' }
+  $versionDate = ($Version -split '-nightly\.', 2)[1].Substring(0, 8)
+  if ($BuildDate.Replace('-', '') -cne $versionDate) { throw 'version/original-run date mismatch' }
+  if ($Head -cne $Sha) { throw 'prepared source is not the checked-out commit' }
+  if ($Status) { throw 'nightly packaging requires the frozen clean source' }
+}
+
+function Get-NightlySourceState([string] $RepositoryRoot) {
+  $head = git -C $RepositoryRoot rev-parse HEAD
+  if ($LASTEXITCODE -ne 0) { throw 'cannot read the checked-out commit' }
+  $status = git -C $RepositoryRoot status --porcelain
+  if ($LASTEXITCODE -ne 0) { throw 'cannot read the source tree status' }
+  return @{ Head = "$head".Trim(); Status = ($status | Out-String).Trim() }
+}
+
 function Assert-NightlyFlavor([string] $ProductName, [string] $VersionOutput, [string] $ExpectedVersion) {
   if ($ProductName -ne 'PhotoCraft Nightly' -or $VersionOutput -cne "PhotoCraft $ExpectedVersion (nightly-v1)") {
     throw 'the executable is not the compiled nightly-v1 flavor'
@@ -54,6 +75,8 @@ if (-not $BuildOnly) { throw 'Nightly compilation requires -BuildOnly; final arc
 # No key values may enter compilation. This produces an internal intermediate, not a feed artifact.
 & (Join-Path $PSScriptRoot 'sign.ps1') -CheckBuildEnvironment
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$Source = Get-NightlySourceState $Root
+Assert-NightlySource $Version $env:PHOTOCRAFT_BUILD_SHA $env:PHOTOCRAFT_BUILD_DATE $Source.Head $Source.Status
 $oldChannel = $env:PHOTOCRAFT_BUILD_CHANNEL
 $oldVersionOverride = $env:PHOTOCRAFT_OVERRIDE_VERSION
 try {
@@ -67,6 +90,9 @@ try {
   $env:PHOTOCRAFT_BUILD_CHANNEL = $oldChannel
   $env:PHOTOCRAFT_OVERRIDE_VERSION = $oldVersionOverride
 }
+$Source = Get-NightlySourceState $Root
+try { Assert-NightlySource $Version $env:PHOTOCRAFT_BUILD_SHA $env:PHOTOCRAFT_BUILD_DATE $Source.Head $Source.Status }
+catch { throw "source changed during the build: $_" }
 $Exe = Join-Path $TargetDir "$Target\release\photocraft.exe"
 $pe = [System.IO.File]::ReadAllBytes($Exe)
 if ($pe.Length -lt 64) { throw 'truncated nightly PE executable' }
