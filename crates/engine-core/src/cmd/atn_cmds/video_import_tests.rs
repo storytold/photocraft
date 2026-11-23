@@ -2,6 +2,7 @@
 //! (`docs/atn.md`, "Recorded with source files").
 
 use super::*;
+use crate::actions_cmds::{ActionStep, ActionsExt};
 
 const IMPORT: &str = "file.import.videoFramesToLayers";
 
@@ -50,7 +51,8 @@ fn a_recorded_step_loads_and_saves_back_unchanged() {
         let d = recorded(path, false);
         let (mut s, r) = load(d.clone());
         assert_eq!(r["unsupported"], json!([]), "{r}");
-        assert_eq!(s.actions.list[0].steps[0], (IMPORT.to_string(), json!({"path": path})));
+        let ActionStep { command, params } = &s.actions().list.actions()[0].steps[0];
+        assert_eq!((command.as_str(), params), (IMPORT, &json!({"path": path})));
         assert_eq!(saved(&mut s), ("importVideoToLayers".to_string(), Some(d.to_bytes())));
     }
 }
@@ -66,7 +68,8 @@ fn a_recorded_header_does_not_keep_the_step() {
     d.class_id = Id::new("importVideoToLayers");
     let (mut s, r) = load(d);
     assert_eq!(r["unsupported"], json!([]), "{r}");
-    assert_eq!(s.actions.list[0].steps[0], (IMPORT.to_string(), json!({"path": path})));
+    let ActionStep { command, params } = &s.actions().list.actions()[0].steps[0];
+    assert_eq!((command.as_str(), params), (IMPORT, &json!({"path": path})));
     assert_eq!(saved(&mut s), ("importVideoToLayers".to_string(), Some(recorded(path, false).to_bytes())));
 }
 
@@ -110,7 +113,8 @@ fn a_native_step_saves_the_measured_form() {
     let d = export_item(IMPORT, &p, "S").and_then(|item| item.descriptor).unwrap();
     assert_eq!(d.items, recorded("C:/Footage/clip.mov", false).items);
     let (s, _) = load(d);
-    assert_eq!(s.actions.list[0].steps[0], (IMPORT.to_string(), p));
+    let ActionStep { command, params } = &s.actions().list.actions()[0].steps[0];
+    assert_eq!((command.as_str(), params), (IMPORT, &p));
 }
 
 /// A native step the event can't hold is refused: no file, an empty path or one with a NUL, a
@@ -157,7 +161,7 @@ fn other_forms_keep_the_photoshop_step() {
     for d in forms {
         let (mut s, r) = load(d.clone());
         assert_eq!(r["unsupported"].as_array().map(Vec::len), Some(1), "{d:?}");
-        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP, "{d:?}");
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP, "{d:?}");
         assert_eq!(saved(&mut s).1, Some(d.to_bytes()));
     }
 }
