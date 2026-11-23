@@ -44,7 +44,7 @@ impl PhotocraftApp {
             self.os_clip_svg = None;
             // Bitmap equality cannot prove that an earlier external vector source is current.
             if self.clip_external && self.session.clipboard.as_ref().is_some_and(|clip| clip.svg.is_some()) {
-                self.session.clipboard = None;
+                *self.session.clipboard = None;
                 self.os_clip_sig = None;
                 self.clip_external = false;
                 self.clip_unmirrored = true;
@@ -57,7 +57,7 @@ impl PhotocraftApp {
         if self.os_clip_svg.as_deref().is_some_and(|old| old == &source) && holds_vectors_or_newer {
             return Ok(true);
         }
-        let clip = photocraft_engine::edit_cmds::Clip::from_svg(&source).map_err(|error| {
+        let clip = photocraft_engine::edit_cmds::clip_from_svg(&source).map_err(|error| {
             let error = error.to_string();
             self.ui.status = error.clone();
             self.ui.status_error = true;
@@ -65,7 +65,7 @@ impl PhotocraftApp {
         })?;
         self.os_clip_sig = Some(svg_clip_signature(&clip));
         self.os_clip_svg = clip.svg.clone();
-        self.session.clipboard = Some(clip);
+        *self.session.clipboard = Some(clip);
         self.clip_external = true;
         self.clip_unmirrored = false;
         Ok(true)
@@ -142,7 +142,7 @@ impl PhotocraftApp {
             }
             self.os_clip_svg = None;
             if (self.os_clip_sig.take().is_some() || self.clip_external) && !self.clip_unmirrored {
-                self.session.clipboard = None;
+                *self.session.clipboard = None;
                 self.clip_external = false;
                 self.clip_unmirrored = true;
             }
@@ -155,7 +155,7 @@ impl PhotocraftApp {
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
-        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip {
+        *self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip {
             components: None,
             surface,
             bounds: r,

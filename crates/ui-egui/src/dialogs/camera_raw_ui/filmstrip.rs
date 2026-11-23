@@ -1,15 +1,13 @@
 //! The open-time dialog's filmstrip: raws opened together wait side by side in one Camera Raw
 //! dialog, as in Photoshop's. Each keeps its own settings and demosaic choice when another is
-//! shown, Open develops every one and Cancel closes every one.
+//! shown, Open develops every one and Cancel closes every one. The framework's `RawFilmstrip`
+//! draws the tiles; this module holds the raws and their thumbnails.
 
 use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
 use super::sidecar::read_sidecar;
-use super::{
-    Align2, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PhotocraftApp, RawOpen, Rect, Sense, Stroke, Tokens, Value, json, pos2, vec2, widgets,
-};
+use super::{CameraRaw, PhotocraftApp, RawOpen, Rect, Value, hosted, image, json, workspace_demosaic};
+use photocraft_engine::color_cmds::ColorExt;
 
-/// The filmstrip column, shown when more than one raw is being opened.
-pub(super) const FILM_W: f32 = 150.0;
 /// Long side of a filmstrip thumbnail, in pixels.
 const THUMB_SIDE: usize = 240;
 
@@ -20,8 +18,9 @@ pub struct HeldRaw {
     /// Its settings and the settings it started from (its sidecar's, or the defaults) once it
     /// has been shown and left for another (`None`: not edited yet).
     pub(super) kept: Option<(CameraRaw, CameraRaw)>,
-    /// The filmstrip thumbnail until it is first drawn, then its texture.
+    /// The filmstrip thumbnail until it is first handed to the workspace, then its texture.
     pub(super) thumb: Option<egui::ColorImage>,
+    // PLAN: the framework tile takes a `SizedTexture`, which does not own its texture: the handle stays here so the texture lives as long as the raw is held.
     tex: Option<egui::TextureHandle>,
 }
 
@@ -56,8 +55,8 @@ fn thumbnail(app: &PhotocraftApp, index: usize) -> Option<egui::ColorImage> {
         }
     }
     let px: Vec<[f32; 4]> = acc.iter().map(|a| if a[4] > 0.0 { [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]] } else { [0.0; 4] }).collect();
-    let display = app.session.color.canvas_display(doc).ok()?;
-    Some(CameraRawDialog::image(&px, tw, th, &display))
+    let display = app.session.color().canvas_display(doc).ok()?;
+    Some(image(&px, tw, th, &display))
 }
 
 /// `px` (`w`×`h`) box-averaged down to at most [`THUMB_SIDE`] pixels on its long side.
@@ -76,6 +75,24 @@ fn shrink(px: &[[f32; 4]], w: usize, h: usize) -> (Vec<[f32; 4]>, usize, usize) 
     (acc.iter().map(|a| if a[4] > 0.0 { [a[0] / a[4], a[1] / a[4], a[2] / a[4], a[3] / a[4]] } else { [0.0; 4] }).collect(), tw, th)
 }
 
+/// Hands each held raw's thumbnail to the workspace's tile, with whether the raw is edited.
+pub(super) fn sync_pictures(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let current = app.raw.as_ref().and_then(|s| s.raw_open.as_ref()).map(|r| r.document);
+    let Some(shown) = hosted(app) else { return };
+    let current_edited = !shown.workspace().session().is_identity();
+    // The shelf is a field beside the dialog host, so both are borrowed at once.
+    let shelf = &mut app.raw_shelf;
+    let Some(workspace) = app.framework.dialogs.get_mut::<super::Hosted>() else { return };
+    for (i, held) in shelf.iter_mut().enumerate() {
+        if let Some(img) = held.thumb.take() {
+            held.tex = Some(ctx.load_texture(format!("camera-raw-thumb-{}", held.raw.document.0), img, egui::TextureOptions::LINEAR));
+        }
+        let Some(tex) = &held.tex else { continue };
+        let edited = if Some(held.raw.document) == current { current_edited } else { held.kept.as_ref().is_some_and(|(p, _)| !p.is_identity()) };
+        workspace.workspace_mut().set_item_picture(i, egui::load::SizedTexture::from_handle(tex), edited);
+    }
+}
+
 /// Shows raw `i` of the filmstrip, with the settings it was left with (its sidecar's, the
 /// Camera Raw Defaults' Auto, or the defaults the first time).
 pub(super) fn open_held(app: &mut PhotocraftApp, ctx: &egui::Context, i: usize) -> Result<(), String> {
@@ -87,13 +104,14 @@ pub(super) fn open_held(app: &mut PhotocraftApp, ctx: &egui::Context, i: usize) 
 /// Shows raw `to` of the filmstrip; the one being left keeps its settings, and its thumbnail
 /// shows them.
 pub(super) fn show_raw(app: &mut PhotocraftApp, ctx: &egui::Context, to: usize) -> Result<(), String> {
-    let Some(d) = app.camera_raw.as_ref() else { return Ok(()) };
-    let current = d.raw_open.as_ref().map(|r| r.document);
-    if d.target != Target::OpenRaw || app.raw_shelf.get(to).is_none_or(|h| Some(h.raw.document) == current) {
+    let Some(session) = app.raw.as_ref() else { return Ok(()) };
+    let current = session.raw_open.as_ref().map(|r| r.document);
+    if session.target != Target::OpenRaw || app.raw_shelf.get(to).is_none_or(|h| Some(h.raw.document) == current) {
         return Ok(());
     }
     keep_settings(app);
-    // On success this replaces the dialog. On failure the dialog stays on the raw being left, and
+    sync_pictures(app, ctx);
+    // On success this shows the raw in the workspace. On failure the workspace stays on the raw being left, and
     // the other keeps its place in the filmstrip.
     let active = app.session.active_index();
     let shown = open_held(app, ctx, to);
@@ -105,20 +123,32 @@ pub(super) fn show_raw(app: &mut PhotocraftApp, ctx: &egui::Context, to: usize) 
     shown
 }
 
-/// Stores the dialog's settings (and demosaic choice) on its filmstrip raw, and refreshes the
+/// Stores the workspace's settings (and demosaic choice) on its filmstrip raw, and refreshes the
 /// raw's thumbnail from the preview.
 pub(super) fn keep_settings(app: &mut PhotocraftApp) {
-    let Some(d) = app.camera_raw.as_ref() else { return };
-    let Some(raw) = &d.raw_open else { return };
-    let Some(held) = app.raw_shelf.iter_mut().find(|h| h.raw.document == raw.document) else { return };
-    held.kept = Some((d.params.clone(), d.original.clone()));
-    held.raw.demosaic = raw.demosaic;
+    let Some(workspace) = hosted(app) else { return };
+    let settings = workspace.workspace().session().clone();
+    let Some(demosaic) = workspace_demosaic(workspace) else { return };
+    keep(app, &settings, demosaic, true);
+}
+
+/// Stores `settings` and `demosaic` on the held raw of the shown one; with `thumbnail`, refreshes its thumbnail from the
+/// develop of those settings.
+pub(super) fn keep(app: &mut PhotocraftApp, settings: &CameraRaw, demosaic: photocraft_io::raw::Demosaic, thumbnail: bool) {
+    let Some(session) = app.raw.as_ref() else { return };
+    let Some(raw) = &session.raw_open else { return };
+    let (document, original, source) = (raw.document, session.original.clone(), session.source.clone());
+    let Some(held) = app.raw_shelf.iter_mut().find(|h| h.raw.document == document) else { return };
+    held.kept = Some((settings.clone(), original));
+    held.raw.demosaic = demosaic;
+    if !thumbnail {
+        return;
+    }
     // The preview may not have caught up with the last edit: the thumbnail shows what was kept.
-    let frame = (d.dirty || d.render_pending()).then(|| d.proxy_job().run().px);
-    let developed = frame.as_deref().unwrap_or(&d.processed);
+    let developed = source.developed().filter(|d| &d.settings == settings).map(|d| d.processed.clone()).unwrap_or_else(|| source.proxy_job(settings).run().px);
     if !developed.is_empty() {
-        let (px, w, h) = shrink(developed, d.pw, d.ph);
-        held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));
+        let (px, w, h) = shrink(&developed, source.pw, source.ph);
+        held.thumb = Some(image(&px, w, h, &source.display));
         held.tex = None;
     }
 }
@@ -147,7 +177,6 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
 /// filmstrip once it has opened or its background develop has started: one that fails stays or
 /// comes back there with its settings, so the dialog returns for it (or Cancel still closes it).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
-    keep_settings(app);
     let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
     let first = commit_open_raw(app, params, raw, Some(original));
     if let Ok(v) = &first {
@@ -190,13 +219,11 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
 }
 
 /// Done: saves each raw's settings to its sidecar, as Camera Raw's Done does, and opens none of
-/// them (they close again).
-pub(super) fn done(app: &mut PhotocraftApp) -> Value {
+/// them (they close again). `settings` are the shown raw's.
+pub(super) fn done(app: &mut PhotocraftApp, settings: &CameraRaw) -> Value {
     use super::sidecar::Stored;
-    keep_settings(app);
-    let Some(d) = app.camera_raw.as_ref() else { return Value::Null };
-    let Some(raw) = d.raw_open.clone() else { return Value::Null };
-    let mut raws = vec![(raw.clone(), d.params.clone())];
+    let Some(raw) = app.raw.as_ref().and_then(|s| s.raw_open.clone()) else { return Value::Null };
+    let mut raws = vec![(raw.clone(), settings.clone())];
     for held in app.raw_shelf.iter().filter(|h| h.raw.document != raw.document) {
         let p = match &held.kept {
             Some((p, _)) => p.clone(),
@@ -221,7 +248,6 @@ pub(super) fn done(app: &mut PhotocraftApp) -> Value {
     };
     app.ui.status_error = saved.is_empty() && stored.contains(&Stored::Skipped);
     let saved = json!(saved);
-    app.camera_raw = None;
     app.raw_shelf.clear();
     for (raw, _) in &raws {
         if let Some(index) = super::open::document_index(app, raw.document) {
@@ -230,61 +256,4 @@ pub(super) fn done(app: &mut PhotocraftApp) -> Value {
     }
     app.sync_views();
     json!({"done": true, "saved": saved})
-}
-
-/// The filmstrip of raws being opened: a thumbnail and name each, the shown one outlined, a dot
-/// on edited ones. Returns the one clicked.
-pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], current: Option<photocraft_doc::DocId>, t: &Tokens) -> Option<usize> {
-    let mut clicked = None;
-    let mut film = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(6.0, 6.0))));
-    film.set_clip_rect(rect.intersect(ui.clip_rect()));
-    egui::ScrollArea::vertical().id_salt("camera-raw-filmstrip").auto_shrink([false, false]).show(&mut film, |ui| {
-        ui.spacing_mut().item_spacing.y = 6.0;
-        let w = ui.available_width();
-        for (i, held) in shelf.iter_mut().enumerate() {
-            if held.tex.is_none()
-                && let Some(img) = held.thumb.take()
-            {
-                held.tex = Some(ui.ctx().load_texture(format!("camera-raw-thumb-{}", held.raw.document.0), img, egui::TextureOptions::LINEAR));
-            }
-            let (tile, response) = ui.allocate_exact_size(vec2(w, w * 0.75 + 18.0), Sense::click());
-            let frame = ERect::from_min_size(tile.min, vec2(w, w * 0.75));
-            let p = ui.painter();
-            p.rect_filled(frame, 2.0, if response.hovered() { t.hover } else { t.canvas });
-            if let Some(tex) = &held.tex {
-                let size = tex.size_vec2();
-                let fit = ((frame.width() - 8.0) / size.x.max(1.0)).min((frame.height() - 8.0) / size.y.max(1.0));
-                let r = ERect::from_center_size(frame.center(), size * fit);
-                widgets::checker(p, r, 6.0);
-                p.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            }
-            if Some(held.raw.document) == current {
-                p.rect_stroke(frame, 2.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
-            }
-            if held.kept.as_ref().is_some_and(|(p, _)| !p.is_identity()) {
-                p.circle_filled(frame.right_top() + vec2(-7.0, 7.0), 3.0, t.text);
-            }
-            let name = ERect::from_min_max(pos2(tile.left(), frame.bottom()), tile.max);
-            let font = FontId::proportional(10.5);
-            let label = tail_fitting(p, &held.raw.name, font.clone(), name.width());
-            p.with_clip_rect(name).text(name.center(), Align2::CENTER_CENTER, label, font, t.text_dim);
-            let response = response.on_hover_text(&held.raw.name);
-            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, Some(held.raw.document) == current, &held.raw.name));
-            if response.clicked() {
-                clicked = Some(i);
-            }
-        }
-    });
-    clicked
-}
-
-/// `name`, or "…" and as much of its end as fits in `width`: raws from one shoot differ at the
-/// end of their names (the frame number).
-fn tail_fitting(p: &egui::Painter, name: &str, font: FontId, width: f32) -> String {
-    let fits = |s: &str| p.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x <= width;
-    if fits(name) {
-        return name.to_owned();
-    }
-    let chars: Vec<char> = name.chars().collect();
-    (1..chars.len()).map(|start| format!("…{}", chars[start..].iter().collect::<String>())).find(|s| fits(s)).unwrap_or_default()
 }
