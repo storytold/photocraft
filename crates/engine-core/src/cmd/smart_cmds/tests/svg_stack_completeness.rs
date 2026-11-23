@@ -12,6 +12,13 @@ fn incomplete_svg() -> Vec<u8> {
     format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\"><!--stack-completeness-review--><rect width=\"2\" height=\"2\" fill=\"red\"/><image width=\"2\" height=\"2\" href=\"data:image/png,{data}\"/></svg>").into_bytes()
 }
 
+fn gzip(svg: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(svg).unwrap();
+    encoder.finish().unwrap()
+}
+
 fn smart_svg(bytes: Vec<u8>) -> SmartObject {
     SmartObject::new(SmartSource::Embedded { file_name: "Stack completeness.svg".into(), bytes: Arc::new(bytes) }, Affine::IDENTITY, None)
 }
@@ -32,19 +39,82 @@ fn old_placed_key(bytes: &[u8], doc: &Document, smart: &SmartObject) -> StageKey
 
 #[test]
 fn gzipped_svg_stack_retains_ordinary_import_for_misnamed_sources() {
-    use std::io::Write;
-    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    encoder.write_all(&incomplete_svg()).unwrap();
-    let bytes = Arc::new(encoder.finish().unwrap());
+    let bytes = Arc::new(gzip(&incomplete_svg()));
     let session = session(8);
     let doc = &session.active().unwrap().doc;
     for name in ["logo.gz", "without-extension"] {
         let mut smart = SmartObject::new(SmartSource::Embedded { file_name: name.into(), bytes: bytes.clone() }, Affine::IDENTITY, None);
-        assert!(decode_source(name, &bytes).is_ok());
+        let ordinary = photocraft_io::import(name, &bytes).unwrap();
+        assert!(ordinary.warnings.iter().any(|warning| warning.contains("embedded image was omitted")));
+        assert!(decode_source(name, &bytes).is_err());
         smart.stack_mode = Some(photocraft_doc::StackMode::Mean);
         let rendered = render(doc, &smart).unwrap().unwrap();
         assert_eq!(rendered.rgba(1, 1), [1., 0., 0., 1.]);
         assert_eq!(source_box(doc, &smart), Some([0., 0., 2., 2.]));
+    }
+}
+
+#[test]
+fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
+    let bytes = gzip(&incomplete_svg());
+    for name in ["contents.svgz", "contents.gz", "contents.psd", "without-extension"] {
+        let opened = photocraft_io::import(name, &bytes).unwrap();
+        assert!(opened.warnings.iter().any(|warning| warning.contains("embedded image was omitted")), "{name}");
+        assert_eq!(photocraft_compose::flatten(&opened.document).get(1, 1), [1., 0., 0., 1.]);
+        let mut s = session(8);
+        paint(&mut s);
+        let id = LayerId(convert(&mut s));
+        s.active_mut().unwrap().source_read_only = true;
+        let before = s.active().unwrap().clone();
+        let pixels = flat(&s);
+        let (old_name, old_bytes) = contents_of(&before.doc, id).unwrap();
+        let error = replace_contents_bytes(&mut s, id, name, bytes.clone()).unwrap_err().to_string();
+        assert!(error.contains("incomplete smart object contents"), "{name}: {error}");
+        let after = s.active().unwrap();
+        assert!(Arc::ptr_eq(&before.doc, &after.doc), "{name}");
+        assert_eq!(after.revision, before.revision);
+        assert_eq!(after.saved_revision, before.saved_revision);
+        assert_eq!(after.history.past_len(), before.history.past_len());
+        assert_eq!(after.path, before.path);
+        assert_eq!(after.source_read_only, before.source_read_only);
+        assert_eq!(flat(&s), pixels);
+        let (retained_name, retained_bytes) = contents_of(&after.doc, id).unwrap();
+        assert_eq!(retained_name, old_name);
+        assert!(Arc::ptr_eq(&retained_bytes, &old_bytes));
+    }
+}
+
+#[test]
+fn complete_svgz_replacement_keeps_encoded_bytes_and_existing_encoding_refusals() {
+    let xml = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>"#;
+    let bytes = gzip(xml.as_bytes());
+    for source_name in ["complete.svgz", "complete.gz", "complete.psd", "without-extension"] {
+        let mut s = session(8);
+        paint(&mut s);
+        let id = LayerId(convert(&mut s));
+        let before = s.active().unwrap().clone();
+        replace_contents_bytes(&mut s, id, source_name, bytes.clone()).unwrap();
+        let after = s.active().unwrap();
+        assert_eq!(after.revision, before.revision + 1);
+        assert_eq!(after.history.past_len(), before.history.past_len() + 1);
+        let (name, retained) = contents_of(&after.doc, id).unwrap();
+        assert_eq!(name, source_name);
+        assert_eq!(retained.as_slice(), bytes);
+        let decoded = decode_source(&name, &retained).unwrap();
+        assert_eq!(decoded.size, Size::new(2, 2));
+        assert_eq!(photocraft_compose::flatten(&decoded).get(1, 1), [1., 0., 0., 1.]);
+    }
+    assert!(decode_source("explicit.af", &bytes).is_err(), "the explicit Affinity route must retain priority");
+    // The shared classifier reads UTF-16, but the app's SVG parser still requires
+    // UTF-8. Recognition must not turn an existing format refusal into success.
+    for little in [true, false] {
+        let mut encoded = if little { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
+        for unit in xml.encode_utf16() {
+            encoded.extend_from_slice(&if little { unit.to_le_bytes() } else { unit.to_be_bytes() });
+        }
+        let encoded = gzip(&encoded);
+        assert!(photocraft_io::import("unsupported.svgz", &encoded).is_err());
+        assert!(decode_source("unsupported.svgz", &encoded).is_err());
     }
 }
 
