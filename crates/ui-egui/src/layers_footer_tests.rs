@@ -236,6 +236,27 @@ fn footer_buttons_run_photocraft_commands() {
             },
         },
         Case {
+            case: "Alt New Group, one artboard active: an empty group, the artboard stays a board",
+            doc: || {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+                s.execute("layer.new.artboard", json!({"name": "Board", "rect": [0, 0, 100, 100]})).unwrap();
+                s
+            },
+            before: none,
+            button: "Create a new group",
+            mods: Modifiers::ALT,
+            after: |h| {
+                let id = h.state().framework.dialogs.stack().top().expect("the New Group dialog opened");
+                confirm(h, id);
+                h.run_steps(4);
+                let plain: Vec<Layer> = groups(h).into_iter().filter(|g| g.artboard().is_none()).collect();
+                assert_eq!(plain.len(), 1, "OK adds one group: {:?}", top(h));
+                assert!(plain[0].children().unwrap().is_empty());
+                assert!(doc(h).layers.iter().any(|l| l.artboard().is_some()), "the artboard stays at the top level");
+            },
+        },
+        Case {
             case: "Cmd New Group, two selected: an empty group below the active layer",
             doc: || two(true),
             before: none,
