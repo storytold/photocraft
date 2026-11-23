@@ -39,12 +39,6 @@ pub(super) fn map(node: &Node, ctl: &Interrupt<'_>) -> Result<Vec<SmartFilter>> 
     if node.properties.len() > names.len() {
         return Err(Failure::Unsupported("graph tone property count exceeds its bounded schema"));
     }
-    if node.properties.len() > names.len() {
-        return Err(Failure::Unsupported("too many graph tone properties"));
-    }
-    if node.properties.len() > names.len() {
-        return Err(Failure::Unsupported("too many graph tone properties"));
-    }
     for (index, property) in node.properties.iter().enumerate() {
         ctl.check().map_err(|_| Failure::Cancelled)?;
         if !names.contains(&property.name.as_str()) {
