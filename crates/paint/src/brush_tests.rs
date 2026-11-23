@@ -118,7 +118,7 @@ fn hard_edge_is_sharp() {
 fn sampled_tip_is_scaled_and_oriented() {
     // Tip: left half painted.
     let tip = GrayTile::from_fn(16, 16, |x, _| if x < 8 { 1.0 } else { 0.0 });
-    let b = BrushSettings { tip: TipShape::Sampled(tip), ..brush() };
+    let b = BrushSettings { tip: TipShape::Sampled(tip).into(), ..brush() };
     let d = Dab::round(Point::new(50.0, 50.0), 20.0, 1.0);
     let r = raster(&b, &d);
     assert!(at(&r, 40, 50) > 0.99 && at(&r, 60, 50) < 0.01);
@@ -359,6 +359,10 @@ fn hard_round_presets_have_continuous_pressure_opacity_tapers() {
                 b.size = 150.0;
                 b.pressure_opacity = true;
                 b.smoothing.amount = smoothing;
+                // The measured lag (#11888) leaves a 49 % stroke ~150 px short of the pointer, so
+                // its end cap would fall inside the span checked below; catch-up on end paints it
+                // through to the last point.
+                b.smoothing.catch_up_on_end = true;
                 let mut s = Surface::new(fmt);
                 render_stroke(&mut s, &b, &points, None, false, 1.0);
                 assert!(s.rgba(200, 120)[3] > 0.7 && s.rgba(699, 120)[3] < 0.3, "{}: the stroke must still taper", preset.name);
@@ -882,26 +886,27 @@ fn smoothing_modes() {
     // Pulled string: jitter smaller than the string moves nothing; the brush trails by the string.
     let ps = Smoothing { amount: 0.2, pulled_string: true, catch_up_on_end: false, ..Default::default() };
     let jitter: Vec<StrokePoint> = (0..20).map(|i| StrokePoint::new(if i % 2 == 0 { 0.0 } else { 5.0 }, 0.0, 1.0)).collect();
-    assert_eq!(smooth_points(&ps, 1.0, &jitter).len(), 1, "within the 20 px string: no motion");
+    assert_eq!(smooth_points(&ps, 1.0, &jitter).len(), 1, "within the 60 px string: no motion");
     let far = smooth_points(&ps, 1.0, &[StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(100.0, 0.0, 1.0)]);
-    assert!((far.last().unwrap().x - 80.0).abs() < 1e-4);
+    assert!((far.last().unwrap().x - 40.0).abs() < 1e-4);
     // Adjust for zoom: at 200 % zoom the string is half as long in image pixels.
     let far = smooth_points(&ps, 2.0, &[StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(100.0, 0.0, 1.0)]);
-    assert!((far.last().unwrap().x - 90.0).abs() < 1e-4);
+    assert!((far.last().unwrap().x - 70.0).abs() < 1e-4);
     // Stroke catch-up: a pause (timestamps) lets the brush converge on the pointer.
     let mut a = StrokePoint::new(0.0, 0.0, 1.0);
     a.time = 0.0;
     let b = StrokePoint { x: 100.0, time: 16.0, ..a };
-    let c = StrokePoint { time: 500.0, ..b };
+    let c = StrokePoint { time: 1000.0, ..b };
+    let d = StrokePoint { time: 2000.0, ..b };
     let mut s = Smoother::new(&Smoothing { amount: 0.8, catch_up: true, catch_up_on_end: false, ..Default::default() }, 1.0);
     let mut out = Vec::new();
-    for p in [a, b, c] {
+    for p in [a, b, c, d] {
         s.push(p, &mut out);
     }
     assert!(out.last().unwrap().x > 99.0, "{}", out.last().unwrap().x);
     let mut s = Smoother::new(&Smoothing { amount: 0.8, catch_up: false, catch_up_on_end: false, ..Default::default() }, 1.0);
     let mut out = Vec::new();
-    for p in [a, b, c] {
+    for p in [a, b, c, d] {
         s.push(p, &mut out);
     }
     assert!(out.last().unwrap().x < 70.0, "{}", out.last().unwrap().x);
@@ -933,7 +938,10 @@ fn disabled_smoothing_keeps_its_settings_and_paints_unsmoothed_at_every_depth() 
         let mut back: Smoothing = serde_json::from_value(serde_json::to_value(&smoothing).unwrap()).unwrap();
         assert_eq!(back, smoothing);
         back.enabled = true;
-        assert!(smooth_points(&back, 1.0, &pts).iter().zip(&pts).any(|(a, b)| a.x != b.x || a.y != b.y));
+        // Re-enabled, it smooths again: different points, or fewer (a pulled string that hasn't
+        // been pulled taut leaves the brush where it started, #11888).
+        let again = smooth_points(&back, 1.0, &pts);
+        assert!(again.len() != pts.len() || again.iter().zip(&pts).any(|(a, b)| a.x != b.x || a.y != b.y));
     }
     // Existing brush JSON has no switch and must retain its old smoothing behavior.
     let legacy: Smoothing = serde_json::from_str(r#"{"amount":0.8,"pulledString":true}"#).unwrap();
@@ -975,8 +983,9 @@ fn smoothing_pulls_by_time_not_by_how_often_the_device_reports() {
         out.last().map_or(0.0, |p| p.x)
     };
     let (fast, slow) = (run(1.0), run(16.0));
-    // Two 16 ms steps of a 0.2 pull: 1 - 0.8² = 36 % of the way.
-    assert!((slow - 36.0).abs() < 1e-4, "{slow}");
+    // Two 16 ms steps of one step's pull `a`: 1 - (1 - a)² of the way.
+    let a = crate::dynamics::smoothing_pull(0.8);
+    assert!((slow - 100.0 * (1.0 - (1.0 - a).powi(2))).abs() < 1e-4, "{slow}");
     assert!((fast - slow).abs() < 1e-4, "1000 Hz {fast} vs 60 Hz {slow}");
     // Without timestamps each point is one step, as before.
     let mut s = Smoother::new(&cfg, 1.0);
@@ -1024,13 +1033,13 @@ fn a_pulled_string_brush_takes_the_pose_along_the_string() {
     let a = StrokePoint { rotation: 350.0, ..StrokePoint::new(0.0, 0.0, 1.0) };
     let b = StrokePoint { rotation: 10.0, tilt_x: 40.0, ..StrokePoint::new(100.0, 0.0, 0.0) };
     let out = smooth_points(&ps, 1.0, &[a, b]);
-    // The 20 px string leaves the brush 80 % of the way to the pointer.
+    // The 60 px string leaves the brush 40 % of the way to the pointer.
     let p = out.last().unwrap();
-    assert!((p.x - 80.0).abs() < 1e-4, "{}", p.x);
-    assert!((p.pressure - 0.2).abs() < 1e-4, "{}", p.pressure);
-    assert!((p.tilt_x - 32.0).abs() < 1e-3, "{}", p.tilt_x);
-    // Rotation the short way round: 350° + 80 % of 20°.
-    assert!((p.rotation - 6.0).abs() < 1e-3, "{}", p.rotation);
+    assert!((p.x - 40.0).abs() < 1e-4, "{}", p.x);
+    assert!((p.pressure - 0.6).abs() < 1e-4, "{}", p.pressure);
+    assert!((p.tilt_x - 16.0).abs() < 1e-3, "{}", p.tilt_x);
+    // Rotation the short way round: 350° + 40 % of 20°.
+    assert!((p.rotation - 358.0).abs() < 1e-3, "{}", p.rotation);
 }
 
 #[test]
@@ -1342,7 +1351,7 @@ fn sampled_dabs_are_the_same_in_their_tight_box_with_rows_cut_to_the_tip() {
     // the pixels match scanning the whole square that fits any rotation, which is 0 elsewhere.
     let tip = GrayTile::from_fn(37, 23, |x, y| 0.05 + ((x * 7 + y * 13) % 11) as f32 / 11.0);
     let dual = DualBrush { enabled: true, tip: TipShape::Sampled(GrayTile::from_fn(15, 40, |x, _| 0.1 + (x % 3) as f32 / 3.0)), ..Default::default() };
-    let b = BrushSettings { tip: TipShape::Sampled(tip), dual_brush: dual, ..brush() };
+    let b = BrushSettings { tip: TipShape::Sampled(tip).into(), dual_brush: dual, ..brush() };
     let ctx = BrushContext::new(&b);
     let half_pi = std::f32::consts::FRAC_PI_2;
     for angle in [0.0, 0.3, -1.1, half_pi, half_pi + 1e-6, half_pi - 3e-7, 3.0, std::f32::consts::PI] {
@@ -1946,7 +1955,7 @@ fn general_loop_strokes_render_the_same_in_parallel_and_serially_at_every_depth(
     let tip = GrayTile::from_fn(16, 16, |x, y| if (x + y) % 3 == 0 { 1.0 } else { 0.4 });
     let mut textured = BrushSettings { size: 120.0, hardness: 0.3, ..brush() };
     textured.texture = Texture { enabled: true, pattern: Pattern::Tile(tip.clone()), each_tip: true, ..Default::default() };
-    let strokes = [BrushSettings { size: 120.0, tip: TipShape::Sampled(tip), color: [0.9, 0.2, 0.1, 1.0], ..brush() }, textured];
+    let strokes = [BrushSettings { size: 120.0, tip: TipShape::Sampled(tip).into(), color: [0.9, 0.2, 0.1, 1.0], ..brush() }, textured];
     let full = Rect::new(0, 0, 400, 200);
     let formats = [PixelFormat::RGBA8, PixelFormat::RGBA8.with_sample(SampleType::U16), PixelFormat::RGBA32F];
     struct Restore;
