@@ -4,6 +4,7 @@
 //! picture (the live composite of an open document, or a bounded decode of the file on disk as a background job),
 //! the version of that picture, and what each action does.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -24,6 +25,12 @@ use crate::PhotocraftApp;
 const OPEN_DOC_REGEN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 #[cfg(all(not(target_arch = "wasm32"), test))]
 const OPEN_DOC_REGEN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// How many recent files one pass stats on the UI thread, about the cards in view on a desktop window (the old cap
+/// of Home's list was 11). Home lists the whole history, so a full one of 100 files on a slow volume would otherwise
+/// stat every card on opening, also those below the fold; cards are asked for in list order, so the ones in view
+/// come first and the rest follow in later passes.
+pub(crate) const STATS_PER_PASS: usize = 12;
 
 /// How long a stat of a file on disk stays valid: frames in between never touch the disk.
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
@@ -81,11 +88,24 @@ impl Stamp {
     }
 
     /// The revision of the file on disk, statted again only when the window gained focus or the last stat is older
-    /// than `RECHECK_INTERVAL`.
+    /// than `RECHECK_INTERVAL`, and only while the pass's `budget` has stats left. Past them the last stat stands, a
+    /// file never statted has no picture yet and sets `new_waiting`, and a repaint picks the path up in the next pass.
+    /// While such a file waits, the next pass spends its stats on the files never statted, not on statting again the
+    /// ones that have a picture: a pass slower than `RECHECK_INTERVAL` cannot keep the first cards due for ever.
     #[cfg(not(target_arch = "wasm32"))]
-    fn disk_revision(&mut self, path: &str, focus_gained: bool) -> Revision {
+    fn disk_revision(&mut self, path: &str, focus_gained: bool, budget: &StatBudget, new_waiting: &mut bool, ctx: &egui::Context) -> Revision {
         let due = focus_gained || self.disk.as_ref().is_none_or(|d| d.checked.elapsed() >= RECHECK_INTERVAL);
-        if due {
+        let fresh = self.disk.is_none();
+        let deferred = budget.prefer_new && !fresh;
+        if due && (deferred || budget.left.get() == 0) {
+            // The start screen replays its last run while nothing it shows changed: this asks for a run of its own.
+            craft::ui::runtime::frame::request_repaint(ctx);
+            if fresh {
+                *new_waiting = true;
+                return Revision::of(&(self.generation, "not statted"));
+            }
+        } else if due {
+            budget.left.set(budget.left.get().saturating_sub(1));
             let seen = std::fs::metadata(path).ok().map(|m| (m.modified().ok(), m.len()));
             self.disk = Some(DiskStamp { seen, checked: std::time::Instant::now() });
         }
@@ -97,7 +117,7 @@ impl Stamp {
 
     /// The web has no files to stat: the picture only follows its generation.
     #[cfg(target_arch = "wasm32")]
-    fn disk_revision(&mut self, _path: &str, _focus_gained: bool) -> Revision {
+    fn disk_revision(&mut self, _path: &str, _focus_gained: bool, _budget: &StatBudget, _new_waiting: &mut bool, _ctx: &egui::Context) -> Revision {
         Revision::of(&(self.generation, "web"))
     }
 }
@@ -107,6 +127,8 @@ impl Stamp {
 #[derive(Default)]
 pub(crate) struct ThumbnailCache {
     stamps: HashMap<String, Stamp>,
+    /// A pass left a file never statted waiting for lack of stats ([`STATS_PER_PASS`]).
+    new_waiting: bool,
 }
 
 impl ThumbnailCache {
@@ -115,6 +137,12 @@ impl ThumbnailCache {
         let stamp = self.stamps.entry(path.to_string()).or_default();
         // The generation survives: it is what makes the next revision differ from the one the store holds.
         *stamp = Stamp { generation: stamp.generation + 1, ..Stamp::default() };
+    }
+
+    /// The paths whose file on disk has been statted.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn statted(&self) -> Vec<&str> {
+        self.stamps.iter().filter(|(_, s)| s.disk.is_some()).map(|(p, _)| p.as_str()).collect()
     }
 
     /// Clear all cached thumbnails (e.g. on Clear Recent Files).
@@ -136,6 +164,16 @@ pub(crate) struct RecentThumbs<'a> {
     cache: &'a Mutex<ThumbnailCache>,
     ctx: egui::Context,
     focus_gained: bool,
+    budget: StatBudget,
+}
+
+/// The stats of files on disk one pass may still make. The web has no files to stat.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) struct StatBudget {
+    /// How many more files this pass may stat ([`STATS_PER_PASS`]).
+    left: Cell<usize>,
+    /// The last pass left a file never statted waiting: this one stats only such files.
+    prefer_new: bool,
 }
 
 /// The thumbnail source of this pass. The focus gain is the frame's own `WindowFocused(true)` event, which egui
@@ -143,7 +181,9 @@ pub(crate) struct RecentThumbs<'a> {
 /// path is statted at most once per `RECHECK_INTERVAL`, or once on a focus gain).
 pub(crate) fn source<'a>(app: &'a PhotocraftApp, ctx: &egui::Context) -> RecentThumbs<'a> {
     let focus_gained = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::WindowFocused(true))));
-    RecentThumbs { docs: app.session.documents(), cache: &app.thumbnail_cache, ctx: ctx.clone(), focus_gained }
+    let prefer_new = std::mem::take(&mut lock(&app.thumbnail_cache).new_waiting);
+    let budget = StatBudget { left: Cell::new(STATS_PER_PASS), prefer_new };
+    RecentThumbs { docs: app.session.documents(), cache: &app.thumbnail_cache, ctx: ctx.clone(), focus_gained, budget }
 }
 
 /// The thumbnails the Home screen stores its pictures in.
@@ -163,14 +203,15 @@ impl ThumbSource<ThumbKey> for RecentThumbs<'_> {
         // The template previews are not PhotoCraft's: it lists none.
         let ThumbKey::Recent(path) = key else { return Revision::new(0) };
         let path = path.to_string_lossy();
-        let mut cache = lock(self.cache);
-        let stamp = cache.stamps.entry(path.to_string()).or_default();
+        let mut guard = lock(self.cache);
+        let ThumbnailCache { stamps, new_waiting } = &mut *guard;
+        let stamp = stamps.entry(path.to_string()).or_default();
         // An open document's live picture wins over the file on disk.
         if let Some(st) = self.open_doc(&path) {
             let held = stamp.held_revision(st.revision, &self.ctx);
             return Revision::of(&(stamp.generation, held));
         }
-        stamp.disk_revision(&path, self.focus_gained)
+        stamp.disk_revision(&path, self.focus_gained, &self.budget, new_waiting, &self.ctx)
     }
 
     fn render(&self, key: &ThumbKey, request: &ThumbRequest) -> ThumbRender {

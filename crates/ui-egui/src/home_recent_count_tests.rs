@@ -49,3 +49,45 @@ fn home_recent_list_follows_the_recent_file_count() {
     assert_eq!(listed(&h), 12, "the preference caps the list");
     assert!(h.query_by_label("file03.psd").is_none(), "the oldest drop off first");
 }
+
+/// A full history of 100 files on a desktop-sized window: most of the cards are below the fold.
+fn full_history() -> H {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.background_jobs = false;
+    app.run("prefs.set", serde_json::json!({"values": {"fileHandling.recentFileCount": 100}})).unwrap();
+    for i in 1..=100 {
+        app.push_recent(&format!("/tmp/photocraft-12234/full{i:03}.psd"));
+    }
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
+        |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
+            if *ready {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::canvas::document_area(app, ui));
+            }
+        },
+        (app, false),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::default());
+    h.state_mut().1 = true;
+    h
+}
+
+fn statted(h: &H) -> Vec<String> {
+    let app = &h.state().0;
+    let cache = app.thumbnail_cache.lock().unwrap();
+    cache.statted().into_iter().map(str::to_owned).collect()
+}
+
+/// Home lists the whole history, but a pass stats only a few files on the UI thread, newest (the cards in view)
+/// first; the rest follow in later passes.
+#[test]
+fn home_stats_a_bounded_number_of_recent_files_per_pass() {
+    let mut h = full_history();
+    h.step();
+    let first = statted(&h);
+    assert!(!first.is_empty() && first.len() <= 2 * crate::home_recent_ui::STATS_PER_PASS, "statted {} of 100 in the first frame", first.len());
+    assert!(first.iter().any(|p| p.ends_with("full100.psd")), "the newest card, in view, is statted first: {first:?}");
+    assert!(!first.iter().any(|p| p.ends_with("full001.psd")), "the oldest card, far below the fold, waits");
+    h.run_steps(20);
+    assert_eq!(statted(&h).len(), 100, "later passes stat the rest");
+    assert_eq!((1..=100).filter(|i| h.query_by_label(&format!("full{i:03}.psd")).is_some()).count(), 100, "all 100 are listed");
+}
