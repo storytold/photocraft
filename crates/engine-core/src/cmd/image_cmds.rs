@@ -1170,25 +1170,142 @@ fn convert_depth(s: &mut Session, depth: SampleType) -> Result<Value> {
     Ok(Value::Null)
 }
 
+enum DepthTone {
+    None,
+    DefaultTransfer(photocraft_compose::adjust::Transfer),
+    DecodeCurve(craft_cms::Curve),
+    Transform(Box<craft_cms::Transform>),
+}
+
+/// Plans the tone-curve operation and resulting ICC profile when `doc` crosses 32-bit float
+/// depth, so exports and canvas display agree with the stored samples (#16562).
+fn plan_depth_crossing(doc: &Document, current: SampleType, depth: SampleType) -> (DepthTone, Option<std::sync::Arc<Vec<u8>>>) {
+    use craft_cms::{Builtin, ColorSpace, Curve, Intent, Profile, Transform};
+
+    let crosses = (current == SampleType::F32) != (depth == SampleType::F32) && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale);
+    if !crosses {
+        return (DepthTone::None, None);
+    }
+    let to_linear = depth == SampleType::F32;
+    let default_transfer = photocraft_compose::adjust::Transfer::for_document(doc.mode, if to_linear { current } else { depth });
+    match doc.mode {
+        ColorMode::Rgb => {
+            let own = doc.icc_profile.as_ref().and_then(|b| Profile::parse(b).ok()).filter(|p| p.color_space == ColorSpace::Rgb);
+            let is_linear = |p: &Profile| p.is_matrix_shaper() && p.trc.as_ref().is_some_and(|t| t.iter().all(Curve::is_identity));
+            if to_linear {
+                match own {
+                    Some(ref p) if is_linear(p) => (DepthTone::None, None),
+                    None => (DepthTone::DefaultTransfer(default_transfer), Some(Builtin::LinearSrgb.profile().to_bytes())),
+                    Some(ref p) if p.same_colors(Builtin::Srgb.profile()) => {
+                        (DepthTone::DefaultTransfer(default_transfer), Some(Builtin::LinearSrgb.profile().to_bytes()))
+                    }
+                    Some(ref p) if p.is_matrix_shaper() => {
+                        let mut q = p.clone();
+                        q.trc = Some([Curve::Identity, Curve::Identity, Curve::Identity]);
+                        q.description = format!("{} (Linear)", p.description);
+                        let q = q.with_encoded_bytes();
+                        let tone = match &p.trc {
+                            Some([r, g, b]) if r == g && g == b => DepthTone::DecodeCurve(r.clone()),
+                            _ => Transform::new(p, &q, Intent::RelativeColorimetric, false)
+                                .map(|t| DepthTone::Transform(Box::new(t)))
+                                .unwrap_or(DepthTone::DefaultTransfer(default_transfer)),
+                        };
+                        (tone, Some(q.to_bytes()))
+                    }
+                    Some(ref p) => {
+                        let dst = Builtin::LinearSrgb.profile();
+                        let tone = Transform::new(p, dst, Intent::RelativeColorimetric, false)
+                            .map(|t| DepthTone::Transform(Box::new(t)))
+                            .unwrap_or(DepthTone::DefaultTransfer(default_transfer));
+                        (tone, Some(dst.to_bytes()))
+                    }
+                }
+            } else {
+                match own {
+                    None => (DepthTone::DefaultTransfer(default_transfer), None),
+                    Some(ref p) if p.same_colors(Builtin::LinearSrgb.profile()) => {
+                        (DepthTone::DefaultTransfer(default_transfer), Some(Builtin::Srgb.profile().to_bytes()))
+                    }
+                    Some(ref p) if is_linear(p) => {
+                        let c = craft_cms::curve::srgb_trc();
+                        let mut q = p.clone();
+                        q.trc = Some([c.clone(), c.clone(), c]);
+                        let base = p.description.strip_suffix(" (Linear)").unwrap_or(&p.description);
+                        let bytes = if q.same_colors(Builtin::DisplayP3.profile()) {
+                            Builtin::DisplayP3.profile().to_bytes()
+                        } else {
+                            q.description = format!("{base} (sRGB-encoded)");
+                            q.with_encoded_bytes().to_bytes()
+                        };
+                        (DepthTone::DefaultTransfer(default_transfer), Some(bytes))
+                    }
+                    Some(_) => (DepthTone::None, None),
+                }
+            }
+        }
+        ColorMode::Grayscale => {
+            let own = doc.icc_profile.as_ref().and_then(|b| Profile::parse(b).ok()).filter(|p| p.color_space == ColorSpace::Gray);
+            let is_linear = |p: &Profile| p.same_colors(craft_cms::builtin::linear_gray()) || p.gray_trc.as_ref().is_some_and(Curve::is_identity);
+            if to_linear {
+                match own {
+                    Some(ref p) if is_linear(p) => (DepthTone::None, None),
+                    Some(ref p) => {
+                        let tone = match &p.gray_trc {
+                            Some(c) => DepthTone::DecodeCurve(c.clone()),
+                            None => DepthTone::DefaultTransfer(default_transfer),
+                        };
+                        (tone, Some(craft_cms::builtin::linear_gray().to_bytes()))
+                    }
+                    None => (DepthTone::DefaultTransfer(default_transfer), Some(craft_cms::builtin::linear_gray().to_bytes())),
+                }
+            } else {
+                match own {
+                    None => (DepthTone::DefaultTransfer(default_transfer), None),
+                    Some(ref p) if is_linear(p) => (DepthTone::DefaultTransfer(default_transfer), Some(Builtin::DotGain20Compat.profile().to_bytes())),
+                    Some(_) => (DepthTone::None, None),
+                }
+            }
+        }
+        _ => (DepthTone::None, None),
+    }
+}
+
 pub(crate) fn change_depth(doc: &mut Document, depth: SampleType) {
     let current = doc.depth;
     // 32-bit documents hold linear light (as Photoshop's do: grey 128 becomes 0.2159, measured
     // in Photoshop 27.11), so the colour samples cross the document's tone curve when the
     // depth crosses 32 bits: decoded after widening, encoded before narrowing (so no linear
     // value is quantised to 8 or 16 bits). Masks, alpha and channels are not colour.
-    let crosses = (current == SampleType::F32) != (depth == SampleType::F32) && matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale);
     let to_linear = depth == SampleType::F32;
-    let transfer = photocraft_compose::adjust::Transfer::for_document(doc.mode, if to_linear { current } else { depth });
-    if crosses && !to_linear {
+    let doc_mode = doc.mode;
+    let (tone, next_icc) = plan_depth_crossing(doc, current, depth);
+    if !to_linear && let DepthTone::DefaultTransfer(transfer) = tone {
         for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.encode(v).clamp(0.0, 1.0)));
     }
     convert_layers_depth(&mut doc.layers, depth);
-    if crosses && to_linear {
-        for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.decode(v)));
+    if to_linear {
+        match tone {
+            DepthTone::None => {}
+            DepthTone::DefaultTransfer(transfer) => {
+                for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| transfer.decode(v)));
+            }
+            DepthTone::DecodeCurve(curve) => {
+                for_each_surface(&mut doc.layers, false, &mut |surf, _| surf.map_color(|v| curve.eval64(f64::from(v.max(0.0))) as f32));
+            }
+            DepthTone::Transform(t) => {
+                for_each_surface(&mut doc.layers, false, &mut |surf, _| {
+                    let fmt = surf.format();
+                    *surf = crate::color_cmds::convert_surface(surf, doc_mode, fmt, &t);
+                });
+            }
+        }
     }
     for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
         let f = ch.surface.format().with_sample(depth);
         ch.surface = ch.surface.convert(f);
+    }
+    if let Some(icc) = next_icc {
+        doc.icc_profile = Some(icc);
     }
     doc.depth = depth;
 }

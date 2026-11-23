@@ -1171,6 +1171,114 @@ fn thirty_two_bit_holds_linear_light() {
 }
 
 #[test]
+fn thirty_two_bit_export_keeps_colour_in_exr_and_png() {
+    // #16562: converting an 8-bit sRGB document (133/200/40) to 32-bit must tag it linear sRGB
+    // so EXR doesn't linearise a second time (0.23455 -> 0.04491), PNG embeds linear sRGB
+    // instead of sRGB over linear samples, and non-ICC / web exports encode back to sRGB.
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 4, "height": 4, "background": "white"})).unwrap();
+    s.edit("paint", |doc, _| {
+        doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[133.0 / 255.0, 200.0 / 255.0, 40.0 / 255.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.mode.bits32", json!({})).unwrap();
+    let d = doc(&s);
+    let icc = d.icc_profile.as_deref().expect("32-bit RGB document should carry a linear ICC profile");
+    assert!(craft_cms::Profile::parse(icc).unwrap().same_colors(craft_cms::Builtin::LinearSrgb.profile()), "32-bit conversion should tag linear sRGB");
+
+    // EXR export must hold the linear values once, not linearised twice.
+    let exr = photocraft_io::export(d, "out.exr", &photocraft_io::ExportOptions::default()).unwrap();
+    let exr_doc = photocraft_io::import("out.exr", &exr.bytes).unwrap().document;
+    let exr_px = exr_doc.layers[0].surface().unwrap().pixel(0, 0);
+    for (got, want) in exr_px.iter().zip([0.23455f32, 0.57758, 0.02122]) {
+        assert!((got - want).abs() < 1e-3, "EXR pixel {exr_px:?} vs {want}");
+    }
+
+    // PNG export embeds the linear sRGB profile alongside its 16-bit linear samples, not sRGB.
+    let png = photocraft_io::export(d, "out.png", &photocraft_io::ExportOptions::default()).unwrap();
+    let png_doc = photocraft_io::import("out.png", &png.bytes).unwrap().document;
+    let png_icc = png_doc.icc_profile.as_deref().expect("PNG export should embed linear sRGB");
+    assert!(
+        craft_cms::Profile::parse(png_icc).unwrap().same_colors(craft_cms::Builtin::LinearSrgb.profile()),
+        "PNG export of a 32-bit document must embed linear sRGB, not sRGB"
+    );
+
+    // Untagged / non-ICC export (BMP) converts from linear sRGB back to 8-bit sRGB 133/200/40.
+    let bmp = photocraft_io::export(d, "out.bmp", &photocraft_io::ExportOptions::default()).unwrap();
+    let bmp_doc = photocraft_io::import("out.bmp", &bmp.bytes).unwrap().document;
+    let bmp_px = bmp_doc.layers[0].surface().unwrap().pixel(0, 0);
+    for (got, want) in bmp_px.iter().zip([133.0 / 255.0, 200.0 / 255.0, 40.0 / 255.0]) {
+        assert!((got - want).abs() <= 1.5 / 255.0, "BMP pixel {bmp_px:?} vs {want}");
+    }
+
+    // Narrowing back to 8-bit restores the sRGB profile and 133/200/40 values.
+    s.execute("image.mode.bits8", json!({})).unwrap();
+    let d8 = doc(&s);
+    let icc8 = d8.icc_profile.as_deref().expect("narrowed 8-bit document should carry sRGB");
+    assert!(
+        craft_cms::Profile::parse(icc8).unwrap().same_colors(craft_cms::Builtin::Srgb.profile()),
+        "narrowing 32-bit linear sRGB back to 8-bit should tag sRGB"
+    );
+    let px8 = d8.layers[0].surface().unwrap().pixel(0, 0);
+    for (got, want) in px8.iter().zip([133.0 / 255.0, 200.0 / 255.0, 40.0 / 255.0]) {
+        assert!((got - want).abs() <= 0.6 / 255.0, "8-bit pixel {px8:?} vs {want}");
+    }
+}
+
+#[test]
+fn thirty_two_bit_respects_non_srgb_gray_and_already_linear_profiles() {
+    // 1. ProPhoto RGB (gamma 1.8) widens using its own TRC (~0.289 for 128/255), not sRGB (0.216).
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 2, "height": 2, "background": "white"})).unwrap();
+    s.edit("setup", |doc, _| {
+        doc.icc_profile = Some(craft_cms::Builtin::ProPhotoCompat.profile().to_bytes());
+        doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 2), &[128.0 / 255.0, 128.0 / 255.0, 128.0 / 255.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.mode.bits32", json!({})).unwrap();
+    let px = doc(&s).layers[0].surface().unwrap().pixel(0, 0);
+    let want_prophoto = (128.0f32 / 255.0).powf(1.8);
+    assert!((px[0] - want_prophoto).abs() < 2e-3, "ProPhoto 32-bit pixel {px:?} vs {want_prophoto}");
+
+    // 2. sGray widens with its own sRGB TRC (~0.216 for 128/255, not Dot Gain ~0.302) and tags linear gray.
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 2, "height": 2, "mode": "grayscale", "background": "white"})).unwrap();
+    s.edit("setup", |doc, _| {
+        doc.icc_profile = Some(craft_cms::Builtin::SGray.profile().to_bytes());
+        doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 2), &[128.0 / 255.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.mode.bits32", json!({})).unwrap();
+    let d = doc(&s);
+    let g_icc = d.icc_profile.as_deref().expect("32-bit gray should carry linear gray ICC");
+    assert!(craft_cms::Profile::parse(g_icc).unwrap().same_colors(craft_cms::builtin::linear_gray()));
+    let gpx = d.layers[0].surface().unwrap().pixel(0, 0);
+    assert!((gpx[0] - 0.2159).abs() < 2e-3, "sGray 32-bit pixel {gpx:?}");
+    let exr = photocraft_io::export(d, "g.exr", &photocraft_io::ExportOptions::default()).unwrap();
+    let exr_doc = photocraft_io::import("g.exr", &exr.bytes).unwrap().document;
+    let exr_g = exr_doc.layers[0].surface().unwrap().pixel(0, 0)[0];
+    assert!((exr_g - 0.2159).abs() < 2e-3, "gray EXR pixel {exr_g} should not linearise twice");
+
+    // 3. An already-linear 16-bit RGB document widens to 32-bit without linearising a second time.
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 2, "height": 2, "depth": 16, "background": "white"})).unwrap();
+    s.edit("setup", |doc, _| {
+        doc.icc_profile = Some(craft_cms::Builtin::LinearSrgb.profile().to_bytes());
+        doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 2, 2), &[0.25, 0.5, 0.75, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.mode.bits32", json!({})).unwrap();
+    let lpx = doc(&s).layers[0].surface().unwrap().pixel(0, 0);
+    for (got, want) in lpx.iter().zip([0.25f32, 0.5, 0.75]) {
+        assert!((got - want).abs() < 1e-3, "already-linear 16-bit -> 32-bit pixel {lpx:?} vs {want}");
+    }
+}
+
+#[test]
 fn grayscale_conversion_matches_photoshop() {
     // Photoshop 27.11, default Color Settings (working gray Dot Gain 20 %): Image > Mode >
     // Grayscale turns sRGB 64 / 128 / 192 grey and pure red into 46 / 105 / 177 / 107.
