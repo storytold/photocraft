@@ -209,6 +209,22 @@ fn a_layer_rename_does_not_count_as_a_type_edit() {
     assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().name, "Renamed");
 }
 
+#[test]
+fn committing_after_undo_keeps_the_type_step_available_to_redo() {
+    let (mut app, id) = app();
+    click_into(&mut app, id);
+    super::host::type_text(&mut app, "Pair");
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(text_of(&app, id), "Hello");
+    assert!(app.ui.text_edit.is_some());
+    assert!(app.session.active().unwrap().history.can_redo());
+
+    crate::type_tool::commit(&mut app);
+    assert!(app.session.active().unwrap().history.can_redo(), "commit must not discard the undone Type step");
+    app.run("edit.redo", json!({})).unwrap();
+    assert_eq!(text_of(&app, id), "Pair");
+}
+
 /// The ⇧⌘ style keys are one step per press for the same reason; the commit must not add an empty
 /// state after them either.
 #[test]
