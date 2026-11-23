@@ -71,8 +71,8 @@ pub(super) fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
         let files: Vec<(String, Option<Vec<u8>>)> = match picked {
             Picked::Paths(paths) => paths.into_iter().map(|path| (path.to_string_lossy().into_owned(), None)).collect(),
             Picked::Contents(files) => files.into_iter().map(|(name, bytes)| (name, Some(bytes))).collect(),
-            Picked::Cancelled => return Err(crate::file_dialog::CANCELLED.into()),
-            Picked::Unavailable(why) => return Err(why),
+            Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
+            Picked::Unavailable(why) | Picked::Failed(why) => return Err(why),
         };
         let count = files.len();
         if count == 0 {

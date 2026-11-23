@@ -10,6 +10,7 @@ use craft::ui::patterns::form_dialogs::{
     Animation, ColorTable, Dither, HostedSaveForWeb, Resample, SaveForWebOptions, SaveForWebResult, WantedVariant, WebFormat, WebMetadata, WebPreset, WebSlice,
     WebSlices, WebVariant,
 };
+use craft::ui::runtime::env::Label;
 use egui::load::SizedTexture;
 use photocraft_engine::web_cmds::{self, WebSettings};
 use serde_json::{Value, json};
@@ -130,7 +131,9 @@ pub(super) fn options_of(p: &Value) -> SaveForWebOptions {
     o
 }
 
-/// The engine parameters of `o`. A document with slices adds the slice choice, its numbers and `html`.
+/// The engine parameters of `o`. An exact size typed in the dialog (`o.size`, with Constrain Proportions on or off) is
+/// sent as `width` and `height`, which replace `percent`. A document with slices adds the slice choice, its numbers and
+/// `html`.
 pub(super) fn params_of(o: &SaveForWebOptions, has_slices: bool) -> Value {
     let mut p = json!({
         "format": name_of(&WEB_FORMATS, o.format),
@@ -152,6 +155,13 @@ pub(super) fn params_of(o: &SaveForWebOptions, has_slices: bool) -> Value {
         "resample": name_of(&RESAMPLES, o.resample),
         "webSnap": o.web_snap,
     });
+    if let Some(size) = o.size {
+        if let Some(map) = p.as_object_mut() {
+            map.remove("percent");
+        }
+        p["width"] = json!(size.width);
+        p["height"] = json!(size.height);
+    }
     if !o.palette_edits.is_empty() {
         p["colorTableEdits"] = Value::Object(o.palette_edits.iter().map(|(i, c)| (i.to_string(), json!(hex(*c)))).collect());
     }
@@ -249,11 +259,23 @@ pub fn open_web(app: &mut PhotocraftApp) -> Option<DialogId> {
     let mut dialog = HostedSaveForWeb::new(doc.name.clone(), PixelSize::new(doc.size.width, doc.size.height), original_texture(&ctx, &doc))
         .options(options_of(&seed))
         .presets(presets)
-        .slices(slices);
+        .slices(slices)
+        .slice_warning(slice_warning(&doc));
     if let Some(t) = doc.timeline.as_ref().filter(|t| t.duration >= 2) {
         dialog = dialog.animation(Animation::new(t.duration as u32, t.fps));
     }
     Some(app.framework.dialogs.open(dialog))
+}
+
+/// The notice under the preview captions when the document has more slices than are resolved (`overflow_warning`):
+/// how many were ignored past the first [`photocraft_doc::slices::MAX_RESOLVED_SLICES`]. `None` otherwise.
+pub(super) fn slice_warning(doc: &photocraft_doc::Document) -> Option<Label> {
+    photocraft_doc::slices::overflow_warning(doc)?;
+    let max = photocraft_doc::slices::MAX_RESOLVED_SLICES;
+    let ignored = doc.slices.list.len().saturating_sub(max).to_string();
+    let text =
+        crate::i18n::fmt(tl!("{count} stored slices past the first {max} were ignored"), &[("count", ignored.as_str()), ("max", max.to_string().as_str())]);
+    Some(Label::from(text))
 }
 
 /// Seek a preview copy, preserving any edits to the source's currently displayed frame.

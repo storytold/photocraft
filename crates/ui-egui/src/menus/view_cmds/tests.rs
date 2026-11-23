@@ -211,6 +211,42 @@ fn command_dialogs_open_and_refuse() {
     assert!(app.ui.views.is_empty() && app.session.documents().is_empty());
 }
 
+/// Fit Image's dialog bounds apply before the command, where a zero side would mean unconstrained.
+#[test]
+fn fit_image_validates_dialog_bounds_before_one_undoable_resize() {
+    let (mut app, ctx) = app_with(1);
+    let id = open_form(&mut app, &ctx, "file.automate.fitImage");
+    let opening = fields(&app, id);
+    let original = app.session.active().unwrap();
+    let (size, steps, revision) = (original.doc.size, original.history.past_len(), original.revision);
+
+    for key in ["width", "height"] {
+        for value in [json!(0), json!(300_001), json!("abc")] {
+            assert!(app.framework.dialogs.set_json_field(&ctx, id, key, value.clone()).is_err(), "{key} accepted {value}");
+            assert_eq!(fields(&app, id), opening);
+        }
+    }
+
+    set(&mut app, &ctx, id, "width", json!(1));
+    set(&mut app, &ctx, id, "height", json!(300_000));
+    let accepted = fields(&app, id);
+    assert_eq!(accepted["width"].as_f64(), Some(1.0));
+    assert_eq!(accepted["height"].as_f64(), Some(300_000.0));
+    set(&mut app, &ctx, id, "width", json!(80));
+    set(&mut app, &ctx, id, "height", json!(40));
+    let staged = app.session.active().unwrap();
+    assert_eq!((staged.doc.size, staged.history.past_len(), staged.revision), (size, steps, revision));
+
+    confirm(&mut app, &ctx, id).unwrap();
+    let resized = app.session.active().unwrap();
+    assert_eq!((resized.doc.size.width, resized.doc.size.height), (50, 40));
+    assert_eq!(resized.history.past_len(), steps + 1);
+    assert_eq!(resized.history.undo_label(), Some("Image Size"));
+
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.size, size);
+}
+
 #[test]
 fn data_sets_as_files_enablement_respects_target_platform() {
     let (app, _) = app_with(1);

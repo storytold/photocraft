@@ -177,7 +177,11 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     };
     let session = photoshop_session(kind);
     if session {
-        record.session.track(session_target(doc, id), ui.ctx().cumulative_pass_nr(), &committed);
+        // The panel's body is a memoized view, so a frame that replays it runs no pass of it: the session follows the
+        // count of passes the panel showed something else or nothing (`PhotocraftApp::properties_hidden`), which stays
+        // put while it shows this layer, replays included.
+        record.session.track(session_target(doc, id), app.properties_hidden, &committed);
+        app.properties_tracked = true;
     }
     follow_color_pick(app, id, &mut record, &committed, &vcx);
     let mut value = match &app.live_adjust {
