@@ -702,7 +702,7 @@ pub(crate) fn open_layered(name: &str, bytes: &[u8], opts: &crate::ImportOptions
     let half = parts.iter().any(|p| p.channels.iter().any(|c| c.sample == craft_exr::decode::SampleType::F16));
     let warnings = if half { vec!["16-bit float samples are stored as 32-bit float".to_string()] } else { Vec::new() };
     let mut doc = Document::new(name, Size::new(cw, ch), ColorMode::Rgb, DocSample::F32);
-    doc.layers = tree;
+    doc.layers = tree.into();
     doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
     Ok(Some(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false }))
 }
