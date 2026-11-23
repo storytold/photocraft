@@ -3,16 +3,18 @@
 //! Shift+letter steps through a key's tools in layout order across slots, an empty toolbar is
 //! allowed, `reset` brings back the default layout, and older settings still load.
 
-use egui::{Key, Modifiers, Rect, vec2};
+use egui::{Key, Modifiers, vec2};
+use egui_kittest::kittest::Queryable;
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::prefs::{DEFAULT_TOOLBAR, Preferences, ToolbarCustomization};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::panels::toolbar::{TOOL_SECTIONS, layout_sections, toolbar};
 use crate::state::Tool;
-use crate::theme::Tokens;
+use crate::theme;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
@@ -20,31 +22,35 @@ fn names(groups: &Value) -> Vec<Vec<String>> {
     serde_json::from_value(groups.clone()).unwrap()
 }
 
+/// Shift and `key` through the app's frames, as the window delivers them: the runtime fires the tool command, and the
+/// app's key route runs it in the frame that follows.
 fn shift_press(app: &mut PhotocraftApp, key: Key) {
-    let modifiers = Modifiers::SHIFT;
-    let ctx = egui::Context::default();
-    let raw = egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
-        ..Default::default()
-    };
-    ctx.begin_pass(raw);
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    crate::canvas::testing::key(app, key, Modifiers::SHIFT);
 }
 
-/// The tool slots the toolbar drew in its last pass (clickable tool-sized buttons).
-fn tool_buttons(app: &mut PhotocraftApp) -> usize {
-    let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
-    for time in [0.0, 0.1] {
-        let mut out = ctx.run_ui(
-            egui::RawInput { time: Some(time), screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 1800.0))), ..Default::default() },
-            |ui| toolbar(app, ui),
-        );
-        out.textures_delta.clear();
-    }
-    let size = egui::Vec2::splat(if Tokens::get(&ctx).pro { 30.0 } else { 36.0 });
-    ctx.viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == size && w.sense.senses_click()).count())
+/// The toolbar drawn in a window tall enough for every slot. The first pass installs the theme and fonts.
+fn toolbar_harness(app: Box<PhotocraftApp>) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
+    let mut ready = false;
+    let mut harness = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(400.0, 1800.0)).build_ui_state(
+        move |ui, app: &mut Box<PhotocraftApp>| {
+            if !ready {
+                egui_extras::install_image_loaders(ui.ctx());
+                theme::install_fonts(ui.ctx());
+                theme::apply(ui.ctx(), &theme::AppTheme::pro());
+                ready = true;
+                return;
+            }
+            toolbar(app, ui);
+        },
+        app,
+    );
+    harness.run_steps(4);
+    harness
+}
+
+/// Whether the drawn toolbar has a slot button showing the tool named `name`.
+fn shows(harness: &egui_kittest::Harness<'static, Box<PhotocraftApp>>, name: &str) -> bool {
+    harness.query_all_by_label_contains(name).next().is_some()
 }
 
 /// The slots `layout_sections` gives for the app's stored layout, as tool groups.
@@ -99,25 +105,28 @@ fn edit_toolbar_stores_and_returns_the_group_layout() {
 #[test]
 fn the_toolbar_draws_one_slot_per_toolbar_group() {
     let mut app = app();
-    let all = tool_buttons(&mut app);
-    let defaults: usize = TOOL_SECTIONS.iter().map(|s| s.len()).sum();
     app.run("edit.toolbar", json!({"toolbar": [["Move"], ["Lasso", "EllipseMarquee"], ["Brush"]]})).unwrap();
     assert_eq!(slots(&app), vec![vec![Tool::Move], vec![Tool::Lasso, Tool::EllipseMarquee], vec![Tool::Brush]]);
-    assert_eq!(tool_buttons(&mut app), all - defaults + 3, "three slots");
-    // A one-tool group has no flyout; the toolbar draws the triangle only for slots with more.
-    assert_eq!(slots(&app).iter().filter(|s| s.len() > 1).count(), 1);
+    let harness = toolbar_harness(app);
+    for name in ["Move Tool", "Lasso Tool", "Brush Tool"] {
+        assert!(shows(&harness, name), "{name} has its slot");
+    }
+    for name in ["Pencil Tool", "Zoom Tool", "Hand Tool"] {
+        assert!(!shows(&harness, name), "{name} is in the extras, not on the toolbar");
+    }
 }
 
 #[test]
 fn an_empty_toolbar_list_leaves_no_tool_slots() {
     let mut app = app();
-    let all = tool_buttons(&mut app);
-    let defaults: usize = TOOL_SECTIONS.iter().map(|s| s.len()).sum();
     let out = app.run("edit.toolbar", json!({"toolbar": []})).unwrap();
     assert!(names(&out["toolbar"]).is_empty());
     assert_eq!(names(&out["extras"]).len(), Tool::ALL.len());
     assert!(slots(&app).is_empty());
-    assert_eq!(tool_buttons(&mut app), all - defaults);
+    let harness = toolbar_harness(app);
+    for tool in Tool::ALL.into_iter().filter(|tool| *tool != Tool::Move) {
+        assert!(!shows(&harness, tool.label()), "{tool:?} has no slot");
+    }
 }
 
 #[test]

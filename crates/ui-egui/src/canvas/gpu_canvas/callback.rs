@@ -69,12 +69,7 @@ impl CanvasCallback {
         let p = &self.params;
         let (origin, scale) = self.placement(ppp);
         let (mode, lod) = filter_mode(scale);
-        // The pixel grid shows above 500% (the constants are shared with the CPU path,
-        // pixel_grid.rs). `p.zoom` is screen points per document pixel; the shared threshold is
-        // in device pixels, so scale by the display's pixels per point.
-        let grid = if p.pixel_grid && crate::pixel_grid::shows_at(p.zoom * ppp) { crate::pixel_grid::STRENGTH } else { 0.0 };
-        let square = if style.checker_square > 0.0 { (style.checker_square * ppp).round().max(1.0) } else { 0.0 };
-        let (l, d, g) = (style.checker_light, style.checker_dark, style.gamut_color);
+        let g = style.gamut_color;
         // 32-bit preview: linear-light gain 2^exposure (0 = off) and 1 / gamma.
         let (gain, inv_gamma) = match p.hdr {
             Some([e, gm]) if e.is_finite() && gm.is_finite() && gm > 0.0 => (2f32.powf(e.clamp(-20.0, 20.0)), 1.0 / gm.max(0.01)),
@@ -91,19 +86,19 @@ impl CanvasCallback {
             p.doc_size[1] as f32,
             mode,
             lod,
-            grid,
-            square,
-            if p.offset[0].is_finite() { p.offset[0] } else { 0.0 },
-            if p.offset[1].is_finite() { p.offset[1] } else { 0.0 },
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             p.display as f32,
             if out_linear { 1.0 } else { 0.0 },
-            l[0],
-            l[1],
-            l[2],
+            0.0,
+            0.0,
+            0.0,
             style.gamut_opacity,
-            d[0],
-            d[1],
-            d[2],
+            0.0,
+            0.0,
+            0.0,
             gain,
             g[0],
             g[1],
@@ -178,10 +173,6 @@ impl CallbackTrait for CanvasCallback {
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
         pass.set_scissor_rect(clip.left_px.max(0) as u32, clip.top_px.max(0) as u32, clip.width_px as u32, clip.height_px as u32);
         pass.set_bind_group(0, &view.bind_group, &[0]);
-        if self.params.shadow {
-            pass.set_pipeline(&res.shadow_pipeline);
-            pass.draw(0..6, 0..1);
-        }
         let Some(doc) = res.docs.get(&self.params.doc) else { return };
         if doc.size != self.params.doc_size {
             return;
@@ -192,12 +183,11 @@ impl CallbackTrait for CanvasCallback {
         let rot = if self.params.rotation.is_finite() { self.params.rotation } else { 0.0 };
         let (cos, sin) = if rot.abs() < 1e-8 { (1.0, 0.0) } else { (rot.cos(), rot.sin()) };
         let cen = self.params.center;
-        let [ox, oy] = self.params.offset.map(|v| if v.is_finite() { v } else { 0.0 });
         pass.set_pipeline(&res.tile_pipeline);
         pass.set_bind_group(2, res.luts.get(&(self.params.doc, self.params.output)).unwrap_or(&res.identity_lut), &[]);
         for t in &doc.tiles {
             let [tx, ty, tw, th] = t.rect.map(|v| v as f32);
-            let (x0, y0, x1, y1) = tile_screen_aabb(origin, scale, cen, cos, sin, [tx + ox, ty + oy, tw, th]);
+            let (x0, y0, x1, y1) = tile_screen_aabb(origin, scale, cen, cos, sin, [tx, ty, tw, th]);
             if x1 < cx0 || y1 < cy0 || x0 > cx1 || y0 > cy1 {
                 continue;
             }

@@ -3,7 +3,12 @@
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use photocraft_doc::{BlendMode, LayerContent};
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionStep},
+    atn_cmds,
+};
 use serde_json::{Value, json};
 
 const NAME: &str = "Independent named adjustment";
@@ -66,11 +71,11 @@ fn make_keeps_name_mode_and_clipping_through_play_and_save_at_both_depths() {
             let base = s.active().unwrap().active_layer.unwrap();
             let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes(descriptor.clone()))})).unwrap();
             assert_eq!(loaded["unsupported"], json!([]), "{params}");
-            let steps = &s.actions.list[0].steps;
+            let steps = &s.actions().list.actions()[0].steps;
             assert_eq!(steps.len(), 1, "{params}");
-            assert_eq!(steps[0].0, "layer.newAdjustmentLayer.levels");
+            assert_eq!(steps[0].command, "layer.newAdjustmentLayer.levels");
             for (k, v) in params.as_object().unwrap() {
-                assert_eq!(steps[0].1.get(k), Some(v), "{params}: {}", steps[0].1);
+                assert_eq!(steps[0].params.get(k), Some(v), "{params}: {}", steps[0].params);
             }
 
             let played = s.execute("actions.play", json!({"action": "Make"})).unwrap();
@@ -103,7 +108,7 @@ fn unreadable_layer_properties_keep_the_step() {
     for extra in [("Nm  ", D::Integer(2)), ("Md  ", blend("unknownBlend")), ("Md  ", blend("PsTh")), ("Md  ", text("Multiply")), ("Grup", text("true"))] {
         let imported = atn_cmds::import(&bytes(make(std::slice::from_ref(&extra)))).unwrap();
         assert_eq!(imported.unsupported.len(), 1, "{:?}", extra.0);
-        assert_eq!(imported.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP, "{:?}", extra.0);
+        assert_eq!(imported.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP, "{:?}", extra.0);
     }
 }
 
@@ -122,7 +127,7 @@ fn bad_layer_properties_fail_without_a_layer_or_an_export() {
         let layers = s.active().unwrap().doc.layers.len();
         assert!(s.execute("layer.newAdjustmentLayer.levels", params.clone()).is_err(), "{params}");
         assert_eq!(s.active().unwrap().doc.layers.len(), layers, "{params} must not add a layer");
-        let action = Action::new("Make", vec![("layer.newAdjustmentLayer.levels".into(), params.clone())]);
+        let action = Action::new("Make", vec![ActionStep::new("layer.newAdjustmentLayer.levels", params.clone())]);
         assert!(atn_cmds::export("Props", &[&action], &[], false).is_err(), "{params} must not save as a default layer");
     }
 }
