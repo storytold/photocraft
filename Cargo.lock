@@ -6935,6 +6935,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-print",
  "craft-psd",
+ "craft-xml",
  "eframe",
  "egui",
  "egui_extras",
