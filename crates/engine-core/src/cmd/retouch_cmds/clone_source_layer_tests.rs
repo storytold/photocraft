@@ -1,6 +1,6 @@
-use crate::presets::PresetsExt;
-use crate::color_cmds::ColorExt;
 use super::*;
+use crate::color_cmds::ColorExt;
+use crate::presets::PresetsExt;
 use crate::presets::clone_source::Mapping;
 
 /// Create a native colour-gradient source and an empty destination without re-picking.

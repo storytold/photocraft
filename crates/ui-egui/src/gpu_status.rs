@@ -5,8 +5,8 @@
 //! "started" hook once the first frames have rendered (the crash-safe startup marker), and
 //! provides the Help › System Info text (including the monitor profile in use).
 
-use photocraft_engine::color_cmds::ColorExt;
 use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;

@@ -1,7 +1,7 @@
 //! Import a complete custom-shape set before changing the persistent library.
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};

@@ -1,6 +1,6 @@
-use crate::actions_cmds::ActionsExt;
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 /// An independently constructed selection-property reference, as recorded in Group F.
 fn selection() -> D {

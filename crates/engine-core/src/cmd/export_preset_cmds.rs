@@ -1,8 +1,8 @@
 //! Named Export As configurations. They persist with the other presets in the preferences
 //! document; applying one only returns settings, and the export itself stays in Export As.
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -278,8 +278,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use crate::prefs::SavedPrefsExt;
     use super::*;
+    use crate::prefs::SavedPrefsExt;
 
     fn settings(sizing: &str) -> Value {
         json!({

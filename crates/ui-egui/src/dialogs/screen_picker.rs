@@ -2,12 +2,12 @@
 //! Color Picker dialog and from colour popovers, runs through these functions. The capture, the
 //! capture windows, the loupe and the pixel mapping are the framework's
 //! (`craft::color_ui::ui::{ScreenPick, ScreenColorPicker}`).
-use photocraft_engine::color_cmds::ColorExt;
 use crate::PhotocraftApp;
 use craft::color_ui::ui::{ScreenColorPicker, ScreenPickGesture, ScreenPickerWords};
 use craft::theme::Srgba;
 use craft::ui::runtime::env::Env;
 use egui::Context;
+use photocraft_engine::color_cmds::ColorExt;
 use std::hash::{Hash, Hasher};
 
 /// What a pick belongs to: the active document, its active layer and the top dialog. A pick whose

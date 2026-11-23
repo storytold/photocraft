@@ -1,5 +1,5 @@
-use crate::color_cmds::ColorExt;
 use crate::cmd::{Color, ColorMode, CommandSpec, Document, EngineError, Layer, SampleType, Size, Value, always, json, parse_hex};
+use crate::color_cmds::ColorExt;
 
 /// File menu: New (new documents take their presets from the document preset store).
 pub fn specs() -> Vec<CommandSpec> {

@@ -73,8 +73,8 @@ pub(crate) fn new_params(app: &PhotocraftApp, tool: Tool) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use photocraft_engine::presets::PresetsExt;
     use super::*;
+    use photocraft_engine::presets::PresetsExt;
 
     fn app() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

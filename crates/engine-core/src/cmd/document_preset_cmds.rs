@@ -1,8 +1,8 @@
 //! Named New Document configurations. The existing preferences services persist these with the
 //! other presets; selecting one only returns settings, and document creation stays in `file.new`.
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_color::{ColorMode, SampleType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -406,8 +406,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use crate::prefs::SavedPrefsExt;
     use super::*;
+    use crate::prefs::SavedPrefsExt;
 
     fn settings() -> Value {
         json!({"width":16,"height":24,"resolution":254.5,"mode":"lab","depth":16,

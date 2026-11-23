@@ -10,8 +10,8 @@
 //! The container lives in `craft-psd` (`asl`), the mapping onto effects in `photocraft-io`
 //! (`asl_map`).
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -95,7 +95,8 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
             list.iter()
                 .map(|n| {
                     let name = n.as_str().ok_or_else(|| bad(EXPORT, "`styles` must be a list of style names"))?;
-                    let (gi, ii) = find(&s.presets().styles, name, group).ok_or_else(|| bad(EXPORT, format!("no style \"{name}\" (see style.presets.list)")))?;
+                    let (gi, ii) =
+                        find(&s.presets().styles, name, group).ok_or_else(|| bad(EXPORT, format!("no style \"{name}\" (see style.presets.list)")))?;
                     s.presets().styles.get(gi).and_then(|g| g.items.get(ii)).cloned().ok_or_else(|| bad(EXPORT, format!("no style \"{name}\"")))
                 })
                 .collect::<Result<_>>()?

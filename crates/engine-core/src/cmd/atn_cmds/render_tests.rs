@@ -1,6 +1,6 @@
-use crate::actions_cmds::ActionsExt;
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 /// A real action file with one step, used by both descriptor and playback checks.
 fn file(event: AtnEvent, descriptor: Descriptor) -> Vec<u8> {

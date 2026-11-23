@@ -3,11 +3,11 @@
 //! the menu model is built only when a fact it shows changed, never for a tool option or a button release, and the
 //! held model always equals a fresh build.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::ui::runtime::measure::{MemoRun, last_frame_derived_builds, last_frame_memo_runs, last_pass_memo_key_bytes};
 use egui::{Event, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;

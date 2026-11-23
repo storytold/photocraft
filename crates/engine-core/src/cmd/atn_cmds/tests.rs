@@ -1,6 +1,6 @@
-use crate::actions_cmds::ActionsExt;
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
@@ -3709,7 +3709,10 @@ fn select_rect_modes_export_without_becoming_replace() {
         assert_eq!(s.actions().list.actions(), before);
     }
 
-    s.actions_mut().list.push(Action::new("Unsupported", vec![ActionStep::new("select.rect", json!({"x":4,"y":4,"width":2,"height":2,"mode":"xor"}))])).unwrap();
+    s.actions_mut()
+        .list
+        .push(Action::new("Unsupported", vec![ActionStep::new("select.rect", json!({"x":4,"y":4,"width":2,"height":2,"mode":"xor"}))]))
+        .unwrap();
     let before = s.actions().list.actions().to_vec();
     assert!(s.execute("actions.save", json!({"action":"Unsupported"})).is_err());
     assert_eq!(s.actions().list.actions(), before, "rejected export must leave actions unchanged");

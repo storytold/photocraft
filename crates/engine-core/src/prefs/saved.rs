@@ -2,8 +2,8 @@
 //! preset libraries ([`SavedPrefs`]), how it is read, and the session methods that move it in and
 //! out.
 
-use crate::presets::PresetsExt;
 use crate::color_cmds::ColorExt;
+use crate::presets::PresetsExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

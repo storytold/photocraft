@@ -1,8 +1,8 @@
 //! The Gradient Editor panel (`gradientEditor`). With a gradient fill layer selected it shows that layer's gradient
 //! (the Properties rows); without one it edits the gradient the Gradient tool paints with.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::behavior::EditEvent;
+use photocraft_engine::presets::PresetsExt;
 // The stop bar is craft-color's.
 use craft::color_ui::ui::gradient::{GradientEditor, StopRef, StopRows, StopRules};
 use craft::ui::buttons::Button;

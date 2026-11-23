@@ -1,8 +1,8 @@
 //! Original geometric CSH fixture, assembled from the public container/path layout.
 //! No Adobe or third-party shape assets are embedded.
 
-use photocraft_engine::presets::PresetsExt;
 use photocraft_engine::Session;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use crate::csh_fixture as fixture;

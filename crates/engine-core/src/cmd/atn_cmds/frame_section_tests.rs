@@ -1,8 +1,8 @@
 //! #10723: Layer › New › Frame from Layers, recorded as a Make of class `framedGroupSection`
 //! (`docs/atn.md`, "Recorded through the menus").
 
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use photocraft_doc::{Layer, LayerId};
 use photocraft_geom::Rect;
 

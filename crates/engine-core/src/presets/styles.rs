@@ -5,8 +5,8 @@
 //! The built-in groups are our own designs, built from the same effect params as
 //! `layer.layerStyle.*`.
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::{Document, Effect, Layer, Pattern, Size};
 use photocraft_geom::Rect;

@@ -1,6 +1,6 @@
 //! One editor owns one original step; previews and confirmation retain its authority.
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::ui::dialog::DialogId;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     actions_edit_cmds,
     doc::{DocId, LayerId},

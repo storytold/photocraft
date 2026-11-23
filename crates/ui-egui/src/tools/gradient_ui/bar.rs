@@ -1,7 +1,6 @@
 //! The Gradient tool's options-bar cells: Mode (live Gradient or Classic gradient), the gradient swatch, the style,
 //! and for the Classic gradient the blend mode and Opacity, then Reverse and Dither.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::draw::ui::gradient::{GradientFillWords, GradientStyle, GradientSwatch};
 use craft::ui::choice::{Checkbox, Segmented};
 use craft::ui::contract::{Bind, Entry, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel};
@@ -12,6 +11,7 @@ use craft::ui::pickers::Select;
 use craft::ui::runtime::env::{Env, Label};
 use craft::ui::text::NumberField;
 use photocraft_doc::BlendMode;
+use photocraft_engine::presets::PresetsExt;
 
 use super::{fill_layer_active, options_changed, stops};
 use crate::state::Tool;

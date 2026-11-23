@@ -1,5 +1,5 @@
-use photocraft_engine::color_cmds::ColorExt;
 use craft::menu::{LANGUAGE_COMMAND, THEME_COMMAND};
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::invoke::{panel_alias, proof_preset, workspace_id};
 use super::{DOCUMENT_ITEM, PhotocraftApp, Value};

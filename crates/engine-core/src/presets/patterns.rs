@@ -4,8 +4,8 @@
 //! Groups hold pattern **ids**. Library patterns that are in no group (newly defined or imported)
 //! are shown in a trailing "Patterns" group; ids whose pattern was deleted are dropped.
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_doc::{Fill, LayerContent};
 use serde_json::{Value, json};
 

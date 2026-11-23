@@ -1,7 +1,7 @@
-use crate::color_cmds::ColorExt;
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::{ActionList, ActionStep, ActionsFile};
+use crate::color_cmds::ColorExt;
 
 /// An `ActionList` holding `actions` in order.
 fn list_of(actions: Vec<crate::actions_cmds::Action>) -> ActionList {
@@ -398,7 +398,10 @@ fn batch_override_open_authorizes_effective_path_and_carries_failure_budget() {
     let existing = png(&output, "b.png", 3, 2, "#4488aa");
     let intact = std::fs::read(&existing).unwrap();
     let mut s = crate::session();
-    s.actions_mut().list.push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", json!({"path":"/recorded.png","as":"png"}))])).unwrap();
+    s.actions_mut()
+        .list
+        .push(crate::actions_cmds::Action::new("Open", vec![ActionStep::new("file.openAs", json!({"path":"/recorded.png","as":"png"}))]))
+        .unwrap();
     s.batch_open = Some(crate::state::BatchOpen { path: first.clone(), sources: Vec::new(), raw_ppi: 300.0, read_only: false });
     assert!(matches!(s.execute("file.openAs", json!([1])), Err(EngineError::BadParams { .. })));
     assert!(s.documents().is_empty());

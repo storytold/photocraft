@@ -1,7 +1,7 @@
 //! Playback Options (`actions.setPlayback`): validation, preferences and headless playback.
-use crate::prefs::SavedPrefsExt;
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
+use crate::prefs::SavedPrefsExt;
 use serde_json::json;
 
 fn options(s: &Session) -> (crate::prefs::PlaybackPerformance, u8, bool) {

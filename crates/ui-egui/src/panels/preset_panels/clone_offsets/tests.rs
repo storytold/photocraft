@@ -1,7 +1,7 @@
-use photocraft_engine::presets::PresetsExt;
 use super::*;
 use crate::canvas::testing::{self, ToolEvent, tool_event};
 use photocraft_engine::Session;
+use photocraft_engine::presets::PresetsExt;
 
 /// Create two distinguishable source colours and an empty layer for real mouse strokes.
 fn app() -> Box<PhotocraftApp> {

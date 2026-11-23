@@ -1,6 +1,6 @@
 //! The documented dialog API answers the import question: the default, Replace and Cancel.
-use photocraft_engine::presets::PresetsExt;
 use craft::ui::dialog::DialogId;
+use photocraft_engine::presets::PresetsExt;
 
 use super::*;
 use crate::control::{ControlRequest, Reply, handle};

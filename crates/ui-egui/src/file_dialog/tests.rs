@@ -1,6 +1,6 @@
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use crate::{Services, menus};
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;

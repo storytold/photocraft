@@ -3,8 +3,8 @@
 //! selection tools (Quick Selection, Object Selection): gesture → engine command, options bars,
 //! and the clone-source marker point. The options bars are in [`bar`].
 
-use photocraft_engine::presets::PresetsExt;
 use craft::keymap::Mods;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;

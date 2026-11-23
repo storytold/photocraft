@@ -1,13 +1,13 @@
 //! Layer Style contours: the engine's contour parameters as the framework's `Contour`, the user's
 //! contour library, and the Contour Editor opened as a child of the Layer Style dialog.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::imaging::layer_style::{Contour, ContourPoint};
 use craft::imaging::ui::layer_style::{ContourAction, ContourEditorDialog, ContourRequest, HostedLayerStyle};
 use craft::ui::dialog::{DialogId, DialogResult};
 use photocraft_doc::Contour as DocContour;
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_engine::layer_style::{contour_from_param, contour_param, contour_to_shc};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::{Child, child_of, take_child};

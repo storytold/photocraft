@@ -3,11 +3,11 @@
 //! dialog's recording, conflict bar and undo are craft-menu's own (its trials); these tests drive
 //! the session the app wraps around it.
 
-use photocraft_engine::prefs::SavedPrefsExt;
 use craft::keymap::{Binding, CommandRef, Policy};
 use egui::{Event, Key, Modifiers};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::prefs::{bindable_items, normalize_shortcut};
 use serde_json::json;
 

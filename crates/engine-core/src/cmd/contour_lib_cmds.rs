@@ -7,8 +7,8 @@
 //! history. A user contour is applied to an effect as a `contour` curve object (see
 //! [`contour_param`]); `.shc` files go through `craft_psd::shc` (see [`contours_from_shc`]).
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_doc::Contour;
 use photocraft_doc::adjust::CurvePoint;
 use serde_json::{Value, json};

@@ -1,9 +1,9 @@
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use crate::canvas_tool_menu::MenuKind;
 use craft::automation::actions::{Action, ActionList, ActionStep};
 use craft::color_ui::ui::{SampleSize, SampleSource};
 use craft::keymap::CommandRef;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 /// An action named `name` whose steps run the given commands.
 // PLAN: assumed `app.session.actions.list` is craft-automation's `ActionList`

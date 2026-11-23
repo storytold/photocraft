@@ -1,5 +1,4 @@
 //! The panel menu's rows and states, and the New Set… and Insert Stop… dialogs they open.
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use craft::automation::ui::actions::{ActionSelection, ActionsPanelCommands as C};
 use craft::ui::dialog::DialogId;
@@ -7,6 +6,7 @@ use craft::ui::menu::PanelRow;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
 use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
 use photocraft_engine::actions_cmds::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -85,7 +85,11 @@ fn the_panel_menu_offers_the_hosts_rows_with_the_apps_state() {
     assert!(enabled(&app, C::Save));
 
     // Insert Path: on only when the selected path is a saved path.
-    app.session.actions_mut().list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))]))
+        .unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     app.ui.selected_path = Some("Curve".into());
     assert!(!enabled(&app, C::InsertPath), "no path of that name");
@@ -131,7 +135,11 @@ fn the_panel_menu_offers_the_hosts_rows_with_the_apps_state() {
 #[test]
 fn load_actions_row_greys_while_a_recording_or_playback_holds_the_library() {
     let mut app = app();
-    app.session.actions_mut().list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))]))
+        .unwrap();
     // Idle: every library row is on.
     assert!(enabled(&app, C::Load), "no recording and no playback: the row is on");
     assert!(enabled(&app, C::Save), "an action to save");
@@ -175,7 +183,11 @@ fn new_set_names_the_first_free_set_and_new_action_records_into_it() {
 #[test]
 fn insert_stop_adds_a_stop_after_the_selected_step() {
     let mut app = app();
-    app.session.actions_mut().list.push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))])).unwrap();
+    app.session
+        .actions_mut()
+        .list
+        .push(Action::new("A", vec![ActionStep::new("select.all", json!({})), ActionStep::new("select.inverse", json!({}))]))
+        .unwrap();
     fire(&mut app, C::InsertStop);
     assert!(!app.dialog_open(), "Insert Stop… needs a selected action");
     app.ui.actions.panel.selected = Some(ActionSelection::Step(0, 0));

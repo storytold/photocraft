@@ -1,9 +1,9 @@
 //! Real panel controls compose the remaining commands with consent and retained selection. The trials that read
 //! the dialog host are unit tests in `panels/actions/panel_menu_tests.rs`.
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::ui::actions::{ActionSelection, ActionsPanelCommands};
 use craft::ui::runtime::commands::CommandRef;
 use egui_kittest::Harness;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionStep},

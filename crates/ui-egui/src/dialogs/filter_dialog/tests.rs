@@ -1,8 +1,8 @@
-use photocraft_engine::color_cmds::ColorExt;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamKind};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::*;
 

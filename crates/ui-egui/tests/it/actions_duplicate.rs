@@ -1,7 +1,7 @@
 //! The panel duplicates the selected action/step and keeps its new row selected.
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::ui::actions::ActionSelection;
 use egui_kittest::Harness;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionStep},

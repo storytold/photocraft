@@ -1,11 +1,11 @@
 //! #3820: edit custom paper through the real Print dialog, preview it, and print safely to PDF.
 //! The dialog host is crate-private, so these are unit tests of the app.
-use photocraft_engine::print_cmds::PrintExt;
 use craft::print::ui::HostedPrint;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue};
 use egui::{Event, Key, Modifiers, PointerButton, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
+use photocraft_engine::print_cmds::PrintExt;
 use serde_json::{Map, Value, json};
 
 use super::open_print;

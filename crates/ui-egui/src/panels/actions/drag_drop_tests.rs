@@ -1,8 +1,8 @@
 //! #12373: an Actions panel row dropped on the trash is deleted, on Create new action duplicated.
 //! The panel reports the drop as `Delete` or `Duplicate`; these tests run those events.
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use craft::automation::actions::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn names(app: &PhotocraftApp) -> Vec<String> {
     app.session.actions().list.actions().iter().map(|a| a.name.clone()).collect()

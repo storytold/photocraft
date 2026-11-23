@@ -5,8 +5,8 @@
 //! Photoshop's "Foreground to Background") and transparency stops, both at `0..=1`. Midpoints are
 //! always 50 %. Built-in colours are our own.
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_doc::{Color, Fill, Layer, LayerContent};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

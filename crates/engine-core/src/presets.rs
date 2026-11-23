@@ -32,8 +32,8 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
 use craft_tracked::Tracked;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;

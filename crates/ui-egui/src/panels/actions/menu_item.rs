@@ -1,10 +1,10 @@
 //! Choose an existing mapped menu event without borrowing current command settings.
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::contract::Bind;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;

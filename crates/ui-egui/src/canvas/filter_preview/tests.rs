@@ -1,6 +1,6 @@
-use photocraft_engine::color_cmds::ColorExt;
 use super::*;
 use craft::ui::dialog::DialogId;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::{Map, Value, json};
 
 /// The id of the dialog on top of the host's stack: the one a test just opened.

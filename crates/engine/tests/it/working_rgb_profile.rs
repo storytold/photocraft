@@ -1,7 +1,5 @@
 //! Working RGB must support reading and editing for the configured intent.
 
-use photocraft_engine::prefs::SavedPrefsExt;
-use photocraft_engine::color_cmds::ColorExt;
 use craft_cms::{
     Builtin, Curve, Intent, Profile, ProfileClass,
     pipeline::Stage,
@@ -10,6 +8,8 @@ use craft_cms::{
 use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer};
 use photocraft_engine::Session;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_geom::Size;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};

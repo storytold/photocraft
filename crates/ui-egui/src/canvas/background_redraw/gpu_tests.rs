@@ -1,7 +1,7 @@
 //! Background full CPU redraws (#4024) on a device: the GPU tests skip when there is no adapter.
 
-use photocraft_engine::color_cmds::ColorExt;
 use super::*;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 struct Gpu {

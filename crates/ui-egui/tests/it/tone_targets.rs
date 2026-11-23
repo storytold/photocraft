@@ -1,5 +1,4 @@
 //! Levels/Curves must use the same grayscale target in their controls, pickers and commands.
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::actions::ActionStep;
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::dialog::DialogId;
@@ -10,6 +9,7 @@ use egui_kittest::{
 };
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, DocId, Document, Layer, LayerContent, LayerMask};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{Session, actions_cmds::Action, channel_cmds::ChannelTarget};
 use photocraft_geom::Size;
 use photocraft_raster::Surface;

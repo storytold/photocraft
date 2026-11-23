@@ -1,8 +1,8 @@
-use photocraft_engine::presets::PresetsExt;
 use super::*;
 use craft::behavior::{EditEvent, Mixed};
 use craft::keymap::Mods;
 use craft::ui::contract::{MemoKey, ReorderMove};
+use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
 fn group(name: &str) -> PresetKey {

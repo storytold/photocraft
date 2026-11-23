@@ -2,9 +2,9 @@
 //! frame (and the wait) between steps, in one history state when Create a single history state is
 //! on; Esc and the Stop button end them keeping the steps applied. Measured in the reference
 //! application 2026-11-05.
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use photocraft_engine::actions_cmds::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 use web_time::{Duration, Instant};
 
 fn names(app: &PhotocraftApp) -> Vec<String> {

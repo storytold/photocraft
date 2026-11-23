@@ -1,9 +1,9 @@
-use photocraft_engine::prefs::SavedPrefsExt;
-use photocraft_engine::presets::PresetsExt;
-use photocraft_engine::color_cmds::ColorExt;
 use super::*;
 use crate::new_doc_remember_tests::{app, fields, harness, open, press_create};
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::presets::PresetsExt;
 
 /// The default settings with `edit` applied.
 fn options(edit: impl FnOnce(&mut DocumentOptions)) -> DocumentOptions {

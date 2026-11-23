@@ -3,10 +3,10 @@
 //! shown, Open develops every one and Cancel closes every one. The framework's `RawFilmstrip`
 //! draws the tiles; this module holds the raws and their thumbnails.
 
-use photocraft_engine::color_cmds::ColorExt;
 use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
 use super::sidecar::read_sidecar;
 use super::{CameraRaw, PhotocraftApp, RawOpen, Rect, Value, hosted, image, json, workspace_demosaic};
+use photocraft_engine::color_cmds::ColorExt;
 
 /// Long side of a filmstrip thumbnail, in pixels.
 const THUMB_SIDE: usize = 240;

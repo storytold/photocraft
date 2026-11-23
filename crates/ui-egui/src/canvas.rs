@@ -260,9 +260,9 @@ mod art_history_shift_click_tests;
 
 #[cfg(test)]
 mod rotation_preview_isolation_tests {
-    use photocraft_engine::color_cmds::ColorExt;
     use craft::ui::dialog::DialogId;
     use photocraft_engine::channel_cmds::ChannelTarget;
+    use photocraft_engine::color_cmds::ColorExt;
 
     use super::*;
 

@@ -1738,8 +1738,8 @@ mod assign_profile_enabled_modes_tests;
 
 #[cfg(test)]
 mod settings_tests {
-    use crate::prefs::SavedPrefsExt;
     use super::*;
+    use crate::prefs::SavedPrefsExt;
 
     fn tagged(spec: &str) -> Document {
         let mut d = Document::with_background("t", photocraft_doc::Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::rgba(0.2, 0.6, 0.9, 1.0));

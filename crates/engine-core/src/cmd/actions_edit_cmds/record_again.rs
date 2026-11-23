@@ -1,6 +1,6 @@
 //! Record Again executes the selected command before replacing its stored settings.
-use crate::actions_cmds::ActionsExt;
 use super::{Result, Session, Value, bad, index, json, not_playing, resolve};
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::{ActionStep, list_error};
 
 const COMMAND: &str = "actions.recordAgain";

@@ -1,6 +1,6 @@
-use crate::actions_cmds::ActionsExt;
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 /// The parameterless events use an empty descriptor and accept both event identifiers.
 #[test]

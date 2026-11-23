@@ -4,9 +4,9 @@
 //! Nothing here grows with the documents, presets, recent files or layers, so an idle frame keys the same few bytes
 //! whatever the model's size.
 
-use photocraft_engine::presets::PresetsExt;
-use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
 use craft::ui::contract::{MemoProps, Revision, Tracked};

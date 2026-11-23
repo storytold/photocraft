@@ -1,9 +1,9 @@
 //! #10723: Layer › New › Artboard and Layer › New › Artboard from Layers, recorded as a Make of
 //! class `artboardSection` (`docs/atn.md`, "Recorded through the menus").
 
-use crate::actions_cmds::ActionsExt;
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 use photocraft_doc::{Layer, LayerId};
 use photocraft_geom::Rect;
 

@@ -1,9 +1,9 @@
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
 use craft::automation::actions::{Action, ActionStep};
 use craft::behavior::value::{EditEvent, Mixed};
 use craft::ui::contract::ReorderMove;
 use craft::ui::primitives::textures::{ThumbRender, ThumbRequest, ThumbSource};
+use photocraft_engine::actions_cmds::ActionsExt;
 
 fn app_with(mode: &str) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

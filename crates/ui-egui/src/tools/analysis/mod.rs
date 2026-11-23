@@ -7,8 +7,8 @@
 //! [`bars`], the two panels in [`log_panel`] and [`notes_panel`], the dialogs in [`dialogs`], and the note alerts in
 //! [`note_alerts`].
 
-use photocraft_engine::color_cmds::ColorExt;
 use craft::behavior::Selection;
+use photocraft_engine::color_cmds::ColorExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

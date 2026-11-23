@@ -1,8 +1,8 @@
 //! #9329 PR A: a pixel change damages only the tiles that changed, and command rects are hints
 //! checked against them.
 
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use photocraft_geom::TILE_SIZE;
 
 fn session(w: u32, h: u32) -> Session {

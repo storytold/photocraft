@@ -5,7 +5,6 @@
 //! of it; what a workspace captures beside its layout (shortcuts, menus, toolbar) is in
 //! `Preferences::workspace_extras` by workspace id. [`ShellUi`] is the serialisable shell state of `UiState`.
 
-use photocraft_engine::color_cmds::ColorExt;
 use craft::behavior::dock::{NamedWorkspace, WorkspaceChrome, WorkspaceError, WorkspaceKeeps, WorkspaceSet};
 use craft::keymap::{CommandRef, Mods};
 use craft::ui::contract::{Bind, CommandSet as _};
@@ -15,6 +14,7 @@ use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWo
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::commands::CommandState;
 use craft::ui::value_drag::SliderScale;
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::prefs::Preferences;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};

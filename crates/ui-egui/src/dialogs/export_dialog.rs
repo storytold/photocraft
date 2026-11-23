@@ -2,8 +2,8 @@
 //! with a preview and an estimated file size. The estimate encodes a small proxy and scales by
 //! pixel count, so the dialog stays instant on 36 MP documents.
 
-use photocraft_engine::presets::PresetsExt;
 use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]

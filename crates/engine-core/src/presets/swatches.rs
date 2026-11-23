@@ -249,9 +249,9 @@ pub fn hex(c: [f32; 3]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::presets::PresetsExt;
     use super::*;
     use crate::presets::PresetState;
+    use crate::presets::PresetsExt;
 
     #[test]
     fn default_library_has_the_forty_six_colours() {

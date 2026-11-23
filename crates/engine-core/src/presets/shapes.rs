@@ -6,8 +6,8 @@
 //! (a circle) and `!` before `M`/`O` to subtract that subpath (holes). Shapes defined with Edit ›
 //! Define Custom Shape appear in a trailing "Custom Shapes" group.
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_doc::vector::{Knot, Path, PathOp, Subpath};
 use photocraft_geom::{Affine, Point, Rect};
 use serde::{Deserialize, Serialize};

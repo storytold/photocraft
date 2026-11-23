@@ -1,7 +1,7 @@
 //! Count trials: the command catalog and the keymap overrides are built only when what they read changes.
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use craft::automation::actions::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::json;
 
 use super::PhotocraftApp;

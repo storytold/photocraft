@@ -8,8 +8,8 @@
 //! The Crop tool's options-bar presets (New / Delete Crop Preset…) are tool presets of the
 //! `"crop"` tool, as in Photoshop, so they also show in the Tool Presets panel.
 
-use crate::presets::presets_changed;
 use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

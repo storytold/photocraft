@@ -1,5 +1,5 @@
-use crate::color_cmds::ColorExt;
 use super::*;
+use crate::color_cmds::ColorExt;
 use photocraft_geom::Rect;
 
 fn session(w: u32, h: u32, depth: u64, mode: &str) -> Session {

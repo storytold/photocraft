@@ -1,5 +1,5 @@
-use photocraft_engine::actions_cmds::ActionsExt;
 use super::*;
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::sync::{Arc, Mutex};
 
 #[test]

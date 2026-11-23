@@ -1,4 +1,3 @@
-use photocraft_engine::color_cmds::ColorExt;
 use super::*;
 use craft::behavior::geometry::quad::BoxState;
 use craft::behavior::kurbo::{Point, Rect, Vec2};
@@ -7,6 +6,7 @@ use craft::draw::ui::transform::{TransformChoice, TransformEdit, TransformMenuWo
 use craft::i18n::WordSet;
 use craft::imaging::trace::{MaskSource, outline};
 use craft::imaging::ui::warp::{CylinderValues, WarpMesh, WarpSplit};
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::preview::AbovePlan;
 use super::warp::{cylinder_edit, cylinder_values, grid_edit};

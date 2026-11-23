@@ -1,5 +1,5 @@
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
 
 #[test]
 /// The last native color sample remains editable on opaque layers, while selected alpha still requires transparency edits.

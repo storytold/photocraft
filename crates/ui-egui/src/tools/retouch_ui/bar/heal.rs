@@ -1,7 +1,6 @@
 //! The Retouch options bar's healing family: Remove, Patch, Content-Aware Move, Spot Healing, Clone Stamp and
 //! Healing Brush. Also holds the cells the toning and selection families share.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::behavior::Value;
 use craft::ui::choice::{Checkbox, Radio, RadioGroup};
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
@@ -9,6 +8,7 @@ use craft::ui::display::Divider;
 use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::text::RangeAlert;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::Value as Json;
 
 use crate::PhotocraftApp;

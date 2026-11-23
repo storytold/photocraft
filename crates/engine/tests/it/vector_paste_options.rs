@@ -1,7 +1,7 @@
 //! Explicit Paste modes preserve source kind instead of silently using the ordinary raster route.
 
-use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::Session;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::json;
 
 /// This uses only the original public command API, so the pre-fix failure is executable.

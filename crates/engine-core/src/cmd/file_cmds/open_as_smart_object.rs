@@ -5,10 +5,10 @@
 //! size and position `0, 0`) and put into the document before it is admitted, so the opening
 //! snapshot already shows it.
 
-use crate::color_cmds::ColorExt;
 use super::open::import_result_for_open;
 use super::paths::{file_name, read_file, stem, untitled_name};
 use super::{Affine, Arc, Document, Layer, LayerContent, Result, Session, SmartObject, SmartSource, Value, flattened_checked, json, str_param};
+use crate::color_cmds::ColorExt;
 use crate::layer_place::Place;
 
 const CMD: &str = "file.openAsSmartObject";

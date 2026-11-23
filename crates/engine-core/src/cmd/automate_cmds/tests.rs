@@ -1,5 +1,5 @@
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 
 /// An `ActionList` holding `actions` in order.

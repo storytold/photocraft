@@ -13,7 +13,6 @@
 //! - Delete Crop Preset… lists the saved crop presets in a multi-select list; OK deletes the
 //!   selected ones (`tool.presets.edit` delete). Nothing opens with no saved crop preset.
 
-use photocraft_engine::presets::PresetsExt;
 use craft::behavior::{DisplayOrder, ItemSource, Selection};
 use craft::draw::ui::crop::{CropSettings, CropUserPreset};
 use craft::ui::contract::{Bind, Show as _, ShowCollection as _};
@@ -22,6 +21,7 @@ use craft::ui::display::Text;
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::form_dialogs::{DialogFields, FormDialog, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 use std::borrow::Cow;
 
@@ -296,8 +296,16 @@ mod tests {
         assert_eq!(names(&app), ["Poster", "3 : 2"]);
 
         // An old-format preset lists and applies; junk options are not listed.
-        app.session.presets_mut().tool_presets.push(ToolPreset { name: "Old".into(), tool: "crop".into(), options: json!({"toolOptions": {"crop_ratio": "2:5"}}) });
-        app.session.presets_mut().tool_presets.push(ToolPreset { name: "Junk".into(), tool: "crop".into(), options: json!({"toolOptions": {"crop": {"ratio": 5}}}) });
+        app.session.presets_mut().tool_presets.push(ToolPreset {
+            name: "Old".into(),
+            tool: "crop".into(),
+            options: json!({"toolOptions": {"crop_ratio": "2:5"}}),
+        });
+        app.session.presets_mut().tool_presets.push(ToolPreset {
+            name: "Junk".into(),
+            tool: "crop".into(),
+            options: json!({"toolOptions": {"crop": {"ratio": 5}}}),
+        });
         assert_eq!(names(&app), ["Poster", "3 : 2", "Old"]);
         crate::prefs_ui::save_preferences(&mut app).unwrap();
 

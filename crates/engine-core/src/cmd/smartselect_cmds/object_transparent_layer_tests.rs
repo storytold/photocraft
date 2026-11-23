@@ -3,8 +3,8 @@
 //!
 //! The documents are the ones the issue measured against the reference application.
 
-use crate::smartselect_cmds::SmartSelectExt;
 use super::*;
+use crate::smartselect_cmds::SmartSelectExt;
 
 const W: u32 = 800;
 const H: u32 = 600;

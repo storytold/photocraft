@@ -318,8 +318,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use crate::color_cmds::ColorExt;
     use super::*;
+    use crate::color_cmds::ColorExt;
 
     /// The shared sRGB functions match the removed copies bit for bit.
     #[test]

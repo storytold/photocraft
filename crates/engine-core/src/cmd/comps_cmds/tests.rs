@@ -1,5 +1,5 @@
-use crate::actions_cmds::ActionsExt;
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use photocraft_color::BlendMode;
 use photocraft_doc::Layer;
 use photocraft_geom::Rect;

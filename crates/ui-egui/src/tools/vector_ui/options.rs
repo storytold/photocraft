@@ -1,4 +1,3 @@
-use photocraft_engine::presets::PresetsExt;
 use craft::behavior::EditEvent;
 use craft::color_ui::ui::Paint;
 use craft::draw::ui::pen::PathOptionsPopover;
@@ -12,6 +11,7 @@ use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::text::NumberField;
+use photocraft_engine::presets::PresetsExt;
 
 use super::path_menus::{path_alignment_menu, path_arrangement_menu, path_operations_menu};
 use super::path_ops::{active_path_name, indexed_document};
