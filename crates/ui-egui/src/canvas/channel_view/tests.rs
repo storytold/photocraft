@@ -41,7 +41,7 @@ fn spot_overlay_previews_with_the_spot_dot_gain() {
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
     s.execute("channel.newSpot", json!({"name": "Ink", "color": "#000000", "solidity": 0})).unwrap();
     let st = s.active_mut().unwrap();
-    let doc = std::sync::Arc::make_mut(&mut st.doc);
+    let doc = std::sync::Arc::make_mut(st.doc_mut());
     let ch = doc.channels.last_mut().unwrap();
     ch.surface.write_region(photocraft_geom::Rect::new(0, 0, 1, 1), &[0.5]);
     let i = doc.channels.len() - 1;
