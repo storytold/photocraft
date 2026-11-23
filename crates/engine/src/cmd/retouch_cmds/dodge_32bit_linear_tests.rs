@@ -2,6 +2,7 @@
 //! (#12687); 8- and 16-bit documents keep their results.
 
 use crate::Session;
+use photocraft_algo::retouch::{ToneRange, dodge_burn};
 use photocraft_color::convert::linear_to_srgb;
 use serde_json::{Value, json};
 
@@ -83,9 +84,8 @@ fn dodge_keeps_8_and_16_bit_results() {
     assert_eq!(got, [[11825, 11825, 11825], [41392, 41392, 41392], [58654, 58654, 58654], [65535, 16658, 16658], [62104, 47989, 39521], [49139, 54599, 62789]]);
 }
 
-#[test]
-fn dodge_keeps_light_above_white_in_32_bit() {
-    let mut s = patches(32);
+/// Fill the first patch with light above white (4.0, 1.5, 0.2, linear).
+fn above_white(s: &mut Session) {
     s.edit("bright", |doc, active| {
         let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
         let r = photocraft_geom::Rect::new(0, 0, SIDE, SIDE);
@@ -94,13 +94,59 @@ fn dodge_keeps_light_above_white_in_32_bit() {
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn dodge_keeps_light_above_white_in_32_bit() {
+    let mut s = patches(32);
+    above_white(&mut s);
     let c = dodge_each(&mut s, json!({}))[0];
     assert_eq!([c[0], c[1]], [4.0, 1.5], "light above white must stay as it was: {c:?}");
     assert!(c[2] > 0.2, "the in-range channel is still dodged: {c:?}");
 }
 
 #[test]
-fn dodge_keeps_tones_in_order_in_32_bit_at_full_exposure() {
+fn dodge_keeps_todays_curve_at_unmeasured_exposures_in_32_bit() {
+    // Only 50 % was measured in 32-bit; other exposures keep the gamma curve with Protect Tones'
+    // luma scaling, run on the stored values.
+    for exposure in [25, 100] {
+        let mut s = patches(32);
+        let before: Vec<_> = (0..PATCHES.len() as i32).map(|i| rgb(&s, i * SIDE + SIDE / 2, SIDE / 2)).collect();
+        let got = dodge_each(&mut s, json!({"exposure": exposure}));
+        for (g, o) in got.iter().zip(before) {
+            let e = dodge_burn(o, exposure as f32 / 100.0, ToneRange::Midtones, false, true);
+            assert!(g.iter().zip(e).all(|(g, e)| (g - e).abs() < 1e-5), "{exposure} % Dodge of {o:?}: got {g:?}, today's curve gives {e:?}");
+        }
+    }
+}
+
+#[test]
+fn dodge_keeps_light_above_white_with_unmeasured_settings_in_32_bit() {
+    // The settings that keep today's curve must not clip light above white either.
+    for extra in [json!({"exposure": 100}), json!({"range": "shadows"}), json!({"range": "highlights"}), json!({"protectTones": false})] {
+        let mut s = patches(32);
+        above_white(&mut s);
+        let c = dodge_each(&mut s, extra.clone())[0];
+        assert!(c[0] >= 4.0 && c[1] >= 1.5, "Dodge with {extra} clipped light above white: {c:?}");
+    }
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": SIDE, "height": SIDE, "depth": 32, "mode": "gray"})).unwrap();
+    s.edit("bright", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let px = photocraft_raster::from_rgba(&surf.format(), [2.0, 2.0, 2.0, 1.0]);
+        surf.write_region(photocraft_geom::Rect::new(0, 0, SIDE, SIDE), &px.repeat((SIDE * SIDE) as usize));
+        Ok(())
+    })
+    .unwrap();
+    let before = rgb(&s, SIDE / 2, SIDE / 2)[0];
+    assert!(before > 1.0, "{before}");
+    s.execute("paint.dodge", json!({"points": [[SIDE / 2, SIDE / 2]], "size": 40, "hardness": 100})).unwrap();
+    let after = rgb(&s, SIDE / 2, SIDE / 2)[0];
+    assert!(after >= before, "32-bit Grayscale Dodge clipped {before} to {after}");
+}
+
+#[test]
+fn dodge_keeps_tones_in_order_in_32_bit() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 256, "height": 8, "depth": 32, "mode": "rgb"})).unwrap();
     s.edit("ramp", |doc, active| {
@@ -111,7 +157,7 @@ fn dodge_keeps_tones_in_order_in_32_bit_at_full_exposure() {
         Ok(())
     })
     .unwrap();
-    s.execute("paint.dodge", json!({"points": [[-20, 4], [276, 4]], "size": 40, "hardness": 100, "exposure": 100})).unwrap();
+    s.execute("paint.dodge", json!({"points": [[-20, 4], [276, 4]], "size": 40, "hardness": 100})).unwrap();
     let row: Vec<f32> = (0..256).map(|x| rgb(&s, x, 4)[0]).collect();
     assert!(row.windows(2).all(|w| w[1] >= w[0]), "{row:?}");
     assert!(row.iter().all(|v| (0.0..=1.0).contains(v)) && row[0] == 0.0 && row[255] == 1.0, "{row:?}");
