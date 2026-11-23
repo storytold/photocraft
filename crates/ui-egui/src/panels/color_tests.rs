@@ -194,13 +194,10 @@ fn swap_and_default_colors_recolour_selected_type() {
         app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
         let anchor = if selected { 6 } else { 11 };
         app.ui.text_edit = Some(crate::state::TextEdit { layer: id.0, document: None, caret: 11, anchor, session: "s".into(), created: false, mask: false });
-        let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(80.0, 120.0)).build_ui_state(
-            |ui, app: &mut Box<PhotocraftApp>| {
-                let w = ui.available_width();
-                color_chips(app, ui, w)
-            },
-            app,
-        );
+        let mut h = egui_kittest::Harness::builder()
+            .with_context(app.ctx().clone())
+            .with_size(vec2(80.0, 120.0))
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| color_chips(app, ui), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::studio());
         h.run_steps(2);
         h.get_by_label("Switch Foreground and Background Colors (X)").click();

@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use craft::ui::runtime::measure::{Settle, last_pass_settles};
+use craft::ui::runtime::measure::{MemoRun, last_pass_memo_runs};
 use egui::accesskit::Role;
 use egui::{Event, Id, Pos2, Rect, vec2};
 use egui_kittest::Harness;
@@ -44,9 +44,9 @@ fn field_value(h: &H, label: &str, within: Rect) -> Option<f64> {
         .and_then(|n| n.accesskit_node().numeric_value().or_else(|| n.accesskit_node().value().and_then(|v| v.trim_end_matches(" px").parse().ok())))
 }
 
-/// The settling regions the last pass replayed.
+/// The memoized views the last pass replayed.
 fn replayed(h: &H) -> HashSet<Id> {
-    last_pass_settles(&h.ctx).into_iter().filter(|(_, s)| *s == Settle::Replayed).map(|(id, _)| id).collect()
+    last_pass_memo_runs(&h.ctx).into_iter().filter(|(_, _, run)| *run == MemoRun::Replayed).map(|(_, id, _)| id).collect()
 }
 
 /// What one drag move did: the regions it replayed, the passes it ran and `read` after it.
