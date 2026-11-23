@@ -4,14 +4,17 @@
 //! 100 × 60 file lands at 97.5,52 to 197.5,112, and a 1000 × 800 file is still fitted to the
 //! canvas (375 × 300) but centred there, -40,-68 to 335,232.
 
-use crate::file_dialog::{self, FileDialogAnswer};
+use crate::canvas::testing;
 use crate::{PhotocraftApp, Services, menus};
+use craft::host::{Picked, ScriptedFiles};
 use serde_json::json;
+use std::sync::Arc;
 
-/// A 400 × 300 document in an 800 × 600 canvas without rulers, its view at `zoom` (physical
-/// pixels per document pixel) centred on `center`; the file dialog answers with a gray `w` × `h`
-/// PNG on disk named `name` (a path, so Place Linked can link to it).
-fn placing_app(zoom: f32, center: [f32; 2], name: &str, (w, h): (u32, u32)) -> PhotocraftApp {
+/// A 400 × 300 document without rulers, its view at `zoom` (device pixels per document pixel)
+/// centred on `center` and turned by `rotation`, shown on the canvas; the file dialog answers
+/// (see [`place`]) with a gray `w` × `h` PNG on disk named `name` (a path, so Place Linked can
+/// link to it).
+fn placing_app(zoom: f32, center: [f32; 2], rotation: f32, name: &str, (w, h): (u32, u32)) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>, std::path::PathBuf) {
     let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgb, vec![128; (w * h * 3) as usize]).unwrap();
     let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
     let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -19,22 +22,37 @@ fn placing_app(zoom: f32, center: [f32; 2], name: &str, (w, h): (u32, u32)) -> P
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(name);
     std::fs::write(&path, bytes).unwrap();
-    let answer = FileDialogAnswer::Paths(vec![path.to_string_lossy().into_owned()]);
-    let services = Services { file_dialog: Some(file_dialog::fake(vec![Some(answer)]).0), ..Default::default() };
+    let files = Arc::new(ScriptedFiles::held());
+    let services = Services { files: Some(files.clone()), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 400, "height": 300, "depth": 8})).unwrap();
     app.ui.extras.rulers = false;
-    app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    testing::shown(&mut app);
     let v = &mut app.ui.views[0];
-    (v.zoom, v.center, v.rotation, v.fit_pending) = (zoom, center, 0.0, false);
-    app
+    (v.zoom, v.center, v.rotation) = (zoom, center, rotation);
+    v.clear_pending();
+    testing::shown(&mut app);
+    let shown = testing::view(&app).expect("the canvas shows the view");
+    assert!(
+        (shown.center.x - f64::from(center[0])).abs() < 1e-3 && (shown.center.y - f64::from(center[1])).abs() < 1e-3,
+        "the canvas shows the view asked for: {:?}",
+        shown.center
+    );
+    (app, files, path)
 }
 
-/// Runs `command` from the menu (the dialog answers at once); the placed layer's box.
-fn place(app: &mut PhotocraftApp, command: &str) -> [i32; 4] {
-    let ctx = egui::Context::default();
+/// The part of the canvas the view shows: `[x0, y0, x1, y1]` in document pixels.
+fn visible(app: &PhotocraftApp) -> [f64; 4] {
+    let r = testing::view(app).expect("the canvas shows a view").visible();
+    [r.x0, r.y0, r.x1, r.y1]
+}
+
+/// Runs `command` from the menu and answers its file dialog with `path`; the placed layer's box.
+fn place(app: &mut PhotocraftApp, files: &ScriptedFiles, path: &std::path::Path, command: &str) -> [i32; 4] {
+    let ctx = app.ctx().clone();
     menus::invoke(app, &ctx, command, json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
+    files.answer(Picked::Paths(vec![path.to_path_buf()])).expect("a file dialog is open");
+    app.poll_file_dialog();
     let st = app.session.active().unwrap();
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert!(matches!(layer.content, photocraft_doc::LayerContent::Smart(_)), "{command} placed the file");
@@ -49,8 +67,10 @@ const ZOOMED: (f32, [f32; 2]) = (5.0, [147.5, 82.0]);
 #[test]
 fn with_the_whole_canvas_in_view_a_place_centres_on_the_canvas() {
     for command in ["file.placeEmbedded", "file.placeLinked"] {
-        let mut app = placing_app(1.0, [200.0, 150.0], "src.png", (100, 60));
-        assert_eq!(place(&mut app, command), [150, 120, 250, 180], "{command}");
+        let (mut app, files, path) = placing_app(1.0, [200.0, 150.0], 0.0, "src.png", (100, 60));
+        let [x0, y0, x1, y1] = visible(&app);
+        assert!(x0 <= 0.0 && y0 <= 0.0 && x1 >= 400.0 && y1 >= 300.0, "the whole canvas is in view: {x0},{y0} to {x1},{y1}");
+        assert_eq!(place(&mut app, &files, &path, command), [150, 120, 250, 180], "{command}");
     }
 }
 
@@ -60,8 +80,8 @@ fn with_the_whole_canvas_in_view_a_place_centres_on_the_canvas() {
 #[test]
 fn with_part_of_the_canvas_in_view_a_place_centres_on_that_part() {
     for command in ["file.placeEmbedded", "file.placeLinked"] {
-        let mut app = placing_app(ZOOMED.0, ZOOMED.1, "src.png", (100, 60));
-        let [x0, y0, x1, y1] = place(&mut app, command);
+        let (mut app, files, path) = placing_app(ZOOMED.0, ZOOMED.1, 0.0, "src.png", (100, 60));
+        let [x0, y0, x1, y1] = place(&mut app, &files, &path, command);
         assert_eq!((x1 - x0, y1 - y0), (100, 60), "{command}: the size is unchanged");
         assert_eq!((y0, y1), (52, 112), "{command}");
         assert!((f64::from(x0 + x1) / 2.0 - 147.5).abs() <= 0.5, "{command}: centred on 147.5 across: {x0}..{x1}");
@@ -72,16 +92,16 @@ fn with_part_of_the_canvas_in_view_a_place_centres_on_that_part() {
 /// the box may reach past the canvas edge.
 #[test]
 fn a_fitted_place_keeps_its_size_and_moves_its_centre() {
-    let mut app = placing_app(ZOOMED.0, ZOOMED.1, "big.png", (1000, 800));
-    assert_eq!(place(&mut app, "file.placeEmbedded"), [-40, -68, 335, 232]);
+    let (mut app, files, path) = placing_app(ZOOMED.0, ZOOMED.1, 0.0, "big.png", (1000, 800));
+    assert_eq!(place(&mut app, &files, &path, "file.placeEmbedded"), [-40, -68, 335, 232]);
 }
 
 /// A selection wins over the view (#14102): Place Embedded centres on it and removes it.
 #[test]
 fn a_selection_wins_over_the_view() {
-    let mut app = placing_app(ZOOMED.0, ZOOMED.1, "src.png", (100, 60));
+    let (mut app, files, path) = placing_app(ZOOMED.0, ZOOMED.1, 0.0, "src.png", (100, 60));
     app.run("select.rect", json!({"x": 300, "y": 200, "width": 80, "height": 80})).unwrap();
-    assert_eq!(place(&mut app, "file.placeEmbedded"), [290, 210, 390, 270]);
+    assert_eq!(place(&mut app, &files, &path, "file.placeEmbedded"), [290, 210, 390, 270]);
     assert!(app.session.active().unwrap().doc.selection.is_none(), "the place removes the selection");
 }
 
@@ -89,25 +109,26 @@ fn a_selection_wins_over_the_view() {
 /// a rotated one.
 #[test]
 fn a_view_cut_on_one_axis_or_rotated_keeps_the_canvas_centre() {
-    // 160 document pixels across, the whole 300 down (at 1.5 the 600-point height shows 400).
-    let mut app = placing_app(5.0, [147.5, 150.0], "src.png", (100, 60));
-    app.ui.views[0].zoom = 1.5;
-    app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 600.0));
-    assert_eq!(place(&mut app, "file.placeEmbedded"), [150, 120, 250, 180], "cut across only");
+    // At 100 % centred right of the canvas: its left part is cut off, the whole 300 down shows.
+    let (mut app, files, path) = placing_app(1.0, [350.0, 150.0], 0.0, "src.png", (100, 60));
+    let [x0, y0, _, y1] = visible(&app);
+    assert!(x0 > 0.0 && y0 <= 0.0 && y1 >= 300.0, "the view cuts the canvas across only: {x0},{y0} to {y1} down");
+    assert_eq!(place(&mut app, &files, &path, "file.placeEmbedded"), [150, 120, 250, 180], "cut across only");
 
-    let mut app = placing_app(ZOOMED.0, ZOOMED.1, "src.png", (100, 60));
-    app.ui.views[0].rotation = 15.0;
-    assert_eq!(place(&mut app, "file.placeEmbedded"), [150, 120, 250, 180], "rotated");
+    let (mut app, files, path) = placing_app(ZOOMED.0, ZOOMED.1, 15.0, "src.png", (100, 60));
+    assert_eq!(place(&mut app, &files, &path, "file.placeEmbedded"), [150, 120, 250, 180], "rotated");
 }
 
 /// Into a selected frame the image fills the frame wherever the view is: the view's centre is
 /// not passed, since a frame place's `center` is in the frame's own space.
 #[test]
 fn a_place_into_a_frame_ignores_the_view() {
-    let mut app = placing_app(ZOOMED.0, ZOOMED.1, "src.png", (100, 100));
+    let (mut app, files, path) = placing_app(ZOOMED.0, ZOOMED.1, 0.0, "src.png", (100, 100));
     let frame = app.run("layer.new.frame", json!({"x": 10, "y": 10, "width": 80, "height": 80})).unwrap()["layer"].as_u64().unwrap();
-    menus::invoke(&mut app, &egui::Context::default(), "file.placeEmbedded", json!({})).unwrap();
-    app.poll_file_dialog(&egui::Context::default(), None);
+    let ctx = app.ctx().clone();
+    menus::invoke(&mut app, &ctx, "file.placeEmbedded", json!({})).unwrap();
+    files.answer(Picked::Paths(vec![path])).expect("a file dialog is open");
+    app.poll_file_dialog();
     let doc = &app.session.active().unwrap().doc;
     let image = &doc.layer(photocraft_doc::LayerId(frame)).unwrap().children().unwrap()[0];
     let photocraft_doc::LayerContent::Smart(so) = &image.content else { panic!("the frame holds the placed image") };
