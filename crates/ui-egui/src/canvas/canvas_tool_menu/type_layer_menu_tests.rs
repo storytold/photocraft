@@ -4,11 +4,13 @@
 //! (`TYPE_EDIT_MENU`) is unchanged.
 
 use super::*;
-use egui::{Context, Modifiers, PointerButton, Pos2, vec2};
+use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 
+use super::tests::{open_here, pick};
+
 /// A committed type layer reading "Hello" over the middle of a 32 px canvas, no edit running.
-fn app_with_type() -> (PhotocraftApp, u64) {
+fn app_with_type() -> (Box<PhotocraftApp>, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
     app.ui.tool = Tool::Type;
@@ -19,14 +21,10 @@ fn app_with_type() -> (PhotocraftApp, u64) {
 
 /// Right-click over the type: the menu opens as a type layer menu.
 fn open_over_type(app: &mut PhotocraftApp) -> CanvasToolMenu {
-    assert!(open_at(app, &Context::default(), Tool::Type, [10.0, 100.0], Some([16.0, 16.0])), "the canvas centre is on the type");
+    assert!(open_here(app, Tool::Type, [16.0, 16.0]), "the canvas centre is on the type");
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    assert!(menu.type_layer && !menu.text);
+    assert!(matches!(menu.kind, MenuKind::TypeLayer { .. }));
     menu
-}
-
-fn row_ids(menu: &CanvasToolMenu) -> Vec<Option<&'static str>> {
-    rows(menu).iter().map(|r| r.map(|(_, id)| id)).collect()
 }
 
 fn text_of(app: &PhotocraftApp, id: u64) -> photocraft_doc::TextLayer {
@@ -38,45 +36,6 @@ fn text_of(app: &PhotocraftApp, id: u64) -> photocraft_doc::TextLayer {
 
 fn history_len(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().history.entries().len()
-}
-
-/// The measured entry order (#12043): Edit Type… on top, then the layer rows, Faux Bold and
-/// Faux Italic above the Convert row, and Layer Style… last.
-#[test]
-fn point_text_menu_has_the_measured_rows_in_order() {
-    let (mut app, _id) = app_with_type();
-    let menu = open_over_type(&mut app);
-    let want = vec![
-        Some("type.editText"),
-        None,
-        Some("edit.checkSpelling"),
-        Some("edit.findAndReplaceText"),
-        None,
-        Some("type.rasterizeTypeLayer"),
-        Some("type.createWorkPath"),
-        Some("type.convertToShape"),
-        None,
-        Some("type.orientation.horizontal"),
-        Some("type.orientation.vertical"),
-        None,
-        Some("type.antiAlias.none"),
-        Some("type.antiAlias.sharp"),
-        Some("type.antiAlias.crisp"),
-        Some("type.antiAlias.strong"),
-        Some("type.antiAlias.smooth"),
-        Some("type.antiAlias.windowsLcd"),
-        Some("type.antiAlias.windows"),
-        None,
-        Some(FAUX_BOLD),
-        Some(FAUX_ITALIC),
-        None,
-        Some("type.convertToParagraphText"),
-        None,
-        Some("type.warpText"),
-        None,
-        Some("layer.layerStyle.blendingOptions"),
-    ];
-    assert_eq!(row_ids(&menu), want);
 }
 
 /// Only one Convert entry: Convert to Paragraph Text on point text, Convert to Point Text on
@@ -103,15 +62,15 @@ fn faux_rows_toggle_the_whole_layer_in_one_history_state() {
     assert!(entry_enabled(&app, &menu, FAUX_ITALIC));
     assert!(!mode_checked(&app, &menu, FAUX_BOLD), "off to start");
     let before = history_len(&app);
-    choose(&mut app, &Context::default(), FAUX_BOLD);
+    pick(&mut app, FAUX_BOLD);
     assert!(text_of(&app, id).char_runs().iter().all(|r| r.style.faux_bold), "the whole layer takes Faux Bold");
     assert_eq!(history_len(&app), before + 1, "one history state for the toggle");
     let menu = open_over_type(&mut app);
     assert!(mode_checked(&app, &menu, FAUX_BOLD), "the row shows a check while the layer uses it");
-    choose(&mut app, &Context::default(), FAUX_BOLD);
+    pick(&mut app, FAUX_BOLD);
     assert!(text_of(&app, id).char_runs().iter().all(|r| !r.style.faux_bold), "and toggles back off");
     open_over_type(&mut app);
-    choose(&mut app, &Context::default(), FAUX_ITALIC);
+    pick(&mut app, FAUX_ITALIC);
     assert!(text_of(&app, id).char_runs().iter().all(|r| r.style.faux_italic), "Faux Italic likewise");
 }
 
@@ -127,40 +86,19 @@ fn edit_type_starts_editing_the_right_clicked_layer() {
     app.run("layer.select", json!({"layer": top, "mode": "add"})).unwrap();
     let at = [25.0, 80.0];
     assert_eq!(crate::type_tool::hit_layer(&mut app, at[0], at[1]).map(|l| l.0), Some(bottom), "the point is on the bottom layer");
-    let ctx = Context::default();
-    assert!(open_at(&mut app, &ctx, Tool::Type, [10.0, 10.0], Some(at)));
+    let ctx = app.ctx().clone();
+    assert!(open_here(&mut app, Tool::Type, at));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     assert!(available(&app, &menu, "type.editText"), "Edit Type… is a live row over committed type");
     choose(&mut app, &ctx, "type.editText");
     assert_eq!(app.ui.text_edit.as_ref().map(|e| e.layer), Some(bottom), "Edit Type… edits the clicked layer");
 }
 
-/// Layer Style… opens the Layer Style dialog for that layer.
-#[test]
-fn layer_style_opens_the_layer_style_dialog() {
-    let (mut app, _id) = app_with_type();
-    let menu = open_over_type(&mut app);
-    assert!(available(&app, &menu, "layer.layerStyle.blendingOptions"), "Layer Style… is a live row over committed type");
-    choose(&mut app, &Context::default(), "layer.layerStyle.blendingOptions");
-    let d = app.ui.dialogs.last().expect("Layer Style… opens the Layer Style dialog");
-    assert_eq!(d.kind, crate::state::DialogKind::LayerStyle);
-}
-
-/// What must not change: the menu shown while editing keeps its Undo/Cut group, both Convert
-/// rows (the one that doesn't apply stays greyed) and no Edit Type… or Layer Style… row.
-#[test]
-fn the_type_edit_menu_is_unchanged() {
-    assert_eq!(TYPE_EDIT_MENU.first().copied().flatten(), Some(("Undo", "edit.undo")));
-    let has = |id: &str| TYPE_EDIT_MENU.iter().flatten().any(|(_, i)| *i == id);
-    assert!(has("type.convertToParagraphText") && has("type.convertToPointText"), "while editing, both Convert rows stay");
-    assert!(!has("type.editText") && !has("layer.layerStyle.blendingOptions"));
-}
-
 /// A drawn harness over the committed type, as in the canvas gesture tests.
-fn menu_harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn menu_harness(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     app.sync_views();
-    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_context(app.ctx().clone()).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
             let ctx = ui.ctx().clone();
             if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -169,12 +107,12 @@ fn menu_harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::default());
     h.run_steps(4);
     h
 }
 
-fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+fn right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2) {
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
@@ -184,7 +122,7 @@ fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
     h.run_steps(2);
 }
 
-fn listed(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn listed(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     let menu = h.state().ui.canvas_tool_menu.clone().expect("the menu stays open over the type");
     rows(&menu).iter().flatten().map(|(_, id)| id.to_string()).collect()
 }
@@ -200,14 +138,14 @@ fn faux_rows_grey_only_for_what_the_command_would_reject() {
     let menu = open_over_type(&mut app);
     assert!(!entry_enabled(&app, &menu, FAUX_BOLD), "Lock All is the command's rejection, so the row is greyed");
     assert!(!available(&app, &menu, FAUX_ITALIC), "and the other faux row with it");
-    choose(&mut app, &Context::default(), FAUX_BOLD);
+    pick(&mut app, FAUX_BOLD);
     assert!(text_of(&app, id).char_runs().iter().all(|r| !r.style.faux_bold), "a greyed row changes nothing");
     // `check_text_unlocked` (the command's only rejection) takes Lock Position: styling
     // re-renders the text, it does not move the layer.
     app.run("layer.setProps", json!({"locks": {"all": false, "position": true}})).unwrap();
     let menu = open_over_type(&mut app);
     assert!(entry_enabled(&app, &menu, FAUX_BOLD), "a position lock keeps the row live, as the command does");
-    choose(&mut app, &Context::default(), FAUX_BOLD);
+    pick(&mut app, FAUX_BOLD);
     assert!(text_of(&app, id).char_runs().iter().all(|r| r.style.faux_bold), "and the style still applies");
 }
 

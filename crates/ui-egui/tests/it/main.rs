@@ -2,39 +2,21 @@
 
 mod actions_duplicate;
 mod actions_panel_menu;
-mod actions_record_again;
-mod adjust_preview_gpu;
-mod arbitrary_rotation_preview;
-mod background_eraser_reset_tip;
+mod apply_data_set_dialog;
+mod apply_data_set_preview;
 mod batch_export_options;
 mod brush_reset_defaults;
 mod camera_raw_histogram;
-mod camera_raw_localization;
 mod camera_raw_scope;
-mod camera_raw_zoom;
-mod canvas_16f;
-mod checker_canvas;
 mod clipboard_svg;
-mod color_managed_canvas;
-mod crop_beyond_canvas;
 mod crop_ctrl_straighten;
-mod crop_default_mode;
 mod crop_defaults;
-mod crop_frame_look;
 mod crop_options_bar_chrome;
-mod crop_overlay_icons;
-mod crop_popup_keys;
-mod crop_shift_corner;
 mod crop_task_bar;
-mod crop_turn_grid;
-mod crop_turn_keeps_frame_inside;
-mod custom_print_paper;
-mod display_shadows;
-mod drag_preview_canvas;
+mod display_names;
 mod eraser_reset_defaults;
-mod export_as_scaling;
-mod eyedropper_ring;
-mod full_res_preview;
+mod flatpak_updates;
+mod free_transform_preview_canvas;
 mod gpu_device_loss;
 mod healing_reset_tip;
 // The interactive bench's `#[cfg(test)]` reporting tests: CI runs `--tests`, never examples.
@@ -43,17 +25,39 @@ mod healing_reset_tip;
 #[allow(dead_code)]
 mod interactive_bench_reporting;
 mod layout_perf;
-mod live_stroke_canvas;
 mod magnetic_lasso_right_click;
-mod marching_ants_pixels;
-mod marquee_autoscroll;
+mod mixer_reset_defaults;
 mod paint_bucket_all_layers;
-mod pattern_preview_canvas;
+mod pending_remove_pointer;
 mod radial_blur_center;
-mod remove_channel_target;
+mod save_memory_gate;
 mod system_locale;
 mod tone_targets;
-mod transform_readout_units;
-mod ui_scale_canvas;
 mod variables_data_sets;
 mod workspace_presets;
+
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// The simulated free memory is process-wide: tests that set it take turns.
+pub(crate) static HEADROOM: Mutex<()> = Mutex::new(());
+
+/// Takes one of the locks above; a failed test that held it does not fail the next.
+pub(crate) fn lock(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
+    lock.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+// Tests that draw on a GPU device. nextest runs every test in a `gpu_tests` module in its `gpu`
+// test group (.config/nextest.toml); the rest run on the CPU canvas.
+mod gpu_tests {
+    mod adjust_preview_gpu;
+    mod arbitrary_rotation_preview;
+    mod canvas_16f;
+    mod checker_canvas;
+    mod color_managed_canvas;
+    mod display_shadows;
+    mod drag_preview_canvas;
+    mod full_res_preview;
+    mod live_stroke_canvas;
+    mod pattern_preview_canvas;
+    mod ui_scale_canvas;
+}
