@@ -12,7 +12,7 @@ mod live_tests;
 mod masked_exposure_tests;
 #[cfg(test)]
 mod tests;
-mod tone;
+pub(in crate::xcf) mod tone;
 
 use craft_xcf::effects::{ArgumentValue, OwnedEffect, Owner, OwnerKind, StoredEffect};
 use photocraft_color::BlendMode;
