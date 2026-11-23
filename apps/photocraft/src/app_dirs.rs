@@ -31,7 +31,10 @@ pub fn current() -> &'static DataDir {
     static DIR: OnceLock<DataDir> = OnceLock::new();
     DIR.get_or_init(|| {
         let exe = std::env::current_exe().ok();
-        let d = resolve(|k| std::env::var_os(k), exe.as_deref().and_then(Path::parent));
+        let d = match crate::launch_profile::current().root() {
+            Some(root) => DataDir { dir: Some(root.to_path_buf()), mode: Mode::Override, warning: None },
+            None => resolve(|k| std::env::var_os(k), exe.as_deref().and_then(Path::parent)),
+        };
         if let Some(w) = &d.warning {
             log::warn!("{w}");
             eprintln!("photocraft: {w}");
