@@ -8,7 +8,7 @@ use crate::Session;
 
 /// A document `w` × `h` px.
 fn session(w: u32, h: u32) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": w, "height": h, "background": "white"})).unwrap();
     s
 }
@@ -269,7 +269,7 @@ fn bad_params_and_too_few_components_change_nothing() {
     assert!(s.execute("path.alignComponents", json!({"edge": "leftEdges"})).is_err());
     assert!(s.execute("path.alignComponents", json!({"edge": "leftEdges", "to": "canvas"})).is_err());
     assert!(s.execute("path.distributeComponents", json!({"edge": "leftEdges"})).is_err());
-    let mut s = Session::new();
+    let mut s = crate::session();
     assert!(s.execute("path.alignComponents", json!({"edge": "leftEdges"})).is_err());
     assert!(s.execute("path.distributeComponents", json!({"edge": "horizontally"})).is_err());
 }
