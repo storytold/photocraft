@@ -99,7 +99,7 @@ pub fn check_gradient_params(p: &Value, cmd: &str) -> Result<()> {
 }
 
 /// Most stops a gradient parameter may carry.
-const MAX_STOPS: usize = 256;
+pub const MAX_STOPS: usize = 256;
 
 /// Explicit colour stops (#5177): `"stops": [[position 0..1, "#rrggbb" | [r, g, b]], …]`, at
 /// least 2 and at most [`MAX_STOPS`], returned sorted by position. `None` without the key.

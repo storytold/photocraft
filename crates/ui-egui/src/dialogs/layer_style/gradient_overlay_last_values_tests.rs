@@ -3,6 +3,7 @@
 //! Reset to Default still gives the factory (or Make Default) values.
 
 use photocraft_engine::Session;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::{Value, json};
 
 use super::tests::{ColorStop, DialogId, EffectKind, GradientStops, Srgba, StyleValue, app_with_layer, cancel, defaults, draft, edit, first_of, ok};
