@@ -249,3 +249,38 @@ fn portable_base_color_keeps_unicode_markup_runs_editable() {
     assert_eq!(text.runs.iter().map(|run| run.len).sum::<usize>(), text.text.len());
     assert_eq!(text.cache.as_ref().unwrap().generation(), generation);
 }
+
+#[test]
+fn inherited_spacing_is_bounded_after_relative_markup_size_for_both_signs() {
+    let colors = NativeColors::new(&craft_cms::Builtin::Srgb.profile().to_bytes(), ColorMode::Rgb).unwrap();
+    for spacing in [1_024_000, -1_024_000] {
+        for (size, admitted) in [("50%", true), ("25%", false)] {
+            let raw = format!(
+                r#"(markup "<markup><span size='2048' letter_spacing='{spacing}'><span size='{size}'>A</span></span></markup>")
+                (font-size 12) (font-size-unit points) (box-mode fixed) (box-width 40) (box-height 20)"#
+            );
+            let mut layer = saved(PixelFormat::RGBA8);
+            let before = layer.clone();
+            let mapped = map_layer(
+                &mut layer,
+                &source(&raw),
+                NativeOptions { resolution: (72., 72.), offset: (5, 6), colors: Some(&colors) },
+                &mut NativeBudget::default(),
+                &mut Budget::default(),
+                &Interrupt::NONE,
+            )
+            .unwrap();
+            if admitted {
+                assert!(matches!(mapped, Mapping::Converted { .. }));
+                let LayerContent::Text(text) = &layer.content else { panic!("admitted editable text") };
+                assert_eq!(text.text, "A");
+                assert_eq!(text.runs.len(), 1);
+                assert_eq!(text.runs[0].style.tracking, if spacing > 0 { 1_000_000. } else { -1_000_000. });
+                assert_eq!(text.cache.as_ref().unwrap().pixel(5, 6), before.surface().unwrap().pixel(5, 6));
+            } else {
+                assert!(matches!(mapped, Mapping::Preserved { reason, .. } if reason.contains("native tracking bounds")));
+                assert_eq!(layer, before, "refused formatting keeps every saved pixel and source layer property");
+            }
+        }
+    }
+}

@@ -305,7 +305,9 @@ pub(super) fn runs(
         }
         style.size_pt = final_size as f32;
         style.tracking = (spacing * 1000. / final_size) as f32;
-        if !style.tracking.is_finite() {
+        // Inherited spacing can become enormous only after a descendant shrinks
+        // the font. Admit the final native run, not just each source scalar.
+        if !style.tracking.is_finite() || style.tracking.abs() > 1_000_000. {
             return Err(unsupported("source markup letter spacing exceeds native tracking bounds"));
         }
         if letter_spaced {

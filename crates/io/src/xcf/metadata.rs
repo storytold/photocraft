@@ -52,6 +52,8 @@ pub(super) fn apply(
     warnings: &mut Warnings,
     ctl: &Interrupt<'_>,
 ) -> Result<()> {
+    // Cancellation must precede DPI/warning mutation even with no guide records.
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     document.resolution_dpi = axes.0;
     if let Some(warning) = crate::unequal_resolution_warning(f64::from(axes.0), f64::from(axes.1)) {
         warnings.note(&warning);
@@ -160,5 +162,28 @@ mod tests {
         let imported = import("truncated exif", &source.write(), &Interrupt::NONE).unwrap();
         assert!(imported.document.metadata.exif.is_none());
         assert!(imported.warnings.iter().any(|note| note.contains("EXIF packet is invalid")));
+    }
+
+    #[test]
+    fn pre_cancelled_metadata_apply_keeps_resolution_metadata_and_warnings_unchanged() {
+        let mut document = Document::new("Original", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        document.metadata.text.push(("Original note".into(), "Retain me".into()));
+        let metadata = document.metadata.clone();
+        let resolution = document.resolution_dpi;
+        let source = ImageMetadata::default();
+        let mut warnings = Warnings::default();
+        let cancel = || true;
+        let ctl = Interrupt::cancel_only(&cancel);
+        assert!(matches!(apply(&mut document, &source, (300., 150.), 26, &mut warnings, &ctl), Err(IoError::Cancelled)));
+        assert_eq!(document.resolution_dpi, resolution);
+        assert_eq!(document.metadata, metadata);
+        assert!(warnings.finish().is_empty());
+
+        // The same empty-guide source still applies its real DPI and disclosure
+        // when permitted: the cancellation test cannot pass through a no-op.
+        let mut warnings = Warnings::default();
+        apply(&mut document, &source, (300., 150.), 26, &mut warnings, &Interrupt::NONE).unwrap();
+        assert_eq!(document.resolution_dpi, 300.);
+        assert!(!warnings.finish().is_empty());
     }
 }
