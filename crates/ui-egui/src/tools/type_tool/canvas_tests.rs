@@ -417,7 +417,7 @@ mod panel_defaults {
         let mut app = new_app();
         app.ui.tool_options.type_style_defaults =
             json!({"tracking": 20, "text": "Injected", "box": [0, 0, 2, 2], "coalesce": "unrelated"}).as_object().unwrap().clone();
-        let p = super::super::default_style_params(&app);
+        let p = super::super::default_style_params(&app, &app.ui.tool_options);
         assert_eq!(p["tracking"], 20);
         assert!(p.get("text").is_none() && p.get("box").is_none() && p.get("coalesce").is_none());
         app.ui.tool_options.type_style_defaults = json!({
@@ -427,7 +427,7 @@ mod panel_defaults {
         .as_object()
         .unwrap()
         .clone();
-        let p = super::super::default_style_params(&app);
+        let p = super::super::default_style_params(&app, &app.ui.tool_options);
         for key in ["tracking", "leading", "spaceAfter", "variations", "features"] {
             assert!(p.get(key).is_none(), "hostile {key} is ignored");
         }

@@ -215,43 +215,67 @@ fn press_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64, mods: 
     ToolAction::Done
 }
 
+/// The settings a `type.create` is built from: the tool in hand (horizontal or vertical, and which
+/// Type Mask), the options bar's type settings and the placeholder preference. A plain drag or a
+/// click reads them live at its release, through [`TypeSnapshot::live`]. The Paragraph Text Size
+/// dialog instead takes the snapshot when it opens and hands it to its OK (#12044): that dialog is
+/// modal in the reference application, so nothing can change the tool or its options between the
+/// Alt+drag and OK, and the box it makes uses what was active at the drag even when a control
+/// changes them while the dialog is open.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct TypeSnapshot {
+    pub tool: crate::state::Tool,
+    pub options: crate::state::ToolOptions,
+    pub placeholder: bool,
+}
+
+impl TypeSnapshot {
+    /// Read from the app as it stands at this moment: today's live reading, what the plain drag and
+    /// the click create with.
+    pub(crate) fn live(app: &PhotocraftApp) -> Self {
+        Self { tool: app.ui.tool, options: app.ui.tool_options.clone(), placeholder: app.session.prefs().type_.fill_new_type_layers_with_placeholder }
+    }
+}
+
 /// The `type.create` parameters a Type-tool gesture ending now starts from: the placeholder or
 /// empty text, the tool's orientation and the options bar's styles. The caller adds the geometry
 /// (`box` for a dragged paragraph, `x`/`y` for point text), and [`create_layer`] adds the session's
 /// `coalesce` key. `is_box` says whether the gesture that ends was a paragraph drag, which #12077's
-/// mask style applies only to a click.
-pub(crate) fn create_params(app: &PhotocraftApp, is_box: bool) -> serde_json::Value {
-    let mask = app.ui.tool.is_type_mask();
+/// mask style applies only to a click; `s` names the tool and settings to create with.
+pub(crate) fn create_params(app: &PhotocraftApp, is_box: bool, s: &TypeSnapshot) -> serde_json::Value {
+    let mask = s.tool.is_type_mask();
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The
     // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
     // vertical mask's placeholder is not measured yet, so it keeps starting empty.
-    let placeholder = app.ui.tool != crate::state::Tool::VerticalTypeMask && app.session.prefs().type_.fill_new_type_layers_with_placeholder;
+    let placeholder = s.tool != crate::state::Tool::VerticalTypeMask && s.placeholder;
     let text = if placeholder { PLACEHOLDER } else { "" };
-    let mut p = default_style_params(app);
+    let mut p = default_style_params(app, &s.options);
     // #12077: the measured case - a click, not a paragraph box, with the Horizontal Type Mask over
     // a horizontal text layer - starts the mask in that layer's font, style and size, as the
     // options bar shows them for the layer. The vertical mask and a box drag are not measured in
     // the issue, so they keep today's tool options.
     if mask
         && !is_box
-        && app.ui.tool == crate::state::Tool::HorizontalTypeMask
+        && s.tool == crate::state::Tool::HorizontalTypeMask
         && let Some(style) = mask_style_from_active_layer(app)
         && let (Some(params), Some(style)) = (p.as_object_mut(), style.as_object())
     {
         params.extend(style.clone());
     }
     p["text"] = json!(text);
-    p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
+    p["orientation"] = json!(if s.tool.is_vertical_type() { "vertical" } else { "horizontal" });
     p
 }
 
 /// Create the type layer `p` describes, and finish what a released Type-tool gesture does with it:
 /// the path target of a click, the options bar's antialiasing, the Type Mask tools' hidden working
-/// layer, and the edit session with the placeholder selected. The id of the new layer, or why
-/// creating it failed (the status bar already says so, since [`PhotocraftApp::run`] reported it).
-pub(crate) fn create_layer(app: &mut PhotocraftApp, mut p: serde_json::Value, target: Option<PathClick>) -> Result<u64, String> {
-    let o = app.ui.tool_options.clone();
-    let mask = app.ui.tool.is_type_mask();
+/// layer, and the edit session with the placeholder selected. `s` is the snapshot `p` was built
+/// from, so the antialiasing and the Type Mask handling follow those settings and not the live ones.
+/// The id of the new layer, or why creating it failed (the status bar already says so, since
+/// [`PhotocraftApp::run`] reported it).
+pub(crate) fn create_layer(app: &mut PhotocraftApp, mut p: serde_json::Value, target: Option<PathClick>, s: &TypeSnapshot) -> Result<u64, String> {
+    let o = &s.options;
+    let mask = s.tool.is_type_mask();
     let n = p.get("text").and_then(serde_json::Value::as_str).unwrap_or("").chars().count();
     let key = session_key(app);
     p["coalesce"] = json!(key);
@@ -303,14 +327,17 @@ fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], alt_at_p
     // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
     // on the path on its outline. The Type Mask tools ignore paths.
     let target = if !mask && !is_box { path_target(app, start[0], start[1]) } else { None };
-    let mut p = create_params(app, is_box);
+    // A plain drag or click reads the tool, its options and the placeholder preference as they
+    // stand at its release, as they always have (#12044).
+    let snapshot = TypeSnapshot::live(app);
+    let mut p = create_params(app, is_box, &snapshot);
     if is_box {
         p["box"] = json!([start[0].min(end[0]).round(), start[1].min(end[1]).round(), w.round(), h.round()]);
     } else {
         p["x"] = json!(start[0].round());
         p["y"] = json!(start[1].round());
     }
-    let _ = create_layer(app, p, target);
+    let _ = create_layer(app, p, target, &snapshot);
 }
 
 impl CanvasTool for TypeTool<'_> {

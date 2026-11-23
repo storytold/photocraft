@@ -4,7 +4,8 @@
 //! route are checked to keep today's behaviour: a plain drag still makes the box directly, Alt+click
 //! is still point text, the vertical Type tool keeps its plain drag, ⌥ is read at the press so it can
 //! come up or go down mid-drag, a second drag while the dialog is open is swallowed by that dialog,
-//! and a name the dialog does not show as a field is refused.
+//! the layer keeps the tool, the type options and the placeholder preference that were active when
+//! the dialog opened, and a name the dialog does not show as a field is refused.
 //!
 //! The gestures go through the canvas pass (`canvas::testing`), the way the released Type tool does
 //! on the hosted framework: a press with ⌥ held, a move, a release. The dialog is driven the way a
@@ -232,16 +233,95 @@ fn an_alt_drag_with_the_vertical_type_tool_still_makes_the_box_directly() {
     assert_eq!(box_rect(&app, ed.layer), [10.0, 10.0, 100.0, 50.0], "the plain drag's box");
 }
 
-/// Guard (pattern 9, no guessing from a name): the drag's top-left and the document it was made in
-/// are the family's captured value, not fields - a control `set_json_field` for a name the dialog
-/// does not show is refused, so the geometry cannot be pushed in through the field map.
+/// The point size of the new layer's first run, as `type.create` stored it.
+fn size_pt(app: &PhotocraftApp, id: u64) -> f32 {
+    text(app, id).char_runs().into_iter().next().expect("the new layer has one run").style.size_pt
+}
+
+/// #12044 review: the reference dialog is modal, so nothing can change the tool or its options
+/// between the Alt+drag and OK. The dialog therefore snapshots the tool, the type options and the
+/// placeholder preference when it opens, and OK creates from that snapshot: a control that switches
+/// to the vertical Type tool and changes the size while the dialog is open does not leak into the
+/// new layer, which stays horizontal at the size the drag had.
+#[test]
+fn the_layer_keeps_the_tool_and_options_active_at_the_drag() {
+    let mut app = app();
+    app.ui.tool_options.type_font = "Drag Font".into();
+    app.ui.tool_options.type_style = "Regular".into();
+    app.ui.tool_options.type_size = 24.0;
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
+    let (d, _) = only_dialog(&app);
+    // Change the settings the dialog is about to read, while it is open.
+    app.ui.tool = Tool::VerticalType;
+    app.ui.tool_options.type_font = "Later Font".into();
+    app.ui.tool_options.type_size = 72.0;
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    let ed = app.ui.text_edit.as_ref().expect("OK starts the edit session, as the drag does");
+    let t = text(&app, ed.layer);
+    assert_eq!(t.orientation, photocraft_doc::text::Orientation::Horizontal, "the tool held at the drag, not the one at OK");
+    assert_eq!(size_pt(&app, ed.layer), 24.0, "the size held at the drag, not the one at OK");
+    assert_eq!(t.char_runs()[0].style.font_family, "Drag Font", "and the family held at the drag");
+    assert_eq!(box_rect(&app, ed.layer), [10.0, 10.0, 99.5, 50.0], "still the box the drag drew");
+}
+
+/// The same snapshot covers the placeholder preference: turning "Fill new type layers with
+/// placeholder text" off while the dialog is open does not leave the new layer empty.
+#[test]
+fn the_layer_keeps_the_placeholder_preference_active_at_the_drag() {
+    let mut app = app();
+    drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
+    let (d, _) = only_dialog(&app);
+    app.session.edit_prefs(|p| p.type_.fill_new_type_layers_with_placeholder = false);
+    let ctx = app.ctx().clone();
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    let ed = app.ui.text_edit.as_ref().expect("OK starts the edit session, as the drag does");
+    assert_eq!(text(&app, ed.layer).text, PLACEHOLDER, "the preference held at the drag, not the one at OK");
+    assert_eq!((ed.anchor, ed.caret), (0, PLACEHOLDER.chars().count()), "and its placeholder stays selected");
+}
+
+/// Not changed by the snapshot: a plain drag reads the tool and its options at the moment it ends.
+/// Pinned so the snapshot stays inside the dialog's route.
+#[test]
+fn a_plain_drag_reads_the_settings_at_its_own_release() {
+    let mut app = app();
+    app.ui.tool = Tool::VerticalType;
+    app.ui.tool_options.type_font = "Drag Font".into();
+    app.ui.tool_options.type_size = 24.0;
+    drag(&mut app, [10.0, 10.0], [110.0, 60.0], Modifiers::NONE, Modifiers::NONE);
+    let ed = app.ui.text_edit.as_ref().expect("the drag creates the text at once");
+    let t = text(&app, ed.layer);
+    assert_eq!(t.orientation, photocraft_doc::text::Orientation::Vertical, "the tool in hand at the release");
+    assert_eq!(size_pt(&app, ed.layer), 24.0, "and the options in hand at the release");
+    assert_eq!(t.char_runs()[0].style.font_family, "Drag Font");
+}
+
+/// The other unchanged neighbour: a click reads the live settings too, including the placeholder
+/// preference as it is at that moment.
+#[test]
+fn a_click_reads_the_settings_at_its_own_release() {
+    let mut app = app();
+    app.session.edit_prefs(|p| p.type_.fill_new_type_layers_with_placeholder = false);
+    app.ui.tool_options.type_size = 30.0;
+    drag(&mut app, [50.0, 100.0], [50.0, 100.0], Modifiers::NONE, Modifiers::NONE);
+    let ed = app.ui.text_edit.as_ref().expect("the click creates point text");
+    let t = text(&app, ed.layer);
+    assert!(matches!(t.shape, photocraft_doc::text::TextShape::Point), "point text");
+    assert_eq!(t.text, "", "the preference as it stands at the click");
+    assert_eq!(size_pt(&app, ed.layer), 30.0, "and the options as they stand at the click");
+}
+
+/// Guard (pattern 9, no guessing from a name): the drag's top-left, the document it was made in and
+/// the settings snapshot are the family's captured value, not fields - a control `set_json_field`
+/// for a name the dialog does not show is refused, so neither the geometry nor the tool and its
+/// options can be pushed in through the field map.
 #[test]
 fn a_name_the_dialog_does_not_show_as_a_field_is_refused() {
     let mut app = app();
     drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
     let (id, _) = only_dialog(&app);
     let ctx = app.ctx().clone();
-    for field in ["at", "document", "box", "text"] {
+    for field in ["at", "document", "settings", "box", "text"] {
         assert!(app.framework.dialogs.set_json_field(&ctx, id, field, json!(1.0)).is_err(), "`{field}` is not a field of this dialog");
     }
     assert_eq!(only_dialog(&app).1["width"].as_f64(), Some(99.5), "and the two real fields keep the dragged size");
