@@ -11,6 +11,10 @@ use super::PhotocraftApp;
 /// Recent files listed on the Home screen.
 const HOME_RECENT: usize = 11;
 
+/// The recent cards keep one size, as many to a row as fit (six on a desktop window), instead of growing to fill it:
+/// a factor on the card thumbnail.
+const HOME_CARD_ZOOM: f32 = 1.65;
+
 /// The Home screen in the document area. The recent list is empty on the web, which has no paths to reopen, and with
 /// Show Home Recent Files off.
 pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -29,6 +33,7 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             .links(&links[..])
             .home_layout(Label::from(crate::native_menu::APP_NAME), &footer[..])
             .max_recent(HOME_RECENT)
+            .card_zoom(HOME_CARD_ZOOM)
             .drop_hint(Label::from(tl!("Drop an image or PSD anywhere to open it.")))
             .show(ui)
             .actions
@@ -75,8 +80,9 @@ fn links() -> [StartLink; 2] {
 fn footer_links() -> [StartLink; 3] {
     [
         StartLink::url(tl!("Website"), Some(IconId::new("link")), crate::links::APP_PAGE),
-        StartLink::url(tl!("Discord"), Some(IconId::new("globe")), crate::links::DISCORD),
-        StartLink::url(tl!("GitHub"), Some(IconId::new("globe")), crate::links::GITHUB),
+        // A speech bubble and a chain link, as the rail showed before the framework move (#15449).
+        StartLink::url(tl!("Discord"), Some(IconId::new("note")), crate::links::DISCORD),
+        StartLink::url(tl!("GitHub"), Some(IconId::new("link_layers")), crate::links::GITHUB),
     ]
 }
 
