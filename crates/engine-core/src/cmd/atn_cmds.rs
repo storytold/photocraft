@@ -85,6 +85,7 @@ use events::{EVENTS, event_and_descriptor, event_for};
 use fields::Mapped;
 use files::{load, save};
 pub use menu_item::{MENU_ITEM, menu_item_command, menu_item_commands, menu_item_needs_settings};
+pub(crate) use steps_artboard_section::omit_recorded_artboard_name;
 #[cfg(test)]
 use steps_doc::crop_from;
 pub(crate) use steps_gallery::RECORDED_EVENT;

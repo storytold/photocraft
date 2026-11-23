@@ -177,6 +177,7 @@ pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
             object.insert("layer".into(), json!(layer.0));
         }
     }
+    crate::atn_cmds::omit_recorded_artboard_name(id, &mut p);
     Ok(p)
 }
 
