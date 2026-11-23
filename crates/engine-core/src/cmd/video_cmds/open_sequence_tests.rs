@@ -85,7 +85,7 @@ fn a_numbered_run_opens_as_one_untitled_video_document() {
     let layer = &group.children().unwrap()[0];
     assert_eq!(r["layer"], layer.id.0);
     assert_eq!(st.active_layer, Some(layer.id));
-    assert_eq!(st.selected_layers, [layer.id]);
+    assert_eq!(st.selected_layers(), [layer.id]);
     let video = layer.video.as_ref().unwrap();
     assert_eq!(video.fps, 12.5);
     assert_eq!(video.original_frames.as_ref().map(Vec::len), Some(3), "Restore Frame has the footage");

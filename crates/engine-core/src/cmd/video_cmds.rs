@@ -724,7 +724,7 @@ fn open_image_sequence(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     if let Some(st) = s.active_mut() {
-        st.selected_layers = vec![id];
+        *st.selection_mut() = vec![id];
     }
     Ok(json!({"document": index, "layer": id.0, "frames": n, "fps": fps, "warnings": warnings}))
 }
