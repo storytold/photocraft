@@ -19,16 +19,15 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     use craft::ui::contract::Bind;
     use craft::ui::primitives::textures::{ThumbnailOptions, Thumbnails};
 
-    use super::layers_tree::{self, PhotoLayers, PhotoThumbs};
+    use super::layers_tree::{self, PhotoThumbs};
 
     // A Move-way pick of a layer opens its groups only when the Move option says so (#11381).
     let reveal = crate::layer_reveal::take(app);
     let ctx = ui.ctx().clone();
     // Thumbnail Contents is the clip preference alone, so the panel reads it each pass.
     app.ui.layers_settings.options.thumbnail_contents = crate::layers_panel_ui::thumbnail_contents(app);
-    // Taken out of the app for the pass; a move keeps its revision.
-    let held = app.layers_tree.take();
-    let Some(st) = app.session.active() else {
+    let Some(st) = app.session.active_tracked() else {
+        layers_tree::no_model(app);
         let _ = Notice::new(Tone::Neutral, tl!("No document")).layout(NoticeLayout::Centred).show(ui);
         return;
     };
@@ -39,14 +38,15 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut filter = app.ui.layer_filter.clone();
     let before = filter.clone();
     let picked = crate::smart_ui::selected(&app.smart_filter_picks, &st.doc, st.active_layer);
-    let tree = PhotoLayers::new(app, st, &filter, foreign, picked).held(held);
+    let model = layers_tree::model(app, st, &filter, foreign, picked);
+    let Some(tree) = &*model else { return };
     let thumbs = Thumbnails::<LayerThumb<LayerId>>::in_context(&ctx, "photocraft-layer-thumbs", ThumbnailOptions::new());
     let source = PhotoThumbs::new(app, &st.doc);
-    let mut panel = LayersPanel::new(&tree)
+    let mut panel = LayersPanel::new(tree)
         .settings(settings)
         .thumbnails(&thumbs, &source)
         .filter(Bind::bound(&mut filter))
-        .row_menu(|target| layers_tree::row_menu(app, &tree, target))
+        .row_menu(|target| layers_tree::row_menu(app, tree, target))
         .document(st.doc.id);
     if let Some((id, groups)) = reveal {
         panel = panel.reveal(id, groups);
@@ -61,7 +61,6 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         panel = panel.start_rename(id);
     }
     let out = panel.show(ui);
-    app.layers_tree = Some(tree);
     app.find_layers_focus = false;
     app.layers_rename = None;
     if filter != before {
