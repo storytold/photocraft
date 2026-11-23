@@ -65,6 +65,10 @@ impl Session {
     /// the saved one. File identity is not a history step; callers finish the write first and don't call this for a
     /// copy or export.
     pub fn saved_to(&mut self, path: String) {
+        if let Some(st) = self.active() {
+            let (doc, before) = (st.doc.id.0, st.path.clone());
+            self.invalidate_link_scan_for_save(doc, before.as_deref(), &path);
+        }
         let renamed = self.active_mut().is_some_and(|st| st.saved_to(path));
         if renamed {
             self.documents_generation = self.documents_generation.wrapping_add(1);
@@ -290,7 +294,7 @@ impl Session {
             if self.link_missing.iter().any(|(d, _)| *d == id.0) {
                 self.link_missing.retain(|(d, _)| *d != id.0);
             }
-            self.link_scan = None;
+            self.invalidate_link_scan();
         }
         let d = self.docs.remove(index).into_inner();
         self.pcraft_caches.remove(&d.doc.id);

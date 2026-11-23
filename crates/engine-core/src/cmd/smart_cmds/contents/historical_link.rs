@@ -104,7 +104,7 @@ fn publish(s: &mut Session, id: LayerId, label: &str, prepared: PreparedChange) 
         Ok(())
     })?;
     s.smart_links.retain(|link| link.parent != parent || link.contents_id != contents);
-    s.link_scan = None;
+    s.invalidate_link_scan();
     Ok(json!({"layer":id.0,"instances":layers.iter().map(|id|id.0).collect::<Vec<_>>(),"warnings":warnings}))
 }
 

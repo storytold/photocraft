@@ -44,8 +44,16 @@ pub fn read_file_limited(path: &Path, max: u64) -> io::Result<Vec<u8>> {
 
 /// [`read_file_with`] with a chosen total limit (tests use small ones).
 fn read_path(path: &Path, chunk: usize, max: u64) -> io::Result<Vec<u8>> {
+    let (mut f, metadata) = open_regular_file(path)?;
+    let len = metadata.len();
+    read_all_with(&mut f, len, chunk, max)
+}
+
+/// Open a regular file without blocking on a Unix FIFO before its type can be checked.
+/// Callers can stream from the validated handle without allocating the whole source.
+pub fn open_regular_file(path: &Path) -> io::Result<(std::fs::File, std::fs::Metadata)> {
     #[cfg(unix)]
-    let (mut f, metadata) = {
+    let (f, metadata) = {
         use rustix::fs::{Mode, OFlags, open};
         let fd = open(path, OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty()).map_err(io::Error::from)?;
         let f = std::fs::File::from(fd);
@@ -57,7 +65,7 @@ fn read_path(path: &Path, chunk: usize, max: u64) -> io::Result<Vec<u8>> {
         (f, metadata)
     };
     #[cfg(not(unix))]
-    let (mut f, metadata) = {
+    let (f, metadata) = {
         let f = std::fs::File::open(path)?;
         let metadata = f.metadata()?;
         if !metadata.is_file() {
@@ -65,8 +73,7 @@ fn read_path(path: &Path, chunk: usize, max: u64) -> io::Result<Vec<u8>> {
         }
         (f, metadata)
     };
-    let len = metadata.len();
-    read_all_with(&mut f, len, chunk, max)
+    Ok((f, metadata))
 }
 
 /// Read `reader` to its end in reads of at most [`READ_CHUNK`] bytes, for an already open file

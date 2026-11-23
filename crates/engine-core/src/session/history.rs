@@ -4,8 +4,12 @@ use super::{Arc, DocState, Document, LayerId, LayerTarget, Session, channel_cmds
 impl Session {
     /// Undo a document step or restore Clear History's rows and source without editing pixels.
     pub fn undo(&mut self) -> bool {
+        let document_before = self.active().map(|st| Arc::clone(st.doc()));
         let before = self.active_layer_stamp();
         let taken = self.undo_step();
+        if taken {
+            self.invalidate_link_digests_for_history(document_before);
+        }
         self.note_layer_change(before);
         taken
     }
@@ -66,8 +70,12 @@ impl Session {
 
     /// Restore the next document state and its selection/visibility bookkeeping through the ordinary history path.
     pub fn redo(&mut self) -> bool {
+        let document_before = self.active().map(|st| Arc::clone(st.doc()));
         let before = self.active_layer_stamp();
         let taken = self.redo_step();
+        if taken {
+            self.invalidate_link_digests_for_history(document_before);
+        }
         self.note_layer_change(before);
         taken
     }
@@ -112,8 +120,12 @@ impl Session {
     /// last of them). Falls back to Undo plus forgetting the redo states when the history
     /// changed since that step. Returns whether a step was taken back.
     pub fn rollback(&mut self) -> bool {
+        let document_before = self.active().map(|st| Arc::clone(st.doc()));
         let before = self.active_layer_stamp();
         let taken = self.rollback_step();
+        if taken {
+            self.invalidate_link_digests_for_history(document_before);
+        }
         self.note_layer_change(before);
         taken
     }
