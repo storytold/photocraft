@@ -16,6 +16,7 @@ suite = ["craft/suite"]
 [dependencies]
 chrono = { workspace = true }
 craft-print = { workspace = true }
+craft-xml = { workspace = true }
 craft = { workspace = true, features = ["ui", "layers", "color-ui", "draw", "imaging", "window", "keymap", "automation", "theme-store", "print", "menu", "timeline", "text", "text-font-picker", "font-manager", "quit", "cms", "tracked-serde"] }
 # Interface translations over the embedded craft-i18n catalogs (`build.rs`, `src/i18n.rs`).
 craft-i18n = { workspace = true }

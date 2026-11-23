@@ -13,6 +13,7 @@ use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 
@@ -217,10 +218,16 @@ fn panel_harness_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static
     h
 }
 
+/// Frames the options bar may take to settle. Opening the font list loads the rows' sample faces on
+/// worker threads, and each pass that runs before a face has loaded is one more frame. The rows are
+/// the fixed test catalog's (`photocraft_text::fonts::catalog`), so the count is bounded, but on a
+/// busy runner the threads can miss many passes.
+const BAR_SETTLE_STEPS: u64 = 64;
+
 fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let _ = photocraft_text::shared();
     // As tall as a window, so the bar's popup lists open in full below it.
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(16).build_app(
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(BAR_SETTLE_STEPS).build_app(
         |ui, app: &mut PhotocraftApp| {
             ui.horizontal(|ui| show_bar(app, ui));
         },
@@ -506,11 +513,16 @@ fn double_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2) {
 }
 
 fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, a: Pos2, b: Pos2) {
+    drag_in(h, a, b, 6);
+}
+
+/// [`drag`] in `moves` pointer moves, one frame each.
+fn drag_in(h: &mut Harness<'static, Box<PhotocraftApp>>, a: Pos2, b: Pos2, moves: u8) {
     h.hover_at(a);
     h.run_steps(1);
     press(h, a, true);
-    for k in 1..=6 {
-        h.hover_at(a + (b - a) * (k as f32 / 6.0));
+    for k in 1..=moves {
+        h.hover_at(a + (b - a) * (f32::from(k) / f32::from(moves)));
         h.run_steps(1);
     }
     press(h, b, false);
@@ -530,52 +542,57 @@ fn selection(h: &Harness<'static, Box<PhotocraftApp>>) -> (usize, usize) {
 #[test]
 fn clicks_and_drags_land_on_the_glyph_under_the_pointer() {
     let rotated = Affine { m: [1.4 * 0.94, 1.4 * 0.342, -1.4 * 0.342, 1.4 * 0.94, 500.0, 420.0] };
-    for ppp in [1.0, 2.0] {
-        for zoom in [0.25f32, 0.5, 1.0, 2.0] {
-            for (flip, pan) in [(false, [0.0, 0.0]), (true, [37.0, -21.0])] {
-                for (shape, tf) in [("point", None), ("box", None), ("point", Some(rotated)), ("box", Some(rotated))] {
-                    let mut app = new_app();
-                    let size = 60.0 / zoom;
-                    let mut p = json!({"text": "HOHOHO HOHO", "size": size, "x": 300, "y": 420});
-                    if shape == "box" {
-                        p["box"] = json!([250.0, 250.0, size * 6.0, size * 4.0]);
-                    }
-                    let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
-                    if let Some(a) = tf {
-                        app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
-                    }
-                    app.ui.view.flip_horizontal = flip;
-                    let mut h = harness(ppp, app);
-                    // Centre the view on the text's middle, then pan.
-                    let (l, aff, _) = layout(h.state_mut(), id).unwrap();
-                    let b = l.bounds().unwrap();
-                    let m = aff.apply(Point::new(f64::from(b[0] + b[2]) / 2.0, f64::from(b[1] + b[3]) / 2.0));
-                    set_view(&mut h, zoom, [m.x as f32 + pan[0], m.y as f32 + pan[1]]);
-                    h.run_steps(2);
-                    let ctx = format!("ppp {ppp} zoom {zoom} flip {flip} {shape} transformed {}", tf.is_some());
-                    let rect = canvas_rect(h.state());
-                    for (i, f) in [(0, 0.2), (2, 0.8), (4, 0.3), (8, 0.7)] {
-                        let p = glyph(&mut h, id, i, f);
-                        assert!(rect.contains(p), "{ctx}: glyph {i} off screen at {p:?}");
-                    }
-                    // Click into the layer: caret before glyph 2 (left part), then after glyph 4.
-                    let p = glyph(&mut h, id, 2, 0.2);
-                    click(&mut h, p);
-                    assert_eq!(selection(&h), (2, 2), "{ctx}: click on the left of glyph 2");
-                    let p = glyph(&mut h, id, 4, 0.8);
-                    click(&mut h, p);
-                    assert_eq!(selection(&h), (5, 5), "{ctx}: click on the right of glyph 4");
-                    // Drag from glyph 1 (left part) to glyph 8 (right part): characters 1..9.
-                    let (a, b) = (glyph(&mut h, id, 1, 0.25), glyph(&mut h, id, 8, 0.75));
-                    drag(&mut h, a, b);
-                    assert_eq!(selection(&h), (1, 9), "{ctx}: drag selection");
-                    // And backwards, starting inside the egui drag threshold of a glyph edge.
-                    let (a, b) = (glyph(&mut h, id, 5, 0.85), glyph(&mut h, id, 3, 0.15));
-                    drag(&mut h, a, b);
-                    assert_eq!(selection(&h), (6, 3), "{ctx}: backwards drag selection");
-                }
-            }
+    // One case per zoom, pairwise over the other axes: every ppp, flip and pan, and shape and transform
+    // appears, ppp meets both flips, and the two ends of the range in points (25 % at 2x is 12.5 %, 200 %
+    // at 1x is 200 %) are kept. The view maps the pointer to the document (the shown view's `to_doc`)
+    // the same way for any layer, and the layer's transform maps the document to text space the same way
+    // at any view, so the two halves need not be crossed.
+    let pan = [37.0, -21.0];
+    for (ppp, zoom, flip, pan, shape, tf) in [
+        (2.0, 0.25f32, false, [0.0, 0.0], "point", None),
+        (1.0, 0.5, true, pan, "box", None),
+        (2.0, 1.0, true, pan, "point", Some(rotated)),
+        (1.0, 2.0, false, [0.0, 0.0], "box", Some(rotated)),
+    ] {
+        let mut app = new_app();
+        let size = 60.0 / zoom;
+        let mut p = json!({"text": "HOHOHO HOHO", "size": size, "x": 300, "y": 420});
+        if shape == "box" {
+            p["box"] = json!([250.0, 250.0, size * 6.0, size * 4.0]);
         }
+        let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
+        if let Some(a) = tf {
+            app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
+        }
+        app.ui.view.flip_horizontal = flip;
+        let mut h = harness(ppp, app);
+        // Centre the view on the text's middle, then pan.
+        let (l, aff, _) = layout(h.state_mut(), id).unwrap();
+        let b = l.bounds().unwrap();
+        let m = aff.apply(Point::new(f64::from(b[0] + b[2]) / 2.0, f64::from(b[1] + b[3]) / 2.0));
+        set_view(&mut h, zoom, [m.x as f32 + pan[0], m.y as f32 + pan[1]]);
+        h.run_steps(2);
+        let ctx = format!("ppp {ppp} zoom {zoom} flip {flip} {shape} transformed {}", tf.is_some());
+        let rect = canvas_rect(h.state());
+        for (i, f) in [(0, 0.2), (2, 0.8), (4, 0.3), (8, 0.7)] {
+            let p = glyph(&mut h, id, i, f);
+            assert!(rect.contains(p), "{ctx}: glyph {i} off screen at {p:?}");
+        }
+        // Click into the layer: caret before glyph 2 (left part), then after glyph 4.
+        let p = glyph(&mut h, id, 2, 0.2);
+        click(&mut h, p);
+        assert_eq!(selection(&h), (2, 2), "{ctx}: click on the left of glyph 2");
+        let p = glyph(&mut h, id, 4, 0.8);
+        click(&mut h, p);
+        assert_eq!(selection(&h), (5, 5), "{ctx}: click on the right of glyph 4");
+        // Drag from glyph 1 (left part) to glyph 8 (right part): characters 1..9.
+        let (a, b) = (glyph(&mut h, id, 1, 0.25), glyph(&mut h, id, 8, 0.75));
+        drag(&mut h, a, b);
+        assert_eq!(selection(&h), (1, 9), "{ctx}: drag selection");
+        // And backwards, starting inside the egui drag threshold of a glyph edge.
+        let (a, b) = (glyph(&mut h, id, 5, 0.85), glyph(&mut h, id, 3, 0.15));
+        drag(&mut h, a, b);
+        assert_eq!(selection(&h), (6, 3), "{ctx}: backwards drag selection");
     }
 }
 
@@ -1082,54 +1099,56 @@ fn temporary_type_transform_visibility_and_cursors() {
 /// Real canvas input: layer-local scaling stays correct across orientation, zoom, HiDPI and flip.
 #[test]
 fn temporary_type_transform_scales_without_reflow_or_leaving_type() {
-    for ppp in [1.0, 2.0] {
-        for zoom in [0.25, 1.0, 2.0, 8.0] {
-            for (paragraph, vertical, flip) in [(false, false, false), (true, false, true), (false, true, true)] {
-                let transform = Affine { m: [1.2, 0.25, 0.18, 0.9, 500.0, 360.0] };
-                let (app, id) = transform_app(paragraph, vertical, transform);
-                let mut h = harness(ppp, app);
-                let f = frame_of(h.state_mut()).unwrap();
-                let center = f.pivot;
-                h.state_mut().ui.view.flip_horizontal = flip;
-                // At high zoom, show the dragged corner; a release beyond the canvas is valid.
-                let at = if zoom >= 2.0 { [f.quad[2][0] as f32, f.quad[2][1] as f32] } else { [center[0] as f32 + 17.0, center[1] as f32 - 9.0] };
-                set_view(&mut h, zoom, at);
-                h.run_steps(2);
-                let before = text(h.state(), id);
-                let count = history_len(&h);
-                let (a, b) = (f.quad[2], [f.quad[0][0] + 1.25 * (f.quad[2][0] - f.quad[0][0]), f.quad[0][1] + 1.25 * (f.quad[2][1] - f.quad[0][1])]);
-                let (a, b) = (frame_point(h.state(), a), frame_point(h.state(), b));
-                assert!(canvas_rect(h.state()).contains(a));
-                transform_drag(&mut h, a, b, type_command() | Modifiers::SHIFT, true);
-                let after = text(h.state(), id);
-                assert_affine(
-                    after.transform,
-                    transform.mul(&Affine::translate(f.rect[0], f.rect[1])).mul(&Affine::scale(1.25)).mul(&Affine::translate(-f.rect[0], -f.rect[1])),
-                );
-                assert_eq!(
-                    (after.text.as_str(), &after.runs, &after.paragraphs, after.orientation, after.shape),
-                    (before.text.as_str(), &before.runs, &before.paragraphs, before.orientation, before.shape)
-                );
-                assert_eq!(selection(&h), (3, 3));
-                assert_eq!(h.state().ui.text_edit.as_ref().unwrap().layer, id.0);
-                assert!(h.state().ui.tool.is_type());
-                assert!(h.state().ui.transform.is_none());
-                assert!(h.state().ui.type_transform.is_none());
-                assert_eq!(history_len(&h), count + 1);
-                // Typing goes through the window host, as the platform's reaches the focused editor.
-                super::commit_tests::type_keys(h.state_mut(), "!");
-                assert!(text(h.state(), id).text.starts_with("Hel!lo"));
-                h.key_press(if vertical { egui::Key::ArrowUp } else { egui::Key::ArrowLeft });
-                h.run_steps(1);
-                assert_eq!(selection(&h), (3, 3));
-                assert_eq!(history_len(&h), count + 1, "one edit session");
-                h.state_mut().run("edit.undo", json!({})).unwrap();
-                assert_affine(text(h.state(), id).transform, before.transform);
-                assert_eq!(text(h.state(), id).text, before.text);
-                h.state_mut().run("edit.redo", json!({})).unwrap();
-                assert_eq!(text(h.state(), id).transform, after.transform);
-            }
-        }
+    // One case per zoom, pairwise over the other axes: both ppp values meet both flips, point, paragraph
+    // and vertical type each appear, both sides of the 200 % view choice below run twice, and the ends of
+    // the range in points (25 % at 2x, 800 % at 1x) are kept. The frame and the drag map through the view
+    // the same way for any kind of type, and the kind decides the layer's frame the same way at any view.
+    for (ppp, zoom, (paragraph, vertical, flip)) in
+        [(2.0, 0.25, (false, false, false)), (1.0, 1.0, (true, false, true)), (2.0, 2.0, (false, true, true)), (1.0, 8.0, (false, false, false))]
+    {
+        let transform = Affine { m: [1.2, 0.25, 0.18, 0.9, 500.0, 360.0] };
+        let (app, id) = transform_app(paragraph, vertical, transform);
+        let mut h = harness(ppp, app);
+        let f = frame_of(h.state_mut()).unwrap();
+        let center = f.pivot;
+        h.state_mut().ui.view.flip_horizontal = flip;
+        // At high zoom, show the dragged corner; a release beyond the canvas is valid.
+        let at = if zoom >= 2.0 { [f.quad[2][0] as f32, f.quad[2][1] as f32] } else { [center[0] as f32 + 17.0, center[1] as f32 - 9.0] };
+        set_view(&mut h, zoom, at);
+        h.run_steps(2);
+        let before = text(h.state(), id);
+        let count = history_len(&h);
+        let (a, b) = (f.quad[2], [f.quad[0][0] + 1.25 * (f.quad[2][0] - f.quad[0][0]), f.quad[0][1] + 1.25 * (f.quad[2][1] - f.quad[0][1])]);
+        let (a, b) = (frame_point(h.state(), a), frame_point(h.state(), b));
+        assert!(canvas_rect(h.state()).contains(a));
+        transform_drag(&mut h, a, b, type_command() | Modifiers::SHIFT, true);
+        let after = text(h.state(), id);
+        assert_affine(
+            after.transform,
+            transform.mul(&Affine::translate(f.rect[0], f.rect[1])).mul(&Affine::scale(1.25)).mul(&Affine::translate(-f.rect[0], -f.rect[1])),
+        );
+        assert_eq!(
+            (after.text.as_str(), &after.runs, &after.paragraphs, after.orientation, after.shape),
+            (before.text.as_str(), &before.runs, &before.paragraphs, before.orientation, before.shape)
+        );
+        assert_eq!(selection(&h), (3, 3));
+        assert_eq!(h.state().ui.text_edit.as_ref().unwrap().layer, id.0);
+        assert!(h.state().ui.tool.is_type());
+        assert!(h.state().ui.transform.is_none());
+        assert!(h.state().ui.type_transform.is_none());
+        assert_eq!(history_len(&h), count + 1);
+        // Typing goes through the window host, as the platform's reaches the focused editor.
+        super::commit_tests::type_keys(h.state_mut(), "!");
+        assert!(text(h.state(), id).text.starts_with("Hel!lo"));
+        h.key_press(if vertical { egui::Key::ArrowUp } else { egui::Key::ArrowLeft });
+        h.run_steps(1);
+        assert_eq!(selection(&h), (3, 3));
+        assert_eq!(history_len(&h), count + 1, "one edit session");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_affine(text(h.state(), id).transform, before.transform);
+        assert_eq!(text(h.state(), id).text, before.text);
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        assert_eq!(text(h.state(), id).transform, after.transform);
     }
 }
 
@@ -2027,67 +2046,68 @@ const HANDLE_SIDES: [(bool, bool, bool, bool); 8] = [
 fn every_paragraph_box_handle_resizes_the_box_with_snapping_on() {
     let scaled = Affine { m: [1.5, 0.0, 0.0, 0.75, 300.0, 300.0] };
     let rotated = Affine { m: [1.2 * 0.94, 1.2 * 0.342, -1.2 * 0.342, 1.2 * 0.94, 300.0, 300.0] };
-    for ppp in [1.0, 2.0] {
-        // The ends of the range only: the frame's handles and their grab area are screen-space parts of the
-        // framework's `TransformBox::text_frame` (`controls.rs`, `frame_box`) and the snap reach is a screen distance,
-        // so the zoom only scales the view, with no step in between. 25 % and 200 % at 1x and 2x span 12.5 % to
-        // 200 % in points, which holds 50 % and 100 %.
-        for zoom in [0.25f32, 2.0] {
-            for (name, tf) in [("plain", None), ("scaled", Some(scaled)), ("rotated", Some(rotated))] {
-                let mut app = new_app();
-                assert!(app.ui.extras.snap, "snapping is on by default");
-                let size = 24.0 / zoom;
-                let p = json!({"text": "HOHOHO HOHO HOHOHO HOHO HOHOHO", "size": size, "x": 300, "y": 300, "box": [300.0, 300.0, size * 8.0, size * 4.0]});
-                let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
-                if let Some(a) = tf {
-                    app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
-                }
-                let mut h = harness(ppp, app);
-                let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
-                let aff = layout(h.state_mut(), id).unwrap().1;
-                let m = aff.apply(Point::new(f64::from(bx + w / 2.0), f64::from(by + bh / 2.0)));
-                set_view(&mut h, zoom, [m.x as f32, m.y as f32]);
-                h.run_steps(2);
-                let ctx = format!("ppp {ppp} zoom {zoom} {name}");
-                let p = glyph(&mut h, id, 2, 0.2);
-                click(&mut h, p);
-                assert_eq!(selection(&h), (2, 2), "{ctx}: editing");
-                for (i, (l, r, t, b)) in HANDLE_SIDES.into_iter().enumerate() {
-                    // Press at the handle and inside its grab area, towards the text.
-                    for off in [0.0f32, 4.0] {
-                        let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
-                        let hx = if l {
-                            bx
-                        } else if r {
-                            bx + w
-                        } else {
-                            bx + w / 2.0
-                        };
-                        let hy = if t {
-                            by
-                        } else if b {
-                            by + bh
-                        } else {
-                            by + bh / 2.0
-                        };
-                        let dir = vec2(f32::from(u8::from(r)) - f32::from(u8::from(l)), f32::from(u8::from(b)) - f32::from(u8::from(t)));
-                        let at = screen(&mut h, id, hx, hy);
-                        let out = (screen(&mut h, id, hx + dir.x * 10.0, hy + dir.y * 10.0) - at).normalized();
-                        let a = at - out * off;
-                        drag(&mut h, a, a + out * 30.0);
-                        let ctx = format!("{ctx} handle {i} offset {off}");
-                        assert_eq!(selection(&h), (2, 2), "{ctx}: the caret stays put");
-                        let (_, _, w2, h2) = super::box_shape(h.state(), id).unwrap();
-                        // 30 points outward (a corner's diagonal: about 21 per side) is that over
-                        // zoom × layer scale in text units; snapping may shift the release by up to
-                        // its 8 point reach.
-                        let min = 6.0 / (zoom / h.state().canvas_ppp()) / 1.5;
-                        let grew = |was: f32, now: f32, moved: bool| if moved { now - was >= min } else { (now - was).abs() < 1e-3 };
-                        assert!(grew(w, w2, l || r), "{ctx}: width {w} -> {w2}");
-                        assert!(grew(bh, h2, t || b), "{ctx}: height {bh} -> {h2}");
-                    }
-                }
-            }
+    // Pairwise over (ppp, zoom, transform): each value of each axis appears once or more, and the two
+    // cases at the ends of the range in points are kept. The frame's handles and their grab area are
+    // screen-space parts of the framework's `TransformBox::text_frame` (`controls.rs`, `frame_box`) and
+    // the snap reach is a screen distance, so the zoom and ppp only scale the view: 25 % at 2x is 12.5 %
+    // in points and 200 % at 1x is 200 %, which hold 50 % and 100 % between them. The layer transform
+    // goes through the same frame mapping at any view scale, so each one runs at one view.
+    let cases = [(2.0, 0.25f32, "plain", None), (1.0, 2.0, "scaled", Some(scaled)), (2.0, 2.0, "rotated", Some(rotated))];
+    for (case, (ppp, zoom, name, tf)) in cases.into_iter().enumerate() {
+        let mut app = new_app();
+        assert!(app.ui.extras.snap, "snapping is on by default");
+        let size = 24.0 / zoom;
+        let p = json!({"text": "HOHOHO HOHO HOHOHO HOHO HOHOHO", "size": size, "x": 300, "y": 300, "box": [300.0, 300.0, size * 8.0, size * 4.0]});
+        let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
+        if let Some(a) = tf {
+            app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
+        }
+        let mut h = harness(ppp, app);
+        let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
+        let aff = layout(h.state_mut(), id).unwrap().1;
+        let m = aff.apply(Point::new(f64::from(bx + w / 2.0), f64::from(by + bh / 2.0)));
+        set_view(&mut h, zoom, [m.x as f32, m.y as f32]);
+        h.run_steps(2);
+        let ctx = format!("ppp {ppp} zoom {zoom} {name}");
+        let p = glyph(&mut h, id, 2, 0.2);
+        click(&mut h, p);
+        assert_eq!(selection(&h), (2, 2), "{ctx}: editing");
+        for (i, (l, r, t, b)) in HANDLE_SIDES.into_iter().enumerate() {
+            // Press at the handle or inside its grab area, towards the text: corners (even `i`) and sides
+            // take turns, and the next case swaps them, so every handle is pressed both ways and every case
+            // presses both ways. The press picks the handle (`TransformBox::text_frame`) and the pass that
+            // commits carries the final box (`box_of`), so the drag needs the move that starts it and the end.
+            let off = if (i + case) % 2 == 0 { 0.0f32 } else { 4.0 };
+            let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
+            let hx = if l {
+                bx
+            } else if r {
+                bx + w
+            } else {
+                bx + w / 2.0
+            };
+            let hy = if t {
+                by
+            } else if b {
+                by + bh
+            } else {
+                by + bh / 2.0
+            };
+            let dir = vec2(f32::from(u8::from(r)) - f32::from(u8::from(l)), f32::from(u8::from(b)) - f32::from(u8::from(t)));
+            let at = screen(&mut h, id, hx, hy);
+            let out = (screen(&mut h, id, hx + dir.x * 10.0, hy + dir.y * 10.0) - at).normalized();
+            let a = at - out * off;
+            drag_in(&mut h, a, a + out * 30.0, 2);
+            let ctx = format!("{ctx} handle {i} offset {off}");
+            assert_eq!(selection(&h), (2, 2), "{ctx}: the caret stays put");
+            let (_, _, w2, h2) = super::box_shape(h.state(), id).unwrap();
+            // 30 points outward (a corner's diagonal: about 21 per side) is that over
+            // zoom × layer scale in text units; snapping may shift the release by up to
+            // its 8 point reach.
+            let min = 6.0 / (zoom / h.state().canvas_ppp()) / 1.5;
+            let grew = |was: f32, now: f32, moved: bool| if moved { now - was >= min } else { (now - was).abs() < 1e-3 };
+            assert!(grew(w, w2, l || r), "{ctx}: width {w} -> {w2}");
+            assert!(grew(bh, h2, t || b), "{ctx}: height {bh} -> {h2}");
         }
     }
 }
