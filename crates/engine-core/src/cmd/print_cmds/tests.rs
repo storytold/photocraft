@@ -78,6 +78,16 @@ fn session(mode: &str, depth: u32) -> Session {
     s
 }
 
+/// Two printers, the second the default, in place of the system spooler's.
+fn test_printers() -> PrinterSource {
+    std::sync::Arc::new(|| {
+        vec![
+            craft_print::Printer { name: "Studio".into(), default: false, two_sided: None, description: String::new() },
+            craft_print::Printer { name: "Office".into(), default: true, two_sided: Some(true), description: String::new() },
+        ]
+    })
+}
+
 fn find(h: &[u8], n: &[u8], from: usize) -> usize {
     from + h[from..].windows(n.len()).position(|w| w == n).unwrap()
 }
@@ -556,7 +566,7 @@ fn system_dialog_receives_pdf_and_reports_confirmation_or_cancel() {
     let driver_settings = craft_print::rgb::DevMode::from_bytes(dev_mode).unwrap().to_hex();
     let expected_driver_settings = driver_settings.clone();
     let mut s = session("rgb", 8);
-    s.system_print_dialog = Some(Arc::new(move |pdf, settings| {
+    *s.system_print_dialog_mut() = Some(Arc::new(move |pdf, settings| {
         assert!(pdf.starts_with(b"%PDF"));
         assert_eq!(settings.title, "Print Me.psd");
         assert_eq!(settings.copies, 2);
@@ -577,7 +587,7 @@ fn system_dialog_receives_pdf_and_reports_confirmation_or_cancel() {
     let remembered = last_print(&s).unwrap();
     assert_eq!(remembered["copies"], 2, "Print One Copy repeats PhotoCraft's submitted settings");
 
-    s.system_print_dialog = Some(Arc::new(|_, _| Ok(SystemPrintOutcome::Cancelled)));
+    *s.system_print_dialog_mut() = Some(Arc::new(|_, _| Ok(SystemPrintOutcome::Cancelled)));
     let cancelled = s.execute("file.print", json!({"systemDialog": true})).unwrap();
     assert_eq!(cancelled["cancelled"], true);
     assert_eq!(cancelled["sent"], false);
@@ -592,8 +602,8 @@ fn unavailable_system_dialog_falls_back_to_the_normal_spooler() {
     }
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut s = session("rgb", 8);
-    s.print_spooler = Some(recording_spooler(true, &seen));
-    s.system_print_dialog = Some(Arc::new(|_, _| Ok(SystemPrintOutcome::Unavailable)));
+    *s.print_spooler_mut() = Some(recording_spooler(true, &seen));
+    *s.system_print_dialog_mut() = Some(Arc::new(|_, _| Ok(SystemPrintOutcome::Unavailable)));
 
     let printed = s.execute("file.print", json!({"systemDialog": true, "printer": "Studio", "copies": 2})).unwrap();
     assert_eq!((printed["sent"].as_bool(), printed["systemDialog"].as_bool()), (Some(true), Some(false)));
@@ -609,10 +619,10 @@ fn active_system_dialog_failure_does_not_fallback_or_submit() {
 
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut s = session("rgb", 8);
-    s.print_spooler = Some(recording_spooler(true, &seen));
+    *s.print_spooler_mut() = Some(recording_spooler(true, &seen));
     // Desktop adapters return Unavailable only during preflight. Once PreparePrint/Print may have
     // started, they return Err so the engine cannot silently submit the same job a second time.
-    s.system_print_dialog = Some(Arc::new(|_, _| Err("PreparePrint response timed out".into())));
+    *s.system_print_dialog_mut() = Some(Arc::new(|_, _| Err("PreparePrint response timed out".into())));
 
     let error = s.execute("file.print", json!({"systemDialog": true, "printer": "Studio"})).unwrap_err();
     assert!(error.to_string().contains("PreparePrint response timed out"), "{error}");
@@ -636,7 +646,7 @@ fn system_dialog_requires_desktop_bridge_and_print_one_copy_bypasses_it() {
 
     let mut s = session("rgb", 8);
     assert!(s.execute("file.print", json!({"systemDialog": true})).is_err());
-    s.system_print_dialog = Some(Arc::new(|_, _| Err("dialog must not open".into())));
+    *s.system_print_dialog_mut() = Some(Arc::new(|_, _| Err("dialog must not open".into())));
     let first = s.execute("file.print", json!({"dryRun": true, "systemDialog": true, "paper": "a5"})).unwrap();
     assert_eq!(first["systemDialog"], true);
     let repeated = s.execute("file.printOneCopy", json!({"dryRun": true})).unwrap();
@@ -986,7 +996,6 @@ fn disabled_printing_never_spools() {
 
 #[test]
 fn printers_lists_the_spooler_destinations_without_a_document() {
-<<<<<<< HEAD:crates/engine-core/src/cmd/print_cmds/tests.rs
     let mut s = crate::session();
     *s.printer_source_mut() = Some(test_printers());
     let r = s.execute("file.printers", json!({})).unwrap();
@@ -1171,16 +1180,6 @@ fn uncached_listings_do_not_wait(cache_other: bool) {
             assert_eq!(names, Err(craft_print::rgb::PrintError::Unsupported));
         }
     });
-=======
-    let mut s = Session::new();
-    let r = s.execute("file.printers", json!({})).unwrap();
-    let list = r["printers"].as_array().unwrap();
-    assert!(list.iter().all(|p| p["name"].is_string() && p["default"].is_boolean()));
-    match r["default"].as_str() {
-        Some(d) => assert!(list.iter().any(|p| p["name"] == d && p["default"] == true)),
-        None => assert!(list.iter().all(|p| p["default"] == false)),
-    }
->>>>>>> 6678a036f5 (fix(print): harden native print confirmation):crates/engine/src/cmd/print_cmds/tests.rs
 }
 
 /// Spooling tests run in a child process: `disable_printing` is process-wide and a test above
