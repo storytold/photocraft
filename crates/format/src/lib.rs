@@ -62,8 +62,8 @@ pub enum FormatError {
     Corrupt(String),
     #[error("unsupported .pcraft feature: {0}")]
     Unsupported(String),
-    #[error("bundle written by a newer version (format {found}, this build reads up to {supported})")]
-    TooNew { found: u32, supported: u32 },
+    #[error("bundle written by a newer version (format {found}, this build reads up to {supported}){writer}. Open it in the same or a newer build, including the pre-release if that is where it was saved; this file has not been changed", writer = newer_writer_hint(.generator.as_deref()))]
+    TooNew { found: u32, supported: u32, generator: Option<String> },
     #[error("limit exceeded: {0}")]
     LimitExceeded(String),
     #[error("`{path}` is NaN or infinite, which a .pcraft manifest cannot hold; reset that value and save again")]
@@ -72,6 +72,21 @@ pub enum FormatError {
     Io(#[from] std::io::Error),
     #[error("manifest JSON: {0}")]
     Json(#[from] serde_json::Error),
+}
+
+// Generator is untrusted manifest data. Keep complete ordinary build identities, but never
+// carry a manifest-sized string into a diagnostic/Debug value or interpret it as a format version.
+fn bounded_writer(value: String) -> String {
+    let mut chars = value.chars();
+    let mut bounded: String = chars.by_ref().take(256).collect();
+    if chars.next().is_some() {
+        bounded.push('…');
+    }
+    bounded
+}
+
+fn newer_writer_hint(generator: Option<&str>) -> String {
+    generator.filter(|value| !value.trim().is_empty()).map(|value| format!("; reported writer: {value:?}")).unwrap_or_default()
 }
 
 impl FormatError {
@@ -86,7 +101,7 @@ impl From<craft_pcraft_format::Error> for FormatError {
         match e {
             Error::Corrupt(m) => FormatError::Corrupt(m),
             Error::Unsupported(m) => FormatError::Unsupported(m),
-            Error::TooNew { found, supported, .. } => FormatError::TooNew { found, supported },
+            Error::TooNew { found, supported, generator, .. } => FormatError::TooNew { found, supported, generator: generator.map(bounded_writer) },
             Error::LimitExceeded(m) => FormatError::LimitExceeded(m),
             Error::Json(e) => FormatError::Json(e),
             other => FormatError::Corrupt(other.to_string()),
@@ -195,16 +210,7 @@ impl Default for LoadOptions {
 ///
 /// Bundles written here place the manifest first; re-zipped bundles may reorder entries.
 pub fn is_pcraft(bytes: &[u8]) -> bool {
-    if !bytes.starts_with(b"PK\x03\x04") {
-        return false;
-    }
-    if bytes.len() >= 30 {
-        let name_len = u16::from_le_bytes([bytes[26], bytes[27]]) as usize;
-        if bytes.get(30..30 + name_len) == Some(b"manifest.json") {
-            return true;
-        }
-    }
-    zip::ZipReader::new(bytes).is_ok_and(|archive| archive.find("manifest.json").is_some())
+    craft_pcraft_bundle::is_pcraft_zip(bytes)
 }
 
 /// Save to an in-memory ZIP bundle (one-shot; use [`PcraftWriter`] for
@@ -244,7 +250,8 @@ pub fn load_bytes_source(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Doc
 
 pub fn load_path_with(path: &Path, opts: &LoadOptions) -> Result<Document> {
     if path.is_dir() {
-        store::load(&store::DirSource { root: path.to_path_buf() }, opts)
+        let source = store::DirSource::new(path, opts)?;
+        store::load(&source, opts)
     } else {
         let bytes = read::read_file(path)?;
         load_from_bytes_with(&bytes, opts)
