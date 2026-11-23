@@ -450,7 +450,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let r = match action.as_str() {
         "rename" if custom(s, req_str(p, "preset", CMD)?) => {
             let (n, to) = (req_str(p, "preset", CMD)?, req_str(p, "name", CMD)?);
-            if n != to && find(&s.presets.shapes, to, None).is_some() {
+            if n != to && find(&s.presets().shapes, to, None).is_some() {
                 return Err(bad(CMD, format!("a preset named \"{to}\" already exists")));
             }
             if let Some(c) = s.edit_state.custom_shapes.iter_mut().find(|c| c.name == n) {

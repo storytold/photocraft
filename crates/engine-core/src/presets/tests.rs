@@ -650,7 +650,21 @@ fn renaming_a_custom_shape_rejects_a_library_name_collision() {
     assert_eq!(s.edit_state.custom_shapes, before, "nothing renamed");
     s.execute("shape.presets.edit", json!({"action": "delete", "preset": "My Star"})).unwrap();
     assert!(s.edit_state.custom_shapes.is_empty());
-    assert!(s.presets.shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Heart")), "the library preset survives");
+    assert!(s.presets().shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Heart")), "the library preset survives");
+}
+
+/// #13725 review: the picker's gear menu enables Rename/Delete whenever the shape exists in `all_groups`, a built-in
+/// included, not only a staged Define Custom Shape result. `edit`'s fallback to `edit_groups` is what makes that
+/// true: a built-in shape renames and deletes the same as any other library preset, as the Shapes panel already
+/// lets it (the picker's parity, per #13468).
+#[test]
+fn renaming_or_deleting_a_builtin_shape_succeeds_like_any_library_preset() {
+    let mut s = session(8);
+    assert!(s.presets().shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Heart")));
+    s.execute("shape.presets.edit", json!({"action": "rename", "preset": "Heart", "name": "Heart 2"})).unwrap();
+    assert!(s.presets().shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Heart 2")));
+    s.execute("shape.presets.edit", json!({"action": "delete", "preset": "Star"})).unwrap();
+    assert!(!s.presets().shapes.iter().any(|g| g.items.iter().any(|sh| sh.name == "Star")));
 }
 
 // ------------------------------------------------------------------ tool presets
