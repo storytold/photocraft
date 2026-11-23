@@ -1,4 +1,4 @@
-//! Tests that run paint commands, moved from the engine-core `pattern_cmds` tests: 7 test(s).
+//! Tests that run paint commands, moved from the engine-core `pattern_cmds` tests: 8 test(s).
 
 use photocraft_doc::{Pattern, Rect};
 use photocraft_engine::Session;
@@ -167,4 +167,20 @@ fn pattern_overlay_renders_and_brush_texture_uses_library() {
     s.execute("brush.texturePattern", json!({"pattern": "Dots", "scale": 50})).unwrap();
     assert!(s.tools.brush.texture.enabled);
     assert!(matches!(s.tools.brush.texture.pattern, photocraft_paint::Pattern::Tile(_)));
+}
+
+#[test]
+fn pattern_fill_and_bucket_reject_non_finite_angle_and_phase() {
+    // 1e39 overflowed f32 to infinity: a NaN render.
+    let mut s = session(8);
+    let n = s.active().unwrap().doc.layers.len();
+    for cmd in ["edit.fill", "paint.bucket"] {
+        for bad in [json!({"angle": 1e39}), json!({"angle": "x"}), json!({"phase": [1e39, 0]}), json!({"phase": [0, -1e300]})] {
+            let mut p = json!({"pattern": "Checkerboard", "contents": "pattern", "x": 1, "y": 1});
+            p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+            let e = s.execute(cmd, p).unwrap_err().to_string();
+            assert!(e.contains("`angle`") || e.contains("`phase`"), "{cmd} {bad}: {e}");
+        }
+    }
+    assert_eq!(s.active().unwrap().doc.layers.len(), n);
 }
