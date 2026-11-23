@@ -90,8 +90,9 @@ pub(crate) struct FindSunDialog {
     copied: Option<String>,
     /// The active document's canvas, which takes a press through the dialog's modal layer to put the sun.
     canvas: Option<egui::Id>,
-    /// Where the dialog first opens: the bottom right of the canvas, over the lower half of a 2:1 image
-    /// (the ground), so it rarely covers the sun. A place the user moved it to comes first.
+    /// Where the dialog's bottom-right corner first opens: the bottom right of the canvas, over the
+    /// lower half of a 2:1 image (the ground), so it rarely covers the sun. A place the user moved it
+    /// to comes first.
     first_place: egui::Pos2,
     /// The document `options.at` was put on by a canvas press. A press can land on a document the
     /// pump hasn't measured yet, so a switch drops only a sun put on another document (or by
@@ -101,9 +102,6 @@ pub(crate) struct FindSunDialog {
 
 /// The dialog's saved placement.
 const PLACE: SaveKey = SaveKey::new("photocraft.findSun");
-
-/// The size the dialog is about, for placing it before it has been drawn.
-const ABOUT_SIZE: egui::Vec2 = egui::vec2(460.0, 460.0);
 
 fn number(v: &Value) -> f64 {
     v.as_f64().unwrap_or(0.0)
@@ -285,7 +283,7 @@ impl StackDialog for FindSunDialog {
         let shown = FormDialog::new(label(tl!("Find Sun")), Bind::bound(options))
             .ok_label(label(tl!("Done")))
             .alt_resets(false)
-            .shaped(move |dialog| dialog.first_place(first_place).remember(PLACE))
+            .shaped(move |dialog| dialog.first_place(first_place, egui::Align2::RIGHT_BOTTOM).remember(PLACE))
             .show(ui, |ui, form, options| {
                 if let Some(canvas) = canvas {
                     form.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
@@ -361,7 +359,7 @@ pub(crate) fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let canvas = app.session.active_index().map(|idx| crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
     let area = app.last_canvas_rect;
     let margin = egui::vec2(16.0, 16.0);
-    let first_place = (area.max - ABOUT_SIZE - margin).max(area.min + margin);
+    let first_place = (area.max - margin).max(area.min + margin);
     Ok(app.framework.dialogs.open(FindSunDialog { options, result, computed, copied: None, canvas, first_place, placed_on: None }))
 }
 

@@ -73,6 +73,7 @@ pub struct DocState {
     pub pixel_revision: u64,
     /// Find Sun's reduced composite and the `revision` it is of, so dragging the sun in its dialog
     /// measures again without compositing again (`sun_cmds`).
+    #[plain_data(assume = "a compose Buffer is a rect and a pixel Vec, shared through the Arc and never written after it is made")]
     pub(crate) sun_sample: Option<(u64, Arc<photocraft_compose::Buffer>)>,
 }
 
