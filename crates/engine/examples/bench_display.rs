@@ -9,6 +9,7 @@
 //! per-frame display lookup (`display_signature`, what the GPU canvas checks each frame) and
 //! building the 33³ GPU display LUT (once per profile/monitor change).
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use craft_cms::Builtin;
@@ -59,16 +60,16 @@ fn main() {
         let before = time(reps, || {
             std::hint::black_box(buf.to_rgba8());
         });
-        let display = s.color.canvas_display(&d).expect("display");
+        let display = s.color().canvas_display(&d).expect("display");
         let after = time(reps, || {
-            let d = s.color.canvas_display(&d).expect("display");
+            let d = s.color().canvas_display(&d).expect("display");
             std::hint::black_box(if d.is_identity() { buf.to_rgba8() } else { d.to_rgba8(&buf) });
         });
         let frame = time(reps * 200, || {
-            std::hint::black_box(s.color.display_signature(&d));
+            std::hint::black_box(s.color().display_signature(&d));
         });
         let lut = time(reps, || {
-            std::hint::black_box(s.color.canvas_lut(&d, 33).expect("lut"));
+            std::hint::black_box(s.color().canvas_lut(&d, 33).expect("lut"));
         });
         let tag = if display.is_identity() { " (identity)" } else { "" };
         println!("{:<22} {composite:>8.1}ms {before:>12.1}ms {after:>12.1}ms {:>10.1}µs {lut:>8.1}ms{tag}", name, frame * 1000.0);

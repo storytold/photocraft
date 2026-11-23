@@ -317,6 +317,21 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
         .collect()
 }
 
+/// What [`command_states`] reads: the active document (the selected slice resolves from its slices), the selected
+/// slice's number and the lock.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    doc: Option<&'a craft::ui::contract::Tracked<photocraft_engine::DocState>>,
+    selected: Option<usize>,
+    locked: bool,
+}
+
+/// [`command_states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = StatesFacts { doc: app.session.active_tracked(), selected: app.ui.slices.selected, locked: app.session.file_menu.slices_locked };
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
+}
+
 /// Runs a fired slice command; whether it was one.
 pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
     let Some(command) = SliceCommand::from_ref(command) else { return false };

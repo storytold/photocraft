@@ -92,8 +92,9 @@ fn read_all_with(reader: &mut impl Read, size_hint: u64, chunk: usize, max: u64)
     loop {
         if buf.len() == buf.capacity() {
             let mut probe = [0; 4096];
+            let probe_len = chunk.min(probe.len());
             let n = loop {
-                match reader.read(&mut probe) {
+                match reader.read(&mut probe[..probe_len]) {
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                     r => break r?,
                 }
@@ -183,6 +184,30 @@ mod tests {
         // From an open reader, whatever the hint says.
         for hint in [0, 10, data.len() as u64, 1 << 20] {
             assert_eq!(read_all(&mut std::io::Cursor::new(&data), hint).unwrap(), data, "hint {hint}");
+        }
+    }
+
+    #[test]
+    fn probe_reads_respect_the_configured_chunk_size() {
+        struct SmallReads<'a> {
+            data: &'a [u8],
+            max_request: usize,
+        }
+        impl Read for SmallReads<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if buf.len() > self.max_request {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "read request exceeds the configured chunk size"));
+                }
+                self.data.read(buf)
+            }
+        }
+        let data = b"ninebytes";
+        for chunk in [0, 1, 7, 4096] {
+            for hint in [0, 3, data.len() as u64] {
+                let mut reader = SmallReads { data, max_request: chunk.max(1) };
+                let result = read_all_with(&mut reader, hint, chunk, 64);
+                assert_eq!(result.unwrap_or_else(|e| panic!("chunk {chunk}, hint {hint}: {e}")), data);
+            }
         }
     }
 

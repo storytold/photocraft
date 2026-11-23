@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum BlendMode {
     /// Groups only: children blend directly into the group's backdrop.
     PassThrough,
@@ -44,6 +44,23 @@ pub enum BlendMode {
     Xor,
     PaintNetColorBurn,
     PaintNetColorDodge,
+}
+
+/// Parse legacy command names and labels, retaining their case and punctuation tolerance.
+pub fn parse_blend(s: &str) -> Option<BlendMode> {
+    fn normalize(value: &str) -> String {
+        value.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "")
+    }
+    static ALIASES: std::sync::OnceLock<std::collections::HashMap<String, BlendMode>> = std::sync::OnceLock::new();
+    let aliases = ALIASES.get_or_init(|| {
+        let mut aliases = std::collections::HashMap::new();
+        for mode in std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()) {
+            aliases.entry(normalize(mode.label())).or_insert(mode);
+            aliases.entry(normalize(&format!("{mode:?}"))).or_insert(mode);
+        }
+        aliases
+    });
+    aliases.get(&normalize(s)).copied()
 }
 
 impl BlendMode {
@@ -673,6 +690,25 @@ mod tests;
 #[cfg(test)]
 mod key_tests {
     use super::BlendMode;
+
+    #[test]
+    fn parser_preserves_legacy_names_and_normalization() {
+        let normalize = |s: &str| s.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
+        let legacy = |s: &str| {
+            let wanted = normalize(s);
+            std::iter::once(BlendMode::PassThrough)
+                .chain(BlendMode::layer_modes())
+                .find(|mode| normalize(mode.label()) == wanted || normalize(&format!("{mode:?}")) == wanted)
+        };
+        for mode in std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()) {
+            for name in [mode.label().to_owned(), format!("{mode:?}"), mode.label().to_ascii_uppercase().replace(' ', "_-")] {
+                assert_eq!(super::parse_blend(&name), legacy(&name), "{name}");
+            }
+        }
+        for name in ["", "not a mode", "color.burn", "é"] {
+            assert_eq!(super::parse_blend(name), legacy(name), "{name}");
+        }
+    }
 
     #[test]
     fn canonical_keys_match_legacy_panel_names_and_round_trip() {

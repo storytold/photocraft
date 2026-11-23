@@ -149,7 +149,7 @@ impl CameraRawGpu {
             let Some(Some(pass)) = self.pass.get() else { return None };
             let points = self.points(px, key, w, h, p, inputs);
             // PLAN: assumed `per_pixel(p, inputs, w, h, float, points)` (dialogs-w50 owns the algo signature)
-            let stages = photocraft_algo::camera_raw::per_pixel(p, inputs, w, h, float, points)?;
+            let stages = gpu_stages(p, inputs, w, h, float, points)?;
             let size = [u32::try_from(w).ok()?, u32::try_from(h).ok()?];
             let mut pass = pass.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match pass.develop(&self.device, &self.queue, Some(&self.health), px, key, size, &stages) {
@@ -183,6 +183,22 @@ impl CameraRawGpu {
         *cache = Some((key, points));
         points
     }
+}
+
+/// The stages the GPU pass runs for `p`, or `None` when the CPU must develop. Besides what
+/// [`per_pixel`](photocraft_algo::camera_raw::per_pixel) refuses, that is Detail: `per_pixel`
+/// hands it over as a stage since craft-libs#3101, but the pass has none yet (#6916), so a
+/// sharpened or noise-reduced frame would come back without it.
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_stages(
+    p: &CameraRaw,
+    inputs: &DevelopInputs,
+    w: usize,
+    h: usize,
+    float: bool,
+    points: Option<(f32, f32)>,
+) -> Option<photocraft_algo::camera_raw::PerPixel> {
+    photocraft_algo::camera_raw::per_pixel(p, inputs, w, h, float, points).filter(|stages| stages.detail.is_none())
 }
 
 #[cfg(test)]
@@ -272,6 +288,21 @@ mod gpu_tests {
         assert_eq!(!has_gpu(&app), software, "a software adapter keeps the CPU develop");
     }
 
+    fn worst_difference(gpu: &[[f32; 4]], cpu: &[[f32; 4]]) -> f32 {
+        assert_eq!(gpu.len(), cpu.len(), "preview frame lengths differ");
+        gpu.iter()
+            .zip(cpu)
+            .enumerate()
+            .flat_map(|(pixel, (a, b))| {
+                (0..4).map(move |channel| {
+                    let diff = (a[channel] - b[channel]).abs();
+                    assert!(diff.is_finite(), "nonfinite preview difference at pixel {pixel}, channel {channel}");
+                    diff
+                })
+            })
+            .fold(0.0, f32::max)
+    }
+
     #[test]
     fn per_pixel_settings_develop_on_the_gpu_like_the_cpu_and_the_rest_stays_on_the_cpu() {
         let _gpu = photocraft_testkit::gpu_lock();
@@ -299,14 +330,14 @@ mod gpu_tests {
             };
             let (backend, gpu, cpu) = developed(&app, per_pixel.clone());
             assert_eq!(backend, "gpu", "{depth}-bit");
-            let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+            let worst = worst_difference(&gpu, &cpu);
             assert!(worst <= TOL, "{depth}-bit: off by {worst}");
             // PLAN: the old `describe["developBackend"] == "gpu"` check read the dialog's own render; a `Job` can only be run by the host (no public runner), so the helper runs the job's body and the session's reported backend is not asserted here.
             // Shadows and Highlights develop on the GPU too, Whites and Blacks measured after them.
             let toned = cr!(per_pixel.clone() => shadows: 40.0, highlights: -35.0);
             let (backend, gpu, cpu) = developed(&app, toned.clone());
             assert_eq!(backend, "gpu", "{depth}-bit, Shadows and Highlights");
-            let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+            let worst = worst_difference(&gpu, &cpu);
             assert!(worst <= TOL, "{depth}-bit, Shadows and Highlights: off by {worst}");
             // So do Dehaze, Clarity and Texture, with Whites and Blacks measured after them.
             for spatial in [
@@ -316,11 +347,17 @@ mod gpu_tests {
             ] {
                 let (backend, gpu, cpu) = developed(&app, spatial.clone());
                 assert_eq!(backend, "gpu", "{depth}-bit, {spatial:?}");
-                let worst = gpu.iter().zip(&cpu).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+                let worst = worst_difference(&gpu, &cpu);
                 assert!(worst <= TOL, "{depth}-bit, {spatial:?}: off by {worst}");
             }
-            // Detail develops the whole frame on the CPU.
-            for detail in [cr!(toned.clone() => sharpen_amount: 40.0), cr!(per_pixel.clone() => noise_luminance: 30.0, dehaze: 20.0)] {
+            // Detail develops the whole frame on the CPU, alone or after another stage.
+            for detail in [
+                cr!(toned.clone() => sharpen_amount: 40.0),
+                cr!(per_pixel.clone() => noise_luminance: 30.0, dehaze: 20.0),
+                cr!(exposure: 0.4, sharpen_amount: 40.0),
+                cr!(exposure: 0.4, noise_luminance: 30.0),
+                cr!(exposure: 0.4, noise_color: 25.0),
+            ] {
                 let (backend, shown, cpu) = developed(&app, detail);
                 assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit");
             }
@@ -328,6 +365,24 @@ mod gpu_tests {
             app.gpu.as_ref().unwrap().health().mark(photocraft_gpu::Fault::Lost("test".into()));
             let (backend, shown, cpu) = developed(&app, per_pixel);
             assert_eq!((backend, shown == cpu), ("cpu", true), "{depth}-bit after a fault");
+        }
+    }
+
+    #[test]
+    fn detail_keeps_the_cpu_develop_without_a_device() {
+        // Runs without a GPU, so hosted CI checks it too: `per_pixel` now hands Detail over as a
+        // stage (craft-libs#3101), and the pass must not run a frame without it.
+        let inputs = DevelopInputs::default();
+        assert!(gpu_stages(&cr!(exposure: 0.4), &inputs, 64, 48, false, None).is_some(), "per-pixel settings reach the GPU");
+        for detail in [
+            cr!(exposure: 0.4, sharpen_amount: 40.0),
+            cr!(exposure: 0.4, noise_luminance: 30.0),
+            cr!(exposure: 0.4, noise_color: 25.0),
+            cr!(shadows: 40.0, sharpen_amount: 40.0),
+        ] {
+            let stages = photocraft_algo::camera_raw::per_pixel(&detail, &inputs, 64, 48, false, None);
+            assert!(stages.is_some_and(|s| s.detail.is_some()), "per_pixel hands Detail over: {detail:?}");
+            assert!(gpu_stages(&detail, &inputs, 64, 48, false, None).is_none(), "the CPU develops Detail: {detail:?}");
         }
     }
 
