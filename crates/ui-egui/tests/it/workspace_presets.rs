@@ -32,7 +32,7 @@ fn select(app: &mut PhotocraftApp, suffix: &str) {
 
 /// Whether the workspace holds `panel`, in a column of icons or not.
 fn is_open(app: &PhotocraftApp, panel: &str) -> bool {
-    app.ui.docking.layout.contains(&panel.to_owned())
+    app.ui.docking.layout().contains(&panel.to_owned())
 }
 
 fn shown(app: &PhotocraftApp) -> Vec<&'static str> {
@@ -157,7 +157,7 @@ fn custom_workspaces_restore_timeline_visibility_and_dock_after_presets() {
 fn legacy_workspace_without_timeline_visibility_still_loads() {
     let mut app = app();
     select(&mut app, "painting");
-    let painting = app.ui.docking.clone();
+    let painting = craft::behavior::dock::Workspace::clone(&app.ui.docking);
     // PLAN: assumed the integration crate reaches `craft` (the facade) as the app crate does.
     app.workspaces.set.saved.push(craft::behavior::dock::NamedWorkspace::new("legacy", "Legacy", painting));
     select(&mut app, "motion");
