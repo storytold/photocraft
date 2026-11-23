@@ -126,6 +126,11 @@ authored GIMP files from several releases, merged PNG oracles, and wrapped sampl
 against the archived source. `crates/io/tests/it/xcf.rs` checks procedural layer samples and compares
 the PhotoCraft composite with GIMP's. Run both through `cargo xtask test-corpus -p io`.
 
+The `xcf_import_bench` example can generate and measure a 24 MP floating-point fixture with
+`generate f32-hdr-24mp <path>` and `measure f32-hdr-24mp <path> 5`. Build it in release mode for
+timing comparisons and use the same fixture for both builds. Two separate graph cases exercise
+the native linear and source-over paths. Their import times include native filter preparation.
+
 | File | Composite vs GIMP |
 |---|---|
 | `layers-8bit-perceptual`, `mask-perceptual`, `text-perceptual` | within 2.5/255 everywhere |
