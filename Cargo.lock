@@ -6693,7 +6693,7 @@ dependencies = [
 name = "photocraft-engine-paint"
 version = "0.23.1"
 dependencies = [
- "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ee30b17c2199b87b3c097729e60f6b1d9c8d1afe)",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=5c5e0d52c387c0a4ae2908a07e476d7584f60362)",
  "photocraft-algo",
  "photocraft-color",
  "photocraft-compose",
