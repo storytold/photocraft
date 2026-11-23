@@ -15,7 +15,7 @@ const INTENTS: [(&str, bool); 5] = [("relative", true), ("relative", false), ("p
 
 /// The inks of an 8-bit sRGB document filled with `background`, converted to Coated FOGRA39.
 fn separate(background: &str, intent: &str, bpc: bool) -> [f32; 4] {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "background": background})).unwrap();
     s.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
     s.execute("edit.convertToProfile", json!({"profile": "coated-fogra39", "intent": intent, "bpc": bpc, "dither": false})).unwrap();
