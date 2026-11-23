@@ -112,7 +112,7 @@ fn intent_fixture() -> Session {
     let mut s = fixture();
     let mut profile = Builtin::LinearSrgb.profile().clone();
     profile.white_point = profile.white_point.map(|value| value * 0.5);
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(profile.with_encoded_bytes().to_bytes());
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).icc_profile = Some(profile.with_encoded_bytes().to_bytes());
     s
 }
 
