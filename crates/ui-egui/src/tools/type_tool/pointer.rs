@@ -13,7 +13,7 @@ use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolHostResponse, T
 use craft::ui::primitives::{Draw, PaintShape, StrokeColor, StrokeWidth};
 use craft::ui::style::DataColor;
 
-use super::defaults::default_style_params;
+use super::defaults::{default_style_params, mask_style_from_active_layer};
 use super::editing::begin_edit;
 use super::layout::{hit_layer, offset_at};
 
@@ -227,6 +227,18 @@ fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let placeholder = app.ui.tool != crate::state::Tool::VerticalTypeMask && app.session.prefs().type_.fill_new_type_layers_with_placeholder;
     let text = if placeholder { PLACEHOLDER } else { "" };
     let mut p = default_style_params(app);
+    // #12077: the measured case - a click, not a paragraph box, with the Horizontal Type Mask over
+    // a horizontal text layer - starts the mask in that layer's font, style and size, as the
+    // options bar shows them for the layer. The vertical mask and a box drag are not measured in
+    // the issue, so they keep today's tool options.
+    if mask
+        && !is_box
+        && app.ui.tool == crate::state::Tool::HorizontalTypeMask
+        && let Some(style) = mask_style_from_active_layer(app)
+        && let (Some(params), Some(style)) = (p.as_object_mut(), style.as_object())
+    {
+        params.extend(style.clone());
+    }
     p["text"] = json!(text);
     p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
     if is_box {
@@ -342,6 +354,9 @@ impl CanvasTool for TypeTool<'_> {
         self.scope.with_app(|app| match hover_path_target(app, at.x, at.y, cx.mods.shift, press) {
             Some(PathClick::Area { .. }) => Cursor::from(PaintedCursor::type_on(false)),
             Some(PathClick::OnPath { .. }) => Cursor::from(PaintedCursor::type_on(true)),
+            // The Vertical Type tool's I-beam lies on its side inside a dotted box, over text too; the
+            // Vertical Type Mask tool's has no box (#12063).
+            None if app.ui.tool == crate::state::Tool::VerticalType => Cursor::from(PaintedCursor::outline(super::vertical_cursor::rings())),
             None if app.ui.tool.is_vertical_type() => Cursor::System(CursorIcon::VerticalText),
             None => Cursor::System(CursorIcon::Text),
         })
@@ -359,3 +374,7 @@ mod mask_placeholder_tests;
 #[cfg(test)]
 #[path = "mask_click_text_layer_tests.rs"]
 mod mask_click_text_layer_tests;
+
+#[cfg(test)]
+#[path = "mask_active_layer_style_tests.rs"]
+mod mask_active_layer_style_tests;

@@ -215,7 +215,12 @@ fn mixer_drag_shows_actual_mixed_paint_before_release_and_alt_never_paints() {
 #[test]
 fn mixer_release_includes_a_new_endpoint_and_deferred_frame_samples() {
     for failed in [false, true] {
-        let mut h = harness(mixer_app());
+        let mut app = mixer_app();
+        // Smoothing off: this is about which points reach the commit, and the Mixer Brush's
+        // first-use 10 % lag (measured, #11888) would hold the brush short of the release point.
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"smoothing": {"amount": 0.0}}})).unwrap();
+        let mut h = harness(app);
         let before = h.state().session.active().unwrap().doc.clone();
         let p = |h: &Harness<'static, Box<PhotocraftApp>>, x: f64| at(h, x, 30.0);
         let start = p(&h, 20.0);
@@ -371,7 +376,10 @@ fn live_stroke_uses_pen_tilt_and_redraws_partially() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let ctx = app.ctx().clone();
     app.run("file.new", json!({"width": 4097, "height": 90, "background": "transparent"})).unwrap();
-    let tilt = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "shapeDynamics": {"enabled": true, "size": {"control": "penTilt"}}});
+    // Smoothing off: the default 10 % lag (measured, #11888) on wall-clock times would leave the
+    // preview's tail anywhere short of the release, so the comparison below couldn't hold.
+    let tilt =
+        json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "smoothing": {"amount": 0.0}, "shapeDynamics": {"enabled": true, "size": {"control": "penTilt"}}});
     app.run("tools.setBrush", json!({ "brush": tilt })).unwrap();
     app.ui.tool = Tool::Brush;
     let mut seen = composite_revision(&mut app, &ctx, 0, None);
@@ -390,7 +398,6 @@ fn live_stroke_uses_pen_tilt_and_redraws_partially() {
     let (a, b) = (doc.layers[0].surface().unwrap(), shown.layers[0].surface().unwrap());
     // 60° tilt shrinks the dab well below 30 px: the preview shows that size, as committed.
     assert!(a.rgba(500, 45)[3] > 0.5 && a.rgba(500, 45 + 12)[3] == 0.0);
-    // (The smoothed tail catches up to the end point only when the stroke finishes.)
     assert!((0..90).all(|y| (0..700).all(|x| a.rgba(x, y) == b.rgba(x, y))), "commit matches the preview");
 }
 

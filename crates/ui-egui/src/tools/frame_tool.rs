@@ -689,17 +689,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect)
     let t = Tokens::get(ui.ctx());
     let painter = ui.painter().clone();
     if let Some(st) = app.session.active() {
-        for (path, _, l) in st.doc.walk() {
-            if !path_visible(&st.doc, &path) {
-                continue;
-            }
-            let Some(f) = &l.frame else { continue };
-            if l.children().is_some_and(|c| c.is_empty()) {
-                let q = f.corners().map(|p| view.to_screen(KPoint::new(p.x, p.y)));
-                paint_path(&painter, &view, &f.outline(), Stroke::new(1., t.text_faint));
-                painter.line_segment([q[0], q[2]], Stroke::new(1., t.text_faint));
-                painter.line_segment([q[1], q[3]], Stroke::new(1., t.text_faint));
-            }
+        for id in app.doc_queries.empty_frames(&app.session, st).iter() {
+            let Some(f) = st.doc.layer(*id).and_then(|l| l.frame.as_ref()) else { continue };
+            let q = f.corners().map(|p| view.to_screen(KPoint::new(p.x, p.y)));
+            paint_path(&painter, &view, &f.outline(), Stroke::new(1., t.text_faint));
+            painter.line_segment([q[0], q[2]], Stroke::new(1., t.text_faint));
+            painter.line_segment([q[1], q[3]], Stroke::new(1., t.text_faint));
         }
     }
     if app.ui.tool != Tool::Frame || app.ui.transform.is_some() {
