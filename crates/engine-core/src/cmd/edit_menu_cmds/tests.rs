@@ -776,7 +776,7 @@ fn find_matches_cases() {
 #[test]
 fn find_and_replace_across_type_layers() {
     let mut s = session(8);
-    assert!(!s.is_enabled("edit.findAndReplaceText"));
+    assert!(s.is_enabled("edit.findAndReplaceText"));
     s.execute("type.create", json!({"text": "Hello world", "x": 4, "y": 20, "size": 12})).unwrap();
     s.execute("type.create", json!({"text": "world peace, World", "x": 4, "y": 40, "size": 12})).unwrap();
     let r = s.execute("edit.findAndReplaceText", json!({"find": "world", "replace": "planet"})).unwrap();
