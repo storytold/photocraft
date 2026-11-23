@@ -924,6 +924,29 @@ fn preview_cache_tracks_working_profiles_but_prefers_embedded_profiles() {
     }
 }
 
+/// A tile that fails to read and recovers alters the pixels without a new revision or other settings: the preview
+/// is made again, so it does not keep the zeros it read during the error (`crate::scratch_reads`).
+#[test]
+fn the_preview_is_made_again_after_a_scratch_read_error_transition() {
+    let app = export_app(20, 10);
+    let revision = app.session.active().unwrap().revision;
+    let mut h = harness(app);
+    open(h.state_mut()).unwrap();
+    settle_preview(&mut h);
+    let texture =
+        |h: &AppHarness| h.state().export_open.as_ref().and_then(|open| open.texture.as_ref().map(egui::TextureHandle::id)).expect("a preview was made");
+    let before = texture(&h);
+    let options = dialog_options(&h);
+    h.run_steps(3);
+    settle_preview(&mut h);
+    assert_eq!(texture(&h), before, "nothing changed: the same preview");
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    settle_preview(&mut h);
+    assert_eq!(h.state().session.active().unwrap().revision, revision);
+    assert_eq!(dialog_options(&h), options, "the settings did not change");
+    assert_ne!(texture(&h), before, "the preview is made again");
+}
+
 /// The dialog's requests are taken once: a second take in the same frame (a frame can run two
 /// passes) starts no second preview and files no second save request.
 #[test]

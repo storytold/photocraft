@@ -5,7 +5,7 @@ use photocraft_doc::{Document, LayerContent, SmartSource, Surface};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, craft_ui_macros::PlainData)]
 pub(crate) struct Tiles {
     refs: HashMap<usize, (u128, usize)>,
     bytes: u128,
