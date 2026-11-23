@@ -317,17 +317,30 @@ impl Session {
     /// whether there was such a document.
     pub fn close_and_release(&mut self, index: usize) -> bool {
         let Some(closed) = self.close(index) else { return false };
-        #[cfg(not(target_arch = "wasm32"))]
-        release_elsewhere(closed);
-        #[cfg(target_arch = "wasm32")]
-        drop(closed);
+        Self::release_off_thread(closed);
         true
+    }
+
+    /// Free `what` (a closed document, or what still holds one) on the release thread
+    /// ([`Session::close_and_release`]), one after another with the documents closed before it.
+    /// A command that closed a document hands it the snapshots it took of that document, so the
+    /// release thread drops the last of them wherever it lands.
+    pub(crate) fn release_off_thread<T: Send + 'static>(what: T) {
+        #[cfg(not(target_arch = "wasm32"))]
+        release_elsewhere(Box::new(what));
+        #[cfg(target_arch = "wasm32")]
+        drop(what);
     }
 }
 
-/// A closed document on its way to the release thread, counted in [`RELEASING`] until freed.
+/// A closed document (or what still holds one) on its way to the release thread, counted in
+/// [`RELEASING`] until freed.
 #[cfg(not(target_arch = "wasm32"))]
-type Closed = (DocState, Releasing);
+type Closed = (Box<dyn Send>, Releasing);
+
+/// Held by a test to keep the release thread from freeing anything until it lets go.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+static RELEASE_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// How many release threads were started ([`release_elsewhere`]): one, unless one stopped.
 #[cfg(not(target_arch = "wasm32"))]
@@ -342,7 +355,7 @@ static RELEASER: std::sync::Mutex<Option<std::sync::mpsc::Sender<Closed>>> = std
 /// with the first close, and again if it stopped (a panic while freeing); if it can't start,
 /// the document is freed here, as before.
 #[cfg(not(target_arch = "wasm32"))]
-fn release_elsewhere(closed: DocState) {
+fn release_elsewhere(closed: Box<dyn Send>) {
     RELEASING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     // Counts the document back out however its release ends, a panic included.
     let item: Closed = (closed, Releasing);
@@ -358,6 +371,8 @@ fn release_elsewhere(closed: DocState) {
     let (tx, rx) = std::sync::mpsc::channel::<Closed>();
     let spawned = std::thread::Builder::new().name("photocraft-close".into()).spawn(move || {
         for (closed, _releasing) in rx {
+            #[cfg(test)]
+            let _gate = RELEASE_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             drop(closed);
             // Its tiles went back to the scratch pool as they dropped, after the command's own
             // release: give that memory back too.
@@ -412,6 +427,30 @@ mod close_tests {
         // Freed on its own thread: gone shortly after.
         let t = std::time::Instant::now();
         while first.upgrade().is_some() {
+            assert!(t.elapsed() < std::time::Duration::from_secs(10), "the closed document was never freed");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// File › Close of the active document: the command's own snapshots of it go to the release
+    /// thread too, so the thread drops the last reference, not the command once it returns.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn closing_the_active_document_hands_the_commands_snapshots_to_the_release_thread() {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+        let doc = std::sync::Arc::downgrade(&s.active().unwrap().doc);
+        // References the open document holds itself (its state, its history).
+        let held = doc.strong_count();
+        let gate = super::RELEASE_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.execute("file.close", json!({})).unwrap();
+        assert!(s.documents().is_empty());
+        // Nothing is freed while the gate is held: the document and the command's two snapshots
+        // (the redraw's and the action recording's) all wait on the release thread.
+        assert_eq!(doc.strong_count(), held + 2, "the command kept none of its snapshots");
+        drop(gate);
+        let t = std::time::Instant::now();
+        while doc.upgrade().is_some() {
             assert!(t.elapsed() < std::time::Duration::from_secs(10), "the closed document was never freed");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
