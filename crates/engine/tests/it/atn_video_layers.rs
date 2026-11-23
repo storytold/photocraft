@@ -7,7 +7,11 @@ use craft_psd::{
     descriptor::{Descriptor, Value as D},
 };
 use photocraft_doc::{LayerContent, LayerId};
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionStep},
+    atn_cmds,
+};
 use serde_json::{Value, json};
 
 const SHOW_ALTERED: &str = "layer.videoLayers.showAlteredVideo";
@@ -65,12 +69,12 @@ fn keyless_events_round_trip_including_an_absent_descriptor() {
             let imported = atn_cmds::import(&file(source)).unwrap();
             assert!(imported.unsupported.is_empty(), "{event}");
             let action = &imported.actions[0];
-            assert_eq!(action.steps[0].0, command);
+            assert_eq!(action.steps[0].command, command);
             let mut expected = params.clone();
             if descriptor.is_none() {
                 expected["_atnVideoFrameNoDescriptor"] = json!(true);
             }
-            assert_eq!(action.steps[0].1, expected, "{event}");
+            assert_eq!(action.steps[0].params, expected, "{event}");
             let back = saved(action);
             assert_eq!((back.event, back.descriptor, back.enabled, back.with_dialog), (AtnEvent::name(event), descriptor, false, true));
         }
@@ -131,7 +135,7 @@ fn show_altered_video_toggles_without_show_and_refuses_other_values() {
 /// A native toggle can't be either event, and nothing beside `show` is written.
 fn a_toggle_or_extra_settings_refuse_export() {
     for params in [json!({}), json!({"show": null}), json!({"show": "true"}), json!({"show": true, "layer": 3}), json!({"show": false, "frame": 1})] {
-        let action = Action::new("Invalid", vec![(SHOW_ALTERED.into(), params.clone())]);
+        let action = Action::new("Invalid", vec![ActionStep::new(SHOW_ALTERED, params.clone())]);
         assert!(atn_cmds::export("Video", &[&action], &[], false).is_err(), "{params}");
     }
     for (command, params) in [
@@ -142,7 +146,7 @@ fn a_toggle_or_extra_settings_refuse_export() {
         ("layer.videoLayers.newVideoLayerFromFile", json!({"path": ""})),
         ("layer.videoLayers.replaceFootage", json!({})),
     ] {
-        let action = Action::new("Invalid", vec![(command.into(), params.clone())]);
+        let action = Action::new("Invalid", vec![ActionStep::new(command, params.clone())]);
         assert!(atn_cmds::export("Video", &[&action], &[], false).is_err(), "{command} {params}");
     }
 }
@@ -154,7 +158,7 @@ fn footage_events_round_trip() {
         let d = footage("C:\\Footage\\clip ö.mp4");
         let imported = atn_cmds::import(&file(item(event, Some(d.clone())))).unwrap();
         assert!(imported.unsupported.is_empty(), "{event}");
-        assert_eq!(imported.actions[0].steps[0], (command.to_string(), json!({"path": "C:\\Footage\\clip ö.mp4"})));
+        assert_eq!(imported.actions[0].steps[0], ActionStep::new(command, json!({"path": "C:\\Footage\\clip ö.mp4"})));
         let back = saved(&imported.actions[0]);
         assert_eq!((back.event, back.descriptor.map(|d| d.to_bytes())), (AtnEvent::name(event), Some(d.to_bytes())));
     }
@@ -177,7 +181,7 @@ fn other_footage_forms_stay_kept_steps() {
         ] {
             let imported = atn_cmds::import(&file(item(event, Some(d.clone())))).unwrap();
             assert_eq!(imported.unsupported.len(), 1, "{event} {d:?}");
-            assert_eq!(imported.actions[0].steps[0].0, "actions.photoshopStep");
+            assert_eq!(imported.actions[0].steps[0].command, "actions.photoshopStep");
             assert_eq!(saved(&imported.actions[0]).descriptor, Some(d));
         }
     }
