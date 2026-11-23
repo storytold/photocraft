@@ -2,8 +2,9 @@
 
 use craft::behavior::IconId;
 use craft::ui::buttons::IconButton;
-use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Text;
+use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::Label;
 use craft::ui::text::TextField;
 use serde_json::json;
@@ -42,7 +43,7 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let mut moved = None;
     let mut delete = false;
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         let step = |ui: &mut egui::Ui, icon: &'static str, name: &str| {
             IconButton::new(IconId::new(icon)).label(Label::from(name.to_owned())).enabled(n > 1).show(ui).clicked()
         };

@@ -8,7 +8,7 @@ use photocraft_engine::Session;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::panels::layers_tree::{blend_key, ui_label};
+use crate::panels::layers_tree::ui_label;
 
 /// `doc`'s layers, top to bottom, groups before their contents.
 fn top_down(doc: &Document) -> Vec<&Layer> {
@@ -71,7 +71,7 @@ fn patched_reads_the_protocol_and_refuses_bad_values() {
             json!({"by": "mode", "mode": "Multiply", "kinds": ["type", "pixel", "type"]}),
             filter(FilterBy::Mode, |f| {
                 f.name = "ink".into();
-                f.mode = blend_key(BlendMode::Multiply);
+                f.mode = BlendMode::Multiply.key().to_string();
                 f.kinds = vec![FilterKind::Type, FilterKind::Pixel];
             }),
         ),

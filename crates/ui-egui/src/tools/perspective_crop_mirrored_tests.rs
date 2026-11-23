@@ -25,7 +25,7 @@ fn app() -> Box<PhotocraftApp> {
     app.run("file.new", json!({"width": 800, "height": 500})).unwrap();
     app.sync_views();
     app.ui.tool = Tool::PerspectiveCrop;
-    let surf = Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layers[0].surface_mut().unwrap();
+    let surf = Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).layers[0].surface_mut().unwrap();
     for (x, y, c) in [(0, 0, RED), (400, 0, GREEN), (0, 250, BLUE), (400, 250, YELLOW)] {
         surf.fill_rect(photocraft_geom::Rect::from_xywh(x, y, 400, 250), &c);
     }
