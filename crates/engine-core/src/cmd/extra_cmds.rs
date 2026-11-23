@@ -291,7 +291,7 @@ pub(crate) fn equalize_pixels(px: &mut [[f32; 4]], cover: &[f32]) {
 // ---------- transform presets ----------
 
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
-const TRANSFORM_TARGET: &str = r#"{"layer":id?,"target":"pixels"|"mask"|"vectorMask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry; scalar channels and explicitly targeted masks turn alone regardless of linking; an explicit layer without target transforms the layer)}"#;
+const TRANSFORM_TARGET: &str = r#"{"layer":id?,"layers":[id,…]? (whole layers only; mutually exclusive with layer or a mask or channel target),"target":"pixels"|"mask"|"vectorMask"|"quickMask"|{"channel":i}|{"color":i}|{"colors":[i,…]}=Channels panel target (selected colour components share one geometry; scalar channels and explicitly targeted masks turn alone regardless of linking; an explicit layer without target transforms the layer)}"#;
 
 /// The targeted layer's vector mask, with its path's control bounds.
 /// The path tools' Free Transform and `path.transform` reuse those bounds, so a flip mirrors

@@ -344,6 +344,25 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_tab_does_not_return_to_home() {
+        use crate::PhotocraftApp;
+        use photocraft_engine::Session;
+        use serde_json::json;
+
+        let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "Keep"})).unwrap();
+        let n = app.session.documents().len();
+        app.ui.chrome.home = Some(n);
+        assert!(app.ui.chrome.shows_home(n, true));
+        app.run("file.new", json!({"width": 8, "height": 8, "name": "Other"})).unwrap();
+        assert!(!app.ui.chrome.shows_home(app.session.documents().len(), true));
+        app.run("file.close", json!({"document": 1})).unwrap();
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(!app.ui.chrome.shows_home(1, true), "Home must stay dismissed after closing the extra tab");
+        assert_eq!(app.session.documents()[0].doc.name, "Keep");
+    }
+
+    #[test]
     fn the_status_item_is_saved_by_its_key() {
         let mut chrome = ChromeState::default();
         assert_eq!(status_item(&chrome), StatusItem::DocumentDimensions);

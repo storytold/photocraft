@@ -1,6 +1,21 @@
 use super::*;
 use serde_json::json;
 
+/// Sets the pixels of `area` (the whole canvas when `None`) on the active layer to `hex`, through the
+/// document: the state `edit.fill` leaves, without the paint command core does not install.
+pub(crate) fn fill_active(s: &mut Session, area: Option<photocraft_geom::Rect>, hex: &str) {
+    let rgba = crate::cmd::parse_hex(hex).unwrap();
+    s.edit("setup", |doc, active| {
+        let area = area.unwrap_or_else(|| doc.bounds());
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        let px = photocraft_raster::from_rgba(&surf.format(), rgba);
+        let data: Vec<f32> = (0..(area.width() * area.height()) as usize).flat_map(|_| px.iter().copied()).collect();
+        surf.write_region(area, &data);
+        Ok(())
+    })
+    .unwrap();
+}
+
 fn session_with_doc() -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();

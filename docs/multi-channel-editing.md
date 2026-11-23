@@ -374,7 +374,8 @@ valid pixel preview continues to follow channel eyes and display-profile changes
 Both Warp command IDs keep explicit scalar targets locked while their eyes remain editable;
 Smart Objects Warp keeps its default whole-object behavior.
 Whole-layer rotate/flip presets use the same selected-layer frame as Free Transform, including
-the selection outline and implicit Background exclusion; explicit layer targets stay scoped.
+the selection outline and Background exclusion for implicit layer selections. Use `layer`
+or `layers` to explicitly limit the preset to specific whole layers.
 
 GPU previews retain pending WebGPU validation until both scopes settle, reject the same
 perspective horizons as commit, and apply display encoding to partial linear-RGB views.

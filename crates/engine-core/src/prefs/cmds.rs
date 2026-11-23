@@ -220,7 +220,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Keyboard Shortcuts…",
             ["Edit"],
             Some("Cmd+Alt+Shift+K"),
-            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"alternates":{"<command id>":["F3",…]|[](none)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false,"importKys":"<.kys XML>"|{"path":".kys"}?,"useSet":"<name>"|""(defaults)?,"saveSet":"<name>"?,"deleteSet":"<name>"?,"sets":{"<name>":{"shortcuts":{…},"alternateShortcuts":{…}}}?,"activeSet":"<name>"|""?,"exportKys":true|{"path":".kys"}?,"summarize":true|{"mac":bool,"path":".html"}?} (with a path the file is written and the reply has kysPath/htmlPath instead of kys/html)"##,
+            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"alternates":{"<command id>":["F3",…]|[](none)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"allowUnknown":bool=false (bind ids that are not registered commands, such as actions.play:<name>),"filter":str?,"list":bool=false,"importKys":"<.kys XML>"|{"path":".kys"}?,"useSet":"<name>"|""(defaults)?,"saveSet":"<name>"?,"deleteSet":"<name>"?,"sets":{"<name>":{"shortcuts":{…},"alternateShortcuts":{…}}}?,"activeSet":"<name>"|""?,"exportKys":true|{"path":".kys"}?,"summarize":true|{"mac":bool,"path":".html"}?} (with a path the file is written and the reply has kysPath/htmlPath instead of kys/html)"##,
             keyboard_shortcuts,
             true
         ),

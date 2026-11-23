@@ -420,9 +420,7 @@ fn imported_group_d_playback_matches_direct_commands_across_modes_and_depths() {
 /// A nonuniform image and nondefault tool colors expose differences hidden by flat inputs.
 fn prepare_pattern(s: &mut Session, depth: u32, mode: &str) {
     s.execute("file.new", json!({"width":32,"height":24,"depth":depth,"mode":mode,"background":"#102030"})).unwrap();
-    s.execute("select.rect", json!({"x":3,"y":2,"width":14,"height":11})).unwrap();
-    s.execute("edit.fill", json!({"color":"#ee9922"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
+    crate::tests::fill_active(s, Some(photocraft_geom::Rect::new(3, 2, 17, 13)), "#ee9922");
     s.execute("tools.setColors", json!({"foreground":"#e83a91","background":"#148fca"})).unwrap();
 }
 

@@ -456,12 +456,14 @@ fn interactive_guard_allows_inline_mesh_edits_but_refuses_stored_warp_edits() {
     let rect = [0.0, 0.0, 12.0, 8.0];
     let w = Warp::custom(BezierMesh::identity(rect, 1, 1), rect);
     for id in ["edit.transform.splitWarpCrosswise", "edit.transform.splitWarpHorizontally", "edit.transform.splitWarpVertically", "edit.transform.warpGrid"] {
-        let p = json!({"warp":w,"size":3});
+        let stored = if id == "edit.transform.warpGrid" { json!({"size":3}) } else { json!({}) };
+        let mut p = stored.clone();
+        p["warp"] = json!(w);
         assert!(s.is_enabled_with(id, &p), "{id}");
         let out = s.execute(id, p).unwrap();
         let edited: Warp = serde_json::from_value(out["warp"].clone()).unwrap();
         assert!(edited.mesh.unwrap().points.len() > 16, "{id}");
-        assert!(s.execute(id, json!({"size":3})).unwrap_err().to_string().contains(LOCKED));
+        assert!(s.execute(id, stored).unwrap_err().to_string().contains(LOCKED));
         assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
         assert_eq!(s.active().unwrap().history.entries(), history);
     }
@@ -962,7 +964,11 @@ fn selected_colour_sets_and_explicit_targets_keep_layer_precedence() {
     let before = s.active().unwrap().doc.clone();
     for command in ["edit.transform", "edit.transform.warp", "edit.transform.flipHorizontal"] {
         assert!(s.is_enabled(command), "{command}");
-        let p = if command == "edit.transform.warp" { json!({"style":"arc","bend":10}) } else { json!({"dx":1}) };
+        let p = match command {
+            "edit.transform" => json!({"dx":1}),
+            "edit.transform.warp" => json!({"style":"arc","bend":10}),
+            _ => json!({}),
+        };
         s.precheck(command, &p).unwrap();
         s.execute(command, p).unwrap();
         s.undo();
