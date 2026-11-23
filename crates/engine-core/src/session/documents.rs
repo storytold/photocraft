@@ -295,6 +295,9 @@ impl Session {
                 self.link_missing.retain(|(d, _)| *d != id.0);
             }
             self.invalidate_link_scan();
+            // A reopened native document can have the same saved ID, but it needs a fresh
+            // first-look fingerprint of its linked sources.
+            self.link_stamps.retain(|(doc, _), _| *doc != id.0);
         }
         let d = self.docs.remove(index).into_inner();
         self.pcraft_caches.remove(&d.doc.id);

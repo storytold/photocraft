@@ -540,11 +540,15 @@ mod tests {
         s.execute("file.placeLinked", json!({"path":path,"historicalXcfSampleOrder":"big-endian"})).unwrap();
         s.execute("file.saveACopy", json!({"path":saved})).unwrap();
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+        let saved_id = s.active().unwrap().doc.id;
+        assert!(s.link_stamps.keys().any(|(doc, _)| *doc == saved_id.0));
         s.close(0);
+        assert!(!s.link_stamps.keys().any(|(doc, _)| *doc == saved_id.0));
         let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
         std::fs::write(&path, historical_pixel(true)).unwrap();
         std::fs::File::options().write(true).open(&path).unwrap().set_times(std::fs::FileTimes::new().set_modified(modified)).unwrap();
         s.execute("file.openAs", json!({"path":saved})).unwrap();
+        assert_eq!(s.active().unwrap().doc.id, saved_id);
         let before = s.active().unwrap().doc.clone();
         s.start_link_scan();
         let started = std::time::Instant::now();
@@ -1072,6 +1076,11 @@ mod tests {
             })
             .unwrap();
             let before = s.active().unwrap().doc.clone();
+            // Place centers the 10×10 source on the 40×40 canvas. Its cache uses document
+            // coordinates, so (0, 0) is outside the source and cannot prove a refresh.
+            let original_pixel = before.layer(photocraft_doc::LayerId(current)).unwrap().surface().unwrap().pixel(20, 20);
+            assert!(is([original_pixel[0], original_pixel[1], original_pixel[2]], RED));
+            assert_eq!(original_pixel[3], 1.0);
             let first = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
             assert_eq!(first["updated"], json!([]));
             assert!(first["needsRelink"].is_array());
@@ -1081,8 +1090,9 @@ mod tests {
             assert_eq!(refreshed["needsRelink"][0]["path"], json!(path));
             let doc = &s.active().unwrap().doc;
             assert_eq!(doc.layer(photocraft_doc::LayerId(old)), before.layer(photocraft_doc::LayerId(old)));
-            let pixel = doc.layer(photocraft_doc::LayerId(current)).unwrap().surface().unwrap().pixel(0, 0);
+            let pixel = doc.layer(photocraft_doc::LayerId(current)).unwrap().surface().unwrap().pixel(20, 20);
             assert!(is([pixel[0], pixel[1], pixel[2]], BLUE));
+            assert_eq!(pixel[3], 1.0);
             assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
         }
     }
