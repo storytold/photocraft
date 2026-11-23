@@ -21,7 +21,7 @@ const ALLOWED: &[&str] = &[
 ];
 // The only catalog rows that may say "Camera Raw": their English text names Photoshop's .xmp files.
 const ALLOWED_KEYS: &[&str] = &["Save these settings as a Camera Raw .xmp file", "Load settings from a Camera Raw .xmp file"];
-const ROOTS: &[&str] = &["src", "../engine/src"];
+const ROOTS: &[&str] = &["src", "../engine/src", "../engine-core/src"];
 
 fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'

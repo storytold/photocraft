@@ -25,6 +25,8 @@ use super::{PhotocraftApp, canvas_view};
 /// document (`layer_transfer`).
 pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if crate::jobs_ui::batch_preview(app, ui) {
+        // The preview replaces the tabs: a floating window dropped meanwhile docks nowhere (#16415).
+        app.dock_drop_rect = None;
         return;
     }
     crate::distort_ui::drop_foreign(app, ui.ctx());
@@ -130,13 +132,23 @@ pub(crate) fn apply_arranged(app: &mut PhotocraftApp, arranged: Arranged) {
     }
 }
 
+/// The height of the band at the top of the document area that takes a floating window's drop where no tab strip
+/// shows: a tab's height.
+const DOCK_BAND: f32 = 32.0;
+
 fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The web build's drop path reads where the canvas is (`file_open::target_at`); set again when one shows.
     app.drop_canvas_rect = None;
+    // A floating window's title bar docks on the tab strip (`tabs::strip` sets its rect); where no strip shows, on a
+    // band of a tab's height at the top of the area, where the strip would be.
+    let area = ui.max_rect();
+    app.dock_drop_rect = Some(Rect::from_min_size(area.min, egui::vec2(area.width(), DOCK_BAND.min(area.height()))));
     retain_gpu_documents(app);
     publish_shown(app);
     crate::cas_transform::tick(app, ui.ctx());
     if app.home_screen_up() {
+        // The Home screen hides the tabs: a floating window dropped on it docks nowhere (#16415).
+        app.dock_drop_rect = None;
         start_screen(app, ui);
         return;
     }
