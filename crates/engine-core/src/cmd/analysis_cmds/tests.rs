@@ -110,7 +110,7 @@ fn measurement_scale_set_query_default_and_undo() {
 
 #[test]
 fn features_area_perimeter_circularity() {
-    // A 10×10 square and a 1-pixel diagonal line of 5 pixels (one 8-connected feature).
+    // A 10×10 square and a 1-pixel horizontal bar of 5 pixels (two 4-connected features).
     let (w, h) = (30usize, 20usize);
     let mut mask = vec![false; w * h];
     for y in 2..12 {
@@ -119,7 +119,7 @@ fn features_area_perimeter_circularity() {
         }
     }
     for i in 0..5 {
-        mask[(5 + i) * w + 20 + i] = true;
+        mask[5 * w + 20 + i] = true;
     }
     let gray: Vec<f32> = (0..w * h).map(|i| if i % 2 == 0 { 0.0 } else { 1.0 }).collect();
     let f = measure_features(&mask, &gray, w, h, (100, 200), 255.0);
@@ -590,5 +590,23 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert_eq!(a.perimeter, b.perimeter);
         assert_eq!(a.bounds, b.bounds);
         assert!(b.histogram.is_empty());
+    }
+}
+
+#[test]
+fn corner_touching_selections_are_measured_as_separate_features() {
+    for second in [(12, 12), (13, 13)] {
+        let mut s = session(32, 32, 8);
+        s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4, "mode": "replace"})).unwrap();
+        s.execute("select.rect", json!({"x": second.0, "y": second.1, "width": 4, "height": 4, "mode": "add"})).unwrap();
+        s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+        let list = s.execute("measurementLog.list", json!({})).unwrap();
+        let rows = list["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 3, "second square at {second:?}: summary + 2 features");
+        assert_eq!(rows[0]["values"]["count"].as_u64(), Some(2));
+        assert_eq!(rows[0]["values"]["area"].as_f64(), Some(32.0));
+        assert_eq!(rows[1]["values"]["area"].as_f64(), Some(16.0));
+        assert_eq!(rows[2]["values"]["area"].as_f64(), Some(16.0));
+        assert_eq!(rows[1]["values"]["perimeter"], rows[2]["values"]["perimeter"], "symmetric squares must have equal perimeter");
     }
 }

@@ -394,7 +394,7 @@ fn gray_range(depth: SampleType) -> f64 {
     }
 }
 
-/// Split `mask` (w×h, true = selected) into 8-connected features and measure each against the
+/// Split `mask` (w×h, true = selected) into 4-connected features and measure each against the
 /// gray image `gray` (0–1). Returns features in scan order of their first pixel; `origin` offsets
 /// the reported bounds.
 pub fn measure_features(mask: &[bool], gray: &[f32], w: usize, h: usize, origin: (i32, i32), range: f64) -> Vec<Feature> {
@@ -402,7 +402,8 @@ pub fn measure_features(mask: &[bool], gray: &[f32], w: usize, h: usize, origin:
 }
 
 fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize, origin: (i32, i32), range: f64) -> Vec<Feature> {
-    // Two-pass connected components.
+    // Two-pass 4-connected components (selections touching only at a diagonal corner stay
+    // separate features, matching Photoshop #16509).
     let mut label = vec![u32::MAX; w * h];
     let mut parent: Vec<u32> = Vec::new();
     for y in 0..h {
@@ -412,18 +413,12 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
                 continue;
             }
             let mut best = u32::MAX;
-            let mut nbrs = [u32::MAX; 4];
+            let mut nbrs = [u32::MAX; 2];
             if x > 0 {
                 nbrs[0] = label[i - 1];
             }
             if y > 0 {
                 nbrs[1] = label[i - w];
-                if x > 0 {
-                    nbrs[2] = label[i - w - 1];
-                }
-                if x + 1 < w {
-                    nbrs[3] = label[i - w + 1];
-                }
             }
             for &n in &nbrs {
                 if n != u32::MAX {
@@ -476,16 +471,23 @@ fn measure_features_impl(mask: &[bool], gray: Option<&[f32]>, w: usize, h: usize
                 for x in -1..w as isize {
                     let c = [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)];
                     let inside = c.iter().filter(|v| **v != u32::MAX).count();
-                    let len = match inside {
-                        1 | 3 => HALF_DIAG,
-                        2 if (c[0] != u32::MAX) == (c[2] != u32::MAX) => 2.0 * HALF_DIAG,
-                        2 => 1.0,
-                        _ => 0.0,
-                    };
-                    if len > 0.0
-                        && let Some(f) = c.iter().find(|v| **v != u32::MAX)
-                    {
-                        acc[*f as usize] += len;
+                    if inside == 2 && (c[0] != u32::MAX) == (c[2] != u32::MAX) {
+                        for &f in &c {
+                            if f != u32::MAX {
+                                acc[f as usize] += HALF_DIAG;
+                            }
+                        }
+                    } else {
+                        let len = match inside {
+                            1 | 3 => HALF_DIAG,
+                            2 => 1.0,
+                            _ => 0.0,
+                        };
+                        if len > 0.0
+                            && let Some(f) = c.iter().find(|v| **v != u32::MAX)
+                        {
+                            acc[*f as usize] += len;
+                        }
                     }
                 }
                 acc
