@@ -1,5 +1,5 @@
 use super::blur::{blur, dilate};
-use super::distance::{dist_inside, dist_outside};
+use super::distance::{dist_inside, dist_outside, par_units};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
     Shadow, psblend,
@@ -464,16 +464,49 @@ pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bo
     m
 }
 
+/// Subpixel offset per unit of missing alpha for the Precise Outer Glow settings measured in #14955.
+pub fn precise_outer_glow_alpha_distance_scale(g: &Glow, inner: bool) -> f32 {
+    if !inner
+        && g.technique == GlowTechnique::Precise
+        && g.size == 5.0
+        && g.spread == 0.0
+        && g.range == 0.5
+        && matches!(g.contour, Contour::Linear)
+        && !g.anti_alias
+        && g.noise == 0.0
+        && matches!(g.paint, FxPaint::Color(_))
+        && g.common.blend == BlendMode::Normal
+        && g.common.opacity == 1.0
+    {
+        // Fit the interior ramp to Photoshop's 11 and 25 blue-channel levels through the
+        // 50% and 25% orange squares. The exterior ramp uses the original distances.
+        1.045
+    } else {
+        0.0
+    }
+}
+
+/// A flat partial-alpha neighbourhood identifies the measured translucent interior.
+fn flat_glow_alpha(shape: &Map, x: usize, y: usize, alpha: f32) -> bool {
+    if x == 0 || y == 0 || x + 1 >= shape.w || y + 1 >= shape.h {
+        return false;
+    }
+    (y - 1..=y + 1).all(|y| {
+        let start = y * shape.w + x - 1;
+        shape.v.get(start..start + 3).is_some_and(|row| row.iter().all(|&a| a == alpha))
+    })
+}
+
 pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -> Map {
     // An inner glow is built from the edge inwards; a centre-source glow is its inverse, taken
     // after the contour and Range (Photoshop 27.11, measured: the centre glow is exactly
     // 1 − the edge glow, for both techniques).
-    let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
+    let soft_source = || if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
     let mut m = match g.technique {
         GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {
             // A width-one box blur leaves no coverage inside the edge. The Size 1 taps
             // put quarter coverage on the first pixel, which Range 50% doubles (#14924).
-            let mut m = src;
+            let mut m = soft_source();
             super::blur::size_one_blur(&mut m);
             m
         }
@@ -483,18 +516,49 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
             // Photoshop's 1 − D / (size + 1) beyond the solid part (measured: outer and inner,
             // sizes 10 and 20, spread 0 and 40 %, choke 0 and 30 %: within 1 level; other Range
             // values are unmeasured). The distances here are 0.5 px short of centre to centre.
-            let d = if inner { dist_inside(shape) } else { dist_outside(&src) };
+            let mut distance = if inner { dist_inside(shape) } else { dist_outside(shape) };
             let solid = g.size * g.spread;
             let soft = (g.size + 1.0 - solid).max(1e-3);
-            let mut m = Map::new(shape.w, shape.h, 0.0);
-            for (o, d) in m.v.iter_mut().zip(d) {
-                let d = d + 0.5;
-                *o = if d <= solid { 1.0 } else { 0.5 * (1.0 - (d - solid) / soft).clamp(0.0, 1.0) };
+            let alpha_distance_scale = precise_outer_glow_alpha_distance_scale(g, inner);
+            let coverage = |d: f32| if d <= solid { 1.0 } else { 0.5 * (1.0 - (d - solid) / soft).clamp(0.0, 1.0) };
+            if alpha_distance_scale > 0.0 {
+                let lut = glow_paint_lut(g, inner);
+                par_units(
+                    distance.len(),
+                    &mut distance,
+                    shape.w,
+                    &mut [] as &mut [()],
+                    0,
+                    || (),
+                    |_, y, row, _| {
+                        let start = y * shape.w;
+                        for (x, value) in row.iter_mut().enumerate() {
+                            let mut d = *value + 0.5;
+                            // Missing alpha shifts the flat interior onto the existing falloff ramp.
+                            if d == 0.0
+                                && let Some(&alpha) = shape.v.get(start + x)
+                                && alpha > 0.0
+                                && alpha < 1.0
+                                && flat_glow_alpha(shape, x, y, alpha)
+                            {
+                                d = (1.0 - alpha) * alpha_distance_scale;
+                            }
+                            let v = coverage(d);
+                            *value = lut.as_deref().map_or(v, |lut| lut_at(lut, v));
+                        }
+                    },
+                );
+                // This case is an outer glow with zero noise. The map already includes its contour.
+                return Map { w: shape.w, h: shape.h, v: distance };
             }
-            m
+            for value in &mut distance {
+                *value = coverage(*value + 0.5);
+            }
+            Map { w: shape.w, h: shape.h, v: distance }
         }
         GlowTechnique::Softer => {
             let (r, bw) = spread_split(g.size, g.spread);
+            let src = soft_source();
             let mut m = dilate(&src, r);
             blur(&mut m, bw);
             m

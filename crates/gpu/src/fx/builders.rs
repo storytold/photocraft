@@ -63,6 +63,16 @@ impl B {
                 let d = self.field(if inner { FieldKind::Inside } else { FieldKind::Outside }, g.size);
                 let solid = g.size * g.spread;
                 let soft = (g.size + 1.0 - solid).max(1e-3);
+                let alpha_distance_scale = fx::precise_outer_glow_alpha_distance_scale(g, inner);
+                if alpha_distance_scale > 0.0 {
+                    // Apply the contour in the same pass, before quantizing the final map.
+                    let lut = fx::glow_paint_lut(g, inner);
+                    let mut s = stage(Kernel::MGlow, Some(d), Some(In::Shape), [solid, soft, alpha_distance_scale, flag(lut.is_some())], 1);
+                    s.lut = lut.map(Arc::new);
+                    s.out = Some(0);
+                    self.stages.push(s);
+                    return 1;
+                }
                 self.push(stage(Kernel::MGlow, Some(d), None, [solid, soft, 0.0, 0.0], 0))
             }
             GlowTechnique::Softer => {
