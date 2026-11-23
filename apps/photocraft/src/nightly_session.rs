@@ -27,9 +27,10 @@ fn regular_or_missing(path: &Path) -> io::Result<bool> {
     }
 }
 
-/// The owner's session, shared by the app's exit hook and the code after the event loop. On macOS
-/// every quit ends the process inside AppKit's terminate, after eframe's `on_exit` and before
-/// `eframe::run_native` could return, so only the exit hook runs there; elsewhere both run.
+/// The owner's session, shared by the app's exit hook (macOS) and the code after the event loop.
+/// On macOS every quit ends the process inside AppKit's terminate, after eframe's `on_exit` and
+/// before `eframe::run_native` could return, so the exit hook finishes it there; the return path
+/// still runs for a start that created no window.
 pub type Shared = Arc<Mutex<Option<Session>>>;
 
 /// The controlled return ([`Session::finish`]) by whichever path comes first; later calls do nothing.

@@ -361,7 +361,7 @@ class Verify(unittest.TestCase):
 class Build(unittest.TestCase):
     def test_compilation_refuses_signing_material_before_building(self):
         f = Fixture(self)
-        for name in ("APPLE_CERTIFICATE", "APPLE_PASSWORD", "MACOS_SIGN_IDENTITY"):
+        for name in ("APPLE_CERTIFICATE", "APPLE_PASSWORD", "MACOS_SIGN_IDENTITY", "WINDOWS_CERTIFICATE", "AZURE_CLIENT_SECRET", "LINUX_SIGNING_KEY"):
             with self.subTest(name=name):
                 result = f.run("nightly.sh", "--arch", "aarch64", **{**{key: None for key in SECRETS}, name: "generated"},
                                PHOTOCRAFT_BUILD_CHANNEL="nightly-v1", PHOTOCRAFT_VERSION=VERSION)

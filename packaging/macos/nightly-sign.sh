@@ -117,7 +117,6 @@ ditto -c -k --keepParent "$APP" "$WORK/notarize.zip"
 notarize "$WORK/notarize.zip"
 # The ticket goes into the bundle (Contents/CodeResources): the Launcher's extract restores no xattrs.
 staple "$APP"
-spctl --assess --type execute -vvv "$APP"
 
 # ---- the final archive, checked as the Launcher unpacks it -----------------------------------------
 ditto -c -k --norsrc --noextattr --noacl --keepParent "$APP" "$WORK/final.zip"
