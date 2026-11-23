@@ -33,7 +33,7 @@ fn doc_with_board(rect: Rect) -> Document {
     if let LayerContent::Group(g) = &mut g1.content {
         g.artboard = Some(Artboard { rect, background: ArtboardBackground::White, preset: String::new() });
     }
-    d.layers = vec![g1];
+    d.layers = vec![g1].into();
     d.guides = Guides { horizontal: vec![90.0], vertical: vec![20.0], ..Default::default() };
     d
 }

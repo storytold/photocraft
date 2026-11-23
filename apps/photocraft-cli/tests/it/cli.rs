@@ -515,11 +515,11 @@ fn batch_applies_actions_to_directory() {
     .stdout;
     assert!(out.contains("2 succeeded, 0 failed"), "{out}");
     let clean_log = std::fs::read(&log).unwrap();
-    assert!(clean_log.starts_with(&[0xff, 0xfe]));
+    assert!(clean_log.starts_with(&[0xfe, 0xff]));
     let (pairs, remainder) = clean_log[2..].as_chunks::<2>();
     assert!(remainder.is_empty());
-    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
-    assert_eq!(body, "Batch Start\r\n\r\nBatch End\r\n");
+    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert_eq!(body, "Start Batch\r\n\r\nEnd Batch\r\n");
     for n in ["one", "two"] {
         let info = ok(bin().arg("info").arg(outp.join(format!("{n}.pcraft")))).stdout;
         let v: Value = serde_json::from_str(&info).unwrap();
@@ -557,11 +557,11 @@ fn batch_recursive_naming_stop_and_error_log() {
         assert!(output.join(file).is_file(), "{file}: {stdout}");
     }
     let bytes = std::fs::read(log).unwrap();
-    assert!(bytes.starts_with(&[0xff, 0xfe]));
+    assert!(bytes.starts_with(&[0xfe, 0xff]));
     let (pairs, remainder) = bytes[2..].as_chunks::<2>();
     assert!(remainder.is_empty());
-    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
-    assert!(errors.contains("Batch Start\r\n") && errors.contains("b.png") && errors.ends_with("Batch End\r\n"), "{errors}");
+    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert!(errors.contains("Start Batch\r\n") && errors.contains("b.png") && errors.ends_with("End Batch\r\n"), "{errors}");
 
     let stopped = root.join("stopped");
     let result = run(&stopped, &["--recursive", "--stop-on-error"]);
@@ -713,6 +713,22 @@ fn batch_with(d: &Path, input: &Path, name: &str, actions: &str, extra: &[&str])
     let file = d.join(format!("{name}.json"));
     std::fs::write(&file, actions).unwrap();
     bin().args(["batch", "--actions"]).arg(&file).arg("--in").arg(input).arg("--out").arg(d.join(name)).args(extra).output().unwrap()
+}
+
+#[test]
+fn batch_error_log_cannot_replace_its_actions_file() {
+    let d = tmp("batch-log-actions-collision");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let actions = r#"[{"command":"image.adjustments.invert"}]"#;
+    let log = input.join("../actions.json");
+
+    let result = batch_with(&d, &input, "actions", actions, &["--error-log", &log.to_string_lossy()]);
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{error}");
+    assert!(error.contains("--error-log") && error.contains("--actions"), "{error}");
+    assert_eq!(std::fs::read(d.join("actions.json")).unwrap(), actions.as_bytes());
+    assert!(!d.join("actions").exists(), "the output folder must not be created");
 }
 
 /// #489: `batch --actions` takes `[id, params]` steps and a droplet's steps, with the same results
@@ -1410,13 +1426,15 @@ fn a_non_unicode_path_is_taken_and_non_unicode_text_is_a_usage_error() {
 /// PhotoCraft can't play are warned about up front.
 #[test]
 fn batch_plays_a_photoshop_actions_file() {
-    use photocraft_engine::actions_cmds::Action;
+    use photocraft_engine::actions_cmds::{Action, ActionStep};
+    photocraft_engine::install().unwrap();
     let d = tmp("atn");
     let input = d.join("in");
     std::fs::create_dir_all(&input).unwrap();
     write_png(&input.join("a.png"), 8, 4, 3);
-    let invert = Action::new("Negative", vec![("image.adjustments.invert".into(), json!({})), ("select.all".into(), json!({}))]);
-    let odd = Action::new("Odd", vec![(photocraft_engine::atn_cmds::PHOTOSHOP_STEP.into(), json!({"event": "syntheticFill", "name": "Generative Fill"}))]);
+    let invert = Action::new("Negative", vec![ActionStep::new("image.adjustments.invert", json!({})), ActionStep::new("select.all", json!({}))]);
+    let odd =
+        Action::new("Odd", vec![ActionStep::new(photocraft_engine::atn_cmds::PHOTOSHOP_STEP, json!({"event": "syntheticFill", "name": "Generative Fill"}))]);
     let (bytes, skipped) = photocraft_engine::atn_cmds::export("Set", &[&invert, &odd], &[], false).unwrap();
     assert!(skipped.is_empty());
     let atn = d.join("Set.atn");
