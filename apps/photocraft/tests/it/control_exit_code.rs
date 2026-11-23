@@ -27,7 +27,7 @@ fn run_with(args: &[&str], vars: &[(&str, &str)]) -> Run {
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("photocraft-control-exit-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut child = std::process::Command::new(crate::binary())
+    let child = std::process::Command::new(crate::binary())
         .args(args)
         .env("PHOTOCRAFT_CONFIG_DIR", &dir)
         // Isolate from the host environment so the test is reproducible.
@@ -44,21 +44,11 @@ fn run_with(args: &[&str], vars: &[(&str, &str)]) -> Run {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("failed to run photocraft binary");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    let timed_out = loop {
-        if child.try_wait().unwrap().is_some() {
-            break false;
-        }
-        if std::time::Instant::now() >= deadline {
-            child.kill().unwrap();
-            break true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
+    // No in-test deadline: a cold start of a freshly extracted binary can be slow, and nextest's
+    // slow-timeout terminates a real hang.
     let output = child.wait_with_output().unwrap();
     let gpu_started = dir.join("gpu-starting.json").exists();
     std::fs::remove_dir_all(&dir).ok();
-    assert!(!timed_out, "PhotoCraft did not exit: {}", String::from_utf8_lossy(&output.stderr));
     assert!(!gpu_started, "control setup errors must exit before GPU startup");
     Run { status: output.status, stderr: String::from_utf8_lossy(&output.stderr).into_owned() }
 }

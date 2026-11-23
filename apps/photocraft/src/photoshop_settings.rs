@@ -1,5 +1,5 @@
 //! Photoshop's live keyboard shortcut set on this machine, for the one-time offer to import it
-//! at first launch (`photocraft_ui_egui::kys_import::offer_import`).
+//! at first launch (`photocraft_ui_egui::kys_import::offer`).
 //!
 //! Photoshop keeps the set in use as `Keyboard Shortcuts.psp` in its per-version settings
 //! folder; it is the same XML a saved `.kys` holds, named after the set the user chose.

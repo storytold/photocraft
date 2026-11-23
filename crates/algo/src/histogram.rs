@@ -126,6 +126,21 @@ pub fn clipping(p: [f32; 4]) -> (u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera_raw::{CameraRaw, DevelopInputs};
+
+    /// `CameraRaw` with the named fields set (the type is `#[non_exhaustive]`, so no struct expression), or a copy of a base with them set.
+    macro_rules! cr {
+        ($($f:ident : $v:expr),* $(,)?) => {{
+            let mut s = CameraRaw::default();
+            $(s.$f = $v;)*
+            s
+        }};
+        ($base:expr => $($f:ident : $v:expr),* $(,)?) => {{
+            let mut s: CameraRaw = $base;
+            $(s.$f = $v;)*
+            s
+        }};
+    }
 
     // The parallel path, and its threshold, exist only off wasm32.
     #[cfg(not(target_arch = "wasm32"))]
@@ -224,7 +239,7 @@ mod tests {
     fn exposure_of_an_eight_bit_gradient_reproduces_the_quantization_comb() {
         let mut pixels: Vec<_> = (0..256).map(|i| [i as f32 / 255.0, i as f32 / 255.0, i as f32 / 255.0, 1.0]).collect();
         assert!(RgbHistogram::from_rgba(&pixels).channels[0].iter().all(|&v| v == 1));
-        crate::camera_raw::develop(&mut pixels, 256, 1, &crate::camera_raw::CameraRaw { exposure: 0.5, ..Default::default() }, true);
+        crate::camera_raw::develop(&mut pixels, 256, 1, &cr! { exposure: 0.5 }, &DevelopInputs::default(), true);
         let h = RgbHistogram::from_rgba(&pixels);
         assert!(h.channels[0][10..230].iter().filter(|&&v| v == 0).count() > 10);
         assert_eq!(h.samples, 256);

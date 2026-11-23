@@ -2,36 +2,50 @@
 //! gear. On (the default) a drag's box snaps to whole pixels; off a rectangle keeps the drag's
 //! fractional coordinates. It is greyed outside Shape mode, where the box still snaps.
 
+use craft::draw::ui::VectorMode;
+use craft::draw::ui::shape_drag::ShapeKind;
 use egui::Modifiers;
 use egui::accesskit::Toggled;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::add_anchor_options_bar_tests::harness;
-use super::{finish_shape, shape_geometry};
+use super::test_input::harness;
 use crate::PhotocraftApp;
-use crate::state::Tool;
+use crate::canvas::{ToolEvent, tool_event};
+use crate::state::{Tool, ToolOptions};
 
 const START: [f64; 2] = [10.3, 10.6];
 const END: [f64; 2] = [40.7, 30.2];
 const GEAR: &str = "Set additional shape and path options";
 
-/// A 200 × 100 document with the Rectangle tool.
-fn app() -> PhotocraftApp {
+/// A 200 × 100 document with the Rectangle tool and its options set by `set`. The pixel-grid snap
+/// of vector tools is off, so only Align Edges rounds.
+fn app(set: impl FnOnce(&mut ToolOptions)) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("prefs.set", json!({"path": "tools.snapVectorToolsAndTransformsToPixelGrid", "value": false})).unwrap();
+    app.sync_views();
+    app.ui.views[0].zoom = 16.0;
     app.ui.tool = Tool::Rectangle;
+    set(&mut app.ui.tool_options);
     app
 }
 
-/// The `[x, y, w, h]` box a Rectangle drag from `START` to `END` draws, or None.
-fn drag_box(app: &PhotocraftApp, mods: Modifiers) -> Option<[f64; 4]> {
-    let g = shape_geometry(&app.ui.tool_options, Tool::Rectangle, START, END, mods)?;
-    serde_json::from_value(g["rect"].clone()).ok()
+/// A canvas drag from `from` to `to`, pressed without modifiers and moved and released with `mods`
+/// (keys pressed after the drag starts).
+fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
+    tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Modifiers::NONE);
+    tool_event(app, ToolEvent::Move { x: (from[0] + to[0]) / 2.0, y: (from[1] + to[1]) / 2.0, pressure: 1.0 }, mods);
+    tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
+    tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
 }
 
-/// The active shape layer's live rectangle `[x, y, w, h]` and its path's `[x0, y0, x1, y1]`.
-fn drawn_layer(app: &mut PhotocraftApp) -> ([f64; 4], [f64; 4]) {
+fn layer_count(app: &PhotocraftApp) -> usize {
+    app.session.active().unwrap().doc.layers.len()
+}
+
+/// The active shape layer's live rectangle `[x, y, w, h]`, its kind and its path's `[x0, y0, x1, y1]`.
+fn drawn_layer(app: &mut PhotocraftApp) -> ([f64; 4], String, [f64; 4]) {
     let st = app.session.active().unwrap();
     let id = st.active_layer.unwrap();
     let path = match &st.doc.layer(id).unwrap().content {
@@ -41,13 +55,17 @@ fn drawn_layer(app: &mut PhotocraftApp) -> ([f64; 4], [f64; 4]) {
     let (x0, y0, x1, y1) = path.control_bounds().unwrap();
     let info = app.session.execute("shape.info", json!({"layer": id.0})).unwrap();
     let live = serde_json::from_value(info["live"]["rect"].clone()).unwrap_or_else(|_| panic!("a live rectangle: {}", info["live"]));
-    (live, [x0, y0, x1, y1])
+    (live, info["live"]["kind"].as_str().unwrap_or_default().to_owned(), [x0, y0, x1, y1])
 }
 
-/// `[x0, y0, x1, y1]` of the work path.
-fn work_path_bounds(app: &PhotocraftApp) -> [f64; 4] {
-    let (x0, y0, x1, y1) = app.session.active().unwrap().doc.work_path.as_ref().unwrap().control_bounds().unwrap();
-    [x0, y0, x1, y1]
+/// The live box `[x, y, w, h]` a Rectangle drag from `START` to `END` with `mods` draws under the
+/// options `set` gives.
+fn drag_box(set: impl FnOnce(&mut ToolOptions), mods: Modifiers) -> [f64; 4] {
+    let mut app = app(set);
+    let layers = layer_count(&app);
+    drag(&mut app, START, END, mods);
+    assert_eq!(layer_count(&app), layers + 1, "one new shape layer");
+    drawn_layer(&mut app).0
 }
 
 fn assert_close(got: [f64; 4], want: [f64; 4]) {
@@ -58,46 +76,47 @@ fn assert_close(got: [f64; 4], want: [f64; 4]) {
 
 #[test]
 fn the_box_snaps_with_align_edges_and_keeps_fractions_without() {
-    let mut app = app();
-    assert!(app.ui.tool_options.align_edges, "on by default");
-    assert_eq!(drag_box(&app, Modifiers::NONE), Some([10.0, 11.0, 30.0, 20.0]));
-    app.ui.tool_options.align_edges = false;
-    assert_close(drag_box(&app, Modifiers::NONE).unwrap(), [10.3, 10.6, 30.4, 19.6]);
+    assert!(ToolOptions::default().align_edges, "on by default");
+    assert_eq!(drag_box(|_| {}, Modifiers::NONE), [10.0, 11.0, 30.0, 20.0]);
+    let off = |o: &mut ToolOptions| o.align_edges = false;
+    assert_close(drag_box(off, Modifiers::NONE), [10.3, 10.6, 30.4, 19.6]);
     // Shift squares on the drag's shorter side and Alt draws from the centre, both before the box
     // snaps or not.
-    assert_close(drag_box(&app, Modifiers::SHIFT).unwrap(), [10.3, 10.6, 19.6, 19.6]);
-    assert_close(drag_box(&app, Modifiers::ALT).unwrap(), [-20.1, -9.0, 60.8, 39.2]);
-    app.ui.tool_options.align_edges = true;
-    assert_eq!(drag_box(&app, Modifiers::SHIFT), Some([10.0, 11.0, 20.0, 20.0]));
-    assert_eq!(drag_box(&app, Modifiers::ALT), Some([-20.0, -9.0, 61.0, 39.0]));
+    assert_close(drag_box(off, Modifiers::SHIFT), [10.3, 10.6, 19.6, 19.6]);
+    assert_close(drag_box(off, Modifiers::ALT), [-20.1, -9.0, 60.8, 39.2]);
+    assert_eq!(drag_box(|_| {}, Modifiers::SHIFT), [10.0, 11.0, 20.0, 20.0]);
+    assert_eq!(drag_box(|_| {}, Modifiers::ALT), [-20.0, -9.0, 61.0, 39.0]);
 }
 
 #[test]
 fn a_rounded_rectangle_and_the_gears_fixed_size_follow_the_checkbox_too() {
-    let mut app = app();
-    app.ui.tool_options.corner_radius = 4.0;
-    app.ui.tool_options.align_edges = false;
-    let g = shape_geometry(&app.ui.tool_options, Tool::Rectangle, START, END, Modifiers::NONE).unwrap();
-    assert_eq!(g["kind"], "roundedRect");
-    assert_close(serde_json::from_value(g["rect"].clone()).unwrap(), [10.3, 10.6, 30.4, 19.6]);
+    let mut app = app(|o| {
+        o.corner_radius = 4.0;
+        o.align_edges = false;
+    });
+    drag(&mut app, START, END, Modifiers::NONE);
+    let (live, kind, _) = drawn_layer(&mut app);
+    assert_eq!(kind, "roundedRect");
+    assert_close(live, [10.3, 10.6, 30.4, 19.6]);
     // Fixed Size puts W × H at the release point.
-    app.ui.tool_options.corner_radius = 0.0;
-    app.ui.tool_options.rect_constraint = "fixedSize".into();
-    (app.ui.tool_options.rect_fixed_width, app.ui.tool_options.rect_fixed_height) = (20.5, 10.25);
-    assert_close(drag_box(&app, Modifiers::NONE).unwrap(), [40.7, 30.2, 20.5, 10.25]);
-    app.ui.tool_options.align_edges = true;
-    assert_eq!(drag_box(&app, Modifiers::NONE), Some([41.0, 30.0, 21.0, 10.0]));
+    let fixed = |align: bool| {
+        move |o: &mut ToolOptions| {
+            o.align_edges = align;
+            o.rect_constraint = "fixedSize".into();
+            (o.rect_fixed_width, o.rect_fixed_height) = (20.0, 10.0);
+        }
+    };
+    assert_close(drag_box(fixed(false), Modifiers::NONE), [40.7, 30.2, 20.0, 10.0]);
+    assert_eq!(drag_box(fixed(true), Modifiers::NONE), [41.0, 30.0, 20.0, 10.0]);
 }
 
 #[test]
 fn the_drawn_shape_layer_follows_the_checkbox() {
     for (align, live, bounds) in [(true, [10.0, 11.0, 30.0, 20.0], [10.0, 11.0, 40.0, 31.0]), (false, [10.3, 10.6, 30.4, 19.6], [10.3, 10.6, 40.7, 30.2])] {
-        let mut app = app();
-        app.ui.tool_options.align_edges = align;
-        let layers = app.session.active().unwrap().doc.layers.len();
-        finish_shape(&mut app, Tool::Rectangle, START, END, Modifiers::NONE);
-        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "one new shape layer");
-        let (got_live, got_bounds) = drawn_layer(&mut app);
+        let mut app = app(|o| o.align_edges = align);
+        drag(&mut app, START, END, Modifiers::NONE);
+        let (got_live, kind, got_bounds) = drawn_layer(&mut app);
+        assert_eq!(kind, "rect");
         assert_close(got_live, live);
         assert_close(got_bounds, bounds);
     }
@@ -105,33 +124,32 @@ fn the_drawn_shape_layer_follows_the_checkbox() {
 
 #[test]
 fn a_greyed_checkbox_keeps_snapping_in_path_and_pixels_mode() {
-    let mut app = app();
-    app.ui.tool_options.align_edges = false;
-    for mode in ["path", "pixels"] {
-        app.ui.tool_options.shape_mode = mode.into();
-        assert_eq!(drag_box(&app, Modifiers::NONE), Some([10.0, 11.0, 30.0, 20.0]), "{mode}");
+    let mut app = app(|o| o.align_edges = false);
+    for mode in [VectorMode::Path, VectorMode::Pixels] {
+        app.ui.tool_options.shape_mode = mode;
+        assert!(super::shapes::snaps_to_pixels(&app, ShapeKind::Rectangle), "{mode:?}");
     }
-    app.ui.tool_options.shape_mode = "path".into();
-    finish_shape(&mut app, Tool::Rectangle, START, END, Modifiers::NONE);
-    assert_close(work_path_bounds(&app), [10.0, 11.0, 40.0, 31.0]);
+    app.ui.tool_options.shape_mode = VectorMode::Path;
+    drag(&mut app, START, END, Modifiers::NONE);
+    let (x0, y0, x1, y1) = app.session.active().unwrap().doc.work_path.as_ref().unwrap().control_bounds().unwrap();
+    assert_close([x0, y0, x1, y1], [10.0, 11.0, 40.0, 31.0]);
+    app.ui.tool_options.shape_mode = VectorMode::Shape;
+    assert!(!super::shapes::snaps_to_pixels(&app, ShapeKind::Rectangle), "Shape mode with Align Edges off keeps fractions");
 }
 
 #[test]
 fn a_sub_pixel_drag_still_draws_nothing() {
-    let mut app = app();
-    app.ui.tool_options.align_edges = false;
+    let mut app = app(|o| o.align_edges = false);
     for end in [[10.9, 40.0], [40.0, 10.5]] {
-        assert!(shape_geometry(&app.ui.tool_options, Tool::Rectangle, [10.0, 10.0], end, Modifiers::NONE).is_none());
-        let layers = app.session.active().unwrap().doc.layers.len();
-        finish_shape(&mut app, Tool::Rectangle, [10.0, 10.0], end, Modifiers::NONE);
-        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
+        let layers = layer_count(&app);
+        drag(&mut app, [10.0, 10.0], end, Modifiers::NONE);
+        assert_eq!(layer_count(&app), layers, "{end:?}");
     }
 }
 
 #[test]
 fn reset_tool_turns_it_back_on() {
-    let mut app = app();
-    app.ui.tool_options.align_edges = false;
+    let mut app = app(|o| o.align_edges = false);
     crate::menus::invoke(&mut app, &egui::Context::default(), crate::tool_reset::RESET, json!({})).unwrap();
     assert!(app.ui.tool_options.align_edges);
 }
@@ -139,8 +157,8 @@ fn reset_tool_turns_it_back_on() {
 #[test]
 fn options_bar_shows_align_edges_at_its_right_end() {
     let mut h = harness(Tool::Rectangle);
-    // The Radius caption and its field.
-    let radius = h.query_all_by_label("Radius:").map(|n| n.rect().right()).fold(f32::MIN, f32::max);
+    // The Radius field.
+    let radius = h.query_all_by_label("Radius").map(|n| n.rect().right()).fold(f32::MIN, f32::max);
     let gear = h.get_by_label(GEAR).rect();
     let node = h.get_by_label("Align Edges");
     assert!(node.rect().left() > gear.right() && gear.left() > radius, "{:?} after {gear:?} after the radius ({radius})", node.rect());
@@ -152,9 +170,7 @@ fn options_bar_shows_align_edges_at_its_right_end() {
     assert!(!h.state().ui.tool_options.align_edges, "clicking toggles the option");
     assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(Toggled::False));
 
-    for mode in ["path", "pixels"] {
-        h.state_mut().ui.tool_options.shape_mode = mode.into();
-        h.run_steps(4);
-        assert!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), "greyed in {mode} mode");
-    }
+    h.state_mut().ui.tool_options.shape_mode = VectorMode::Path;
+    h.run_steps(4);
+    assert!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), "greyed in Path mode");
 }
