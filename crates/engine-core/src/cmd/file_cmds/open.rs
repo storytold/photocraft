@@ -73,8 +73,29 @@ pub(crate) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io:
 /// [`import_result_with`], also telling whether a PSD/PSB had damaged data it recovered from, as
 /// File › Open's job learns it (`photocraft_io::import_for_open`), so an interactive caller can ask.
 pub(super) fn import_result_for_open(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<(photocraft_io::ImportResult, bool)> {
+    import_result_for_open_in(name, bytes, opts, &photocraft_raster::Interrupt::NONE)
+}
+
+pub(crate) fn import_result_with_interrupt(
+    name: &str,
+    bytes: &[u8],
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<photocraft_io::ImportResult> {
+    import_result_for_open_in(name, bytes, opts, ctl).map(|(result, _)| result)
+}
+
+fn import_result_for_open_in(
+    name: &str,
+    bytes: &[u8],
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt<'_>,
+) -> Result<(photocraft_io::ImportResult, bool)> {
     crate::allocation::checkpoint("importing document")?;
-    let (r, damaged) = photocraft_io::import_for_open(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
+    let (r, damaged) = photocraft_io::import_for_open_with(name, bytes, opts, ctl).map_err(|error| match error {
+        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+        error => crate::error::io_open_error(name, error),
+    })?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.
     // Open has its own warning-preserving path; never silently place or process a thumbnail.
     if r.preview_only {
@@ -367,6 +388,18 @@ fn place_input(s: &mut Session, input: PlaceInput) -> Result<Value> {
     crate::jobs::run_stepped(s, &label, true, PlaceSteps::new(input, s.cooperative_jobs()), apply_place)
 }
 
+/// Parse one picker-approved encoded revision shared by Place Linked and Relink.
+pub(crate) fn expected_source_digest(params: &Value, command: &str) -> Result<Option<[u8; 32]>> {
+    params
+        .get("expectedSourceDigest")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value(value.clone())
+                .map_err(|_| EngineError::BadParams { cmd: command.into(), msg: "expectedSourceDigest must be an array of 32 bytes".into() })
+        })
+        .transpose()
+}
+
 /// The file a place reads.
 pub(super) enum PlaceFile {
     /// Its contents, already read (a dropped or picked file with no path, a script's bytes).
@@ -382,6 +415,7 @@ pub(crate) struct PlaceInput {
     pub(super) name: String,
     pub(super) file: PlaceFile,
     pub(super) linked: Option<String>,
+    pub(super) expected_source_digest: Option<[u8; 32]>,
     pub(super) params: Value,
     pub(super) canvas: (f64, f64),
     /// File › Place Embedded's centre on the selection (`"centerOnSelection"`, #14102): the
@@ -443,7 +477,7 @@ impl PlaceInput {
         let cmd = if linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" };
         let base = crate::jobs::import_options(prefs);
         let parsed = super::sample_order::import_options_from_params(base, p, cmd)?;
-        let opts = if prepare_native_xcf {
+        let opts = if prepare_native_xcf || linked.is_some() {
             parsed
         } else {
             if matches!(parsed.historical_xcf_order, photocraft_io::HistoricalXcfOrder::Explicit(_)) {
@@ -452,12 +486,13 @@ impl PlaceInput {
                     msg: "explicit historical XCF order currently requires raster Place Embedded (smartObject:false, frame:false)".into(),
                 });
             }
-            // Do not change compatible Smart/linked imports until their source
-            // interpretation and linked identity can survive cache eviction.
+            // Embedded Smart/frame Place remains compatible until its separate
+            // historical producer is activated. Linked sources retain their verified order.
             photocraft_io::ImportOptions { historical_xcf_order: base.historical_xcf_order, ..parsed }
         };
         Ok(Self {
             name: name.to_string(),
+            expected_source_digest: expected_source_digest(p, cmd)?,
             canvas,
             on_selection,
             ppi: f64::from(d.doc.resolution_dpi),
@@ -527,6 +562,17 @@ pub(crate) struct Prepared {
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
 pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
     let Prepared { warnings, content, layer_name, label, scale, bounds, smart, frame, deselect } = p;
+    if let LayerContent::Smart(object) = &content
+        && object.historical_xcf_sample_order.is_some()
+        && matches!(object.source, photocraft_doc::SmartSource::Linked { .. })
+    {
+        // The worker's cache is a snapshot. A changed file must not install a fresh linked
+        // layer whose on-disk bytes already differ from that captured interpretation.
+        let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+        let (_, bytes) = crate::smart_cmds::source_bytes(&doc.metadata, &object.source)
+            .ok_or_else(|| EngineError::Other("the linked historical XCF source is unavailable".into()))?;
+        crate::smart_cmds::check_historical_link(object, &bytes)?;
+    }
     let layer = Layer::new(layer_name, content);
     let id = layer.id;
     s.edit(label, move |doc, active| {

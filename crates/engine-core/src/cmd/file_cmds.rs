@@ -52,7 +52,9 @@ pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, wri
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_import_options, open_bytes_as_with_options, place_bytes, raw_defaults};
-pub(crate) use open::{PlaceInput, apply_place, import, import_result_with, import_with_options, tag_exr_colorspace};
+pub(crate) use open::{
+    PlaceInput, apply_place, expected_source_digest, import, import_result_with, import_result_with_interrupt, import_with_options, tag_exr_colorspace,
+};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 pub(crate) use open::{batch_open_notice, batch_open_params, remember_batch_open};
 pub use open_as_smart_object::admit_as_smart_object;
@@ -371,7 +373,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Linked…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame),"historicalXcfSampleOrder":"little-endian|big-endian"? (required for ambiguous historical XCF),"expectedSourceDigest":[u8;32]?}"##,
             native_doc,
             |s, p| place(s, p, true)
         ),
@@ -596,3 +598,6 @@ mod aces_exr_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod historical_linked_place_tests;

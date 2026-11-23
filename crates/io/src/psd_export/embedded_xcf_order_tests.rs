@@ -158,19 +158,32 @@ fn unknown_hints_are_retained_and_known_hints_clear_on_reset_or_rasterization() 
 }
 
 #[test]
-fn external_link_does_not_gain_embedded_order_semantics() {
-    let path = std::env::temp_dir().join(format!("photocraft-psd-external-xcf-{}.xcf", std::process::id()));
+fn external_historical_link_is_embedded_only_from_its_verified_bytes() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("external.xcf");
     let bytes = xcf(true);
     std::fs::write(&path, &bytes).unwrap();
     let mut doc = document(SmartSource::Linked { path: path.to_string_lossy().into_owned() }, Some(Order::LittleEndian));
     let LayerContent::Smart(object) = &mut doc.layers[0].content else { panic!("smart source") };
-    object.historical_xcf_link_digest = Some(*blake3::hash(&bytes).as_bytes());
-    let (file, warnings) = document_to_psd_with(&doc, &PsdExportOptions { read_linked_files: true, ..Default::default() }).unwrap();
-    assert!(warnings.iter().any(|w| w.contains("verified linked-source workflow")), "{warnings:?}");
+    object.historical_xcf_link_digest = Some(crate::linked::historical_xcf_digest(&bytes));
+    let options = PsdExportOptions { read_linked_files: true, ..Default::default() };
+    let (file, warnings) = document_to_psd_with(&doc, &options).unwrap();
+    assert!(!warnings.iter().any(|w| w.contains("written as pixels")), "{warnings:?}");
     let record = &file.layer_info.as_ref().unwrap().layers[0];
+    assert!(record.block(b"SoLd").is_some());
+    assert_eq!(record.block(&crate::smart_xcf_order::PSD_KEY).unwrap().data, crate::smart_xcf_order::encode(Order::LittleEndian));
+    let reopened = crate::import("linked.psd", &file.to_bytes().unwrap()).unwrap().document;
+    assert_eq!(smart(&reopened).historical_xcf_sample_order, Some(Order::LittleEndian));
+    let SmartSource::Linked { path: uuid } = &smart(&reopened).source else { panic!("PSD UUID") };
+    assert_eq!(crate::linked::embedded_payload(&reopened.metadata, uuid).unwrap().1, bytes);
+    std::fs::write(&path, xcf(false)).unwrap();
+    let (rejected, warnings) = document_to_psd_with(&doc, &options).unwrap();
+    assert!(warnings.iter().any(|w| w.contains(crate::linked::HISTORICAL_XCF_LINK_CHANGED)), "{warnings:?}");
+    let record = &rejected.layer_info.as_ref().unwrap().layers[0];
     assert!(record.block(b"SoLd").is_none());
     assert!(record.block(&crate::smart_xcf_order::PSD_KEY).is_none());
-    let unchanged = std::fs::read(&path).unwrap();
-    std::fs::remove_file(path).unwrap();
-    assert_eq!(unchanged, bytes);
+    assert_eq!(std::fs::read(&path).unwrap(), xcf(false));
+    // A caller that forbids external reads still gets the existing stored-pixel fallback.
+    let (_, warnings) = document_to_psd_with(&doc, &PsdExportOptions { read_linked_files: false, ..Default::default() }).unwrap();
+    assert!(warnings.iter().any(|w| w.contains("not read for this export")));
 }

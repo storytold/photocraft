@@ -889,16 +889,18 @@ impl Ex<'_> {
     fn smart_source(&mut self, sm: &photocraft_doc::SmartObject, template: Option<&crate::smart_map::Placed>) -> Result<Source, String> {
         use photocraft_doc::SmartSource;
         if sm.historical_xcf_sample_order.is_some()
-            && let photocraft_doc::SmartSource::Linked { path } = &sm.source
+            && let SmartSource::Linked { path } = &sm.source
         {
-            // This slice permits PSD's embedded UUIDs only; never grant an external link a choice.
+            let expected = sm.historical_xcf_link_digest.ok_or("the historical XCF link needs a verified sample-order choice")?;
             let blocks = self.smart.globals.iter().map(|(_, key, data)| (key, data.as_slice()));
-            let (_, bytes) = crate::linked::embedded_payload_in_blocks(blocks, path)
-                .ok_or("historical XCF order on an external link requires a verified linked-source workflow")?;
-            let digest = *self.smart.historical_xcf_digests.entry(path.clone()).or_insert_with(|| *blake3::hash(bytes).as_bytes());
-            if sm.historical_xcf_link_digest != Some(digest) {
-                return Err("the embedded historical XCF bytes no longer match their saved interpretation".into());
+            if let Some((_, bytes)) = crate::linked::embedded_payload_in_blocks(blocks, path) {
+                let digest = *self.smart.historical_xcf_digests.entry(path.clone()).or_insert_with(|| crate::linked::historical_xcf_digest(bytes));
+                if expected != digest {
+                    return Err(crate::linked::HISTORICAL_XCF_LINK_CHANGED.into());
+                }
             }
+            // External files are read once under read_linked_files/path policy below, then
+            // authenticated before either preview decoding or embedding those same bytes.
         }
         let preview = self.smart.vector_preview(sm).and_then(|preview| Some((preview.document.clone(), preview.frame?)));
         let mut source = match &sm.source {
@@ -949,7 +951,12 @@ impl Ex<'_> {
                     // and one to a device such as `/dev/zero` would never end (#8601).
                     let bytes = photocraft_format::read_file(&file).map_err(|e| format!("the linked file {path} can't be read: {e}"))?;
                     let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
-                    let source = self.embed(sm.contents_id, &name, &bytes, true)?;
+                    let source = if sm.historical_xcf_sample_order.is_some() {
+                        crate::linked::check_historical_xcf_digest(sm.historical_xcf_link_digest, &bytes).map_err(str::to_owned)?;
+                        self.embed_hashed(sm.contents_id, &name, &bytes, true, crate::linked::historical_xcf_digest(&bytes), sm.historical_xcf_sample_order)?
+                    } else {
+                        self.embed(sm.contents_id, &name, &bytes, true)?
+                    };
                     self.warnings.push(format!("the linked smart object {name} was embedded (PSD export keeps no external links)"));
                     Ok(source)
                 }

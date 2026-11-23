@@ -289,10 +289,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_smart,
             export_contents
         ),
-        spec!("layer.smartObjects.relinkToFile", "Relink to File…", SO, r##"{"layer":id?,"path":str}"##, has_smart, |s, p| {
-            let path = path_param("layer.smartObjects.relinkToFile", p)?.to_string();
-            set_source(s, p, "Relink to File", false, |_, _| Ok(SmartSource::Linked { path }))
-        }),
+        spec!(
+            "layer.smartObjects.relinkToFile",
+            "Relink to File…",
+            SO,
+            r##"{"layer":id?,"path":str,"historicalXcfSampleOrder":"little-endian"|"big-endian"?,"expectedSourceDigest":[u8;32]?}"##,
+            has_smart,
+            contents::relink_to_file
+        ),
         spec!("layer.smartObjects.updateModifiedContent", "Update Modified Content", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
             let id = layer_param(s, p)?;
             s.edit("Update Modified Content", |doc, _| refresh_or_fail(doc, id))?;
@@ -340,16 +344,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.convertToLinked",
             "Convert to Linked…",
             SO,
-            r##"{"layer":id?,"path":str} (writes the contents there)"##,
+            r##"{"layer":id?,"path":str} (writes and verifies the source's recorded interpretation)"##,
             has_smart,
-            |s, p| {
-                let path = path_param("layer.smartObjects.convertToLinked", p)?.to_string();
-                set_source(s, p, "Convert to Linked", false, |meta, src| {
-                    let (_, bytes) = source_bytes(meta, src).ok_or_else(|| other("the smart object's contents are unavailable"))?;
-                    crate::file_cmds::write_file(&path, &bytes)?;
-                    Ok(SmartSource::Linked { path })
-                })
-            }
+            contents::convert_to_linked
         ),
         // Smart filters
         spec!(

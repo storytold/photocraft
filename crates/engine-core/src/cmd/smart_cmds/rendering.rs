@@ -351,10 +351,10 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 /// Reject annotations on linked bytes before classification, preview substitution or cache lookup.
 pub(super) fn check_historical_link(sm: &SmartObject, bytes: &[u8]) -> Result<()> {
     if matches!(sm.source, SmartSource::Linked { .. }) && sm.historical_xcf_sample_order.is_some() {
-        let expected = sm.historical_xcf_link_digest.ok_or_else(|| other("the historical XCF link needs a verified sample-order choice"))?;
-        if expected != *blake3::hash(bytes).as_bytes() {
-            return Err(other("the linked historical XCF bytes changed; relink and choose their sample byte order"));
-        }
+        let expected = sm
+            .historical_xcf_link_digest
+            .ok_or_else(|| EngineError::HistoricalXcfLinkChanged("the historical XCF link needs a verified sample-order choice".into()))?;
+        photocraft_io::linked::check_historical_xcf_digest(Some(expected), bytes).map_err(|message| EngineError::HistoricalXcfLinkChanged(message.into()))?;
     }
     Ok(())
 }
@@ -662,6 +662,19 @@ fn refresh_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<bool> {
 
 pub(super) fn refresh_or_fail(doc: &mut Document, id: LayerId) -> Result<()> {
     refresh_or_fail_in(doc, id, &JobCtx::new())
+}
+
+/// A source-changing transaction renders every instance from its one verified read.
+pub(super) fn refresh_or_fail_from_source(doc: &mut Document, id: LayerId, ctx: &JobCtx, source: (String, Arc<Vec<u8>>)) -> Result<()> {
+    ctx.check()?;
+    let mut layer = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Smart(object) = &mut layer.content else { return Err(other("the layer is not a smart object")) };
+    let surface = render_in_with_source(doc, object, ctx, Some(source))?.ok_or_else(|| other("the smart object's contents could not be rendered"))?;
+    ctx.check()?;
+    object.cache = Some(surface);
+    let target = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    target.content = layer.content;
+    Ok(())
 }
 
 pub(super) fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) -> Result<()> {

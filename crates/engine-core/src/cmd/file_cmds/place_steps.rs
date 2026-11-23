@@ -34,6 +34,7 @@ pub(crate) struct PlaceSteps {
     /// Where the placed image lands, known once it is decoded.
     plan: Plan,
     warnings: Vec<String>,
+    historical_order: Option<photocraft_doc::HistoricalXcfSampleOrder>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -64,7 +65,7 @@ impl PlaceSteps {
     /// `fine` cuts the work into pieces of a few milliseconds, as a session without worker
     /// threads needs; without it each stage is one unit of work.
     pub(crate) fn new(input: PlaceInput, fine: bool) -> Self {
-        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default(), warnings: Vec::new() }
+        Self { input, bytes: Arc::new(Vec::new()), fine, stage: Stage::Decode, plan: Plan::default(), warnings: Vec::new(), historical_order: None }
     }
 
     /// An import error as the engine reports it: a cancel stays one and a refused memory budget
@@ -148,6 +149,9 @@ impl PlaceSteps {
                 Arc::new(bytes)
             }
         };
+        if self.input.expected_source_digest.is_some_and(|expected| expected != photocraft_io::linked::historical_xcf_digest(&self.bytes)) {
+            return Err(EngineError::SourceChanged { name: self.input.name.clone() });
+        }
         let (name, fmt) = (&self.input.name, self.input.fmt);
         crate::memory_gate::ensure(&format!("place \u{201c}{}\u{201d}", file_name(name)), crate::memory_gate::place_need(&self.bytes, fmt.bytes_per_pixel()))?;
         // A path isn't read when the input is made, so whether it is a vector source is decided now.
@@ -165,6 +169,10 @@ impl PlaceSteps {
                 self.input.name
             )));
         }
+        self.historical_order = imported.historical_xcf_sample_order.map(|order| match order {
+            photocraft_io::HistoricalXcfSampleOrder::BigEndian => photocraft_doc::HistoricalXcfSampleOrder::BigEndian,
+            photocraft_io::HistoricalXcfSampleOrder::LittleEndian => photocraft_doc::HistoricalXcfSampleOrder::LittleEndian,
+        });
         self.warnings = imported.warnings;
         let src = imported.document;
         let (w, h) = (src.size.width as f64, src.size.height as f64);
@@ -261,6 +269,10 @@ impl PlaceSteps {
                 None => SmartSource::Embedded { file_name: file_name(&input.name), bytes: Arc::clone(&self.bytes) },
             };
             let mut so = SmartObject::new(source, placement, px);
+            so.historical_xcf_sample_order = self.historical_order;
+            if input.linked.is_some() && self.historical_order.is_some() {
+                so.historical_xcf_link_digest = Some(photocraft_io::linked::historical_xcf_digest(&self.bytes));
+            }
             // A vector source (SVG) or a frame's image renders at its placement scale instead of
             // as a resampled raster.
             if let Some(doc) = &input.doc {

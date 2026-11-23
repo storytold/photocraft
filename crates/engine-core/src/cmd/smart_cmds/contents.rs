@@ -253,3 +253,6 @@ mod initial_view_tests;
 
 #[cfg(test)]
 mod command_validation_tests;
+
+mod historical_link;
+pub(super) use historical_link::{convert_to_linked, relink_to_file};
