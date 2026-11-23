@@ -403,13 +403,15 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             let bl = &s.black;
             let periodic = bl.delta_h.is_empty() && bl.delta_v.is_empty() && matches!(bl.rows, 1 | 2) && matches!(bl.cols, 1 | 2) && cfa.width <= 16;
             let period = if cfa.width % 2 == 0 { cfa.width.max(2) } else { cfa.width * 2 };
-            let fill_row = |iy: usize, row: &mut [f32]| {
+            // One normalized CFA row (image row `iy` of the crop), scaled by `gains` and limited to
+            // `0..=top`. `fill_row` is the balanced row clipped at white.
+            let fill_with = |iy: usize, row: &mut [f32], gains: [f32; 3], top: f32| {
                 let y = c.y + iy;
                 let fill_scalar = |row: &mut [f32]| {
                     for (i, v) in row.iter_mut().enumerate() {
                         let x = c.x + i;
                         let ch = usize::from(cfa.color(x, y)).min(2);
-                        *v = (sc.value(x, y, 0) * mult[ch]).clamp(0.0, 1.0);
+                        *v = (sc.value(x, y, 0) * gains[ch]).clamp(0.0, top);
                     }
                 };
                 if periodic && s.float_data.is_none() && s.polynomials.is_empty() {
@@ -425,7 +427,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                             if !(range.is_finite() && range > 0.0 && black.is_finite()) {
                                 return (0.0, 0.0);
                             }
-                            let gain = mult[usize::from(cfa.color(x, y)).min(2)] / range;
+                            let gain = gains[usize::from(cfa.color(x, y)).min(2)] / range;
                             // Scalar normalization rejects a non-finite quotient before
                             // white balance. A finite gain alone does not prove that
                             // every U16 numerator divided by this range stays finite.
@@ -442,13 +444,13 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                         match &sc.lin {
                             None => {
                                 for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                    *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
+                                    *v = ((f32::from(raw) - black) * gain).clamp(0.0, top);
                                 }
                             }
                             Some(l) => {
                                 for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
                                     let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
-                                    *v = ((lin - black) * gain).clamp(0.0, 1.0);
+                                    *v = ((lin - black) * gain).clamp(0.0, top);
                                 }
                             }
                         }
@@ -462,42 +464,78 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 // highlights stay neutral.
                 if let Some(g) = gain_row(s, y, c.x, w, 0) {
                     for (v, g) in row.iter_mut().zip(g) {
-                        *v = (*v * g).clamp(0.0, 1.0);
+                        *v = (*v * g).clamp(0.0, top);
                     }
                 }
             };
+            let fill_row = |iy: usize, row: &mut [f32]| fill_with(iy, row, mult, 1.0);
+            // The shared demosaics see the balanced mosaic unclipped: a red or blue sample the
+            // sensor measured is kept even where white balance lifts it past white. Where the
+            // sensor did clip, the frame is developed whole and the clipped highlights rebuilt
+            // (`develop_rebuilt`); clipping after white balance stays only as the fallback for a
+            // frame too large to rebuild within the memory limit.
+            let open_row = |iy: usize, row: &mut [f32]| fill_with(iy, row, mult, f32::INFINITY);
+            let shared_method = match opts.demosaic {
+                Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+            };
+            let shared = matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd);
+            let clipped = shared && sensor_clipped(w, h, band, &|iy, row| fill_with(iy, row, [1.0; 3], f32::INFINITY));
+            let rebuild = if clipped {
+                let method = if bayer { shared_method } else { craft_develop::sensor::Method::Bilinear };
+                if rebuild_fits(w, h, method, orient_copy, &opts.limits) {
+                    Some(method)
+                } else {
+                    warnings.push("clipped highlights are clipped, not rebuilt: the frame is too large to rebuild within the memory limit".into());
+                    None
+                }
+            } else {
+                None
+            };
+            // Rows for the shared demosaics when nothing is rebuilt.
+            let shared_row = |iy: usize, row: &mut [f32]| if clipped { fill_row(iy, row) } else { open_row(iy, row) };
+            let cfa_at = |p: Vec<u8>, cw: usize, ch: usize| craft_develop::sensor::Cfa { width: cw, height: ch, pattern: p, origin_x: 0, origin_y: 0 };
+            let rebuilt = |method, cw, ch, p: Vec<u8>| {
+                develop_rebuilt(w, h, band, cfa_at(p, cw, ch), method, mult, &|iy, row| fill_with(iy, row, [1.0; 3], f32::INFINITY))
+            };
             let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
-            if bayer && fused && matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+            if bayer && fused && shared {
                 let p = cfa.phase(c.x, c.y);
                 pattern = Some(names(&p));
-                let method = match opts.demosaic {
-                    Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
-                    Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
-                };
+                let method = shared_method;
                 let mut o = vec![0u16; w * h * 3];
-                par::chunks_mut_grouped(&mut o, band * w * 3, jobs, |b, chunk| {
-                    let y0 = b * band;
-                    let rows = chunk.len() / (w * 3);
-                    let y_start = y0.saturating_sub(PAD);
-                    let y_end = (y0 + rows + PAD).min(h);
-                    let sh = y_end - y_start;
-                    let mut strip = vec![0.0f32; w * sh];
-                    for (r, row) in strip.chunks_exact_mut(w).enumerate() {
-                        fill_row(y_start + r, row);
-                    }
-                    let norm = craft_develop::sensor::Normalized {
-                        width: w,
-                        height: sh,
-                        cpp: 1,
-                        data: strip,
-                        cfa: Some(craft_develop::sensor::Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: y_start % 2 }),
-                    };
-                    let dem = craft_develop::sensor::demosaic(&norm, method);
-                    let top_pad = y0 - y_start;
-                    let dem_f32: Vec<f32> = dem.data[top_pad * w..(top_pad + rows) * w].iter().flat_map(|px| *px).collect();
-                    encode_plain(&dem_f32, chunk);
-                });
-                fused_out = Some(o);
+                if let Some(method) = rebuild {
+                    let rgb = rebuilt(method, 2, 2, p.to_vec());
+                    par::chunks_mut(&mut o, band * w * 3, |b, chunk| {
+                        let start = b * band * w * 3;
+                        encode_plain(&rgb[start..start + chunk.len()], chunk);
+                    });
+                    fused_out = Some(o);
+                } else {
+                    par::chunks_mut_grouped(&mut o, band * w * 3, jobs, |b, chunk| {
+                        let y0 = b * band;
+                        let rows = chunk.len() / (w * 3);
+                        let y_start = y0.saturating_sub(PAD);
+                        let y_end = (y0 + rows + PAD).min(h);
+                        let sh = y_end - y_start;
+                        let mut strip = vec![0.0f32; w * sh];
+                        for (r, row) in strip.chunks_exact_mut(w).enumerate() {
+                            shared_row(y_start + r, row);
+                        }
+                        let norm = craft_develop::sensor::Normalized {
+                            width: w,
+                            height: sh,
+                            cpp: 1,
+                            data: strip,
+                            cfa: Some(craft_develop::sensor::Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: y_start % 2 }),
+                        };
+                        let dem = craft_develop::sensor::demosaic(&norm, method);
+                        let top_pad = y0 - y_start;
+                        let dem_f32: Vec<f32> = dem.data[top_pad * w..(top_pad + rows) * w].iter().flat_map(|px| *px).collect();
+                        encode_plain(&dem_f32, chunk);
+                    });
+                    fused_out = Some(o);
+                }
             } else if bayer && fused {
                 // No padded plane either: every band normalizes its own rows.
                 let p = cfa.phase(c.x, c.y);
@@ -505,7 +543,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 let mut o = vec![0u16; w * h * 3];
                 demosaic_fused(w, h, p, opts.demosaic, &to_xyz, jobs, &fill_row, &mut o, &encode_plain);
                 fused_out = Some(o);
-            } else if matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+            } else if shared {
                 let (cfa_w, cfa_h, cfa_pat) = if bayer {
                     let p = cfa.phase(c.x, c.y);
                     pattern = Some(names(&p));
@@ -515,29 +553,20 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                     pattern = Some(pat.colors.chunks(pat.w.max(1)).map(names).collect::<Vec<_>>().join("/"));
                     (pat.w, pat.h, pat.colors)
                 };
-                let mut norm_data = vec![0.0f32; w * h];
-                par::chunks_mut(&mut norm_data, band * w, |b, chunk| {
-                    for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
-                        fill_row(b * band + r, row);
-                    }
-                });
-                let norm = craft_develop::sensor::Normalized {
-                    width: w,
-                    height: h,
-                    cpp: 1,
-                    data: norm_data,
-                    cfa: Some(craft_develop::sensor::Cfa { width: cfa_w, height: cfa_h, pattern: cfa_pat, origin_x: 0, origin_y: 0 }),
-                };
-                let method = if !bayer {
-                    craft_develop::sensor::Method::Bilinear
+                if let Some(method) = rebuild {
+                    rgb = rebuilt(method, cfa_w, cfa_h, cfa_pat);
                 } else {
-                    match opts.demosaic {
-                        Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
-                        Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
-                    }
-                };
-                let dem = craft_develop::sensor::demosaic(&norm, method);
-                rgb = dem.data.into_iter().flatten().collect();
+                    let mut norm_data = vec![0.0f32; w * h];
+                    par::chunks_mut(&mut norm_data, band * w, |b, chunk| {
+                        for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
+                            shared_row(b * band + r, row);
+                        }
+                    });
+                    let norm = craft_develop::sensor::Normalized { width: w, height: h, cpp: 1, data: norm_data, cfa: Some(cfa_at(cfa_pat, cfa_w, cfa_h)) };
+                    let method = if bayer { shared_method } else { craft_develop::sensor::Method::Bilinear };
+                    let dem = craft_develop::sensor::demosaic(&norm, method);
+                    rgb = dem.data.into_iter().flatten().collect();
+                }
             } else {
                 let mut plane = Padded::new(w, h);
                 let stride = plane.stride;
@@ -650,6 +679,89 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
         },
         warnings,
     })
+}
+
+/// The normalized sensor level from which a sample counts as clipped (as LightCraft's develop).
+const SENSOR_CLIP: f32 = 0.99;
+
+/// Whether any sample of the crop reaches [`SENSOR_CLIP`]; `sensor_row` fills one row of
+/// normalized sensor values (before white balance, not clipped).
+fn sensor_clipped(w: usize, h: usize, band: usize, sensor_row: &(impl Fn(usize, &mut [f32]) + Sync)) -> bool {
+    let mut bands = vec![false; h.div_ceil(band.max(1))];
+    par::chunks_mut(&mut bands, 1, |b, hit| {
+        let mut row = vec![0.0f32; w];
+        let rows = b * band..((b + 1) * band).min(h);
+        hit[0] = rows.into_iter().any(|y| {
+            sensor_row(y, &mut row);
+            row.iter().any(|v| *v >= SENSOR_CLIP)
+        });
+    });
+    bands.contains(&true)
+}
+
+/// Bytes [`develop_rebuilt`] holds at its peak, plus the encode that follows it.
+fn rebuild_bytes(w: usize, h: usize, method: craft_develop::sensor::Method, orient_copy: bool) -> u64 {
+    let pixels = (w as u64).saturating_mul(h as u64);
+    // The mosaic, its clip mask, the RGB frame, and the highlight rebuild's half-resolution
+    // pyramids (well under 16 bytes a pixel), next to the whole-frame demosaic's own buffers.
+    let ahd = method == craft_develop::sensor::Method::Ahd;
+    let rebuild = pixels.saturating_mul(4 + 1 + 12 + 16).saturating_add(shared_bayer_peak(w, h, h, ahd, 1, 1));
+    // Then the RGB frame and the encoded output (and its oriented copy).
+    let encode = pixels.saturating_mul(if orient_copy { 24 } else { 18 });
+    rebuild.max(encode).saturating_add((GAMMA_STEPS as u64 + 2) * 4)
+}
+
+fn rebuild_fits(w: usize, h: usize, method: craft_develop::sensor::Method, orient_copy: bool, limits: &Limits) -> bool {
+    let need = rebuild_bytes(w, h, method, orient_copy);
+    need <= limits.max_alloc && usize::try_from(need).is_ok()
+}
+
+/// The balanced RGB frame (interleaved) of a CFA mosaic with clipped samples, developed as
+/// LightCraft does: demosaiced white-balanced and unclipped, then the channels that depend on
+/// clipped samples rebuilt from nearby reliable colour with the shared clip mask. Fully clipped
+/// areas come out neutral, partly clipped ones keep the colour around them.
+fn develop_rebuilt(
+    w: usize,
+    h: usize,
+    band: usize,
+    cfa: craft_develop::sensor::Cfa,
+    method: craft_develop::sensor::Method,
+    mult: [f32; 3],
+    sensor_row: &(impl Fn(usize, &mut [f32]) + Sync),
+) -> Vec<f32> {
+    use craft_develop::sensor::{self, highlight};
+    let mut data = vec![0.0f32; w * h];
+    par::chunks_mut(&mut data, band * w, |b, chunk| {
+        for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
+            sensor_row(b * band + r, row);
+        }
+    });
+    let mut n = sensor::Normalized { width: w, height: h, cpp: 1, data, cfa: Some(cfa) };
+    let mask = sensor::clip_mask(&n, sensor::Rect::new(0, 0, w, h), method, SENSOR_CLIP);
+    if let Some(cfa) = &n.cfa {
+        let cfa = cfa.clone();
+        par::chunks_mut(&mut n.data, band * w, |b, chunk| {
+            for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
+                for (x, v) in row.iter_mut().enumerate() {
+                    *v *= mult[usize::from(cfa.color_at(x, b * band + r)).min(2)];
+                }
+            }
+        });
+    }
+    let mut rgb = sensor::demosaic(&n, method);
+    drop(n);
+    if let Some(mask) = mask {
+        let unbalance = |px: &mut [f32; 3], k: fn(f32, f32) -> f32| {
+            for c in 0..3 {
+                px[c] = k(px[c], mult[c]);
+            }
+        };
+        rgb.data.iter_mut().for_each(|px| unbalance(px, |v, m| v / m));
+        // Balanced camera RGB [1, 1, 1] is the colour model's white.
+        highlight::reconstruct_masked(&mut rgb, mult, SENSOR_CLIP, [1.0; 3], &mask);
+        rgb.data.iter_mut().for_each(|px| unbalance(px, |v, m| v * m));
+    }
+    rgb.data.into_flattened()
 }
 
 /// How the frame is developed, for [`working_memory`].
@@ -1038,6 +1150,82 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A 48 x 48 RGGB sensor whose normalized samples are `scene(x, y)` for the CFA colour at
+    /// (x, y), developed with white-balance multipliers (2, 1, 2) and 2 EV under.
+    fn develop_scene(scene: impl Fn(usize, usize, usize) -> f32, method: Demosaic, fused: bool, limits: Option<Limits>) -> Developed {
+        let (w, h) = (48, 48);
+        let mut s = test_sensor(w, h, crate::Cfa::bayer("RGGB"), 1);
+        let cfa = s.cfa.clone().unwrap();
+        s.data = (0..w * h).map(|i| (64.0 + scene(i % w, i / w, usize::from(cfa.color(i % w, i / w))) * 3936.0).round() as u16).collect();
+        let mut opts = DevelopOptions { demosaic: method, white_balance: WhiteBalance::Multipliers([2.0, 1.0, 2.0]), exposure: -2.0, ..Default::default() };
+        if let Some(l) = limits {
+            opts.limits = l;
+        }
+        develop(&s, &opts, fused).unwrap()
+    }
+
+    fn centre(d: &Developed) -> [u16; 3] {
+        let i = (24 * d.width as usize + 24) * 3;
+        [d.rgb[i], d.rgb[i + 1], d.rgb[i + 2]]
+    }
+
+    #[test]
+    fn red_lifted_past_white_by_white_balance_keeps_its_measured_level() {
+        // Red measured at 0.8 of white is 1.6 after balance; 0.5 is exactly white. The sensor
+        // clipped neither, so the brighter red must stay brighter.
+        for method in [Demosaic::Ahd, Demosaic::Bilinear] {
+            for fused in [true, false] {
+                let red = |r: f32| develop_scene(move |_, _, c| if c == 0 { r } else { 0.2 }, method, fused, None);
+                let (bright, white) = (centre(&red(0.8)), centre(&red(0.5)));
+                assert!(bright[0] > white[0], "{method:?} fused {fused}: red {} not above {}", bright[0], white[0]);
+            }
+        }
+    }
+
+    /// Green clipped by the sensor in a disc, red and blue measured below white there; a grey
+    /// surround. Returns the centre pixel and the development's warnings.
+    fn clipped_green_disc(method: Demosaic, fused: bool, limits: Option<Limits>) -> ([u16; 3], Vec<String>) {
+        let disc = |x: usize, y: usize| (x as f32 - 24.0).powi(2) + (y as f32 - 24.0).powi(2) < 100.0;
+        let d = develop_scene(
+            |x, y, c| match (disc(x, y), c) {
+                (true, 1) => 1.0,
+                (true, _) => 0.6,
+                (false, 1) => 0.4,
+                (false, _) => 0.2,
+            },
+            method,
+            fused,
+            limits,
+        );
+        (centre(&d), d.warnings)
+    }
+
+    fn spread(p: [u16; 3]) -> f32 {
+        let (lo, hi) = (p.iter().min().copied().unwrap_or(0), p.iter().max().copied().unwrap_or(0));
+        f32::from(hi - lo) / f32::from(hi.max(1))
+    }
+
+    #[test]
+    fn highlights_the_sensor_clipped_are_rebuilt_neutral() {
+        for method in [Demosaic::Ahd, Demosaic::Bilinear] {
+            for fused in [true, false] {
+                let (p, warnings) = clipped_green_disc(method, fused, None);
+                // Unclipped, the balanced disc is (1.2, 1, 1.2): magenta.
+                assert!(spread(p) < 0.03, "{method:?} fused {fused}: clipped green disc {p:?} is not neutral");
+                assert!(!warnings.iter().any(|w| w.contains("not rebuilt")), "{method:?} fused {fused}: {warnings:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_frame_too_large_to_rebuild_clips_after_white_balance_and_says_so() {
+        let need = rebuild_bytes(48, 48, craft_develop::sensor::Method::Bilinear, false);
+        let limits = Limits { max_alloc: need - 1, ..Limits::default() };
+        let (p, warnings) = clipped_green_disc(Demosaic::Bilinear, false, Some(limits));
+        assert!(warnings.iter().any(|w| w.contains("not rebuilt")), "{warnings:?}");
+        assert!(spread(p) < 0.03, "clipped after balance, the disc stays neutral: {p:?}");
     }
 
     #[test]
