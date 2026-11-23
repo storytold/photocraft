@@ -1831,6 +1831,26 @@ fn duplicating_a_clipped_layer_without_its_base_joins_the_block() {
     assert_eq!(crate::clip_group::base_of(doc(&s), clipped), Some(base), "the original keeps its base");
 }
 
+/// #14631: the block can put a group's copy one level deeper than the group, inside the topmost
+/// original's group. Past the nesting limit that is refused, and the document is untouched.
+#[test]
+fn duplicating_into_a_deeper_block_is_capped_at_the_nesting_limit() {
+    let mut s = session(8);
+    let deep = rect_layer(&mut s, Rect::new(0, 0, 3, 3));
+    select_all(&mut s, &[deep]);
+    for _ in 0..photocraft_doc::MAX_GROUP_DEPTH {
+        s.execute("layer.groupLayers", json!({})).unwrap();
+    }
+    let outer = s.active().unwrap().active_layer.unwrap();
+    let inner = rect_layer(&mut s, Rect::new(2, 2, 6, 6));
+    s.execute("layer.groupLayers", json!({"layer": inner.0})).unwrap();
+    select_all(&mut s, &[outer, inner]);
+    let before = doc(&s).clone();
+    let err = s.execute("layer.duplicate", json!({})).unwrap_err();
+    assert!(err.to_string().contains("deeper than"), "{err}");
+    assert_eq!(*doc(&s), before, "nothing was copied");
+}
+
 #[test]
 fn duplicate_hide_lock_and_reverse_selected() {
     let mut s = session(8);

@@ -306,6 +306,8 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
             copies.push(nid);
         }
         relink_copies(doc, &copies)?;
+        // The block can put a group's copy deeper than the group itself.
+        check_group_depth(doc, label)?;
         let a = new_active.or(copies.last().copied());
         *active = a;
         Ok((copies, a))
