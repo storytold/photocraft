@@ -1,9 +1,18 @@
-# Windows, Linux and macOS release-ref nightly: source preparation
+# Windows, Linux and macOS release-ref nightly: supervised manual go-live
 
-**Not activated or qualified.** No production signing policy is installed. The producer and
-signer workflows are dormant `.yml` registrations, not an activated signing pipeline.
-All three jobs remain literally disabled. There is no
-schedule or platform secret grant. The unsigned reusable caller's maximum OIDC/attestation
+**Enabled for supervised manual runs, not yet qualified.** The producer (`nightly.yml`, main) and the
+signer (`nightly-sign.yml`, release) keep only their exact context guards and run when the reviewed
+manual actor dispatches them. `nightly-dispatch.yml` stays literally off and there is no schedule:
+it only forwards scheduled producers. The installed policy
+[`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is real v3 except
+that `producer_workflow_id` is `null` until `nightly.yml` is registered on main. Read it then
+and commit it before the policy reaches `release`:
+
+```bash
+gh api repos/storytold/photocraft/actions/workflows/nightly.yml --jq .id
+```
+
+The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
 Shared tooling is pinned to `a4f6fd51e854773de8b24b4f92e1ad7e770c08d7`, the craft-common-actions
@@ -13,9 +22,23 @@ and `tooling-revision`; the earlier pin, `077d4657` (#330), is Windows-only. A p
 source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
 
-**Platform rows (dormant).** The producer caller lists
-`platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'` on its single, still literally-off
-job: one producer run builds every listed platform for one all-or-nothing release (one failed or
+**First runs.** The first runs are manual dispatches in this order: `nightly.yml` on main (only
+`skylartaylor` passes the producer's plan step), then `nightly-sign.yml` on `release` with that
+producer run ID and attempt. `nightly-dispatch.yml` only matters once a schedule is approved.
+
+**Admission timing.** The candidate check reads the newest CI run on the candidate commit and
+main's latest finished Sonar analysis, so when to dispatch matters:
+- Dispatch the producer only on a main commit pushed after that day's scheduled CI run
+  (03:11 UTC). The scheduled run leaves out most of the 19 required jobs (the Windows legs,
+  git-sources, the test without HEIF and the web build), and if it ran on the same commit it is
+  the newest run there, so admission refuses.
+- The candidate must be main's latest finished Sonar analysis. Pick a quiet main, wait for its
+  CI and SonarCloud analysis to finish green, then dispatch the producer and, once it succeeds,
+  the signer, before another main push lands a newer analysis.
+
+**Platform rows.** The producer caller lists
+`platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'` on its single job: one producer
+run builds every listed platform for one all-or-nothing release (one failed or
 skipped platform stops that night's release, Windows included), and the release-ref signer admits
 platforms only from the protected policy, so there is no separate Linux or macOS caller job and
 the signer caller has no platform input. The shared Linux leg runs the app's
@@ -28,11 +51,34 @@ callers. Neither leg has run on hosted runners: launch, profile isolation beside
 Launcher install still need Linux and macOS desktop QA.
 This is not a hosted no-key test, a native signing result or a working nightly feed.
 
+## Installed policy values and their sources
+
+Read on 2026-11-23; re-read anything that may have moved before the policy is promoted to `release`.
+
+| Field | Value | Source |
+|---|---|---|
+| `repository_id` | `1398080271` | `gh api repos/storytold/photocraft --jq .id` |
+| `producer_workflow_id` | `null` (pending) | Only exists once `nightly.yml` is registered on main |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `a4f6fd51…` (craft-common-actions #342) | The callers' pin |
+| `manual_actors` / `automatic_signer_actors` | `["skylartaylor"]` / `[]` | Go-live checklist; equals the producer caller's `manual-actors` |
+| `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist (Linux tarball is about 126 MB) |
+| `platforms` | three rows | v0.23.1 stable identities, as in the example; the Windows publisher subject was confirmed by reading the stable v0.23.1 `photocraft.exe` Authenticode signature on Windows |
+| `candidate_policy.required_workflows` | CI (`ci.yml`, workflow `371199934`), 19 jobs | Workflow list API; jobs that succeeded on every recent main push run (the only always-run main workflow without path filters) |
+| `candidate_policy.sonar` | `storytold` / `storytold_photocraft`, app `12526` | `sonar-project.properties`; the SonarCloud check on main commits |
+| Sonar conditions | `new_security_rating` accepted (max 5); the other five required | Quality gate of main analysis `1a4ddfda` (commit `6554712c`) |
+| Sonar `issue_types` / `debt` | `VULNERABILITY`; the 8 unresolved main vulnerabilities | `api/issues/search` at the same analysis |
+
+The candidate check refuses whenever main's unresolved vulnerability set differs from `debt`, whether
+an issue is new or fixed, and whenever a required condition fails or a listed CI job is renamed. Refresh
+those values in the same reviewed change that promotes the policy to `release`.
+
 ## Ownership and interface
 
-- `.github/workflows/nightly.yml`: dormant default-main registration for the future unsigned producer,
-  named `PhotoCraft unsigned nightly`; no signing secrets may be passed or inherited.
-- `.github/workflows/nightly-dispatch.yml`: dormant completion transport only. On activation it accepts
+- `.github/workflows/nightly.yml`: default-main registration of the unsigned producer, named
+  `PhotoCraft unsigned nightly`, enabled for manual dispatch by `manual-actors`; no signing secrets
+  may be passed or inherited.
+- `.github/workflows/nightly-dispatch.yml`: completion transport only, still literally off until a
+  schedule is approved. On activation it accepts
   only a successful same-repository/main first scheduled producer attempt, then sends only
   `producer_run_id` and `producer_run_attempt` to the fixed `nightly-sign.yml` on `release`.
   No checkout, artifact parsing, application code or release environment is used here.
@@ -41,11 +87,11 @@ This is not a hosted no-key test, a native signing result or a working nightly f
   `release-signing-key.asc` published with v0.23.1 (one ed25519 primary key,
   `2B76741B414AAD6CD33E631213A005C0B9D7C3ED`, with one signing subkey). The shared Linux verifier
   reads it from the protected release checkout, never from a release asset. Public material only.
-- `.github/workflows/nightly-sign.yml`: dormant top-level registration, intended to be identical on
-  main/release after reviewed promotion. It rejects wrong repository/event/actual branch,
+- `.github/workflows/nightly-sign.yml`: top-level release registration, enabled for manual dispatch,
+  and identical on main and release after reviewed promotion. It rejects wrong repository/event/actual branch,
   including same-name tags. Its constant whole-run concurrency is distinct from stable,
-  cancellation is off and `queue: max` must be hosted-qualified. No credentials can be reached
-  by this preparation.
+  cancellation is off and `queue: max` must be hosted-qualified. The caller itself passes no
+  credentials; only the shared callee's sign jobs bind the `release` environment.
 - Shared reusable entrypoints are `nightly-unsigned.yml` and `nightly-release.yml` in
   `storytold/craft-common-actions`. Both must resolve to a **real reviewed public immutable
   commit**; the defining workflow SHA and tooling input must match. The release callee's
@@ -63,11 +109,12 @@ This is not a hosted no-key test, a native signing result or a working nightly f
   PE/inventory checks and post-sign verification; do not execute `nightly.ps1`, `package.ps1`
   or the payload beside keys. No new wrapper is needed. `sign.ps1` is unchanged here.
 
-## Missing real configuration (all activation blockers)
+## Policy fields and their required authority
 
-`.github/nightly-signing-policy.json` is deliberately absent: there is no authorizing root,
-empty debt set or invented workflow ID, and installing it is a separate activation step. The adjacent
-[`nightly-signing-policy.example.json`](nightly-signing-policy.example.json) is intentionally
+`.github/nightly-signing-policy.json` is installed with the values and sources listed above; its only
+unresolved field is the pending `producer_workflow_id`, so the shared validator refuses it until that
+ID is committed. The adjacent
+[`nightly-signing-policy.example.json`](nightly-signing-policy.example.json) stays intentionally
 invalid (`null` unresolved values), not installable configuration. Its `platforms` rows do carry
 the reviewed public values: each fixed `nightly-unsigned-<platform>` artifact kind and stable's
 identities, read from the v0.23.1 release (Windows Authenticode leaf subject in Windows form,
@@ -135,9 +182,9 @@ were audited by this source change; no secret values were read.
 
 ## Bounded integration and acceptance
 
-1. The callers now reference the same reviewed public preview commit in `uses` and
-   `tooling-revision`. Keep callers/dispatcher literally off through independent qualification
-   and while assembling real policy. Future shared pin updates require review of the exact
+1. The callers reference the same reviewed public commit in `uses` and `tooling-revision`.
+   The producer and signer are enabled only for the reviewed manual actor; the dispatcher stays
+   literally off until a schedule is separately approved. Future shared pin updates require review of the exact
    public immutable source and interface. Do not claim dormant source as a working pipeline.
    Do not temporarily call old same-run signing or use mutable `@main`/`@release` tooling.
    Keep compiler permissions contents and Actions read only, with no OIDC, attestation write,
