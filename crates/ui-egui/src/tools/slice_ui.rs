@@ -1,20 +1,32 @@
-//! Slice tool and Slice Select tool (Crop group, C): drawing new user slices, selecting and
-//! moving slices, the slice overlay (outlines and numbered badges in the Preferences › Guides,
-//! Grid & Slices colour) and both tools' options bars. Every change is an engine command
-//! (`slice.new`, `slice.set`, `slice.promote`, `slice.divide`, `slice.delete`); this module only
-//! turns pointer gestures into them.
+//! Slice tool and Slice Select tool (Crop group, C): the family tool over the framework's `SliceTool`,
+//! the slice overlay, both tools' options bars and the Slice Options and Divide Slice dialogs. Every
+//! change is an engine command (`slice.new`, `slice.set`, `slice.promote`, `slice.divide`,
+//! `slice.delete`); this module only turns the framework's slice events into them.
 
-use egui::{Color32, Rect, Stroke, vec2};
+use craft::behavior::EditEvent;
+use craft::behavior::geometry::Constraint;
+use craft::behavior::kurbo::Rect as DocRect;
+use craft::draw::ui::slice::{
+    DivideBy, DivideSlices, DivideSlicesDialog, SliceBar, SliceCommand, SliceEvent, SliceItem, SliceKind, SliceMode, SliceOptions, SliceOptionsDialog,
+    SliceOrigin as ItemOrigin, SliceOverlay, SliceRules, SliceTool, SliceToolSettings,
+};
+use craft::theme::Srgba;
+use craft::ui::canvas::ToolHostResponse;
+use craft::ui::contract::Show as _;
+use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::runtime::commands::{CommandRef, CommandSet as _, CommandState};
+use photocraft_doc::SliceOrigin;
 use photocraft_doc::slices::{self, ResolvedSlice};
-use photocraft_doc::{Document, SliceOrigin};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::{DialogKind, Tool};
+use crate::canvas::document_display::CanvasHost;
+use crate::canvas::tools::{FamilyTool, ToolScope};
+use crate::state::Tool;
 
-/// Slice tool state (serde: readable through the control channel).
+/// Slice tool state (serde: readable through the control channel; only the selection and Hide Auto
+/// Slices are saved).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SliceUi {
@@ -22,456 +34,454 @@ pub struct SliceUi {
     pub selected: Option<usize>,
     /// Slice Select options bar › Hide Auto Slices.
     pub hide_auto: bool,
+    /// The slice a Move or Resize gesture is dragging, with its proposed rectangle: the overlay paints
+    /// the items it is given, so the gesture's value is fed back until it ends.
     #[serde(skip)]
-    pub drag: Option<SliceDrag>,
+    pub preview: Option<(usize, DocRect)>,
+    /// The open Slice Options dialog and the slice it is for.
+    #[serde(skip)]
+    pub options: Option<(DialogId, SliceTarget)>,
+    /// The open Divide Slice dialog and the slice it is for.
+    #[serde(skip)]
+    pub divide: Option<(DialogId, SliceTarget)>,
 }
 
-/// A gesture in progress.
-#[derive(Clone, Debug, PartialEq)]
-pub enum SliceDrag {
-    New {
-        start: [f64; 2],
-        cur: [f64; 2],
-    },
-    Move {
-        id: u32,
-        start: [f64; 2],
-        cur: [f64; 2],
-        rect: photocraft_geom::Rect,
-    },
-    /// A handle of the selected slice: `handle` is −1, 0 or 1 per axis (the left, untouched or
-    /// right edge; the top, untouched or bottom edge).
-    Resize {
-        id: u32,
-        handle: [i8; 2],
-        start: [f64; 2],
-        cur: [f64; 2],
-        rect: photocraft_geom::Rect,
-    },
+/// What a dialog's command addresses: a stored slice by id, or an auto slice by its number (the
+/// engine promotes it inside the same step).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SliceTarget {
+    /// A stored (user or layer) slice's id.
+    Stored(u32),
+    /// An auto slice's display number.
+    Auto(usize),
 }
 
-/// How far from a handle (screen points) a press still grabs it.
-const HANDLE_REACH: f64 = 5.0;
-
-/// The handle of `r` at document point `p`, within `reach` document pixels: the corners first,
-/// then the edge middles, as the overlay draws them.
-fn handle_at(r: photocraft_geom::Rect, p: [f64; 2], reach: f64) -> Option<[i8; 2]> {
-    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
-    let at = |h: [i8; 2]| {
-        let x = match h[0] {
-            -1 => x0,
-            1 => x1,
-            _ => (x0 + x1) / 2.0,
-        };
-        let y = match h[1] {
-            -1 => y0,
-            1 => y1,
-            _ => (y0 + y1) / 2.0,
-        };
-        (p[0] - x).abs() <= reach && (p[1] - y).abs() <= reach
-    };
-    [[-1, -1], [1, -1], [-1, 1], [1, 1], [0, -1], [0, 1], [-1, 0], [1, 0]].into_iter().find(|h| at(*h))
-}
-
-/// `r` with the edges `handle` grabs moved by (`dx`, `dy`), turned the right way round when an
-/// edge is dragged past the opposite one, and at least 1 × 1.
-fn resized(r: photocraft_geom::Rect, handle: [i8; 2], dx: i32, dy: i32) -> photocraft_geom::Rect {
-    let (mut x0, mut y0, mut x1, mut y1) = (r.x0, r.y0, r.x1, r.y1);
-    match handle[0] {
-        -1 => x0 = x0.saturating_add(dx),
-        1 => x1 = x1.saturating_add(dx),
-        _ => {}
+impl SliceTarget {
+    /// The engine params that address the slice.
+    fn params(self) -> Value {
+        match self {
+            SliceTarget::Stored(id) => json!({"slice": id}),
+            SliceTarget::Auto(n) => json!({"number": n}),
+        }
     }
-    match handle[1] {
-        -1 => y0 = y0.saturating_add(dy),
-        1 => y1 = y1.saturating_add(dy),
-        _ => {}
-    }
-    let (x0, x1) = (x0.min(x1), x0.max(x1).max(x0.min(x1).saturating_add(1)));
-    let (y0, y1) = (y0.min(y1), y0.max(y1).max(y0.min(y1).saturating_add(1)));
-    photocraft_geom::Rect::new(x0, y0, x1, y1)
 }
 
 fn is_slice_tool(t: Tool) -> bool {
     matches!(t, Tool::Slice | Tool::SliceSelect)
 }
 
-/// The slice under a document point: stored slices win (the latest on top), then auto slices.
-pub fn slice_at(doc: &Document, x: f64, y: f64) -> Option<ResolvedSlice> {
-    let all = slices::resolve(doc);
-    let (xi, yi) = (x.floor() as i32, y.floor() as i32);
-    let order = |r: &ResolvedSlice| r.id.and_then(|id| doc.slices.list.iter().position(|s| s.id == id));
-    all.iter().filter(|r| r.rect.contains(xi, yi)).max_by_key(|r| order(r).map_or(0, |i| i + 1)).cloned()
+fn to_doc_rect(r: photocraft_geom::Rect) -> DocRect {
+    DocRect::new(f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1))
 }
 
-fn rect_from(a: [f64; 2], b: [f64; 2]) -> photocraft_geom::Rect {
-    let (x0, x1) = (a[0].min(b[0]).floor() as i32, a[0].max(b[0]).ceil() as i32);
-    let (y0, y1) = (a[1].min(b[1]).floor() as i32, a[1].max(b[1]).ceil() as i32);
-    photocraft_geom::Rect::new(x0, y0, x1, y1)
+fn origin_of(origin: SliceOrigin) -> ItemOrigin {
+    match origin {
+        SliceOrigin::User => ItemOrigin::User,
+        SliceOrigin::Auto => ItemOrigin::Auto,
+        SliceOrigin::Layer => ItemOrigin::Layer,
+    }
 }
 
-/// The new slice drawn from `start` to `cur` under the Slice tool's Style (Normal, Fixed Ratio,
-/// Fixed Size), as the marquee's (#8360). A fixed style is placed on the pixel the press is in.
-/// Fixed Size has exactly its pixels. Fixed Ratio's longer side follows the drag to within a pixel
-/// and the shorter side takes the ratio from it, as close as whole pixels allow: rounding each edge of
-/// a fractional drag apart would make 2 : 1 into 5 × 3, and keeping to whole multiples of the
-/// ratio would grow a 1366 : 768 slice in steps of 683 px.
-fn new_rect(app: &PhotocraftApp, start: [f64; 2], cur: [f64; 2]) -> photocraft_geom::Rect {
+/// The resolved slices of the active document, with the dragged slice at its proposed rectangle.
+fn items(app: &PhotocraftApp) -> Vec<SliceItem> {
+    let Some(st) = app.session.active() else { return Vec::new() };
+    let preview = app.ui.slices.preview;
+    slices::resolve(&st.doc)
+        .iter()
+        .map(|r| {
+            let rect = match preview {
+                Some((n, rect)) if n == r.number => rect,
+                _ => to_doc_rect(r.rect),
+            };
+            SliceItem::new(r.number, r.id, rect, origin_of(r.origin))
+        })
+        .collect()
+}
+
+/// The Style, Width and Height of the options bar as the marquee's constraint, with Hide Auto Slices.
+fn settings(app: &PhotocraftApp) -> SliceToolSettings {
     let o = &app.ui.tool_options;
     let (w, h) = (f64::from(o.slice_width), f64::from(o.slice_height));
-    let size = match o.slice_style.as_str() {
-        "fixedSize" => [w.round().max(1.0), h.round().max(1.0)],
-        "fixedRatio" if w > 0.0 && h > 0.0 => {
-            let end = crate::chrome_ui::marquee_end("fixedRatio", w, h, false, start, cur);
-            let k = (end[0] - start[0]).abs() / w;
-            // A drag shorter than half a pixel is a click: no size.
-            let follow = |long: f64, short: f64| {
-                let l = (k * long).round();
-                [l, if l > 0.0 { (l * short / long).round().max(1.0) } else { 0.0 }]
-            };
-            if w >= h {
-                follow(w, h)
-            } else {
-                let [l, s] = follow(h, w);
-                [s, l]
-            }
-        }
-        _ => return rect_from(start, crate::chrome_ui::marquee_end(&o.slice_style, w, h, false, start, cur)),
+    let style = match o.slice_style.as_str() {
+        "fixedRatio" => Constraint::Ratio(w, h),
+        "fixedSize" => Constraint::Size(w, h),
+        _ => Constraint::Free,
     };
-    // The drag's extent and direction are from the press itself; only the slice is placed on the
-    // pixel the press is in.
-    let sign = |d: f64| if d < 0.0 { -1.0 } else { 1.0 };
-    // A slice drawn left or up grows from the far side of that pixel, so it holds the pixel: the
-    // edges a Normal slice gets from the same press (`rect_from`), also on a pixel's edge.
-    let dir = [sign(cur[0] - start[0]), sign(cur[1] - start[1])];
-    let corner = [0, 1].map(|i| if dir[i] < 0.0 { start[i].ceil() } else { start[i].floor() });
-    rect_from(corner, [corner[0] + dir[0] * size[0], corner[1] + dir[1] * size[1]])
+    let mut s = SliceToolSettings::new(style);
+    s.hide_auto = app.ui.slices.hide_auto;
+    s
 }
 
-/// Pointer input for the two slice tools. Returns true when the event was theirs.
-pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, _mods: egui::Modifiers) -> bool {
-    let tool = app.ui.tool;
-    if !is_slice_tool(tool) {
-        return false;
+/// Writes the bar's settings back to the stored keys (`tool_options.slice_*`, `slices.hide_auto`).
+fn store(app: &mut PhotocraftApp, s: SliceToolSettings) {
+    let o = &mut app.ui.tool_options;
+    match s.style {
+        Constraint::Ratio(w, h) => (o.slice_style, o.slice_width, o.slice_height) = ("fixedRatio".into(), w as f32, h as f32),
+        Constraint::Size(w, h) => (o.slice_style, o.slice_width, o.slice_height) = ("fixedSize".into(), w as f32, h as f32),
+        _ => o.slice_style = "normal".into(),
     }
-    let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return true };
-    let locked = app.session.file_menu.slices_locked;
-    match ev {
-        // View › Lock Slices: neither tool draws, selects or moves a slice, and the press says
-        // why, as Photoshop's error does (#7865).
-        ToolEvent::Down { .. } if locked => {
-            app.ui.slices.selected = None;
-            app.ui.status = tl!("Slices are locked (View › Lock Slices)").to_string();
-            app.ui.status_error = true;
-        }
-        ToolEvent::Down { x, y, .. } => {
-            if tool == Tool::Slice {
-                app.ui.slices.drag = Some(SliceDrag::New { start: [x, y], cur: [x, y] });
-            } else {
-                // A handle of the selected user slice resizes it (#7863).
-                let reach = HANDLE_REACH / f64::from(app.point_zoom().max(0.01));
-                let grabbed = app.ui.slices.selected.filter(|_| !locked).and_then(|n| {
-                    let r = slices::resolve(&doc).into_iter().find(|r| r.number == n && r.origin == SliceOrigin::User)?;
-                    Some((r.id?, r.rect, handle_at(r.rect, [x, y], reach)?))
-                });
-                if let Some((id, rect, handle)) = grabbed {
-                    app.ui.slices.drag = Some(SliceDrag::Resize { id, handle, start: [x, y], cur: [x, y], rect });
-                    return true;
-                }
-                let hit = slice_at(&doc, x, y);
-                app.ui.slices.selected = hit.as_ref().map(|r| r.number);
-                // The whole slice moves, also when the press hits one piece of a covered slice.
-                if let Some(r) = hit
-                    && let Some(sl) = r.id.and_then(|id| doc.slices.get(id)).filter(|_| r.origin == SliceOrigin::User)
-                {
-                    app.ui.slices.drag = Some(SliceDrag::Move { id: sl.id, start: [x, y], cur: [x, y], rect: sl.rect });
-                }
-            }
-        }
-        ToolEvent::Move { x, y, .. } => match &mut app.ui.slices.drag {
-            Some(SliceDrag::New { cur, .. }) | Some(SliceDrag::Move { cur, .. }) | Some(SliceDrag::Resize { cur, .. }) => *cur = [x, y],
-            None => {}
-        },
-        ToolEvent::Up { x, y } => match app.ui.slices.drag.take() {
-            Some(SliceDrag::New { start, .. }) => {
-                let r = new_rect(app, start, [x, y]);
-                // A drag of a pixel or two is a click, which selects; a Fixed Size slice is made
-                // by a click, at any size.
-                let fixed_size = app.ui.tool_options.slice_style == "fixedSize";
-                if r.width() >= 1 && r.height() >= 1 && (fixed_size || r.width() > 2 || r.height() > 2) {
-                    if let Ok(v) = app.run("slice.new", json!({"rect": [r.x0, r.y0, r.width(), r.height()]})) {
-                        app.ui.slices.selected = v.get("number").and_then(Value::as_u64).map(|n| n as usize);
-                    }
-                } else {
-                    app.ui.slices.selected = slice_at(&doc, x, y).map(|r| r.number);
-                }
-            }
-            Some(SliceDrag::Move { id, start, rect, .. }) => {
-                let (dx, dy) = ((x - start[0]).round() as i32, (y - start[1]).round() as i32);
-                if dx != 0 || dy != 0 {
-                    let r = rect.translate(dx, dy);
-                    if app.run("slice.set", json!({"slice": id, "rect": [r.x0, r.y0, r.width(), r.height()]})).is_ok() {
-                        let d = app.session.active().map(|d| d.doc.clone());
-                        app.ui.slices.selected = d.and_then(|d| slices::resolve(&d).into_iter().find(|s| s.id == Some(id)).map(|s| s.number));
-                    }
-                }
-            }
-            Some(SliceDrag::Resize { id, handle, start, rect, .. }) => {
-                let r = resized(rect, handle, (x - start[0]).round() as i32, (y - start[1]).round() as i32);
-                if r != rect && app.run("slice.set", json!({"slice": id, "rect": [r.x0, r.y0, r.width(), r.height()]})).is_ok() {
-                    let d = app.session.active().map(|d| d.doc.clone());
-                    app.ui.slices.selected = d.and_then(|d| slices::resolve(&d).into_iter().find(|s| s.id == Some(id)).map(|s| s.number));
-                }
-            }
-            None => {}
-        },
-    }
-    true
+    app.ui.slices.hide_auto = s.hide_auto;
 }
 
 /// The slice colour from Preferences › Guides, Grid & Slices.
-pub fn slice_color(app: &PhotocraftApp) -> Color32 {
-    hex(&app.session.prefs().guides_grid_and_slices.slice_color, Color32::from_rgb(0x38, 0xb5, 0xff))
+pub fn slice_color(app: &PhotocraftApp) -> Srgba {
+    hex(&app.session.prefs().guides_grid_and_slices.slice_color, Srgba::rgb(f32::from(0x38_u8) / 255.0, f32::from(0xb5_u8) / 255.0, 1.0))
 }
 
-fn hex(s: &str, fallback: Color32) -> Color32 {
+fn hex(s: &str, fallback: Srgba) -> Srgba {
     let s = s.trim_start_matches('#');
-    let b = |i: usize| s.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
+    let b = |i: usize| s.get(i..i + 2).and_then(|h| u8::from_str_radix(h, 16).ok()).map(|v| f32::from(v) / 255.0);
     match (s.len(), b(0), b(2), b(4)) {
-        (6, Some(r), Some(g), Some(bl)) => Color32::from_rgb(r, g, bl),
+        (6, Some(r), Some(g), Some(bl)) => Srgba::rgb(r, g, bl),
         _ => fallback,
     }
 }
 
-/// Slice outlines and numbered badges (View › Show › Slices; always while a slice tool is on).
-pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
-    let tool_on = is_slice_tool(app.ui.tool);
-    let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
-    if !(tool_on || (app.ui.view.shows(app.ui.view.show.slices) && !doc.slices.is_empty())) {
+// ---------- the tool ----------
+
+/// The framework's `SliceTool` for this pass, with the app's snapshot set on it.
+pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut SliceTool, _host: CanvasHost) -> FamilyTool<'a> {
+    scope.with_app(|app| {
+        let mode = if app.ui.tool == Tool::SliceSelect { SliceMode::Select } else { SliceMode::Slice };
+        state
+            .mode(mode)
+            .items(&items(app))
+            .selected(app.ui.slices.selected)
+            .locked(app.session.file_menu.slices_locked)
+            .settings(settings(app))
+            .rules(SliceRules::PHOTOSHOP)
+            .color(Some(slice_color(app)));
+    });
+    Box::new(state)
+}
+
+/// Takes the events the tool reported in the pass.
+pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut SliceTool, _response: &ToolHostResponse) {
+    for event in state.take_events() {
+        apply(app, event);
+    }
+}
+
+// ---------- the overlay ----------
+
+/// Slice outlines and numbered badges (View › Show › Slices; always while a slice tool is on) over
+/// the document at `at`. Its events, and in Select mode its picks, moves and resizes, go to [`apply`].
+pub(crate) fn canvas_controls(ui: &mut egui::Ui, app: &mut PhotocraftApp, at: egui::Rect) {
+    let tool = app.ui.tool;
+    let tool_on = is_slice_tool(tool);
+    let Some(has_slices) = app.session.active().map(|d| !d.doc.slices.is_empty()) else { return };
+    if !(tool_on || (app.ui.view.shows(app.ui.view.show.slices) && has_slices)) {
         return;
     }
-    let prefs = &app.session.prefs().guides_grid_and_slices;
-    let color = slice_color(app);
-    let numbers = prefs.show_slice_numbers;
-    let selected_color = Color32::from_rgb(0xff, 0xb0, 0x00);
-    let to_screen = |r: photocraft_geom::Rect| Rect::from_two_pos(xf.to_screen(r.x0 as f32, r.y0 as f32), xf.to_screen(r.x1 as f32, r.y1 as f32));
-    let all = slices::resolve(&doc);
-    // Auto slices first (dotted, underneath), then user and layer slices.
-    for pass in [true, false] {
-        for r in all.iter().filter(|r| (r.origin == SliceOrigin::Auto) == pass) {
-            if pass && (!tool_on || app.ui.slices.hide_auto) {
-                continue;
-            }
-            let sr = to_screen(r.rect);
-            let selected = app.ui.slices.selected == Some(r.number);
-            if pass {
-                let pts = [sr.left_top(), sr.right_top(), sr.right_bottom(), sr.left_bottom(), sr.left_top()];
-                painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, color.gamma_multiply(0.7)), 3.0, 3.0));
-            } else {
-                painter.rect_stroke(sr, 0.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
-            }
-            if selected && tool_on {
-                painter.rect_stroke(sr, 0.0, Stroke::new(2.0, selected_color), egui::StrokeKind::Inside);
-                if r.origin == SliceOrigin::User {
-                    for c in [
-                        sr.left_top(),
-                        sr.right_top(),
-                        sr.left_bottom(),
-                        sr.right_bottom(),
-                        sr.center_top(),
-                        sr.center_bottom(),
-                        sr.left_center(),
-                        sr.right_center(),
-                    ] {
-                        painter.rect_filled(Rect::from_center_size(c, vec2(5.0, 5.0)), 0.0, selected_color);
-                    }
-                }
-            }
-            if numbers && sr.width() > 18.0 && sr.height() > 12.0 {
-                let label = match r.origin {
-                    SliceOrigin::Layer => format!("{:02} ▪", r.number),
-                    _ => format!("{:02}", r.number),
-                };
-                let font = egui::FontId::proportional(10.0);
-                let galley = painter.layout_no_wrap(label, font, Color32::WHITE);
-                let badge = Rect::from_min_size(sr.left_top() + vec2(2.0, 2.0), galley.size() + vec2(6.0, 2.0));
-                let bg = if pass {
-                    Color32::from_gray(110)
-                } else if selected && tool_on {
-                    selected_color
-                } else {
-                    color
-                };
-                painter.rect_filled(badge, 2.0, bg);
-                painter.galley(badge.min + vec2(3.0, 1.0), galley, Color32::WHITE);
-            }
-        }
+    let items = items(app);
+    let numbers = app.session.prefs().guides_grid_and_slices.show_slice_numbers;
+    let mut overlay = SliceOverlay::new("Slices", &items)
+        .pick(tool == Tool::SliceSelect)
+        .hide_auto(!tool_on || app.ui.slices.hide_auto)
+        .numbers(numbers)
+        .color(slice_color(app))
+        .locked(app.session.file_menu.slices_locked)
+        .rules(SliceRules::PHOTOSHOP);
+    if let Some(n) = app.ui.slices.selected.filter(|_| tool_on) {
+        overlay = overlay.selected_slice(n);
     }
-    match &app.ui.slices.drag {
-        Some(SliceDrag::New { start, cur }) => {
-            let sr = to_screen(new_rect(app, *start, *cur));
-            painter.rect_stroke(sr, 0.0, Stroke::new(1.0, Color32::WHITE), egui::StrokeKind::Middle);
-            let pts = [sr.left_top(), sr.right_top(), sr.right_bottom(), sr.left_bottom(), sr.left_top()];
-            painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, color), 4.0, 4.0));
-        }
-        Some(SliceDrag::Move { start, cur, rect, .. }) => {
-            let r = rect.translate((cur[0] - start[0]).round() as i32, (cur[1] - start[1]).round() as i32);
-            painter.rect_stroke(to_screen(r), 0.0, Stroke::new(2.0, selected_color), egui::StrokeKind::Inside);
-        }
-        Some(SliceDrag::Resize { handle, start, cur, rect, .. }) => {
-            let r = resized(*rect, *handle, (cur[0] - start[0]).round() as i32, (cur[1] - start[1]).round() as i32);
-            painter.rect_stroke(to_screen(r), 0.0, Stroke::new(2.0, selected_color), egui::StrokeKind::Inside);
-        }
-        None => {}
+    let events = overlay.show_at(ui, at).events;
+    for event in events {
+        apply(app, event);
     }
 }
 
-/// The selected slice's id, promoting an auto slice first when `promote`.
-fn selected_id(app: &mut PhotocraftApp, promote: bool) -> Option<u32> {
+// ---------- events ----------
+
+/// Carries out one event of the tool or the overlay.
+pub(crate) fn apply(app: &mut PhotocraftApp, event: SliceEvent) {
+    match event {
+        SliceEvent::Draw(EditEvent::Commit { after, .. } | EditEvent::Set { after, .. }) => draw(app, after),
+        SliceEvent::Draw(_) => {}
+        SliceEvent::Move { number, event, .. } | SliceEvent::Resize { number, event, .. } => edit_slice(app, number, event),
+        SliceEvent::Select { number, .. } => app.ui.slices.selected = number,
+        SliceEvent::Command(command) => run_command(app, command),
+        SliceEvent::Refused(_) => {
+            app.ui.slices.selected = None;
+            app.ui.status = tl!("Slices are locked (View › Lock Slices)").to_string();
+            app.ui.status_error = true;
+        }
+        _ => {}
+    }
+}
+
+/// A new slice drawn to `rect`.
+fn draw(app: &mut PhotocraftApp, rect: DocRect) {
+    let (x, y) = (rect.x0.round(), rect.y0.round());
+    let (w, h) = ((rect.x1 - rect.x0).round(), (rect.y1 - rect.y0).round());
+    match app.run("slice.new", json!({"rect": [x, y, w, h]})) {
+        Ok(v) => app.ui.slices.selected = v.get("number").and_then(Value::as_u64).map(|n| n as usize),
+        Err(e) => report(app, e),
+    }
+}
+
+/// One step of a Move or Resize of the slice `number`. The gesture's value is shown as the preview;
+/// its end moves each edge of the stored slice by what the piece's edge moved.
+fn edit_slice(app: &mut PhotocraftApp, number: usize, event: EditEvent<DocRect>) {
+    match event {
+        EditEvent::Begin { .. } => {}
+        EditEvent::Update { value, .. } => app.ui.slices.preview = Some((number, value)),
+        EditEvent::Cancel { .. } => app.ui.slices.preview = None,
+        EditEvent::Commit { before, after, .. } | EditEvent::Set { before, after, .. } => {
+            app.ui.slices.preview = None;
+            commit_slice(app, number, before.same().copied(), after);
+        }
+        _ => {}
+    }
+}
+
+/// Moves the stored slice that owns piece `number` by the change from `before` to `after`; a gesture
+/// that moved no edge changes nothing.
+fn commit_slice(app: &mut PhotocraftApp, number: usize, before: Option<DocRect>, after: DocRect) {
+    let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
+    let Some(piece) = slices::resolve(&doc).into_iter().find(|r| r.number == number) else { return };
+    let Some(stored) = piece.id.and_then(|id| doc.slices.get(id)) else { return };
+    let before = before.unwrap_or_else(|| to_doc_rect(piece.rect));
+    let delta = |a: f64, b: f64| (a - b).round() as i32;
+    let r = stored.rect;
+    let moved = photocraft_geom::Rect::new(
+        r.x0.saturating_add(delta(after.x0, before.x0)),
+        r.y0.saturating_add(delta(after.y0, before.y0)),
+        r.x1.saturating_add(delta(after.x1, before.x1)),
+        r.y1.saturating_add(delta(after.y1, before.y1)),
+    );
+    if moved == r {
+        return;
+    }
+    let id = stored.id;
+    match app.run("slice.set", json!({"slice": id, "rect": [moved.x0, moved.y0, moved.width(), moved.height()]})) {
+        Ok(_) => app.ui.slices.selected = number_of(app, id),
+        Err(e) => report(app, e),
+    }
+}
+
+/// The display number of the first piece of stored slice `id`.
+fn number_of(app: &PhotocraftApp, id: u32) -> Option<usize> {
+    let st = app.session.active()?;
+    slices::resolve(&st.doc).into_iter().find(|r| r.id == Some(id)).map(|r| r.number)
+}
+
+fn report(app: &mut PhotocraftApp, error: String) {
+    app.ui.status = error;
+    app.ui.status_error = true;
+}
+
+// ---------- commands ----------
+
+/// The selected slice as a command target.
+fn selected_target(app: &PhotocraftApp) -> Option<SliceTarget> {
     let n = app.ui.slices.selected?;
-    let doc = app.session.active()?.doc.clone();
-    let r = slices::resolve(&doc).into_iter().find(|r| r.number == n)?;
-    match r.id {
-        Some(id) => Some(id),
-        None if promote => app.run("slice.promote", json!({"number": n})).ok()?.get("slice")?.as_u64().map(|v| v as u32),
-        None => None,
-    }
+    let r = resolved(app, n)?;
+    Some(r.id.map_or(SliceTarget::Auto(n), SliceTarget::Stored))
 }
 
-/// Delete or Backspace with no modifiers, with the Slice Select tool and a slice selected,
-/// deletes that slice, as in Photoshop (#7862). It never reaches Layer › Delete or Edit › Clear.
-/// An auto slice has nothing to delete, and View › Lock Slices refuses with a message.
-pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-    use crate::shortcut_dispatch::Focus;
-    // Text fields and widgets that delete with these keys themselves keep them.
-    if app.ui.tool != Tool::SliceSelect
-        || app.ui.slices.selected.is_none()
-        || app.ui.text_edit.is_some()
-        || matches!(Focus::of(ctx), Focus::Text | Focus::DeletingWidget)
-    {
-        return false;
-    }
-    let mods = ctx.input(|i| i.modifiers);
-    if !mods.is_none() || !ctx.input_mut(|i| i.consume_key(mods, egui::Key::Delete) || i.consume_key(mods, egui::Key::Backspace)) {
-        return false;
-    }
-    let result = if app.session.file_menu.slices_locked {
-        Err(tl!("Slices are locked (View › Lock Slices)").to_string())
-    } else {
-        match selected_id(app, false) {
-            Some(id) => app.run("slice.delete", json!({"slice": id})).map(|_| app.ui.slices.selected = None),
+fn resolved(app: &PhotocraftApp, number: usize) -> Option<ResolvedSlice> {
+    slices::resolve(&app.session.active()?.doc).into_iter().find(|r| r.number == number)
+}
+
+/// Runs a slice command of the bar, the keyboard or a double click.
+fn run_command(app: &mut PhotocraftApp, command: SliceCommand) {
+    let result: Result<(), String> = match command {
+        SliceCommand::Delete => match selected_target(app) {
+            Some(SliceTarget::Stored(id)) => app.run("slice.delete", json!({"slice": id})).map(|_| app.ui.slices.selected = None),
             // An auto slice is made from the user slices around it: it goes when they do.
+            _ => Ok(()),
+        },
+        SliceCommand::Promote => match selected_target(app) {
+            Some(target) => app.run("slice.promote", target.params()).map(|_| ()),
             None => Ok(()),
-        }
+        },
+        SliceCommand::Divide => open_divide(app).map(|_| ()),
+        SliceCommand::Options => open_options(app).map(|_| ()),
+        SliceCommand::FromGuides => app.run("slice.fromGuides", json!({})).map(|_| ()),
+        _ => Ok(()),
     };
     if let Err(e) = result {
-        app.ui.status = e;
-        app.ui.status_error = true;
+        report(app, e);
+    }
+}
+
+/// The state of each slice command: gated by the selected slice's origin, the lock and the document.
+pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
+    let origin = app.ui.slices.selected.and_then(|n| resolved(app, n)).map(|r| origin_of(r.origin));
+    let locked = app.session.file_menu.slices_locked;
+    let has_doc = app.session.active().is_some();
+    [SliceCommand::Delete, SliceCommand::Options, SliceCommand::Promote, SliceCommand::Divide, SliceCommand::FromGuides]
+        .into_iter()
+        .map(|c| (CommandRef::from(c), CommandState::new().enabled(c.enabled(origin, locked, has_doc))))
+        .collect()
+}
+
+/// What [`command_states`] reads: the active document (the selected slice resolves from its slices), the selected
+/// slice's number and the lock.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    doc: Option<&'a craft::ui::contract::Tracked<photocraft_engine::DocState>>,
+    selected: Option<usize>,
+    locked: bool,
+}
+
+/// [`command_states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = StatesFacts { doc: app.session.active_tracked(), selected: app.ui.slices.selected, locked: app.session.file_menu.slices_locked };
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
+}
+
+/// Runs a fired slice command; whether it was one.
+pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
+    let Some(command) = SliceCommand::from_ref(command) else { return false };
+    run_command(app, command);
+    true
+}
+
+// ---------- the options bar ----------
+
+/// Options bars of the Slice and Slice Select tools; false for another tool.
+pub fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> bool {
+    if !is_slice_tool(tool) {
+        return false;
+    }
+    let mode = if tool == Tool::SliceSelect { SliceMode::Select } else { SliceMode::Slice };
+    let mut current = settings(app);
+    let out = SliceBar::new(mode, &mut current).locked(app.session.file_menu.slices_locked).show(ui);
+    if out.settings_changed {
+        store(app, current);
     }
     true
 }
 
-/// Slice Options dialog for the selected slice (auto slices are promoted on OK).
-pub fn open_options(app: &mut PhotocraftApp) -> Result<Value, String> {
+// ---------- dialogs ----------
+
+fn kind_id(kind: SliceKind) -> &'static str {
+    match kind {
+        SliceKind::Image => "image",
+        SliceKind::NoImage => "noImage",
+        SliceKind::HtmlText => "table",
+        _ => "image",
+    }
+}
+
+/// Opens Slice Options for the selected slice (an auto slice is promoted on OK). A refusal is the
+/// `Err` text.
+pub(crate) fn open_options(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let n = app.ui.slices.selected.ok_or("select a slice with the Slice Select tool")?;
     let st = app.session.active().ok_or("no document")?;
     let r = slices::resolve(&st.doc).into_iter().find(|r| r.number == n).ok_or("no such slice")?;
     let v = photocraft_engine::slice_cmds::resolved_json(&st.doc, &r);
-    let mut f = serde_json::Map::new();
-    f.insert("__command".into(), json!("slice.set"));
-    f.insert("__label".into(), json!("Slice Options"));
-    f.insert("__form".into(), json!(true));
-    f.insert("__choices".into(), json!({"kind": ["image", "noImage"]}));
-    f.insert("number".into(), json!(n));
-    f.insert("kind".into(), v["kind"].clone());
-    for k in ["name", "url", "target", "alt", "message", "cellText"] {
-        f.insert(k.into(), v[k].clone());
+    let text = |k: &str| v[k].as_str().unwrap_or("").to_string();
+    let kind = match v["kind"].as_str() {
+        Some("noImage") => SliceKind::NoImage,
+        Some("table") => SliceKind::HtmlText,
+        _ => SliceKind::Image,
+    };
+    // `SliceOptions` is non-exhaustive: start from its default and set every field.
+    let mut options = SliceOptions::default();
+    options.kind = kind;
+    options.name = text("name");
+    options.url = text("url");
+    options.target = text("target");
+    options.message = text("message");
+    options.alt = text("alt");
+    options.cell_text = text("cellText");
+    options.background_row = true;
+    options.background = v["background"].as_str().and_then(Srgba::from_hex);
+    let target = r.id.map_or(SliceTarget::Auto(n), SliceTarget::Stored);
+    // HTML Text is offered only for a Table slice, so its value shows.
+    let mut kinds = vec![SliceKind::Image, SliceKind::NoImage];
+    if kind == SliceKind::HtmlText {
+        kinds.push(SliceKind::HtmlText);
     }
-    f.insert("background".into(), json!(v["background"].as_str().unwrap_or("none")));
-    Ok(json!({"dialog": app.ui.open_dialog(DialogKind::Command, f)}))
+    let id = app.framework.dialogs.open(SliceOptionsDialog::new(options).kinds(&kinds));
+    app.ui.slices.options = Some((id, target));
+    Ok(id)
 }
 
-/// Divide Slice dialog.
-fn open_divide(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let n = app.ui.slices.selected.ok_or("select a slice first")?;
-    let mut f = serde_json::Map::new();
-    f.insert("__command".into(), json!("slice.divide"));
-    f.insert("__label".into(), json!("Divide Slice"));
-    f.insert("__form".into(), json!(true));
-    f.insert("__choices".into(), json!({}));
-    f.insert("number".into(), json!(n));
-    f.insert("horizontal".into(), json!(2));
-    f.insert("vertical".into(), json!(1));
-    Ok(json!({"dialog": app.ui.open_dialog(DialogKind::Command, f)}))
+/// Opens Divide Slice for the selected slice. A refusal is the `Err` text.
+pub(crate) fn open_divide(app: &mut PhotocraftApp) -> Result<DialogId, String> {
+    let target = selected_target(app).ok_or("select a slice first")?;
+    let id = app.framework.dialogs.open(DivideSlicesDialog::new(DivideSlices::new(Some(DivideBy::Count(2)), None)));
+    app.ui.slices.divide = Some((id, target));
+    Ok(id)
 }
 
-/// Options bars of the Slice and Slice Select tools.
-pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    if !is_slice_tool(tool) {
-        return false;
+/// The result pump of the two dialogs: the Background colour request goes to the picker and its answer
+/// back, and a finished dialog runs its engine command.
+pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    take_options(app);
+    take_divide(app);
+}
+
+fn take_options(app: &mut PhotocraftApp) {
+    let Some((id, target)) = app.ui.slices.options else { return };
+    if let Some(request) = app.framework.dialogs.get_mut_by_id::<SliceOptionsDialog>(id).and_then(SliceOptionsDialog::pick_color) {
+        crate::color_picker_ui::open_for_request(app, id, request);
     }
-    let has_doc = app.session.active().is_some();
-    let locked = app.session.file_menu.slices_locked;
-    let t = crate::theme::Tokens::get(ui.ctx());
-    if tool == Tool::Slice {
-        // Style, Width and Height, as the marquee's (#8360).
-        let o = &mut app.ui.tool_options;
-        crate::panels::opt_label(ui, tl!("Style"));
-        let styles = [("normal".to_string(), tl!("Normal")), ("fixedRatio".to_string(), tl!("Fixed Ratio")), ("fixedSize".to_string(), tl!("Fixed Size"))];
-        if crate::widgets::dropdown(ui, "slice-style", tl!("Style"), &mut o.slice_style, &styles, 96.0) {
-            (o.slice_width, o.slice_height) = if o.slice_style == "fixedSize" { (64.0, 64.0) } else { (1.0, 1.0) };
-        }
-        let fixed_size = o.slice_style == "fixedSize";
-        let range = crate::tool_memory::style_range(&o.slice_style);
-        // Fixed Size shows whole pixels, the size the slice gets (`new_rect` rounds the same way),
-        // however the value was typed, stepped or scrubbed.
-        let field = |ui: &mut egui::Ui, v: &mut f32| {
-            if fixed_size {
-                crate::widgets::value_field_prec(ui, v, range.clone(), "px", 62.0, 0)
-            } else {
-                crate::widgets::value_field(ui, v, range.clone(), "", 62.0)
+    if let Some((key, color)) = crate::color_picker_ui::answer_for(app, id)
+        && let Some(dialog) = app.framework.dialogs.get_mut_by_id::<SliceOptionsDialog>(id)
+    {
+        dialog.set_color(&key, color);
+    }
+    match app.framework.dialogs.take_by_id::<SliceOptionsDialog>(id) {
+        Some(DialogResult::Ok(options)) => {
+            app.ui.slices.options = None;
+            let mut params = target.params();
+            params["kind"] = json!(kind_id(options.kind));
+            for (k, v) in [
+                ("name", &options.name),
+                ("url", &options.url),
+                ("target", &options.target),
+                ("message", &options.message),
+                ("alt", &options.alt),
+                ("cellText", &options.cell_text),
+            ] {
+                params[k] = json!(v);
             }
-        };
-        ui.add_enabled_ui(o.slice_style != "normal", |ui| {
-            crate::panels::opt_label(ui, tl!("Width"));
-            field(ui, &mut o.slice_width);
-            if crate::icons::button(ui, "arrow-left-right", 22.0, false, tl!("Swaps height and width")).clicked() {
-                std::mem::swap(&mut o.slice_width, &mut o.slice_height);
+            params["background"] = match options.background {
+                Some(c) => {
+                    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    json!(format!("#{:02x}{:02x}{:02x}", byte(c.r), byte(c.g), byte(c.b)))
+                }
+                None => json!("none"),
+            };
+            match app.run("slice.set", params) {
+                Ok(v) => app.ui.slices.selected = v.get("number").and_then(Value::as_u64).map(|n| n as usize),
+                Err(e) => report(app, e),
             }
-            crate::panels::opt_label(ui, tl!("Height"));
-            field(ui, &mut o.slice_height);
-        });
-        crate::widgets::vline(ui, 22.0);
-        if ui.add_enabled_ui(has_doc && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Slices From Guides"), 0.0)).inner.clicked() {
-            let _ = app.run("slice.fromGuides", json!({}));
         }
-    } else {
-        let sel = app.ui.slices.selected.is_some();
-        let stored =
-            sel && app.session.active().is_some_and(|d| slices::resolve(&d.doc).iter().any(|r| Some(r.number) == app.ui.slices.selected && r.id.is_some()));
-        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Promote"), 0.0)).inner.clicked() {
-            let _ = selected_id(app, true).map(|id| app.run("slice.promote", json!({"slice": id})));
-        }
-        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Divide…"), 0.0)).inner.clicked() {
-            let _ = open_divide(app);
-        }
-        if ui.add_enabled_ui(stored && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Delete"), 0.0)).inner.clicked()
-            && let Some(id) = selected_id(app, false)
-            && app.run("slice.delete", json!({"slice": id})).is_ok()
-        {
-            app.ui.slices.selected = None;
-        }
-        crate::widgets::vline(ui, 22.0);
-        crate::widgets::checkbox(ui, &mut app.ui.slices.hide_auto, tl!("Hide Auto Slices"));
-        crate::widgets::vline(ui, 22.0);
-        if ui.add_enabled_ui(sel && !locked, |ui| crate::widgets::secondary_button(ui, tl!("Slice Options…"), 0.0)).inner.clicked() {
-            let _ = open_options(app);
-        }
+        Some(DialogResult::Cancel) => app.ui.slices.options = None,
+        Some(_) => {}
+        None if app.framework.dialogs.get_by_id::<SliceOptionsDialog>(id).is_none() => app.ui.slices.options = None,
+        None => {}
     }
-    if locked {
-        ui.label(egui::RichText::new(tl!("Slices are locked (View › Lock Slices)")).color(t.text_dim).size(11.0));
+}
+
+fn take_divide(app: &mut PhotocraftApp) {
+    let Some((id, target)) = app.ui.slices.divide else { return };
+    match app.framework.dialogs.take_by_id::<DivideSlicesDialog>(id) {
+        Some(DialogResult::Ok(divide)) => {
+            app.ui.slices.divide = None;
+            let mut params = target.params();
+            for (by, count, size) in [(divide.rows, "horizontal", "horizontalSize"), (divide.columns, "vertical", "verticalSize")] {
+                match by {
+                    Some(DivideBy::Count(n)) => params[count] = json!(n),
+                    Some(DivideBy::Size(px)) => params[size] = json!(px),
+                    _ => {}
+                }
+            }
+            if let Err(e) = app.run("slice.divide", params) {
+                report(app, e);
+            }
+        }
+        Some(DialogResult::Cancel) => app.ui.slices.divide = None,
+        Some(_) => {}
+        None if app.framework.dialogs.get_by_id::<DivideSlicesDialog>(id).is_none() => app.ui.slices.divide = None,
+        None => {}
     }
-    true
 }
 
 #[cfg(test)]

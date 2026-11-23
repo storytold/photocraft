@@ -116,7 +116,12 @@ fn detect_locale() -> Option<String> {
     if let Some(v) = env("PHOTOCRAFT_LOCALE") {
         return Some(v);
     }
-    if let Some(v) = os_locale() {
+    // Test processes run by cargo-nextest (`NEXTEST` set) skip the OS query: each test is its own
+    // process, and on Windows the query starts a `reg.exe` child every time (#15377 did the same
+    // for the system font scan). They then see the same locale on every machine.
+    if std::env::var_os("NEXTEST").is_none()
+        && let Some(v) = os_locale()
+    {
         return Some(v);
     }
     ["LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"].iter().find_map(|k| env(k)).map(|v| v.split(':').next().unwrap_or("").to_string())
