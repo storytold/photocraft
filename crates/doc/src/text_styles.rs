@@ -28,31 +28,34 @@ pub type StyleAttrs = Map<String, Value>;
 const REF_KEY: &str = "style_sheet";
 
 /// A named character style.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct CharacterStyleDef {
     /// Stable id (≥ 1), referenced by [`CharStyle::style_sheet`].
     pub id: u32,
     pub name: String,
     /// Character attributes this style sets (others come from the paragraph style).
+    #[plain_data(assume = "JSON values: plain data")]
     pub attrs: StyleAttrs,
 }
 
 /// A named paragraph style (or Basic Paragraph).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct ParagraphStyleDef {
     /// Stable id (≥ 1; Basic Paragraph is 0), referenced by [`ParagraphStyle::style_sheet`].
     pub id: u32,
     pub name: String,
     /// Paragraph attributes this style sets.
+    #[plain_data(assume = "JSON values: plain data")]
     pub para_attrs: StyleAttrs,
     /// Character attributes this style sets (the basis of every run in its paragraphs).
+    #[plain_data(assume = "JSON values: plain data")]
     pub char_attrs: StyleAttrs,
 }
 
 /// The document's named type styles.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct TextStyles {
     /// Character styles in panel order ("None" is implicit and first).
@@ -63,6 +66,7 @@ pub struct TextStyles {
     pub basic: ParagraphStyleDef,
     /// Style sheets of the PSD text engine this document was read from (`ResourceDict`
     /// `StyleSheetSet` / `ParagraphSheetSet`), kept so unmapped data survives a round trip.
+    #[plain_data(assume = "JSON value: plain data")]
     pub psd_raw: Option<Value>,
 }
 

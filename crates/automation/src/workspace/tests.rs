@@ -65,6 +65,25 @@ fn read_growth_is_rejected_at_the_observed_length() {
 }
 
 #[test]
+fn location_names_the_file_below_the_root_that_holds_it() {
+    let (library, work, _) = roots("location");
+    std::fs::create_dir_all(work.join("shots")).unwrap();
+    std::fs::write(work.join("shots/a.png"), b"a").unwrap();
+    std::fs::write(library.join("same.png"), b"first").unwrap();
+    std::fs::write(work.join("same.png"), b"second").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    // A root-relative request names the file below the root that holds it, as an absolute path.
+    assert_eq!(workspace.location("shots/a.png"), Some(work.join("shots").join("a.png")));
+    // The first root that holds the name wins, as for `read`.
+    assert_eq!(workspace.location("same.png"), Some(library.join("same.png")));
+    // An absolute request below a root keeps naming that file.
+    assert_eq!(workspace.location(&work.join("same.png").to_string_lossy()), Some(work.join("same.png")));
+    assert_eq!(workspace.location("missing.png"), None);
+    assert_eq!(workspace.location("../outside.png"), None, "a path escaping the roots has no location");
+    assert_eq!(AuthorizedWorkspace::default().location("shots/a.png"), None, "no read root, no location");
+}
+
+#[test]
 fn open_pcraft_loads_a_directory_below_the_read_root() {
     let (inside, _, workspace) = roots("pcraft-dir");
     let doc = photocraft_doc::Document::new("Native", photocraft_doc::Size::new(16, 12), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
@@ -150,6 +169,32 @@ fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
     std::fs::write(inside.join("notes.txt"), b"keep").unwrap();
     assert!(workspace.write_stream("notes.txt", &mut |w| w.write_all(b"x")).is_err());
     assert_eq!(std::fs::read(inside.join("notes.txt")).unwrap(), b"keep");
+}
+
+/// #14355: files PhotoCraft can read but never writes (notes, data, rich text, read-only image
+/// formats such as XPM or DICOM) are not "a kind PhotoCraft writes", by name or by their bytes (#9439).
+#[test]
+fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
+    let (inside, _, workspace) = roots("read-only-kinds");
+    let files: [(&str, &[u8]); 7] = [
+        ("notes.md", b"# keep"),
+        ("data.csv", b"a,b\n1,2\n"),
+        ("letter.rtf", b"{\\rtf1 keep}"),
+        ("README", b"{\\rtf1 keep}"),
+        ("icon.xpm", b"/* XPM */ keep"),
+        ("scan.dcm", b"keep"),
+        ("TODO", b"/* XPM */ keep"),
+    ];
+    let replaced: Vec<&str> = files
+        .into_iter()
+        .filter(|(name, bytes)| {
+            std::fs::write(inside.join(name), bytes).unwrap();
+            workspace.write(name, b"\x89PNG\r\n\x1a\n").is_ok() || std::fs::read(inside.join(name)).unwrap() != *bytes
+        })
+        .map(|(name, _)| name)
+        .collect();
+    assert!(replaced.is_empty(), "replaced: {replaced:?}");
+    assert!(temp_files(&inside).is_empty());
 }
 
 /// A writer that panics leaves the original and no temporary file behind.
@@ -763,6 +808,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("swatches.import", serde_json::json!({"path": "/outside/set.aco"})),
         ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
         ("actions.load", serde_json::json!({"path": "/outside/set.atn"})),
+        ("actions.replace", serde_json::json!({"path": "/outside/set.atn","confirm":true})),
         ("actions.save", serde_json::json!({"path": "/outside/set.atn"})),
         ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
         ("style.presets.exportAsl", serde_json::json!({"path": "/outside/set.asl"})),
@@ -780,6 +826,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("swatches.import", serde_json::json!({"data": "QUJD"})),
         ("swatches.export", serde_json::json!({"format": "ase"})),
         ("actions.load", serde_json::json!({"data": "QUJD"})),
+        ("actions.replace", serde_json::json!({"data": "QUJD","confirm":true})),
         ("actions.save", serde_json::json!({"set": "S"})),
         ("style.presets.importAsl", serde_json::json!({"data": "QUJD"})),
         ("style.presets.exportAsl", serde_json::json!({"group": "Basics"})),
@@ -900,7 +947,7 @@ fn svg_smart_handoff_is_memory_only_and_linked_sources_stay_denied() {
         assert!(authorize_desktop_engine_command(id, &ambient).is_err(), "{id}");
         assert!(headless.command_run(id, ambient).is_err(), "{id}");
     }
-    let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
     let id = photocraft_doc::LayerId(layer.as_u64().unwrap());
     let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("SVG smart object") };
     sm.source = photocraft_doc::SmartSource::Linked { path: "/outside/source.svg".into() };
@@ -931,7 +978,7 @@ fn svg_update_cannot_replay_desktop_lut_file_in_any_shared_instance() {
         .unwrap();
         let target = photocraft_doc::LayerId(pasted["layer"].as_u64().unwrap());
         let filtered = if shared_only {
-            let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+            let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
             let duplicate = doc.layer(target).unwrap().duplicate();
             let id = duplicate.id;
             doc.layers.push(duplicate);
@@ -956,7 +1003,7 @@ fn svg_update_cannot_replay_desktop_lut_file_in_any_shared_instance() {
         assert_eq!(headless.session.active().unwrap().doc, before);
         assert_eq!(headless.session.active().unwrap().revision, revision);
         // A hidden stored filter is not executed, so its unused filename grants no access.
-        let doc = Arc::make_mut(&mut headless.session.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(headless.session.active_mut().unwrap().doc_mut());
         let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(filtered).unwrap().content else { panic!("smart object") };
         sm.smart_filters.last_mut().unwrap().visible = false;
         assert_eq!(headless.command_run("layer.smartObjects.updateSvg", params).unwrap()["updated"], true);
@@ -1036,6 +1083,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.vectorMask.add"
             | "layer.vectorMask.edit"
             | "layer.vectorMask.info"
+            | "layer.vectorMask.currentPath"
             | "paint.symmetryFromPath"
             | "edit.defineCustomShape"
             // `"as":"path"` pastes the clipboard as a vector path (#10694).
@@ -1471,6 +1519,22 @@ fn same_root_leaf_link_save_replaces_the_link_without_writing_its_target() {
     assert_eq!(std::fs::read(inside.join("target.txt")).unwrap(), b"target");
     assert_eq!(std::fs::read(inside.join("link.png")).unwrap(), b"replacement");
     assert!(!std::fs::symlink_metadata(inside.join("link.png")).unwrap().file_type().is_symlink());
+}
+
+/// A hardlink inside a root names the outside inode, so it reads that content. Writing over it is
+/// an atomic replace of the directory entry: the other name and its inode keep their bytes.
+#[cfg(unix)]
+#[test]
+fn hardlink_inside_a_root_reads_the_target_but_write_over_replaces_the_link() {
+    let (inside, outside, workspace) = roots("hardlink");
+    let target = outside.join("target.png");
+    std::fs::write(&target, b"outside").unwrap();
+    std::fs::hard_link(&target, inside.join("linked.png")).unwrap();
+
+    assert_eq!(workspace.read("linked.png").unwrap(), b"outside");
+    workspace.write("linked.png", b"replacement").unwrap();
+    assert_eq!(std::fs::read(&target).unwrap(), b"outside", "the outside inode is not modified");
+    assert_eq!(std::fs::read(inside.join("linked.png")).unwrap(), b"replacement");
 }
 
 #[test]

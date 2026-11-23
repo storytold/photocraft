@@ -271,7 +271,7 @@ index b86d7b2af..1f76a0f90 100644
 +++ b/crates/ui-egui/src/panels.rs
 @@ -1868,6 +1868,7 @@ pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
      }
-     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::panel_docking::show(app, ui));
+     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::panel_docking::show(app, ui, false));
      crate::dock::persist(app, ui.ctx());
 +    crate::color_panel_ui::persist(app);
  }
