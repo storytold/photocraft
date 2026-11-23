@@ -1,6 +1,16 @@
+use craft::imaging::ui::live_preview::{PreviewSession, settings_hash};
+use craft::ui::canvas::PixelRect;
+use craft::ui::dialog::StackDialog as _;
+use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use photocraft_engine::color_cmds::ColorExt;
+
 use super::display::canvas_display;
 use super::textures::texture_buffer;
-use super::{Document, LayerContent, PhotocraftApp};
+use super::{Document, PhotocraftApp};
+use photocraft_doc::LayerContent;
+
+#[cfg(test)]
+mod tests;
 
 /// The proxy factor of a live preview of filter `cmd` with `params` on `doc`, the active document:
 /// reduced on a large document (Preferences › Performance › Low Resolution Previews), except for
@@ -21,7 +31,21 @@ use super::{Document, LayerContent, PhotocraftApp};
 pub(crate) fn filter_preview_factor(app: &PhotocraftApp, doc: &Document, cmd: &str, params: &serde_json::Value) -> u32 {
     // A smart filter edit re-renders the whole stack: every stage constrains the factor.
     let k = crate::filter_dialog::smart_preview_factor(doc, cmd, params, crate::proxy::preview_factor(doc, crate::proxy::reduced_previews(app)));
-    if cfg!(target_arch = "wasm32") { k } else { crate::proxy::view_factor(k, app.current_zoom()) }
+    if cfg!(target_arch = "wasm32") { k } else { crate::proxy::view_factor(k, app.current_zoom(), doc.size.area()) }
+}
+
+/// The open Smart Filter adjustment editor with its Preview box on: its dialog id, the adjustment command, the
+/// captured Smart Filter target and the settings it would send. A plain adjustment dialog previews through
+/// `adjust_preview` instead.
+fn smart_adjust_preview(app: &PhotocraftApp) -> Option<(craft::ui::dialog::DialogId, String, serde_json::Value, serde_json::Value)> {
+    let open = crate::adjust_dialog::open_value(app)?;
+    let (_, captured) = open.smart_filter.as_ref()?;
+    let hosted = crate::adjust_dialog::hosted(app, open.id)?;
+    if !hosted.is_previewing() {
+        return None;
+    }
+    let params = crate::adjust_dialog::smart_filter_params(app, open, hosted.value(), hosted.edited()).ok()?;
+    Some((open.id, open.command.clone(), captured.clone(), params))
 }
 
 /// Live preview for an open filter dialog: run the filter on the proxy and upload it. With
@@ -40,43 +64,54 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     if crate::adjust_preview::on_layer(app, idx) {
         return None;
     }
-    let dialog = app.ui.dialogs.iter().position(|d| d.fields.contains_key("__filter"))?;
-    crate::filter_dialog::refresh_match_color_sources(&app.session, &mut app.ui.dialogs[dialog].fields);
-    let d = &app.ui.dialogs[dialog];
-    crate::filter_dialog::validate_match_color_destination(app, &d.fields).ok()?;
-    if d.fields.get("__preview").and_then(serde_json::Value::as_bool) != Some(true) {
-        return None;
-    }
-    let cmd = d.fields.get("__command")?.as_str()?.to_string();
-    // Previews edit what the command will: a targeted layer mask included (#780).
-    let (cmd, mut params) = if d.fields.contains_key("__smartFilter") {
-        crate::smart_filter_dialog::edit_command(app, &d.fields).ok()?
+    // The open dialog with its Preview box on, whichever family hosts it; its key is the command.
+    let (id, cmd, params) = if let Some((id, key, captured, params)) = smart_adjust_preview(app) {
+        let (cmd, params) = crate::smart_filter_dialog::params_command(app, &captured, &key, params).ok()?;
+        (id, cmd, params)
     } else {
-        (cmd.clone(), app.with_mask_target(&cmd, crate::filter_dialog::params_of(&d.fields)))
+        let (id, key, dialog_fields, fields) = {
+            let d = app.framework.dialogs.get::<HostedParamDialog>()?;
+            if !d.is_previewing() {
+                return None;
+            }
+            let key = d.key()?.to_owned();
+            // The values OK runs: a document choice is its index, a colour its hex.
+            let serde_json::Value::Object(fields) = crate::filter_dialog::command_params(&key, d.fields()) else { return None };
+            (d.id(), key, d.fields().clone(), fields)
+        };
+        // Previews edit what the command will: a targeted layer mask included (#780).
+        let target = crate::dialogs::params::captured(app, &key);
+        crate::filter_dialog::validate_match_color_destination(app, &key, &target, &fields).ok()?;
+        crate::filter_dialog::validate_lens_blur_document(app, &key, &target, fields.get("depthMap").and_then(serde_json::Value::as_str)).ok()?;
+        let (cmd, params) = if crate::smart_filter_dialog::owns(&key) {
+            crate::smart_filter_dialog::blend_command(app, &target, &dialog_fields).ok()?
+        } else if crate::smart_filter_dialog::is_target(&target) {
+            crate::smart_filter_dialog::params_command(app, &target, &key, crate::filter_dialog::params_of(&fields)).ok()?
+        } else {
+            (key.clone(), app.with_mask_target(&key, crate::filter_dialog::params_of(&fields)))
+        };
+        (id, cmd, params)
     };
-    // Select and Mask previews in its view mode; holding X shows the image without one.
-    if crate::select_mask_view::owns(&d.fields) {
-        if crate::select_mask_view::hides_view(&d.fields) {
-            return None;
-        }
-        params = crate::select_mask_view::request_params(&d.fields, params);
-    }
-    crate::actions::authorize_panel_preview(app, d.id, &d.fields, &cmd, &params).ok()?;
+    crate::actions::authorize_panel_preview(app, id, &cmd, &params).ok()?;
     let st = app.session.documents().get(idx)?;
+    let bounds = st.doc.bounds();
     // Fade previews at full size: it blends one area, like OK does, and has no proxy (#8230).
     let k = if cmd == FADE { 1 } else { filter_preview_factor(app, &st.doc, &cmd, &params) };
     let request = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
         sources: crate::filter_dialog::preview_source_revisions(&app.session, &cmd, &params),
-        dialog: d.id,
+        dialog: id,
+        open: app.framework.dialogs.open_serial(id).unwrap_or(0),
         active: st.active_layer,
         target: st.channel_view.target,
         command: cmd,
         params,
         k,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
+    app.filter_live.begin(session_of(&request), PixelRect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1));
     let key = request.doc.0 ^ (1u64 << 61);
     // Every filter's preview computes off the UI thread in the desktop app: Gaussian Blur at
     // 1000 px takes long enough to freeze the window. Once the slider settles, a preview still
@@ -95,11 +130,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 // the factor, #10474), it has a frame to show (an empty one would blank a good
                 // preview), and it must not displace a frame that is already exact for the dialog,
                 // which is what a slider dragged out and back would otherwise make the canvas do.
-                Ok(computed)
-                    if finished.same_target_at_any_scale(&request)
-                        && computed.result.is_some()
-                        && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) =>
-                {
+                Ok(computed) if same_target(app, &finished) && computed.result.is_some() && !app.filter_preview.as_ref().is_some_and(|p| p.key == request) => {
                     publish_filter_preview(app, idx, finished, computed.result, computed.ms);
                 }
                 Ok(_) => {}
@@ -116,7 +147,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         if !fresh && !app.filter_preview_worker.busy() {
             let doc = app.session.documents().get(idx)?.doc.clone();
             let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
-            let color = app.session.color.settings.clone();
+            let color = app.session.color().settings.clone();
             let task = request.clone();
             let fade = fade_job(app, &task);
             if let Err(error) = app.filter_preview_worker.start(request.clone(), ctx.clone(), move |cancel| {
@@ -152,7 +183,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         let preview = app.filter_preview.as_ref()?;
         // Keep the last preview during a drag, but never one from another source or dialog. It is
         // drawn at its own factor, so a drag that changes the factor keeps it too (#10474).
-        if !preview.key.same_target_at_any_scale(&request) {
+        if !same_target(app, &preview.key) {
             return None;
         }
         let result = preview.result.as_ref()?;
@@ -177,7 +208,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 None,
                 request.target,
                 &documents,
-                &app.session.color.settings,
+                &app.session.color().settings,
                 Some(request.tool_colors),
             ),
         }
@@ -193,6 +224,22 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
 }
 
 const FADE: &str = "edit.fade";
+
+/// The preview session of `key`: everything that makes two requests the same target at any scale (document,
+/// revision, active layer, dialog and its open, and the target, sources, command, tool colours and Match Color's source layer),
+/// not the other parameters and not `k`. A frame of another session is foreign to the dialog's preview.
+pub(crate) fn session_of(key: &crate::filter_dialog::FilterPreviewKey) -> PreviewSession {
+    let layer = key.active.map_or(0, |l| l.0 + 1);
+    let source_layer = key.params.get("sourceLayer");
+    let target = format!("{:?}|{:?}|{}|{:?}|{:?}", key.target, key.sources, key.command, key.tool_colors, source_layer);
+    PreviewSession::new(key.doc.0, key.revision, layer).and(key.dialog.value()).and(key.open).and(settings_hash(&[target.as_bytes()]))
+}
+
+/// Whether `key` is a preview of the open dialog's target, at any proxy factor (a frame is drawn at its own factor,
+/// #10474).
+pub(crate) fn same_target(app: &PhotocraftApp, key: &crate::filter_dialog::FilterPreviewKey) -> bool {
+    app.filter_live.session() == Some(session_of(key))
+}
 
 /// Edit › Fade blends back towards the pixels before the last step, which only the session's
 /// history holds, so its preview is captured from the session here (cheap: the copy shares its
@@ -302,7 +349,7 @@ pub(super) fn ensure_proxy_preview(app: &mut PhotocraftApp, idx: usize, zoom: f3
     // Zoomed in, a proxy coarser than the screen showed the drag in k-pixel blocks (#5764): when
     // the wgpu compositor draws the full-size document, use a proxy only as coarse as the screen
     // (none at 50 % and closer). Otherwise the full size would be a CPU composite per change.
-    let fine = crate::proxy::view_factor(k, zoom);
+    let fine = crate::proxy::view_factor(k, zoom, doc.size.area());
     if fine < k && app.gpu.as_ref().is_some_and(|g| g.supports(&doc)) {
         k = fine;
     }

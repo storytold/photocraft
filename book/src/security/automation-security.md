@@ -43,9 +43,13 @@ Automation is a privilege boundary because requests can cause filesystem access,
 - A save without a `path` (MCP `doc_save`, `serve` `doc.save`, the control channel's `app.save`)
   writes back only to the document's own PSD, PSB or `.pcraft` file in its own format; any other
   save needs an explicit `path`, so automation never flattens or converts over the file it opened.
-- Automation paths must be relative beneath the applicable root. Absolute paths, parent
-  traversal, alternate separators, Windows device names, malformed components, and link escapes
-  are rejected before file effects.
+- Automation paths may be relative or absolute beneath the canonical or configured spelling of
+  the applicable granted root. Absolute paths outside that root are rejected. Accepted absolute
+  paths are translated to relative paths and resolved through the held directory capability.
+  Relative requests reject empty or `.` components and alternate separators. Absolute requests
+  are split into native path components before checking the root-relative remainder, so repeated
+  separators and interior `.` components are normalized. Both forms reject parent traversal in
+  the remainder, disallowed component names and link escapes before file effects.
 - Engine commands that still use ambient paths fail closed at the automation boundary. Synthetic
   UI input reaches the same command policy, and automation-triggered file hooks do not run
   user-configured script-event paths. The policy also covers every command a command runs on its
@@ -67,8 +71,10 @@ Automation is a privilege boundary because requests can cause filesystem access,
   or command-duration/cancellation budget;
 - one thread per accepted TCP connection;
 - no structured security audit event stream;
-- desktop screenshot capture/encoding and document import/export have no automation-specific
-  operation budgets; the desktop transport limits replies after their creation;
+- desktop screenshots are admission-bounded (4 outstanding requests, 128 MiB per image, 256 MiB
+  aggregate, 8 s deadline), which is far above the 8 MiB JSON reply cap; document import/export
+  have no automation-specific operation budgets, and the desktop transport limits replies after
+  their creation;
 - expensive engine commands are not charged to a session budget.
 
 Reply rejection can happen after a command has changed state. Such errors report that the

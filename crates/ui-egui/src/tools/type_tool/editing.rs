@@ -1,15 +1,28 @@
-use super::ime::interrupt_incoming;
-use super::ime_edit::note_ime_application_change;
-use super::layout::{hit_layer, hit_offset, shows_own_layout};
-use super::{
-    Arc, FontFieldEdit, HashMap, LayerId, PhotocraftApp, TextEdit, TextLayer, accept_row, active_doc_id, apply, byte_range, current_text, families,
-    font_labels_id, font_menu_rows, insertion_style, json, selected_range, session_key, text_layer,
-};
+use craft::text::ui::editor::CharToggle;
+use craft::ui::runtime::focus::{self, FocusTarget};
+
+use super::layout::{hit_layer, is_vertical, offset_at, shows_own_layout};
+use super::{LayerId, PhotocraftApp, TextEdit, TextLayer, active_doc_id, byte_range, current_text, json, session_key, text_layer};
+
+/// Marks the session's editor to take the keyboard in the pass that first shows it: the framework knows an editor's
+/// doc key only once it has been shown, so a request made before that finds nothing.
+pub(crate) fn focus_editor(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(FOCUS_WANTED), true));
+}
+
+const FOCUS_WANTED: &str = "photocraft.type-editor-focus-wanted";
+
+/// Moves the keyboard to the editor just shown when a session start asked for it ([`focus_editor`]).
+pub(super) fn take_editor_focus(ctx: &egui::Context) {
+    if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(FOCUS_WANTED))).is_some() {
+        let _ = focus::request(ctx, FocusTarget::Doc(super::controls::TYPE_EDITOR));
+    }
+}
 
 /// Start editing an existing type layer. Like Photoshop, editing shows the text as the type
 /// engine lays it out, so a PSD layer is re-rendered first (inside the edit session's history
 /// step, so Cancel brings Photoshop's pixels back).
-pub(super) fn begin_edit(app: &mut PhotocraftApp, id: LayerId, key: &str) -> Result<(), String> {
+pub(super) fn begin_edit(app: &mut PhotocraftApp, ctx: &egui::Context, id: LayerId, key: &str) -> Result<(), String> {
     let st = app.session.active().ok_or("no document open")?;
     let doc = st.doc.clone();
     if let Some(t) = text_layer(&doc, id)
@@ -17,12 +30,13 @@ pub(super) fn begin_edit(app: &mut PhotocraftApp, id: LayerId, key: &str) -> Res
     {
         app.run("type.edit", json!({"layer": id.0, "coalesce": key}))?;
     }
+    focus_editor(ctx);
     Ok(())
 }
 
 /// Edit the active type layer from its thumbnail, selecting all text like Photoshop. Reuse the
 /// current session when already editing it, so Cancel and undo still cover the whole edit.
-pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
+pub fn edit_active(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     app.ui.type_insertion_style = None;
     let st = app.session.active().ok_or("no document open")?;
     let id = st.active_layer.ok_or("no active layer")?;
@@ -30,35 +44,17 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
     if app.ui.text_edit.as_ref().is_none_or(|ed| ed.layer != id.0) {
         commit(app);
         let key = session_key(app);
-        begin_edit(app, id, &key)?;
-        app.ui.text_edit = Some(TextEdit {
-            layer: id.0,
-            document: active_doc_id(app),
-            caret: n,
-            anchor: 0,
-            session: key,
-            created: false,
-            mask: false,
-            dragging: false,
-            resize: None,
-            preedit: None,
-        });
+        begin_edit(app, ctx, id, &key)?;
+        app.ui.text_edit = Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: n, anchor: 0, session: key, created: false, mask: false });
     } else {
-        let mut cancelled = false;
+        // The editor drops a composition when the selection moves from outside.
         if let Some(ed) = app.ui.text_edit.as_mut() {
             ed.anchor = 0;
             ed.caret = n;
-            // Re-entering the same session moves the caret away from the composition: cancel it
-            // rather than reusing a range that no longer describes the text.
-            cancelled = ed.preedit.take().is_some();
         }
-        if cancelled {
-            app.type_ime.clear_preedit();
-            interrupt_incoming(app);
-            app.type_ime.request_interrupt();
-        }
+        focus_editor(ctx);
     }
-    let vertical = app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
+    let vertical = is_vertical(app, id);
     app.ui.text_edit_return_tool = None;
     app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
     app.ui.mask_target = false;
@@ -69,7 +65,7 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
 /// Double-click with the Move tool (Photoshop CC 2019+): edit the type layer under document
 /// point (`x`, `y`) with the caret on the glyph there, switching to the Type tool. False when no
 /// type is there.
-pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
+pub fn edit_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64) -> bool {
     let Some(id) = hit_layer(app, x, y) else { return false };
     let previous_tool = app.ui.tool;
     commit(app);
@@ -77,23 +73,12 @@ pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
         return false;
     }
     let key = session_key(app);
-    if begin_edit(app, id, &key).is_err() {
+    if begin_edit(app, ctx, id, &key).is_err() {
         return false;
     }
-    let off = hit_offset(app, id, x, y);
-    app.ui.text_edit = Some(TextEdit {
-        layer: id.0,
-        document: active_doc_id(app),
-        caret: off,
-        anchor: off,
-        session: key,
-        created: false,
-        mask: false,
-        dragging: false,
-        resize: None,
-        preedit: None,
-    });
-    let vertical = app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
+    let off = offset_at(app, id, x, y);
+    app.ui.text_edit = Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: off, anchor: off, session: key, created: false, mask: false });
+    let vertical = is_vertical(app, id);
     if !previous_tool.is_type() {
         app.ui.text_edit_return_tool = Some(previous_tool);
     }
@@ -103,118 +88,10 @@ pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     true
 }
 
-/// Copy the selected characters to the system clipboard. Returns the copied range. Shared by the
-/// clipboard Copy event and Edit > Copy during a type edit.
-pub(crate) fn copy_selection(app: &PhotocraftApp, ctx: &egui::Context) -> Option<[usize; 2]> {
-    let [a, b] = selected_range(app)?;
-    let ed = app.ui.text_edit.as_ref()?;
-    let text = text_layer(&app.session.active()?.doc, LayerId(ed.layer))?;
-    ctx.copy_text(text.text.chars().skip(a).take(b - a).collect());
-    Some([a, b])
-}
-
-/// Edit > Paste during a type edit: ask the window for the clipboard text, which arrives as a
-/// Paste event next frame and replaces the selection there (like ⌘V).
-pub(crate) fn request_paste(ctx: &egui::Context) {
-    ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-}
-
-/// Select > All during a type edit selects every character (like ⌘A).
-pub(crate) fn select_all(app: &mut PhotocraftApp) {
-    let Some(n) = app.ui.text_edit.as_ref().and_then(|ed| current_text(app, LayerId(ed.layer))).map(|t| t.chars().count()) else { return };
-    if let Some(e) = app.ui.text_edit.as_mut() {
-        (e.anchor, e.caret) = (0, n);
-    }
-}
-
-/// Shared by the clipboard Cut event and Edit > Cut during a type edit.
-pub(crate) fn cut_selection(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some([a, b]) = copy_selection(app, ctx) else { return };
-    if let Some(ed) = app.ui.text_edit.as_mut() {
-        ed.anchor = a;
-        ed.caret = b;
-    }
-    insert(app, "");
-}
-
-/// Replace the selection with `s`.
-pub(super) fn insert(app: &mut PhotocraftApp, s: &str) {
-    let Some(ed) = app.ui.text_edit.clone() else { return };
-    let (a, b) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
-    let s = s.replace("\r\n", "\n").replace('\r', "\n");
-    if a == b && s.is_empty() {
-        return;
-    }
-    crate::type_transform::finish(app);
-    let applied = insertion_style::replace(app, a, b, &s);
-    if applied {
-        let mut cancelled = false;
-        if let Some(e) = app.ui.text_edit.as_mut() {
-            e.caret = a + s.chars().count();
-            e.anchor = e.caret;
-            // An application edit invalidates a live composition: its recorded range no longer
-            // describes the text, and its pending native commit must not be applied here.
-            cancelled = e.preedit.take().is_some();
-        }
-        if cancelled {
-            app.type_ime.clear_preedit();
-            interrupt_incoming(app);
-            app.type_ime.request_interrupt();
-        }
-        // Ordinary typing, paste, cut and deletion are application-origin, never IME receipts.
-        note_ime_application_change(app, &ed);
-    }
-}
-
-/// Typed text (not a paste): with Preferences ▸ Type ▸ Use Smart Quotes, straight quotes become
-/// typographic (Photoshop does not rewrite pasted text).
-pub(super) fn insert_typed(app: &mut PhotocraftApp, s: &str) {
-    if !app.session.prefs().type_.smart_quotes {
-        return insert(app, s);
-    }
-    let prev = app.ui.text_edit.clone().and_then(|ed| {
-        let at = ed.caret.min(ed.anchor);
-        let text = current_text(app, LayerId(ed.layer))?;
-        (at > 0).then(|| text.chars().nth(at - 1)).flatten()
-    });
-    insert(app, &smart_quotes(s, prev));
-}
-
-/// Straight quotes become “ ” and ‘ ’: opening after whitespace, a bracket or a dash (or at the
-/// start of the text), closing next to a letter or another quote. `prev` is the character before
-/// the caret.
-pub(super) fn smart_quotes(s: &str, mut prev: Option<char>) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        let c = match c {
-            '"' => {
-                if opens_quote(prev) {
-                    '\u{201c}'
-                } else {
-                    '\u{201d}'
-                }
-            }
-            '\'' => {
-                if opens_quote(prev) {
-                    '\u{2018}'
-                } else {
-                    '\u{2019}'
-                }
-            }
-            _ => c,
-        };
-        out.push(c);
-        prev = Some(c);
-    }
-    out
-}
-
-fn opens_quote(prev: Option<char>) -> bool {
-    prev.is_none_or(|p| p.is_whitespace() || matches!(p, '(' | '[' | '{' | '-' | '\u{2013}' | '\u{2014}'))
-}
-
 /// Alt+←/→: kern the pair before the caret by `by` (1/1000 em). No pair (caret at a text or line
-/// edge): nothing happens, like Photoshop. Not coalesced: one history step per press.
+/// edge): nothing happens, like Photoshop. One history step per press: the press takes a fresh
+/// key of its own ([`session_step_key`]) rather than no key, so it stays its own state and still
+/// says which session opened it (#12050).
 pub(super) fn kern_pair(app: &mut PhotocraftApp, id: LayerId, caret: usize, by: f32) {
     let Some(text) = current_text(app, id) else { return };
     let before = caret.checked_sub(1).and_then(|i| text.chars().nth(i));
@@ -223,40 +100,35 @@ pub(super) fn kern_pair(app: &mut PhotocraftApp, id: LayerId, caret: usize, by: 
         return;
     }
     crate::type_transform::finish(app);
-    let _ = app.run("type.edit", json!({"layer": id.0, "kernPair": {"at": caret, "by": by}}));
+    let mut p = json!({"layer": id.0, "kernPair": {"at": caret, "by": by}});
+    if let Some(session) = app.ui.text_edit.as_ref().map(|ed| ed.session.clone()) {
+        p["coalesce"] = json!(session_step_key(app, &session));
+    }
+    let _ = app.run("type.edit", p);
 }
 
-/// A character style the type editor's ⇧⌘ keys toggle (Photoshop: ⇧⌘K All Caps, ⇧⌘U
-/// Underline, ⇧⌘B Faux Bold, ⇧⌘I Faux Italic, ⇧⌘/ Strikethrough).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CharToggle {
-    AllCaps,
-    Underline,
-    FauxBold,
-    FauxItalic,
-    Strikethrough,
+/// Whether the toggle is on for a character style.
+fn char_on(which: CharToggle, st: &photocraft_doc::text::CharStyle) -> bool {
+    match which {
+        CharToggle::AllCaps => st.caps == photocraft_doc::text::Caps::AllCaps,
+        CharToggle::Underline => st.underline,
+        CharToggle::FauxBold => st.faux_bold,
+        CharToggle::FauxItalic => st.faux_italic,
+        CharToggle::Strikethrough => st.strikethrough,
+        _ => false,
+    }
 }
 
-impl CharToggle {
-    fn is_on(self, st: &photocraft_doc::text::CharStyle) -> bool {
-        match self {
-            Self::AllCaps => st.caps == photocraft_doc::text::Caps::AllCaps,
-            Self::Underline => st.underline,
-            Self::FauxBold => st.faux_bold,
-            Self::FauxItalic => st.faux_italic,
-            Self::Strikethrough => st.strikethrough,
-        }
-    }
-
-    fn param(self, on: bool) -> (&'static str, serde_json::Value) {
-        match self {
-            Self::AllCaps => ("caps", json!(if on { "all" } else { "normal" })),
-            Self::Underline => ("underline", json!(on)),
-            Self::FauxBold => ("fauxBold", json!(on)),
-            Self::FauxItalic => ("fauxItalic", json!(on)),
-            Self::Strikethrough => ("strikethrough", json!(on)),
-        }
-    }
+/// The `type.setStyle` parameter that sets the toggle on or off; `None` for a toggle the engine has no parameter for.
+fn char_param(which: CharToggle, on: bool) -> Option<(&'static str, serde_json::Value)> {
+    Some(match which {
+        CharToggle::AllCaps => ("caps", json!(if on { "all" } else { "normal" })),
+        CharToggle::Underline => ("underline", json!(on)),
+        CharToggle::FauxBold => ("fauxBold", json!(on)),
+        CharToggle::FauxItalic => ("fauxItalic", json!(on)),
+        CharToggle::Strikethrough => ("strikethrough", json!(on)),
+        _ => return None,
+    })
 }
 
 /// The character styles of the selection, or of the typing style when the text is empty. Empty
@@ -296,6 +168,7 @@ fn set_style(app: &mut PhotocraftApp, ed: &TextEdit, range: (usize, usize), mut 
     crate::type_transform::finish(app);
     p["layer"] = json!(ed.layer);
     p["range"] = json!([range.0, range.1]);
+    p["coalesce"] = json!(session_step_key(app, &ed.session));
     if let Err(e) = app.run("type.setStyle", p) {
         app.ui.status = e;
         app.ui.status_error = true;
@@ -310,8 +183,8 @@ pub(crate) fn toggle_char_style(app: &mut PhotocraftApp, which: CharToggle) {
     let Some(styles) = app.session.active().and_then(|s| text_layer(&s.doc, LayerId(ed.layer))).map(|t| selected_styles(t, range.0, range.1)) else {
         return;
     };
-    let on = !styles.iter().all(|st| which.is_on(st));
-    let (key, value) = which.param(on);
+    let on = !styles.iter().all(|st| char_on(which, st));
+    let Some((key, value)) = char_param(which, on) else { return };
     set_style(app, &ed, range, json!({ key: value }));
 }
 
@@ -354,86 +227,52 @@ pub fn commit(app: &mut PhotocraftApp) {
     commit_with(app, egui::Modifiers::NONE);
 }
 
-/// The document's commit shortcut also works while a Type field owns keyboard input.
-/// Resolve a pending font query before ending the edit; composition still owns its keys.
-pub(crate) fn commit_shortcut(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-    let Some(ed) = app.ui.text_edit.as_ref() else { return false };
-    let composing = ed.preedit.is_some();
-    let mods = ctx.input(|i| {
-        i.events.iter().find_map(|e| match e {
-            egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.command => Some(*modifiers),
-            _ => None,
-        })
-    });
-    let Some(mods) = mods else { return false };
-    let focused = ctx.memory(|m| m.focused());
-    let font_edit = focused.and_then(|id| ctx.data(|d| d.get_temp::<FontFieldEdit>(id.with("edit"))));
-    ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Enter, modifiers, .. } if modifiers.command)));
-    if composing || font_edit.as_ref().is_some_and(|e| e.composing) || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Ime(_)))) {
-        // Suppress the document/path shortcut, but leave IME events for their focused editor.
-        return false;
-    }
-    end_if_left(app);
-    if app.ui.text_edit.is_none() {
-        return true;
-    }
-    if let Some(edit) = font_edit.filter(|e| !e.accepted && !e.text.trim().is_empty() && !e.query.is_empty()) {
-        let families = families();
-        let labels: Option<Arc<HashMap<String, String>>> = ctx.data(|d| d.get_temp(font_labels_id()));
-        let (rows, _) = font_menu_rows(&families, labels.as_deref(), &edit.query, &edit.recents);
-        let selected =
-            edit.row.filter(|&i| rows.get(i).is_some_and(|(f, _)| **f == edit.current)).or_else(|| rows.iter().position(|(f, _)| **f == edit.current));
-        let family = accept_row(&rows, &edit.text, selected).and_then(|i| rows.get(i)).map(|(f, _)| (*f).clone());
-        if let Some(family) = family {
-            photocraft_text::served::request(&family);
-            app.note_recent_font(&family);
-            app.ui.tool_options.type_font = family.clone();
-            apply(app, ctx, json!({"font": family}));
-        }
-    }
-    if let Some(field) = focused {
-        ctx.memory_mut(|m| m.surrender_focus(field));
-        ctx.data_mut(|d| d.remove::<FontFieldEdit>(field.with("edit")));
-    }
-    egui::Popup::close_all(ctx);
-    ctx.data_mut(|d| {
-        d.remove::<String>(egui::Id::unique("type-font-hover"));
-        d.remove::<(String, f64)>(egui::Id::unique("type-font-hover-since"));
-    });
-    crate::type_font_preview::clear(app);
-    commit_with(app, mods);
-    true
-}
-
 /// [`commit`] from a click, button or key that has modifiers held. They no longer change the
 /// result, since a Type Mask always replaces the selection (#12073); the parameter stays so its
 /// callers don't change.
 pub fn commit_with(app: &mut PhotocraftApp, _mods: egui::Modifiers) {
+    commit_ending(app, true);
+}
+
+/// The commit a Layers panel row click makes before it selects `selected` (#5584): a click on
+/// another layer's row is a layer switch (#6483), so an unchanged session records nothing (#12050);
+/// a click on the edited layer's own row ends the edit like any other commit. A multi-row selection
+/// names all its rows, so it is a switch too unless the edited layer is one of them.
+pub(crate) fn commit_before_selecting(app: &mut PhotocraftApp, selected: &[u64]) {
+    let switches = app.ui.text_edit.as_ref().is_some_and(|ed| !selected.is_empty() && !selected.contains(&ed.layer));
+    commit_ending(app, !switches);
+}
+
+/// [`commit_with`]'s body. `by_user`: the user ended the edit (a commit gesture), rather than a
+/// switch to another layer or document taking the work over, which records nothing for an
+/// unchanged session (#12050).
+fn commit_ending(app: &mut PhotocraftApp, by_user: bool) {
     app.ui.type_insertion_style = None;
     // A box drag in progress keeps the box it reached, as when every move was applied.
     crate::type_box_preview::flush(app);
     crate::type_font_preview::clear(app);
     let current = app.session.active_index();
     let Some(home) = app.ui.text_edit.as_ref().map(|ed| edit_home(app, ed)) else {
-        return commit_here(app);
+        return commit_here(app, by_user);
     };
     match home {
         Some(home) if Some(home) != current => {
             // An edit left in a background document commits there, in its own history (#6483).
+            // Another document is active, so a document switch ended the edit: an unchanged
+            // session records nothing there, even though its own document is active now.
             app.session.set_active(home);
-            commit_here(app);
+            commit_here(app, false);
             if let Some(i) = current {
                 app.session.set_active(i);
             }
         }
-        Some(_) => commit_here(app),
+        Some(_) => commit_here(app, by_user),
         // Its document closed: there is nothing to commit into, and the layer id may name a
         // layer of another document.
         None => {
             crate::type_transform::reset(app);
             app.ui.text_edit = None;
             app.ui.text_edit_return_tool = None;
-            app.type_ime.clear_preedit();
         }
     }
 }
@@ -447,13 +286,16 @@ pub(super) fn edit_home(app: &PhotocraftApp, ed: &TextEdit) -> Option<usize> {
 }
 
 /// [`commit_with`] in the active document, which is the edit's own.
-fn commit_here(app: &mut PhotocraftApp) {
+fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
+    // Read before the tool and the layer move on below: #12050 measures the commits the user
+    // makes, and an unchanged edit that ends because a tool switch or another layer took the
+    // work over (#6483) keeps today's behaviour of recording nothing.
+    let ends_an_edit = by_user && user_ends_the_edit(app);
     if app.ui.tool.is_type() {
         crate::type_transform::finish(app);
     }
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
-    app.type_ime.clear_preedit();
     if let Some(tool) = app.ui.text_edit_return_tool.take()
         && app.ui.tool.is_type()
     {
@@ -508,7 +350,49 @@ fn commit_here(app: &mut PhotocraftApp) {
     } else if ed.created {
         let name = photocraft_engine::type_cmds::layer_name(&text);
         let _ = app.run("type.edit", json!({"layer": ed.layer, "name": name, "coalesce": ed.session}));
+    } else if ends_an_edit && worked_on_layer(app, &ed) && !session_recorded(app, &ed) {
+        // Ending an edit of an existing layer is a step of its own even when the session changed
+        // nothing (#12050), so the History list shows the edit the user just ended. The Cancel
+        // button ends through `cancel`, which never runs this.
+        let _ = app.run("type.edit", json!({"layer": ed.layer, "coalesce": ed.session}));
     }
+}
+
+/// A coalesce key for one deliberate step inside a typing session: the ⇧⌘ style keys, the ⌥
+/// metric steps and Alt+←/→ kerning are one history step per press, so each press takes a fresh
+/// key and no two presses share a state. The key still names the session, which is how
+/// [`session_recorded`] knows the session already opened a state and must not add an empty one
+/// when the edit ends (#12050).
+fn session_step_key(app: &mut PhotocraftApp, session: &str) -> String {
+    format!("{session}-{}", app.ui.alloc_id())
+}
+
+/// Has this session opened a history state of its own? Its typing carries the session's key, and
+/// its one-step-per-press keys ([`session_step_key`]) carry that key with a press number, so the
+/// state they leave names the session that made it. Ending such a session adds nothing: the undo
+/// step the user just made is already there, and an empty state behind it would be a History row
+/// that undoes nothing. A state left by an *earlier* session carries that session's key, so a
+/// later unchanged edit of the same layer still records its own (#12050).
+fn session_recorded(app: &PhotocraftApp, ed: &TextEdit) -> bool {
+    let pressed = format!("{}-", ed.session);
+    app.session.active().is_some_and(|st| st.coalesce.as_deref().is_some_and(|k| k == ed.session || k.starts_with(pressed.as_str())))
+}
+
+/// Is a Type tool still the tool holding this session? The frame commits the edit when a tool
+/// switch takes the work on (#6483), also between the Type tools and the Type Mask tools; that is
+/// not an edit of the layer, so #12050's state is not opened for it.
+fn user_ends_the_edit(app: &PhotocraftApp) -> bool {
+    app.ui.tool.is_type() && app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask == app.ui.tool.is_type_mask())
+}
+
+/// Is the session's layer still the one worked on? Selecting another layer or document commits the
+/// session (#6483); #12050 does not measure that, so it records nothing. A background document's
+/// edit is checked in its own document, where [`commit_ending`] has just made it active, so a
+/// document switch cannot be told from an in-place commit here: [`commit_ending`] already found the
+/// switch and passes `by_user` false, which is what keeps the unchanged edit from recording there
+/// (#12050 review c4502824764).
+fn worked_on_layer(app: &PhotocraftApp, ed: &TextEdit) -> bool {
+    app.session.active().is_some_and(|st| st.active_layer == Some(LayerId(ed.layer)))
 }
 
 /// Commit the edit once its layer is no longer the one worked on (#6483): another layer became
@@ -542,7 +426,6 @@ pub fn cancel(app: &mut PhotocraftApp) {
     crate::type_box_preview::discard(app);
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
-    app.type_ime.clear_preedit();
     if let Some(tool) = app.ui.text_edit_return_tool.take()
         && app.ui.tool.is_type()
     {
@@ -565,16 +448,19 @@ fn undo_session(app: &mut PhotocraftApp, ed: &TextEdit) {
 /// where the difference is measured.
 #[cfg(test)]
 mod indexed_commit_tests {
-    use super::{cancel, commit, insert};
+    use super::commit;
     use crate::PhotocraftApp;
     use crate::state::Tool;
-    use crate::tools::type_tool::pointer_up;
+    use crate::tools::type_tool::host::type_text;
+
+    use crate::canvas::testing::{ToolEvent, tool_event};
+    use egui::Modifiers;
     use photocraft_doc::{ColorMode, LayerContent, LayerId, TextLayer};
     use serde_json::json;
 
     /// A new transparent document in `mode`: `rgb` keeps today's behaviour, `indexed` and `bitmap`
     /// are the two the issue is about.
-    fn app(mode: &str) -> PhotocraftApp {
+    fn app(mode: &str) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 400, "height": 200, "background": "transparent"})).unwrap();
         match mode {
@@ -592,6 +478,16 @@ mod indexed_commit_tests {
         app.sync_views();
         app.ui.tool = Tool::Type;
         app
+    }
+
+    /// Opens a session with the tool in hand: a click, or a drag from `from` to `to` for a paragraph box.
+    // PLAN: tools-w21's shared `type_new` helper replaces this setup.
+    fn open(app: &mut PhotocraftApp, from: (f64, f64), to: (f64, f64)) {
+        tool_event(app, ToolEvent::Down { x: from.0, y: from.1, pressure: 1.0 }, Modifiers::NONE);
+        if from != to {
+            tool_event(app, ToolEvent::Move { x: to.0, y: to.1, pressure: 1.0 }, Modifiers::NONE);
+        }
+        tool_event(app, ToolEvent::Up { x: to.0, y: to.1 }, Modifiers::NONE);
     }
 
     fn doc_mode(app: &PhotocraftApp) -> ColorMode {
@@ -630,8 +526,8 @@ mod indexed_commit_tests {
     fn committing_in_indexed_color_or_bitmap_leaves_the_glyphs_selected() {
         // The bounds the same text covers where it does become a layer.
         let mut rgb = app("rgb");
-        pointer_up(&mut rgb, [80.0, 120.0], [80.0, 120.0]);
-        insert(&mut rgb, "Hi");
+        open(&mut rgb, (80.0, 120.0), (80.0, 120.0));
+        type_text(&mut rgb, "Hi");
         commit(&mut rgb);
         let glyphs = rgb.session.active().unwrap().doc.layers.last().unwrap().surface().unwrap().content_bounds();
         assert_eq!(text_layers(&rgb), 1, "an RGB document keeps its type layer");
@@ -643,8 +539,8 @@ mod indexed_commit_tests {
             let (layers_before, states_before) = (layers(&app), states(&app));
 
             // Typing: the working layer is there, and shown, as measured.
-            pointer_up(&mut app, [80.0, 120.0], [80.0, 120.0]);
-            insert(&mut app, "Hi");
+            open(&mut app, (80.0, 120.0), (80.0, 120.0));
+            type_text(&mut app, "Hi");
             assert!(app.ui.text_edit.is_some(), "{mode}: the session is open");
             assert_eq!(text_layers(&app), 1, "{mode}: the text is edited on a layer");
 
@@ -662,23 +558,6 @@ mod indexed_commit_tests {
         }
     }
 
-    /// Cancelling such a session is unchanged: no layer and no selection are left, as elsewhere.
-    #[test]
-    fn cancelling_in_indexed_color_or_bitmap_leaves_nothing() {
-        for mode in ["rgb", "indexed", "bitmap"] {
-            let mut app = app(mode);
-            let (layers_before, states_before) = (layers(&app), states(&app));
-            pointer_up(&mut app, [80.0, 120.0], [80.0, 120.0]);
-            insert(&mut app, "Hi");
-            cancel(&mut app);
-            assert!(app.ui.text_edit.is_none(), "{mode}: the session ended");
-            assert_eq!(text_layers(&app), 0, "{mode}: no layer is left");
-            assert_eq!(layers(&app), layers_before, "{mode}: no layer is added");
-            assert!(selection(&app).is_none(), "{mode}: nothing is selected");
-            assert_eq!(states(&app), states_before, "{mode}: and no history state");
-        }
-    }
-
     /// #12041 measures the horizontal point text you click and type. Paragraph (box) text and
     /// vertical type are on its *Not measured* list, whose rule is that they keep today's
     /// behaviour - and today's behaviour is the right one here anyway: a coverage mask cannot bring
@@ -690,8 +569,8 @@ mod indexed_commit_tests {
         for mode in ["indexed", "bitmap"] {
             // A dragged paragraph box.
             let mut boxed = app(mode);
-            pointer_up(&mut boxed, [40.0, 60.0], [320.0, 180.0]);
-            insert(&mut boxed, "Hi");
+            open(&mut boxed, (40.0, 60.0), (320.0, 180.0));
+            type_text(&mut boxed, "Hi");
             let box_layer = LayerId(boxed.ui.text_edit.as_ref().unwrap().layer);
             assert!(matches!(text_of(&boxed, box_layer).map(|t| t.shape), Some(TextShape::Box { .. })), "{mode}: the setup made paragraph text");
             commit(&mut boxed);
@@ -701,8 +580,8 @@ mod indexed_commit_tests {
             // Vertical point text.
             let mut column_app = app(mode);
             column_app.ui.tool = Tool::VerticalType;
-            pointer_up(&mut column_app, [80.0, 120.0], [80.0, 120.0]);
-            insert(&mut column_app, "Hi");
+            open(&mut column_app, (80.0, 120.0), (80.0, 120.0));
+            type_text(&mut column_app, "Hi");
             let column = LayerId(column_app.ui.text_edit.as_ref().unwrap().layer);
             assert!(text_of(&column_app, column).is_some_and(|t| t.orientation == Orientation::Vertical), "{mode}: the setup made vertical text");
             commit(&mut column_app);
