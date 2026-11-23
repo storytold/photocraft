@@ -8,17 +8,12 @@ use crate::{PhotocraftApp, state::Tool};
 
 /// The id of the command that selects `tool`.
 pub(crate) fn id(tool: Tool) -> String {
-    let mut name = format!("{tool:?}");
-    if let Some(first) = name.get_mut(..1) {
-        first.make_ascii_lowercase();
-    }
-    format!("tools.select.{name}")
+    format!("tools.select.{}", tool.id())
 }
 
 pub(crate) fn tool(id: &str) -> Option<Tool> {
     let name = id.strip_prefix("tools.select.")?;
-    let tool = Tool::from_name(name)?;
-    (id == self::id(tool)).then_some(tool)
+    Tool::from_id(name)
 }
 
 pub(crate) fn default(tool: Tool) -> Option<String> {
@@ -116,5 +111,23 @@ mod engine_table_tests {
         let engine: Vec<(String, &str, Option<String>)> =
             photocraft_engine::shell_commands::TOOLS.iter().map(|(i, n, k)| (i.to_string(), *n, k.map(str::to_string))).collect();
         assert_eq!(ours, engine, "update photocraft_engine::shell_commands::TOOLS");
+    }
+}
+
+#[cfg(test)]
+mod id_tests {
+    use super::*;
+
+    #[test]
+    fn selection_ids_preserve_debug_names_and_resolve_exactly() {
+        for tool_value in Tool::ALL {
+            let mut old_name = format!("{tool_value:?}");
+            old_name.get_mut(..1).unwrap().make_ascii_lowercase();
+            let old_id = format!("tools.select.{old_name}");
+            assert_eq!(id(tool_value), old_id);
+            assert_eq!(tool(&old_id), Tool::from_name(&old_name).filter(|found| *found == tool_value));
+        }
+        assert_eq!(tool("tools.select.Brush"), None);
+        assert_eq!(tool("tools.select.notATool"), None);
     }
 }

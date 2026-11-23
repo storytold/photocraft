@@ -370,9 +370,13 @@ fn file_hex(path: &std::path::Path) -> Option<String> {
 /// per-file download rather than a git upstream; the manifest discipline is the same
 /// (`--update-manifest` re-pins). Opt-in: not part of `--all` or CI until a maintainer says so.
 pub fn fetch_pixls(update: bool) -> Result<(), String> {
-    let dest = crate::root().join("corpus").join("pixls");
+    fetch_pixls_at(&crate::root(), update)
+}
+
+fn fetch_pixls_at(root: &Path, update: bool) -> Result<(), String> {
+    let dest = root.join("corpus").join("pixls");
     std::fs::create_dir_all(&dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
-    let manifest = crate::root().join("xtask").join("pixls.sha256");
+    let manifest = root.join("xtask").join("pixls.sha256");
     if update {
         let mut names: Vec<&str> = crate::corpus_pins::PIXLS_FILES.iter().map(|(_, n)| *n).collect();
         names.sort_unstable();
@@ -390,6 +394,12 @@ pub fn fetch_pixls(update: bool) -> Result<(), String> {
         .lines()
         .filter_map(|l| l.split_once("  ").map(|(s, n)| (n.to_string(), s.to_string())))
         .collect();
+    // Check every pin before any download: two absent hashes must not count as a cache hit.
+    for (_, name) in crate::corpus_pins::PIXLS_FILES {
+        if !want.contains_key(*name) {
+            return Err(format!("pixls {name}: missing sha256 entry in {}", manifest.display()));
+        }
+    }
     for (path, name) in crate::corpus_pins::PIXLS_FILES {
         let file = dest.join(name);
         if file_hex(&file).as_deref() == want.get(*name).map(String::as_str) {
@@ -477,5 +487,81 @@ mod tests {
         assert_eq!(out, vec![PathBuf::from("real/a.psd")]);
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    struct PixlsFixture(PathBuf);
+
+    impl PixlsFixture {
+        fn new(case: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("photocraft-pixls-{}-{case}", std::process::id()));
+            std::fs::create_dir(&root).unwrap();
+            std::fs::create_dir(root.join("xtask")).unwrap();
+            std::fs::create_dir_all(root.join("corpus/pixls")).unwrap();
+            Self(root)
+        }
+
+        fn populate(&self, omitted: Option<&str>, cached: bool) {
+            let hash = crate::sha256::hex(b"camera fixture");
+            let mut manifest = String::new();
+            for (_, name) in crate::corpus_pins::PIXLS_FILES {
+                if Some(*name) != omitted {
+                    manifest.push_str(&format!("{hash}  {name}\n"));
+                }
+                if cached {
+                    std::fs::write(self.0.join("corpus/pixls").join(name), b"camera fixture").unwrap();
+                }
+            }
+            std::fs::write(self.0.join("xtask/pixls.sha256"), manifest).unwrap();
+        }
+
+        fn missing_pin_error(&self, name: &str) -> String {
+            format!("pixls {name}: missing sha256 entry in {}", self.0.join("xtask").join("pixls.sha256").display())
+        }
+    }
+
+    impl Drop for PixlsFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn pixls_rejects_empty_manifest_without_claiming_missing_files_are_verified() {
+        let fixture = PixlsFixture::new("empty-manifest");
+        std::fs::write(fixture.0.join("xtask/pixls.sha256"), "").unwrap();
+        let name = crate::corpus_pins::PIXLS_FILES[0].1;
+        assert_eq!(super::fetch_pixls_at(&fixture.0, false), Err(fixture.missing_pin_error(name)));
+    }
+
+    #[test]
+    fn pixls_rejects_missing_pin_even_when_file_is_cached() {
+        let fixture = PixlsFixture::new("cached-missing-pin");
+        let name = crate::corpus_pins::PIXLS_FILES[0].1;
+        fixture.populate(Some(name), true);
+        assert_eq!(super::fetch_pixls_at(&fixture.0, false), Err(fixture.missing_pin_error(name)));
+    }
+
+    #[test]
+    fn pixls_checks_last_pin_before_downloading_an_earlier_missing_file() {
+        let fixture = PixlsFixture::new("last-pin");
+        let name = crate::corpus_pins::PIXLS_FILES.last().unwrap().1;
+        fixture.populate(Some(name), false);
+        assert_eq!(super::fetch_pixls_at(&fixture.0, false), Err(fixture.missing_pin_error(name)));
+    }
+
+    #[test]
+    fn pixls_accepts_complete_matching_cached_files() {
+        let fixture = PixlsFixture::new("complete-cache");
+        fixture.populate(None, true);
+        assert_eq!(super::fetch_pixls_at(&fixture.0, false), Ok(()));
+    }
+
+    #[test]
+    fn pixls_update_manifest_still_hashes_cached_files() {
+        let fixture = PixlsFixture::new("update-manifest");
+        fixture.populate(None, true);
+        std::fs::write(fixture.0.join("xtask/pixls.sha256"), "").unwrap();
+        assert_eq!(super::fetch_pixls_at(&fixture.0, true), Ok(()));
+        assert_eq!(super::fetch_pixls_at(&fixture.0, false), Ok(()));
     }
 }

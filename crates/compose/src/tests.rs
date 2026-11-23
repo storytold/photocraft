@@ -2936,15 +2936,16 @@ fn blend_if_gray_follows_photoshops_weights_and_rounding() {
 
 #[test]
 fn blend_if_split_point_fades_like_opacity() {
-    // A split black point (Alt-drag) at 50/150 shows a value-100 layer at half strength, which
-    // is exactly the layer at 50% opacity, also over a semi-transparent backdrop.
+    // A split black point (Alt-drag) at 50/150 shows a value-100 layer at (100 − 50 + 1) /
+    // (150 − 50 + 1) in an 8-bit document (#14855), which is exactly the layer at that opacity,
+    // also over a semi-transparent backdrop.
     let v = 100.0 / 255.0;
     let mut d = doc_white(4, 4);
     d.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.2, 1.0, 0.5]);
     let mut l = solid_layer("v", Rect::new(0, 0, 4, 4), [v, v, v, 1.0]);
     l.blend = BlendMode::Multiply;
     let mut half = l.clone();
-    half.opacity = 0.5;
+    half.opacity = 51.0 / 101.0;
     l.blend_if.set(0, [range([50, 150], [255, 255]), FULL]);
     let mut d2 = d.clone();
     d.layers.push(l);
