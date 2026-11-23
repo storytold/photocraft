@@ -48,7 +48,7 @@ fn gated(doc: Document) -> (Recoverable, mpsc::Receiver<()>, mpsc::Sender<()>, m
 
 fn frame(app: &mut PhotocraftApp, ctx: &egui::Context) {
     ctx.run_ui(egui::RawInput::default(), |ui| {
-        tick(app, ui.ctx());
+        super::save::tick(app, ui.ctx(), Instant::now());
         crate::jobs_ui::tick(app, ui.ctx());
     })
     .textures_delta
@@ -91,7 +91,7 @@ fn recovery_keeps_frames_and_editing_live_and_adopts_the_admitted_document() {
     let (pending, started, release, finished) = gated(doc);
     let (services, log) = services(vec![pending]);
     let mut app = PhotocraftApp::new(Session::new(), services);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     assert!(app.session.documents().is_empty());
     frame(&mut app, &ctx);
     started.recv_timeout(Duration::from_secs(10)).unwrap();
@@ -115,7 +115,19 @@ fn recovery_keeps_frames_and_editing_live_and_adopts_the_admitted_document() {
     assert_eq!(recovered.path.as_deref(), Some("original.psb"));
     assert!(recovered.is_dirty());
     assert_eq!(recovered.doc.layers, original.layers);
-    assert_eq!(app.prefs_rt.autosaved.get(&recovered.doc.id), Some(&recovered.revision));
+    // The recovered document's copy is current: even a forced autosave does not write it again.
+    let docs: Vec<_> = app
+        .session
+        .documents()
+        .iter()
+        .map(|st| craft::platform::autosave::AutosaveDoc { id: st.doc.id.0, revision: st.revision, dirty: st.is_dirty() })
+        .collect();
+    // The test's services have no autosave writer, so the frame never set the timer's interval.
+    app.autosave.set_interval(craft::platform::autosave::interval_for_minutes(10));
+    app.autosave.autosave_now();
+    let due = app.autosave.due(std::time::Instant::now(), docs);
+    assert!(!due.save.contains(&recovered.doc.id.0), "{due:?}");
+    assert!(due.save.contains(&working_id.0), "the edited working document is due: {due:?}");
     assert_eq!(*log.lock().unwrap(), [format!("adopt {} pending", recovered.doc.id.0)]);
 }
 
@@ -135,7 +147,7 @@ fn cancelling_recovery_skips_the_queue_and_never_adopts_a_late_result() {
     };
     let (services, log) = services(vec![pending, second]);
     let mut app = PhotocraftApp::new(Session::new(), services);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     frame(&mut app, &ctx);
     started.recv_timeout(Duration::from_secs(10)).unwrap();
     let job = app.session.jobs()[0].id;
@@ -158,11 +170,16 @@ fn failed_recovery_reports_the_error_and_continues_to_the_next_entry() {
     let broken = Recoverable { key: "broken".into(), name: "Broken".into(), path: None, load: Box::new(|| Err("corrupt tile".into())) };
     let (services, log) = services(vec![broken, entry("good", document("Good"))]);
     let mut app = PhotocraftApp::new(Session::new(), services);
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     settle(&mut app, &ctx);
     assert_eq!(app.session.documents().len(), 1);
     assert!(app.ui.chrome.home.is_none(), "the first recovered document should be visible");
-    assert!(app.ui.notices.iter().any(|n| n.error && (n.title.contains("corrupt tile") || n.lines.iter().any(|l| l.contains("corrupt tile")))));
+    assert!(
+        app.ui
+            .notices
+            .iter()
+            .any(|n| n.tone == craft::theme::variant::Tone::Bad && (n.title.contains("corrupt tile") || n.lines.iter().any(|l| l.contains("corrupt tile"))))
+    );
     assert_eq!(*log.lock().unwrap(), [format!("adopt {} good", app.session.active().unwrap().doc.id.0)]);
 }
 
@@ -182,7 +199,7 @@ fn disabled_recovery_never_discovers_or_decodes_entries() {
             ..Default::default()
         },
     );
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     for _ in 0..3 {
         frame(&mut app, &ctx);
     }

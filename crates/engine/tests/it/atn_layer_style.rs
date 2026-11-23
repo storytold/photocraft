@@ -4,9 +4,10 @@ use craft_psd::{
     descriptor::{Class, Descriptor, Id, MAX_DEPTH, ObjectArray, ReferenceItem, UnicodeString, Value as D},
 };
 use photocraft_doc::{Document, Effect, LayerId};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
-    actions_cmds::Action,
+    actions_cmds::{Action, ActionStep},
     atn_cmds::{export, import},
 };
 use serde_json::{Value, json};
@@ -52,7 +53,7 @@ fn action(items: Vec<AtnItem>) -> Action {
 }
 
 fn exported(id: &str, params: Value) -> Option<AtnItem> {
-    let a = Action::new("A", vec![(id.into(), params)]);
+    let a = Action::new("A", vec![ActionStep::new(id, params)]);
     let bytes = export("S", &[&a], &[], false).ok()?.0;
     atn::parse(&bytes).ok()?.actions.into_iter().next()?.items.into_iter().next()
 }
@@ -145,7 +146,7 @@ fn create_layers_playback_matches_native_effect_layers_and_undo_at_each_depth() 
         let (mut recorded, source) = fixture(depth);
         let before = recorded.active().unwrap().doc.clone();
         let past = recorded.active().unwrap().history.past_len();
-        recorded.actions.list.push(action(vec![item(CREATE, create())]));
+        recorded.actions_mut().list.push(action(vec![item(CREATE, create())])).unwrap();
         let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none(), "{depth}: {result}");
@@ -176,7 +177,7 @@ fn scale_effects_playback_matches_native_settings_and_undo_at_each_depth() {
                 recorded.execute("actions.setHistory", json!({"singleState":single_state})).unwrap();
                 let before = recorded.active().unwrap().doc.clone();
                 let past = recorded.active().unwrap().history.past_len();
-                recorded.actions.list.push(action(vec![item(SCALE, scale(percent))]));
+                recorded.actions_mut().list.push(action(vec![item(SCALE, scale(percent))])).unwrap();
                 let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
                 assert_eq!(result["ran"], 1);
                 assert!(result.get("failed").is_none(), "{depth}/{percent}: {result}");
@@ -202,7 +203,7 @@ fn scale_then_create_layers_matches_native_sequence() {
         recorded.execute("actions.setHistory", json!({"singleState":single_state})).unwrap();
         let before = recorded.active().unwrap().doc.clone();
         let past = recorded.active().unwrap().history.past_len();
-        recorded.actions.list.push(action(vec![item(SCALE, scale(200.0)), item(CREATE, create())]));
+        recorded.actions_mut().list.push(action(vec![item(SCALE, scale(200.0)), item(CREATE, create())])).unwrap();
         let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 2);
         assert!(result.get("failed").is_none());
@@ -234,19 +235,19 @@ fn layer_style_descriptors_roundtrip_and_edited_scale_does_not_revive_source() {
         source.with_dialog = true;
         source.dialog_options = 2;
         let a = action(vec![source.clone()]);
-        assert_eq!(a.steps[0].0, id);
+        assert_eq!(a.steps[0].command, id);
         let bytes = export("S", &[&a], &[], false).unwrap().0;
         let saved = atn::parse(&bytes).unwrap().actions.into_iter().next().unwrap().items;
         assert_eq!(saved.len(), 1);
         same_item_wire(saved.into_iter().next().unwrap(), source);
-        let mut damaged = a.steps[0].1.clone();
+        let mut damaged = a.steps[0].params.clone();
         damaged["_atnLayerStyleDescriptor"] = json!("not base64");
         assert!(exported(id, damaged).is_none());
     }
     let mut d = scale(100.0);
     d.name = UnicodeString::new_nul("Original");
     let mut a = action(vec![item(SCALE, d)]);
-    a.steps[0].1["scale"] = json!(200);
+    a.steps[0].params["scale"] = json!(200);
     for skip in [false, true] {
         let (bytes, skipped) = export("S", &[&a], &[], skip).unwrap();
         assert!(skipped.is_empty());
@@ -360,7 +361,7 @@ fn layer_style_malformed_records_stay_kept_without_an_edit() {
         let source = item(id, d);
         let loaded = import(&atn::write(&file(vec![source.clone()])).unwrap()).unwrap();
         assert_eq!(loaded.unsupported.len(), 1, "{id}: {source:?}");
-        assert_eq!(loaded.actions[0].steps[0].0, "actions.photoshopStep");
+        assert_eq!(loaded.actions[0].steps[0].command, "actions.photoshopStep");
         let bytes = export("S", &[&loaded.actions[0]], &[], false).unwrap().0;
         let saved = atn::parse(&bytes).unwrap().actions.into_iter().next().unwrap().items;
         assert_eq!(saved.len(), 1);
@@ -368,7 +369,9 @@ fn layer_style_malformed_records_stay_kept_without_an_edit() {
         let (mut s, _) = fixture(8);
         let before = s.active().unwrap().doc.clone();
         let past = s.active().unwrap().history.past_len();
-        s.actions.list.extend(loaded.actions);
+        for action in loaded.actions {
+            s.actions_mut().list.push(action).unwrap();
+        }
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 0);
         assert!(result.get("failed").is_some());
@@ -387,7 +390,9 @@ fn miskeyed_effects_reference_stays_whole_without_a_blank_layer_edit() {
     let (mut s, _) = fixture(8);
     let before = s.active().unwrap().doc.clone();
     let past = s.active().unwrap().history.past_len();
-    s.actions.list.extend(loaded.actions.clone());
+    for action in loaded.actions.clone() {
+        s.actions_mut().list.push(action).unwrap();
+    }
     let result = s.execute("actions.play", json!({"action": 0})).unwrap();
     // Play before checking import classification: the old path actually creates a blank layer.
     assert!(
@@ -402,7 +407,7 @@ fn miskeyed_effects_reference_stays_whole_without_a_blank_layer_edit() {
     assert_eq!(result["ran"], 0);
     assert!(result.get("failed").is_some());
     assert_eq!(loaded.unsupported.len(), 1);
-    assert_eq!(loaded.actions[0].steps[0].0, "actions.photoshopStep");
+    assert_eq!(loaded.actions[0].steps[0].command, "actions.photoshopStep");
     let (bytes, skipped) = export("S", &[&loaded.actions[0]], &[], false).unwrap();
     assert!(skipped.is_empty());
     let saved = atn::parse(&bytes).unwrap().actions.into_iter().next().unwrap().items;
@@ -419,10 +424,10 @@ fn ordinary_layer_make_remains_a_legitimate_control() {
             d = d.with("Usng", u);
         }
         let a = action(vec![item(CREATE, d)]);
-        assert_eq!(a.steps[0].0, "layer.new.layer");
+        assert_eq!(a.steps[0].command, "layer.new.layer");
         let (mut s, source) = fixture(8);
         let before = s.active().unwrap().doc.clone();
-        s.actions.list.push(a);
+        s.actions_mut().list.push(a).unwrap();
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none());
@@ -465,7 +470,9 @@ fn nested_effects_references_stay_whole_without_a_blank_layer_edit() {
             let (mut s, _) = fixture(8);
             let before = s.active().unwrap().doc.clone();
             let past = s.active().unwrap().history.past_len();
-            s.actions.list.extend(loaded.actions.clone());
+            for action in loaded.actions.clone() {
+                s.actions_mut().list.push(action).unwrap();
+            }
             let result = s.execute("actions.play", json!({"action": 0})).unwrap();
             // Playback precedes classification so the baseline exposes the actual blank-layer edit.
             assert!(
@@ -480,7 +487,7 @@ fn nested_effects_references_stay_whole_without_a_blank_layer_edit() {
             assert_eq!(result["ran"], 0, "{label}/{key}");
             assert!(result.get("failed").is_some(), "{label}/{key}");
             assert_eq!(loaded.unsupported.len(), 1, "{label}/{key}");
-            assert_eq!(loaded.actions[0].steps[0].0, "actions.photoshopStep", "{label}/{key}");
+            assert_eq!(loaded.actions[0].steps[0].command, "actions.photoshopStep", "{label}/{key}");
             let (bytes, skipped) = export("S", &[&loaded.actions[0]], &[], false).unwrap();
             assert!(skipped.is_empty(), "{label}/{key}");
             let saved = atn::parse(&bytes).unwrap().actions.into_iter().next().unwrap().items;
@@ -502,13 +509,13 @@ fn ordinary_layer_make_native_export_matches_native_playback() {
             options.items.push((Id::new("data"), value));
         }
         let a = action(vec![source]);
-        assert_eq!(a.steps[0], ("layer.new.layer".into(), params.clone()));
+        assert_eq!(a.steps[0], ActionStep::new("layer.new.layer", params.clone()));
         let (mut native, _) = fixture(8);
         native.execute("layer.new.layer", params.clone()).unwrap();
         let (mut recorded, source) = fixture(8);
         let before = recorded.active().unwrap().doc.clone();
         let past = recorded.active().unwrap().history.past_len();
-        recorded.actions.list.push(a);
+        recorded.actions_mut().list.push(a).unwrap();
         let result = recorded.execute("actions.play", json!({"action": 0})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none());

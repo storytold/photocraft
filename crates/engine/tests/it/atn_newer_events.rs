@@ -4,7 +4,12 @@ use craft_psd::{
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
 };
 use photocraft_doc::{Layer, LayerContent, LayerId, SmartObject, SmartSource};
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionStep},
+    atn_cmds,
+};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -12,7 +17,7 @@ fn fixture(groups: &[Option<u64>], selected: &[usize]) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
     let st = s.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     doc.layers = groups
         .iter()
         .enumerate()
@@ -162,8 +167,8 @@ fn invalid_link_state_fails_without_editing() {
     }
     for active in [None, Some(LayerId(u64::MAX))] {
         let st = s.active_mut().unwrap();
-        st.active_layer = active;
-        st.selected_layers = active.into_iter().collect();
+        st.set_active_layer(active);
+        *st.selection_mut() = active.into_iter().collect();
         assert!(s.execute("layer.linkLayers", json!({"linked": false})).is_err());
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!(s.active().unwrap().history.past_len(), history);
@@ -180,7 +185,7 @@ fn atn_link_events_keep_descriptors_and_replay_the_requested_operation() {
             let descriptor = Descriptor::new("null").with("null", target());
             let mut s = fixture(&initial, &[0, 1]);
             assert_eq!(load(&mut s, &file(event, descriptor.clone()))["unsupported"], json!([]));
-            assert_eq!(s.actions.list[0].steps, [("layer.linkLayers".into(), json!({"linked": linked}))]);
+            assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("layer.linkLayers", json!({"linked": linked}))]);
             let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
             assert_eq!(saved["skipped"], json!([]));
             let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
@@ -228,7 +233,7 @@ fn unsupported_link_descriptors_are_kept_and_ambiguous_exports_are_refused() {
     }
     // `{}` is the measured Link Layers toggle and exports (main's Group F mapping).
     for params in [json!({"linked": null}), json!({"linked": true, "layer": "Layer 0"}), json!({"linked": false, "layers": [1, 2]})] {
-        let action = Action::new("A", vec![("layer.linkLayers".into(), params)]);
+        let action = Action::new("A", vec![ActionStep::new("layer.linkLayers", params)]);
         assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
@@ -258,7 +263,7 @@ fn targeted(event: &str, explicit: bool) -> Descriptor {
 fn load_targeted(s: &mut Session, event: &str, id: &str, explicit: bool) {
     assert_eq!(load(s, &file(event, targeted(event, explicit)))["unsupported"], json!([]), "{event}");
     let p = if explicit { json!({}) } else { json!({"_atnNoTarget": true}) };
-    assert_eq!(s.actions.list[0].steps, [(id.into(), p)]);
+    assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new(id, p)]);
 }
 
 #[test]
@@ -293,7 +298,7 @@ fn bare_link_events_keep_their_operation_and_empty_keys() {
         let initial = if linked { None } else { Some(77) };
         let mut s = fixture(&[initial, initial], &[0, 1]);
         assert_eq!(load(&mut s, &file(event, Descriptor::new(event)))["unsupported"], json!([]));
-        assert_eq!(s.actions.list[0].steps[0].1, json!({"linked": linked, "_atnNoTarget": true}));
+        assert_eq!(s.actions().list.actions()[0].steps[0].params, json!({"linked": linked, "_atnNoTarget": true}));
         let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
         let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
         assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor, Some(Descriptor::new("null")));
@@ -324,12 +329,12 @@ fn target_events_keep_unknown_targets_and_refuse_native_options() {
             assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0].descriptor, Some(descriptor));
         }
         for p in [json!({"layer": 1}), json!({"on": true}), json!({"_atnNoTarget": false}), json!({"_atnNoTarget": "true"})] {
-            let action = Action::new("A", vec![(id.into(), p)]);
+            let action = Action::new("A", vec![ActionStep::new(id, p)]);
             assert!(atn_cmds::export("Links", &[&action], &[], false).is_err(), "{event}");
         }
     }
     for linked in [false, true] {
-        let action = Action::new("A", vec![("layer.linkLayers".into(), json!({"linked": linked, "_atnNoTarget": false}))]);
+        let action = Action::new("A", vec![ActionStep::new("layer.linkLayers", json!({"linked": linked, "_atnNoTarget": false}))]);
         assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
@@ -339,7 +344,7 @@ fn scan_fixture() -> Session {
     s.execute("file.new", json!({"width": 480, "height": 340, "background": "#fafafa"})).unwrap();
     let st = s.active_mut().unwrap();
     let id = st.active_layer.unwrap();
-    let surface = Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().surface_mut().unwrap();
+    let surface = Arc::make_mut(st.doc_mut()).layer_mut(id).unwrap().surface_mut().unwrap();
     for (x, y, w, h, color) in [(40, 60, 160, 110, [0.6, 0.1, 0.1, 1.0]), (290, 180, 150, 120, [0.1, 0.2, 0.6, 1.0])] {
         surface.fill_rect(photocraft_doc::Rect::new(x, y, x + w, y + h), &color);
     }
@@ -377,18 +382,22 @@ fn crop_parent_refuses_ineligible_layers_without_document_or_history_changes() {
         let mut s = scan_fixture();
         let st = s.active_mut().unwrap();
         let id = st.active_layer.unwrap();
-        let doc = Arc::make_mut(&mut st.doc);
-        match case {
-            "missing" => st.active_layer = None,
-            "stale" => st.active_layer = Some(LayerId::fresh()),
-            "hidden" => doc.layer_mut(id).unwrap().visible = false,
-            "pixels" => doc.layer_mut(id).unwrap().locks.pixels = true,
-            "indexed" => doc.mode = photocraft_doc::ColorMode::Indexed,
-            _ => {
-                let mut group = Layer::group("Parent", std::mem::take(&mut doc.layers));
-                group.visible = case != "hidden-parent";
-                group.locks.all = case == "locked-parent";
-                doc.layers.push(group);
+        if case == "missing" {
+            st.set_active_layer(None);
+        } else if case == "stale" {
+            st.set_active_layer(Some(LayerId::fresh()));
+        } else {
+            let doc = Arc::make_mut(st.doc_mut());
+            match case {
+                "hidden" => doc.layer_mut(id).unwrap().visible = false,
+                "pixels" => doc.layer_mut(id).unwrap().locks.pixels = true,
+                "indexed" => doc.mode = photocraft_doc::ColorMode::Indexed,
+                _ => {
+                    let mut group = Layer::group("Parent", std::mem::take(&mut doc.layers));
+                    group.visible = case != "hidden-parent";
+                    group.locks.all = case == "locked-parent";
+                    doc.layers.push(group);
+                }
             }
         }
         let before = s.active().unwrap().doc.clone();
@@ -425,7 +434,10 @@ fn crop_parent_runs_once_and_the_kept_helper_stops_the_duplicate_crop_tail() {
     let mut f = atn::parse(&file("CropPhotosAuto0001", Descriptor::new("cjsp"))).unwrap();
     let helper = Descriptor::new("null").with("Vl  ", D::List([0.0, 0.0, 150.0, 0.0, 150.0, 120.0, 0.0, 120.0].into_iter().map(D::Double).collect()));
     f.actions[0].items.push(AtnItem { event: AtnEvent::name("CropPhotos0001"), descriptor: Some(helper.clone()), ..Default::default() });
-    let tail = Action::new("Tail", vec![("image.duplicate".into(), json!({})), ("image.crop".into(), json!({"x": 1, "y": 1, "width": 10, "height": 10}))]);
+    let tail = Action::new(
+        "Tail",
+        vec![ActionStep::new("image.duplicate", json!({})), ActionStep::new("image.crop", json!({"x": 1, "y": 1, "width": 10, "height": 10}))],
+    );
     let (bytes, skipped) = atn_cmds::export("Tail", &[&tail], &[], false).unwrap();
     assert!(skipped.is_empty());
     f.actions[0].items.extend(atn::parse(&bytes).unwrap().actions[0].items.clone());
@@ -434,7 +446,7 @@ fn crop_parent_runs_once_and_the_kept_helper_stops_the_duplicate_crop_tail() {
     let report = load(&mut s, &atn::write(&f).unwrap());
     assert_eq!(report["unsupported"].as_array().unwrap().len(), 1);
     assert_eq!(
-        s.actions.list[0].steps.iter().map(|step| step.0.as_str()).collect::<Vec<_>>(),
+        s.actions().list.actions()[0].steps.iter().map(|step| step.command.as_str()).collect::<Vec<_>>(),
         ["file.automate.cropAndStraightenPhotos", "actions.photoshopStep", "image.duplicate", "image.crop"]
     );
     let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
@@ -453,7 +465,7 @@ fn artboard_fixture() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 12, "height": 10, "background": "transparent"})).unwrap();
     let st = s.active_mut().unwrap();
-    let doc = Arc::make_mut(&mut st.doc);
+    let doc = Arc::make_mut(st.doc_mut());
     let mut child = Layer::raster("Pixels", doc.pixel_format());
     let surface = child.surface_mut().unwrap();
     for rect in [photocraft_doc::Rect::new(2, 2, 3, 3), photocraft_doc::Rect::new(5, 5, 6, 6)] {
@@ -461,7 +473,7 @@ fn artboard_fixture() -> Session {
     }
     let group = Layer::group("Group", vec![child]);
     let id = group.id;
-    doc.layers = vec![group];
+    doc.layers = vec![group].into();
     s.restore_layer_selection(Some(id), &[id], Some(id)).unwrap();
     s
 }
@@ -490,8 +502,8 @@ fn artboard_recorded_flags_and_guides_roundtrip_without_resizing() {
     for (background, expected) in [(1, [1.0, 1.0, 1.0, 1.0]), (2, [0.0, 0.0, 0.0, 1.0]), (3, [0.0; 4]), (4, [0.25, 0.5, 0.75, 1.0])] {
         for flag in [None, Some(0), Some(1), Some(2), Some(3), Some(-1), Some(7)] {
             let mut s = artboard_fixture();
-            Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
-            Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.vertical.push(4.0);
+            Arc::make_mut(s.active_mut().unwrap().doc_mut()).guides.horizontal.push(3.0);
+            Arc::make_mut(s.active_mut().unwrap().doc_mut()).guides.vertical.push(4.0);
             let before = s.active().unwrap().doc.clone();
             let id = s.active().unwrap().active_layer.unwrap();
             let mut d = artboard_descriptor(background, vec![D::Integer(2), D::Integer(99999)], D::Integer(flag.unwrap_or(1)));
@@ -499,8 +511,8 @@ fn artboard_recorded_flags_and_guides_roundtrip_without_resizing() {
                 d.items.pop();
             }
             assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
-            assert_eq!(s.actions.list[0].steps[0].0, "layer.new.artboardFromGroup");
-            assert_eq!(s.actions.list[0].steps[0].1["color"], json!([0.25, 0.5, 0.75]));
+            assert_eq!(s.actions().list.actions()[0].steps[0].command, "layer.new.artboardFromGroup");
+            assert_eq!(s.actions().list.actions()[0].steps[0].params["color"], json!([0.25, 0.5, 0.75]));
             assert_eq!(saved_item(&mut s).descriptor, Some(d));
             play(&mut s);
             let doc = &s.active().unwrap().doc;
@@ -528,7 +540,7 @@ fn artboard_target_only_form_keeps_existing_native_group_behavior() {
     let before = s.active().unwrap().doc.clone();
     let d = Descriptor::new("null").with("null", target());
     assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
-    assert_eq!(s.actions.list[0].steps, [("layer.new.artboardFromGroup".into(), json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("layer.new.artboardFromGroup", json!({}))]);
     assert_eq!(saved_item(&mut s).descriptor, Some(d));
     play(&mut s);
     assert!(s.active().unwrap().doc.layers[0].artboard().is_some());
@@ -541,7 +553,7 @@ fn artboard_target_only_form_keeps_existing_native_group_behavior() {
 fn artboard_from_group_replaces_the_previous_layer_selection() {
     let mut s = artboard_fixture();
     let group = s.active().unwrap().active_layer.unwrap();
-    let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
     let other = Layer::raster("Other", doc.pixel_format());
     let id = other.id;
     doc.layers.push(other);
@@ -562,7 +574,7 @@ fn artboard_partial_custom_background_preserves_the_document_variant() {
         s.execute("layer.new.artboardFromGroup", params.clone()).unwrap();
         let expected = s.active().unwrap().doc.clone();
         assert!(s.undo());
-        let action = Action::new("A", vec![("layer.new.artboardFromGroup".into(), params)]);
+        let action = Action::new("A", vec![ActionStep::new("layer.new.artboardFromGroup", params)]);
         let (bytes, skipped) = atn_cmds::export("Links", &[&action], &[], false).unwrap();
         assert!(skipped.is_empty());
         assert_eq!(load(&mut s, &bytes)["unsupported"], json!([]));
@@ -588,9 +600,9 @@ fn artboard_fractional_colors_survive_import_save_and_playback() {
             D::Descriptor(["Rd  ", "Grn ", "Bl  "].into_iter().zip(rgb).fold(Descriptor::new("RGBC"), |color, (key, n)| color.with(key, D::Double(n))));
         assert_eq!(load(&mut s, &file(event, d.clone()))["unsupported"], json!([]));
         assert_eq!(saved_item(&mut s).descriptor, Some(d));
-        let (id, mut changed) = s.actions.list[0].steps[0].clone();
+        let ActionStep { command: id, params: mut changed } = s.actions().list.actions()[0].steps[0].clone();
         changed["color"][0] = 0.5.into();
-        assert!(atn_cmds::export("Links", &[&Action::new("Changed", vec![(id, changed)])], &[], false).is_err());
+        assert!(atn_cmds::export("Links", &[&Action::new("Changed", vec![ActionStep::new(id, changed)])], &[], false).is_err());
         let before = s.active().unwrap().doc.clone();
         play(&mut s);
         let pixel = photocraft_compose::render(&s.active().unwrap().doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0];
@@ -624,7 +636,7 @@ fn artboard_unmeasured_types_and_extra_settings_stay_whole() {
         assert_eq!(s.active().unwrap().history.past_len(), history);
     }
     for p in [json!({"layer":1}), json!({"preset":7}), json!({"guideIDs":[7.5]}), json!({"changeBackground":false})] {
-        let action = Action::new("A", vec![("layer.new.artboardFromGroup".into(), p)]);
+        let action = Action::new("A", vec![ActionStep::new("layer.new.artboardFromGroup", p)]);
         assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
@@ -638,9 +650,9 @@ fn artboard_omitted_type_defaults_to_white_and_invalid_native_settings_are_atomi
         Descriptor::new("null").with("null", target()).with("artboard", D::Descriptor(artboard_settings(None, vec![]))).with("changeBackground", D::Integer(1));
     assert_eq!(load(&mut s, &file("artboardFromLayerGroupEvent", d.clone()))["unsupported"], json!([]));
     assert_eq!(saved_item(&mut s).descriptor, Some(d));
-    let mut changed = s.actions.list[0].steps[0].1.clone();
+    let mut changed = s.actions().list.actions()[0].steps[0].params.clone();
     changed["background"] = "black".into();
-    assert!(atn_cmds::export("Links", &[&Action::new("A", vec![("layer.new.artboardFromGroup".into(), changed)])], &[], false).is_err());
+    assert!(atn_cmds::export("Links", &[&Action::new("A", vec![ActionStep::new("layer.new.artboardFromGroup", changed)])], &[], false).is_err());
     play(&mut s);
     assert_eq!(photocraft_compose::render(&s.active().unwrap().doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0], [1.0; 4]);
     assert!(s.undo());
@@ -682,7 +694,7 @@ fn artboard_background_edit_roundtrips_without_replaying_recorded_geometry() {
         let mut s = artboard_fixture();
         let initial_background = if kind == 1 { "black" } else { "white" };
         s.execute("layer.new.artboardFromGroup", json!({"background":initial_background})).unwrap();
-        Arc::make_mut(&mut s.active_mut().unwrap().doc).guides.horizontal.push(3.0);
+        Arc::make_mut(s.active_mut().unwrap().doc_mut()).guides.horizontal.push(3.0);
         let before = s.active().unwrap().doc.clone();
         let id = s.active().unwrap().active_layer.unwrap();
         assert_eq!(
@@ -692,7 +704,7 @@ fn artboard_background_edit_roundtrips_without_replaying_recorded_geometry() {
         let history = s.active().unwrap().history.past_len();
         let d = artboard_edit_descriptor(kind, 8);
         assert_eq!(load(&mut s, &file("editArtboardEvent", d.clone()))["unsupported"], json!([]));
-        assert_eq!(s.actions.list[0].steps[0].0, "layer.artboard.set");
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, "layer.artboard.set");
         assert_eq!(saved_item(&mut s).descriptor, Some(d));
         play(&mut s);
         let doc = &s.active().unwrap().doc;
@@ -727,11 +739,11 @@ fn artboard_edit_refuses_unmeasured_modes_and_lossy_native_exports() {
         assert_eq!(s.active().unwrap().history.past_len(), history);
     }
     load(&mut s, &file("editArtboardEvent", artboard_edit_descriptor(4, 8)));
-    let params = s.actions.list[0].steps[0].1.clone();
+    let params = s.actions().list.actions()[0].steps[0].params.clone();
     for (key, value) in [("rect", json!([0, 0, 100, 100])), ("preset", json!("iPhone 14")), ("changeSizes", json!(4)), ("changeBackground", json!(0))] {
         let mut edited = params.clone();
         edited[key] = value;
-        assert!(atn_cmds::export("Links", &[&Action::new("A", vec![("layer.artboard.set".into(), edited)])], &[], false).is_err());
+        assert!(atn_cmds::export("Links", &[&Action::new("A", vec![ActionStep::new("layer.artboard.set", edited)])], &[], false).is_err());
     }
 }
 
@@ -819,7 +831,7 @@ fn rasterize_all_event_visits_nested_and_top_level_smart_layers() {
         let mut s = smart_fixture(&png("#0000ff"));
         let first = s.active().unwrap().active_layer.unwrap();
         s.execute("layer.smartObjects.newSmartObjectViaCopy", json!({})).unwrap();
-        let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+        let doc = Arc::make_mut(s.active_mut().unwrap().doc_mut());
         let nested = doc.remove(first).unwrap();
         doc.layers.push(Layer::group("Nested", vec![nested]));
         let before = s.active().unwrap().doc.clone();
@@ -850,7 +862,7 @@ fn video_and_isolate_events_use_current_document_state() {
 
         let mut s = fixture(&[None, None, None], &[0, 2]);
         let before = s.active().unwrap().doc.clone();
-        let ids = s.active().unwrap().selected_layers();
+        let ids = s.active().unwrap().selected_layers().to_vec();
         let history = s.active().unwrap().history.past_len();
         load_targeted(&mut s, "isolateLayers", "select.isolateLayers", explicit);
         play(&mut s);
@@ -918,10 +930,10 @@ fn make_type_shape_roundtrips_and_converts_actual_glyphs_with_undo() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 128, "height": 80, "background": "white"})).unwrap();
     let id = LayerId(s.execute("type.create", json!({"text": "oil", "size": 24, "x": 8, "y": 48})).unwrap()["layer"].as_u64().unwrap());
-    Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(id).unwrap().psd_blocks.push((*b"TySh", Arc::new(vec![1, 2, 3])));
+    Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(id).unwrap().psd_blocks.push((*b"TySh", Arc::new(vec![1, 2, 3])));
     let before = s.active().unwrap().doc.clone();
     assert_eq!(load(&mut s, &file("Mk  ", make_type_descriptor()))["unsupported"], json!([]));
-    assert_eq!(s.actions.list[0].steps, [("type.convertToShape".into(), json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new("type.convertToShape", json!({}))]);
     let saved = saved_item(&mut s);
     assert_eq!(saved.event, AtnEvent::Code(*b"Mk  "));
     let mut canonical = make_type_descriptor();
@@ -951,14 +963,14 @@ fn make_type_shape_keeps_wrong_references_and_preserves_fill_mappings() {
         assert_eq!(saved_item(&mut s).descriptor, Some(descriptor));
     }
     for (id, p) in [("layer.newFillLayer.solidColor", json!({"color": "#ff0000"})), ("layer.newFillLayer.pattern", json!({"pattern": "Grid"}))] {
-        let action = Action::new("A", vec![(id.into(), p)]);
+        let action = Action::new("A", vec![ActionStep::new(id, p)]);
         let (bytes, skipped) = atn_cmds::export("Links", &[&action], &[], false).unwrap();
         assert!(skipped.is_empty());
         let mut s = Session::new();
         assert_eq!(load(&mut s, &bytes)["unsupported"], json!([]));
-        assert_eq!(s.actions.list[0].steps[0].0, id);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, id);
     }
-    let action = Action::new("A", vec![("type.convertToShape".into(), json!({"layer": 1}))]);
+    let action = Action::new("A", vec![ActionStep::new("type.convertToShape", json!({"layer": 1}))]);
     assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
 }
 
@@ -1008,7 +1020,7 @@ fn shape_blur_radius_boundaries_keep_their_value_without_running_large_kernels()
         let mut s = Session::new();
         let mut canonical = radius_descriptor(radius);
         assert_eq!(load(&mut s, &file("shapeBlur", canonical.clone()))["unsupported"], json!([]));
-        assert_eq!(s.actions.list[0].steps[0].1["radius"].as_f64(), Some(radius));
+        assert_eq!(s.actions().list.actions()[0].steps[0].params["radius"].as_f64(), Some(radius));
         canonical.class_id = Id::new("null");
         assert_eq!(saved_item(&mut s).descriptor, Some(canonical));
     }
@@ -1032,7 +1044,7 @@ fn shape_blur_keeps_unrepresented_assets_and_invalid_radius_forms_whole() {
         assert_eq!(saved_item(&mut s).descriptor.unwrap().to_bytes(), descriptor.to_bytes());
     }
     for p in [json!({"radius": 0}), json!({"radius": 1001}), json!({"radius": null}), json!({"radius": 10, "shape": "circle"}), json!({"target": "mask"})] {
-        let action = Action::new("A", vec![("filter.blur.shapeBlur".into(), p)]);
+        let action = Action::new("A", vec![ActionStep::new("filter.blur.shapeBlur", p)]);
         assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
@@ -1132,7 +1144,7 @@ fn smart_paths_roundtrip_and_play_real_files_on_the_current_target() {
                 recorded = recorded.with("LyrI", D::Integer(hint));
             }
             assert_eq!(load(&mut s, &file(event, recorded))["unsupported"], json!([]), "{event}");
-            assert_eq!(s.actions.list[0].steps, [(id.to_string(), json!({"path": path}))]);
+            assert_eq!(s.actions().list.actions()[0].steps, [ActionStep::new(id, json!({"path": path}))]);
             let saved = s.execute("actions.save", json!({"set": "Links"})).unwrap();
             assert_eq!(saved["skipped"], json!([]));
             let bytes = photocraft_engine::paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
@@ -1189,7 +1201,7 @@ fn smart_paths_keep_missing_unusable_and_unrepresented_descriptors_whole() {
 fn smart_path_exports_refuse_unrepresentable_native_params() {
     for &(_, id) in SMART_PATHS {
         for params in [json!({}), json!({"path": ""}), json!({"path": "a\0b"}), json!({"path": 3}), json!({"path": "/tmp/a.png", "layer": 1})] {
-            let action = Action::new("A", vec![(id.into(), params)]);
+            let action = Action::new("A", vec![ActionStep::new(id, params)]);
             assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
         }
     }
