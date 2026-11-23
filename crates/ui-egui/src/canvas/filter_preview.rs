@@ -2,6 +2,7 @@ use craft::imaging::ui::live_preview::{PreviewSession, settings_hash};
 use craft::ui::canvas::PixelRect;
 use craft::ui::dialog::StackDialog as _;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::display::canvas_display;
 use super::textures::texture_buffer;
@@ -108,6 +109,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         params,
         k,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     app.filter_live.begin(session_of(&request), PixelRect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1));
     let key = request.doc.0 ^ (1u64 << 61);
@@ -145,7 +147,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         if !fresh && !app.filter_preview_worker.busy() {
             let doc = app.session.documents().get(idx)?.doc.clone();
             let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
-            let color = app.session.color.settings.clone();
+            let color = app.session.color().settings.clone();
             let task = request.clone();
             let fade = fade_job(app, &task);
             if let Err(error) = app.filter_preview_worker.start(request.clone(), ctx.clone(), move |cancel| {
@@ -206,7 +208,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                 None,
                 request.target,
                 &documents,
-                &app.session.color.settings,
+                &app.session.color().settings,
                 Some(request.tool_colors),
             ),
         }

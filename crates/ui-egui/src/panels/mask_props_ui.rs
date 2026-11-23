@@ -5,7 +5,7 @@ use craft::ui::bars::{Bar, BarKind};
 use craft::ui::buttons::Button;
 use craft::ui::contract::{Bind, Show, ShowContainer};
 use craft::ui::form::SliderField;
-use craft::ui::runtime::env::UnitKind;
+use craft::ui::runtime::env::{UnitKind, with_env};
 use craft::ui::sections::Section;
 use craft::ui::value_drag::SliderScale;
 use photocraft_doc::{Layer, LayerContent};
@@ -68,31 +68,35 @@ fn mask_section(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, secti
     let Some(document) = app.session.active().map(|s| s.doc.id.0) else { return };
     let layer_id = layer.id.0;
     let mut edits: Vec<Value> = Vec::new();
-    ui.push_id((document, layer.id, section.key), |ui| {
-        Section::new(section.title).show(ui, |ui, _| {
-            // Feather's track is curved like Photoshop's, so a few px can be dragged to (#6545).
-            let rows = [
-                ("density", tl!("Density"), f64::from(density) * 100.0, 100.0, 100.0, UnitKind::Percent, SliderScale::Linear),
-                ("feather", tl!("Feather"), f64::from(feather), 1000.0, 0.0, UnitKind::Pixels, SliderScale::Power(3.0)),
-            ];
-            for (field, label, value, max, reset, unit, scale) in rows {
-                let out = SliderField::new(label, Bind::given(value).reset(reset), 0.0..=max).scale(scale).unit_kind(unit).show(ui);
-                for event in &out.events {
-                    // A cancel lands on the value from before the drag, written into the same undo step.
-                    let Some(value) = event.landed() else { continue };
-                    let mut params = json!({"document": document, "layer": layer_id});
-                    if let Some(gesture) = event.id() {
-                        params["coalesce"] = json!(format!("{}:{document}:{layer_id}:{field}:{}", section.key, gesture.0));
+    with_env(
+        ui,
+        |set| set.id_salt = Some(egui::Id::unique((document, layer.id, section.key))),
+        |ui| {
+            Section::new(section.title).show(ui, |ui, _| {
+                // Feather's track is curved like Photoshop's, so a few px can be dragged to (#6545).
+                let rows = [
+                    ("density", tl!("Density"), f64::from(density) * 100.0, 100.0, 100.0, UnitKind::Percent, SliderScale::Linear),
+                    ("feather", tl!("Feather"), f64::from(feather), 1000.0, 0.0, UnitKind::Pixels, SliderScale::Power(3.0)),
+                ];
+                for (field, label, value, max, reset, unit, scale) in rows {
+                    let out = SliderField::new(label, Bind::given(value).reset(reset), 0.0..=max).scale(scale).unit_kind(unit).show(ui);
+                    for event in &out.events {
+                        // A cancel lands on the value from before the drag, written into the same undo step.
+                        let Some(value) = event.landed() else { continue };
+                        let mut params = json!({"document": document, "layer": layer_id});
+                        if let Some(gesture) = event.id() {
+                            params["coalesce"] = json!(format!("{}:{document}:{layer_id}:{field}:{}", section.key, gesture.0));
+                        }
+                        params[field] = json!(value);
+                        edits.push(params);
                     }
-                    params[field] = json!(value);
-                    edits.push(params);
                 }
-            }
-            if section.refine {
-                refine_row(ui);
-            }
-        });
-    });
+                if section.refine {
+                    refine_row(ui);
+                }
+            });
+        },
+    );
     for params in edits {
         if let Err(error) = app.run(section.command, params) {
             app.ui.status = error;
