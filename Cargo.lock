@@ -1504,7 +1504,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "md-5",
  "rayon",
@@ -1527,7 +1527,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=8d436f486a2e890930ffdf
 [[package]]
 name = "craft-color"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "serde",
 ]
@@ -1535,9 +1535,9 @@ dependencies = [
 [[package]]
 name = "craft-color-transform"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
- "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3)",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
  "craft-color",
  "serde",
 ]
@@ -1590,7 +1590,7 @@ dependencies = [
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1614,13 +1614,13 @@ dependencies = [
 [[package]]
 name = "craft-develop"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "craft-color",
  "craft-color-transform",
  "craft-develop-model",
  "craft-geom",
- "craft-raw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3)",
+ "craft-raw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
  "rayon",
  "serde",
  "serde_json",
@@ -1629,10 +1629,10 @@ dependencies = [
 [[package]]
 name = "craft-develop-model"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "craft-geom",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
  "miniz_oxide 0.9.1",
  "serde",
  "serde_json",
@@ -1787,7 +1787,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=8d436f486a2e890930ffdf
 [[package]]
 name = "craft-geom"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "serde",
 ]
@@ -1971,11 +1971,11 @@ dependencies = [
 [[package]]
 name = "craft-metadata"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "brotli-decompressor 6.3.2",
  "chrono",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -2151,12 +2151,12 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "chrono",
- "craft-crw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3)",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3)",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3)",
+ "craft-crw 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d)",
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -2319,7 +2319,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=22a80f2965469c633518f4779d7b414ac15dd5f3#22a80f2965469c633518f4779d7b414ac15dd5f3"
+source = "git+https://github.com/storytold/craft-libs?rev=33be35625e252cc4f06aa375b3b428521faea37d#33be35625e252cc4f06aa375b3b428521faea37d"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
