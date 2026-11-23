@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use photocraft_color::BlendMode;
 use photocraft_doc::Layer;
 use photocraft_geom::Rect;
@@ -525,7 +526,7 @@ fn a_recorded_apply_layer_comp_finds_the_comp_by_name() {
 
     // A second document whose comp with the recorded id is another one.
     let (mut other, _, ob) = session(8);
-    other.actions = s.actions.clone();
+    *other.actions_mut() = s.actions().clone();
     let show = |s: &mut Session, visible: bool| {
         s.edit("t", |d, _| {
             d.layer_mut(ob).unwrap().visible = visible;

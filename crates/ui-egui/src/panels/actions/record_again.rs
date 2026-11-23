@@ -1,5 +1,6 @@
 //! One editor owns one original step; previews and confirmation retain its authority.
 use craft::ui::dialog::DialogId;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     actions_edit_cmds,
     doc::{DocId, LayerId},
@@ -33,7 +34,7 @@ fn authorize(app: &PhotocraftApp, held: &Held, id: &str, params: &Value) -> Resu
 /// Refuse stale selection or a different document before preview or confirmation can edit it.
 fn unchanged(app: &PhotocraftApp, held: &Held) -> Result<(), String> {
     super::suspended_guard(app, COMMAND)?;
-    if held.selection.get("revision").and_then(Value::as_u64) != Some(app.session.actions.list.revision())
+    if held.selection.get("revision").and_then(Value::as_u64) != Some(app.session.actions().list.revision())
         || app.session.recording.target.is_some()
         || app.session.recording.playing > 0
     {
@@ -52,7 +53,7 @@ pub(super) fn open(app: &mut PhotocraftApp, action: usize, step: usize) -> Resul
         return Err(tl!("Confirm or cancel the pending Record Again editor first.").into());
     }
     app.held_record_again = None;
-    let selection = json!({"action": action, "step": step, "revision": app.session.actions.list.revision()});
+    let selection = json!({"action": action, "step": step, "revision": app.session.actions().list.revision()});
     let target = actions_edit_cmds::record_again_target(&app.session, &selection).map_err(|e| e.to_string())?;
     let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
     let mut held = Held {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::presets::PresetsExt;
 use photocraft_doc::vector::Subpath;
 
 fn session(depth: u32) -> Session {
@@ -410,9 +411,11 @@ fn delete_and_fill_selection_removes_the_object_in_one_step() {
         s.undo();
         assert_eq!(px(&s, 30, 20)[1], 0.0, "undo restores the blob");
     }
-    // Parameters are ignored, never a crash; nothing selected greys it out and refuses.
+    // It takes no parameters: any are refused before it runs (#7596), never a crash; nothing
+    // selected greys it out and refuses.
     let mut s = blob_session(8);
-    assert!(s.execute("edit.deleteAndFillSelection", json!({"output": 7, "sampling": [1]})).is_ok());
+    assert!(s.execute("edit.deleteAndFillSelection", json!({"output": 7, "sampling": [1]})).unwrap_err().to_string().contains("unknown parameter"));
+    assert!(s.execute("edit.deleteAndFillSelection", json!({})).is_ok());
     s.execute("select.deselect", json!({})).unwrap();
     assert!(!s.is_enabled("edit.deleteAndFillSelection"));
     assert!(s.execute("edit.deleteAndFillSelection", json!({})).is_err());
@@ -873,7 +876,8 @@ fn backward_change_find_moves_past_the_replaced_text() {
 fn fade_allocation_failure_keeps_document_and_history() {
     for depth in [8, 16, 32] {
         let mut s = session(depth);
-        s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+        // A fadeable step: the white document inverted to black.
+        s.execute("image.adjustments.invert", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.entries();
         crate::allocation::fail_next_for_test();
@@ -904,17 +908,17 @@ fn tool_presets_round_trip_through_export_import() {
     }
     let selected = target.execute("tool.presets.select", json!({"preset":"2 : 3"})).unwrap();
     assert_eq!(selected["options"]["toolOptions"]["crop_ratio"], "2:3");
-    assert_eq!(target.presets.tool_presets.iter().filter(|p| p.name == "2 : 3").count(), 1);
+    assert_eq!(target.presets().tool_presets.iter().filter(|p| p.name == "2 : 3").count(), 1);
     let only_brushes = source.execute("edit.presets.exportImportPresets", json!({"kinds":["brushes"]})).unwrap();
     assert_eq!(only_brushes["tools"], 0);
     let with_builtins = source.execute("edit.presets.exportImportPresets", json!({"kinds":["tools"], "includeBuiltins":true})).unwrap();
-    assert_eq!(with_builtins["tools"].as_u64().unwrap() as usize, source.presets.tool_presets.len());
+    assert_eq!(with_builtins["tools"].as_u64().unwrap() as usize, source.presets().tool_presets.len());
 }
 
 #[test]
 fn tool_preset_import_is_validated_before_mutation_and_accepts_old_files() {
     let mut s = crate::session();
-    let before = s.presets.tool_presets.clone();
+    let before = s.presets().tool_presets.clone();
     for preset in [
         json!({"name":"", "tool":"crop", "options":{}}),
         json!({"name":"x".repeat(256), "tool":"crop", "options":{}}),
@@ -926,11 +930,11 @@ fn tool_preset_import_is_validated_before_mutation_and_accepts_old_files() {
             json!({"action":"import", "data":{"format":PRESET_FORMAT, "toolPresets":[{"name":"Valid", "tool":"crop", "options":{}}, preset]}}),
         );
         assert!(result.is_err());
-        assert_eq!(s.presets.tool_presets, before);
+        assert_eq!(s.presets().tool_presets, before);
     }
     let too_many: Vec<_> = (0..crate::presets::tools::MAX_PRESETS + 1).map(|i| json!({"name":format!("Crop {i}"), "tool":"crop", "options":{}})).collect();
     assert!(s.execute("edit.presets.exportImportPresets", json!({"action":"import", "data":{"format":PRESET_FORMAT, "toolPresets":too_many}})).is_err());
-    assert_eq!(s.presets.tool_presets, before);
+    assert_eq!(s.presets().tool_presets, before);
     let result = s.execute("edit.presets.exportImportPresets", json!({"action":"import", "data":{"format":PRESET_FORMAT, "version":1}})).unwrap();
     assert_eq!(result["tools"], 0);
 }

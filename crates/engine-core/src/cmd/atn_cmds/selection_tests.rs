@@ -1,5 +1,6 @@
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 /// An independently constructed selection-property reference, as recorded in Group F.
 fn selection() -> D {
@@ -98,9 +99,9 @@ fn assert_kept(id: &str, name: Option<&str>, descriptor: Descriptor) {
     let mut s = crate::session();
     let loaded = s.execute("actions.load", json!({"data":photocraft_paint::tile::b64_encode(&atn::write(&original).unwrap())})).unwrap();
     assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{id}/{name:?}/{descriptor:?}");
-    assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
-    assert!(s.actions.list.actions()[0].disabled.contains(&0));
-    assert!(s.actions.list.actions()[0].dialogs.contains(&0));
+    assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
+    assert!(s.actions().list.actions()[0].disabled.contains(&0));
+    assert!(s.actions().list.actions()[0].dialogs.contains(&0));
     let saved = s.execute("actions.save", json!({"action":"Step"})).unwrap();
     assert_eq!(saved["skipped"], json!([]));
     let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();

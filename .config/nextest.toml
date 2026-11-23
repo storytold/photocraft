@@ -21,10 +21,23 @@ nextest-version = "0.9.150"
 # parallelism.
 [test-groups]
 gpu = { max-threads = 4 }
+# mcp_wait builds a 6000x6000 document and a radius-1000 Gaussian Blur so the
+# waited command runs long enough to cancel. On the artcraft k8s gate pods that
+# often fails with "not enough working memory" when it shares the shard with
+# the rest of the suite; hosted ubuntu-24.04 stays green. A bridged jobs.list
+# poll can also miss its 300ms test timeout under that load (run 45136461883).
+# Run these alone: the group caps them at one, and threads-required keeps the
+# rest of the shard off the machine while they run.
+heavy-filter = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'package(photocraft-gpu) | test(/(^|::|_)gpu_tests::/)'
 test-group = 'gpu'
+
+[[profile.default.overrides]]
+filter = 'package(photocraft-automation) & test(/^mcp_wait::/)'
+test-group = 'heavy-filter'
+threads-required = "num-test-threads"
 
 # CI (`--profile ci`, .github/workflows/ci.yml). Collect all failures in one integration run
 # instead of exposing one regression per rebuild. A hanging test still terminates, and every
@@ -44,11 +57,13 @@ archive.include = [
 ]
 
 # panic_hunt drives every command with adversarial parameters and exists to find hangs, so a hang
-# must cost seconds, not the profile's 10 minutes. It runs in 18 s on Linux and 26 s on Windows, so
-# the first slow warning comes at 15 s and a run past 45 s is terminated.
+# must cost seconds, not the profile's 10 minutes. Hosted ubuntu-24.04 is about 18 s and Windows
+# about 26 s. On artcraft-k8s-main it is typically 31-33 s, and under memory pressure it has
+# timed out at 45 s after nearly finishing the registry (run 45127595159). The first slow
+# warning still comes at 15 s; a run past 90 s is terminated.
 [[profile.ci.overrides]]
 filter = 'binary(panic_hunt)'
-slow-timeout = { period = "15s", terminate-after = 3 }
+slow-timeout = { period = "15s", terminate-after = 6 }
 
 # Content-Aware Move solves on rayon across every core. On the Windows runner the GPU tests draw
 # on the CPU-backed adapter, so two of these beside a GPU test starve it until its device poll

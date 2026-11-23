@@ -9,6 +9,7 @@
 //! `lutSize`, `lutError`) and Lens Blur's `channel:N` sources and Match Color's textual
 //! `source`; the family's `command_params` (dialogs-w24) maps them back and leaves the private ones out.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -136,8 +137,8 @@ fn indexed_matte_document_color(app: &PhotocraftApp, doc: &Document, color: [f32
         ColorSpace::Rgb | ColorSpace::Gray => photocraft_engine::color_cmds::document_profile(doc),
         _ => photocraft_engine::color_cmds::composite_profile(doc),
     };
-    let source = app.session.color.working(ColorMode::Rgb);
-    let options = TransformOptions { intent: app.session.color.settings.intent(), bpc: app.session.color.settings.bpc, ..Default::default() };
+    let source = app.session.color().working(ColorMode::Rgb);
+    let options = TransformOptions { intent: app.session.color().settings.intent(), bpc: app.session.color().settings.bpc, ..Default::default() };
     let transform = craft::cms::transform::cached(&source, &destination, options).map_err(|e| e.to_string())?;
     let mut output = [0.0; 16];
     transform.eval(&color[..3], &mut output).map_err(|e| e.to_string())?;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::color_cmds::ColorExt;
 use photocraft_geom::Rect;
 
 fn session(w: u32, h: u32, depth: u64, mode: &str) -> Session {
@@ -374,9 +375,9 @@ fn indexed_matte_converts_working_rgb_to_document_profile_at_every_depth() {
                 paint(&mut s, |x, _| if x == 0 { [1.0, 0.0, 0.0, 0.5] } else { [0.0; 4] });
                 let pixel = doc(&s).layers[0].surface().unwrap().rgba(0, 0);
                 let profile = doc(&s).icc_profile.clone();
-                let source = s.color.working(ColorMode::Rgb);
+                let source = s.color().working(ColorMode::Rgb);
                 let destination = crate::color_cmds::document_profile(doc(&s));
-                let transform = Transform::new(&source, &destination, s.color.settings.intent(), bpc).unwrap();
+                let transform = Transform::new(&source, &destination, s.color().settings.intent(), bpc).unwrap();
                 let mut converted = [0.0; 16];
                 transform.eval(&color, &mut converted).unwrap();
                 let expected = [0, 1, 2].map(|i| ((pixel[i] * pixel[3] + converted[i].clamp(0.0, 1.0) * (1.0 - pixel[3])) * 255.0).round() as u8);
@@ -1112,7 +1113,7 @@ fn duotone_to_colour_modes_keeps_the_ink_colours() {
                 assert_eq!(d.mode, target, "{ctx}");
                 let srgb = Builtin::Srgb.profile();
                 let dst = crate::color_cmds::working_profile(target);
-                let t = Transform::new(srgb, &dst, s.color.settings.intent(), s.color.settings.bpc).unwrap();
+                let t = Transform::new(srgb, &dst, s.color().settings.intent(), s.color().settings.bpc).unwrap();
                 for x in 0..16 {
                     let got = surf.pixel(x, 1);
                     let want: Vec<f32> = if target == ColorMode::Grayscale {

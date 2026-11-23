@@ -8,6 +8,7 @@
 //!
 //! The Toolbar tab is not here: Edit › Toolbar opens the toolbar drawer.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::{BTreeMap, BTreeSet};
 
 use craft::keymap::import::kys;
@@ -82,7 +83,7 @@ pub(crate) fn profiles_of(prefs: &Preferences) -> Profiles {
 pub(crate) fn draft_keymap(app: &PhotocraftApp) -> Keymap {
     let platform = windows::os_of(app.ctx());
     // The runtime catalog's held rows while they are current; built here before the first frame holds them.
-    let rows = match app.framework.catalog_rows_at(app.session.actions.list.revision()) {
+    let rows = match app.framework.catalog_rows_at(app.session.actions().list.revision()) {
         Some(rows) => rows.to_vec(),
         None => crate::shortcut_dispatch::command_rows(app),
     };

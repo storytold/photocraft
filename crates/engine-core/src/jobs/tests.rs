@@ -1,3 +1,4 @@
+use crate::actions_cmds::ActionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::{Duration, Instant};
@@ -1119,7 +1120,7 @@ fn admit(_: &str, _: &Value) -> Result<()> {
 
 /// Whether the action named `name` is marked as written by automation.
 fn marked(s: &Session, name: &str) -> bool {
-    s.actions.list.actions().iter().find(|a| a.name == name).unwrap().automation
+    s.actions().list.actions().iter().find(|a| a.name == name).unwrap().automation
 }
 
 /// A background step a gated client starts during the user's recording marks the recorded action
@@ -1175,13 +1176,25 @@ fn a_users_job_applied_while_a_gated_client_waits_stays_the_users() {
 /// Exercise six terminal job routes so prepared paint snapshots cannot outlive a completed or discarded job.
 #[test]
 fn every_job_terminal_path_drops_a_live_commit_stroke() {
-    use crate::brush_cmds::mixer_live::LiveMixer;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     for outcome in 0..6 {
         let mut s = session(32, 32);
-        let live = LiveMixer::begin(&s, &json!({"points": [[16, 16]], "size": 4})).unwrap();
-        live.prepare_commit(&mut s).unwrap();
+        // A Mixer Brush stroke's offer, as `LiveMixer::prepare_commit` leaves it.
+        let st = s.active().unwrap();
+        let (base, bounds) = ((st.doc.id, st.revision), st.doc.bounds());
+        let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        let points = vec![photocraft_paint::StrokePoint::new(16.0, 16.0, 1.0)];
+        s.live_commit = Some(crate::state::LiveCommit {
+            mixer: None,
+            cmd: "paint.mixerBrush".into(),
+            base,
+            params: json!({"size": 4}),
+            seed: Some(1),
+            points,
+            surface,
+            bounds,
+        });
         let gate = Arc::new(AtomicBool::new(false));
         let worker_gate = gate.clone();
         let id = job(s

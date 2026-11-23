@@ -108,7 +108,7 @@ impl Policy {
 }
 
 /// Edit › Color Settings: working spaces, colour management policies and conversion options.
-/// Honoured when files are opened ([`Session::open_document`]), by Image › Mode conversions
+/// Honoured when files are opened ([`ColorExt::open_document`](crate::color_cmds::ColorExt::open_document)), by Image › Mode conversions
 /// and by "working" profile specs (Convert to Profile, Proof Setup).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -216,7 +216,7 @@ pub fn validate_settings(c: &ColorSettings) -> std::result::Result<(), String> {
     Ok(())
 }
 
-/// Session-wide colour settings and caches (`Session::color`).
+/// Session-wide colour settings and caches ([`ColorExt::color`]).
 #[derive(Default)]
 pub struct ColorState {
     /// Edit › Color Settings (persisted with the preferences).
@@ -593,7 +593,7 @@ pub fn document_profile(doc: &Document) -> Arc<Profile> {
 pub fn swatch_in_doc(s: &Session, c: [f32; 4]) -> [f32; 4] {
     let Some(st) = s.active().filter(|st| st.doc.mode == ColorMode::Grayscale) else { return c };
     let default_gray = Builtin::DotGain20Compat;
-    if s.color.settings.working_gray != default_gray.id() || document_profile(&st.doc).content_hash() != default_gray.profile().content_hash() {
+    if s.color().settings.working_gray != default_gray.id() || document_profile(&st.doc).content_hash() != default_gray.profile().content_hash() {
         return c;
     }
     let opts = craft_cms::TransformOptions { intent: Intent::RelativeColorimetric, bpc: true, ..Default::default() };
@@ -971,9 +971,9 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
         && mode == ColorMode::Rgb
         && doc.icc_profile.as_ref().is_none_or(|bytes| profile_from_bytes(bytes).ok().is_some_and(|p| p.color_space == ColorSpace::Rgb));
     let dst = match p.get("profile").and_then(Value::as_str) {
-        Some(spec) => s.color.resolve(spec, Some(doc), Some(mode))?,
+        Some(spec) => s.color().resolve(spec, Some(doc), Some(mode))?,
         None if preserve_indexed_rgb => document_profile(doc),
-        None => s.color.working(mode),
+        None => s.color().working(mode),
     };
     if space_mode(dst.color_space)
         != Some(match mode {
@@ -984,8 +984,8 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     {
         return Err(EngineError::Other(format!("profile `{}` is {:?}, not {mode:?}", dst.description, dst.color_space)));
     }
-    let intent = intent_or(p, s.color.settings.intent())?;
-    let bpc = bool_param(p, "bpc", s.color.settings.bpc);
+    let intent = intent_or(p, s.color().settings.intent())?;
+    let bpc = bool_param(p, "bpc", s.color().settings.bpc);
     if preserve_indexed_rgb {
         s.edit("Mode Change", |doc, _| {
             doc.mode = ColorMode::Rgb;
@@ -1052,7 +1052,7 @@ fn assign_profile(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes = if spec == "none" {
         None
     } else {
-        let prof = s.color.resolve(spec, Some(doc), None)?;
+        let prof = s.color().resolve(spec, Some(doc), None)?;
         if prof.color_space != mode_space(doc.mode) {
             return Err(EngineError::Other(format!("profile `{}` is {:?}; the document is {:?}", prof.description, prof.color_space, doc.mode)));
         }
@@ -1151,9 +1151,9 @@ fn convert_to_profile(s: &mut Session, p: &Value) -> Result<Value> {
     if doc.mode == ColorMode::Bitmap {
         return Err(EngineError::Other("Convert to Profile is not available for Bitmap documents".into()));
     }
-    let dst = s.color.resolve(spec, Some(doc), None)?;
-    let intent = intent_or(p, s.color.settings.intent())?;
-    let bpc = bool_param(p, "bpc", s.color.settings.bpc);
+    let dst = s.color().resolve(spec, Some(doc), None)?;
+    let intent = intent_or(p, s.color().settings.intent())?;
+    let bpc = bool_param(p, "bpc", s.color().settings.bpc);
     let flatten = profile_option(p, "flatten")?;
     let rasterize = profile_option(p, "rasterizePlaced")?;
     let dither = profile_option(p, "dither")?;
@@ -1216,7 +1216,7 @@ fn proof_setup(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let (id, doc) = (st.doc.id, st.doc.clone());
     let name = p.get("profile").and_then(Value::as_str).unwrap_or("working-cmyk").to_string();
-    let profile = s.color.resolve(&name, Some(&doc), Some(ColorMode::Cmyk))?;
+    let profile = s.color().resolve(&name, Some(&doc), Some(ColorMode::Cmyk))?;
     let intent = intent_param(p)?;
     let setup = ProofSetup {
         name,
@@ -1226,7 +1226,7 @@ fn proof_setup(s: &mut Session, p: &Value) -> Result<Value> {
         simulate_paper: bool_param(p, "simulatePaper", false),
         kind: crate::proof_sim::ProofKind::Profile,
     };
-    let pv = s.color.proof_mut(id);
+    let pv = s.color_mut().proof_mut(id);
     pv.setup = setup.clone();
     Ok(
         json!({ "profile": setup.profile.description, "intent": setup.intent.id(), "bpc": setup.bpc, "simulatePaper": setup.simulate_paper, "proofColors": pv.enabled }),
@@ -1235,7 +1235,7 @@ fn proof_setup(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn proof_colors(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.active().ok_or(EngineError::NoDocument)?.doc.id;
-    let pv = s.color.proof_mut(id);
+    let pv = s.color_mut().proof_mut(id);
     pv.enabled = p.get("on").and_then(Value::as_bool).unwrap_or(!pv.enabled);
     Ok(json!({ "on": pv.enabled, "profile": pv.setup.profile.description }))
 }
@@ -1243,7 +1243,7 @@ fn proof_colors(s: &mut Session, p: &Value) -> Result<Value> {
 fn gamut_warning(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
-    let pv = s.color.proof_mut(doc.id);
+    let pv = s.color_mut().proof_mut(doc.id);
     pv.gamut_warning = p.get("on").and_then(Value::as_bool).unwrap_or(!pv.gamut_warning);
     if let Some(t) = p.get("threshold").and_then(Value::as_f64) {
         pv.gamut_threshold = t.max(0.0) as f32;
@@ -1261,7 +1261,7 @@ fn gamut_warning(s: &mut Session, p: &Value) -> Result<Value> {
 /// Edit › Color Settings: read or change working spaces, policies and conversion options.
 fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.colorSettings";
-    let mut next = s.color.settings.clone();
+    let mut next = s.color().settings.clone();
     if p.get("reset").and_then(Value::as_bool) == Some(true) {
         next = ColorSettings::default();
     }
@@ -1318,22 +1318,22 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
         next.spot_dot_gain = g as f32;
     }
     validate_settings(&next).map_err(|msg| EngineError::BadParams { cmd: cmd.into(), msg })?;
-    if next != s.color.settings {
+    if next != s.color().settings {
         photocraft_compose::psblend::set_text_gamma(next.blend_text_gamma);
         photocraft_compose::multichannel::set_spot_dot_gain(next.spot_dot_gain);
-        s.color.settings = next;
+        s.color_mut().settings = next;
         // Persisted with the preferences.
         s.prefs.edit(|_| ());
     }
-    let c = &s.color.settings;
-    let desc = |m: ColorMode| s.color.working(m).description.clone();
+    let c = &s.color().settings;
+    let desc = |m: ColorMode| s.color().working(m).description.clone();
     Ok(json!({
         "settings": c,
         "working": {"rgb": desc(ColorMode::Rgb), "cmyk": desc(ColorMode::Cmyk), "gray": desc(ColorMode::Grayscale)},
-        "monitor": s.color.monitor().description,
-        "monitorDetected": !s.color.displays.is_empty(),
-        "monitorStatus": s.color.monitor_status(),
-        "displays": s.color.display_statuses(),
+        "monitor": s.color().monitor().description,
+        "monitorDetected": !s.color().displays.is_empty(),
+        "monitorStatus": s.color().monitor_status(),
+        "displays": s.color().display_statuses(),
     }))
 }
 
@@ -1345,8 +1345,8 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
     match action {
         "preserve" | "useEmbedded" => Ok(json!({"action": "kept"})),
         "convert" | "convertToWorking" => {
-            let dst = s.color.working(mode);
-            let (intent, bpc) = (s.color.settings.intent(), s.color.settings.bpc);
+            let dst = s.color().working(mode);
+            let (intent, bpc) = (s.color().settings.intent(), s.color().settings.bpc);
             s.edit("Convert to Working RGB", |doc, _| convert_document(doc, &dst, intent, bpc))?;
             Ok(json!({"action": "converted", "profile": dst.description}))
         }
@@ -1358,7 +1358,7 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
             Ok(json!({"action": "discarded"}))
         }
         "assignWorking" => {
-            let w = s.color.working(mode);
+            let w = s.color().working(mode);
             s.edit("Assign Profile", |doc, _| {
                 doc.icc_profile = Some(w.to_bytes());
                 Ok(())
@@ -1372,12 +1372,28 @@ fn profile_mismatch(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
-impl Session {
+/// Colour management on a session: its [`ColorState`] (a session slot of this module) and opening
+/// documents under the Color Settings policy.
+pub trait ColorExt {
+    /// Colour management state: proofing, monitor profiles, display transforms.
+    fn color(&self) -> &ColorState;
+    /// Colour management state, to change it.
+    fn color_mut(&mut self) -> &mut ColorState;
     /// Add a document read from a file, applying the Color Settings policy first (preserve,
     /// convert to the working space, or discard the embedded profile). Returns the document
     /// index and a report (`action`, `mismatch`, `ask`) the UI can turn into a prompt.
-    pub fn open_document(&mut self, mut doc: Document, path: Option<String>) -> (usize, Value) {
-        let report = self.color.open_policy(&mut doc, self.prefs().file_handling.ignore_exif_profile_tag);
+    fn open_document(&mut self, doc: Document, path: Option<String>) -> (usize, Value);
+}
+
+impl ColorExt for Session {
+    fn color(&self) -> &ColorState {
+        self.slot_or_default::<ColorState>()
+    }
+    fn color_mut(&mut self) -> &mut ColorState {
+        self.slot_or_default_mut::<ColorState>()
+    }
+    fn open_document(&mut self, mut doc: Document, path: Option<String>) -> (usize, Value) {
+        let report = self.color().open_policy(&mut doc, self.prefs().file_handling.ignore_exif_profile_tag);
         (self.add_document(doc, path), report)
     }
 }
@@ -1614,26 +1630,26 @@ mod tests {
         monitor.description = "Synthetic identity-matrix gamma monitor".into();
         monitor.trc = Some(std::array::from_fn(|_| craft_cms::Curve::Gamma(2.2)));
         let monitor = monitor.with_encoded_bytes();
-        s.color.set_displays(Ok(vec![crate::display_color::Display {
+        s.color_mut().set_displays(Ok(vec![crate::display_color::Display {
             id: 1,
             name: "Synthetic monitor".into(),
             frame: [0.0, 0.0, 800.0, 600.0],
             profile_name: None,
             icc: Some(monitor.to_bytes()),
         }]));
-        let pv = s.color.proof_mut(d.id);
+        let pv = s.color_mut().proof_mut(d.id);
         pv.setup.profile = Arc::new(Profile::parse(&proof.to_bytes()).unwrap());
         pv.enabled = true;
-        assert!(s.color.gpu_canvas_matrix_shaper_for(&d, Some(1)).unwrap().is_some(), "ordinary profile conversion is separable");
+        assert!(s.color().gpu_canvas_matrix_shaper_for(&d, Some(1)).unwrap().is_some(), "ordinary profile conversion is separable");
         for command in ["view.proofSetup.legacyMacintoshRgb", "view.proofSetup.colorBlindnessProtanopia", "view.proofSetup.colorBlindnessDeuteranopia"] {
             // These commands retain the previously selected custom profile.
             s.execute(command, json!({})).unwrap();
-            assert!(s.color.display_transform_for(&d, Some(1)).unwrap().gpu_matrix_shaper().is_some(), "fixture must exercise the shortcut");
-            assert!(s.color.gpu_canvas_matrix_shaper_for(&d, Some(1)).unwrap().is_none(), "{command} must retain its simulation");
-            assert!(s.color.gpu_canvas_lut_for(&d, 9, Some(1)).unwrap().is_some(), "{command} still has its LUT fallback");
+            assert!(s.color().display_transform_for(&d, Some(1)).unwrap().gpu_matrix_shaper().is_some(), "fixture must exercise the shortcut");
+            assert!(s.color().gpu_canvas_matrix_shaper_for(&d, Some(1)).unwrap().is_none(), "{command} must retain its simulation");
+            assert!(s.color().gpu_canvas_lut_for(&d, 9, Some(1)).unwrap().is_some(), "{command} still has its LUT fallback");
         }
         s.execute("view.proofColors", json!({"on": false})).unwrap();
-        assert!(s.color.gpu_canvas_matrix_shaper_for(&d, Some(1)).unwrap().is_some(), "disabled simulations do not block ordinary display conversion");
+        assert!(s.color().gpu_canvas_matrix_shaper_for(&d, Some(1)).unwrap().is_some(), "disabled simulations do not block ordinary display conversion");
     }
 
     #[test]
@@ -1641,27 +1657,27 @@ mod tests {
         let mut s = session("rgb", 8);
         paint_rgb(&mut s);
         let id = doc(&s).id;
-        assert!(!s.color.proof(id).enabled);
+        assert!(!s.color().proof(id).enabled);
         s.execute("view.proofSetup", json!({"profile": "coated-cmyk", "intent": "perceptual", "simulatePaper": true})).unwrap();
-        let pv = s.color.proof(id);
+        let pv = s.color().proof(id);
         assert_eq!((pv.setup.intent, pv.setup.simulate_paper), (Intent::Perceptual, true));
         s.execute("view.proofColors", json!({})).unwrap();
-        assert!(s.color.proof(id).enabled);
+        assert!(s.color().proof(id).enabled);
         let d = doc(&s).clone();
-        let t = s.color.display_transform(&d).unwrap();
+        let t = s.color().display_transform(&d).unwrap();
         let mut o = [0.0f32; 3];
         t.eval(&[1.0, 1.0, 1.0], &mut o).unwrap();
         assert!(o[0] < 0.97, "paper simulation: {o:?}");
-        let lut = s.color.display_lut(&d, 17).unwrap();
+        let lut = s.color().display_lut(&d, 17).unwrap();
         assert_eq!(lut.data().len(), 17 * 17 * 17);
         s.execute("view.proofColors", json!({"on": false})).unwrap();
-        let t2 = s.color.display_transform(&d).unwrap();
+        let t2 = s.color().display_transform(&d).unwrap();
         t2.eval(&[1.0, 1.0, 1.0], &mut o).unwrap();
         assert!(o.iter().all(|v| (v - 1.0).abs() < 1e-3), "no proof: identity-ish {o:?}");
         // Saturated sRGB blue is outside coated CMYK; mid gray and white are inside.
         let r = s.execute("view.gamutWarning", json!({"on": true})).unwrap();
         assert!(r["on"].as_bool().unwrap());
-        let (mask, count) = gamut_mask(&d, &s.color.proof(id).setup, 4.0).unwrap();
+        let (mask, count) = gamut_mask(&d, &s.color().proof(id).setup, 4.0).unwrap();
         assert_eq!(r["outOfGamut"].as_u64().unwrap() as usize, count);
         let w = d.size.width as usize;
         assert_eq!(mask[8 * w + 20], 255, "blue out of gamut");
@@ -1674,7 +1690,7 @@ mod tests {
         let s = session("gray", 8);
         let p = composite_profile(doc(&s));
         assert_eq!(p.color_space, ColorSpace::Rgb);
-        let t = s.color.display_transform(doc(&s)).unwrap();
+        let t = s.color().display_transform(doc(&s)).unwrap();
         let mut o = [0.0f32; 3];
         t.eval(&[0.5, 0.5, 0.5], &mut o).unwrap();
         // The default working gray (Dot Gain 20 %-compatible, gamma 1.732) shows gray 0.5 as the
@@ -1723,6 +1739,7 @@ mod assign_profile_enabled_modes_tests;
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+    use crate::prefs::SavedPrefsExt;
 
     fn tagged(spec: &str) -> Document {
         let mut d = Document::with_background("t", photocraft_doc::Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::rgba(0.2, 0.6, 0.9, 1.0));
@@ -1744,11 +1761,11 @@ mod settings_tests {
         assert!(s.execute("edit.colorSettings", json!({"intent": "vivid"})).is_err());
         let r = s.execute("edit.colorSettings", json!({"workingRgb": "adobe-rgb-compat", "intent": "perceptual", "bpc": false})).unwrap();
         assert!(r["working"]["rgb"].as_str().unwrap().starts_with("Adobe RGB"));
-        assert_eq!(s.color.settings.intent(), Intent::Perceptual);
+        assert_eq!(s.color().settings.intent(), Intent::Perceptual);
         // Settings travel with the preferences file.
         let mut t = crate::session();
         t.load_prefs_json(&s.prefs_to_json()).unwrap();
-        assert_eq!(t.color.settings, s.color.settings);
+        assert_eq!(t.color().settings, s.color().settings);
     }
 
     // The Blend Text Colors Using Gamma test is `tests/text_gamma.rs`: it changes the
@@ -1759,28 +1776,28 @@ mod settings_tests {
         let mut s = crate::session();
         // Ask When Opening off: nothing to ask, mismatched or missing.
         s.execute("edit.colorSettings", json!({"askOnMismatch": false, "askOnMissing": false})).unwrap();
-        assert!(s.color.open_question(&tagged("adobe-rgb-compat")).is_none());
+        assert!(s.color().open_question(&tagged("adobe-rgb-compat")).is_none());
         let mut untagged = tagged("srgb");
         untagged.icc_profile = None;
-        assert!(s.color.open_question(&untagged).is_none());
+        assert!(s.color().open_question(&untagged).is_none());
         // On: a mismatch asks, suggesting the policy's answer; a matching profile never asks.
         s.execute("edit.colorSettings", json!({"askOnMismatch": true, "askOnMissing": true, "policyRgb": "convert"})).unwrap();
-        let q = s.color.open_question(&tagged("adobe-rgb-compat")).unwrap();
+        let q = s.color().open_question(&tagged("adobe-rgb-compat")).unwrap();
         assert_eq!((q["mismatch"].as_bool(), q["action"].as_str()), (Some(true), Some("convert")));
         assert!(q["embedded"].as_str().unwrap().starts_with("Adobe RGB"));
-        assert!(s.color.open_question(&tagged("srgb")).is_none());
-        assert_eq!(s.color.open_question(&untagged).unwrap()["missing"], true);
+        assert!(s.color().open_question(&tagged("srgb")).is_none());
+        assert_eq!(s.color().open_question(&untagged).unwrap()["missing"], true);
         // Asking changes nothing; the answer is applied to the document.
         let mut d = tagged("adobe-rgb-compat");
-        s.color.resolve_open(&mut d, "preserve").unwrap();
+        s.color().resolve_open(&mut d, "preserve").unwrap();
         assert!(desc(&d).unwrap().starts_with("Adobe RGB"));
-        s.color.resolve_open(&mut d, "convert").unwrap();
+        s.color().resolve_open(&mut d, "convert").unwrap();
         assert_eq!(desc(&d).as_deref(), Some("sRGB IEC61966-2.1"));
-        s.color.resolve_open(&mut d, "discard").unwrap();
+        s.color().resolve_open(&mut d, "discard").unwrap();
         assert_eq!(desc(&d), None);
-        s.color.resolve_open(&mut d, "assignWorking").unwrap();
+        s.color().resolve_open(&mut d, "assignWorking").unwrap();
         assert_eq!(desc(&d).as_deref(), Some("sRGB IEC61966-2.1"));
-        assert!(s.color.resolve_open(&mut d, "explode").is_err());
+        assert!(s.color().resolve_open(&mut d, "explode").is_err());
     }
 
     #[test]
@@ -1979,7 +1996,7 @@ mod settings_tests {
             assert!(desc(d).unwrap().contains("2020"), "depth {depth}: {:?}", desc(d));
         }
         // "working" specs follow the settings too.
-        let p = s.color.resolve("working-rgb", None, None).unwrap();
+        let p = s.color().resolve("working-rgb", None, None).unwrap();
         assert!(p.description.contains("2020"));
     }
 
