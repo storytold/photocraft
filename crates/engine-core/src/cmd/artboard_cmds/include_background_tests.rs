@@ -17,7 +17,7 @@ const WHITE: [u8; 4] = [255, 255, 255, 255];
 /// The issue's document at `depth` bits, its boards' fill `background` (`white`, `black`, …).
 /// Returns the session and the ids of Red, Blue and Empty Board.
 fn session(depth: u32, background: Value) -> (Session, [u64; 3]) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"name": "abfiles-test", "width": 800, "height": 400, "depth": depth, "background": "transparent"})).unwrap();
     let mut board = |name: &str, rect: [u32; 4], layer: Option<(&str, [u32; 4], &str)>| {
         let mut p = json!({"name": name, "rect": rect, "background": background});
