@@ -216,6 +216,20 @@ fn ruler_protractor_and_record() {
 }
 
 #[test]
+fn record_single_ruler_count_respects_selected_data_points() {
+    let mut s = session(100, 100, 8);
+    s.execute("image.analysis.rulerTool", json!({"start": [32, 64], "end": [62, 24]})).unwrap();
+    s.execute("image.analysis.selectDataPoints", json!({"ruler": {"count": true}})).unwrap();
+    let r = s.execute("image.analysis.recordMeasurements", json!({"source": "ruler"})).unwrap();
+    assert_eq!(r["rows"][0]["values"]["count"], 1);
+    assert_eq!(r["rows"][0]["values"]["length"], 50.0);
+
+    s.execute("image.analysis.selectDataPoints", json!({"ruler": {"count": false}})).unwrap();
+    let r = s.execute("image.analysis.recordMeasurements", json!({"source": "ruler"})).unwrap();
+    assert!(r["rows"][0]["values"].get("count").is_none());
+}
+
+#[test]
 fn inscribed_rect() {
     let (w, h) = inscribed(100.0, 50.0, 0.0);
     assert!((w - 100.0).abs() < 1e-9 && (h - 50.0).abs() < 1e-9);

@@ -155,7 +155,7 @@ pub struct EditState {
 const COMMON: &[&str] = &["label", "dateTime", "document", "source", "scale", "scaleUnits", "scaleFactor"];
 const SELECTION_ONLY: &[&str] =
     &["count", "area", "perimeter", "circularity", "height", "width", "grayMin", "grayMax", "grayMean", "grayMedian", "integratedDensity", "histogram"];
-const RULER_ONLY: &[&str] = &["length", "angle"];
+const RULER_ONLY: &[&str] = &["count", "length", "angle"];
 const COUNT_ONLY: &[&str] = &["count"];
 
 /// Data points a measurement source can record.
