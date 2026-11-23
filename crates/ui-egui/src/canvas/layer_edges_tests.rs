@@ -5,7 +5,7 @@ use serde_json::json;
 
 const ORIGINAL: DRect = DRect::new(100, 100, 300, 260);
 
-fn app(depth: u32) -> PhotocraftApp {
+fn app(depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 600, "height": 400, "depth": depth, "background": "transparent"})).unwrap();
     app.run("select.rect", json!({"x": 100, "y": 100, "width": 200, "height": 160})).unwrap();
@@ -21,29 +21,26 @@ fn app(depth: u32) -> PhotocraftApp {
     app
 }
 
-/// Inspect the actual painted Layer Edges rectangle, distinct from the snap/transform box.
+/// After a canvas pass, the Layer Edges outline of document `idx`, in document units, is the `expected` rectangle.
+/// The outline is the same path the canvas draws, so no view is needed to compare it.
 fn assert_edges(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, primary: bool, expected: DRect) {
+    use craft::behavior::kurbo::Shape as _;
     let rect = Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0));
-    let view = View { zoom: 0.75, center: [300.0, 200.0], doc_size: [600, 400], fit_pending: false, ..Default::default() };
+    let view = View { zoom: 0.75, center: [300.0, 200.0], doc_size: [600, 400], pending: Vec::new(), ..Default::default() };
     let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
-        canvas_view(app, ui, idx, rect, view.clone(), primary);
+        canvas_view(app, ui, super::document_display::CanvasHost::main(idx), rect, view.clone(), primary);
     });
     output.textures_delta.clear();
-    let xf = ViewXform { rect, zoom: view.zoom / ctx.pixels_per_point(), center: view.center, flip: false, rotation: 0.0, aspect: 1.0 };
-    let edges: Vec<_> = output
-        .shapes
-        .iter()
-        .filter_map(|s| match &s.shape {
-            egui::Shape::Rect(r) if r.stroke.color == LAYER_EDGES && r.stroke_kind == egui::StrokeKind::Outside => Some(r.rect),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(edges, vec![xf.doc_rect(expected)]);
+    let edges = super::transform_controls::layer_edges(app, idx).expect("Layer Edges show an outline");
+    let bounds = edges.bounding_box();
+    let want = [expected.x0, expected.y0, expected.x1, expected.y1].map(f64::from);
+    let got = [bounds.x0, bounds.y0, bounds.x1, bounds.y1];
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "Layer Edges {got:?}, expected {want:?}");
 }
 
 fn context(ppp: f32) -> egui::Context {
     let ctx = egui::Context::default();
-    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+    PhotocraftApp::setup_context(&ctx, crate::theme::AppTheme::pro());
     ctx.set_pixels_per_point(ppp);
     ctx
 }

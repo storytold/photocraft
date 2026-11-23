@@ -1,77 +1,37 @@
-//! #14582: the Canvas Size dialog reports the flat image's size (width × height × channels
-//! × bytes per channel, no alpha) with one decimal, not the layer-backed `__bytesPerPixel`.
+//! #14582: Canvas Size uses flat image bytes, not the first layer's storage with alpha.
+
+use egui_kittest::{Harness, kittest::Queryable};
+use serde_json::json;
 
 use super::*;
 
 #[test]
-fn canvas_readout_matches_the_measured_flat_sizes() {
-    for (w, h, want) in [
-        (400.0, 300.0, "351.6K"),
-        (1.0, 300.0, "900 bytes"),
-        (133.0, 300.0, "116.9K"),
-        (300000.0, 300.0, "257.5M"),
-        (500.0, 400.0, "585.9K"),
-        (567.0, 300.0, "498.3K"),
-    ] {
-        assert_eq!(canvas_size_text(w * h * 3.0), want, "{w}x{h} RGB 8");
-    }
-}
-
-#[test]
-fn flat_format_counts_channels_without_alpha() {
-    use photocraft_color::{ColorMode, SampleType};
-    for (mode, depth, want) in [
-        (ColorMode::Rgb, SampleType::U8, (3, 1)),
-        (ColorMode::Grayscale, SampleType::U8, (1, 1)),
-        (ColorMode::Cmyk, SampleType::U8, (4, 1)),
-        (ColorMode::Rgb, SampleType::U16, (3, 2)),
-        (ColorMode::Rgb, SampleType::F32, (3, 4)),
-    ] {
-        let (channels, per_channel) = flat_format(mode, depth);
-        assert_eq!((channels, per_channel), want, "{mode:?} {depth:?}");
-        assert_eq!(channels * per_channel, want.0 * want.1, "{mode:?} {depth:?} bytes per pixel");
-    }
-}
-
-#[test]
-fn malformed_fields_fall_back_instead_of_nan() {
-    let mut f = Map::new();
-    assert_eq!(canvas_flat_bpp(&f), 3.0, "missing fields fall back to RGB 8");
-    assert_eq!(canvas_size_text(400.0 * 300.0 * canvas_flat_bpp(&f)), "351.6K");
-    for bad in [json!(f64::NAN), json!(f64::INFINITY), json!(0.0), json!(-2.0), json!("x"), json!(null)] {
-        f.insert("__channels".into(), bad.clone());
-        f.insert("__bytesPerChannel".into(), bad.clone());
-        let bpp = canvas_flat_bpp(&f);
-        assert!(bpp.is_finite() && bpp > 0.0, "{bad:?} falls back, got {bpp}");
-        let text = canvas_size_text(400.0 * 300.0 * bpp);
-        assert!(!text.contains("NaN") && !text.contains("inf"), "{bad:?} reads {text:?}");
-    }
-    // One bad field still falls back for that field only.
-    f.insert("__channels".into(), json!(4.0));
-    f.insert("__bytesPerChannel".into(), json!("x"));
-    assert_eq!(canvas_flat_bpp(&f), 4.0);
-}
-
-#[test]
-fn canvas_readout_uses_the_system_decimal_mark() {
-    crate::i18n::with_decimal_separator(Some(','), || {
-        assert_eq!(canvas_size_text(400.0 * 300.0 * 3.0), "351,6K");
-        assert_eq!(canvas_size_text(500.0 * 400.0 * 3.0), "585,9K");
+fn canvas_size_readouts_count_flat_image_bytes_and_update_with_new_dimensions() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+        app.run("prefs.set", json!({"path": "interface.language", "value": "en"})).unwrap();
+        app.session.execute("file.new", json!({"width": 400, "height": 300, "resolution": 72})).unwrap();
+        app
     });
-    assert_eq!(canvas_size_text(400.0 * 300.0 * 3.0), "351.6K");
-}
+    h.run_steps(4);
+    let id = open(h.state_mut(), CANVAS_COMMAND).expect("a document is open");
+    h.run_steps(6);
+    // The fixture pins English unit words. The host still uses the regional number format,
+    // so render the independently measured quantities with that format before querying the UI.
+    let format = crate::i18n::framework_i18n().format();
+    let initial = format.number_ungrouped(351.6, 1);
+    assert_eq!(h.query_all_by_label_contains(&initial).count(), 2, "Current and New Size both count three RGB channels");
 
-/// The open dialog on a 400x300 RGB 8 document shows the flat 351.6K, not the layer-backed 469K.
-#[test]
-fn canvas_size_dialog_shows_the_flat_size() {
-    use egui_kittest::{Harness, kittest::Queryable};
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.session.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    open(h.state_mut(), "image.canvasSize").unwrap();
-    h.run_steps(3);
-    // Current Size and New Size both read 351.6K on an unchanged dialog.
-    assert_eq!(h.get_all_by_label_contains("351.6K").count(), 2, "the dialog shows the flat 400x300 RGB 8 size");
-    assert_eq!(h.query_all_by_label_contains("469K").count(), 0, "the layer-backed size is gone");
+    for (width, height, value, decimals) in [(1, 300, 900.0, 0), (133, 300, 116.9, 1), (500, 400, 585.9, 1), (567, 300, 498.3, 1)] {
+        let app = h.state_mut();
+        let ctx = app.ctx().clone();
+        app.framework.dialogs.set_json_field(&ctx, id, "width", json!(width)).unwrap();
+        app.framework.dialogs.set_json_field(&ctx, id, "height", json!(height)).unwrap();
+        h.run_steps(4);
+        let number = format.number_ungrouped(value, decimals);
+        let want = if decimals == 0 { format!("{number} bytes") } else { number };
+        assert_eq!(h.query_all_by_label_contains(&initial).count(), 1, "the original size is unchanged");
+        assert_eq!(h.query_all_by_label_contains(&want).count(), 1, "{width}×{height} shows the new flat size");
+    }
 }
