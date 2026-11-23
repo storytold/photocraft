@@ -1,4 +1,4 @@
-use craft::ui::dialog::{DialogId, StackDialog as _};
+use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::HostedImageSize;
 use craft::ui::runtime::env::UnitKind;
 use serde_json::{Value, json};
