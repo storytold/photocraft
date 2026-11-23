@@ -39,7 +39,13 @@ pub(crate) struct VectorTools {
 
 impl Default for VectorTools {
     fn default() -> Self {
-        Self { pen: PenTool::new(), shapes: ShapeDragTool::new(), freeform: FreeformPenTool::default(), path_selection: Default::default(), press_mods: Mods::default() }
+        Self {
+            pen: PenTool::new(),
+            shapes: ShapeDragTool::new(),
+            freeform: FreeformPenTool::default(),
+            path_selection: Default::default(),
+            press_mods: Mods::default(),
+        }
     }
 }
 
