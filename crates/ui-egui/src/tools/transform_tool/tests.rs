@@ -3120,3 +3120,15 @@ fn enter_right_after_an_undo_back_into_warp_commits_what_a_pass_would() {
         assert!((a - b).abs() < 1e-9, "{:?} vs {:?}", now.1, then.1);
     }
 }
+
+/// #15548: Free Transform on an unturned, unskewed box shows the horizontal skew as "0", not "-0".
+#[test]
+fn an_unskewed_box_shows_its_horizontal_skew_as_zero() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = harness(app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24)), egui::vec2(1400.0, 900.0));
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("Horizontal skew").value().as_deref(), Some("0"));
+}
