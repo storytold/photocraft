@@ -64,13 +64,13 @@ fn duplicate_cannot_shift_the_owner_of_a_suspended_recording() {
     let result = app.run("actions.play", json!({"action": "Menu"})).unwrap();
     let dialog = result["paused"]["dialog"].clone();
     let list = app.session.actions.list.clone();
-    assert!(app.session.actions.recording.is_none());
+    assert!(app.session.recording.target.is_none());
     let error = app.run("actions.duplicate", json!({"action": "Menu"})).unwrap_err();
     assert!(error.contains("Confirm or cancel"), "{error}");
     assert_eq!(app.session.actions.list, list);
     let app_ctx = app.ctx().clone();
     let cancelled = control(&mut app, &app_ctx, "ui.dialog.cancel", json!({"dialog": dialog}));
     assert_eq!(cancelled["ok"], true, "{cancelled}");
-    assert_eq!(app.session.actions.recording.map(|(_, i)| i), Some(1));
+    assert_eq!(app.session.recording.target.map(|(_, i)| i), Some(1));
     app.run("actions.stop", json!({})).unwrap();
 }

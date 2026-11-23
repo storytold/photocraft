@@ -128,8 +128,8 @@ pub(crate) const MAX_SCRIPT_STEPS: u64 = crate::actions_cmds::MAX_PLAYBACK_STEPS
 fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
     let mut results = Vec::new();
     for (id, params) in steps {
-        s.actions.script_steps = s.actions.script_steps.saturating_add(1);
-        if s.actions.script_steps > MAX_SCRIPT_STEPS {
+        s.recording.script_steps = s.recording.script_steps.saturating_add(1);
+        if s.recording.script_steps > MAX_SCRIPT_STEPS {
             results.push(json!({"command": id, "error": format!("the script ran more than {MAX_SCRIPT_STEPS} steps in all (scripts calling scripts)")}));
             break;
         }
@@ -171,15 +171,15 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(cmd, "give \"path\" (a script file), \"script\" (its text) or \"steps\"")),
     };
     check_known(&steps, cmd)?;
-    if s.actions.script_depth >= MAX_SCRIPT_DEPTH {
+    if s.recording.script_depth >= MAX_SCRIPT_DEPTH {
         return Err(bad(cmd, format!("scripts are nested more than {MAX_SCRIPT_DEPTH} deep")));
     }
-    if s.actions.script_depth == 0 {
-        s.actions.script_steps = 0;
+    if s.recording.script_depth == 0 {
+        s.recording.script_steps = 0;
     }
-    s.actions.script_depth += 1;
+    s.recording.script_depth += 1;
     let results = run_steps(s, &steps);
-    s.actions.script_depth -= 1;
+    s.recording.script_depth -= 1;
     let ok = results.iter().all(|r| r.get("error").is_none());
     Ok(json!({"steps": steps.len(), "ok": ok, "results": results}))
 }

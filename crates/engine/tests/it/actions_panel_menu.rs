@@ -54,7 +54,7 @@ fn background_stroke_ownership_does_not_suppress_ordinary_filter_jobs() {
         let changed = s.execute("actions.allowToolRecording", json!({"enabled":true}));
         if command == "paint.remove" {
             assert!(changed.is_err(), "the in-flight stroke retains the mode it started under");
-            assert!(!s.actions.record_tools);
+            assert!(!s.recording.record_tools);
         } else {
             changed.unwrap();
         }

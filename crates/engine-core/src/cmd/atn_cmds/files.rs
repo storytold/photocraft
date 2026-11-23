@@ -17,7 +17,7 @@ fn renamed_to<'a>(renames: &'a [(String, String)], name: &str) -> Option<&'a Str
 /// loads is marked as automation's, so it keeps the gate when the user plays it.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.load";
-    if s.actions.recording.is_some() || s.actions.playing > 0 {
+    if s.recording.target.is_some() || s.recording.playing > 0 {
         return Err(bad(cmd, "stop recording or playing before loading actions"));
     }
     let encoding = match p.get("encoding") {

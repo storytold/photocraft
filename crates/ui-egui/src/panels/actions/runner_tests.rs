@@ -195,7 +195,7 @@ fn single_history_dialog_confirmation_and_cancel() {
         assert!(app.session.redo());
         assert_eq!(app.session.active().unwrap().doc.as_ref(), after.as_ref());
         assert!(app.paused_playbacks.paused.is_empty());
-        assert_eq!(app.session.actions.playing, 0);
+        assert_eq!(app.session.recording.playing, 0);
         let count = app.session.active().unwrap().history.past_len();
         app.session.execute("layer.renameLayer", json!({"name":"Outside"})).unwrap();
         assert_eq!(app.session.active().unwrap().history.past_len(), count + 1);
@@ -229,7 +229,7 @@ fn single_history_dialog_refuses_intervening_edit_or_document_switch() {
         assert_eq!(app.session.active().unwrap().history.entries(), history);
         assert!(app.filter_preview.is_none());
         assert!(app.paused_playbacks.paused.is_empty());
-        assert_eq!(app.session.actions.playing, 0);
+        assert_eq!(app.session.recording.playing, 0);
     }
 }
 
@@ -273,7 +273,7 @@ fn paused_spelling_repeated_changes_and_errors_keep_one_owned_history() {
             spelling_change(&mut app, params).unwrap();
             let token = app.ui.type_panels.spell.as_ref().unwrap().resume.unwrap();
             assert!(app.paused_playbacks.paused[&token].history.is_some());
-            assert_eq!(app.session.actions.playing, 0);
+            assert_eq!(app.session.recording.playing, 0);
         }
         let st = app.session.active().unwrap();
         let texts: Vec<_> = st
@@ -311,7 +311,7 @@ fn paused_spelling_repeated_changes_and_errors_keep_one_owned_history() {
 #[test]
 fn spelling_playback_blocks_library_edits_until_done() {
     let (mut app, _, _) = paused_history_spelling(false, None);
-    assert_eq!(app.session.actions.playing, 0);
+    assert_eq!(app.session.recording.playing, 0);
     let error = app.run("actions.clearAll", json!({"confirm": true})).unwrap_err();
     assert_eq!(app.ui.status, error);
     assert!(app.ui.status_error);
@@ -356,7 +356,7 @@ fn paused_spelling_rejects_external_edit_switch_and_original_gate_before_change(
             }
             close_spelling(&mut app);
             assert!(app.paused_playbacks.paused.is_empty());
-            assert_eq!(app.session.actions.playing, 0);
+            assert_eq!(app.session.recording.playing, 0);
             if scenario == "gate" {
                 assert_eq!(app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().name, "Tail");
             } else {
@@ -420,8 +420,8 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
         Some(|id, _| if id == "view.fitOnScreen" { Err(photocraft_engine::EngineError::Other("denied nested view".into())) } else { Ok(()) });
     let r = app.run("actions.play", json!({"action":"Parent"})).unwrap();
     assert!(r["failed"]["error"].as_str().unwrap().contains("denied nested view"));
-    assert!(app.session.actions.playback_stack.is_empty());
-    assert_eq!(app.session.actions.playing, 0);
+    assert!(app.session.recording.playback_stack.is_empty());
+    assert_eq!(app.session.recording.playing, 0);
 
     app.session.authorize = None;
     let dir = tempfile::tempdir().unwrap();
@@ -527,7 +527,7 @@ fn view_action_failure_resume_and_authorization() {
     let result = app.run("actions.play", json!({"action": "Fit"})).unwrap();
     assert_eq!(result["ran"], 0);
     assert_eq!(result["failed"]["step"], 0);
-    assert_eq!(app.session.actions.playing, 0);
+    assert_eq!(app.session.recording.playing, 0);
     app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
     app.session.authorize =
         Some(
@@ -542,7 +542,7 @@ fn view_action_failure_resume_and_authorization() {
     assert_eq!(result["ran"], 1);
     assert_eq!(app.ui.views[0].pending.last(), Some(&ViewRequest::Command(ViewCommands::ActualPixels)), "played from step 1: no fit after 100%");
     assert!(app.run("actions.play", json!({"action": 0, "from": -1})).is_err());
-    app.session.actions.playing = 1;
+    app.session.recording.playing = 1;
     assert!(app.run("actions.play", json!({"action": 0})).is_err());
 }
 
@@ -980,8 +980,8 @@ fn dialog_worker_failure_stops_action_before_following_steps() {
         } else {
             assert!(result.is_ok(), "the successful worker lets the action continue: {result:?}");
         }
-        assert_eq!(app.session.actions.playing, 0);
-        assert!(app.session.actions.playback_stack.is_empty());
+        assert_eq!(app.session.recording.playing, 0);
+        assert!(app.session.recording.playback_stack.is_empty());
     }
 }
 
@@ -1260,7 +1260,7 @@ fn a_recorded_call_paused_by_a_dialog_records_one_call_and_replays_once() {
     // Confirm: the dialog command and the resumed rest stay inside the one named call.
     let live = app.session.journal.len();
     let id = pause_child(&mut app);
-    assert!(app.session.actions.recording.is_none(), "recording stays suspended while the step dialog is open");
+    assert!(app.session.recording.target.is_none(), "recording stays suspended while the step dialog is open");
     let names = |app: &PhotocraftApp| app.session.actions.list.actions().iter().map(|a| a.name.clone()).collect::<Vec<_>>();
     let before = names(&app);
     assert_eq!(app.run("actions.record", json!({"name": "Intruder"})), Err(refusal.clone()), "no second recording while the call is suspended");
@@ -1268,7 +1268,7 @@ fn a_recorded_call_paused_by_a_dialog_records_one_call_and_replays_once() {
     assert_eq!(app.run("actions.move", json!({"action": "Owner", "to": 0})), Err(refusal.clone()), "the suspended owner can't be moved");
     assert_eq!(names(&app), before, "the refused commands leave the list alone");
     answer_ok(&mut app, id).unwrap();
-    assert!(app.session.actions.recording.is_some(), "recording comes back when the call completes");
+    assert!(app.session.recording.target.is_some(), "recording comes back when the call completes");
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(pairs(&app, 1), child_call());
     assert_eq!(suffixes(&app), 1);
@@ -1292,7 +1292,7 @@ fn a_recorded_call_paused_by_a_dialog_records_one_call_and_replays_once() {
     app.run("actions.record", json!({"name": "Cancelled"})).unwrap();
     let id = pause_child(&mut app);
     answer_cancel(&mut app, id).unwrap();
-    assert!(app.session.actions.recording.is_some(), "cancel restores recording");
+    assert!(app.session.recording.target.is_some(), "cancel restores recording");
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(pairs(&app, 2), child_call());
 }
@@ -1301,11 +1301,11 @@ fn a_recorded_call_paused_by_a_dialog_records_one_call_and_replays_once() {
 fn a_failing_step_dialog_command_ends_the_recorded_call_once() {
     let mut app = recording_with_dialog_child();
     let id = pause_child(&mut app);
-    assert!(app.session.actions.recording.is_none(), "recording stays suspended while the step dialog is open");
+    assert!(app.session.recording.target.is_none(), "recording stays suspended while the step dialog is open");
     // The dialog takes only values its row accepts, so the command fails on the document: the layer it filters is locked.
     app.run("layer.lockLayers", json!({"all": true})).unwrap();
     assert!(answer_ok(&mut app, id).is_err(), "the dialog command fails");
-    assert!(app.session.actions.recording.is_some(), "recording comes back when the dialog command fails");
+    assert!(app.session.recording.target.is_some(), "recording comes back when the dialog command fails");
     assert_eq!(suffixes(&app), 0, "the action stops at the failed step");
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(pairs(&app, 1), child_call());
@@ -1331,7 +1331,7 @@ fn a_failing_resumed_playback_ends_the_recorded_call_once() {
     // The rest of the call can't be found any more: resuming it fails.
     app.session.actions.list.rename(0, "Renamed", |_, _, _| {}).unwrap();
     assert!(answer_ok(&mut app, id).is_err(), "the resumed playback fails");
-    assert!(app.session.actions.recording.is_some(), "recording comes back when the resumed playback fails");
+    assert!(app.session.recording.target.is_some(), "recording comes back when the resumed playback fails");
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(pairs(&app, 1), child_call());
 }
@@ -1360,11 +1360,11 @@ fn escape_on_a_step_dialog_ends_the_recorded_call_once() {
     h.run_steps(2);
     pause_child(h.state_mut());
     h.run_steps(4);
-    assert!(h.state().session.actions.recording.is_none(), "recording stays suspended while the step dialog is open");
+    assert!(h.state().session.recording.target.is_none(), "recording stays suspended while the step dialog is open");
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert!(!h.state().dialog_open(), "Esc closes the step dialog");
-    assert!(h.state().session.actions.recording.is_some(), "Esc restores recording");
+    assert!(h.state().session.recording.target.is_some(), "Esc restores recording");
     let app = h.state_mut();
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(pairs(app, 1), child_call());
@@ -1417,7 +1417,7 @@ fn assert_displace_call_finished(app: &mut PhotocraftApp, suffix_count: usize) {
     assert!(!app.file_dialog_open());
     assert!(!app.dialog_open());
     assert!(app.paused_playbacks.paused.is_empty());
-    assert!(app.session.actions.recording.is_some());
+    assert!(app.session.recording.target.is_some());
     assert_eq!(suffixes(app), suffix_count);
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(pairs(app, 1), child_call(), "record the child call exactly once");
@@ -1440,7 +1440,7 @@ fn a_displace_step_restores_recording_when_the_map_picker_fails_or_is_cancelled(
         let id = pause_child(&mut app);
         answer_ok(&mut app, id).unwrap();
         assert!(app.file_dialog_open());
-        assert!(app.session.actions.recording.is_none());
+        assert!(app.session.recording.target.is_none());
         app.poll_file_dialog();
         assert_displace_call_finished(&mut app, 0);
     }
@@ -1543,7 +1543,7 @@ fn a_paused_dialog_authorizes_edited_params_before_history_or_worker_admission()
         assert!(app.session.job_on(state.doc.id).is_none(), "no worker was admitted");
         assert!(app.session.authorize.is_none());
         assert!(app.paused_playbacks.paused.is_empty());
-        assert_eq!(app.session.actions.playing, 0);
+        assert_eq!(app.session.recording.playing, 0);
         app.run("layer.renameLayer", json!({"name": "Outside"})).unwrap();
         assert_eq!(app.session.active().unwrap().history.past_len(), count + 1, "no action scope leaked");
     }
@@ -1567,7 +1567,7 @@ fn an_allowed_paused_edit_and_an_ordinary_manual_dialog_still_run() {
         assert!(app.session.job_on(state.doc.id).is_none(), "the resumed action waited for its worker");
         assert!(app.session.authorize.is_none(), "the transient captured gate was restored");
         assert!(app.paused_playbacks.paused.is_empty());
-        assert_eq!(app.session.actions.playing, 0);
+        assert_eq!(app.session.recording.playing, 0);
     }
 }
 
@@ -1659,7 +1659,7 @@ fn a_changed_live_gate_cannot_be_replaced_for_the_remaining_action() {
             assert!(app.session.undo());
             assert_eq!(app.session.active().unwrap().doc.as_ref(), before.as_ref());
             assert!(app.paused_playbacks.paused.is_empty());
-            assert_eq!(app.session.actions.playing, 0);
+            assert_eq!(app.session.recording.playing, 0);
         }
     }
 }
@@ -1741,7 +1741,7 @@ fn configured_gates_require_one_composed_policy_for_automated_resume() {
         assert!(std::ptr::fn_addr_eq(app.session.authorize.unwrap(), deny_wide_blur as Gate));
         assert!(std::ptr::fn_addr_eq(app.services.automation_authorize.unwrap(), service));
         assert!(app.paused_playbacks.paused.is_empty());
-        assert_eq!(app.session.actions.playing, 0);
+        assert_eq!(app.session.recording.playing, 0);
     }
 }
 
@@ -1906,7 +1906,7 @@ fn an_implicit_paused_filter_refuses_a_public_api_receiver_change() {
                 assert_eq!(after.as_ref(), before.as_ref(), "neither layer may be edited after stale implicit targeting");
             }
             assert!(app.paused_playbacks.paused.is_empty());
-            assert_eq!(app.session.actions.playing, 0);
+            assert_eq!(app.session.recording.playing, 0);
         }
     }
 }
@@ -2152,7 +2152,7 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
         } else {
             assert!(r.get("failed").is_none(), "hook={hook}: {r}");
         }
-        assert_eq!(app.session.actions.playing, 0);
-        assert!(app.session.actions.playback_stack.is_empty());
+        assert_eq!(app.session.recording.playing, 0);
+        assert!(app.session.recording.playback_stack.is_empty());
     }
 }

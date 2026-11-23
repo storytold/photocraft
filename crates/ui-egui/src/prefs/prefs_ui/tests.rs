@@ -974,7 +974,7 @@ fn restart_cases() -> Vec<Case> {
                 assert!(early.files.lock().unwrap().is_empty());
                 tx.send(photocraft_engine::preset_store::open(Box::new(early.clone()))).unwrap();
                 tick(app, ctx);
-                assert!(app.services.preset_store.is_none() && app.session.preset_store.is_some());
+                assert!(app.services.preset_store.is_none() && app.session.preset_store().is_some());
                 app.run("brush.presets.save", json!({"name": "Late"})).unwrap();
             }),
             check: Box::new(move |_, _, _| {

@@ -1048,7 +1048,7 @@ pub struct PendingPsdPreflight {
 impl Session {
     /// A recording mode change must not reclassify an in-flight stroke from this take.
     pub(crate) fn tool_stroke_job_running(&self) -> bool {
-        self.jobs.running.iter().any(|job| job.started_in_take == Some(self.actions.take) && crate::actions_record::tool_stroke(&job.command))
+        self.jobs.running.iter().any(|job| job.started_in_take == Some(self.recording.take) && crate::actions_record::tool_stroke(&job.command))
     }
 
     /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
@@ -1800,12 +1800,12 @@ impl Session {
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
-        let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers().to_vec()) } else { None };
+        let pre_selected = if self.recording.target.is_some() { self.active().map(|st| st.selected_layers().to_vec()) } else { None };
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
         // being recorded, nor move the recording mark past the entries it is about to replace.
-        let recording = if spec.journal && crate::actions_record::replayable(id) { self.actions.recording.take() } else { None };
+        let recording = if spec.journal && crate::actions_record::replayable(id) { self.recording.target.take() } else { None };
         let before = self.active().map(|st| (st.doc.clone(), st.revision));
         let docs_before: Vec<_> = self.docs.iter().map(|st| st.doc.id).collect();
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
@@ -1815,8 +1815,8 @@ impl Session {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
         self.live_commit = None;
-        if self.actions.recording.is_none() {
-            self.actions.recording = recording;
+        if self.recording.target.is_none() {
+            self.recording.target = recording;
         }
         self.jobs.spawn = false;
         self.coalesce_request = None;
@@ -1849,8 +1849,8 @@ impl Session {
                 job.command = id.to_string();
                 job.params = params;
                 job.journal = spec.journal;
-                job.started_in_take = self.actions.recording.map(|_| self.actions.take);
-                job.recorded_by = job.started_in_take.filter(|_| self.actions.record_tools || !crate::actions_record::tool_stroke(id));
+                job.started_in_take = self.recording.target.map(|_| self.recording.take);
+                job.recorded_by = job.started_in_take.filter(|_| self.recording.record_tools || !crate::actions_record::tool_stroke(id));
                 job.automation = automation;
                 job.pre_selected = pre_selected.clone();
                 job.before = std::mem::take(&mut record_before);
@@ -1986,7 +1986,7 @@ impl Session {
             self.journal.truncate(from);
         }
         let typed = crate::actions_record::typed_layer(self, id, &params);
-        let params = if self.actions.recording.is_none() { params } else { hooks.recorded(self, id, params, pre_selected) };
+        let params = if self.recording.target.is_none() { params } else { hooks.recorded(self, id, params, pre_selected) };
         let params = crate::actions_record::recorded_params(self, id, params);
         let params = crate::actions_record::portable(self, id, params, before);
         // A step a control client runs while the user records keeps automation's gate.
@@ -2060,7 +2060,7 @@ impl Session {
         } = job;
         // A recording started after the job (#7289) keeps what it has so far, and the job's step
         // goes into the journal past its start, so that recording doesn't get it.
-        let foreign = self.actions.recording.is_some() && *recorded_by != Some(self.actions.take);
+        let foreign = self.recording.target.is_some() && *recorded_by != Some(self.recording.take);
         if foreign {
             for flush in &crate::registry::hooks().flush_recording {
                 flush(self)?;
@@ -2104,15 +2104,15 @@ impl Session {
         // Apply-time hooks can dispatch commands too. Keep the same single-step recording
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
-        let recording = if *journal && crate::actions_record::replayable(command) { self.actions.recording.take() } else { None };
+        let recording = if *journal && crate::actions_record::replayable(command) { self.recording.target.take() } else { None };
         let applied_from = target.and_then(|i| self.docs.get(i)).map(|st| (st.doc.id, st.revision));
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
-        if self.actions.recording.is_none() {
-            self.actions.recording = recording;
+        if self.recording.target.is_none() {
+            self.recording.target = recording;
         }
         self.coalesce_request = None;
         self.color_restrict = None;
@@ -2128,7 +2128,7 @@ impl Session {
             // polling it now, and only for the recording that owns it: a foreign recording does
             // not get the step.
             self.after_command(command, params.clone(), *journal, *automation && !foreign, Some(nested_from), pre_selected.as_deref(), before);
-            if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
+            if foreign && let Some((start, _)) = self.recording.target.as_mut() {
                 *start = self.journal.len();
             }
         }

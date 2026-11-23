@@ -141,7 +141,7 @@ pub fn full(s: &Session, p: &Pattern) -> std::result::Result<Pattern, String> {
     if !s.patterns.stored.contains_key(&p.id) {
         return Ok(p.clone());
     }
-    let st = s.preset_store.as_ref().ok_or_else(|| format!("pattern \"{}\" is not loaded: no preset store", p.display_name()))?;
+    let st = s.preset_store().ok_or_else(|| format!("pattern \"{}\" is not loaded: no preset store", p.display_name()))?;
     let mut f = st.load_pattern(&p.id).map_err(|e| format!("pattern \"{}\" could not be loaded: {e}", p.display_name()))?;
     f.name = p.name.clone();
     Ok(f)

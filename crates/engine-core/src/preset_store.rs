@@ -1175,7 +1175,7 @@ impl Session {
         } else if self.actions.list.actions().is_empty() && self.actions.list.sets().is_empty() {
             self.actions.list.replace(disk);
             name_id_shortcuts(self, &action_ids);
-            if let Some(st) = self.preset_store.as_mut() {
+            if let Some(st) = self.preset_store_mut() {
                 st.actions_rev = self.actions.list.revision();
             }
             if !action_ids.is_empty() {
@@ -1201,7 +1201,7 @@ impl Session {
         let mut brush = std::mem::take(&mut *self.tools.brush);
         let _ = self.load_brush_tips(&mut brush);
         *self.tools.brush = brush;
-        if let Some(st) = self.preset_store.as_mut() {
+        if let Some(st) = self.preset_store_mut() {
             warnings.extend(st.take_warnings());
         }
         warnings
@@ -1210,7 +1210,7 @@ impl Session {
     /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
     pub fn sync_preset_store(&mut self) {
         let rev = self.tools.presets_rev;
-        if let Some(st) = self.preset_store.as_mut() {
+        if let Some(st) = self.preset_store_mut() {
             if st.synced_rev != Some(rev) {
                 st.sync(&mut self.tools.presets);
                 st.synced_rev = Some(rev);
@@ -1231,7 +1231,7 @@ impl Session {
     pub fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String> {
         let load = |r: &mut StoredTile| -> Result<(), String> {
             if r.full.is_none() {
-                let st = self.preset_store.as_ref().ok_or_else(|| format!("brush tip {} is not available: no preset store is attached", r.key))?;
+                let st = self.preset_store().ok_or_else(|| format!("brush tip {} is not available: no preset store is attached", r.key))?;
                 r.full = Some(st.load_tile(r)?);
             }
             Ok(())

@@ -220,7 +220,7 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => app.services.preset_store = None,
         }
     }
-    if let Some(w) = app.session.preset_store.as_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {
+    if let Some(w) = app.session.preset_store_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {
         app.ui.status = w;
     }
 }

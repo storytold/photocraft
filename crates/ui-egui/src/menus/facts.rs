@@ -222,7 +222,7 @@ impl<'a> RuleFacts<'a> {
                 type_defaults: s.type_defaults.is_some(),
                 measurement_log: s.analysis.log.is_empty(),
                 mask_targeted: s.tools.mask_targeted,
-                actions: (s.actions.list.revision(), s.actions.recording, s.actions.playing),
+                actions: (s.actions.list.revision(), s.recording.target, s.recording.playing),
                 undo_label: crate::actions::library::edit_undo_label(app),
                 plugins: photocraft_plugins::registry::revision(),
             },

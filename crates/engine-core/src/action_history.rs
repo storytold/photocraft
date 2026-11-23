@@ -272,7 +272,7 @@ impl ActionHistoryContinuation {
     /// Rebind a completed nonmodal dialog edit, leaving open-dialog time outside its scope.
     /// Only the scope resumed from this continuation may be taken; a parent remains untouched.
     pub fn suspend_after_edit(&self, s: &mut Session) -> Result<Self> {
-        if s.actions.playing != 0 || s.active().map(|st| st.doc.id) != self.active {
+        if s.recording.playing != 0 || s.active().map(|st| st.doc.id) != self.active {
             return Err(EngineError::Other("the dialog's action scope is no longer current".into()));
         }
         let active = self.documents.iter().find(|doc| Some(doc.id) == self.active);
@@ -321,7 +321,7 @@ impl ActionHistoryContinuation {
 
 /// Publish the completed prefix, then release the active scope while a dialog is open.
 pub fn suspend_history(s: &mut Session) -> Option<ActionHistoryContinuation> {
-    if s.actions.playing != 1 {
+    if s.recording.playing != 1 {
         return None;
     }
     Some(ActionHistoryContinuation::capture(s))
@@ -329,7 +329,7 @@ pub fn suspend_history(s: &mut Session) -> Option<ActionHistoryContinuation> {
 
 /// End a dialog scope if its command or continuation fails before playback starts.
 pub fn finish_pending_history(s: &mut Session) {
-    if s.actions.playing == 0 {
+    if s.recording.playing == 0 {
         finish_playback(s);
     }
 }
@@ -428,7 +428,7 @@ mod tests {
                     s.execute("layer.renameLayer", json!({"name":name})).unwrap();
                     continuation = continuation.suspend_after_edit(&mut s).unwrap();
                     assert!(s.action_history.is_none(), "idle time must not own a history scope");
-                    assert_eq!(s.actions.playing, 0);
+                    assert_eq!(s.recording.playing, 0);
                 }
                 continuation.resume(&mut s).unwrap();
                 finish_document_history(&mut s);
