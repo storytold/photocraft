@@ -237,12 +237,12 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
-    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationLocateFn, AutomationOpenPcraftFn, AutomationReadFn,
-    AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn,
-    CursorPosFn, DiscardAutosaveFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp,
-    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox,
-    PrimaryDownFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn,
-    WriteFn,
+    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationLinkMissingFn, AutomationLocateFn, AutomationOpenPcraftFn,
+    AutomationReadFn, AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn,
+    ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave,
+    ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn,
+    PhotoshopShortcutsFn, PlaceInbox, PrimaryDownFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn,
+    TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::cjk_fonts;
@@ -472,6 +472,8 @@ pub struct PhotocraftApp {
     pub(crate) layer_style_child: Option<(craft::ui::dialog::DialogId, dialogs::layer_style::Child)>,
     /// What each open Color Picker edits (`color_picker_ui`).
     pub(crate) color_targets: HashMap<craft::ui::dialog::DialogId, color_picker_ui::PickTarget>,
+    /// Looks at opened documents' linked files that have not answered yet (`missing_links_ui`).
+    pub(crate) link_looks: Vec<missing_links_ui::LateLook>,
     /// Colours a Color Picker answered with OK, waiting for their owner: (dialog, field, colour).
     pub(crate) color_answers: Vec<(craft::ui::dialog::DialogId, String, craft::theme::Srgba)>,
     /// The screen-colour pick in progress (`screen_picker`).

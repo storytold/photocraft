@@ -402,3 +402,185 @@ fn a_missing_link_named_like_the_raw_note_keeps_the_resolution() {
     assert_eq!(r["warnings"], json!([format!("Cannot locate linked asset: {}", abs(&named))]));
     assert_eq!(session.active().unwrap().doc.resolution_dpi, dpi);
 }
+
+/// The desktop agent policy as far as linked files go: every smart-object command that reads a
+/// file is refused, whatever its path (`photocraft_automation::workspace::authorize_engine_command`).
+fn refuse_smart_object_files(id: &str, _: &serde_json::Value) -> photocraft_engine::Result<()> {
+    if id.starts_with("layer.smartObjects.") { Err(photocraft_engine::EngineError::Other(format!("{id} is disabled"))) } else { Ok(()) }
+}
+
+/// Stores `stored` as the links of the three layers of `s`, one each, in its saved document.
+fn store_links(s: &Saved, stored: [&str; 3]) {
+    let mut session = photocraft_engine::Session::new();
+    let bytes = std::fs::read(&s.doc).unwrap();
+    photocraft_engine::file_cmds::open_bytes_as(&mut session, "doc.pcraft", &bytes, None, Some(abs(&s.doc))).unwrap();
+    session
+        .edit("links", |d, _| {
+            for (id, path) in s.layers.iter().zip(stored) {
+                if let LayerContent::Smart(sm) = &mut d.layer_mut(LayerId(*id)).unwrap().content {
+                    sm.source = SmartSource::Linked { path: path.to_string() };
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    session.execute("file.saveACopy", json!({"path": abs(&s.doc), "overwrite": true})).unwrap();
+}
+
+/// An agent's `app.open` names its file below a read folder and runs under a policy that refuses
+/// every smart-object file command. Its missing linked files are looked for through the read
+/// folder: the ones below it are reported, relative links taken from where the folder holds the
+/// document, and a link that leaves the folder is not looked at, there or not.
+#[test]
+fn automation_opens_look_for_linked_files_through_the_read_folder() {
+    let s = saved(false, None);
+    let root = s.dir.path().to_path_buf();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let (inside, outside) = (root.join("in.png"), elsewhere.path().join("out.png"));
+    store_links(&s, ["art.png", &abs(&inside), &abs(&outside)]);
+    // The directory form of the same document.
+    let doc = photocraft_format::load_from_bytes(&std::fs::read(&s.doc).unwrap()).unwrap();
+    photocraft_format::PcraftWriter::new().save_dir(&doc, &root.join("folder.pcraft"), &photocraft_format::SaveOptions::default()).unwrap();
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<PathBuf>::new()));
+    let services = || {
+        let (read, dir, locate, look, asked) = (root.clone(), root.clone(), root.clone(), root.clone(), asked.clone());
+        Services {
+            import: Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            automation_read: Some(Box::new(move |path: &str| {
+                let bytes = std::fs::read(read.join(path)).map_err(|e| e.to_string())?;
+                Ok(crate::AutomationReadResult { name: path.to_string(), bytes, save_path: None })
+            })),
+            automation_open_pcraft: Some(Box::new(move |path: &str| {
+                let at = dir.join(path);
+                if !at.is_dir() {
+                    return Ok(None);
+                }
+                photocraft_format::load_path(&at).map(|doc| Some((path.to_string(), doc))).map_err(|e| e.to_string())
+            })),
+            automation_locate: Some(Box::new(move |path: &str| Some(abs(&locate.join(path))))),
+            automation_link_missing: Some(Box::new(move |file: &Path| {
+                asked.borrow_mut().push(file.to_path_buf());
+                file.strip_prefix(&look).ok().map(|_| !file.exists())
+            })),
+            automation_authorize: Some(refuse_smart_object_files),
+            ..Default::default()
+        }
+    };
+    let warnings = |files: &[&Path]| json!(files.iter().map(|f| format!("Cannot locate linked asset: {}", abs(f))).collect::<Vec<_>>());
+    for (request, there) in [("doc.pcraft", false), ("folder.pcraft", false), ("doc.pcraft", true)] {
+        // What lies outside the read folder changes nothing, there or not.
+        if there {
+            std::fs::write(&outside, png("#00ff00")).unwrap();
+        }
+        asked.borrow_mut().clear();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services());
+        app.background_jobs = false;
+        let r = call(&mut app, "app.open", json!({"path": request}));
+        assert_eq!(r["result"]["warnings"], warnings(&[&s.art, &inside]), "{request}: {r}");
+        assert!(no_dialogs(&app));
+        let mut looked = asked.borrow().clone();
+        looked.sort();
+        let mut links = vec![s.art.clone(), inside.clone(), outside.clone()];
+        links.sort();
+        assert_eq!(looked, links, "{request}: every link is looked for through the read folder only");
+    }
+    // A file that comes back is no longer reported.
+    std::fs::write(&inside, png("#0000ff")).unwrap();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services());
+    app.background_jobs = false;
+    let r = call(&mut app, "app.open", json!({"path": "doc.pcraft"}));
+    assert_eq!(r["result"]["warnings"], warnings(&[&s.art]), "{r}");
+}
+
+/// A look that has not answered when the open stops waiting (a share that is slow to answer) is
+/// kept: the document opens without the dialog, and the dialog shows once the look answers.
+#[test]
+fn a_look_that_answers_late_shows_the_dialog_when_it_arrives() {
+    let s = saved(true, None);
+    let (mut app, _) = app();
+    open_file(&mut app, &s.doc);
+    assert!(no_dialogs(&app), "every linked file is there");
+    let document = app.session.active().unwrap().doc.id;
+    let ctx = app.ctx().clone();
+    let (answer, look) = std::sync::mpsc::channel();
+    let mut looked_from = None;
+    ask_with(&mut app, document, Some(&abs(&s.doc)), std::time::Duration::from_millis(1), |_, opened| {
+        looked_from = opened.map(Path::to_path_buf);
+        look
+    });
+    assert_eq!(looked_from.as_deref(), Some(s.doc.as_path()), "relative links are taken from the opened file");
+    assert!(no_dialogs(&app), "the open does not wait for the look");
+    crate::dialogs::take_results(&mut app, &ctx);
+    assert!(no_dialogs(&app), "nothing to show before the look answers");
+    answer.send(vec![(s.art.clone(), vec![abs(&s.art)])]).unwrap();
+    crate::dialogs::take_results(&mut app, &ctx);
+    let shown = dialogs(&app);
+    assert_eq!(shown.len(), 1, "{:?}", app.framework.dialogs.open_dialogs());
+    assert_eq!(shown[0].document(), document);
+    assert_eq!(listed(shown[0]), json!([{"file": abs(&s.art), "paths": [abs(&s.art)]}]));
+    // The answer is shown once.
+    let id = dialog_id_of(&app);
+    crate::dialogs::testing::confirm(&mut app, id).unwrap();
+    crate::dialogs::take_results(&mut app, &ctx);
+    assert!(no_dialogs(&app));
+    assert!(app.link_looks.is_empty());
+}
+
+/// A late answer lists only files the document still links to, and shows nothing for a document
+/// that was closed meanwhile or when the look ends without an answer.
+#[test]
+fn a_late_answer_follows_what_happened_to_the_document_meanwhile() {
+    let s = saved(true, None);
+    let other = s.dir.path().join("other.png");
+    std::fs::write(&other, png("#00ff00")).unwrap();
+    let late = |app: &mut PhotocraftApp| {
+        let document = app.session.active().unwrap().doc.id;
+        let (answer, look) = std::sync::mpsc::channel();
+        ask_with(app, document, Some(&abs(&s.doc)), std::time::Duration::from_millis(1), |_, _| look);
+        assert_eq!(app.link_looks.len(), 1);
+        answer
+    };
+    let both = vec![(s.art.clone(), vec![abs(&s.art)]), (other.clone(), vec![abs(&other)])];
+    // One of the two files the look names is linked: only that one is listed.
+    let (mut app, _) = self::app();
+    open_file(&mut app, &s.doc);
+    let ctx = app.ctx().clone();
+    let answer = late(&mut app);
+    answer.send(both.clone()).unwrap();
+    crate::dialogs::take_results(&mut app, &ctx);
+    assert_eq!(listed(dialogs(&app)[0]), json!([{"file": abs(&s.art), "paths": [abs(&s.art)]}]));
+    // Every layer was relinked while the look ran: nothing is left to list.
+    let (mut app, _) = self::app();
+    open_file(&mut app, &s.doc);
+    let ctx = app.ctx().clone();
+    let answer = late(&mut app);
+    for layer in [s.layers[0], s.layers[2]] {
+        app.run("layer.smartObjects.relinkToFile", json!({"layer": layer, "path": abs(&other)})).unwrap();
+    }
+    assert_eq!(links(&app, s.layers), [abs(&other), abs(&other), abs(&other)]);
+    answer.send(vec![(s.art.clone(), vec![abs(&s.art)])]).unwrap();
+    crate::dialogs::take_results(&mut app, &ctx);
+    assert!(no_dialogs(&app), "{:?}", app.framework.dialogs.open_dialogs());
+    assert!(app.link_looks.is_empty());
+    // The document was closed while the look ran.
+    let (mut app, _) = self::app();
+    open_file(&mut app, &s.doc);
+    let ctx = app.ctx().clone();
+    let answer = late(&mut app);
+    let index = app.session.active_index().unwrap();
+    app.session.close(index);
+    crate::dialogs::take_results(&mut app, &ctx);
+    assert!(app.link_looks.is_empty(), "the look of a closed document is not waited for");
+    assert!(answer.send(both).is_err(), "nothing listens for its answer");
+    assert!(no_dialogs(&app));
+    // The look ended without an answer.
+    let (mut app, _) = self::app();
+    open_file(&mut app, &s.doc);
+    let ctx = app.ctx().clone();
+    drop(late(&mut app));
+    crate::dialogs::take_results(&mut app, &ctx);
+    assert!(no_dialogs(&app));
+    assert!(app.link_looks.is_empty());
+}

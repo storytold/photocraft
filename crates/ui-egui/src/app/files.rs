@@ -180,11 +180,19 @@ impl PhotocraftApp {
     /// in its `warnings` instead of asking in the Cannot Locate Linked Assets dialog: one line per
     /// file, with its absolute path. Relative links are taken from `opened`, the path the document
     /// was read from, which a template, a read-only source or a directory `.pcraft` doesn't keep.
+    ///
+    /// Only files the automation client may read are looked at: through its read folders where the
+    /// host gives that look ([`crate::Services::automation_link_missing`]), else the files its policy
+    /// accepts. `opened` is a request path, which may be relative to a read folder, so relative
+    /// links are taken from where that folder holds it ([`crate::Services::automation_locate`]).
     pub(crate) fn missing_link_warnings(&self, opened: &str) -> Vec<String> {
-        let opened = Some(std::path::Path::new(opened));
-        // Only files the automation client may read are looked at.
-        let gate = self.services.automation_authorize;
-        self.session.active().map(|st| photocraft_engine::link_watch::missing_file_warnings(&st.doc, opened, gate)).unwrap_or_default()
+        let located = self.services.automation_locate.as_ref().and_then(|locate| locate(opened));
+        let opened = Some(std::path::Path::new(located.as_deref().unwrap_or(opened)));
+        let Some(st) = self.session.active() else { return Vec::new() };
+        match self.services.automation_link_missing.as_deref() {
+            Some(absent) => photocraft_engine::link_watch::missing_file_warnings_through(&st.doc, opened, absent),
+            None => photocraft_engine::link_watch::missing_file_warnings(&st.doc, opened, self.services.automation_authorize),
+        }
     }
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script

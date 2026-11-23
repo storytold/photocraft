@@ -492,6 +492,12 @@ capability. It searches in the same order: a ZIP file in an earlier root wins ov
 in a later root. Once a directory is selected, loading errors are terminal. Directory opens
 never establish an implicit save target, even when the read and write capabilities match;
 use an explicit layered Save As beneath the write root.
+Desktop `app.open` never shows the Cannot Locate Linked Assets dialog. It reports a document's
+missing linked smart object files in `warnings`, one `Cannot locate linked asset: <absolute path>`
+per file. The files are looked for through the read roots only: a link beneath a read root is
+reported when that root has no such file, a relative link is taken from the folder the document
+was read from, and a link outside every read root, or one that leaves a root through a symbolic
+link, is neither looked at nor reported.
 Every configured root must be an existing directory. An empty, missing or invalid root fails
 startup rather than being dropped. There is exactly one optional write root; repeated
 `--automation-write-root` flags are usage errors (exit 2), even when the values match.

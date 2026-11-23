@@ -343,6 +343,11 @@ pub type AutomationOpenPcraftFn = Box<dyn FnMut(&str) -> Result<Option<(String, 
 /// when no read root holds it.
 pub type AutomationLocateFn = Box<dyn Fn(&str) -> Option<String>>;
 
+/// Whether a document's linked file (an absolute path) is absent, looked at through the automation
+/// read roots only: `None` for a file outside them, which is never looked at. An automation open
+/// lists its missing linked files with it.
+pub type AutomationLinkMissingFn = Box<dyn Fn(&std::path::Path) -> Option<bool>>;
+
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Same policy as [`AutomationCommandFn`] for each step a command runs (`actions.play`).
@@ -357,6 +362,7 @@ pub struct AutomationServices {
     pub write: Option<AutomationWriteFn>,
     pub open_pcraft: Option<AutomationOpenPcraftFn>,
     pub locate: Option<AutomationLocateFn>,
+    pub link_missing: Option<AutomationLinkMissingFn>,
     pub save: Option<SaveFileFn>,
     pub command: Option<AutomationCommandFn>,
     pub authorize: Option<AutomationAuthorizeFn>,
@@ -560,6 +566,9 @@ pub struct Services {
     /// Where an automation open's file is on disk, for Open Recent. Without it an automation
     /// open is not listed there.
     pub automation_locate: Option<AutomationLocateFn>,
+    /// How an automation open looks for its document's linked files: through the read roots.
+    /// Without it they are looked at as [`Self::automation_authorize`] allows.
+    pub automation_link_missing: Option<AutomationLinkMissingFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
@@ -674,6 +683,7 @@ impl Services {
         self.automation_write = a.write;
         self.automation_open_pcraft = a.open_pcraft;
         self.automation_locate = a.locate;
+        self.automation_link_missing = a.link_missing;
         self.automation_save = a.save;
         self.automation_command = a.command;
         self.automation_authorize = a.authorize;

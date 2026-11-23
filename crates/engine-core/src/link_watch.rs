@@ -91,13 +91,20 @@ fn resolved_files_of(doc: &Document, document: Option<&Path>) -> Vec<(String, Op
 /// name it (sorted).
 pub type MissingFile = (PathBuf, Vec<String>);
 
-/// Groups the followed paths among `resolved` whose file is not there by that file: each file once,
+/// Whether `file` can't be looked at where it should be. Any failure counts, as the watcher's own
+/// look does ([`stamp`], the Layers panel's Missing filter): a file whose folder can't be entered or
+/// whose share doesn't answer is not located either, and Relink… is the way out of all of them.
+fn not_there(file: &Path) -> bool {
+    !cfg!(target_arch = "wasm32") && std::fs::metadata(file).is_err()
+}
+
+/// Groups the followed paths among `resolved` whose file is `absent` by that file: each file once,
 /// in path order, however many layers or spellings name it.
-fn missing_among(resolved: Vec<(String, Option<PathBuf>, Vec<u64>)>) -> Vec<MissingFile> {
+fn missing_among(resolved: Vec<(String, Option<PathBuf>, Vec<u64>)>, absent: impl Fn(&Path) -> bool) -> Vec<MissingFile> {
     let mut by_file: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     for (stored, file, _) in resolved {
         // Absent, not merely unstamped: a file dated before 1970 has no stamp but is there.
-        if let Some(file) = file.filter(|f| !cfg!(target_arch = "wasm32") && std::fs::metadata(f).is_err()) {
+        if let Some(file) = file.filter(|f| absent(f)) {
             by_file.entry(file).or_default().push(stored);
         }
     }
@@ -109,24 +116,42 @@ fn missing_among(resolved: Vec<(String, Option<PathBuf>, Vec<u64>)>) -> Vec<Miss
 /// (the watcher's first look is still to come). A path that is not followed ([`crate::doc_path`]) is
 /// not listed, as in [`LinkWatchExt::missing_links`]; the web app has no files to look at and lists none.
 pub fn missing_files(doc: &Document, document: Option<&Path>) -> Vec<MissingFile> {
-    missing_among(resolved_files_of(doc, document))
+    missing_among(resolved_files_of(doc, document), not_there)
 }
 
-/// [`missing_files`] looked at on a worker thread and waited for at most `wait`, for a caller that
-/// must not be held up (the interface after an open): `None` when the look takes longer, as a file
-/// on a share that doesn't answer can make it.
-pub fn missing_files_within(doc: &Document, document: Option<&Path>, wait: std::time::Duration) -> Option<Vec<MissingFile>> {
+/// [`missing_files`] looked at on a worker thread, for a caller that must not be held up (the
+/// interface after an open): a file on a share that doesn't answer can take the look a long time.
+/// The answer arrives on the returned channel, and `done` runs right after it is sent (to wake a
+/// caller that polls). A document with no followed link is answered at once. A channel that closes
+/// without an answer is a look that could not be started.
+pub fn missing_files_look(doc: &Document, document: Option<&Path>, done: impl FnOnce() + Send + 'static) -> std::sync::mpsc::Receiver<Vec<MissingFile>> {
     let resolved = resolved_files_of(doc, document);
-    if cfg!(target_arch = "wasm32") || resolved.iter().all(|(_, file, _)| file.is_none()) {
-        return Some(Vec::new());
-    }
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new().name("link-check".into()).spawn(move || tx.send(missing_among(resolved))).ok()?;
-    rx.recv_timeout(wait).ok()
+    if cfg!(target_arch = "wasm32") || resolved.iter().all(|(_, file, _)| file.is_none()) {
+        let _ = tx.send(Vec::new());
+        return rx;
+    }
+    let look = move || {
+        let _ = tx.send(missing_among(resolved, not_there));
+        done();
+    };
+    // A thread that can't be started drops the sender with the closure.
+    let _ = std::thread::Builder::new().name("link-check".into()).spawn(look);
+    rx
+}
+
+/// [`missing_files_look`] waited for at most `wait`: `None` when the look takes longer.
+pub fn missing_files_within(doc: &Document, document: Option<&Path>, wait: std::time::Duration) -> Option<Vec<MissingFile>> {
+    missing_files_look(doc, document, || {}).recv_timeout(wait).ok()
 }
 
 /// Decides whether an untrusted caller may touch a path: the session's [`Session::authorize`] gate.
 pub type PathGate = fn(&str, &Value) -> Result<()>;
+
+/// One warning per missing file, naming its absolute path.
+fn missing_warnings(missing: Vec<MissingFile>) -> Vec<String> {
+    missing.into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
+}
 
 /// The warnings an open without a dialog (automation, the CLI) reports for [`missing_files`]: one
 /// per file, naming its absolute path. With `gate` (an automation open), a file it refuses is not
@@ -140,7 +165,15 @@ pub fn missing_file_warnings(doc: &Document, document: Option<&Path>, gate: Opti
             }
         }
     }
-    missing_among(resolved).into_iter().map(|(file, _)| format!("Cannot locate linked asset: {}", file.display())).collect()
+    missing_warnings(missing_among(resolved, not_there))
+}
+
+/// [`missing_file_warnings`] for a caller that reaches files its own way (an automation client,
+/// through its read folders) and not the process's: `absent` answers whether a file is not there,
+/// or `None` for one it may not look at, which is then not reported. No file is looked at any
+/// other way, so the warnings tell nothing about a file outside what the caller may read.
+pub fn missing_file_warnings_through(doc: &Document, document: Option<&Path>, absent: &dyn Fn(&Path) -> Option<bool>) -> Vec<String> {
+    missing_warnings(missing_among(resolved_files_of(doc, document), |f| absent(f) == Some(true)))
 }
 
 /// The command a missing-link look is authorized as: it reads no more of a file than Update

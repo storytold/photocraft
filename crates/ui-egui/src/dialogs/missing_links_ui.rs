@@ -10,9 +10,10 @@
 //!   smart object), then the row leaves the list.
 //! - Cancel is not measured in the reference yet: it does what OK does.
 //!
-//! Only an interactive open asks ([`crate::jobs_ui::after_open`]), and it waits at most half a
-//! second for the files to be looked at, on a worker thread. An automation open never shows
-//! the dialog and lists the files in its `warnings` instead
+//! Only an interactive open asks ([`crate::jobs_ui::after_open`]). The files are looked at on a
+//! worker thread, and the open waits at most half a second for the answer; one that comes later (a
+//! share that is slow to answer) shows the dialog when it arrives ([`LateLook`]). An automation
+//! open never shows the dialog and lists the files in its `warnings` instead
 //! ([`photocraft_engine::link_watch::missing_file_warnings`]).
 //!
 //! The dialog is hosted on the framework's dialog host, one per opened document, so agents see it
@@ -20,6 +21,8 @@
 //! `ui.dialog.cancel`.
 
 use std::collections::HashSet;
+use std::path::Path;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 
 use craft::behavior::IconId;
 use craft::ui::buttons::Button;
@@ -29,7 +32,8 @@ use craft::ui::display::{Icon, Text};
 use craft::ui::patterns::form_dialogs::FormDialog;
 use craft::ui::primitives::IconSpec;
 use craft::ui::runtime::env::Label;
-use photocraft_doc::{DocId, LayerContent, LayerId, SmartSource};
+use photocraft_doc::{DocId, Document, LayerContent, LayerId, SmartSource};
+use photocraft_engine::link_watch::MissingFile;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -38,9 +42,16 @@ use crate::PhotocraftApp;
 const KEY: &str = "photocraft.missingLinks";
 
 /// How long an open waits for its linked files to be looked at. Local files answer at once; a
-/// share that doesn't answer in time doesn't hold the interface up, and the document opens without
-/// the dialog (the link watcher keeps looking, and the Layers panel's Missing filter lists them).
+/// share that doesn't answer in time doesn't hold the interface up: the document opens, and the
+/// dialog follows when the look answers ([`LateLook`]).
 const LOOK_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// A look at an opened document's linked files that did not answer within [`LOOK_WAIT`], kept
+/// until it does ([`take`]).
+pub(crate) struct LateLook {
+    document: DocId,
+    answer: Receiver<Vec<MissingFile>>,
+}
 
 fn label(text: &str) -> Label {
     Label::from(text.to_string())
@@ -138,18 +149,68 @@ impl StackDialog for MissingLinksDialog {
 /// linked files is not there. A document whose links are all there, or that has none, opens without
 /// it. Relative links are taken from `path` (else the document's own file).
 pub(crate) fn ask(app: &mut PhotocraftApp, document: DocId, path: Option<&str>) {
+    let ctx = app.ctx().clone();
+    ask_with(app, document, path, LOOK_WAIT, |doc, opened| photocraft_engine::link_watch::missing_files_look(doc, opened, move || ctx.request_repaint()));
+}
+
+/// [`ask`] with the look to start and how long to wait for its answer before the open goes on
+/// without it. A look still running then is kept, and [`take`] shows the dialog once it answers.
+pub(crate) fn ask_with(
+    app: &mut PhotocraftApp,
+    document: DocId,
+    path: Option<&str>,
+    wait: std::time::Duration,
+    look: impl FnOnce(&Document, Option<&Path>) -> Receiver<Vec<MissingFile>>,
+) {
     let Some(st) = app.session.documents().iter().find(|st| st.doc.id == document) else { return };
-    let opened = path.or(st.path.as_deref()).map(std::path::Path::new);
-    let Some(missing) = photocraft_engine::link_watch::missing_files_within(&st.doc, opened, LOOK_WAIT) else {
-        log::warn!("{}: its linked files did not answer in time; opened without Cannot Locate Linked Assets", st.doc.name);
-        return;
-    };
-    let files: Vec<MissingRow> = missing.into_iter().map(|(file, paths)| MissingRow { file: file.to_string_lossy().into_owned(), paths }).collect();
+    let opened = path.or(st.path.as_deref()).map(Path::new);
+    let answer = look(&st.doc, opened);
+    match answer.recv_timeout(wait) {
+        Ok(missing) => list(app, document, missing),
+        Err(RecvTimeoutError::Timeout) => {
+            log::warn!("{}: its linked files did not answer in time; Cannot Locate Linked Assets waits for them", st.doc.name);
+            app.link_looks.push(LateLook { document, answer });
+        }
+        // The look could not be started.
+        Err(RecvTimeoutError::Disconnected) => {}
+    }
+}
+
+/// Shows the dialog for document `document` with the files of `missing` that its layers still link
+/// to (a look that answered late may name a file relinked or embedded since). Nothing is shown for
+/// a document that was closed, or when no file is left to list.
+fn list(app: &mut PhotocraftApp, document: DocId, missing: Vec<MissingFile>) {
+    let Some(st) = app.session.documents().iter().find(|st| st.doc.id == document) else { return };
+    let linked: HashSet<String> = photocraft_engine::link_watch::linked_files(&st.doc).into_iter().map(|(path, _)| path).collect();
+    let files: Vec<MissingRow> = missing
+        .into_iter()
+        .map(|(file, paths)| MissingRow { file: file.to_string_lossy().into_owned(), paths: paths.into_iter().filter(|p| linked.contains(p)).collect() })
+        .filter(|row| !row.paths.is_empty())
+        .collect();
     if files.is_empty() {
         return;
     }
     let name = st.doc.name.clone();
     app.framework.dialogs.open(MissingLinksDialog { document, name, files, relink: None });
+    app.ctx().request_repaint();
+}
+
+/// Shows the dialog of every late look that has answered; one whose document was closed, or that
+/// ended without an answer, is dropped.
+fn take_late_looks(app: &mut PhotocraftApp) {
+    if app.link_looks.is_empty() {
+        return;
+    }
+    for look in std::mem::take(&mut app.link_looks) {
+        if !app.session.documents().iter().any(|st| st.doc.id == look.document) {
+            continue;
+        }
+        match look.answer.try_recv() {
+            Ok(missing) => list(app, look.document, missing),
+            Err(TryRecvError::Empty) => app.link_looks.push(look),
+            Err(TryRecvError::Disconnected) => {}
+        }
+    }
 }
 
 /// The open Cannot Locate Linked Assets dialogs.
@@ -158,9 +219,11 @@ pub(crate) fn open_ids(app: &PhotocraftApp) -> Vec<DialogId> {
     host.open_dialogs().into_iter().map(|open| open.id).filter(|id| host.get_by_id::<MissingLinksDialog>(*id).is_some()).collect()
 }
 
-/// The result pump (a `TAKERS` row): a pressed Relink… asks for a file. OK and Cancel leave the
-/// document as it was read, so their answers only need taking.
+/// The result pump (a `TAKERS` row): a look that answered late shows its dialog, and a pressed
+/// Relink… asks for a file. OK and Cancel leave the document as it was read, so their answers only
+/// need taking.
 pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
+    take_late_looks(app);
     while app.framework.dialogs.take_keyed::<MissingLinksDialog>().is_some() {}
     for id in open_ids(app) {
         let Some(file) = app.framework.dialogs.get_mut_by_id::<MissingLinksDialog>(id).and_then(|d| d.relink.take()) else { continue };
