@@ -120,28 +120,13 @@ fn a_multi_dot_name_keeps_its_last_extension() {
 fn a_name_without_an_extension_gets_the_suffix_at_the_end() {
     let dir = tmp("noext");
     let mut s = open_session();
-    let mut copied = Vec::new();
     for (sub, colour) in [("a", "#ff0000"), ("b", "#00c800")] {
-        let p = write_link(&dir, sub, "logo", colour);
-        place(&mut s, &p);
-        copied.push(p);
+        place(&mut s, &write_link(&dir, sub, "logo", colour));
     }
-    // The files can't be imported without an extension on every build, and Package stops on a
-    // link it can't place (#14076); when both are copied the names are `logo` and `logo_1`, and
-    // a copy is never given a form with a dash prefix.
-    let r = match try_package(&mut s, &dir) {
-        Ok(r) => r,
-        Err(e) => {
-            assert_eq!(e.to_string(), PACKAGE_MISSING_LINK);
-            let _ = std::fs::remove_dir_all(&dir);
-            return;
-        }
-    };
-    let names = tails(&r);
-    assert!(names.iter().all(|n| !n.contains('-')), "{names:?}");
-    if names.len() == 2 {
-        assert_eq!(names, vec!["logo", "logo_1"]);
-    }
+    // Both files placed (`place` unwraps), so Package checks and copies both: no refusal, the
+    // names are `logo` and `logo_1`, and a copy is never given a form with a dash prefix.
+    let r = package(&mut s, &dir);
+    assert_eq!(tails(&r), vec!["logo", "logo_1"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
