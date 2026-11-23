@@ -1,5 +1,6 @@
 use super::*;
 use crate::{Services, menus};
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -313,7 +314,7 @@ fn plain_save_of_a_flat_jpeg_asks_jpeg_options_and_records_a_plain_save() {
     confirm_options(&mut app);
     app.run("actions.stop", json!({})).unwrap();
     assert_eq!(*written.borrow(), ["/pics/photo.jpg"]);
-    assert_eq!(app.session.actions.list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({}))]);
+    assert_eq!(app.session.actions().list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({}))]);
 }
 
 /// A plain Save confirmed in the dialog keeps a changed JPEG Options answer in its recorded step,
@@ -341,7 +342,7 @@ fn plain_save_of_a_flat_jpeg_records_and_replays_a_changed_quality() {
     set_option(&mut app, "format", json!("progressive"));
     confirm_options(&mut app);
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({"quality": 3, "jpegFormat": "progressive"}))]);
+    assert_eq!(app.session.actions().list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({"quality": 3, "jpegFormat": "progressive"}))]);
     // Played on another flat JPEG: written over itself at quality 3, with no dialog or prompt.
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "other.jpg", &Default::default()).unwrap().bytes;
     let index = app.session.add_document(photocraft_io::import("other.jpg", &bytes).unwrap().document, Some("/pics/other.jpg".into()));
@@ -1338,7 +1339,7 @@ fn flat_jpeg_saves_are_recorded_and_replay_over_the_open_file() {
     set_option(&mut app, "quality", json!(5));
     confirm_options(&mut app);
     app.run("actions.stop", json!({})).unwrap();
-    assert_eq!(app.session.actions.list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({"quality": 5}))]);
+    assert_eq!(app.session.actions().list.action(0).unwrap().steps, [ActionStep::new("file.save", json!({"quality": 5}))]);
     add_flat_jpeg(&mut app, "/pics/other.jpg");
     written.borrow_mut().clear();
     let played = app.run("actions.play", json!({"action": 0})).unwrap();

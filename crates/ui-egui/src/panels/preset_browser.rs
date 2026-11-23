@@ -20,6 +20,7 @@ use craft::ui::runtime::env::Env;
 use craft::ui::tile_grid::TileZoom;
 use egui::{Color32, ColorImage, Pos2, Rect, TextureId, pos2};
 use photocraft_engine::pattern_cmds::PatternLibrary;
+use photocraft_engine::presets::PresetsExt;
 use photocraft_engine::presets::shapes::ShapePreset;
 use photocraft_engine::presets::styles::StylePreset;
 use serde::{Deserialize, Serialize};
@@ -348,7 +349,7 @@ fn paint_gradient(cx: &ContentPainterCx, rect: Rect, stops: &[(f32, [f32; 4])]) 
 /// applies it.
 pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    let groups = &app.session.presets.gradients;
+    let groups = &app.session.presets().gradients;
     // PLAN: the current-gradient strip above the browser needs a painter component; the browser's selected row shows it.
     let folders: Vec<Folder> = groups
         .iter()
@@ -388,7 +389,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let library = held_patterns(app);
     let folders: Vec<Folder> = app
         .session
-        .presets
+        .presets()
         .pattern_groups
         .iter()
         .map(|group| Folder {
@@ -447,14 +448,14 @@ impl StyleLibrary {
     /// views keyed by it settle.
     pub(crate) fn held(app: &mut PhotocraftApp) -> Arc<Tracked<Self>> {
         let patterns = patterns_stamp(&app.session.patterns);
-        let stamp = (app.session.presets.revision(), patterns);
+        let stamp = (app.session.presets().revision(), patterns);
         if let Some((held, library)) = &app.preset_art.styles
             && *held == stamp
         {
             return Arc::clone(library);
         }
         let styles =
-            app.session.presets.styles.iter().flat_map(|group| group.items.iter()).map(|style| (style_stamp(style, patterns), style.clone())).collect();
+            app.session.presets().styles.iter().flat_map(|group| group.items.iter()).map(|style| (style_stamp(style, patterns), style.clone())).collect();
         let library = Arc::new(Tracked::new(StyleLibrary { styles, patterns: app.session.patterns.clone() }));
         app.preset_art.styles = Some((stamp, Arc::clone(&library)));
         library
@@ -494,7 +495,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The Styles folders: each style group with its styles, keyed and named by the style's name.
 fn style_folders(app: &PhotocraftApp) -> Vec<Folder> {
-    let groups = &app.session.presets.styles;
+    let groups = &app.session.presets().styles;
     groups
         .iter()
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|style| (style.name.clone(), style.name.clone())).collect() })
@@ -511,7 +512,7 @@ fn style_files(any: bool, export: Option<PresetExport>) -> PresetFiles<'static, 
 
 /// What the Styles panel menu is built from: whether any style exists, the selected style and the browser's view.
 fn styles_menu_facts(app: &PhotocraftApp) -> (bool, Option<PresetKey>, PresetView) {
-    let any = app.session.presets.styles.iter().any(|group| !group.items.is_empty());
+    let any = app.session.presets().styles.iter().any(|group| !group.items.is_empty());
     let selected = app.ui.presets_ui.selected.get(STYLES.id).cloned().map(PresetKey::Item);
     let view = app.ui.presets_ui.browsers.get(STYLES.id).map_or(PresetView::Grid, |state| state.view);
     (any, selected, view)
@@ -548,7 +549,7 @@ pub(crate) fn styles_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandStat
 /// view.
 pub(crate) fn styles_source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
     let view = app.ui.presets_ui.browsers.get(STYLES.id).map_or(PresetView::Grid, |state| state.view);
-    let facts = (app.session.presets.revision(), app.ui.presets_ui.selected.get(STYLES.id), view);
+    let facts = (app.session.presets().revision(), app.ui.presets_ui.selected.get(STYLES.id), view);
     crate::app::framework::derived_states(app, name, &facts, || styles_states(app))
 }
 
@@ -773,7 +774,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current = app.ui.tool;
     let presets: Vec<(String, String)> = app
         .session
-        .presets
+        .presets()
         .tool_presets
         .iter()
         .filter(|preset| !only || Tool::from_name(&preset.tool) == Some(current))

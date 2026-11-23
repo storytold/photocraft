@@ -6,6 +6,8 @@
 //! (a circle) and `!` before `M`/`O` to subtract that subpath (holes). Shapes defined with Edit ›
 //! Define Custom Shape appear in a trailing "Custom Shapes" group.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_doc::vector::{Knot, Path, PathOp, Subpath};
 use photocraft_geom::{Affine, Point, Rect};
 use serde::{Deserialize, Serialize};
@@ -285,7 +287,7 @@ pub fn builtin() -> Vec<Group<ShapePreset>> {
 
 /// Every shape the panel shows: the preset groups plus Define Custom Shape results.
 pub fn all_groups(s: &Session) -> Vec<Group<ShapePreset>> {
-    let mut g = s.presets.shapes.clone();
+    let mut g = s.presets().shapes.clone();
     let custom: Vec<ShapePreset> = s.edit_state.custom_shapes.iter().map(|c| ShapePreset { name: c.name.clone(), path: c.path.clone(), id: None }).collect();
     if !custom.is_empty() {
         g.push(Group::new(CUSTOM_GROUP, custom));
@@ -304,7 +306,7 @@ pub(crate) fn filter_path(s: &Session, p: &Value) -> Result<Path> {
     const CMD: &str = "filter.blur.shapeBlur";
     if let Some(value) = p.get("shapeId") {
         let id = value.as_str().filter(|id| !id.is_empty()).ok_or_else(|| bad(CMD, "shapeId must be a nonempty string"))?;
-        let mut matches = s.presets.shapes.iter().flat_map(|g| &g.items).filter(|shape| shape.id.as_deref() == Some(id));
+        let mut matches = s.presets().shapes.iter().flat_map(|g| &g.items).filter(|shape| shape.id.as_deref() == Some(id));
         let found = matches.next().ok_or_else(|| bad(CMD, format!("no installed shape with id \"{id}\"")))?;
         // Reimporting an unchanged library adds another display name for the same asset.
         // Different geometry under one ID is ambiguous and must not pick the first match.
@@ -411,7 +413,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(id)) if !id.is_empty() => Some(id.clone()),
         _ => return Err(bad(CMD, "id must be a nonempty string")),
     };
-    if id.as_deref().is_some_and(|id| s.presets.shapes.iter().flat_map(|g| &g.items).any(|shape| shape.id.as_deref() == Some(id))) {
+    if id.as_deref().is_some_and(|id| s.presets().shapes.iter().flat_map(|g| &g.items).any(|shape| shape.id.as_deref() == Some(id))) {
         return Err(bad(CMD, "a shape with this id is already installed"));
     }
     let path = match p.get("path") {
@@ -428,11 +430,11 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Normalise into the 100 box so thumbnails and placing don't depend on where it was drawn.
     let path = fit(&path, [0.0, 0.0, 100.0, 100.0], true);
-    let name = unique_name(&s.presets.shapes, str_param(p, "name").unwrap_or("Shape"));
-    let gi = group_index(&mut s.presets.shapes, str_param(p, "group"));
-    let group = s.presets.shapes[gi].name.clone();
-    s.presets.shapes[gi].items.push(ShapePreset { name: name.clone(), path, id });
-    s.presets_changed();
+    let name = unique_name(&s.presets().shapes, str_param(p, "name").unwrap_or("Shape"));
+    let gi = group_index(&mut s.presets_mut().shapes, str_param(p, "group"));
+    let group = s.presets().shapes[gi].name.clone();
+    s.presets_mut().shapes[gi].items.push(ShapePreset { name: name.clone(), path, id });
+    presets_changed(s);
     Ok(json!({"name": name, "group": group}))
 }
 
@@ -442,7 +444,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     // Define Custom Shape results live in the edit state; rename/delete them there.
     let custom = |s: &Session, n: &str| {
         str_param(p, "group").is_none_or(|g| g == CUSTOM_GROUP)
-            && find(&s.presets.shapes, n, None).is_none()
+            && find(&s.presets().shapes, n, None).is_none()
             && s.edit_state.custom_shapes.iter().any(|c| c.name == n)
     };
     let r = match action.as_str() {
@@ -458,9 +460,9 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
             s.edit_state.custom_shapes.retain(|c| c.name != n);
             json!({"deleted": 1})
         }
-        a => edit_groups(&mut s.presets.shapes, a, p, CMD)?,
+        a => edit_groups(&mut s.presets_mut().shapes, a, p, CMD)?,
     };
-    s.presets_changed();
+    presets_changed(s);
     Ok(r)
 }
 
@@ -468,14 +470,14 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     let mut b = builtin();
     if p.get("append").and_then(Value::as_bool).unwrap_or(false) {
         for g in &mut b {
-            g.name = super::gradients::unique_group(&s.presets.shapes, &g.name);
+            g.name = super::gradients::unique_group(&s.presets().shapes, &g.name);
         }
-        s.presets.shapes.extend(b);
+        s.presets_mut().shapes.extend(b);
     } else {
-        s.presets.shapes = b;
+        s.presets_mut().shapes = b;
     }
-    s.presets_changed();
-    Ok(json!({"groups": s.presets.shapes.len()}))
+    presets_changed(s);
+    Ok(json!({"groups": s.presets().shapes.len()}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
