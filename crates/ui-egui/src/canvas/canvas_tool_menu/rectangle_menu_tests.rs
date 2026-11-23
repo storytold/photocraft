@@ -6,15 +6,18 @@
 //! The checks shared with the Triangle tool (#13367), which measured the same three menus, live
 //! here and take the tool; `triangle_menu_tests` runs them for the Triangle.
 
-use egui::{Context, Modifiers};
+use craft::draw::ui::VectorMode;
+use craft::keymap::Mods;
+use egui::Modifiers;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::{Value, json};
 
 use super::line_menu_tests::{greyed, menu, shown};
-use super::tests::{app, harness, right_click, screen_of};
-use super::{available, choose, open, open_at};
+use super::tests::{any_dialog, app, harness, open_here, pick, right_click, screen_of};
+use super::{available, open_at};
 use crate::PhotocraftApp;
+use crate::canvas::testing;
 use crate::state::Tool;
 
 /// The measured menu over a pixel layer with no path, in the issue's notation.
@@ -36,27 +39,35 @@ const UNITE: [&str; 4] = ["Unite Shapes", "Subtract Front Shape", "Unite Shapes 
 /// A point of the 32 × 32 document off every shape the fixtures draw.
 const EMPTY: [f32; 2] = [2.0, 2.0];
 
-/// `app` with `tool` picked in `mode` ("shape", "path" or "pixels").
-pub(super) fn with_tool(mut app: PhotocraftApp, tool: Tool, mode: &str) -> PhotocraftApp {
+/// `app` with `tool` picked in `mode`.
+pub(super) fn with_tool(mut app: Box<PhotocraftApp>, tool: Tool, mode: VectorMode) -> Box<PhotocraftApp> {
     app.ui.tool = tool;
-    app.ui.tool_options.shape_mode = mode.into();
+    app.ui.tool_options.shape_mode = mode;
     app
 }
 
+/// The selected tool drags from (8, 8) to (24, 24) on the canvas.
+fn draw(app: &mut PhotocraftApp) {
+    testing::press(app, [8.0, 8.0], Modifiers::NONE);
+    testing::move_to(app, [16.0, 16.0], Modifiers::NONE);
+    testing::move_to(app, [24.0, 24.0], Modifiers::NONE);
+    testing::release(app, [24.0, 24.0], Modifiers::NONE);
+}
+
 /// A pixel layer filled red above the Background, active, with `tool` in Shape mode and no path.
-pub(super) fn pixel_layer(tool: Tool) -> PhotocraftApp {
+pub(super) fn pixel_layer(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = app();
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    with_tool(app, tool, "shape")
+    with_tool(app, tool, VectorMode::Shape)
 }
 
 /// `tool` drew a filled shape with a 2 px stroke from (8, 8) to (24, 24) in Shape mode: its
 /// shape layer is active.
-pub(super) fn shape_layer(tool: Tool) -> PhotocraftApp {
-    let mut app = with_tool(app(), tool, "shape");
+pub(super) fn shape_layer(tool: Tool) -> Box<PhotocraftApp> {
+    let mut app = with_tool(app(), tool, VectorMode::Shape);
     app.ui.tool_options.stroke_width = 2.0;
-    crate::vector_ui::finish_shape(&mut app, tool, [8.0, 8.0], [24.0, 24.0], Modifiers::NONE);
+    draw(&mut app);
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().content.kind_name(), "Shape", "{tool:?} made a shape layer");
     app
@@ -64,9 +75,9 @@ pub(super) fn shape_layer(tool: Tool) -> PhotocraftApp {
 
 /// [`pixel_layer`], then `tool` drew the same shape in Path mode: the Work Path holds it, and the
 /// pixel layer stays active.
-pub(super) fn work_path(tool: Tool) -> PhotocraftApp {
-    let mut app = with_tool(pixel_layer(tool), tool, "path");
-    crate::vector_ui::finish_shape(&mut app, tool, [8.0, 8.0], [24.0, 24.0], Modifiers::NONE);
+pub(super) fn work_path(tool: Tool) -> Box<PhotocraftApp> {
+    let mut app = with_tool(pixel_layer(tool), tool, VectorMode::Path);
+    draw(&mut app);
     let st = app.session.active().unwrap();
     assert!(st.doc.work_path.is_some(), "{tool:?} drew the Work Path");
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().content.kind_name(), "Pixel", "the pixel layer stays active");
@@ -75,28 +86,28 @@ pub(super) fn work_path(tool: Tool) -> PhotocraftApp {
 }
 
 /// Right-click document point `doc`: what `ui.inspect` reports.
-fn inspect_at(h: &mut Harness<'static, PhotocraftApp>, doc: [f32; 2]) -> Value {
+fn inspect_at(h: &mut Harness<'static, Box<PhotocraftApp>>, doc: [f32; 2]) -> Value {
     let p = screen_of(h.state(), doc);
     right_click(h, p, Modifiers::NONE);
     crate::control::inspect(h.state(), &h.ctx)
 }
 
 /// Right-click document point `doc` with `tool`: the open menu's entries.
-pub(super) fn entries_at(h: &mut Harness<'static, PhotocraftApp>, tool: Tool, doc: [f32; 2]) -> Vec<Value> {
+pub(super) fn entries_at(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool, doc: [f32; 2]) -> Vec<Value> {
     let inspected = inspect_at(h, doc);
     assert_eq!(inspected["canvasToolMenu"]["tool"], json!(format!("{tool:?}")), "a menu opened at {doc:?}");
     inspected["canvasToolMenu"]["entries"].as_array().cloned().unwrap_or_default()
 }
 
 /// A right-click at document point `doc` opens no menu, neither the tool's nor the layer menu.
-pub(super) fn opens_nothing(h: &mut Harness<'static, PhotocraftApp>, doc: [f32; 2], case: &str) {
+pub(super) fn opens_nothing(h: &mut Harness<'static, Box<PhotocraftApp>>, doc: [f32; 2], case: &str) {
     let inspected = inspect_at(h, doc);
     assert_eq!(inspected["canvasToolMenu"], Value::Null, "{case}");
     assert_eq!(inspected["layerMenu"], Value::Null, "{case}");
 }
 
 /// Click the open menu's row `label`, which closes the menu.
-fn pick(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+fn pick_row(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str) {
     h.get_by_label(label).click();
     h.run_steps(2);
     assert!(h.state().ui.canvas_tool_menu.is_none(), "{label} closes the menu");
@@ -107,7 +118,7 @@ fn pick(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
 /// other rows are pinned to the measurement as they are.
 fn pixel_fill_rows_greyed() -> bool {
     let mut app = pixel_layer(Tool::Line);
-    assert!(open(&mut app, &Context::default(), Tool::Line, [10.0, 10.0]));
+    assert!(open_here(&mut app, Tool::Line, [10.0, 10.0]));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     let copy = available(&app, &menu, "path.style.copyFill");
     assert_eq!(copy, available(&app, &menu, "path.style.pasteFill"), "the two fill rows share one rule");
@@ -139,7 +150,7 @@ pub(super) fn check_pixel_layer_menu(tool: Tool) {
     ]
     .concat();
     assert_eq!(greyed(&entries), greyed_rows(PIXEL_MENU, &measured, true), "{tool:?}");
-    pick(&mut h, "Free Transform");
+    pick_row(&mut h, "Free Transform");
     assert!(h.state().ui.transform.is_some(), "{tool:?}: Free Transform opens the box on the layer");
 }
 
@@ -150,7 +161,7 @@ pub(super) fn check_shape_layer_menu(tool: Tool, at: [f32; 2]) {
     let entries = entries_at(&mut h, tool, at);
     assert_eq!(shown(&entries), menu(PATH_MENU), "{tool:?}");
     let before = h.state().session.journal.len();
-    pick(&mut h, "Copy Fill");
+    pick_row(&mut h, "Copy Fill");
     let ran: Vec<_> = h.state().session.journal[before..].iter().map(|(id, _)| id.clone()).collect();
     assert_eq!(ran, ["path.style.copyFill"], "{tool:?}");
     let st = h.state().session.active().unwrap();
@@ -177,24 +188,24 @@ pub(super) fn check_work_path_menu(tool: Tool, at: [f32; 2]) {
 
 /// What choosing a row did: the dialog it opened, the commands it recorded, whether a fill was
 /// copied, and how many layers are isolated.
-type Outcome = (Option<serde_json::Map<String, Value>>, Vec<String>, bool, usize);
+type Outcome = (bool, Vec<String>, bool, usize);
 
 /// A document builder for a tool, and the menu rows to choose on it.
-type Case = (fn(Tool) -> PhotocraftApp, &'static [&'static str]);
+type Case = (fn(Tool) -> Box<PhotocraftApp>, &'static [&'static str]);
 
 /// Choose `command` from `menu_tool`'s menu on the document `make(tool)` builds.
-fn outcome(make: fn(Tool) -> PhotocraftApp, menu_tool: Tool, tool: Tool, command: &str) -> Outcome {
+fn outcome(make: fn(Tool) -> Box<PhotocraftApp>, menu_tool: Tool, tool: Tool, command: &str) -> Outcome {
     let mut app = make(tool);
     app.ui.tool = menu_tool;
-    assert!(open(&mut app, &Context::default(), menu_tool, [10.0, 10.0]), "{menu_tool:?}");
+    assert!(open_here(&mut app, menu_tool, [10.0, 10.0]), "{menu_tool:?}");
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     assert!(available(&app, &menu, command), "{menu_tool:?}: {command} is enabled");
     let before = app.session.journal.len();
-    choose(&mut app, &Context::default(), command);
+    pick(&mut app, command);
     assert!(!app.ui.status_error, "{menu_tool:?}: {command}: {}", app.ui.status);
     let ran = app.session.journal[before..].iter().map(|(id, _)| id.clone()).collect();
     let isolated = app.session.active().map_or(0, |st| st.isolated_layers.len());
-    (app.ui.dialogs.last().map(|d| d.fields.clone()), ran, app.session.path_fill_clipboard.is_some(), isolated)
+    (any_dialog(&app), ran, app.session.path_fill_clipboard.is_some(), isolated)
 }
 
 /// Each enabled path row opens the dialog or runs the command the Pen's menu does on the same
@@ -207,13 +218,13 @@ pub(super) fn check_rows_run_as_elsewhere(tool: Tool) {
     for (make, commands) in cases {
         for command in commands {
             let pen = outcome(make, Tool::Pen, tool, command);
-            assert!(pen.0.is_some() || !pen.1.is_empty() || pen.2 || pen.3 > 0, "{command} does something from the Pen's menu");
+            assert!(pen.0 || !pen.1.is_empty() || pen.2 || pen.3 > 0, "{command} does something from the Pen's menu");
             assert_eq!(outcome(make, tool, tool, command), pen, "{tool:?}: {command}");
         }
     }
     let mut app = shape_layer(tool);
-    assert!(open(&mut app, &Context::default(), tool, [10.0, 10.0]));
-    choose(&mut app, &Context::default(), "layer.rasterize.layer");
+    assert!(open_here(&mut app, tool, [10.0, 10.0]));
+    pick(&mut app, "layer.rasterize.layer");
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("layer.rasterize.layer"), "{tool:?}");
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().content.kind_name(), "Pixel", "{tool:?}: rasterized");
@@ -223,17 +234,17 @@ pub(super) fn check_rows_run_as_elsewhere(tool: Tool) {
 /// menu, as before.
 pub(super) fn check_unmeasured_cases_open_nothing(tool: Tool) {
     for make in [pixel_layer, shape_layer, work_path] {
-        let mut h = harness(with_tool(make(tool), tool, "pixels"));
+        let mut h = harness(with_tool(make(tool), tool, VectorMode::Pixels));
         opens_nothing(&mut h, EMPTY, &format!("{tool:?}: Pixels mode"));
     }
-    let mut h = harness(with_tool(pixel_layer(tool), tool, "path"));
+    let mut h = harness(with_tool(pixel_layer(tool), tool, VectorMode::Path));
     opens_nothing(&mut h, EMPTY, &format!("{tool:?}: Path mode, no path"));
-    let mut h = harness(with_tool(shape_layer(tool), tool, "path"));
+    let mut h = harness(with_tool(shape_layer(tool), tool, VectorMode::Path));
     opens_nothing(&mut h, EMPTY, &format!("{tool:?}: Path mode, a shape layer active"));
     let mut app = app();
     app.run("type.create", json!({"x": 4, "y": 20, "text": "A", "size": 12})).unwrap();
-    let mut app = with_tool(app, tool, "shape");
-    assert!(!open_at(&mut app, &Context::default(), tool, [10.0, 10.0], Some([2.0, 2.0])), "{tool:?}: a type layer");
+    let mut app = with_tool(app, tool, VectorMode::Shape);
+    assert!(!open_here(&mut app, tool, [2.0, 2.0]), "{tool:?}: a type layer");
     assert!(app.ui.canvas_tool_menu.is_none());
 }
 
@@ -274,21 +285,20 @@ fn inside_the_rectangle_opens_nothing() {
 
 #[test]
 fn on_a_corner_radius_widget_opens_nothing() {
-    // No fill, so the widget inside the top-left corner is off the shape as Path Selection picks
-    // it: only the widget keeps the right-click.
-    let mut app = with_tool(app(), Tool::Rectangle, "shape");
+    // No fill, so a point inside the top-left corner, where its widget sits, is off the shape as
+    // Path Selection picks it: only the widget keeps the right-click.
+    let mut app = with_tool(app(), Tool::Rectangle, VectorMode::Shape);
     app.ui.tool_options.shape_fill = false;
     app.ui.tool_options.stroke_width = 2.0;
-    crate::vector_ui::finish_shape(&mut app, Tool::Rectangle, [8.0, 8.0], [24.0, 24.0], Modifiers::NONE);
+    draw(&mut app);
     let mut h = harness(app);
-    let inset = 10.0 / f64::from(h.state().point_zoom());
-    let widget = [8.0 + inset, 8.0 + inset];
-    assert!(crate::corner_radius::hovers(h.state(), widget), "the top-left widget is at {widget:?}");
+    let widget = [12.0, 12.0];
+    assert!(!crate::shape_controls::corner_targets(h.state()).is_empty(), "the rectangle shows its corner widgets");
     let st = h.state().session.active().unwrap();
     assert!(crate::vector_ui::pick_shape_at(&st.doc, widget, crate::path_components::press_tolerance(h.state())).is_none());
     opens_nothing(&mut h, [widget[0] as f32, widget[1] as f32], "on the widget");
     // Also through the control channel's path, which calls `open_at` directly.
-    let ctx = h.ctx.clone();
-    assert!(!open_at(h.state_mut(), &ctx, Tool::Rectangle, [10.0, 10.0], Some(widget)));
+    let at = screen_of(h.state(), [widget[0] as f32, widget[1] as f32]);
+    assert!(!open_at(h.state_mut(), Tool::Rectangle, Mods::NONE, at, widget, None));
     entries_at(&mut h, Tool::Rectangle, EMPTY);
 }

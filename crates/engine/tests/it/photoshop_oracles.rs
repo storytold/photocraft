@@ -1,7 +1,8 @@
 //! Re-render oracle over the Photoshop corpus (`corpus/photoshop`): our own Photoshop-authored
 //! PSDs from https://github.com/storytold/photocraft-corpus, fetched at a pinned commit by
 //! `cargo xtask corpus --all`. Feature `corpus` (run with `cargo xtask test-corpus`); a missing
-//! corpus fails.
+//! corpus fails. It walks the directory's sample (`photocraft_testkit::corpus`), and every file
+//! with `PHOTOCRAFT_FULL_SWEEP=1` (the nightly CI run).
 //!
 //! The io corpus test (`crates/io/tests/it/corpus.rs`) flattens imported documents, which composite
 //! Photoshop's own cached pixels for smart objects and type layers. This test throws those caches
@@ -13,7 +14,7 @@
 //! with the corpus fonts installed (see the corpus README), so the floor counts on none of them.
 #![cfg(feature = "corpus")]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use craft_psd::PsdFile;
 use photocraft_doc::{Document, LayerContent};
@@ -22,18 +23,8 @@ use photocraft_doc::{Document, LayerContent};
 const PASS_TOL: f32 = 2.0 / 255.0;
 /// Re-rendered files that match Photoshop's merged composite (of 86 with smart objects or type).
 const PASS_FLOOR: usize = 5;
-
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect(&p, out);
-        } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("psd")) {
-            out.push(p);
-        }
-    }
-}
+/// `PASS_FLOOR` over the sample of `corpus/photoshop` (`photocraft_testkit::corpus`).
+const SAMPLE_PASS_FLOOR: usize = 1;
 
 /// Premultiplied max difference over pixels visible in either image (1.0 if sizes differ).
 fn max_diff(a: &[[f32; 4]], b: &[[f32; 4]]) -> (f32, f32) {
@@ -83,6 +74,8 @@ fn rerender(doc: &mut Document) -> Result<usize, String> {
 /// Re-rendering Photoshop's Screen/Motion Blur oracle matches its merged composite, so the result retains the input's coverage.
 #[test]
 fn screen_motion_blur_retains_input_coverage() {
+    // Reads the command registry (the smart filters' commands) before any session exists.
+    photocraft_engine::install().unwrap();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop/smart-filters/sf-blend-screen-100.psd");
     let bytes = std::fs::read(&path).expect("Screen/Motion Blur oracle missing: run cargo xtask corpus --all");
     let file = PsdFile::from_bytes(&bytes).expect("parse Screen/Motion Blur oracle");
@@ -96,11 +89,10 @@ fn screen_motion_blur_retains_input_coverage() {
 /// Re-render every Photoshop oracle in the corpus with PhotoCraft's filters and compare it with Photoshop's own merged composite.
 #[test]
 fn photoshop_oracles_rerendered() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/photoshop");
-    assert!(root.is_dir(), "{} is missing: run `cargo xtask corpus --all`", root.display());
-    let mut files = Vec::new();
-    collect(&root, &mut files);
-    files.sort();
+    // Reads the command registry (the smart filters' commands) before any session exists.
+    photocraft_engine::install().unwrap();
+    let root = photocraft_testkit::corpus::root().join("photoshop");
+    let files = photocraft_testkit::corpus::psd_files("photoshop");
     let mut groups: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
     let (mut pass, mut total, mut errors) = (0, 0, 0);
     eprintln!("{:<60} {:>7} {:>9} {:>8}  status", "file (re-rendered)", "layers", "max_err", "bad_px%");
@@ -143,5 +135,6 @@ fn photoshop_oracles_rerendered() {
     for (g, (p, n)) in &groups {
         eprintln!("photoshop re-render:   {g:<16} {p:>4} / {n:<4} pass");
     }
-    assert!(pass >= PASS_FLOOR, "re-render oracle pass count {pass} fell below the floor {PASS_FLOOR}");
+    let floor = if photocraft_testkit::full_sweep() { PASS_FLOOR } else { SAMPLE_PASS_FLOOR };
+    assert!(pass >= floor, "re-render oracle pass count {pass} fell below the floor {floor}");
 }
