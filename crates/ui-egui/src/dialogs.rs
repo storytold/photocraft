@@ -299,6 +299,9 @@ pub(crate) mod params {
             if let (Some(action), Some(footer)) = (footer, family.and_then(|family| family.footer)) {
                 footer(app, ctx, id, &action);
             }
+            if key.as_deref() == Some(image_processor_ui::COMMAND) {
+                image_processor_ui::take_settings_action(app, ctx, id);
+            }
         }
     }
 
