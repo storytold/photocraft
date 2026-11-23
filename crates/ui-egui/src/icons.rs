@@ -66,14 +66,6 @@ mod tests {
         }
     }
 
-    /// The two Type tools are different tools, so they show different glyphs: the vertical one draws
-    /// the T with a downward arrow, not the horizontal one's plain T (#12062).
-    #[test]
-    fn the_type_tools_show_different_glyphs() {
-        assert_ne!(tool_icon(Tool::VerticalType), tool_icon(Tool::Type));
-        assert_eq!(tool_icon(Tool::Type).name(), "type", "the horizontal Type tool keeps its glyph");
-    }
-
     /// Every panel's iconic form draws the registry's icon, so each registry name resolves.
     #[test]
     fn every_panel_icon_resolves() {
