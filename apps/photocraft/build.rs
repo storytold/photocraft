@@ -17,7 +17,8 @@ fn main() {
             println!("cargo:rustc-cfg=photocraft_nightly_v1");
             true
         }
-        Ok("stable") | Err(std::env::VarError::NotPresent) => false,
+        // An empty value (an unset CI input) means the default stable build.
+        Ok("stable" | "") | Err(std::env::VarError::NotPresent) => false,
         _ => {
             eprintln!("unsupported PHOTOCRAFT_BUILD_CHANNEL (expected stable or nightly-v1)");
             std::process::exit(1);
