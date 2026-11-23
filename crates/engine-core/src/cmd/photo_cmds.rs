@@ -880,6 +880,9 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
     // Resolved before loading: the sources are flattened and retained one at a time, so the
     // budget has to bound them before the first surface is allocated, not after they all exist.
     let budget = photomerge_memory_budget(p);
+    // Auto-Blend Layers' first snapshot keeps the aligned layers (#14094). Without a first
+    // snapshot (History Options) nothing would hold them, so they are not kept through the blend.
+    let keep_aligned = blend && !fill && s.prefs().history_options.automatically_create_first_snapshot;
     let (mut srcs, fmt, icc) = load_sources(s, p, cmd, Some(budget))?;
     if srcs.len() < 2 {
         return Err(bad(cmd, "Photomerge needs two or more images"));
@@ -930,10 +933,10 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             let warped_sizes: Vec<(usize, usize)> =
                 extents.iter().map(|&(w, h)| ((w.ceil() + 1.0).max(0.0).min(cw) as usize, (h.ceil() + 1.0).max(0.0).min(ch) as usize)).collect();
             let (est_needed, fixed_during_bands) = estimate_photomerge_memory(&sizes, &warped_sizes, cw as usize, ch as usize, cc, bpp, blend, fill);
-            // Auto-Blend Layers' first snapshot keeps the aligned layers (#14094): their warped
-            // pixels stay alive through the blend instead of being freed as it reads them.
+            // The aligned layers kept for the first snapshot: their warped pixels stay alive
+            // through the blend instead of being freed as it reads them.
             let kept =
-                if blend && !fill { warped_sizes.iter().map(|&(w, h)| w.saturating_mul(h)).fold(0usize, usize::saturating_add).saturating_mul(bpp) } else { 0 };
+                if keep_aligned { warped_sizes.iter().map(|&(w, h)| w.saturating_mul(h)).fold(0usize, usize::saturating_add).saturating_mul(bpp) } else { 0 };
             let (est_needed, fixed_during_bands) = (est_needed.saturating_add(kept), fixed_during_bands.saturating_add(kept));
             if est_needed > budget {
                 let mb_est = est_needed / (1 << 20);
@@ -972,7 +975,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 let remaining_band_budget = budget.saturating_sub(fixed_during_bands);
                 let check_cancel = || ctx.check();
                 // Shares the tiles: the cost is the `kept` bytes charged above.
-                let aligned = (!fill).then(|| warped.clone());
+                let aligned = keep_aligned.then(|| warped.clone());
                 let opt = BlendOptions { seamless: true, gains: true, geometry: geo, budget: Some(remaining_band_budget) };
                 let b = seam_blend(warped, canvas, &order, opt, Some(&check_cancel))?;
                 // `children[0]` is the bottom layer, and the first source goes on top.
