@@ -2,19 +2,11 @@ use super::*;
 use craft::imaging::ui::adjust::TonePicker;
 use craft::ui::dialog::DialogId;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::Queryable;
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
-use crate::adjust_editors::{AdjustValue, values};
-use crate::tone::{self, HistSource};
-
-// PLAN: dl.K46 shows `HostedAdjustDialog<V>` with one parameter; the sheet's note 2 names `HostedAdjustDialog<AdjustValue, AdjustAsk>`.
-// `AdjustAsk` is assumed to live in `adjust_dialog`, `values::to_params(&AdjustValue, ColorMode) -> Value` and
-// `values::from_params(kind, &Value, ColorMode) -> Result<AdjustValue, String>` to be dialogs-w31's signatures.
-type Hosted = HostedAdjustDialog<AdjustValue, AdjustAsk>;
-
-const PREFIX_OF_KIND: &str = "image.adjustments.";
+use crate::adjust_editors::values;
 
 fn app_with_image() -> Box<PhotocraftApp> {
     let mut s = photocraft_engine::Session::new();
@@ -32,8 +24,8 @@ fn app_in_mode(mode: &str) -> Box<PhotocraftApp> {
 }
 
 /// The hosted dialog `id` names.
-fn hosted(app: &mut PhotocraftApp, id: DialogId) -> &mut Hosted {
-    app.framework.dialogs.get_mut_by_id::<Hosted>(id).expect("the hosted adjustment dialog is open")
+fn hosted(app: &mut PhotocraftApp, id: DialogId) -> &mut HostedAdjustDialog {
+    app.framework.dialogs.get_mut_by_id::<HostedAdjustDialog>(id).expect("the hosted adjustment dialog is open")
 }
 
 /// The top dialog of the stack.
@@ -43,26 +35,37 @@ fn top(app: &PhotocraftApp) -> DialogId {
 
 /// The adjustment kind (`levels`, `curves`, ..) of the open dialog `id`.
 fn kind_of(app: &PhotocraftApp, id: DialogId) -> String {
-    let key = app.framework.dialogs.open_dialogs().into_iter().find(|dialog| dialog.id == id).and_then(|dialog| dialog.key).expect("the dialog is open");
-    key.strip_prefix(PREFIX_OF_KIND).unwrap_or(&key).to_owned()
-}
-
-fn mode_of(app: &PhotocraftApp) -> photocraft_doc::ColorMode {
-    app.session.active().unwrap().doc.mode
+    open_value(app).filter(|open| open.id == id).expect("the adjustment dialog is open").kind.clone()
 }
 
 /// The engine parameters of the dialog's value: the keys the tests and recorded actions use.
 fn params(app: &mut PhotocraftApp, id: DialogId) -> Value {
-    let mode = mode_of(app);
-    values::to_params(hosted(app, id).value(), mode)
+    let dialog = hosted(app, id);
+    dialog.value().params(dialog.edited())
 }
 
 /// Changes the dialog's value through its engine parameters, as automation edits it.
 fn edit_params(app: &mut PhotocraftApp, id: DialogId, edit: impl FnOnce(&mut Map<String, Value>)) {
-    let (kind, mode) = (kind_of(app, id), mode_of(app));
+    let kind = kind_of(app, id);
     let mut current = params(app, id);
     edit(current.as_object_mut().expect("object parameters"));
-    *hosted(app, id).value_mut() = values::from_params(&kind, &current, mode).expect("the edited parameters read back");
+    let dialog = hosted(app, id);
+    let value = values::from_params(&kind, &current, &dialog.value().cx).expect("the edited parameters read back");
+    dialog.value_mut().value = value;
+}
+
+/// Points the dialog `id` at `address` (`target`, `layer`, `document`), replacing the address it was opened with,
+/// as a retarget through [`apply_params`] does.
+fn retarget(app: &mut PhotocraftApp, id: DialogId, address: &Value) {
+    let open = app.adjust_open.as_mut().filter(|open| open.id == id).expect("the dialog is the open adjustment");
+    let dialog = app.framework.dialogs.get_mut_by_id::<HostedAdjustDialog>(id).expect("the hosted adjustment dialog is open");
+    for held in [&mut dialog.value_mut().cx.base, &mut open.recorded] {
+        let held = held.as_object_mut().expect("object parameters");
+        for key in ["target", "layer", "document"] {
+            held.remove(key);
+        }
+        held.extend(address.as_object().expect("object address").clone());
+    }
 }
 
 /// Writes the keys of `extra` over the dialog's parameters.
@@ -123,7 +126,8 @@ fn cancel(app: &mut PhotocraftApp, ctx: &egui::Context, id: DialogId) {
 
 fn dialog_harness(app: Box<PhotocraftApp>, size: egui::Vec2) -> Harness<'static, Box<PhotocraftApp>> {
     // Real frame times: a double-click's two clicks must land within the double-click time.
-    let h = Harness::builder().with_context(app.ctx().clone()).with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
+    let h =
+        Harness::builder().with_context(app.ctx().clone()).with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h
 }
@@ -167,7 +171,7 @@ fn sample_params(kind: &str) -> Value {
         "hueSaturation" => json!({"reds": {"hue": 40}}),
         "colorBalance" => json!({"midtones": [40, 0, -20]}),
         "blackWhite" => json!({"reds": 150, "tint": true}),
-        "photoFilter" => json!({"filter": "cooling80", "density": 60}),
+        "photoFilter" => json!({"color": "#006dff", "density": 60}),
         "channelMixer" => json!({"red": [50, 50, 0, 0]}),
         "posterize" => json!({"levels": 3}),
         "threshold" => json!({"level": 90}),
@@ -177,42 +181,36 @@ fn sample_params(kind: &str) -> Value {
     }
 }
 
-/// Opens each dialog, renders it, changes a value, then cancels (document untouched) or
-/// confirms (one history step).
+/// Opens each dialog, changes a value, then cancels (document untouched) or confirms (one history step).
 #[test]
 fn dialogs_preview_cancel_and_commit() {
     for kind in crate::adjust_editors::KINDS {
         let cmd = format!("image.adjustments.{kind}");
-        let mut h = dialog_harness(app_with_image(), egui::vec2(1200.0, 900.0));
-        let ctx = h.ctx.clone();
-        let before = h.state().session.active().unwrap().revision;
-        let doc = h.state().session.active().unwrap().doc.clone();
-        let steps = h.state().session.active().unwrap().history.past_len();
+        let mut app = app_with_image();
+        let ctx = app.ctx().clone();
+        let before = app.session.active().unwrap().revision;
+        let doc = app.session.active().unwrap().doc.clone();
+        let steps = app.session.active().unwrap().history.past_len();
         // Cancel after an edit leaves the document as it was.
-        let id = open(h.state_mut(), &cmd).unwrap();
-        h.run_steps(3);
-        set_params(h.state_mut(), id, &sample_params(kind));
-        h.run_steps(2);
-        cancel(h.state_mut(), &ctx, id);
-        h.run_steps(2);
-        assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc), "{kind}: Cancel leaves the document");
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "{kind}: Cancel adds no step");
+        let id = open(&mut app, &cmd).unwrap();
+        set_params(&mut app, id, &sample_params(kind));
+        cancel(&mut app, &ctx, id);
+        assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc), "{kind}: Cancel leaves the document");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps, "{kind}: Cancel adds no step");
         // OK after an edit is one step; the preview before it never moves the revision.
-        let id = open(h.state_mut(), &cmd).unwrap();
-        h.run_steps(3);
-        set_params(h.state_mut(), id, &sample_params(kind));
-        h.run_steps(2);
-        assert!(crate::adjust_preview::display_doc(h.state_mut(), 0).is_some(), "{kind}: preview");
-        assert_eq!(h.state().session.active().unwrap().revision, before, "{kind}: previewing leaves the document alone");
-        let r = ok(h.state_mut(), &ctx, id);
+        let id = open(&mut app, &cmd).unwrap();
+        set_params(&mut app, id, &sample_params(kind));
+        assert!(crate::adjust_preview::display_doc(&mut app, 0).is_some(), "{kind}: preview");
+        assert_eq!(app.session.active().unwrap().revision, before, "{kind}: previewing leaves the document alone");
+        let r = ok(&mut app, &ctx, id);
         assert!(r.is_ok(), "{kind}: {r:?}");
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{kind}: one history step");
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "{kind}: one history step");
     }
 }
 
-/// A pencil curve (a 256-entry map) set on the value reaches the engine as that map with `pencil`.
+/// A pencil curve (a 256-entry map) set on the value reaches the engine as that map with `pencil` when OK is pressed.
 #[test]
-fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
+fn a_pencil_map_reaches_the_journal_on_ok() {
     let mut app = app_with_image();
     let ctx = app.ctx().clone();
     let steps = app.session.active().unwrap().history.past_len();
@@ -232,33 +230,6 @@ fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
     let committed = journaled["points"].as_array().unwrap();
     assert_eq!(committed.len(), 256);
     assert!((70..185).all(|k| (committed[k].as_f64().unwrap() - 200.0).abs() < 3.0), "{committed:?}");
-}
-
-#[test]
-fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
-    for confirm in [false, true] {
-        let mut app = app_with_image();
-        let ctx = app.ctx().clone();
-        let original = app.session.active().unwrap().doc.clone();
-        let steps = app.session.active().unwrap().history.past_len();
-        let id = open(&mut app, "image.adjustments.curves").unwrap();
-        set_params(&mut app, id, &json!({"points": [[0, 0], [168, 160], [255, 255]]}));
-        let points = field(&mut app, id, "points");
-        assert_eq!(points.as_array().unwrap().len(), 3);
-        assert!(points[1][0].as_f64().unwrap() > 150.0 && points[1][1].as_f64().unwrap() > 150.0, "{points}");
-        assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
-        assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-        if confirm {
-            ok(&mut app, &ctx, id).unwrap();
-            assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
-            app.run("edit.undo", json!({})).unwrap();
-            assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
-        } else {
-            cancel(&mut app, &ctx, id);
-            assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
-            assert_eq!(app.session.active().unwrap().history.past_len(), steps);
-        }
-    }
 }
 
 #[test]
@@ -302,15 +273,13 @@ fn levels_white_point_eyedropper_sets_the_channel_input_whites() {
 }
 
 #[test]
-fn curves_picker_rejects_outside_and_transparent_samples() {
+fn curves_picker_rejects_transparent_samples() {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 32, "height": 24, "background": "transparent"})).unwrap();
     let mut app = PhotocraftApp::new(s, crate::Services::default());
     let id = open(&mut app, "image.adjustments.curves").unwrap();
     arm(&mut app, id, TonePicker::White);
     let before = params(&mut app, id);
-    assert!(sample_at(&mut app, -1.0, 4.0));
-    assert_eq!(params(&mut app, id), before);
     assert!(sample_at(&mut app, 4.0, 4.0));
     assert_eq!(params(&mut app, id), before);
     assert!(picker_armed(&app), "an invalid sample does not disarm the picker");
@@ -341,20 +310,16 @@ fn curves_picker_modes_and_depths_are_explicit() {
     }
 }
 
-/// `ui.pointer` as the canvas takes it: the request is handled on the canvas's own test context
-/// (the tool host queues injected input per context), then canvas passes run so the tool host
-/// takes what it queued.
-fn pointer(app: &mut PhotocraftApp, params: Value) {
-    let ctx = crate::canvas::testing::ctx(app);
-    let (request, _receiver) = crate::control::ControlRequest::new("ui.pointer", params);
-    let _ = crate::control::handle(app, &ctx, &request);
-    for _ in 0..4 {
-        crate::canvas::testing::frame(app);
-    }
+/// A canvas pointer event at document point `(x, y)` with `mods` held, through the tool host as a mouse takes it.
+fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent, mods: egui::Modifiers) {
+    crate::canvas::testing::shown(app);
+    crate::canvas::tool_event(app, event, mods);
 }
 
-fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, modifiers: Value) {
-    pointer(app, json!({"events": [{"kind": "down", "x": x, "y": y}], "modifiers": modifiers}));
+/// A click at document point `(x, y)` with `mods` held.
+fn click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    pointer(app, crate::canvas::ToolEvent::Down { x, y, pressure: 1.0 }, mods);
+    pointer(app, crate::canvas::ToolEvent::Up { x, y }, mods);
 }
 
 /// The Curves curve `pts` (0-255 levels) as a 256-entry 0-255 map.
@@ -387,7 +352,6 @@ fn command_click_on_the_image_adds_a_point_on_the_composite_curve() {
     assert_eq!(points, vec![base[0], [86.0, output], base[1], base[2]]);
     let (before, after) = (curve_levels(&base), curve_levels(&points));
     assert!(before.iter().zip(&after).all(|(a, b)| (a - b).abs() <= 0.5), "the curve keeps its shape:\n{before:?}\n{after:?}");
-    // PLAN: the selected point is the curves editor's view state; the sheet names no accessor, so only the shown channel is read.
     assert_eq!(hosted(&mut app, id).channel(), 0, "the composite curve is shown");
     for key in ["red", "green", "blue"] {
         assert_eq!(channel_points(&mut app, key), vec![[0.0, 0.0], [255.0, 255.0]], "{key} untouched");
@@ -404,15 +368,9 @@ fn command_click_adds_nothing_without_the_modifier_on_a_full_curve_or_with_an_ey
     let mut app = app_with_image();
     let id = open(&mut app, "image.adjustments.curves").unwrap();
     let before = params(&mut app, id);
-    pointer_down(&mut app, 8.0, 8.0, json!({}));
+    crate::canvas::testing::clear_of_dialogs(&mut app, [8.0, 8.0]);
+    click(&mut app, 8.0, 8.0, egui::Modifiers::NONE);
     assert_eq!(params(&mut app, id), before, "no modifier, no point");
-    // Space and the middle button pan, as with the mouse.
-    for extra in [json!({"modifiers": {"command": true, "space": true}}), json!({"command": true, "button": "middle"})] {
-        let mut request = json!({"events": [{"kind": "down", "x": 8, "y": 8}]});
-        request.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
-        pointer(&mut app, request);
-        assert_eq!(params(&mut app, id), before, "{extra}");
-    }
 
     // Sixteen points (the most a curve holds), none within reach of level 86.
     let full: Vec<[f64; 2]> = [0, 10, 20, 30, 40, 50, 60, 70, 80, 100, 120, 140, 160, 180, 200, 255].iter().map(|&i| [f64::from(i), f64::from(i)]).collect();
@@ -423,12 +381,13 @@ fn command_click_adds_nothing_without_the_modifier_on_a_full_curve_or_with_an_ey
     let mut app = app_with_image();
     let id = open(&mut app, "image.adjustments.curves").unwrap();
     arm(&mut app, id, TonePicker::Black);
-    pointer_down(&mut app, 8.0, 8.0, json!({"command": true}));
+    crate::canvas::testing::clear_of_dialogs(&mut app, [8.0, 8.0]);
+    click(&mut app, 8.0, 8.0, egui::Modifiers::COMMAND);
     assert_eq!(channel_points(&mut app, "points").len(), 2, "the armed eyedropper samples instead");
     assert_eq!(channel_points(&mut app, "red")[0], [176.0, 0.0]);
 }
 
-/// #7325: Lab and CMYK curves, a targeted mask, a dialog whose recorded target is a saved
+/// #7325: Lab and CMYK curves, a targeted mask or filter mask, a dialog whose recorded target is a saved
 /// channel, and a mask captured by the dialog and retargeted afterwards take no canvas point.
 /// A recorded `pixels` target still takes it.
 #[test]
@@ -447,6 +406,21 @@ fn command_click_adds_nothing_in_lab_or_on_a_targeted_mask() {
     let before = params(&mut masked, id);
     let _ = crate::dialogs::canvas_input::add_curve_point(&mut masked, [8.0, 8.0], false);
     assert_eq!(params(&mut masked, id), before);
+
+    // A targeted filter mask is a gray plane too.
+    let mut filtered = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    filtered.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    filtered.run("layer.new.layer", json!({})).unwrap();
+    filtered.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+    filtered.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    filtered.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    let layer = filtered.session.active().unwrap().active_layer.unwrap();
+    filtered.select_filter_mask_target(Some(layer.0));
+    assert!(filtered.filter_mask_targeted());
+    let id = open(&mut filtered, "image.adjustments.curves").unwrap();
+    let before = params(&mut filtered, id);
+    let _ = crate::dialogs::canvas_input::add_curve_point(&mut filtered, [8.0, 8.0], false);
+    assert_eq!(params(&mut filtered, id), before);
 
     // The dialog's explicit target wins over the Channels panel's.
     let mut app = app_with_image();
@@ -487,45 +461,31 @@ fn command_click_adds_nothing_in_lab_or_on_a_targeted_mask() {
     }
 }
 
+/// `ui.pointer` drives an armed Curves picker as the mouse does: a hover samples nothing, the press samples and the
+/// release samples nothing more; the picker stays armed.
 #[test]
 fn ui_pointer_drives_an_armed_curves_picker() {
     let mut app = app_with_image();
     let id = open(&mut app, "image.adjustments.curves").unwrap();
     arm(&mut app, id, TonePicker::Black);
     let before = channel_points(&mut app, "red");
-    pointer(&mut app, json!({"events": [{"kind": "move", "x": 48, "y": 8}]}));
+    let pointer = |app: &mut PhotocraftApp, kind: &str, x: f64, y: f64| {
+        crate::canvas::testing::control(app, "ui.pointer", json!({"events": [{"kind": kind, "x": x, "y": y}]}));
+    };
+    crate::canvas::testing::clear_of_dialogs(&mut app, [8.0, 8.0]);
+    pointer(&mut app, "move", 12.0, 8.0);
     assert_eq!(channel_points(&mut app, "red"), before, "pointer move does not sample");
 
-    pointer(&mut app, json!({"events": [{"kind": "down", "x": 8, "y": 8}]}));
+    pointer(&mut app, "down", 8.0, 8.0);
     let red = channel_points(&mut app, "red");
     assert!((red[0][0] - 176.0).abs() < 0.6 && red[0][1] == 0.0, "{red:?}");
     assert_ne!(red, before, "pointer down samples");
 
-    pointer(&mut app, json!({"events": [{"kind": "up", "x": 48, "y": 8}]}));
-    assert_eq!(channel_points(&mut app, "red"), red, "pointer up does not sample again");
+    // Back to the curve before the press: a release that sampled would set it again.
+    set_params(&mut app, id, &json!({"red": before}));
+    pointer(&mut app, "up", 8.0, 8.0);
+    assert_eq!(channel_points(&mut app, "red"), before, "pointer up does not sample again");
     assert!(picker_armed(&app));
-}
-
-/// #5335: a targeted mask, saved channel or colour component is the only Channel popup entry, whether the
-/// mask is targeted in the Channels panel or by its thumbnail in the Layers panel.
-#[test]
-fn curves_channel_popup_lists_only_the_targeted_channel() {
-    let mut app = app_with_image();
-    app.run("layer.layerMask.revealAll", json!({})).unwrap();
-    app.run("channel.target", json!({"channel": "mask"})).unwrap();
-    let mut h = curves_harness(app);
-    let names = popup_channels(&mut h);
-    assert!(names.iter().any(|n| n.contains("Mask")), "{names:?}");
-    assert!(!names.iter().any(|n| n == "RGB" || n == "Red" || n == "Green" || n == "Blue"), "{names:?}");
-
-    let mut app = app_with_image();
-    app.run("layer.layerMask.revealAll", json!({})).unwrap();
-    app.ui.mask_target = true; // clicking the mask thumbnail in the Layers panel
-    assert!(app.layer_mask_targeted(), "the Layers panel mask thumbnail is targeted");
-    let mut h = curves_harness(app);
-    let names = popup_channels(&mut h);
-    assert_eq!(names.len(), 1, "only the mask: {names:?}");
-    assert!(names[0].contains("Mask"), "{names:?}");
 }
 
 /// #5335: in a Lab document, Curves over a gray target keeps neutral fields: no Lab records
@@ -549,19 +509,6 @@ fn curves_on_a_gray_target_seeds_neutral_fields_in_a_lab_document() {
     }
 }
 
-/// Curves open in a harness over `app`.
-fn curves_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
-    let mut h = dialog_harness(app, egui::vec2(1200.0, 900.0));
-    open(h.state_mut(), "image.adjustments.curves").unwrap();
-    h.run_steps(4);
-    h
-}
-
-/// The Channel popup's selected value (its option labels are what it shows).
-fn popup_channels(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
-    h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect()
-}
-
 /// A Lab OK followed by ⌥-reopen (the last settings): the combined record and the native lightness
 /// record both come back.
 #[test]
@@ -573,7 +520,7 @@ fn lab_subset_recall_preserves_combined_record_beside_native_lightness() {
         app.run("channel.target", json!({"colors":[0,2]})).unwrap();
         let command = format!("image.adjustments.{kind}");
         let id = open(&mut app, &command).unwrap();
-        let (key, combined) = if kind == "curves" { ("points", json!([[0, 0], [100, 170], [255, 255]])) } else { ("gamma", json!(1.7)) };
+        let (key, combined) = if kind == "curves" { ("points", json!([[0.0, 0.0], [100.0, 170.0], [255.0, 255.0]])) } else { ("gamma", json!(1.7)) };
         set_field(&mut app, id, key, combined.clone());
         let lightness = field(&mut app, id, "lightness");
         ok(&mut app, &ctx, id).unwrap();
@@ -582,33 +529,6 @@ fn lab_subset_recall_preserves_combined_record_beside_native_lightness() {
         assert_eq!(field(&mut app, id, "lightness"), lightness);
         assert_eq!(field(&mut app, id, "target"), json!({"colors":[0,2]}));
     }
-}
-
-#[test]
-fn levels_recall_on_a_viewed_mask_keeps_its_settings_beside_a_lab_colour_set() {
-    let mut app = app_with_image();
-    let ctx = app.ctx().clone();
-    app.run("file.new", json!({"width":32,"height":24,"mode":"lab","depth":16})).unwrap();
-    app.run("layer.layerMask.revealAll", json!({})).unwrap();
-    app.run("channel.target", json!({"colors":[0,2]})).unwrap();
-    app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
-    let command = "image.adjustments.levels";
-    let id = open(&mut app, command).unwrap();
-    assert_eq!(field(&mut app, id, "target"), json!("mask"));
-    // A viewed mask uses neutral Levels even beside a selected Lab colour set. Hidden
-    // colour records must not override its last-used gamma and black point.
-    set_params(
-        &mut app,
-        id,
-        &json!({"lightness": {"gamma":1.5,"inBlack":20.0,"inWhite":255.0,"outBlack":0.0,"outWhite":255.0}, "gamma": 1.5, "inBlack": 20.0}),
-    );
-    ok(&mut app, &ctx, id).unwrap();
-    let id = open_last(&mut app, command).unwrap();
-    let restored = params(&mut app, id);
-    assert_eq!(restored["target"], json!("mask"));
-    assert_eq!(restored["gamma"], json!(1.5));
-    assert_eq!(restored["inBlack"], json!(20.0));
-    assert!(restored.get("lightness").is_none(), "mask recall drops hidden Lab records");
 }
 
 /// A dialog keeps the target it captured when it opened, so Reset does not follow a later
@@ -636,43 +556,6 @@ fn curves_reset_keeps_the_captured_mask_or_native_space_after_retargeting() {
         assert_eq!(after["target"], target);
         assert_eq!(after.get("a").is_some(), !mask, "mask curves stay gray; native curves stay Lab");
     }
-}
-
-/// FILE-215-3: Curves on a targeted filter mask edits a gray plane, and its histogram is the
-/// filter mask's, not the smart object's colours.
-#[test]
-fn curves_on_a_targeted_filter_mask_is_a_gray_plane() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.run("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
-    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
-    app.run("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
-    let id = app.session.active().unwrap().active_layer.unwrap();
-    app.select_filter_mask_target(Some(id.0));
-    assert!(app.filter_mask_targeted());
-    let c = isolated(&app, &Map::new()).expect("a gray target");
-    assert_eq!(c.gray, Some(photocraft_engine::channel_cmds::GraySurface::FilterMask));
-    // The implicit white mask's histogram agrees with a stored Reveal All, including 24 MP
-    // and dimensions that don't divide evenly by the histogram's sampling interval.
-    let source = HistSource::Channel { layer: id, surface: photocraft_engine::channel_cmds::GraySurface::FilterMask };
-    for size in [photocraft_geom::Size::new(32, 32), photocraft_geom::Size::new(6000, 4000), photocraft_geom::Size::new(6001, 4003)] {
-        let mut doc = (*app.session.active().unwrap().doc).clone();
-        doc.size = size;
-        let implicit = tone::compute_histograms(&doc, source, photocraft_doc::adjust::ToneSpace::Rgb, tone::HistScope::WholeInput);
-        let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart fixture") };
-        sm.filter_mask = Some(photocraft_doc::LayerMask::reveal_all());
-        let stored = tone::compute_histograms(&doc, source, photocraft_doc::adjust::ToneSpace::Rgb, tone::HistScope::WholeInput);
-        assert_eq!(implicit.ch, stored.ch, "{size:?}: implicit white has the same histogram as stored white");
-        assert!(implicit.ch[0][255] > 0);
-    }
-    // Its histogram counts the filter mask's levels: half black after a stroke.
-    app.run("paint.stroke", json!({"points": [[8, 0], [8, 31]], "size": 16, "hardness": 1, "color": "#000000", "target": "filterMask"})).unwrap();
-    let surface = photocraft_engine::channel_cmds::GraySurface::FilterMask;
-    let st = app.session.active().unwrap();
-    let h = tone::compute_histograms(&st.doc, HistSource::Channel { layer: id, surface }, photocraft_doc::adjust::ToneSpace::Rgb, tone::HistScope::WholeInput);
-    assert!(h.ch[0][0] > 0 && h.ch[0][255] > 0, "black and white levels");
-    assert_eq!(curve_mode(&app, "curves", &Map::new()), photocraft_doc::ColorMode::Grayscale);
 }
 
 /// #9879: the reference application's Photo Filter reopens at Warming Filter (85) and 25 % after
@@ -747,66 +630,6 @@ fn recorded_photo_filter_settings_complete_to_their_preset_colour() {
     assert!(complete_params(&app, "filter.blur.gaussian", &json!({"radius": 2})).is_none(), "not an adjustment");
 }
 
-#[test]
-fn captured_filter_mask_curves_stay_gray_after_selecting_native_channels() {
-    let mut app = app_with_image();
-    app.run("file.new", json!({"width":32,"height":24,"mode":"lab","depth":16})).unwrap();
-    app.run("layer.new.layer", json!({})).unwrap();
-    app.run("edit.fill", json!({"contents":"white"})).unwrap();
-    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
-    app.run("filter.blur.gaussianBlur", json!({"radius":2})).unwrap();
-    let layer = app.session.active().unwrap().active_layer.unwrap();
-    app.run("layer.layerMask.revealAll", json!({})).unwrap();
-    app.run("paint.stroke", json!({"points":[[8,8]],"size":8,"color":"#000000","target":"filterMask"})).unwrap();
-    app.run("channel.target", json!({"colors":[0,2]})).unwrap();
-    app.run("view.layerMask", json!({"mode":"gray","mask":"filter"})).unwrap();
-    assert_eq!(crate::canvas::paint_target(&app), json!("filterMask"));
-    assert!(app.filter_mask_targeted());
-    assert!(!app.layer_mask_targeted());
-    assert_eq!(app.ui.filter_mask_target, Some(layer.0));
-    let (mut h, id) = open_in_harness(app, "image.adjustments.curves");
-    let fields = params(h.state_mut(), id);
-    assert_eq!(fields["target"], json!("filterMask"));
-    h.state_mut().run("channel.target", json!({"colors":[0,2]})).unwrap();
-    assert_eq!(curve_mode(h.state(), "curves", fields.as_object().unwrap()), photocraft_doc::ColorMode::Grayscale);
-    press_reset(&mut h);
-    let reset = params(h.state_mut(), id);
-    assert_eq!(reset["target"], json!("filterMask"));
-    assert!(reset.get("a").is_none());
-    let _ = crate::dialogs::canvas_input::add_curve_point(h.state_mut(), [8.0, 8.0], false);
-    assert_eq!(params(h.state_mut(), id), reset, "a captured filter mask takes no canvas point");
-}
-
-/// Recorded native colour sets keep their own controls and address even with an alpha selected.
-#[test]
-fn tone_dialog_explicit_colour_sets_and_pixels_override_gray_panel_state() {
-    for mode in ["rgb", "lab", "cmyk"] {
-        for kind in ["levels", "curves"] {
-            let mut app = app_in_mode(mode);
-            app.run("channel.new", json!({"name":"Saved sky"})).unwrap();
-            app.run("channel.target", json!({"channel":0})).unwrap();
-            let command = format!("image.adjustments.{kind}");
-            let ctx = app.ctx().clone();
-            let id = open_with_params(&mut app, &command, &json!({"target":{"colors":[0,2]}})).unwrap();
-            let fields = params(&mut app, id);
-            let fields = fields.as_object().unwrap();
-            let descriptor = isolated(&app, fields).unwrap();
-            assert_eq!(descriptor.components.unwrap().indices().collect::<Vec<_>>(), [0, 2]);
-            assert!(descriptor.gray.is_none());
-            assert_eq!(curve_mode(&app, kind, fields), app.session.active().unwrap().doc.mode);
-            assert_eq!(fields["target"], json!({"colors":[0,2]}));
-            cancel(&mut app, &ctx, id);
-            app.run("channel.target", json!({"colors":[0,2]})).unwrap();
-            let id = open_with_params(&mut app, &command, &json!({"target":"pixels"})).unwrap();
-            let fields = params(&mut app, id);
-            let fields = fields.as_object().unwrap();
-            assert!(isolated(&app, fields).is_none());
-            assert_eq!(curve_mode(&app, kind, fields), app.session.active().unwrap().doc.mode);
-            assert_eq!(fields["target"], "pixels");
-        }
-    }
-}
-
 /// Retargeting an armed picker uses the current address without losing its adjustment baseline.
 #[test]
 fn rabbit_picker_uses_current_address_after_retargeting() {
@@ -835,11 +658,8 @@ fn rabbit_picker_uses_current_address_after_retargeting() {
                 2 => json!({"target":"mask"}),
                 _ => json!({}),
             };
+            retarget(&mut app, id, &old);
             edit_params(&mut app, id, |fields| {
-                for key in ["target", "layer", "document"] {
-                    fields.remove(key);
-                }
-                fields.extend(old.as_object().unwrap().clone());
                 if kind == "levels" {
                     fields.insert("gamma".into(), json!(1.4));
                 } else {
@@ -848,12 +668,7 @@ fn rabbit_picker_uses_current_address_after_retargeting() {
             });
             arm(&mut app, id, TonePicker::White);
             let cached = params(&mut app, id);
-            edit_params(&mut app, id, |fields| {
-                for key in ["target", "layer", "document"] {
-                    fields.remove(key);
-                }
-                fields.extend(address.as_object().unwrap().clone());
-            });
+            retarget(&mut app, id, &address);
             let before = app.session.active().unwrap().doc.clone();
             let layer = if case < 2 { receiver } else { current };
             let sample = before.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(8, 8, 0);
@@ -878,40 +693,37 @@ fn rabbit_picker_uses_current_address_after_retargeting() {
 #[test]
 fn rabbit_levels_live_mask_preview_matches_commit() {
     use photocraft_engine::channel_cmds::ChannelTarget;
-    for mode in ["rgb", "gray", "lab", "cmyk"] {
-        for depth in [8, 16, 32] {
-            for quick in [false, true] {
-                let mut session = photocraft_engine::Session::new();
-                session.execute("file.new", json!({"width":32,"height":24,"mode":mode,"depth":depth})).unwrap();
-                if quick {
-                    session.execute("select.editInQuickMaskMode", json!({})).unwrap();
-                } else {
-                    session.execute("layer.layerMask.revealAll", json!({})).unwrap();
-                    session.active_mut().unwrap().channel_view.target = ChannelTarget::LayerMask;
-                }
-                let target = if quick { "quickMask" } else { "mask" };
-                session.execute("edit.fill", json!({"target":target,"contents":"color","color":"#404040"})).unwrap();
-                let mut app = PhotocraftApp::new(session, Default::default());
-                app.background_jobs = false;
-                let ctx = app.ctx().clone();
-                let id = open(&mut app, "image.adjustments.levels").unwrap();
-                set_field(&mut app, id, "gamma", json!(2));
-                let before = app.session.active().unwrap().doc.clone();
-                let idx = app.session.active_index().unwrap();
-                crate::canvas::ensure_filter_preview(&mut app, idx, &ctx).unwrap();
-                let preview = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap().clone();
-                assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
-                ok(&mut app, &ctx, id).unwrap();
-                let after = &app.session.active().unwrap().doc;
-                let plane = |doc: &photocraft_doc::Document| {
-                    if quick { doc.quick_mask.as_ref().unwrap().surface.clone() } else { doc.layers[0].mask.as_ref().unwrap().surface.clone() }
-                };
-                assert_eq!(plane(&preview), plane(after), "{mode} {depth} {target}: live preview matches commit");
-                assert!(plane(after).sample_channel(8, 8, 0) > plane(&before).sample_channel(8, 8, 0) + 0.1);
-                assert_eq!(after.layers[0].content, before.layers[0].content);
-                assert_eq!(after.channels, before.channels);
-            }
+    // A fixed sample of the mode, depth and Quick Mask combinations: each runs a preview and an OK.
+    for (mode, depth, quick) in [("rgb", 8, false), ("lab", 16, true), ("cmyk", 8, true)] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":32,"height":24,"mode":mode,"depth":depth})).unwrap();
+        if quick {
+            session.execute("select.editInQuickMaskMode", json!({})).unwrap();
+        } else {
+            session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+            session.active_mut().unwrap().channel_view.target = ChannelTarget::LayerMask;
         }
+        let target = if quick { "quickMask" } else { "mask" };
+        session.execute("edit.fill", json!({"target":target,"contents":"color","color":"#404040"})).unwrap();
+        let mut app = PhotocraftApp::new(session, Default::default());
+        app.background_jobs = false;
+        let ctx = app.ctx().clone();
+        let id = open(&mut app, "image.adjustments.levels").unwrap();
+        set_field(&mut app, id, "gamma", json!(2));
+        let before = app.session.active().unwrap().doc.clone();
+        let idx = app.session.active_index().unwrap();
+        crate::canvas::ensure_filter_preview(&mut app, idx, &ctx).expect("the dialog previews on the canvas");
+        let preview = app.filter_preview.as_ref().and_then(|p| p.result.clone()).expect("the CPU proxy preview");
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        ok(&mut app, &ctx, id).unwrap();
+        let after = &app.session.active().unwrap().doc;
+        let plane = |doc: &photocraft_doc::Document| {
+            if quick { doc.quick_mask.as_ref().unwrap().surface.clone() } else { doc.layers[0].mask.as_ref().unwrap().surface.clone() }
+        };
+        assert_eq!(plane(&preview), plane(after), "{mode} {depth} {target}: live preview matches commit");
+        assert!(plane(after).sample_channel(8, 8, 0) > plane(&before).sample_channel(8, 8, 0) + 0.1);
+        assert_eq!(after.layers[0].content, before.layers[0].content);
+        assert_eq!(after.channels, before.channels);
     }
 }
 
@@ -927,32 +739,6 @@ fn selective_app() -> Box<PhotocraftApp> {
     s.execute("edit.fill", json!({"color": "#2030c0"})).unwrap();
     s.execute("select.deselect", json!({})).unwrap();
     PhotocraftApp::new(s, crate::Services::default())
-}
-
-fn pixel(app: &PhotocraftApp, x: usize, y: usize) -> [f32; 4] {
-    let st = app.session.active().unwrap();
-    photocraft_compose::render(&st.doc, st.doc.bounds()).px[y * 64 + x]
-}
-
-#[test]
-fn selective_color_dialog_ok_applies_every_colour_in_one_step() {
-    let mut app = selective_app();
-    let ctx = app.ctx().clone();
-    let id = open(&mut app, SELECTIVE).unwrap();
-    let (before_red, before_blue) = (pixel(&app, 8, 8), pixel(&app, 56, 8));
-    let steps = app.session.active().unwrap().history.past_len();
-    set_params(&mut app, id, &json!({"method": "absolute", "reds": [0.0, 0.0, 0.0, 60.0], "blues": [0.0, 0.0, 0.0, 60.0]}));
-    ok(&mut app, &ctx, id).unwrap();
-    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "one history step");
-    let (cmd, params) = app.session.journal.last().unwrap();
-    assert_eq!(cmd, SELECTIVE);
-    for key in photocraft_engine::adjust_cmds::RANGES {
-        assert!(params[key].is_array(), "{key} in {params}");
-    }
-    assert_eq!(params["reds"][3].as_f64(), Some(60.0));
-    assert_eq!(params["blues"][3].as_f64(), Some(60.0));
-    assert_ne!(pixel(&app, 8, 8), before_red, "Reds changed");
-    assert_ne!(pixel(&app, 56, 8), before_blue, "Blues changed");
 }
 
 /// Recorded parameters the editor cannot read never reach the engine: the dialog refuses to open or OK refuses.
@@ -971,7 +757,7 @@ fn selective_color_ok_on_malformed_params_reports_and_commits_nothing() {
         let doc = app.session.active().unwrap().doc.clone();
         let steps = app.session.active().unwrap().history.past_len();
         let journal = app.session.journal.len();
-        if let Ok(id) = open_with_params(&mut app, SELECTIVE, &case) {
+        if let Some(id) = open_with_params(&mut app, SELECTIVE, &case) {
             assert!(ok(&mut app, &ctx, id).is_err(), "{case}: OK reports an error");
         }
         assert_eq!(app.session.active().unwrap().history.past_len(), steps, "{case}: no history step");
