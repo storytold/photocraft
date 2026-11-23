@@ -26,6 +26,7 @@ macro_rules! tl {
 }
 mod brush_mode_menu;
 pub mod canvas;
+mod channel_titles;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
 pub mod dialogs;

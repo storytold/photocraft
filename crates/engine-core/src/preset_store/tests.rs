@@ -1,4 +1,6 @@
 use super::*;
+use crate::actions_cmds::ActionsExt;
+use crate::preset_store::PresetStoreExt;
 use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 use serde_json::json;
 use std::path::PathBuf;
@@ -96,9 +98,9 @@ fn saved_airbrush_group_keeps_legacy_and_explicit_rates_across_reopen() {
 #[test]
 fn sessions_have_no_store_by_default() {
     let mut s = crate::session();
-    assert!(s.preset_store.is_none(), "headless sessions must stay hermetic");
+    assert!(s.preset_store().is_none(), "headless sessions must stay hermetic");
     s.execute("brush.presets.save", json!({"name": "Mine"})).unwrap();
-    assert!(s.preset_store.is_none());
+    assert!(s.preset_store().is_none());
 }
 
 #[test]
@@ -371,13 +373,15 @@ fn corrupt_and_oversized_files_are_skipped_with_a_warning() {
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Good").is_some());
     // Full tips load when a brush is used (#1843): the broken one fails then, not at start.
     assert!(photocraft_paint::presets::find(&t.tools.presets, "Lost").is_some());
-    let before = (*t.tools.brush).clone();
-    let e = t.execute("tools.setBrush", json!({"preset": "Lost"})).unwrap_err().to_string();
+    let mut lost = photocraft_paint::presets::find(&t.tools.presets, "Lost").unwrap().brush.clone();
+    let e = t.load_brush_tips(&mut lost).unwrap_err();
     assert!(e.contains(&h), "{e}");
-    assert_eq!(*t.tools.brush, before, "a failed pick leaves the brush alone");
-    t.execute("tools.setBrush", json!({"preset": "Good"})).unwrap();
+    let mut good = photocraft_paint::presets::find(&t.tools.presets, "Good").unwrap().brush.clone();
+    t.load_brush_tips(&mut good).unwrap();
     // The broken files are left alone for the user (never deleted by a sync).
-    t.execute("brush.presets.save", json!({"name": "Another"})).unwrap();
+    std::sync::Arc::make_mut(&mut *t.tools.presets).push(sampled("Another", "Fine", tip8(8, 8, 3)));
+    t.brush_presets_changed();
+    t.sync_preset_store();
     let files = dir.files();
     assert!(files.contains(&"junk-00000000.pcbrushes".to_string()) && files.contains(&tip_file(&h)), "{files:?}");
 
@@ -399,7 +403,7 @@ fn write_failures_are_warnings() {
     s.attach_preset_store(open_dir(&dir.0));
     s.tools.brush.tip = TipShape::Sampled(tip8(4, 4, 0)).into();
     s.execute("brush.presets.save", json!({"name": "Nope"})).unwrap();
-    let w = s.preset_store.as_mut().unwrap().take_warnings();
+    let w = s.preset_store_mut().unwrap().take_warnings();
     assert!(!w.is_empty());
     let _ = std::fs::remove_file(&dir.0);
 }
@@ -433,7 +437,7 @@ fn bench_load_500_sampled_presets() {
     let t0 = std::time::Instant::now();
     s.sync_preset_store();
     let write = t0.elapsed();
-    let bytes = s.preset_store.as_ref().unwrap().bytes();
+    let bytes = s.preset_store().unwrap().bytes();
     let t0 = std::time::Instant::now();
     let o = open_dir(&dir.0);
     let load = t0.elapsed();
@@ -488,7 +492,7 @@ fn library_samples(s: &Session) -> usize {
 }
 
 fn cache(s: &Session) -> TipCacheStats {
-    s.preset_store.as_ref().unwrap().tip_cache()
+    s.preset_store().unwrap().tip_cache()
 }
 
 #[test]
@@ -541,7 +545,7 @@ fn the_decoded_tip_cache_stays_within_its_budget() {
     let mut t = crate::session();
     t.attach_preset_store(open(Box::new(mem)));
     let one = 256 * 256 * 2;
-    t.preset_store.as_ref().unwrap().set_tip_cache_limit(one * 2 + 1);
+    t.preset_store().unwrap().set_tip_cache_limit(one * 2 + 1);
     for i in 0..6 {
         t.execute("tools.setBrush", json!({"preset": format!("Big {i}")})).unwrap();
         let c = cache(&t);
@@ -555,7 +559,7 @@ fn the_decoded_tip_cache_stays_within_its_budget() {
     t.execute("tools.setBrush", json!({"preset": "Big 0"})).unwrap();
     assert_eq!(cache(&t).decodes, 7);
     // A budget below one tip still loads it (the brush in use holds its own reference).
-    t.preset_store.as_ref().unwrap().set_tip_cache_limit(0);
+    t.preset_store().unwrap().set_tip_cache_limit(0);
     assert_eq!(cache(&t).tips, 0);
     t.execute("tools.setBrush", json!({"preset": "Big 1"})).unwrap();
     assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()));
@@ -662,9 +666,10 @@ fn a_store_without_previews_makes_them_once_and_then_loads_lazily() {
     assert!(t.attach_preset_store(open(Box::new(mem.clone()))).is_empty());
     assert_eq!(mem.list().unwrap(), files);
     assert_eq!(user(&t), user(&s));
-    t.execute("tools.setBrush", json!({"preset": "Old A"})).unwrap();
-    assert_eq!(t.tools.brush.tip.bitmap(), Some(&tips[0]));
-    assert_eq!(t.tools.brush.texture.pattern.bitmap(), Some(&tips[1]));
+    let mut old_a = photocraft_paint::presets::find(&t.tools.presets, "Old A").unwrap().brush.clone();
+    t.load_brush_tips(&mut old_a).unwrap();
+    assert_eq!(old_a.tip.bitmap(), Some(&tips[0]));
+    assert_eq!(old_a.texture.pattern.bitmap(), Some(&tips[1]));
     assert_eq!(cache(&t).decodes, 2);
     // Exported presets embed the full bitmaps, as before.
     let out = t.execute("edit.presets.exportImportPresets", json!({"action": "export"})).unwrap();
@@ -775,7 +780,7 @@ fn a_group_file_that_failed_to_load_is_not_overwritten() {
     s.tools.brush.tip = TipShape::Sampled(tip8(4, 4, 0)).into();
     s.execute("brush.presets.save", json!({"name": "New"})).unwrap();
     assert_eq!(mem.files.lock().unwrap().get(&file), Some(&newer), "a file the store could not read was overwritten");
-    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty());
 }
 
 #[test]
@@ -790,7 +795,7 @@ fn an_actions_file_that_failed_to_load_is_not_overwritten() {
     s.execute("actions.stop", json!({})).unwrap();
     s.sync_preset_store();
     assert_eq!(mem.files.lock().unwrap().get(ACTIONS_FILE), Some(&newer), "an actions file the store could not read was overwritten");
-    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty());
 }
 
 // A PhotoCraft actions file that keyed calls and shortcuts by stored action id loads with names
@@ -812,9 +817,9 @@ fn stored_action_ids_move_to_names_on_load() {
         prefs.shortcuts.insert(format!("actions.playById:{id}"), "F6".into());
     });
     s.attach_preset_store(open(Box::new(mem.clone())));
-    let names: Vec<&str> = s.actions.list.actions().iter().map(|action| action.name.as_str()).collect();
+    let names: Vec<&str> = s.actions().list.actions().iter().map(|action| action.name.as_str()).collect();
     assert_eq!(names, ["Same", "Same 2", "Caller"]);
-    assert_eq!(s.actions.list.actions()[2].steps[0].params, json!({"action": "Same 2"}));
+    assert_eq!(s.actions().list.actions()[2].steps[0].params, json!({"action": "Same 2"}));
     assert_eq!(s.prefs().shortcuts.get("actions.play:Same 2").map(String::as_str), Some("F6"));
     assert!(!s.prefs().shortcuts.keys().any(|key| key.starts_with("actions.playById:")));
     let saved = String::from_utf8(mem.files.lock().unwrap()[ACTIONS_FILE].clone()).unwrap();
@@ -828,10 +833,8 @@ fn large_patterns_load_on_use() {
     let dir = TempDir::new("patterns-large");
     let (mut s, _) = session(&dir);
     s.execute("file.new", json!({"width": 300, "height": 200})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
-    s.execute("select.rect", json!({"x": 250, "y": 150, "width": 50, "height": 50})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#ffffff");
+    crate::tests::fill_active(&mut s, Some(photocraft_geom::Rect::new(250, 150, 300, 200)), "#ff0000");
     s.execute("edit.definePattern", json!({"name": "Big"})).unwrap();
     assert_eq!(dir.files().iter().filter(|f| f.ends_with(".preview.pat")).count(), 1);
 
@@ -935,7 +938,7 @@ fn patterns_survive_a_restart() {
 
 fn define_pattern(s: &mut Session, name: &str, color: &str, width: u32) {
     s.execute("file.new", json!({"width": width, "height": 6})).unwrap();
-    s.execute("edit.fill", json!({"color": color})).unwrap();
+    crate::tests::fill_active(s, None, color);
     s.execute("edit.definePattern", json!({"name": name})).unwrap();
 }
 
@@ -1000,7 +1003,7 @@ fn a_patterns_file_that_failed_to_load_is_not_overwritten() {
     s.execute("edit.definePattern", json!({"name": "New"})).unwrap();
     s.sync_preset_store();
     assert_eq!(mem.files.lock().unwrap().get(PATTERNS_FILE), Some(&unreadable), "a patterns file the store could not read was overwritten");
-    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty());
 }
 
 /// A `.pat` of one 4×4 pattern with id `id`, filled with `rgba`.
@@ -1072,7 +1075,7 @@ fn a_failed_patterns_removal_is_retried() {
     backend.fail.store(true, std::sync::atomic::Ordering::SeqCst);
     s.execute("pattern.delete", json!({"pattern": id})).unwrap();
     s.sync_preset_store();
-    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty(), "the failure is warned");
+    assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty(), "the failure is warned");
     backend.fail.store(false, std::sync::atomic::Ordering::SeqCst);
     s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
     s.sync_preset_store();

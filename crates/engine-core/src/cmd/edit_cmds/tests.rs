@@ -115,25 +115,6 @@ fn injected_copy_buffer_failure_does_not_change_document_or_clipboard() {
 }
 
 #[test]
-fn injected_fill_result_reservation_failure_keeps_pixels_and_history() {
-    let mut s = session();
-    let st = s.active().unwrap();
-    let id = st.active_layer.unwrap();
-    let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
-    let revision = st.revision;
-    let history_len = st.history.past_len();
-
-    crate::allocation::fail_next_for_test();
-    let result = s.execute("edit.fill", json!({"color": "#00ff00"}));
-
-    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for blending pixels")));
-    let st = s.active().unwrap();
-    assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
-    assert_eq!(st.revision, revision);
-    assert_eq!(st.history.past_len(), history_len);
-}
-
-#[test]
 fn injected_paste_failure_does_not_change_document_or_clipboard() {
     let mut s = session();
     s.execute("select.rect", json!({"x": 10, "y": 10, "width": 8, "height": 8})).unwrap();

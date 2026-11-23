@@ -1,5 +1,5 @@
-//! FILE-215-3: painting a smart object's filter mask (`"target":"filterMask"`) hides the smart
-//! filters where it is black, in one undo step, and the painted mask is saved.
+//! FILE-215-3: commands on a smart object's filter mask (`"target":"filterMask"`), and the mask
+//! saved with the document. Painting it with the brush: `brush_cmds/filter_mask_stroke_tests.rs`.
 
 use super::*;
 
@@ -12,41 +12,31 @@ fn stroke(s: &mut Session, target: Option<&str>) -> Result<Value> {
     s.execute("paint.stroke", p)
 }
 
+/// The filter mask a vertical black stroke of width 8 over x = 8 leaves, set as the paint command
+/// would: a white mask is made first, then the column is blacked and the object re-rendered.
+fn black_filter_mask_column(s: &mut Session) {
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("setup", |doc, _| {
+        let mask = crate::smart_cmds::filter_mask_surface(doc, id)?;
+        let black = photocraft_raster::from_rgba(&mask.format(), [0.0, 0.0, 0.0, 1.0]);
+        let r = Rect::new(4, 2, 12, 46);
+        let data: Vec<f32> = (0..(r.width() * r.height()) as usize).flat_map(|_| black.iter().copied()).collect();
+        mask.write_region(r, &data);
+        crate::smart_cmds::refresh_after_filter_mask_edit(doc, id)
+    })
+    .unwrap();
+}
+
+/// The filter mask is saved: .pcraft and PSD give it back.
 #[test]
-fn painting_the_filter_mask_hides_the_filters_there_in_one_undo_step() {
+fn a_filter_mask_survives_pcraft_and_psd() {
     for depth in DEPTHS {
         let mut s = session(depth);
         paint(&mut s);
-        let original = flat(&s);
         convert(&mut s);
-        // Without smart filters there is no filter mask to paint.
-        let before = s.active().unwrap().doc.clone();
-        let steps = s.active().unwrap().history.past_len();
-        assert!(matches!(stroke(&mut s, Some("filterMask")), Err(EngineError::Disabled(..))), "depth {depth}");
-        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &before));
-        assert_eq!(s.active().unwrap().history.past_len(), steps);
         s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
-        let blurred = flat(&s);
-        assert!(active_smart(&s).filter_mask.is_none());
-        let steps = s.active().unwrap().history.past_len();
-
-        stroke(&mut s, Some("filterMask")).unwrap();
-        let mask = active_smart(&s).filter_mask.expect("painting starts a white filter mask");
-        assert_eq!((mask.value(8, 20), mask.value(30, 20)), (0.0, 1.0), "depth {depth}");
-        let px = flat(&s);
-        let at = |v: &Vec<[f32; 4]>, x: i32, y: i32| v[(y * W + x) as usize];
-        assert!(max_diff(&[at(&px, 8, 20)], &[at(&original, 8, 20)]) < 1e-6, "depth {depth}: black hides the blur");
-        assert_eq!(at(&px, 30, 20), at(&blurred, 30, 20), "depth {depth}: white keeps it");
-        assert!(active_smart(&s).smart_filters.len() == 1, "the stroke is no smart filter");
-
-        assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one step");
-        s.execute("edit.undo", json!({})).unwrap();
-        assert!(active_smart(&s).filter_mask.is_none());
-        assert_eq!(flat(&s), blurred, "depth {depth}: undo brings the blur back");
-        s.execute("edit.redo", json!({})).unwrap();
-        assert_eq!(flat(&s), px);
-
-        // The painted mask is saved: .pcraft and PSD give it back.
+        black_filter_mask_column(&mut s);
+        let mask = active_smart(&s).filter_mask.expect("a filter mask");
         let doc = s.active().unwrap().doc.clone();
         let id = s.active().unwrap().active_layer.unwrap();
         let back = photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap()).unwrap();
@@ -167,7 +157,7 @@ fn the_filter_mask_target_leaves_the_smart_object_commands_alone() {
     paint(&mut s);
     convert(&mut s);
     s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
-    stroke(&mut s, Some("filterMask")).unwrap();
+    black_filter_mask_column(&mut s);
     let steps = s.active().unwrap().history.past_len();
     assert!(
         matches!(s.execute("filter.convertForSmartFilters", json!({"target": "filterMask"})), Err(EngineError::Disabled(..))),

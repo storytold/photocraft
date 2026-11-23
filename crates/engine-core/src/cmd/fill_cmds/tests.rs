@@ -201,13 +201,6 @@ fn timing_24mp() {
     time(&mut s, "colour 50% multiply", json!({"opacity": 50, "mode": "multiply"}));
     s.execute("select.rect", json!({"x": 100, "y": 100, "width": 5000, "height": 3000})).unwrap();
     time(&mut s, "colour, 15 MP rectangle selection", json!({}));
-    s.execute("select.deselect", json!({})).unwrap();
-    // The old per-pixel f32 path, for comparison.
-    let st = s.active().unwrap();
-    let mut surf = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone();
-    let t = std::time::Instant::now();
-    crate::pixels::try_fill_surface(&mut surf, Rect::new(0, 0, 6000, 4000), [0.2, 0.4, 0.6, 1.0], None, false).unwrap();
-    println!("{:<48} {:>8.1} ms", "fallible fill_surface, no selection", t.elapsed().as_secs_f64() * 1000.0);
 }
 
 #[test]
@@ -331,4 +324,23 @@ fn unselected_tiles_stay_shared() {
         }
         s.execute("select.deselect", json!({})).unwrap();
     }
+}
+
+#[test]
+fn injected_fill_result_reservation_failure_keeps_pixels_and_history() {
+    let mut s = session();
+    let st = s.active().unwrap();
+    let id = st.active_layer.unwrap();
+    let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+    let revision = st.revision;
+    let history_len = st.history.past_len();
+
+    crate::allocation::fail_next_for_test();
+    let result = s.execute("edit.fill", json!({"color": "#00ff00"}));
+
+    assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for blending pixels")));
+    let st = s.active().unwrap();
+    assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+    assert_eq!(st.revision, revision);
+    assert_eq!(st.history.past_len(), history_len);
 }
