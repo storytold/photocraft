@@ -39,10 +39,13 @@ const UNITE: [&str; 4] = ["Unite Shapes", "Subtract Front Shape", "Unite Shapes 
 /// A point of the 32 × 32 document off every shape the fixtures draw.
 const EMPTY: [f32; 2] = [2.0, 2.0];
 
-/// `app` with `tool` picked in `mode`.
+/// `app` with `tool` picked in `mode`, shown at 800 % so a right-click a few pixels off the shape is
+/// clear of the shape's bounding-box handles.
 pub(super) fn with_tool(mut app: Box<PhotocraftApp>, tool: Tool, mode: VectorMode) -> Box<PhotocraftApp> {
     app.ui.tool = tool;
     app.ui.tool_options.shape_mode = mode;
+    app.sync_views();
+    app.ui.views[0].zoom = 8.0;
     app
 }
 
@@ -197,7 +200,7 @@ type Case = (fn(Tool) -> Box<PhotocraftApp>, &'static [&'static str]);
 fn outcome(make: fn(Tool) -> Box<PhotocraftApp>, menu_tool: Tool, tool: Tool, command: &str) -> Outcome {
     let mut app = make(tool);
     app.ui.tool = menu_tool;
-    assert!(open_here(&mut app, menu_tool, [10.0, 10.0]), "{menu_tool:?}");
+    assert!(open_here(&mut app, menu_tool, [2.0, 2.0]), "{menu_tool:?}");
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
     assert!(available(&app, &menu, command), "{menu_tool:?}: {command} is enabled");
     let before = app.session.journal.len();
@@ -223,7 +226,7 @@ pub(super) fn check_rows_run_as_elsewhere(tool: Tool) {
         }
     }
     let mut app = shape_layer(tool);
-    assert!(open_here(&mut app, tool, [10.0, 10.0]));
+    assert!(open_here(&mut app, tool, [2.0, 2.0]));
     pick(&mut app, "layer.rasterize.layer");
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("layer.rasterize.layer"), "{tool:?}");
     let st = app.session.active().unwrap();
