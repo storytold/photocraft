@@ -315,6 +315,43 @@ fn close_alerts(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 #[test]
+fn color_sampler_canvas_gestures_make_one_undoable_history_step_each() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    let mut gesture = |from: (f64, f64), to: (f64, f64), mods, label, expected: &[[f64; 2]]| {
+        let st = app.session.active().unwrap();
+        let before = st.color_samplers.clone();
+        let past = st.history.past_len();
+        down(&mut app, from.0, from.1, mods);
+        mv(&mut app, to.0, to.1, mods);
+        up(&mut app, to.0, to.1);
+        let st = app.session.active().unwrap();
+        assert_eq!(st.color_samplers, expected);
+        assert_eq!(st.history.past_len(), past + 1);
+        assert_eq!(st.history.undo_label(), Some(label));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().color_samplers, before);
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().color_samplers, expected);
+    };
+
+    let a = (25.0, 30.0);
+    let b = (60.0, 40.0);
+    let regular = egui::Modifiers::NONE;
+    gesture(a, a, regular, "New Color Sampler", &[[25.5, 30.5]]);
+    gesture(a, a, regular, "Drag Color Sampler", &[[25.5, 30.5]]);
+    gesture(a, b, regular, "Drag Color Sampler", &[[60.5, 40.5]]);
+    gesture(b, b, egui::Modifiers::ALT, "Delete Color Sampler", &[]);
+    gesture(a, a, regular, "New Color Sampler", &[[25.5, 30.5]]);
+    gesture(a, (205.0, 30.0), regular, "Delete Color Sampler", &[]);
+
+    let past = app.session.active().unwrap().history.past_len();
+    down(&mut app, -5.0, 30.0, regular);
+    up(&mut app, -5.0, 30.0);
+    assert_eq!(app.session.active().unwrap().history.past_len(), past, "pasteboard click adds no step");
+}
+
+#[test]
 fn placing_color_sampler_reveals_closed_info_panel() {
     let (mut app, _) = app();
     app.ui.tool = Tool::ColorSampler;

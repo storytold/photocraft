@@ -37,8 +37,42 @@ pub struct HistoryState {
     /// The layers whose visibility the step that created this state changed, as stepping to this
     /// state from the one before it in the list must apply it; see [`History::current_visibility`].
     pub visibility: Vec<LayerId>,
+    color_samplers: Option<ColorSamplerChange>,
     /// Stable while the state is held: indices shift when older states fall off, ids don't.
     pub id: u64,
+}
+
+/// The sampler lists on either side of a History step that edits Color Samplers.
+#[derive(Clone, Debug, craft_ui_macros::PlainData)]
+pub struct ColorSamplerChange {
+    before: Arc<[[f64; 2]]>,
+    after: Arc<[[f64; 2]]>,
+}
+
+impl ColorSamplerChange {
+    pub fn new(before: &[[f64; 2]], after: &[[f64; 2]]) -> Self {
+        Self { before: before.into(), after: after.into() }
+    }
+
+    pub fn before(&self) -> &[[f64; 2]] {
+        &self.before
+    }
+
+    pub fn after(&self) -> &[[f64; 2]] {
+        &self.after
+    }
+
+    fn reversed(self) -> Self {
+        Self { before: self.after, after: self.before }
+    }
+}
+
+/// Keep the outer endpoints when the states between two sampler changes disappear.
+fn combine_sampler_changes(earlier: Option<ColorSamplerChange>, later: Option<ColorSamplerChange>) -> Option<ColorSamplerChange> {
+    match (earlier, later) {
+        (Some(earlier), Some(later)) => Some(ColorSamplerChange { before: earlier.before, after: later.after }),
+        (earlier, later) => earlier.or(later),
+    }
 }
 
 /// The context in which a selected action row must remain available after it is folded away.
@@ -65,6 +99,11 @@ pub struct History {
     current_layers: LayerTarget,
     /// [`HistoryState::visibility`] of the current state.
     current_visibility: Vec<LayerId>,
+    /// The sampler edit producing the current state, if any. Ordinary pixel/geometry steps
+    /// leave the live sampler list alone when stepped through.
+    current_color_samplers: Option<ColorSamplerChange>,
+    /// Counts sampler edits and history moves over those edits for action consolidation.
+    color_sampler_history_revision: u64,
     /// Optional compound-operation accumulator; snapshots and rollback carry it with the history.
     visibility_capture: Option<Arc<Vec<LayerId>>>,
     /// Changes only when every undo/redo state is irreversibly discarded.
@@ -101,6 +140,7 @@ struct LastRecord {
     visibility_capture_before: Option<Arc<Vec<LayerId>>>,
     /// The document it replaced (the state a rollback makes current again).
     before: Arc<Document>,
+    color_samplers: Option<ColorSamplerChange>,
     /// How many former redo states it moved onto the undo side (always 0 in linear history).
     moved: usize,
     /// The states it (and the [`History::trim`] after it) dropped for the state limit or the
@@ -142,6 +182,8 @@ impl History {
             current_label: "Open".into(),
             current_layers: LayerTarget::default(),
             current_visibility: Vec::new(),
+            current_color_samplers: None,
+            color_sampler_history_revision: 0,
             visibility_capture: None,
             purge_generation: 0,
             non_linear: false,
@@ -176,7 +218,19 @@ impl History {
     /// reads `…, before, the former redo states (oldest first), the new step`, so the new step is
     /// appended at the end and every earlier state can still be stepped to.
     pub fn record(&mut self, label: impl Into<String>, before: Arc<Document>, layers: LayerTarget) {
+        self.record_with_color_samplers(label, before, layers, None);
+    }
+
+    /// Record a step and, when it edits samplers, keep their positions and numbering with it.
+    pub fn record_with_color_samplers(
+        &mut self,
+        label: impl Into<String>,
+        before: Arc<Document>,
+        layers: LayerTarget,
+        color_samplers: Option<ColorSamplerChange>,
+    ) {
         self.changed();
+        self.note_color_sampler_change(color_samplers.is_some());
         if self.max_bytes == 0 {
             self.tiles = None;
         }
@@ -192,8 +246,16 @@ impl History {
         let prev_visibility = std::mem::take(&mut self.current_visibility);
         let prev_id = std::mem::replace(&mut self.current_id, self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
-        self.undo.push_back(HistoryState { label: prev_label, doc: before.clone(), layers: prev_layers, visibility: prev_visibility, id: prev_id });
+        self.undo.push_back(HistoryState {
+            label: prev_label,
+            doc: before.clone(),
+            layers: prev_layers,
+            visibility: prev_visibility,
+            color_samplers: self.current_color_samplers.take(),
+            id: prev_id,
+        });
         let mut moved = 0;
+        let mut skipped_samplers = None;
         if self.non_linear {
             // `redo` holds the next state last; the list order is oldest first. Their tiles stay
             // counted: they only move from the redo side to the undo side.
@@ -201,12 +263,16 @@ impl History {
                 // The new step follows the last of them in the list but was made from `before`:
                 // stepping back to them walks back over their steps.
                 merge_ids(&mut self.current_visibility, &state.visibility);
+                skipped_samplers = combine_sampler_changes(skipped_samplers, state.color_samplers.clone());
                 self.undo.push_back(state);
                 moved += 1;
             }
         } else {
             self.clear_redo();
         }
+        // A non-linear step was made from an older state but appears after the skipped
+        // states. Its edge first reverses their sampler edits, then applies this step's own.
+        self.current_color_samplers = combine_sampler_changes(skipped_samplers.map(ColorSamplerChange::reversed), color_samplers.clone());
         let mut evicted = Vec::new();
         while self.undo.len() > self.max_states {
             // The History Brush's source doesn't fall off (as in Photoshop): the next oldest does.
@@ -218,7 +284,7 @@ impl History {
             }
             evicted.push((at, state));
         }
-        self.last_record = Some(LastRecord { before, moved, evicted, visibility_capture_before: self.visibility_capture.clone() });
+        self.last_record = Some(LastRecord { before, color_samplers, moved, evicted, visibility_capture_before: self.visibility_capture.clone() });
     }
 
     pub fn can_undo(&self) -> bool {
@@ -246,6 +312,27 @@ impl History {
     pub fn set_current_layers(&mut self, layers: LayerTarget) {
         self.changed();
         self.current_layers = layers;
+    }
+
+    /// The sampler edit made by the step at the current History position.
+    pub fn current_color_sampler_change(&self) -> Option<&ColorSamplerChange> {
+        self.current_color_samplers.as_ref()
+    }
+
+    /// The original sampler edit made by the last record, before any non-linear history relocation.
+    pub fn recorded_color_sampler_change(&self) -> Option<&ColorSamplerChange> {
+        self.last_record.as_ref()?.color_samplers.as_ref()
+    }
+
+    /// Changes when a sampler-editing step is recorded or traversed.
+    pub fn color_sampler_history_revision(&self) -> u64 {
+        self.color_sampler_history_revision
+    }
+
+    fn note_color_sampler_change(&mut self, changed: bool) {
+        if changed {
+            self.color_sampler_history_revision = self.color_sampler_history_revision.wrapping_add(1);
+        }
     }
 
     /// The layers whose visibility the step that produced the current document changed, as the
@@ -362,7 +449,9 @@ impl History {
             merge_ids(Arc::make_mut(capture), &visibility);
         }
         let id = std::mem::replace(&mut self.current_id, prev.id);
-        self.redo.push(HistoryState { label, doc: current, layers, visibility, id });
+        let color_samplers = std::mem::replace(&mut self.current_color_samplers, prev.color_samplers);
+        self.note_color_sampler_change(color_samplers.is_some());
+        self.redo.push(HistoryState { label, doc: current, layers, visibility, color_samplers, id });
         Some((prev.doc, prev.layers))
     }
 
@@ -382,7 +471,9 @@ impl History {
             merge_ids(Arc::make_mut(capture), &self.current_visibility);
         }
         let id = std::mem::replace(&mut self.current_id, next.id);
-        self.undo.push_back(HistoryState { label, doc: current, layers, visibility, id });
+        let color_samplers = std::mem::replace(&mut self.current_color_samplers, next.color_samplers);
+        self.note_color_sampler_change(self.current_color_samplers.is_some());
+        self.undo.push_back(HistoryState { label, doc: current, layers, visibility, color_samplers, id });
         Some((next.doc, next.layers))
     }
 
@@ -495,6 +586,7 @@ impl History {
         }
         // The current step now starts where the purged one did.
         merge_ids(&mut self.current_visibility, &state.visibility);
+        self.current_color_samplers = combine_sampler_changes(state.color_samplers, self.current_color_samplers.take());
         true
     }
 
@@ -514,10 +606,12 @@ impl History {
             tiles.remove(&state.doc);
         }
         // The state after it now follows the one before it.
-        match self.undo.get_mut(i) {
-            Some(next) => merge_ids(&mut next.visibility, &state.visibility),
-            None => merge_ids(&mut self.current_visibility, &state.visibility),
-        }
+        let (visibility, color_samplers) = match self.undo.get_mut(i) {
+            Some(next) => (&mut next.visibility, &mut next.color_samplers),
+            None => (&mut self.current_visibility, &mut self.current_color_samplers),
+        };
+        merge_ids(visibility, &state.visibility);
+        *color_samplers = combine_sampler_changes(state.color_samplers, color_samplers.take());
         true
     }
 
@@ -536,6 +630,7 @@ impl History {
         // before it.
         if let Some(next) = k.checked_sub(1).and_then(|n| self.redo.get_mut(n)) {
             merge_ids(&mut next.visibility, &state.visibility);
+            next.color_samplers = combine_sampler_changes(state.color_samplers, next.color_samplers.take());
         }
         true
     }
@@ -554,9 +649,12 @@ impl History {
         self.current_layers = prev.layers.clone();
         self.current_id = prev.id;
         let dropped = std::mem::replace(&mut self.current_visibility, prev.visibility);
+        let color_samplers = std::mem::replace(&mut self.current_color_samplers, prev.color_samplers);
+        self.note_color_sampler_change(color_samplers.is_some());
         // The next later state now follows `prev`.
         if let Some(next) = self.redo.last_mut() {
             merge_ids(&mut next.visibility, &dropped);
+            next.color_samplers = combine_sampler_changes(color_samplers, next.color_samplers.take());
         }
         Some((prev.doc, prev.layers))
     }
@@ -574,8 +672,9 @@ impl History {
         if self.undo.len().saturating_add(held.evicted.len()) <= held.moved {
             return None;
         }
-        let LastRecord { moved, evicted, visibility_capture_before, .. } = self.last_record.take()?;
+        let LastRecord { moved, evicted, visibility_capture_before, color_samplers, .. } = self.last_record.take()?;
         self.visibility_capture = visibility_capture_before;
+        self.note_color_sampler_change(color_samplers.is_some());
         // Put each back where it was taken off, the last one taken off first.
         for (at, state) in evicted.into_iter().rev() {
             if let Some(tiles) = &mut self.tiles {
@@ -595,6 +694,7 @@ impl History {
         self.current_label = prev.label;
         self.current_layers = prev.layers.clone();
         self.current_visibility = prev.visibility;
+        self.current_color_samplers = prev.color_samplers;
         self.current_id = prev.id;
         Some((prev.doc, prev.layers))
     }
@@ -634,6 +734,7 @@ impl History {
         self.purge_generation = self.purge_generation.wrapping_add(1);
         self.last_record = None;
         self.current_visibility.clear();
+        self.current_color_samplers = None;
         self.undo.clear();
         self.redo.clear();
         self.tiles = None;

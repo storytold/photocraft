@@ -26,22 +26,18 @@ impl Session {
         // The step being undone: the layers whose visibility it changed get it back.
         let changed = st.history.current_visibility().to_vec();
         let doc = st.doc.clone();
+        let samplers = if st.history.is_cleared() { None } else { st.history.current_color_sampler_change().cloned() };
         match st.history.undo(doc) {
-            // Undo Clear History: the list comes back, the document is the same one. Not an
-            // edit: keep a clean document clean (the revision still moves for the panels).
-            Some((d, layers)) if Arc::ptr_eq(&d, &st.doc) => {
-                restore_target(st, layers);
-                let clean = !st.is_dirty();
-                st.revision += 1;
-                st.record_unknown_damage();
-                if clean {
-                    st.saved_revision = st.revision;
-                }
-                st.last_damage = Some(photocraft_geom::Rect::EMPTY);
-                st.record_damage();
-                true
-            }
             Some((mut d, layers)) => {
+                if let Some(change) = samplers {
+                    st.color_samplers = change.before().to_vec();
+                }
+                // Undo Clear History and undo a sampler-only step both keep the same document.
+                if Arc::ptr_eq(&d, &st.doc) {
+                    restore_target(st, layers);
+                    st.bump_view_revision(!st.is_dirty());
+                    return true;
+                }
                 // Save As changes file identity outside history, just like the saved path.
                 if d.name != st.doc.name {
                     Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
@@ -83,6 +79,14 @@ impl Session {
         let doc = st.doc.clone();
         match st.history.redo(doc) {
             Some((mut d, layers)) => {
+                if let Some(change) = st.history.current_color_sampler_change() {
+                    st.color_samplers = change.after().to_vec();
+                }
+                if Arc::ptr_eq(&d, &st.doc) {
+                    restore_target(st, layers);
+                    st.bump_view_revision(!st.is_dirty());
+                    return true;
+                }
                 if d.name != st.doc.name {
                     Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
                 }
@@ -128,6 +132,7 @@ impl Session {
         // The step taken back (and the later states it moved, in non-linear history): the layers
         // whose visibility it changed get it back, the unrecorded changes stay, as for Undo.
         let changed = st.history.current_visibility().to_vec();
+        let samplers = st.history.recorded_color_sampler_change().cloned();
         let Some((mut d, layers)) = st.history.rollback() else {
             let undone = self.undo();
             if undone && let Some(st) = self.active_mut() {
@@ -135,6 +140,14 @@ impl Session {
             }
             return undone;
         };
+        if let Some(change) = samplers {
+            st.color_samplers = change.before().to_vec();
+        }
+        if Arc::ptr_eq(&d, &st.doc) {
+            restore_target(st, layers);
+            st.bump_view_revision(!st.is_dirty());
+            return true;
+        }
         if d.name != st.doc.name {
             Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
         }
