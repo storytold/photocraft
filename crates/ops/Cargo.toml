@@ -9,3 +9,6 @@ workspace = true
 
 [dependencies]
 photocraft-doc = { workspace = true }
+# Plain data (the engine holds documents in a `Tracked`): the marker and its derive, without the UI.
+craft-tracked = { workspace = true }
+craft-ui-macros = { workspace = true }
