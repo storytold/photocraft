@@ -90,7 +90,12 @@ fn decode_source_import_with_order(
         // This API has no warning channel. Stack/source caches and contents edits must not
         // turn a partial SVG import into silently complete smart-object contents.
         return photocraft_io::svg::import_svg_bounded_images_strict(file_name, bytes, 24_000_000)
-            .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
+            .map_err(|error| crate::error::io_open_error(file_name, error));
+    }
+    if let Some(imported) =
+        photocraft_io::try_import_smart_object_svg(file_name, bytes, 24_000_000).map_err(|error| crate::error::io_open_error(file_name, error))?
+    {
+        return Ok(imported);
     }
     let historical_xcf_order = order.map_or(photocraft_io::HistoricalXcfOrder::Default, |order| {
         photocraft_io::HistoricalXcfOrder::Explicit(match order {
@@ -99,7 +104,6 @@ fn decode_source_import_with_order(
         })
     });
     crate::file_cmds::import_result_with(file_name, bytes, &photocraft_io::ImportOptions { historical_xcf_order, ..Default::default() })
-        .map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
 fn base_name(path: &str) -> String {
@@ -214,7 +218,7 @@ mod rendering;
 mod source;
 
 pub(crate) use contents::on_close;
-pub use contents::{commit_child, contents_of, replace_contents_bytes, replace_contents_from_bytes};
+pub use contents::{commit_child, contents_of, replace_contents_bytes, replace_contents_from_bytes, start_replace_contents_bytes};
 use contents::{edit_contents, export_contents, is_smart_child, replace_contents, set_source, update_all};
 use filters::smart_mut;
 pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};

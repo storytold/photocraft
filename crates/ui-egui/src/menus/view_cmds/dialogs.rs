@@ -15,6 +15,21 @@ pub(crate) use artboard_export_options::nest as nest_artboard_export_options;
 mod artboard_name_options;
 pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
 
+fn replace_picked_contents(app: &mut PhotocraftApp, layer: photocraft_doc::LayerId, name: &str, bytes: Vec<u8>) -> Result<Value, String> {
+    let started = photocraft_engine::smart_cmds::start_replace_contents_bytes(&mut app.session, layer, name, bytes).map_err(|e| e.to_string())?;
+    let result = match started {
+        photocraft_engine::jobs::Started::Done(result) => result,
+        photocraft_engine::jobs::Started::Job(job) => {
+            app.jobs.last_started = Some(job);
+            app.ui.status.clear();
+            app.ui.status_error = false;
+            json!({"job":job.0,"pending":true})
+        }
+    };
+    app.sync_views();
+    Ok(result)
+}
+
 // ---------- dialogs and pickers in front of engine commands ----------
 
 /// The command ids whose dialog is a hosted parameter form built by [`params_for`] (Open EXR Parts included).
@@ -824,13 +839,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "layer.smartObjects.replaceContents" => {
             let st = app.session.active()?;
             let (doc, layer) = (st.doc.id, st.active_layer?);
-            Some(app.pick_file_bytes(move |app, name, bytes| {
-                app.with_document(doc, |app| {
-                    let r = photocraft_engine::smart_cmds::replace_contents_bytes(&mut app.session, layer, &name, bytes).map_err(|e| e.to_string());
-                    app.sync_views();
-                    r
-                })
-            }))
+            Some(app.pick_file_bytes(move |app, name, bytes| app.with_document(doc, |app| replace_picked_contents(app, layer, &name, bytes))))
         }
         "layer.smartObjects.exportContents" => Some(export_contents(app)),
         "layer.smartObjects.relinkToFile" => {

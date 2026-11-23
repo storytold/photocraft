@@ -71,22 +71,24 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
 
 pub(super) fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_param("layer.smartObjects.replaceContents", p)?.to_string();
-    let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| other(format!("can't read {path}: {e}")))?;
     let id = layer_param(s, p)?;
-    replace_contents_bytes(s, id, &base_name(&path), bytes)
+    replacement::run(s, id, replacement::Source::Path(path))
 }
 
-/// Replace Contents with a file the caller already read, for the smart object `p` names (`layer`,
-/// else the active layer): the body of the command minus its ambient path read (#8061).
+/// Replace contents already read by a caller; synchronous callers keep their existing result.
 pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
     let id = layer_param(s, p)?;
     replace_contents_bytes(s, id, file_name, bytes)
 }
 
-/// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
 pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
-    decode_source(file_name, &bytes)?; // fail before touching the document
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+    replacement::run(s, id, replacement::Source::Bytes(file_name.into(), Arc::new(bytes)))
+}
+
+/// Prepare picker bytes off-thread, retaining the chosen layer and its document snapshot.
+/// Completion uses the normal locked-document job admission and one replacement undo step.
+pub fn start_replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<crate::jobs::Started> {
+    replacement::start(s, id, file_name, bytes)
 }
 
 /// The file name and bytes of smart object `id`'s contents.
@@ -258,3 +260,4 @@ mod command_validation_tests;
 
 mod historical_link;
 pub(super) use historical_link::{convert_to_linked, relink_to_file};
+mod replacement;

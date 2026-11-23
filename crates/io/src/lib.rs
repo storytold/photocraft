@@ -1310,6 +1310,41 @@ fn import_stages(
     }
 }
 
+/// Decode Smart Object contents without silently accepting omitted SVG images.
+/// Unlike ordinary Open, these callers cannot present partial SVG contents as a warning.
+pub fn import_smart_object_source(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<ImportResult, IoError> {
+    match try_import_smart_object_svg(name, bytes, max_decoded_pixels)? {
+        Some(imported) => Ok(imported),
+        None => import(name, bytes),
+    }
+}
+
+/// Strictly decode recognized SVG/SVGZ contents, or return `None` without
+/// importing another format. Hosts with stronger generic-source admission can
+/// retain their existing fallback (preview-only rejection, typed budgets, etc.).
+pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<Option<ImportResult>, IoError> {
+    if craft_svg::sniff::is_svgz(bytes) {
+        use craft_xcf::transport::{Limits, PrefixProbe, Wrapper, probe_prefix};
+        // Affinity and gzip-XCF have their own admission and decode budgets.
+        // Check the shared XCF signature before using the smaller SVGZ limit, even for renamed files.
+        if route(name, &[]) == Route::Affinity
+            || Wrapper::from_name(name) == Some(Wrapper::Gzip)
+            || matches!(probe_prefix(bytes, None, Limits::default(), &|| true), Ok(PrefixProbe::Xcf(_)))
+        {
+            return Ok(None);
+        }
+        let plain = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).map_err(|error| IoError::Svg(error.to_string()))?;
+        let text = craft_svg::svgz::decode(&plain).map_err(|error| IoError::Svg(error.to_string()))?;
+        if is_svg_input(name, text.as_bytes()) {
+            // Preserve the encoding bytes for strict validation after bounded inflation.
+            return svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some);
+        }
+    } else if svg::is_svg(bytes) {
+        return svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels).map(Some);
+    }
+    Ok(None)
+}
+
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
 /// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
 /// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.

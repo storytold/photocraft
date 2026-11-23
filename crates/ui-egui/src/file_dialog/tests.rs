@@ -817,6 +817,15 @@ fn place_embedded_uses_the_single_file_picker_and_accepts_contents() {
 fn replace_contents_picks_a_file_for_every_instance() {
     let (mut app, files, _, ids) = smart_app();
     let ctx = egui::Context::default();
+    let finish_replacement = |app: &mut PhotocraftApp| {
+        assert!(app.session.has_jobs());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while app.session.has_jobs() {
+            assert!(std::time::Instant::now() < deadline, "Replace Contents worker timed out");
+            crate::jobs_ui::tick(app, &ctx);
+            std::thread::yield_now();
+        }
+    };
     let before = ids.map(|id| smart_source(&app, id));
     // Cancelling changes nothing.
     menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
@@ -829,6 +838,7 @@ fn replace_contents_picks_a_file_for_every_instance() {
     menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
     answer(&files, Picked::Contents(vec![("art.png".into(), png)]));
     app.poll_file_dialog();
+    finish_replacement(&mut app);
     assert!(!app.ui.status_error, "{}", app.ui.status);
     for id in ids {
         assert!(matches!(smart_source(&app, id), photocraft_doc::SmartSource::Embedded { ref file_name, .. } if file_name == "art.png"));
@@ -837,6 +847,7 @@ fn replace_contents_picks_a_file_for_every_instance() {
     menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
     answer(&files, Picked::Contents(vec![("notes.png".into(), b"not an image".to_vec())]));
     app.poll_file_dialog();
+    finish_replacement(&mut app);
     assert!(app.ui.status_error);
     assert!(matches!(smart_source(&app, ids[1]), photocraft_doc::SmartSource::Embedded { ref file_name, .. } if file_name == "art.png"));
 }
