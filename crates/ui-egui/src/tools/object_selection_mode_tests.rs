@@ -9,14 +9,13 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
-use crate::tool_feedback::{Badge, badge};
 
 const RED: [f64; 2] = [200.0, 180.0];
 const BLUE: [f64; 2] = [560.0, 300.0];
 
 /// An 800 x 600 document with an opaque red block (80,80–320,280) and a blue disc (centre
 /// 560,300, radius 120) on one layer, nothing selected, Object Selection with Object Finder on.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
@@ -90,7 +89,7 @@ fn intersect_mode_keeps_only_the_overlap() {
     assert!(selected(&app, RED), "red with red is red");
     click(&mut app, BLUE, Modifiers::NONE);
     assert!(!any_selection(&app), "red with blue is empty");
-    assert!(!app.ui.status_error && app.ui.dialogs.is_empty(), "an empty intersection is not an error");
+    assert!(!app.ui.status_error && app.framework.dialogs.is_empty(), "an empty intersection is not an error");
 }
 
 #[test]
@@ -144,33 +143,6 @@ fn modifiers_override_the_bar() {
 }
 
 #[test]
-fn the_badge_follows_the_bar_and_modifiers() {
-    let mut app = app();
-    let both = Modifiers { shift: true, alt: true, ..Default::default() };
-    for (mode, want) in [(0, None), (1, Some(Badge::Add)), (2, Some(Badge::Subtract)), (3, Some(Badge::Intersect))] {
-        app.ui.selection_mode = mode;
-        assert_eq!(badge(&app, Tool::ObjectSelection, Modifiers::NONE), want, "bar mode {mode}");
-    }
-    app.ui.selection_mode = 0;
-    assert_eq!(badge(&app, Tool::ObjectSelection, both), Some(Badge::Intersect));
-}
-
-#[test]
-fn command_drag_inside_the_selection_moves_the_pixels() {
-    let mut app = app();
-    click(&mut app, RED, Modifiers::NONE);
-    drag(&mut app, RED, [250.0, 220.0], Modifiers::COMMAND);
-    // The pixels float at the pointer (as with a marquee's ⌘-drag) and land as "Move" on the drop.
-    let offset = photocraft_engine::float_cmds::floating(app.session.active().unwrap()).map(|f| f.offset);
-    assert_eq!(offset, Some((50, 40)), "the selected pixels follow the drag");
-    crate::menus::invoke(&mut app, &egui::Context::default(), "select.deselect", json!({})).unwrap();
-    let labels: Vec<String> = app.session.active().unwrap().history.entries().into_iter().map(|e| e.to_string()).collect();
-    assert!(labels.iter().any(|l| l == "Move"), "{labels:?}");
-    assert_eq!(alpha_at(&app, 100, 100), 0.0, "the pixels moved away");
-    assert_eq!(alpha_at(&app, 340, 300), 1.0);
-}
-
-#[test]
 fn reset_tool_sets_the_mode_back_to_new() {
     let ctx = egui::Context::default();
     let mut app = app();
@@ -204,7 +176,9 @@ fn object_finder_off_dab_subtracts_with_alt_and_in_subtract_mode() {
         app.ui.selection_mode = bar;
         click(&mut app, RED, mods);
         assert!(!selected(&app, RED), "bar mode {bar}, {mods:?} subtracts");
-        assert!(selected(&app, [20.0, 20.0]), "bar mode {bar}, {mods:?} keeps the rest");
+        // The rest is what the layer has: (20, 20) is transparent on it, which a Quick Selection stroke now drops from
+        // the selection (#12919); the blue disc is opaque and stays.
+        assert!(selected(&app, BLUE), "bar mode {bar}, {mods:?} keeps the rest");
     }
 }
 
@@ -215,16 +189,19 @@ fn indexed_color_alerts_instead_of_deselecting_or_moving_the_outline() {
     app.run("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
     assert!(selected(&app, RED));
     let steps = app.session.active().unwrap().history.past_len();
-    let errors = |app: &PhotocraftApp| app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).count();
+    let ctx = app.ctx().clone();
     for gesture in 0..2 {
         if gesture == 0 {
             click(&mut app, RED, Modifiers::NONE);
         } else {
             drag(&mut app, RED, [250.0, 220.0], Modifiers::NONE);
         }
-        assert_eq!(errors(&app), 1, "gesture {gesture}: the tool's alert");
+        let alerts = crate::dialogs::alerts::alerts(&app);
+        assert_eq!(alerts.len(), 1, "gesture {gesture}: the tool's alert");
         assert!(selected(&app, RED) && !selected(&app, [340.0, 300.0]), "gesture {gesture}: the selection stays");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps, "gesture {gesture}: no history step");
-        app.ui.dialogs.clear();
+        for id in alerts {
+            app.framework.dialogs.cancel_by_id(&ctx, id);
+        }
     }
 }

@@ -1,8 +1,8 @@
 //! Escape during a frame drag makes the frame at the pointer (#13866).
 use super::*;
-use crate::canvas::tool_event;
+use crate::canvas::{ToolEvent, testing, tool_event};
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":600,"height":400})).unwrap();
     app.sync_views();
@@ -12,13 +12,7 @@ fn app() -> PhotocraftApp {
 }
 
 fn escape(app: &mut PhotocraftApp) {
-    let ctx = egui::Context::default();
-    ctx.begin_pass(egui::RawInput {
-        events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
-        ..Default::default()
-    });
-    crate::shortcuts::handle(app, &ctx);
-    ctx.end_pass().textures_delta.clear();
+    testing::key(app, egui::Key::Escape, egui::Modifiers::NONE);
 }
 
 fn entries(app: &PhotocraftApp) -> Vec<String> {
@@ -38,7 +32,7 @@ fn escape_during_a_drag_makes_the_frame_at_the_pointer_in_one_new_frame_step() {
     tool_event(&mut app, ToolEvent::Down { x: 50., y: 50., pressure: 1.0 }, m);
     tool_event(&mut app, ToolEvent::Move { x: 122., y: 120., pressure: 1.0 }, m);
     escape(&mut app);
-    assert!(app.ui.frame_tool.drag.is_none());
+    assert!(!testing::in_gesture(&app), "Escape ended the drag");
     assert_eq!(frames(&app), vec![[72., 0., 0., 70., 50., 50.]], "50..122 x 50..120");
     let after = entries(&app);
     assert_eq!(after.len(), before.len() + 1);
@@ -58,7 +52,7 @@ fn escape_after_a_click_sized_drag_makes_nothing() {
     tool_event(&mut app, ToolEvent::Down { x: 50., y: 50., pressure: 1.0 }, egui::Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Move { x: 51., y: 51., pressure: 1.0 }, egui::Modifiers::NONE);
     escape(&mut app);
-    assert!(app.ui.frame_tool.drag.is_none());
+    assert!(!testing::in_gesture(&app), "Escape ended the drag");
     assert!(frames(&app).is_empty());
     assert_eq!(entries(&app), before);
 }

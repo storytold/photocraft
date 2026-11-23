@@ -1,24 +1,25 @@
+//! The Type tool on the canvas host: a press on shown type edits it, a press elsewhere starts new text
+//! on release (a point, a paragraph box dragged out, or text on or in a path).
+//!
+//! While a session is open the text editor, the text frame and the type transform's move zone take their
+//! presses first (`controls.rs`, shown before the tool runs); the editor commits on a background press.
+//! A press that reaches the tool with a session open is therefore not the tool's, and the tool does nothing
+//! with it.
+
+use craft::behavior::kurbo;
+use craft::behavior::{CancelReason, Cursor, CursorIcon, PaintedCursor};
+use craft::keymap::Mods;
+use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolHostResponse, ToolPath, ToolPointer, ToolRegion};
+use craft::ui::primitives::{Draw, PaintShape, StrokeColor, StrokeWidth};
+use craft::ui::style::DataColor;
+
 use super::defaults::default_style_params;
-use super::editing::{begin_edit, commit_with};
-use super::layout::{hit_layer, hit_offset, layout, to_text};
-use super::{BoxResize, LayerId, PLACEHOLDER, PhotocraftApp, Point, TextEdit, TextLayout, active_doc_id, byte_of, current_text, json, session_key, text_layer};
+use super::editing::begin_edit;
+use super::layout::{hit_layer, offset_at};
 
-/// Smallest paragraph box a handle drag leaves, in text-space px.
-pub(super) const MIN_BOX: f32 = 4.0;
-
-/// Which box edges handle `i` moves: (left, right, top, bottom). The order matches the overlay.
-pub(super) fn handle_sides(i: u8) -> (bool, bool, bool, bool) {
-    match i {
-        0 => (true, false, true, false),
-        1 => (false, true, true, false),
-        2 => (false, true, false, true),
-        3 => (true, false, false, true),
-        4 => (false, false, true, false),
-        5 => (false, true, false, false),
-        6 => (false, false, false, true),
-        _ => (true, false, false, false),
-    }
-}
+use super::{LayerId, PLACEHOLDER, PhotocraftApp, Point, TextEdit, active_doc_id, json, session_key, text_layer};
+use crate::canvas::document_display::CanvasHost;
+use crate::canvas::tools::{FamilyTool, ToolScope};
 
 pub(crate) fn box_shape(app: &PhotocraftApp, id: LayerId) -> Option<(f32, f32, f32, f32)> {
     match app.session.active().and_then(|s| text_layer(&s.doc, id).map(|t| t.shape.clone()))? {
@@ -27,193 +28,44 @@ pub(crate) fn box_shape(app: &PhotocraftApp, id: LayerId) -> Option<(f32, f32, f
     }
 }
 
-/// The paragraph-box handle under the document point, if the layer is paragraph text.
-pub(crate) fn box_handle_at(app: &mut PhotocraftApp, id: LayerId, x: f64, y: f64) -> Option<u8> {
-    let (bx, by, w, h) = box_shape(app, id)?;
-    let (_, aff, _) = layout(app, id)?;
-    let (r, b) = (bx + w, by + h);
-    let (mx, my) = (bx + w / 2.0, by + h / 2.0);
-    let spots = [(bx, by), (r, by), (r, b), (bx, b), (mx, by), (r, my), (mx, b), (bx, my)];
-    let zoom = app.point_zoom().max(0.01);
-    let tol = f64::from(6.0 / zoom);
-    let at = |(sx, sy): (f32, f32), tol: f64| {
-        let p = aff.apply(Point::new(f64::from(sx), f64::from(sy)));
-        (p.x - x).abs() <= tol && (p.y - y).abs() <= tol
-    };
-    if let Some(i) = spots.iter().position(|&s| at(s, tol)) {
-        return Some(i as u8);
-    }
-    // The enlarged overflow handle is square on screen, so in a rotated view its corners reach
-    // half a diagonal from the box corner along the document axes. Only where no handle
-    // answered at the ordinary reach: the middle handles of a small box keep their presses.
-    let over = app.ui.type_box_overflow && app.ui.text_edit.as_ref().is_some_and(|ed| ed.layer == id.0);
-    let big = f64::from(super::overlay::OVERFLOW_HANDLE / 2.0 * std::f32::consts::SQRT_2 / zoom);
-    (over && at(spots[2], big)).then_some(2)
+/// The Type family's state between passes, kept in `CanvasTools::type_tool`.
+#[derive(Debug, Default)]
+pub(crate) struct TypeState {
+    /// Where the running press began, in document units: the corner of the box a drag makes, or the point of a
+    /// click. Set by a press that starts new text, taken by its release.
+    pub(super) press: Option<kurbo::Point>,
+    /// The press of this pass ended an open session (the editor commits on a background press): it starts no new
+    /// text, as in Photoshop. Set by the canvas controls before the tool runs, taken by the press, cleared by `drain`.
+    pub(super) began_with_session: bool,
+    /// Where a secondary press on the text editor was released and the modifiers held then, taken once by the canvas
+    /// body for the canvas menu (the editor's part takes the press, so the host never reports it).
+    pub(super) context: Option<(egui::Pos2, Mods)>,
 }
 
-/// Drag the handle of `r` (the box and transform snapshotted at the press) to the document
-/// point: the dragged edges follow it, the others stay put. With ⌥ the opposite edges mirror
-/// the drag about the centre the box started with, so the block grows symmetrically instead of
-/// from one side — pressing or releasing ⌥ mid-drag switches that on and off as if it had been
-/// held from the start.
-fn resize_box(app: &mut PhotocraftApp, ed: &TextEdit, r: BoxResize, x: f64, y: f64, alt: bool) {
-    let (px, py) = to_text(&r.aff, x, y);
-    let (l, rw, t, b) = handle_sides(r.handle);
-    let (bx, by, w, h) = (r.shape[0], r.shape[1], r.shape[2], r.shape[3]);
-    let (mut x0, mut y0, mut x1, mut y1) = (bx, by, bx + w, by + h);
-    // The centre the ⌥ mirror turns about: the box as it stood at the press (every move
-    // recomputes from that snapshot, so the centre holds for the whole drag).
-    let (cx, cy) = (bx + w / 2.0, by + h / 2.0);
-    if l {
-        x0 = px.min(x1 - MIN_BOX);
+impl TypeState {
+    pub(crate) fn take_context(&mut self) -> Option<(egui::Pos2, Mods)> {
+        self.context.take()
     }
-    if rw {
-        x1 = px.max(x0 + MIN_BOX);
-    }
-    if t {
-        y0 = py.min(y1 - MIN_BOX);
-    }
-    if b {
-        y1 = py.max(y0 + MIN_BOX);
-    }
-    if alt {
-        // The mirror keeps the centre fixed: the dragged edge clamps at MIN_BOX/2 from it, and
-        // the opposite edge follows, so the block never inverts below the minimum.
-        if l {
-            x0 = px.min(cx - MIN_BOX / 2.0);
-            x1 = 2.0 * cx - x0;
-        }
-        if rw {
-            x1 = px.max(cx + MIN_BOX / 2.0);
-            x0 = 2.0 * cx - x1;
-        }
-        if t {
-            y0 = py.min(cy - MIN_BOX / 2.0);
-            y1 = 2.0 * cy - y0;
-        }
-        if b {
-            y1 = py.max(cy + MIN_BOX / 2.0);
-            y0 = 2.0 * cy - y1;
-        }
-    }
-    // type.edit places the box's top-left at the given document point.
-    let o = r.aff.apply(Point::new(f64::from(x0), f64::from(y0)));
-    // Rendered in the background where that is on; the release applies the box.
-    if crate::type_box_preview::want(app, LayerId(ed.layer), [o.x, o.y, f64::from(x1 - x0), f64::from(y1 - y0)]) {
-        return;
-    }
-    let _ = app.run("type.edit", json!({"layer": ed.layer, "box": [o.x, o.y, x1 - x0, y1 - y0], "coalesce": ed.session}));
 }
 
-/// True when document point (`x`, `y`) lies inside the paragraph box of type layer `id` (false
-/// for point text).
-pub(crate) fn inside_box(app: &mut PhotocraftApp, id: LayerId, x: f64, y: f64) -> bool {
-    let Some((bx, by, w, h)) = box_shape(app, id) else { return false };
-    let Some((_, aff, _)) = layout(app, id) else { return false };
-    let (tx, ty) = to_text(&aff, x, y);
-    tx >= bx && tx <= bx + w && ty >= by && ty <= by + h
+/// The Type tool for a pass (`tools::run`), for the four type tools.
+pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut TypeState, _host: CanvasHost) -> FamilyTool<'a> {
+    Box::new(TypeTool { scope, state })
 }
 
-/// Pointer down with the Type tool. Returns true when the press was consumed (no box drag).
-pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) -> bool {
-    if let Some(ed) = app.ui.text_edit.clone() {
-        let id = LayerId(ed.layer);
-        if let Some(i) = box_handle_at(app, id, x, y) {
-            app.ui.type_insertion_style = None;
-            // Snapshot the box and transform now: every move recomputes from them, so ⌥ held
-            // or released mid-drag mirrors about the centre the drag started with.
-            let snap = box_shape(app, id).zip(layout(app, id)).map(|((bx, by, w, h), (_, aff, _))| BoxResize { handle: i, shape: [bx, by, w, h], aff });
-            if let (Some(snap), Some(e)) = (snap, app.ui.text_edit.as_mut()) {
-                e.resize = Some(snap);
-            }
-            if app.ui.text_edit.as_ref().is_some_and(|e| e.resize.is_some()) {
-                crate::type_box_preview::begin(app, id, ed.session.clone());
-            }
-            return true;
-        }
-        // Photoshop: anywhere inside the paragraph box places the caret, even off the glyphs
-        // (left of a line's start, below the last line); only a click outside it commits.
-        if hit_layer(app, x, y) == Some(id) || inside_box(app, id, x, y) {
-            let off = hit_offset(app, id, x, y);
-            if off != ed.caret || (!mods.shift && off != ed.anchor) {
-                app.ui.type_insertion_style = None;
-            }
-            if let Some(e) = app.ui.text_edit.as_mut() {
-                e.caret = off;
-                if !mods.shift {
-                    e.anchor = off;
-                }
-                e.dragging = true;
-            }
-            return true;
-        }
-        // A Type Mask replaces the selection with ⇧ or ⌥ on that click too (#12073).
-        commit_with(app, mods);
-        return true; // Photoshop: a click outside commits without starting new text
+/// Clears what no gesture is left to take: the press of a gesture that ended some other way, and the flag of a
+/// press that never reached the tool.
+pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut TypeState, _response: &ToolHostResponse) {
+    state.began_with_session = false;
+    if !crate::canvas::tools::in_gesture(app) {
+        state.press = None;
     }
-    app.ui.type_insertion_style = None;
-    // A ⇧-click starts new text over old, as in Photoshop. A Type Mask click on a text layer's
-    // glyphs edits it as the Type tool does (#12075), unless ⇧ is held or the layer is only partly
-    // locked: neither is measured, so those keep starting a new mask.
-    let hit = hit_layer(app, x, y);
-    let partly_locked = |id| app.session.active().map(|st| st.doc.effective_locks(id)).is_some_and(|l| l.any() && !l.all);
-    if mods.shift || (app.ui.tool.is_type_mask() && hit.is_some_and(partly_locked)) {
-        return false;
-    }
-    if let Some(id) = hit {
-        let _ = app.session.select_layer(id);
-        // Lock All (the layer's own or a group's) refuses the edit before it starts, as the engine
-        // would refuse the first keystroke; the reference application says so in an alert (#12040).
-        if app.session.active().is_some_and(|st| st.doc.effective_locks(id).all) {
-            let message = json!({"message": tl!("Could not use the type tool because the layer is locked.")});
-            app.ui.open_dialog(crate::state::DialogKind::Error, message.as_object().cloned().unwrap_or_default());
-            return true;
-        }
-        let key = session_key(app);
-        if begin_edit(app, id, &key).is_err() {
-            return true;
-        }
-        let off = hit_offset(app, id, x, y);
-        app.ui.text_edit = Some(TextEdit {
-            layer: id.0,
-            document: active_doc_id(app),
-            caret: off,
-            anchor: off,
-            session: key,
-            created: false,
-            mask: false,
-            dragging: true,
-            resize: None,
-            preedit: None,
-        });
-        // The frame commits an edit that is no mask while a Type Mask tool is in hand: edit with
-        // the Type tool, as Move's double-click does, and give the mask tool back at the end.
-        app.ui.text_edit_return_tool = app.ui.tool.is_type_mask().then_some(app.ui.tool);
-        if app.ui.text_edit_return_tool.is_some() {
-            let vertical =
-                app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
-            app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
-        }
-        return true;
-    }
-    false
 }
 
-pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    let Some(ed) = app.ui.text_edit.clone() else { return };
-    if let Some(r) = ed.resize {
-        resize_box(app, &ed, r, x, y, mods.alt);
-        return;
-    }
-    if ed.dragging {
-        let off = hit_offset(app, LayerId(ed.layer), x, y);
-        if off != ed.caret {
-            app.ui.type_insertion_style = None;
-        }
-        if let Some(e) = app.ui.text_edit.as_mut() {
-            e.caret = off;
-        }
-    }
+/// The Type tool as the host runs it: the pass's scope over the app, and the family's state.
+pub(crate) struct TypeTool<'a> {
+    scope: &'a ToolScope<'a>,
+    state: &'a mut TypeState,
 }
 
 /// What a Type tool click on a path does, like Photoshop: inside a closed path, area type;
@@ -293,18 +145,17 @@ pub(crate) fn path_target(app: &PhotocraftApp, x: f64, y: f64) -> Option<PathCli
 }
 
 /// What the Type tool's pointer over document `(x, y)` shows (#218): the path click a press there
-/// would make, unless the press edits the type layer under it instead (`pointer_down`: an
-/// unshifted press on shown type), where Photoshop keeps the plain I-beam. The type hit is only
-/// tested over a path, so a hover elsewhere lays out nothing. Nothing while a type edit is open
-/// (a click then commits rather than starting new type). While the button is held it is what the
-/// release makes (`pointer_up`): nothing once the drag is a text box, else the path click at the
-/// press.
-pub(crate) fn hover_path_target(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) -> Option<PathClick> {
+/// would make, unless the press edits the type layer under it instead (an unshifted press on shown
+/// type), where Photoshop keeps the plain I-beam. The type hit is only tested over a path, so a
+/// hover elsewhere lays out nothing. Nothing while a type edit is open (a click then commits rather
+/// than starting new type). While the button is held (`press` is where it went down) it is what the
+/// release makes: nothing once the drag is a text box, else the path click at the press.
+pub(crate) fn hover_path_target(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool, press: Option<[f64; 2]>) -> Option<PathClick> {
     if app.ui.text_edit.is_some() {
         return None;
     }
-    if let Some(start) = app.drag.as_ref().map(|d| d.start) {
-        // The press already passed over editing type (`pointer_down`), so no type hit test.
+    if let Some(start) = press {
+        // The press already passed over editing type (`press_at`), so no type hit test.
         return if makes_box(app, start, [x, y]) { None } else { path_target(app, start[0], start[1]) };
     }
     let target = path_target(app, x, y)?;
@@ -319,22 +170,57 @@ fn makes_box(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
     w >= min && h >= min
 }
 
-/// Pointer up. `rect` is the dragged box (document px) when no edit session consumed the press.
-pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
-    crate::type_box_preview::flush(app);
-    if let Some(e) = app.ui.text_edit.as_mut() {
-        e.dragging = false;
-        e.resize = None;
-        app.ui.caret_blink_time = app.last_frame_time;
-        return;
+/// A press at document `(x, y)`: edits the type under it, or answers `Claimed` for a press that makes new text on
+/// release. With a session open the press is not the tool's (the editor, the frame or the move zone had it first).
+fn press_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64, mods: Mods) -> ToolAction {
+    if app.ui.text_edit.is_some() {
+        return ToolAction::Done;
     }
+    app.ui.type_insertion_style = None;
+    // A ⇧-click starts new text over old, as in Photoshop. A Type Mask click on a text layer's
+    // glyphs edits it as the Type tool does (#12075), unless ⇧ is held or the layer is only partly
+    // locked: neither is measured, so those keep starting a new mask.
+    let hit = hit_layer(app, x, y);
+    let partly_locked = |id| app.session.active().map(|st| st.doc.effective_locks(id)).is_some_and(|l| l.any() && !l.all);
+    if mods.shift || (app.ui.tool.is_type_mask() && hit.is_some_and(partly_locked)) {
+        return ToolAction::Claimed;
+    }
+    let Some(id) = hit else { return ToolAction::Claimed };
+    let _ = app.session.select_layer(id);
+    // Lock All (the layer's own or a group's) refuses the edit before it starts, as the engine
+    // would refuse the first keystroke; the reference application says so in an alert (#12040).
+    if app.session.active().is_some_and(|st| st.doc.effective_locks(id).all) {
+        crate::dialogs::alerts::alert(app, tl!("Could not use the type tool because the layer is locked."));
+        return ToolAction::Done;
+    }
+    let key = session_key(app);
+
+    if begin_edit(app, ctx, id, &key).is_err() {
+        return ToolAction::Done;
+    }
+    let off = offset_at(app, id, x, y);
+    app.ui.text_edit = Some(TextEdit { layer: id.0, document: active_doc_id(app), caret: off, anchor: off, session: key, created: false, mask: false });
+    // The frame commits an edit that is no mask while a Type Mask tool is in hand: edit with
+    // the Type tool, as Move's double-click does, and give the mask tool back at the end.
+    app.ui.text_edit_return_tool = app.ui.tool.is_type_mask().then_some(app.ui.tool);
+    if app.ui.text_edit_return_tool.is_some() {
+        let vertical =
+            app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
+        app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
+    }
+    ToolAction::Done
+}
+
+/// A release that makes new text: from `start` to `end` in document units. A drag of at least 4 screen pixels both
+/// ways makes a paragraph box; anything less is a click, which makes point text, or text on or in the path under it.
+fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let (w, h) = ((end[0] - start[0]).abs(), (end[1] - start[1]).abs());
-    let min = 4.0 / app.point_zoom().max(0.01) as f64;
     let o = app.ui.tool_options.clone();
     let mask = app.ui.tool.is_type_mask();
+    let is_box = makes_box(app, start, end);
     // A click (not a drag) with the Type tool on a path: area type inside a closed path, type
     // on the path on its outline. The Type Mask tools ignore paths.
-    let target = if !mask && !makes_box(app, start, end) { path_target(app, start[0], start[1]) } else { None };
+    let target = if !mask && !is_box { path_target(app, start[0], start[1]) } else { None };
     // Preferences ▸ Type: "Fill new type layers with placeholder text" (on by default). The
     // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
     // vertical mask's placeholder is not measured yet, so it keeps starting empty.
@@ -343,7 +229,7 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let mut p = default_style_params(app);
     p["text"] = json!(text);
     p["orientation"] = json!(if app.ui.tool.is_vertical_type() { "vertical" } else { "horizontal" });
-    if w >= min && h >= min {
+    if is_box {
         p["box"] = json!([start[0].min(end[0]).round(), start[1].min(end[1]).round(), w.round(), h.round()]);
     } else {
         p["x"] = json!(start[0].round());
@@ -376,115 +262,96 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         }
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();
-        app.ui.caret_blink_time = app.last_frame_time;
-        app.ui.text_edit = Some(TextEdit {
-            layer: id,
-            document: active_doc_id(app),
-            caret: n,
-            anchor: 0,
-            session: key,
-            created: true,
-            mask,
-            dragging: false,
-            resize: None,
-            preedit: None,
-        });
+        app.ui.text_edit = Some(TextEdit { layer: id, document: active_doc_id(app), caret: n, anchor: 0, session: key, created: true, mask });
         app.ui.text_edit_return_tool = None;
     }
 }
 
-/// Character index of the previous / next word boundary (shared with `type.navigate`).
-pub(super) fn word_boundary(text: &str, from: usize, forward: bool) -> usize {
-    photocraft_text::word_boundary(text, from, forward)
-}
-
-/// Most clicks in a run that select more: 2 a word, 3 a line, 4 a paragraph, 5 all text. The
-/// next quick click starts over with a caret.
-const MAX_CLICKS: u32 = 5;
-
-/// Count of this click in a run of clicks at one spot. `egui_count` is egui's own count for the
-/// click (1 single, 2 double, 3 triple; it never goes past 3), which already applies the
-/// double-click delay and distance; `prev` is our count for the previous click (0: none). A slow
-/// or distant click (egui says 1) starts a new run; after five clicks the run starts over.
-pub(crate) fn next_click_count(prev: u32, egui_count: u32) -> u32 {
-    match (egui_count, prev) {
-        (0 | 1, _) => 1,
-        (n, 0) => n.min(MAX_CLICKS),
-        (_, p) => p % MAX_CLICKS + 1,
+impl CanvasTool for TypeTool<'_> {
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        let Some(space) = cx.space() else { return ToolAction::Ignored };
+        // The press that ended a session (the editor's commit on a background press) only commits.
+        if std::mem::take(&mut self.state.began_with_session) {
+            return ToolAction::Done;
+        }
+        let at = space.view.to_doc(pointer.pos);
+        let ctx = self.scope.ctx().clone();
+        let action = self.scope.with_app(|app| press_at(app, &ctx, at.x, at.y, pointer.mods));
+        self.state.press = (action == ToolAction::Claimed).then_some(at);
+        action
     }
-}
 
-/// The selection (anchor, caret) a run of `count` clicks makes at character `caret`: 1 a caret,
-/// 2 the word under it, 3 its visual line as laid out (a column in vertical type), 4 its
-/// paragraph up to the hard return, 5 all text. `line` is the laid-out line the click hit; it
-/// decides at a soft wrap, where one caret offset ends a line and starts the next. Without a
-/// layout a line is its paragraph. Offsets past the text are clamped, so an empty layer or a
-/// stale caret never panics.
-pub(crate) fn click_selection(layout: Option<&TextLayout>, text: &str, caret: usize, line: Option<usize>, count: u32) -> (usize, usize) {
-    let n = text.chars().count();
-    let c = caret.min(n);
-    match count {
-        2 => {
-            let chars: Vec<char> = text.chars().collect();
-            let word = |i: usize| chars.get(i).is_some_and(|ch| ch.is_alphanumeric());
-            let (mut a, mut b) = (c, c);
-            while a > 0 && word(a - 1) {
-                a -= 1;
+    /// With an edit open and the type box hidden, another type layer is the tool's over the edit's move reach and
+    /// caret: a press there commits the edit (`claimed_regions`). With ⌘ held the box shows, and its own reach rules.
+    fn regions(&self) -> Vec<ToolRegion> {
+        let mods = craft::ui::runtime::pointer::frame(self.scope.ctx()).mods;
+        let regions = self.scope.with_app(|app| {
+            let box_shown = app.ui.tool.is_type() && crate::type_transform::whole_box(app, mods);
+            if crate::type_transform::active(app) || box_shown {
+                return Vec::new();
             }
-            while word(b) {
-                b += 1;
+            super::layout::claimed_regions(app)
+        });
+        regions.into_iter().map(ToolRegion::polygon).collect()
+    }
+
+    fn drag(&mut self, _pointer: &ToolPointer, _cx: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let Some(start) = self.state.press.take() else { return };
+        let Some(space) = cx.space() else { return };
+        let end = space.view.to_doc(pointer.pos);
+        let ctx = self.scope.ctx().clone();
+        self.scope.with_app(|app| {
+            create_text(app, [start.x, start.y], [end.x, end.y]);
+            // The new session's editor takes the keyboard from the pass it opens, as an edit of existing text does.
+            if app.ui.text_edit.is_some() {
+                super::editing::focus_editor(&ctx);
             }
-            (a, b)
-        }
-        3 => {
-            let Some(l) = layout else { return paragraph_of(text, c) };
-            let ln = line.and_then(|i| l.lines.get(i)).or_else(|| l.lines.get(photocraft_text::line_index(l, byte_of(text, c))));
-            ln.map_or((c, c), |ln| (photocraft_text::char_index(text, ln.range.start), photocraft_text::char_index(text, ln.range.end)))
-        }
-        4 => paragraph_of(text, c),
-        5 => (0, n),
-        _ => (c, c),
+        });
     }
-}
 
-/// Characters of the paragraph holding character `c`, without its hard return.
-fn paragraph_of(text: &str, c: usize) -> (usize, usize) {
-    let b = byte_of(text, c);
-    let paras = photocraft_text::layout::split_paragraphs(text);
-    let Some(r) = paras.iter().find(|r| b >= r.start && b < r.end).or_else(|| paras.last()) else { return (c, c) };
-    let body = text.get(r.clone()).unwrap_or("").trim_end_matches(['\r', '\n']);
-    let start = photocraft_text::char_index(text, r.start);
-    (start, start + body.chars().count())
-}
-
-/// A click while editing type at document point (`x`, `y`), after it placed the caret there.
-/// `egui_count` is egui's count for the click (see [`next_click_count`]). Like Photoshop, two
-/// clicks select a word, three the line, four the paragraph and five all text.
-pub fn multi_click(app: &mut PhotocraftApp, egui_count: u32, x: f64, y: f64) {
-    let Some(ed) = app.ui.text_edit.clone() else {
-        app.type_clicks = None;
-        return;
-    };
-    let prev = app.type_clicks.filter(|(layer, _)| *layer == ed.layer).map_or(0, |(_, n)| n);
-    let count = next_click_count(prev, egui_count);
-    app.type_clicks = Some((ed.layer, count));
-    if count < 2 {
-        return;
+    fn cancel(&mut self, _reason: CancelReason, _cx: &mut ToolContext<'_>) {
+        self.state.press = None;
+        self.state.began_with_session = false;
     }
-    let id = LayerId(ed.layer);
-    let Some(text) = current_text(app, id) else { return };
-    let laid = layout(app, id);
-    let (caret, line) = match &laid {
-        Some((l, aff, t)) if *t == text && x.is_finite() && y.is_finite() => {
-            let (tx, ty) = to_text(aff, x, y);
-            let (ci, line) = photocraft_text::hit_char(l, t, tx, ty);
-            (ci, Some(line))
+
+    /// The box a drag makes, in document axes (#7063): a white line under a black dashed one, so it reads on any
+    /// image. Nothing paints without a drag, and a drag too small to make a box makes none.
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        let (Some(start), Some(pointer), Some(space)) = (self.state.press, cx.pointer, cx.space()) else { return };
+        let end = space.view.to_doc(pointer.pos);
+        if !self.scope.with_app(|app| makes_box(app, [start.x, start.y], [end.x, end.y])) {
+            return;
         }
-        _ => (ed.caret, None),
-    };
-    let (a, b) = click_selection(laid.as_ref().map(|(l, _, _)| l.as_ref()), &text, caret, line, count);
-    if let Some(e) = app.ui.text_edit.as_mut() {
-        (e.anchor, e.caret) = (a, b);
+        let corner = |x: f64, y: f64| space.view.to_screen(kurbo::Point::new(x, y));
+        let ring = [corner(start.x, start.y), corner(end.x, start.y), corner(end.x, end.y), corner(start.x, end.y)];
+        draw.stroke(&PaintShape::Polygon(ring.to_vec()), StrokeWidth::Thin, StrokeColor::Data(DataColor::new(egui::Color32::WHITE)));
+        let closed = [ring[0], ring[1], ring[2], ring[3], ring[0]];
+        draw.dashed(&closed, draw.dashes(), StrokeWidth::Thin, StrokeColor::Data(DataColor::new(egui::Color32::BLACK)));
+    }
+
+    /// The I-beam (turned in vertical type) and the path cursor over what a click would start text on or in. The type
+    /// transform's box (the move cursor in its move reach just outside the text being typed) and the text frame set
+    /// their own cursors over their parts. Type is not among the Other Cursors tools production swaps for the precise
+    /// cursor (cw.C9).
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        let (Some(pointer), Some(space)) = (cx.pointer, cx.space()) else { return Cursor::System(CursorIcon::Text) };
+        let at = space.view.to_doc(pointer.pos);
+        let press = self.state.press.map(|p| [p.x, p.y]);
+        self.scope.with_app(|app| match hover_path_target(app, at.x, at.y, cx.mods.shift, press) {
+            Some(PathClick::Area { .. }) => Cursor::from(PaintedCursor::type_on(false)),
+            Some(PathClick::OnPath { .. }) => Cursor::from(PaintedCursor::type_on(true)),
+            // The Vertical Type tool's I-beam lies on its side inside a dotted box, over text too; the
+            // Vertical Type Mask tool's has no box (#12063).
+            None if app.ui.tool == crate::state::Tool::VerticalType => Cursor::from(PaintedCursor::outline(super::vertical_cursor::rings())),
+            None if app.ui.tool.is_vertical_type() => Cursor::System(CursorIcon::VerticalText),
+            None => Cursor::System(CursorIcon::Text),
+        })
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the type.create command")
     }
 }
 

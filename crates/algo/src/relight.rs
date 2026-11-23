@@ -150,6 +150,11 @@ fn read_rgba(src: &Image, ctx: &Ctx, x: i32, y: i32) -> [f32; 4] {
 
 /// Relight `out` of `src`. Identity when `intensity` is 0 (or not finite).
 pub(crate) fn relight(src: &Image, out: Rect, ctx: &Ctx, p: Params) -> Vec<f32> {
+    relight_with_luma_budget(src, out, ctx, p, MAX_LUMA_PIXELS)
+}
+
+/// Relight with a bound on the luma field allocated by each band.
+fn relight_with_luma_budget(src: &Image, out: Rect, ctx: &Ctx, p: Params, max_luma_pixels: usize) -> Vec<f32> {
     let n = src.ch;
     if out.is_empty() || n == 0 {
         return src.crop(out);
@@ -160,14 +165,14 @@ pub(crate) fn relight(src: &Image, out: Rect, ctx: &Ctx, p: Params) -> Vec<f32> 
     let sig = sigma(p.softness, ctx.bounds);
     let step = step_for_sigma(sig);
     let reach = read_radius(sig);
-    if let Some(band_h) = luma_band_rows(out, reach) {
+    if let Some(band_h) = luma_band_rows(out, reach, max_luma_pixels) {
         return relight_bands(src, out, ctx, p, sig, step, band_h);
     }
     relight_rect(src, out, ctx, p, sig, step)
 }
 
 /// Horizontal strip height so the inflated luma field stays within [`MAX_LUMA_PIXELS`].
-fn luma_band_rows(out: Rect, reach: i32) -> Option<i32> {
+fn luma_band_rows(out: Rect, reach: i32, max_luma_pixels: usize) -> Option<i32> {
     let margin = 2usize.saturating_mul(reach.max(0) as usize);
     let yw = (out.width() as usize).saturating_add(margin);
     let yh = (out.height() as usize).saturating_add(margin);
@@ -179,10 +184,10 @@ fn luma_band_rows(out: Rect, reach: i32) -> Option<i32> {
         Some(_) => return None,
         None => usize::MAX,
     };
-    if n <= MAX_LUMA_PIXELS {
+    if n <= max_luma_pixels {
         return None;
     }
-    let max_yh = (MAX_LUMA_PIXELS / yw).max(1);
+    let max_yh = (max_luma_pixels / yw).max(1);
     let inner = max_yh.saturating_sub(margin).max(1).min(i32::MAX as usize) as i32;
     if inner >= out.height() as i32 { None } else { Some(inner.max(1)) }
 }
@@ -534,10 +539,9 @@ mod tests {
     }
 
     #[test]
-    fn layers_above_8mp_are_relit() {
-        // 4096×2048 = 8.39 MP. A single full-frame kernel call inflates past 8 MP of luma,
-        // which used to return the input unchanged. Force one tile so that path is taken.
-        let (w, h) = (4096, 2048);
+    fn layers_above_the_luma_budget_are_relit() {
+        // A small budget exercises the same banding path as an 8 MP luma field.
+        let (w, h) = (256, 128);
         let bounds = Rect::new(0, 0, w, h);
         let mut s = Surface::new(PixelFormat::RGBA8);
         let bytes: Vec<u8> = (0..h)
@@ -550,15 +554,19 @@ mod tests {
             })
             .collect();
         s.write_interleaved(bounds, &bytes);
-        let p = relight_p(180.0, 30.0, 90.0, 12.0, 0.0, 25.0);
-        let area = output_area(&p, s.content_bounds(), bounds, None);
+        let p = Params { angle: 180.0, elevation: 30.0, intensity: 90.0, ambient: 12.0, warmth: 0.0, softness: 25.0 };
+        let reach = read_radius(sigma(p.softness, bounds));
+        assert!(luma_band_rows(bounds, reach, 20_000).is_some());
+        let src = Image::read_clamped(&s, bounds.inflate(reach), bounds);
+        let ctx = Ctx { bounds, mode: ColorMode::Rgb, alpha: true };
         let before = s.pixel(w / 2, h / 2);
-        let out = apply_tiled(&s, &p, area, bounds, None, 8192, None);
-        let after = out.pixel(w / 2, h / 2);
+        let out = relight_with_luma_budget(&src, bounds, &ctx, p, 20_000);
+        let pixel = |x: i32, y: i32| &out[((y * w + x) * 4) as usize..][..4];
+        let after = pixel(w / 2, h / 2);
         assert!(after.iter().all(|c| c.is_finite()), "{after:?}");
-        let d = max_diff(&before, &after);
-        assert!(d > 1e-4, "8 MP+ layer was left unchanged (max diff {d})");
-        assert!(max_diff(&s.pixel(8, 8), &out.pixel(8, 8)) > 1e-4);
+        let d = max_diff(&before, after);
+        assert!(d > 1e-4, "over-budget layer was left unchanged (max diff {d})");
+        assert!(max_diff(&s.pixel(8, 8), pixel(8, 8)) > 1e-4);
     }
 
     #[test]

@@ -170,10 +170,10 @@ fn a_stroked_shapes_mask_applies_to_fill_and_stroke_together() {
     assert!(close4(p, [0.0, 1.0, 0.0, 0.5]), "{p:?}");
     // With effects too.
     l.effects.items = vec![Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(1.0, 1.0, 1.0) }];
-    d.layers = vec![l.clone()];
+    d.layers = vec![l.clone()].into();
     let p = px(&d, 12, 20);
     assert!(close4(p, [0.0, 1.0, 0.0, 0.5]), "without clipped layers: {p:?}");
-    d.layers = vec![l, clip];
+    d.layers = vec![l, clip].into();
     let p = px(&d, 12, 20);
     assert!(close4(p, [0.0, 1.0, 0.0, 0.5]), "{p:?}");
 }
