@@ -687,6 +687,10 @@ fn extension_color(s: &Session, p: &Value) -> [f32; 4] {
         // The reference application's Gray: 128,128,128 (#14543). A 32-bit document holds linear
         // light, so there it is grey 128 decoded as `change_depth` decodes it (0.2159).
         "gray" => {
+            // An Indexed document was not measured (#14543) and keeps today's background colour.
+            if s.active().is_some_and(|d| d.doc.mode == ColorMode::Indexed) {
+                return s.tools.background;
+            }
             let v = 128.0 / 255.0;
             let v = match s.active().map(|d| (d.doc.mode, d.doc.depth)) {
                 Some((mode @ (ColorMode::Rgb | ColorMode::Grayscale), SampleType::F32)) => {

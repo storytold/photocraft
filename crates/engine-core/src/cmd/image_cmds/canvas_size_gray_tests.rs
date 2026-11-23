@@ -69,6 +69,22 @@ fn gray_in_a_32_bit_document_is_linear_grey_128() {
     assert_eq!(background_value(&s, 10, 10)[..3], [1.0, 1.0, 1.0], "the old Background keeps its pixels");
 }
 
+/// An Indexed Color document was not measured and keeps today's behaviour: Gray takes the
+/// background colour there, as an unknown value does.
+#[test]
+fn gray_in_an_indexed_document_keeps_the_background_colour() {
+    let grown = |color: &str| {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
+        s.execute("image.mode.indexedColor", json!({})).unwrap();
+        s.tools.background = [0.0, 0.0, 1.0, 1.0];
+        s.execute("image.canvasSize", GROW(color)).unwrap();
+        background_value(&s, 450, 350)
+    };
+    assert_eq!(grown("gray"), grown("background"), "Gray fills with the background colour");
+    assert_ne!(grown("gray"), grown("white"), "the test tells the two apart");
+}
+
 #[test]
 fn an_unknown_extension_colour_still_takes_the_background_colour() {
     let mut s = doc(8);
