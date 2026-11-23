@@ -37,8 +37,12 @@ fn select(s: &mut Session, ids: &[LayerId]) {
 
 /// The issue's focus stack: FocusL (bottom) sharp on the left half, FocusR (top) on the right.
 fn focus_pair() -> (Session, LayerId, LayerId) {
+    focus_pair_at(8)
+}
+
+fn focus_pair_at(depth: u32) -> (Session, LayerId, LayerId) {
     let mut s = crate::session();
-    s.execute("file.new", json!({"width": W, "height": H, "background": "transparent"})).unwrap();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": depth, "background": "transparent"})).unwrap();
     let l = focus_layer(&mut s, "FocusL", 0..W / 2);
     let r = focus_layer(&mut s, "FocusR", W / 2..W);
     select(&mut s, &[l, r]);
@@ -89,6 +93,26 @@ fn a_semi_transparent_winning_pixel_keeps_the_bottom_masked() {
     assert!(a < 0.9, "the composite keeps the pixel partly transparent, alpha {a}");
 }
 
+/// In a 32-bit document a top pixel at alpha 0.999 is not opaque, though a mask would round that
+/// weight to full. Revealing the bottom under it would make it opaque, so the old masks are kept.
+#[test]
+fn a_nearly_opaque_float_pixel_keeps_the_bottom_masked() {
+    let (mut s, l, r) = focus_pair_at(32);
+    let (x, y) = (3 * W / 4, H / 2);
+    s.edit("soften", |doc, _| {
+        let v = detail(x, y);
+        doc.layer_mut(r).unwrap().surface_mut().unwrap().fill_rect(Rect::new(x, y, x + 1, y + 1), &[v, v, v, 0.999]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert!(doc.layer(l).unwrap().mask.as_ref().unwrap().value(x, y) < 0.5, "FocusL stays hidden under it");
+    let img = photocraft_compose::render(doc, doc.bounds());
+    let a = img.px[(y * W + x) as usize][3];
+    assert!(a < 0.9995, "the composite keeps the pixel's own alpha, {a}");
+}
+
 /// Prepares one case on the focus pair (FocusL, FocusR) and returns its Auto-Blend params.
 type Setup = fn(&mut Session, &[LayerId]) -> Value;
 
@@ -96,7 +120,7 @@ type Setup = fn(&mut Session, &[LayerId]) -> Value;
 /// the bottom layer stays hidden where the layer above takes over.
 #[test]
 fn other_runs_keep_the_bottom_layer_masked() {
-    let cases: [(&str, Setup); 4] = [
+    let cases: [(&str, Setup); 5] = [
         ("panorama", |s, ids| {
             // A panorama pair: FocusL over x 0..240, FocusR over x 160..400.
             let (l, r) = (ids[0], ids[1]);
@@ -112,6 +136,16 @@ fn other_runs_keep_the_bottom_layer_masked() {
         ("stack of three layers", |s, ids| {
             let flat = focus_layer(s, "Flat", 0..0);
             select(s, &[ids[0], ids[1], flat]);
+            json!({"method": "stack", "seamlessTones": false})
+        }),
+        ("stack under a clipped top", |s, ids| {
+            // A clipped top shows only where the bottom does, so revealing the bottom shows more of it.
+            let top = ids[1];
+            s.edit("clip", |doc, _| {
+                doc.layer_mut(top).unwrap().clipped = true;
+                Ok(())
+            })
+            .unwrap();
             json!({"method": "stack", "seamlessTones": false})
         }),
         ("stack over an existing mask", |s, ids| {
