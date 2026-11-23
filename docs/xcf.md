@@ -32,20 +32,22 @@ and document policies. A signature match also opens XCF files with a different e
 | Compression | none, RLE, zlib |
 | XCF versions | 0 to 26 (GIMP 1.x to 3.2); newer files open with a note, unknown parts skipped |
 
-The conversion report describes how each GIMP layer filter was handled. An Open request with native
-filter permission can turn supported Exposure and Brightness/Contrast stages on raster layers into
-editable Smart Filters. The report records that the stages use PhotoCraft's native rendering rules.
+The conversion report describes how each GIMP layer filter was handled. Editor Open, raster Place
+Embedded and rooted automation Open can turn supported Exposure and Brightness/Contrast stages
+into editable Smart Filters when the session authorizes the native commands. RGB float layers
+can also retain a Levels stage with normalized ascending endpoints and full-strength settings.
+The report records that these stages use PhotoCraft's native rendering rules.
 A single masked Exposure in an XCF 22 file can retain independent filter opacity and coverage on an
 opaque 8-bit or 16-bit RGB raster layer when the stored mask covers the image frame and uses supported settings.
 Supported graph chains consisting of sequential Invert stages open as ordinary native Invert filters.
 One unmasked, full-strength source-over graph can place an inverted copy over the original as two
 editable layers inside a Smart Object. Unsupported stages, other graph branches, and unresolved
-blend settings keep the saved layer pixels. The
-report can retain the original source records for inspection within its storage limits. Floating
+blend settings keep the saved layer pixels. The report can retain the original source records
+for inspection within its storage limits. Floating
 selection attachment and item-set behavior remain outside the native mapping.
 
 Ordinary background Open on the desktop prompts for a sample byte order when a multi-byte XCF 4–11
-file leaves it unspecified. Open As also accepts an explicit order. CLI `convert`, `info`, `run`, and
+file leaves it unspecified. Open As and raster Place Embedded also accept an explicit order. CLI `convert`, `info`, `run`, and
 `batch` accept `--historical-xcf-sample-order` with `little-endian` or `big-endian`. In Batch, a
 recorded Open As of the same source inherits this order when the step has no explicit choice.
 Each nested Batch has its own scope. PhotoCraft records the order used in the
