@@ -41,7 +41,7 @@ fn select(h: &mut Harness<'_, Box<PhotocraftApp>>, names: &[&str]) {
 fn selection(h: &Harness<'_, Box<PhotocraftApp>>) -> (Vec<String>, Option<String>) {
     let st = h.state().session.active().unwrap();
     let name = |id: LayerId| st.doc.layer(id).unwrap().name.clone();
-    (st.selected_layers().into_iter().map(name).collect(), st.active_layer.map(name))
+    (st.selected_layers().iter().copied().map(name).collect(), st.active_layer.map(name))
 }
 
 enum Step {

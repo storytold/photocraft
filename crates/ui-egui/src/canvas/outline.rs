@@ -12,7 +12,7 @@ pub(crate) struct SurfaceMask<'a> {
 }
 
 impl<'a> SurfaceMask<'a> {
-    /// The mask `surface` of a document `size` pixels large. `revision` is the mask's own fingerprint (its tiles), not
+    /// The mask `surface` of a document `size` pixels large. `revision` is the mask's own (its surface generation), not
     /// the document's, so an edit elsewhere in the document keeps the overlay's trace.
     pub(crate) fn new(surface: &'a Surface, revision: u64, size: [u32; 2]) -> Self {
         SurfaceMask { surface, revision, size }
@@ -24,8 +24,10 @@ impl MaskSource for SurfaceMask<'_> {
         self.size
     }
 
+    /// The mask's revision with the scratch read-error generation: a selection tile that fails to read traces as
+    /// empty, and as its pixels once it reads, without a new revision (`crate::scratch_reads`).
     fn revision(&self) -> u64 {
-        self.revision
+        crate::scratch_reads::with(self.revision)
     }
 
     /// The allocated tiles: every pixel that differs from the default lies in one, and the union of their rects is

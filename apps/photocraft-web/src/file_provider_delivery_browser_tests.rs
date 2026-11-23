@@ -256,7 +256,7 @@ fn application() -> Result<(Box<PhotocraftApp>, Host, Captures), JsValue> {
     let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(error)?;
     let raster = photocraft_io::import("original.png", &png).map_err(error)?.document;
     let state = app.session.active_mut().ok_or_else(|| error("no fixture document"))?;
-    let doc = Arc::make_mut(&mut state.doc);
+    let doc = Arc::make_mut(state.doc_mut());
     doc.layers = raster.layers;
     doc.metadata.text.push(("Original".into(), "Native delivery fixture".into()));
     doc.metadata.psd_resources.push((4000, "Original embedded bytes".into(), Arc::new(png)));

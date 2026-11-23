@@ -506,7 +506,7 @@ fn resource_lists_are_bounded_unique_and_independent_of_local_recents() {
     app.push_recent("/local/drawing.psd");
     let entry = Resource { id: "resource-one".into(), name: "drawing.psd".into(), updated_at: "today".into() };
     host.set_resources(&connection(&host), vec![entry.clone()]).unwrap();
-    assert_eq!(app.ui.recent_files, ["/local/drawing.psd"]);
+    assert_eq!(app.ui.recent_files.as_slice(), ["/local/drawing.psd"]);
     assert!(host.set_resources(&connection(&host), vec![entry.clone(), entry.clone()]).is_err());
     assert!(host.set_resources(&connection(&host), (0..101).map(|i| Resource { id: format!("resource-{i}"), ..entry.clone() }).collect()).is_err());
     assert!(host.set_resources(&connection(&host), vec![Resource { name: "../drawing.psd".into(), ..entry.clone() }]).is_err());

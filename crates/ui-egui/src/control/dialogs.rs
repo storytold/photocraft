@@ -356,9 +356,26 @@ pub(crate) fn method(app: &mut PhotocraftApp, ctx: &egui::Context, req: &Control
     if !matches!(req.method.as_str(), "ui.dialog.set" | "ui.dialog.confirm" | "ui.dialog.cancel" | "ui.dialog.apply") {
         return None;
     }
-    let id = match dialog_id(host(app), p) {
-        Ok(id) => id,
-        Err(e) => return Some(err(e)),
+    // Keyboard Shortcuts and Menus draws outside the host: Cancel closes it; its changes go through
+    // `edit.keyboardShortcuts` params (#15544).
+    if p.get("dialog").and_then(Value::as_str) == Some(crate::prefs_ui::shortcuts::CONTROL_ID) {
+        return Some(match req.method.as_str() {
+            "ui.dialog.cancel" if crate::prefs_ui::shortcuts::cancel(app) => ok(Value::Null),
+            "ui.dialog.cancel" => err("Keyboard Shortcuts and Menus is not open"),
+            _ => err("Keyboard Shortcuts and Menus takes its changes as `edit.keyboardShortcuts` params; `ui.dialog.cancel` closes it"),
+        });
+    }
+    // The unsaved-changes prompt is listed as "discard" and answered by that id.
+    let id = if p.get("dialog").and_then(Value::as_str) == Some(crate::discard_ui::CONTROL_ID) {
+        match crate::discard_ui::host_id(app) {
+            Some(id) => id,
+            None => return Some(err("no unsaved-changes prompt is open")),
+        }
+    } else {
+        match dialog_id(host(app), p) {
+            Ok(id) => id,
+            Err(e) => return Some(err(e)),
+        }
     };
     Some(match req.method.as_str() {
         "ui.dialog.set" => set(app, ctx, id, p),

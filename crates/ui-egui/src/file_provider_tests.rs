@@ -234,8 +234,10 @@ fn provider_ack_owns_its_revision_without_becoming_a_local_path() {
     app.run("file.new", json!({"width": 2, "height": 2, "name": "Other"})).unwrap();
     app.session.active_mut().unwrap().path = Some("/device/drawing.psd".into());
     let selected = app.session.active().unwrap().doc.id;
+    let document_names = app.session.documents_generation();
     provider.result(request, "saved".into(), "resource-one".into()).unwrap();
     file_providers::tick(&mut app, &ctx);
+    assert_ne!(app.session.documents_generation(), document_names);
     let saved = app.session.documents().iter().find(|state| state.doc.id == document).unwrap();
     assert_eq!(saved.saved_revision, 7);
     assert!(saved.is_dirty());
@@ -243,7 +245,7 @@ fn provider_ack_owns_its_revision_without_becoming_a_local_path() {
     assert_eq!(saved.doc.name, "drawing.psd");
     assert_eq!(app.session.active().unwrap().doc.id, selected);
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/device/drawing.psd"));
-    assert_eq!(app.ui.recent_files, ["/device/drawing.psd"]);
+    assert_eq!(app.ui.recent_files.as_slice(), ["/device/drawing.psd"]);
     assert!(provider.bound(document));
 }
 
@@ -771,7 +773,7 @@ fn provider_delivery_failure_preserves_native_resources_drafts_and_a_fresh_save_
     let raster = photocraft_io::import("original.png", &png).unwrap().document;
     {
         let state = app.session.active_mut().unwrap();
-        let doc = std::sync::Arc::make_mut(&mut state.doc);
+        let doc = std::sync::Arc::make_mut(state.doc_mut());
         doc.layers = raster.layers;
         doc.metadata.text.push(("Original".into(), "Native delivery fixture".into()));
         doc.metadata.psd_resources.push((4000, "Original embedded bytes".into(), std::sync::Arc::new(png)));

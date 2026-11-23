@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use craft::ui::contract::{Revision, Tracked};
 use photocraft_doc::DocId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -84,6 +85,7 @@ struct State {
     recovery_events: Vec<Event>,
     publishing: bool,
     resources: Vec<Resource>,
+    recent_menu_revision: Tracked<()>,
     bindings: HashMap<DocId, String>,
     provider_names: HashMap<DocId, String>,
     provider_revisions: HashMap<DocId, u64>,
@@ -202,6 +204,7 @@ impl Host {
         s.connection_id = connection_id.clone();
         s.provider = Some(next);
         s.enabled = true;
+        s.recent_menu_revision.edit(|_| ());
         s.snapshot = Value::Null;
         Ok(connection_id)
     }
@@ -212,7 +215,9 @@ impl Host {
         if s.busy() {
             return Err("finish or cancel pending file provider operations before unregistering".into());
         }
-        s.provider = None;
+        if s.provider.take().is_some() {
+            s.recent_menu_revision.edit(|_| ());
+        }
         s.connection_id.clear();
         s.enabled = false;
         s.resources.clear();
@@ -243,8 +248,16 @@ impl Host {
         if s.provider.is_none() {
             return Err("file provider is not connected".into());
         }
-        s.enabled = enabled;
+        if s.enabled != enabled {
+            s.enabled = enabled;
+            s.recent_menu_revision.edit(|_| ());
+        }
         Ok(())
+    }
+
+    /// The availability, identity and entries shown in the recent-file menus.
+    pub(crate) fn recent_menu_revision(&self) -> Revision {
+        self.state().recent_menu_revision.revision()
     }
 
     pub(crate) fn connection_id(&self) -> Option<String> {
@@ -385,7 +398,10 @@ impl Host {
         if s.provider.is_none() || s.connection_id != connection_id {
             return Err("the file provider resource list belongs to another connection".into());
         }
-        s.resources = resources;
+        if s.resources != resources {
+            s.resources = resources;
+            s.recent_menu_revision.edit(|_| ());
+        }
         Ok(())
     }
 

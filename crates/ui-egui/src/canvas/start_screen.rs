@@ -11,6 +11,10 @@ use super::PhotocraftApp;
 /// Recent files listed on the Home screen.
 const HOME_RECENT: usize = 11;
 
+/// The recent cards keep one size, as many to a row as fit (six on a desktop window), instead of growing to fill it:
+/// a factor on the card thumbnail.
+const HOME_CARD_ZOOM: f32 = 1.65;
+
 /// The Home screen in the document area. The recent list is empty on the web, which has no paths to reopen, and with
 /// Show Home Recent Files off.
 pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -36,12 +40,15 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // The source reads the app, so the page binds copies of the view and the sort and they are written back after.
     let (mut view, mut sort) = (app.ui.chrome.home_recent_view, app.ui.chrome.home_recent_sort);
     let links = links();
+    let footer = footer_links();
     let actions = {
         let source = crate::home_recent_ui::source(app, &ctx);
         let screen = StartScreen::new(Bind::bound(&mut view), Bind::bound(&mut sort), &recent)
             .thumbnails(&thumbs, &source)
             .links(&links[..])
+            .home_layout(Label::from(crate::native_menu::APP_NAME), &footer[..])
             .max_recent(HOME_RECENT)
+            .card_zoom(HOME_CARD_ZOOM)
             .drop_hint(Label::from(drop_hint));
         if provider_recent {
             // The framework owns the local grid and list; provider resources keep their own section.
@@ -80,14 +87,22 @@ fn reveal(app: &mut PhotocraftApp, path: &std::path::Path) {
     let _ = (app, path);
 }
 
-/// The links of the Home rail: Home, which leaves Home for the open documents, then Learn and the community pages.
-fn links() -> [StartLink; 5] {
+/// The navigation of the Home rail: Home (the page shown, so selected), which leaves Home for the open documents, then
+/// Learn.
+fn links() -> [StartLink; 2] {
     [
-        StartLink::command(tl!("Home"), Some(IconId::new("home")), "window.home"),
+        StartLink::command(tl!("Home"), Some(IconId::new("home")), "window.home").selected(true),
         StartLink::url(tl!("Learn"), Some(IconId::new("sparkles")), crate::links::TUTORIALS),
+    ]
+}
+
+/// The community pages, at the bottom of the Home rail.
+fn footer_links() -> [StartLink; 3] {
+    [
         StartLink::url(tl!("Website"), Some(IconId::new("link")), crate::links::APP_PAGE),
-        StartLink::url(tl!("Discord"), Some(IconId::new("globe")), crate::links::DISCORD),
-        StartLink::url(tl!("GitHub"), Some(IconId::new("globe")), crate::links::GITHUB),
+        // A speech bubble and a chain link, as the rail showed before the framework move (#15449).
+        StartLink::url(tl!("Discord"), Some(IconId::new("note")), crate::links::DISCORD),
+        StartLink::url(tl!("GitHub"), Some(IconId::new("link_layers")), crate::links::GITHUB),
     ]
 }
 
@@ -104,7 +119,11 @@ pub(crate) fn toggle_home(app: &mut PhotocraftApp) {
 }
 
 #[cfg(test)]
-mod tests {
+#[path = "start_screen/tests.rs"]
+mod tests;
+
+#[cfg(test)]
+mod provider_tests {
     use craft::ui::shell::RecentView;
     use egui_kittest::kittest::Queryable;
 
@@ -114,7 +133,7 @@ mod tests {
 
     fn home(width: f32, provider: Option<crate::file_providers::Host>) -> egui_kittest::Harness<'static, (Box<PhotocraftApp>, bool)> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: provider, ..Default::default() });
-        app.ui.recent_files = vec![LOCAL_RECENT.into()];
+        *app.ui.recent_files = vec![LOCAL_RECENT.into()];
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 760.0)).with_context(app.ctx().clone()).build_ui_state(
             |ui, (app, ready): &mut (Box<PhotocraftApp>, bool)| {
                 if *ready {
@@ -152,7 +171,7 @@ mod tests {
             assert_eq!(h.state().0.ui.chrome.home_recent_view, RecentView::List);
             assert!(h.query_by_label("Remote.psd").is_some());
             assert!(h.query_by_role_and_label(egui::accesskit::Role::ListItem, "Local.psd, fixtures").is_some());
-            assert_eq!(h.state().0.ui.recent_files, [LOCAL_RECENT]);
+            assert_eq!(h.state().0.ui.recent_files.as_slice(), [LOCAL_RECENT]);
             assert_eq!(provider.resources().iter().map(|resource| resource.id.as_str()).collect::<Vec<_>>(), ["remote"]);
         }
     }

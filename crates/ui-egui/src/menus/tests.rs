@@ -19,7 +19,7 @@ fn provider_resource_named_dashes_remains_a_command_in_window_native_and_search_
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider.clone()), ..Default::default() });
     let ctx = app.ctx().clone();
     let command = "file.openProviderRecent.dashes";
-    assert!(row(&model(&mut app, &ctx).rows, command).is_none());
+    assert!(row(model(&mut app, &ctx).rows(), command).is_none());
     provider.connect("menu-fixture".into(), "Separator fixtures".into(), "account".into()).unwrap();
     let connection = provider.snapshot()["connectionId"].as_str().unwrap().to_string();
     provider.set_resources(&connection, vec![crate::file_providers::Resource { id: "dashes".into(), name: "---".into(), updated_at: String::new() }]).unwrap();
@@ -30,7 +30,7 @@ fn provider_resource_named_dashes_remains_a_command_in_window_native_and_search_
     assert!(resource.enabled && resource.kind == ItemKind::Plain && !resource.command.id.is_empty());
     assert!(items.iter().any(|row| row.command.id.is_empty() && row.label == "---"), "ordinary separator rows remain separators");
     let shared = model(&mut app, &ctx);
-    assert_eq!(row(&shared.rows, command).unwrap().label, "---");
+    assert_eq!(row(shared.rows(), command).unwrap().label, "---");
     let file = shared.bar.menu(MenuRole::File).unwrap();
     let recent = native_submenu(&file.children, "Open Recent").unwrap();
     let resources = native_submenu(recent, "Separator fixtures").unwrap();
@@ -42,7 +42,7 @@ fn provider_resource_named_dashes_remains_a_command_in_window_native_and_search_
     assert_eq!(listed.len(), 1, "search includes the resource once and excludes separators");
     assert_eq!(listed[0].label().as_str(), "---");
     provider.set_enabled(false).unwrap();
-    assert!(row(&model(&mut app, &ctx).rows, command).is_none(), "idle host changes invalidate the shared menu cache");
+    assert!(row(model(&mut app, &ctx).rows(), command).is_none(), "idle host changes invalidate the shared menu cache");
 }
 
 #[test]
@@ -76,7 +76,7 @@ fn provider_resource_names_remain_literal_in_localized_menus_and_search() {
         let command = CommandRef::new(format!("file.openProviderRecent.{id}"));
         let entry = entries.iter().find(|entry| entry.command() == &command).unwrap();
         assert_eq!(entry.label().as_str(), name);
-        assert_eq!(entry.english().map(|english| english.as_str()), Some(name));
+        assert_eq!(entry.english().map_or(entry.label().as_str(), |english| english.as_str()), name);
     }
     let file = layout.bar.menu(MenuRole::File).unwrap();
     assert_eq!(file.title, "Fichier");
@@ -90,26 +90,44 @@ fn provider_recents_stay_separate_from_local_files_and_refresh_without_input() {
     let provider = crate::file_providers::Host::default();
     provider.set_session("menu-recents-fixture-0001".into()).unwrap();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_provider: Some(provider.clone()), ..Default::default() });
-    app.ui.recent_files = vec!["/tmp/drawing.psd".into()];
+    *app.ui.recent_files = vec!["/tmp/drawing.psd".into()];
     let ctx = app.ctx().clone();
-    let local = model(&mut app, &ctx).rows.iter().find(|row| row.command.id == "file.openRecent.0").unwrap();
-    assert_eq!(local.path, ["File", "Open Recent"]);
-    provider.connect("menu-fixture".into(), "Local Recent Files".into(), "account".into()).unwrap();
-    let connection = provider.connection_id().unwrap();
+    let command = CommandRef::new("file.openProviderRecent.drawing");
+    let provider_path = ["File", "Open Recent", "File Provider"];
+    let local_path = ["File", "Open Recent", "Local Recent Files"];
+    let local_id = if cfg!(target_arch = "wasm32") { "file.localRecentHint" } else { "file.openRecent.0" };
+
+    let initial = model(&mut app, &ctx);
+    assert_eq!(row(initial.rows(), "file.openRecent.0").unwrap().path, ["File", "Open Recent"]);
+    assert!(initial.bar.find(&command).is_none());
+
+    let connection = provider.connect("menu-fixture".into(), "Local Recent Files".into(), "account".into()).unwrap();
+    let connected = model(&mut app, &ctx);
+    let empty = row(connected.rows(), "file.providerRecentEmpty").unwrap();
+    assert_eq!(empty.path, provider_path);
+    assert!(!empty.enabled);
+    assert_eq!(row(connected.rows(), local_id).unwrap().path, local_path);
+
     let resources = |name: &str| vec![crate::file_providers::Resource { id: "drawing".into(), name: name.into(), updated_at: String::new() }];
     provider.set_resources(&connection, resources("drawing.psd")).unwrap();
-    let shared = model(&mut app, &ctx);
-    assert_eq!(row(&shared.rows, "file.openProviderRecent.drawing").unwrap().path, ["File", "Open Recent", "File Provider"]);
-    let local_id = if cfg!(target_arch = "wasm32") { "file.localRecentHint" } else { "file.openRecent.0" };
-    assert_eq!(row(&shared.rows, local_id).unwrap().path, ["File", "Open Recent", "Local Recent Files"]);
-    assert_eq!(app.ui.recent_files, ["/tmp/drawing.psd"]);
-    provider.set_resources(&connection, resources("full.name.with.ellipsis…")).unwrap();
-    assert_eq!(row(&model(&mut app, &ctx).rows, "file.openProviderRecent.drawing").unwrap().label, "full.name.with.ellipsis…");
-    let before = native_menu::state_hash(&app, None);
+    let listed = model(&mut app, &ctx);
+    assert!(row(listed.rows(), "file.providerRecentEmpty").is_none());
+    assert_eq!(row(listed.rows(), &command.id).unwrap().path, provider_path);
+    assert_eq!(listed.bar.find(&command).unwrap().label, "drawing.psd");
+    assert_eq!(row(listed.rows(), local_id).unwrap().path, local_path);
+    assert_eq!(*app.ui.recent_files, vec!["/tmp/drawing.psd".to_string()]);
+
+    let renamed = "full.name.with.ellipsis…";
+    provider.set_resources(&connection, resources(renamed)).unwrap();
+    assert_eq!(row(model(&mut app, &ctx).rows(), &command.id).unwrap().label, renamed);
+    assert_eq!(native_menu::laid_out(&mut app, &ctx).bar.find(&command).unwrap().label, renamed);
+
     provider.set_enabled(false).unwrap();
-    assert_ne!(before, native_menu::state_hash(&app, None));
-    assert!(!is_enabled(&app, "file.openProviderRecent.drawing"));
-    assert!(row(&model(&mut app, &ctx).rows, "file.openProviderRecent.drawing").is_none());
+    assert!(!is_enabled(&app, &command.id));
+    let disabled = model(&mut app, &ctx);
+    assert!(row(disabled.rows(), &command.id).is_none(), "idle provider changes invalidate the shared menu cache");
+    assert_eq!(row(disabled.rows(), local_id).unwrap().path, local_path);
+    assert!(native_menu::laid_out(&mut app, &ctx).bar.find(&command).is_none());
 }
 
 #[test]
@@ -215,20 +233,29 @@ fn shared_menu_choices_keep_exact_english_aliases_and_titles() {
         (CommandRef::with_params(LANGUAGE_COMMAND, json!({"lang": "en"})), i18n.name(i18n.from_code("en").unwrap()).to_string()),
         (CommandRef::with_params(LANGUAGE_COMMAND, json!({"lang": "az"})), i18n.name(i18n.from_code("az").unwrap()).to_string()),
     ];
+    let mac = Target::current() == Target::Mac;
+    let visible_choices = theme_choices.iter().chain(language_choices.iter().filter(|_| mac));
     let shared = model(&mut app, &ctx);
-    for (command, english) in theme_choices.iter().chain(&language_choices) {
-        assert_eq!(shared.english_label(command).as_deref(), Some(english.as_str()), "{command:?}");
+    for (command, english) in visible_choices.clone() {
+        let item = shared.bar.find(command).expect("the shared command is visible on this platform");
+        assert_eq!(item.english.as_deref().unwrap_or(&item.label), english.as_str(), "{command:?}");
     }
-    assert_eq!(shared.english_label(&CommandRef::with_params(THEME_COMMAND, json!({"mode": "unknown"}))), None);
-    assert_eq!(shared.english_label(&CommandRef::with_params(LANGUAGE_COMMAND, json!({"lang": "unknown"}))), None);
-    assert_eq!(shared.english_title(words.set::<ThemeLabels>().theme.as_str()).as_deref(), Some("Appearance"));
-    if Target::current() == Target::Mac {
-        assert_eq!(shared.english_title(words.set::<LanguageLabels>().language.as_str()).as_deref(), Some("Language"));
+    assert!(shared.bar.find(&CommandRef::with_params(THEME_COMMAND, json!({"mode": "unknown"}))).is_none());
+    assert!(shared.bar.find(&CommandRef::with_params(LANGUAGE_COMMAND, json!({"lang": "unknown"}))).is_none());
+    let theme_labels = words.set::<ThemeLabels>();
+    let language_labels = words.set::<LanguageLabels>();
+    let titles = [(theme_labels.theme.as_str(), "Appearance"), (language_labels.language.as_str(), "Language")];
+    for (shown, expected) in titles.into_iter().take(if mac { 2 } else { 1 }) {
+        let english = shared.bar.menus.iter().flat_map(|menu| &menu.children).find_map(|node| match node {
+            Node::Submenu { label, english, .. } if label == shown => Some(english.as_deref().unwrap_or(label)),
+            _ => None,
+        });
+        assert_eq!(english, Some(expected));
     }
     let listed = help_entries(&mut app, &ctx);
-    for (command, english) in theme_choices.iter().chain(language_choices.iter().filter(|_| Target::current() == Target::Mac)) {
+    for (command, english) in visible_choices {
         let entry = listed.iter().find(|entry| entry.command() == command).expect("the visible shared menu choice is searchable");
-        assert_eq!(entry.english().map(|label| label.as_str()), Some(english.as_str()), "{command:?}");
+        assert_eq!(entry.english().map_or(entry.label().as_str(), |label| label.as_str()), english.as_str(), "{command:?}");
     }
 }
 
