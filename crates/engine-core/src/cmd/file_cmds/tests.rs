@@ -2019,7 +2019,7 @@ fn open_as_vectorcraft_uses_the_vectorcraft_reader() {
     let renamed = join(&dir, "mystery.bin");
     std::fs::write(&renamed, vectorcraft_file(40, 20, "0 0 1")).unwrap();
     for ext in ["vectorcraft", "drawcraft", ".VectorCraft"] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.openAs", json!({"path": renamed, "as": ext})).unwrap();
         assert_eq!((doc(&s).size.width, doc(&s).size.height), (40, 20), "{ext}");
     }
