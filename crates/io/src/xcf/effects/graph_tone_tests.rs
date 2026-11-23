@@ -1,6 +1,5 @@
 //! Original synthetic inputs qualify ordinary native controls, not GEGL fidelity.
 use super::linear_graph_tests::{evidence, fixture};
-use super::*;
 use photocraft_doc::{LayerContent, SmartSource, import_conversion::ConversionDisposition};
 
 fn allow(_: &str, _: &serde_json::Value) -> std::result::Result<(), crate::native_xcf_tones::AuthorizationError> {
