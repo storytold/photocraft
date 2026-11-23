@@ -96,9 +96,9 @@ fn saved_airbrush_group_keeps_legacy_and_explicit_rates_across_reopen() {
 #[test]
 fn sessions_have_no_store_by_default() {
     let mut s = crate::session();
-    assert!(s.preset_store.is_none(), "headless sessions must stay hermetic");
+    assert!(s.preset_store().is_none(), "headless sessions must stay hermetic");
     s.execute("brush.presets.save", json!({"name": "Mine"})).unwrap();
-    assert!(s.preset_store.is_none());
+    assert!(s.preset_store().is_none());
 }
 
 #[test]
@@ -399,7 +399,7 @@ fn write_failures_are_warnings() {
     s.attach_preset_store(open_dir(&dir.0));
     s.tools.brush.tip = TipShape::Sampled(tip8(4, 4, 0)).into();
     s.execute("brush.presets.save", json!({"name": "Nope"})).unwrap();
-    let w = s.preset_store.as_mut().unwrap().take_warnings();
+    let w = s.preset_store_mut().unwrap().take_warnings();
     assert!(!w.is_empty());
     let _ = std::fs::remove_file(&dir.0);
 }
@@ -433,7 +433,7 @@ fn bench_load_500_sampled_presets() {
     let t0 = std::time::Instant::now();
     s.sync_preset_store();
     let write = t0.elapsed();
-    let bytes = s.preset_store.as_ref().unwrap().bytes();
+    let bytes = s.preset_store().unwrap().bytes();
     let t0 = std::time::Instant::now();
     let o = open_dir(&dir.0);
     let load = t0.elapsed();
@@ -488,7 +488,7 @@ fn library_samples(s: &Session) -> usize {
 }
 
 fn cache(s: &Session) -> TipCacheStats {
-    s.preset_store.as_ref().unwrap().tip_cache()
+    s.preset_store().unwrap().tip_cache()
 }
 
 #[test]
@@ -541,7 +541,7 @@ fn the_decoded_tip_cache_stays_within_its_budget() {
     let mut t = crate::session();
     t.attach_preset_store(open(Box::new(mem)));
     let one = 256 * 256 * 2;
-    t.preset_store.as_ref().unwrap().set_tip_cache_limit(one * 2 + 1);
+    t.preset_store().unwrap().set_tip_cache_limit(one * 2 + 1);
     for i in 0..6 {
         t.execute("tools.setBrush", json!({"preset": format!("Big {i}")})).unwrap();
         let c = cache(&t);
@@ -555,7 +555,7 @@ fn the_decoded_tip_cache_stays_within_its_budget() {
     t.execute("tools.setBrush", json!({"preset": "Big 0"})).unwrap();
     assert_eq!(cache(&t).decodes, 7);
     // A budget below one tip still loads it (the brush in use holds its own reference).
-    t.preset_store.as_ref().unwrap().set_tip_cache_limit(0);
+    t.preset_store().unwrap().set_tip_cache_limit(0);
     assert_eq!(cache(&t).tips, 0);
     t.execute("tools.setBrush", json!({"preset": "Big 1"})).unwrap();
     assert!(matches!(&*t.tools.brush.tip, TipShape::Stored(r) if r.is_loaded()));
@@ -775,7 +775,7 @@ fn a_group_file_that_failed_to_load_is_not_overwritten() {
     s.tools.brush.tip = TipShape::Sampled(tip8(4, 4, 0)).into();
     s.execute("brush.presets.save", json!({"name": "New"})).unwrap();
     assert_eq!(mem.files.lock().unwrap().get(&file), Some(&newer), "a file the store could not read was overwritten");
-    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty());
 }
 
 #[test]
@@ -790,7 +790,7 @@ fn an_actions_file_that_failed_to_load_is_not_overwritten() {
     s.execute("actions.stop", json!({})).unwrap();
     s.sync_preset_store();
     assert_eq!(mem.files.lock().unwrap().get(ACTIONS_FILE), Some(&newer), "an actions file the store could not read was overwritten");
-    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty());
 }
 
 // A PhotoCraft actions file that keyed calls and shortcuts by stored action id loads with names
@@ -1000,7 +1000,7 @@ fn a_patterns_file_that_failed_to_load_is_not_overwritten() {
     s.execute("edit.definePattern", json!({"name": "New"})).unwrap();
     s.sync_preset_store();
     assert_eq!(mem.files.lock().unwrap().get(PATTERNS_FILE), Some(&unreadable), "a patterns file the store could not read was overwritten");
-    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty());
+    assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty());
 }
 
 /// A `.pat` of one 4×4 pattern with id `id`, filled with `rgba`.
@@ -1072,7 +1072,7 @@ fn a_failed_patterns_removal_is_retried() {
     backend.fail.store(true, std::sync::atomic::Ordering::SeqCst);
     s.execute("pattern.delete", json!({"pattern": id})).unwrap();
     s.sync_preset_store();
-    assert!(!s.preset_store.as_mut().unwrap().take_warnings().is_empty(), "the failure is warned");
+    assert!(!s.preset_store_mut().unwrap().take_warnings().is_empty(), "the failure is warned");
     backend.fail.store(false, std::sync::atomic::Ordering::SeqCst);
     s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
     s.sync_preset_store();

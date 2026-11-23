@@ -125,7 +125,7 @@ pub(crate) fn close_spelling(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(d) = app.ui.type_panels.spell.take() else { return };
     let mut recording_error = None;
-    if app.session.actions.recording.is_some() && run(app, "edit.checkSpelling", json!({ "allLayers": d.all_layers })).is_none() {
+    if app.session.recording.target.is_some() && run(app, "edit.checkSpelling", json!({ "allLayers": d.all_layers })).is_none() {
         recording_error = Some(app.ui.status.clone());
     }
     if let Some(token) = d.resume {

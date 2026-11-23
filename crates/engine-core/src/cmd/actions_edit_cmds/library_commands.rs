@@ -11,6 +11,7 @@ use craft::automation::actions::{ActionList, ActionListError, LibraryEdit};
 use serde_json::{Value, json};
 
 use crate::actions_cmds::{Action, ActionStep, ActionsFile, is_action_key, list_error, not_playing};
+use crate::preset_store::PresetStoreExt;
 use crate::{Result, Session};
 
 use super::bad;
@@ -44,7 +45,7 @@ pub(crate) fn enabled(s: &Session) -> std::result::Result<(), String> {
 
 fn idle(s: &Session, cmd: &str) -> Result<()> {
     not_playing(s, cmd)?;
-    if s.actions.recording.is_some() {
+    if s.recording.target.is_some() {
         return Err(bad(cmd, "stop recording before changing the Actions library"));
     }
     Ok(())
@@ -112,7 +113,7 @@ pub(crate) fn publish_library<R>(s: &mut Session, cmd: &str, shortcuts: Option<S
         after_alternates: after.1,
         replaced_before_attachment: s.actions.replaced_before_attachment,
     };
-    if replacing && s.preset_store.is_none() {
+    if replacing && s.preset_store().is_none() {
         s.actions.replaced_before_attachment = true;
     }
     s.actions.list = list;
@@ -127,7 +128,7 @@ pub(super) fn clear(s: &mut Session, p: &Value) -> Result<Value> {
     let prefs = s.prefs();
     let keys = prefs.shortcuts.keys().chain(prefs.alternate_shortcuts.keys()).any(|id| is_action_key(id));
     // Before the store attaches, an empty list still clears the stored library.
-    if count != 0 || !s.actions.list.sets().is_empty() || keys || (s.preset_store.is_none() && !s.actions.replaced_before_attachment) {
+    if count != 0 || !s.actions.list.sets().is_empty() || keys || (s.preset_store().is_none() && !s.actions.replaced_before_attachment) {
         publish_library(s, CMD, Some(Shortcuts::new()), ActionList::clear_all)?;
     }
     Ok(json!({"cleared": count}))
@@ -204,7 +205,7 @@ pub(super) fn undo(s: &mut Session, _: &Value) -> Result<Value> {
     undo_state(s)?;
     let undo = s.actions.library_undo.take().ok_or_else(|| list_error(CMD, ActionListError::NothingToUndo))?;
     s.actions.list.undo_library().map_err(|error| list_error(CMD, error))?;
-    if s.preset_store.is_none() {
+    if s.preset_store().is_none() {
         s.actions.replaced_before_attachment = undo.replaced_before_attachment;
     }
     replace_bindings(s, undo.shortcuts, undo.alternates);

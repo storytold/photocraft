@@ -27,9 +27,9 @@ fn tool_recording_is_opt_in_and_toggles_do_not_reclassify_pending_steps() {
     s.execute("actions.record", json!({"action":"A"})).unwrap();
     stroke(&mut s, "#ff0000");
     s.execute("select.all", json!({})).unwrap();
-    let original = s.actions.clone();
+    let original = (s.actions.clone(), s.recording.clone());
     assert!(s.execute("actions.allowToolRecording", json!({"enabled":"yes"})).is_err());
-    assert_eq!(s.actions, original, "invalid mode must not flush pending work");
+    assert_eq!((s.actions.clone(), s.recording.clone()), original, "invalid mode must not flush pending work");
     s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap();
     stroke(&mut s, "#00ff00");
     s.execute("actions.allowToolRecording", json!({"enabled":false})).unwrap();
@@ -54,7 +54,7 @@ fn background_stroke_ownership_does_not_suppress_ordinary_filter_jobs() {
         let changed = s.execute("actions.allowToolRecording", json!({"enabled":true}));
         if command == "paint.remove" {
             assert!(changed.is_err(), "the in-flight stroke retains the mode it started under");
-            assert!(!s.actions.record_tools);
+            assert!(!s.recording.record_tools);
         } else {
             changed.unwrap();
         }
@@ -132,10 +132,10 @@ fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
     }
     empty.execute("actions.duplicate", json!({"set":"E"})).unwrap();
     assert_eq!(actions_edit_cmds::set_names(&empty), ["E", "E copy", "F"]);
-    let original = empty.actions.clone();
+    let original = (empty.actions.clone(), empty.recording.clone());
     for params in [json!({"set":"Missing"}), json!({"set":"E","action":0}), json!({"set":false})] {
         assert!(empty.execute("actions.duplicate", params).is_err());
-        assert_eq!(empty.actions, original);
+        assert_eq!((empty.actions.clone(), empty.recording.clone()), original);
     }
 }
 
@@ -166,12 +166,12 @@ fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() 
         }
     }
     let mut s = session();
-    let original = s.actions.clone();
+    let original = (s.actions.clone(), s.recording.clone());
     for params in
         [json!({"action":"A","id":"layer.setProps"}), json!({"action":"A","id":"file.open"}), json!({"action":"A","id":"image.imageSize","params":{"width":4}})]
     {
         assert!(s.execute("actions.insertMenuItem", params).is_err());
-        assert_eq!(s.actions, original);
+        assert_eq!((s.actions.clone(), s.recording.clone()), original);
     }
     let mut raw = craft_psd::atn::AtnFile::default();
     raw.actions.push(craft_psd::atn::AtnAction {

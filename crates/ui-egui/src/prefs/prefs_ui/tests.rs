@@ -10,6 +10,7 @@ use craft::theme::ThemeId;
 use craft::ui::patterns::preferences::{PrefValue, SettingsDraft};
 use egui::{Color32, vec2};
 use photocraft_engine::prefs::{self, AppearanceMode};
+use photocraft_engine::preset_store::PresetStoreExt;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -974,7 +975,7 @@ fn restart_cases() -> Vec<Case> {
                 assert!(early.files.lock().unwrap().is_empty());
                 tx.send(photocraft_engine::preset_store::open(Box::new(early.clone()))).unwrap();
                 tick(app, ctx);
-                assert!(app.services.preset_store.is_none() && app.session.preset_store.is_some());
+                assert!(app.services.preset_store.is_none() && app.session.preset_store().is_some());
                 app.run("brush.presets.save", json!({"name": "Late"})).unwrap();
             }),
             check: Box::new(move |_, _, _| {

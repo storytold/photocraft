@@ -775,7 +775,7 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
 /// Refuses a batch or droplet nested past [`MAX_BATCH_DEPTH`](crate::actions_cmds::MAX_BATCH_DEPTH),
 /// before it reads or decodes anything: each level keeps its parent's scratch document open.
 pub(crate) fn check_batch_depth(s: &Session, cmd: &str) -> Result<()> {
-    if s.actions.batch_depth >= crate::actions_cmds::MAX_BATCH_DEPTH {
+    if s.recording.batch_depth >= crate::actions_cmds::MAX_BATCH_DEPTH {
         return Err(EngineError::BatchLimit(format!(
             "invalid parameters for `{cmd}`: batches and droplets are nested more than {} deep",
             crate::actions_cmds::MAX_BATCH_DEPTH
@@ -889,7 +889,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         .action_history
         .as_ref()
         .map(|group| group.name.clone())
-        .or_else(|| s.actions.playback_stack.first().cloned())
+        .or_else(|| s.recording.playback_stack.first().cloned())
         .or_else(|| called_name.clone())
         .or_else(|| p.get("action").and_then(Value::as_str).map(str::to_string))
         .or_else(|| p.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).map(str::to_string))
@@ -939,31 +939,30 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // action starts fresh; standalone explicit steps retain their existing behavior. A batch nested
     // in another batch (a droplet a droplet runs) is charged the same way, so the levels share one budget.
     let named = called_name.is_some();
-    let nested = s.actions.playing > 0 || s.actions.batch_depth > 0;
+    let nested = s.recording.playing > 0 || s.recording.batch_depth > 0;
     let mut playback_steps = 0;
     if nested || named {
-        let spent = if nested { s.actions.playback_steps } else { 0 };
+        let spent = if nested { s.recording.playback_steps } else { 0 };
         playback_steps =
             spent.saturating_add((steps.len().max(1) as u64).saturating_mul(if source == "open" { s.documents().len() } else { inputs.len() } as u64));
         if playback_steps > crate::actions_cmds::MAX_PLAYBACK_STEPS {
             return Err(EngineError::BatchLimit(format!("invalid parameters for `{cmd}`: this batch would exceed the action playback step limit")));
         }
         if nested {
-            s.actions.playback_steps = playback_steps;
+            s.recording.playback_steps = playback_steps;
         }
     }
-    let mut playback_stack = s.actions.playback_stack.clone();
+    let mut playback_stack = s.recording.playback_stack.clone();
     playback_stack.extend(called_name);
-    let actions = crate::actions_cmds::ActionState {
-        list: s.actions.list.clone(),
-        called,
-        playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },
+    let actions = crate::actions_cmds::ActionState { list: s.actions.list.clone(), called, ..Default::default() };
+    let run = crate::ActionRecording {
+        playing: if named { s.recording.playing.saturating_add(1) } else { s.recording.playing },
         playback_stack,
         playback_steps,
-        script_depth: s.actions.script_depth,
-        script_steps: s.actions.script_steps,
+        script_depth: s.recording.script_depth,
+        script_steps: s.recording.script_steps,
         budget_shared: nested,
-        batch_depth: s.actions.batch_depth.saturating_add(1),
+        batch_depth: s.recording.batch_depth.saturating_add(1),
         ..Default::default()
     };
     if source == "open" {
@@ -972,18 +971,18 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         // As in ordinary named playback, suspend it while executing and restore the Batch owner.
         let previous_recording = if named {
             crate::actions_cmds::flush_recording(s)?;
-            s.actions.recording.take()
+            s.recording.target.take()
         } else {
             None
         };
         // Swap only the execution context (the playback counters and the actions playback calls);
         // the user's list, the recorder and the script counters stay.
-        let previous_playing = std::mem::replace(&mut s.actions.playing, actions.playing);
-        let previous_stack = std::mem::replace(&mut s.actions.playback_stack, actions.playback_stack);
-        let previous_steps = std::mem::replace(&mut s.actions.playback_steps, actions.playback_steps);
+        let previous_playing = std::mem::replace(&mut s.recording.playing, run.playing);
+        let previous_stack = std::mem::replace(&mut s.recording.playback_stack, run.playback_stack);
+        let previous_steps = std::mem::replace(&mut s.recording.playback_steps, run.playback_steps);
         // The nesting depth and shared budget of the levels above travel with the run too.
-        let previous_shared = std::mem::replace(&mut s.actions.budget_shared, actions.budget_shared);
-        let previous_depth = std::mem::replace(&mut s.actions.batch_depth, actions.batch_depth);
+        let previous_shared = std::mem::replace(&mut s.recording.budget_shared, run.budget_shared);
+        let previous_depth = std::mem::replace(&mut s.recording.batch_depth, run.batch_depth);
         let previous_called = std::mem::replace(&mut s.actions.called, actions.called);
         let owns_history = s.action_history.is_none() && s.prefs().actions.create_single_history_state;
         if owns_history {
@@ -993,16 +992,16 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         if owns_history {
             crate::actions_cmds::finish_document_history(s);
         }
-        s.actions.playing = previous_playing;
-        s.actions.playback_stack = previous_stack;
-        s.actions.budget_shared = previous_shared;
-        s.actions.batch_depth = previous_depth;
+        s.recording.playing = previous_playing;
+        s.recording.playback_stack = previous_stack;
+        s.recording.budget_shared = previous_shared;
+        s.recording.batch_depth = previous_depth;
         s.actions.called = previous_called;
         if previous_playing == 0 && !previous_shared {
-            s.actions.playback_steps = previous_steps;
+            s.recording.playback_steps = previous_steps;
         }
         if named {
-            s.actions.recording = previous_recording;
+            s.recording.target = previous_recording;
         }
         return result;
     }
@@ -1028,7 +1027,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let prefs = s.prefs.clone();
     let color_settings = s.color.settings.clone();
     let raw_settings = s.batch_raw_open.as_ref().unwrap_or(&s.prefs().raw_defaults).clone();
-    let script_count = s.actions.script_steps;
+    let script_count = s.recording.script_steps;
     let outputs: Vec<(String, String)> = if save_and_close {
         inputs.iter().map(|input| (input.path.clone(), input.path.clone())).collect()
     } else {
@@ -1083,7 +1082,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                     scratch.batch_open_notices = Some(Vec::new());
                 }
                 if override_open {
-                    scratch.batch_open = Some(super::open::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, read_only: false });
+                    scratch.batch_open = Some(crate::state::BatchOpen { path: path.to_string(), sources: Vec::new(), raw_ppi, read_only: false });
                 } else {
                     let bytes = read_file(path)?;
                     if quiet_profiles || quiet_raw {
@@ -1157,8 +1156,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 };
                 scratch.authorize = authorize;
                 scratch.actions = actions.clone();
-                scratch.actions.playback_steps = carried.get();
-                scratch.actions.script_steps = script_steps.get();
+                scratch.recording = run.clone();
+                scratch.recording.playback_steps = carried.get();
+                scratch.recording.script_steps = script_steps.get();
                 scratch.prefs.edit(|prefs| prefs.actions = action_prefs.clone());
                 let owns_history = scratch.action_history.is_none() && scratch.prefs().actions.create_single_history_state;
                 if owns_history {
@@ -1226,8 +1226,8 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 if let Some(observe) = history_observer {
                     observe(scratch);
                 }
-                carried.set(scratch.actions.playback_steps);
-                script_steps.set(scratch.actions.script_steps);
+                carried.set(scratch.recording.playback_steps);
+                script_steps.set(scratch.recording.script_steps);
                 result
             };
             let mut result = process_batch_outputs_with(
@@ -1244,9 +1244,9 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         },
         move |s, (result, carried, script_steps)| {
             if was_playing {
-                s.actions.playback_steps = carried;
+                s.recording.playback_steps = carried;
             }
-            s.actions.script_steps = script_steps;
+            s.recording.script_steps = script_steps;
             let mut result = result;
             mark_script_limit(s, &mut result);
             if let (Some(notices), Some(imports)) = (&mut s.batch_open_notices, result.get("notices").and_then(Value::as_array)) {
@@ -1402,14 +1402,14 @@ fn batch_open_documents(
 /// A Batch run from a script charges each step it executes to the script's total, as nested
 /// playback does (`consume_playback_step`); the Batch itself is only one script step.
 fn charge_script_step(s: &mut Session) -> Result<()> {
-    if s.actions.script_depth == 0 {
+    if s.recording.script_depth == 0 {
         return Ok(());
     }
     let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
-    if s.actions.script_steps >= max {
+    if s.recording.script_steps >= max {
         return Err(EngineError::Other(format!("the script ran more than {max} steps in all (scripts calling scripts)")));
     }
-    s.actions.script_steps += 1;
+    s.recording.script_steps += 1;
     Ok(())
 }
 
@@ -1419,7 +1419,7 @@ fn charge_script_step(s: &mut Session) -> Result<()> {
 fn mark_script_limit(s: &Session, result: &mut Value) {
     let max = crate::automate_cmds::MAX_SCRIPT_STEPS;
     let failed = result.get("errors").and_then(Value::as_array).is_some_and(|errors| !errors.is_empty());
-    if s.actions.script_depth > 0 && s.actions.script_steps >= max && failed {
+    if s.recording.script_depth > 0 && s.recording.script_steps >= max && failed {
         result["scriptLimitError"] = json!(format!("the script ran more than {max} steps in all (scripts calling scripts)"));
     }
 }

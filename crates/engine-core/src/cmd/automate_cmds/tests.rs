@@ -797,7 +797,7 @@ fn scripts_nested_deeper_than_the_limit_fail() {
     let r = s.execute("file.scripts.browse", json!({"path": below})).unwrap();
     assert_eq!(r["ok"], false, "{r}");
     assert!(r.to_string().contains("nested more than"), "{r}");
-    assert_eq!(s.actions.script_depth, 0, "the depth is released");
+    assert_eq!(s.recording.script_depth, 0, "the depth is released");
 }
 
 /// A droplet captures only the actions its enabled steps can call: a disabled Play step in a

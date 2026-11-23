@@ -1,5 +1,5 @@
 //! Consolidate document history after commands finish their own atomic transactions.
-use super::{EngineError, Result, Session};
+use crate::{EngineError, Result, Session};
 use photocraft_doc::{DocId, Document};
 use photocraft_ops::{History, LayerTarget};
 use std::collections::HashSet;
@@ -39,8 +39,13 @@ pub(crate) struct ActionHistory {
     before: Vec<BeforeDocument>,
 }
 
+/// Active playback and retained dialog continuations keep their chosen history policy.
+pub(crate) fn history_policy_in_use(s: &Session) -> bool {
+    s.recording.playing != 0 || s.action_history.is_some() || s.paused_action_history.iter().any(|lease| lease.strong_count() != 0)
+}
+
 /// The outer play owns one lazy scope; nested plays share its document snapshots.
-pub(super) fn begin(s: &mut Session, name: &str) {
+pub(crate) fn begin(s: &mut Session, name: &str) {
     if s.action_history.is_none() && s.prefs().actions.create_single_history_state {
         s.action_history = Some(ActionHistory { name: name.into(), external: false, before: Vec::new() });
     }
@@ -171,7 +176,7 @@ fn consolidate(s: &mut Session, group: &ActionHistory) {
 }
 
 /// Publish all edited documents once the outer play, including its failure prefix, ends.
-pub(super) fn finish(s: &mut Session) {
+pub(crate) fn finish(s: &mut Session) {
     if let Some(group) = s.action_history.take() {
         consolidate(s, &group);
     }
@@ -191,7 +196,7 @@ pub(crate) fn finish_document_history(s: &mut Session) {
 }
 
 /// Finish an ordinary outer playback without closing a scope owned by the surrounding Batch.
-pub(super) fn finish_playback(s: &mut Session) {
+pub(crate) fn finish_playback(s: &mut Session) {
     if s.action_history.as_ref().is_none_or(|group| !group.external) {
         finish(s);
     }
@@ -272,7 +277,7 @@ impl ActionHistoryContinuation {
     /// Rebind a completed nonmodal dialog edit, leaving open-dialog time outside its scope.
     /// Only the scope resumed from this continuation may be taken; a parent remains untouched.
     pub fn suspend_after_edit(&self, s: &mut Session) -> Result<Self> {
-        if s.actions.playing != 0 || s.active().map(|st| st.doc.id) != self.active {
+        if s.recording.playing != 0 || s.active().map(|st| st.doc.id) != self.active {
             return Err(EngineError::Other("the dialog's action scope is no longer current".into()));
         }
         let active = self.documents.iter().find(|doc| Some(doc.id) == self.active);
@@ -321,7 +326,7 @@ impl ActionHistoryContinuation {
 
 /// Publish the completed prefix, then release the active scope while a dialog is open.
 pub fn suspend_history(s: &mut Session) -> Option<ActionHistoryContinuation> {
-    if s.actions.playing != 1 {
+    if s.recording.playing != 1 {
         return None;
     }
     Some(ActionHistoryContinuation::capture(s))
@@ -329,7 +334,7 @@ pub fn suspend_history(s: &mut Session) -> Option<ActionHistoryContinuation> {
 
 /// End a dialog scope if its command or continuation fails before playback starts.
 pub fn finish_pending_history(s: &mut Session) {
-    if s.actions.playing == 0 {
+    if s.recording.playing == 0 {
         finish_playback(s);
     }
 }
@@ -428,7 +433,7 @@ mod tests {
                     s.execute("layer.renameLayer", json!({"name":name})).unwrap();
                     continuation = continuation.suspend_after_edit(&mut s).unwrap();
                     assert!(s.action_history.is_none(), "idle time must not own a history scope");
-                    assert_eq!(s.actions.playing, 0);
+                    assert_eq!(s.recording.playing, 0);
                 }
                 continuation.resume(&mut s).unwrap();
                 finish_document_history(&mut s);

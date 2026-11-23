@@ -608,7 +608,7 @@ fn play_on_another_document_matches_pixels_at_each_depth() {
         assert_eq!(s.active().unwrap().history.past_len(), before + 3, "depth {depth}: one history step per played step");
         let px = pixel(&s, 1, 5, 5);
         assert!(px.iter().zip([1.0, 0.0, 0.0, 1.0]).all(|(a, b)| (a - b).abs() < 1.0e-5), "depth {depth}: {px:?}");
-        assert_eq!(s.actions.playing, 0);
+        assert_eq!(s.recording.playing, 0);
     }
 }
 
@@ -1016,7 +1016,7 @@ fn play_stops_at_the_failing_step_and_reports_it() {
     assert_eq!(r["failed"]["id"], "not.a.command");
     assert!(r["failed"]["error"].as_str().unwrap().contains("unknown command"));
     assert_eq!(s.active().unwrap().doc.layers.len(), 2, "the step before the failure is kept");
-    assert_eq!(s.actions.playing, 0);
+    assert_eq!(s.recording.playing, 0);
     // A later play still runs.
     assert_eq!(s.execute("actions.play", json!({"action": 0, "from": 1})).unwrap()["ran"], 0);
 }
@@ -1037,7 +1037,7 @@ fn play_refuses_recursion() {
     assert_eq!(r["ran"], 0);
     assert_eq!(r["failed"]["id"], "actions.play");
     assert!(r["failed"]["error"].as_str().unwrap().contains("recursive action"), "{r}");
-    assert_eq!(s.actions.playing, 0);
+    assert_eq!(s.recording.playing, 0);
 }
 
 #[test]
@@ -1195,17 +1195,17 @@ fn delete_one_step_while_recording_keeps_journal_and_remaining_steps() {
     s.execute("layer.new.layer", json!({"name": "Removed"})).unwrap();
     let journal = s.journal.clone();
     let rev = s.actions.list.revision();
-    let before = s.actions.clone();
+    let before = (s.actions.clone(), s.recording.clone());
     for step in [json!(-1), json!(2), json!(0.5), json!(null), json!("0"), json!(u64::MAX)] {
         assert!(s.execute("actions.delete", json!({"action": 0, "step": step})).is_err());
-        assert_eq!(s.actions, before, "invalid deletion is atomic");
+        assert_eq!((s.actions.clone(), s.recording.clone()), before, "invalid deletion is atomic");
     }
     assert_eq!(pending_steps(&s, 0).count(), 2);
     let result = s.execute("actions.delete", json!({"action": 0, "step": 1})).unwrap();
     assert_eq!(result["steps"], 1);
     assert_eq!(s.journal, journal, "deleting a recording does not erase executed commands");
     assert_eq!(s.active().unwrap().doc.layers.len(), 3, "it does not undo document edits");
-    assert!(s.actions.recording.is_some());
+    assert!(s.recording.target.is_some());
     assert!(s.actions.list.revision() > rev);
     s.execute("layer.new.layer", json!({"name": "After"})).unwrap();
     s.execute("actions.stop", json!({})).unwrap();
@@ -1254,7 +1254,7 @@ fn nested_call_records_one_named_step_and_tracks_child_edits() {
     let result = s.execute("actions.play", json!({"action": "Parent"})).unwrap();
     assert!(result.get("failed").is_none(), "{result}");
     assert_eq!(s.active().unwrap().doc.layers.iter().skip(1).map(|l| l.name.as_str()).collect::<Vec<_>>(), ["Before", "Child layer", "Added later", "After"]);
-    assert!(s.actions.playback_stack.is_empty());
+    assert!(s.recording.playback_stack.is_empty());
 }
 
 #[test]
@@ -1301,8 +1301,8 @@ fn nested_failure_cycles_depth_and_authorization_stop_parent() {
     }
     let r = s.execute("actions.play", json!({"action": "N0"})).unwrap();
     assert!(r["failed"]["error"].as_str().unwrap().contains("16 levels"));
-    assert_eq!(s.actions.playing, 0);
-    assert!(s.actions.playback_stack.is_empty());
+    assert_eq!(s.recording.playing, 0);
+    assert!(s.recording.playback_stack.is_empty());
     s.actions.list.delete_step(15, 0).unwrap();
     assert!(s.execute("actions.play", json!({"action": "N0"})).unwrap().get("failed").is_none());
 }
@@ -1315,7 +1315,7 @@ fn move_pending_steps_is_atomic_persists_and_changes_playback_order() {
     for name in ["One", "Two", "Three"] {
         s.execute("layer.new.layer", json!({"name": name})).unwrap();
     }
-    let before = s.actions.clone();
+    let before = (s.actions.clone(), s.recording.clone());
     for params in [
         json!({"action":0,"step":0,"to":3}),
         json!({"action":0,"step":99,"to":0}),
@@ -1324,7 +1324,7 @@ fn move_pending_steps_is_atomic_persists_and_changes_playback_order() {
         json!({"action":0,"to":null}),
     ] {
         assert!(s.execute("actions.move", params).is_err());
-        assert_eq!(s.actions, before);
+        assert_eq!((s.actions.clone(), s.recording.clone()), before);
     }
     let journal = s.journal.clone();
     s.execute("actions.move", json!({"action":0,"step":0,"to":2})).unwrap();
@@ -1345,7 +1345,7 @@ fn new_names_do_not_collide_with_named_calls() {
     assert_eq!(s.execute("actions.record", json!({})).unwrap()["action"], "Action 3");
     s.execute("actions.stop", json!({})).unwrap();
     assert!(s.execute("actions.record", json!({"name":"Action 2"})).is_err());
-    assert!(s.actions.recording.is_none());
+    assert!(s.recording.target.is_none());
 }
 
 #[test]
@@ -1388,7 +1388,7 @@ fn bad_params_do_not_panic() {
             let _ = s.execute(id, p.clone());
         }
     }
-    assert_eq!(s.actions.playing, 0);
+    assert_eq!(s.recording.playing, 0);
     assert!(crate::commands::command_specs().iter().any(|c| c.id == "actions.play" && !c.journal && c.menu.is_empty()));
 }
 
@@ -1658,11 +1658,11 @@ fn record_keeps_an_empty_loaded_sets_exact_name() {
 fn skipped_steps_count_against_the_script_limit() {
     let mut s = crate::session();
     s.actions.list.push(Action::new("A", (0..3).map(|_| ActionStep::new("select.all", json!({}))).collect())).unwrap();
-    s.actions.script_depth = 1;
-    s.actions.script_steps = crate::automate_cmds::MAX_SCRIPT_STEPS - 1;
+    s.recording.script_depth = 1;
+    s.recording.script_steps = crate::automate_cmds::MAX_SCRIPT_STEPS - 1;
     let e = s.execute("actions.play", json!({"action": "A", "from": 3})).err().map(|e| e.to_string());
     assert!(e.is_some_and(|e| e.contains("the script ran more than")));
-    assert_eq!(s.actions.playing, 0);
+    assert_eq!(s.recording.playing, 0);
     assert!(s.action_history.is_none(), "a rejected call leaves no history scope open");
 }
 

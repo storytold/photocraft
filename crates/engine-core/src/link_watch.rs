@@ -21,19 +21,14 @@
 //! ends catches up.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, PoisonError};
 
 use photocraft_doc::{Document, LayerContent, LayerId, SmartSource};
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
 
-/// A file's size and modification time (nanoseconds since 1970).
-pub type Stamp = (u64, u128);
-
-/// Stamps of a document's linked files taken on a worker thread: (document id, [(file, layer
-/// ids, stamp)]).
-pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Vec<u64>, Option<Stamp>)>)>>>;
+pub use crate::state::{LinkScan, Stamp};
 
 /// Stamps `file`, a linked path resolved by [`crate::doc_path`]; `None` (not looked at, like a
 /// missing file) when it is not followed.

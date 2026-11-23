@@ -60,7 +60,7 @@ fn allow_tool_recording_checkbox_records_only_enabled_strokes() {
     h.state_mut().run("actions.record", json!({"action":"A"})).unwrap();
     for enabled in [true, false] {
         fire(&mut h, ActionsPanelCommands::ToolRecording);
-        assert_eq!(h.state().session.actions.record_tools, enabled);
+        assert_eq!(h.state().session.recording.record_tools, enabled);
         h.state_mut().run("paint.stroke", json!({"points":[[2,3],[10,3]],"size":2,"color":if enabled {"#ff0000"} else {"#00ff00"}})).unwrap();
     }
     h.state_mut().run("actions.stop", json!({})).unwrap();

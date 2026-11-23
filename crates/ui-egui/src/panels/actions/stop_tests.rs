@@ -60,8 +60,8 @@ fn nested_app(allow: bool) -> Box<PhotocraftApp> {
 }
 
 pub(super) fn assert_idle(app: &PhotocraftApp) {
-    assert_eq!(app.session.actions.playing, 0);
-    assert!(app.session.actions.playback_stack.is_empty());
+    assert_eq!(app.session.recording.playing, 0);
+    assert!(app.session.recording.playback_stack.is_empty());
     assert!(app.paused_playbacks.paused.is_empty());
     assert!(!app.dialog_open());
 }
@@ -166,12 +166,12 @@ fn a_stop_restores_a_suspended_recording_once_for_every_exit() {
             app.run("actions.record", json!({"name": "Owner"})).unwrap();
             let v = play(&mut app, &json!({"action": "Stop Test"})).unwrap();
             assert_eq!(v["paused"]["step"], 1, "{v}");
-            assert!(app.session.actions.recording.is_none());
+            assert!(app.session.recording.target.is_none());
             {
                 let prompt = stop_prompt(&app);
                 answer(&mut app, prompt, confirm).unwrap();
             }
-            assert!(app.session.actions.recording.is_some());
+            assert!(app.session.recording.target.is_some());
             app.run("actions.stop", json!({})).unwrap();
             let owner = app.session.actions.list.actions().iter().find(|a| a.name == "Owner").unwrap();
             assert_eq!(owner.steps, vec![ActionStep::new("actions.play", json!({"action": "Stop Test"}))]);
@@ -199,7 +199,7 @@ fn continue_inside_a_called_action_finishes_every_caller_once() {
     assert_eq!(prompts_open(&app), 1, "Parent goes on into its own Stop");
     let second = stop_prompt(&app);
     assert_ne!(second, first, "Parent's Stop is a prompt of its own");
-    assert!(app.session.actions.recording.is_none(), "recording stays suspended through both pauses");
+    assert!(app.session.recording.target.is_none(), "recording stays suspended through both pauses");
     answer(&mut app, second, true).unwrap();
     assert_idle(&app);
     let edits: Vec<_> = app.session.journal.iter().filter(|(id, _)| id == "layer.new.layer").map(|(_, p)| p["name"].as_str().unwrap().to_string()).collect();
@@ -208,7 +208,7 @@ fn continue_inside_a_called_action_finishes_every_caller_once() {
     let st = app.session.active().unwrap();
     assert_eq!(st.history.past_len(), history + 1);
     assert_eq!(st.history.undo_label(), Some("Action: Grandparent"));
-    assert!(app.session.actions.recording.is_some());
+    assert!(app.session.recording.target.is_some());
     app.run("actions.stop", json!({})).unwrap();
     let owner = app.session.actions.list.actions().iter().find(|a| a.name == "Owner").unwrap();
     assert_eq!(owner.steps, vec![ActionStep::new("actions.play", json!({"action": "Grandparent"}))]);
