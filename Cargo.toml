@@ -108,6 +108,8 @@ web-time = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# cargo-llvm-cov sets cfg(coverage) for instrumented test builds.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
