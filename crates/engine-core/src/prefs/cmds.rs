@@ -1,0 +1,246 @@
+use super::customize::{keyboard_shortcuts, menus};
+use super::validate::{SECTIONS, get_path, keyed};
+use super::{CommandSpec, EngineError, Map, Result, Session, ToolbarCustomization, Value, json};
+use crate::color_cmds::ColorExt;
+
+// ------------------------------------------------------------------ commands
+
+fn always(_: &Session) -> std::result::Result<(), String> {
+    Ok(())
+}
+
+pub(super) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
+    EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
+}
+
+fn prefs_get(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = p.get("path").and_then(Value::as_str).unwrap_or("");
+    let v = super::saved::prefs_view(s);
+    get_path(&v, path).cloned().ok_or_else(|| bad("prefs.get", format!("unknown preference `{path}`")))
+}
+
+fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "prefs.set";
+    let mut changes: Vec<(String, Value)> = Vec::new();
+    if let Some(path) = p.get("path").and_then(Value::as_str) {
+        changes.push((path.to_string(), p.get("value").cloned().ok_or_else(|| bad(cmd, "missing `value`"))?));
+    }
+    if let Some(m) = p.get("values").and_then(Value::as_object) {
+        changes.extend(m.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+    if changes.is_empty() {
+        return Err(bad(cmd, "give `path` and `value`, or `values: {path: value, …}`"));
+    }
+    // All or nothing: validate against a scratch copy first.
+    let (saved_prefs, saved_color) = (s.prefs().clone(), s.color().settings.clone());
+    let mut color_changed = false;
+    for (path, v) in &changes {
+        match super::saved::set_pref(s, path, v.clone(), false) {
+            Ok(touched) => color_changed |= touched,
+            Err(e) => {
+                s.prefs.edit(|p| *p = saved_prefs);
+                s.color_mut().settings = saved_color;
+                return Err(bad(cmd, e));
+            }
+        }
+    }
+    if color_changed && let Err(e) = crate::color_cmds::validate_settings(&s.color().settings) {
+        s.prefs.edit(|p| *p = saved_prefs);
+        s.color_mut().settings = saved_color;
+        return Err(bad(cmd, e));
+    }
+    // `colorSettings.blendTextGamma` and `spotDotGain` live in the compositor too, as
+    // `edit.colorSettings` sets them. Process-wide: only a colour change moves them, so another
+    // session's values survive this one's unrelated preferences.
+    if color_changed {
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
+    }
+    s.apply_prefs();
+    let view = super::saved::prefs_view(s);
+    let out: Map<String, Value> = changes.iter().map(|(k, _)| (k.clone(), get_path(&view, k).cloned().unwrap_or(Value::Null))).collect();
+    Ok(Value::Object(out))
+}
+
+/// Validate policy-changing resets before mutating either preferences or color settings.
+fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = p.get("path").or_else(|| p.get("section")).and_then(Value::as_str);
+    if !path.is_some_and(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
+        let mut candidate = s.prefs().clone();
+        candidate.reset(path).map_err(|e| bad("prefs.reset", e))?;
+        if candidate.actions.create_single_history_state != s.prefs().actions.create_single_history_state && crate::action_history::history_policy_in_use(s) {
+            return Err(bad("prefs.reset", "cannot change action history settings during playback"));
+        }
+    }
+    match path {
+        Some("colorSettings") => s.color_mut().settings = Default::default(),
+        // One colour setting: `Preferences` has no `colorSettings`, so take the default
+        // from `ColorSettings` and route it like `prefs.set` does.
+        Some(path) if path.starts_with("colorSettings.") => {
+            let defaults = serde_json::to_value(crate::color_cmds::ColorSettings::default()).map_err(|e| bad("prefs.reset", e.to_string()))?;
+            let key = path.strip_prefix("colorSettings.").unwrap_or(path);
+            let def = get_path(&defaults, key).cloned().ok_or_else(|| bad("prefs.reset", format!("unknown preference `{path}`")))?;
+            super::saved::set_pref(s, path, def, true).map_err(|e| bad("prefs.reset", e))?;
+        }
+        None => {
+            s.color_mut().settings = Default::default();
+            s.edit_prefs(|p| p.reset(None)).map_err(|e| bad("prefs.reset", e))?;
+        }
+        Some(path) => {
+            let mut next = s.prefs().clone();
+            next.reset(Some(path)).map_err(|e| bad("prefs.reset", e))?;
+            s.edit_prefs(|p| *p = next);
+        }
+    }
+    s.prefs.edit(|_| ());
+    if path.is_none_or(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
+    }
+    s.apply_prefs();
+    if path.is_some_and(|path| keyed(path).is_some()) {
+        // The removed override is absent, so reading its old path would report an error.
+        Ok(Value::Null)
+    } else {
+        prefs_get(s, &json!({"path": path.unwrap_or("")}))
+    }
+}
+
+/// `edit.preferences.<section>`: the section's values (the GUI opens the dialog on it instead).
+fn preferences_section(s: &mut Session, p: &Value) -> Result<Value> {
+    let section = p.get("__section").and_then(Value::as_str).unwrap_or("general").to_string();
+    let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
+    let values = s.prefs().get(&section).unwrap_or(Value::Null);
+    Ok(json!({"section": section, "title": title, "values": values}))
+}
+
+/// Edit › Toolbar: the toolbar's group layout (`toolbar` slots and `extras`, each a list of tool
+/// groups), and the older flat `hidden` list. Returns the resulting layout.
+fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
+    let ids = |k: &str| -> Option<Vec<String>> { p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()) };
+    // A list of groups; a bare name is a group of one.
+    let groups = |k: &str| -> Result<Option<Vec<Vec<String>>>> {
+        let Some(v) = p.get(k).filter(|v| !v.is_null()) else { return Ok(None) };
+        let list = v.as_array().ok_or_else(|| bad("edit.toolbar", format!("`{k}` needs a list of tool groups")))?;
+        let group = |g: &Value| match g {
+            Value::Array(a) => Ok(a.iter().filter_map(Value::as_str).map(str::to_string).collect()),
+            Value::String(name) => Ok(vec![name.clone()]),
+            _ => Err(bad("edit.toolbar", format!("`{k}` needs a list of tool groups"))),
+        };
+        list.iter().map(group).collect::<Result<Vec<Vec<String>>>>().map(Some)
+    };
+    let (toolbar, extras) = (groups("toolbar")?, groups("extras")?);
+    s.edit_prefs(|pr| {
+        if p.get("reset").and_then(Value::as_bool) == Some(true) {
+            pr.toolbar = ToolbarCustomization::default();
+        }
+        if let Some(h) = ids("hidden") {
+            pr.toolbar.hidden = h;
+        }
+        if toolbar.is_some() || extras.is_some() {
+            let current = pr.toolbar.layout();
+            // Tools a new extras list names leave the current toolbar for it.
+            let named: Vec<String> = extras.iter().flatten().flatten().filter_map(|n| ToolbarCustomization::tool_name(n)).collect();
+            let toolbar =
+                toolbar.clone().unwrap_or_else(|| current.toolbar.iter().map(|g| g.iter().filter(|t| !named.contains(t)).cloned().collect()).collect());
+            let extras = extras.clone().unwrap_or(current.extras);
+            // The new layout holds the hidden tools now; keep it as it was given.
+            let layout = ToolbarCustomization { toolbar: Some(toolbar), extras: Some(extras), ..Default::default() }.layout();
+            pr.toolbar.hidden.clear();
+            pr.toolbar.toolbar = Some(layout.toolbar);
+            pr.toolbar.extras = Some(layout.extras);
+        }
+    });
+    let layout = s.prefs().toolbar.layout();
+    Ok(json!({"toolbar": layout.toolbar, "extras": layout.extras}))
+}
+
+macro_rules! spec {
+    ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $run:expr, $journal:expr) => {
+        CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: always, run: $run, journal: $journal }
+    };
+}
+
+macro_rules! section {
+    ($id:literal, $label:literal) => {
+        section!($id, $label, None)
+    };
+    ($id:literal, $label:literal, $shortcut:expr) => {
+        CommandSpec { id: $id, label: $label, menu: &["Edit", "Preferences"], shortcut: $shortcut, params: r##"{}"##, enabled: always, run: |s, _| preferences_section(s, &json!({"__section": section_of($id)})), journal: false }
+    };
+}
+
+fn section_of(id: &str) -> &str {
+    id.rsplit('.').next().unwrap_or("general")
+}
+
+/// Preference command specs.
+pub fn specs() -> Vec<CommandSpec> {
+    vec![
+        spec!(
+            "prefs.get",
+            "Get Preferences",
+            [],
+            None,
+            r##"{"path":"section.key"?=everything (e.g. "performance.historyStates", "colorSettings.workingRgb")}"##,
+            prefs_get,
+            false
+        ),
+        spec!(
+            "prefs.set",
+            "Set Preferences",
+            [],
+            None,
+            r##"{"path":"section.key","value":json} or {"values":{"section.key":json,…}} (validated; all or nothing)"##,
+            prefs_set,
+            false
+        ),
+        spec!("prefs.reset", "Reset Preferences", [], None, r##"{"path":"section|section.key"?=everything}"##, prefs_reset, false),
+        // Photoshop: ⌘K opens Preferences › General (⌘, is Layer › Hide Layers).
+        section!("edit.preferences.general", "General…", Some("Cmd+K")),
+        section!("edit.preferences.interface", "Interface…"),
+        section!("edit.preferences.workspace", "Workspace…"),
+        section!("edit.preferences.tools", "Tools…"),
+        section!("edit.preferences.historyLog", "History Log…"),
+        section!("edit.preferences.fileHandling", "File Handling…"),
+        section!("edit.preferences.export", "Export…"),
+        section!("edit.preferences.performance", "Performance…"),
+        section!("edit.preferences.scratchDisks", "Scratch Disks…"),
+        section!("edit.preferences.cursors", "Cursors…"),
+        section!("edit.preferences.transparencyAndGamut", "Transparency & Gamut…"),
+        section!("edit.preferences.unitsAndRulers", "Units & Rulers…"),
+        section!("edit.preferences.guidesGridAndSlices", "Guides, Grid & Slices…"),
+        section!("edit.preferences.plugIns", "Plugins…"),
+        section!("edit.preferences.type", "Type…"),
+        section!("edit.preferences.enhancedControls", "Enhanced Controls…"),
+        section!("edit.preferences.rawDefaults", "RAW Defaults…"),
+        section!("edit.preferences.integrations", "Integrations…"),
+        spec!(
+            "edit.keyboardShortcuts",
+            "Keyboard Shortcuts…",
+            ["Edit"],
+            Some("Cmd+Alt+Shift+K"),
+            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"alternates":{"<command id>":["F3",…]|[](none)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"allowUnknown":bool=false (bind ids that are not registered commands, such as actions.play:<name>),"filter":str?,"list":bool=false,"importKys":"<.kys XML>"|{"path":".kys"}?,"useSet":"<name>"|""(defaults)?,"saveSet":"<name>"?,"deleteSet":"<name>"?,"sets":{"<name>":{"shortcuts":{…},"alternateShortcuts":{…}}}?,"activeSet":"<name>"|""?,"exportKys":true|{"path":".kys"}?,"summarize":true|{"mac":bool,"path":".html"}?} (with a path the file is written and the reply has kysPath/htmlPath instead of kys/html)"##,
+            keyboard_shortcuts,
+            true
+        ),
+        spec!(
+            "edit.menus",
+            "Menus…",
+            ["Edit"],
+            Some("Cmd+Alt+Shift+M"),
+            r##"{"hide":["<id>",…]?,"show":["<id>",…]?,"color":{"<id>":"red|orange|yellow|green|blue|violet|gray|none"}?,"reset":bool=false}"##,
+            menus,
+            true
+        ),
+        spec!(
+            "edit.toolbar",
+            "Toolbar…",
+            ["Edit"],
+            None,
+            r##"{"toolbar":[["<tool>",…],…]?,"extras":[["<tool>",…],…]?,"hidden":["<tool>",…]?,"reset":bool=false}"##,
+            toolbar,
+            true
+        ),
+    ]
+}

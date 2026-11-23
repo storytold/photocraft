@@ -340,12 +340,14 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     Ok(dialog)
 }
 
-/// Why the open workspace's work no longer applies: the active layer is not the one it was opened on (another layer
-/// selected by a shortcut or the control channel). `select.refineEdge` works on the active layer, so its edits must
-/// not run there. A document switch is `distort_ui::drop_foreign`'s.
+/// Why the open workspace's work no longer applies: the active document is not the one it was opened on, or the active
+/// layer is not the one it was opened on (another layer selected by a shortcut or the control channel).
+/// `select.refineEdge` works on the active layer of the active document, so its edits must not run there.
 pub(crate) fn stale(app: &PhotocraftApp) -> Option<&'static str> {
     let (_, document, opened_on, _) = app.select_mask_target.as_ref()?;
-    let st = app.session.active().filter(|st| st.doc.id == *document)?;
+    let Some(st) = app.session.active().filter(|st| st.doc.id == *document) else {
+        return Some(tl!("Select and Mask was closed: its document is no longer the active one"));
+    };
     let layer = st.active_layer.filter(|id| st.doc.layer(*id).is_some());
     (layer != Some(*opened_on)).then_some(tl!("Select and Mask was closed: another layer was selected"))
 }
@@ -538,3 +540,6 @@ fn compute(job: Job, cancel: &Cancel) -> Result<Computed, String> {
     let shown = shown.ok_or("the preview failed")?;
     Ok(Computed { shown, cache: Cache { base: base_cache, proxy } })
 }
+
+#[cfg(test)]
+mod tests;

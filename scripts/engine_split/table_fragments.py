@@ -2,7 +2,7 @@
 """Move a branch's edits of the old inline command table into the table fragments.
 
 Before the table was split, `crates/engine/src/cmd.rs` held every core command in one `vec![...]`
-inside `fn build()`. The entries now live in `crates/engine/src/cmd/table/<owner>/<menu>.rs`, and
+inside `fn build()`. The entries now live in `crates/engine-core/src/cmd/table/<owner>/<menu>.rs`, and
 `install/command_ids.txt` pins the registry order. A branch that edited the old table carries its
 edits in `cmd.rs`. This script applies them to the fragments:
 
@@ -29,8 +29,8 @@ Edits outside `build()` (imports in cmd.rs, helper fns, test modules) are not to
 import argparse, os, re, subprocess, sys, tempfile
 
 CMD = "crates/engine/src/cmd.rs"
-TABLE = "crates/engine/src/cmd/table"
-IDS = "crates/engine/src/install/command_ids.txt"
+TABLE = "crates/engine-core/src/cmd/table"
+IDS = "crates/engine-core/src/install/command_ids.txt"
 ID_RE = re.compile(r'"([a-zA-Z]+\.[A-Za-z0-9.]+)"')
 
 

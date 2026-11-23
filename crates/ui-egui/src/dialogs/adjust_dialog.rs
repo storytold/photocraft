@@ -833,15 +833,23 @@ fn follow_target(app: &mut PhotocraftApp, id: DialogId) {
     (open.mode, open.target, open.picker_base, open.picked) = (smart_mode, target, None, None);
 }
 
-/// Authorizes and runs the confirmed command (one history step), then remembers the settings.
-fn run_confirmed(app: &mut PhotocraftApp, ctx: &egui::Context, open: &OpenAdjust, value: &DialogValue, edited: bool) -> Result<(), String> {
+/// What OK on the open dialog runs, `(command, its params, the dialog's params)`: the adjustment command on the dialog's
+/// value, or for a Smart Filter edit the command that replaces the captured filter. OK and the CPU proxy preview
+/// (`canvas::ensure_filter_preview`) both take it from here, so the preview is what OK commits.
+pub(crate) fn confirmed_command(app: &PhotocraftApp, open: &OpenAdjust, value: &DialogValue, edited: bool) -> Result<(String, Value, Value), String> {
     let params = match open.smart_filter {
         Some(_) => smart_filter_params(app, open, value, edited)?,
         None => value.params(edited),
     };
-    crate::actions::authorize_panel_preview(app, open.id, &open.command, &params)?;
     let captured = open.smart_filter.as_ref().map_or(Value::Null, |(_, target)| target.clone());
     let (command, run_params) = crate::smart_ui::confirm_command(app, &captured, open.command.clone(), params.clone())?;
+    Ok((command, run_params, params))
+}
+
+/// Authorizes and runs the confirmed command (one history step), then remembers the settings.
+fn run_confirmed(app: &mut PhotocraftApp, ctx: &egui::Context, open: &OpenAdjust, value: &DialogValue, edited: bool) -> Result<(), String> {
+    let (command, run_params, params) = confirmed_command(app, open, value, edited)?;
+    crate::actions::authorize_panel_preview(app, open.id, &open.command, &params)?;
     // The editor Record Again opened answers the step it was opened for, not a new run of the command.
     if crate::actions::record_again::owns_dialog(app, open.id) {
         crate::actions::record_again::confirm(app, open.id, &command, run_params)?;
@@ -907,3 +915,6 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

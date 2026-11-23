@@ -88,7 +88,7 @@ Conventions and paths:
 
 - `unsafe` is allowed only in `crates/tablet/src/macos.rs` and `windows.rs`; the workspace sets `unsafe_code = "forbid"`. The example plug-in in `examples/plugins/` is outside the workspace and uses `unsafe` for the WebAssembly host calls. Every new crate sets `[lints] workspace = true`.
 - Attribution file: `ATTRIBUTION.md`. Fonts come from storytold/craft-fonts through `CRAFT_FONTS_DIR` (`docs/development.md` > Fonts).
-- Test corpora: storytold/photocraft-corpus, fetched into `corpus/` by `cargo xtask corpus --all` at the pins in `xtask/src/corpus_pins.rs`.
+- Test corpora: storytold/photocraft-corpus, fetched into `corpus/` by `cargo xtask corpus --all` at the pins in `xtask/src/corpus_pins.rs`. `cargo xtask test-corpus` runs each directory's fixed sample; `PHOTOCRAFT_FULL_SWEEP=1` runs every file (CI: samples on pull requests and main, every file nightly).
 - Feature names are recorded in `docs/feature-names.md`.
 - Contributor credits: `docs/contributors.md`.
 - Dev log: `log/devlog.md` (local, gitignored). `plan/` is an optional local notebook.

@@ -295,6 +295,14 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
     }
 }
 
+/// What one straight-alpha sRGB colour becomes under `adj` in an 8-bit RGB document: [`apply_in`] over a 1 x 1 buffer,
+/// so a UI preview of a colour runs the code a layer's pixels run.
+pub fn adjust_color(adj: &Adjustment, color: [f32; 4]) -> [f32; 4] {
+    let mut buf = Buffer { rect: photocraft_geom::Rect { x0: 0, y0: 0, x1: 1, y1: 1 }, px: vec![color] };
+    apply_in(adj, &mut buf, Transfer::Srgb, None, ColorMode::Rgb);
+    buf.px[0]
+}
+
 /// Applies an adjustment in a document of colour `mode`: [`apply_depth`], except that in Lab
 /// and CMYK documents the adjustments Photoshop evaluates on the document's own channels do so
 /// (see [`lab_channel_adjustment`] and [`cmyk_channel_adjustment`]).
