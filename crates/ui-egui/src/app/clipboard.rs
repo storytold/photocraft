@@ -57,7 +57,7 @@ impl PhotocraftApp {
         if self.os_clip_svg.as_deref().is_some_and(|old| old == &source) && holds_vectors_or_newer {
             return Ok(true);
         }
-        let clip = photocraft_engine::edit_cmds::Clip::from_svg(&source).map_err(|error| {
+        let clip = photocraft_engine::edit_cmds::clip_from_svg(&source).map_err(|error| {
             let error = error.to_string();
             self.ui.status = error.clone();
             self.ui.status_error = true;
