@@ -2,7 +2,7 @@
 //! and settings toggle, the framework's `PaintBar`, and the symmetry menu.
 
 use craft::draw::ui::symmetry::SymmetryCommand;
-use craft::draw::ui::{EraserMode, MixerValues, PaintBar, PaintTool, PaintValues, Smoothing};
+use craft::draw::ui::{EraserMode, MixerLoad, MixerValues, PaintBar, PaintTool, PaintValues, Smoothing};
 use craft::theme::Srgba;
 use craft::ui::contract::{Entry, MemoProps, MemoView, Outbox};
 use craft::ui::dialog::{Alert, HostedAlert};
@@ -131,7 +131,8 @@ fn paint_values(app: &PhotocraftApp, tool: Tool, b: &BrushSettings) -> PaintValu
     mixer.flow = f64::from(b.mixer.flow);
     mixer.sample_all_layers = b.mixer.sample_all_layers;
     mixer.combination = o.mixer_combination;
-    mixer.load_color = app.session.tools.mixer.next_load(app.session.tools.foreground).map(Srgba::from_array);
+    mixer.current_load =
+        app.session.tools.mixer.next_load(app.session.tools.foreground).map_or(MixerLoad::Clean, |rgba| MixerLoad::Color(Srgba::from_array(rgba)));
     mixer.solid_colors_only = b.mixer.solid_colors_only;
     v.mixer = mixer;
     v
