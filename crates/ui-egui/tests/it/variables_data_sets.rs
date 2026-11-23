@@ -52,6 +52,17 @@ fn inspect(h: &mut H, id: &str) -> Value {
     listed["result"]["dialogs"].as_array().into_iter().flatten().find(|d| d["id"] == json!(id)).map(|d| d["fields"].clone()).expect("the dialog is listed")
 }
 
+/// The id of the open dialog whose message is `message`, as `ui.inspect` lists it.
+fn alert_id(h: &mut H, message: &str) -> Option<String> {
+    let listed = control(h, "ui.inspect", json!({}));
+    listed["result"]["dialogs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|d| d["fields"]["message"] == json!(message))
+        .and_then(|d| d["id"].as_str().map(str::to_owned))
+}
+
 fn confirm(h: &mut H, id: &str) {
     assert!(!refused(&control(h, "ui.dialog.confirm", json!({"dialog": id}))));
     h.run_steps(3);
@@ -82,6 +93,8 @@ fn pixel_replacement_harness() -> (tempfile::TempDir, H, String) {
     #[cfg(not(target_arch = "wasm32"))]
     photocraft_raster::spill::use_test_volume_space();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
+    // The alert assertions use English text; don't follow the system locale.
+    app.session.prefs.edit(|p| p.interface.language = "en".into());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     let layer = app.session.active().unwrap().active_layer.unwrap();
     let mut h = harness(app);
@@ -149,6 +162,11 @@ fn failed_apply_can_be_corrected_without_retries_or_cancel_rollback() {
     h.get_by_label("Apply").click();
     h.run_steps(3);
     assert!(h.state().ui.status.contains("missing.png"), "{}", h.state().ui.status);
+    // The missing file's alert opens on top (#14500); OK dismisses it.
+    let alert = alert_id(&mut h, "Could not apply data set because the replacement file was not found.").expect("the missing-file alert is open");
+    confirm(&mut h, &alert);
+    assert_eq!(alert_id(&mut h, "Could not apply data set because the replacement file was not found."), None);
+
     assert_eq!(read_pixel(&mut h), json!([1.0, 1.0, 1.0, 1.0]));
     h.state_mut().ui.status.clear();
     h.run_steps(3);
