@@ -34,9 +34,11 @@ pub fn sync(s: &mut Session) {
     if !stale && loose.is_empty() {
         return;
     }
+    // The library's ids apart from the session, which the presets borrow while they change.
+    let ids: Vec<String> = lib.iter().map(|p| p.id.clone()).collect();
     let groups = &mut s.presets_mut().pattern_groups;
     for g in groups.iter_mut() {
-        g.items.retain(in_lib);
+        g.items.retain(|id| ids.contains(id));
     }
     if !loose.is_empty() {
         let gi = group_index(groups, Some(UNGROUPED));

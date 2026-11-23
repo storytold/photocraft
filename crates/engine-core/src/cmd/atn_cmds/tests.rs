@@ -4517,7 +4517,8 @@ fn channel_and_color_steps_load_and_save_back() {
     // Match Color with no reference plays on the image itself.
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
     s.execute("filter.render.clouds", json!({})).unwrap();
-    s.actions_mut().list.push(Action::new("Match", vec![s.actions().list.actions()[0].steps[3].clone()])).unwrap();
+    let step = s.actions().list.actions()[0].steps[3].clone();
+    s.actions_mut().list.push(Action::new("Match", vec![step])).unwrap();
     let played = s.execute("actions.play", json!({"action": "Match"})).unwrap();
     assert_eq!(played["ran"], 1, "{played}");
 }
@@ -6818,7 +6819,7 @@ fn gradient_fill_set_imports_midpoints_plays_and_saves_back_unchanged() {
     let mut s2 = crate::session();
     s2.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded_gradient([50, 50, 50]))])).unwrap())})).unwrap();
     assert_eq!(s2.actions().list.actions()[0].steps[0].params["midpoints"], json!([]));
-    *s.actions_mut() = s2.actions();
+    *s.actions_mut() = s2.actions().clone();
     s.execute("actions.play", json!({"action": "A"})).unwrap();
     let photocraft_doc::Fill::Gradient { midpoints, .. } = active_fill(&s) else { panic!("not a gradient") };
     assert!(midpoints.is_empty() || midpoints.iter().all(|m| *m == 0.5), "{midpoints:?}");
