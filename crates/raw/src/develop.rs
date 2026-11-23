@@ -87,7 +87,7 @@ pub struct Developed {
     pub warnings: Vec<String>,
 }
 
-/// Linearization + black/white scaling for one sample (pre white balance), 0..1.
+/// Linearization + black/white scaling for one sample (pre white balance), without clipping.
 pub(crate) struct Scale<'a> {
     s: &'a Sensor,
     lin: Option<&'a [u16]>,
@@ -102,19 +102,31 @@ impl<'a> Scale<'a> {
     #[inline]
     pub(crate) fn value(&self, x: usize, y: usize, sample: usize) -> f32 {
         let s = self.s;
-        let raw = s.data[(y * s.width + x) * s.samples + sample];
-        let v = match self.lin {
-            Some(l) => f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw)),
-            None => f32::from(raw),
+        let index = (y * s.width + x) * s.samples + sample;
+        let v = if let Some(samples) = &s.float_data {
+            samples[index]
+        } else {
+            let raw = s.data[index];
+            match self.lin {
+                Some(l) => f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw)),
+                None => f32::from(raw),
+            }
         };
         let black = s.black.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), sample, s.samples);
         let white = s.white[sample.min(2)];
         let range = white - black;
-        if range.is_nan() || range < 1.0 {
+        // Floating-point sensor levels use source units: a valid white-minus-black
+        // range may be smaller than one. Only invalid or nonpositive ranges fail.
+        if !range.is_finite() || range <= 0.0 {
             return 0.0;
         }
         let n = (v - black) / range;
-        if n.is_finite() { n } else { 0.0 }
+        let mut n = if n.is_finite() { n } else { 0.0 };
+        let (ax, ay) = (x.saturating_sub(s.active.x), y.saturating_sub(s.active.y));
+        for p in s.polynomials.iter().filter(|p| p.covers(ax, ay, sample)) {
+            n = p.eval(f64::from(n)) as f32;
+        }
+        n
     }
 }
 
@@ -128,9 +140,17 @@ fn fill_linear_row(sc: &Scale, mult: &[f32; 3], x0: usize, y: usize, row: &mut [
     let s = sc.s;
     let spp = s.samples;
     let w = row.len() / 3;
+    if s.float_data.is_some() {
+        for (i, px) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            for k in 0..3 {
+                px[k] = (sc.value(x0 + i, y, k.min(spp.saturating_sub(1))) * mult[k]).clamp(0.0, 1.0);
+            }
+        }
+        return;
+    }
     let bl = &s.black;
     let cols = bl.cols.max(1);
-    if !bl.delta_h.is_empty() || !bl.delta_v.is_empty() || x0 < s.active.x || cols > 16 || !matches!(spp, 1 | 3) {
+    if !bl.delta_h.is_empty() || !bl.delta_v.is_empty() || x0 < s.active.x || cols > 16 || !matches!(spp, 1 | 3) || !s.polynomials.is_empty() {
         for (i, px) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
             for k in 0..3 {
                 px[k] = (sc.value(x0 + i, y, k.min(spp.saturating_sub(1))) * mult[k]).clamp(0.0, 1.0);
@@ -171,11 +191,15 @@ fn fill_samples(row: &mut [f32], raw: impl Iterator<Item = [u16; 3]>, table: &[[
         phase = if phase + 1 == table.len() { 0 } else { phase + 1 };
         for k in 0..3 {
             let (black, range) = t[k];
-            let n = if range.is_nan() || range < 1.0 {
-                0.0
-            } else {
+            // One comparison keeps this per-sample loop as cheap as before. It gives the same
+            // result as the `!range.is_finite() || range <= 0.0` test of `Scale::value`: NaN and
+            // nonpositive ranges fail it, and a +inf range divides a finite numerator to 0 (or to
+            // NaN for an infinite one, which the finiteness check maps to 0).
+            let n = if range > 0.0 {
                 let n = (lin(raw[k]) - black) / range;
                 if n.is_finite() { n } else { 0.0 }
+            } else {
+                0.0
             };
             px[k] = (n * mult[k]).clamp(0.0, 1.0);
         }
@@ -269,7 +293,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     if c.is_empty()
         || c.x.checked_add(c.width).is_none_or(|x| x > s.width)
         || c.y.checked_add(c.height).is_none_or(|y| y > s.height)
-        || samples.is_none_or(|n| s.data.len() < n)
+        || samples.is_none_or(|n| s.sample_count() < n)
     {
         return Err(RawError::malformed("crop lies outside the sensor data"));
     }
@@ -381,8 +405,16 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             let period = if cfa.width % 2 == 0 { cfa.width.max(2) } else { cfa.width * 2 };
             let fill_row = |iy: usize, row: &mut [f32]| {
                 let y = c.y + iy;
-                if periodic {
+                let fill_scalar = |row: &mut [f32]| {
+                    for (i, v) in row.iter_mut().enumerate() {
+                        let x = c.x + i;
+                        let ch = usize::from(cfa.color(x, y)).min(2);
+                        *v = (sc.value(x, y, 0) * mult[ch]).clamp(0.0, 1.0);
+                    }
+                };
+                if periodic && s.float_data.is_none() && s.polynomials.is_empty() {
                     // Per column of the period: black and the combined scale × white-balance gain.
+                    let mut finite_gains = true;
                     let k: Vec<(f32, f32)> = (0..period)
                         .map(|p| {
                             let x = c.x + p;
@@ -390,33 +422,41 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                             let range = s.white[0] - black;
                             // A non-finite black (a BlackLevel DOUBLE beyond f32) gives 0, as
                             // `Scale::value` does, instead of (raw - inf) * 0 = NaN.
-                            if !(range >= 1.0 && black.is_finite()) {
+                            if !(range.is_finite() && range > 0.0 && black.is_finite()) {
                                 return (0.0, 0.0);
                             }
-                            (black, mult[usize::from(cfa.color(x, y)).min(2)] / range)
+                            let gain = mult[usize::from(cfa.color(x, y)).min(2)] / range;
+                            // Scalar normalization rejects a non-finite quotient before
+                            // white balance. A finite gain alone does not prove that
+                            // every U16 numerator divided by this range stays finite.
+                            finite_gains &= gain.is_finite() && ((0.0 - black) / range).is_finite() && ((f32::from(u16::MAX) - black) / range).is_finite();
+                            (black, gain)
                         })
                         .collect();
-                    let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
-                    let ks = k.iter().cycle();
-                    match &sc.lin {
-                        None => {
-                            for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
+                    // Tiny positive ranges can overflow either the combined gain
+                    // or scalar U16 normalization. Select the scalar row once;
+                    // keep the ordinary fast pixel loop intact.
+                    if finite_gains {
+                        let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
+                        let ks = k.iter().cycle();
+                        match &sc.lin {
+                            None => {
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
+                                    *v = ((f32::from(raw) - black) * gain).clamp(0.0, 1.0);
+                                }
+                            }
+                            Some(l) => {
+                                for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
+                                    let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
+                                    *v = ((lin - black) * gain).clamp(0.0, 1.0);
+                                }
                             }
                         }
-                        Some(l) => {
-                            for ((v, &raw), &(black, gain)) in row.iter_mut().zip(src).zip(ks) {
-                                let lin = f32::from(l.get(usize::from(raw)).or_else(|| l.last()).copied().unwrap_or(raw));
-                                *v = ((lin - black) * gain).clamp(0.0, 1.0);
-                            }
-                        }
+                    } else {
+                        fill_scalar(row);
                     }
                 } else {
-                    for (i, v) in row.iter_mut().enumerate() {
-                        let x = c.x + i;
-                        let ch = usize::from(cfa.color(x, y)).min(2);
-                        *v = (sc.value(x, y, 0) * mult[ch]).clamp(0.0, 1.0);
-                    }
+                    fill_scalar(row);
                 }
                 // Lens-shading gain maps, after the white-balance clip so clipped
                 // highlights stay neutral.
@@ -427,13 +467,77 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 }
             };
             let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
-            if bayer && fused {
+            if bayer && fused && matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+                let p = cfa.phase(c.x, c.y);
+                pattern = Some(names(&p));
+                let method = match opts.demosaic {
+                    Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                    Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                };
+                let mut o = vec![0u16; w * h * 3];
+                par::chunks_mut_grouped(&mut o, band * w * 3, jobs, |b, chunk| {
+                    let y0 = b * band;
+                    let rows = chunk.len() / (w * 3);
+                    let y_start = y0.saturating_sub(PAD);
+                    let y_end = (y0 + rows + PAD).min(h);
+                    let sh = y_end - y_start;
+                    let mut strip = vec![0.0f32; w * sh];
+                    for (r, row) in strip.chunks_exact_mut(w).enumerate() {
+                        fill_row(y_start + r, row);
+                    }
+                    let norm = craft_develop::sensor::Normalized {
+                        width: w,
+                        height: sh,
+                        cpp: 1,
+                        data: strip,
+                        cfa: Some(craft_develop::sensor::Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: y_start % 2 }),
+                    };
+                    let dem = craft_develop::sensor::demosaic(&norm, method);
+                    let top_pad = y0 - y_start;
+                    let dem_f32: Vec<f32> = dem.data[top_pad * w..(top_pad + rows) * w].iter().flat_map(|px| *px).collect();
+                    encode_plain(&dem_f32, chunk);
+                });
+                fused_out = Some(o);
+            } else if bayer && fused {
                 // No padded plane either: every band normalizes its own rows.
                 let p = cfa.phase(c.x, c.y);
                 pattern = Some(names(&p));
                 let mut o = vec![0u16; w * h * 3];
                 demosaic_fused(w, h, p, opts.demosaic, &to_xyz, jobs, &fill_row, &mut o, &encode_plain);
                 fused_out = Some(o);
+            } else if matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+                let (cfa_w, cfa_h, cfa_pat) = if bayer {
+                    let p = cfa.phase(c.x, c.y);
+                    pattern = Some(names(&p));
+                    (2, 2, p.to_vec())
+                } else {
+                    let pat = Pattern::of(cfa, c.x, c.y);
+                    pattern = Some(pat.colors.chunks(pat.w.max(1)).map(names).collect::<Vec<_>>().join("/"));
+                    (pat.w, pat.h, pat.colors)
+                };
+                let mut norm_data = vec![0.0f32; w * h];
+                par::chunks_mut(&mut norm_data, band * w, |b, chunk| {
+                    for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
+                        fill_row(b * band + r, row);
+                    }
+                });
+                let norm = craft_develop::sensor::Normalized {
+                    width: w,
+                    height: h,
+                    cpp: 1,
+                    data: norm_data,
+                    cfa: Some(craft_develop::sensor::Cfa { width: cfa_w, height: cfa_h, pattern: cfa_pat, origin_x: 0, origin_y: 0 }),
+                };
+                let method = if !bayer {
+                    craft_develop::sensor::Method::Bilinear
+                } else {
+                    match opts.demosaic {
+                        Demosaic::Bilinear => craft_develop::sensor::Method::Bilinear,
+                        Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
+                    }
+                };
+                let dem = craft_develop::sensor::demosaic(&norm, method);
+                rgb = dem.data.into_iter().flatten().collect();
             } else {
                 let mut plane = Padded::new(w, h);
                 let stride = plane.stride;
@@ -566,6 +670,31 @@ fn fused_band_bytes(w: usize, h: usize, band_rows: usize, window: bool) -> u64 {
     rgb.saturating_add(window)
 }
 
+// Shared Bayer strip demosaic at the pinned craft-develop revision. Count outer
+// buffers per live strip and the nested AHD tile scratch per active rayon worker.
+fn shared_bayer_peak(w: usize, h: usize, rows: usize, ahd: bool, jobs: usize, workers: usize) -> u64 {
+    let w64 = w as u64;
+    let strip = rows.saturating_add(2 * PAD).min(h);
+    let pixels = w64.saturating_mul(strip as u64);
+    // The normalized strip, shared RGB result and flat RGB interior. Reserving a
+    // gain row and CFA/neighbor tables here also covers the normalization peak.
+    let mut per_band = pixels.saturating_mul(16).saturating_add(w64.saturating_mul((rows as u64).saturating_mul(12).saturating_add(4)));
+    per_band = per_band.saturating_add(4096);
+    let mut tile_scratch = 0u64;
+    if ahd && w >= 4 && strip >= 4 {
+        const TILE: usize = 128;
+        const MARGIN: usize = 6;
+        let tiles = w.div_ceil(TILE).saturating_mul(strip.div_ceil(TILE));
+        // Returned tile pixels and the collecting Vec's three-word tuples.
+        per_band = per_band.saturating_add(pixels.saturating_mul(12)).saturating_add((tiles as u64).saturating_mul(5 * std::mem::size_of::<usize>() as u64));
+        // Mosaic/colour, two greens, two RGB and two Lab candidates and two
+        // homogeneity arrays; also allow the two-byte CFA-period allocation.
+        let per_tile = ((w.min(TILE) + 2 * MARGIN) as u64).saturating_mul((strip.min(TILE) + 2 * MARGIN) as u64).saturating_mul(63).saturating_add(2);
+        tile_scratch = per_tile.saturating_mul(workers.min(jobs.saturating_mul(tiles)) as u64);
+    }
+    per_band.saturating_mul(jobs as u64).saturating_add(tile_scratch)
+}
+
 /// Checks the peak of the two development phases. The CFA and non-Bayer green
 /// planes are freed before the u16 output is allocated; the AHD scratch and the fused band
 /// buffers are bounded by reducing simultaneous bands when needed. The fused path never holds
@@ -607,7 +736,15 @@ fn working_memory(w: usize, h: usize, cfa: bool, bayer: bool, shape: Shape, opts
         // The fused Bayer path has no whole plane: each worker's window is counted with its band.
         let plane = if fused && bayer { 0 } else { plane };
         let mut mosaic = pixels.saturating_mul(frame).saturating_add(plane).saturating_add(table);
-        if bayer && opts.demosaic == Demosaic::Ahd {
+        if bayer && fused && matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd) {
+            let rows = par::band_rows(w);
+            jobs = jobs.min(h.div_ceil(rows)).max(1);
+            let strip_peak = |jobs| shared_bayer_peak(w, h, rows.min(h), opts.demosaic == Demosaic::Ahd, jobs, workers.max(1));
+            while jobs > 1 && mosaic.saturating_add(strip_peak(jobs)) > limits.max_alloc {
+                jobs -= 1;
+            }
+            mosaic = mosaic.saturating_add(strip_peak(jobs));
+        } else if bayer && opts.demosaic == Demosaic::Ahd {
             mosaic = mosaic.saturating_add(crate::demosaic::AHD_TABLE_BYTES);
             let scratch = crate::demosaic::ahd_scratch(w as u64, h as u64).saturating_add(band_of(crate::demosaic::AHD_BAND, true));
             // At least one band must fit, even when no parallelism is available.
@@ -837,6 +974,7 @@ mod tests {
             height: h,
             samples,
             data,
+            float_data: None,
             cfa,
             linearization: None,
             black: BlackLevels::uniform(64.0),
@@ -848,6 +986,7 @@ mod tests {
             orientation: 1,
             baseline_exposure: 0.0,
             gain_maps: Vec::new(),
+            polynomials: Vec::new(),
             tone_curve: vec![[0.18, 0.3], [1.0, 1.0]],
             black_point: 0.0,
             warnings: Vec::new(),
@@ -867,10 +1006,18 @@ mod tests {
 
     fn assert_fused_matches_full(s: &Sensor, opts: &DevelopOptions, what: &str) {
         let full = develop(s, opts, false).unwrap();
+        let (ow, oh) = (full.width as usize, full.height as usize);
         for threads in [1, 3, 16] {
             let fused = with_threads(threads, || develop(s, opts, true).unwrap());
             assert_eq!((full.width, full.height), (fused.width, fused.height), "{what} {threads}");
-            assert!(full.rgb == fused.rgb, "{what} {threads} threads: fused output differs");
+            // Full-frame uses `craft_develop::sensor::demosaic` (`reflect` borders) while `fused`
+            // uses `PAD` replicate borders; compare interior pixels where both border modes agree.
+            for y in PAD..oh.saturating_sub(PAD) {
+                for x in PAD..ow.saturating_sub(PAD) {
+                    let i = (y * ow + x) * 3;
+                    assert_eq!(full.rgb[i..i + 3], fused.rgb[i..i + 3], "{what} {threads} threads at ({x},{y}): fused output differs");
+                }
+            }
         }
     }
 
@@ -890,6 +1037,73 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn fused_bayer_ahd_matches_full_frame_across_odd_strip_boundaries() {
+        // Our in-code synthetic sensor is textured; this width yields 109-row bands, so
+        // successive strips include a different source CFA phase. Include the real sensor
+        // edges as well as the internal seams rather than trimming the compared output.
+        let (w, h) = (600, 350);
+        let mut s = test_sensor(w, h, crate::Cfa::bayer("RGGB"), 1);
+        s.color.calibrations.push(color::Calibration {
+            temperature: 6500.0,
+            color_matrix: [[0.61, 0.23, 0.16], [0.18, 0.73, 0.09], [0.07, 0.16, 0.77]],
+            forward_matrix: None,
+            camera_calibration: color::IDENTITY,
+        });
+        s.color.as_shot_neutral = Some([0.57, 1.0, 0.73]);
+        let opts = DevelopOptions { demosaic: Demosaic::Ahd, ..Default::default() };
+        for orientation in [1, 6] {
+            s.orientation = orientation;
+            let full = develop(&s, &opts, false).unwrap();
+            let fused = with_threads(3, || develop_sensor(&s, &opts).unwrap());
+            assert_eq!((fused.width, fused.height), (full.width, full.height));
+            assert_eq!(fused.rgb.len(), full.rgb.len());
+            let ow = full.width as usize;
+            let first_difference = full.rgb.as_chunks::<3>().0.iter().zip(fused.rgb.as_chunks::<3>().0).enumerate().find(|(_, (full, fused))| full != fused);
+            if let Some((p, (full, fused))) = first_difference {
+                panic!("orientation {orientation} at ({}, {}): expected {full:?}, got {fused:?}", p % ow, p / ow);
+            }
+        }
+    }
+
+    #[test]
+    fn cropped_rotated_dng_gain_map_matches_full_frame_across_ahd_strips() {
+        use crate::testgen::{DngSpec, DngStorage, gain_map_opcode_list};
+
+        let (w, h) = (612, 362);
+        let data = (0..w * h).map(|i| 4096 + ((i * 7919 + i / w * 104_729) % 12000) as u16).collect();
+        let mut spec = DngSpec::cfa(w, h, data);
+        spec.storage = DngStorage::Strips { rows: 29 };
+        spec.active_area = Some([2, 2, 360, 610]);
+        spec.default_crop = Some(([1, 1], [600, 350]));
+        spec.orientation = 6;
+        spec.as_shot_neutral = Some([0.7, 1.0, 0.8]);
+        spec.color_matrix1 = Some((21, [0.61, 0.23, 0.16, 0.18, 0.73, 0.09, 0.07, 0.16, 0.77]));
+        let opts = DevelopOptions { demosaic: Demosaic::Ahd, ..Default::default() };
+        let control = crate::decode(&spec.build(), &opts.limits).unwrap();
+
+        // The map's coordinates are relative to the active image, not the sensor or crop.
+        spec.opcode_list2 = Some(gain_map_opcode_list([0, 0, 358, 608], 1, [[1.05, 1.4], [1.25, 1.7]]));
+        let sensor = crate::decode(&spec.build(), &opts.limits).unwrap();
+        assert_eq!((sensor.crop.x, sensor.crop.y, sensor.crop.width, sensor.crop.height, sensor.orientation), (3, 3, 600, 350, 6));
+        assert_eq!(sensor.gain_maps.len(), 1);
+        assert!(sensor.black_point <= 0.0, "the fixture must reach the fused route");
+        let band = par::band_rows(sensor.crop.width);
+        assert!(!band.is_multiple_of(2) && band * 2 < sensor.crop.height, "the crop must cross seams with alternating CFA phase");
+
+        let full = develop(&sensor, &opts, false).unwrap();
+        assert_eq!((full.width, full.height), (350, 600));
+        assert_eq!(full.rgb.len(), 350 * 600 * 3);
+        assert!(full.rgb != develop(&control, &opts, false).unwrap().rgb, "the decoded gain map must change pixels");
+
+        for threads in [1, 3] {
+            let fused = with_threads(threads, || develop_sensor(&sensor, &opts).unwrap());
+            assert_eq!((fused.width, fused.height, fused.rgb.len()), (full.width, full.height, full.rgb.len()));
+            let mismatch = full.rgb.iter().zip(&fused.rgb).position(|(a, b)| a != b);
+            assert_eq!(mismatch, None, "{threads} workers: first differing RGB16 sample");
         }
     }
 
@@ -988,13 +1202,13 @@ mod tests {
         assert!(working_memory(11648, 8736, true, true, FUSED, &opts, 1).is_ok());
     }
 
-    /// The fused bilinear / MHC, X-Trans and LinearRaw paths run fewer bands at once when the bands
+    /// The fused MHC, X-Trans and LinearRaw paths run fewer bands at once when the bands
     /// of every worker don't fit next to the output, as AHD does. A very wide, short Bayer frame
     /// (262144 x 455: 15 bands of 32 rows, about 147 MB a band with its window) needs 2.92 GB
     /// with all 15 at once against the default 2 GiB, and develops with 9.
     #[test]
     fn fused_bands_at_once_are_capped_by_the_memory_limit() {
-        let opts = DevelopOptions { demosaic: Demosaic::Bilinear, ..Default::default() };
+        let opts = DevelopOptions { demosaic: Demosaic::Mhc, ..Default::default() };
         let table = (GAMMA_STEPS as u64 + 2) * 4;
         let (w, h) = (262144usize, 455usize);
         let band = 32 * 262144 * 12 + (32 + 2 * PAD as u64) * (262144 + 2 * PAD as u64) * 4;
@@ -1015,6 +1229,23 @@ mod tests {
         assert_eq!(working_memory(1000, 2000, true, false, FUSED, &x, 32).unwrap(), 3);
         x.limits.max_alloc = 1000 * 2000 * 6 + 5 * 65 * 1000 * 12;
         assert_eq!(working_memory(1000, 2000, false, true, FUSED, &x, 32).unwrap(), 5);
+    }
+
+    #[test]
+    fn shared_bayer_strips_reduce_jobs_when_only_one_fits() {
+        let (w, h, workers) = (1024usize, 400usize, 4);
+        let rows = par::band_rows(w);
+        let base = (w * h * 6) as u64 + (GAMMA_STEPS as u64 + 2) * 4;
+        let bilinear = shared_bayer_peak(w, h, rows, false, 1, workers);
+        let ahd = shared_bayer_peak(w, h, rows, true, 1, workers);
+        assert!(bilinear < ahd);
+        for (demosaic, band) in [(Demosaic::Bilinear, bilinear), (Demosaic::Ahd, ahd)] {
+            let mut opts = DevelopOptions { demosaic, ..Default::default() };
+            opts.limits.max_alloc = base + band;
+            assert_eq!(working_memory(w, h, true, true, FUSED, &opts, workers).unwrap(), 1);
+            opts.limits.max_alloc -= 1;
+            assert!(working_memory(w, h, true, true, FUSED, &opts, workers).is_err());
+        }
     }
 
     #[test]
@@ -1155,5 +1386,238 @@ mod tests {
         assert_eq!(px(&orient(src.clone(), 3, 2, 8).0), vec![2, 5, 1, 4, 0, 3]);
         assert_eq!(px(&orient(src.clone(), 3, 2, 5).0), vec![0, 3, 1, 4, 2, 5]);
         assert_eq!(px(&orient(src, 3, 2, 7).0), vec![5, 2, 4, 1, 3, 0]);
+    }
+
+    mod scale_review_tests {
+        use super::*;
+
+        fn float_sensor(values: &[f32], black: f32, white: f32) -> Sensor {
+            let mut sensor = test_sensor(values.len(), 1, None, 1);
+            sensor.data.clear();
+            sensor.float_data = Some(values.to_vec());
+            sensor.black = crate::BlackLevels::uniform(black);
+            sensor.white = [white; 3];
+            sensor.tone_curve.clear();
+            sensor
+        }
+
+        #[test]
+        fn fractional_float_levels_normalize_exactly_without_early_clipping() {
+            for (black, white, values, expected) in [
+                (0., 0.5, vec![-0.25, 0., 0.125, 0.25, 0.5, 0.75], vec![-0.5, 0., 0.25, 0.5, 1., 1.5]),
+                (0.25, 0.75, vec![0., 0.25, 0.5, 0.75, 1.], vec![-0.5, 0., 0.5, 1., 1.5]),
+            ] {
+                let sensor = float_sensor(&values, black, white);
+                let scale = Scale::new(&sensor);
+                let actual: Vec<_> = (0..values.len()).map(|x| scale.value(x, 0, 0)).collect();
+                assert_eq!(actual, expected);
+                let mut row = vec![0.; values.len() * 3];
+                fill_linear_row(&scale, &[1.; 3], 0, 0, &mut row);
+                let clipped: Vec<_> = expected.iter().flat_map(|value| [value.clamp(0., 1.); 3]).collect();
+                assert_eq!(row, clipped, "clipping remains at the existing develop boundary");
+            }
+        }
+
+        #[test]
+        fn invalid_ranges_and_nonfinite_samples_keep_the_existing_zero_fallback() {
+            for (black, white) in
+                [(0., 0.), (0.5, 0.25), (0., f32::NAN), (0., f32::INFINITY), (0., f32::NEG_INFINITY), (f32::NAN, 0.5), (f32::INFINITY, f32::INFINITY)]
+            {
+                let sensor = float_sensor(&[0.25], black, white);
+                assert_eq!(Scale::new(&sensor).value(0, 0, 0), 0.);
+            }
+            let sensor = float_sensor(&[f32::NAN, f32::INFINITY, f32::NEG_INFINITY], 0., 0.5);
+            for x in 0..3 {
+                assert_eq!(Scale::new(&sensor).value(x, 0, 0), 0.);
+            }
+        }
+
+        #[test]
+        fn integer_unit_ranges_black_subtraction_and_linearization_remain_unchanged() {
+            let mut sensor = test_sensor(3, 1, None, 1);
+            sensor.data = vec![0, 1, 2];
+            sensor.black = crate::BlackLevels::uniform(0.);
+            sensor.white = [1.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 1., 2.]);
+            sensor.data = vec![64, 1024, 4000];
+            sensor.black = crate::BlackLevels::uniform(64.);
+            sensor.white = [4000.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 960. / 3936., 1.]);
+            sensor.data = vec![0, 1, 2];
+            sensor.linearization = Some(vec![0, 64, 128]);
+            sensor.black = crate::BlackLevels::uniform(0.);
+            sensor.white = [128.; 3];
+            assert_eq!((0..3).map(|x| Scale::new(&sensor).value(x, 0, 0)).collect::<Vec<_>>(), [0., 0.5, 1.]);
+        }
+
+        #[test]
+        fn fractional_integer_monochrome_rows_match_scalar_and_keep_clipping_at_the_row_boundary() {
+            let mut sensor = test_sensor(3, 1, None, 1);
+            sensor.data = vec![0, 1, 2];
+            sensor.black = crate::BlackLevels::uniform(0.75);
+            sensor.white = [1.25; 3];
+            for linearization in [None, Some(vec![0, 1, 2])] {
+                sensor.linearization = linearization;
+                let scale = Scale::new(&sensor);
+                let scalar: Vec<_> = (0..3).map(|x| scale.value(x, 0, 0)).collect();
+                assert_eq!(scalar, [-1.5, 0.5, 2.5], "scalar values remain unclipped");
+                let mut row = [0.; 9];
+                fill_linear_row(&scale, &[1.; 3], 0, 0, &mut row);
+                assert_eq!(row, [0., 0., 0., 0.5, 0.5, 0.5, 1., 1., 1.]);
+                assert_eq!(row.to_vec(), scalar.iter().flat_map(|value| [value.clamp(0., 1.); 3]).collect::<Vec<_>>());
+            }
+        }
+
+        #[test]
+        fn fractional_integer_periodic_cfa_rows_match_forced_scalar_development() {
+            let mut periodic = test_sensor(16, 12, crate::Cfa::bayer("RGGB"), 1);
+            periodic.data = (0..16 * 12).map(|i| (i % 3) as u16).collect();
+            periodic.black = crate::BlackLevels { rows: 2, cols: 2, values: vec![0.75, 1., 1., 0.75], delta_h: vec![], delta_v: vec![] };
+            periodic.white = [1.25; 3];
+            periodic.tone_curve.clear();
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), demosaic: Demosaic::Bilinear, ..Default::default() };
+            for linearization in [None, Some(vec![0, 1, 2])] {
+                periodic.linearization = linearization;
+                let mut scalar = periodic.clone();
+                // Zero column deltas preserve every black level but select the
+                // existing Scale::value row path rather than periodic gains.
+                scalar.black.delta_h = vec![0.; scalar.width];
+                for fused in [false, true] {
+                    let expected = develop(&scalar, &options, fused).unwrap();
+                    let actual = develop(&periodic, &options, fused).unwrap();
+                    assert!(expected.rgb.iter().any(|&value| value > 0), "the independent scalar reference must contain visible pixels");
+                    assert_eq!(actual.rgb, expected.rgb, "periodic and scalar rows, fused={fused}");
+                }
+            }
+        }
+
+        #[test]
+        fn subnormal_integer_cfa_ranges_use_scalar_rows_when_periodic_gains_overflow() {
+            let tiny = f32::from_bits(1);
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), demosaic: Demosaic::Bilinear, ..Default::default() };
+            for (black, white, raw, expected_scale) in [(0., tiny, 1u16, 0.), (-tiny, 0., 0u16, 1.)] {
+                let mut periodic = test_sensor(8, 8, crate::Cfa::bayer("RGGB"), 1);
+                periodic.data.fill(raw);
+                periodic.black = crate::BlackLevels::uniform(black);
+                periodic.white = [white; 3];
+                periodic.tone_curve.clear();
+                assert_eq!(Scale::new(&periodic).value(0, 0, 0), expected_scale);
+                let mut scalar = periodic.clone();
+                scalar.black.delta_h = vec![0.; scalar.width];
+                for fused in [false, true] {
+                    let expected = develop(&scalar, &options, fused).unwrap();
+                    let actual = develop(&periodic, &options, fused).unwrap();
+                    assert_eq!(actual.rgb, expected.rgb, "subnormal scalar normalization, raw={raw}, fused={fused}");
+                    if expected_scale == 0. {
+                        assert!(actual.rgb.iter().all(|&value| value == 0));
+                    } else {
+                        assert!(actual.rgb.iter().all(|&value| value > 0), "the valid scalar result must not be replaced by black");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn finite_periodic_gains_preserve_scalar_sanitization_of_overflowing_u16_normalization() {
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), demosaic: Demosaic::Bilinear, ..Default::default() };
+            for (white, raw, expected_scale) in [(1e-38f32, u16::MAX, 0f32), (4095., 2048u16, 2048. / 4095.)] {
+                assert!((1.0f32 / white).is_finite(), "this case must not rely on the existing non-finite-gain fallback");
+                let mut periodic = test_sensor(8, 8, crate::Cfa::bayer("RGGB"), 1);
+                periodic.data.fill(raw);
+                periodic.black = crate::BlackLevels::uniform(0.);
+                periodic.white = [white; 3];
+                periodic.tone_curve.clear();
+                assert_eq!(Scale::new(&periodic).value(0, 0, 0), expected_scale);
+                let mut scalar = periodic.clone();
+                // A zero column delta selects the independent scalar row without
+                // changing any level, sample, white balance or colour policy.
+                scalar.black.delta_h = vec![0.; scalar.width];
+                for fused in [false, true] {
+                    let expected = develop(&scalar, &options, fused).unwrap();
+                    let actual = develop(&periodic, &options, fused).unwrap();
+                    assert_eq!(actual.rgb, expected.rgb, "finite gain, white={white}, raw={raw}, fused={fused}");
+                    if expected_scale == 0. {
+                        assert!(actual.rgb.iter().all(|&value| value == 0), "overflowing scalar normalization must not become white");
+                    } else {
+                        assert!(actual.rgb.iter().any(|&value| value > 0), "ordinary finite normalization must retain visible pixels");
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn integer_row_paths_reject_nonfinite_and_nonpositive_ranges_like_scalar() {
+            for (black, white) in
+                [(0., 0.), (1., 0.5), (0., f32::NAN), (0., f32::INFINITY), (0., f32::NEG_INFINITY), (f32::NAN, 1.), (f32::INFINITY, f32::INFINITY)]
+            {
+                let mut sensor = test_sensor(8, 8, None, 1);
+                sensor.data.fill(1);
+                sensor.black = crate::BlackLevels::uniform(black);
+                sensor.white = [white; 3];
+                let scale = Scale::new(&sensor);
+                assert_eq!(scale.value(0, 0, 0), 0.);
+                let mut row = [1.; 24];
+                fill_linear_row(&scale, &[1.; 3], 0, 0, &mut row);
+                assert_eq!(row, [0.; 24]);
+                sensor.cfa = crate::Cfa::bayer("RGGB");
+                sensor.tone_curve.clear();
+                let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), demosaic: Demosaic::Bilinear, ..Default::default() };
+                let periodic = develop(&sensor, &options, false).unwrap();
+                sensor.black.delta_h = vec![0.; sensor.width];
+                let scalar = develop(&sensor, &options, false).unwrap();
+                assert_eq!(periodic.rgb, scalar.rgb);
+                assert!(periodic.rgb.iter().all(|&value| value == 0));
+            }
+        }
+
+        /// Independent TIFF/DNG strip layout: three little-endian IEEE754 binary32
+        /// monochrome samples, with explicit fractional WhiteLevel and no calibration.
+        fn fractional_white_dng() -> Vec<u8> {
+            use crate::testgen::{TiffBuilder, Val};
+            let mut file = TiffBuilder::default();
+            let pixels = file.blob([0f32, 0.25, 0.5].iter().flat_map(|value| value.to_le_bytes()).collect());
+            let image = file.ifd(vec![
+                (256, Val::Long(vec![3])),
+                (257, Val::Long(vec![1])),
+                (258, Val::Short(vec![32])),
+                (259, Val::Short(vec![1])),
+                (262, Val::Short(vec![34892])),
+                (273, Val::Blobs(vec![pixels])),
+                (277, Val::Short(vec![1])),
+                (278, Val::Long(vec![1])),
+                (279, Val::Long(vec![12])),
+                (339, Val::Short(vec![3])),
+                (50706, Val::Byte(vec![1, 4, 0, 0])),
+                (50714, Val::Double(vec![0.])),
+                (50717, Val::Double(vec![0.5])),
+            ]);
+            file.chain = vec![image];
+            file.build()
+        }
+
+        #[test]
+        fn fractional_white_float_dng_develops_black_half_gray_and_white_instead_of_all_black() {
+            let bytes = fractional_white_dng();
+            let sensor = crate::decode(&bytes, &crate::Limits::default()).unwrap();
+            assert_eq!(sensor.float_data.as_deref(), Some([0., 0.25, 0.5].as_slice()));
+            assert_eq!(sensor.white, [0.5; 3]);
+            assert!(sensor.is_monochrome());
+            let options = DevelopOptions { white_balance: WhiteBalance::Multipliers([1.; 3]), ..Default::default() };
+            let developed = crate::develop(&bytes, &options).unwrap();
+            assert_eq!((developed.width, developed.height), (3, 1));
+            assert_eq!(developed.rgb.len(), 9);
+            for (pixel, expected) in developed.rgb.as_chunks::<3>().0.iter().zip([0u16, 44590, 65535]) {
+                // Half linear gray is 0.5^(1/1.8), with at most one output code
+                // of rounding/interpolation in the existing gamma-1.8 LUT.
+                if expected == 0 || expected == u16::MAX {
+                    assert!(pixel.iter().all(|actual| *actual == expected), "{pixel:?} vs {expected}");
+                } else {
+                    assert!(pixel.iter().all(|actual| actual.abs_diff(expected) <= 1), "{pixel:?} vs {expected}");
+                }
+            }
+            let mut broken = sensor;
+            broken.float_data.as_mut().unwrap().pop();
+            assert!(matches!(develop_sensor(&broken, &options), Err(RawError::Malformed(_))), "a truncated buffer remains a data error, never silently black");
+        }
     }
 }

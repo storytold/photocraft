@@ -65,7 +65,7 @@ impl<'a> Interrupt<'a> {
 }
 
 /// Returned by an operation that stopped because its [`Interrupt`] was cancelled.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::PlainData)]
 pub struct Cancelled;
 
 impl std::fmt::Display for Cancelled {
