@@ -579,5 +579,27 @@ pub fn last_filter(s: &Session) -> Option<(String, Value)> {
     Some((id, params))
 }
 
+/// The `redirect` hook: Last Filter runs as the filter it repeats, journaled, recorded in an
+/// action, faded and run as a job like that filter, so a recorded step replays the same filter
+/// anywhere (#3089), as Transform Again records its transform (#1440). The `target` and `layer` it
+/// was called with carry over. With no filter yet it runs itself and fails its precondition.
+pub(crate) fn repeat_last_filter(s: &Session, id: &str, params: &Value) -> Option<(String, Value)> {
+    if id != "filter.lastFilter" {
+        return None;
+    }
+    let (filter, mut p) = last_filter(s).filter(|(f, _)| f != id)?;
+    for key in ["target", "layer"] {
+        if let Some(value) = params.get(key) {
+            if p.is_null() {
+                p = json!({});
+            }
+            if let Some(object) = p.as_object_mut() {
+                object.insert(key.into(), value.clone());
+            }
+        }
+    }
+    Some((filter, p))
+}
+
 #[cfg(test)]
 mod tests;

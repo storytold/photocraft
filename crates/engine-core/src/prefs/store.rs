@@ -47,11 +47,11 @@ impl PrefsStore {
     }
 }
 
-/// The preferences file format written by [`Session::prefs_value`]. 2: Use Shift Key for Tool
+/// The preferences file format written by [`SavedPrefsExt::prefs_value`](crate::prefs::SavedPrefsExt::prefs_value). 2: Use Shift Key for Tool
 /// Switch stored as chosen (before, a stored `false` was the old default; see `load_prefs_json`).
 pub const PREFS_VERSION: u64 = 2;
 
-/// A saved preference [`Session::load_prefs_json`] couldn't read (a wrong type, an unknown
+/// A saved preference [`SavedPrefsExt::load_prefs_json`](crate::prefs::SavedPrefsExt::load_prefs_json) couldn't read (a wrong type, an unknown
 /// choice) and left at its default.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InvalidPref {
@@ -98,7 +98,7 @@ where
     }
 }
 
-/// One section of a preferences file (`performance`, …) read as [`Session::load_prefs_json`]
+/// One section of a preferences file (`performance`, …) read as [`SavedPrefsExt::load_prefs_json`](crate::prefs::SavedPrefsExt::load_prefs_json)
 /// reads it: a value of the wrong type keeps its default and the rest still loads (#6611).
 /// Startup reads the graphics settings with it before a session exists.
 pub fn read_section<T>(v: Value) -> T

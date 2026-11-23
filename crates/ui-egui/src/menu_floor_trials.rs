@@ -7,6 +7,7 @@ use craft::ui::runtime::measure::{MemoRun, last_frame_derived_builds, last_frame
 use egui::{Event, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -23,7 +24,7 @@ fn harness(documents: usize, recent: usize, swatches: usize) -> H {
         for _ in 0..documents {
             s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
         }
-        s.presets.edit(|presets| {
+        s.presets_mut().edit(|presets| {
             if let Some(group) = presets.swatches.first_mut()
                 && let Some(entry) = group.entries.first().cloned()
             {

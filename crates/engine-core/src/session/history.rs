@@ -1,5 +1,5 @@
 use super::documents::fix_active;
-use super::{Arc, DocState, Document, LayerId, LayerTarget, Session, channel_cmds, layer_multi_cmds};
+use super::{Arc, DocState, Document, LayerId, LayerTarget, Session, channel_cmds};
 
 impl Session {
     /// Undo a document step or restore Clear History's rows and source without editing pixels.
@@ -51,7 +51,7 @@ impl Session {
                 }
                 // Pixels this step can have touched, so the canvas recomposites only that
                 // (it recomposited everything before).
-                let damage = layer_multi_cmds::step_damage(&d, &st.doc);
+                let damage = crate::damage::step_damage(&d, &st.doc);
                 let before = std::mem::replace(st.doc_mut(), d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
@@ -91,7 +91,7 @@ impl Session {
                     let changed = st.history.current_visibility().to_vec();
                     carry_visibility(&st.doc, &mut d, &changed);
                 }
-                let damage = layer_multi_cmds::step_damage(&st.doc, &d);
+                let damage = crate::damage::step_damage(&st.doc, &d);
                 let before = std::mem::replace(st.doc_mut(), d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
@@ -141,7 +141,7 @@ impl Session {
         if keep_visibility {
             carry_visibility(&st.doc, &mut d, &changed);
         }
-        let damage = layer_multi_cmds::step_damage(&d, &st.doc);
+        let damage = crate::damage::step_damage(&d, &st.doc);
         let before = std::mem::replace(st.doc_mut(), d);
         // Taking back a selection-only step keeps a clean document clean, as Undo does (#6865).
         let keep_clean = st.keeps_clean(&before);
