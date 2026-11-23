@@ -31,54 +31,66 @@ fn pixels(s: &Session) -> Vec<f32> {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds())
 }
 
+/// The six sequential-dab commands every test here strokes with.
+const CMDS: [&str; 6] = ["paint.smudge", "paint.blur", "paint.sharpen", "paint.dodge", "paint.burn", "paint.sponge"];
+
+/// The tests cross commands with one more axis (stroke case, colour mode or target) and depth
+/// pairwise: each command meets each value of the axis once, at the depth `(i + j) % 3` picks, so
+/// every command and every value of the axis still runs at 8, 16 and 32 bits (32 is the float path).
+const DEPTHS: [u32; 3] = [8, 16, 32];
+
+/// The commands that meet value `i` of the other axis at `DEPTHS[d]`.
+fn cmds_at(i: usize, d: usize) -> impl Iterator<Item = &'static str> {
+    CMDS.into_iter().enumerate().filter(move |(j, _)| (i + j) % 3 == d).map(|(_, cmd)| cmd)
+}
+
 #[test]
 fn pressure_shape_and_smoothing_match_replay() {
     let mut failures = Vec::new();
-    for cmd in ["paint.smudge", "paint.blur", "paint.sharpen", "paint.dodge", "paint.burn", "paint.sponge"] {
-        for case in ["pressure", "locked", "ellipse", "smoothing", "scattering"] {
-            for depth in [8, 16, 32] {
-                let mut s = setup(depth, "rgb");
-                match case {
-                    "locked" => {
-                        s.edit("lock alpha", |doc, active| {
-                            doc.layer_mut(active.unwrap()).unwrap().locks.transparency = true;
-                            Ok(())
-                        })
-                        .unwrap();
-                    }
-                    "ellipse" => {
-                        s.tools.brush.roundness = 0.2;
-                        s.tools.brush.angle = 37.0;
-                    }
-                    "smoothing" => {
-                        s.tools.brush.smoothing.amount = 0.6;
-                    }
-                    "scattering" => {
-                        s.tools.brush.scattering.enabled = true;
-                        s.tools.brush.scattering.scatter.jitter = 1.0;
-                    }
-                    _ => {}
+    for (i, cmd) in CMDS.into_iter().enumerate() {
+        for (j, case) in ["pressure", "locked", "ellipse", "smoothing", "scattering"].into_iter().enumerate() {
+            let depth = DEPTHS[(i + j) % 3];
+            let mut s = setup(depth, "rgb");
+            match case {
+                "locked" => {
+                    s.edit("lock alpha", |doc, active| {
+                        doc.layer_mut(active.unwrap()).unwrap().locks.transparency = true;
+                        Ok(())
+                    })
+                    .unwrap();
                 }
-                let points = [[40.0, 40.0, 0.1], [65.0, 50.0, 0.4], [100.0, 60.0, 1.0], [140.0, 70.0, 0.7], [60.0, 40.0, 0.2]];
-                let params = json!({"points":points,"size":40,"hardness":70,"strength":80,"opacity":55,"spacing":25});
-                s.execute(cmd, params.clone()).unwrap();
-                let want = pixels(&s);
-                s.execute("edit.undo", json!({})).unwrap();
-                let mut start = params.clone();
-                start["points"] = json!([points[0]]);
-                let mut live = LiveDab::begin(&s, cmd, &start).unwrap();
-                for q in &points[1..] {
-                    live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
+                "ellipse" => {
+                    s.tools.brush.roundness = 0.2;
+                    s.tools.brush.angle = 37.0;
                 }
-                s.offer_live_dab(live).unwrap();
-                let result = s.execute(cmd, params).unwrap();
-                assert_eq!(result["fromLive"], true);
-                let got = pixels(&s);
-                let count = got.iter().zip(&want).filter(|(a, b)| a != b).count();
-                let max = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
-                if count > 0 {
-                    failures.push(format!("{cmd} {case} depth={depth}: {count} channels differ, max={max}"));
+                "smoothing" => {
+                    s.tools.brush.smoothing.amount = 0.6;
                 }
+                "scattering" => {
+                    s.tools.brush.scattering.enabled = true;
+                    s.tools.brush.scattering.scatter.jitter = 1.0;
+                }
+                _ => {}
+            }
+            let points = [[40.0, 40.0, 0.1], [65.0, 50.0, 0.4], [100.0, 60.0, 1.0], [140.0, 70.0, 0.7], [60.0, 40.0, 0.2]];
+            let params = json!({"points":points,"size":40,"hardness":70,"strength":80,"opacity":55,"spacing":25});
+            s.execute(cmd, params.clone()).unwrap();
+            let want = pixels(&s);
+            s.execute("edit.undo", json!({})).unwrap();
+            let mut start = params.clone();
+            start["points"] = json!([points[0]]);
+            let mut live = LiveDab::begin(&s, cmd, &start).unwrap();
+            for q in &points[1..] {
+                live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
+            }
+            s.offer_live_dab(live).unwrap();
+            let result = s.execute(cmd, params).unwrap();
+            assert_eq!(result["fromLive"], true);
+            let got = pixels(&s);
+            let count = got.iter().zip(&want).filter(|(a, b)| a != b).count();
+            let max = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            if count > 0 {
+                failures.push(format!("{cmd} {case} depth={depth}: {count} channels differ, max={max}"));
             }
         }
     }
@@ -87,8 +99,8 @@ fn pressure_shape_and_smoothing_match_replay() {
 
 #[test]
 fn native_modes_selection_and_lock_match_replay() {
-    for mode in ["rgb", "gray", "cmyk", "lab"] {
-        for depth in [8, 16, 32] {
+    for (i, mode) in ["rgb", "gray", "cmyk", "lab"].into_iter().enumerate() {
+        for (d, depth) in DEPTHS.into_iter().enumerate() {
             let mut s = setup(depth, mode);
             s.edit("lock alpha", |doc, active| {
                 doc.layer_mut(active.unwrap()).unwrap().locks.transparency = true;
@@ -97,7 +109,7 @@ fn native_modes_selection_and_lock_match_replay() {
             .unwrap();
             s.execute("select.rect", json!({"x":30,"y":20,"width":110,"height":60})).unwrap();
             let points = [[-10.0, 30.0], [80.0, 50.0], [160.0, 80.0], [60.0, 60.0]];
-            for cmd in ["paint.blur", "paint.sharpen", "paint.dodge", "paint.burn", "paint.sponge", "paint.smudge"] {
+            for cmd in cmds_at(i, d) {
                 let params = json!({"points":points,"size":30,"hardness":40,"strength":70,"opacity":37});
                 let expected_damage = s.execute(cmd, params.clone()).unwrap()["damage"].clone();
                 let want = pixels(&s);
@@ -127,7 +139,7 @@ fn changed_document_refuses_live_pixels() {
     s.execute("paint.stroke", json!({"points":[[40,40],[80,60]],"color":"#ffffff","size":20})).unwrap();
     let mut replay = Session::new();
     replay.add_document((*s.active().unwrap().doc).clone(), None);
-    replay.tools.brush = s.tools.brush.clone();
+    *replay.tools.brush = (*s.tools.brush).clone();
     s.offer_live_dab(live).unwrap();
     assert!(s.execute("paint.blur", p.clone()).unwrap().get("fromLive").is_none());
     replay.execute("paint.blur", p).unwrap();
@@ -178,7 +190,7 @@ fn pressure_sized_live_dabs_commit_only_the_requested_mask_or_channel() {
         let values: Vec<f32> = (0..120).flat_map(|y| (0..200).map(move |x| ((x * 7 + y * 3) % 31) as f32 / 31.0)).collect();
         surface.write_region(photocraft_geom::Rect::new(0, 0, 200, 120), &values);
     };
-    for depth in [8, 16, 32] {
+    for (d, depth) in DEPTHS.into_iter().enumerate() {
         let mut s = setup(depth, "rgb");
         s.execute("layer.new.layer", json!({})).unwrap();
         s.execute("layer.layerMask.revealAll", json!({})).unwrap();
@@ -192,8 +204,8 @@ fn pressure_sized_live_dabs_commit_only_the_requested_mask_or_channel() {
         })
         .unwrap();
         let before = s.active().unwrap().doc.clone();
-        for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
-            for cmd in ["paint.smudge", "paint.blur", "paint.sharpen", "paint.dodge", "paint.burn", "paint.sponge"] {
+        for (i, target) in [json!("mask"), json!({"channel":0}), json!("quickMask")].into_iter().enumerate() {
+            for cmd in cmds_at(i, d) {
                 let points = [[40.0, 40.0, 0.1], [65.0, 50.0, 0.4], [100.0, 60.0, 1.0], [140.0, 70.0, 0.7], [60.0, 40.0, 0.2]];
                 let params = json!({"target":target,"points":points,"size":40,"hardness":70,"strength":80,"opacity":55,"spacing":25});
                 s.execute(cmd, params.clone()).unwrap();

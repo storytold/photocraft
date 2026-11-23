@@ -59,7 +59,7 @@ pub(super) fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     // The panel menu greys this row while a recording or a paced playback holds the library (see
     // [`super::menu::states`]); a keyboard, shortcut or control-channel route says so before the
     // picker opens, since `actions.load` only refuses after it has read the chosen file.
-    if app.session.actions.recording.is_some() || app.session.actions.playing > 0 || super::playback::pending(app) {
+    if app.session.recording.target.is_some() || app.session.recording.playing > 0 || super::playback::pending(app) {
         return Err(tl!("Stop recording or playback before changing the Actions library.").into());
     }
     let mut request = PickRequest::open_many("actions").filter("Actions", &["atn"]);

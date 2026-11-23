@@ -2,7 +2,7 @@
 """Move a branch's added or removed command tables into the engine's install list.
 
 The engine's command tables are listed, in registry order, in `TABLES` in
-`crates/engine/src/install.rs`. Before that, `crates/engine/src/cmd.rs` listed them: first as
+`crates/engine-core/src/install.rs` (`crates/engine/src/install.rs` before the crate split). Before that, `crates/engine/src/cmd.rs` listed them: first as
 `v.extend(<module>::specs());` lines in `fn build()`, later as `("<name>", <path>),` entries in
 `SPECS`. A branch that added or removed a table carries that edit in `cmd.rs`. This script applies
 it to `TABLES`:
@@ -22,8 +22,8 @@ inline commands are `table_fragments.py`'s; run both.
 import argparse, re, subprocess, sys
 
 CMD = "crates/engine/src/cmd.rs"
-INSTALL = "crates/engine/src/install.rs"
-LIB = "crates/engine/src/lib.rs"
+INSTALL = "crates/engine-core/src/install.rs"
+INSTALL_BEFORE_SPLIT = "crates/engine/src/install.rs"
 EXTEND_RE = re.compile(r"^\s*v\.extend\(((?:crate::)?(?:cmd::)?)([a-z0-9_:]+?)::([a-z0-9_]+)\(\)\);", re.M)
 ENTRY_RE = re.compile(r'^\s*\("([^"]+)",\s*([A-Za-z0-9_:]+)\),', re.M)
 
@@ -65,7 +65,7 @@ def main():
     ap.add_argument("--base", required=True, help="the branch's merge-base with the old main")
     ap.add_argument("--head", required=True, help="the branch")
     a = ap.parse_args()
-    if git_show(a.head, INSTALL) is not None:
+    if git_show(a.head, INSTALL) is not None or git_show(a.head, INSTALL_BEFORE_SPLIT) is not None:
         print(
             f"warning: {a.head} is already on the install.rs layout; if you rebased, pass the "
             "pre-rebase commit as --head (a rebased branch has lost its added tables)",
@@ -98,13 +98,6 @@ def main():
             pred = "the last table fragment"
         rows.insert(at, f'    ("{name}", {path}),')
         report.append(f"added    {name} ({path}) after {pred}")
-        module = path.split("::")[-2]
-        lib = git_show(a.head, LIB) or ""
-        if not re.search(rf"^pub (?:use cmd::{module}|mod {module})\b", lib, re.M):
-            report.append(
-                f"WARNING  module `{module}` of {name} is private in {LIB}; task 3 moves install.rs "
-                "to the top crate and needs it public"
-            )
     for name in base:
         if name not in head_names and name in names():
             rows = [r for r, n in zip(rows, names()) if n != name]
