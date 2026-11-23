@@ -7,7 +7,7 @@ const H: i32 = 256;
 
 /// A 2:1 sky at `depth` bits with a small bright sun at document pixel (`sx`, `sy`).
 fn sky(depth: u64, sx: i32, sy: i32) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": depth})).unwrap();
     s.edit("setup", |doc, active| {
         let b = doc.bounds();
