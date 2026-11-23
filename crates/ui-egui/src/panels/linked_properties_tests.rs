@@ -132,7 +132,7 @@ fn a_psd_placed_layer_is_not_shown_as_a_linked_file() {
     {
         let st = h.state_mut().session.active_mut().unwrap();
         let id = st.active_layer.unwrap();
-        let LayerContent::Smart(sm) = &mut std::sync::Arc::make_mut(&mut st.doc).layer_mut(id).unwrap().content else { panic!("a smart object") };
+        let LayerContent::Smart(sm) = &mut std::sync::Arc::make_mut(st.doc_mut()).layer_mut(id).unwrap().content else { panic!("a smart object") };
         sm.source = SmartSource::Linked { path: "a1b2c3d4-0000-1111-2222-333344445555".into() };
         sm.psd_raw = Some(std::sync::Arc::new(vec![0; 4]));
     }
