@@ -4,8 +4,8 @@
 //! tenth of a second has a couple of dozen), and joined by straight lines a curve shows as a
 //! polygon. [`CurveFit`] passes a centripetal Catmull–Rom spline through the points and samples it
 //! densely. The spline goes through every input point exactly; the centripetal form doesn't loop
-//! or overshoot at sharp turns. Pressure, tilt, rotation, wheel and time are interpolated linearly
-//! between the two points of each segment.
+//! or overshoot at sharp turns. Pressure, tilt, wheel and time are interpolated linearly between
+//! the two points of each segment; barrel rotation the shorter way round (350° to 10° passes 0°).
 //!
 //! A segment needs the point after it, so the live stroke runs one input point behind the pen
 //! (a few milliseconds); [`CurveFit::finish`] draws the last segment at pen-up. A point at the
@@ -46,6 +46,12 @@ fn extrapolate(a: &StrokePoint, b: &StrokePoint, c: &StrokePoint) -> StrokePoint
     StrokePoint { x: 3.0 * a.x - 3.0 * b.x + c.x, y: 3.0 * a.y - 3.0 * b.y + c.y, ..*a }
 }
 
+/// `from` turned toward `to` by the fraction `f`, the shorter way round, in `0..360`.
+fn turn_toward(from: f32, to: f32, f: f32) -> f32 {
+    let d = (to - from + 540.0).rem_euclid(360.0) - 180.0;
+    (from + d * f).rem_euclid(360.0)
+}
+
 /// Knot step of the centripetal parametrisation (√distance), never 0.
 fn knot(a: &StrokePoint, b: &StrokePoint) -> f64 {
     (a.x - b.x).hypot(a.y - b.y).sqrt().max(1e-6)
@@ -68,6 +74,7 @@ fn segment(p0: &StrokePoint, p1: &StrokePoint, p2: &StrokePoint, p3: &StrokePoin
         let u = i as f64 / n as f64;
         let mut q = if i == n { *p2 } else { lerp_pt(p1, p2, u) };
         if i < n {
+            q.rotation = turn_toward(p1.rotation, p2.rotation, u as f32);
             // Barry–Goldman pyramid.
             let t = t1 + (t2 - t1) * u;
             let a1 = mix(q0, q1, t0, t1, t);
@@ -206,6 +213,16 @@ mod tests {
         assert!(out.iter().all(|q| q.y.abs() < 1e-9 && q.x >= 0.0 && q.x <= 60.0));
         let mid = out.iter().find(|q| (q.x - 15.0).abs() < 0.8).map(|q| q.pressure).unwrap_or(-1.0);
         assert!(mid > 0.0 && mid < 1.0, "between the pressures of its two points: {mid}");
+    }
+
+    #[test]
+    fn barrel_rotation_turns_the_shorter_way_round() {
+        let mut a = pt(0.0, 0.0);
+        let mut b = pt(40.0, 0.0);
+        (a.rotation, b.rotation) = (350.0, 10.0);
+        let out = fit_points(&[a, b]);
+        // Every sample stays within the 20° between them, across 0°, never near 180°.
+        assert!(out.iter().all(|q| q.rotation >= 350.0 || q.rotation <= 10.0), "{:?}", out.iter().map(|q| q.rotation).collect::<Vec<_>>());
     }
 
     #[test]
