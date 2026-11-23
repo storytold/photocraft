@@ -45,16 +45,7 @@ pub struct Allowed {
 
 /// Existing click handlers that change the document directly. Shrink only: each entry is a
 /// follow-up (route it through an engine command), never a place to park new code.
-pub const ALLOWLIST: &[Allowed] = &[
-    // Window › Color: the colour field and hue strip (and their readout) assign the foreground or
-    // background colour on every drag frame, so the change never reaches the journal, action
-    // recording or the control channel's event log. Fix: dispatch `tools.setColors` (it already exists).
-    Allowed {
-        file: "crates/ui-egui/src/panels/color.rs",
-        func: "color_field",
-        reason: "Color panel field, hue strip and readout assign session.tools.foreground/background; dispatch tools.setColors",
-    },
-];
+pub const ALLOWLIST: &[Allowed] = &[];
 
 /// A click handler that changes the document or its history without a command id.
 #[derive(Debug, Clone, PartialEq, Eq)]

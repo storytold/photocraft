@@ -21,6 +21,7 @@
 
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, UnicodeString, Value as D};
+use photocraft_engine::actions_cmds::{ActionList, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
 
@@ -113,13 +114,13 @@ fn edge_profile_at_radius_2_3_at_sixteen_bits_is_the_same_curve_in_another_scale
 fn gaussian_recording_replays_the_direct_blur_pixels_and_radius() {
     let imported = atn_cmds::import(&gaussian_recording()).unwrap();
     assert!(imported.unsupported.is_empty());
-    assert_eq!(imported.actions[0].steps[0].0, "filter.blur.gaussianBlur");
-    assert_eq!(imported.actions[0].steps[0].1["radius"], 2.3, "the recorded radius must survive import");
+    assert_eq!(imported.actions[0].steps[0].command, "filter.blur.gaussianBlur");
+    assert_eq!(imported.actions[0].steps[0].params["radius"], 2.3, "the recorded radius must survive import");
     for depth in [8u32, 16] {
         let mut direct = edge_doc(depth);
         direct.execute("filter.blur.gaussianBlur", json!({"radius": 2.3})).unwrap();
         let mut s = edge_doc(depth);
-        s.actions.list = imported.actions.clone();
+        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action": "Blur2_3"})).unwrap()["ran"], 1);
         assert_eq!(
             photocraft_compose::flatten(&s.active().unwrap().doc).px,

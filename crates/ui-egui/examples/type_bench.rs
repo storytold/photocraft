@@ -1,7 +1,8 @@
 //! Font-size drag latency (#124): a large document with many type layers, one layer's size
 //! changed step by step the way the options bar / Properties drag does it (one `type.setStyle`
 //! per frame, all sharing one coalesce key), each followed by the CPU canvas refresh the app does
-//! for it (`canvas::ensure_texture`, the path without a GPU or when the GPU compositor falls back).
+//! for it (one pass of `canvas::canvas_view` with no GPU: the CPU composite the canvas draws when
+//! the GPU compositor is absent or falls back).
 //!
 //! ```sh
 //! cargo run --release -p photocraft-ui-egui --example type_bench -- [--size 6000x4000] [--layers 50] [--steps 30] [--effects] [--typing]
@@ -14,6 +15,22 @@ use serde_json::json;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+}
+
+/// One pass of document 0's canvas, as the app draws it each frame.
+fn refresh(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
+    let view = app.ui.views.first().cloned().unwrap_or_default();
+    let _ = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
+        let (_, _) = photocraft_ui_egui::canvas::canvas_view(app, ui, photocraft_ui_egui::canvas::CanvasHost::main(0), rect, view.clone(), true);
+    });
+}
+
+/// A context set up as the app's.
+fn context() -> egui::Context {
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    ctx
 }
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -31,8 +48,8 @@ fn typing(app: &mut PhotocraftApp, steps: usize) {
         let id = r["layer"].as_u64().unwrap_or(0);
         app.run(&format!("type.orientation.{orient}"), json!({"layer": id})).expect("orientation");
         app.sync_views();
-        let ctx = egui::Context::default();
-        let _ = photocraft_ui_egui::canvas::ensure_texture(app, &ctx, 0, None);
+        let ctx = context();
+        refresh(app, &ctx);
         let (mut cmd, mut lay, mut canvas, mut total) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for i in 0..steps {
             let c = text.get(i % text.len()).copied().unwrap_or('あ');
@@ -42,7 +59,7 @@ fn typing(app: &mut PhotocraftApp, steps: usize) {
             let t1 = Instant::now();
             let _ = photocraft_ui_egui::type_tool::layout(app, photocraft_doc::LayerId(id));
             let t2 = Instant::now();
-            let _ = photocraft_ui_egui::canvas::ensure_texture(app, &ctx, 0, None);
+            refresh(app, &ctx);
             let t3 = Instant::now();
             cmd.push((t1 - t0).as_secs_f64() * 1e3);
             lay.push((t2 - t1).as_secs_f64() * 1e3);
@@ -92,7 +109,7 @@ fn main() {
     app.sync_views();
     let ctx = egui::Context::default();
     let t0 = Instant::now();
-    let _ = photocraft_ui_egui::canvas::ensure_texture(&mut app, &ctx, 0, None);
+    refresh(&mut app, &ctx);
     eprintln!("first canvas composite: {:.0} ms", t0.elapsed().as_secs_f64() * 1e3);
 
     let id = ids.get(n / 2).copied().unwrap_or(0);
@@ -108,7 +125,7 @@ fn main() {
         })
         .expect("type.setStyle");
         let t1 = Instant::now();
-        let _ = photocraft_ui_egui::canvas::ensure_texture(&mut app, &ctx, 0, None);
+        refresh(&mut app, &ctx);
         let t2 = Instant::now();
         cmd.push((t1 - t0).as_secs_f64() * 1e3);
         canvas.push((t2 - t1).as_secs_f64() * 1e3);

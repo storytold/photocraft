@@ -1,6 +1,6 @@
 use super::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, craft::ui::contract::MemoProps, craft::ui::contract::PlainData)]
 pub enum Tool {
     Move,
     Artboard,
@@ -52,6 +52,8 @@ pub enum Tool {
     Blur,
     Sharpen,
     Smudge,
+    /// Paints an adjustment layer's mask, making the layer on the first stroke (#12519).
+    AdjustmentBrush,
     Dodge,
     Burn,
     Sponge,
@@ -81,7 +83,91 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 69] = [
+    /// Stable identifier used by tool-selection commands.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Move => "move",
+            Self::Artboard => "artboard",
+            Self::RectMarquee => "rectMarquee",
+            Self::EllipseMarquee => "ellipseMarquee",
+            Self::SingleRowMarquee => "singleRowMarquee",
+            Self::SingleColumnMarquee => "singleColumnMarquee",
+            Self::Lasso => "lasso",
+            Self::PolygonLasso => "polygonLasso",
+            Self::MagneticLasso => "magneticLasso",
+            Self::MagicWand => "magicWand",
+            Self::Crop => "crop",
+            Self::PerspectiveCrop => "perspectiveCrop",
+            Self::Eyedropper => "eyedropper",
+            Self::ColorSampler => "colorSampler",
+            Self::Ruler => "ruler",
+            Self::Note => "note",
+            Self::Count => "count",
+            Self::Brush => "brush",
+            Self::Pencil => "pencil",
+            Self::MixerBrush => "mixerBrush",
+            Self::ColorReplacement => "colorReplacement",
+            Self::Eraser => "eraser",
+            Self::BackgroundEraser => "backgroundEraser",
+            Self::MagicEraser => "magicEraser",
+            Self::Gradient => "gradient",
+            Self::PaintBucket => "paintBucket",
+            Self::Type => "type",
+            Self::VerticalType => "verticalType",
+            Self::HorizontalTypeMask => "horizontalTypeMask",
+            Self::VerticalTypeMask => "verticalTypeMask",
+            Self::Hand => "hand",
+            Self::RotateView => "rotateView",
+            Self::Zoom => "zoom",
+            Self::Remove => "remove",
+            Self::SpotHealing => "spotHealing",
+            Self::Healing => "healing",
+            Self::Patch => "patch",
+            Self::ContentAwareMove => "contentAwareMove",
+            Self::RedEye => "redEye",
+            Self::CloneStamp => "cloneStamp",
+            Self::PatternStamp => "patternStamp",
+            Self::HistoryBrush => "historyBrush",
+            Self::ArtHistoryBrush => "artHistoryBrush",
+            Self::Blur => "blur",
+            Self::Sharpen => "sharpen",
+            Self::Smudge => "smudge",
+            Self::AdjustmentBrush => "adjustmentBrush",
+            Self::Dodge => "dodge",
+            Self::Burn => "burn",
+            Self::Sponge => "sponge",
+            Self::QuickSelection => "quickSelection",
+            Self::ObjectSelection => "objectSelection",
+            Self::Pen => "pen",
+            Self::FreeformPen => "freeformPen",
+            Self::CurvaturePen => "curvaturePen",
+            Self::AddAnchorPoint => "addAnchorPoint",
+            Self::DeleteAnchorPoint => "deleteAnchorPoint",
+            Self::ConvertPoint => "convertPoint",
+            Self::PathSelection => "pathSelection",
+            Self::DirectSelection => "directSelection",
+            Self::Rectangle => "rectangle",
+            Self::EllipseShape => "ellipseShape",
+            Self::Triangle => "triangle",
+            Self::Polygon => "polygon",
+            Self::Star => "star",
+            Self::Line => "line",
+            Self::CustomShape => "customShape",
+            Self::Slice => "slice",
+            Self::SliceSelect => "sliceSelect",
+            Self::Frame => "frame",
+        }
+    }
+
+    /// Resolve an exact tool identifier.
+    pub fn from_id(id: &str) -> Option<Self> {
+        static IDS: std::sync::OnceLock<std::collections::HashMap<&'static str, Tool>> = std::sync::OnceLock::new();
+        IDS.get_or_init(|| Self::ALL.into_iter().filter(|tool| Self::from_name(tool.id()) == Some(*tool)).map(|tool| (tool.id(), tool)).collect())
+            .get(id)
+            .copied()
+    }
+
+    pub const ALL: [Tool; 70] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -128,6 +214,7 @@ impl Tool {
         Tool::Blur,
         Tool::Sharpen,
         Tool::Smudge,
+        Tool::AdjustmentBrush,
         Tool::Dodge,
         Tool::Burn,
         Tool::Sponge,
@@ -204,6 +291,7 @@ impl Tool {
             Tool::Blur => "Blur Tool",
             Tool::Sharpen => "Sharpen Tool",
             Tool::Smudge => "Smudge Tool",
+            Tool::AdjustmentBrush => "Adjustment Brush Tool",
             Tool::Dodge => "Dodge Tool",
             Tool::Burn => "Burn Tool",
             Tool::Sponge => "Sponge Tool",
@@ -258,6 +346,7 @@ impl Tool {
                 | Tool::Blur
                 | Tool::Sharpen
                 | Tool::Smudge
+                | Tool::AdjustmentBrush
                 | Tool::Dodge
                 | Tool::Burn
                 | Tool::Sponge
@@ -284,6 +373,8 @@ impl Tool {
             Tool::CloneStamp | Tool::PatternStamp => 'S',
             Tool::HistoryBrush | Tool::ArtHistoryBrush => 'Y',
             Tool::Blur | Tool::Sharpen | Tool::Smudge => '\0',
+            // Its own slot without a letter: no Shift+letter cycle reaches it.
+            Tool::AdjustmentBrush => '\0',
             // In the Marquee flyout, but M cycles only the Rectangular and Elliptical Marquee.
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
@@ -317,11 +408,22 @@ impl Tool {
             _ => "•",
         }
     }
+    /// The tool `s` names: its variant name, that name without "marquee", or its label, in any case and with spaces,
+    /// `_` and `-` ignored. The first tool of [`Tool::ALL`] a spelling names wins.
     pub fn from_name(s: &str) -> Option<Tool> {
-        let n = s.to_ascii_lowercase().replace([' ', '_', '-'], "");
-        Tool::ALL.into_iter().find(|t| {
-            let a = format!("{t:?}").to_ascii_lowercase();
-            n == a || n == a.replace("marquee", "") || n == t.label().to_ascii_lowercase().replace(' ', "")
-        })
+        // Panels resolve tool names per row as they draw, and the command gate per tool command: one table instead of
+        // formatting every tool's names per lookup.
+        static NAMES: std::sync::OnceLock<std::collections::HashMap<String, Tool>> = std::sync::OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            let mut names = std::collections::HashMap::new();
+            for t in Tool::ALL {
+                let a = format!("{t:?}").to_ascii_lowercase();
+                for spelling in [a.replace("marquee", ""), t.label().to_ascii_lowercase().replace(' ', ""), a] {
+                    names.entry(spelling).or_insert(t);
+                }
+            }
+            names
+        });
+        names.get(&s.to_ascii_lowercase().replace([' ', '_', '-'], "")).copied()
     }
 }
