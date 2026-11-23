@@ -314,9 +314,14 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "hide", json!(true)),
             false
         )),
-        spec!("layer.vectorMask.currentPath", "Vector Mask: Current Path", [], r##"{"layer":id?,"name":str|"work"="work"}"##, has_layer, |s, p| {
-            vector_mask_add(s, p, true)
-        }),
+        spec!(
+            "layer.vectorMask.currentPath",
+            "Vector Mask: Current Path",
+            [],
+            r##"{"layer":id?,"name":str|"work"="work","hide":bool=false (Hide All: the path inverted; the Layers panel's Alt-click)}"##,
+            has_layer,
+            |s, p| { vector_mask_add(s, p, true) }
+        ),
         spec!("layer.vectorMask.enabled", "Enable Vector Mask", [], r##"{"layer":id?,"enabled":bool? (default: toggle)}"##, has_layer, |s, p| {
             toggle_vector_mask(s, p, "enabled")
         }),

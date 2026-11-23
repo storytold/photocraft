@@ -1,4 +1,4 @@
-use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, layer_multi_cmds, symmetry_cmds};
+use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, symmetry_cmds};
 
 /// Per-document editing state. Plain data: the session holds each in a `Tracked`, whose revision moves with every
 /// write, view state included.
@@ -224,7 +224,7 @@ impl DocState {
     /// (marquee, lasso, Magic Wand, Quick / Object Selection, Select › …) is a history step but
     /// not an edit, so it neither marks the file modified nor makes closing ask to save.
     pub(crate) fn keeps_clean(&self, before: &Document) -> bool {
-        self.saved_revision == self.revision && layer_multi_cmds::selection_only_change(before, &self.doc)
+        self.saved_revision == self.revision && crate::damage::selection_only_change(before, &self.doc)
     }
     /// Damage since `revision`, or `None` when a revision is missing or has unknown damage.
     pub fn damage_since(&self, revision: u64) -> Option<photocraft_geom::Rect> {
@@ -285,7 +285,7 @@ impl DocState {
             if r.is_empty() {
                 Some(r)
             } else if bounded(&self.doc.layers, 0) {
-                Some(layer_multi_cmds::grow_hint(&self.doc, r))
+                Some(crate::damage::grow_hint(&self.doc, r))
             } else {
                 None
             }
@@ -349,7 +349,7 @@ pub struct ToolState {
     pub brush: craft_tracked::Tracked<photocraft_paint::BrushSettings>,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`), tracked as the brush is.
     pub presets: craft_tracked::Tracked<Arc<Vec<photocraft_paint::BrushPreset>>>,
-    /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
+    /// Bumped whenever `presets` changes ([`PresetStoreExt::brush_presets_changed`](crate::preset_store::PresetStoreExt::brush_presets_changed)); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
     /// Mixer Brush paint carried between strokes.

@@ -1,10 +1,12 @@
 //! The command registry: the command tables a process installs, in their order, looked up by id.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 
 use serde_json::{Value, json};
 
+use crate::hooks::Hooks;
+use crate::slots::SlotInit;
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -36,11 +38,27 @@ pub struct Install {
     /// Registry order: these tables in turn, each in its own order. Menus, the Command Palette
     /// and `command.list` list commands in it.
     pub commands: Vec<Table>,
+    /// The pipeline hooks of the crates whose tables these are.
+    pub(crate) hooks: Hooks,
+    /// The session slots of the crates whose tables these are, one per type.
+    pub(crate) slots: Vec<SlotInit>,
+}
+
+impl Install {
+    /// Give every session a slot of `T` ([`Session::slot`]); a type already registered keeps its one.
+    pub(crate) fn slot<T: Default + Send + 'static>(&mut self) {
+        let init = SlotInit::of::<T>();
+        if !self.slots.iter().any(|s| s.id() == init.id()) {
+            self.slots.push(init);
+        }
+    }
 }
 
 /// Install `install` for this process. Installing the same tables again (the same names in the
 /// same order) does nothing. Different tables are refused with [`EngineError::InstallConflict`],
 /// and from then on every command fails with it and the registry lists nothing.
+/// Only the tables are compared: each crate's `register` adds its hooks and slots with its tables,
+/// so the same tables come with the same hooks and slots.
 pub fn install(install: Install) -> Result<()> {
     INSTALLED.install(install)
 }
@@ -53,6 +71,24 @@ pub fn command_specs() -> &'static [CommandSpec] {
 /// The installed command `id`, if any.
 pub fn find(id: &str) -> Option<&'static CommandSpec> {
     INSTALLED.registry().ok()?.get(id)
+}
+
+/// The installed pipeline hooks (none before an install, or after a conflicting one).
+pub(crate) fn hooks() -> &'static Hooks {
+    static NO_HOOKS: LazyLock<Hooks> = LazyLock::new(Hooks::default);
+    INSTALLED.installed().map_or(&*NO_HOOKS, |install| &install.hooks)
+}
+
+/// The installed session slots; none before an install or after a conflicting one (a session made
+/// then reports the install at its first command, and at each slot it reads).
+pub(crate) fn slot_inits() -> &'static [SlotInit] {
+    INSTALLED.installed().map_or(&[], |install| install.slots.as_slice())
+}
+
+/// Why a session has no slot of a type: the install's error, or [`EngineError::NotInstalled`] when
+/// the crate that registers it was not installed before the session was made.
+pub(crate) fn slot_error() -> EngineError {
+    INSTALLED.installed().err().unwrap_or(EngineError::NotInstalled)
 }
 
 /// The installed command `id`, for running it: [`EngineError::NotInstalled`] before an install,
@@ -103,23 +139,23 @@ pub fn list_entry_matches(entry: &Value, needle: &str) -> bool {
 
 static INSTALLED: InstallCell = InstallCell::new();
 
-/// A process's install: the first install's tables, the registry built from them on first use,
+/// A process's install: the first install, the registry built from its tables on first use,
 /// and the conflict a later install with other tables raised.
 struct InstallCell {
-    tables: OnceLock<Vec<Table>>,
+    installed: OnceLock<Install>,
     registry: OnceLock<Registry>,
     conflict: OnceLock<EngineError>,
 }
 
 impl InstallCell {
     const fn new() -> Self {
-        Self { tables: OnceLock::new(), registry: OnceLock::new(), conflict: OnceLock::new() }
+        Self { installed: OnceLock::new(), registry: OnceLock::new(), conflict: OnceLock::new() }
     }
 
     fn install(&self, install: Install) -> Result<()> {
-        let mut requested = Some(install.commands);
-        let installed = self.tables.get_or_init(|| requested.take().unwrap_or_default());
-        let Some(requested) = requested else { return Ok(()) };
+        let mut requested = Some(install);
+        let installed = &self.installed.get_or_init(|| requested.take().unwrap_or_default()).commands;
+        let Some(Install { commands: requested, .. }) = requested else { return Ok(()) };
         let name = |tables: &[Table], at: usize| tables.get(at).map_or_else(|| "(none)".to_string(), |t| t.0.to_string());
         let Some(at) = (0..installed.len().max(requested.len())).find(|&at| installed.get(at).map(|t| t.0) != requested.get(at).map(|t| t.0)) else {
             return Ok(());
@@ -129,12 +165,16 @@ impl InstallCell {
         Err(conflict)
     }
 
-    fn registry(&self) -> Result<&Registry> {
+    fn installed(&self) -> Result<&Install> {
         if let Some(conflict) = self.conflict.get() {
             return Err(conflict.clone());
         }
-        let tables = self.tables.get().ok_or(EngineError::NotInstalled)?;
-        Ok(self.registry.get_or_init(|| Registry::new(build(tables))))
+        self.installed.get().ok_or(EngineError::NotInstalled)
+    }
+
+    fn registry(&self) -> Result<&Registry> {
+        let install = self.installed()?;
+        Ok(self.registry.get_or_init(|| Registry::new(build(&install.commands))))
     }
 }
 
@@ -202,12 +242,12 @@ mod tests {
         let cell = InstallCell::new();
         assert!(matches!(cell.registry(), Err(EngineError::NotInstalled)));
 
-        cell.install(Install { commands: vec![a] }).unwrap();
+        cell.install(Install { commands: vec![a], ..Install::default() }).unwrap();
         assert!(cell.registry().unwrap().get("a.one").is_some());
-        cell.install(Install { commands: vec![a] }).unwrap();
+        cell.install(Install { commands: vec![a], ..Install::default() }).unwrap();
         assert!(cell.registry().unwrap().get("a.one").is_some(), "the same tables again change nothing");
 
-        let conflict = cell.install(Install { commands: vec![a, b] }).unwrap_err();
+        let conflict = cell.install(Install { commands: vec![a, b], ..Install::default() }).unwrap_err();
         assert_eq!(conflict, EngineError::InstallConflict { at: 1, installed: "(none)".into(), requested: "b".into() });
         assert_eq!(cell.registry().err(), Some(conflict), "every later lookup reports the conflict");
     }

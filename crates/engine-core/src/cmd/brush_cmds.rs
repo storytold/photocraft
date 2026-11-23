@@ -6,8 +6,9 @@
 //! (`{"scattering": {"enabled": true}}`). Strokes are deterministic: the jitter seed is the `seed`
 //! param or a hash of the points, so a journaled command replays to identical pixels.
 
+use crate::preset_store::PresetStoreExt;
 use photocraft_geom::Rect;
-use photocraft_paint::mixer::{MixerSettings, MixerState};
+use photocraft_paint::mixer::MixerSettings;
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
 use photocraft_paint::{
@@ -627,43 +628,7 @@ pub struct LiveStroke {
     base: (photocraft_doc::DocId, u64),
 }
 
-/// A finished live stroke offered to its own commit ([`Session::offer_live_stroke`],
-/// [`Session::offer_live_retouch`]): when the committing command matches it (same command,
-/// document revision, params, seed and points), it takes these pixels instead of rendering the
-/// stroke again.
-pub struct LiveCommit {
-    /// Mixer load before and after the stroke; transient, never serialized into the journal.
-    pub(crate) mixer: Option<(MixerState, MixerState)>,
-    pub(crate) cmd: String,
-    pub(crate) base: (photocraft_doc::DocId, u64),
-    pub(crate) params: Value,
-    /// The Brush's and Pencil's seed; the retouching tools have none.
-    pub(crate) seed: Option<u64>,
-    pub(crate) points: Vec<StrokePoint>,
-    pub(crate) surface: Surface,
-    pub(crate) bounds: Rect,
-}
-
-impl LiveCommit {
-    /// The params that decide the pixels, without the points and seed (compared separately).
-    fn settings(p: &Value) -> Value {
-        let mut p = p.clone();
-        if let Some(o) = p.as_object_mut() {
-            o.remove("points");
-            o.remove("seed");
-        }
-        p
-    }
-
-    pub(crate) fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
-        let base = s.active().map(|st| (st.doc.id, st.revision));
-        self.cmd == cmd
-            && base == Some(self.base)
-            && p.get("seed").and_then(Value::as_u64) == self.seed
-            && self.points == pts
-            && Self::settings(p) == Self::settings(&self.params)
-    }
-}
+pub use crate::state::LiveCommit;
 
 impl LiveStroke {
     /// Start from `paint.stroke` params; their `points` are rendered.
@@ -1368,7 +1333,7 @@ pub fn remembered_settings(b: &BrushSettings) -> Option<Value> {
 /// not a brush or fails the checks `tools.setBrush` makes (a size or scatter out of range). The
 /// options-bar values are clamped to the ranges their controls allow (size 1..max px; opacity
 /// 1..100 %; hardness, flow and smoothing 0..100 %), and stored tips load when the store is attached (else
-/// they paint with their previews until `Session::attach_preset_store`).
+/// they paint with their previews until `PresetStoreExt::attach_preset_store`).
 pub fn restored_settings(s: &Session, v: &Value) -> Option<BrushSettings> {
     if !v.is_object() {
         return None;
@@ -1618,3 +1583,6 @@ mod define_brush_no_selection_tests;
 
 #[cfg(test)]
 mod define_brush_color_density_tests;
+
+#[cfg(test)]
+mod filter_mask_stroke_tests;

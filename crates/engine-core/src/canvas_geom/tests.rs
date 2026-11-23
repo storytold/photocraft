@@ -413,7 +413,8 @@ fn turns_on_empty_and_tiny_documents_never_panic() {
         let mut s = crate::session();
         s.execute("file.new", json!({"width": w, "height": h})).unwrap();
         for t in TURNS {
-            s.execute(command(t), json!({"junk": [1, 2]})).unwrap();
+            assert!(s.execute(command(t), json!({"junk": [1, 2]})).is_err(), "an undocumented key is refused (#7596)");
+            s.execute(command(t), json!({})).unwrap();
         }
         s.execute("image.rotation.arbitrary", json!({"angle": 33})).unwrap();
     }

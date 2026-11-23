@@ -4,6 +4,7 @@
 //! and the clone-source marker point. The options bars are in [`bar`].
 
 use craft::keymap::Mods;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -42,7 +43,7 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to
     // paint, as with no source at all: `ui.clone_source` / `ui.clone_offset` carry no document,
     // so falling back to them would read another document's coordinates from this one's pixels.
-    app.session.presets.clone.active().source?;
+    app.session.presets().clone.active().source?;
     Some(p)
 }
 
@@ -704,7 +705,7 @@ pub fn source_marker_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<
     if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
         return None;
     }
-    let slot = app.session.presets.clone.active();
+    let slot = app.session.presets().clone.active();
     if slot.document_closed || slot.document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         return None;
     }

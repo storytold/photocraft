@@ -89,7 +89,7 @@ pub fn open(app: &mut PhotocraftApp) -> DialogId {
     let inks = crate::color_picker_ui::ink_value(craft::theme::Srgba::rgb(r, g, b), app.session.tools.picked_role_cmyk(0));
     let reset = defaults([r, g, b], first, app.session.tools.picked_role_cmyk(0));
     let mut fields = DialogFields::new();
-    let remembered: Option<DialogFields> = MemoryStage::peek_saved(&ctx, &SaveKey::named(REMEMBER_INKS));
+    let remembered: Option<DialogFields> = MemoryStage::peek_saved(app.ctx(), &SaveKey::named(REMEMBER_INKS));
     let remembered_inks = remembered.as_ref().and_then(|saved| saved.get(&crate::color_picker_ui::ink_field("color"))).cloned();
     fields.set(crate::color_picker_ui::ink_field("color"), remembered_inks.unwrap_or(inks));
     let title = Label::from(tl!("Fill"));

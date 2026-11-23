@@ -1,4 +1,5 @@
 use super::*;
+use crate::presets::PresetsExt;
 use serde_json::json;
 
 fn session() -> Session {
@@ -631,7 +632,7 @@ fn fresh_effects_match_the_dialog_factory_defaults() {
 fn layer_style_defaults_persist_with_presets() {
     let mut s = session();
     s.execute("layer.layerStyle.makeDefault", json!({"kind": "stroke", "params": {"size": 9}})).unwrap();
-    let blob = s.presets.to_json(&s);
+    let blob = s.presets().to_json(&s);
     let mut t = crate::session();
     t.load_presets_json(blob);
     let r = t.execute("layer.layerStyle.defaultFor", json!({"kind": "stroke"})).unwrap();

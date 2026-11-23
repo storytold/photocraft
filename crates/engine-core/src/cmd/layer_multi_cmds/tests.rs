@@ -1,7 +1,7 @@
 use photocraft_color::SampleType;
 
-use super::damage::{align_bounds, shape_pixel_bounds};
 use super::*;
+use crate::damage::{align_bounds, shape_pixel_bounds};
 
 #[test]
 fn merge_with_background_preserves_background() {

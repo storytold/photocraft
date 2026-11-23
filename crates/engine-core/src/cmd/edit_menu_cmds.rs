@@ -5,9 +5,12 @@
 //! Check Spelling is not implemented: it needs a word list per language, and no permissively
 //! licensed dictionary small enough to bundle (or a pure-Rust checker with one) was available.
 
+use crate::preset_store::PresetStoreExt;
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_doc::vector::Path;
-use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
@@ -19,65 +22,7 @@ use crate::{EngineError, Result, Session};
 
 // ------------------------------------------------------------------ state
 
-/// What Edit › Fade would fade: the result of the last filter, adjustment or paint command.
-#[derive(Clone, Debug, PartialEq)]
-pub struct FadeSource {
-    pub doc: DocId,
-    /// Document revision right after the command, or after a later step that only showed or hid
-    /// other layers (#13805); any other change disables Fade.
-    pub revision: u64,
-    /// History id of the state before the command, which Fade blends back towards. Steps that only
-    /// showed or hid other layers can sit between that state and the current one.
-    pub before: Option<u64>,
-    pub target: FadeTarget,
-    pub label: String,
-}
-
-/// What the faded command changed, and so what Fade blends back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FadeTarget {
-    /// A layer's pixels.
-    Pixels(LayerId),
-    /// A layer's layer mask.
-    Mask(LayerId),
-    /// An alpha or spot channel (index into [`Document::channels`]).
-    Channel(usize),
-    /// The Quick Mask.
-    QuickMask,
-}
-
-/// A custom shape (Edit › Define Custom Shape), usable by the Custom Shape tool.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CustomShape {
-    pub name: String,
-    pub path: Path,
-}
-
-/// Remembered Find and Replace Text match (or collapsed cursor after a replacement) and the
-/// search query it belongs to.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FindCursor {
-    pub layer: LayerId,
-    pub start: usize,
-    pub end: usize,
-    pub find: String,
-    pub case_sensitive: bool,
-    pub whole_word: bool,
-    pub forward: bool,
-    pub all_layers: bool,
-}
-
-/// Edit-menu state kept by the session.
-#[derive(Clone, Debug, Default)]
-pub struct EditState {
-    pub fade: Option<FadeSource>,
-    /// Custom shape library (the vector tools read it).
-    pub custom_shapes: Vec<CustomShape>,
-    /// Find and Replace Text position and the query it belongs to.
-    pub find_cursor: Option<FindCursor>,
-    /// First layer visited in the current Find Next round (so wrapping stops before it).
-    pub find_start: Option<LayerId>,
-}
+pub use crate::state::{CustomShape, EditState, FadeSource, FadeTarget, FindCursor};
 
 /// Commands whose result Edit › Fade can blend back against the previous state.
 fn fadeable(id: &str) -> bool {
@@ -269,7 +214,7 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 custom_shapes: if want("customShapes") { s.edit_state.custom_shapes.clone() } else { Vec::new() },
                 tool_presets: if want("tools") {
                     let builtins = crate::presets::tools::builtin();
-                    s.presets.tool_presets.iter().filter(|preset| bool_or(p, "includeBuiltins", false) || !builtins.contains(preset)).cloned().collect()
+                    s.presets().tool_presets.iter().filter(|preset| bool_or(p, "includeBuiltins", false) || !builtins.contains(preset)).cloned().collect()
                 } else {
                     Vec::new()
                 },
@@ -287,7 +232,7 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad(cmd, format!("not a preset file (format `{}`)", file.format)));
             }
             // Validate the whole tool import before changing any preset library.
-            let mut tools = s.presets.tool_presets.clone();
+            let mut tools = s.presets().tool_presets.clone();
             let nt = if want("tools") { file.tool_presets.len() } else { 0 };
             if nt > crate::presets::tools::MAX_PRESETS {
                 return Err(bad(cmd, "too many tool presets"));
@@ -334,8 +279,8 @@ fn export_import(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             if want("tools") {
-                s.presets.tool_presets = tools;
-                s.presets_changed();
+                s.presets_mut().tool_presets = tools;
+                presets_changed(s);
             }
             Ok(json!({"brushes": nb, "customShapes": ns, "tools": nt}))
         }
@@ -366,7 +311,7 @@ use content_aware_scale::content_aware_scale;
 pub use fade::{FadePreview, fade_preview, fade_surface};
 use fade::{can_fade, fade};
 pub use find_replace::find_matches;
-use find_replace::{find_replace, has_type_layer};
+use find_replace::{can_find_replace, find_replace};
 pub(crate) use presets::current_path;
 pub use presets::{PRESET_FORMAT, PresetFile};
 use presets::{can_define_shape, define_brush_preset, define_custom_shape, preset_manager};
@@ -433,7 +378,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ["Edit"],
             None,
             r##"{"find":text,"replace":text,"action":"changeAll|find|change|changeFind","caseSensitive":bool=false,"wholeWord":bool=false,"forward":bool=true,"allLayers":bool=true}"##,
-            has_type_layer,
+            can_find_replace,
             find_replace
         ),
         spec!(

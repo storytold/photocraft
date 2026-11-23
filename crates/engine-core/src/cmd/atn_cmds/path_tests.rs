@@ -1,5 +1,6 @@
 use super::super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, UnicodeString, atn};
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::{ActionList, ActionsFile};
 
 /// Construct a pixel point directly from the measured #10706 wire format.
@@ -119,15 +120,15 @@ fn whole_atn_and_native_insert_path_replay_keep_geometry() {
     let mut s = crate::session();
     s.execute("file.new", json!({"width":400,"height":300})).unwrap();
     s.execute("path.set", json!({"name":"Source","path":crate::vector_cmds::path_json(&expected)})).unwrap();
-    s.actions.list.push(Action::new("Captured", Vec::new())).unwrap();
+    s.actions_mut().list.push(Action::new("Captured", Vec::new())).unwrap();
     let revision = s.active().unwrap().revision;
     s.execute("actions.insertPath", json!({"action":0,"name":"Source"})).unwrap();
     assert_eq!(s.active().unwrap().revision, revision);
-    let (bytes, skipped) = super::super::export("S", &[&s.actions.list.actions()[0]], &[], false).unwrap();
+    let (bytes, skipped) = super::super::export("S", &[&s.actions().list.actions()[0]], &[], false).unwrap();
     assert!(skipped.is_empty());
     let imported = super::super::import(&bytes).unwrap();
     assert!(imported.unsupported.is_empty());
-    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     s.execute("path.set", json!({"name":"Source","path":{"subpaths":[]}})).unwrap();
     let played = s.execute("actions.play", json!({"action":0})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
