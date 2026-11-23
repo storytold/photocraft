@@ -73,7 +73,7 @@ in the dialog.
 
 Every binary reports its version, the commit and the build date: `photocraft --version`,
 `photocraft-cli --version`, and *Help › About PhotoCraft*. CI sets `PHOTOCRAFT_BUILD_SHA` and
-`PHOTOCRAFT_BUILD_DATE`, and `crates/engine/src/build_info.rs` reads them at compile time. A plain
+`PHOTOCRAFT_BUILD_DATE`, and `crates/engine-core/src/build_info.rs` reads them at compile time. A plain
 `cargo build` doesn't set them and reports `0.2.0 (dev build)`.
 
 Every desktop build job (macOS, Windows, Linux, FreeBSD) also checks out [craft-fonts](https://github.com/storytold/craft-fonts)
@@ -242,7 +242,15 @@ Why these formats:
   `~/.local/share/applications/ai.storyteller.photocraft.desktop` with `Exec` rewritten to
   the AppImage's path (`TryExec` dropped, the binary isn't on the host PATH) and the
   hicolor icons beside it, rewriting only when the content changed, and any failure leaves
-  the launch untouched. `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; to uninstall, `rm
+  the launch untouched. Launcher refresh uses a hidden generated snapshot to preserve
+  user edits, comments and deleted keys while updating untouched packaged metadata and
+  known executable paths. Missing or damaged snapshots use a conservative fallback.
+  External integration removes a duplicate only when a regular launcher exactly matches
+  a valid regular snapshot. Symlinked launchers or snapshots (including dangling links)
+  and special files are left alone during both refresh and deduplication; icons still
+  install. These checks do not synchronize concurrent changes by other processes.
+  This overlaps the deduplication protection proposed in #5168 without depending on it.
+  `PHOTOCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; to uninstall, `rm
   ~/.local/share/applications/ai.storyteller.photocraft.desktop` and `find
   ~/.local/share/icons/hicolor -name 'ai.storyteller.photocraft*' -delete`. The script is
   covered by `packaging/linux/apprun-test.sh` in the packaging-lint workflow.

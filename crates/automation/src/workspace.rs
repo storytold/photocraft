@@ -70,6 +70,16 @@ impl AuthorizedWorkspace {
         Ok(Self { read: self.read.clone(), write: Some(open_root(path, "write", &self.read)?) })
     }
 
+    /// The read roots as configured at launch, in the order files are looked up.
+    pub fn read_folders(&self) -> Vec<PathBuf> {
+        self.read.iter().map(|root| root.configured_path.clone()).collect()
+    }
+
+    /// The write root as configured at launch, if any.
+    pub fn write_folder(&self) -> Option<PathBuf> {
+        self.write.as_ref().map(|root| root.configured_path.clone())
+    }
+
     /// Read the first matching regular file, trying roots in their configured order.
     /// Only an open that reports NotFound tries the next root. Once opened, errors
     /// (including a non-regular file or a failed bounded read) never select another file.
@@ -91,6 +101,18 @@ impl AuthorizedWorkspace {
         let bytes = read_to_observed_length(&mut file, metadata.len())?;
         let save_path = self.write.as_ref().filter(|write| Arc::ptr_eq(&root.dir, &write.dir)).map(|_| path.to_owned());
         Ok((bytes, save_path))
+    }
+
+    /// Where the file or `.pcraft` folder that `path` names is on disk: below the first read
+    /// root that holds it (the root `read` and `open_pcraft` pick), as that root was configured
+    /// at launch. Open Recent lists this, since the person reopens the file outside automation,
+    /// where a root-relative request path names nothing. It grants no access.
+    pub fn location(&self, path: &str) -> Option<PathBuf> {
+        self.read.iter().find_map(|root| {
+            let relative = scoped_path(path, root).ok()??;
+            root.dir.metadata(&relative).ok()?;
+            Some(root.configured_path.join(relative))
+        })
     }
 
     fn open_read(&self, path: &str) -> Result<(cap_std::fs::File, &RootCapability), AutomationError> {
@@ -248,21 +270,25 @@ impl Drop for TempRemoval<'_> {
     }
 }
 
-/// Whether `name`'s extension is one of the formats PhotoCraft saves or exports.
+/// Whether `name`'s extension is one of the formats PhotoCraft saves or exports. The image codec
+/// registry, not `photocraft_formats`: that one also names text and office files PhotoCraft only
+/// reads (`txt`, `md`, `csv`, `rtf`…), and notes must never be replaced (#14355). A codec counts
+/// only if this build writes it: PCX, XPM, DICOM and HEIF are read-only.
 fn written_kind(name: &str) -> bool {
     let Some((_, ext)) = name.rsplit_once('.') else { return false };
     let ext = ext.to_ascii_lowercase();
-    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str()) || photocraft_codecs::from_extension(&ext).is_some()
+    ["psd", "psb", "ora", "pdf", photocraft_format::EXTENSION].contains(&ext.as_str())
+        || photocraft_codecs::from_extension(&ext).is_some_and(|format| format.caps().write)
 }
 
-/// Whether the file at `relative` starts like an image PhotoCraft reads (PSD/PSB or a codec's
-/// magic). Containers that also hold other things (zip, PDF) are judged by name only.
+/// Whether the file at `relative` starts like an image PhotoCraft writes (PSD/PSB or a writable
+/// codec's magic). Containers that also hold other things (zip, PDF) are judged by name only.
 fn holds_image(dir: &Dir, relative: &Path) -> bool {
     let mut head = [0u8; 64];
     let Ok(mut file) = dir.open(relative) else { return false };
     let Ok(n) = file.read(&mut head) else { return false };
     let head = &head[..n];
-    head.starts_with(b"8BPS") || photocraft_codecs::detect(head).is_some()
+    photocraft_io::is_psd(head) || photocraft_codecs::detect(head).is_some_and(|format| format.caps().write)
 }
 
 fn read_to_observed_length(reader: &mut impl Read, observed_length: u64) -> Result<Vec<u8>, AutomationError> {
@@ -763,6 +789,7 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
     match id {
         "actions.load"
+        | "actions.replace"
         | "brush.presets.importAbr"
         | "brush.presets.importImage"
         | "gradient.presets.importGrd"
