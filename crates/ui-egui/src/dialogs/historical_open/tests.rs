@@ -179,3 +179,32 @@ fn historical_prompt_waits_behind_existing_place_gate() {
     assert!(is_open(&app));
     answer(&mut app, request, None).unwrap();
 }
+
+#[test]
+fn profile_answers_cannot_consume_a_damaged_open_behind_memory() {
+    let mut app = app();
+    app.prompt_order.extend([open_prompt::PromptKind::Memory, open_prompt::PromptKind::Open]);
+    app.held_opens.push_back(open_prompt::Held {
+        doc: photocraft_doc::Document::new("Damaged", photocraft_geom::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
+        read_only: false,
+        initial_view: None,
+        protected_import_source: None,
+        damage_pending: true,
+        name: "damaged.psd".into(),
+        path: None,
+        warnings: vec![],
+        bytes: None,
+        slot: None,
+        order: None,
+        question: None,
+        policy_applied: false,
+        smart_object: false,
+    });
+    let settings = app.session.color().settings.clone();
+    assert!(open_prompt::answer(&mut app, Some("convert")).unwrap_err().contains("damaged PSD"));
+    assert!(open_prompt::answer_remembering(&mut app, "convert").unwrap_err().contains("damaged PSD"));
+    assert_eq!(app.session.color().settings, settings);
+    assert_eq!(app.held_opens.len(), 1);
+    assert_eq!(app.prompt_order.iter().copied().collect::<Vec<_>>(), [open_prompt::PromptKind::Memory, open_prompt::PromptKind::Open]);
+    assert!(app.session.documents().is_empty());
+}

@@ -66,3 +66,76 @@ fn storage_conversions_reject_unrelated_order_before_changing_contents_or_writin
     assert_eq!(std::fs::read(&output).unwrap(), bytes);
     assert_eq!(std::fs::read(&source).unwrap(), bytes);
 }
+
+fn interpreted_link(directory: &std::path::Path) -> (Session, LayerId, std::path::PathBuf, Vec<u8>) {
+    use photocraft_doc::{ColorMode, Document, HistoricalXcfSampleOrder, Layer, SampleType};
+    let bytes = crate::jobs::historical_fixture::historical_rgba16();
+    let path = directory.join("historical.xcf");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut object = SmartObject::new(SmartSource::Linked { path: path.to_str().unwrap().into() }, photocraft_geom::Affine::IDENTITY, None);
+    object.historical_xcf_sample_order = Some(HistoricalXcfSampleOrder::LittleEndian);
+    object.historical_xcf_link_digest = Some(*blake3::hash(&bytes).as_bytes());
+    let layer = Layer::new("Interpreted linked contents", LayerContent::Smart(object));
+    let id = layer.id;
+    let mut doc = Document::new("Loaded native linked contents", photocraft_geom::Size::new(3, 1), ColorMode::Rgb, SampleType::U16);
+    doc.layers.push(layer);
+    let mut session = crate::session();
+    session.add_document(doc, None);
+    (session, id, path, bytes)
+}
+
+#[test]
+fn changed_historical_links_refuse_contents_and_storage_commands_atomically() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut session, id, path, approved) = interpreted_link(directory.path());
+    let mut changed = approved.clone();
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
+    std::fs::write(&path, &changed).unwrap();
+    let output = directory.path().join("exported.xcf");
+    let before = session.active().unwrap().clone();
+    let journal = session.journal.clone();
+    for command in ["editContents", "convertToLayers", "exportContents", "convertToEmbedded", "embedAllLinked", "newSmartObjectViaCopy"] {
+        let params = match command {
+            "exportContents" => json!({"layer":id.0,"path":output}),
+            "embedAllLinked" => json!({}),
+            _ => json!({"layer":id.0}),
+        };
+        let error = session.execute(&format!("layer.smartObjects.{command}"), params).unwrap_err();
+        assert!(error.to_string().contains("bytes changed"), "{command}: {error}");
+        assert!(Arc::ptr_eq(session.active().unwrap().doc(), before.doc()));
+        assert_eq!((session.active().unwrap().revision, session.active().unwrap().history.past_len()), (before.revision, before.history.past_len()));
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.journal, journal);
+        assert!(!output.exists());
+        assert_eq!(std::fs::read(&path).unwrap(), changed);
+    }
+    // Convert to Linked has a narrower supported contract: interpreted contents
+    // need an explicit replacement workflow before any file is written.
+    let error = session.execute("layer.smartObjects.convertToLinked", json!({"layer":id.0,"path":output})).unwrap_err();
+    assert!(error.to_string().contains("explicit sample-order workflow"), "{error}");
+    assert!(!output.exists());
+    assert!(Arc::ptr_eq(session.active().unwrap().doc(), before.doc()));
+    std::fs::write(&path, &approved).unwrap();
+    session.execute("layer.smartObjects.exportContents", json!({"layer":id.0,"path":output})).unwrap();
+    assert_eq!(std::fs::read(&output).unwrap(), approved, "unchanged approved bytes remain exportable verbatim");
+    session.execute("layer.smartObjects.convertToEmbedded", json!({"layer":id.0})).unwrap();
+    let object = object(&session, id);
+    assert!(object.historical_xcf_sample_order.is_some());
+    assert!(object.historical_xcf_link_digest.is_none());
+    assert!(matches!(&object.source,SmartSource::Embedded {bytes,..} if bytes.as_slice()==approved));
+}
+
+#[test]
+fn neighboring_source_commands_reject_invalid_order_before_missing_path_io() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut session, id, _, _) = interpreted_link(directory.path());
+    let before = session.active().unwrap().clone();
+    for command in ["layer.smartObjects.replaceContents", "layer.smartObjects.relinkToFile"] {
+        let error =
+            session.execute(command, json!({"layer":id.0,"path":directory.path().join("missing.xcf"),"historicalXcfSampleOrder":"invalid"})).unwrap_err();
+        assert!(matches!(error,EngineError::BadParams {ref cmd,..} if cmd==command), "{error}");
+        assert!(Arc::ptr_eq(session.active().unwrap().doc(), before.doc()));
+        assert_eq!((session.active().unwrap().revision, session.active().unwrap().history.past_len()), (before.revision, before.history.past_len()));
+    }
+}

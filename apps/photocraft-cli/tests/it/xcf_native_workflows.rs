@@ -378,3 +378,26 @@ fn run_in_place_still_edits_and_exports_an_ordinary_writable_png() {
     }
     assert_eq!(std::fs::read(input).unwrap(), layered_xcf());
 }
+
+#[test]
+fn corrupt_xcf_transports_fail_info_convert_and_run_without_outputs_or_source_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    for (kind, mut bytes) in wrapped_sources() {
+        bytes.truncate(bytes.len() / 2);
+        let input = directory.path().join(format!("corrupt-{kind}.data"));
+        let output = directory.path().join(format!("output-{kind}.pcraft"));
+        std::fs::write(&input, &bytes).unwrap();
+        let attempts = [
+            cli().arg("info").arg(&input).output().unwrap(),
+            cli().arg("convert").arg(&input).arg(&output).output().unwrap(),
+            cli().arg("run").arg(&input).args(["--cmd", "layer.setProps", "--params", r#"{"opacity":0.25}"#, "--out"]).arg(&output).output().unwrap(),
+        ];
+        for result in attempts {
+            assert!(!result.status.success(), "{kind}: truncated source accepted");
+            assert!(!result.stderr.is_empty(), "{kind}: missing actionable error");
+            assert!(result.stdout.is_empty(), "{kind}: failed import must not emit a command result");
+            assert!(!output.exists());
+            assert_eq!(std::fs::read(&input).unwrap(), bytes);
+        }
+    }
+}
