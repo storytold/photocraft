@@ -838,8 +838,15 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         }
         "layer.smartObjects.replaceContents" => {
             let st = app.session.active()?;
-            let (doc, layer) = (st.doc.id, st.active_layer?);
-            Some(app.pick_file_bytes(move |app, name, bytes| app.with_document(doc, |app| replace_picked_contents(app, layer, &name, bytes))))
+            let (doc, generation, layer) = (st.doc.id, st.open_generation(), st.active_layer?);
+            Some(app.pick_file_bytes(move |app, name, bytes| {
+                // Saved IDs can repeat after close/reopen. Check the opening,
+                // while still allowing edits to the same live document.
+                if !app.session.documents().iter().any(|state| state.doc.id == doc && state.open_generation() == generation) {
+                    return Err(tl!("the replacement document was closed").into());
+                }
+                app.with_document(doc, |app| replace_picked_contents(app, layer, &name, bytes))
+            }))
         }
         "layer.smartObjects.exportContents" => Some(export_contents(app)),
         "layer.smartObjects.relinkToFile" => {

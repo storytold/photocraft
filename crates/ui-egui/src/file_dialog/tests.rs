@@ -1717,3 +1717,52 @@ fn open_picker_covers_every_xcf_transport_in_all_formats_and_its_format_filter()
         assert!(xcf.extensions.iter().any(|ext| ext == extension), "XCF filter hides {name}");
     }
 }
+
+#[test]
+fn replacement_picker_cannot_target_a_reopened_native_document_with_the_same_saved_ids() {
+    let (mut app, files, _, ids) = smart_app();
+    let ctx = egui::Context::default();
+    let original = app.session.active().unwrap();
+    let (id, generation) = (original.doc.id, original.open_generation());
+    let saved = photocraft_format::save_to_bytes(original.doc(), &Default::default()).unwrap();
+    let png = photocraft_io::export(original.doc(), "png", &Default::default()).unwrap().bytes;
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
+    app.session.close(0).unwrap();
+    app.session.add_document(photocraft_format::load_from_bytes(&saved).unwrap(), None);
+    let reopened = app.session.active().unwrap();
+    assert_eq!(reopened.doc.id, id);
+    assert_ne!(reopened.open_generation(), generation);
+    let before = reopened.doc().clone();
+    let sources = ids.map(|id| smart_source(&app, id));
+    answer(&files, Picked::Contents(vec![("Late.png".into(), png)]));
+    app.poll_file_dialog();
+    assert!(app.ui.status_error);
+    assert!(app.ui.status.contains("replacement document was closed"), "{}", app.ui.status);
+    assert!(!app.session.has_jobs(), "a stale picker must not launch a replacement worker");
+    assert!(Arc::ptr_eq(&before, app.session.active().unwrap().doc()));
+    assert_eq!(ids.map(|id| smart_source(&app, id)), sources);
+}
+
+#[test]
+fn replacement_picker_still_accepts_legitimate_edits_to_the_same_open_document() {
+    let (mut app, files, _, ids) = smart_app();
+    app.session.set_cooperative_jobs(true);
+    let ctx = egui::Context::default();
+    let generation = app.session.active().unwrap().open_generation();
+    let png = photocraft_io::export(app.session.active().unwrap().doc(), "png", &Default::default()).unwrap().bytes;
+    menus::invoke(&mut app, &ctx, "layer.smartObjects.replaceContents", json!({})).unwrap();
+    app.session
+        .edit("Rename document", |doc, _| {
+            doc.name = "Edited while picker waited".into();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(app.session.active().unwrap().open_generation(), generation);
+    answer(&files, Picked::Contents(vec![("Current.png".into(), png)]));
+    app.poll_file_dialog();
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().doc.name, "Edited while picker waited");
+    for id in ids {
+        assert!(matches!(smart_source(&app, id), photocraft_doc::SmartSource::Embedded { file_name, .. } if file_name == "Current.png"));
+    }
+}
