@@ -1,6 +1,7 @@
 //! File › Automate › Batch: OK checks for a missing source folder, then a missing destination
 //! folder, as the reference does (#13669). The first that fails refuses OK with the reference's
-//! message; the dialog stays open with every value, and nothing runs. The same holds for a
+//! message in a one-button alert titled "Batch"; the dialog stays open with every value, and
+//! nothing runs. The same holds for a
 //! confirm through the control channel.
 
 use craft::automation::actions::{Action, ActionStep};
@@ -48,6 +49,12 @@ fn fields(app: &PhotocraftApp, id: DialogId) -> Option<Value> {
     app.framework.dialogs.open_dialogs().into_iter().find(|open| open.id == id).and_then(|open| open.fields)
 }
 
+/// The messages of the alerts the host has open (`HostedAlert`'s key is "alert").
+fn alerts(app: &PhotocraftApp) -> Vec<String> {
+    let open = app.framework.dialogs.open_dialogs().into_iter().filter(|d| d.key.as_deref() == Some("alert"));
+    open.filter_map(|d| Some(d.fields.as_ref()?["message"].as_str()?.to_string())).collect()
+}
+
 /// A folder holding one 2 × 1 PNG, `in/a.png`, and the path of an output folder `out` beside it.
 fn image_folder() -> (tempfile::TempDir, String, String) {
     let dir = tempfile::tempdir().unwrap();
@@ -68,6 +75,7 @@ fn ok_without_a_source_folder_is_refused_and_keeps_the_dialog_open() {
         let before = fields(&app, id).expect("the dialog is open");
         assert_eq!(crate::dialogs::confirm(&mut app, &ctx, id), Err(NO_SOURCE_FOLDER.to_string()));
         assert_eq!(NO_SOURCE_FOLDER, "You must choose a source folder.");
+        assert_eq!(alerts(&app), [NO_SOURCE_FOLDER], "the refusal shows in an alert");
         assert_eq!(fields(&app, id), Some(before), "the dialog stays open with every value");
         assert!(!dir.path().join("out").exists(), "nothing was written");
         assert_eq!(app.session.documents().len(), 1, "nothing was opened");
@@ -82,6 +90,7 @@ fn ok_without_a_destination_folder_is_refused_and_writes_nothing() {
         let before = fields(&app, id).expect("the dialog is open");
         assert_eq!(crate::dialogs::confirm(&mut app, &ctx, id), Err(NO_DESTINATION_FOLDER.to_string()));
         assert_eq!(NO_DESTINATION_FOLDER, "You must choose a destination folder.");
+        assert_eq!(alerts(&app), [NO_DESTINATION_FOLDER], "the refusal shows in an alert");
         assert_eq!(fields(&app, id), Some(before));
         let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
         assert_eq!(files, ["in"], "nothing was written");
@@ -132,6 +141,7 @@ fn ok_with_both_folders_runs_the_batch() {
         let (mut app, ctx, id) = batch(&input, &output);
         crate::dialogs::confirm(&mut app, &ctx, id).expect("OK is accepted");
         assert!(fields(&app, id).is_none(), "OK closes the dialog");
+        assert!(alerts(&app).is_empty(), "an accepted OK shows no alert");
         assert!(dir.path().join("out/a.png").is_file(), "the batch wrote a.png");
     });
 }

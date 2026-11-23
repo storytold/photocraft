@@ -686,14 +686,17 @@ fn batch_missing_choice(fields: &DialogFields) -> Option<&'static str> {
 }
 
 /// The `ParamFamily::check` of the Batch dialog (#13669): OK, from the button or a confirm through the control channel,
-/// is refused while a folder source or its destination names no folder. The dialog stays open with its values, shows
-/// the reference's message, and nothing runs.
-pub(crate) fn batch_check(_app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
-    match batch_missing_choice(&result.fields) {
-        Some(NO_SOURCE_FOLDER) => Err(Label::from(tl!("You must choose a source folder."))),
-        Some(_) => Err(Label::from(tl!("You must choose a destination folder."))),
-        None => Ok(()),
-    }
+/// is refused while a folder source or its destination names no folder. As in the reference, a one-button alert
+/// titled "Batch" shows the message; the dialog stays open with its values (the refusal also shows under its rows and
+/// answers a control-channel confirm), and nothing runs.
+pub(crate) fn batch_check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    let message = match batch_missing_choice(&result.fields) {
+        Some(NO_SOURCE_FOLDER) => tl!("You must choose a source folder."),
+        Some(_) => tl!("You must choose a destination folder."),
+        None => return Ok(()),
+    };
+    crate::dialogs::alerts::show(app, craft::ui::dialog::Alert::new(tl!("Batch"), message));
+    Err(Label::from(message))
 }
 
 #[cfg(test)]
