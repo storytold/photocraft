@@ -49,7 +49,7 @@ fn action_dragged_onto_plus_adds_a_copy_after_it() {
     assert_eq!(steps(&app, 1), steps(&app, 0));
     assert_eq!(app.ui.actions.panel.selected, Some(ActionSelection::Action(1)));
     assert!(app.ui.actions.panel.expanded.contains(&names[1]), "the copy is open as its source was");
-    assert!(app.session.actions.recording.is_none());
+    assert!(app.session.recording.target.is_none());
 }
 
 #[test]

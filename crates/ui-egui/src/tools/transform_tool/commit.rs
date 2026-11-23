@@ -288,7 +288,7 @@ fn selected_layers_changed(st: &photocraft_engine::DocState, t: &FreeTransform, 
         return false;
     }
     let Some(opened) = opened else { return false };
-    let mut now = st.selected_layers();
+    let mut now = st.selected_layers().to_vec();
     now.sort_unstable();
     now != opened
 }
@@ -321,7 +321,7 @@ pub fn follow_edits(app: &mut PhotocraftApp) {
         let now = Several::shown(&st.doc, &sv.ids, &sv.lifted);
         if now.layers != sv.moving.layers {
             sv.moving = now;
-            pv.textures = sv.render();
+            pv.textures = sv.render(&mut app.texture_serials);
         }
     }
     if t.layers.is_empty()

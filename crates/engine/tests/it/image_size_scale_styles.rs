@@ -28,7 +28,7 @@ fn styled_shape(depth: u32) -> (Session, LayerId) {
             ..Default::default()
         };
         doc.layer_mut(id).unwrap().effects = effects.clone();
-        let children = std::mem::take(&mut doc.layers);
+        let children = std::mem::take(&mut *doc.layers);
         let mut outer = Layer::group("Outer", vec![Layer::group("Inner", children)]);
         outer.effects = effects;
         doc.layers.push(outer);

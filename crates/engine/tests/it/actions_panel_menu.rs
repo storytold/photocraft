@@ -27,9 +27,9 @@ fn tool_recording_is_opt_in_and_toggles_do_not_reclassify_pending_steps() {
     s.execute("actions.record", json!({"action":"A"})).unwrap();
     stroke(&mut s, "#ff0000");
     s.execute("select.all", json!({})).unwrap();
-    let original = s.actions.clone();
+    let original = (s.actions.clone(), s.recording.clone());
     assert!(s.execute("actions.allowToolRecording", json!({"enabled":"yes"})).is_err());
-    assert_eq!(s.actions, original, "invalid mode must not flush pending work");
+    assert_eq!((s.actions.clone(), s.recording.clone()), original, "invalid mode must not flush pending work");
     s.execute("actions.allowToolRecording", json!({"enabled":true})).unwrap();
     stroke(&mut s, "#00ff00");
     s.execute("actions.allowToolRecording", json!({"enabled":false})).unwrap();
@@ -54,7 +54,7 @@ fn background_stroke_ownership_does_not_suppress_ordinary_filter_jobs() {
         let changed = s.execute("actions.allowToolRecording", json!({"enabled":true}));
         if command == "paint.remove" {
             assert!(changed.is_err(), "the in-flight stroke retains the mode it started under");
-            assert!(!s.actions.record_tools);
+            assert!(!s.recording.record_tools);
         } else {
             changed.unwrap();
         }
@@ -132,16 +132,17 @@ fn set_duplication_preserves_metadata_call_targets_and_empty_folder_order() {
     }
     empty.execute("actions.duplicate", json!({"set":"E"})).unwrap();
     assert_eq!(actions_edit_cmds::set_names(&empty), ["E", "E copy", "F"]);
-    let original = empty.actions.clone();
+    let original = (empty.actions.clone(), empty.recording.clone());
     for params in [json!({"set":"Missing"}), json!({"set":"E","action":0}), json!({"set":false})] {
         assert!(empty.execute("actions.duplicate", params).is_err());
-        assert_eq!(empty.actions, original);
+        assert_eq!((empty.actions.clone(), empty.recording.clone()), original);
     }
 }
 
 /// Menu insertion keeps descriptor absence and kind; empty descriptors and ambiguous commands differ.
 #[test]
 fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() {
+    photocraft_engine::install().unwrap();
     assert!(!atn_cmds::menu_item_needs_settings("filter.noise.despeckle"));
     assert!(atn_cmds::menu_item_needs_settings("filter.blur.gaussianBlur"));
     for id in ["image.imageSize", "filter.blur.gaussianBlur", "filter.noise.despeckle"] {
@@ -165,12 +166,12 @@ fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() 
         }
     }
     let mut s = session();
-    let original = s.actions.clone();
+    let original = (s.actions.clone(), s.recording.clone());
     for params in
         [json!({"action":"A","id":"layer.setProps"}), json!({"action":"A","id":"file.open"}), json!({"action":"A","id":"image.imageSize","params":{"width":4}})]
     {
         assert!(s.execute("actions.insertMenuItem", params).is_err());
-        assert_eq!(s.actions, original);
+        assert_eq!((s.actions.clone(), s.recording.clone()), original);
     }
     let mut raw = craft_psd::atn::AtnFile::default();
     raw.actions.push(craft_psd::atn::AtnAction {
@@ -183,6 +184,50 @@ fn inserted_menu_events_roundtrip_absent_settings_and_stateless_items_execute() 
     });
     let loaded = atn_cmds::import(&craft_psd::atn::write(&raw).unwrap()).unwrap();
     assert_eq!(loaded.actions[0].steps[0].command, "filter.blur.gaussianBlur");
+}
+
+/// A one-action set as `actions.load` reads it, built without an external action file.
+fn set_bytes(set: &str, action: &str) -> Vec<u8> {
+    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+    use craft_psd::descriptor::UnicodeString;
+    craft_psd::atn::write(&AtnFile {
+        name: UnicodeString::new_nul(set),
+        actions: vec![AtnAction {
+            name: UnicodeString::new_nul(action),
+            items: vec![AtnItem { event: AtnEvent::Code(*b"Invr"), dictionary: "Invert".into(), ..Default::default() }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+/// The action names in the list.
+fn names(s: &Session) -> Vec<String> {
+    s.actions.list.actions().iter().map(|a| a.name.clone()).collect()
+}
+
+/// Load Actions waits for the recording or playback that holds the library, as the reference
+/// application's greyed row says: a load during a take would replace the set the recording writes
+/// into. The refused call changes nothing; the same bytes load after the take ends.
+#[test]
+fn load_actions_waits_for_a_running_recording_or_playback() {
+    let mut s = session();
+    let during = photocraft_paint::tile::b64_encode(&set_bytes("Mid take", "MidLoaded"));
+    s.execute("actions.record", json!({"name":"Rec"})).unwrap();
+    let error = s.execute("actions.load", json!({"data":during.clone()})).unwrap_err().to_string();
+    assert!(error.contains("recording"), "{error}");
+    assert_eq!(names(&s), ["A", "Rec"], "the refused load changes nothing");
+    s.execute("actions.stop", json!({})).unwrap();
+    // A running playback holds it the same way: the step fails instead of editing mid-play.
+    s.actions.list.push(Action::new("Loader", vec![ActionStep::new("actions.load", json!({"data":during}))])).unwrap();
+    let played = s.execute("actions.play", json!({"action":"Loader"})).unwrap();
+    assert!(played["failed"]["error"].as_str().unwrap().contains("playing"), "{played}");
+    assert!(!names(&s).iter().any(|name| name == "MidLoaded"), "nothing loaded during the playback");
+    // Idle again: the same bytes load.
+    let idle_bytes = photocraft_paint::tile::b64_encode(&set_bytes("Incoming", "Loaded"));
+    s.execute("actions.load", json!({"data":idle_bytes})).unwrap();
+    assert!(names(&s).iter().any(|name| name == "Loaded"), "{:?}", names(&s));
 }
 
 /// A full curve is snapshotted independently of later source edits and replays as the work path.

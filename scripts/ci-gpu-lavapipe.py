@@ -2,7 +2,7 @@
 """Run a command with wgpu on lavapipe, and fail if a GPU comparison in its output was skipped.
 
 The Linux gate runs nextest's `gpu` test group in a shard of its own through this script
-(`ci-gpu-lavapipe.py cargo xtask ci tests --gpu`, scripts/ci-test-shard.sh): every wgpu
+(`ci-gpu-lavapipe.py <xtask> ci tests --from <dir> --gpu`, scripts/ci-test-shard.sh): every wgpu
 device in the run is Vulkan on Mesa's CPU rasterizer, each test's output is shown, and the output
 is checked here for authored skips and for the parity tests' Vulkan backend line.
 

@@ -2,6 +2,8 @@
 
 mod actions_duplicate;
 mod actions_panel_menu;
+mod apply_data_set_dialog;
+mod apply_data_set_preview;
 mod batch_export_options;
 mod brush_reset_defaults;
 mod camera_raw_histogram;
@@ -14,6 +16,7 @@ mod crop_task_bar;
 mod display_names;
 mod eraser_reset_defaults;
 mod flatpak_updates;
+mod free_transform_preview_canvas;
 mod gpu_device_loss;
 mod healing_reset_tip;
 // The interactive bench's `#[cfg(test)]` reporting tests: CI runs `--tests`, never examples.
@@ -23,6 +26,7 @@ mod healing_reset_tip;
 mod interactive_bench_reporting;
 mod layout_perf;
 mod magnetic_lasso_right_click;
+mod mixer_reset_defaults;
 mod paint_bucket_all_layers;
 mod pending_remove_pointer;
 mod radial_blur_center;
