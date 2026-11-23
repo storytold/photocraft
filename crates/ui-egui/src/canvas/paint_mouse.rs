@@ -32,9 +32,9 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     }
     // The live brush is the outgoing tool's, so save it there before the new one takes over: any
     // edit it made since it was last active is in it, so its copy never goes stale.
-    let current = app.session.tools.brush.clone();
+    let current = (*app.session.tools.brush).clone();
     save_brush(app, app.ui.brush_tool, current.clone());
-    app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
+    *app.session.tools.brush = match app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
         Some((_, b)) => {
             // A brush remembered from the previous run holds its stored tips as references:
             // load their full bitmaps (a missing one keeps painting with its preview).
@@ -47,15 +47,25 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // first Pattern Stamp stroke multiply (or give Healing a mode its menu doesn't have).
         // The Pattern Stamp also starts at full opacity and flow (#12616): those fields are its own.
         // The Background Eraser, the Healing Brush, the Burn, Dodge and Sponge tools, the Clone
-        // Stamp, the Smudge tool and the Art History Brush start with their own measured tips
+        // Stamp, the Smudge tool, the Adjustment Brush and the Art History Brush start with their own measured tips
         // instead, as the whole brush Reset Tool gives them (#11911, #12099, #12671, #12684,
         // #13029, #12601, #12964, #12631); the Art History Brush's is at full opacity (#10263).
-        None if matches!(tool, Tool::BackgroundEraser | Tool::Healing | Tool::Burn | Tool::Dodge | Tool::Sponge | Tool::CloneStamp | Tool::Smudge) => {
+        // The Art History Brush's Angle and pressure toggles are its own bar controls, so they
+        // start at 0° and off too, whatever the outgoing brush has (#12629).
+        None if matches!(
+            tool,
+            Tool::BackgroundEraser
+                | Tool::Healing
+                | Tool::Burn
+                | Tool::Dodge
+                | Tool::Sponge
+                | Tool::CloneStamp
+                | Tool::Smudge
+                | Tool::AdjustmentBrush
+                | Tool::ArtHistoryBrush
+        ) =>
+        {
             fresh_brush(tool, &current)
-        }
-        // Its pressure toggles are not measured, so its first use keeps the outgoing ones (#12631).
-        None if tool == Tool::ArtHistoryBrush => {
-            BrushSettings { pressure_size: current.pressure_size, pressure_opacity: current.pressure_opacity, ..fresh_brush(tool, &current) }
         }
         // The Pencil starts with its own 1 px hard round (#12200) regardless of the Brush, keeping
         // the outgoing opacity.
@@ -98,6 +108,8 @@ fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettin
 /// The Brush tool's tip after Reset Tool, as the reference measures it (#11810): size, hardness
 /// and spacing of a 13 px soft round at 25 % spacing.
 const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Mixer Brush's tip after Reset Tool (#11945): a 35 px soft round at 25 % spacing.
+const MIXER_BRUSH_TIP: (f32, f32, f32) = (35.0, 0.0, 0.25);
 /// The Eraser's tip after Reset Tool (#11936): a 13 px hard round at 25 % spacing, with no
 /// smoothing.
 const ERASER_TOOL_TIP: (f32, f32, f32) = (13.0, 1.0, 0.25);
@@ -120,10 +132,14 @@ const ART_HISTORY_BRUSH_TIP: (f32, f32, f32) = (21.0, 0.0, 0.25);
 const REMOVE_TOOL_SIZE: f32 = 19.0;
 /// The Smudge tool's tip after Reset Tool (#12964): a 13 px soft round at 25 % spacing.
 const SMUDGE_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+/// The Adjustment Brush's starting tip (#12519): a 100 px soft round (hardness 0 %). Its spacing
+/// was not measured, so it stays the default brush's.
+const ADJUSTMENT_BRUSH_TIP: (f32, f32) = (100.0, 0.0);
 
 /// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
 /// smoothing, with the session's own fields of `current`. The Brush tool's tip is
-/// [`BRUSH_TOOL_TIP`], the Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
+/// [`BRUSH_TOOL_TIP`], the Mixer Brush's [`MIXER_BRUSH_TIP`] and measured mixer settings, the
+/// Eraser's [`ERASER_TOOL_TIP`] with no smoothing, the Background Eraser's [`BACKGROUND_ERASER_TIP`], the Healing Brush's
 /// [`HEALING_BRUSH_TIP`], the Burn, Dodge and Sponge tools' [`TONING_TOOL_TIP`], the Clone Stamp's
 /// [`CLONE_STAMP_TIP`] and the Art History Brush's [`ART_HISTORY_BRUSH_TIP`], both with no
 /// smoothing, the Remove tool's size [`REMOVE_TOOL_SIZE`], the Smudge
@@ -133,6 +149,16 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
     let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
     match tool {
         Tool::Brush => (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP,
+        Tool::MixerBrush => {
+            (brush.size, brush.hardness, brush.spacing) = MIXER_BRUSH_TIP;
+            brush.mixer.wet = 0.8;
+            brush.mixer.load = 0.75;
+            brush.mixer.mix = 0.9;
+            brush.mixer.flow = 1.0;
+            brush.mixer.load_after_stroke = true;
+            brush.mixer.clean_after_stroke = true;
+            brush.mixer.sample_all_layers = false;
+        }
         Tool::Eraser => {
             (brush.size, brush.hardness, brush.spacing) = ERASER_TOOL_TIP;
             brush.smoothing.amount = 0.0;
@@ -151,6 +177,7 @@ pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings 
             brush.smoothing.amount = 0.0;
         }
         Tool::Remove => brush.size = REMOVE_TOOL_SIZE,
+        Tool::AdjustmentBrush => (brush.size, brush.hardness) = ADJUSTMENT_BRUSH_TIP,
         _ => {}
     }
     session_fields(current, &brush)
