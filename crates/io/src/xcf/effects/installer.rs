@@ -1,5 +1,7 @@
 //! Optional private preparation of ordinary native raster Smart Objects.
 //! No source operation is evaluated and no owner is mutated by this module.
+mod pixel;
+
 use super::{Mapping, MaskRequirement};
 use craft_xcf::effects::{Owner, OwnerKind};
 use photocraft_color::{BlendMode, ColorMode, SampleType};
@@ -145,6 +147,7 @@ fn prepare_plan(
     let local = Rect::new(0, 0, width as i32, height as i32);
     let mut filters = Vec::new();
     let mut adjustments = Vec::new();
+    let mut native_pixels = Vec::new();
     let mut notes = Vec::new();
     for stage in stages {
         check(ctl)?;
@@ -172,7 +175,8 @@ fn prepare_plan(
             if super::point_color::native(&filter.command) && format.mode != ColorMode::Rgb {
                 return Err(Refusal::Unsupported("point-color preparation is proven only for RGB owners"));
             }
-            let adjustment = native_adjustment(filter)?;
+            let pixel = pixel::params(filter).transpose()?;
+            let adjustment = if pixel.is_none() { Some(native_adjustment(filter)?) } else { None };
             let mut filter = filter.clone();
             filter.visible = stage.envelope.visible;
             if coverage.is_some() {
@@ -180,9 +184,12 @@ fn prepare_plan(
             }
             filters.push(filter);
             adjustments.push((adjustment, stage.envelope.visible));
+            native_pixels.push(pixel);
         }
         notes.extend_from_slice(&stage.notes);
     }
+    let has_pixels = native_pixels.iter().any(Option::is_some);
+    let pixel_admission = if has_pixels { Some(pixel::admission(&filters, &native_pixels, bounds, document, &format, ctl)?) } else { None };
     let profile_bytes = document.icc_profile.as_ref().map_or(0, |profile| profile.len());
     if profile_bytes > 4 << 20 {
         return Err(Refusal::Limit);
@@ -205,12 +212,14 @@ fn prepare_plan(
     // bounded representation, not a claim about the writer's complete peak RSS.
     let encoded_bound = add(add(mul(local_bytes, 2)?, mul(local_tiles, 32 * 1024)?)?, add(1 << 20, mul(profile_bytes, 2)?)?)?;
     let extra = if coverage.is_some() { add(mul(cache_bytes, 2)?, mul(tile_pixels, 4 * 4 * 4)?)? } else { 0 };
-    let temporary = add(add(add(local_bytes, cache_bytes)?, add(encoded_bound, row_bytes)?)?, extra)?;
+    let temporary =
+        add(add(add(add(local_bytes, cache_bytes)?, add(encoded_bound, row_bytes)?)?, extra)?, pixel_admission.as_ref().map_or(0, |a| a.temporary))?;
     if temporary > crate::xcf::MAX_PIXEL_BYTES || temporary > *budgets.retained {
         return Err(Refusal::Limit);
     }
     let mix_work = if coverage.is_some() { mul(pixels, 128)? } else { 0 };
-    let work = add(add(mul(pixels, mul(add(adjustments.len(), 4)?, 16)?)?, mul(encoded_bound, 2)?)?, mix_work)?;
+    let work =
+        add(add(add(mul(pixels, mul(add(adjustments.len(), 4)?, 16)?)?, mul(encoded_bound, 2)?)?, mix_work)?, pixel_admission.as_ref().map_or(0, |a| a.work))?;
     // Caller counters can be stricter, never expand the importer's absolute
     // retained/work ceilings even if accidentally initialized to usize::MAX.
     if work > crate::xcf::MAX_PIXEL_BYTES.saturating_mul(8) {
@@ -251,9 +260,12 @@ fn prepare_plan(
         normalized.try_write_region(Rect::from_xywh(0, y as i32, width as u32, 1), &row).map_err(|_| Refusal::Limit)?;
         for (adjustment, visible) in &adjustments {
             check(ctl)?;
-            if !visible {
+            if !visible || has_pixels {
                 continue;
             }
+            let Some(adjustment) = adjustment else {
+                continue;
+            };
             adjust::apply_depth(adjustment, &mut buffer, Transfer::for_document(document.mode, document.depth), Some(document.depth));
             // Ordinary native filter stages quantize to the owner's depth.
             for (x, pixel) in buffer.px.iter_mut().enumerate() {
@@ -286,6 +298,9 @@ fn prepare_plan(
     if bytes.capacity() > encoded_bound {
         return Err(Refusal::Limit);
     }
+    if has_pixels {
+        cache = pixel::render(source, &filters, &native_pixels, bounds, document, ctl)?;
+    }
     if let Some(resolved) = &coverage {
         let opacity = stages.first().ok_or(Refusal::Unsupported("one masked Exposure"))?.envelope.opacity;
         cache = photocraft_compose::smart_mix::mix(source, &cache, bounds, BlendMode::Normal, opacity, ctl).map_err(|error| {
@@ -301,7 +316,7 @@ fn prepare_plan(
         })?;
         check(ctl)?;
     }
-    let retained = add(bytes.capacity(), cache_bytes)?;
+    let retained = add(bytes.capacity(), pixel_admission.as_ref().map_or(cache_bytes, |a| a.retained))?;
     let remaining = budgets.retained.checked_sub(retained).ok_or(Refusal::Limit)?;
     let mut smart = SmartObject::new(
         SmartSource::Embedded { file_name: "xcf-raster-contents.pcraft".into(), bytes: Arc::new(bytes) },

@@ -33,3 +33,6 @@ mod levels_tests;
 
 #[cfg(test)]
 mod point_color_tests;
+
+#[cfg(test)]
+mod spatial_tests;

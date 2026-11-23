@@ -13,6 +13,9 @@ mod masked_exposure_tests;
 mod point_color;
 #[cfg(test)]
 mod point_color_tests;
+mod spatial;
+#[cfg(test)]
+mod spatial_tests;
 #[cfg(test)]
 mod tests;
 pub(in crate::xcf) mod tone;
@@ -69,7 +72,8 @@ pub(super) fn map(source: &OwnedEffect<'_>, ctl: &Interrupt<'_>) -> Result<Optio
     ctl.check().map_err(|_| Failure::Cancelled)?;
     let effect = &source.record;
     let supported = matches!(effect.operation, "gegl:brightness-contrast" | "gegl:exposure" | "gegl:levels")
-        || point_color::supports(effect.operation);
+        || point_color::supports(effect.operation)
+        || spatial::supports(effect.operation);
     if !supported {
         return Ok(None);
     }
@@ -96,7 +100,9 @@ pub(super) fn map(source: &OwnedEffect<'_>, ctl: &Interrupt<'_>) -> Result<Optio
         0 | 28 | 62 => BlendMode::Normal,
         _ => return Err(Failure::Unsupported("source effect blend mode is outside the initial native adapter")),
     };
-    let (filters, note) = if point_color::supports(effect.operation) {
+    let (filters, note) = if spatial::supports(effect.operation) {
+        spatial::map(effect, ctl)?
+    } else if point_color::supports(effect.operation) {
         point_color::map(effect, ctl)?
     } else {
         tone::map(effect, ctl)?

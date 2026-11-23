@@ -343,3 +343,57 @@ fn levels_unproven_contexts_refuse_before_spending_generation_budgets() {
         assert_eq!(original, before);
     }
 }
+
+#[test]
+fn spatial_workspace_work_and_late_cancel_do_not_publish_partial_owners() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (document, original, bounds) = owner(ColorMode::Rgb, SampleType::U8);
+    let before = original.clone();
+    let stage = prepared(&source("gegl:gaussian-blur", vec![scalar("std-dev-x", 2.), scalar("std-dev-y", 1.)]));
+    for (retained_start, work_start) in [(4 << 20, 128 << 20), (64 << 20, 1)] {
+        let mut retained = retained_start;
+        let mut work = work_start;
+        assert!(matches!(
+            prepare(
+                stage.owner,
+                &original,
+                bounds,
+                &document,
+                std::slice::from_ref(&stage),
+                &mut Budgets { retained: &mut retained, work: &mut work },
+                &Interrupt::NONE
+            ),
+            Err(Refusal::Limit)
+        ));
+        assert_eq!(retained, retained_start);
+        assert_eq!(original, before);
+        if work_start == 1 {
+            assert_eq!(work, 0);
+        }
+    }
+    let flag = AtomicBool::new(false);
+    let cancel = || flag.load(Ordering::Relaxed);
+    let progress = |p: f32| {
+        if p > 0. {
+            flag.store(true, Ordering::Relaxed);
+        }
+    };
+    let mut retained = 64 << 20;
+    let mut work = 128 << 20;
+    assert!(matches!(
+        prepare(
+            stage.owner,
+            &original,
+            bounds,
+            &document,
+            std::slice::from_ref(&stage),
+            &mut Budgets { retained: &mut retained, work: &mut work },
+            &Interrupt::new(&cancel, &progress)
+        ),
+        Err(Refusal::Cancelled)
+    ));
+    assert!(flag.load(Ordering::Relaxed));
+    assert_eq!(retained, 64 << 20);
+    assert!(work < 128 << 20);
+    assert_eq!(original, before);
+}
