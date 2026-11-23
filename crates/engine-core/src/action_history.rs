@@ -1,5 +1,5 @@
 //! Consolidate document history after commands finish their own atomic transactions.
-use super::{EngineError, Result, Session};
+use crate::{EngineError, Result, Session};
 use photocraft_doc::{DocId, Document};
 use photocraft_ops::{History, LayerTarget};
 use std::collections::HashSet;
@@ -40,7 +40,7 @@ pub(crate) struct ActionHistory {
 }
 
 /// The outer play owns one lazy scope; nested plays share its document snapshots.
-pub(super) fn begin(s: &mut Session, name: &str) {
+pub(crate) fn begin(s: &mut Session, name: &str) {
     if s.action_history.is_none() && s.prefs().actions.create_single_history_state {
         s.action_history = Some(ActionHistory { name: name.into(), external: false, before: Vec::new() });
     }
@@ -171,7 +171,7 @@ fn consolidate(s: &mut Session, group: &ActionHistory) {
 }
 
 /// Publish all edited documents once the outer play, including its failure prefix, ends.
-pub(super) fn finish(s: &mut Session) {
+pub(crate) fn finish(s: &mut Session) {
     if let Some(group) = s.action_history.take() {
         consolidate(s, &group);
     }
@@ -191,7 +191,7 @@ pub(crate) fn finish_document_history(s: &mut Session) {
 }
 
 /// Finish an ordinary outer playback without closing a scope owned by the surrounding Batch.
-pub(super) fn finish_playback(s: &mut Session) {
+pub(crate) fn finish_playback(s: &mut Session) {
     if s.action_history.as_ref().is_none_or(|group| !group.external) {
         finish(s);
     }
