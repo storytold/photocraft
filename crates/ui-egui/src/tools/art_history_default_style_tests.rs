@@ -11,7 +11,7 @@ use crate::PhotocraftApp;
 use crate::state::{Tool, ToolOptions};
 
 /// Build an app with a document and the Art History Brush selected.
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 96, "height": 96, "background": "white"})).unwrap();
     app.ui.tool = Tool::ArtHistoryBrush;
@@ -19,9 +19,9 @@ fn app() -> PhotocraftApp {
 }
 
 /// Render the options bar inside a kittest harness once fonts are loaded.
-fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+fn bar(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1400.0, 60.0)).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
@@ -29,13 +29,13 @@ fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
     h.run_steps(4);
     h
 }
 
 /// Whether a combo box in the options bar currently shows `value`.
-fn has_combo_value(h: &Harness<'_, PhotocraftApp>, value: &str) -> bool {
+fn has_combo_value(h: &Harness<'_, Box<PhotocraftApp>>, value: &str) -> bool {
     h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| n.value().as_deref() == Some(value))
 }
 

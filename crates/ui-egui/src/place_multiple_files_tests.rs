@@ -3,29 +3,31 @@
 //! state, as the reference application does.
 
 use super::*;
-use crate::file_dialog::{self, FileDialogAnswer, FileDialogRequest};
 use crate::menus;
+use craft::host::{PickKind, Picked, ScriptedFiles};
 use serde_json::json;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-/// The requests the fake file dialog was given.
-type Asked = Rc<RefCell<Vec<FileDialogRequest>>>;
-
-/// An app with one 40×30 document whose file dialog answers `picked` (once), and the requests the
-/// dialog was given.
-fn app_picking(picked: FileDialogAnswer) -> (PhotocraftApp, Asked) {
-    let (show, asked) = file_dialog::fake(vec![Some(picked)]);
-    let services = crate::Services { file_dialog: Some(show), ..Default::default() };
+/// An app with one 40×30 document whose file dialogs answer `answers` in order (then Cancel), and
+/// its file service.
+fn app_answering(answers: impl IntoIterator<Item = Picked>) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>) {
+    let files = Arc::new(ScriptedFiles::answering(answers));
+    let services = crate::Services { files: Some(files.clone()), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     app.run("file.new", json!({"width": 40, "height": 30})).unwrap();
-    (app, asked)
+    (app, files)
+}
+
+/// An app with one 40×30 document whose File › Place Embedded dialog will answer `picked`.
+fn app_picking(picked: Picked) -> (Box<PhotocraftApp>, Arc<ScriptedFiles>) {
+    app_answering([picked])
 }
 
 /// File › Place Embedded from the menu, its dialog shown and answered at the end of the frame.
 fn place_embedded(app: &mut PhotocraftApp, ctx: &egui::Context) {
     menus::invoke(app, ctx, "file.placeEmbedded", json!({})).unwrap();
-    app.poll_file_dialog(ctx, None);
+    app.poll_file_dialog();
 }
 
 /// PNG bytes of a white `w`×`h` image.
@@ -55,30 +57,29 @@ fn history_steps(app: &PhotocraftApp) -> usize {
 fn place_box(app: &PhotocraftApp) -> [f64; 4] {
     let t = app.ui.transform.as_ref().expect("a placed file is in Free Transform");
     assert_eq!(t.made, Some(crate::state::MadeLayer::Place));
-    let xs = t.quad.map(|c| c[0]);
-    let ys = t.quad.map(|c| c[1]);
+    let quad = t.session.quad();
+    let xs = quad.map(|c| c.x);
+    let ys = quad.map(|c| c.y);
     let fold = |v: [f64; 4], f: fn(f64, f64) -> f64| v.into_iter().reduce(f).unwrap();
     [fold(xs, f64::min), fold(ys, f64::min), fold(xs, f64::max), fold(ys, f64::max)]
 }
 
 /// Three files (20×10, 8×6 and 12×4), as the web picker hands them over: each with its contents.
-fn three_contents() -> FileDialogAnswer {
-    FileDialogAnswer::ContentsMany(vec![("first.png".into(), png(20, 10)), ("second.png".into(), png(8, 6)), ("third.png".into(), png(12, 4))])
+fn three_contents() -> Picked {
+    Picked::Contents(vec![("first.png".into(), png(20, 10)), ("second.png".into(), png(8, 6)), ("third.png".into(), png(12, 4))])
 }
 
 #[test]
 fn place_embedded_asks_for_several_files_and_place_linked_for_one() {
     let ctx = egui::Context::default();
-    let (mut app, asked) = app_picking(FileDialogAnswer::Contents("one.png".into(), png(4, 4)));
+    let (mut app, files) = app_answering([Picked::Contents(vec![("one.png".into(), png(4, 4))]), Picked::Cancelled]);
     place_embedded(&mut app, &ctx);
-    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, extensions: None, .. }]));
+    assert_eq!(files.requests().iter().map(|r| r.kind).collect::<Vec<_>>(), [PickKind::OpenMany]);
     // Place Linked keeps its single-file dialog (several files there were not measured).
     crate::transform_tool::commit(&mut app);
-    let (show, linked) = file_dialog::fake(vec![None]);
-    app.services.file_dialog = Some(show);
     menus::invoke(&mut app, &ctx, "file.placeLinked", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    assert!(matches!(linked.borrow().as_slice(), [FileDialogRequest::Open { multiple: false, .. }]));
+    app.poll_file_dialog();
+    assert_eq!(files.requests().iter().map(|r| r.kind).collect::<Vec<_>>(), [PickKind::OpenMany, PickKind::Open]);
 }
 
 /// The measured sequence: the first file appears with its box, ↩ commits it as its own history
@@ -139,9 +140,9 @@ fn chosen_paths_are_read_in_turn_and_a_missing_one_is_reported() {
     std::fs::write(&b, png(20, 10)).unwrap();
     std::fs::write(&a, png(8, 6)).unwrap();
     let missing = dir.join("gone.png");
-    let paths = [&b, &missing, &a].map(|p| p.to_string_lossy().into_owned());
+    let paths: Vec<PathBuf> = [&b, &missing, &a].map(|p| p.to_path_buf()).to_vec();
     let ctx = egui::Context::default();
-    let (mut app, _) = app_picking(FileDialogAnswer::Paths(paths.to_vec()));
+    let (mut app, _) = app_picking(Picked::Paths(paths));
     place_embedded(&mut app, &ctx);
     // The dialog's order, not name order: b first.
     assert_eq!(names(&app), ["Background", "b"]);
@@ -150,7 +151,7 @@ fn chosen_paths_are_read_in_turn_and_a_missing_one_is_reported() {
     assert!(app.drop_places.iter().all(|(_, p)| matches!(p, DropPlace::Path(_))));
     crate::transform_tool::commit(&mut app);
     app.place_next_dropped(&ctx);
-    assert_eq!(app.ui.notices.iter().filter(|n| n.error && n.title.contains("gone.png")).count(), 1);
+    assert_eq!(app.ui.notices.iter().filter(|n| n.tone == crate::notices::Tone::Bad && n.title.contains("gone.png")).count(), 1);
     assert_eq!(names(&app), ["Background", "b", "a"]);
     assert_eq!(place_box(&app), [16.0, 12.0, 24.0, 18.0]);
     let st = app.session.active().unwrap();
@@ -183,7 +184,7 @@ fn skip_transform_when_placing_commits_every_file_at_once() {
 #[test]
 fn background_places_follow_one_another() {
     let ctx = egui::Context::default();
-    let (mut app, _) = app_picking(FileDialogAnswer::ContentsMany(vec![("first.png".into(), png(20, 10)), ("second.png".into(), png(8, 6))]));
+    let (mut app, _) = app_picking(Picked::Contents(vec![("first.png".into(), png(20, 10)), ("second.png".into(), png(8, 6))]));
     app.background_jobs = true;
     place_embedded(&mut app, &ctx);
     let wait = |app: &mut PhotocraftApp, done: &dyn Fn(&PhotocraftApp) -> bool| {
@@ -204,20 +205,18 @@ fn background_places_follow_one_another() {
     assert_eq!(place_box(&app), [16.0, 12.0, 24.0, 18.0]);
 }
 
-/// One file chosen, from either picker, is placed as before: at once, in Free Transform, with
+/// One file chosen is placed as before: at once, in Free Transform, with
 /// nothing queued, and a file that can't be read is the command's error.
 #[test]
 fn a_single_chosen_file_is_placed_as_before() {
     let ctx = egui::Context::default();
-    for picked in [FileDialogAnswer::Contents("one.png".into(), png(20, 10)), FileDialogAnswer::ContentsMany(vec![("one.png".into(), png(20, 10))])] {
-        let (mut app, _) = app_picking(picked);
-        place_embedded(&mut app, &ctx);
-        assert_eq!(names(&app), ["Background", "one"]);
-        assert_eq!(place_box(&app), [10.0, 10.0, 30.0, 20.0]);
-        assert!(app.drop_places.is_empty());
-    }
+    let (mut app, _) = app_picking(Picked::Contents(vec![("one.png".into(), png(20, 10))]));
+    place_embedded(&mut app, &ctx);
+    assert_eq!(names(&app), ["Background", "one"]);
+    assert_eq!(place_box(&app), [10.0, 10.0, 30.0, 20.0]);
+    assert!(app.drop_places.is_empty());
     let missing = std::env::temp_dir().join(format!("photocraft-place-missing-{}.png", std::process::id()));
-    let (mut app, _) = app_picking(FileDialogAnswer::Paths(vec![missing.to_string_lossy().into_owned()]));
+    let (mut app, _) = app_picking(Picked::Paths(vec![missing]));
     place_embedded(&mut app, &ctx);
     assert!(app.ui.status_error);
     assert!(app.ui.status.contains("photocraft-place-missing-"), "{}", app.ui.status);
@@ -231,7 +230,7 @@ fn a_single_chosen_file_is_placed_as_before() {
 fn every_chosen_file_is_placed_past_the_drop_queue_limit() {
     let ctx = egui::Context::default();
     let files: Vec<(String, Vec<u8>)> = (0..MAX_QUEUED_DROPS + 2).map(|i| (format!("f{i}.png"), png(2, 2))).collect();
-    let (mut app, _) = app_picking(FileDialogAnswer::ContentsMany(files));
+    let (mut app, _) = app_picking(Picked::Contents(files));
     app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
     let steps = history_steps(&app);
     place_embedded(&mut app, &ctx);

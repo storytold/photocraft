@@ -80,3 +80,18 @@ fn precheck_agrees_with_execute() {
     }
     assert!(disagreements.is_empty(), "{disagreements:#?}");
 }
+
+#[test]
+fn precheck_reports_file_new_value_errors_like_execute() {
+    for p in
+        [json!({"width": 0}), json!({"width": 300_001}), json!({"height": "x"}), json!({"mode": "Bogus"}), json!({"width": 0, "name": 5}), json!({"name": 5})]
+    {
+        let pre = Session::new().precheck("file.new", &p).unwrap_err().to_string();
+        let ran = Session::new().execute("file.new", p.clone()).unwrap_err().to_string();
+        assert_eq!(pre, ran, "{p}");
+    }
+    // Where both checks fail, the value check's message (not the parameter check's) wins, as in dispatch.
+    let both = Session::new().precheck("file.new", &json!({"width": 0, "name": 5})).unwrap_err().to_string();
+    assert_eq!(both, "invalid parameters for `file.new`: `name` must be a string");
+    Session::new().precheck("file.new", &json!({"width": 64, "height": 32})).unwrap();
+}

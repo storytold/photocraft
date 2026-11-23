@@ -1,102 +1,173 @@
 //! #1810: File › New starts from the last document made with the dialog (Photoshop does), with the
-//! clipboard image's size still taking priority.
+//! clipboard image's size still taking priority. Also the hosted dialog's test harness, which the
+//! New Document tests share.
 
+use craft::behavior::PixelSize;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{BackgroundContents, BitDepth, ColorMode, DocumentOptions};
+use craft::ui::runtime::env::UnitKind;
+use egui::vec2;
+use egui_kittest::Harness;
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::state::DialogKind;
 
-fn app() -> PhotocraftApp {
+/// The app under a window, as a frame runs it.
+pub(crate) type AppHarness = Harness<'static, Box<PhotocraftApp>>;
+
+pub(crate) fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
 }
 
-/// Open New Document, set `fields`, press Create.
-fn create(app: &mut PhotocraftApp, fields: Value) {
-    let f = app.new_document_fields();
-    let id = app.ui.open_dialog(DialogKind::NewDocument, f);
-    let d = app.ui.dialog_mut(id).unwrap();
-    for (k, v) in fields.as_object().unwrap() {
-        d.fields.insert(k.clone(), v.clone());
+/// `app` with the hosted dialogs run each frame, the way the app's frame runs them (their pumps included).
+pub(crate) fn harness(app: Box<PhotocraftApp>) -> AppHarness {
+    let ctx = app.ctx().clone();
+    let mut h = Harness::builder()
+        .with_size(vec2(1400.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .with_context(ctx)
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    h.run_steps(2);
+    h
+}
+
+/// Opens File › New and lets a frame show it.
+pub(crate) fn open(h: &mut AppHarness) -> DialogId {
+    let id = crate::new_doc_ui::open(h.state_mut());
+    h.run_steps(2);
+    id
+}
+
+/// The settings the open dialog `id` shows, by their serde keys.
+pub(crate) fn fields(app: &PhotocraftApp, id: DialogId) -> Value {
+    app.framework.dialogs.open_dialogs().into_iter().find(|d| d.id == id).and_then(|d| d.fields).expect("the New Document dialog is open")
+}
+
+/// The settings the open dialog `id` shows.
+pub(crate) fn options(app: &PhotocraftApp, id: DialogId) -> DocumentOptions {
+    serde_json::from_value(fields(app, id)).expect("the dialog's fields are its settings")
+}
+
+/// Sets every setting of dialog `id` to `options`, one field at a time through the host.
+pub(crate) fn set_options(h: &mut AppHarness, id: DialogId, options: &DocumentOptions) {
+    let ctx = h.ctx.clone();
+    let Value::Object(all) = serde_json::to_value(options).expect("settings serialise") else { panic!("settings are an object") };
+    for (field, value) in all {
+        h.state_mut().framework.dialogs.set_json_field(&ctx, id, &field, value).unwrap_or_else(|e| panic!("the dialog has a `{field}` field: {e}"));
     }
-    crate::dialogs::confirm(app, id).unwrap();
+    h.run_steps(1);
+}
+
+/// Presses Create on dialog `id`; the frames after it run the pump.
+pub(crate) fn press_create(h: &mut AppHarness, id: DialogId) -> bool {
+    let enabled = crate::dialogs::testing::confirm(h.state_mut(), id).is_ok();
+    h.run_steps(3);
+    enabled
+}
+
+/// Opens New Document, applies `edit` to the settings it shows and presses Create.
+fn create(h: &mut AppHarness, edit: impl FnOnce(&mut DocumentOptions)) -> DialogId {
+    let id = open(h);
+    let mut shown = options(h.state(), id);
+    edit(&mut shown);
+    set_options(h, id, &shown);
+    press_create(h, id);
+    id
 }
 
 #[test]
 fn new_document_starts_from_the_last_settings() {
-    let mut app = app();
-    // The first time: the defaults (1920 × 1080, 72 ppi).
-    assert_eq!(app.new_document_fields(), crate::state::UiState::new_document_fields());
-    create(
-        &mut app,
-        json!({"name": "Poster", "width": 640, "height": 480, "resolution": 300.0, "mode": "cmyk", "depth": 16, "background": "transparent", "__unit": "in", "__resUnit": "ppi"}),
-    );
-    let d = &app.session.active().unwrap().doc;
+    let mut h = harness(app());
+    // The first time: PhotoCraft's defaults (1920 × 1080, 72 ppi).
+    let first = h.state_mut().new_document_options();
+    assert_eq!((first.size, first.pixels_per_inch, first.name.as_str()), (PixelSize::new(1920, 1080), 72.0, "Untitled-1"));
+    create(&mut h, |o| {
+        o.name = "Poster".into();
+        o.size = PixelSize::new(640, 480);
+        o.pixels_per_inch = 300.0;
+        o.color_mode = ColorMode::Cmyk;
+        o.depth = BitDepth::Sixteen;
+        o.background = BackgroundContents::Transparent;
+        o.unit = UnitKind::Inches;
+    });
+    let d = &h.state().session.active().unwrap().doc;
     assert_eq!((d.size.width, d.size.height, d.resolution_dpi), (640, 480, 300.0));
     // The next time: those settings, but not the name.
-    let f = app.new_document_fields();
-    for (k, v) in [
-        ("width", json!(640)),
-        ("height", json!(480)),
-        ("resolution", json!(300.0)),
-        ("mode", json!("cmyk")),
-        ("depth", json!(16)),
-        ("background", json!("transparent")),
-        ("__unit", json!("in")),
-        ("__resUnit", json!("ppi")),
-    ] {
-        assert_eq!(f.get(k), Some(&v), "{k}");
-    }
-    assert_eq!(f["name"], "Untitled-1");
-    // They live in the preferences, so they survive a restart.
-    assert_eq!(app.session.prefs().dialogs["file.new"]["resolution"], json!(300.0));
+    let next = h.state_mut().new_document_options();
+    assert_eq!(
+        (next.size, next.pixels_per_inch, next.color_mode, next.depth, next.background, next.unit, next.name.as_str()),
+        (PixelSize::new(640, 480), 300.0, ColorMode::Cmyk, BitDepth::Sixteen, BackgroundContents::Transparent, UnitKind::Inches, "Untitled-1")
+    );
 
-    // An image on the clipboard still sets the size (the Clipboard preset); the rest is remembered.
-    app.run("select.rect", json!({"x": 0, "y": 0, "width": 123, "height": 45})).unwrap();
-    app.run("edit.fill", json!({"color": "#336699"})).unwrap();
-    app.run("edit.copy", json!({})).unwrap();
-    let f = app.new_document_fields();
-    assert_eq!((f["width"].as_u64(), f["height"].as_u64()), (Some(123), Some(45)));
-    assert_eq!((f["mode"].as_str(), f["depth"].as_u64()), (Some("cmyk"), Some(16)));
+    // A fresh install reads them from the SAVED tier's stored form.
+    // PLAN: the store's round trip across a restart is hub-w1's and top-w30's (`Services::settings`); the stored value is moved by its serde form here.
+    let stored = craft::ui::runtime::memory::saved_value::<Option<DocumentOptions>>(h.state().ctx(), &crate::new_doc_ui::LAST_CREATED);
+    let mut restarted = app();
+    craft::ui::runtime::memory::set_saved_value(restarted.ctx(), &crate::new_doc_ui::LAST_CREATED, stored);
+    assert_eq!(restarted.new_document_options(), next);
+
+    // An image on the clipboard still sets the size (the Clipboard card); the rest is remembered.
+    h.state_mut().run("select.rect", json!({"x": 0, "y": 0, "width": 123, "height": 45})).unwrap();
+    h.state_mut().run("edit.fill", json!({"color": "#336699"})).unwrap();
+    h.state_mut().run("edit.copy", json!({})).unwrap();
+    let id = open(&mut h);
+    let shown = options(h.state(), id);
+    assert_eq!(shown.size, PixelSize::new(123, 45));
+    assert_eq!((shown.color_mode, shown.depth), (ColorMode::Cmyk, BitDepth::Sixteen));
 }
 
 #[test]
 fn a_corrupt_remembered_value_is_ignored() {
-    let mut app = app();
-    app.session.prefs.edit(|p| p.dialogs.insert("file.new".into(), json!({"width": -5, "height": 600, "resolution": "x", "depth": 7, "mode": 3})));
-    let f = app.new_document_fields();
-    let defaults = crate::state::UiState::new_document_fields();
-    assert_eq!(f["height"], json!(600), "a valid value is used");
-    for k in ["width", "depth", "mode"] {
-        assert_eq!(f.get(k), defaults.get(k), "{k}");
-    }
-    assert!(f.get("resolution").is_none());
-    // A failed Create remembers nothing.
-    let id = app.ui.open_dialog(DialogKind::NewDocument, f);
-    app.ui.dialog_mut(id).unwrap().fields.insert("width".into(), json!(0));
-    let _ = crate::dialogs::confirm(&mut app, id);
-    assert_eq!(app.session.prefs().dialogs["file.new"]["height"], json!(600), "unchanged");
+    let mut h = harness(app());
+    create(&mut h, |o| o.size = PixelSize::new(800, 600));
+    let kept = craft::ui::runtime::memory::saved_value::<Option<DocumentOptions>>(h.state().ctx(), &crate::new_doc_ui::LAST_CREATED);
+    assert_eq!(kept.as_ref().map(|o| o.size), Some(PixelSize::new(800, 600)));
+    let documents = h.state().session.documents().len();
+    let recent = h.state().session.presets().recent_documents.clone();
+    // A Create the engine refuses (an unknown profile) stores nothing and adds no recent entry.
+    create(&mut h, |o| {
+        o.size = PixelSize::new(321, 123);
+        o.profile = Some("no-such-profile".into());
+    });
+    assert_eq!(h.state().session.documents().len(), documents, "no document was made");
+    assert_eq!(craft::ui::runtime::memory::saved_value::<Option<DocumentOptions>>(h.state().ctx(), &crate::new_doc_ui::LAST_CREATED), kept, "unchanged");
+    assert_eq!(h.state().session.presets().recent_documents, recent);
 }
 
-/// #3131: File › New › Recent lists the documents created with the dialog, newest first, with
-/// every setting restored by a click, and survives a restart.
+/// #3131: File › New › Recent lists the documents created with the dialog, newest first, and
+/// survives a restart.
 #[test]
 fn created_documents_fill_the_recent_category() {
-    let mut app = app();
-    create(&mut app, json!({"width": 640, "height": 480, "resolution": 300.0, "mode": "cmyk", "depth": 16, "background": "transparent", "__unit": "in"}));
-    create(&mut app, json!({"width": 1920, "height": 1080, "resolution": 72.0, "mode": "rgb", "depth": 8, "background": "white", "__unit": "px"}));
-    let recent = app.session.presets.recent_documents.clone();
+    let mut h = harness(app());
+    create(&mut h, |o| {
+        o.size = PixelSize::new(640, 480);
+        o.pixels_per_inch = 300.0;
+        o.color_mode = ColorMode::Cmyk;
+        o.depth = BitDepth::Sixteen;
+        o.background = BackgroundContents::Transparent;
+        o.unit = UnitKind::Inches;
+    });
+    create(&mut h, |o| {
+        o.size = PixelSize::new(1920, 1080);
+        o.pixels_per_inch = 72.0;
+        o.color_mode = ColorMode::Rgb;
+        o.depth = BitDepth::Eight;
+        o.background = BackgroundContents::White;
+        o.unit = UnitKind::Pixels;
+    });
+    let recent = h.state().session.presets().recent_documents.clone();
     assert_eq!(recent.iter().map(|r| (r.width, r.unit.as_str())).collect::<Vec<_>>(), [(1920, "px"), (640, "in")]);
     // The settings are kept with the preferences.
     let mut restarted = photocraft_engine::Session::new();
-    restarted.load_prefs_json(&app.session.prefs_to_json()).unwrap();
-    assert_eq!(restarted.presets.recent_documents, recent);
-    // A recent card restores all of its settings but keeps the new document's name.
-    let mut f = app.new_document_fields();
-    f.insert("name".into(), json!("Next"));
-    crate::new_doc_ui::apply_settings(&mut f, &recent[1]);
-    let p = crate::new_doc_ui::command_params(&f);
+    restarted.load_prefs_json(&h.state().session.prefs_to_json()).unwrap();
+    assert_eq!(restarted.presets().recent_documents, recent);
+    // The list the dialog opens with (its bound `recent`) holds every setting of each entry.
+    let listed: Vec<DocumentOptions> = restarted.presets().recent_documents.iter().map(crate::new_doc_ui::to_options).collect();
     assert_eq!(
-        (&p["width"], &p["height"], &p["mode"], &p["depth"], &p["background"], &p["name"], &f["__unit"]),
-        (&json!(640), &json!(480), &json!("cmyk"), &json!(16), &json!("transparent"), &json!("Next"), &json!("in"))
+        (listed[1].size, listed[1].unit, listed[1].color_mode, listed[1].depth),
+        (PixelSize::new(640, 480), UnitKind::Inches, ColorMode::Cmyk, BitDepth::Sixteen)
     );
+    assert_eq!(listed[1].background, BackgroundContents::Transparent);
 }

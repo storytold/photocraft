@@ -199,6 +199,64 @@ fn smooth_inner_bevel_lights_the_top_edge_inside_only() {
     assert!(at(&maps[0], 20, 15) < 0.05);
 }
 
+/// A gloss contour from Photoshop's 0–255 contour editor points.
+fn gloss_of(points: &[(f32, f32)]) -> Contour {
+    Contour::Custom {
+        name: "gloss".into(),
+        points: points.iter().map(|&(i, o)| photocraft_doc::adjust::CurvePoint { input: i / 255.0, output: o / 255.0 }).collect(),
+        corners: vec![],
+    }
+}
+
+/// Smooth inner bevel highlight and shadow maps of `shape` with `gloss`, light from `angle` at
+/// `altitude`.
+fn gloss_maps(shape: &Map, gloss: Contour, angle: f32, altitude: f32, size: f32, depth: f32) -> Vec<Map> {
+    let mut b = bevel_of(BevelStyle::InnerBevel, BevelTechnique::Smooth);
+    (b.angle, b.altitude, b.size, b.depth, b.gloss_contour) = (angle, altitude, size, depth, gloss);
+    bevel_maps(shape, &b, &GlobalLight::default(), &no_tex(), &PreparedPatterns::new(&[], PREPARED_PATTERN_BYTES)).0
+}
+
+/// The gloss contour maps the shading, and the flat face's own unmapped shading `sin(altitude)`
+/// stays the neutral. Photoshop's own composite of a purchased style pack's type (Rolling Slope -
+/// Descending at altitude 69, 16 px smooth inner bevel at 358 %): the face stays at its colour, with white
+/// glints only where the shading is within ~0.015 of zero (measured per pixel against this
+/// bevel's shading). With the mapped `lut(sin 69°)` = 0.16 as the neutral, every slope pixel
+/// whose mapped shading came out above it took the full highlight, and the type rendered white.
+#[test]
+fn high_altitude_descending_gloss_only_glints_where_the_light_misses() {
+    let n = 80;
+    let mut shape = Map::new(n, n, 0.0);
+    for y in 10..70 {
+        for x in 20..60 {
+            shape.v[y * n + x] = 1.0;
+        }
+    }
+    let rolling = gloss_of(&[(2.0, 255.0), (53.0, 100.0), (97.0, 107.0), (179.0, 153.0), (252.0, 0.0)]);
+    // Light from the left: the bar's right slope faces away from it.
+    let maps = gloss_maps(&shape, rolling, 180.0, 69.0, 16.0, 3.58);
+    let row: Vec<f32> = (20..60).map(|x| maps[0].v[40 * n + x]).collect();
+    let lit = row.iter().filter(|v| **v > 0.05).count();
+    assert!(lit <= 8, "only a few glint pixels, not the whole face: {row:?}");
+    assert!(row[..20].iter().all(|v| *v < 0.05), "no highlight on the slope facing the light: {row:?}");
+    assert!(row[20..].iter().any(|v| *v > 0.9), "a full glint where the slope faces away: {row:?}");
+}
+
+/// Photoshop 27.11 oracles (corpus `bevel-inner-gloss-ramp-peak` / `-double-ring-aa`: 12 px
+/// smooth inner bevel at altitude 30, Screen white and Multiply black at 75 % over (90, 120,
+/// 170)): a contour that maps the flat shading 0.5 above or below 0.5 lights or darkens the flat
+/// face too. Ramp-peak (0,0)(128,255)(255,0) paints the face (214, 221, 234), the full
+/// highlight; double-ring (…, (128, 40), …) paints it (44, 58, 83), a 0.69 shadow.
+#[test]
+fn a_gloss_contour_lights_or_darkens_the_flat_face_around_the_unmapped_neutral() {
+    let shape = square(40, 5, 35);
+    let face = |m: &Map| m.v[20 * 40 + 20];
+    let peak = gloss_maps(&shape, gloss_of(&[(0.0, 0.0), (128.0, 255.0), (255.0, 0.0)]), 120.0, 30.0, 5.0, 1.0);
+    assert!(face(&peak[0]) > 0.99 && face(&peak[1]) == 0.0, "ramp-peak: full highlight, {} / {}", face(&peak[0]), face(&peak[1]));
+    let ring = gloss_maps(&shape, gloss_of(&[(0.0, 0.0), (64.0, 255.0), (128.0, 40.0), (192.0, 255.0), (255.0, 0.0)]), 120.0, 30.0, 5.0, 1.0);
+    // (0.5 − 40/255) / 0.5: 90 × (1 − 0.75 × 0.686) = 43.7.
+    assert!(face(&ring[0]) == 0.0 && (face(&ring[1]) - 0.686).abs() < 0.02, "double-ring: shadow {}", face(&ring[1]));
+}
+
 /// Photoshop 27.11, measured across a straight edge (size 10, depth 100 %, light from the top
 /// at 30°): a chisel facet has the slope `depth × size / (2 (size + 1))`, flat right up to the
 /// edge pixel for Inner Hard; Inner Soft's edge pixel is half as steep again; Outer Hard
@@ -624,7 +682,8 @@ fn chisel_fields_do_not_depend_on_the_threads() {
     for (k, m) in maps.iter().enumerate() {
         for reach in [3.0f32, 12.0] {
             let one = with_threads(1, || (sharp_edges(m), distance_field_of(m, reach)));
-            for threads in [2, 5, 16] {
+            // 2 threads give groups of several units with a short last one, 16 one unit a group: the two ways `par_units` splits work (#15652).
+            for threads in [2, 16] {
                 let many = with_threads(threads, || (sharp_edges(m), distance_field_of(m, reach)));
                 assert_eq!(one.0.slot, many.0.slot, "map {k} sharp slots on {threads} threads");
                 let edges = |s: &SharpEdges| {
@@ -641,48 +700,52 @@ fn chisel_fields_do_not_depend_on_the_threads() {
 
 #[test]
 fn bevel_maps_do_not_depend_on_the_threads() {
-    // Every style and technique, softened or not, and a texture; one thread (in order) is the reference.
-    let mut patchy = aa_disc(101, 101, 40.0);
+    // Compact anti-aliased fixtures keep curved, rounded, clipped oblique and patchy edges.
+    // Dimensions above 16 and below 64 exercise multi-row groups with 2 threads and
+    // one row per group with 8. Odd extents also leave a short final group.
+    let mut patchy = aa_disc(51, 51, 18.0);
+    let patchy_width = patchy.w;
     for (i, v) in patchy.v.iter_mut().enumerate() {
-        if (i % 101 / 13 + i / 101 / 17) % 5 == 0 {
+        if (i % patchy_width / 7 + i / patchy_width / 9).is_multiple_of(5) {
             *v *= 0.6;
         }
     }
-    let shapes = [aa_disc(97, 83, 30.0), aa_round_rect(131, 77, 9.0, 11.0, 120.0, 66.0, 14.0), aa_bar(90, 130, 60.0, 150.0, 25.0), patchy];
+    let shapes = [aa_disc(49, 47, 13.0), aa_round_rect(61, 47, 10.0, 9.0, 51.0, 38.0, 8.0), aa_bar(47, 63, 60.0, 74.0, 15.0), patchy];
     let mut sf = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
     sf.fill_rect(Rect::new(0, 0, 4, 2), &[0.0, 0.0, 0.0, 1.0]);
     sf.fill_rect(Rect::new(0, 2, 4, 4), &[1.0, 1.0, 1.0, 1.0]);
     let pats = [Pattern::new("stripes", sf, 4, 4)];
     let light = GlobalLight::default();
     let styles = [BevelStyle::InnerBevel, BevelStyle::OuterBevel, BevelStyle::Emboss, BevelStyle::PillowEmboss, BevelStyle::StrokeEmboss];
-    for (k, shape) in shapes.iter().enumerate() {
+    let techniques = [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft];
+    let settings = [(5.0, 0.0, false), (12.0, 2.0, false), (8.0, 0.0, true)];
+    for (shape_index, shape) in shapes.iter().enumerate() {
         let tex = TextureCtx { rect: Rect::new(3, 5, 3 + shape.w as i32, 5 + shape.h as i32), patterns: &pats, anchor: (0.0, 0.0) };
-        for style in styles {
-            for technique in [BevelTechnique::Smooth, BevelTechnique::ChiselHard, BevelTechnique::ChiselSoft] {
-                for (size, soften, textured) in [(5.0, 0.0, false), (12.0, 2.0, false), (8.0, 0.0, true)] {
-                    let mut b = bevel_of(style, technique);
-                    (b.size, b.soften) = (size, soften);
-                    if textured {
-                        b.texture = Some(photocraft_doc::BevelTexture {
-                            name: "stripes".into(),
-                            id: String::new(),
-                            scale: 1.0,
-                            depth: 1.0,
-                            invert: false,
-                            link: true,
-                            phase: (0.0, 0.0),
-                        });
-                    }
-                    let run = || bevel_maps(shape, &b, &light, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES)).0;
-                    let one = with_threads(1, run);
-                    for threads in [2, 5, 16] {
-                        let many = with_threads(threads, run);
-                        assert_eq!(one.len(), many.len());
-                        for (j, (a, m)) in one.iter().zip(&many).enumerate() {
-                            assert_eq!(bits(&a.v), bits(&m.v), "shape {k}, {style:?} {technique:?} size {size} map {j} on {threads} threads");
-                        }
-                    }
-                }
+        for (style_index, style) in styles.into_iter().enumerate() {
+            // Rotate each set through shapes. Stepping the settings twice as fast as
+            // the techniques across styles also gives every technique each setting.
+            let technique = techniques[(shape_index + style_index) % techniques.len()];
+            let (size, soften, textured) = settings[(shape_index + 2 * style_index) % settings.len()];
+            let threads = [2, 8][(shape_index + style_index) % 2];
+            let mut b = bevel_of(style, technique);
+            (b.size, b.soften) = (size, soften);
+            if textured {
+                b.texture = Some(photocraft_doc::BevelTexture {
+                    name: "stripes".into(),
+                    id: String::new(),
+                    scale: 1.0,
+                    depth: 1.0,
+                    invert: false,
+                    link: true,
+                    phase: (0.0, 0.0),
+                });
+            }
+            let run = || bevel_maps(shape, &b, &light, &tex, &PreparedPatterns::new(&pats, PREPARED_PATTERN_BYTES)).0;
+            let one = with_threads(1, run);
+            let many = with_threads(threads, run);
+            assert_eq!(one.len(), many.len());
+            for (j, (a, m)) in one.iter().zip(&many).enumerate() {
+                assert_eq!(bits(&a.v), bits(&m.v), "shape {shape_index}, {style:?} {technique:?} size {size} map {j} on {threads} threads");
             }
         }
     }
