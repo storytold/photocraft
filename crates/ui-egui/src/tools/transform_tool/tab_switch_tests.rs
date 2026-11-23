@@ -2,7 +2,7 @@
 //! document, as clicking outside the canvas does in Photoshop, instead of throwing it away. The
 //! document switched to keeps its pixels, history and active state.
 
-use super::super::tests::{app_with_square, frame_of, land_jobs, moved_place};
+use super::super::tests::{app_with_square, frame_of, land_jobs, move_box, moved_place, set_quad};
 use super::*;
 use crate::transform_tool::begin;
 use photocraft_engine::DocState;
@@ -14,7 +14,7 @@ const SQUARE: Rect = Rect::new(8, 8, 24, 24);
 /// A (`app_with_square`, the square's layer active) and B (32 × 32 with a new layer: one step of
 /// its own), with A active and Free Transform open on the square, moved 8 px right:
 /// (app, A, B, the square's layer, A's history steps before the box).
-fn moved_in_a() -> (PhotocraftApp, DocId, DocId, LayerId, usize) {
+fn moved_in_a() -> (Box<PhotocraftApp>, DocId, DocId, LayerId, usize) {
     let mut app = app_with_square(64, SQUARE);
     let a = app.session.active().unwrap().doc.id;
     app.session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
@@ -24,9 +24,9 @@ fn moved_in_a() -> (PhotocraftApp, DocId, DocId, LayerId, usize) {
     app.sync_views();
     let st = app.session.active().unwrap();
     let (layer, steps) = (st.active_layer.unwrap(), st.history.past_len());
-    begin(&mut app, &egui::Context::default()).unwrap();
-    let t = app.ui.transform.as_mut().unwrap();
-    t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+    let ctx = app.ctx().clone();
+    begin(&mut app, &ctx).unwrap();
+    move_box(&mut app, 8.0, 0.0);
     (app, a, b, layer, steps)
 }
 
@@ -93,7 +93,7 @@ fn another_document_applies_the_box_in_its_own_document_with_undo_and_redo() {
 #[test]
 fn next_document_applies_the_box() {
     let (mut app, a, b, layer, steps) = moved_in_a();
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     crate::menus::invoke(&mut app, &ctx, "window.nextDocument", json!({})).unwrap();
     end_if_left(&mut app);
     assert!(app.ui.transform.is_none());
@@ -116,9 +116,9 @@ fn a_copy_with_the_same_layer_ids_still_applies_the_box() {
     app.sync_views();
     let st = app.session.active().unwrap();
     let (layer, steps) = (st.active_layer.unwrap(), st.history.past_len());
-    begin(&mut app, &egui::Context::default()).unwrap();
-    let t = app.ui.transform.as_mut().unwrap();
-    t.quad = t.quad.map(|[x, y]| [x + 8.0, y]);
+    let ctx = app.ctx().clone();
+    begin(&mut app, &ctx).unwrap();
+    move_box(&mut app, 8.0, 0.0);
     let b_before = snapshot(doc(&app, b));
     assert!(app.session.set_active(1));
     let st = app.session.active().unwrap();
@@ -165,7 +165,7 @@ fn closing_the_other_document_keeps_the_applied_box() {
 #[test]
 fn a_refused_box_ends_without_changing_either_document() {
     let (mut app, a, b, layer, steps) = moved_in_a();
-    app.ui.transform.as_mut().unwrap().quad = [[16.0, 16.0]; 4];
+    set_quad(&mut app, [[16.0, 16.0]; 4]);
     let (a_before, b_before) = (snapshot(doc(&app, a)), snapshot(doc(&app, b)));
     assert!(app.session.set_active(1));
     end_if_left(&mut app);

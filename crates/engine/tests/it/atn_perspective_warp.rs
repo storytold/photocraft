@@ -5,7 +5,12 @@ use craft_psd::{
     descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D},
 };
 use photocraft_doc::{LayerContent, LayerId};
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionStep},
+    atn_cmds,
+};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -77,8 +82,8 @@ fn descriptor_round_trip_preserves_shared_indices_and_flags() {
         let loaded = imported(d.clone(), true, false);
         assert!(loaded.unsupported.is_empty());
         let action = &loaded.actions[0];
-        assert_eq!(action.steps[0].0, COMMAND);
-        let params = &action.steps[0].1;
+        assert_eq!(action.steps[0].command, COMMAND);
+        let params = &action.steps[0].params;
         assert_eq!(params["planes"], planes());
         assert_eq!(params["layer"].as_str(), name);
         assert_eq!(params["target"], "pixels");
@@ -115,7 +120,7 @@ fn unsupported_recordings_are_kept_without_partial_mapping() {
     for descriptor in [layout, wrong_target, bad_index, wrong_units, incompatible_topology, duplicate] {
         let loaded = imported(descriptor.clone(), false, true);
         assert_eq!(loaded.unsupported.len(), 1, "{descriptor:?}");
-        assert_eq!(loaded.actions[0].steps[0].0, "actions.photoshopStep");
+        assert_eq!(loaded.actions[0].steps[0].command, "actions.photoshopStep");
         assert_eq!(saved(&loaded.actions[0]).descriptor.unwrap().to_bytes(), descriptor.to_bytes());
     }
 }
@@ -123,16 +128,16 @@ fn unsupported_recordings_are_kept_without_partial_mapping() {
 /// Native export needs a reference rectangle. A stale recorded topology must not be substituted.
 #[test]
 fn native_export_requires_known_rectangle_and_rejects_stale_source() {
-    let mut action = Action::new("Warp", vec![(COMMAND.into(), json!({"planes": planes()}))]);
+    let mut action = Action::new("Warp", vec![ActionStep::new(COMMAND, json!({"planes": planes()}))]);
     assert!(atn_cmds::export("Set", &[&action], &[], false).is_err());
-    action.steps[0].1["__atnPerspectiveWarpRect"] = json!([0, 0, 32, 24]);
+    action.steps[0].params["__atnPerspectiveWarpRect"] = json!([0, 0, 32, 24]);
     let d = saved(&action).descriptor.unwrap();
     let keys: Vec<_> = d.items.iter().map(|(id, _)| id.as_bytes()).collect();
     assert_eq!(keys, [b"null".as_slice(), b"Md  ", b"referenceRect", b"vertices", b"warpedVertices", b"quads"]);
     let mut recorded = imported(d, false, true).actions.remove(0);
-    recorded.steps[0].1["planes"][0]["dst"][0][0] = json!(6);
+    recorded.steps[0].params["planes"][0]["dst"][0][0] = json!(6);
     assert!(atn_cmds::export("Set", &[&recorded], &[], false).is_err());
-    action.steps[0].1["interpolation"] = json!("nearest");
+    action.steps[0].params["interpolation"] = json!("nearest");
     assert!(atn_cmds::export("Set", &[&action], &[], false).is_err());
 }
 
@@ -166,7 +171,9 @@ fn action_playback_matches_the_native_raster_warp() {
         }
         let decoy = actual.active().unwrap().active_layer.unwrap();
         let decoy_before = actual.active().unwrap().doc.layer(decoy).unwrap().clone();
-        actual.actions.list.extend(imported(fixture(Some("Facade")), false, true).actions);
+        for action in imported(fixture(Some("Facade")), false, true).actions {
+            actual.actions_mut().list.push(action).unwrap();
+        }
         actual.execute("actions.play", json!({"action":0})).unwrap();
         direct.execute(COMMAND, json!({"planes":planes(),"layer":"Facade","target":"pixels"})).unwrap();
         let result = actual.active().unwrap().doc.layer(id).unwrap().surface().unwrap();
@@ -186,7 +193,9 @@ fn active_smart_object_playback_matches_the_native_filter() {
     for s in [&mut actual, &mut direct] {
         s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     }
-    actual.actions.list.extend(imported(fixture(None), false, true).actions);
+    for action in imported(fixture(None), false, true).actions {
+        actual.actions_mut().list.push(action).unwrap();
+    }
     actual.execute("actions.play", json!({"action":0})).unwrap();
     direct.execute("layer.smartObjects.perspectiveWarp", json!({"planes":planes()})).unwrap();
     let [actual, direct] = [&actual, &direct].map(|s| {

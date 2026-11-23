@@ -44,7 +44,7 @@ use bevel::{bevel_maps, satin_map};
 #[cfg(test)]
 use blur::{blur, box_line, dilate, tent, tent_direct};
 pub use blur::{size_one_kernel, tent_kernel};
-pub(crate) use composite::{VectorStroke, build_maps_prepared, composite_with_effects_prepared, map_count};
+pub(crate) use composite::{VectorStroke, build_maps_prepared, composite_with_effects_prepared_with, map_count};
 pub use composite::{build_maps, composite_with_effects, outline_share, premerges_layer, shadow_see_through, stroke_widths};
 pub use distance::{FieldKind, STROKE_CHAMFER_MAX, bevel_distance_fields, distance_field, stroke_outside_exact};
 #[cfg(test)]
@@ -54,8 +54,8 @@ use distance::{
 };
 use paint::dissolves;
 pub use paint::{
-    bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise, ranged_lut, sample_gradient, satin_lut,
-    spread_split,
+    aa_shift, anti_aliased_contour, bevel_contour_lut, glow_gradient_gain, glow_lut, glow_paint_lut, gradient_t, gradient_units, hash_noise, ranged_lut,
+    sample_gradient, satin_lut, spread_split,
 };
 #[cfg(test)]
 use paint::{glow_map, lut_at, noise, offset, shadow_map};
@@ -247,7 +247,19 @@ impl FxMaps {
 }
 
 #[cfg(test)]
+mod inner_shadow_anti_alias_tests;
+#[cfg(test)]
+mod outer_glow_noise_tests;
+
+#[cfg(test)]
+mod inner_shadow_noise_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
+mod satin_invert_contour_tests;
+#[cfg(test)]
 mod satin_size_one_tests;
+
+#[cfg(test)]
+mod inner_glow_size_one_tests;

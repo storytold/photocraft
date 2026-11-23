@@ -1,58 +1,76 @@
-//! #11766: the Count tool's folder button opens the "Count Group Name" dialog, pre-filled with the
-//! next group's name; OK makes the group with the typed name and makes it current, Cancel and
-//! Escape make nothing. The group menu lists the groups, a separator and Rename…, which opens the
-//! same dialog for the current group. The first click on the canvas still makes "Count Group 1".
+//! #11766, #14707: the Count tool's folder button opens the "Count Group Name" dialog on the dialog host, pre-filled
+//! with the next group's name; OK makes the group with the typed name and makes it current, Cancel makes nothing. The
+//! group menu lists the groups, a separator and Rename…, which opens the same dialog for the current group. The
+//! dialog belongs to the document activation that opened it, and a rename also to the document state it read.
 
-use egui::{Key, vec2};
+use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::*;
+use crate::PhotocraftApp;
+use crate::state::Tool;
 
-/// A 400 × 300 document with one count group (made by a canvas click) and the Count tool; the
-/// harness draws the options bar and the analysis dialogs.
-fn harness() -> Harness<'static, PhotocraftApp> {
+/// A 400 x 300 document with one count group (made by a canvas click) and the Count tool; the harness draws the
+/// options bar.
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.ui.tool = Tool::Count;
-    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, egui::Modifiers::NONE);
-    let mut h = Harness::builder().with_size(vec2(1600.0, 700.0)).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+    app.run("count.add", json!({"x": 50, "y": 50})).unwrap();
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1600.0, 700.0)).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
             // The app's font families arrive with `setup_context`, after the first frame.
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }
             crate::panels::options_bar(app, ui);
-            super::windows(app, ui.ctx());
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::studio());
     h.run_steps(3);
     h
 }
 
-fn groups(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn groups(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().session.active().unwrap().doc.measurement.count_groups.iter().map(|g| g.name.clone()).collect()
 }
 
-fn history(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn history(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.past_len()
 }
 
-fn dialog_name(h: &Harness<'static, PhotocraftApp>) -> Option<String> {
-    let (kind, f) = h.state().ui.analysis.dialog.clone()?;
-    assert_eq!(kind, crate::count_group_name_ui::KIND);
-    f.get("name").and_then(|v| v.as_str()).map(String::from)
+/// The values of the one open dialog, after a host pass has loaded them.
+fn dialog_fields(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Option<Value> {
+    crate::dialogs::testing::show(h.state_mut());
+    let shown = h.state().framework.dialogs.open_dialogs();
+    assert!(shown.len() <= 1, "at most one dialog is open");
+    shown.first().map(|d| d.fields.clone().expect("the dialog lists its values"))
+}
+
+fn dialog_name(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Option<String> {
+    dialog_fields(h).map(|f| f["name"].as_str().expect("a name field").to_owned())
+}
+
+/// Types `name` into the open dialog and answers OK; the error is the refusal text.
+fn type_and_ok(h: &mut Harness<'static, Box<PhotocraftApp>>, name: &str) -> Result<(), String> {
+    let id = h.state().framework.dialogs.open_dialogs()[0].id;
+    let ctx = h.ctx.clone();
+    h.state_mut().framework.dialogs.set_json_field(&ctx, id, "name", json!(name)).unwrap();
+    crate::dialogs::testing::confirm(h.state_mut(), id)
+}
+
+fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>) {
+    let id = h.state().framework.dialogs.open_dialogs()[0].id;
+    crate::dialogs::testing::cancel(h.state_mut(), id).unwrap();
 }
 
 #[test]
 fn the_first_canvas_click_still_makes_count_group_1_without_a_dialog() {
-    let h = harness();
+    let mut h = harness();
     assert_eq!(groups(&h), vec!["Count Group 1".to_string()]);
-    assert!(h.state().ui.analysis.dialog.is_none());
+    assert!(dialog_fields(&mut h).is_none());
 }
 
 #[test]
@@ -61,195 +79,97 @@ fn the_folder_button_opens_the_dialog_and_ok_makes_the_named_group() {
     let before = history(&h);
     h.get_by_label("Create a new count group").click();
     h.run_steps(3);
-    assert_eq!(dialog_name(&h).as_deref(), Some("Count Group 2"), "pre-filled with the next group's name");
+    assert_eq!(dialog_name(&mut h).as_deref(), Some("Count Group 2"), "pre-filled with the next group's name");
     assert_eq!(groups(&h).len(), 1, "nothing made yet");
-    // The name field has the keyboard with the whole name selected: typing replaces it.
-    h.event(egui::Event::Text("Cells".into()));
-    h.run_steps(2);
-    assert_eq!(dialog_name(&h).as_deref(), Some("Cells"));
-    h.get_by_label("OK").click();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none());
+    type_and_ok(&mut h, "Cells").unwrap();
+    assert!(dialog_fields(&mut h).is_none(), "OK closes the dialog");
     assert_eq!(groups(&h), vec!["Count Group 1".to_string(), "Cells".to_string()]);
-    let m = &h.state().session.active().unwrap().doc.measurement;
-    assert_eq!(m.active_count_group, 1, "the new group is the current one");
+    assert_eq!(h.state().session.active().unwrap().doc.measurement.active_count_group, 1, "the new group is the current one");
     assert_eq!(history(&h), before + 1, "one history state");
 }
 
 #[test]
-fn cancel_and_escape_make_nothing() {
+fn cancel_makes_nothing() {
     let mut h = harness();
     let before = history(&h);
     h.get_by_label("Create a new count group").click();
     h.run_steps(3);
-    h.get_by_label("Cancel").click();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none());
-    h.get_by_label("Create a new count group").click();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_some());
-    h.key_press(Key::Escape);
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none(), "Escape closes it");
+    assert!(dialog_fields(&mut h).is_some());
+    cancel(&mut h);
+    assert!(dialog_fields(&mut h).is_none());
     assert_eq!(groups(&h).len(), 1);
     assert_eq!(history(&h), before, "no history state");
 }
 
 #[test]
-fn rename_opens_the_dialog_with_the_current_name_and_ok_renames() {
-    let mut h = harness();
-    crate::count_group_name_ui::open_rename(h.state_mut(), 0);
-    h.run_steps(3);
-    assert_eq!(dialog_name(&h).as_deref(), Some("Count Group 1"));
-    h.event(egui::Event::Text("Nuclei".into()));
-    h.run_steps(2);
-    let before = history(&h);
-    h.get_by_label("OK").click();
-    h.run_steps(3);
-    assert_eq!(groups(&h), vec!["Nuclei".to_string()]);
-    assert_eq!(history(&h), before + 1);
-}
-
-#[test]
-fn the_group_menu_lists_rename_after_the_groups() {
+fn the_group_menu_lists_rename_after_the_groups_and_it_renames_the_current_group() {
     let mut h = harness();
     h.state_mut().run("count.newGroup", json!({"name": "Second"})).unwrap();
     h.run_steps(2);
     h.get_by_label("Group").click();
     h.run_steps(2);
-    // The open list: the groups, then Rename… (after a separator).
     let rename = h.get_by_label("Rename…");
     let second = h.get_by_label("Second");
-    assert!(rename.rect().top() > second.rect().top());
+    assert!(rename.rect().top() > second.rect().top(), "Rename… follows the groups");
     rename.click();
     h.run_steps(3);
-    assert_eq!(dialog_name(&h).as_deref(), Some("Second"), "Rename… renames the current group");
+    assert_eq!(dialog_name(&mut h).as_deref(), Some("Second"), "Rename… renames the current group");
     assert_eq!(groups(&h).len(), 2, "picking Rename… doesn't switch groups");
+    let before = history(&h);
+    type_and_ok(&mut h, "Nuclei").unwrap();
+    assert_eq!(groups(&h), vec!["Count Group 1".to_string(), "Nuclei".to_string()]);
+    assert_eq!(history(&h), before + 1);
 }
 
-/// CodeRabbit on #14707: the dialog belongs to the document that opened it. Switching documents
-/// drops it, so OK can't rename a group of another document or name its new group, and nothing is
-/// made.
+/// CodeRabbit on #14707: the dialog belongs to the document that opened it. After a switch to another document, OK is
+/// refused, so it can't rename a group of another document or name its new group.
 #[test]
-fn switching_documents_drops_the_dialog() {
+fn switching_documents_refuses_ok() {
     for rename in [false, true] {
         let mut h = harness();
         if rename {
-            crate::count_group_name_ui::open_rename(h.state_mut(), 0);
+            crate::count_group_name_ui::open_rename(h.state_mut(), 0).unwrap();
         } else {
-            h.get_by_label("Create a new count group").click();
+            crate::count_group_name_ui::open_new(h.state_mut()).unwrap();
         }
-        h.run_steps(3);
-        assert!(h.state().ui.analysis.dialog.is_some(), "the dialog is open (rename {rename})");
-        h.event(egui::Event::Text("Wrong place".into()));
+        assert!(dialog_fields(&mut h).is_some(), "the dialog is open (rename {rename})");
         h.state_mut().run("file.new", json!({"width": 100, "height": 100})).unwrap();
-        // A count group in the new document, which the old index would name.
         h.state_mut().run("count.newGroup", json!({"name": "Mine"})).unwrap();
-        h.run_steps(3);
-        assert!(h.state().ui.analysis.dialog.is_none(), "the dialog is dropped (rename {rename})");
+        assert!(type_and_ok(&mut h, "Wrong place").is_err(), "OK is refused (rename {rename})");
         assert_eq!(groups(&h), vec!["Mine".to_string()], "the other document's groups are untouched (rename {rename})");
     }
 }
 
-/// CodeRabbit on #14707: coming back to a document (or opening one that reuses a closed
-/// document's id) is a new activation, so the dialog is dropped then too.
+/// Coming back to a document is a new activation, so the dialog opened before the round trip refuses OK too.
 #[test]
-fn leaving_a_document_and_coming_back_drops_the_dialog() {
+fn leaving_a_document_and_coming_back_refuses_ok() {
     let mut h = harness();
-    h.get_by_label("Create a new count group").click();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_some());
+    crate::count_group_name_ui::open_new(h.state_mut()).unwrap();
+    assert!(dialog_fields(&mut h).is_some());
     h.state_mut().run("file.new", json!({"width": 100, "height": 100})).unwrap();
     h.state_mut().session.set_active(0);
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none(), "dropped after the round trip");
+    assert!(type_and_ok(&mut h, "Late").is_err());
     assert_eq!(groups(&h), vec!["Count Group 1".to_string()], "nothing made");
 }
 
-/// CodeRabbit on #14707: the rename dialog targets one group; deleting an earlier one shifts the
-/// indexes, so it is dropped rather than renaming the group that moved into the index.
+/// CodeRabbit on #14707: groups may share a name and any edit can shift the indexes, so any change to the document
+/// after the rename dialog opened refuses OK, even one that restores the same names.
 #[test]
-fn deleting_a_group_drops_the_rename_dialog() {
-    let mut h = harness();
-    h.state_mut().run("count.newGroup", json!({"name": "B"})).unwrap();
-    h.state_mut().run("count.newGroup", json!({"name": "C"})).unwrap();
-    assert_eq!(groups(&h), vec!["Count Group 1".to_string(), "B".to_string(), "C".to_string()]);
-    crate::count_group_name_ui::open_rename(h.state_mut(), 1);
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_some());
-    h.state_mut().run("count.deleteGroup", json!({"group": 0})).unwrap();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none(), "the dialog is dropped");
-    assert_eq!(groups(&h), vec!["B".to_string(), "C".to_string()], "no group renamed");
-}
-
-/// CodeRabbit on #14707: groups may share a name, so the rename dialog can't tell them apart by
-/// name. With `[A, B, B]` and the dialog on the first B, deleting A shifts the second B into that
-/// index: any change to the group list drops the dialog.
-#[test]
-fn deleting_a_group_drops_the_rename_dialog_with_duplicate_names() {
+fn a_document_change_refuses_the_rename_but_not_a_new_group() {
     let mut h = harness();
     h.state_mut().run("count.newGroup", json!({"name": "B"})).unwrap();
     h.state_mut().run("count.newGroup", json!({"name": "B"})).unwrap();
-    assert_eq!(groups(&h), vec!["Count Group 1".to_string(), "B".to_string(), "B".to_string()]);
-    crate::count_group_name_ui::open_rename(h.state_mut(), 1);
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_some());
-    h.state_mut().run("count.deleteGroup", json!({"group": 0})).unwrap();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none(), "the dialog is dropped");
-    assert_eq!(groups(&h), vec!["B".to_string(), "B".to_string()], "no group renamed");
-}
-
-/// CodeRabbit on #14707: closing the document the dialog was opened on and opening another drops
-/// it (a new activation, whatever id the new document gets).
-#[test]
-fn closing_the_document_and_opening_another_drops_the_dialog() {
-    let mut h = harness();
-    h.get_by_label("Create a new count group").click();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_some());
-    h.state_mut().session.close(0);
-    h.state_mut().run("file.new", json!({"width": 100, "height": 100})).unwrap();
-    h.state_mut().run("count.newGroup", json!({"name": "Mine"})).unwrap();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none(), "the dialog is dropped");
-    assert_eq!(groups(&h), vec!["Mine".to_string()], "the new document's groups are untouched");
-}
-
-/// CodeRabbit on #14707: two control requests that run before the next frame (delete the first of
-/// `[B, B]`, add another `B`) leave the same names with a different group at index 0, which a list
-/// of names can't tell. Any change to the document drops the rename dialog.
-#[test]
-fn two_queued_edits_that_restore_the_names_still_drop_the_rename_dialog() {
-    let mut h = harness();
-    h.state_mut().run("count.newGroup", json!({"name": "B"})).unwrap();
-    h.state_mut().run("count.newGroup", json!({"name": "B"})).unwrap();
-    h.state_mut().run("count.deleteGroup", json!({"group": 0})).unwrap();
-    h.run_steps(2);
-    crate::count_group_name_ui::open_rename(h.state_mut(), 0);
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_some(), "the dialog is open on [B, B]");
+    crate::count_group_name_ui::open_rename(h.state_mut(), 1).unwrap();
+    assert!(dialog_fields(&mut h).is_some());
     h.state_mut().run("count.deleteGroup", json!({"group": 0})).unwrap();
     h.state_mut().run("count.newGroup", json!({"name": "B"})).unwrap();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none(), "the dialog is dropped though the names are [B, B] again");
-}
-
-/// CodeRabbit on #14707: the same document closed and reopened under the same id (an activation
-/// the id can't tell) drops the dialog.
-#[test]
-fn reopening_the_document_under_the_same_id_drops_the_dialog() {
-    let mut h = harness();
-    h.get_by_label("Create a new count group").click();
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_some());
-    let closed = h.state_mut().session.close(0).unwrap();
-    let id = closed.doc.id;
-    h.state_mut().session.add_document((*closed.doc).clone(), None);
-    assert_eq!(h.state().session.active().unwrap().doc.id, id, "the reopened document has the closed one's id");
-    let before = groups(&h);
-    h.run_steps(3);
-    assert!(h.state().ui.analysis.dialog.is_none(), "the dialog is dropped");
-    assert_eq!(groups(&h), before);
+    assert!(type_and_ok(&mut h, "Renamed").is_err(), "the rename is refused though the names are [B, B, B] again");
+    cancel(&mut h);
+    assert!(groups(&h).iter().all(|g| g == "B"), "no group renamed");
+    // A new group does not depend on an index: a change to the document leaves OK working.
+    crate::count_group_name_ui::open_new(h.state_mut()).unwrap();
+    assert!(dialog_fields(&mut h).is_some());
+    h.state_mut().run("count.setGroup", json!({"group": 0, "active": true})).unwrap();
+    type_and_ok(&mut h, "Fresh").unwrap();
+    assert_eq!(groups(&h).last().map(String::as_str), Some("Fresh"));
 }
