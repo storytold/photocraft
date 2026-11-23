@@ -88,8 +88,7 @@ pub(crate) fn copy(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     // One clipboard: a pixel clip replaces a path clip, as a path clip replaces it.
     let (resolution, source) = (Some(doc.resolution_dpi), Some(doc.id));
     s.path_clipboard = None;
-    *s.clipboard =
-        Some(Clip { svg: None, components: None, surface, bounds, layers: None, resolution, source, board: None });
+    *s.clipboard = Some(Clip { svg: None, components: None, surface, bounds, layers: None, resolution, source, board: None });
     Ok(Some(json!({"bounds": [bounds.x0, bounds.y0, bounds.width(), bounds.height()], "channel": k})))
 }
 
