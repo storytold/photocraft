@@ -2,6 +2,8 @@
 use super::linear_graph_tests::{evidence, fixture};
 use photocraft_doc::{LayerContent, SmartSource, import_conversion::ConversionDisposition};
 
+const FULL_TONE_GRAPH: &str = "exposure exposure=1 brightness-contrast brightness=0.25 contrast=1 levels in-low=0 in-high=1 out-low=0.25 out-high=0.75";
+
 fn allow(_: &str, _: &serde_json::Value) -> std::result::Result<(), crate::native_xcf_tones::AuthorizationError> {
     Ok(())
 }
@@ -9,14 +11,17 @@ fn allow(_: &str, _: &serde_json::Value) -> std::result::Result<(), crate::nativ
 #[test]
 fn graph_tone_families_keep_native_control_order_pixels_and_native_reopen() {
     let _scope = crate::native_xcf_tones::enter_import(allow);
-    let graph = "exposure exposure=1 brightness-contrast brightness=0.25 contrast=1 levels in-low=0 in-high=1 out-low=0.25 out-high=0.75";
     for gray in [false, true] {
+        // Native Levels is deliberately qualified only for RGB F32. Gray still
+        // exercises the shared BC/Exposure graph path without widening that guard.
+        let graph = if gray { "exposure exposure=1 brightness-contrast brightness=0.25 contrast=1" } else { FULL_TONE_GRAPH };
         let imported = crate::import("graph-tones.xcf", &fixture(graph, "string", gray)).unwrap();
-        let LayerContent::Smart(smart) = &imported.document.layers[0].content else { panic!("native graph tone chain") };
-        assert_eq!(
-            smart.smart_filters.iter().map(|filter| filter.command.as_str()).collect::<Vec<_>>(),
-            ["image.adjustments.exposure", "image.adjustments.brightnessContrast", "image.adjustments.brightnessContrast", "image.adjustments.levels"]
-        );
+        let LayerContent::Smart(smart) = &imported.document.layers[0].content else { panic!("qualified native graph tone chain, gray={gray}") };
+        let mut expected_commands = vec!["image.adjustments.exposure", "image.adjustments.brightnessContrast", "image.adjustments.brightnessContrast"];
+        if !gray {
+            expected_commands.push("image.adjustments.levels");
+        }
+        assert_eq!(smart.smart_filters.iter().map(|filter| filter.command.as_str()).collect::<Vec<_>>(), expected_commands);
         let SmartSource::Embedded { bytes, .. } = &smart.source else { panic!("ordinary native input") };
         let original = photocraft_format::load_from_bytes(bytes).unwrap();
         let input = original.layers[0].surface().unwrap();
@@ -24,9 +29,10 @@ fn graph_tone_families_keep_native_control_order_pixels_and_native_reopen() {
             let source = input.rgba(x, 0);
             let got = smart.cache.as_ref().unwrap().rgba(x, 0);
             for channel in 0..3 {
-                // Native F32 Exposure doubles, legacy brightness adds .25,
-                // then native float Levels maps affinely without clipping HDR.
-                let expected = 0.25 + (source[channel] * 2. + 0.25) * 0.5;
+                // Native F32 Exposure doubles and legacy brightness adds .25.
+                // Qualified RGB float Levels then maps affinely without clipping HDR.
+                let brightened = source[channel] * 2. + 0.25;
+                let expected = if gray { brightened } else { 0.25 + brightened * 0.5 };
                 assert!((got[channel] - expected).abs() < 0.000002, "{gray}: {source:?} -> {got:?}");
             }
             assert_eq!(got[3], source[3]);
@@ -39,6 +45,20 @@ fn graph_tone_families_keep_native_control_order_pixels_and_native_reopen() {
         assert_eq!(restored.cache, smart.cache);
         assert_eq!(reopened.metadata.import_conversion, imported.document.metadata.import_conversion);
     }
+}
+
+#[test]
+fn gray_graph_with_unqualified_levels_keeps_the_entire_source_chain_unapplied() {
+    let _scope = crate::native_xcf_tones::enter_import(allow);
+    let imported = crate::import("gray-levels-graph.xcf", &fixture(FULL_TONE_GRAPH, "string", true)).unwrap();
+    let original = imported.document.layers[0].surface().expect("unqualified Gray Levels must not install a BC/Exposure prefix");
+    assert_eq!(original.read_region(photocraft_geom::Rect::from_xywh(0, 0, 2, 1)), [0.25, 0.5, 0.75, 1.]);
+    assert!(evidence(&imported.document).entries.iter().all(|entry| entry.disposition == ConversionDisposition::RetainedUnapplied));
+    assert!(evidence(&imported.document).entries.iter().any(|entry| entry.reason == photocraft_doc::import_conversion::ConversionReason::NativeLimitation));
+    let saved = photocraft_format::save_to_bytes(&imported.document, &Default::default()).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+    assert_eq!(reopened.layers[0].surface(), Some(original));
+    assert_eq!(reopened.metadata.import_conversion, imported.document.metadata.import_conversion);
 }
 
 #[test]
