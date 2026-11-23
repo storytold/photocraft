@@ -6,7 +6,7 @@ const COMMAND: &str = "edit.findAndReplaceText";
 #[test]
 fn find_replace_without_type_is_enabled_and_leaves_the_document_unchanged() {
     for depth in [8, 16, 32] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let revision = s.active().unwrap().revision;
@@ -30,7 +30,7 @@ fn find_replace_without_type_is_enabled_and_leaves_the_document_unchanged() {
 
 #[test]
 fn find_replace_needs_a_document_and_preserves_locked_type_refusal() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     assert!(!s.is_enabled(COMMAND));
     assert!(s.execute(COMMAND, json!({"find": "word"})).is_err());
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -51,7 +51,7 @@ fn find_replace_needs_a_document_and_preserves_locked_type_refusal() {
 
 #[test]
 fn find_replace_empty_document_without_an_active_layer_is_a_noop() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     let st = s.active_mut().unwrap();
     Arc::make_mut(st.doc_mut()).layers.clear();

@@ -120,7 +120,7 @@ fn monochrome_cmyk_channel_mixer_is_refused_as_unsupported() {
         assert!(matches!(rgb, Adjustment::ChannelMixer { cmyk: None, monochrome: true, .. }), "{mode:?}: {rgb:?}");
     }
     // The command refuses it and leaves the layer as it was.
-    let mut s = crate::Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "background": "white"})).unwrap();
     s.execute("layer.newAdjustmentLayer.channelMixer", json!({})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();

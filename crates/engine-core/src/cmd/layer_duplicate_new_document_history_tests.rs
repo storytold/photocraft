@@ -39,7 +39,7 @@ fn check_duplicate_history(s: &mut Session, source: &DocState) {
 #[test]
 fn duplicate_to_a_new_document_undoes_one_layer_at_each_depth() {
     for depth in [8, 16, 32] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 40, "height": 30, "depth": depth})).unwrap();
         let layer = s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap()["layer"].clone();
         s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
@@ -60,7 +60,7 @@ fn duplicate_to_a_new_document_undoes_one_layer_at_each_depth() {
 
 #[test]
 fn duplicate_to_a_new_document_undoes_all_selected_layers_in_one_step() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
     let background = s.active().unwrap().doc.layers[0].id.0;
@@ -79,7 +79,7 @@ fn duplicate_to_a_new_document_undoes_all_selected_layers_in_one_step() {
 
 #[test]
 fn duplicate_to_a_new_document_undoes_a_group_without_a_first_snapshot() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("history.options", json!({"automaticallyCreateFirstSnapshot": false})).unwrap();
     s.execute("file.new", json!({"width": 40, "height": 30, "mode": "gray", "depth": 16, "resolution": 300, "profile": "gray-gamma-2.2"})).unwrap();
     let child = s.execute("layer.new.layer", json!({"name": "Child"})).unwrap()["layer"].clone();

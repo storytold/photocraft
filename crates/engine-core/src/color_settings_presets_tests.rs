@@ -11,7 +11,7 @@ use super::*;
 const CMD: &str = "edit.colorSettings";
 
 fn setup(name: &str) -> ColorSettings {
-    let s = Session::new();
+    let s = crate::session();
     s.color.preset_settings(&s.color.settings, name).unwrap()
 }
 
@@ -23,6 +23,7 @@ fn the_menu_lists_the_thirteen_setups_in_order() {
     assert_eq!(COLOR_SETTINGS_PRESETS[3], "Monitor Color");
     assert_eq!(COLOR_SETTINGS_PRESETS[12], "North America Web/Internet");
     // The params doc offers Custom, then the same names.
+    crate::install().unwrap();
     let spec = crate::commands::find(CMD).unwrap().params;
     let names = format!("\"preset\":\"{CUSTOM_SETTINGS}|{}\"", COLOR_SETTINGS_PRESETS.join("|"));
     assert!(spec.contains(&names), "{spec}");
@@ -67,7 +68,7 @@ fn each_setup_sets_the_measured_values() {
 
 #[test]
 fn monitor_color_takes_a_named_monitor_profile() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.color.settings.monitor_profile = "display-p3".into();
     let c = s.color.preset_settings(&s.color.settings, "Monitor Color").unwrap();
     assert_eq!(c.working_rgb, "display-p3");
@@ -84,7 +85,7 @@ fn monitor_color_takes_a_named_monitor_profile() {
 
 #[test]
 fn fresh_settings_are_custom() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     assert_eq!(ColorSettings::default().preset, CUSTOM_SETTINGS);
     let r = s.execute(CMD, json!({})).unwrap();
     assert_eq!(r["preset"], CUSTOM_SETTINGS);
@@ -93,7 +94,7 @@ fn fresh_settings_are_custom() {
 
 #[test]
 fn a_scripted_setup_is_stored_and_reported() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     // Blend Text Colors Using Gamma off: a scripted setup turns it back on at 1.45.
     s.color.settings.blend_text_gamma = 1.0;
     let r = s.execute(CMD, json!({"preset": "North America Prepress 2"})).unwrap();
@@ -121,7 +122,7 @@ fn any_change_makes_it_custom() {
         json!({"reset": true}),
     ];
     for change in changes {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute(CMD, json!({"preset": "North America Prepress 2"})).unwrap();
         let r = s.execute(CMD, change.clone()).unwrap();
         assert_eq!(r["preset"], CUSTOM_SETTINGS, "{change}");
@@ -132,7 +133,7 @@ fn any_change_makes_it_custom() {
 fn the_dialogs_ok_keeps_the_name_with_its_own_text_gamma() {
     // OK in the dialog sends the picked setup with every value, and Blend Text Colors Using Gamma
     // as the dialog kept it: the name stays, and so does that gamma.
-    let mut s = Session::new();
+    let mut s = crate::session();
     let mut params = serde_json::to_value(setup("North America Web/Internet")).unwrap();
     params["blendTextGamma"] = json!(1.45);
     params["preset"] = json!("North America Web/Internet");
@@ -148,7 +149,7 @@ fn the_dialogs_ok_keeps_the_name_with_its_own_text_gamma() {
 
 #[test]
 fn a_setup_with_a_differing_value_is_custom() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     let r = s.execute(CMD, json!({"preset": "Monitor Color", "policyRgb": "preserve"})).unwrap();
     assert_eq!(r["preset"], CUSTOM_SETTINGS);
     // The setup's other values still apply.
@@ -158,7 +159,7 @@ fn a_setup_with_a_differing_value_is_custom() {
 
 #[test]
 fn custom_keeps_the_values() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute(CMD, json!({"preset": "North America General Purpose 2"})).unwrap();
     let r = s.execute(CMD, json!({"preset": CUSTOM_SETTINGS})).unwrap();
     assert_eq!(r["preset"], CUSTOM_SETTINGS);
@@ -167,7 +168,7 @@ fn custom_keeps_the_values() {
 
 #[test]
 fn a_bad_preset_is_an_error_and_changes_nothing() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute(CMD, json!({"preset": "North America General Purpose 2"})).unwrap();
     let before = s.color.settings.clone();
     for bad in [json!(null), json!("Europe"), json!(""), json!("custom"), json!(3), json!(true), json!(["Monitor Color"]), json!({"name": "Monitor Color"})] {

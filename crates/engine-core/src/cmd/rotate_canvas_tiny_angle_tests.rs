@@ -17,7 +17,7 @@ fn canvas_rotation_rounds_to_hundredths_before_editing() {
             (359.99, 401, 301, 1),
             (361.0, 406, 307, 1),
         ] {
-            let mut s = Session::new();
+            let mut s = crate::session();
             s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
             let before = s.active().unwrap().history.past_len();
             let result = s.execute("image.rotation.arbitrary", json!({"angle": angle, "direction": direction})).unwrap();
@@ -29,7 +29,7 @@ fn canvas_rotation_rounds_to_hundredths_before_editing() {
 
 #[test]
 fn straightening_still_applies_a_sub_hundredth_turn() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
     let before = s.active().unwrap().history.past_len();
     let result = rotate_arbitrary_with(&mut s, &json!({"angle": 0.004}), false, false).unwrap();

@@ -5,7 +5,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-use crate::{EngineError, Session};
+use crate::EngineError;
 
 const COMMAND: &str = "file.scripts.imageProcessor";
 const NO_SOURCE: &str = "There were no source files that could be opened by PhotoCraft.";
@@ -29,7 +29,7 @@ fn blank_empty_non_image_and_corrupt_sources_report_no_openable_files() {
     let input = root.path().join("input");
     let output = root.path().join("output");
     fs::create_dir(&input).unwrap();
-    let mut session = Session::new();
+    let mut session = crate::session();
 
     for per_format in [false, true] {
         assert_eq!(session.execute(COMMAND, settings(Path::new(""), &output, per_format)), Err(EngineError::Other(NO_SOURCE.into())));
@@ -55,7 +55,7 @@ fn image_processor_skips_non_images_and_can_find_images_in_subfolders() {
     fs::write(input.join("notes.txt"), b"not an image").unwrap();
     fs::write(nested.join("manifest.txt"), b"not an image").unwrap();
     write_image(&nested.join("test.ppm")).unwrap();
-    let mut session = Session::new();
+    let mut session = crate::session();
 
     for per_format in [false, true] {
         let output = root.path().join(if per_format { "multi" } else { "single" });
@@ -85,7 +85,7 @@ fn an_opened_image_can_still_report_a_processing_or_write_failure() {
     fs::create_dir(&input).unwrap();
     write_image(&input.join("test.ppm")).unwrap();
     fs::write(&output, b"not a directory").unwrap();
-    let mut session = Session::new();
+    let mut session = crate::session();
     for per_format in [false, true] {
         let result = session.execute(COMMAND, settings(&input, &output, per_format)).unwrap();
         assert_eq!(result["files"], json!([]));
@@ -101,7 +101,7 @@ fn missing_paths_and_missing_open_documents_keep_their_own_errors() {
     let root = tempfile::tempdir().unwrap();
     let missing = root.path().join("missing");
     let output = root.path().join("output");
-    let mut session = Session::new();
+    let mut session = crate::session();
     for per_format in [false, true] {
         let params = settings(&missing, &output, per_format);
         let error = session.execute(COMMAND, params.clone()).unwrap_err().to_string();
@@ -123,7 +123,7 @@ fn mixed_valid_and_corrupt_images_keep_the_corrupt_file_report() {
     let corrupt = input.join("broken.jpg");
     fs::write(&corrupt, b"not an image").unwrap();
     write_image(&input.join("test.ppm")).unwrap();
-    let mut session = Session::new();
+    let mut session = crate::session();
     for per_format in [false, true] {
         let output = root.path().join(if per_format { "multi" } else { "single" });
         let result = session.execute(COMMAND, settings(&input, &output, per_format)).unwrap();
@@ -143,7 +143,7 @@ fn mixed_valid_and_corrupt_images_keep_the_corrupt_file_report() {
 fn empty_explicit_inputs_error_and_invalid_recursion_keeps_its_diagnostic() {
     let root = tempfile::tempdir().unwrap();
     let output = root.path().join("output");
-    let mut session = Session::new();
+    let mut session = crate::session();
     for per_format in [false, true] {
         let mut params = settings(Path::new(""), &output, per_format);
         params["includeSubfolders"] = json!("true");
@@ -167,7 +167,7 @@ fn a_source_removed_between_formats_keeps_the_written_file_and_read_error() {
     let jpeg = output.join("test.jpg");
     fs::create_dir(&output).unwrap();
     write_image(&input).unwrap();
-    let session = Session::new();
+    let session = crate::session();
     let output = output.to_str().unwrap();
     let sources = image_processor_folder_inputs(&json!({"files": [input]}), output).unwrap();
     let inputs = ProcessorInputs::Folder(sources);

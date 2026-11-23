@@ -11,7 +11,7 @@ use serde_json::json;
 /// The issue's test document: 400 x 300 px at 72 ppi, RGB 8 bit, a white Background and a pixel
 /// layer with an orange (255,128,0) rectangle at x 100..299, y 75..224.
 fn test_document() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 400, "height": 300, "resolution": 72, "background": "#ffffff"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("select.rect", json!({"x": 100, "y": 75, "width": 200, "height": 150})).unwrap();
@@ -21,7 +21,7 @@ fn test_document() -> Session {
 }
 
 fn session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     s

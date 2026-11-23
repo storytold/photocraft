@@ -410,7 +410,7 @@ fn hue_saturation_and_color_balance_keep_a_cmyk_layers_black() {
 /// command mixes the ink amounts as Photoshop does, and a mix changes only the ink it targets.
 #[test]
 fn channel_mixer_in_a_cmyk_document_mixes_the_inks() {
-    let mut s = crate::Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "background": "white"})).unwrap();
     s.execute("layer.newAdjustmentLayer.channelMixer", json!({})).unwrap();
     let doc = &s.active().unwrap().doc;
