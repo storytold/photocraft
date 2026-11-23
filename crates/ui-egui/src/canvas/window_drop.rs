@@ -10,6 +10,7 @@ use craft::ui::style::{ComponentStyle, StyleCx};
 use egui::{Rect, Response, Vec2};
 
 use super::PhotocraftApp;
+use crate::file_open::DropTo;
 
 /// The style of the drop target: it paints nothing; the framework draws the drop mark around its rect.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -94,7 +95,17 @@ pub(super) fn take(ui: &mut egui::Ui, rect: Rect) -> Option<OsFiles> {
 /// pass's.
 pub(super) fn open(app: &mut PhotocraftApp, ctx: &egui::Context, files: OsFiles) {
     let at = app.cursor_pos(ctx);
-    let to = app.drop_to(ctx, at);
+    let mut to = app.drop_to(ctx, at);
+    // On a pane of Window › Arrange's n-up or Tile arrangement the files go to that pane's document, which the drop
+    // activates, as a press on the pane does.
+    if matches!(to, DropTo::Canvas { .. })
+        && let Some(p) = at
+        && let Some((pane, _)) = super::arranged_cells(app, app.last_canvas_rect).and_then(|cells| cells.into_iter().find(|(_, cell)| cell.contains(p)))
+        && app.session.active_index() != Some(pane)
+    {
+        app.session.set_active(pane);
+        to = app.drop_to(ctx, at);
+    }
     app.open_dropped(ctx, files.files, to);
 }
 

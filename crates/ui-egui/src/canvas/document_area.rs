@@ -29,6 +29,8 @@ pub fn document_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if crate::jobs_ui::batch_preview(app, ui) {
         // The preview replaces the tabs: a floating window dropped meanwhile docks nowhere (#16415).
         app.dock_drop_rect = None;
+        // It replaces the canvas too: a file dropped where the canvas was opens, not into the hidden document.
+        app.drop_canvas_rect = None;
     } else {
         crate::distort_ui::drop_foreign(app, ui.ctx());
         crate::layer_transfer::prepare(app, ui.ctx());

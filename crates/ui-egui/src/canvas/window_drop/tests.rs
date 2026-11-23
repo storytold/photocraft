@@ -116,3 +116,79 @@ fn a_file_dropped_on_a_tab_opens_once_at_its_slot() {
     assert_eq!(names.last().map(String::as_str), Some("doc-2.png"), "it opens at the strip's slot, not at the end: {names:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Waits up to 30 s, stepping, until `done`.
+fn step_until(h: &mut H, done: impl Fn(&H) -> bool) {
+    let t = std::time::Instant::now();
+    while !done(h) && t.elapsed() < std::time::Duration::from_secs(30) {
+        h.step();
+    }
+}
+
+fn layers(h: &H, doc: usize) -> usize {
+    h.state().session.documents()[doc].doc.layers.len()
+}
+
+#[test]
+fn a_file_dropped_on_another_arranged_pane_is_placed_in_that_pane_s_document() {
+    let (dir, file) = png_file("tile");
+    let mut h = harness(2);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.tile", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().session.active_index(), Some(1), "the last new document is active");
+    let app = h.state();
+    let cells = crate::canvas::arranged_cells(app, app.last_canvas_rect).expect("two documents are tiled");
+    let first = cells.iter().find(|(d, _)| *d == 0).expect("the first document has a pane").1;
+    let before = (layers(&h, 0), layers(&h, 1));
+    drop_at(&mut h, &file, first.center());
+    step_until(&mut h, |h| layers(h, 0) != before.0 || layers(h, 1) != before.1);
+    assert_eq!((layers(&h, 0), layers(&h, 1)), (before.0 + 1, before.1), "the file goes to the pane it was dropped on");
+    assert_eq!(h.state().session.active_index(), Some(0), "the drop activates that pane's document");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_dropped_where_the_canvas_was_during_a_batch_preview_opens() {
+    use photocraft_engine::jobs::Started;
+    let (dir, file) = png_file("batch");
+    let mut h = harness(1);
+    let canvas = h.state().drop_canvas_rect.expect("the canvas is shown");
+    let before = layers(&h, 0);
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let Started::Job(_) = h
+        .state_mut()
+        .session
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            move |ctx| {
+                let mut scratch = photocraft_engine::Session::new();
+                scratch.execute("file.new", json!({"name": "input.png", "width": 16, "height": 12}))?;
+                ctx.publish_batch_preview("/source/input.png", scratch.active().map(|state| state.doc.clone()));
+                let _ = ready_tx.send(());
+                while done_rx.try_recv().is_err() {
+                    ctx.check()?;
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                ctx.publish_batch_preview("/source/input.png", None);
+                Ok(json!({"files": []}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap()
+    else {
+        panic!("batch did not start as a job")
+    };
+    ready_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+    step_until(&mut h, |h| egui_kittest::kittest::Queryable::query_by_label(h, "Batch preview").is_some());
+    drop_at(&mut h, &file, canvas.center());
+    step_until(&mut h, |h| h.state().session.documents().len() > 1);
+    let _ = done_tx.send(());
+    assert_eq!(layers(&h, 0), before, "nothing is placed in the document the preview hides");
+    assert_eq!(doc_names(&h), vec!["doc-1.png".to_string(), "photo.png".to_string()], "the file opens");
+    let _ = std::fs::remove_dir_all(&dir);
+}
