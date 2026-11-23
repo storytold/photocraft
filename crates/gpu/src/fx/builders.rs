@@ -67,7 +67,17 @@ impl B {
             }
             GlowTechnique::Softer => {
                 // Inner glows spread 1 - alpha.
-                let src = if inner { self.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { In::Shape };
+                // #14951: an Anti-aliased Outer Glow takes the CPU's sub-pixel source offset, on
+                // the CPU's gate only (`fx::aa_shift`: the outer Softer path, the Gaussian contour,
+                // and a Size and Spread that leave the map a shift plus a blur that is not the
+                // identity; a zero offset adds no stage), and the Inner Glow (#14927) keeps today's
+                // map. At a Spread that dilates the CPU recomputes its dilation distance on the
+                // offset map while this path hands `dilate` the whole-pixel `StrokeOutside` field of
+                // the unshifted shape, and at a blur of width 1 the offset would be the whole map:
+                // both neighbours take no offset here, which is what keeps them equal on both
+                // compositors (`anti_aliased_outer_glow_gated_neighbours_match_the_cpu`).
+                let aa = fx::aa_shift(!inner && g.anti_alias, &g.contour, g.size, g.spread);
+                let src = if inner { self.shift(In::Shape, 0.0, 0.0, 0.0, true) } else { self.shift(In::Shape, aa, aa, 0.0, false) };
                 self.spread_blur(src, (g.size, g.spread), inner, 0.0, 0.0)
             }
         };

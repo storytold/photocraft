@@ -469,6 +469,12 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
     // after the contour and Range (Photoshop 27.11, measured: the centre glow is exactly
     // 1 − the edge glow, for both techniques).
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
+    // #14951: an Anti-aliased Outer Glow builds its map from that shape off-centre (`aa_shift`).
+    // The Precise technique and the Inner Glow (#14927) were not measured and keep today's map, and
+    // so does every Size or Spread `aa_shift` excludes; `aa_shift` is only ever negative, so a map
+    // that keeps `aa` at 0 skips the resample.
+    let aa = if inner || g.technique == GlowTechnique::Precise { 0.0 } else { aa_shift(g.anti_alias, &g.contour, g.size, g.spread) };
+    let src = if aa < 0.0 { src.shifted(aa, aa, 0.0) } else { src };
     let mut m = match g.technique {
         GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {
             // A width-one box blur leaves no coverage inside the edge. The Size 1 taps
