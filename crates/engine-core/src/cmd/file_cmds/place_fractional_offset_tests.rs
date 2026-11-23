@@ -5,8 +5,6 @@
 use photocraft_doc::LayerContent;
 use serde_json::{Value, json};
 
-use crate::Session;
-
 fn png(w: u32, h: u32) -> Vec<u8> {
     let px = vec![200u8; (w * h * 3) as usize];
     let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgb, px).unwrap();
