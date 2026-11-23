@@ -1,17 +1,18 @@
 //! Content-Aware Move › Transform On Drop (the options-bar checkbox, as in Photoshop): after the
-//! drop a transform box sits on the moved patch. Its handles are the Free Transform box's
-//! ([`crate::transform_tool::hit`], [`crate::transform_tool::apply_drag`]), limited to moving,
-//! scaling and rotating; ↩, ✓ or a double-click computes the blend with the transformed patch
-//! (`paint.contentAwareMove` with `scaleX`, `scaleY` and `rotate`), Esc or ⊘ drops the whole move.
-//! The document is untouched until then, so the move stays one History step.
+//! drop a transform box sits on the moved patch. The box is the framework's `TransformOverlay` on a
+//! `TransformSession`, limited to moving, scaling and rotating; ↩, ✓ or a double-click computes the
+//! blend with the transformed patch (`paint.contentAwareMove` with `scaleX`, `scaleY` and `rotate`),
+//! Esc or ⊘ drops the whole move. The document is untouched until then, so the move stays one
+//! History step.
 
-use egui::{CursorIcon, Modifiers, Pos2};
-use photocraft_algo::transform::Homography;
+use craft::behavior::geometry::quad::BoxAllow;
+use craft::behavior::kurbo::{Point, Rect};
+use craft::draw::ui::transform::{ApplyBy, TransformOverlay, TransformSession};
+use craft::imaging::ui::selection::{PointMap, SelectionOverlay};
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::{CamTransform, Tool, TransformSession};
-use crate::transform_tool::{Gesture, Hit};
+use crate::canvas::outline::SurfaceMask;
+use crate::state::{CamTransform, Tool};
 
 /// Where the patch lands: the drag offset (px) and the scale (%, per axis) and clockwise rotation
 /// (degrees) about its centre, as `paint.contentAwareMove` takes them.
@@ -29,6 +30,7 @@ impl Placement {
     }
 }
 
+/// Whether a Transform On Drop box is up.
 pub(crate) fn active(app: &PhotocraftApp) -> bool {
     app.ui.cam_transform.is_some()
 }
@@ -44,25 +46,13 @@ pub(crate) fn begin(app: &mut PhotocraftApp, offset: [i32; 2]) -> bool {
     if b.is_empty() {
         return false;
     }
-    let r = [b.x0.saturating_add(offset[0]), b.y0.saturating_add(offset[1]), b.x1.saturating_add(offset[0]), b.y1.saturating_add(offset[1])].map(f64::from);
-    let frame = TransformSession {
-        session: app.ui.alloc_id(),
-        layer: 0,
-        rect: r,
-        quad: [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]],
-        pivot: [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0],
-        interpolation: crate::transform_tool::default_interpolation(app).into(),
-        warp: None,
-        selection: false,
-        target: None,
-        path: None,
-        made: None,
-        mode: Default::default(),
-        content_aware: None,
-        skew_v: 0.0,
-        layers: Vec::new(),
-    };
-    app.ui.cam_transform = Some(CamTransform { document, revision, offset, frame, gesture: None });
+    let [x0, y0, x1, y1] =
+        [b.x0.saturating_add(offset[0]), b.y0.saturating_add(offset[1]), b.x1.saturating_add(offset[0]), b.y1.saturating_add(offset[1])].map(f64::from);
+    // The patch's blend takes only a scale and a rotation: the box refuses skew, distort and warp.
+    let session = TransformSession::<()>::new(Rect::new(x0, y0, x1, y1))
+        .allow(BoxAllow::new(true, false, false).with_warp(false))
+        .settings(&crate::transform_tool::settings(app), crate::transform_tool::default_interpolation(app));
+    app.ui.cam_transform = Some(CamTransform { document, revision, offset, session });
     app.ui.status = crate::i18n::fmt(tl!("Scale or rotate the moved area, then press {key}"), &[("key", &crate::shortcuts::pretty("Enter"))]);
     app.ui.status_error = false;
     true
@@ -71,12 +61,17 @@ pub(crate) fn begin(app: &mut PhotocraftApp, offset: [i32; 2]) -> bool {
 /// The box as `paint.contentAwareMove`'s params: its rect → quad map split into a scale along the
 /// box's own axes, a rotation and the move of its centre. `None` for a collapsed or absurd box.
 pub(crate) fn placement(t: &CamTransform) -> Option<Placement> {
-    let [x0, y0, x1, y1] = t.frame.rect;
+    placement_of(t.offset, t.session.rect(), t.session.quad())
+}
+
+/// [`placement`] of a box `quad` over the source frame `rect`, for a box that is not the session's yet.
+fn placement_of(offset: [i32; 2], rect: Rect, quad: [Point; 4]) -> Option<Placement> {
+    let [x0, y0, x1, y1] = [rect.x0, rect.y0, rect.x1, rect.y1];
     let (w, h) = (x1 - x0, y1 - y0);
     if !(w > 0.0 && h > 0.0) {
         return None;
     }
-    let q = t.frame.quad;
+    let q = quad.map(|p| [p.x, p.y]);
     // The box's x axis (scaled by sx, turned) and y axis (scaled by sy, a negative sy flips).
     let u = [(q[1][0] - q[0][0]) / w, (q[1][1] - q[0][1]) / w];
     let v = [(q[3][0] - q[0][0]) / h, (q[3][1] - q[0][1]) / h];
@@ -85,7 +80,7 @@ pub(crate) fn placement(t: &CamTransform) -> Option<Placement> {
     let (sx, sy) = (u[0].hypot(u[1]), v[1] * cs - v[0] * sn);
     // Scale and rotation are about the selection's centre, then the offset moves it.
     let centre = [(q[0][0] + q[2][0]) / 2.0, (q[0][1] + q[2][1]) / 2.0];
-    let origin = [(x0 + x1) / 2.0 - f64::from(t.offset[0]), (y0 + y1) / 2.0 - f64::from(t.offset[1])];
+    let origin = [(x0 + x1) / 2.0 - f64::from(offset[0]), (y0 + y1) / 2.0 - f64::from(offset[1])];
     let off = [(centre[0] - origin[0]).round(), (centre[1] - origin[1]).round()];
     let round = |v: f64| {
         let r = (v * 1e4).round() / 1e4;
@@ -97,6 +92,7 @@ pub(crate) fn placement(t: &CamTransform) -> Option<Placement> {
     ok.then_some(Placement { offset: [off[0] as i64, off[1] as i64], scale: [sx, sy], rotate })
 }
 
+/// Drops the box and its status hint.
 pub(crate) fn cancel(app: &mut PhotocraftApp) {
     if app.ui.cam_transform.take().is_some() && !app.ui.status_error {
         // The box's hint is done with.
@@ -142,85 +138,51 @@ pub(crate) fn commit(app: &mut PhotocraftApp) {
     }
 }
 
-/// Pointer input while the box is up: every press goes to it (the canvas is otherwise inert, as
-/// during Free Transform). Returns false when there is no box.
-pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
+/// The selection's outline where the box puts it, and the box, in the canvas body after the document
+/// display. The box takes every press in the body (the canvas is otherwise inert, as during Free
+/// Transform); Enter, a double click or ✓ commit, Escape discards.
+///
+/// A second pass of a frame shows the box again from the session as the first pass left it and applies
+/// only its own output; after a commit or discard there is no box and the pass returns at once.
+pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect) {
     cancel_stale(app);
-    let tol = crate::transform_tool::handle_tolerance(app);
-    let legacy = app.session.prefs().general.use_legacy_free_transform;
-    let Some(t) = app.ui.cam_transform.as_mut() else { return false };
-    match ev {
-        ToolEvent::Down { x, y, .. } => {
-            let p = [x, y];
-            if !p.iter().all(|v| v.is_finite()) {
-                return true;
-            }
-            let mut h = crate::transform_tool::hit(&t.frame, p, tol);
-            // ⌥-click away from the handles moves the reference point there (and drags it).
-            if mods.alt && matches!(h, Hit::Inside | Hit::Outside) {
-                t.frame.pivot = p;
-                h = Hit::Pivot;
-            }
-            t.gesture = Some(Gesture { hit: h, start: p, quad0: t.frame.quad, pivot0: t.frame.pivot });
-        }
-        ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
-            if let Some(g) = t.gesture
-                && [x, y].iter().all(|v| v.is_finite() && v.abs() <= 1e7)
-            {
-                let before = (t.frame.quad, t.frame.pivot);
-                // Move, scale and rotate only: ⌘ would skew or distort, which the blend can't take.
-                let plain = Modifiers { command: false, ctrl: false, mac_cmd: false, ..mods };
-                crate::transform_tool::apply_drag(&mut t.frame, g, [x, y], crate::transform_tool::legacy_mods(legacy, g.hit, plain));
-                if placement(t).is_none() {
-                    (t.frame.quad, t.frame.pivot) = before;
-                }
-            }
-            if matches!(ev, ToolEvent::Up { .. }) {
-                t.gesture = None;
-            }
-        }
+    if app.ui.cam_transform.is_none() {
+        return;
     }
-    true
-}
-
-/// The selection's outline where the box puts it, and the box.
-pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
-    let Some(t) = &app.ui.cam_transform else { return };
-    if let Some((doc, _, segs)) = &app.outline_cache
-        && doc.0 == t.document
-        && let Some(h) = Homography::rect_to_quad(t.frame.rect, t.frame.quad)
-    {
-        let [ox, oy] = t.offset.map(f64::from);
-        let time = painter.ctx().input(|i| i.time);
-        crate::canvas::marching_ants_mapped(painter, segs, time, |p| {
-            let (x, y) = h.apply(f64::from(p[0]) + ox, f64::from(p[1]) + oy);
-            xf.to_screen(x as f32, y as f32)
-        });
-        painter.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-    }
-    crate::type_transform::draw_box(painter, xf, &t.frame);
-}
-
-/// The Free Transform box's cursors over the box's handles.
-pub(crate) fn cursor(app: &PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> Option<CursorIcon> {
-    let t = app.ui.cam_transform.as_ref().filter(|_| app.ui.tool == Tool::ContentAwareMove)?;
-    let q = t.frame.quad;
-    let h = t.gesture.map_or_else(|| crate::transform_tool::hit(&t.frame, xf.to_doc(p), crate::transform_tool::handle_tolerance(app)), |g| g.hit);
-    let mid = |i: usize| -> Option<[f64; 2]> {
-        let (a, b) = (q.get(i % 4)?, q.get((i + 1) % 4)?);
-        Some([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0])
+    let now = ui.input(|i| i.time);
+    let settings = crate::transform_tool::settings(app);
+    let out = {
+        let Some(t) = app.ui.cam_transform.as_ref() else { return };
+        // `cancel_stale` left a box only over the active document with a selection; the overlay traces the
+        // selection and keeps the trace by the mask's revision.
+        if let Some(st) = app.session.active()
+            && let Some(selection) = st.doc.selection.as_ref()
+            && let Some(h) = t.session.homography()
+        {
+            let mask = SurfaceMask::new(selection, selection.generation(), [st.doc.size.width, st.doc.size.height]);
+            // A scale and rotate box has no horizon: the map always answers.
+            SelectionOverlay::new(tl!("Content-Aware Move").to_owned(), &mask)
+                .offset(t.offset)
+                .mapped(PointMap::new(move |p: Point| Some(h.apply(p))))
+                .show_at(ui, rect);
+        }
+        TransformOverlay::new(tl!("Content-Aware Move").to_owned(), &t.session, &settings).show_at(ui, rect)
     };
-    Some(match h {
-        Hit::Corner(i) => crate::tool_cursor::corner_resize(&q, i, xf),
-        Hit::Edge(i) => {
-            let (a, b) = (mid(i)?, mid(i + 2)?);
-            crate::tool_cursor::resize([a[0] - b[0], a[1] - b[1]], xf)
+    if let Some(t) = app.ui.cam_transform.as_mut() {
+        for edit in out.edits {
+            // An absurd box (no placement) is refused: the session keeps the box it had.
+            let mut proposed = t.session.clone();
+            proposed.apply(edit, now);
+            if placement_of(t.offset, proposed.rect(), proposed.quad()).is_some() {
+                t.session = proposed;
+            }
         }
-        Hit::Outside => {
-            crate::type_transform::rotation_cursor(ctx, p);
-            CursorIcon::None
-        }
-        Hit::Pivot => CursorIcon::Crosshair,
-        Hit::Inside => CursorIcon::Move,
-    })
+        t.session.settle(now, false);
+    }
+    if out.discard {
+        cancel(app);
+    } else if matches!(out.apply, Some(ApplyBy::Key | ApplyBy::DoubleClick)) {
+        // A click outside the box does nothing: only Enter, ✓ and a double click commit.
+        commit(app);
+    }
 }

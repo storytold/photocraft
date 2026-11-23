@@ -1,15 +1,22 @@
-//! The Artboard tool's options bar controls (#11385): the size group (preset, W, H, Make Portrait,
-//! Make Landscape) that edits the selected board, or the tool's own options when no board is
-//! selected; the background swatch and dropdown for the boards the tool draws; the Align panel; and
-//! the gear menu. The options live in [`ArtboardToolUi`](super::ArtboardToolUi).
+//! The Artboard tool's options bar (#11385): the framework's `ArtboardBar` for the selected board, or for the
+//! tool's own options when no board is selected, and the gear menu. The options live in
+//! [`ArtboardToolUi`](super::ArtboardToolUi).
 
-use egui::Color32;
-use photocraft_doc::{ArtboardBackground, Layer, LayerId};
+// PLAN: the `craft::ui::widgets::{Button, Menu}` and `craft::ui::contract::{Entry, Trigger}` facade paths are assumed.
+
+use craft::behavior::kurbo::Size;
+use craft::behavior::{EditEvent, EditEvents};
+use craft::draw::ui::artboard::{ArtboardBackground as Shown, ArtboardBar, ArtboardBarTarget, ArtboardPreset};
+use craft::theme::Srgba;
+use craft::ui::buttons::Button;
+use craft::ui::contract::{Entry, Show as _, Trigger};
+use craft::ui::menu::Menu;
+use craft::ui::runtime::requests::ColorRequest;
+use photocraft_doc::{ArtboardBackground, LayerId};
 use photocraft_engine::artboard_cmds::PRESETS;
 use serde_json::{Value, json};
 
-use crate::theme::Tokens;
-use crate::{PhotocraftApp, icons};
+use crate::PhotocraftApp;
 
 /// The size preset a fresh bar (and Reset Tool) shows, with its width and height.
 pub const DEFAULT_SIZE: (&str, u32, u32) = ("iPhone 8/7/6", 750, 1334);
@@ -17,25 +24,8 @@ pub const DEFAULT_SIZE: (&str, u32, u32) = ("iPhone 8/7/6", 750, 1334);
 /// The largest board side the bar accepts (the engine's limit).
 const MAX_SIDE: f32 = 300_000.0;
 
-/// The Align panel: three groups of entries. An entry is a label and the `layer.align.*` command
-/// it runs; Distribute Widths / Heights have none yet (their behaviour is not measured), so they
-/// show disabled.
-pub const ALIGN_PANEL: [&[(&str, Option<&str>)]; 3] = [
-    &[
-        ("Left Edges", Some("layer.align.leftEdges")),
-        ("Horizontal Centers", Some("layer.align.horizontalCenters")),
-        ("Right Edges", Some("layer.align.rightEdges")),
-    ],
-    &[
-        ("Top Edges", Some("layer.align.topEdges")),
-        ("Vertical Centers", Some("layer.align.verticalCenters")),
-        ("Bottom Edges", Some("layer.align.bottomEdges")),
-    ],
-    &[("Distribute Widths", None), ("Distribute Heights", None)],
-];
-
 /// The gear menu's entries, in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Gear {
     AutoNest,
     AutoSizeCanvas,
@@ -77,6 +67,11 @@ pub fn bar_size(app: &PhotocraftApp) -> [i64; 2] {
     }
 }
 
+/// The name of the preset of size `w` x `h`, "" (Custom) for none. No two presets share a size.
+pub fn preset_name(w: i64, h: i64) -> &'static str {
+    PRESETS.iter().find(|(_, pw, ph)| i64::from(*pw) == w && i64::from(*ph) == h).map_or("", |(n, _, _)| *n)
+}
+
 /// `params` for `layer.new.artboard` plus the bar's background: `background`, and `color` for Other….
 pub fn with_background(app: &PhotocraftApp, mut params: Value) -> Value {
     let o = &app.ui.artboard_tool;
@@ -87,37 +82,18 @@ pub fn with_background(app: &PhotocraftApp, mut params: Value) -> Value {
     params
 }
 
-/// Choose size preset `name` as the tool option: its size, no board involved. Unknown names and
-/// Custom (empty) change nothing.
-pub fn set_preset(app: &mut PhotocraftApp, name: &str) {
-    if let Some((n, w, h)) = PRESETS.iter().find(|(n, _, _)| *n == name) {
-        let o = &mut app.ui.artboard_tool;
-        (o.preset, o.width, o.height) = (n.to_string(), *w, *h);
-    }
-}
-
-/// Set the tool option size to `w` x `h` (clamped to 1..=300000); the preset becomes Custom, or
-/// stays when the size is still the preset's.
+/// Set the tool option size to `w` x `h`, clamped to 1..=300000.
 pub fn set_size(app: &mut PhotocraftApp, w: f32, h: f32) {
     let clamp = |v: f32| if v.is_finite() { v.round().clamp(1.0, MAX_SIDE) as u32 } else { 1 };
-    let (w, h) = (clamp(w), clamp(h));
     let o = &mut app.ui.artboard_tool;
-    (o.width, o.height) = (w, h);
-    if !PRESETS.iter().any(|(n, pw, ph)| *n == o.preset && (*pw, *ph) == (w, h)) {
-        o.preset.clear();
-    }
-}
-
-/// The size preset the bar shows for board `id`: the name stored on the board ("" = Custom).
-pub fn board_preset(app: &PhotocraftApp, id: LayerId) -> String {
-    app.session.active().and_then(|st| st.doc.layer(id)).and_then(Layer::artboard).map(|a| a.preset.clone()).unwrap_or_default()
+    (o.width, o.height) = (clamp(w), clamp(h));
 }
 
 /// The selected boards: each selected layer's artboard, once, in document order.
 fn selected_boards(app: &PhotocraftApp) -> Vec<LayerId> {
     let Some(st) = app.session.active() else { return Vec::new() };
     let mut ids: Vec<LayerId> = Vec::new();
-    for l in st.selected_layers() {
+    for &l in st.selected_layers() {
         if let Some(b) = st.doc.artboard_of(l)
             && !ids.contains(&b)
         {
@@ -202,142 +178,108 @@ pub fn set_custom_background_from_picker(app: &mut PhotocraftApp, color: &str, u
     Ok(json!({"color": color}))
 }
 
-/// Run Align panel entry `index` of group `group` on the selected boards. None for an entry that
-/// has no command yet.
-pub fn run_align(app: &mut PhotocraftApp, group: usize, index: usize) -> Option<Result<Value, String>> {
-    let cmd = ALIGN_PANEL.get(group)?.get(index)?.1?;
-    Some(app.run(cmd, json!({})))
-}
-
-/// The swatch colour of a background (`name`, with `hex` for custom).
-fn background_color(name: &str, hex: &str) -> Color32 {
-    match name {
-        "black" => Color32::BLACK,
-        "transparent" => Color32::TRANSPARENT,
-        "custom" => crate::color_picker_ui::parse_hex(hex).map_or(Color32::WHITE, rgb32),
-        _ => Color32::WHITE,
-    }
-}
-
-fn rgb32(c: [f32; 3]) -> Color32 {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
-}
-
 /// Opens the Color Picker for the custom background.
 fn pick_background(app: &mut PhotocraftApp) {
     let rgb = crate::color_picker_ui::parse_hex(&shown_background(app).1).unwrap_or([1.0; 3]);
     let title = crate::color_picker_ui::title_for(tl!("Color"));
-    crate::color_picker_ui::open_for_target(app, "artboardBackground", &title, rgb);
+    if let Err(message) = crate::color_picker_ui::open_for_target(app, "artboardBackground", &title, rgb) {
+        crate::notices::error(app, message);
+    }
 }
 
-/// Size, W, H, Make Portrait and Make Landscape. With a board selected they show and edit the
-/// board (the returned `layer.artboard.set` params); with none, Size, W and H edit the tool's own
-/// options and nothing is returned.
-pub fn size_group(app: &mut PhotocraftApp, ui: &mut egui::Ui, board: Option<(LayerId, [i64; 4])>) -> Option<Value> {
-    let t = Tokens::get(ui.ctx());
-    let mut edit: Option<Value> = None;
-    let (mut preset, mut w, mut h) = match board {
-        Some((id, r)) => (board_preset(app, id), (r[2] - r[0]) as f32, (r[3] - r[1]) as f32),
-        None => (app.ui.artboard_tool.preset.clone(), app.ui.artboard_tool.width as f32, app.ui.artboard_tool.height as f32),
-    };
-    let id = board.map_or(LayerId(0), |b| b.0);
-    ui.label(egui::RichText::new(tl!("Size")).color(t.text_dim));
-    let mut opts: Vec<(String, &str)> = vec![(String::new(), tl!("Custom"))];
-    opts.extend(PRESETS.iter().map(|(n, _, _)| (n.to_string(), *n)));
-    if crate::widgets::dropdown(ui, "artboard-tool-preset", tl!("Preset"), &mut preset, &opts, 150.0) && !preset.is_empty() {
-        if board.is_some() {
-            edit = Some(json!({"layer": id.0, "preset": preset}));
-        } else {
-            set_preset(app, &preset);
-        }
+/// The framework's background for a bar background `name` (with `hex` for custom).
+fn shown_of_name(name: &str, hex: &str) -> Shown {
+    match name {
+        "black" => Shown::Black,
+        "transparent" => Shown::Transparent,
+        "custom" => crate::color_picker_ui::parse_hex(hex).map_or(Shown::White, |[r, g, b]| Shown::Custom(Srgba::rgb(r, g, b))),
+        _ => Shown::White,
     }
-    ui.label(egui::RichText::new(tl!("W")).color(t.text_dim));
-    let cw = crate::widgets::value_field(ui, &mut w, 1.0..=MAX_SIDE, "px", 64.0).accessible_name(tl!("Width")).changed();
-    ui.label(egui::RichText::new(tl!("H")).color(t.text_dim));
-    let ch = crate::widgets::value_field(ui, &mut h, 1.0..=MAX_SIDE, "px", 64.0).accessible_name(tl!("Height")).changed();
-    if cw || ch {
-        if board.is_some() {
-            edit = Some(json!({"layer": id.0, "width": w.round(), "height": h.round(), "coalesce": format!("artboard-tool-wh-{}", id.0)}));
-        } else {
-            set_size(app, w, h);
-        }
-    }
-    ui.add_enabled_ui(board.is_some(), |ui| {
-        if crate::widgets::secondary_button(ui, tl!("Make Portrait"), 0.0).clicked() && w > h {
-            edit = Some(json!({"layer": id.0, "width": h.round(), "height": w.round()}));
-        }
-        if crate::widgets::secondary_button(ui, tl!("Make Landscape"), 0.0).clicked() && h > w {
-            edit = Some(json!({"layer": id.0, "width": h.round(), "height": w.round()}));
-        }
-    });
-    edit
 }
 
-/// The background swatch and its dropdown (White, Black, Transparent, Other…). With boards selected
-/// they show the first selected board's background and a change recolours every selected board in
-/// one history step (`layer.artboard.set`; "Edit Artboard" for one, "Edit Artboards" for several);
-/// either way it is also the tool option, the background of the next drawn board. With no board
-/// selected it edits the tool option only.
-pub fn background(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let (name, hex) = shown_background(app);
-    if crate::widgets::color_swatch_button(ui, background_color(&name, &hex), tl!("Artboard Background Color")).clicked() {
+/// `(name, #rrggbb)` of a framework background, in the names `set_background` takes.
+fn name_of(background: Shown) -> (&'static str, Option<String>) {
+    match background {
+        Shown::Black => ("black", None),
+        Shown::Transparent => ("transparent", None),
+        Shown::Custom(c) => {
+            let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            ("custom", Some(format!("#{:02x}{:02x}{:02x}", byte(c.r), byte(c.g), byte(c.b))))
+        }
+        _ => ("white", None),
+    }
+}
+
+/// The presets the bar lists.
+fn presets() -> Vec<ArtboardPreset> {
+    PRESETS.iter().map(|(name, w, h)| ArtboardPreset::new(*name, Size::new(f64::from(*w), f64::from(*h)))).collect()
+}
+
+/// The value a size edit proposes. A gesture's `Update`s apply as they come and its `Commit` ends it; a `Set` is one step.
+fn proposed(event: &EditEvent<Size>) -> Option<Size> {
+    match event {
+        EditEvent::Update { value, .. } => Some(*value),
+        EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => Some(*after),
+        _ => None,
+    }
+}
+
+/// Applies what the bar reported: sizes edit the board (`board`) or the tool's option, a background goes to
+/// [`set_background`], and a colour request opens the picker.
+pub(crate) fn route(app: &mut PhotocraftApp, board: Option<LayerId>, size: EditEvents<Size>, background: Option<Shown>, pick_color: Option<ColorRequest>) {
+    for event in &size {
+        let Some(value) = proposed(event) else { continue };
+        let (w, h) = (value.width.round(), value.height.round());
+        match board {
+            Some(id) => {
+                let mut params = json!({"layer": id.0, "width": w, "height": h});
+                // PLAN: assumed `crate::history_keys::coalesce` (tl.P12); one key per gesture and board.
+                if let Some(key) = crate::history_keys::coalesce(&format!("artboard-tool-wh-{}", id.0), event) {
+                    params["coalesce"] = json!(key);
+                }
+                let r = app.run("layer.artboard.set", params);
+                super::report(app, r);
+            }
+            None => set_size(app, w as f32, h as f32),
+        }
+    }
+    if let Some(background) = background {
+        let (name, hex) = name_of(background);
+        let hex = hex.unwrap_or_else(|| shown_background(app).1);
+        let r = set_background(app, name, &hex);
+        super::report(app, r);
+    }
+    if pick_color.is_some() {
         pick_background(app);
     }
-    let mut bg = name;
-    let opts = [
-        ("white".to_string(), tl!("White")),
-        ("black".to_string(), tl!("Black")),
-        ("transparent".to_string(), tl!("Transparent")),
-        ("custom".to_string(), tl!("Other…")),
-    ];
-    if crate::widgets::dropdown(ui, "artboard-tool-bg", tl!("Background"), &mut bg, &opts, 120.0) {
-        if bg == "custom" {
-            pick_background(app);
-        } else if let Err(e) = set_background(app, &bg, &hex) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
-    }
 }
 
-/// The Align button with its panel, and the gear button with its menu.
-pub fn align_and_gear(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    crate::widgets::vline(ui, 22.0);
-    let align = icons::button_with_icon_size(ui, "align-edge-left", 28.0, 20.0, false, tl!("Align"));
-    egui::Popup::menu(&align).show(|ui| {
-        ui.set_min_width(200.0);
-        for (g, group) in ALIGN_PANEL.iter().enumerate() {
-            if g > 0 {
-                ui.separator();
-            }
-            for (i, (label, cmd)) in group.iter().enumerate() {
-                let on = cmd.is_some_and(|c| app.session.is_enabled(c));
-                let icon = match cmd {
-                    Some(c) => crate::align_bar::ALIGN.iter().find(|a| a.0 == *c).map_or("align-edge-left", |a| a.1),
-                    None if *label == "Distribute Widths" => "distribute-horizontal",
-                    None => "distribute-vertical",
-                };
-                let tint = if on { t.icon } else { t.text_dim };
-                let button = egui::Button::image_and_text(icons::image(icon, 16.0, tint), tl!(label));
-                if ui.add_enabled(on, button).clicked() {
-                    if let Some(Err(e)) = run_align(app, g, i) {
-                        app.ui.status = e;
-                        app.ui.status_error = true;
-                    }
-                    ui.close();
-                }
-            }
-        }
-    });
-    let gear = icons::button_with_icon_size(ui, "settings", 28.0, 20.0, false, tl!("Options"));
-    egui::Popup::menu(&gear).show(|ui| {
-        for (item, label) in GEAR {
-            let mut on = item.checked(&app.ui.artboard_tool);
-            if ui.add_enabled(item.enabled(), egui::Checkbox::new(&mut on, tl!(label))).changed() && item == Gear::AutoNest {
-                app.ui.artboard_tool.auto_nest = on;
-            }
-        }
-    });
+/// Shows the bar's members for the selected board, or for the next board, and applies what they report.
+pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let boards = super::items(app);
+    let selected = boards.selected.first().copied();
+    let presets = presets();
+    let next = {
+        let [w, h] = bar_size(app);
+        let (name, hex) = shown_background(app);
+        ArtboardBarTarget::next(Size::new(w as f64, h as f64), shown_of_name(&name, &hex))
+    };
+    let target = match selected.and_then(|i| boards.items.get(i)) {
+        Some(item) => ArtboardBarTarget::Board(item),
+        None => next,
+    };
+    let out = ArtboardBar::new(target, &presets).show(ui);
+    let id = selected.and_then(|i| boards.ids.get(i).copied());
+    route(app, id, out.size, out.background, out.pick_color);
+}
+
+/// The gear button and its menu: the four entries as check rows, Auto-nest Layers live, the others disabled.
+pub fn gear(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let opener = Button::new(tl!("Options")).show(ui).response;
+    let o = &app.ui.artboard_tool;
+    let entries: Vec<Entry<Gear>> = GEAR.iter().map(|(g, label)| Entry::new(*g, label.to_string()).checked(g.checked(o)).enabled(g.enabled())).collect();
+    let pick = Menu::new(tl!("Options")).opened_by(&opener, Trigger::Press).pick(ui, &entries);
+    if pick.picked == Some(Gear::AutoNest) {
+        app.ui.artboard_tool.auto_nest = !app.ui.artboard_tool.auto_nest;
+    }
 }

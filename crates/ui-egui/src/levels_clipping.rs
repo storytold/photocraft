@@ -17,10 +17,13 @@
 //! per-block minimum and maximum are scanned once per view and a slider move only compares them
 //! with the new thresholds.
 //!
-//! State is the dialog field `__clipping` (`"shadows"` / `"highlights"`): [`sync`] sets it when an
-//! Alt-drag starts and clears it when the drag ends, and automation can set it with
-//! `ui.dialog.set`. OK never sees it (`filter_dialog::params_of` drops `__` keys).
+//! State is the open dialog's clipping display (`HostedAdjustDialog::clipping`): the Levels panel reports an
+//! Alt-drag on its black or white Input slider into it and clears it when the drag ends, and automation can set
+//! it as the dialog's `clipping` field. OK never sees it: it is not a parameter of the adjustment.
 
+use craft::behavior::CanvasView;
+use craft::behavior::kurbo::Point;
+use craft::imaging::ui::adjust::LevelsClip;
 use egui::{Color32, Mesh, TextureOptions, pos2};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_compose::adjust::{levels_float, levels_q};
@@ -28,75 +31,11 @@ use photocraft_doc::adjust::{LevelsChannel, ToneSpace};
 use photocraft_doc::{Adjustment, DocId, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
-use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
-
-/// The dialog field that turns the display on.
-pub const FIELD: &str = "__clipping";
 
 /// A pixel counts where the selection covers at least this much (the command blends the rest).
 const SELECTED: f32 = 0.5;
-
-/// Which input slider's clipping is shown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ClipEnd {
-    /// The black slider: what the input levels clip to black.
-    Shadows,
-    /// The white slider: what they clip to white.
-    Highlights,
-}
-
-impl ClipEnd {
-    /// The [`FIELD`] value that asks for this end.
-    fn name(self) -> &'static str {
-        match self {
-            ClipEnd::Shadows => "shadows",
-            ClipEnd::Highlights => "highlights",
-        }
-    }
-
-    /// The display a `__clipping` field value asks for (anything else: off).
-    pub fn parse(v: Option<&Value>) -> Option<Self> {
-        match v.and_then(Value::as_str) {
-            Some("shadows") => Some(ClipEnd::Shadows),
-            Some("highlights") => Some(ClipEnd::Highlights),
-            _ => None,
-        }
-    }
-}
-
-/// Mirror an Alt-drag on the Levels dialog's black or white Input slider (editor state under
-/// `mem`) into the dialog's [`FIELD`]. Only changes are written, so a display turned on through
-/// automation stays until it is cleared or a drag ends.
-pub fn sync(ctx: &egui::Context, mem: egui::Id, fields: &mut Map<String, Value>) {
-    if fields.get("__adjust").and_then(Value::as_str) != Some("levels") {
-        return;
-    }
-    let held = ctx.input(|i| i.modifiers.alt && i.pointer.primary_down());
-    let live = match crate::adjust_editors::levels_drag(ctx, mem) {
-        Some(0) if held => Some(ClipEnd::Shadows),
-        Some(2) if held => Some(ClipEnd::Highlights),
-        _ => None,
-    };
-    let last_id = mem.with("levels-clipping");
-    let last: Option<ClipEnd> = ctx.data(|d| d.get_temp(last_id)).flatten();
-    if live == last {
-        return;
-    }
-    ctx.data_mut(|d| d.insert_temp(last_id, live));
-    match live {
-        Some(end) => {
-            fields.insert(FIELD.into(), json!(end.name()));
-        }
-        None => {
-            fields.remove(FIELD);
-        }
-    }
-    // The canvas paints before the dialogs: show the change on the next frame.
-    ctx.request_repaint();
-}
 
 /// Which ends the Levels input levels clip a sample `v` (0..1) of one channel to, as
 /// (black, white): the channel's own input range or, after it, the composite's. `quantum` is the
@@ -226,35 +165,31 @@ pub fn scan(surface: &Surface, selection: Option<&Surface>, rect: Rect, factor: 
 
 /// The display colour of a pixel clipped to black in the channels of `black` and to white in
 /// those of `white` (bit 0 red, 1 green, 2 blue).
-pub fn colour(end: ClipEnd, black: u8, white: u8) -> Color32 {
+pub fn colour(end: LevelsClip, black: u8, white: u8) -> Color32 {
     let on = |mask: u8, c: u8| if mask & (1 << c) != 0 { 255 } else { 0 };
     match end {
-        ClipEnd::Shadows => {
+        LevelsClip::Shadows => {
             let m = 7 ^ black;
             Color32::from_rgb(on(m, 0), on(m, 1), on(m, 2))
         }
-        ClipEnd::Highlights => Color32::from_rgb(on(white, 0), on(white, 1), on(white, 2)),
+        // `LevelsClip` is non-exhaustive: an end the framework adds shows as the white slider's display.
+        _ => Color32::from_rgb(on(white, 0), on(white, 1), on(white, 2)),
     }
 }
 
 /// The display of `stats` for `end` under the per-channel `thresholds`, one colour per block (in
 /// parallel off the web: this runs on every slider move).
-pub fn image(stats: &Stats, thresholds: &Thresholds, end: ClipEnd) -> Vec<Color32> {
+pub fn image(stats: &Stats, thresholds: &Thresholds, end: LevelsClip) -> Vec<Color32> {
     // Integer bounds (none clipped: below every key / above every key) and the 8 possible colours.
     let lo = thresholds.map(|(lo, _)| lo.map_or(-1, i32::from));
     let hi = thresholds.map(|(_, hi)| hi.map_or(i32::from(u16::MAX) + 1, i32::from));
-    let palette: [Color32; 8] = std::array::from_fn(|m| match end {
-        ClipEnd::Shadows => colour(end, m as u8, 0),
-        ClipEnd::Highlights => colour(end, 0, m as u8),
-    });
+    let shadows = end == LevelsClip::Shadows;
+    let palette: [Color32; 8] = std::array::from_fn(|m| if shadows { colour(end, m as u8, 0) } else { colour(end, 0, m as u8) });
     let block = |e: &Extremes| {
         let mut mask = 0usize;
         for c in 0..3 {
             let (min, max) = (i32::from(e[c]), i32::from(e[c + 3]));
-            let clipped = match end {
-                ClipEnd::Shadows => min <= max && min <= lo[c],
-                ClipEnd::Highlights => min <= max && max >= hi[c],
-            };
+            let clipped = if shadows { min <= max && min <= lo[c] } else { min <= max && max >= hi[c] };
             mask |= usize::from(clipped) << c;
         }
         palette[mask]
@@ -273,27 +208,26 @@ pub fn image(stats: &Stats, thresholds: &Thresholds, end: ClipEnd) -> Vec<Color3
 /// What the display needs from the app: the end shown and the Levels adjustment, for the active
 /// document's target layer.
 struct Request {
-    end: ClipEnd,
+    end: LevelsClip,
     adj: Adjustment,
     doc: std::sync::Arc<photocraft_doc::Document>,
     revision: u64,
     target: LayerId,
 }
 
-/// The open Levels dialog's fields, if any. A Smart Filter's Levels (`__smartFilter`) edits the
-/// filter, not the layer's pixels, so it has no display (`adjust_preview` keeps it off the layer
-/// path too).
-fn dialog(app: &PhotocraftApp) -> Option<&Map<String, Value>> {
-    app.ui.dialogs.iter().map(|d| &d.fields).find(|f| f.get("__adjust").and_then(Value::as_str) == Some("levels") && !f.contains_key("__smartFilter"))
+/// Whether a Levels dialog is open. A Smart Filter's Levels edits the filter, not the layer's pixels, so
+/// it has no display (`adjust_preview` keeps it off the layer path too).
+fn dialog(app: &PhotocraftApp) -> Option<&crate::adjust_dialog::OpenAdjust> {
+    crate::adjust_dialog::open_value(app).filter(|open| open.kind == "levels" && open.smart_filter.is_none())
 }
 
 /// The display the open Levels dialog asks for on document `idx`. None when no Levels dialog
 /// shows clipping, `idx` isn't the active document, or the document can't show it: CMYK and Lab,
 /// a channel, mask or Quick Mask target, or a target that isn't a pixel layer.
 fn request(app: &PhotocraftApp, idx: usize) -> Option<Request> {
-    let fields = dialog(app)?;
-    let end = ClipEnd::parse(fields.get(FIELD))?;
-    let params = crate::filter_dialog::params_of(fields);
+    let open = dialog(app)?;
+    let end = crate::adjust_dialog::hosted(app, open.id)?.clipping()?;
+    let params = crate::adjust_dialog::open_params(app)?;
     if app.session.active_index() != Some(idx) || crate::adjust_preview::targets_channel(app, idx, "levels", &params) {
         return None;
     }
@@ -315,7 +249,7 @@ pub struct Cache {
     key: (DocId, u64, LayerId, Rect, u32),
     stats: Stats,
     /// The end and thresholds the texture shows.
-    drawn: Option<(ClipEnd, Thresholds)>,
+    drawn: Option<(LevelsClip, Thresholds)>,
     tex: Option<egui::TextureHandle>,
 }
 
@@ -326,12 +260,13 @@ const MAX_BLOCKS: u64 = 2048 * 2048;
 
 /// The visible part of the document in `xf` and the block size giving about one texel per screen
 /// pixel (`ppp` physical pixels per point), within `max_side` texels a side and [`MAX_BLOCKS`].
-fn view_area(xf: &ViewXform, bounds: Rect, ppp: f32, max_side: u32) -> Option<(Rect, u32)> {
-    let device_zoom = xf.zoom * ppp;
+fn view_area(view: &CanvasView, bounds: Rect, ppp: f32, max_side: u32) -> Option<(Rect, u32)> {
+    // `CanvasView::zoom` is screen points per document unit, so the device zoom takes the pixel ratio.
+    let device_zoom = view.zoom as f32 * ppp;
     if !(device_zoom.is_finite() && device_zoom > 0.0) {
         return None;
     }
-    let visible = crate::canvas::visible_doc_rect(xf).intersect(&bounds);
+    let visible = crate::canvas::visible_doc_rect(view).intersect(&bounds);
     if visible.is_empty() {
         return None;
     }
@@ -352,31 +287,31 @@ fn view_area(xf: &ViewXform, bounds: Rect, ppp: f32, max_side: u32) -> Option<(R
     }
 }
 
-/// Draw the Levels clipping display over the image in canvas view `xf` of document `idx`, if one
-/// is asked for. Drops the cache once no Levels dialog is open. Only the main canvas calls it:
+/// The Levels clipping display over the image in canvas `view` of document `idx`, if one
+/// is asked for: the shapes the canvas paints under its controls. Drops the cache once no Levels dialog is open. Only the main canvas calls it:
 /// the one cache follows that view.
-pub fn paint(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, xf: &ViewXform, idx: usize) {
+pub fn shapes(app: &mut PhotocraftApp, ctx: &egui::Context, view: &CanvasView, idx: usize) -> Vec<egui::Shape> {
     if dialog(app).is_none() {
         app.levels_clipping = None;
-        return;
+        return Vec::new();
     }
     // A background job holds the workers and may replace the document: no thresholds, scan or
     // image until it ends.
     if app.session.has_jobs() {
-        return;
+        return Vec::new();
     }
-    let Some(req) = request(app, idx) else { return };
-    let Some(thr) = thresholds(&req.adj, req.doc.pixel_format().sample) else { return };
+    let Some(req) = request(app, idx) else { return Vec::new() };
+    let Some(thr) = thresholds(&req.adj, req.doc.pixel_format().sample) else { return Vec::new() };
     let max_side = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, 8192);
-    let Some((rect, factor)) = view_area(xf, req.doc.bounds(), ctx.pixels_per_point(), max_side) else { return };
+    let Some((rect, factor)) = view_area(view, req.doc.bounds(), ctx.pixels_per_point(), max_side) else { return Vec::new() };
     let key = (req.doc.id, req.revision, req.target, rect, factor);
     if app.levels_clipping.as_ref().is_none_or(|c| c.key != key) {
-        let Some(LayerContent::Raster(surface)) = req.doc.layer(req.target).map(|l| &l.content) else { return };
+        let Some(LayerContent::Raster(surface)) = req.doc.layer(req.target).map(|l| &l.content) else { return Vec::new() };
         let stats = scan(surface, req.doc.selection.as_ref(), rect, factor);
         let tex = app.levels_clipping.take().and_then(|c| c.tex);
         app.levels_clipping = Some(Cache { key, stats, drawn: None, tex });
     }
-    let Some(cache) = app.levels_clipping.as_mut() else { return };
+    let Some(cache) = app.levels_clipping.as_mut() else { return Vec::new() };
     if cache.drawn != Some((req.end, thr)) || cache.tex.is_none() {
         let img = egui::ColorImage::new(cache.stats.size, image(&cache.stats, &thr, req.end));
         match &mut cache.tex {
@@ -385,7 +320,7 @@ pub fn paint(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Paint
         }
         cache.drawn = Some((req.end, thr));
     }
-    let Some(tex) = cache.tex.as_ref().map(egui::TextureHandle::id) else { return };
+    let Some(tex) = cache.tex.as_ref().map(egui::TextureHandle::id) else { return Vec::new() };
     // The texture covers whole blocks; the last row and column may reach past the area.
     let s = &cache.stats;
     let f = s.factor as f32;
@@ -393,11 +328,17 @@ pub fn paint(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Paint
     let (x0, y0, x1, y1) = (s.rect.x0 as f32, s.rect.y0 as f32, s.rect.x1 as f32, s.rect.y1 as f32);
     let mut mesh = Mesh::with_texture(tex);
     for (p, t) in [((x0, y0), (0.0, 0.0)), ((x1, y0), (uv[0], 0.0)), ((x1, y1), (uv[0], uv[1])), ((x0, y1), (0.0, uv[1]))] {
-        mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(p.0, p.1), uv: pos2(t.0, t.1), color: Color32::WHITE });
+        mesh.vertices.push(egui::epaint::Vertex { pos: view.to_screen(Point::new(f64::from(p.0), f64::from(p.1))), uv: pos2(t.0, t.1), color: Color32::WHITE });
     }
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
-    painter.add(egui::Shape::mesh(mesh));
+    vec![egui::Shape::mesh(mesh)]
+}
+
+/// [`shapes`] added to `painter`.
+#[cfg(test)]
+pub fn paint(app: &mut PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, view: &CanvasView, idx: usize) {
+    painter.extend(shapes(app, ctx, view, idx));
 }
 
 #[cfg(test)]

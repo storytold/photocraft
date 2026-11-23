@@ -1,8 +1,12 @@
 //! UI tests for the adjustment editors: the whole app (eframe harness, CPU canvas) with an
 //! adjustment layer on a new document, edited through the Properties panel with real pointer and
-//! key input (issue #12: "add an adjustment layer to a new document, edit it, crash"), and the
-//! Curves point interactions (issue #43).
+//! key input (issue #12: "add an adjustment layer to a new document, edit it, crash"). The
+//! editors' own gestures are the framework's tests; these cover what the app wires around them.
 
+use craft::behavior::dock::Action;
+use craft::color_ui::ui::{ColorPickerDialog, PickedColor};
+use craft::theme::Srgba;
+use egui::accesskit::{Role, Toggled};
 use egui::{Pos2, Rect, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -30,12 +34,27 @@ const ALL_KINDS: [&str; 16] = [
     "colorLookup",
 ];
 
-fn app_harness(kind: &str, mode: &str, depth: u32) -> Harness<'static, PhotocraftApp> {
-    app_harness_stepped(kind, mode, depth, 0.25)
+/// Kinds whose Properties editor has a slider the first drag of `every_adjustment_layer_edits_through_properties` moves.
+const SLIDER_KINDS: [&str; 11] = [
+    "brightnessContrast",
+    "exposure",
+    "vibrance",
+    "hueSaturation",
+    "colorBalance",
+    "blackWhite",
+    "photoFilter",
+    "channelMixer",
+    "posterize",
+    "threshold",
+    "selectiveColor",
+];
+
+fn app_harness(kind: &str, mode: &str, depth: u32) -> Harness<'static, Box<PhotocraftApp>> {
+    app_harness_with(kind, mode, depth, 1.0 / 60.0, crate::Services::default())
 }
 
-/// [`app_harness`] advancing `step_dt` seconds per frame (double-clicks need real frame times).
-fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harness<'static, PhotocraftApp> {
+/// [`app_harness`] with the app's `services` (a file source the test scripts).
+fn app_harness_with(kind: &str, mode: &str, depth: u32, step_dt: f32, services: crate::Services) -> Harness<'static, Box<PhotocraftApp>> {
     let (kind, mode) = (kind.to_string(), mode.to_string());
     let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).with_step_dt(step_dt).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -46,17 +65,21 @@ fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harn
         s.execute("edit.fill", json!({"color": "#6a3020"})).unwrap();
         s.execute("select.deselect", json!({})).unwrap();
         s.execute(&format!("layer.newAdjustmentLayer.{kind}"), json!({})).unwrap();
-        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), s, services);
         // The default Properties group gives way to Layers (#147) and scrolls taller editors;
         // these tests drive every control without scrolling, so they size it like a user would.
-        app.ui.dock.heights.insert(crate::dock::Group::Properties, 560.0);
+        crate::panel_docking::apply(&mut app, vec![Action::resize_group("properties".to_owned(), Some(560.0))]).unwrap();
         app
     });
+    // The Color panel above Properties has sliders of its own; these tests drive the Properties editor's.
+    let ctx = h.ctx.clone();
+    let (request, _) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color"]}}));
+    crate::control::handle(h.state_mut(), &ctx, &request);
     h.run_steps(8);
     h
 }
 
-fn layer(h: &Harness<'_, PhotocraftApp>) -> (LayerId, Adjustment) {
+fn layer(h: &Harness<'_, Box<PhotocraftApp>>) -> (LayerId, Adjustment) {
     let st = h.state().session.active().unwrap();
     let id = st.active_layer.unwrap();
     match &st.doc.layer(id).unwrap().content {
@@ -65,20 +88,25 @@ fn layer(h: &Harness<'_, PhotocraftApp>) -> (LayerId, Adjustment) {
     }
 }
 
-fn drag(h: &mut Harness<'_, PhotocraftApp>, from: Pos2, to: Pos2) {
+fn history_len(h: &Harness<'_, Box<PhotocraftApp>>) -> usize {
+    h.state().session.active().unwrap().history.past_len()
+}
+
+fn drag(h: &mut Harness<'_, Box<PhotocraftApp>>, from: Pos2, to: Pos2) {
     h.hover_at(from);
     h.run_steps(1);
     h.drag_at(from);
     h.run_steps(1);
-    for i in 1..=6 {
-        h.hover_at(from + (to - from) * (i as f32 / 6.0));
+    // Three moves give the gesture several previews before its one commit, which is what the history check needs.
+    for i in 1..=3 {
+        h.hover_at(from + (to - from) * (i as f32 / 3.0));
         h.run_steps(1);
     }
     h.drop_at(to);
     h.run_steps(3);
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, at: Pos2) {
     h.hover_at(at);
     h.run_steps(1);
     h.drag_at(at);
@@ -87,77 +115,113 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2) {
     h.run_steps(3);
 }
 
-fn label_rect(h: &Harness<'_, PhotocraftApp>, text: &str) -> Option<Rect> {
+fn label_rect(h: &Harness<'_, Box<PhotocraftApp>>, text: &str) -> Option<Rect> {
     // The last caption: the Properties header repeats the kind's name above its controls.
     // `get_by_label` hides a caption that names a control, so ask for the label node itself;
     // a checkbox paints its caption as the control, so fall back to the last matching widget.
     h.query_all(egui_kittest::kittest::by().label(text).include_labels())
-        .rfind(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
+        .rfind(|n| n.accesskit_node().role() == Role::Label)
         .map(|n| n.rect())
         .or_else(|| h.query_all_by_label(text).last().map(|n| n.rect()))
 }
 
-fn curves_graph(h: &Harness<'_, PhotocraftApp>, id: LayerId) -> Rect {
-    h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique(("adjust-layer", id.0)).with("curves-graph"))).expect("curves graph drawn")
+/// The rectangles of the editor's sliders, top to bottom.
+fn sliders(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<Rect> {
+    let mut rects: Vec<Rect> = h.query_all_by_role(Role::Slider).map(|n| n.rect()).collect();
+    rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    rects
 }
 
 /// Issue #12: every adjustment kind, on a new document at 8/16/32 bits and in RGB, Grayscale,
 /// CMYK and Lab, opens its Properties editor and takes an edit through real input without
-/// panicking; slider kinds commit exactly one history step per gesture.
+/// panicking; slider kinds commit exactly one history step per gesture and end the preview with it.
 #[test]
 fn every_adjustment_layer_edits_through_properties() {
     for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("gray", 8), ("cmyk", 8), ("lab", 16)] {
-        for kind in ALL_KINDS {
-            let mut h = app_harness(kind, mode, depth);
-            let (id, before) = layer(&h);
-            let steps = h.state().session.active().unwrap().history.past_len();
-            // A probe label per editor; the control sits just below it.
-            let probe = match kind {
-                "brightnessContrast" => Some("Brightness"),
-                "exposure" => Some("Exposure"),
-                "vibrance" => Some("Vibrance"),
-                "hueSaturation" => Some("Hue"),
-                "colorBalance" => Some("Cyan  ·  Red"),
-                "blackWhite" => Some("Reds"),
-                "photoFilter" => Some("Density"),
-                "channelMixer" => Some("Constant"),
-                "posterize" => Some("Levels"),
-                "threshold" => Some("Threshold Level"),
-                "selectiveColor" => Some("Cyan"),
-                _ => None,
-            };
-            match kind {
-                "curves" => {
-                    let g = curves_graph(&h, id);
-                    drag(&mut h, g.center(), g.center() + vec2(0.0, -40.0));
-                }
-                "levels" => {
-                    // The output black handle sits below the output gradient bar.
-                    let r = label_rect(&h, "Output Levels:").unwrap_or_else(|| panic!("{kind} {mode}: Output Levels"));
-                    let y = r.bottom() + 17.0;
-                    drag(&mut h, Pos2::new(r.left() + 6.0, y), Pos2::new(r.left() + 60.0, y));
-                }
-                "gradientMap" => {
-                    let r = label_rect(&h, "Reverse").unwrap_or_else(|| panic!("{kind} {mode}: Reverse"));
-                    click(&mut h, r.center());
-                }
-                _ => {
-                    if let Some(p) = probe {
-                        let r = label_rect(&h, p).unwrap_or_else(|| panic!("{kind} {mode}: no `{p}` label"));
-                        let y = r.bottom() + 14.0;
-                        drag(&mut h, Pos2::new(r.left() + 40.0, y), Pos2::new(r.left() + 120.0, y));
-                    }
-                }
+        // One app per document setting, not one per kind: each kind deletes the previous kind's layer and adds its
+        // own over the same two-tone background, so its editor opens on the stack a fresh app had (the Properties
+        // session is per layer, `PropertiesAdjust::new`). Every kind still runs in every mode and depth: the
+        // composite of each adjustment differs per mode and depth, and no other test runs all of them.
+        let mut h = app_harness(ALL_KINDS[0], mode, depth);
+        for (i, kind) in ALL_KINDS.into_iter().enumerate() {
+            if i > 0 {
+                let (previous, _) = layer(&h);
+                h.state_mut().run("layer.delete", json!({"layer": previous.0})).unwrap();
+                h.state_mut().run(&format!("layer.newAdjustmentLayer.{kind}"), json!({})).unwrap();
+                // The Properties panel shows the new layer's editor on the next frame; the second leaves its widgets
+                // laid out for the queries below.
+                h.run_steps(2);
+            }
+            assert_eq!(h.state().session.active().unwrap().doc.layers.len(), 2, "{kind} {mode}: the background and this kind's layer");
+            let (_, before) = layer(&h);
+            let steps = history_len(&h);
+            if kind == "channelMixer" && mode == "cmyk" {
+                // No framework editor for ink outputs yet (#8047): `cmyk_channel_mixer_is_kept_out_of_the_rgb_editor`.
+                let why = crate::adjust_editors::values::CMYK_MIXER_UNAVAILABLE;
+                assert!(label_rect(&h, why).is_some(), "{kind} {mode}: the Properties panel says why");
+                assert_ne!(h.state().ui.status, why, "{kind} {mode}: not in the status bar");
+                continue;
+            }
+            let slider = sliders(&h).first().copied();
+            if SLIDER_KINDS.contains(&kind) {
+                let r = slider.unwrap_or_else(|| panic!("{kind} {mode}: no slider in the Properties editor"));
+                drag(&mut h, r.center() - vec2(r.width() * 0.2, 0.0), r.center() + vec2(r.width() * 0.2, 0.0));
+            } else if kind == "gradientMap" {
+                let r = label_rect(&h, "Reverse").unwrap_or_else(|| panic!("{kind} {mode}: Reverse"));
+                click(&mut h, r.center());
             }
             h.run_steps(4);
             let (_, after) = layer(&h);
             assert!(h.state().live_adjust.is_none(), "{kind} {mode}: preview ended with the gesture");
-            if !matches!(kind, "invert" | "colorLookup") {
+            if SLIDER_KINDS.contains(&kind) || kind == "gradientMap" {
                 assert_ne!(after, before, "{kind} {mode}@{depth}: the edit reached the layer");
-                assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{kind} {mode}: one history step");
+                assert_eq!(history_len(&h), steps + 1, "{kind} {mode}: one history step");
             }
         }
     }
+}
+
+/// #8047: the framework Channel Mixer editor has red, green and blue outputs only, so a CMYK
+/// document's mixer (cyan, magenta, yellow and black outputs) is not opened in it. The Properties
+/// panel says why and edits nothing, the Image › Adjustments dialog refuses with the same reason,
+/// and the layer keeps its ink rows. RGB mixers still open.
+#[test]
+fn cmyk_channel_mixer_is_kept_out_of_the_rgb_editor() {
+    use crate::adjust_editors::values::{self, CMYK_MIXER_UNAVAILABLE, ValueCx};
+    use photocraft_doc::ColorMode;
+    use photocraft_engine::adjust_params;
+
+    // The conversion refuses ink outputs: a CMYK mixer, an imported monochrome one, a CMYK document's defaults.
+    let ink = adjust_params::to_params(&adjust_params::default_for("channelMixer", ColorMode::Cmyk).unwrap());
+    let mut mono = ink.clone();
+    mono["monochrome"] = json!(true);
+    mono["gray"] = json!([30, 30, 30, 100, 0]);
+    for params in [&ink, &mono, &json!({})] {
+        let read = values::from_params("channelMixer", params, &ValueCx::new(ColorMode::Cmyk, params.clone()));
+        assert_eq!(read.err().as_deref(), Some(CMYK_MIXER_UNAVAILABLE), "{params}");
+    }
+    let rgb = json!({"red": [50, 50, 0, 0]});
+    let read = values::from_params("channelMixer", &rgb, &ValueCx::new(ColorMode::Rgb, rgb.clone()));
+    assert!(matches!(read, Ok(crate::adjust_editors::AdjustValue::ChannelMixer { .. })), "RGB mixers read: {read:?}");
+
+    // A CMYK document: the Properties panel shows no editor but a faint label saying why (not the status bar, which
+    // it would overwrite on every frame), the dialog refuses with the same reason, the mixer is unchanged.
+    let mut h = app_harness("channelMixer", "cmyk", 8);
+    let (_, before) = layer(&h);
+    assert!(matches!(&before, Adjustment::ChannelMixer { cmyk: Some(_), .. }), "{before:?}");
+    let steps = history_len(&h);
+    h.run_steps(4);
+    assert!(label_rect(&h, CMYK_MIXER_UNAVAILABLE).is_some(), "the Properties panel says why");
+    assert_ne!(h.state().ui.status, CMYK_MIXER_UNAVAILABLE, "the status bar is left alone");
+    let err = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.channelMixer").unwrap_err();
+    assert_eq!(err, CMYK_MIXER_UNAVAILABLE);
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, before, "the mixer is kept as it is");
+    assert_eq!(history_len(&h), steps, "nothing was edited");
+
+    // An RGB document's mixer still opens in the dialog.
+    let mut h = app_harness("channelMixer", "rgb", 8);
+    assert!(crate::adjust_dialog::open(h.state_mut(), "image.adjustments.channelMixer").is_ok(), "RGB mixers open");
 }
 
 /// #3264: wheel browsing previews without recording one edit per selected LUT.
@@ -197,161 +261,13 @@ fn color_lookup_picker_cycles_luts_with_the_mouse_wheel() {
     }
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "cycling remains a preview");
     assert!(h.state().live_adjust.is_some(), "the selected LUT is previewed");
-    h.run_steps(4);
+    // The wheel run commits when the wheel gap passes without a notch (the harness steps 1/60 s).
+    h.run_steps((craft::behavior::GESTURE_GAP * 60.0).ceil() as usize + 4);
     let (_, after) = layer(&h);
     let Adjustment::ColorLookup { name: after_name, .. } = after else { panic!("Color Lookup layer") };
     assert_ne!(after_name, before_name, "wheel browsing selects a different LUT");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one wheel gesture makes one adjustment edit");
     assert!(h.state().live_adjust.is_none(), "the completed wheel gesture is committed");
-}
-
-fn curve_of(a: &Adjustment) -> Vec<[f32; 2]> {
-    match a {
-        Adjustment::Curves { master, .. } => master.iter().map(|p| [(p.input * 255.0).round(), (p.output * 255.0).round()]).collect(),
-        other => panic!("{other:?}"),
-    }
-}
-
-/// #8984: the Curves graph in Properties grows with the panel instead of stopping at 300
-/// points, stays square, and edits where it is clicked at its new size.
-#[test]
-fn curves_graph_grows_with_the_properties_panel() {
-    let mut h = app_harness("curves", "rgb", 8);
-    let (id, _) = layer(&h);
-    let narrow = curves_graph(&h, id);
-    assert!(narrow.width() < 300.0, "{narrow:?}");
-    crate::panels::request_dock_width(&h.ctx, 760.0);
-    h.run_steps(8);
-    let wide = curves_graph(&h, id);
-    // 760 points of panel, but the 900-point window leaves room for 540 beside the other rows.
-    assert!(wide.width() > narrow.width() + 250.0 && wide.height() <= 900.0 - 360.0, "{narrow:?} → {wide:?}");
-    assert!((wide.width() - wide.height()).abs() < 1.0, "square: {wide:?}");
-    // A point added at the graph's centre lands at 128, 128 of the curve.
-    click(&mut h, wide.center());
-    let c = curve_of(&layer(&h).1);
-    assert_eq!(c.len(), 3, "{c:?}");
-    assert!((c[1][0] - 127.5).abs() < 2.0 && (c[1][1] - 127.5).abs() < 2.0, "{c:?}");
-}
-
-/// Issue #43: pressing on a point selects it (no new point), Delete/Backspace and ⌘/Ctrl-click
-/// remove points, dragging off the graph removes one, endpoints stay.
-#[test]
-fn curves_points_are_added_selected_and_deleted() {
-    let mut h = app_harness("curves", "rgb", 8);
-    let (id, _) = layer(&h);
-    let g = curves_graph(&h, id);
-    let at = |v: [f32; 2]| Pos2::new(g.left() + v[0] / 255.0 * g.width(), g.bottom() - v[1] / 255.0 * g.height());
-    // Add a point.
-    click(&mut h, at([128.0, 128.0]));
-    assert_eq!(curve_of(&layer(&h).1).len(), 3);
-    // Press 4 px off it and drag: moves that point, adds none.
-    drag(&mut h, at([128.0, 128.0]) + vec2(4.0, 3.0), at([128.0, 180.0]));
-    let c = curve_of(&layer(&h).1);
-    assert_eq!(c.len(), 3, "{c:?}");
-    assert!(c[1][1] > 165.0, "{c:?}");
-    // Delete key removes the selected point (the graph has focus).
-    h.key_press(egui::Key::Delete);
-    h.run_steps(3);
-    assert_eq!(curve_of(&layer(&h).1).len(), 2);
-    // Backspace too.
-    click(&mut h, at([64.0, 100.0]));
-    assert_eq!(curve_of(&layer(&h).1).len(), 3);
-    h.key_press(egui::Key::Backspace);
-    h.run_steps(3);
-    assert_eq!(curve_of(&layer(&h).1).len(), 2);
-    // ⌘/Ctrl-click removes.
-    click(&mut h, at([190.0, 120.0]));
-    assert_eq!(curve_of(&layer(&h).1).len(), 3);
-    let p = at([190.0, 120.0]);
-    h.event_modifiers(egui::Event::PointerMoved(p), egui::Modifiers::COMMAND);
-    h.event_modifiers(
-        egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND },
-        egui::Modifiers::COMMAND,
-    );
-    h.run_steps(1);
-    h.event_modifiers(
-        egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::COMMAND },
-        egui::Modifiers::COMMAND,
-    );
-    h.run_steps(3);
-    assert_eq!(curve_of(&layer(&h).1).len(), 2);
-    // Dragging a point off the graph removes it; endpoints survive both.
-    click(&mut h, at([100.0, 60.0]));
-    drag(&mut h, at([100.0, 60.0]), g.right_center() + vec2(80.0, 0.0));
-    assert_eq!(curve_of(&layer(&h).1).len(), 2);
-    drag(&mut h, at([0.0, 0.0]), g.left_top() + vec2(-80.0, -80.0));
-    click(&mut h, at([0.0, 0.0]));
-    h.key_press(egui::Key::Delete);
-    h.run_steps(3);
-    assert_eq!(curve_of(&layer(&h).1).len(), 2, "endpoints can't be deleted");
-}
-
-/// Capture and history are shared with Camera Raw, but Properties commits on release.
-#[test]
-fn curves_fast_release_commits_one_edit_and_undo_restores_the_curve() {
-    let mut h = app_harness("curves", "rgb", 8);
-    let (id, _) = layer(&h);
-    let graph = curves_graph(&h, id);
-    click(&mut h, graph.center());
-    let (_, before) = layer(&h);
-    let steps = h.state().session.active().unwrap().history.past_len();
-    let at = graph.center() + vec2(4.0, 3.0);
-    h.hover_at(at);
-    h.run_steps(1);
-    h.drag_at(at);
-    h.run_steps(1);
-    // Only the release frame supplies the destination, as a very fast physical gesture can.
-    h.drop_at(at + vec2(40.0, -32.0));
-    h.run_steps(3);
-    let after = curve_of(&layer(&h).1);
-    assert_eq!(after.len(), 3);
-    assert!(after[1][0] > 150.0 && after[1][1] > 150.0, "{after:?}");
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
-    assert!(h.state().live_adjust.is_none());
-    h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(layer(&h).1, before);
-}
-
-/// Real pointer input: `n` clicks at `at` with `mods` held (2 = a double-click).
-fn clicks_with(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, n: usize, mods: egui::Modifiers) {
-    // Well past the double-click time since the last gesture.
-    h.run_steps(40);
-    h.event(egui::Event::ModifiersChanged(mods));
-    h.hover_at(at);
-    h.run_steps(1);
-    for _ in 0..n {
-        for pressed in [true, false] {
-            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: mods });
-            h.run_steps(1);
-        }
-    }
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-    h.run_steps(3);
-}
-
-fn wheel_at(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, notches: f32, mods: egui::Modifiers) {
-    h.event(egui::Event::ModifiersChanged(mods));
-    h.hover_at(at);
-    h.run_steps(1);
-    h.event(egui::Event::MouseWheel {
-        source: egui::MouseWheelSource::Unknown,
-        unit: egui::MouseWheelUnit::Line,
-        delta: vec2(0.0, notches),
-        phase: egui::TouchPhase::Move,
-        modifiers: mods,
-    });
-    h.run_steps(1);
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-    h.run_steps(3);
-}
-
-fn key_with(h: &mut Harness<'_, PhotocraftApp>, key: egui::Key, mods: egui::Modifiers) {
-    h.event(egui::Event::ModifiersChanged(mods));
-    for pressed in [true, false] {
-        h.event(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: mods });
-    }
-    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
-    h.run_steps(3);
 }
 
 fn color_balance_of(a: &Adjustment) -> ([f32; 3], [f32; 3], [f32; 3], bool) {
@@ -361,74 +277,18 @@ fn color_balance_of(a: &Adjustment) -> ([f32; 3], [f32; 3], [f32; 3], bool) {
     }
 }
 
-/// Photoshop 25.4, Color Balance in the Properties panel (measured on the real application by
-/// scripted clicks and reading the layer back): a double-click on a slider's knob or track sets that
-/// slider of the shown tone to 0, whatever modifier is held; the label doesn't; a click jumps; the
-/// wheel does nothing; Up/Down in a field step 1, with Shift 10.
-#[test]
-fn color_balance_sliders_reset_and_step_like_photoshop() {
-    let mut h = app_harness_stepped("colorBalance", "rgb", 8, 1.0 / 60.0);
-    let (id, _) = layer(&h);
-    let start = json!({"layer": id.0, "shadows": [10, 0, 0], "midtones": [40, -30, 20], "highlights": [0, 0, -15], "preserveLuminosity": false});
-    h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
-    h.run_steps(4);
-    let label = label_rect(&h, "Cyan  ·  Red").expect("Cyan · Red row");
-    let on_track = Pos2::new(label.left() + 60.0, label.bottom() + 14.0);
-    let cb = |h: &Harness<'_, PhotocraftApp>| color_balance_of(&layer(h).1);
-
-    // A click jumps to the pointer, with or without modifiers.
-    clicks_with(&mut h, on_track, 1, egui::Modifiers::NONE);
-    let jumped = cb(&h).1[0];
-    assert!(jumped < 0.0 && jumped > -100.0, "click jumps to the pointer: {jumped}");
-    for mods in [egui::Modifiers::SHIFT, egui::Modifiers::CTRL, egui::Modifiers::ALT] {
-        h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
-        h.run_steps(3);
-        clicks_with(&mut h, on_track, 1, mods);
-        assert_eq!(cb(&h).1[0], jumped, "{mods:?}-click is a plain click");
-    }
-    // A double-click anywhere on the slider zeroes it, with any modifier; nothing else changes.
-    for mods in [egui::Modifiers::NONE, egui::Modifiers::SHIFT, egui::Modifiers::CTRL, egui::Modifiers::ALT] {
-        h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
-        h.run_steps(3);
-        clicks_with(&mut h, on_track, 2, mods);
-        assert_eq!(cb(&h), ([10.0, 0.0, 0.0], [0.0, -30.0, 20.0], [0.0, 0.0, -15.0], false), "{mods:?} double-click");
-    }
-    // The label is not a reset target.
-    h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
-    h.run_steps(3);
-    clicks_with(&mut h, label.center(), 2, egui::Modifiers::NONE);
-    assert_eq!(cb(&h).1, [40.0, -30.0, 20.0], "double-click on the label");
-    // The panel's sliders ignore the wheel.
-    wheel_at(&mut h, on_track, 3.0, egui::Modifiers::NONE);
-    wheel_at(&mut h, on_track, 3.0, egui::Modifiers::SHIFT);
-    assert_eq!(cb(&h).1, [40.0, -30.0, 20.0], "wheel over a Properties slider");
-    // Up/Down in the field: 1, Shift: 10 (also below zero, where a half step used to round away).
-    let field = h
-        .query_all_by_role(egui::accesskit::Role::SpinButton)
-        .map(|n| n.rect())
-        .find(|r| (r.center().y - label.center().y).abs() < 8.0)
-        .expect("Cyan · Red field");
-    clicks_with(&mut h, field.center(), 1, egui::Modifiers::NONE);
-    key_with(&mut h, egui::Key::ArrowUp, egui::Modifiers::NONE);
-    assert_eq!(cb(&h).1[0], 41.0, "Up");
-    key_with(&mut h, egui::Key::ArrowUp, egui::Modifiers::SHIFT);
-    assert_eq!(cb(&h).1[0], 51.0, "Shift+Up");
-    for _ in 0..8 {
-        key_with(&mut h, egui::Key::ArrowDown, egui::Modifiers::SHIFT);
-    }
-    key_with(&mut h, egui::Key::ArrowDown, egui::Modifiers::NONE);
-    assert_eq!(cb(&h).1[0], -30.0, "Shift+Down ×8, Down");
-    key_with(&mut h, egui::Key::ArrowUp, egui::Modifiers::NONE);
-    assert_eq!(cb(&h).1[0], -29.0, "Up below zero");
+/// The tone radio Color Balance shows as chosen.
+fn shown_tone(h: &Harness<'_, Box<PhotocraftApp>>) -> Option<&'static str> {
+    ["Shadows", "Midtones", "Highlights"].into_iter().find(|name| h.query_all_by_label(name).any(|n| n.accesskit_node().toggled() == Some(Toggled::True)))
 }
 
 /// Photoshop 25.4, Color Balance in the Properties panel: edits that follow each other make one
-/// history step (a double-click, whose first click moved the knob, undoes in one go); Reset first
-/// returns to the settings the layer had when the panel started showing it (Tone choice kept),
-/// then to the defaults (every tone 0, Midtones, Preserve Luminosity kept), within that step.
+/// history step; Reset first returns to the settings the layer had when the panel started showing
+/// it (Tone choice kept), then to the defaults (every tone 0, Midtones, Preserve Luminosity kept),
+/// within that step.
 #[test]
 fn color_balance_properties_history_and_reset_like_photoshop() {
-    let mut h = app_harness_stepped("colorBalance", "rgb", 8, 1.0 / 60.0);
+    let mut h = app_harness("colorBalance", "rgb", 8);
     let (id, _) = layer(&h);
     let start = ([10.0, 0.0, 0.0], [40.0, -30.0, 20.0], [0.0, 0.0, -15.0], false);
     h.state_mut()
@@ -443,575 +303,66 @@ fn color_balance_properties_history_and_reset_like_photoshop() {
     h.run_steps(4);
     h.state_mut().session.select_layer(id).unwrap();
     h.run_steps(4);
-    let cb = |h: &Harness<'_, PhotocraftApp>| color_balance_of(&layer(h).1);
-    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
-    let label = label_rect(&h, "Cyan  ·  Red").expect("Cyan · Red row");
-    let on_track = Pos2::new(label.left() + 60.0, label.bottom() + 14.0);
-    let before = steps(&h);
-    clicks_with(&mut h, on_track, 1, egui::Modifiers::NONE);
-    clicks_with(&mut h, Pos2::new(label.left() + 90.0, on_track.y), 2, egui::Modifiers::NONE);
-    assert_eq!(cb(&h).1, [0.0, -30.0, 20.0]);
-    assert_eq!(steps(&h), before + 1, "a click and a double-click: one history step");
+    let cb = |h: &Harness<'_, Box<PhotocraftApp>>| color_balance_of(&layer(h).1);
+    let track = *sliders(&h).first().expect("the Cyan · Red slider");
+    let before = history_len(&h);
+    // Two clicks far apart (not a double-click): the second follows the first within one step.
+    click(&mut h, Pos2::new(track.left() + track.width() * 0.25, track.center().y));
+    let first = cb(&h).1[0];
+    click(&mut h, Pos2::new(track.left() + track.width() * 0.75, track.center().y));
+    let second = cb(&h).1[0];
+    assert!(first < 0.0 && second > 0.0, "the clicks jump to the pointer: {first} then {second}");
+    assert_eq!(history_len(&h), before + 1, "two edits in a row: one history step");
     assert!(h.state_mut().session.undo());
     h.run_steps(3);
     assert_eq!(cb(&h), start, "one Undo returns to the settings before them");
     // Edit with Highlights shown; Reset returns to the settings the panel started with.
     let hl = label_rect(&h, "Highlights").expect("Highlights radio");
-    clicks_with(&mut h, hl.center(), 1, egui::Modifiers::NONE);
-    clicks_with(&mut h, on_track, 1, egui::Modifiers::NONE);
+    click(&mut h, hl.center());
+    assert_eq!(shown_tone(&h), Some("Highlights"));
+    click(&mut h, Pos2::new(track.left() + track.width() * 0.25, track.center().y));
     assert_ne!(cb(&h), start);
-    let tone = crate::adjust_editors::layer_mem(id).with("cb-tone");
     let reset = h.get_by_label("Reset to defaults").rect();
-    let before = steps(&h);
-    clicks_with(&mut h, reset.center(), 1, egui::Modifiers::NONE);
+    let before = history_len(&h);
+    click(&mut h, reset.center());
     assert_eq!(cb(&h), start, "first Reset: the settings the panel started with");
-    assert_eq!(h.ctx.data(|d| d.get_temp::<usize>(tone)), Some(2), "Tone choice kept");
-    clicks_with(&mut h, reset.center(), 1, egui::Modifiers::NONE);
+    assert_eq!(shown_tone(&h), Some("Highlights"), "Tone choice kept");
+    click(&mut h, reset.center());
     assert_eq!(cb(&h), ([0.0; 3], [0.0; 3], [0.0; 3], false), "second Reset: defaults, Preserve Luminosity kept");
-    assert_eq!(h.ctx.data(|d| d.get_temp::<usize>(tone)), Some(1), "defaults show Midtones");
-    clicks_with(&mut h, reset.center(), 1, egui::Modifiers::NONE);
+    assert_eq!(shown_tone(&h), Some("Midtones"), "defaults show Midtones");
+    click(&mut h, reset.center());
     assert_eq!(cb(&h), ([0.0; 3], [0.0; 3], [0.0; 3], false), "third Reset: still the defaults");
-    assert_eq!(steps(&h), before, "the edit and the Resets share one history step");
-}
-
-fn map_stops(a: &Adjustment) -> Vec<(f32, [u8; 3])> {
-    let q = |v: f32| (v * 255.0).round() as u8;
-    match a {
-        Adjustment::GradientMap { stops, .. } => stops.iter().map(|(t, c)| (*t, [q(c[0]), q(c[1]), q(c[2])])).collect(),
-        other => panic!("{other:?}"),
-    }
-}
-
-fn map_handle(h: &Harness<'_, PhotocraftApp>, at: f32) -> Pos2 {
-    let strip = h.get_by_label("Gradient stops").rect();
-    Pos2::new(strip.left() + 8.0 + at * (strip.width() - 16.0), strip.top() + 36.0)
-}
-
-#[test]
-fn gradient_map_handle_drag_previews_and_commits_once_after_crossing_stops() {
-    for depth in [8, 16, 32] {
-        let mut h = app_harness("gradientMap", "rgb", depth);
-        let (id, _) = layer(&h);
-        h.state_mut()
-            .run(
-                "layer.setAdjustment",
-                json!({
-                    "layer": id.0, "stops": [[0, "#000000"], [0.25, "#ff0000"], [0.5, "#00ff00"], [1, "#ffffff"]]
-                }),
-            )
-            .unwrap();
-        h.run_steps(3);
-        let before = layer(&h).1;
-        let steps = h.state().session.active().unwrap().history.past_len();
-        let start = map_handle(&h, 0.25);
-        h.hover_at(start);
-        h.run_steps(1);
-        h.drag_at(start);
-        h.run_steps(1);
-        for location in [0.4, 0.5, 0.6, 0.75] {
-            let to = map_handle(&h, location);
-            h.hover_at(to);
-            h.run_steps(1);
-            assert!(h.state().live_adjust.is_some(), "{depth}: live preview");
-            assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "{depth}: dragging records no history");
-        }
-        let end = map_handle(&h, 0.8);
-        h.drop_at(end);
-        h.run_steps(3);
-        assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.5, [0, 255, 0]), (0.8, [255, 0, 0]), (1.0, [255, 255, 255])]);
-        assert_eq!(h.ctx.data(|d| d.get_temp::<usize>(crate::adjust_editors::layer_mem(id).with("gm-stop-selection"))), Some(2));
-        assert!(h.state().live_adjust.is_none());
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
-        let after = layer(&h).1;
-        h.state_mut().run("edit.undo", json!({})).unwrap();
-        h.run_steps(3);
-        assert_eq!(layer(&h).1, before);
-        h.state_mut().run("edit.redo", json!({})).unwrap();
-        h.run_steps(3);
-        assert_eq!(layer(&h).1, after);
-    }
-}
-
-/// #10742: a stop dragged off the strip goes as the Gradient tool's does, with a live preview, and
-/// comes back if the drag returns. Two stops always stay.
-#[test]
-fn gradient_map_stop_dragged_off_the_strip_is_removed_in_one_step() {
-    for depth in [8, 16, 32] {
-        let mut h = app_harness("gradientMap", "rgb", depth);
-        let (id, _) = layer(&h);
-        let four = json!({"layer": id.0, "stops": [[0, "#000000"], [0.25, "#ff0000"], [0.5, "#00ff00"], [1, "#ffffff"]]});
-        h.state_mut().run("layer.setAdjustment", four).unwrap();
-        h.run_steps(3);
-        let before = layer(&h).1;
-        let steps = h.state().session.active().unwrap().history.past_len();
-        let start = map_handle(&h, 0.25);
-        let away = start + vec2(0.0, 90.0);
-        h.hover_at(start);
-        h.run_steps(1);
-        h.drag_at(start);
-        h.run_steps(1);
-        h.hover_at(away);
-        h.run_steps(1);
-        let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
-        assert_eq!(preview, Some(Some(3)), "{depth}: the preview drops the stop");
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "{depth}: dragging records no history");
-        h.drop_at(away);
-        h.run_steps(3);
-        assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.5, [0, 255, 0]), (1.0, [255, 255, 255])], "{depth}: the stop is gone");
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{depth}: one history step");
-        h.state_mut().run("edit.undo", json!({})).unwrap();
-        h.run_steps(3);
-        assert_eq!(layer(&h).1, before, "{depth}: undo brings it back");
-
-        // Off the strip and back: the stop stays, with its colour, where the drag ends.
-        let back = map_handle(&h, 0.4);
-        h.hover_at(start);
-        h.run_steps(1);
-        h.drag_at(start);
-        h.run_steps(1);
-        h.hover_at(away);
-        h.run_steps(1);
-        h.hover_at(back);
-        h.run_steps(1);
-        let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
-        assert_eq!(preview, Some(Some(4)), "{depth}: the preview has the stop back while it's held");
-        h.drop_at(back);
-        h.run_steps(3);
-        assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.4, [255, 0, 0]), (0.5, [0, 255, 0]), (1.0, [255, 255, 255])], "{depth}: kept");
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{depth}: the move is one step");
-    }
-}
-
-/// A drag that ends without its release reaching the strip (the drag taken away: focus lost, the
-/// pointer let go elsewhere) still commits what the preview shows: a stop taken off the strip isn't
-/// left removed with no History step.
-#[test]
-fn gradient_map_stop_drag_that_ends_elsewhere_still_commits() {
-    let mut h = app_harness("gradientMap", "rgb", 8);
-    let (id, _) = layer(&h);
-    let four = json!({"layer": id.0, "stops": [[0, "#000000"], [0.25, "#ff0000"], [0.5, "#00ff00"], [1, "#ffffff"]]});
-    h.state_mut().run("layer.setAdjustment", four).unwrap();
-    h.run_steps(3);
-    let steps = h.state().session.active().unwrap().history.past_len();
-    let start = map_handle(&h, 0.25);
-    let away = start + vec2(0.0, 90.0);
-    h.hover_at(start);
-    h.run_steps(1);
-    h.drag_at(start);
-    h.run_steps(1);
-    h.hover_at(away);
-    h.run_steps(1);
-    // The drag ends without reaching the strip's response, then the button comes up.
-    h.ctx.stop_dragging();
-    h.run_steps(1);
-    h.drop_at(away);
-    h.run_steps(3);
-    assert_eq!(map_stops(&layer(&h).1).len(), 3, "the stop the preview dropped is gone from the layer");
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "in one History step");
-}
-
-#[test]
-fn gradient_map_last_two_stops_cant_be_dragged_off_the_strip() {
-    let mut h = app_harness("gradientMap", "rgb", 8);
-    let (id, _) = layer(&h);
-    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "stops": [[0, "#000000"], [1, "#ffffff"]]})).unwrap();
-    h.run_steps(3);
-    let steps = h.state().session.active().unwrap().history.past_len();
-    let start = map_handle(&h, 0.0);
-    let away = start + vec2(0.0, 90.0);
-    h.hover_at(start);
-    h.run_steps(1);
-    h.drag_at(start);
-    h.run_steps(1);
-    h.hover_at(away);
-    h.run_steps(1);
-    let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
-    assert!(preview.is_none_or(|n| n == Some(2)), "the preview keeps both: {preview:?}");
-    h.drop_at(away);
-    h.run_steps(3);
-    assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (1.0, [255, 255, 255])], "both stay where they were");
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing to record");
-}
-
-#[test]
-fn gradient_map_strip_adds_selects_and_removes_stops_without_deleting_the_last_pair() {
-    let mut h = app_harness("gradientMap", "rgb", 8);
-    let (id, original) = layer(&h);
-    let steps = h.state().session.active().unwrap().history.past_len();
-    let middle = map_handle(&h, 0.5);
-    click(&mut h, middle);
-    let added = map_stops(&layer(&h).1);
-    assert_eq!(added.len(), 3);
-    assert!((added[1].0 - 0.5).abs() < 0.001);
-    assert_eq!(added[1].1, [128, 128, 128]);
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
-    let first = map_handle(&h, 0.0);
-    click(&mut h, first);
-    assert_eq!(h.ctx.data(|d| d.get_temp::<usize>(crate::adjust_editors::layer_mem(id).with("gm-stop-selection"))), Some(0));
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "selection is view state");
-    click(&mut h, middle);
-    let remove = h.get_by_label("Remove stop").rect().center();
-    click(&mut h, remove);
-    assert_eq!(layer(&h).1, original);
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 2);
-    let first = map_handle(&h, 0.0);
-    click(&mut h, first);
-    let remove = h.get_by_label("Remove stop").rect().center();
-    click(&mut h, remove);
-    assert_eq!(layer(&h).1, original, "keep two stops");
-}
-
-#[test]
-fn gradient_map_drag_clamps_at_the_endpoints_and_reverse_keeps_stop_coordinates() {
-    let mut h = app_harness("gradientMap", "rgb", 8);
-    let reverse = label_rect(&h, "Reverse").unwrap().center();
-    click(&mut h, reverse);
-    let first = map_handle(&h, 0.0);
-    let target = map_handle(&h, 0.3);
-    drag(&mut h, first, target);
-    assert!((map_stops(&layer(&h).1)[0].0 - 0.3).abs() < 0.001);
-    let target = map_handle(&h, 0.3);
-    drag(&mut h, target, first - vec2(60.0, 0.0));
-    assert_eq!(map_stops(&layer(&h).1)[0].0, 0.0);
-    let last = map_handle(&h, 1.0);
-    let beyond = last + vec2(60.0, 0.0);
-    let before = layer(&h).1;
-    let steps = h.state().session.active().unwrap().history.past_len();
-    drag(&mut h, last, beyond);
-    assert_eq!(layer(&h).1, before);
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "a clamped no-op makes no history");
-}
-
-#[test]
-fn gradient_map_stop_controls_fit_a_narrow_properties_panel_in_every_theme() {
-    use crate::adjust_editors::{EditorCx, editor};
-    for kind in crate::theme::ThemeKind::ALL {
-        for width in [240.0, 280.0] {
-            let mut h = Harness::builder().with_size(vec2(width, 360.0)).build_ui_state(
-                |ui, values: &mut serde_json::Value| {
-                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                        return;
-                    }
-                    let cx = EditorCx {
-                        mem: egui::Id::unique("map-layout"),
-                        hist: None,
-                        gray: false,
-                        swatches: [[0.0; 3], [1.0; 3]],
-                        gradients: Vec::new(),
-                        dialog: false,
-                        dynamic_color_sliders: true,
-                        isolated_curve: None,
-                    };
-                    editor(ui, "gradientMap", values, &cx);
-                },
-                json!({"stops": [[0, "#000000"], [1, "#ffffff"]]}),
-            );
-            PhotocraftApp::setup_context(&h.ctx, kind);
-            h.run_steps(4);
-            for role in [egui::accesskit::Role::Button, egui::accesskit::Role::ComboBox, egui::accesskit::Role::SpinButton] {
-                for control in h.query_all_by_role(role) {
-                    let r = control.rect();
-                    assert!(r.left() >= 0.0 && r.right() <= width && r.width() >= 8.0, "{kind:?} width {width}: {role:?} {r:?}");
-                }
-            }
-        }
-    }
-}
-
-/// Issue #1588: the Gradient Map preset picker offers the session's gradient library (built-in
-/// groups beyond Basics and the user's own saved gradients), and picking one writes its stops as
-/// one history step.
-#[test]
-fn gradient_map_picker_offers_the_gradient_library() {
-    use photocraft_engine::presets::{Group, gradients};
-    let mut h = app_harness("gradientMap", "rgb", 8);
-    // A short library so every row fits the popup: Basics, Blues and a user-saved group.
-    let mut lib: Vec<_> = gradients::builtin().into_iter().take(2).collect();
-    lib[1].items.truncate(3);
-    lib.push(Group::new("Mine", vec![gradients::GradientPreset::new("My Teal", &["#008080", "#ffee00"])]));
-    h.state_mut().session.presets.gradients = lib;
-    h.run_steps(2);
-    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
-    for (name, want) in
-        [("Blue 03", vec![(0.0, [0x00, 0xb4, 0xd8]), (1.0, [0x03, 0x04, 0x5e])]), ("My Teal", vec![(0.0, [0x00, 0x80, 0x80]), (1.0, [0xff, 0xee, 0x00])])]
-    {
-        let before = steps(&h);
-        // The picker sits right of its "Preset:" label.
-        let preset = label_rect(&h, "Preset:").expect("the preset picker");
-        click(&mut h, Pos2::new(preset.right() + 60.0, preset.center().y));
-        let item = h.query_by_label(name).unwrap_or_else(|| panic!("`{name}` in the picker")).rect();
-        click(&mut h, item.center());
-        h.run_steps(4);
-        assert_eq!(map_stops(&layer(&h).1), want, "{name}");
-        assert_eq!(steps(&h), before + 1, "{name}: one history step");
-    }
-}
-
-fn import_gradients_from_picker(h: &mut Harness<'_, PhotocraftApp>) {
-    let preset = label_rect(h, "Preset:").unwrap();
-    click(h, Pos2::new(preset.right() + 60.0, preset.center().y));
-    h.get_by_label("Gradient Preset Options").click();
-    h.run_steps(2);
-    h.get_by_label("Import .GRD").click();
-    h.run_steps(3);
-}
-
-#[test]
-fn gradient_map_picker_imports_grd_without_editing_the_map() {
-    use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop};
-    let mut h = app_harness("gradientMap", "rgb", 16);
-    h.state_mut().session.presets.gradients.truncate(1);
-    let before = layer(&h);
-    let history = h.state().session.active().unwrap().history.past_len();
-    let tool = h.state().session.presets.gradient.clone();
-    let bytes = photocraft_psd::grd::write(&[GrdGradient {
-        name: "Imported Teal".into(),
-        stops: vec![
-            GrdStop { location: 0.0, midpoint: 0.5, color: GrdColor::Rgb([0.0, 0.5, 0.5]) },
-            GrdStop { location: 1.0, midpoint: 0.5, color: GrdColor::Rgb([1.0, 1.0, 0.0]) },
-        ],
-        ..Default::default()
-    }]);
-    h.state_mut().services.file_dialog = Some(Box::new(move |request, _, reply| {
-        assert!(matches!(request, crate::FileDialogRequest::Open { multiple: false, extensions: Some(ref exts), .. } if exts == &["grd"]));
-        reply.send(Some(crate::FileDialogAnswer::Contents("My Gradients.GRD".into(), bytes.clone())));
-    }));
-    import_gradients_from_picker(&mut h);
-    assert_eq!(layer(&h), before, "import does not edit the adjustment");
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
-    assert_eq!(h.state().session.presets.gradient, tool);
-    assert!(!h.state().ui.status_error);
-    assert!(h.state().ui.status.contains("Imported 1 gradient"));
-    let preset = label_rect(&h, "Preset:").unwrap();
-    click(&mut h, Pos2::new(preset.right() + 60.0, preset.center().y));
-    h.get_by_label("My Gradients");
-    h.get_by_label("Imported Teal").click();
-    h.run_steps(3);
-    assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 128, 128]), (1.0, [255, 255, 0])]);
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
-    h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(layer(&h), before);
-}
-
-#[test]
-fn gradient_map_picker_import_cancel_and_errors_preserve_state() {
-    use crate::FileDialogAnswer;
-    for answer in [
-        None,
-        Some(FileDialogAnswer::Contents("broken.grd".into(), b"invalid".to_vec())),
-        Some(FileDialogAnswer::Contents("old.grd".into(), b"8BGR\0\x03".to_vec())),
-        Some(FileDialogAnswer::Contents(
-            "noise.grd".into(),
-            photocraft_psd::grd::write(&[photocraft_psd::grd::GrdGradient { noise: true, ..Default::default() }]),
-        )),
-        Some(FileDialogAnswer::Contents("wrong.abr".into(), Vec::new())),
-        Some(FileDialogAnswer::Paths(vec!["/nonexistent/photocraft-gradients.grd".into()])),
-        Some(FileDialogAnswer::Unavailable("dialog unavailable".into())),
-    ] {
-        let mut h = app_harness("gradientMap", "rgb", 8);
-        h.state_mut().session.presets.gradients.truncate(1);
-        let before = layer(&h);
-        let presets = h.state().session.presets.gradients.clone();
-        let history = h.state().session.active().unwrap().history.past_len();
-        let error = answer.is_some();
-        h.state_mut().services.file_dialog = Some(Box::new(move |_, _, reply| reply.send(answer.clone())));
-        import_gradients_from_picker(&mut h);
-        assert_eq!(layer(&h), before);
-        assert_eq!(h.state().session.presets.gradients, presets);
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
-        assert_eq!(h.state().ui.status_error, error);
-        if error {
-            assert!(!h.state().ui.status.is_empty());
-        }
-    }
-}
-
-#[test]
-fn gradient_map_dialog_import_preserves_pending_settings() {
-    let mut h = app_harness("gradientMap", "rgb", 8);
-    let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.gradientMap").unwrap();
-    let fields = h.state_mut().ui.dialog_mut(id).unwrap().fields.clone();
-    h.state_mut().services.file_dialog = Some(Box::new(|request, _, reply| {
-        assert!(matches!(request, crate::FileDialogRequest::Open { extensions: Some(ref exts), .. } if exts == &["grd"]));
-        reply.send(None);
-    }));
-    h.run_steps(3);
-    import_gradients_from_picker(&mut h);
-    assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields, fields);
-    assert!(!h.state().file_dialog_open());
-    assert!(!h.state().ui.status_error);
-}
-
-/// Document point (x, y) on screen in the app's first view.
-fn doc_on_screen(h: &Harness<'_, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
-    let app = h.state();
-    let v = &app.ui.views[0];
-    let xf = crate::canvas::ViewXform {
-        rect: crate::rulers::content_rect(app, app.last_canvas_rect),
-        zoom: v.zoom,
-        center: v.center,
-        flip: app.ui.view.flip_horizontal,
-        rotation: v.rotation,
-        aspect: app.ui.view.display_aspect(),
-    };
-    xf.to_screen(x, y)
+    assert_eq!(history_len(&h), before, "the edit and the Resets share one history step");
 }
 
 /// UI-217-15 (#3110, #3116): the Properties panel of a Curves or Levels layer has the Set
 /// Black/Neutral Gray/White Point eyedroppers. With Set White Point armed, a click on the image
-/// makes that pixel white as one history step (sampled below the layer), and Esc disarms the
-/// picker.
+/// makes that pixel white as one history step (sampled below the layer), the picker stays armed for
+/// another click, and Esc disarms it.
 #[test]
-fn curves_properties_white_point_eyedropper_edits_the_layer() {
-    properties_white_point_eyedropper_edits_the_layer("curves");
-}
-
-#[test]
-fn levels_properties_white_point_eyedropper_edits_the_layer() {
-    properties_white_point_eyedropper_edits_the_layer("levels");
-}
-
-fn properties_white_point_eyedropper_edits_the_layer(kind: &str) {
-    let mut h = app_harness(kind, "rgb", 8);
-    let (_, before) = layer(&h);
-    let steps = h.state().session.active().unwrap().history.past_len();
-    h.get_by_label("Set White Point").click();
-    h.run_steps(2);
-    assert!(crate::layer_picker::armed(h.state()).is_some(), "armed from the Properties panel");
-    // The left half is #6a3020: the white point moves to it, so it composites white.
-    let at = doc_on_screen(&h, 10.0, 10.0);
-    click(&mut h, at);
-    let pixel = |h: &mut Harness<'_, PhotocraftApp>| -> Vec<f32> {
-        serde_json::from_value(h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap()).unwrap()
-    };
-    let px = pixel(&mut h);
-    assert!(px.iter().take(3).all(|v| *v > 0.99), "{kind}: {px:?}");
-    assert_ne!(layer(&h).1, before, "{kind}: the layer changed");
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{kind}: one history step");
-    assert!(crate::layer_picker::armed(h.state()).is_some(), "stays armed for another click");
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().ui.layer_picker.is_none(), "Esc disarms");
-    h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(layer(&h).1, before);
-}
-
-/// A bare `kind` editor over `params`, as the Properties panel and the dialog host it.
-fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'static, serde_json::Value> {
-    use crate::adjust_editors::{EditorCx, editor};
-    let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(
-        move |ui, values: &mut serde_json::Value| {
-            let cx = EditorCx {
-                mem: egui::Id::unique("precision"),
-                hist: None,
-                gray: false,
-                swatches: [[0.0; 3], [1.0; 3]],
-                gradients: Vec::new(),
-                dialog: true,
-                dynamic_color_sliders: true,
-                isolated_curve: None,
-            };
-            editor(ui, kind, values, &cx);
-        },
-        params,
-    );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
-    h.run_steps(4);
-    h
-}
-
-/// #9242: the Hue/Saturation spectrum bars stretch with the panel, like the sliders above them.
-#[test]
-fn hue_saturation_bars_fill_the_panel_width() {
-    use crate::adjust_editors::{EditorCx, editor};
-    for width in [300.0, 600.0] {
-        let mut h = Harness::builder().with_size(vec2(width, 500.0)).build_ui_state(
-            |ui, values: &mut serde_json::Value| {
-                let cx = EditorCx {
-                    mem: egui::Id::unique("hs"),
-                    hist: None,
-                    gray: false,
-                    swatches: [[0.0; 3], [1.0; 3]],
-                    gradients: Vec::new(),
-                    dialog: false,
-                    dynamic_color_sliders: true,
-                    isolated_curve: None,
-                };
-                let avail = ui.available_width();
-                editor(ui, "hueSaturation", values, &cx);
-                ui.data_mut(|d| d.insert_temp(egui::Id::unique("hs-avail"), avail));
-            },
-            json!({}),
-        );
-        PhotocraftApp::setup_context(&h.ctx, Default::default());
-        h.run_steps(4);
-        let bars = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique("hs").with("hs-bars"))).expect("bars drawn");
-        let avail = h.ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("hs-avail"))).unwrap();
-        assert!((bars.width() - avail).abs() < 0.5, "{width}: bars {} of {avail}", bars.width());
+fn properties_white_point_eyedropper_edits_the_layer() {
+    for kind in ["curves", "levels"] {
+        let mut h = app_harness(kind, "rgb", 8);
+        let (_, before) = layer(&h);
+        let steps = history_len(&h);
+        h.get_by_label("Set White Point").click();
+        h.run_steps(2);
+        assert!(crate::layer_picker::armed(h.state()).is_some(), "{kind}: armed from the Properties panel");
+        // The left half is #6a3020: the white point moves to it, so it composites white.
+        let view = crate::canvas::testing::view(h.state()).expect("the canvas has a view");
+        let at = view.to_screen(craft::behavior::kurbo::Point::new(10.0, 10.0));
+        click(&mut h, at);
+        let px: Vec<f32> = serde_json::from_value(h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap()).unwrap();
+        assert!(px.iter().take(3).all(|v| *v > 0.99), "{kind}: {px:?}");
+        assert_ne!(layer(&h).1, before, "{kind}: the layer changed");
+        assert_eq!(history_len(&h), steps + 1, "{kind}: one history step");
+        assert!(crate::layer_picker::armed(h.state()).is_some(), "{kind}: stays armed for another click");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().ui.layer_picker.is_none(), "{kind}: Esc disarms");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(layer(&h).1, before, "{kind}: undo restores the layer");
     }
-}
-
-/// Types `text` into the `index`th number field and commits it with Enter.
-fn type_into_field(h: &mut Harness<'static, serde_json::Value>, index: usize, text: &str) {
-    h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(index).unwrap().click();
-    h.run_steps(2);
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.run_steps(1);
-    h.event(egui::Event::Text(text.into()));
-    h.run_steps(1);
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-}
-
-/// The text the `index`th number field shows.
-fn field_text(h: &Harness<'static, serde_json::Value>, index: usize) -> String {
-    h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(index).unwrap().value().unwrap_or_default()
-}
-
-/// #4164: Exposure keeps fractional stops (Photoshop: two decimals) and Offset four decimals,
-/// instead of rounding Exposure to whole stops because its range is wider than 10.
-#[test]
-fn exposure_keeps_fractional_stops_and_offset_four_decimals() {
-    let mut h = editor_harness("exposure", json!({}));
-    type_into_field(&mut h, 0, "0.5");
-    assert_eq!(h.state()["exposure"].as_f64(), Some(0.5), "{}", h.state());
-    type_into_field(&mut h, 0, "-1.37");
-    assert!((h.state()["exposure"].as_f64().unwrap() + 1.37).abs() < 1e-4, "{}", h.state());
-    type_into_field(&mut h, 1, "0.0123");
-    assert!((h.state()["offset"].as_f64().unwrap() - 0.0123).abs() < 1e-6, "{}", h.state());
-    type_into_field(&mut h, 2, "1.234");
-    assert!((h.state()["gamma"].as_f64().unwrap() - 1.23).abs() < 1e-4, "Gamma keeps two decimals: {}", h.state());
-    h.run_steps(2);
-    assert_eq!(field_text(&h, 0), "-1.37");
-    assert_eq!(field_text(&h, 1), "0.0123");
-    assert_eq!(field_text(&h, 2), "1.23");
-}
-
-/// #4164: the integer rows that share Exposure's slider code stay whole numbers.
-#[test]
-fn integer_adjustment_rows_stay_whole_numbers() {
-    for (kind, key, typed, want) in [
-        ("posterize", "levels", "4.6", 5.0),
-        ("threshold", "level", "100.4", 100.0),
-        ("brightnessContrast", "brightness", "12.7", 13.0),
-        ("vibrance", "vibrance", "-20.4", -20.0),
-    ] {
-        let mut h = editor_harness(kind, json!({}));
-        type_into_field(&mut h, 0, typed);
-        assert_eq!(h.state()[key].as_f64(), Some(want), "{kind}: {}", h.state());
-    }
-}
-
-/// #4164: a row's own decimals win over the range rule; rows without them keep it.
-#[test]
-fn row_values_round_to_their_own_decimals() {
-    use crate::adjust_editors::row_value;
-    assert_eq!(row_value(0.5, -20.0, 20.0, Some(2)), 0.5);
-    assert_eq!(row_value(-1.374, -20.0, 20.0, Some(2)), -1.37);
-    assert!((row_value(0.012_34, -0.5, 0.5, Some(4)) - 0.0123).abs() < 1e-7);
-    assert_eq!(row_value(4.6, 2.0, 255.0, None), 5.0, "wide ranges stay whole numbers");
-    assert!((row_value(1.234, 0.01, 9.99, None) - 1.23).abs() < 1e-6, "small ranges keep two decimals");
-    assert!(row_value(f32::NAN, -20.0, 20.0, Some(u32::MAX)).is_nan(), "no panic on odd input");
 }
 
 fn photo_filter_color(a: &Adjustment) -> [f32; 3] {
@@ -1021,14 +372,19 @@ fn photo_filter_color(a: &Adjustment) -> [f32; 3] {
     }
 }
 
-/// Click the Photo Filter swatch, wait for its Color Picker and show `hex` in it.
-fn photo_filter_picker_shows(h: &mut Harness<'_, PhotocraftApp>, hex: &str) {
-    h.get_by_label("Color Picker (Photo Filter)").click();
+/// Clicks the colour well labelled `label` and returns the Color Picker it opened.
+fn open_picker(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) -> craft::ui::dialog::DialogId {
+    // The panel scrolls: bring the well into view before the pointer goes to it.
+    h.get_by_role_and_label(Role::ColorWell, label).scroll_to_me();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::ColorWell, label).click();
     h.run_steps(3);
-    let d = h.state().ui.dialogs.last().expect("the swatch opens the Color Picker");
-    assert_eq!(d.fields["__label"], "Color Picker (Photo Filter)");
-    let id = d.id;
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!(hex));
+    crate::color_picker_ui::top(h.state()).expect("the colour well opens the Color Picker")
+}
+
+fn show_in_picker(h: &mut Harness<'_, Box<PhotocraftApp>>, picker: craft::ui::dialog::DialogId, hex: &str) {
+    let color = Srgba::from_hex(hex).expect("a hex colour");
+    h.state_mut().framework.dialogs.get_mut_by_id::<ColorPickerDialog>(picker).expect("the picker is open").set_color(PickedColor::rgb(color));
     h.run_steps(3);
 }
 
@@ -1038,42 +394,42 @@ fn photo_filter_colour_picker_previews_live_cancel_restores_and_ok_is_one_step()
     let (id, _) = layer(&h);
     h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "color": "#336699"})).unwrap();
     h.run_steps(4);
-    // The Color: radio enables the swatch.
-    h.get_by_label("Color:").click();
+    h.get_by_role_and_label(Role::RadioButton, "Color").click();
     h.run_steps(3);
     let start = photo_filter_color(&layer(&h).1);
-    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
-    let before = steps(&h);
+    let before = history_len(&h);
 
     // While the picker is open, the canvas previews its colour; nothing is committed yet.
-    photo_filter_picker_shows(&mut h, "#ff0000");
+    let picker = open_picker(&mut h, "Filter Color");
+    show_in_picker(&mut h, picker, "#ff0000");
     let live = h.state().live_adjust.clone();
     assert!(matches!(&live, Some((l, v)) if *l == id && v["color"] == "#ff0000"), "live preview while the picker is open: {live:?}");
     assert_eq!(photo_filter_color(&layer(&h).1), start);
-    assert_eq!(steps(&h), before);
+    assert_eq!(history_len(&h), before);
 
     // Cancel: back to the opening colour, no history step.
-    h.get_by_label("Cancel").click();
+    let ctx = h.ctx.clone();
+    h.state_mut().framework.dialogs.cancel_by_id(&ctx, picker);
     h.run_steps(4);
     assert!(h.state().live_adjust.is_none(), "Cancel ends the preview");
     assert_eq!(photo_filter_color(&layer(&h).1), start);
-    assert_eq!(steps(&h), before);
+    assert_eq!(history_len(&h), before);
 
     // OK: the colour, as one history step however long it previewed.
-    photo_filter_picker_shows(&mut h, "#00ff80");
-    h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#00ff00"));
-    h.run_steps(3);
-    assert_eq!(steps(&h), before);
-    h.get_by_label("OK").click();
+    let picker = open_picker(&mut h, "Filter Color");
+    show_in_picker(&mut h, picker, "#00ff80");
+    show_in_picker(&mut h, picker, "#00ff00");
+    assert_eq!(history_len(&h), before);
+    crate::dialogs::confirm(h.state_mut(), &ctx, picker).expect("OK is enabled");
     h.run_steps(4);
     assert!(h.state().live_adjust.is_none());
     assert_eq!(photo_filter_color(&layer(&h).1), [0.0, 1.0, 0.0]);
-    assert_eq!(steps(&h), before + 1, "OK: one history step");
+    assert_eq!(history_len(&h), before + 1, "OK: one history step");
 }
 
 /// Opening a Gradient Map stop's Color Picker and closing it without a new colour (Cancel, or OK
-/// unchanged) edits nothing: a stop at a location finer than the editor's 0.001 grid (a PSD's
-/// 30 % is 1229/4096) stays as it is, with no history step.
+/// unchanged) edits nothing: a stop at a location finer than a 0.001 grid (a PSD's 30 % is
+/// 1229/4096) stays as it is, with no history step.
 #[test]
 fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
     let mut h = app_harness("gradientMap", "rgb", 16);
@@ -1082,89 +438,57 @@ fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
     h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "stops": [[0, "#000000"], [fine, "#ff0000"], [1, "#ffffff"]]})).unwrap();
     h.run_steps(4);
     let before = layer(&h).1;
-    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
-    let history = steps(&h);
+    let history = history_len(&h);
+    let ctx = h.ctx.clone();
     for button in ["Cancel", "OK"] {
-        h.get_by_label("Color Picker (Stop Color)").click();
-        h.run_steps(3);
-        assert_eq!(h.state().ui.dialogs.last().expect("the stop's Color Picker").fields["__label"], "Color Picker (Stop Color)");
-        h.get_by_label(button).click();
+        let picker = open_picker(&mut h, "Color");
+        if button == "OK" {
+            crate::dialogs::confirm(h.state_mut(), &ctx, picker).expect("OK is enabled");
+        } else {
+            h.state_mut().framework.dialogs.cancel_by_id(&ctx, picker);
+        }
         h.run_steps(4);
-        assert!(h.state().ui.dialogs.is_empty());
+        assert!(crate::color_picker_ui::top(h.state()).is_none(), "{button}: the picker closed");
         assert_eq!(layer(&h).1, before, "{button}: the stops are untouched");
-        assert_eq!(steps(&h), history, "{button}: no history step");
+        assert_eq!(history_len(&h), history, "{button}: no history step");
         assert!(h.state().live_adjust.is_none());
     }
 }
 
-/// Selective Color in Properties: the Colors dropdown's choice lives in editor memory, so
-/// switching colour commits nothing, and each colour keeps its own row.
+/// #9269: Black & White's Auto button sets the layer's weights from the image under it, as one
+/// history step.
 #[test]
-fn selective_color_properties_switch_colour_without_committing() {
-    let mut h = app_harness("selectiveColor", "rgb", 8);
+fn black_white_auto_button_sets_the_weights() {
+    let mut h = app_harness("blackWhite", "rgb", 8);
+    // A red and a blue the default mix turns into the same grey, under the adjustment layer.
+    h.state_mut()
+        .session
+        .edit("setup", |doc, _| {
+            let b = doc.bounds();
+            let bg = doc.layers.first_mut().and_then(|l| l.surface_mut()).unwrap();
+            let fmt = bg.format();
+            let mut data = Vec::new();
+            for _ in b.y0..b.y1 {
+                for x in b.x0..b.x1 {
+                    let c = if x < b.x1 / 2 { [0.776, 0.2, 0.2, 1.0] } else { [0.29, 0.29, 1.0, 1.0] };
+                    data.extend(photocraft_raster::from_rgba(&fmt, c));
+                }
+            }
+            bg.write_region(b, &data);
+            Ok(())
+        })
+        .unwrap();
+    h.run_steps(2);
     let (_, before) = layer(&h);
-    let steps = h.state().session.active().unwrap().history.past_len();
-    let nudge = |h: &mut Harness<'static, PhotocraftApp>| {
-        let r =
-            h.query_all_by_role(egui::accesskit::Role::Slider).rfind(|n| n.accesskit_node().label().as_deref() == Some("Cyan")).expect("Cyan slider").rect();
-        drag(h, r.center(), Pos2::new(r.right() + 40.0, r.center().y));
-    };
-    nudge(&mut h);
-    let (_, reds) = layer(&h);
-    assert_ne!(reds, before);
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
-    // Switch to Blues through the Colors dropdown: press it, drag onto the option, release.
-    let named = |n: &egui_kittest::Node<'_>| {
-        let a = n.accesskit_node();
-        a.value().as_deref() == Some("Reds") || a.label().as_deref() == Some("Reds")
-    };
-    let at = h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| named(n)).expect("the Colors dropdown").rect().center();
-    h.hover_at(at);
-    h.run_steps(1);
-    h.drag_at(at);
-    h.run_steps(3);
-    let blues = h.query_by_label("Blues").expect("the list opened on the press").rect().center();
-    for k in 1..=6 {
-        h.hover_at(at + (blues - at) * (k as f32 / 6.0));
-        h.run_steps(1);
-    }
-    h.drop_at(blues);
-    h.run_steps(4);
-    assert!(
-        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| {
-            let a = n.accesskit_node();
-            a.value().as_deref() == Some("Blues") || a.label().as_deref() == Some("Blues")
-        }),
-        "the dropdown keeps its choice"
-    );
-    assert_eq!(layer(&h).1, reds, "switching colour changes nothing");
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
-    assert!(h.state().live_adjust.is_none());
-    nudge(&mut h);
-    let (Adjustment::SelectiveColor { adjustments: first, .. }, (_, Adjustment::SelectiveColor { adjustments: now, .. })) = (&reds, layer(&h)) else {
-        panic!("Selective Color layer")
-    };
-    assert_eq!(now[0], first[0], "Reds untouched by editing Blues");
-    assert_ne!(now[4], [0.0; 4], "Blues edited");
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 2);
-}
-
-/// The Method radios in Properties commit through the real controls; the current one is a no-op.
-#[test]
-fn selective_color_properties_method_radios_commit() {
-    let mut h = app_harness("selectiveColor", "rgb", 8);
-    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
-    let start = steps(&h);
-    let radio = |h: &mut Harness<'static, PhotocraftApp>, text: &str| {
-        let at = h.query_all_by_role_and_label(egui::accesskit::Role::RadioButton, text).last().expect("method radio").rect().center();
-        click(h, at);
-    };
-    radio(&mut h, "Absolute");
-    assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: false, .. }));
-    assert_eq!(steps(&h), start + 1);
-    radio(&mut h, "Absolute");
-    assert_eq!(steps(&h), start + 1, "the current method is no step");
-    radio(&mut h, "Relative");
-    assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: true, .. }));
-    assert_eq!(steps(&h), start + 2);
+    let steps = history_len(&h);
+    let auto = h.query_all_by_label("Auto").last().map(|n| n.rect().center()).expect("an Auto button");
+    click(&mut h, auto);
+    let (_, after) = layer(&h);
+    let Adjustment::BlackWhite { weights, .. } = &after else { panic!("{after:?}") };
+    let id = layer(&h).0;
+    let expected = h.state_mut().run("image.adjustments.blackWhite.auto", json!({"layer": id.0})).unwrap();
+    let want: Vec<f32> = photocraft_engine::adjust_params::HUE_RANGES.iter().map(|k| expected[*k].as_f64().unwrap() as f32).collect();
+    assert_eq!(weights.to_vec(), want);
+    assert_ne!(after, before, "the red and blue are told apart");
+    assert_eq!(history_len(&h), steps + 1);
 }

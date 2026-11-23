@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.
+- Rust: `rust-toolchain.toml` names the release CI builds with, and rustup installs it with the web target on first use (`rust-version` in Cargo.toml is the oldest release the sources support, 1.95).
 - macOS, Windows or Linux. On Linux, install the windowing, GL and GTK development packages:
   - Debian/Ubuntu: `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgtk-3-dev`
   - Fedora/RHEL: `sudo dnf install libxkbcommon-devel wayland-devel libX11-devel libXrandr-devel libXi-devel mesa-libGL-devel gtk3-devel`
@@ -36,7 +36,7 @@ building locally; the downloaded app is still subject to Windows application-con
 
 ## Build and run
 
-On Linux, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
+On Linux and FreeBSD, PhotoCraft keeps its integrated client-side decorated title bar by default (#4439), including desktop-matched buttons. Enabling **System Title Bar** in Preferences switches to the system frame at the next launch: on GNOME/Wayland, winit provides font-free Adwaita controls; on X11, the window manager supplies the frame. Explicit saved choices are respected and Windows/macOS defaults are unchanged.
 
 ```sh
 cargo run --release -p photocraft -- path/to/image.psd      # desktop app
@@ -45,6 +45,7 @@ cargo run --release -p photocraft -- --control 7878 --control-token-file .privat
 cargo test --workspace                                     # everything
 cargo xtask test                                           # tests (nextest when installed) + doctests
 cargo xtask ci                                             # the CI gate: fmt, clippy, layers, scorecard, tests, panic_hunt, doctests, wasm, i18n report
+cargo xtask ci lint                                        # only the gate's steps that need no test build (its lint leg)
 cargo xtask stats                                          # tests and lines per crate
 cargo xtask parity                                         # Photoshop menu coverage -> docs/parity-checklist.md
 ```
@@ -64,7 +65,7 @@ cargo nextest run --workspace              # parallel across binaries (cargo ins
 cargo test --doc --workspace               # nextest does not run doctests
 ```
 
-[cargo-nextest](https://nexte.st) runs each test in its own process. `.config/nextest.toml` puts the GPU tests (`photocraft-gpu`, and ui-egui's integration and canvas/GPU tests) in a group of at most 4 at a time, because each process opens its own wgpu device and the in-process `gpu_lock()` no longer serializes them. On a 32-thread Windows machine the full workspace went from 297 s (`cargo test`) to about 120 s (#2204). Ignored tests run with `cargo nextest run --run-ignored only`. The longest sweeps (`photocraft-testkit`'s `Sweep`) run a quarter of their cases, a different quarter each UTC day; `PHOTOCRAFT_FULL_SWEEP=1` runs all of them, and `PHOTOCRAFT_SWEEP_PART=<n>` replays the part a failing run printed. CI runs it with `--profile ci` (fail-fast, a 10-minute hang timeout), plus `cargo test --doc` for the doctests (#6117); `PHOTOCRAFT_FULL_SWEEP=1 cargo test --workspace` stays the final check before a PR.
+[cargo-nextest](https://nexte.st) runs each test in its own process. `.config/nextest.toml` puts the GPU tests (`photocraft-gpu`, and every test in a module named `gpu_tests` or `<name>_gpu_tests`: the tests that build a wgpu device) in a group of at most 4 at a time, because each process opens its own wgpu device and the in-process `gpu_lock()` no longer serializes them. Every other test runs on the CPU canvas at full parallelism, so a new test that needs a device goes in such a module. On a 32-thread Windows machine the full workspace went from 297 s (`cargo test`) to about 120 s (#2204). Ignored tests run with `cargo nextest run --run-ignored only`. The longest sweeps (`photocraft-testkit`'s `Sweep`) run a quarter of their cases, a different quarter each UTC day; `PHOTOCRAFT_FULL_SWEEP=1` runs all of them, and `PHOTOCRAFT_SWEEP_PART=<n>` replays the part a failing run printed. CI runs it with `--profile ci` (fail-fast, a 10-minute hang timeout), plus `cargo test --doc` for the doctests (#6117); `PHOTOCRAFT_FULL_SWEEP=1 cargo test --workspace` stays the final check before a PR.
 
 ### Long matrix tests and CI timings
 
@@ -99,7 +100,7 @@ On a native host with a working wgpu adapter, capture the two images into a fres
     set -eu
     shortcut_snapshots="$(mktemp -d)"
     PHOTOCRAFT_SHORTCUT_SNAPSHOTS="$shortcut_snapshots" cargo test -p photocraft-ui-egui --lib \
-        prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
+        prefs::prefs_ui::shortcut_capture_tests::captured_shortcut_gpu_snapshots -- --exact
     test -s "$shortcut_snapshots/ctrl-k-1x.png"
     test -s "$shortcut_snapshots/ctrl-k-2x.png"
     printf 'Review the shortcut row and conflict message in %s\n' "$shortcut_snapshots"
@@ -113,7 +114,7 @@ the opted-in test; an unset variable leaves the ordinary behavior tests availabl
 After review, remove only the two generated PNGs and their owned temporary directory. The same
 Rust test and variable work on Windows with the native shell's environment-variable syntax.
 
-**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. After the regular gate, `python3 scripts/ci-gpu-lavapipe.py` reruns the configured `gpu` group with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected. It requires Vulkan parity evidence and rejects authored skips, except the documented software-adapter timing exceptions. It reads the filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1` and run the same script. Windows uses WARP; this check does not certify Windows skip coverage.
+**GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. The gate builds the tests once into a nextest archive (`cargo xtask ci archive`) and runs them in shards from it (`cargo xtask ci tests`). One shard runs the configured `gpu` group alone, through `python3 scripts/ci-gpu-lavapipe.py`, with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected; the other shards split the remaining tests. The script requires Vulkan parity evidence in that shard's output and rejects authored skips, except the documented software-adapter timing exceptions. xtask reads the group's filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1`, build an archive and run `python3 scripts/ci-gpu-lavapipe.py <extracted>/target/debug/xtask ci tests --from <extracted> --gpu` as `scripts/ci-test-shard.sh` does. Windows uses WARP; this check does not certify Windows skip coverage.
 
 ## Fonts (craft-fonts)
 
@@ -133,6 +134,21 @@ CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japa
 - **Type tool:** the text engine registers them in `FontDb::new` (so also with no system fonts) and puts them first in the Japanese slot of the locale-ordered fallback list: BIZ UDPGothic for sans runs, Shippori Mincho / BIZ UDMincho for serif runs.
 - **Web:** the wasm32 build never embeds craft-fonts, even with `CRAFT_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. Instead it loads fonts served next to it, on demand: `fonts/manifest.txt` beside `index.html`, in craft-fonts' manifest format (`crates/text/src/served.rs`; hosting: `packaging/web/README.md` › Fonts). `PHOTOCRAFT_WEB_FONTS_DIR="$PWD/../craft-fonts" packaging/web/package.sh` puts craft-fonts there. Served families are in the font menus and are fetched when picked or when a document's text needs them; they aren't in the script fallback list yet, so Japanese text set in a Latin font still needs a Japanese font picked (#1615).
 - Tests that need the fonts skip with a message when `CRAFT_FONTS` is empty; CI's Linux gate and Windows test legs build with `CRAFT_FONTS_DIR` set and `CRAFT_FONTS_REQUIRED=1`, so they run there. Desktop releases check out craft-fonts at the commit pinned in `.github/workflows/release.yml` (`CRAFT_FONTS_REF`; ci.yml pins the same commit) and ship each font's `OFL.txt` as `OFL-<family>.txt`.
+
+## Translations (craft-i18n)
+
+The interface catalogs live in [storytold/craft-i18n](https://github.com/storytold/craft-i18n) (`locales/<code>/common.tsv`, shared by the Crafting Apps, and `photocraft.tsv`), never in this repo. Like craft-fonts it is an **optional build input**, never a Cargo dependency; `craft-i18n.rev` pins the commit CI, releases and the flatpak manifests use:
+
+```sh
+git clone https://github.com/storytold/craft-i18n ../craft-i18n
+git -C ../craft-i18n checkout "$(tr -d '[:space:]' < craft-i18n.rev)"
+CRAFT_I18N_DIR="$PWD/../craft-i18n" cargo run --release -p photocraft
+```
+
+- Use an absolute path: `crates/ui-egui/build.rs` embeds every locale with a `photocraft.tsv` (and its `common.tsv`) as `CRAFT_I18N`, read through the `craft-i18n` crate (`crates/ui-egui/src/i18n.rs`). Unset, `CRAFT_I18N` is empty and the interface is English only; a bad path is a build warning, or an error with `CRAFT_I18N_REQUIRED=1` (CI and release builds set both, through craft-common-actions' `checkout-craft-i18n`).
+- The web build embeds the same catalogs, raw: they ship inside the gzipped wasm parts (`packaging/web/package.sh`), so only the download grows with them.
+- Tests that need a translation skip with a note when `CRAFT_I18N` is empty; CI builds with it, so they run there.
+- A PR here adds English only; translations are added in craft-i18n and reach PhotoCraft when `craft-i18n.rev` moves (a test keeps both flatpak manifests on the same commit). `cargo xtask i18n-report` lists what each language lacks.
 
 ## One instance per user
 
@@ -165,6 +181,8 @@ The desktop app writes its `log` records to standard error and to `logs/photocra
 
 By default PhotoCraft's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`, `RUST_LOG=warn,photocraft_gpu=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`photocraft*=debug`). The logger is `apps/photocraft/src/logging.rs`; the web build logs to the browser console instead.
 
+A file dragged in from the desktop logs two lines at `info` (`file_open.rs`; file names are left out): `N file(s) dragged over the window` when the drag reaches the window, and `N file(s) dropped on the window: <target>, pointer known|unknown` when it is released. Neither line means the operating system never offered the files to PhotoCraft: on Windows, a PhotoCraft started with Run as administrator gets nothing from a File Explorer that is not elevated, and a drag from a browser or a zip folder carries no file path. Only the first line means PhotoCraft saw the drag but not the drop. Both lines with no document opened are normal for a drop on the canvas (the file is placed as a layer) and for a preset file (it is imported into its library). A routing or open error also shows as a notice.
+
 ## Environment variables
 
 `photocraft --help` lists the desktop app's flags and, beside the control, automation-root and in-window-menu flags, the variable that stands in for each. A flag wins over its variable and an empty variable counts as unset. A bad flag value is a usage error naming the flag (exit status 2), as is an unknown option, a repeated flag or a flag without its value; a bad value in one of those listed variables is a usage error naming the variable. `PHOTOCRAFT_PRESENT_MODE` and `PHOTOCRAFT_FRAME_LATENCY` are not listed: a bad value there is logged and ignored. On Windows, release builds use the GUI subsystem and have no console, so `--help`, `--version` and usage errors print nothing in a terminal; redirect them to see the text (`photocraft --help | more` or `photocraft --help > help.txt`). The exit status is the same either way.
@@ -173,7 +191,7 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 |---|---|
 | `PHOTOCRAFT_GPU=1` (or `=0`) | Headless CLI: prefer GPU composition and flat export (0 to disable, empty to unset). Explicit `--gpu`/`--no-gpu` CLI flags override this variable. `file.export.quickExport` composites and encodes inside the engine, which has no renderer, so it always runs on the CPU; `run --gpu` prints a one-time warning when a step uses it |
 | `PHOTOCRAFT_CONTROL_PORT` | Same as `--control <port>`; also the port for `photocraft-cli serve --port` and `mcp --bridge` when the flag is absent. Empty is unset |
-| `PHOTOCRAFT_NO_PRINT` | Set to anything but `0`: `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works). CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
+| `PHOTOCRAFT_NO_PRINT` | Set to a non-empty value other than `0` (empty counts as unset): `file.print` / `file.printOneCopy` refuse to spool (`dryRun` still works) and `file.print.page` asks no printer driver. CI sets it, with `LPDEST=photocraft-no-such-printer` as a second net; set both when running the panic hunt or fuzzers locally |
 | `RUST_LOG` | Log levels for standard error and the log file (see [Logs](#logs)) |
 | `PHOTOCRAFT_CONTROL_TOKEN` | 64-hex bearer token for control TCP (avoid on shared systems where environment inspection is possible) |
 | `PHOTOCRAFT_CONTROL_TOKEN_FILE` | Read, or create for a server, the control bearer-token file |
@@ -243,7 +261,7 @@ See `docs/control-protocol.md` for every method. Tips:
 - **macOS does not render occluded windows.** `ui.screenshot` raises the window first (`focus: true` by default). Use `ui.focus` before other visual checks.
 - **Capture only our own window.** For native captures (to see the real title bar and traffic lights), capture by window id (`screencapture -l <CGWindowID>`), never a screen region, which can grab other apps.
 - **Pointer gestures:** `ui.pointer` takes events in *document* coordinates and runs them through the same tool state machine as the mouse.
-- **Seeing tile storage:** `ui.set {"tileGrid": true}` overlays the active layer's stored tiles, which shows how sparse a layer is and which tiles share pixels (`ui-egui/src/tile_overlay.rs`).
+- **Seeing tile storage:** `ui.set {"tileGrid": true}` overlays the active layer's stored tiles, which shows how sparse a layer is and which tiles share pixels (`ui-egui/src/canvas/tile_overlay.rs`).
 
 ## Headless CLI
 
@@ -305,13 +323,30 @@ At startup the desktop lists recovery metadata, then decodes one document at a t
 
 `photocraft-cli mcp` serves MCP on stdio using `crates/automation`, which is built on `rmcp`:
 
-- **Headless:** `photocraft-cli mcp --automation-read-root <dir> --automation-write-root <dir>`. It drives an in-process engine session and has no file authority when a root is omitted.
-- **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <dir> --automation-write-root <dir>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots. See `docs/control-protocol.md#mcp-bridge`.
+- **Headless:** `photocraft-cli mcp --headless --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`. Use `--headless` in scripts, tests and agent sessions: without it `mcp` works in the open window while the ArtCraft Launcher's agents switch is on, and may start PhotoCraft (When PhotoCraft Is Closed defaults to starting it). It drives an in-process engine session with ordered read directories and one write directory.
+- **Live app:** start `photocraft --control 7878 --control-token-file <private-path> --automation-read-root <project> --automation-read-root <library> --automation-write-root <project>`, then run `photocraft-cli mcp --bridge 127.0.0.1:7878 --control-token-file <private-path>`. The desktop process owns the roots; root flags on the bridging CLI are a usage error. See `docs/control-protocol.md#mcp-bridge`.
+- **Live app, no flags:** with the `AI-MCP` flag, turn on ArtCraft Launcher › Settings › AI agents and add the MCP client there; plain `photocraft-cli mcp` then works in the open window. The app publishes its port and token file in `agent-connection.json` in the settings folder; `mcp` reads it on every call. Without a launcher, a scratch `CRAFT_MCP_DIR` with an `apps.json` naming `photocraft` (the format in storytold/craft-ai-integrations, crate `craft-ai-agents`) turns the switch on for a test. See [MCP conventions](mcp.md#connecting-the-desktop-app-no-terminal). Test it against a scratch settings folder with `PHOTOCRAFT_CONFIG_DIR`, which both the app and the CLI honour.
 
 For headless MCP clients, pass absolute paths to deliberately chosen trusted workspace directories in the launch arguments. Desktop `PHOTOCRAFT_AUTOMATION_READ_ROOT` and `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` environment variables do **not** grant headless CLI access. Omitting a root flag deliberately denies that direction of access.
 
+Read flags accumulate in order, including mixed `--automation-read-root <dir>` and
+`--automation-read-root=<dir>` syntax; duplicate read roots are allowed. A headless relative read
+uses the first existing regular file. Only a missing file falls through to the next root;
+directory, permission, path-escape and decoding errors stop the request. Desktop `app.open`
+(and bridged `doc_open`) also accepts native directory `.pcraft` through the selected read
+capability. An earlier root's ZIP file wins over a later root's directory, and loading errors
+in a selected directory are terminal. Directory opens never establish an implicit save target;
+use explicit layered Save As beneath the write root, even when both capabilities match.
+Every root must be an existing directory, and empty or missing values fail startup. There is still only one write root;
+repeating its flag is a usage error even for identical values. Write authority does not imply
+read authority. A read-only library document needs an explicit Save As into the write root before
+it has an implicit save target; aliases and nested roots also require explicit Save As.
+These roots do not enable additional ambient asset reads or headless directory-bundle access;
+desktop directory `.pcraft` reads use only the granted read capabilities.
+
 Tools:
 
+- `agent_folders` (where the app opens and saves files for agents: `read_folder`, `write_folder`; a headless session with several read roots adds `read_folders`. With the preferences' folders empty this is the default agent folder, `Documents/ArtCraft/Agents/PhotoCraft`. In `--bridge` mode both are `null`, with a note: the app's own launch decides)
 - `session_list`
 - `doc_open`, `doc_new`, `doc_place`, `doc_replace_smart_object`, `doc_export_layers`, `doc_export_data_sets`, `doc_import_data_sets`, `doc_save`, `doc_export`, `doc_inspect`, `doc_render_preview` (returns a PNG image), `doc_select`, `doc_close`
 - `command_list`, `command_run`, `command_batch` (several commands per call)
@@ -335,7 +370,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
   "mcpServers": {
     "photocraft": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
-      "args": ["mcp", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
+      "args": ["mcp", "--headless", "--automation-read-root", "/absolute/path/to/trusted/workspace", "--automation-read-root", "/absolute/path/to/reference/library", "--automation-write-root", "/absolute/path/to/trusted/workspace"]
     },
     "photocraft-live": {
       "command": "/path/to/photocraft/target/release/photocraft-cli",
@@ -348,7 +383,7 @@ Claude Code (`.mcp.json` in the repo root, or `claude mcp add`):
 ```sh
 cargo build --release -p photocraft-cli
 mkdir -p "$PWD/photocraft-work"
-claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp \
+claude mcp add photocraft -- "$PWD/target/release/photocraft-cli" mcp --headless \
   --automation-read-root "$PWD/photocraft-work" \
   --automation-write-root "$PWD/photocraft-work"
 ```
@@ -367,7 +402,7 @@ capability-scoped export, resize/crop, CMYK + native save) driven purely over MC
 Without MCP, `photocraft-cli serve [--port N]` keeps a headless session open and answers JSON lines
 (see `docs/control-protocol.md#headless-server`).
 
-A typical agent loop (place inputs under the configured read root and outputs under the write root):
+A typical agent loop (place inputs under a configured read root and outputs under the write root):
 
 1. `doc_open {path}`
 2. `command_list {filter:"blur"}`
@@ -377,15 +412,15 @@ A typical agent loop (place inputs under the configured read root and outputs un
 
 ## Colour management
 
-`crates/cms` is our own pure-Rust ICC engine (v2/v4 parsing, matrix/TRC and LUT profiles, all four
+`craft-cms` ([storytold/craft-libs](https://github.com/storytold/craft-libs/tree/main/crates/cms)) is our own pure-Rust ICC engine (v2/v4 parsing, matrix/TRC and LUT profiles, all four
 intents, black point compensation). It ships CC0 built-in profiles, including a synthetic
-"PhotoCraft Coated CMYK", because Adobe's CMYK profiles are proprietary (see `crates/cms/README.md`).
+"PhotoCraft Coated CMYK", because Adobe's CMYK profiles are proprietary (see its README).
 
 - Documents carry an optional embedded ICC profile (`Document::icc_profile`); `edit.assignProfile`
   and `edit.convertToProfile` change it. Mode changes (`image.mode.*`) convert through cms.
 - **Proof Colors** (⌘Y), **Proof Setup** and **Gamut Warning** (⇧⌘Y) bake a 3D LUT
   (`cms::Lut3d`) that the canvas shader applies; the document pixels never change.
-- Convert colours with `photocraft_cms::transform::cached(src, dst, opts)`: transforms are cached
+- Convert colours with `craft_cms::transform::cached(src, dst, opts)`: transforms are cached
   process-wide and integer buffers use precomputed tables or a device link.
 
 ## Menu parity
@@ -394,15 +429,16 @@ intents, black point compensation). It ships CC0 built-in profiles, including a 
 the live command registry (`menus::is_live`) and rewrites [`docs/parity-checklist.md`](parity-checklist.md). The test
 `parity::tests::parity_does_not_regress` fails if the live count drops below `parity::FLOOR`.
 
-`cargo xtask i18n-coverage` prints the UI translation coverage for each language in the
-`crates/ui-egui/src/i18n.rs` registry, in stable language-code order. Its English-key set is
-derived from UI `tl!` literals, the menu catalog and UI command table, and menu command labels in
-the engine source. Catalog rows are validated for malformed and duplicate keys; unused legacy
-translations do not affect the denominator. Unregistered locale TSV files are ignored. After the
-counts it lists, per language, the source keys the catalog lacks (one line for a language with
-none). A missing translation shows in English and fails nothing: `cargo xtask ci` runs the report
-as its last step so the list appears in the log, and only prints a warning if the report itself
-can't run.
+`cargo xtask i18n-report` prints the UI translation coverage for each language in the
+`crates/ui-egui/src/i18n.rs` registry, in stable language-code order, from the craft-i18n checkout
+`CRAFT_I18N_DIR` names (the one the build embeds; without it the report says it was skipped). Its
+English-key set is derived from UI `tl!` literals and `trn` forms, the menu catalog and UI command
+table, and menu command labels in the engine source; each key is looked up as the app does (the
+`craft-i18n` crate: PhotoCraft's rows over the shared ones). After the counts and the rows kept in
+English (a translation that is the English itself) it lists, per language, the source keys it lacks
+(one line for a language with none), then any catalog rows the crate skips. A missing translation
+shows in English and fails nothing: `cargo xtask ci` runs the report as its last step so the list
+appears in the log, and only prints a warning if the report itself can't run.
 
 ## Panel command routing
 
@@ -680,6 +716,25 @@ except Place, which is a job that `poll_jobs` steps on the UI thread (a *coopera
 
 ## Indexed Color timings
 
+The stock Indexed Color dialog exposes Matte: None, Foreground Color, Background Color,
+White, Black, 50% Gray, Netscape Gray and Other… (the shared Color Picker). Choosing Other…
+opens the picker without replacing the current matte; Cancel leaves that choice unchanged, and
+OK commits the picked `#rrggbb` in document RGB coordinates. Automation accepts `matte` as
+`none`, `foreground`, `background`, `white`, `black`, `gray` (50% Gray, encoded
+`#808080`), `netscapeGray` (Netscape Gray, encoded `#c0c0c0`) or `#rrggbb`. Foreground/background
+tool colours are converted from the working RGB profile into the document profile and clipped
+to its encodable RGB range before blending. A selected matte blends all
+partially transparent edges; with Transparency on, fully clear pixels stay transparent.
+With Transparency off, the selected matte also fills clear pixels. None retains the existing
+hard-edged transparency/default flattening behavior. Indexed conversion retains the document's
+ICC profile and encoded RGB sample representation; matte colours are interpreted in the document
+RGB coordinate space. Default Indexed → RGB expands the stored RGB samples without converting
+them to the working profile; an explicitly supplied destination profile still requests a CMS
+conversion. Inline and worker dialog previews inherit the current foreground/background tool
+colors, and changing those colors invalidates both cached frames and pending worker results,
+including when the preview proxy factor changes. A same-color frame at the old factor can
+remain visible during a drag until the new result arrives. This follows Adobe's documented
+[Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).
@@ -720,19 +775,26 @@ so a following `ui.inspect` observes their effect.
 
 ## Photoshop Actions (.atn)
 
-`photocraft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
+`craft-psd` reads Photoshop Actions files (`atn`, versions 12 and 16) and writes version 16
 (Photoshop 6 and later); `photocraft-engine`'s `atn_cmds` maps their events onto commands (`actions.load`,
 `actions.save`; the Actions panel menu's Load/Save Actions…; `photocraft-cli batch --actions
 set.atn`). To see what a set holds (event ids, panel names, the parameter keys Photoshop
 recorded) when adding an event to the table:
 
 ```sh
-cargo run -p photocraft-psd --example atn_dump -- "Default Actions.atn"
-cargo run -p photocraft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
+cargo run -p craft-psd --example atn_dump -- "Default Actions.atn"
+cargo run -p craft-psd --example atn_roundtrip -- "Default Actions.atn"   # parse, write, diff
 ```
 
+The Classic Actions panel asks before clearing, resetting, or replacing the library. Reset
+offers OK, Cancel, and Append for PhotoCraft Basics. Replace validates the entire ATN archive
+before it removes existing sets. The latest library change can be undone through Edit › Undo
+without changing document History. Command callers use `confirm: true` with `actions.clearAll`,
+`actions.reset` (mode `append` or `replace`), or `actions.replace`, then `actions.undoLibrary`
+to undo. Use `actions.load` for a same-set import.
+
 The real-file oracles are `corpus/atn/` (16 sets from seven public repositories, see *Test
-corpora*): `photocraft-psd`'s corpus test parses every file and rewrites it byte for byte;
+corpora*): `craft-psd`'s corpus test parses every file and rewrites it byte for byte;
 `photocraft-engine`'s loads, saves and reloads every set and caps the steps that still have no
 PhotoCraft equivalent.
 
@@ -757,7 +819,7 @@ recorded rectangle/preset are retained for saving, without resizing the target.
 
 `crates/psd/tests/it/atn_contract.rs` checks the parser's public API against small, independently
 encoded version-16 fixtures (the version-12 ones are read by `atn_v12::`) in `crates/psd/tests/fixtures/atn/` (provenance and checksums in
-its README): `cargo test -p photocraft-psd --test it atn_contract::`.
+its README): `cargo test -p craft-psd --test it atn_contract::`.
 Recorded layer indexes and ordinals resolve against the full stack, including collapsed children
 and hidden group-end positions. Indexed moves use the stack before the move. Recorded document
 indexes are one-based opening order; a native numeric `document` parameter remains a zero-based
@@ -833,7 +895,7 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
 - These budgets apply to an import's **aggregate peak estimate**, not to one allocation: a peak
   may sum many layer, mask, merged and workspace buffers. Each individual buffer must still fit
   the target's layout limit (`isize::MAX`) and the decoder's own per-buffer allowance
-  (`photocraft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
+  (`craft-psd`'s `MAX_DECODED_BYTES`, `photocraft-codecs`' `Limits::max_alloc`), which is
   enforced by fallible allocation or an explicit cap where that buffer is created. A 64-bit
   native process has no measurable aggregate address-space cap, so admission relies on explicit
   approval plus those per-buffer checks; 32-bit native uses a 2 GiB project cap
@@ -999,18 +1061,24 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 
 **Opt-in locally, strict when opted in, always in CI.**
 
-- The corpus tests sit behind the `corpus` cargo feature of `photocraft-psd`, `photocraft-codecs`,
+- The corpus tests sit behind the `corpus` cargo feature of `craft-psd`, `photocraft-codecs`,
   `photocraft-io` and `photocraft-engine`, so plain `cargo test` neither compiles nor needs them.
   The HEIF ones also need the `heif` feature of `photocraft-codecs`/`photocraft-io` (test-corpus
   turns it on).
 - With the feature on, a missing corpus is a failure ("run `cargo xtask corpus --all`"), never a
   silent skip, and every floor is enforced.
+- The tests that walk `corpus/psd`, `corpus/psd-tools` and `corpus/photoshop` take each
+  directory's fixed sample (`photocraft-testkit`'s `corpus` module: every colour mode and depth,
+  PSD and PSB, every tagged block key outside the large files, each oracle kind, at small canvas
+  sizes), so each test stays near a second. `PHOTOCRAFT_FULL_SWEEP=1` takes every file, as it
+  takes every case of the testkit sweeps; the Affinity test's sampled rows are marked in its table.
+  A sample file a pin removes fails the test: pick its replacement for the sample.
 - If you touch psd, io, codecs, compose, gpu, text or format, run `cargo xtask test-corpus` before
-  you finish.
-- The CI `corpus` job runs `cargo xtask corpus --all` and then `cargo xtask test-corpus` on every PR
-  and on main. `corpus/` is cached with `actions/cache`, keyed on the hash of `corpus_pins.rs` and
-  the manifests. A download happens only when a pin changes; otherwise the cache restores in seconds
-  and is re-verified (sha256) before the tests run. Fork PRs read the base branch's cache.
+  you finish, and `PHOTOCRAFT_FULL_SWEEP=1 cargo xtask test-corpus` when the change could reach
+  files outside the samples.
+- CI: the Linux gate builds the corpus tests in (`PHOTOCRAFT_CORPUS_TESTS=1`) and each test shard
+  runs `cargo xtask corpus --all` first (pinned, sha256-verified, about 20 MB). Pull requests and
+  main run the samples; the nightly run sets `PHOTOCRAFT_FULL_SWEEP=1` and runs every file.
 
 **Our own corpus: [photocraft-corpus](https://github.com/storytold/photocraft-corpus).**
 
@@ -1074,7 +1142,7 @@ the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
 
 These checks use PhotoCraft's own importer and inspector; they do **not** prove that
 Photoshop can open the output or interprets it correctly. The report marks those
-stages `not_run`. The ordinary CI corpus job does not yet run this recipe command or
+stages `not_run`. The ordinary CI gate does not yet run this recipe command or
 upload its artifacts; that integration and the Photoshop judge are separate work.
 
 ## Rendering fidelity (PSD oracle)

@@ -12,7 +12,7 @@ fn nested_pass_through_groups_with_clipped_layers_are_not_planned_exponentially(
         layers = vec![group, clipped];
     }
     let mut doc = Document::new("nest", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
-    doc.layers = layers;
+    doc.layers = layers.into();
     let started = std::time::Instant::now();
     let Err(error) = plan(&doc) else { panic!("2^30 plannings must be refused") };
     assert!(error.0.contains("too many nested layers"), "{}", error.0);
@@ -26,13 +26,29 @@ fn stops_closer_than_one_lut_step_stay_on_the_cpu() {
 }
 
 #[test]
+fn grayscale_gradient_map_at_8_and_16_bits_falls_back_to_the_cpu() {
+    let adj = Adjustment::GradientMap { stops: vec![(0.0, [1.0, 0.0, 0.0]), (1.0, [0.0, 0.0, 1.0])], reverse: false, dither: false, source: None };
+    for depth in [SampleType::U8, SampleType::U16] {
+        let mut doc = Document::new("gray", Size::new(4, 4), ColorMode::Grayscale, depth);
+        doc.layers.push(Layer::new("map", LayerContent::Adjustment(adj.clone())));
+        assert!(plan(&doc).unwrap_err().0.contains("Grayscale"), "{depth:?}");
+        // RGB and 32-bit Grayscale keep the shader's plain stop-colour LUT.
+        doc.mode = ColorMode::Rgb;
+        assert!(plan(&doc).is_ok(), "{depth:?} in RGB");
+        doc.mode = ColorMode::Grayscale;
+        doc.depth = SampleType::F32;
+        assert!(plan(&doc).is_ok(), "32-bit Grayscale");
+    }
+}
+
+#[test]
 fn lab_channel_adjustments_defer_to_the_cpu_in_lab_documents() {
     let lab_rules = [
         Adjustment::Invert,
         Adjustment::Posterize { levels: 4 },
         Adjustment::Threshold { level: 0.5 },
         Adjustment::BrightnessContrast { brightness: 10.0, contrast: 5.0, legacy: false },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false },
+        Adjustment::GradientMap { stops: vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], reverse: false, dither: false, source: None },
     ];
     for adj in &lab_rules {
         assert!(!adjustment_on_gpu(adj, ColorMode::Lab), "{adj:?}");
@@ -183,6 +199,47 @@ fn small_layers_composite_only_over_their_bounds() {
     assert!(p.passes.iter().all(|p| p.clip.is_none()));
 }
 
+/// #8639: Stroke Emboss shades the stroke's band, which only the CPU compositor builds: a
+/// document using it is composited on the CPU, so both show the same pixels.
+#[test]
+fn stroke_emboss_defers_to_the_cpu() {
+    use photocraft_doc::{Bevel, BevelStyle, BevelTechnique, Contour, FxCommon};
+    let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut l = Layer::raster("embossed", d.pixel_format());
+    l.surface_mut().unwrap().fill_rect(Rect::new(2, 2, 5, 5), &[1.0, 0.0, 0.0, 1.0]);
+    let bevel = |style| Bevel {
+        enabled: true,
+        style,
+        technique: BevelTechnique::Smooth,
+        depth: 1.0,
+        up: true,
+        size: 3.0,
+        soften: 0.0,
+        angle: 90.0,
+        altitude: 30.0,
+        use_global_light: false,
+        gloss_contour: Contour::Linear,
+        gloss_anti_alias: false,
+        highlight: FxCommon::new(BlendMode::Screen, 0.75),
+        highlight_color: Color::WHITE,
+        shadow: FxCommon::new(BlendMode::Multiply, 0.75),
+        shadow_color: Color::BLACK,
+        contour: None,
+        texture: None,
+    };
+    l.effects.items.push(photocraft_doc::Effect::BevelEmboss(bevel(BevelStyle::InnerBevel)));
+    d.layers.push(l);
+    assert!(plan(&d).is_ok(), "other bevel styles stay on the GPU");
+    d.layers[1].effects.items[0] = photocraft_doc::Effect::BevelEmboss(bevel(BevelStyle::StrokeEmboss));
+    let err = plan(&d).unwrap_err();
+    assert!(err.0.contains("Stroke Emboss"), "{err}");
+    // Turned off, it no longer matters.
+    if let photocraft_doc::Effect::BevelEmboss(b) = &mut d.layers[1].effects.items[0] {
+        b.enabled = false;
+    }
+    assert!(plan(&d).is_ok());
+}
+
 #[test]
 fn effects_are_planned_in_place() {
     let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
@@ -295,6 +352,28 @@ fn blend_if_plans_on_the_gpu() {
     assert_eq!(blend_if(&d), 0);
 }
 
+/// #14855: the Blend If pass marks 8-bit RGB documents in `p4.z`, where `compose.wgsl`'s `bi_ramp`
+/// fades a split point over both ends as `BlendRange::weight_8bit` does; deeper documents and
+/// Grayscale keep the plain ramp.
+#[test]
+fn blend_if_marks_eight_bit_documents_for_the_split_fade() {
+    for (mode, depth, levels) in [
+        (ColorMode::Rgb, SampleType::U8, 1.0),
+        (ColorMode::Rgb, SampleType::U16, 0.0),
+        (ColorMode::Rgb, SampleType::F32, 0.0),
+        (ColorMode::Grayscale, SampleType::U8, 0.0),
+    ] {
+        let mut d = Document::with_background("t", Size::new(8, 8), mode, depth, Color::WHITE);
+        let mut l = Layer::raster("bi", d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
+        l.blend_if.set(0, [photocraft_doc::BlendRange { black: [40, 90], white: [255, 255] }, photocraft_doc::BlendRange::FULL]);
+        d.layers.push(l);
+        let plan = plan(&d).unwrap();
+        let pass = plan.passes.iter().find(|p| p.flags & F_BLEND_IF != 0).expect("a Blend If pass");
+        assert_eq!(pass.extra[2], levels, "{mode:?} {depth:?}");
+    }
+}
+
 #[test]
 fn blend_if_params_pack_every_range_exactly() {
     let mut bi = photocraft_doc::BlendIf::default();
@@ -334,6 +413,50 @@ fn advanced_blending_falls_back_to_the_cpu() {
     inner.advanced.knockout = Knockout::Shallow;
     d.layers.push(Layer::group("g", vec![inner]));
     assert!(plan(&d).is_err(), "knockout inside a group");
+}
+
+/// A chunk-sized texture per live slot: nesting isolated groups keeps every ancestor's slot
+/// live, so past a depth the plan is refused and the CPU composites instead.
+#[test]
+fn deeply_nested_isolated_groups_are_refused_before_their_slots_are_allocated() {
+    let nested = |depth: usize| {
+        let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut inner = Layer::raster("leaf", d.pixel_format());
+        inner.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.0, 1.0, 1.0]);
+        let mut layers = vec![inner];
+        for _ in 0..depth {
+            let mut sibling = Layer::raster("s", d.pixel_format());
+            sibling.surface_mut().unwrap().fill_rect(Rect::new(2, 2, 6, 6), &[1.0, 0.0, 0.0, 0.5]);
+            let mut group = Layer::group("g", vec![sibling, layers.pop().unwrap()]);
+            group.blend = BlendMode::Multiply;
+            group.opacity = 0.5;
+            layers = vec![group];
+        }
+        d.layers.extend(layers);
+        d
+    };
+    assert!(plan(&nested(4)).unwrap().slots <= planner::MAX_PLAN_SLOTS);
+    let e = plan(&nested(200)).unwrap_err().to_string();
+    assert!(e.contains("accumulator slots"), "{e}");
+}
+
+/// Every gradient fill planned keeps a 64 KiB lookup table: a document of thousands of them
+/// (or one that plans the same fills again at every nesting level) is refused.
+#[test]
+fn too_many_gradient_tables_refuse_the_plan() {
+    let doc = |n: usize| {
+        let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        for _ in 0..n {
+            let fill = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, photocraft_doc::GradientStyle::Linear, false);
+            let mut l = Layer::new("fill", LayerContent::Fill(fill));
+            l.opacity = 0.5;
+            d.layers.push(l);
+        }
+        d
+    };
+    assert!(plan(&doc(16)).is_ok());
+    let e = plan(&doc(1100)).unwrap_err().to_string();
+    assert!(e.contains("gradient fills"), "{e}");
 }
 
 /// Adjustments whose LUT rows the planner caches (#11498), with settings away from identity.

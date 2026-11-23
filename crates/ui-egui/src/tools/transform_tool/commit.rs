@@ -1,8 +1,11 @@
-use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warps_type};
-use super::options_bar::{rotate_about_pivot, scale_about_pivot};
+use craft::behavior::EditEvent;
+use craft::behavior::kurbo::Point;
+use craft::draw::ui::transform::{TransformEdit, TransformRequest};
+
+use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made};
 use super::{
-    Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession,
-    corners, json,
+    Arc, DocId, FreeTransform, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, OpenPreview, PhotocraftApp, SessionWarp, Several, json,
+    preset_for_command, swap_mode_texels,
 };
 
 /// Undo and Redo while the commit runs in the background (Free Transform, or Warp).
@@ -19,15 +22,19 @@ pub fn commit(app: &mut PhotocraftApp) {
         cancel(app);
         return;
     }
-    let type_layer = warps_type(app);
-    let Some(t) = app.ui.transform.take() else { return };
+    let Some(mut t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
+    // An untouched box closes without a step: a ⌥⌘T copy or a place stays.
+    let result = match t.session.commit() {
+        TransformRequest::Apply(result) => Some(result),
+        _ => None,
+    };
     if crate::frame_tool::frame_transform(&t) {
         app.frame_preview = None;
-        if t.quad != corners(t.rect) {
-            let result = crate::frame_tool::transformed_frame(app, &t)
+        if result.is_some() {
+            let done = crate::frame_tool::transformed_frame(app, &t)
                 .and_then(|transform| app.run("layer.frame.set", json!({"layer": t.layer, "transform": transform.m})));
-            if let Err(error) = result {
+            if let Err(error) = done {
                 keep_open(app, t, preview, error);
             }
         }
@@ -37,13 +44,16 @@ pub fn commit(app: &mut PhotocraftApp) {
         crate::cas_transform::commit(app, &t, options);
         return;
     }
+    let Some(result) = result else { return };
+    let rect = [result.rect.x0, result.rect.y0, result.rect.x1, result.rect.y1];
+    let quad = result.state.quad.map(|p| [p.x, p.y]);
+    let interpolation = result.interpolation.id();
+    let warp = result.warp.map(|w| w.warp);
     if t.selection {
-        let mut p = json!({"rect": t.rect, "interpolation": t.interpolation});
-        match &t.warp {
-            Some(w) if !w.is_identity() => p["warp"] = json!(w),
-            Some(_) => return,
-            None if t.quad == corners(t.rect) => return,
-            None => p["quad"] = json!(t.quad),
+        let mut p = json!({"rect": rect, "interpolation": interpolation});
+        match &warp {
+            Some(w) => p["warp"] = json!(w),
+            None => p["quad"] = json!(quad),
         }
         if let Err(e) = app.run("select.transformSelection", p) {
             keep_open(app, t, preview, e);
@@ -52,16 +62,14 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
     if let Some(target) = &t.path {
         let mut p = target.clone();
-        match &t.warp {
-            Some(w) if w.is_identity() => return,
+        match &warp {
             Some(w) => p["warp"] = json!(w),
-            None if t.quad == corners(t.rect) => return,
             // Distort and Perspective map the path through the box (#3027).
-            None => match rect_to_quad_affine(t.rect, t.quad) {
+            None => match rect_to_quad_affine(rect, quad) {
                 Some(a) => p["matrix"] = json!(a.m),
                 None => {
-                    p["rect"] = json!(t.rect);
-                    p["quad"] = json!(t.quad);
+                    p["rect"] = json!(rect);
+                    p["quad"] = json!(quad);
                 }
             },
         }
@@ -71,17 +79,11 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let made = t.made;
-    let r = if let Some(w) = &t.warp {
-        // Type with a Warp Text can be warped back to None; the engine skips an unchanged style.
-        if w.is_identity() && !type_layer {
-            return;
-        }
-        app.run("edit.transform.warp", json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation}))
+    let r = if let Some(w) = &warp {
+        // The warp's bounds are the frame it was built over (a stored smart warp's, or Warp Text's).
+        app.run("edit.transform.warp", json!({"layer": t.layer, "rect": w.bounds, "warp": w, "interpolation": interpolation}))
     } else {
-        if t.quad == corners(t.rect) {
-            return; // untouched: nothing to do and no history step; a ⌥⌘T copy or a place stays
-        }
-        let mut p = json!({"rect": t.rect, "quad": t.quad, "interpolation": t.interpolation});
+        let mut p = json!({"rect": rect, "quad": quad, "interpolation": interpolation});
         if t.layers.is_empty() {
             p["layer"] = json!(t.layer);
         } else {
@@ -111,6 +113,60 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
 }
 
+/// A click outside the box, at `at` in document units (`ApplyBy::ClickOutside`): clicking the pasteboard or
+/// another layer's pixels commits; a click outside the box where only the Background has pixels does nothing and
+/// the box stays open (#11100). The commit doesn't pick the layer under the click: as in the reference
+/// application, that takes a second click (#8208). A click moves nothing, so there is no box to restore.
+pub fn apply_click(app: &mut PhotocraftApp, at: Point) {
+    let at = [at.x, at.y];
+    let Some(t) = app.ui.transform.as_ref() else { return };
+    if on_pasteboard(app, at) || on_other_layer(app, t, at) {
+        commit(app);
+    }
+}
+
+/// Commits the Frame tool's auto-opened session when one of this pass's `edits` ends a box gesture, and clears the
+/// flag. It reads only the edits it is given, so a second pass of a frame commits nothing the first one did.
+/// `true` when it committed.
+pub fn auto_commit(app: &mut PhotocraftApp, edits: &[TransformEdit<SessionWarp>]) -> bool {
+    let ends_gesture = edits.iter().any(|e| matches!(e, TransformEdit::Box(EditEvent::Commit { .. })));
+    if !ends_gesture || !app.ui.frame_tool.auto_transform {
+        return false;
+    }
+    app.ui.frame_tool.auto_transform = false;
+    commit(app);
+    true
+}
+
+/// Whether a document point is outside the document, on the pasteboard around the canvas.
+fn on_pasteboard(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    app.session.active().is_some_and(|st| p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(st.doc.size.width) || p[1] >= f64::from(st.doc.size.height))
+}
+
+/// Whether a document point lands on pixels of a layer the box doesn't move: the frontmost hit
+/// there, skipping the moved layers and fully locked ones as Auto-Select does, is a visible
+/// top-level layer that is not the Background. As measured in the reference application
+/// (#11100, #8208), a click there commits a layer transform and leaves the selection as it was;
+/// a second click picks that layer. Not measured, so the box stays open as before: Transform
+/// Selection, a path or mask target, and hidden, locked or grouped layers (also when a grouped
+/// layer covers a top-level one at the click).
+fn on_other_layer(app: &PhotocraftApp, t: &FreeTransform, p: [f64; 2]) -> bool {
+    if t.selection || t.path.is_some() || t.target.is_some() || !p[0].is_finite() || !p[1].is_finite() {
+        return false;
+    }
+    let Some(st) = app.session.active() else { return false };
+    let doc = &st.doc;
+    // The layers the commit moves: `edit.transform` takes the link group along as it is then, so a
+    // layer linked after the box opened counts as moved too.
+    let moved = photocraft_engine::transform_cmds::box_targets(doc, &moving_layers(t));
+    let moved = |id: photocraft_doc::LayerId| id.0 == t.layer || moved.contains(&id);
+    // `as` saturates out-of-range floats; `layers_at` returns nothing off the canvas.
+    photocraft_engine::pick_cmds::layers_at(doc, p[0].floor() as i32, p[1].floor() as i32)
+        .into_iter()
+        .find(|id| !moved(*id) && !doc.effective_locks(*id).all)
+        .is_some_and(|id| !doc.is_background(id) && doc.layers.iter().any(|l| l.id == id && l.artboard().is_none()))
+}
+
 /// After the transform landed or not: fold the layer the session made into its step, or take it
 /// back.
 fn finish(app: &mut PhotocraftApp, document: Option<DocId>, layer: LayerId, made: Option<MadeLayer>, landed: bool) {
@@ -130,6 +186,9 @@ pub(crate) fn committing(app: &PhotocraftApp) -> Option<JobId> {
 /// A job ended (see [`crate::jobs_ui`]): when it was the commit, the session ends with it. Its
 /// status and errors are reported like any job's.
 pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
+    if super::begin::on_prepared(app, e) {
+        return;
+    }
     if committing(app) != Some(e.id) {
         return;
     }
@@ -160,7 +219,7 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
 /// A commit the engine refused (a result over the pixel budget, #3773): the box stays open as it
 /// was, with the reason in the status bar, so the transform can be changed or cancelled. A copy or
 /// a placed layer it made goes only when it is cancelled.
-fn keep_open(app: &mut PhotocraftApp, t: TransformSession, preview: Option<TransformPreview>, e: String) {
+fn keep_open(app: &mut PhotocraftApp, t: FreeTransform, preview: Option<OpenPreview>, e: String) {
     app.ui.transform = Some(t);
     app.transform_preview = preview;
     app.ui.status = e;
@@ -221,12 +280,12 @@ fn switched_away(app: &PhotocraftApp) -> bool {
 /// compared, not the layers the box moves: those also hold the layers linked to it (#11217) and
 /// leave out the children of a selected group. Boxes over a selection, a mask or channel, a path,
 /// a placed file or Content-Aware Scale don't follow the selection.
-fn selected_layers_changed(st: &photocraft_engine::DocState, t: &TransformSession, opened: Option<&[LayerId]>) -> bool {
+fn selected_layers_changed(st: &photocraft_engine::DocState, t: &FreeTransform, opened: Option<&[LayerId]>) -> bool {
     if t.selection || t.target.is_some() || t.path.is_some() || t.made == Some(MadeLayer::Place) || t.content_aware.is_some() {
         return false;
     }
     let Some(opened) = opened else { return false };
-    let mut now = st.selected_layers();
+    let mut now = st.selected_layers().to_vec();
     now.sort_unstable();
     now != opened
 }
@@ -259,7 +318,7 @@ pub fn follow_edits(app: &mut PhotocraftApp) {
         let now = Several::shown(&st.doc, &sv.ids, &sv.lifted);
         if now.layers != sv.moving.layers {
             sv.moving = now;
-            pv.texture = sv.render();
+            pv.textures = sv.render(&mut app.texture_serials);
         }
     }
     if t.layers.is_empty()
@@ -282,7 +341,10 @@ pub fn cancel(app: &mut PhotocraftApp) {
         crate::jobs_ui::cancel(app, job);
         return;
     }
-    let transform = app.ui.transform.take();
+    let transform = app.ui.transform.take().map(|mut t| {
+        let _ = t.session.discard();
+        t
+    });
     let preview = app.transform_preview.take();
     if let (Some(t), Some(pv)) = (transform, preview)
         && t.made.is_some()
@@ -291,40 +353,11 @@ pub fn cancel(app: &mut PhotocraftApp) {
     }
 }
 
-/// The session's starting box: where Undo stops.
-pub(super) fn start_steps(app: &mut PhotocraftApp) {
-    if let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) {
-        pv.steps = Steps { settled: Some(Step::of(t)), ..Steps::default() };
-    }
-}
-
-/// Record the box as an undo step whenever it comes to rest in a new state: once per drag (on
-/// release), nudge or option edit (once typing in its field ends). Call once per frame.
-pub fn track_steps(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) else { return };
-    if pv.gesture.is_some() || pv.warp_drag.is_some() || ctx.input(|i| i.pointer.any_down()) || ctx.text_edit_focused() {
-        // Whatever comes to rest after this is more than the nudge.
-        pv.steps.fold = false;
-        return;
-    }
-    pv.steps.settle(Step::of(t));
-}
-
-/// Arrow keys while Free Transform is active: move the box (and its pivot) by `(dx, dy)`.
-/// Nudges that follow each other closely are one Undo step of the session (`nudge_bundle`).
-pub(crate) fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64) {
-    let (pause, now) = (crate::nudge_bundle::pause(app), app.nudge_bundle.now);
-    let Some(t) = app.ui.transform.as_mut().filter(|t| t.warp.is_none()) else { return };
-    let before = Step::of(t);
-    t.quad = t.quad.map(|q| [q[0] + dx, q[1] + dy]);
-    t.pivot = [t.pivot[0] + dx, t.pivot[1] + dy];
-    if let Some(pv) = app.transform_preview.as_mut() {
-        pv.steps.nudged(&before, Step::of(t), now, pause);
-    }
-}
-
 /// Save for Web (Legacy): refused under an open box, as it would export without the preview (#6737).
 pub(crate) const SAVE_FOR_WEB: &str = "file.export.saveForWebLegacy";
+
+/// Layer › Copy CSS: refused under an open box too, as it would copy the bounds from before it.
+const COPY_CSS: &str = photocraft_engine::layer_css_cmds::ID;
 
 /// While transforming, Undo and Redo apply to the box: `Some(enabled)` for those commands (and
 /// Toggle Last State, which would change the document under the box), `None` for the rest.
@@ -339,19 +372,19 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
     if committing(app).is_some() {
         return box_command(id).then_some(false);
     }
-    let steps = app.transform_preview.as_ref().map(|pv| &pv.steps);
     match id {
         // Content-Aware Scale's box only scales: no switching it to another transform or Warp.
         "edit.freeTransform" | "edit.freeTransformCopy" if t.content_aware.is_some() => Some(false),
         i if i.starts_with("edit.transform.") && t.content_aware.is_some() => Some(false),
-        "edit.undo" => Some(steps.is_some_and(|s| s.can_undo(&Step::of(t)))),
-        "edit.redo" => Some(steps.is_some_and(|s| !s.redo.is_empty())),
+        "edit.undo" => Some(t.session.can_undo()),
+        "edit.redo" => Some(t.session.can_redo()),
         // No Toggle Last State or history jump under the box, and one box at a time.
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
         // Save for Web exports the committed document and would ignore the pending box (#6737).
-        SAVE_FOR_WEB => Some(false),
+        // Copy CSS, likewise, would copy the layers' bounds from before the box.
+        SAVE_FOR_WEB | COPY_CSS => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
-        _ if box_preset(id).is_some() => Some(t.warp.is_none()),
+        _ if preset_for_command(id).is_some() => Some(t.session.warp().is_none()),
         // One box over several layers doesn't warp (#6501).
         "edit.transform.warp"
         | "layer.smartObjects.warp"
@@ -370,23 +403,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 }
 
 /// Does the box move an editable type layer (not its selection outline, a lone mask or a path)?
-pub(super) fn moves_type(app: &PhotocraftApp, t: &TransformSession) -> bool {
+pub(super) fn moves_type(app: &PhotocraftApp, t: &FreeTransform) -> bool {
     !t.selection && t.target.is_none() && t.path.is_none() && moves_kind(app, t, |c| matches!(c, LayerContent::Text(_)))
-}
-
-/// Edit › Transform's Rotate and Flip presets while a box is open: what they do to the box, as
-/// `(kx, ky, angle)`: a scale along the box's own axes, then a rotation (radians, clockwise on
-/// screen), both about the reference point.
-fn box_preset(id: &str) -> Option<(f64, f64, f64)> {
-    use std::f64::consts::{FRAC_PI_2, PI};
-    Some(match id {
-        "edit.transform.rotate180" => (1.0, 1.0, PI),
-        "edit.transform.rotate90Cw" => (1.0, 1.0, FRAC_PI_2),
-        "edit.transform.rotate90Ccw" => (1.0, 1.0, -FRAC_PI_2),
-        "edit.transform.flipHorizontal" => (-1.0, 1.0, 0.0),
-        "edit.transform.flipVertical" => (1.0, -1.0, 0.0),
-        _ => return None,
-    })
 }
 
 /// While transforming, the box owns the history for every caller (menus, shortcuts, the control
@@ -394,30 +412,33 @@ fn box_preset(id: &str) -> Option<(f64, f64, f64)> {
 /// which would change the document under the box, are refused. Edit › Transform's Rotate and
 /// Flip turn the box itself, as in Photoshop, instead of the layer under it; committing stays
 /// with ↩ and the options bar.
-/// `None` for other commands or when not transforming.
 /// The commands the open box answers itself ([`is_enabled`], [`intercept`]).
 fn box_command(id: &str) -> bool {
-    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB) || box_preset(id).is_some()
+    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | COPY_CSS)
+        || preset_for_command(id).is_some()
 }
 
+/// `None` for other commands or when not transforming.
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
-    let warping = app.ui.transform.as_ref()?.warp.is_some();
+    let warping = app.ui.transform.as_ref()?.session.warp().is_some();
     if committing(app).is_some() {
         return box_command(id).then(|| Err(if warping { STILL_WARPING } else { STILL_APPLYING }.into()));
     }
     match id {
         "edit.undo" => Some(Ok(step(app, false))),
         "edit.redo" => Some(Ok(step(app, true))),
-        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB => {
+        "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB | COPY_CSS => {
             Some(Err("Commit or cancel the transform first".into()))
         }
         _ => {
-            let (kx, ky, angle) = box_preset(id)?;
+            let preset = preset_for_command(id)?;
             if warping {
                 return Some(Err("Commit or cancel the transform first".into()));
             }
-            scale_about_pivot(app, kx, ky);
-            rotate_about_pivot(app, angle);
+            let now = app.nudge_bundle.now;
+            if let Some(t) = app.ui.transform.as_mut() {
+                t.session.apply(TransformEdit::Preset(preset), now);
+            }
             Some(Ok(json!({"transform": app.ui.transform})))
         }
     }
@@ -426,15 +447,17 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
 /// Undo (or redo) one step of the open session; nothing mid-drag or with no step to take.
 fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     let Some(t) = app.ui.transform.as_mut() else { return serde_json::Value::Null };
-    let Some(pv) = app.transform_preview.as_mut().filter(|pv| pv.gesture.is_none() && pv.warp_drag.is_none()) else {
+    let had_warp = t.session.warp().is_some();
+    let moved = if redo { t.session.redo() } else { t.session.undo() };
+    if !moved {
         return serde_json::Value::Null;
-    };
-    let s = &mut pv.steps;
-    s.settle(Step::of(t));
-    let (from, to) = if redo { (&mut s.redo, &mut s.undo) } else { (&mut s.undo, &mut s.redo) };
-    let Some(step) = from.pop() else { return serde_json::Value::Null };
-    to.push(Step::of(t));
-    s.settled = Some(step.clone());
-    step.restore(t);
-    json!({"transform": t})
+    }
+    // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs): the step
+    // brings its own box, so only the texels swap.
+    if had_warp != t.session.warp().is_some()
+        && let Some(pv) = app.transform_preview.as_mut()
+    {
+        swap_mode_texels(pv);
+    }
+    json!({"transform": app.ui.transform})
 }

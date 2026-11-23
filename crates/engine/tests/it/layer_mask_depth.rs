@@ -35,7 +35,8 @@ fn newly_created_layer_masks_follow_document_depth() {
                 }
                 let before = s.active().unwrap().doc.clone();
                 let history = s.active().unwrap().history.past_len();
-                s.execute(command, json!({"color": "#000000"})).unwrap();
+                let params = if command.starts_with("layer.newFillLayer") { json!({"color": "#000000"}) } else { json!({}) };
+                s.execute(command, params).unwrap();
                 let d = s.active().unwrap();
                 let m = mask(&d.doc);
                 assert_eq!(m.surface.format(), PixelFormat::new(ColorMode::Grayscale, sample, false), "{command}, {depth}-bit {mode}");
@@ -127,7 +128,8 @@ fn mask_creation_preserves_selection_coverage_and_existing_masks() {
             })
             .unwrap();
             let before = s.active().unwrap().doc.clone();
-            s.execute(command, json!({"from": [0, 0], "to": [64, 48]})).unwrap();
+            let params = if command == "gradient.fill.create" { json!({"from": [0, 0], "to": [64, 48]}) } else { json!({}) };
+            s.execute(command, params).unwrap();
             let after = &s.active().unwrap().doc;
             let added = after.layer(s.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
             assert_eq!(
@@ -135,9 +137,8 @@ fn mask_creation_preserves_selection_coverage_and_existing_masks() {
                 before.selection.as_ref().unwrap().read_region(before.bounds()),
                 "{depth}-bit coverage is unchanged"
             );
-            // The selection went into the mask, except for the Gradient tool's fill layer.
-            let kept = if command == "gradient.fill.create" { before.selection.clone() } else { None };
-            assert_eq!(after.selection, kept, "{command}");
+            // The selection went into the mask, so it is dropped (#8801, #12196).
+            assert!(after.selection.is_none(), "{command}");
             assert_eq!(after.layers[0].mask, before.layers[0].mask, "creating a mask does not requantize an existing mask");
         }
     }

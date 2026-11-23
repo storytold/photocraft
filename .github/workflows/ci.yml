@@ -1,18 +1,22 @@
 name: CI
 
-# Quality gates for every push to main and every pull request. The Linux gate runs through the
-# suite's shared gate workflow in craft-common-actions (`cargo xtask ci`); the Windows legs, the
-# test variant and the corpus, web and fuzz jobs are PhotoCraft's own.
+# Quality gates for every push to main and every pull request. The Linux and Windows tests run
+# through the suite's shared gate workflow in craft-common-actions (`cargo xtask ci`, split over the
+# gate's jobs); the test variant, web and fuzz jobs are PhotoCraft's own. Every night
+# the Linux gate alone runs a cold build: the safety net for the workspace crates it keeps between
+# runs (`cache-workspace-crates`), and a fresh start for that cache entry.
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "11 3 * * *"
   pull_request:
     # `labeled` so that adding `full-ci` to an open PR starts a run with Windows in it.
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
       full_sweep:
-        description: "Run every testkit sweep case (runtime comparison and integration validation)"
+        description: "Run every testkit sweep case and every corpus file, as the nightly run does (runtime comparison and integration validation)"
         type: boolean
         default: false
       color_range:
@@ -54,7 +58,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  PHOTOCRAFT_FULL_SWEEP: ${{ inputs.full_sweep && '1' || '0' }}
+  # Every case of the long test sweeps and every corpus file (photocraft-testkit `full_sweep`): the
+  # nightly run and manual runs with `full_sweep`. Other runs take a sweep part and the corpus samples.
+  PHOTOCRAFT_FULL_SWEEP: ${{ (inputs.full_sweep || github.event_name == 'schedule') && '1' || '0' }}
   # No test or fuzz run may print a page: the engine refuses to spool, and if something ever
   # bypasses that, lp fails loudly on a printer that does not exist.
   PHOTOCRAFT_NO_PRINT: "1"
@@ -68,55 +74,45 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Git dependencies come from github.com/storytold, and Cargo.lock is complete and up to date.
+  git-sources:
+    if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
+    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
+    uses: storytold/craft-common-actions/.github/workflows/git-sources.yml@main
+
   # Whether the Windows legs and the web build run. main, manual runs and PRs labelled `full-ci`
   # get both. Other PRs get Windows when they touch code whose behaviour differs by platform: the
   # app shell, UI, text and fonts, GPU, pen input, native saves, build scripts or the lockfile.
   # Format changes must exercise the Windows-only publication barriers (#8034). macOS is tested
-  # only by release.yml.
+  # only by release.yml. `windows_gpu`: whether those Windows legs run photocraft-gpu's tests, which
+  # render on WARP, the CPU Direct3D 12 rasterizer, and took half of the integration leg's test time.
+  # Pull requests run them only when they change the GPU crate, a workspace crate it builds on, any
+  # package manifest, or a file outside the workspace packages other than documentation
+  # (scripts/ci-windows-gpu-tests.py, #15247); the Linux gate runs them on every pull request, and main runs them on Windows too.
+  # `linux_skip`: the packages the Linux gate leaves out of its test build because nothing a pull request changes
+  # reaches them (same rule, every package but photocraft-gpu); empty on main, the nightly run and `full-ci`.
+  # `windows_skip`: the platform-neutral packages whose Windows tests a pull request skips because nothing it
+  # changes reaches them (same script); empty on main and `full-ci`.
   platforms:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 10
     name: select platforms
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-latest' }}
     outputs:
       windows: ${{ steps.pick.outputs.windows }}
+      windows_gpu: ${{ steps.pick.outputs.windows_gpu }}
+      windows_skip: ${{ steps.pick.outputs.windows_skip }}
+      linux_skip: ${{ steps.pick.outputs.linux_skip }}
       web: ${{ steps.pick.outputs.web }}
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Git dependencies come from storytold
-        run: |
-          set -euo pipefail
-          test -f Cargo.lock || { echo "Cargo.lock is missing"; exit 1; }
-          # Source replacement, patches and path overrides in cargo config never show up
-          # in Cargo.lock. Parsed rather than grepped: TOML has many spellings of one key.
-          # Cargo still reads the legacy .cargo/config.
-          python3 - <<'PY'
-          import os, sys, tomllib
-          for path in (".cargo/config", ".cargo/config.toml"):
-              if not os.path.exists(path):
-                  continue
-              config = tomllib.load(open(path, "rb"))
-              replaced = [name for name, source in config.get("source", {}).items()
-                          if isinstance(source, dict) and "replace-with" in source]
-              if replaced or "patch" in config or "paths" in config:
-                  print(f"{path} replaces, patches or overrides a source")
-                  sys.exit(1)
-          PY
-          # Fails when Cargo.lock is out of date with the manifests.
-          cargo metadata --locked --format-version 1 > /dev/null
-          python3 - <<'PY'
-          import sys, tomllib
-          lock = tomllib.load(open("Cargo.lock", "rb"))
-          bad = sorted({p["source"] for p in lock.get("package", [])
-                        if p.get("source", "").startswith("git+")
-                        and not p["source"].startswith("git+https://github.com/storytold/")})
-          if bad:
-              print("Git dependencies outside github.com/storytold:", *bad, sep="\n")
-              sys.exit(1)
-          PY
       - id: pick
         env:
           EVENT: ${{ github.event_name }}
@@ -124,169 +120,246 @@ jobs:
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
           if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
-            echo "windows=true" >> "$GITHUB_OUTPUT"
-            echo "web=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "windows=true"
+              echo "windows_gpu=true"
+              echo "windows_skip="
+              echo "linux_skip="
+              echo "web=true"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # The browser build (a fat-LTO wasm build) runs only when something it compiles or
           # packages changed: the web app and its packaging, crate sources and manifests (the web
-          # build compiles nearly every crate), the workspace manifests and this workflow.
-          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/photocraft-web(-boot)?/|packaging/web/|packaging/env\.sh$|crates/[^/]+/(src/|Cargo\.toml$|build\.rs$)|Cargo\.(toml|lock)$|rust-toolchain(\.toml)?$|\.github/workflows/ci\.yml$)'; then
+          # build compiles nearly every crate), the workspace manifests, the craft-i18n pin and this
+          # workflow.
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/photocraft-web(-boot)?/|packaging/web/|packaging/env\.sh$|crates/[^/]+/(src/|Cargo\.toml$|build\.rs$)|Cargo\.(toml|lock)$|craft-i18n\.rev$|rust-toolchain(\.toml)?$|\.github/workflows/ci\.yml$)'; then
             echo "web=true" >> "$GITHUB_OUTPUT"
           else
             echo "web=false" >> "$GITHUB_OUTPUT"
           fi
-          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|(.*/)?build\.rs$|\.github/workflows/ci\.yml$)'; then
+          if git diff --name-only "$BASE" HEAD | grep -Eq '^(apps/|crates/(ui-egui|text|gpu|tablet|heif|format)/|Cargo\.lock$|craft-i18n\.rev$|(.*/)?build\.rs$|\.cargo/config\.toml$|\.config/nextest\.toml$|\.config/ci-test-times\.tsv$|xtask/|scripts/ci-test-shard\.sh$|\.github/workflows/ci\.yml$)'; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
           else
             echo "windows=false" >> "$GITHUB_OUTPUT"
           fi
+          gpu=$(python3 scripts/ci-windows-gpu-tests.py "$BASE")
+          echo "windows_gpu=$gpu" >> "$GITHUB_OUTPUT"
+          if [ "$gpu" = false ]; then
+            echo "::notice::photocraft-gpu's tests are skipped on Windows: this pull request changes nothing they are built from (the Linux gate still runs them)."
+          fi
+          linux_skip=$(python3 scripts/ci-windows-gpu-tests.py --skip-linux "$BASE")
+          echo "linux_skip=$linux_skip" >> "$GITHUB_OUTPUT"
+          if [ -n "$linux_skip" ]; then
+            echo "::notice::Tests of packages the pull request does not reach are skipped on Linux (main runs them all): $linux_skip"
+          fi
+          skip=$(python3 scripts/ci-windows-gpu-tests.py --skip-neutral "$BASE")
+          echo "windows_skip=$skip" >> "$GITHUB_OUTPUT"
+          if [ -n "$skip" ]; then
+            echo "::notice::Tests of platform-neutral packages the pull request does not reach are skipped on Windows (the Linux gate still runs them): $skip"
+          fi
 
-  # The Linux gate. Its rust-cache entry is the one `test (without heif)` restores.
+  # The Linux gate (craft-common-actions gate.yml). Its `lint` leg runs the checks that need no test
+  # build. The `build` job builds the tests once and writes one nextest archive per shard
+  # (`cargo xtask ci archive`, `shard-archives`), each with only the test binaries that shard runs,
+  # balanced by .config/ci-test-times.tsv (xtask/src/shards.rs); it uploads them and then runs the
+  # doctests. Each of the four test shards downloads its own archive and runs it
+  # (scripts/ci-test-shard.sh). Shard 1 runs nextest's `gpu` group alone, on lavapipe, and
+  # fails on a skipped GPU comparison (scripts/ci-gpu-lavapipe.py); shards 2-4 split the other
+  # tests. The `gpu` group is ~840 test-seconds on 4 slots (~3.5 min); the other ~6900
+  # test-seconds over 3 shards are ~8.5-10.5 min each.
+  # The build keeps the compiled workspace crates between runs (`cache-workspace-crates`), so a
+  # pull request rebuilds only the crates its changes reach. Each main run's build job saves a
+  # rolling entry of its own, which `test (without heif)` restores too; `cache-prune` keeps
+  # the newest one. The lint legs keep no cache (`lint-cache: false`): a cold lint leg costs
+  # minutes, and their entries (~1 GB per OS) would not fit the 10 GB cache budget.
   gate:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    # `platforms` is skipped on the nightly run, which tests everything. When it fails, its outputs
+    # are empty (`linux_skip` included), so the gate still runs and tests everything.
+    needs: platforms
+    if: ${{ !cancelled() && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') }}
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      os: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && '["artcraft-k8s-main"]' || '["ubuntu-24.04"]' }}
+      # On the cluster runners sccache uses the shared cluster cache, which main runs fill for
+      # every app; PR runs on hosted runners can't reach it, so they leave it off.
+      sccache: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       # egui/winit/rfd.
       packages: >-
         libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
         libgtk-3-dev mesa-vulkan-drivers libvulkan1
       # The tests build with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run. Same commit as release.yml.
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-      # Cargo.toml's dev profile already keeps line tables only.
-      dev-debug: ""
+      craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
+      # Every .rs file is reached by a mod, #[path] or include!; a new unreached file fails the lint leg.
+      unreached-rs-mode: strict
+      # CI test binaries carry no debuginfo and no symbols (CARGO_PROFILE_TEST_STRIP below): a
+      # test build drops from ~19 to ~6.5 GB. A panic still names its file and line; only
+      # backtrace frames lose names and lines. Local builds keep Cargo.toml's line tables.
+      dev-debug: "0"
+      cache-version: v2
       env: |
-        PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
+        PHOTOCRAFT_FULL_SWEEP=${{ (inputs.full_sweep || github.event_name == 'schedule') && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
+        CARGO_PROFILE_TEST_STRIP=symbols
+        PHOTOCRAFT_CI_EXCLUDE=${{ needs.platforms.outputs.linux_skip }}
+        PHOTOCRAFT_CORPUS_TESTS=1
       timeout-minutes: 100
-      # fmt, clippy, layers, panel-commands, scorecard, tests, panic_hunt, doctests and the wasm32 check, with
-      # `--locked --features heif`, then the missing-translations report (xtask/src/main.rs).
-      command: python3 scripts/test-ci-gpu-lavapipe.py && cargo xtask ci && python3 scripts/ci-gpu-lavapipe.py
+      cache-workspace-crates: true
+      lint-cache: false
+      cold-build: ${{ github.event_name == 'schedule' }}
+      # fmt, egui-fork, clippy, layers, panel-commands, scorecard, the wasm32 check and the
+      # missing-translations report (`cargo xtask ci lint`, xtask/src/main.rs), and the CI scripts'
+      # own tests.
+      lint-command: python3 scripts/test-ci-gpu-lavapipe.py && python3 scripts/test-ci-windows-gpu-tests.py && python3 scripts/test-ci-test-times.py && python3 scripts/test-ci-toolchain-bump.py && python3 scripts/test-ci-clear-rolling-cache.py && cargo xtask ci lint
+      archive-command: cargo xtask-gate archive --gpu-shard
+      after-archive-command: cargo xtask-gate doctest
+      test-shards: 4
+      shard-archives: true
+      # The tests and panic_hunt with `--locked --features heif` (TEST_TARGETS in xtask/src/main.rs).
+      shard-command: bash scripts/ci-test-shard.sh --gpu-shard
 
-  # Windows tests run as two legs in parallel: the unit tests and the integration tests. As one job
-  # they took ~28 min on the Windows runner; the legs take ~13 and ~15. Splitting the integration
-  # tests over a third runner (nextest --partition) saved ~2 min of wall time but cost ~7
-  # runner-minutes and one more Windows slot per PR. They stay outside the shared gate for sccache,
-  # which needs its own action step.
+  # The Windows tests and Clippy on the same gate, when `platforms` says the run needs them: a
+  # `lint` leg runs Clippy, the `build` job builds the tests once into one nextest archive per shard
+  # (as on Linux, without a GPU shard) and then runs the doctests, and six shards each run their own
+  # archive. Windows runs
+  # the tests ~1.75x slower than Linux: ~55 min on one runner, ~9 min per shard. A seventh shard
+  # would not shorten the slowest one while its slowest test alone takes ~9.6 min (the
+  # shortcut-dispatch UI test). The browser apps are wasm targets, so their native tests are left
+  # out; pull requests also leave out photocraft-gpu and the platform-neutral packages nothing they
+  # change reaches (`windows_gpu`, `windows_skip`). Windows keeps a dependency-only cache entry:
+  # its workspace crates would not fit the repository's cache budget beside Linux's.
   windows:
     needs: platforms
     if: needs.platforms.outputs.windows == 'true'
-    timeout-minutes: 100
-    name: test (windows-latest, ${{ matrix.part }})
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        part: [unit, integration]
-    env:
+    # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      os: '["windows-latest"]'
+      lint-cache: false
+      # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels with
+      # kittest's strict `MissingGlyphPolicy::Panic`, and a hosted Windows image has no guaranteed
+      # Japanese or Simplified Chinese system font. Same pinned central fonts as Linux and release.
+      craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
+      # No wasm32 check on Windows: the Linux lint leg runs it.
+      targets: ""
       # No debuginfo on Windows: writing PDBs for ~200 test binaries cost 2.2 of ~21 build minutes.
       # A panic still names its file and line; only backtrace frames lose theirs (Linux keeps
       # line-tables-only, so a backtrace with lines is one OS away).
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      # The all-language UI tests shape real Japanese, Chinese, Korean and Devanagari labels
-      # with kittest's strict `MissingGlyphPolicy::Panic`. A hosted Windows image has no
-      # guaranteed Japanese or Simplified Chinese system font, and egui 0.37 panics on a
-      # missing glyph; the app's lazy system fallback runs after layout, too late for the
-      # first headless frame. Use the same pinned central fonts as Linux and release, so every
-      # language is drawn by a real embedded face rather than skipping. Same commit as the gate
-      # above and release.yml.
-      CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
-      CRAFT_FONTS_REQUIRED: "1"
+      dev-debug: "0"
+      cache-version: v2
+      # CARGO_TARGET_DIR: the Windows compiler command line carries one -L path per built
+      # dependency; a short target path keeps it within CreateProcess's limit. rust-lld (shipped
+      # with the toolchain) links the test binaries instead of link.exe, and the test links skip
+      # identical-code folding and PDBs; the link arguments in build.rs (/DELAYLOAD, delayimp.lib)
+      # are lld-link options too.
+      env: |
+        PHOTOCRAFT_FULL_SWEEP=${{ (inputs.full_sweep || github.event_name == 'schedule') && '1' || '0' }}
+        PHOTOCRAFT_NO_PRINT=1
+        LPDEST=photocraft-no-such-printer
+        CARGO_TARGET_DIR=D:\t
+        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
+        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-Clink-arg=/OPT:NOICF -Clink-arg=/DEBUG:NONE
+        PHOTOCRAFT_CI_EXCLUDE=photocraft-web photocraft-web-boot ${{ needs.platforms.outputs.windows_gpu == 'false' && 'photocraft-gpu' || '' }} ${{ needs.platforms.outputs.windows_skip }}
+      timeout-minutes: 100
+      lint-command: cargo xtask ci clippy
+      archive-command: cargo xtask-gate archive
+      after-archive-command: cargo xtask-gate doctest
+      test-shards: 6
+      shard-archives: true
+      shard-command: bash scripts/ci-test-shard.sh
+
+  # Keeps one Actions cache entry per family on main, so the repository stays within its 10 GB
+  # budget and GitHub never evicts an entry a run still needs (an evicted Windows entry makes the
+  # Windows build cold, about 60 instead of 21 minutes). It runs beside the run's jobs and prunes
+  # each time a job that saves an entry finishes: the gate's build jobs (the Linux rolling entry,
+  # about 4 GB, and the Windows dependency entry) and web. A skipped job is listed under its
+  # own name (a skipped reusable-workflow call under the caller job's), so a run that skips one
+  # still ends. No `needs`: the gate is one reusable call, and waiting for it would leave the
+  # replaced entry in place until every shard has run. A failed prune warns instead of failing the
+  # run, and cache-prune.yml prunes again after every attempt, re-runs of failed jobs included.
+  cache-prune:
+    name: cache prune
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # A cold Windows build takes about an hour, and the watch ends when it does; `watch-minutes`
+    # ends it before this limit.
+    timeout-minutes: 120
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-24.04' }}
+    permissions:
+      actions: write
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - name: Prune replaced cache entries
+        uses: storytold/craft-common-actions/actions/cache-prune@main
+        continue-on-error: true
+        with:
+          watch: true
+          watch-minutes: 110
+          saving-jobs: |
+            ^gate( / build \(.*\))?$
+            ^windows( / build \(.*\))?$
+            ^web build and wasm size gate$
+
+  # The nightly cold run never restores the rolling crates entry, so the old entry is only overlap
+  # while the cold run saves its own: two entries of about 4 GB, which with the others go over the
+  # 10 GB cache limit and get the Windows, web and corpus entries evicted. This deletes the old
+  # entries when the build job starts saving (scripts/ci-clear-rolling-cache.py).
+  cold-cache-clear:
+    name: cold cache clear
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    continue-on-error: true
+    permissions:
+      actions: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Check out craft-fonts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: storytold/craft-fonts
-          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-          path: craft-fonts
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-        with:
-          components: clippy
-
-      # Only main saves caches; PRs restore main's, so the repo's 10 GB cache budget keeps main's.
-      # A failing test still saves: the cache holds compiled dependencies, not test results.
-      # Both legs share one key (same dependencies); the integration leg saves it, because it also
-      # runs Clippy and so leaves Clippy's dependency metadata in it.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'integration' }}
-          cache-on-failure: true
-
-      # sccache caches the workspace crates' compiled libraries, which rust-cache leaves out:
-      # warm, each Windows leg built 4.5 min faster. Like rust-cache, only main writes (PRs read
-      # main's entries); a full set is ~90 MB, so it barely touches the 10 GB budget (#2688).
-      # Test executables can't be cached, so a PR still links its tests.
-      - name: Install sccache
-        uses: Mozilla-Actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.18.0
-
-      - name: Use sccache
+      - name: Delete the old rolling entries before the save
         env:
-          MAIN: ${{ github.ref == 'refs/heads/main' }}
-        run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          if [ "$MAIN" != true ]; then echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"; fi
-        shell: bash
-
-      - name: Clippy
-        if: matrix.part == 'integration'
-        run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
-
-      - name: Dependency layering
-        if: matrix.part == 'integration'
-        run: cargo xtask layers
-
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        with:
-          tool: cargo-nextest@0.9.150
-
-      # The unit leg runs `--lib --bins` and the integration leg `--test '*'` (every
-      # integration-test target); the feature selection stays the same, so both legs share the
-      # dependency cache.
-      - name: Test
-        env:
-          PART: ${{ matrix.part }}
-        run: |
-          case "$PART" in
-            unit) targets=(--lib --bins) ;;
-            *) targets=(--test '*') ;;
-          esac
-          cargo nextest run --profile ci --workspace --locked --features heif "${targets[@]}"
-        shell: bash
-
-      - name: Doctests
-        if: matrix.part == 'unit'
-        run: cargo test --workspace --locked --features heif --doc
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci-clear-rolling-cache.py
 
   # The same codecs without the optional decoder: HEIC must stay a clear "not in this build" error
-  # for distributors who leave it out. Runs beside the gate and restores the gate's dependency
-  # cache without saving one: the dependencies are the same, and the 10 GB cache budget is tight
-  # (#2688).
+  # for distributors who leave it out. Runs beside the gate and restores the gate's newest rolling
+  # cache entry without saving one: the dependencies are the same, and the 10 GB cache budget is
+  # tight (#2688). Its sources keep their checkout mtimes, so the workspace crates it builds are
+  # rebuilt.
   test-without-heif:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: github.event_name != 'schedule' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 60
     name: test (without heif)
     # The gate's runner: its cache entry is keyed on the OS.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-24.04' }}
     env:
       # The gate sets these; rust-cache hashes CARGO_* and RUST* variables into its key.
       CARGO_INCREMENTAL: 0
       CARGO_NET_RETRY: 10
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_STRIP: symbols
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The translations at the commit in craft-i18n.rev, as the gate and release.yml embed them
+      # (sets CRAFT_I18N_DIR and CRAFT_I18N_REQUIRED=1).
+      - name: Check out craft-i18n
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
 
       - name: Install Linux build dependencies
         uses: storytold/craft-common-actions/actions/install-apt-packages@main
@@ -295,88 +368,79 @@ jobs:
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
             libgtk-3-dev
 
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-
-      # gate.yml keys its cache `<cache-version>-rust-<hash of Cargo.toml>-gate`.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          prefix-key: v1-rust
-          shared-key: ${{ hashFiles('Cargo.toml') }}-gate
-          save-if: false
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
 
-      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+      # The gate's own key (the shared action computes it), restore only. The toolchain action
+      # exports CARGO_HOME, which the gate's legs do not have; align-environment leaves it out of
+      # the cache paths.
+      - uses: storytold/craft-common-actions/actions/rust-cache@main
+        with:
+          cache-version: v2
+          job: gate
+          cache-workspace-crates: "true"
+          align-environment: "true"
+
+      - uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
         with:
           tool: cargo-nextest@0.9.150
 
       - name: Test without heif
-        run: cargo nextest run -p photocraft-heif -p photocraft-codecs -p photocraft-io --locked --profile ci
-
-  corpus:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
-    timeout-minutes: 30
-    # Real-file corpus tests (cargo feature `corpus`), on every PR and on main. The corpora are
-    # pinned in xtask/src/corpus_pins.rs and sha256-verified (xtask/*.sha256) after both a cache
-    # restore and a download; a missing corpus fails the tests. The cache key changes only when a
-    # pin or manifest does, so normally this restores in seconds (fork PRs read the base cache).
-    name: corpus tests
-    runs-on: ubuntu-latest
-    env:
-      # test-corpus builds with --release, but here without the release profile's thin LTO and
-      # single codegen unit: they ran LTO over the dependency graph for each of the ~95 corpus test
-      # binaries, so building took 23.5 of the job's 37 minutes while the tests ran for 1.5.
-      # Turning them off builds 2.7x faster; the code under test is the same.
-      CARGO_PROFILE_RELEASE_LTO: "false"
-      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          key: corpus
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
-      - name: Restore test corpora
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: corpus/
-          key: corpus-${{ hashFiles('xtask/src/corpus_pins.rs', 'xtask/*.sha256') }}
-      - name: Fetch and verify corpora
-        run: cargo xtask corpus --all
-      - name: Corpus tests
-        run: cargo xtask test-corpus
-
+        run: cargo nextest run -p photocraft-io --locked --profile ci
   web:
     timeout-minutes: 60
     name: web build and wasm size gate
     # PRs run it only when web-relevant files change (see `platforms`); main always does.
     needs: platforms
     if: needs.platforms.outputs.web == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-latest' }}
     env:
       # Match release.yml so PR results reflect what would actually ship.
       TRUNK_VERSION: 0.21.14
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      # The translations at the commit in craft-i18n.rev, as the gate and release.yml embed them
+      # (sets CRAFT_I18N_DIR and CRAFT_I18N_REQUIRED=1).
+      - name: Check out craft-i18n
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          targets: wasm32-unknown-unknown
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          prefix-key: v1-rust
           key: ci-web
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
+      # Checksum-verified, as in release.yml's web build.
       - name: Install trunk
-        run: |
-          curl --proto '=https' -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C "$HOME/.cargo/bin" trunk
-          trunk --version
+        uses: storytold/craft-common-actions/actions/install-trunk@main
+        with:
+          trunk-version: ${{ env.TRUNK_VERSION }}
       # package.sh runs Trunk's release builds, validates relative URLs, cuts the wasm into
       # parts, checks the 24 MiB per-file limit and exercises the packaging step release.yml uses.
       - name: Build and verify browser release
+        env:
+          # Pull requests skip wasm-opt --converge (minutes slower); main keeps it, so the size
+          # gate on a PR measures a slightly larger wasm than main produces.
+          PHOTOCRAFT_WEB_WASM_OPT_CONVERGE: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: packaging/web/package.sh
       - name: Report wasm size
         if: success()
@@ -402,7 +466,10 @@ jobs:
     name: fuzz (${{ matrix.target.crate }}/${{ matrix.target.name }})
     # Placeholder: manual trigger only until a nightly schedule is enabled.
     if: github.event_name == 'workflow_dispatch' && inputs.fuzz
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-latest' }}
+    env:
+      # cargo-fuzz needs nightly; the checkout's rust-toolchain.toml would pick the pinned release.
+      RUSTUP_TOOLCHAIN: nightly
     strategy:
       fail-fast: false
       matrix:
@@ -429,13 +496,17 @@ jobs:
           - { crate: affinity, name: import_preview, args: "--features io" }
           - { crate: format, name: load }
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # nightly
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          workspaces: crates/${{ matrix.target.crate }}/fuzz
+          toolchain: nightly
+      - run: rustc -Vv
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: Fuzz
@@ -452,11 +523,15 @@ jobs:
 
   color-range-performance:
     if: inputs.color_range == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       RAYON_NUM_THREADS: "4"
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -466,14 +541,17 @@ jobs:
           packages: >-
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
             libgtk-3-dev
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          key: color-range-perf
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
       - name: Compare exact outputs and release timings on 24 MP
         run: |
           set -o pipefail
-          cargo test --release -p photocraft-engine --lib color_range_release_comparison -- --ignored --nocapture | tee color-range-perf.txt
+          cargo test --release -p photocraft-engine-core --lib color_range_release_comparison -- --ignored --nocapture | tee color-range-perf.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -482,11 +560,15 @@ jobs:
 
   selection-morphology:
     if: inputs.selection_morphology == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-latest' }}
     timeout-minutes: 45
     env:
       RAYON_NUM_THREADS: "4"
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -496,10 +578,13 @@ jobs:
           packages: >-
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
             libgtk-3-dev
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          key: selection-morphology-perf
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
       - name: Compare exact outputs and release timings on 36 MP
         run: |
           set -o pipefail
@@ -507,7 +592,7 @@ jobs:
       - name: Compare cropped command reads and writeback on 36 MP
         run: |
           set -o pipefail
-          cargo test --release -p photocraft-engine --lib sparse_modify_release_comparison -- --ignored --nocapture | tee -a selection-morphology-perf.txt
+          cargo test --release -p photocraft-engine-core --lib sparse_modify_release_comparison -- --ignored --nocapture | tee -a selection-morphology-perf.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -522,13 +607,26 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 60
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
+      # perf-nightly.yml's entry (same key and runner); only that job saves it.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          key: perf-release
+          prefix-key: v1-rust
+          shared-key: perf-release
+          save-if: false
       - name: Quick performance suite
         run: cargo xtask perf --quick
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -541,18 +639,25 @@ jobs:
 
   selection-combining:
     if: inputs.selection_combining == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-latest' }}
     timeout-minutes: 30
     env:
       RAYON_NUM_THREADS: "4"
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          key: selection-combining-perf
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
       - name: Compare exact outputs and release timings on 36 MP
         run: |
           set -o pipefail
@@ -565,11 +670,15 @@ jobs:
 
   brush-tip:
     if: inputs.brush_tip == true
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     env:
       RAYON_NUM_THREADS: "4"
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -579,13 +688,13 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.brush_tip_base }}
           path: before
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
-          workspaces: |
-            before -> target
-            after -> target
-          key: brush-tip-release
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
       - name: Build the same benchmark against both versions
         run: |
           cp after/crates/paint/examples/big_dab_bench.rs before/crates/paint/examples/big_dab_bench.rs
@@ -609,13 +718,17 @@ jobs:
           path: brush-tip.txt
   dry-mixer:
     if: inputs.dry_mixer == true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-latest' }}
     timeout-minutes: 90
     env:
       RAYON_NUM_THREADS: "4"
       CARGO_PROFILE_RELEASE_LTO: "false"
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -630,7 +743,13 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/photocraft-baseline" "$base"
           mkdir -p "$RUNNER_TEMP/photocraft-baseline/crates/engine/examples"
           cp crates/engine/examples/bench_dry_mixer.rs "$RUNNER_TEMP/photocraft-baseline/crates/engine/examples/bench_dry_mixer.rs"
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@f5141455aac7b2eb4708aa259d8ffcdf10fde939
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
       - name: Install Linux build dependencies
         uses: storytold/craft-common-actions/actions/install-apt-packages@main
         with:
@@ -663,3 +782,33 @@ jobs:
         with:
           name: dry-mixer-performance
           path: dry-mixer-perf.txt
+
+  # After the nightly cold run passes, a warning (annotation and job summary) says when a newer stable
+  # Rust release than rust-toolchain.toml's exists. It needs no permission and changes nothing: a bump
+  # is a pull request that changes the file's `channel` by hand.
+  toolchain-check:
+    name: toolchain check
+    needs: gate
+    if: github.event_name == 'schedule' && needs.gate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare the pinned release with stable
+        run: |
+          set -euo pipefail
+          version=$(python3 scripts/ci-toolchain-bump.py)
+          if [ -z "$version" ]; then
+            echo "rust-toolchain.toml is current"
+            exit 0
+          fi
+          msg="Rust $version is the newest stable release; rust-toolchain.toml pins an older one. Change its channel in a pull request to move."
+          echo "::warning title=Newer Rust release::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"

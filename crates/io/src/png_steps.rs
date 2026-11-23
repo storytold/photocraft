@@ -13,7 +13,7 @@ use photocraft_codecs::{self as codecs, DecodeOptions, Format, Limits, OrientSte
 use photocraft_geom::TILE_SIZE;
 use photocraft_raster::{Interrupt, PruneCursor};
 
-use crate::flat::{FlatBuilder, PngStream, apply_flat_format};
+use crate::flat::{FlatBuilder, PngIndices, PngStream, apply_flat_format};
 use crate::{ImportResult, IoError, Route};
 
 /// The rows of a file being streamed into the tiles of its layer.
@@ -29,6 +29,15 @@ struct Pruning {
     extras: PngExtras,
 }
 
+/// A palette PNG's document, its file being read again for the indices of entries that share a
+/// colour (#14342).
+struct Indexing {
+    result: ImportResult,
+    read: PngIndices<SharedBytes>,
+    /// Whether the layer was streamed.
+    streamed: bool,
+}
+
 enum Stage {
     /// The rows becoming tiles as they are decoded.
     Stream(Box<Streaming>),
@@ -40,6 +49,8 @@ enum Stage {
     Orient(Box<OrientSteps>),
     /// The decoded image becoming the document, a band of rows and a batch of tiles at a time.
     Build(Box<FlatBuilder>),
+    /// The palette indices, a band of rows at a time.
+    Indices(Box<Indexing>),
     Spent,
 }
 
@@ -55,6 +66,13 @@ impl PngImport {
     /// which reads the header and refuses what the import refuses; `None` for any other file,
     /// which only [`crate::import_with_options_and_interrupt`] reads. The decoder shares `bytes`.
     pub fn new(name: &str, bytes: &Arc<Vec<u8>>) -> Result<Option<Self>, IoError> {
+        // A native bundle suffix must never start the PNG streaming path, even when the bytes
+        // are a PNG (for example, an invalid `.pcraft` file). The ordinary importer still uses
+        // content detection and can open a PNG copied to a bare name.
+        let extension = name.rsplit(['/', '\\']).next().and_then(|file| file.rsplit_once('.')).map(|(_, ext)| ext);
+        if extension.is_some_and(|ext| photocraft_formats::from_extension(ext) == Some(photocraft_formats::Format::Pcraft)) {
+            return Ok(None);
+        }
         if crate::route(name, bytes) != Route::Flat || codecs::detect(bytes) != Some(Format::Png) {
             return Ok(None);
         }
@@ -78,7 +96,11 @@ impl PngImport {
     /// image never exists whole. False for a file whose rows can't come in final order, and from
     /// the moment a late `eXIf` sends a streamed one back to a whole decode.
     pub fn streams(&self) -> bool {
-        matches!(self.stage, Stage::Stream(_) | Stage::Prune(_))
+        match &self.stage {
+            Stage::Stream(_) | Stage::Prune(_) => true,
+            Stage::Indices(i) => i.streamed,
+            _ => false,
+        }
     }
 
     /// How much of the import is done, `0.0..=1.0`.
@@ -87,13 +109,14 @@ impl PngImport {
             Stage::Stream(s) => s.rows.progress(),
             Stage::Rows(rows) => rows.progress(),
             Stage::Orient(steps) => steps.progress(),
-            Stage::Prune(_) | Stage::Build(_) | Stage::Spent => 1.0,
+            Stage::Prune(_) | Stage::Build(_) | Stage::Indices(_) | Stage::Spent => 1.0,
         }
     }
 
     /// Works while `more()` returns true (at least one bounded piece per call): rows (into tiles
-    /// as they come, or into the whole image), the turn upright, the copy into tiles, then the
-    /// prune scan. `Some` once the document is built, after which the import is spent.
+    /// as they come, or into the whole image), the turn upright, the copy into tiles, the prune
+    /// scan, then a palette's indices. `Some` once the document is built, after which the import
+    /// is spent.
     pub fn step(&mut self, more: &mut dyn FnMut() -> bool) -> Result<Option<ImportResult>, IoError> {
         match std::mem::replace(&mut self.stage, Stage::Spent) {
             Stage::Stream(mut s) => {
@@ -124,7 +147,7 @@ impl PngImport {
                     let Pruning { stream, extras, .. } = *p;
                     let mut r = stream.into_document(&self.name, extras)?;
                     apply_flat_format(&mut r, &self.bytes, Some(Format::Png), None)?;
-                    return Ok(Some(r));
+                    return self.indices(r, true, more);
                 }
                 if !more() {
                     self.stage = Stage::Prune(p);
@@ -168,9 +191,33 @@ impl PngImport {
                     }
                     continue;
                 }
-                return build.finish(self.bytes.as_slice(), Some(Format::Png)).map(Some);
+                let r = build.finish(self.bytes.as_slice(), Some(Format::Png))?;
+                return self.indices(r, false, more);
+            },
+            Stage::Indices(mut i) => loop {
+                match i.read.step() {
+                    Some(false) if more() => {}
+                    Some(false) => {
+                        self.stage = Stage::Indices(i);
+                        return Ok(None);
+                    }
+                    Some(true) => {
+                        let Indexing { mut result, read, .. } = *i;
+                        result.document.color_indices = read.finish();
+                        return Ok(Some(result));
+                    }
+                    None => return Ok(Some(i.result)),
+                }
             },
             Stage::Spent => Err(IoError::Unsupported("the PNG was already imported".into())),
         }
+    }
+
+    /// The built document `result`, or, for a palette whose entries share a colour, the stage that
+    /// reads its indices, entered in this call while `more()` allows.
+    fn indices(&mut self, result: ImportResult, streamed: bool, more: &mut dyn FnMut() -> bool) -> Result<Option<ImportResult>, IoError> {
+        let Some(read) = PngIndices::new(SharedBytes(Arc::clone(&self.bytes)), &result.document) else { return Ok(Some(result)) };
+        self.stage = Stage::Indices(Box::new(Indexing { result, read, streamed }));
+        if more() { self.step(more) } else { Ok(None) }
     }
 }
