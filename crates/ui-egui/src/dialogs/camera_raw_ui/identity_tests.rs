@@ -1,10 +1,14 @@
 //! Re-develop completion must follow the replacement document across intervening tab changes.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CameraRaw, PhotocraftApp, RawOpen, commit_open_raw, finish_redevelop, queue_open_dialog, replace_raw_document};
+use craft::imaging::raw::RawDevelopSettings as CameraRaw;
+
+use super::open::{RawOpen, commit_open_raw, finish_redevelop, queue_open_dialog, replace_raw_document};
+use crate::PhotocraftApp;
 
 fn synthetic_raw() -> Vec<u8> {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
@@ -30,7 +34,7 @@ impl Control {
     }
 }
 
-fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
+fn identity_app() -> (Box<PhotocraftApp>, RawOpen, Control) {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     session.execute("layer.new.layer", json!({})).unwrap();
@@ -66,7 +70,7 @@ fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
 /// another event changes the tab list. No sleeps, timing races or fake decoder are needed.
 fn completed_redevelop(app: &mut PhotocraftApp, raw: &RawOpen) -> (CameraRaw, Value, photocraft_doc::DocId) {
     app.background_jobs = true;
-    let params = CameraRaw { exposure: 1.0, contrast: 20.0, ..Default::default() };
+    let params = cr!(exposure: 1.0, contrast: 20.0);
     let started = commit_open_raw(app, &params, raw, None).unwrap();
     let job = photocraft_engine::jobs::JobId(started["job"].as_u64().expect("the sensor re-develop runs as a real job"));
     let mut result = app.session.wait_job(job).unwrap();
