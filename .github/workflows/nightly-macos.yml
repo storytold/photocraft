@@ -6,34 +6,28 @@ name: Nightly macOS build
 # is signed and notarized by the shared release-ref signer (craft-common-actions), which calls
 # packaging/macos/nightly-sign.sh.
 on:
+  # macOS runners are shared with release builds: pull requests run this only with the `full-ci`
+  # label (as ci.yml's Windows legs), never by changed paths. `labeled` so adding it starts a run.
   pull_request:
-    paths:
-      - "packaging/macos/**"
-      - "packaging/nightly-common.sh"
-      - "packaging/nightly_paths.py"
-      - "packaging/env.sh"
-      - "assets/app-icon/photocraft-nightly.icns"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "apps/photocraft/build.rs"
-      - "crates/text/build.rs"
-      - "crates/ui-egui/build.rs"
-      - "apps/photocraft/src/build_flavor.rs"
-      - "apps/photocraft/src/launch_profile.rs"
-      - "apps/photocraft/src/nightly_session.rs"
-      - ".github/workflows/nightly-macos.yml"
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# As ci.yml: a newer push to a labelled PR cancels its older run; adding any label but `full-ci`
+# gets a group of its own, so it neither runs anything nor cancels a run.
 concurrency:
-  group: nightly-macos-${{ github.ref }}
-  cancel-in-progress: true
+  group: nightly-macos-${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: Nightly .app (aarch64, unsigned)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
     runs-on: macos-15
     timeout-minutes: 90
     env:
