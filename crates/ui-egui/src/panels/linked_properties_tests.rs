@@ -83,9 +83,10 @@ fn read_only(h: &Harness<'_, Box<PhotocraftApp>>, label: &str) -> bool {
     h.get_by_label(label).accesskit_node().is_read_only()
 }
 
-/// Every labelled node's role and label, for the failure messages.
-fn labels(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
-    h.query_all_by_label_contains("").map(|n| format!("{:?} {:?}", n.accesskit_node().role(), n.accesskit_node().label())).collect()
+/// The kind the panel's header shows for the active layer (the header paints it; it is not a node
+/// of its own).
+fn kind(h: &Harness<'_, Box<PhotocraftApp>>) -> String {
+    crate::panels::properties::kind_label(&active(h))
 }
 
 /// The path the row shows for `file`: the full absolute path.
@@ -97,7 +98,7 @@ fn shown(file: &std::path::Path) -> String {
 fn a_linked_smart_object_shows_its_kind_path_read_only_size_and_actions() {
     let (_directory, file) = png("small-100x60-72.png");
     let h = panel("file.placeLinked", &file);
-    assert!(h.query_by_label("Linked Smart Object").is_some(), "the header names the kind: {:?}", labels(&h));
+    assert_eq!(kind(&h), "Linked Smart Object", "the header names the kind");
     // W and H are read-only, and show the size; X and Y stay editable.
     assert!(read_only(&h, "Width") && read_only(&h, "Height"), "read-only W/H");
     for (label, value) in [("Width", "100"), ("Height", "60")] {
@@ -120,8 +121,7 @@ fn a_linked_smart_object_shows_its_kind_path_read_only_size_and_actions() {
 fn an_embedded_smart_object_keeps_its_header_fields_and_actions() {
     let (_directory, file) = png("small-100x60-72.png");
     let h = panel("file.placeEmbedded", &file);
-    assert!(h.query_by_label("Linked Smart Object").is_none());
-    assert!(h.query_by_label("Smart Object Layer").is_some(), "{:?}", labels(&h));
+    assert_eq!(kind(&h), "Smart Object Layer");
     assert!(!read_only(&h, "Width") && !read_only(&h, "Height"), "W/H fields");
     assert!(h.query_by_label("Maintain aspect ratio").is_some());
     assert!(h.query_by_label(&shown(&file)).is_none(), "no path row");
@@ -142,7 +142,7 @@ fn a_psd_placed_layer_is_not_shown_as_a_linked_file() {
         sm.psd_raw = Some(std::sync::Arc::new(vec![0; 4]));
     }
     frames(&mut h, 4);
-    assert!(h.query_by_label("Linked Smart Object").is_none());
+    assert_eq!(kind(&h), "Smart Object Layer");
     assert!(!read_only(&h, "Width"));
     assert!(h.query_by_label_contains("a1b2c3d4").is_none());
     assert!(!quick_actions_shown(&h).contains(&EMBED_BUTTON.to_string()));
@@ -156,7 +156,7 @@ fn embed_makes_the_linked_smart_object_embedded() {
     frames(&mut h, 4);
     let LayerContent::Smart(sm) = &active(&h).content else { panic!("still a smart object") };
     assert!(matches!(&sm.source, SmartSource::Embedded { file_name, .. } if file_name == "small-100x60-72.png"), "{:?}", sm.source);
-    assert!(h.query_by_label("Smart Object Layer").is_some(), "an embedded smart object now");
+    assert_eq!(kind(&h), "Smart Object Layer", "an embedded smart object now");
     assert!(!read_only(&h, "Width"), "W/H are fields again");
     assert!(h.query_by_label(&shown(&file)).is_none());
     // One undo step puts the link back.

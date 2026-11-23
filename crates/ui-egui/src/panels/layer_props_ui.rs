@@ -199,7 +199,7 @@ fn read_only_size(ui: &mut egui::Ui, unit: Unit, dpi: f64, ppi: f64, size: [f64;
     // The value is converted here, so the field keeps and shows the same unit.
     let lengths = LengthUnits::new(unit_kind(unit), unit_kind(unit), dpi);
     Row::new().show(ui, |ui, _| {
-        for (label, px, extent) in [(tl!("W"), size[0], extent[0]), (tl!("H"), size[1], extent[1])] {
+        for (label, px, extent) in [(tl!("Width"), size[0], extent[0]), (tl!("Height"), size[1], extent[1])] {
             NumberField::length(label, Bind::given(Some(unit.from_px(px, dpi, extent, ppi))), lengths).read_only(true).show(ui);
         }
     });

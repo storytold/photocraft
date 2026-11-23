@@ -42,7 +42,7 @@ fn kind_icon(content: &LayerContent) -> &'static str {
 }
 
 /// "Type Layer", "Curves", "Artboard"…
-fn kind_label(layer: &Layer) -> String {
+pub(super) fn kind_label(layer: &Layer) -> String {
     if layer.frame.is_some() {
         return tl!("Frame").into();
     }
