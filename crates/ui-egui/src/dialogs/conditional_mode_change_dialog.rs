@@ -5,9 +5,12 @@
 //! The checkboxes are one custom row of the command's form: `from` is the list of ticked source
 //! ids and `to` the target id, so OK, Reset and `ui.dialog.set` work as for every form.
 
+use craft::behavior::ColumnWidth;
 use craft::ui::buttons::Button;
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
+use craft::ui::layout::GridFit;
+use craft::ui::layout_components::{Grid, Row, Stack};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamKind};
 use craft::ui::runtime::env::Label;
 use serde_json::{Value, json};
@@ -66,29 +69,33 @@ fn ticked(from: &Value, id: &str) -> bool {
     }
 }
 
-/// The eight checkboxes in two columns, All and None under them.
+/// The two columns of checkboxes, each as wide as its widest label.
+const COLUMNS: &[ColumnWidth] = &[ColumnWidth::Content, ColumnWidth::Content];
+
+/// The eight checkboxes in two columns, All and None under them. Laid out by the framework's grid and row: in an egui
+/// `Grid` the framework's checkboxes took the whole height left in the dialog, one row each.
 fn sources_row(ui: &mut egui::Ui, fields: &mut DialogFields, _: &mut craft::ui::patterns::form_dialogs::CustomContext) -> egui::Response {
     let from = from_value(fields);
     let mut on = SOURCES.map(|(id, _)| ticked(&from, id));
     let before = on;
-    let response = egui::Grid::new("conditional-mode-sources")
-        .num_columns(2)
-        .spacing([24.0, 6.0])
-        .show(ui, |ui| {
-            for row in 0..4 {
-                for i in [row, row + 4] {
-                    Checkbox::new(Bind::bound(&mut on[i])).label(tl!(SOURCES[i].1)).show(ui);
+    let response = Stack::new()
+        .show(ui, |ui, _| {
+            Grid::new(COLUMNS).fit(GridFit::Fixed).show(ui, |ui, _| {
+                for row in 0..4 {
+                    for i in [row, row + 4] {
+                        Checkbox::new(Bind::bound(&mut on[i])).label(tl!(SOURCES[i].1)).show(ui);
+                    }
                 }
-                ui.end_row();
-            }
-            for (label, all) in [(tl!("All"), true), (tl!("None"), false)] {
-                if Button::new(label).show(ui).clicked() {
-                    on = [all; 8];
+            });
+            Row::new().show(ui, |ui, _| {
+                for (label, all) in [(tl!("All"), true), (tl!("None"), false)] {
+                    if Button::new(label).show(ui).clicked() {
+                        on = [all; 8];
+                    }
                 }
-            }
-            ui.end_row();
+            });
         })
-        .response;
+        .output;
     if on != before {
         let ticked: Vec<&str> = SOURCES.iter().zip(on).filter(|(_, on)| *on).map(|((id, _), _)| *id).collect();
         fields.set("from", FieldValue::Json(json!(ticked)));

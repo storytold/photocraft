@@ -1,14 +1,16 @@
-use std::collections::HashMap;
-
 use craft::i18n::Words;
 use craft::keymap::{Chord, CommandRef, Mods};
 use craft::menu::{
     Alternate, Customization, ItemKind, ItemRole, LanguageChoice, LanguageLabels, LanguageMenu, LayoutOptions, MenuBar, MenuRole, Node, Platforms, Row, Target,
     ThemeLabels, from_items, layout,
 };
+use std::sync::Arc;
+
 use craft::ui::contract::Tracked;
+use craft::ui::runtime::derived::derived;
 use serde_json::json;
 
+use super::facts::MenuFacts;
 use super::invoke::{panel_alias, proof_preset, workspace_id};
 use super::state::{checked, is_enabled, reveal_label, translated_menu_label};
 use super::{DOCUMENT_ITEM, PhotocraftApp, TOP_MENUS, UI_COMMANDS};
@@ -46,83 +48,73 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.other.colorToAlpha", "filter.other.offset"),
 ];
 
-/// The menu rows of one state of the app, built once and kept until that state changes: building
-/// them asks every command whether it can run, which on a document with thousands of layers costs
-/// far more than a frame.
+/// The menu rows of one state of the app, built once and kept until a fact they show changes
+/// ([`MenuFacts`]): building them asks every command whether it can run, which on a document with
+/// thousands of layers costs far more than a frame.
 pub struct MenuModel {
-    /// [`crate::native_menu::state_hash`] of the state the model was built from.
-    state: u64,
-    /// The English label each row was built from, by [`command_key`] (`rows` hold the labels as shown).
-    english: HashMap<(String, String), String>,
-    /// The English title of each menu and submenu, by its title as shown.
-    english_titles: HashMap<String, String>,
-    /// The rows with labels as shown, after the user's Edit › Menus customization.
-    pub rows: Vec<Row>,
+    built: Arc<Built>,
     /// The menus laid out for this platform, titles as shown, each translated title and label with its English name.
     /// A rebuild that lays out the same menus keeps the held value, so the bar's key stays.
     pub bar: Tracked<MenuBar>,
 }
 
 impl MenuModel {
-    /// [`crate::native_menu::state_hash`] of the state this model was built from.
-    pub(super) fn state(&self) -> u64 {
-        self.state
-    }
-
-    /// Copies of the English labels and titles, for a lookup that cannot borrow the model.
-    pub(super) fn english_names(&self) -> (HashMap<(String, String), String>, HashMap<String, String>) {
-        (self.english.clone(), self.english_titles.clone())
-    }
-
-    /// The English label of the row that runs `command`.
-    pub(super) fn english_label(&self, command: &CommandRef) -> Option<String> {
-        self.english.get(&command_key(command)).cloned()
-    }
-
-    /// The English title of a menu or submenu shown as `title`.
-    pub(super) fn english_title(&self, title: &str) -> Option<String> {
-        self.english_titles.get(title).cloned()
+    /// The rows with labels as shown, after the user's Edit › Menus customization; each translated label carries its
+    /// English name.
+    pub fn rows(&self) -> &[Row] {
+        &self.built.rows
     }
 }
 
-/// The key of a command in the English-name map: its id and its parameters, since one id (`app.theme`) runs many rows.
-pub(super) fn command_key(command: &CommandRef) -> (String, String) {
-    (command.id.clone(), command.params.to_string())
+/// One build of the model: the rows and the bar laid out from them.
+struct Built {
+    rows: Vec<Row>,
+    bar: MenuBar,
 }
 
-/// Records the English label of every item under `node`, for the commands the framework lays out itself.
-fn collect_english(node: &Node, english: &mut HashMap<(String, String), String>) {
-    match node {
-        Node::Item(item) => {
-            english.insert(command_key(&item.command), item.label.clone());
-        }
-        Node::Submenu { children, .. } => children.iter().for_each(|child| collect_english(child, english)),
-        _ => {}
-    }
-}
-
-/// The model for the app's current state. It is rebuilt when the hash of its inputs changes; a
-/// frame with a click or key press folds the frame number in, which covers state the hash does not
-/// list. A second pass of that frame sees no input, so it hashes differently and rebuilds once,
-/// after the first pass's commands ran.
-pub fn model<'a>(app: &'a mut PhotocraftApp, ctx: &egui::Context) -> &'a MenuModel {
-    let state = crate::native_menu::state_hash(app, had_input(ctx).then_some(app.frame));
-    match app.menu_model.take() {
-        Some(held) if held.state == state => app.menu_model.insert(held),
-        held => {
-            let mut built = build(app, state);
-            if let Some(held) = held.filter(|held| held.bar == built.bar) {
-                built.bar = held.bar;
+/// `shown` with the English name of each item and submenu whose label `english`, the same node built in English,
+/// words differently.
+fn with_english(mut shown: Node, english: &Node) -> Node {
+    fn name(node: &mut Node, english: &Node) {
+        match (node, english) {
+            (Node::Item(item), Node::Item(en)) => {
+                if item.label != en.label {
+                    item.english = Some(en.label.clone());
+                }
             }
-            app.menu_model.insert(built)
+            (Node::Submenu { label, english, children, .. }, Node::Submenu { label: en_label, children: en_children, .. }) => {
+                if label != en_label {
+                    *english = Some(en_label.clone());
+                }
+                children.iter_mut().zip(en_children).for_each(|(child, en)| name(child, en));
+            }
+            _ => {}
         }
     }
+    name(&mut shown, english);
+    shown
 }
 
-/// Whether this frame had a key press or a button release, which may change state [`crate::native_menu::state_hash`]
-/// does not list.
-pub(crate) fn had_input(ctx: &egui::Context) -> bool {
-    craft::ui::runtime::keys::keyed(ctx) || ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: false, .. })))
+/// The id the model is derived under.
+pub(crate) fn model_id() -> egui::Id {
+    egui::Id::unique("photocraft-menu-model")
+}
+
+/// The model for the app's current state: derived from its [`MenuFacts`], so it is built again only when one of them
+/// changed. The held bar is replaced only when the new build lays out different menus.
+pub fn model<'a>(app: &'a mut PhotocraftApp, ctx: &egui::Context) -> &'a MenuModel {
+    let built = {
+        let app = &*app;
+        derived(ctx, model_id(), &MenuFacts::of(app), || build(app))
+    };
+    let held = app.menu_model.get_or_insert_with(|| MenuModel { bar: Tracked::new(built.bar.clone()), built: Arc::clone(&built) });
+    if !Arc::ptr_eq(&held.built, &built) {
+        if *held.bar != built.bar {
+            *held.bar = built.bar.clone();
+        }
+        held.built = built;
+    }
+    held
 }
 
 /// The row that runs `id`.
@@ -368,23 +360,28 @@ pub(super) fn menu_tint(name: &str) -> Option<egui::Color32> {
     })
 }
 
-/// Translates the titles of menus and submenus, recording each one's English title.
-fn translate_titles(bar: &mut MenuBar, lang: crate::i18n::Lang, english: &mut HashMap<String, String>) {
-    fn level(nodes: &mut [Node], lang: crate::i18n::Lang, english: &mut HashMap<String, String>) {
+/// Translates the titles of menus and submenus, each translated one keeping its English title.
+fn translate_titles(bar: &mut MenuBar, lang: crate::i18n::Lang) {
+    /// `title` as shown in `lang`, and its English name when the two differ.
+    fn translate(title: &mut String, english: &mut Option<String>, lang: crate::i18n::Lang) {
+        let shown = crate::i18n::tr(lang, title).to_string();
+        if shown != *title {
+            *english = Some(std::mem::replace(title, shown));
+        }
+    }
+    fn level(nodes: &mut [Node], lang: crate::i18n::Lang) {
         for node in nodes {
-            if let Node::Submenu { label, children, .. } = node {
-                let shown = crate::i18n::tr(lang, label).to_string();
-                english.insert(shown.clone(), std::mem::replace(label, shown));
-                level(children, lang, english);
+            if let Node::Submenu { label, english, children, .. } = node {
+                translate(label, english, lang);
+                level(children, lang);
             }
         }
     }
     for menu in &mut bar.menus {
         if menu.role != MenuRole::App {
-            let shown = crate::i18n::tr(lang, &menu.title).to_string();
-            english.insert(shown.clone(), std::mem::replace(&mut menu.title, shown));
+            translate(&mut menu.title, &mut menu.english, lang);
         }
-        level(&mut menu.children, lang, english);
+        level(&mut menu.children, lang);
     }
 }
 
@@ -396,16 +393,23 @@ fn put_in_window(bar: &mut MenuBar, node: Node) {
     menu.children.insert(at, node);
 }
 
-fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
+/// The bar a build from `app`'s state lays out now, for trials that check the held model is never stale.
+#[cfg(test)]
+pub(crate) fn fresh_bar(app: &PhotocraftApp) -> MenuBar {
+    build(app).bar
+}
+
+fn build(app: &PhotocraftApp) -> Built {
     let lang = crate::i18n::current();
     let mut rows = menu_rows(app);
-    let mut english = HashMap::new();
     for row in &mut rows {
         if row.label == "---" {
             continue;
         }
-        english.insert(command_key(&row.command), row.label.clone());
-        row.label = translated_menu_label(lang, &row.command.id, &row.label);
+        let shown = translated_menu_label(lang, &row.command.id, &row.label);
+        if shown != row.label {
+            row.english = Some(std::mem::replace(&mut row.label, shown));
+        }
         if let Some(tip) = row.tooltip.take() {
             row.tooltip = Some(crate::i18n::tr(lang, &tip).to_string());
         }
@@ -422,8 +426,7 @@ fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
     let i18n = crate::i18n::framework_i18n();
     let words = Words::from_i18n(i18n.clone(), i18n.from_code(lang.code()).unwrap_or_else(|| i18n.system_lang()));
     let themes = crate::prefs_ui::theme_menu(app);
-    collect_english(&themes.submenu(&Words::english().set::<ThemeLabels>()), &mut english);
-    put_in_window(&mut bar, themes.submenu(&words.set::<ThemeLabels>()));
+    put_in_window(&mut bar, with_english(themes.submenu(&words.set::<ThemeLabels>()), &themes.submenu(&Words::english().set::<ThemeLabels>())));
     // Production shows Language only in the macOS app menu.
     let pref = &app.session.prefs().interface.language;
     let choice = if pref == "auto" { LanguageChoice::Automatic } else { LanguageChoice::Code(pref.clone()) };
@@ -433,7 +436,6 @@ fn build(app: &PhotocraftApp, state: u64) -> MenuModel {
     let keys = |chord: &Chord| craft::ui::runtime::commands::holder(app.ctx(), chord);
     let options = LayoutOptions::new(crate::native_menu::APP_NAME).label(&label).keys(&keys);
     let mut bar = layout(&bar, Target::current(), &options).bar;
-    let mut english_titles = HashMap::new();
-    translate_titles(&mut bar, lang, &mut english_titles);
-    MenuModel { state, english, english_titles, rows, bar: Tracked::new(bar) }
+    translate_titles(&mut bar, lang);
+    Built { rows, bar }
 }
