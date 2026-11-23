@@ -288,7 +288,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             lifted(out.events, |values| AdjustValue::Posterize { values })
         }
         ("hueSaturation", AdjustValue::HueSaturation { value }) => {
-            let out = HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).context(context).show(ui);
+            let out = HueSaturationEditor::new("Hue/Saturation", Bind::bound(value)).adjusted(&values::hue_saturation_adjusted).context(context).show(ui);
             lifted(out.edit.events, |value| AdjustValue::HueSaturation { value })
         }
         ("colorBalance", AdjustValue::ColorBalance { value }) => {

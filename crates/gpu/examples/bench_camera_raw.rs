@@ -1,11 +1,11 @@
 //! Camera Raw's preview develop on the 858×572 proxy of a 6000×4000 image: the CPU develop
 //! against the GPU passes (upload, render, readback), for per-pixel settings and for the spatial
-//! stages (Dehaze, Shadows and Highlights, Clarity, Texture) with them. "Source uploaded every
+//! stages (Dehaze, Shadows and Highlights, Clarity, Texture, Detail) with them. "Source uploaded every
 //! time" also makes Dehaze's copy on the CPU every time, as a white balance drag does.
 //! `cargo run --release -p photocraft-gpu --example bench_camera_raw [-- --quick]`
 use std::time::Instant;
 
-use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs, Wheel, develop, per_pixel, spatial, white_black_points};
+use photocraft_algo::camera_raw::{CameraRaw, DevelopInputs, Wheel, develop, per_pixel, spatial, spatial_tone, white_black_points};
 use photocraft_gpu::CameraRawDevelop;
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -140,6 +140,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 p.highlights = -50.0;
             }),
         ),
+        ("Sharpening 40", with(&none, &|p| p.sharpen_amount = 40.0)),
+        (
+            "Sharpening 40, Masking 30",
+            with(&none, &|p| {
+                p.sharpen_amount = 40.0;
+                p.sharpen_masking = 30.0;
+            }),
+        ),
+        ("Noise Reduction 30", with(&none, &|p| p.noise_luminance = 30.0)),
+        ("Color Noise Reduction 25", with(&none, &|p| p.noise_color = 25.0)),
+        (
+            "Sharpening 40, Masking 30, both noise reductions, every per-pixel stage",
+            with(&per_pixel_stages, &|p| {
+                p.sharpen_amount = 40.0;
+                p.sharpen_masking = 30.0;
+                p.noise_luminance = 30.0;
+                p.noise_color = 25.0;
+            }),
+        ),
+        (
+            "Detail, Clarity, Texture, Dehaze, Shadows, Highlights, every per-pixel stage",
+            with(&per_pixel_stages, &|p| {
+                p.sharpen_amount = 40.0;
+                p.sharpen_masking = 30.0;
+                p.noise_luminance = 30.0;
+                p.noise_color = 25.0;
+                p.clarity = 50.0;
+                p.texture = 50.0;
+                p.dehaze = 40.0;
+                p.shadows = 50.0;
+                p.highlights = -50.0;
+            }),
+        ),
     ];
     for (name, (p, inputs)) in &sets {
         let toned = spatial(p);
@@ -156,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  CPU develop                          {cpu:7.2} ms");
         println!("  GPU, source uploaded every time      {upload:7.2} ms");
         println!("  GPU, source cached (slider drag)     {cached:7.2} ms");
-        if !toned && (p.whites != 0.0 || p.blacks != 0.0) {
+        if !spatial_tone(p) && (p.whites != 0.0 || p.blacks != 0.0) {
             let points_ms = time(runs, || {
                 std::hint::black_box(white_black_points(&src, w, h, p, inputs));
             });

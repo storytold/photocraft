@@ -38,7 +38,7 @@ pub(crate) fn on_input(raw_input: &egui::RawInput) {
     }
 }
 
-/// Registers fonts the catalog gained since the last frame and re-renders the type layers that
+/// Registers fonts the installed catalog gained since the last frame and re-renders the type layers that
 /// use their families (a missing font that now resolves, a style just installed). Also retries
 /// the layers of a document that was busy.
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -52,7 +52,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// [`tick`]'s work once the catalog runs.
 fn follow_catalog(app: &mut PhotocraftApp) {
     let mut layers = std::mem::take(&mut *PENDING.lock().unwrap_or_else(PoisonError::into_inner));
-    let generation = photocraft_text::fonts::catalog().generation();
+    let generation = photocraft_text::fonts::installed_catalog().generation();
     if generation != CHECKED.load(Ordering::Relaxed)
         && let Some(engine) = photocraft_text::try_shared()
     {
