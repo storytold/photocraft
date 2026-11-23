@@ -837,7 +837,7 @@ fn a_copy_job_takes_the_destinations_resolution_as_it_lands() {
 /// clipped away until it is edited.
 #[test]
 fn a_copy_job_renders_its_shapes_for_the_destination_as_it_lands() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 120, "height": 50})).unwrap();
     s.execute("shape.create", json!({"kind": "rect", "rect": [70, 10, 20, 20], "fill": "#ff0000"})).unwrap();
     s.execute("file.new", json!({"width": 60, "height": 50})).unwrap();
