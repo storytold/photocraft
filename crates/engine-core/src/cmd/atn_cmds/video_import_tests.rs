@@ -30,7 +30,7 @@ fn load(d: Descriptor) -> (Session, Value) {
         actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![item], ..Default::default() }],
         ..Default::default()
     };
-    let mut s = Session::new();
+    let mut s = crate::session();
     let r = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&atn::write(&file).unwrap())})).unwrap();
     (s, r)
 }
@@ -81,7 +81,7 @@ fn a_loaded_step_imports_the_frames_and_undoes() {
     std::fs::create_dir_all(&dir).unwrap();
     // A folder of stills is footage to the command, one frame per file in name order.
     for (name, w, h, color) in [("f01.png", 12, 8, "#ff0000"), ("f02.png", 6, 10, "#0000ff")] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": w, "height": h, "background": color})).unwrap();
         let bytes = photocraft_io::export(&s.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
         std::fs::write(dir.join(name), bytes).unwrap();
