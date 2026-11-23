@@ -17,7 +17,7 @@ MOD_DECL = re.compile(r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([a-z]+\))?\s+)?mod\s+([a
 PATH_ATTR = re.compile(r'#\[path\s*=\s*"([^"]+)"\]')
 TEST_ATTR = re.compile(r"#\[test\]")
 TEST_FN = re.compile(r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+([a-z0-9_]+)")
-INLINE_MOD = re.compile(r"\bmod\s+([a-z0-9_]+)\s*\{")
+INLINE_MOD = re.compile(r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\([a-z]+\))?\s+)?\bmod\s+([a-z0-9_]+)\s*\{")
 TARGET_PATH = re.compile(r'^\s*path\s*=\s*"([^"]+\.rs)"', re.M)
 IDENT_BEFORE = re.compile(r"[A-Za-z0-9_]")
 
@@ -97,11 +97,13 @@ def block_end(masked, start):
     return i
 
 
-def module_file(parent, name, attrs, inline=()):
+def module_file(parent, name, attrs, inline=(), root=False):
     """The file of `mod name;` declared in `parent` with attributes `attrs`, inside the inline
-    modules `inline` (outermost first), or None."""
+    modules whose directories are `inline` (outermost first), or None. A crate root (`root`, any
+    file name) and a `mod.rs` hold their children beside them; any other file in a directory of
+    its own name."""
     d = os.path.dirname(parent)
-    if os.path.basename(parent) not in ("lib.rs", "mod.rs", "main.rs"):
+    if not root and os.path.basename(parent) not in ("lib.rs", "mod.rs", "main.rs"):
         d = os.path.join(d, os.path.basename(parent)[:-3])
     d = os.path.join(d, *inline)
     p = PATH_ATTR.search(attrs)
@@ -116,16 +118,22 @@ def module_file(parent, name, attrs, inline=()):
     return None
 
 
-def inline_mods(masked, pos):
-    """Names of the inline `mod x { .. }` blocks around `pos`, outermost first."""
-    return [m.group(1) for m in INLINE_MOD.finditer(masked, 0, pos) if block_end(masked, m.start()) > pos]
+def inline_mods(src, masked, pos):
+    """The directories of the inline `mod x { .. }` blocks around `pos`, outermost first: each
+    module's `#[path]`, else its name."""
+    dirs = []
+    for m in INLINE_MOD.finditer(masked, 0, pos):
+        if block_end(masked, m.start(2)) > pos:
+            p = PATH_ATTR.search(src[m.start(1) : m.end(1)])
+            dirs.append(p.group(1) if p else m.group(2))
+    return dirs
 
 
 def test_regions(root_file):
     """{file: None} for a test file, {file: [(start, end)]} with its test items' ranges otherwise."""
-    regions, todo = {}, [(root_file, False)]
+    regions, todo = {}, [(root_file, False, True)]
     while todo:
-        f, is_test = todo.pop()
+        f, is_test, root = todo.pop()
         if f in regions:
             continue
         src = open(f).read()
@@ -133,9 +141,9 @@ def test_regions(root_file):
         regions[f] = None if is_test else []
         for d in MOD_DECL.finditer(m):
             attrs = src[d.start(1) : d.end(1)]
-            child = module_file(f, d.group(2), attrs, inline_mods(m, d.start()))
+            child = module_file(f, d.group(2), attrs, inline_mods(src, m, d.start()), root)
             if child:
-                todo.append((child, is_test or bool(CFG_TEST.search(attrs))))
+                todo.append((child, is_test or bool(CFG_TEST.search(attrs)), False))
         if not is_test:
             regions[f] = item_ranges(m)
     return regions
@@ -153,7 +161,8 @@ def compiled_files(roots):
             targets += [os.path.join(d, p) for p in TARGET_PATH.findall(open(os.path.join(d, "Cargo.toml")).read())]
             for sub in ("src/bin", "tests", "benches", "examples"):
                 targets += glob.glob(os.path.join(d, sub, "*.rs")) + glob.glob(os.path.join(d, sub, "*", "main.rs"))
-    seen, todo = set(), [os.path.normpath(t) for t in targets if os.path.isfile(t)]
+    roots_ = {os.path.normpath(t) for t in targets if os.path.isfile(t)}
+    seen, todo = set(), sorted(roots_)
     while todo:
         f = todo.pop()
         if f in seen:
@@ -162,7 +171,7 @@ def compiled_files(roots):
         src = open(f).read()
         m = mask(src)
         for d in MOD_DECL.finditer(m):
-            child = module_file(f, d.group(2), src[d.start(1) : d.end(1)], inline_mods(m, d.start()))
+            child = module_file(f, d.group(2), src[d.start(1) : d.end(1)], inline_mods(src, m, d.start()), f in roots_)
             if child:
                 todo.append(os.path.normpath(child))
     return seen

@@ -298,13 +298,41 @@ def add_import(text, path, trait):
     line = f"use {trait_path(path, trait)};\n"
     m = re.search(r"^use ", masked, re.M)
     if m:
-        return text[: m.start()] + line + text[m.start() :]
+        # Before the outer attributes (`#[cfg(test)]`) of that first import, so they stay on it.
+        pos = m.start()
+        while pos > 0:
+            prev = text.rfind("\n", 0, pos - 1) + 1
+            if not masked[prev:pos].lstrip().startswith("#["):
+                break
+            pos = prev
+        return text[:pos] + line + text[pos:]
+    # After the file's header: inner doc comments, blank lines and inner attributes (`#![..]`,
+    # over several lines too).
     pos = 0
-    for lm in re.finditer(r"^(?://!.*|#!\[.*\]|\s*)\n", text, re.M):
-        if lm.start() != pos:
+    while pos < len(text):
+        if masked.startswith("#![", pos):
+            end = attr_end(masked, pos + 2)
+            pos = text.find("\n", end)
+            pos = len(text) if pos < 0 else pos + 1
+            continue
+        lm = re.match(r"(?://!.*|[ \t]*)\n", text[pos:])
+        if not lm:
             break
-        pos = lm.end()
+        pos += lm.end()
     return text[:pos] + line + text[pos:]
+
+
+def attr_end(masked, open_bracket):
+    """The index after the `]` that closes the `[` at `open_bracket`."""
+    depth = 0
+    for i in range(open_bracket, len(masked)):
+        if masked[i] == "[":
+            depth += 1
+        elif masked[i] == "]":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return len(masked)
 
 
 def enclosing_mod(masked, pos):
@@ -442,8 +470,11 @@ def fix(stream):
         removals = {}
     for path in set(edits) | set(imports) | set(removals):
         text = apply(read(path), edits.get(path, []))
+        # Module offsets were taken in the text before `edits`; move them past the edits above them.
+        shift = lambda off: off + sum(len(r) - (e - b) for b, e, r in set(edits.get(path, [])) if e <= off)
+        moved = {(tr, None if module is None else shift(module)) for tr, module in imports.get(path, ())}
         # Innermost module first, so earlier insertion offsets stay valid.
-        for tr, module in sorted(imports.get(path, ()), key=lambda x: -(x[1] or 0)):
+        for tr, module in sorted(moved, key=lambda x: -(x[1] or 0)):
             text = add_import(text, path, tr) if module is None else add_import_in(text, path, tr, module)
         lines = text.splitlines(keepends=True)
         for n in sorted(removals.get(path, ()), reverse=True):
