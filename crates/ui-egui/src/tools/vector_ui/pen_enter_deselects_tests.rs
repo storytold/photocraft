@@ -7,14 +7,14 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::add_anchor_options_bar_tests::harness;
+use super::overlay::overlay_paths;
 use super::pen_draw_tests::click;
-use super::tests::overlay_shapes;
+use super::test_input::harness;
 use super::{PathRow, path_rows, work_path_shown};
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn draw_path(h: &mut Harness<'static, PhotocraftApp>, pts: [[f32; 2]; 2], key: Key) {
+fn draw_path(h: &mut Harness<'static, Box<PhotocraftApp>>, pts: [[f32; 2]; 2], key: Key) {
     for p in pts {
         click(h, p);
     }
@@ -23,18 +23,24 @@ fn draw_path(h: &mut Harness<'static, PhotocraftApp>, pts: [[f32; 2]; 2], key: K
 }
 
 /// The anchors of each subpath of the Work Path.
-fn work_anchors(h: &Harness<'static, PhotocraftApp>) -> Vec<Vec<[f64; 2]>> {
+fn work_anchors(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<Vec<[f64; 2]>> {
     let doc = &h.state().session.active().unwrap().doc;
     let work = doc.work_path.as_ref().expect("a work path");
     work.subpaths.iter().map(|s| s.knots.iter().map(|k| [k.anchor.x.round(), k.anchor.y.round()]).collect()).collect()
 }
 
-fn listed(h: &Harness<'static, PhotocraftApp>) -> bool {
+fn listed(h: &Harness<'static, Box<PhotocraftApp>>) -> bool {
     let st = h.state().session.active().unwrap();
     path_rows(&st.doc, st.active_layer).iter().any(|r| r.kind == PathRow::Work)
 }
 
-fn make_buttons_enabled(h: &Harness<'static, PhotocraftApp>) -> [bool; 2] {
+/// How many paths the canvas overlay shows.
+fn overlaid(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
+    let doc = h.state().session.active().unwrap().doc.id;
+    overlay_paths(h.state(), doc).len()
+}
+
+fn make_buttons_enabled(h: &Harness<'static, Box<PhotocraftApp>>) -> [bool; 2] {
     ["Selection…", "Shape"].map(|label| !h.get_by_label(label).accesskit_node().is_disabled())
 }
 
@@ -47,7 +53,7 @@ fn enter_deselects_the_work_path_and_the_next_path_replaces_it() {
     assert!(listed(&h), "the Work Path is still in the Paths panel");
     assert_eq!(h.state().ui.selected_path, None, "but not selected");
     assert!(!work_path_shown(h.state()), "the Work Path is hidden");
-    assert_eq!(overlay_shapes(h.state(), &egui::Context::default()), 0, "no outline on the canvas");
+    assert_eq!(overlaid(&h), 0, "no outline on the canvas");
     assert_eq!(make_buttons_enabled(&h), [false, false], "the Make buttons are greyed");
 
     draw_path(&mut h, [[30.0, 60.0], [150.0, 80.0]], Key::Enter);
@@ -61,7 +67,7 @@ fn escape_keeps_the_work_path_selected_and_the_next_path_joins_it() {
     draw_path(&mut h, [[20.0, 20.0], [120.0, 20.0]], Key::Escape);
     assert_eq!(h.state().ui.selected_path.as_deref(), Some("work"));
     assert!(work_path_shown(h.state()));
-    assert!(overlay_shapes(h.state(), &egui::Context::default()) > 0, "the outline stays");
+    assert!(overlaid(&h) > 0, "the outline stays");
     assert_eq!(make_buttons_enabled(&h), [true, true]);
 
     draw_path(&mut h, [[30.0, 60.0], [150.0, 80.0]], Key::Escape);
@@ -119,7 +125,7 @@ fn delete_after_enter_deletes_the_layer_not_the_work_path() {
     let mut h = harness(Tool::Pen);
     h.state_mut().run("layer.new.layer", json!({})).unwrap();
     h.run_steps(2);
-    let layers = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().doc.layers.len();
+    let layers = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().doc.layers.len();
     let before = layers(&h);
     draw_path(&mut h, [[20.0, 20.0], [120.0, 20.0]], Key::Enter);
     h.key_press(Key::Delete);

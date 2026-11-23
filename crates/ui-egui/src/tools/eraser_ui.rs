@@ -1,16 +1,23 @@
 //! UI for the Eraser group's colour-aware tools: Magic Eraser (click → `paint.magicEraser`) and
-//! Background Eraser (stroke → `paint.backgroundEraser`), with their options bars.
+//! Background Eraser (stroke → `paint.backgroundEraser`), with their options-bar members.
 //!
 //! A Magic Eraser press in an Indexed Color or Bitmap document shows the reference's alert (message
 //! + OK) and runs nothing: the document keeps its pixels and its History (#12032).
 
+use craft::behavior::IconId;
+use craft::ui::buttons::ToggleButton;
+use craft::ui::choice::{Checkbox, Segmented};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Divider;
+use craft::ui::form::Field;
+use craft::ui::pickers::Select;
+use craft::ui::primitives::IconSpec;
 use photocraft_engine::eraser_cmds::{MAGIC_ERASER_BITMAP_ERROR, MAGIC_ERASER_INDEXED_ERROR};
 use serde_json::{Value, json};
 
+use super::option_cells;
 use crate::PhotocraftApp;
-use crate::state::{DialogKind, Tool};
-use crate::theme::Tokens;
-use crate::{icons, widgets};
+use crate::state::Tool;
 
 fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
     if let Err(e) = r {
@@ -35,7 +42,7 @@ fn error_alert(error: &str) -> Option<&'static str> {
 /// Opens the alert: the message and one OK button, as a refused Move press does
 /// (`move_lock::prompt`).
 fn refuse(app: &mut PhotocraftApp, message: &str) {
-    app.ui.open_dialog(DialogKind::Error, json!({"message": alert_text(message)}).as_object().cloned().unwrap_or_default());
+    crate::dialogs::alerts::alert(app, alert_text(message));
 }
 
 /// The alert in the UI language. Literal keys, so the translation report lists both alerts for the
@@ -133,233 +140,6 @@ pub fn block_size(app: &PhotocraftApp) -> f32 {
     photocraft_engine::brush_cmds::block_size(f64::from(app.point_zoom()))
 }
 
-/// The Eraser's Mode dropdown (Brush / Pencil / Block). Returns whether it changed.
-pub fn mode_dropdown(ui: &mut egui::Ui, mode: &mut String) -> bool {
-    opt(ui, tl!("Mode:"));
-    let modes = [("brush".to_string(), tl!("Brush")), ("pencil".to_string(), tl!("Pencil")), ("block".to_string(), tl!("Block"))];
-    widgets::dropdown(ui, "eraser-mode", tl!("Mode"), mode, &modes, 96.0)
-}
-
-fn opt(ui: &mut egui::Ui, text: &str) {
-    let t = Tokens::get(ui.ctx());
-    let label = ui.label(egui::RichText::new(tl!(&text)).color(t.text_dim).size(12.0));
-    crate::widgets::scrub_option_label(ui, &label);
-}
-
-/// The reference application's alert for a Background Eraser Angle typed outside −180…180.
-pub(crate) const ANGLE_RANGE_MESSAGE: &str = "An integer between -180 ° and 180 ° is required. Closest value inserted.";
-
-/// The Background Eraser's Angle: an angle icon and a whole-degree field on the brush tip's
-/// angle, −180…180, default 0. Returns true when a typed value was out of range and was clamped
-/// (400 → 180): the caller shows [`ANGLE_RANGE_MESSAGE`] once the entry is committed.
-fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let tip = tl!("Set the brush angle");
-    ui.add(icons::image("rotate-cw", 15.0, t.text_dim)).on_hover_text(tip);
-    // A wider range than the angle's, so a typed 400 reaches us and can be told apart from 180.
-    let mut a = b.angle;
-    // Read before the field: it consumes the arrow keys it steps with, and the wheel it steps
-    // with while focused never shows in the scroll delta (a view's scroll does, and is no step).
-    let arrow_or_wheel =
-        ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown)) || crate::field_wheel::focused_field_wheeled(ui.ctx());
-    let r = widgets::value_field_named(ui, tl!("Angle"), &mut a, -ANGLE_TYPED_MAX..=ANGLE_TYPED_MAX, "°", 52.0);
-    let out_of_range = r.id.with("bg-eraser-angle-out-of-range");
-    // The flag lives only while an entry is being typed: drawn without the keyboard, the field
-    // drops it, so an entry the tool switch cut off (never committed) can't alert on a later one.
-    // The widget's own focus, not `has_focus()`: that is false while the window is in the
-    // background, and switching away mid-entry must keep the alert for the commit.
-    if !ui.memory(|m| m.has_focus(r.id)) && !r.lost_focus() {
-        ui.data_mut(|d| d.remove_temp::<bool>(out_of_range));
-    }
-    if r.changed() && a.is_finite() {
-        let whole = a.trunc();
-        let clamped = whole.clamp(-180.0, 180.0);
-        b.angle = clamped;
-        // Only typing alerts: a scrub or an arrow-key step past the end just stops there.
-        let stepped = r.dragged() || arrow_or_wheel;
-        // A wheel step over the field without its focus is no entry either.
-        let typed_out = whole != clamped && !stepped && (r.has_focus() || r.lost_focus());
-        ui.data_mut(|d| d.insert_temp(out_of_range, typed_out));
-    }
-    let r = r.on_hover_text(tip);
-    // Enter (or a click away) commits the entry: the alert comes then, not mid-typing.
-    r.lost_focus() && ui.data_mut(|d| d.remove_temp::<bool>(out_of_range)).unwrap_or(false)
-}
-
-/// How far the Angle field lets a typed number through before [`angle_field`] clamps it.
-const ANGLE_TYPED_MAX: f32 = 1.0e6;
-
-/// Options bar for the Magic Eraser and Background Eraser. Returns false for other tools.
-pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    let o = &mut app.ui.tool_options;
-    match tool {
-        Tool::MagicEraser => {
-            opt(ui, tl!("Tolerance:"));
-            widgets::value_field(ui, &mut o.tolerance, 0.0..=255.0, "", 58.0);
-            widgets::checkbox(ui, &mut o.anti_alias, tl!("Anti-alias"));
-            widgets::checkbox(ui, &mut o.contiguous, tl!("Contiguous"));
-            widgets::checkbox(ui, &mut o.sample_all.magic_eraser, tl!("Sample All Layers"));
-            widgets::vline(ui, 22.0);
-            opt(ui, tl!("Opacity:"));
-            widgets::value_field(ui, &mut o.magic_eraser_opacity, 1.0..=100.0, "%", 62.0);
-        }
-        Tool::BackgroundEraser => {
-            // Sampling: Continuous / Once / Background Swatch, as icon toggles (Photoshop).
-            ui.spacing_mut().item_spacing.x = 2.0;
-            for (k, icon, tip) in [
-                ("continuous", "pipette", tl!("Sampling: Continuous")),
-                ("once", "circle-dot", tl!("Sampling: Once")),
-                ("backgroundSwatch", "square", tl!("Sampling: Background Swatch")),
-            ] {
-                if icons::button(ui, icon, 24.0, o.bg_sampling == k, tip).clicked() {
-                    o.bg_sampling = k.into();
-                }
-            }
-            ui.spacing_mut().item_spacing.x = 8.0;
-            widgets::vline(ui, 22.0);
-            opt(ui, tl!("Limits:"));
-            let limits = [
-                ("discontiguous".to_string(), tl!("Discontiguous")),
-                ("contiguous".to_string(), tl!("Contiguous")),
-                ("findEdges".to_string(), tl!("Find Edges")),
-            ];
-            widgets::dropdown(ui, "bg-eraser-limits", tl!("Limits:"), &mut o.bg_limits, &limits, 110.0);
-            // The dropdown's button, by the id its combo box takes from "bg-eraser-limits".
-            if let Some(limits) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("bg-eraser-limits"))) {
-                limits.on_hover_text(tl!("How far to let the erasing spread"));
-            }
-            opt(ui, tl!("Tolerance:"));
-            if tolerance_field(ui, &mut o.bg_tolerance) {
-                open_range_alert(app);
-            }
-            // Angle and Pressure for Size edit the tool's own brush (the shell swaps one in per
-            // tool), through `tools.setBrush` like the Brush Settings panel.
-            let before = app.session.tools.brush.clone();
-            let mut brush = before.clone();
-            if angle_field(ui, &mut brush) {
-                let message = tl!(ANGLE_RANGE_MESSAGE).to_string();
-                app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
-            }
-            widgets::checkbox(ui, &mut app.ui.tool_options.bg_protect_fg, tl!("Protect Foreground Color"))
-                .on_hover_text(tl!("Do not erase the foreground swatch color"));
-            let name = tl!("Always use pressure for size");
-            let pressure = icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), brush.pressure_size, name, false);
-            if pressure.on_hover_text(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
-                brush.pressure_size = !brush.pressure_size;
-            }
-            crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
-        }
-        _ => return false,
-    }
-    true
-}
-
-/// The alert for a Background Eraser Tolerance typed out of range (#11909).
-pub const TOLERANCE_RANGE_ALERT: &str = "An integer between 1% and 100% is required. Closest value inserted.";
-
-/// The Background Eraser's Tolerance: whole numbers in 1..=100, as the reference application takes
-/// them (#11909). A typed fraction becomes the nearest whole number, a value past the range the
-/// closest one. Returns true when the field is left with a value typed out of range, so the
-/// caller shows [`TOLERANCE_RANGE_ALERT`].
-fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
-    whole_tolerance_field(ui, value, "bg-eraser-tolerance-typed", tl!("Erase range of similar colors"))
-}
-
-/// [`tolerance_field`]'s field for any tool's whole-number Tolerance (the Color Replacement tool's
-/// too, #11930): `draft` keys its typed-but-not-left text, `hover` is its tooltip.
-pub(crate) fn whole_tolerance_field(ui: &mut egui::Ui, value: &mut f32, draft: &str, hover: &str) -> bool {
-    // A restored setting (an older 0, a fraction) shows and erases as the field would store it.
-    *value = stored_tolerance(*value);
-    // While the field has the keyboard it gets back what was typed, not the stored value, so
-    // its text is left alone mid-entry (`0` on the way to `05` must not turn into `1`).
-    let draft_id = ui.make_persistent_id(egui::IdSalt::new(draft));
-    // The field's own range is wide, so the typed value reaches here unclamped.
-    // A draft only stands while the setting is still the one it stored: a value set elsewhere
-    // meanwhile (a tool preset while the bar was hidden) wins.
-    let draft = ui.ctx().data(|d| d.get_temp::<(f32, f32)>(draft_id));
-    let mut typed = draft.filter(|(_, stored)| *stored == *value).map_or(*value, |(typed, _)| typed);
-    let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(hover);
-    let out_id = r.id.with("out-of-range");
-    // An edit the field never got to finish (the options bar was hidden while it had the
-    // keyboard) has nothing left to say once the field is entered again.
-    if r.gained_focus() {
-        ui.ctx().data_mut(|d| {
-            d.remove_temp::<bool>(out_id);
-            d.remove_temp::<bool>(r.id.with("parses"));
-        });
-    }
-    if r.changed() && typed.is_finite() {
-        *value = typed.round().clamp(1.0, 100.0);
-        // Only what was typed alerts, also an expression committed as the field is left
-        // (`50*4` and Enter); a scrub past the ends (the field's or its caption's, even while
-        // the field has the keyboard) just stops there.
-        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
-        let out = typing && !(1.0..=100.0).contains(&typed);
-        ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
-        if typing && r.has_focus() {
-            ui.ctx().data_mut(|d| d.insert_temp(draft_id, (typed, *value)));
-        } else {
-            ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
-        }
-    }
-    // Text replaced by something that is no number (`150`, then `abc`) leaves the value alone
-    // when the field is left, with no alert (#12268). A number typed again after it (`150` once
-    // more) owes the alert again, even though the value did not change.
-    let no_number_id = r.id.with("no-number-typed");
-    if r.has_focus() {
-        match widgets::typed_text_parses(ui.ctx(), r.id) {
-            Some(false) => ui.ctx().data_mut(|d| {
-                d.remove_temp::<bool>(out_id);
-                d.insert_temp(no_number_id, true);
-            }),
-            Some(true) if ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number_id)).unwrap_or(false) => {
-                let out = typed.is_finite() && !(1.0..=100.0).contains(&typed);
-                ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
-            }
-            _ => {}
-        }
-    } else {
-        ui.ctx().data_mut(|d| d.remove_temp::<bool>(no_number_id));
-    }
-    if !r.has_focus() {
-        ui.ctx().data_mut(|d| d.remove_temp::<(f32, f32)>(draft_id));
-    }
-    let alert = r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false);
-    // While a value typed out of range waits for the field to be left, the bar notes the pass, so
-    // a field that goes away instead (a tool shortcut that passes the field by) still alerts.
-    let owed = r.has_focus() && ui.ctx().data(|d| d.get_temp::<bool>(out_id)).unwrap_or(false);
-    let pass = ui.ctx().cumulative_pass_nr();
-    ui.ctx().data_mut(|d| {
-        if owed {
-            d.insert_temp(range_alert_owed_id(), pass);
-        } else {
-            d.remove_temp::<u64>(range_alert_owed_id());
-        }
-    });
-    alert
-}
-
-/// Where a whole-number Tolerance field notes the pass in which it last owed the range alert.
-fn range_alert_owed_id() -> egui::Id {
-    egui::Id::unique("whole-tolerance-range-alert-owed")
-}
-
-/// Shows [`TOLERANCE_RANGE_ALERT`] for a whole-number Tolerance field that went away in the last
-/// pass while it held a value typed out of range (the tool changed by a shortcut, #12268). The
-/// options bar calls it before drawing a tool's options. An edit older than that (the bar was
-/// hidden meanwhile) is dropped, as the field drops it once entered again.
-pub(crate) fn alert_for_a_field_gone(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(seen) = ctx.data(|d| d.get_temp::<u64>(range_alert_owed_id())) else { return };
-    let now = ctx.cumulative_pass_nr();
-    if seen.saturating_add(1) >= now {
-        return;
-    }
-    ctx.data_mut(|d| d.remove_temp::<u64>(range_alert_owed_id()));
-    if seen.saturating_add(2) == now {
-        open_range_alert(app);
-    }
-}
-
 /// A Tolerance as the field stores it: a whole number in 1..=100, the default 50 for a value
 /// that is no number. Strokes use it too, so a restored setting erases the same before and after
 /// the options bar shows it.
@@ -367,17 +147,124 @@ pub(crate) fn stored_tolerance(v: f32) -> f32 {
     if v.is_finite() { v.round().clamp(1.0, 100.0) } else { 50.0 }
 }
 
-/// Shows [`TOLERANCE_RANGE_ALERT`]: a modal with OK, once even if more than one pass asks.
-pub(crate) fn open_range_alert(app: &mut PhotocraftApp) {
-    let message = tl!(TOLERANCE_RANGE_ALERT).to_owned();
-    let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
-    if !shown {
-        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+/// A check box named `label` over `value`.
+fn check(ui: &mut egui::Ui, label: &str, value: &mut bool, tip: Option<&str>) {
+    let mut checkbox = Checkbox::new(Bind::bound(value)).label(label.to_owned());
+    if let Some(tip) = tip {
+        checkbox = checkbox.tooltip(tip.to_owned());
+    }
+    checkbox.show(ui);
+}
+
+/// The members of the Eraser group's options bars, added to the host's `Bar` body. Returns false
+/// for other tools. The Eraser's own Mode is `PaintBar::eraser_mode`, not a member here.
+pub fn options_bar(ui: &mut egui::Ui, app: &mut PhotocraftApp, tool: Tool) -> bool {
+    match tool {
+        Tool::MagicEraser => magic_eraser_members(ui, app),
+        Tool::BackgroundEraser => background_eraser_members(ui, app),
+        _ => return false,
+    }
+    true
+}
+
+fn magic_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let o = &mut app.ui.tool_options;
+    // The field clamps without an alert, as the reference's Magic Eraser Tolerance does.
+    let _ = option_cells::number(tl!("Tolerance:"), &mut o.tolerance, 0.0..=255.0).show(ui);
+    check(ui, tl!("Anti-alias"), &mut o.anti_alias, None);
+    check(ui, tl!("Contiguous"), &mut o.contiguous, None);
+    check(ui, tl!("Sample All Layers"), &mut o.sample_all.magic_eraser, None);
+    Divider::vertical().show(ui);
+    let _ = option_cells::number(tl!("Opacity:"), &mut o.magic_eraser_opacity, 1.0..=100.0).unit("%").show(ui);
+}
+
+fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+    let mut alerts = Vec::new();
+    {
+        let o = &mut app.ui.tool_options;
+        let sampling = [
+            Entry::new("continuous".to_string(), tl!("Sampling: Continuous")).icon(IconId::new("eyedropper")),
+            Entry::new("once".to_string(), tl!("Sampling: Once")).icon(IconId::new("target")),
+            Entry::new("backgroundSwatch".to_string(), tl!("Sampling: Background Swatch")).icon(IconId::new("square")),
+        ];
+        let picked = Segmented::new(tl!("Sampling"), Bind::given(o.bg_sampling.clone()), &sampling).show(ui).value().cloned();
+        if let Some(sampling) = picked {
+            o.bg_sampling = sampling;
+        }
+        Divider::vertical().show(ui);
+
+        let limits = [
+            Entry::new("discontiguous".to_string(), tl!("Discontiguous")),
+            Entry::new("contiguous".to_string(), tl!("Contiguous")),
+            Entry::new("findEdges".to_string(), tl!("Find Edges")),
+        ];
+        // In a `Field`, as Color Replacement's Limits: a bare control's label only names it (#16338).
+        let picked = Field::new(tl!("Limits:"))
+            .show(ui, |ui, _| {
+                Select::new(tl!("Limits:"), Bind::given(o.bg_limits.clone()), &limits)
+                    .tooltip(tl!("How far to let the erasing spread").to_owned())
+                    .show(ui)
+                    .events
+                    .committed()
+                    .cloned()
+            })
+            .inner
+            .flatten();
+        if let Some(limits) = picked {
+            o.bg_limits = limits;
+        }
+
+        // Shown as the stroke reads it; written back only when the user edits it.
+        let shown = stored_tolerance(o.bg_tolerance);
+        let mut tolerance = shown;
+        let alert = option_cells::number(tl!("Tolerance:"), &mut tolerance, 1.0..=100.0)
+            .whole()
+            .unit("%")
+            .tooltip(tl!("Erase range of similar colors"))
+            .show(ui)
+            .out_of_range;
+        if tolerance != shown {
+            o.bg_tolerance = tolerance;
+        }
+        alerts.extend(alert);
+    }
+
+    // Angle and Pressure for Size edit the tool's own brush (the shell swaps one in per tool).
+    let before = (*app.session.tools.brush).clone();
+    let mut brush = before.clone();
+    let mut angle = brush.angle;
+    let angle_out = option_cells::number(tl!("Angle"), &mut angle, -180.0..=180.0)
+        .whole()
+        .unit("°")
+        .icon(IconSpec::svg(IconId::new("rotate_cw")))
+        .tooltip(tl!("Set the brush angle"))
+        .show(ui);
+    // One scrub is one gesture, so one history step.
+    let mut key = angle_out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
+    brush.angle = angle;
+    alerts.extend(angle_out.out_of_range);
+
+    check(ui, tl!("Protect Foreground Color"), &mut app.ui.tool_options.bg_protect_fg, Some(tl!("Do not erase the foreground swatch color")));
+
+    let pressure = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(brush.pressure_size))
+        .icon(IconId::new("target"))
+        .icon_only()
+        .tooltip(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure").to_owned())
+        .show(ui);
+    if let Some(on) = pressure.value().copied() {
+        brush.pressure_size = on;
+        key = pressure.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e)).or(key);
+    }
+    crate::brush_panel::commit_keyed(app, &before, &brush, key);
+
+    for alert in &alerts {
+        option_cells::range_alert(app, ui, alert);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::brush_refusal::brush_refusal_alert_tests::alerts;
     use super::*;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
 
@@ -392,14 +279,9 @@ mod tests {
         });
     }
 
-    /// The message of every open error dialog, in the order they were opened.
-    fn alerts(app: &PhotocraftApp) -> Vec<&str> {
-        app.ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message").and_then(|m| m.as_str())).collect()
-    }
-
     /// The app with a white 64x48 document in `mode` open and the Magic Eraser picked: a click on
     /// it would wipe the flat canvas out.
-    fn app_in(mode: ColorMode) -> PhotocraftApp {
+    fn app_in(mode: ColorMode) -> Box<PhotocraftApp> {
         let mut s = photocraft_engine::Session::new();
         s.add_document(Document::with_background("p", Size::new(64, 48), mode, SampleType::U8, Color::WHITE), None);
         let mut app = PhotocraftApp::new(s, crate::Services::default());
@@ -425,12 +307,11 @@ mod tests {
             assert_eq!(st.doc.layer(id).unwrap().name, "Background", "{case}: still a Background");
             assert!(st.doc.layer(id).unwrap().surface().unwrap().rgba(2, 2)[3] > 0.0, "{case}: nothing erased");
             assert!(!app.ui.status_error, "{case}: the alert is the answer, not the status bar");
-            // OK closes it (`DialogKind::Error` asks for nothing else), and the next press answers
-            // the same way: the document is no more erasable than it was.
-            let open: Vec<u64> = app.ui.dialogs.iter().map(|d| d.id).collect();
-            for dialog in open {
-                app.ui.close_dialog(dialog);
-            }
+            // OK closes it, and the next press answers the same way: the document is no more
+            // erasable than it was.
+            let id = app.framework.dialogs.open_dialogs().first().map(|d| d.id).unwrap();
+            let ctx = app.ctx().clone();
+            crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
             click(&mut app, Tool::MagicEraser, 10.0, 10.0);
             assert_eq!(alerts(&app), [want], "{case}: the next press is refused too");
             assert_eq!(app.session.active().unwrap().history.past_len(), steps, "{case}: still no History step");
@@ -452,7 +333,7 @@ mod tests {
             let mut app = app_in(mode);
             let steps = app.session.active().unwrap().history.past_len();
             assert!(click(&mut app, Tool::MagicEraser, 2.0, 2.0), "{case}");
-            assert!(app.ui.dialogs.iter().all(|d| d.kind != DialogKind::Error), "{case}: no alert");
+            assert!(alerts(&app).is_empty(), "{case}: no alert");
             let st = app.session.active().unwrap();
             let id = st.active_layer.unwrap();
             assert_eq!(st.doc.layer(id).unwrap().name, "Layer 0", "{case}: the Background became a layer");

@@ -194,9 +194,16 @@ pub fn hash_noise(x: i64, y: i64) -> f32 {
 }
 
 /// Effect noise (Photoshop's Noise slider): monochrome speckle in the coverage,
-/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. The speckle is
-/// scaled by the coverage, so it fades out with the effect instead of lighting up the blur's
-/// near-zero tail out to the edge of its rectangular reach (#7833).
+/// applied after the contour. `amount` is 0..=1; 0 leaves the map untouched. In a falloff a
+/// pixel drops out entirely with probability `min(1, amount x (1 - v) x (0.22 + 0.024 / v))`
+/// and otherwise its coverage deepens by up to `1 + 2 x amount` (measured on the Inner Shadow
+/// and Outer Glow falloff bands, #14936 and #14952: the reference application scatters far
+/// stronger than the multiplicative jitter, which never removed a band pixel at Noise 50).
+/// The dropout probability grows as coverage falls, so the speckle fades out with the effect
+/// instead of lighting up the blur's near-zero tail out to the edge of its rectangular reach
+/// (#7833); pixels with no coverage are never touched. Solid coverage (>= 0.95, e.g. a big
+/// drop shadow's interior) keeps today's multiplicative jitter: the issues measure falloff
+/// bands only, and jittering the interior is a behaviour they do not ask to change.
 pub(super) fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
     if !amount.is_finite() || amount <= 0.0 {
         return;
@@ -208,7 +215,16 @@ pub(super) fn noise(m: &mut Map, amount: f32, x0: i32, y0: i32) {
                 continue;
             }
             let n = hash_noise(i64::from(x0 + x as i32), i64::from(y0 + y as i32));
-            *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
+            if *v >= 0.95 {
+                *v = (*v * (1.0 + (n - 0.5) * 2.0 * amount)).clamp(0.0, 1.0);
+                continue;
+            }
+            let kill = (amount * (1.0 - *v) * (0.22 + 0.024 / *v)).min(1.0);
+            if n < kill {
+                *v = 0.0;
+            } else {
+                *v = (*v * (1.0 + 2.0 * amount * n)).clamp(0.0, 1.0);
+            }
         }
     }
 }
@@ -229,6 +245,57 @@ pub(super) fn rgb(c: &photocraft_color::Color) -> [f32; 3] {
 pub(super) fn offset(angle: f32, distance: f32) -> (f32, f32) {
     let a = angle.to_radians();
     ((-a.cos() * distance).round(), (a.sin() * distance).round())
+}
+
+/// Whether an effect's Anti-aliased checkbox moves its source map: only for the contour the
+/// reference application was measured with. #14934 (Inner Shadow) and #14951 (Outer Glow) both
+/// measure Size 10 with the Gaussian contour and leave Anti-aliased with any other contour
+/// unmeasured, so every other contour keeps today's map bit-for-bit. The built-in Gaussian preset
+/// carries that name from the Contour picker and from a PSD import; an edited curve becomes
+/// "Custom" and keeps today's map. Public because the GPU map program asks for the same rule, so
+/// both compositors take the offset or neither does.
+pub fn anti_aliased_contour(c: &Contour) -> bool {
+    matches!(c, Contour::Custom { name, .. } if name.eq_ignore_ascii_case("Gaussian"))
+}
+
+/// Whether Choke / Spread `spread` of a `size` px soft effect leaves the map both issues measured:
+/// one the two compositors build alike, and one whose edge is soft at all. `spread_split` splits
+/// the Size into a dilation radius and a blur width, and both neighbours of the measured split are
+/// degeneracies of that split rather than a guess about an unmeasured picture:
+/// - a radius above 0 makes the CPU recompute its chamfer distance on the offset map
+///   (`blur::dilate`), while the GPU dilates with a distance field of the unshifted shape shifted
+///   by whole pixels only (`fx::builders::spread_blur`), so the two compositors part by exactly
+///   the fraction of a pixel the offset adds. Keep those on today's map.
+/// - a blur width of 1 or less is the identity (`blur::tent` returns at once, because
+///   `tent_kernel(1).0 == 0`), and with the radius at 0 nothing else softens the edge either: at
+///   Size 1, or at Size 2 with half Choke / Spread, the source offset would be the whole map -
+///   coverage on the bottom and right inner edges of an Inner Shadow and one glowing line outside
+///   the top and left of an Outer Glow, which no measurement shows.
+///
+/// Radius 0 with a wider blur is the map both issues measured, whatever the Size: the rule is in
+/// the inputs, not in the measured documents' Size 10.
+fn anti_aliased_geometry(size: f32, spread: f32) -> bool {
+    let (r, bw) = spread_split(size, spread);
+    r <= 0.0 && bw > 1.0
+}
+
+/// The sub-pixel offset towards the top-left that an anti-aliased effect builds its map from,
+/// added to the whole-pixel light offset. Both measured tables sit on a third of a pixel: with the
+/// flag on, the Outer Glow reaches a pixel further at the top and left (its reported bounds grow
+/// there) and a pixel less at the bottom and right, and the Inner Shadow is weaker at the top and
+/// left edge and stronger at the bottom and right. Half a pixel overshoots (it puts the Inner
+/// Shadow 5 levels and the Outer Glow 15 levels off the measured profiles); a third lands the
+/// Inner Shadow within 1.4 levels of every measured pixel, and the glow within 4.6 at four
+/// samples of eighteen and within 3 at the rest, which is where today's off-path profile already
+/// sits from the reference. *Why* the two pairs of edges differ is not measured, so this
+/// reproduces both profiles instead of guessing a rule for the unmeasured cases. The GPU map
+/// program adds the same offset to its shift stage, so both compositors build the same geometry.
+/// Only the configuration the issues measured takes it: the Gaussian contour
+/// (`anti_aliased_contour`) with a Size and Choke / Spread `anti_aliased_geometry` allows, so the
+/// offset is neither keyed to the measured Size nor applied to a map the two compositors build
+/// differently. Every other neighbour keeps today's map bit-for-bit.
+pub fn aa_shift(on: bool, c: &Contour, size: f32, spread: f32) -> f32 {
+    if on && anti_aliased_contour(c) && anti_aliased_geometry(size, spread) { -1.0 / 3.0 } else { 0.0 }
 }
 
 /// The lengths a 100 % gradient at `angle` spans in a `w` × `h` frame: the chord (Linear and
@@ -378,8 +445,12 @@ pub fn spread_split(size: f32, spread: f32) -> (f32, f32) {
 pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bool, origin: (i32, i32)) -> Map {
     let angle = if s.use_global_light { light.angle } else { s.angle };
     let (dx, dy) = offset(angle, s.distance);
+    // #14934: an Anti-aliased Inner Shadow builds its map from the shape off-centre (`aa_shift`).
+    // Only the inner branch was measured, so a Drop Shadow keeps today's map (#14881 is its own),
+    // and `aa_shift` leaves every Choke that dilates and every Size whose blur is the identity.
+    let aa = aa_shift(inner && s.anti_alias, &s.contour, s.size, s.spread);
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
-    let mut m = src.shifted(dx, dy, if inner { 1.0 } else { 0.0 });
+    let mut m = src.shifted(dx + aa, dy + aa, if inner { 1.0 } else { 0.0 });
     let (r, bw) = spread_split(s.size, s.spread);
     m = dilate(&m, r);
     blur(&mut m, bw);
@@ -399,6 +470,13 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
     // 1 − the edge glow, for both techniques).
     let src = if inner { shape.clone().map(|a| 1.0 - a) } else { shape.clone() };
     let mut m = match g.technique {
+        GlowTechnique::Softer if inner && g.source == GlowSource::Edge && g.size == 1.0 && g.spread == 0.0 => {
+            // A width-one box blur leaves no coverage inside the edge. The Size 1 taps
+            // put quarter coverage on the first pixel, which Range 50% doubles (#14924).
+            let mut m = src;
+            super::blur::size_one_blur(&mut m);
+            m
+        }
         GlowTechnique::Precise => {
             // Coverage falls linearly from 0.5 at the edge to 0 at `size + 1` px (centre to
             // centre), solid within the spread / choke: after the default 50 % Range that is
