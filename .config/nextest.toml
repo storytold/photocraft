@@ -24,7 +24,10 @@ gpu = { max-threads = 4 }
 # mcp_wait builds a 6000x6000 document and a radius-1000 Gaussian Blur so the
 # waited command runs long enough to cancel. On the artcraft k8s gate pods that
 # often fails with "not enough working memory" when it shares the shard with
-# the rest of the suite; hosted ubuntu-24.04 stays green. Run these alone.
+# the rest of the suite; hosted ubuntu-24.04 stays green. A bridged jobs.list
+# poll can also miss its 300ms test timeout under that load (run 45136461883).
+# Run these alone: the group caps them at one, and threads-required keeps the
+# rest of the shard off the machine while they run.
 heavy-filter = { max-threads = 1 }
 
 [[profile.default.overrides]]
@@ -34,6 +37,7 @@ test-group = 'gpu'
 [[profile.default.overrides]]
 filter = 'package(photocraft-automation) & test(/^mcp_wait::/)'
 test-group = 'heavy-filter'
+threads-required = "num-test-threads"
 
 # CI (`--profile ci`, .github/workflows/ci.yml). Collect all failures in one integration run
 # instead of exposing one regression per rebuild. A hanging test still terminates, and every
