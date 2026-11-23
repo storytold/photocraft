@@ -35,7 +35,7 @@ pub(crate) fn commands(a: &CommandsArgs, out: &mut dyn Write) -> Result {
 pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     use std::sync::{Arc, Mutex};
     let mut h = Headless::with_workspace(a.automation.workspace()?);
-    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(crate::CliError::Other)?;
+    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
     policy.apply_to_headless(&mut h);
     for d in h.drain_diagnostics() {
         let _ = writeln!(err, "warning: {d}");
@@ -87,7 +87,7 @@ pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
         }
         None => {
             let mut h = Headless::with_workspace(a.automation.workspace()?);
-            let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(crate::CliError::Other)?;
+            let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
             policy.apply_to_headless(&mut h);
             for d in h.drain_diagnostics() {
                 let _ = writeln!(err, "warning: {d}");
@@ -114,7 +114,7 @@ fn live_config(a: &McpArgs) -> Result<photocraft_automation::live::LiveConfig> {
     config.read_roots.clone_from(&a.automation.automation_read_root);
     config.write_root = a.automation.automation_write_root.clone();
     config.launch = std::env::current_exe().ok().and_then(|exe| photocraft_automation::live::launcher(&exe));
-    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(crate::CliError::Other)?;
+    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
     config.prepare_headless = Some(Box::new(move |h| {
         policy.apply_to_headless(h);
         // stdout carries the protocol; the warnings a headless start has go to stderr.

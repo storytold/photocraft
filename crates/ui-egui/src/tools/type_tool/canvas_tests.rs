@@ -13,6 +13,7 @@ use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 
@@ -61,7 +62,7 @@ fn canvas_rect(app: &PhotocraftApp) -> egui::Rect {
 
 /// Sets the main view's zoom and centre through the `ui.set` view command, then runs the passes
 /// that show it.
-fn set_view(h: &mut Harness<'static, PhotocraftApp>, zoom: f32, center: [f32; 2]) {
+fn set_view(h: &mut Harness<'static, Box<PhotocraftApp>>, zoom: f32, center: [f32; 2]) {
     let ctx = h.ctx.clone();
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"zoom": zoom, "center": center}));
     let app = h.state_mut();
@@ -151,14 +152,14 @@ fn show_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Clicks the presets chevron of the number field named `menu` minus " presets" ("Font size presets"): the button
 /// inside that field's spin button.
-fn open_presets(h: &Harness<'static, PhotocraftApp>, menu: &str) {
+fn open_presets(h: &Harness<'static, Box<PhotocraftApp>>, menu: &str) {
     let field = menu.strip_suffix(" presets").unwrap_or(menu);
     h.get_by_role_and_label(egui::accesskit::Role::SpinButton, field).get_by_role_and_label(egui::accesskit::Role::Button, "Presets").click();
 }
 
 /// The accessible name of the field `label` of the Properties panel, or of the options bar's own name for it
 /// ("Font size" is "Set font size" there).
-fn field_name(h: &Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, label: &str) -> String {
+fn field_name(h: &Harness<'static, Box<PhotocraftApp>>, role: egui::accesskit::Role, label: &str) -> String {
     // The Character panel names its style field "Style"; the options bar names it "Set font style".
     let lower = label.to_lowercase();
     [label.to_owned(), format!("Set {lower}"), format!("Set font {lower}")]
@@ -169,7 +170,7 @@ fn field_name(h: &Harness<'static, PhotocraftApp>, role: egui::accesskit::Role, 
 
 /// Scrolls the open popup list until the row `label` is shown: lists draw only the rows in view, so a row near the end
 /// of a long one is not in the access tree until the wheel has brought it into view.
-pub(super) fn reveal(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+pub(super) fn reveal(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str) {
     for _ in 0..40 {
         if h.query_by_label(label).is_some() {
             return;
@@ -188,7 +189,7 @@ pub(super) fn reveal(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
     panic!("the row {label} never came into view");
 }
 
-fn panel_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn panel_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     // Wait for the font scan: while it runs the panels repaint every 100 ms and `Harness::run` gives up.
     let _ = photocraft_text::shared();
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(760.0, 800.0)).with_max_steps(16).build_app(
@@ -204,10 +205,10 @@ fn panel_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 
 /// The Properties panel without the app's frame logic, which ends a text edit whose layer is not the
 /// active one: for a session on a layer other than the primary.
-fn panel_harness_without_frame_logic(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn panel_harness_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let _ = photocraft_text::shared();
     let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(760.0, 800.0)).with_max_steps(16).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             ui.set_width(340.0);
             show_panels(app, ui);
         },
@@ -217,10 +218,14 @@ fn panel_harness_without_frame_logic(app: PhotocraftApp) -> Harness<'static, Pho
     h
 }
 
-fn bar_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+/// Frames the options bar may take to settle: opening the font list loads the rows' samples over several
+/// passes, more of them where the system has more fonts.
+const BAR_SETTLE_STEPS: u64 = 64;
+
+fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let _ = photocraft_text::shared();
     // As tall as a window, so the bar's popup lists open in full below it.
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(16).build_app(
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(BAR_SETTLE_STEPS).build_app(
         |ui, app: &mut PhotocraftApp| {
             ui.horizontal(|ui| show_bar(app, ui));
         },
@@ -258,7 +263,7 @@ mod panel_defaults {
         assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "defaults are not a document edit");
     }
 
-    fn number(h: &mut Harness<'static, PhotocraftApp>, label: &str, value: &str) {
+    fn number(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str, value: &str) {
         let name = field_name(h, Role::SpinButton, label);
         h.get_by_role_and_label(Role::SpinButton, &name).click();
         h.run();
@@ -429,17 +434,17 @@ mod panel_defaults {
     }
 }
 
-fn harness(ppp: f32, app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(ppp: f32, app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     make_harness_with(Harness::builder(), ppp, app)
 }
 
 /// 60 frames a second: every queued event is a frame, and the default quarter-second step puts
 /// the second click of a double-click past egui's double-click delay.
-fn fast_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn fast_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     make_harness_with(Harness::builder().with_step_dt(1.0 / 60.0), 1.0, app)
 }
 
-fn make_harness_with(builder: egui_kittest::HarnessBuilder<PhotocraftApp>, ppp: f32, app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn make_harness_with(builder: egui_kittest::HarnessBuilder<Box<PhotocraftApp>>, ppp: f32, app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     // The tests type CJK text; the UI stack loads a system face only after a pass that missed the glyph,
     // so the first pass draws tofu on any machine and the layout under test does not depend on a face.
     let builder = builder.allow_missing_glyphs().with_context(app.ctx().clone()).with_size(vec2(1200.0, 800.0)).with_pixels_per_point(ppp);
@@ -453,7 +458,7 @@ fn make_harness_with(builder: egui_kittest::HarnessBuilder<PhotocraftApp>, ppp: 
     h
 }
 
-fn new_app() -> PhotocraftApp {
+fn new_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
     app.sync_views();
@@ -463,7 +468,7 @@ fn new_app() -> PhotocraftApp {
 }
 
 /// Screen position of a text-space point of layer `id`.
-fn screen(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, x: f32, y: f32) -> Pos2 {
+fn screen(h: &mut Harness<'static, Box<PhotocraftApp>>, id: LayerId, x: f32, y: f32) -> Pos2 {
     let app = h.state_mut();
     let (_, aff, _) = layout(app, id).unwrap();
     let p = aff.apply(Point::new(f64::from(x), f64::from(y)));
@@ -472,7 +477,7 @@ fn screen(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, x: f32, y: f32) 
 
 /// A point inside glyph `i` (character index): `f` of the way along its advance, in the upper
 /// half of its line.
-fn glyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32) -> Pos2 {
+fn glyph(h: &mut Harness<'static, Box<PhotocraftApp>>, id: LayerId, i: usize, f: f32) -> Pos2 {
     let (l, _, text) = layout(h.state_mut(), id).unwrap();
     let b = text.char_indices().nth(i).unwrap().0;
     let c = l.clusters.iter().find(|c| c.range.start == b).unwrap().clone();
@@ -480,12 +485,12 @@ fn glyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32)
     screen(h, id, c.x + c.advance * f, ln.baseline - ln.ascent * 0.35)
 }
 
-fn press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool) {
+fn press(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, down: bool) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2) {
     h.hover_at(p);
     h.run_steps(1);
     press(h, p, true);
@@ -494,7 +499,7 @@ fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
 }
 
 /// Two clicks within egui's double-click delay (use [`fast_harness`]).
-fn double_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+fn double_click(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2) {
     h.hover_at(p);
     h.run_steps(1);
     // One pass per press and release, as the window delivers them: the runtime takes one press per pass.
@@ -505,19 +510,24 @@ fn double_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
     h.run_steps(1);
 }
 
-fn drag(h: &mut Harness<'static, PhotocraftApp>, a: Pos2, b: Pos2) {
+fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, a: Pos2, b: Pos2) {
+    drag_in(h, a, b, 6);
+}
+
+/// [`drag`] in `moves` pointer moves, one frame each.
+fn drag_in(h: &mut Harness<'static, Box<PhotocraftApp>>, a: Pos2, b: Pos2, moves: u8) {
     h.hover_at(a);
     h.run_steps(1);
     press(h, a, true);
-    for k in 1..=6 {
-        h.hover_at(a + (b - a) * (k as f32 / 6.0));
+    for k in 1..=moves {
+        h.hover_at(a + (b - a) * (f32::from(k) / f32::from(moves)));
         h.run_steps(1);
     }
     press(h, b, false);
     h.run_steps(1);
 }
 
-fn selection(h: &Harness<'static, PhotocraftApp>) -> (usize, usize) {
+fn selection(h: &Harness<'static, Box<PhotocraftApp>>) -> (usize, usize) {
     let Some(e) = h.state().ui.text_edit.clone() else { return (usize::MAX, usize::MAX) };
     (e.anchor, e.caret)
 }
@@ -530,52 +540,57 @@ fn selection(h: &Harness<'static, PhotocraftApp>) -> (usize, usize) {
 #[test]
 fn clicks_and_drags_land_on_the_glyph_under_the_pointer() {
     let rotated = Affine { m: [1.4 * 0.94, 1.4 * 0.342, -1.4 * 0.342, 1.4 * 0.94, 500.0, 420.0] };
-    for ppp in [1.0, 2.0] {
-        for zoom in [0.25f32, 0.5, 1.0, 2.0] {
-            for (flip, pan) in [(false, [0.0, 0.0]), (true, [37.0, -21.0])] {
-                for (shape, tf) in [("point", None), ("box", None), ("point", Some(rotated)), ("box", Some(rotated))] {
-                    let mut app = new_app();
-                    let size = 60.0 / zoom;
-                    let mut p = json!({"text": "HOHOHO HOHO", "size": size, "x": 300, "y": 420});
-                    if shape == "box" {
-                        p["box"] = json!([250.0, 250.0, size * 6.0, size * 4.0]);
-                    }
-                    let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
-                    if let Some(a) = tf {
-                        app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
-                    }
-                    app.ui.view.flip_horizontal = flip;
-                    let mut h = harness(ppp, app);
-                    // Centre the view on the text's middle, then pan.
-                    let (l, aff, _) = layout(h.state_mut(), id).unwrap();
-                    let b = l.bounds().unwrap();
-                    let m = aff.apply(Point::new(f64::from(b[0] + b[2]) / 2.0, f64::from(b[1] + b[3]) / 2.0));
-                    set_view(&mut h, zoom, [m.x as f32 + pan[0], m.y as f32 + pan[1]]);
-                    h.run_steps(2);
-                    let ctx = format!("ppp {ppp} zoom {zoom} flip {flip} {shape} transformed {}", tf.is_some());
-                    let rect = canvas_rect(h.state());
-                    for (i, f) in [(0, 0.2), (2, 0.8), (4, 0.3), (8, 0.7)] {
-                        let p = glyph(&mut h, id, i, f);
-                        assert!(rect.contains(p), "{ctx}: glyph {i} off screen at {p:?}");
-                    }
-                    // Click into the layer: caret before glyph 2 (left part), then after glyph 4.
-                    let p = glyph(&mut h, id, 2, 0.2);
-                    click(&mut h, p);
-                    assert_eq!(selection(&h), (2, 2), "{ctx}: click on the left of glyph 2");
-                    let p = glyph(&mut h, id, 4, 0.8);
-                    click(&mut h, p);
-                    assert_eq!(selection(&h), (5, 5), "{ctx}: click on the right of glyph 4");
-                    // Drag from glyph 1 (left part) to glyph 8 (right part): characters 1..9.
-                    let (a, b) = (glyph(&mut h, id, 1, 0.25), glyph(&mut h, id, 8, 0.75));
-                    drag(&mut h, a, b);
-                    assert_eq!(selection(&h), (1, 9), "{ctx}: drag selection");
-                    // And backwards, starting inside the egui drag threshold of a glyph edge.
-                    let (a, b) = (glyph(&mut h, id, 5, 0.85), glyph(&mut h, id, 3, 0.15));
-                    drag(&mut h, a, b);
-                    assert_eq!(selection(&h), (6, 3), "{ctx}: backwards drag selection");
-                }
-            }
+    // One case per zoom, pairwise over the other axes: every ppp, flip and pan, and shape and transform
+    // appears, ppp meets both flips, and the two ends of the range in points (25 % at 2x is 12.5 %, 200 %
+    // at 1x is 200 %) are kept. The view maps the pointer to the document (the shown view's `to_doc`)
+    // the same way for any layer, and the layer's transform maps the document to text space the same way
+    // at any view, so the two halves need not be crossed.
+    let pan = [37.0, -21.0];
+    for (ppp, zoom, flip, pan, shape, tf) in [
+        (2.0, 0.25f32, false, [0.0, 0.0], "point", None),
+        (1.0, 0.5, true, pan, "box", None),
+        (2.0, 1.0, true, pan, "point", Some(rotated)),
+        (1.0, 2.0, false, [0.0, 0.0], "box", Some(rotated)),
+    ] {
+        let mut app = new_app();
+        let size = 60.0 / zoom;
+        let mut p = json!({"text": "HOHOHO HOHO", "size": size, "x": 300, "y": 420});
+        if shape == "box" {
+            p["box"] = json!([250.0, 250.0, size * 6.0, size * 4.0]);
         }
+        let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
+        if let Some(a) = tf {
+            app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
+        }
+        app.ui.view.flip_horizontal = flip;
+        let mut h = harness(ppp, app);
+        // Centre the view on the text's middle, then pan.
+        let (l, aff, _) = layout(h.state_mut(), id).unwrap();
+        let b = l.bounds().unwrap();
+        let m = aff.apply(Point::new(f64::from(b[0] + b[2]) / 2.0, f64::from(b[1] + b[3]) / 2.0));
+        set_view(&mut h, zoom, [m.x as f32 + pan[0], m.y as f32 + pan[1]]);
+        h.run_steps(2);
+        let ctx = format!("ppp {ppp} zoom {zoom} flip {flip} {shape} transformed {}", tf.is_some());
+        let rect = canvas_rect(h.state());
+        for (i, f) in [(0, 0.2), (2, 0.8), (4, 0.3), (8, 0.7)] {
+            let p = glyph(&mut h, id, i, f);
+            assert!(rect.contains(p), "{ctx}: glyph {i} off screen at {p:?}");
+        }
+        // Click into the layer: caret before glyph 2 (left part), then after glyph 4.
+        let p = glyph(&mut h, id, 2, 0.2);
+        click(&mut h, p);
+        assert_eq!(selection(&h), (2, 2), "{ctx}: click on the left of glyph 2");
+        let p = glyph(&mut h, id, 4, 0.8);
+        click(&mut h, p);
+        assert_eq!(selection(&h), (5, 5), "{ctx}: click on the right of glyph 4");
+        // Drag from glyph 1 (left part) to glyph 8 (right part): characters 1..9.
+        let (a, b) = (glyph(&mut h, id, 1, 0.25), glyph(&mut h, id, 8, 0.75));
+        drag(&mut h, a, b);
+        assert_eq!(selection(&h), (1, 9), "{ctx}: drag selection");
+        // And backwards, starting inside the egui drag threshold of a glyph edge.
+        let (a, b) = (glyph(&mut h, id, 5, 0.85), glyph(&mut h, id, 3, 0.15));
+        drag(&mut h, a, b);
+        assert_eq!(selection(&h), (6, 3), "{ctx}: backwards drag selection");
     }
 }
 
@@ -601,7 +616,7 @@ fn editing_psd_type_shows_our_layout_and_cancel_restores_it() {
     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
         t.cache = Some(moved.clone());
     }
-    st.doc = std::sync::Arc::new(doc);
+    *st.doc_mut() = std::sync::Arc::new(doc);
     st.revision += 1;
     let steps = app.session.active().unwrap().history.entries().len();
     let mut h = harness(1.0, app);
@@ -677,7 +692,7 @@ fn size_applies_at_layer_and_selection_scope() {
     }
 }
 
-fn history_len(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn history_len(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     h.state().session.active().unwrap().history.entries().len()
 }
 
@@ -720,7 +735,7 @@ fn size_drag_is_live_and_one_history_step_per_drag() {
 
 /// A point inside glyph `i` of vertical type: `f` of the way down its advance, right of the
 /// column's centre line.
-fn vglyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32) -> Pos2 {
+fn vglyph(h: &mut Harness<'static, Box<PhotocraftApp>>, id: LayerId, i: usize, f: f32) -> Pos2 {
     let (l, _, text) = layout(h.state_mut(), id).unwrap();
     assert!(l.vertical);
     let b = text.char_indices().nth(i).unwrap().0;
@@ -730,7 +745,7 @@ fn vglyph(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize, f: f32
     screen(h, id, x, y)
 }
 
-fn key(h: &mut Harness<'static, PhotocraftApp>, k: egui::Key) {
+fn key(h: &mut Harness<'static, Box<PhotocraftApp>>, k: egui::Key) {
     h.event(egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
     h.run_steps(1);
 }
@@ -903,21 +918,21 @@ fn command_mods() -> Mods {
 }
 
 /// The modifiers held in the harness's last pass: the real keys plus the shell's latch (tp.T15).
-fn held(h: &Harness<'static, PhotocraftApp>) -> Mods {
+fn held(h: &Harness<'static, Box<PhotocraftApp>>) -> Mods {
     craft::ui::runtime::pointer::frame(&h.ctx).mods
 }
 
-fn hold(h: &mut Harness<'static, PhotocraftApp>, mods: Modifiers) {
+fn hold(h: &mut Harness<'static, Box<PhotocraftApp>>, mods: Modifiers) {
     h.event(egui::Event::ModifiersChanged(mods));
     h.run_steps(1);
 }
 
-fn transform_press(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, mods: Modifiers) {
+fn transform_press(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, down: bool, mods: Modifiers) {
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: mods });
     h.run_steps(1);
 }
 
-fn transform_drag(h: &mut Harness<'static, PhotocraftApp>, a: Pos2, b: Pos2, mods: Modifiers, release_command: bool) {
+fn transform_drag(h: &mut Harness<'static, Box<PhotocraftApp>>, a: Pos2, b: Pos2, mods: Modifiers, release_command: bool) {
     hold(h, mods);
     h.hover_at(a);
     h.run_steps(1);
@@ -933,7 +948,7 @@ fn transform_drag(h: &mut Harness<'static, PhotocraftApp>, a: Pos2, b: Pos2, mod
     hold(h, Modifiers::NONE);
 }
 
-fn transform_app(paragraph: bool, vertical: bool, transform: Affine) -> (PhotocraftApp, LayerId) {
+fn transform_app(paragraph: bool, vertical: bool, transform: Affine) -> (Box<PhotocraftApp>, LayerId) {
     let mut app = new_app();
     // The tests assert where a drag lands, which a snap to a guide or an edge would move.
     app.ui.extras.snap = false;
@@ -1082,54 +1097,56 @@ fn temporary_type_transform_visibility_and_cursors() {
 /// Real canvas input: layer-local scaling stays correct across orientation, zoom, HiDPI and flip.
 #[test]
 fn temporary_type_transform_scales_without_reflow_or_leaving_type() {
-    for ppp in [1.0, 2.0] {
-        for zoom in [0.25, 1.0, 2.0, 8.0] {
-            for (paragraph, vertical, flip) in [(false, false, false), (true, false, true), (false, true, true)] {
-                let transform = Affine { m: [1.2, 0.25, 0.18, 0.9, 500.0, 360.0] };
-                let (app, id) = transform_app(paragraph, vertical, transform);
-                let mut h = harness(ppp, app);
-                let f = frame_of(h.state_mut()).unwrap();
-                let center = f.pivot;
-                h.state_mut().ui.view.flip_horizontal = flip;
-                // At high zoom, show the dragged corner; a release beyond the canvas is valid.
-                let at = if zoom >= 2.0 { [f.quad[2][0] as f32, f.quad[2][1] as f32] } else { [center[0] as f32 + 17.0, center[1] as f32 - 9.0] };
-                set_view(&mut h, zoom, at);
-                h.run_steps(2);
-                let before = text(h.state(), id);
-                let count = history_len(&h);
-                let (a, b) = (f.quad[2], [f.quad[0][0] + 1.25 * (f.quad[2][0] - f.quad[0][0]), f.quad[0][1] + 1.25 * (f.quad[2][1] - f.quad[0][1])]);
-                let (a, b) = (frame_point(h.state(), a), frame_point(h.state(), b));
-                assert!(canvas_rect(h.state()).contains(a));
-                transform_drag(&mut h, a, b, type_command() | Modifiers::SHIFT, true);
-                let after = text(h.state(), id);
-                assert_affine(
-                    after.transform,
-                    transform.mul(&Affine::translate(f.rect[0], f.rect[1])).mul(&Affine::scale(1.25)).mul(&Affine::translate(-f.rect[0], -f.rect[1])),
-                );
-                assert_eq!(
-                    (after.text.as_str(), &after.runs, &after.paragraphs, after.orientation, after.shape),
-                    (before.text.as_str(), &before.runs, &before.paragraphs, before.orientation, before.shape)
-                );
-                assert_eq!(selection(&h), (3, 3));
-                assert_eq!(h.state().ui.text_edit.as_ref().unwrap().layer, id.0);
-                assert!(h.state().ui.tool.is_type());
-                assert!(h.state().ui.transform.is_none());
-                assert!(h.state().ui.type_transform.is_none());
-                assert_eq!(history_len(&h), count + 1);
-                // Typing goes through the window host, as the platform's reaches the focused editor.
-                super::commit_tests::type_keys(h.state_mut(), "!");
-                assert!(text(h.state(), id).text.starts_with("Hel!lo"));
-                h.key_press(if vertical { egui::Key::ArrowUp } else { egui::Key::ArrowLeft });
-                h.run_steps(1);
-                assert_eq!(selection(&h), (3, 3));
-                assert_eq!(history_len(&h), count + 1, "one edit session");
-                h.state_mut().run("edit.undo", json!({})).unwrap();
-                assert_affine(text(h.state(), id).transform, before.transform);
-                assert_eq!(text(h.state(), id).text, before.text);
-                h.state_mut().run("edit.redo", json!({})).unwrap();
-                assert_eq!(text(h.state(), id).transform, after.transform);
-            }
-        }
+    // One case per zoom, pairwise over the other axes: both ppp values meet both flips, point, paragraph
+    // and vertical type each appear, both sides of the 200 % view choice below run twice, and the ends of
+    // the range in points (25 % at 2x, 800 % at 1x) are kept. The frame and the drag map through the view
+    // the same way for any kind of type, and the kind decides the layer's frame the same way at any view.
+    for (ppp, zoom, (paragraph, vertical, flip)) in
+        [(2.0, 0.25, (false, false, false)), (1.0, 1.0, (true, false, true)), (2.0, 2.0, (false, true, true)), (1.0, 8.0, (false, false, false))]
+    {
+        let transform = Affine { m: [1.2, 0.25, 0.18, 0.9, 500.0, 360.0] };
+        let (app, id) = transform_app(paragraph, vertical, transform);
+        let mut h = harness(ppp, app);
+        let f = frame_of(h.state_mut()).unwrap();
+        let center = f.pivot;
+        h.state_mut().ui.view.flip_horizontal = flip;
+        // At high zoom, show the dragged corner; a release beyond the canvas is valid.
+        let at = if zoom >= 2.0 { [f.quad[2][0] as f32, f.quad[2][1] as f32] } else { [center[0] as f32 + 17.0, center[1] as f32 - 9.0] };
+        set_view(&mut h, zoom, at);
+        h.run_steps(2);
+        let before = text(h.state(), id);
+        let count = history_len(&h);
+        let (a, b) = (f.quad[2], [f.quad[0][0] + 1.25 * (f.quad[2][0] - f.quad[0][0]), f.quad[0][1] + 1.25 * (f.quad[2][1] - f.quad[0][1])]);
+        let (a, b) = (frame_point(h.state(), a), frame_point(h.state(), b));
+        assert!(canvas_rect(h.state()).contains(a));
+        transform_drag(&mut h, a, b, type_command() | Modifiers::SHIFT, true);
+        let after = text(h.state(), id);
+        assert_affine(
+            after.transform,
+            transform.mul(&Affine::translate(f.rect[0], f.rect[1])).mul(&Affine::scale(1.25)).mul(&Affine::translate(-f.rect[0], -f.rect[1])),
+        );
+        assert_eq!(
+            (after.text.as_str(), &after.runs, &after.paragraphs, after.orientation, after.shape),
+            (before.text.as_str(), &before.runs, &before.paragraphs, before.orientation, before.shape)
+        );
+        assert_eq!(selection(&h), (3, 3));
+        assert_eq!(h.state().ui.text_edit.as_ref().unwrap().layer, id.0);
+        assert!(h.state().ui.tool.is_type());
+        assert!(h.state().ui.transform.is_none());
+        assert!(h.state().ui.type_transform.is_none());
+        assert_eq!(history_len(&h), count + 1);
+        // Typing goes through the window host, as the platform's reaches the focused editor.
+        super::commit_tests::type_keys(h.state_mut(), "!");
+        assert!(text(h.state(), id).text.starts_with("Hel!lo"));
+        h.key_press(if vertical { egui::Key::ArrowUp } else { egui::Key::ArrowLeft });
+        h.run_steps(1);
+        assert_eq!(selection(&h), (3, 3));
+        assert_eq!(history_len(&h), count + 1, "one edit session");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_affine(text(h.state(), id).transform, before.transform);
+        assert_eq!(text(h.state(), id).text, before.text);
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        assert_eq!(text(h.state(), id).transform, after.transform);
     }
 }
 
@@ -1443,7 +1460,7 @@ mod multi_layer_formatting {
         }
     }
 
-    fn fixture() -> (PhotocraftApp, [LayerId; 3]) {
+    fn fixture() -> (Box<PhotocraftApp>, [LayerId; 3]) {
         let mut app = new_app();
         let ids = std::array::from_fn(|i| {
             LayerId(
@@ -1470,11 +1487,11 @@ mod multi_layer_formatting {
     }
 
     /// The Properties panel (`properties`) or the options bar over `app`.
-    fn controls(app: PhotocraftApp, properties: bool) -> Harness<'static, PhotocraftApp> {
+    fn controls(app: Box<PhotocraftApp>, properties: bool) -> Harness<'static, Box<PhotocraftApp>> {
         if properties { panel_harness(app) } else { bar_harness(app) }
     }
 
-    fn number(h: &mut Harness<'static, PhotocraftApp>, label: &str, value: &str) {
+    fn number(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str, value: &str) {
         // Variable-font axes add numeric fields before size/leading. Select the setting by
         // its accessible name, so a font scan cannot shift this action onto another control.
         let name = field_name(h, Role::SpinButton, label);
@@ -1486,7 +1503,7 @@ mod multi_layer_formatting {
         h.run();
     }
 
-    fn preset(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+    fn preset(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str) {
         reveal(h, label);
         h.run();
         h.get_by_label(label).click();
@@ -1494,7 +1511,7 @@ mod multi_layer_formatting {
     }
 
     /// Opens a preset chevron by its accessible name and picks `label`.
-    fn pick(h: &mut Harness<'static, PhotocraftApp>, menu: &str, label: &str) {
+    fn pick(h: &mut Harness<'static, Box<PhotocraftApp>>, menu: &str, label: &str) {
         open_presets(h, menu);
         h.run();
         preset(h, label);
@@ -1616,7 +1633,7 @@ mod multi_layer_formatting {
         app.run("type.setStyle", json!({"layer": id.0, "range": [3, 10], "font": "JetBrains Mono", "fontStyle": "Regular"})).unwrap();
         assert_eq!((style(&app, id, 0).font_family.as_str(), style(&app, id, 5).font_family.as_str()), ("Inter", "JetBrains Mono"));
         let mut h = controls(app, false);
-        let shown = |h: &Harness<'static, PhotocraftApp>| {
+        let shown = |h: &Harness<'static, Box<PhotocraftApp>>| {
             (
                 h.get_by_role_and_label(Role::ComboBox, "Font family").value().unwrap_or_default(),
                 h.get_by_role_and_label(Role::ComboBox, &field_name(h, Role::ComboBox, "Style")).value(),
@@ -1785,7 +1802,7 @@ mod multi_layer_formatting {
         app.run("type.orientation.horizontal", json!({"layer": ids[1].0})).unwrap();
         let checks = |app: &mut PhotocraftApp| -> Vec<String> {
             let ctx = app.ctx().clone();
-            let rows = &crate::menus::model(app, &ctx).rows;
+            let rows = crate::menus::model(app, &ctx).rows();
             for id in ["type.antiAlias.none", "type.antiAlias.crisp", "type.orientation.horizontal", "type.orientation.vertical"] {
                 let it = crate::menus::row(rows, id).unwrap();
                 assert!(it.kind.checked().is_some(), "{id} is a check item");
@@ -1798,7 +1815,7 @@ mod multi_layer_formatting {
         editing(&mut app, ids[0]);
         assert_eq!(checks(&mut app), ["type.antiAlias.none", "type.orientation.vertical"]);
         app.ui.text_edit = None;
-        app.session.active_mut().unwrap().active_layer = Some(ids[1]);
+        app.session.active_mut().unwrap().set_active_layer(Some(ids[1]));
         assert_eq!(checks(&mut app), ["type.antiAlias.crisp", "type.orientation.horizontal"]);
     }
 
@@ -1972,12 +1989,12 @@ fn type_mask_cancel_leaves_the_selection_unchanged() {
 }
 
 /// A harness with short frames, so a run of clicks stays inside egui's double-click delay.
-fn quick_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn quick_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     make_harness_with(Harness::builder().with_step_dt(0.02), 1.0, app)
 }
 
 /// `n` quick clicks at `p`, then a pause long enough that the next click starts a new run.
-fn clicks(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, n: usize) -> (usize, usize) {
+fn clicks(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, n: usize) -> (usize, usize) {
     h.hover_at(p);
     h.run_steps(1);
     for _ in 0..n {
@@ -1990,7 +2007,7 @@ fn clicks(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, n: usize) -> (usize,
 }
 
 /// Centre the view on layer `id` at 50 % zoom.
-fn centre_on(h: &mut Harness<'static, PhotocraftApp>, id: LayerId) {
+fn centre_on(h: &mut Harness<'static, Box<PhotocraftApp>>, id: LayerId) {
     let (l, aff, _) = layout(h.state_mut(), id).unwrap();
     let b = l.bounds().unwrap();
     let m = aff.apply(Point::new(f64::from(b[0] + b[2]) / 2.0, f64::from(b[1] + b[3]) / 2.0));
@@ -1999,7 +2016,7 @@ fn centre_on(h: &mut Harness<'static, PhotocraftApp>, id: LayerId) {
 }
 
 /// Laid-out line (character range) holding character `i`.
-fn line_chars(h: &mut Harness<'static, PhotocraftApp>, id: LayerId, i: usize) -> (usize, usize) {
+fn line_chars(h: &mut Harness<'static, Box<PhotocraftApp>>, id: LayerId, i: usize) -> (usize, usize) {
     let (l, _, text) = layout(h.state_mut(), id).unwrap();
     let b = text.char_indices().nth(i).unwrap().0;
     let c = l.clusters.iter().find(|c| c.range.start == b).unwrap();
@@ -2027,63 +2044,68 @@ const HANDLE_SIDES: [(bool, bool, bool, bool); 8] = [
 fn every_paragraph_box_handle_resizes_the_box_with_snapping_on() {
     let scaled = Affine { m: [1.5, 0.0, 0.0, 0.75, 300.0, 300.0] };
     let rotated = Affine { m: [1.2 * 0.94, 1.2 * 0.342, -1.2 * 0.342, 1.2 * 0.94, 300.0, 300.0] };
-    for ppp in [1.0, 2.0] {
-        for zoom in [0.25f32, 0.5, 1.0, 2.0] {
-            for (name, tf) in [("plain", None), ("scaled", Some(scaled)), ("rotated", Some(rotated))] {
-                let mut app = new_app();
-                assert!(app.ui.extras.snap, "snapping is on by default");
-                let size = 24.0 / zoom;
-                let p = json!({"text": "HOHOHO HOHO HOHOHO HOHO HOHOHO", "size": size, "x": 300, "y": 300, "box": [300.0, 300.0, size * 8.0, size * 4.0]});
-                let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
-                if let Some(a) = tf {
-                    app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
-                }
-                let mut h = harness(ppp, app);
-                let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
-                let aff = layout(h.state_mut(), id).unwrap().1;
-                let m = aff.apply(Point::new(f64::from(bx + w / 2.0), f64::from(by + bh / 2.0)));
-                set_view(&mut h, zoom, [m.x as f32, m.y as f32]);
-                h.run_steps(2);
-                let ctx = format!("ppp {ppp} zoom {zoom} {name}");
-                let p = glyph(&mut h, id, 2, 0.2);
-                click(&mut h, p);
-                assert_eq!(selection(&h), (2, 2), "{ctx}: editing");
-                for (i, (l, r, t, b)) in HANDLE_SIDES.into_iter().enumerate() {
-                    // Press at the handle and inside its grab area, towards the text.
-                    for off in [0.0f32, 4.0] {
-                        let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
-                        let hx = if l {
-                            bx
-                        } else if r {
-                            bx + w
-                        } else {
-                            bx + w / 2.0
-                        };
-                        let hy = if t {
-                            by
-                        } else if b {
-                            by + bh
-                        } else {
-                            by + bh / 2.0
-                        };
-                        let dir = vec2(f32::from(u8::from(r)) - f32::from(u8::from(l)), f32::from(u8::from(b)) - f32::from(u8::from(t)));
-                        let at = screen(&mut h, id, hx, hy);
-                        let out = (screen(&mut h, id, hx + dir.x * 10.0, hy + dir.y * 10.0) - at).normalized();
-                        let a = at - out * off;
-                        drag(&mut h, a, a + out * 30.0);
-                        let ctx = format!("{ctx} handle {i} offset {off}");
-                        assert_eq!(selection(&h), (2, 2), "{ctx}: the caret stays put");
-                        let (_, _, w2, h2) = super::box_shape(h.state(), id).unwrap();
-                        // 30 points outward (a corner's diagonal: about 21 per side) is that over
-                        // zoom × layer scale in text units; snapping may shift the release by up to
-                        // its 8 point reach.
-                        let min = 6.0 / (zoom / h.state().canvas_ppp()) / 1.5;
-                        let grew = |was: f32, now: f32, moved: bool| if moved { now - was >= min } else { (now - was).abs() < 1e-3 };
-                        assert!(grew(w, w2, l || r), "{ctx}: width {w} -> {w2}");
-                        assert!(grew(bh, h2, t || b), "{ctx}: height {bh} -> {h2}");
-                    }
-                }
-            }
+    // Pairwise over (ppp, zoom, transform): each value of each axis appears once or more, and the two
+    // cases at the ends of the range in points are kept. The frame's handles and their grab area are
+    // screen-space parts of the framework's `TransformBox::text_frame` (`controls.rs`, `frame_box`) and
+    // the snap reach is a screen distance, so the zoom and ppp only scale the view: 25 % at 2x is 12.5 %
+    // in points and 200 % at 1x is 200 %, which hold 50 % and 100 % between them. The layer transform
+    // goes through the same frame mapping at any view scale, so each one runs at one view.
+    let cases = [(2.0, 0.25f32, "plain", None), (1.0, 2.0, "scaled", Some(scaled)), (2.0, 2.0, "rotated", Some(rotated))];
+    for (case, (ppp, zoom, name, tf)) in cases.into_iter().enumerate() {
+        let mut app = new_app();
+        assert!(app.ui.extras.snap, "snapping is on by default");
+        let size = 24.0 / zoom;
+        let p = json!({"text": "HOHOHO HOHO HOHOHO HOHO HOHOHO", "size": size, "x": 300, "y": 300, "box": [300.0, 300.0, size * 8.0, size * 4.0]});
+        let id = LayerId(app.run("type.create", p).unwrap()["layer"].as_u64().unwrap());
+        if let Some(a) = tf {
+            app.run("type.edit", json!({"layer": id.0, "transform": a.m})).unwrap();
+        }
+        let mut h = harness(ppp, app);
+        let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
+        let aff = layout(h.state_mut(), id).unwrap().1;
+        let m = aff.apply(Point::new(f64::from(bx + w / 2.0), f64::from(by + bh / 2.0)));
+        set_view(&mut h, zoom, [m.x as f32, m.y as f32]);
+        h.run_steps(2);
+        let ctx = format!("ppp {ppp} zoom {zoom} {name}");
+        let p = glyph(&mut h, id, 2, 0.2);
+        click(&mut h, p);
+        assert_eq!(selection(&h), (2, 2), "{ctx}: editing");
+        for (i, (l, r, t, b)) in HANDLE_SIDES.into_iter().enumerate() {
+            // Press at the handle or inside its grab area, towards the text: corners (even `i`) and sides
+            // take turns, and the next case swaps them, so every handle is pressed both ways and every case
+            // presses both ways. The press picks the handle (`TransformBox::text_frame`) and the pass that
+            // commits carries the final box (`box_of`), so the drag needs the move that starts it and the end.
+            let off = if (i + case) % 2 == 0 { 0.0f32 } else { 4.0 };
+            let (bx, by, w, bh) = super::box_shape(h.state(), id).unwrap();
+            let hx = if l {
+                bx
+            } else if r {
+                bx + w
+            } else {
+                bx + w / 2.0
+            };
+            let hy = if t {
+                by
+            } else if b {
+                by + bh
+            } else {
+                by + bh / 2.0
+            };
+            let dir = vec2(f32::from(u8::from(r)) - f32::from(u8::from(l)), f32::from(u8::from(b)) - f32::from(u8::from(t)));
+            let at = screen(&mut h, id, hx, hy);
+            let out = (screen(&mut h, id, hx + dir.x * 10.0, hy + dir.y * 10.0) - at).normalized();
+            let a = at - out * off;
+            drag_in(&mut h, a, a + out * 30.0, 2);
+            let ctx = format!("{ctx} handle {i} offset {off}");
+            assert_eq!(selection(&h), (2, 2), "{ctx}: the caret stays put");
+            let (_, _, w2, h2) = super::box_shape(h.state(), id).unwrap();
+            // 30 points outward (a corner's diagonal: about 21 per side) is that over
+            // zoom × layer scale in text units; snapping may shift the release by up to
+            // its 8 point reach.
+            let min = 6.0 / (zoom / h.state().canvas_ppp()) / 1.5;
+            let grew = |was: f32, now: f32, moved: bool| if moved { now - was >= min } else { (now - was).abs() < 1e-3 };
+            assert!(grew(w, w2, l || r), "{ctx}: width {w} -> {w2}");
+            assert!(grew(bh, h2, t || b), "{ctx}: height {bh} -> {h2}");
         }
     }
 }
@@ -2160,7 +2182,7 @@ fn justify_buttons_are_greyed_on_point_text() {
     let justify = ["Justify last left", "Justify last centered", "Justify last right", "Justify all"];
     let area = |app: &mut PhotocraftApp| {
         app.run("type.create", json!({"text": "one two three four five six", "size": 24, "x": 300, "y": 420})).unwrap();
-        std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+        std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).work_path =
             Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (600.0, 300.0), (600.0, 500.0), (300.0, 500.0)])]));
         app.run("type.fillPath", json!({})).unwrap();
     };
@@ -2199,7 +2221,7 @@ fn justify_buttons_are_greyed_on_point_text() {
 /// included) and point text — which has no box — never set it.
 #[test]
 fn the_overflow_handle_flags_a_box_that_cannot_hold_its_text() {
-    let build = |mut app: PhotocraftApp, p: serde_json::Value, caret: usize| {
+    let build = |mut app: Box<PhotocraftApp>, p: serde_json::Value, caret: usize| {
         let id = app.run("type.create", p).unwrap()["layer"].as_u64().unwrap();
         app.session.select_layer(LayerId(id)).unwrap();
         app.ui.text_edit = Some(edit_of(id, caret, caret, "s"));
@@ -2377,7 +2399,7 @@ fn an_unselected_work_path_is_not_an_area_target() {
     // Type tool, so a click inside it is plain point text; its outline still takes type on a
     // path, as before area type (#5180).
     let mut app = new_app();
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).work_path =
+    std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).work_path =
         Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(300.0, 300.0), (700.0, 300.0), (700.0, 500.0), (300.0, 500.0)])]));
     app.ui.selected_path = None;
     assert!(path_target(&app, 500.0, 400.0).is_none(), "inside a hidden work path");
@@ -2400,7 +2422,7 @@ fn options_bar_alignment_follows_the_target_paragraph() {
     app.run("type.setStyle", json!({"layer": id, "align": "center", "direction": "rtl"})).unwrap();
     assert_eq!(app.ui.tool_options.type_align, "left", "the tool default stays Left");
     let mut h = bar_harness(app);
-    let on = |h: &Harness<'static, PhotocraftApp>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True);
+    let on = |h: &Harness<'static, Box<PhotocraftApp>>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True);
     assert!(on(&h, "Center text") && !on(&h, "Left align text"), "the layer's centred paragraph");
     h.state_mut().run("layer.new.layer", json!({})).unwrap();
     h.run_steps(2);

@@ -9,7 +9,7 @@ use crate::PhotocraftApp;
 
 /// The app with a 400 × 300 document: a red 100 × 60 rectangle at (100, 100) on its own layer
 /// above the Background.
-fn app() -> Harness<'static, PhotocraftApp> {
+fn app() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -25,7 +25,7 @@ fn app() -> Harness<'static, PhotocraftApp> {
 }
 
 /// Open Free Transform and move the box 50 px right, 40 px down.
-fn transform_and_move(h: &mut Harness<'static, PhotocraftApp>) {
+fn transform_and_move(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "edit.freeTransform", json!({})).unwrap();
     h.run_steps(2);
@@ -36,12 +36,12 @@ fn transform_and_move(h: &mut Harness<'static, PhotocraftApp>) {
 
 /// Clicks the toolbar's Eyedropper Tool: a tool that stays in view at 900 pt, where the tool
 /// column scrolls and its last tools (Hand, Zoom) lie past its end.
-fn pick_another_tool(h: &Harness<'static, PhotocraftApp>) {
+fn pick_another_tool(h: &Harness<'static, Box<PhotocraftApp>>) {
     // The framework names a toolbar button on its node and on its child: the first node is the button itself.
     h.get_all_by_label_contains("Eyedropper Tool").next().expect("the toolbar's Eyedropper Tool").click();
 }
 
-fn red_bounds(h: &Harness<'static, PhotocraftApp>) -> photocraft_geom::Rect {
+fn red_bounds(h: &Harness<'static, Box<PhotocraftApp>>) -> photocraft_geom::Rect {
     let st = h.state().session.active().unwrap();
     let top = st.doc.layers.last().unwrap();
     top.surface().unwrap().content_bounds()
@@ -60,7 +60,7 @@ fn picking_another_tool_in_the_toolbar_applies_the_transform() {
 /// The app with the red rectangle on a layer the last step made (Layer via Copy, which deselects in
 /// the same step), as Place Embedded leaves it for the box `begin_placed` opens: cancelling the
 /// place takes that step back.
-fn placed_app() -> Harness<'static, PhotocraftApp> {
+fn placed_app() -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -75,12 +75,12 @@ fn placed_app() -> Harness<'static, PhotocraftApp> {
     h
 }
 
-fn history(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+fn history(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<String> {
     h.state().session.active().unwrap().history.entries().to_vec()
 }
 
 /// The box on a just-placed layer (a file dropped on the canvas), moved.
-fn placed_and_moved(h: &mut Harness<'static, PhotocraftApp>) {
+fn placed_and_moved(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     crate::transform_tool::begin_placed(h.state_mut(), &ctx).unwrap();
     h.run_steps(2);

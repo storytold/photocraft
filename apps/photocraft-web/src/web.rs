@@ -1,5 +1,6 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -100,15 +101,21 @@ pub fn start() {
                     let served: Served = Arc::default();
                     load_font_manifest(served.clone(), cc.egui_ctx.clone());
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
-                    let actions_revision = session.actions.list.revision();
+                    let actions_revision = session.actions().list.revision();
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
                     let mut services = services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag));
-                    let mut initial = Some(load_initial_preferences(&presets, database.is_some() && !session.actions.list.actions().is_empty()));
+                    let mut initial = Some(load_initial_preferences(&presets, database.is_some() && !session.actions().list.actions().is_empty()));
                     services.load_prefs = Some(Box::new(move || initial.take().unwrap_or_else(stored_preferences)));
                     let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), session, services);
                     if !preset_warnings.is_empty() {
-                        photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
+                        photocraft_ui_egui::notices::post(
+                            &mut app,
+                            i18n::t("Some brush presets could not be loaded"),
+                            preset_warnings,
+                            photocraft_ui_egui::notices::Tone::Bad,
+                            None,
+                        );
                     }
                     listen_pen(&pen_target, app.stylus.feed.clone());
                     app.set_theme(&cc.egui_ctx, AppTheme::pro());
@@ -356,7 +363,7 @@ async fn fetch_bytes(url: &str, integrity: Option<&str>) -> Result<Vec<u8>, Stri
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously,
 /// so the app's own drop path can't handle them) and feed them through the inboxes.
 struct WebShell {
-    app: PhotocraftApp,
+    app: Box<PhotocraftApp>,
     /// Dropped files to open as documents.
     inbox: Inbox,
     /// Dropped files to place on the active document's canvas.
@@ -375,11 +382,11 @@ struct WebShell {
 impl WebShell {
     fn save_presets(&mut self, ctx: &egui::Context) {
         let session = &self.app.session;
-        if self.actions_revision != session.actions.list.revision() {
+        if self.actions_revision != session.actions().list.revision() {
             // The engine can reject an oversized definition before calling the backend.
             // Never stage that edit's keys with the last successfully queued definitions.
-            self.presets.verify_action_definitions(&session.actions);
-            self.actions_revision = session.actions.list.revision();
+            self.presets.verify_action_definitions(session.actions());
+            self.actions_revision = session.actions().list.revision();
         }
         let prefs_revision = session.prefs.rev();
         if self.prefs_revision != Some(prefs_revision) {

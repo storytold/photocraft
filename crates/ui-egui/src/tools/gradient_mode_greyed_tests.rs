@@ -14,7 +14,7 @@ use crate::canvas::ToolEvent;
 use crate::state::Tool;
 
 /// A document with a pixel layer below a Gradient fill layer; returns (app, pixel layer, fill layer).
-fn doc() -> (PhotocraftApp, LayerId, LayerId) {
+fn doc() -> (Box<PhotocraftApp>, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
     let pixels = LayerId(app.run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
@@ -29,7 +29,7 @@ fn select(app: &mut PhotocraftApp, id: LayerId) {
     assert_eq!(app.session.active().unwrap().active_layer, Some(id));
 }
 
-fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn bar(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let ctx = app.ctx().clone();
     let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).with_context(ctx).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
     h.run_steps(4);
@@ -38,7 +38,7 @@ fn bar(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
 
 /// The mode dropdown, found by its role and options rather than its label (the blend Mode label
 /// reads "Mode:" or "Mode" by theme): (greyed, the option it shows).
-fn dropdown(h: &Harness<'static, PhotocraftApp>) -> (bool, String) {
+fn dropdown(h: &Harness<'static, Box<PhotocraftApp>>) -> (bool, String) {
     let modes = ["Gradient", "Classic gradient"];
     let mut combos = h.query_all_by_role(Role::ComboBox).filter(|n| n.accesskit_node().value().is_some_and(|v| modes.contains(&v.as_str())));
     let node = combos.next().expect("the mode dropdown");

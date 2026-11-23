@@ -13,7 +13,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// The options bar with the Polygon tool active.
-fn bar() -> Harness<'static, PhotocraftApp> {
+fn bar() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = Tool::Polygon;
@@ -24,7 +24,7 @@ fn bar() -> Harness<'static, PhotocraftApp> {
 }
 
 /// Types `text` into Sides, then Tabs out of it.
-fn type_sides(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
+fn type_sides(h: &mut Harness<'static, Box<PhotocraftApp>>, text: &str) {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Sides")).expect("the Sides field").click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -35,11 +35,11 @@ fn type_sides(h: &mut Harness<'static, PhotocraftApp>, text: &str) {
 }
 
 /// How many alerts are open.
-fn alerts(h: &Harness<'static, PhotocraftApp>) -> usize {
+fn alerts(h: &Harness<'static, Box<PhotocraftApp>>) -> usize {
     crate::dialogs::alerts::alerts(h.state()).len()
 }
 
-fn sides(h: &Harness<'static, PhotocraftApp>) -> u32 {
+fn sides(h: &Harness<'static, Box<PhotocraftApp>>) -> u32 {
     h.state().ui.tool_options.polygon_sides
 }
 

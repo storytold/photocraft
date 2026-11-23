@@ -1,13 +1,14 @@
 use craft::print::ui::HostedPrint;
-use craft::ui::dialog::DialogId;
+use craft::ui::dialog::{DialogId, StackDialog as _};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedSaveForWeb, Resample, SAVE_PATH_KEY, WebFormat, WebSlices};
+use photocraft_engine::print_cmds::PrintExt;
 
 use super::*;
 use std::sync::Arc;
 
-pub(super) fn app() -> PhotocraftApp {
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.session.printer_source =
+    *app.session.printer_source_mut() =
         Some(Arc::new(|| vec![craft::print::Printer { name: "Test printer".into(), default: true, two_sided: None, description: String::new() }]));
     app.run("file.new", json!({"width": 120, "height": 80, "name": "web"})).unwrap();
     app
@@ -57,48 +58,121 @@ fn print_fields(app: &mut PhotocraftApp, id: DialogId) -> &mut DialogFields {
     app.framework.dialogs.get_mut_by_id::<HostedPrint>(id).expect("Print is open").fields_mut()
 }
 
-#[cfg(windows)]
+/// A default printer named `name`, as a printer source lists it.
+fn listed_printer(name: &str) -> craft::print::Printer {
+    craft::print::Printer { name: name.into(), default: true, two_sided: None, description: String::new() }
+}
+
+/// The printer the open Print dialog has chosen.
+fn chosen_printer(app: &PhotocraftApp, id: DialogId) -> Value {
+    app.framework.dialogs.get_by_id::<HostedPrint>(id).and_then(|dialog| dialog.json_fields()).map_or(Value::Null, |f| f["printer"].clone())
+}
+
 #[test]
 fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_empty() {
+    check_saved_settings_with_cached_printers(&[]);
+}
+
+#[test]
+fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_stale() {
+    check_saved_settings_with_cached_printers(&["Old printer"]);
+}
+
+/// Opens Print while another thread holds the spooler. The printer list kept from before (`cached`) does not name
+/// the remembered printer. The dialog keeps the remembered printer and its driver settings while the list is
+/// pending, and still keeps them once the spooler is free and the fresh list names the printer.
+fn check_saved_settings_with_cached_printers(cached: &'static [&'static str]) {
     use std::sync::atomic::{AtomicBool, Ordering};
     let mut app = app();
     let ctx = app.ctx().clone();
     let available = Arc::new(AtomicBool::new(false));
     let listed = Arc::clone(&available);
-    app.session.printer_source = Some(Arc::new(move || {
-        if listed.load(Ordering::SeqCst) {
-            vec![craft::print::Printer { name: "Saved printer".into(), default: true, two_sided: None, description: String::new() }]
-        } else {
-            Vec::new()
-        }
+    *app.session.printer_source_mut() = Some(Arc::new(move || {
+        if listed.load(Ordering::SeqCst) { vec![listed_printer("Saved printer")] } else { cached.iter().map(|name| listed_printer(name)).collect() }
     }));
     app.session.prefs.edit(|p| {
         p.dialogs.insert(photocraft_engine::print_cmds::REMEMBERED.into(), json!({"printer": "Saved printer", "printerSettings": "0011"}));
     });
     let mut lister = photocraft_engine::Session::new();
-    lister.printer_source = app.session.printer_source.clone();
+    *lister.printer_source_mut() = app.session.printer_source().cloned();
     let (held_tx, held) = std::sync::mpsc::channel();
     let (release, released_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
         photocraft_engine::print_cmds::with_spooler(|| {
-            assert!(photocraft_engine::print_cmds::rgb_printers(&lister).unwrap().is_empty());
+            // Both lists the dialog reads while the spooler is busy are kept from this listing.
+            let _ = photocraft_engine::print_cmds::rgb_printers(&lister);
+            let kept = photocraft_engine::print_cmds::printers_without_waiting(&mut lister);
             available.store(true, Ordering::SeqCst);
-            held_tx.send(()).unwrap();
-            let _ = released_rx.recv_timeout(std::time::Duration::from_secs(5));
+            held_tx.send(kept["printers"].as_array().map_or(0, Vec::len)).unwrap();
+            let _ = released_rx.recv();
         });
     });
-    held.recv().unwrap();
+    let kept = held.recv().unwrap();
     let id = open_print(&mut app);
-    let fields = print_fields(&mut app, id);
-    assert_eq!((field(fields, "printer"), field(fields, "printerSettings")), (json!("Saved printer"), json!("0011")));
+    pass(&mut app);
+    take(&mut app, &ctx);
+    pass(&mut app);
+    let pending = (chosen_printer(&app, id), field(print_fields(&mut app, id), "printerSettings"), print_ready(&mut app, id));
     let _ = release.send(());
     holder.join().unwrap();
+    assert_eq!(kept, cached.len(), "the printers kept from before");
+    assert_eq!(pending, (json!("Saved printer"), json!("0011"), false), "while the list is pending, cached {cached:?}");
     photocraft_engine::print_cmds::with_spooler(|| {
         pass(&mut app);
         take(&mut app, &ctx);
-        let fields = print_fields(&mut app, id);
-        assert_eq!((field(fields, "printer"), field(fields, "printerSettings")), (json!("Saved printer"), json!("0011")));
+        pass(&mut app);
     });
+    let fresh = (chosen_printer(&app, id), field(print_fields(&mut app, id), "printerSettings"), print_ready(&mut app, id));
+    assert_eq!(fresh, (json!("Saved printer"), json!("0011"), true), "after the fresh list, cached {cached:?}");
+}
+
+/// A fresh, empty list leaves no printer chosen and Print unavailable, and drops the remembered printer's driver
+/// settings, so a printer listed later does not get them.
+#[test]
+fn an_empty_fresh_printer_list_drops_the_saved_driver_settings() {
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    *app.session.printer_source_mut() = Some(Arc::new(Vec::new));
+    app.session.prefs.edit(|p| {
+        p.dialogs.insert(photocraft_engine::print_cmds::REMEMBERED.into(), json!({"printer": "Saved printer", "printerSettings": "0011"}));
+    });
+    let id = open_print(&mut app);
+    photocraft_engine::print_cmds::with_spooler(|| {
+        pass(&mut app);
+        take(&mut app, &ctx);
+        pass(&mut app);
+    });
+    let shown = (chosen_printer(&app, id), field(print_fields(&mut app, id), "printerSettings"), print_ready(&mut app, id));
+    assert_eq!(shown, (json!(""), Value::Null, false));
+}
+
+/// Whether the open Print dialog's Print would start a job.
+fn print_ready(app: &mut PhotocraftApp, id: DialogId) -> bool {
+    let ctx = app.ctx().clone();
+    app.framework.dialogs.get_mut_by_id::<HostedPrint>(id).expect("Print is open").confirm(&ctx).is_some()
+}
+
+/// A fresh list without the remembered printer replaces it with the default printer, and the driver settings of
+/// the replaced printer are dropped. Settings remembered without a printer (the default one) stay.
+#[test]
+fn a_fresh_printer_list_without_the_saved_printer_drops_its_driver_settings() {
+    for (remembered, settings) in
+        [(json!({"printer": "Gone printer", "printerSettings": "0011"}), Value::Null), (json!({"printerSettings": "0011"}), json!("0011"))]
+    {
+        let mut app = app();
+        let ctx = app.ctx().clone();
+        app.session.prefs.edit(|p| {
+            p.dialogs.insert(photocraft_engine::print_cmds::REMEMBERED.into(), remembered.clone());
+        });
+        let id = open_print(&mut app);
+        photocraft_engine::print_cmds::with_spooler(|| {
+            pass(&mut app);
+            take(&mut app, &ctx);
+            pass(&mut app);
+        });
+        assert_eq!(chosen_printer(&app, id), json!("Test printer"), "{remembered}");
+        assert_eq!(field(print_fields(&mut app, id), "printerSettings"), settings, "{remembered}");
+    }
 }
 
 #[test]
@@ -108,7 +182,7 @@ fn print_dialog_retries_an_uncached_printer_list_after_the_spooler_is_released()
     let ctx = app.ctx().clone();
     let asked = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&asked);
-    app.session.printer_source = Some(Arc::new(move || {
+    *app.session.printer_source_mut() = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
         vec![craft::print::Printer { name: "Retry printer".into(), default: true, two_sided: None, description: String::new() }]
     }));
@@ -286,7 +360,7 @@ fn save_for_web_writes_the_picked_file_when_the_name_changed() {
         set_option(&mut app, id, "format", json!(WebFormat::Png24));
         answer_path(&mut app, id, &target);
         if rename {
-            Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "renamed".into();
+            Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).name = "renamed".into();
         }
         confirm(&mut app, id);
         assert!(std::path::Path::new(&target).exists(), "rename {rename}: {target}");
@@ -314,6 +388,39 @@ fn save_for_web_width_keeps_proportions_and_sizes_the_file() {
     let st = app.session.active().unwrap();
     assert_eq!((st.revision, st.doc.size), (revision, photocraft_doc::Size::new(120, 80)));
     let _ = std::fs::remove_file(path);
+}
+
+/// #15484: with Constrain Proportions off, a typed width and height both reach the file; the exact size replaces the
+/// percent the dialog started with, and the document itself is never resized.
+#[test]
+fn save_for_web_unlinked_width_and_height_size_the_file() {
+    let mut app = app();
+    let id = open_web(&mut app).expect("an open document");
+    let revision = app.session.active().unwrap().revision;
+    set_option(&mut app, id, "format", json!(WebFormat::Png24));
+    set_option(&mut app, id, "__constrain", json!(false));
+    set_option(&mut app, id, "width", json!(90));
+    set_option(&mut app, id, "height", json!(20));
+    let path = std::env::temp_dir().join(format!("pc-webui-unlinked-{}.png", std::process::id())).to_string_lossy().into_owned();
+    answer_path(&mut app, id, &path);
+    confirm(&mut app, id);
+    let written = photocraft_io::import("unlinked.png", &std::fs::read(&path).unwrap()).unwrap().document;
+    assert_eq!((written.size.width, written.size.height), (90, 20));
+    let st = app.session.active().unwrap();
+    assert_eq!((st.revision, st.doc.size), (revision, photocraft_doc::Size::new(120, 80)));
+    let _ = std::fs::remove_file(path);
+}
+
+/// #15485: the panes get the ignored-slices notice only when the document has more slices than are resolved.
+#[test]
+fn save_for_web_warns_only_past_the_slice_limit() {
+    let mut doc = photocraft_doc::Document::new("slices", photocraft_doc::Size::new(8, 8), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    let slice = |i: usize| photocraft_doc::Slice { id: i as u32 + 1, rect: photocraft_doc::Rect::new(0, 0, 8, 8), ..Default::default() };
+    doc.slices.list = (0..3).map(slice).collect();
+    assert!(super::web::slice_warning(&doc).is_none(), "a few slices: no notice");
+    doc.slices.list = (0..photocraft_doc::slices::MAX_RESOLVED_SLICES + 2).map(slice).collect();
+    let warning = super::web::slice_warning(&doc).expect("past the limit: a notice");
+    assert_eq!(warning.as_str(), "2 stored slices past the first 10000 were ignored");
 }
 
 /// Reopened on another document, Save for Web starts at that document's full size again
@@ -369,12 +476,12 @@ fn save_for_web_downloads_images_and_html_through_the_platform_writer() {
 }
 
 /// Presses Save… in the dialog's own UI and hands the app back.
-fn press_save(app: PhotocraftApp) -> PhotocraftApp {
+fn press_save(app: Box<PhotocraftApp>) -> Box<PhotocraftApp> {
     use egui_kittest::kittest::Queryable;
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1600.0, 1100.0))
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     h.run_steps(5);
     h.get_by_role_and_label(egui::accesskit::Role::Button, "Save…").click();
     h.run_steps(3);

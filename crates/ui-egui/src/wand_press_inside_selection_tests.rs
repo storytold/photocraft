@@ -12,7 +12,7 @@ use crate::state::Tool;
 
 /// A 500 x 400 document with an opaque red block at 100,100–300,250 on its own layer, selected
 /// with the wand.
-fn selected() -> PhotocraftApp {
+fn selected() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 500, "height": 400})).unwrap();
     app.sync_views();

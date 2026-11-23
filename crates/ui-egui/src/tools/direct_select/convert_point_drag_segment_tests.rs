@@ -16,7 +16,7 @@ const BOTTOM_EDGE: [f64; 2] = [200.0, 500.0];
 
 /// The reference document: 800×600 px with a saved path, targeted in the Paths panel: a closed
 /// corner square, an open straight line and an open S-curve of two smooth points.
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     let path = json!({"subpaths": [

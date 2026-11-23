@@ -20,7 +20,8 @@ fn input(depth: u32) -> Session {
     s.execute("file.new", json!({"width": 16, "height": 16, "depth": depth})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     let d = s.active_mut().unwrap();
-    let l = std::sync::Arc::make_mut(&mut d.doc).layer_mut(d.active_layer.unwrap()).unwrap();
+    let active = d.active_layer.unwrap();
+    let l = std::sync::Arc::make_mut(d.doc_mut()).layer_mut(active).unwrap();
     let surf = l.surface_mut().unwrap();
     for y in 0..16 {
         for x in 0..16 {
@@ -71,7 +72,8 @@ fn average_smart_command_rerenders_and_undoes() {
         s.execute("layer.smartFilter.setVisible", json!({"index": 0, "visible": true})).unwrap();
         let d = s.active_mut().unwrap();
         let snapshot = d.doc.clone();
-        let layer = std::sync::Arc::make_mut(&mut d.doc).layer_mut(d.active_layer.unwrap()).unwrap();
+        let active = d.active_layer.unwrap();
+        let layer = std::sync::Arc::make_mut(d.doc_mut()).layer_mut(active).unwrap();
         if let LayerContent::Smart(sm) = &mut layer.content {
             assert_eq!(sm.smart_filters.len(), 1);
             assert_eq!(sm.smart_filters[0].command, "filter.blur.average");

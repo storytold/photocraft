@@ -12,7 +12,7 @@ const DT: f32 = 1.0 / 60.0;
 
 /// The whole app with a 400×300 document at 100 %: the runtime takes the keys of a frame and reports the fired
 /// commands to the app in the next one, so every key event runs two frames (`key_event`).
-fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+fn harness(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(DT).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -32,43 +32,43 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 /// The screen point of the document point (`x`, `y`) through the view the canvas shows.
-fn screen(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
+fn screen(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) -> Pos2 {
     crate::canvas::testing::to_screen(h.state_mut(), [f64::from(x), f64::from(y)])
 }
 
 /// One key event with its modifiers, then two frames: the pass that takes the key and the one that runs its command.
-fn key_event(h: &mut Harness<'static, PhotocraftApp>, k: Key, pressed: bool, repeat: bool, m: Modifiers) {
+fn key_event(h: &mut Harness<'static, Box<PhotocraftApp>>, k: Key, pressed: bool, repeat: bool, m: Modifiers) {
     h.event(Event::ModifiersChanged(m));
     h.event(Event::Key { key: k, physical_key: None, pressed, repeat, modifiers: m });
     h.run_steps(2);
 }
 
-fn down(h: &mut Harness<'static, PhotocraftApp>, k: Key) {
+fn down(h: &mut Harness<'static, Box<PhotocraftApp>>, k: Key) {
     key_event(h, k, true, false, Modifiers::NONE);
 }
 
-fn up(h: &mut Harness<'static, PhotocraftApp>, k: Key) {
+fn up(h: &mut Harness<'static, Box<PhotocraftApp>>, k: Key) {
     key_event(h, k, false, false, Modifiers::NONE);
     h.run_steps(2);
 }
 
 /// Wait `secs` of input time.
-fn wait(h: &mut Harness<'static, PhotocraftApp>, secs: f64) {
+fn wait(h: &mut Harness<'static, Box<PhotocraftApp>>, secs: f64) {
     h.run_steps((secs / f64::from(DT)).ceil() as usize);
 }
 
-fn button(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, pressed: bool, m: Modifiers) {
+fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, p: Pos2, pressed: bool, m: Modifiers) {
     h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: m });
     h.run_steps(1);
 }
 
-fn move_to(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) {
+fn move_to(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32) {
     let p = screen(h, x, y);
     h.event(Event::PointerMoved(p));
     h.run_steps(1);
 }
 
-fn click(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32, m: Modifiers) {
+fn click(h: &mut Harness<'static, Box<PhotocraftApp>>, x: f32, y: f32, m: Modifiers) {
     move_to(h, x, y);
     let p = screen(h, x, y);
     button(h, p, true, m);

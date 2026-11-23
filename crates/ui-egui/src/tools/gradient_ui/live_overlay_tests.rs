@@ -7,7 +7,7 @@ use crate::state::Tool;
 use photocraft_engine::gradient_fill_cmds as cmds;
 
 /// A 200×120 document with a Gradient Fill layer drawn from (20, 60) to (180, 60).
-fn app_with_fill_layer() -> PhotocraftApp {
+fn app_with_fill_layer() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
     app.ui.tool = Tool::Gradient;

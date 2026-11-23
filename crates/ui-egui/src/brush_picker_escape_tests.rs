@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.run("tools.setBrush", json!({"brush": {"size": 20, "hardness": 0.0, "angle": 0.0, "roundness": 1.0}})).unwrap();
@@ -35,7 +35,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
 }
 
 /// Type `text` into the picker's `n`th spin field (0 Size, 1 Hardness), then Tab.
-fn type_into(h: &mut Harness<'static, PhotocraftApp>, n: usize, text: &str) {
+fn type_into(h: &mut Harness<'static, Box<PhotocraftApp>>, n: usize, text: &str) {
     h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(n).expect("the field").click();
     h.run_steps(1);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
@@ -45,12 +45,12 @@ fn type_into(h: &mut Harness<'static, PhotocraftApp>, n: usize, text: &str) {
     h.run_steps(2);
 }
 
-fn brush(h: &Harness<'static, PhotocraftApp>) -> (f32, f32, f32) {
+fn brush(h: &Harness<'static, Box<PhotocraftApp>>) -> (f32, f32, f32) {
     let b = &h.state().session.tools.brush;
     (b.size, b.hardness, b.angle)
 }
 
-fn journal_ids(h: &Harness<'static, PhotocraftApp>, from: usize) -> Vec<String> {
+fn journal_ids(h: &Harness<'static, Box<PhotocraftApp>>, from: usize) -> Vec<String> {
     h.state().session.journal[from..].iter().map(|(id, _)| id.clone()).collect()
 }
 

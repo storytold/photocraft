@@ -11,7 +11,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 
 /// An 800 × 600 document with `tool` active and its options set by `set`.
-fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> PhotocraftApp {
+fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();

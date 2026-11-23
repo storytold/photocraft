@@ -107,7 +107,7 @@ mod web_playback_tests {
     use super::tests::{app, pass, set_option};
     use super::*;
 
-    fn animated_app(depth: u32) -> PhotocraftApp {
+    fn animated_app(depth: u32) -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 32, "height": 24, "depth": depth})).unwrap();
         app.run("timeline.create", json!({"duration": 3, "fps": 2})).unwrap();
