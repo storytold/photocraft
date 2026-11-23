@@ -29,8 +29,8 @@ client's launch directory. In bridge mode the roots are configured on the deskto
 flags on `photocraft-cli mcp --bridge` are rejected. Explicit `--control-token` and
 `--control-token-file` flags require `--bridge` (or `PHOTOCRAFT_CONTROL_PORT`) and are mutually
 exclusive; bridge credentials can also come from `PHOTOCRAFT_CONTROL_TOKEN` or
-`PHOTOCRAFT_CONTROL_TOKEN_FILE`. Each launch option
-except `--help`/`-h` takes one non-empty value and cannot be repeated. Stray positional arguments,
+`PHOTOCRAFT_CONTROL_TOKEN_FILE`. `--headless`, `--gpu`, `--no-gpu` and `--help`/`-h` take no value. Other launch options
+take one non-empty value; only `--automation-read-root` may repeat, adding ordered read directories. Stray positional arguments,
 missing values and options for the wrong mode are usage errors (exit 2) reported on stderr before
 the server starts.
 
