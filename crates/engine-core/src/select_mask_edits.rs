@@ -407,6 +407,14 @@ mod tests {
         assert!(invert(Some(&all), canvas).is_none());
     }
 
+    /// Wall-clock bound for the huge-canvas tests, so a canvas-wide paint fails quickly.
+    /// Hosted ubuntu-24.04 is about 7s; artcraft-k8s-main took 26.86s on main (run 45091743078);
+    /// coverage instrumentation has been 20.6–24.8s. 90s still passes those and is far below
+    /// painting a 100,000×100,000 bounding box.
+    fn assert_huge_canvas_time(started: std::time::Instant) {
+        assert!(started.elapsed() < std::time::Duration::from_secs(90), "{:?}", started.elapsed());
+    }
+
     /// A huge canvas inverts without a canvas-sized buffer, and a run of Inverts costs one.
     #[test]
     fn invert_on_a_huge_canvas_and_runs_of_inverts() {
@@ -424,7 +432,7 @@ mod tests {
         let split = [SelectionEdit::Invert, SelectionEdit::Invert, SelectionEdit::Invert, SelectionEdit::Clear, SelectionEdit::Invert];
         let all = apply(&doc, None, Some(small), &split).expect("cleared, then everything");
         assert!(all.sample_channel(15, 15, 0) > 0.99 && all.sample_channel(70_000, 3, 0) > 0.99);
-        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+        assert_huge_canvas_time(t);
     }
 
     /// The #8783 review: a size-1 Brush edit from corner to corner of a 100,000 px canvas sweeps
@@ -449,7 +457,7 @@ mod tests {
         let erased =
             apply(&doc, None, Some(small.clone()), &[brush, SelectionEdit::Brush { points: diagonal, size: 9.0, hardness: 100.0, add: false }]).expect("kept");
         assert!(erased.sample_channel(15, 65, 0) > 0.99 && erased.sample_channel(50_000, 50_000, 0) == 0.0);
-        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+        assert_huge_canvas_time(t);
         // A zigzag across more tiles than one edit may paint is refused before painting.
         let zigzag: Vec<(f32, f32)> = (0..20).map(|i| (if i % 2 == 0 { 0.0 } else { 99_999.0 }, i as f32 * 5000.0)).collect();
         let over = [SelectionEdit::Brush { points: zigzag.clone(), size: 1.0, hardness: 100.0, add: true }];
