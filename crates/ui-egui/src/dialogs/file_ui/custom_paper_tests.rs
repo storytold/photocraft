@@ -23,12 +23,12 @@ fn set_fields(app: &mut PhotocraftApp, id: DialogId, values: Value) {
     }
 }
 
-fn app() -> (PhotocraftApp, DialogId) {
+fn app() -> (Box<PhotocraftApp>, DialogId) {
     app_remembering(None)
 }
 
 /// The Print dialog opened after a print that kept `paper` as its paper (what `file.print` remembers).
-fn app_remembering(paper: Option<Value>) -> (PhotocraftApp, DialogId) {
+fn app_remembering(paper: Option<Value>) -> (Box<PhotocraftApp>, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     // Print lists this printer and does not ask the spooler.
     app.session.printer_source = Some(std::sync::Arc::new(|| {
@@ -51,19 +51,19 @@ fn assert_no_system_listing() {
 }
 
 /// One pass of the dialogs, then the app's result takers, as the app's frame runs them.
-fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+fn show(ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>) {
     crate::dialogs::run(app, ui);
     let ctx = ui.ctx().clone();
     super::take(app, &ctx);
 }
 
-fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     harness_at_scale(app, 1.0)
 }
 
 /// Builds the real dialog at an explicit physical-pixels-per-egui-point ratio so pointer
 /// events remain in egui points while exercising both standard and Retina display scales.
-fn harness_at_scale(app: PhotocraftApp, pixels_per_point: f32) -> Harness<'static, PhotocraftApp> {
+fn harness_at_scale(app: Box<PhotocraftApp>, pixels_per_point: f32) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder()
         // The paper menu lists the Japanese paper names; no installed face is guaranteed to draw them.
         .allow_missing_glyphs()
@@ -76,7 +76,7 @@ fn harness_at_scale(app: PhotocraftApp, pixels_per_point: f32) -> Harness<'stati
     h
 }
 
-fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     if let Some(node) = h.query_by_label(label) {
         node.click();
     } else {
@@ -87,7 +87,7 @@ fn click(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
 
 /// Scrolls the open paper list until the row `label` is shown: the list draws only the rows in view, so a row near
 /// the end is not in the access tree until the wheel has brought it into view.
-fn reveal(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+fn reveal(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     for _ in 0..40 {
         if h.query_by_label(label).is_some() {
             return;
@@ -109,18 +109,18 @@ fn reveal(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
 /// Chooses an option from the open paper menu. The Japanese presets made the list longer than
 /// the dropdown shows, so it scrolls (and reopens where it was left): bring the row into view
 /// before clicking it.
-fn choose_paper(h: &mut Harness<'_, PhotocraftApp>, label: &str) {
+fn choose_paper(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     reveal(h, label);
     h.get_by_label(label).click();
     h.run_steps(3);
 }
 
-fn shown(h: &Harness<'_, PhotocraftApp>, text: &str) -> bool {
+fn shown(h: &Harness<'_, Box<PhotocraftApp>>, text: &str) -> bool {
     // A form caption and its control both expose the same accessible name.
     h.query_all_by_label(text).next().is_some() || h.query_all_by_value(text).next().is_some()
 }
 
-fn enter_length(h: &mut Harness<'_, PhotocraftApp>, label: &str, value: &str) {
+fn enter_length(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, value: &str) {
     // The caption is a separate Label node with the same text; use the accessible SpinButton.
     let pos = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, label).rect().center();
     h.event(Event::PointerMoved(pos));
@@ -135,7 +135,7 @@ fn enter_length(h: &mut Harness<'_, PhotocraftApp>, label: &str, value: &str) {
     h.run_steps(3);
 }
 
-fn fields(h: &Harness<'_, PhotocraftApp>, id: DialogId) -> Map<String, Value> {
+fn fields(h: &Harness<'_, Box<PhotocraftApp>>, id: DialogId) -> Map<String, Value> {
     let open = h.state().framework.dialogs.open_dialogs();
     open.into_iter().find(|d| d.id == id).and_then(|d| d.fields).and_then(|v| v.as_object().cloned()).expect("the Print dialog's values")
 }

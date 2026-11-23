@@ -109,18 +109,18 @@ mod tests {
 
     const SHIFT_ALT: Modifiers = Modifiers { alt: true, ctrl: false, shift: true, mac_cmd: false, command: false };
 
-    fn harness() -> Harness<'static, PhotocraftApp> {
+    fn harness() -> Harness<'static, Box<PhotocraftApp>> {
         harness_size(400, 300)
     }
 
-    fn harness_size(width: u32, height: u32) -> Harness<'static, PhotocraftApp> {
+    fn harness_size(width: u32, height: u32) -> Harness<'static, Box<PhotocraftApp>> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": width, "height": height})).unwrap();
         app.run("tools.setColors", json!({"foreground": "#0000ff"})).unwrap();
         app.ui.tool = Tool::Brush;
         app.sync_views();
         let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
-            |ui, app: &mut PhotocraftApp| {
+            |ui, app: &mut Box<PhotocraftApp>| {
                 let ctx = ui.ctx().clone();
                 if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                     return;
@@ -134,7 +134,7 @@ mod tests {
         h
     }
 
-    fn button(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2, pressed: bool, modifiers: Modifiers) {
+    fn button(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2, pressed: bool, modifiers: Modifiers) {
         h.event(egui::Event::ModifiersChanged(modifiers));
         h.event(egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers });
         h.run_steps(2);
@@ -143,7 +143,7 @@ mod tests {
     /// The HUD's picking content (the colour square and the hue strip beside it), found by its accessibility node: the
     /// smallest node named "Color", since the popover around it carries the same name. The square is as tall as
     /// the content is high; the strip stands in the content's right part.
-    fn content(h: &Harness<'static, PhotocraftApp>) -> Rect {
+    fn content(h: &Harness<'static, Box<PhotocraftApp>>) -> Rect {
         h.query_all_by_label("Color").map(|node| node.rect()).min_by(|a, b| a.area().total_cmp(&b.area())).expect("the HUD is shown")
     }
 
@@ -159,7 +159,7 @@ mod tests {
         pos2(content.right() - beside / 4.0, content.center().y)
     }
 
-    fn foreground(h: &Harness<'static, PhotocraftApp>) -> [f32; 4] {
+    fn foreground(h: &Harness<'static, Box<PhotocraftApp>>) -> [f32; 4] {
         h.state().session.tools.foreground
     }
 
@@ -283,7 +283,7 @@ mod tests {
         crate::canvas::testing::window(h.state_mut(), vec2(1200.0, 800.0));
         // The document's centre, in document points as `ui.pointer` takes them.
         let c = [200.0, 150.0];
-        let pointer = |h: &mut Harness<'static, PhotocraftApp>, events: serde_json::Value| {
+        let pointer = |h: &mut Harness<'static, Box<PhotocraftApp>>, events: serde_json::Value| {
             crate::canvas::testing::control(h.state_mut(), "ui.pointer", json!({"button": "right", "shift": true, "alt": true, "events": events}));
         };
         pointer(&mut h, json!([{"kind": "down", "x": c[0], "y": c[1]}, {"kind": "up", "x": c[0], "y": c[1]}]));

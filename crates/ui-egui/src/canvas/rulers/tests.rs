@@ -5,7 +5,7 @@ use crate::PhotocraftApp;
 use crate::canvas::testing;
 use crate::state::Tool;
 
-type AppHarness = egui_kittest::Harness<'static, PhotocraftApp>;
+type AppHarness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 /// The real canvas on a `size` document at 100 %, rulers on, snapping off, with `tool`.
 fn canvas_harness(size: [u32; 2], tool: Tool) -> AppHarness {
@@ -21,7 +21,7 @@ fn harness_with_passes(size: [u32; 2], tool: Tool, second_pass: bool) -> AppHarn
     app.ui.extras.snap = false;
     app.ui.tool = tool;
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1000.0, 700.0)).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }

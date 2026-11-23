@@ -417,7 +417,7 @@ fn link_groups_and_effects_reference_round_trip() {
     let mut inner = Layer::raster("inner", fmt);
     inner.link_group = Some(3);
     let g = Layer::group("g", vec![inner]);
-    d.layers = vec![a, b, g];
+    d.layers = vec![a, b, g].into();
     let back = roundtrip(&d);
     assert_eq!(back.layers[0].link_group, Some(7));
     assert_eq!(back.layers[1].link_group, Some(7));
@@ -459,7 +459,7 @@ fn channel_restrictions_round_trip_as_brst() {
     a.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
     a.excluded_channels = 0b110;
     let b = Layer::raster("b", d.pixel_format());
-    d.layers = vec![a, b];
+    d.layers = vec![a, b].into();
     let f = document_to_psd(&d).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == "a").unwrap();
     assert_eq!(rec.block(b"brst").unwrap().data, vec![0, 0, 0, 1, 0, 0, 0, 2]);
@@ -472,6 +472,58 @@ fn channel_restrictions_round_trip_as_brst() {
     cleared.layers[0].excluded_channels = 0;
     let f = document_to_psd(&cleared).unwrap();
     assert!(f.layers().iter().find(|r| r.name() == "a").unwrap().block(b"brst").is_none());
+}
+
+fn channel_restrictions_psd(payload: Vec<u8>) -> Vec<u8> {
+    use craft_psd::{LayerSpec, PixelData, PsdBuilder, TaggedBlock};
+    let mut layer = LayerSpec::new("restricted", 0, 0, 1, 1, PixelData::Rgba8(vec![80, 120, 160, 255]));
+    layer.extra_blocks = vec![TaggedBlock::new(*b"zBef", vec![1, 2, 3, 4]), TaggedBlock::new(*b"brst", payload), TaggedBlock::new(*b"zAft", vec![5, 6, 7, 8])];
+    let mut builder = PsdBuilder::new(1, 1);
+    builder.push_layer(layer);
+    builder.composite(PixelData::Rgba8(vec![80, 120, 160, 255]));
+    builder.to_bytes().unwrap()
+}
+
+#[test]
+fn channel_restrictions_partial_records_preserve_valid_indices_and_neighboring_blocks() {
+    for trailing in [vec![0xaa], vec![0xaa, 0xbb], vec![0xaa, 0xbb, 0xcc]] {
+        // The complete indices are 31, 32, 0, 31: 32 is ignored and 31 is a duplicate.
+        let mut payload = vec![0, 0, 0, 31, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 31];
+        payload.extend(trailing);
+        let bytes = channel_restrictions_psd(payload.clone());
+        let document = import("restrictions.psd", &bytes).unwrap().document;
+        let layer = document.layers.iter().find(|layer| layer.name == "restricted").unwrap();
+        assert_eq!(layer.excluded_channels, 0x8000_0001);
+        assert!(layer.psd_blocks.iter().any(|(key, data)| key == b"brst" && data.as_slice() == payload));
+
+        let saved = export(&document, "restrictions.psd", &ExportOptions::default()).unwrap().bytes;
+        let file = PsdFile::from_bytes(&saved).unwrap();
+        let record = file.layers().iter().find(|record| record.name() == "restricted").unwrap();
+        let preserved: Vec<_> = record.blocks.iter().filter(|block| [*b"zBef", *b"brst", *b"zAft"].contains(&block.key)).collect();
+        assert_eq!(preserved.iter().map(|block| block.key).collect::<Vec<_>>(), vec![*b"zBef", *b"brst", *b"zAft"]);
+        assert_eq!(preserved[0].data, vec![1, 2, 3, 4]);
+        assert_eq!(preserved[1].data, vec![0, 0, 0, 0, 0, 0, 0, 31]);
+        assert_eq!(preserved[2].data, vec![5, 6, 7, 8]);
+        let reopened = import("restrictions.psd", &saved).unwrap().document;
+        assert_eq!(reopened.layers.iter().find(|layer| layer.name == "restricted").unwrap().excluded_channels, 0x8000_0001);
+    }
+}
+
+#[test]
+fn channel_restrictions_without_valid_records_are_omitted() {
+    for payload in [vec![], vec![0xaa], vec![0xaa, 0xbb], vec![0xaa, 0xbb, 0xcc], vec![0, 0, 0, 32, 255, 255, 255, 255]] {
+        let bytes = channel_restrictions_psd(payload);
+        let document = import("restrictions.psd", &bytes).unwrap().document;
+        assert_eq!(document.layers.iter().find(|layer| layer.name == "restricted").unwrap().excluded_channels, 0);
+        let saved = export(&document, "restrictions.psd", &ExportOptions::default()).unwrap().bytes;
+        let file = PsdFile::from_bytes(&saved).unwrap();
+        let record = file.layers().iter().find(|record| record.name() == "restricted").unwrap();
+        assert!(record.block(b"brst").is_none());
+        assert_eq!(record.block(b"zBef").unwrap().data, vec![1, 2, 3, 4]);
+        assert_eq!(record.block(b"zAft").unwrap().data, vec![5, 6, 7, 8]);
+        let reopened = import("restrictions.psd", &saved).unwrap().document;
+        assert_eq!(reopened.layers.iter().find(|layer| layer.name == "restricted").unwrap().excluded_channels, 0);
+    }
 }
 
 /// Advanced Blending maps to `knko` / `infx` / `clbl` / `tsly` / `lmgm` / `vmgm` (one byte +
@@ -497,7 +549,7 @@ fn advanced_blending_round_trips_as_tagged_blocks() {
         g.advanced.knockout = Knockout::Shallow;
         g.fill_opacity = 128.0 / 255.0;
         let b = Layer::raster("b", d.pixel_format());
-        d.layers = vec![a, b, g];
+        d.layers = vec![a, b, g].into();
         let f = document_to_psd(&d).unwrap();
         let rec = |name: &str| f.layers().iter().find(|r| r.name() == name).unwrap().clone();
         let ra = rec("a");
@@ -539,7 +591,7 @@ fn blend_if_round_trips_as_blending_ranges() {
     let mut g = Layer::group("g", vec![Layer::raster("c", d.pixel_format())]);
     g.blend_if.set(1, [BlendRange { black: [1, 2], white: [3, 4] }, BlendRange::FULL]);
     let b = Layer::raster("b", d.pixel_format());
-    d.layers = vec![a, b, g];
+    d.layers = vec![a, b, g].into();
     let f = document_to_psd(&d).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == "a").unwrap();
     let full = [0u8, 0, 255, 255, 0, 0, 255, 255];
@@ -630,7 +682,7 @@ fn frame_children_keep_their_links() {
     let b = Layer::raster("b", fmt);
     let mut outside = Layer::raster("outside", fmt);
     outside.link_group = Some(5);
-    d.layers = vec![framed(vec![a, b], Some(photocraft_doc::ShapeStroke::default())), outside];
+    d.layers = vec![framed(vec![a, b], Some(photocraft_doc::ShapeStroke::default())), outside].into();
     let back = roundtrip(&d);
     let LayerContent::Group(g) = &back.layers[0].content else { panic!("frame is not a group") };
     let names: Vec<_> = g.children.iter().map(|l| (l.name.as_str(), l.link_group)).collect();
@@ -645,7 +697,7 @@ fn frame_stroke_exports_its_pixels() {
     let mut d = Document::new("s", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
     let fmt = d.pixel_format();
     let stroke = photocraft_doc::ShapeStroke { width: 2.0, ..Default::default() };
-    d.layers = vec![framed(vec![Layer::raster("a", fmt)], Some(stroke))];
+    d.layers = vec![framed(vec![Layer::raster("a", fmt)], Some(stroke))].into();
     let r = export(&d, "x.psd", &ExportOptions::default()).unwrap();
     let f = PsdFile::from_bytes(&r.bytes).unwrap();
     let rec = f.layers().iter().find(|r| r.name() == "Frame Stroke").expect("stroke record");
@@ -659,7 +711,7 @@ fn an_invalidated_frame_stays_removed_after_psd_roundtrip() {
 
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut doc = Document::new("frame", Size::new(8, 8), ColorMode::Rgb, depth);
-        doc.layers = vec![framed(vec![Layer::raster("image", doc.pixel_format())], None)];
+        doc.layers = vec![framed(vec![Layer::raster("image", doc.pixel_format())], None)].into();
         let mut imported = roundtrip(&doc);
         let frame = &mut imported.layers[0];
         assert!(frame.frame.is_some(), "{depth:?}: the frame must first survive import");

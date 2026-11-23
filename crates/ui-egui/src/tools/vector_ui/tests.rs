@@ -15,7 +15,7 @@ use crate::canvas::testing;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::direct_select::PathRef;
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
@@ -1037,12 +1037,12 @@ fn live_rectangle_corner_radius_edit_preserves_other_corners_and_history() {
 }
 
 /// The options bar of `tool` edits the selected shape's fill and stroke, one history step per edit.
-fn shape_bar_harness(tool: Tool) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn shape_bar_harness(tool: Tool) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     let mut app = app();
     app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
     shape_drag(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0]);
     let mut h = egui_kittest::Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 48.0)).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
+        move |ui, app: &mut Box<PhotocraftApp>| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 ui.horizontal_centered(|ui| options_bar(app, ui, tool));
             }
@@ -1064,7 +1064,7 @@ fn active_shape_paint(app: &PhotocraftApp) -> (Option<photocraft_doc::Fill>, Opt
 }
 
 /// Clicks the options bar's Fill check box.
-fn click_bar_fill(h: &mut egui_kittest::Harness<'_, PhotocraftApp>) {
+fn click_bar_fill(h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>) {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     h.get_by_role_and_label(Role::CheckBox, "Fill").click();
@@ -1072,13 +1072,13 @@ fn click_bar_fill(h: &mut egui_kittest::Harness<'_, PhotocraftApp>) {
 }
 
 /// Whether the options bar shows its Fill check box.
-fn bar_shows_fill(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> bool {
+fn bar_shows_fill(h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>) -> bool {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     h.query_by_role_and_label(Role::CheckBox, "Fill").is_some()
 }
 
-fn type_stroke_width(h: &mut egui_kittest::Harness<'_, PhotocraftApp>) {
+fn type_stroke_width(h: &mut egui_kittest::Harness<'_, Box<PhotocraftApp>>) {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
     h.get_all_by_role(Role::SpinButton).next().expect("the stroke width").click();

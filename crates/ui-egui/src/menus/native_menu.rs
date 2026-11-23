@@ -1,18 +1,17 @@
 //! The macOS menu bar: the same menus as the in-window bar ([`crate::menus::items::model`]), laid
-//! out the way a Mac app's are by craft-menu's [`mac_layout`] and handed to craft-menu's platform
+//! out the way a Mac app's are by craft-menu and handed to its platform
 //! backend.
 //!
 //! craft-menu owns the layout, the clash rules, the key equivalents and the driver. This module
 //! supplies what is PhotoCraft's: the app name, the translated labels, the shortcuts bound outside
-//! the menus, the gate and modal rules ([`crate::menus::menu_gate`]) and the hash of the state the
-//! menus show ([`state_hash`]).
+//! the menus and the gate and modal rules ([`crate::menus::menu_gate`]).
 //!
 //! A menu click is a fired command ([`poll`] fires it with `FireSource::Menu`); the runtime's
 //! drain runs it like any other fired command, so the menu has no command path of its own.
 
-use std::hash::{DefaultHasher, Hash, Hasher};
-
-use craft::menu::{Layout, NativeMenu, Target};
+#[cfg(any(target_os = "macos", test))]
+use craft::menu::Layout;
+use craft::menu::{NativeMenu, Target};
 use craft::ui::runtime::commands::{FireSource, fire};
 use craft::ui::runtime::windows::WindowHost;
 
@@ -22,15 +21,17 @@ use crate::menus::items;
 /// The name the app menu, About, Hide and Quit show.
 pub const APP_NAME: &str = "PhotoCraft";
 
-/// [`items::model`]'s menus laid out as a Mac menu bar, in the UI language.
-///
-/// The one place that lays the model out for macOS: the first install, every re-sync and the tests
-/// use it. The model itself is the one menu definition both bars read.
-pub(crate) fn laid_out(app: &mut PhotocraftApp, ctx: &egui::Context) -> Layout {
-    // Native installation and sync can run before the drawing language catches up.
+fn model<'a>(app: &'a mut PhotocraftApp, ctx: &egui::Context) -> &'a items::MenuModel {
+    // Installation and sync can run before the drawing language catches up.
     let lang = crate::i18n::Lang::from_pref(&app.session.prefs().interface.language);
-    let _menu_language = crate::i18n::language_scope(lang);
-    items::model_for(app, ctx, Target::Mac).layout.clone()
+    let _language = crate::i18n::language_scope(lang);
+    items::model_for(app, ctx, Target::Mac)
+}
+
+/// The Mac menu layout in the saved interface language.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn laid_out(app: &mut PhotocraftApp, ctx: &egui::Context) -> Layout {
+    model(app, ctx).layout().clone()
 }
 
 /// Installs the macOS menu bar; `None` where there is none (every other platform).
@@ -57,64 +58,21 @@ pub fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// Once per frame after the pass: sets what may run from the menus and brings the menus up to date
-/// when anything they show may have changed. Building the rows walks every command's enabled
-/// state, so the layout runs only when [`state_hash`] changes or a menu event arrived.
+/// when what they show changed: the model's bar (its revision) or the keymap whose keys the layout
+/// gives way to.
 pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Taken out for the pass: the layout borrows the whole app.
     let Some(mut native) = app.services.native_menu.take() else { return };
     let (gate, rules) = crate::menus::menu_gate(app);
     native.set_gate(gate.text_editing(WindowHost::of(ctx).typing()));
     native.set_modal_rules(rules);
-    let state = state_hash(app, craft::menu::had_input(ctx).then_some(app.frame));
-    for c in native.sync_with(state, || laid_out(app, ctx)) {
+    let keymap = app.framework.keymap_inputs();
+    let model = model(app, ctx);
+    let shown = (model.bar.revision(), keymap);
+    for c in native.sync_with(&shown, || model.layout().clone()) {
         log::info!("menu: {} is {} on macOS and {} in PhotoCraft; {}", c.shortcut.portable(), c.system, c.command.id, c.resolution);
     }
     app.services.native_menu = Some(native);
-}
-
-/// What the menus' rows depend on, cheaply: commands run, the documents (their names, in tab
-/// order, for the Window menu) and the active one's revision, selection, recent files, panels and
-/// view state, the language. `input` forces a change on frames with a click or key press, which
-/// covers state the hash doesn't list.
-pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
-    let mut h = DefaultHasher::new();
-    input.hash(&mut h);
-    let s = &app.session;
-    s.journal.len().hash(&mut h);
-    s.active_index().hash(&mut h);
-    for d in s.documents() {
-        (d.doc.id.0, &d.doc.name).hash(&mut h);
-    }
-    s.clipboard.is_some().hash(&mut h);
-    // A running job greys the commands that would change its document.
-    s.has_jobs().hash(&mut h);
-    (crate::actions::library::edit_undo_label(app), crate::vector_ui::pen_can_undo(app)).hash(&mut h);
-    if let Some(d) = s.active() {
-        (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
-    }
-    let ui = &app.ui;
-    (&ui.recent_files, &app.workspaces.set.current, app.ui.palette.open, ui.transform.is_some(), ui.text_edit.is_some(), app.dialog_count()).hash(&mut h);
-    // Cut and Copy are enabled while the typed text has a selection.
-    ui.text_edit.as_ref().map(|e| e.anchor != e.caret).hash(&mut h);
-    (app.discard.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
-    crate::prefs_ui::recording(app).hash(&mut h);
-    // The rows show the keymap's chords; the keymap follows these from the frame they change.
-    app.framework.keymap_inputs().hash(&mut h);
-    // Edit / Clear Selected Guides are enabled only while a guide is selected.
-    crate::guide_select::selected(app).hash(&mut h);
-    // The dock workspace's revision moves only on `replace`, so the arrangement is read as the panels in the layout and
-    // the keys of the hidden and floating ones; the checked flags cover panels opened or closed and the flyout of a
-    // panel in a column of icons.
-    let docking = &app.ui.docking;
-    docking.layout.panels().hash(&mut h);
-    docking.hidden.iter().map(|(panel, _)| panel).collect::<Vec<_>>().hash(&mut h);
-    docking.floated.iter().map(|(panel, _)| panel).collect::<Vec<_>>().hash(&mut h);
-    for panel in crate::panels::registry::PANELS {
-        crate::panel_docking::is_checked(app, panel.id).hash(&mut h);
-    }
-    serde_json::to_string(&(&ui.extras, &ui.view, ui.theme.id().as_str(), ui.theme.is_dark(), ui.tool)).unwrap_or_default().hash(&mut h);
-    s.prefs().interface.language.hash(&mut h);
-    h.finish()
 }
 
 #[cfg(test)]

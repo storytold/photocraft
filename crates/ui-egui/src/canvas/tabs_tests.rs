@@ -14,7 +14,7 @@ use crate::theme::AppTheme;
 use super::tabs::tab_title_at;
 
 /// A real app window with `docs` documents named "ch1-pNN.png".
-fn harness(docs: usize) -> Harness<'static, PhotocraftApp> {
+fn harness(docs: usize) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_max_steps(64).build_eframe(move |cc| {
         let theme = AppTheme::pro();
         PhotocraftApp::setup_context(&cc.egui_ctx, theme.clone());
@@ -31,7 +31,7 @@ fn harness(docs: usize) -> Harness<'static, PhotocraftApp> {
 }
 
 /// How many tabs of the strip carry `name`. A tab's accessible name is its name, then its detail and modified mark.
-fn tabs_named(h: &Harness<'_, PhotocraftApp>, name: &str) -> usize {
+fn tabs_named(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) -> usize {
     h.query_all_by_role(Role::Tab).filter(|n| n.accesskit_node().label().is_some_and(|label| label.contains(name))).count()
 }
 
@@ -39,7 +39,7 @@ fn tabs_named(h: &Harness<'_, PhotocraftApp>, name: &str) -> usize {
 // `ui-shell/src/shell/reveal.rs:95-99`) and the app harness does not hand the shell output to a trial; the panels'
 // visibility is read from the tree, by the Layers panel the default workspace docks.
 /// Whether the docked panels are drawn.
-fn panels_shown(h: &Harness<'_, PhotocraftApp>) -> bool {
+fn panels_shown(h: &Harness<'_, Box<PhotocraftApp>>) -> bool {
     h.query_all_by_label("Layers").next().is_some()
 }
 
@@ -79,9 +79,9 @@ fn ctrl() -> egui::Modifiers {
 #[test]
 fn ctrl_tab_cycles_through_the_document_tabs() {
     let mut h = harness(3);
-    let active = |h: &Harness<'_, PhotocraftApp>| h.state().session.active_index();
+    let active = |h: &Harness<'_, Box<PhotocraftApp>>| h.state().session.active_index();
     assert_eq!(active(&h), Some(2), "the last new document is active");
-    let press = |h: &mut Harness<'_, PhotocraftApp>, shift: bool| {
+    let press = |h: &mut Harness<'_, Box<PhotocraftApp>>, shift: bool| {
         h.key_press_modifiers(if shift { ctrl() | egui::Modifiers::SHIFT } else { ctrl() }, egui::Key::Tab);
         h.run_steps(2);
     };
@@ -120,7 +120,7 @@ fn ctrl_tab_records_a_relative_document_switch() {
 fn quick_mask_mode_names_the_quick_mask_in_the_tab() {
     let mut h = harness(1);
     h.state_mut().run("layer.new.layer", json!({})).unwrap();
-    let title = |h: &Harness<'_, PhotocraftApp>| tab_title_at(h.state(), 0, 100.0);
+    let title = |h: &Harness<'_, Box<PhotocraftApp>>| tab_title_at(h.state(), 0, 100.0);
 
     let detail = title(&h);
     assert!(detail.starts_with("ch1-p01.png @ 100%"), "{detail}");
@@ -135,4 +135,101 @@ fn quick_mask_mode_names_the_quick_mask_in_the_tab() {
     h.state_mut().run("select.editInQuickMaskMode", json!({"on": false})).unwrap();
     let detail = title(&h);
     assert!(detail.contains("Layer 1") && detail.contains("RGB") && !detail.contains("Quick Mask"), "{detail}");
+}
+
+#[test]
+fn a_tab_close_resolves_the_document_to_its_current_index() {
+    let mut h = harness(2);
+    let other = h.state().session.active().unwrap().doc.id;
+    h.query_all_by_role(Role::Button)
+        .find(|n| n.accesskit_node().label().is_some_and(|label| label.starts_with("Close ch1-p01.png")))
+        .expect("the other document tab's close button")
+        .click();
+    h.run_steps(3);
+    let docs = h.state().session.documents();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].doc.id, other);
+}
+
+fn tiled_app(width: f32) -> Harness<'static, Box<PhotocraftApp>> {
+    let mut h = Harness::builder().with_size(vec2(width, 720.0)).with_pixels_per_point(1.25).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, AppTheme::pro());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 180, "height": 120, "name": "Edited photograph with a long title.psd", "depth": 16})).unwrap();
+        app.run("layer.new.layer", json!({"name": "Retouch"})).unwrap();
+        app.run("file.new", json!({"width": 160, "height": 100, "name": "Reference photograph.psd"})).unwrap();
+        app
+    });
+    h.run_steps(3);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.tile", json!({})).unwrap();
+    h.run_steps(4);
+    h
+}
+
+fn tiled_control<'a>(h: &'a Harness<'_, Box<PhotocraftApp>>, role: Role, label: &str) -> Option<egui_kittest::Node<'a>> {
+    let area = h.state().last_canvas_rect;
+    h.query_all_by_role(role).filter(|n| n.accesskit_node().label().is_some_and(|text| text.contains(label))).find(|n| area.contains(n.rect().center()))
+}
+
+#[test]
+fn tiled_document_titles_follow_individual_views() {
+    for width in [1120.0, 652.0] {
+        let mut h = tiled_app(width);
+        let original = h.state().ui.views[1].zoom;
+        h.state_mut().ui.views[0].zoom = 0.5;
+        h.state_mut().ui.views[0].clear_pending();
+        h.run_steps(3);
+        let app = h.state();
+        let name = &app.session.documents()[0].doc.name;
+        let title = tiled_control(&h, Role::Tab, name).expect("the edited document's title is inside its tile");
+        let label = title.accesskit_node().label().unwrap();
+        assert!(label.contains("@ 50% (Retouch, RGB/16)") && label.ends_with(", modified"), "{label}");
+        let panes = super::document_area::arranged_panes(app, app.last_canvas_rect).unwrap();
+        let cell = panes.iter().find(|(i, _)| *i == 0).unwrap().1;
+        let canvases = super::arranged_cells(app, app.last_canvas_rect).unwrap();
+        let canvas = canvases.iter().find(|(i, _)| *i == 0).unwrap().1;
+        let close = tiled_control(&h, Role::Button, &format!("Close {name}")).expect("close is available in the tile");
+        assert!(cell.contains_rect(title.rect()) && cell.contains_rect(close.rect()), "title and close stay inside the tile at {width} points");
+        let zoom = h.query_all_by_label("50%").find(|n| cell.contains_rect(n.rect())).expect("the edited document's tile shows its own zoom");
+        assert!(title.rect().bottom() <= canvas.top() && zoom.rect().top() >= canvas.bottom(), "chrome is outside its canvas");
+        assert!(matches!(app.drop_to(&h.ctx, Some(title.rect().center())), crate::file_open::DropTo::Window));
+        assert_eq!(h.state().ui.views[1].zoom, original, "the other tile keeps its zoom");
+        title.click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.active_index(), Some(0));
+    }
+}
+
+#[test]
+fn tiled_document_close_uses_the_clicked_document_and_save_prompt() {
+    let mut h = tiled_app(1120.0);
+    let edited = h.state().session.documents()[0].doc.id;
+    assert!(h.state().session.documents()[0].is_dirty());
+    assert!(!h.state().session.documents()[1].is_dirty());
+    assert_eq!(h.state().session.active_index(), Some(1));
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    let revisions: Vec<_> = h.state().session.documents().iter().map(|d| d.revision).collect();
+    let at = tiled_control(&h, Role::Button, "Close Edited photograph").expect("the inactive tile has its own close button").rect().center();
+    h.event(egui::Event::PointerMoved(at));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    h.run_steps(3);
+    assert!(h.state().discard.is_some(), "closing edits asks whether to save");
+    assert!(h.state().session.documents().iter().map(|d| d.revision).eq(revisions), "the close press produces no brush edit");
+    assert_eq!(h.state().session.documents().len(), 2);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().discard.is_none());
+    assert_eq!(h.state().session.documents().len(), 2, "Cancel leaves both tiles open");
+    tiled_control(&h, Role::Button, "Close Reference photograph").expect("the clean tile has its own close button").click();
+    h.run_steps(3);
+    assert!(h.state().discard.is_none());
+    let docs = h.state().session.documents();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].doc.id, edited, "the close button removed only the clean document");
+    assert!(tiled_control(&h, Role::Tab, "Edited photograph").is_none(), "one document returns to the original single canvas");
 }

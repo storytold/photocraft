@@ -18,15 +18,15 @@ use craft::ui::runtime::memory::set_saved_value;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
-type AppHarness = Harness<'static, PhotocraftApp>;
+type AppHarness = Harness<'static, Box<PhotocraftApp>>;
 
 /// An app with a `width` × `height` document whose exporter and writer accept everything.
-fn export_app(width: u32, height: u32) -> PhotocraftApp {
+fn export_app(width: u32, height: u32) -> Box<PhotocraftApp> {
     export_app_over(width, height, None)
 }
 
 /// [`export_app`] over the file service `files` (the framework takes it when the app is built).
-fn export_app_over(width: u32, height: u32, files: Option<std::sync::Arc<dyn craft::host::Files>>) -> PhotocraftApp {
+fn export_app_over(width: u32, height: u32, files: Option<std::sync::Arc<dyn craft::host::Files>>) -> Box<PhotocraftApp> {
     let services =
         crate::Services { files, export: Some(Box::new(|_, _, _| Ok((Vec::new(), Vec::new())))), write: Some(Box::new(|_, _| Ok(()))), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -35,12 +35,12 @@ fn export_app_over(width: u32, height: u32, files: Option<std::sync::Arc<dyn cra
 }
 
 /// The dialog host and its answers, as a frame runs them, on the app's own context.
-fn harness(app: PhotocraftApp) -> AppHarness {
+fn harness(app: Box<PhotocraftApp>) -> AppHarness {
     let mut h = Harness::builder()
         .with_size(egui::vec2(900.0, 700.0))
         .with_step_dt(1.0 / 60.0)
         .with_context(app.ctx().clone())
-        .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::run(app, ui), app);
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     h.run_steps(2);
     h
 }
@@ -922,6 +922,29 @@ fn preview_cache_tracks_working_profiles_but_prefers_embedded_profiles() {
         assert_eq!(dialog_options(&h), options, "the settings did not change");
         assert_eq!(before != texture(&h), !embedded, "embedded: {embedded}");
     }
+}
+
+/// A tile that fails to read and recovers alters the pixels without a new revision or other settings: the preview
+/// is made again, so it does not keep the zeros it read during the error (`crate::scratch_reads`).
+#[test]
+fn the_preview_is_made_again_after_a_scratch_read_error_transition() {
+    let app = export_app(20, 10);
+    let revision = app.session.active().unwrap().revision;
+    let mut h = harness(app);
+    open(h.state_mut()).unwrap();
+    settle_preview(&mut h);
+    let texture =
+        |h: &AppHarness| h.state().export_open.as_ref().and_then(|open| open.texture.as_ref().map(egui::TextureHandle::id)).expect("a preview was made");
+    let before = texture(&h);
+    let options = dialog_options(&h);
+    h.run_steps(3);
+    settle_preview(&mut h);
+    assert_eq!(texture(&h), before, "nothing changed: the same preview");
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    settle_preview(&mut h);
+    assert_eq!(h.state().session.active().unwrap().revision, revision);
+    assert_eq!(dialog_options(&h), options, "the settings did not change");
+    assert_ne!(texture(&h), before, "the preview is made again");
 }
 
 /// The dialog's requests are taken once: a second take in the same frame (a frame can run two

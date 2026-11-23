@@ -5,7 +5,7 @@ use crate::PhotocraftApp;
 use crate::canvas::ToolEvent;
 use crate::state::Tool;
 
-fn app() -> (PhotocraftApp, egui::Context) {
+fn app() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
     let ctx = app.ctx().clone();
@@ -208,12 +208,12 @@ fn count_size_fields_send_whole_numbers_the_engine_applies() {
 // ---------------------------------------------------------------- Straighten Layer button (#12033)
 
 /// The Ruler options bar, drawn wide enough for its buttons to show.
-fn ruler_bar(mut app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+fn ruler_bar(mut app: Box<PhotocraftApp>) -> egui_kittest::Harness<'static, Box<PhotocraftApp>> {
     use egui::vec2;
     app.ui.tool = Tool::Ruler;
     let ctx = app.ctx().clone();
     let mut h = egui_kittest::Harness::builder().with_context(ctx).with_size(vec2(1400.0, 60.0)).build_ui_state(
-        |ui: &mut egui::Ui, app: &mut PhotocraftApp| {
+        |ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
             }

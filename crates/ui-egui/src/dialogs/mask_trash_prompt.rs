@@ -56,7 +56,7 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
         StandardPrompt::trash_mask().can_apply(app.session.is_enabled_with(LAYER_MASK_APPLY, &json!({"layer": layer})))
     };
     Some(Ok(match alerts::open_prompt(app, prompt.tag(tag)) {
-        Ok(id) => json!({"dialog": id, "confirmationPending": true}),
+        Ok(id) => json!({"dialog": id.value(), "confirmationPending": true}),
         Err(_) => json!({"confirmationPending": true}),
     }))
 }

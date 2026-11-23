@@ -152,7 +152,7 @@ pub(super) fn open_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     let id = params::open_param(app, KEY, DialogFields::new(), Value::Null, move |fields: &mut DialogFields| {
         ParamDialog::command(KEY, tl!("Playback Options"), rows(&performance, seconds, single)).values(Bind::bound(fields)).alert_title(tl!("PhotoCraft"))
     });
-    Ok(json!({"dialog": id}))
+    Ok(json!({"dialog": id.value()}))
 }
 
 /// Refuses seconds that are not a whole number in range, which the field cannot show.

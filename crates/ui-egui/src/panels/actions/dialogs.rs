@@ -36,7 +36,7 @@ pub(super) fn new_set_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
         let rows = vec![Param::new("name", tl!("Name:"), ParamKind::text(name.clone()))];
         ParamDialog::command(NEW_SET, tl!("New Set"), rows).values(Bind::bound(fields))
     });
-    Ok(json!({"dialog": id}))
+    Ok(json!({"dialog": id.value()}))
 }
 
 /// Makes the set and selects it, so New Action records into it.
@@ -74,7 +74,7 @@ pub(super) fn insert_stop_dialog(app: &mut PhotocraftApp) -> Result<Value, Strin
         ];
         ParamDialog::command(INSERT_STOP, tl!("Insert Stop"), rows).values(Bind::bound(fields))
     });
-    Ok(json!({"dialog": id}))
+    Ok(json!({"dialog": id.value()}))
 }
 
 /// Inserts the Stop step into the captured action, selects it and opens its action.
