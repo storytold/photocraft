@@ -9,6 +9,7 @@
 //! The `craft` facade features PhotoCraft enables for this: `text`, `text-font-picker`,
 //! `font-manager`, `menu`, `timeline` and `print`, plus `dialogs` on native targets.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -676,7 +677,7 @@ impl PhotocraftApp {
     pub(crate) fn framework_before_input(&mut self, ctx: &egui::Context) {
         // The catalog's rows change only with the action names; the bindings with the rows and the
         // shortcut preferences.
-        let list = &self.session.actions.list;
+        let list = &self.session.actions().list;
         let actions_rev = list.revision();
         if self.framework.catalog_rows_rev != Some(actions_rev) {
             let same = self.framework.catalog_rows_rev.is_some()

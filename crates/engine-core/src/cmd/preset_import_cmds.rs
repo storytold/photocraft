@@ -12,6 +12,9 @@
 //!
 //! [`BrushSettings`]: photocraft_paint::BrushSettings
 
+use crate::preset_store::PresetStoreExt;
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -379,7 +382,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
     // Same default as the group insertion below and the documented contract (#10640).
     let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
     let mut taken =
-        UniqueNames::new_exact(s.presets.gradients.iter().filter(|g| !replace || g.name != group).flat_map(|g| g.items.iter().map(|i| i.name.as_str())));
+        UniqueNames::new_exact(s.presets().gradients.iter().filter(|g| !replace || g.name != group).flat_map(|g| g.items.iter().map(|i| i.name.as_str())));
     let original_names: Vec<String> =
         grads.iter().enumerate().map(|(i, g)| if g.name.trim().is_empty() { format!("Gradient {}", i + 1) } else { g.name.trim().to_string() }).collect();
     let mut reserved = taken.taken.clone();
@@ -422,7 +425,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "the file holds no gradients PhotoCraft can use (noise gradients only)"));
     }
     let names: Vec<String> = items.iter().map(|g| g.name.clone()).collect();
-    let st = &mut s.presets;
+    let st = s.presets_mut();
     // As with brushes: a new group beside one of the same name unless `replace` (#10640).
     let group = if replace {
         st.gradients.retain(|g| g.name != group);
@@ -431,7 +434,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         free_group(&group, |g| st.gradients.iter().any(|x| x.name == g))
     };
     st.gradients.push(Group::new(&group, items));
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"group": group, "imported": names, "count": names.len(), "warnings": warnings}))
 }
 
@@ -608,17 +611,17 @@ mod tests {
             assert_eq!(result["imported"], json!(["Duplicate", "Duplicate 2"]));
         }
         s.execute("gradient.presets.select", json!({"preset": "Duplicate"})).unwrap();
-        let first = s.presets.gradient.clone();
+        let first = s.presets().gradient.clone();
         s.execute("gradient.presets.select", json!({"preset": "Duplicate 2"})).unwrap();
-        assert_ne!(first.stops, s.presets.gradient.stops);
-        let mut saved = s.presets.to_json(&s);
+        assert_ne!(first.stops, s.presets().gradient.stops);
+        let mut saved = s.presets().to_json(&s);
         let groups = saved["gradients"].as_array_mut().unwrap();
         let group = groups.iter_mut().find(|g| g["name"] == "Duplicates").unwrap();
         group["items"][1]["name"] = json!("Duplicate");
         s.load_presets_json(saved);
-        let restored = s.presets.gradients.iter().find(|g| g.name == "Duplicates").unwrap();
+        let restored = s.presets().gradients.iter().find(|g| g.name == "Duplicates").unwrap();
         assert_eq!(restored.items[1].name, "Duplicate 2");
-        assert_eq!(s.presets.gradient.name, "Duplicate 2");
+        assert_eq!(s.presets().gradient.name, "Duplicate 2");
         let result = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Other", "replace": false})).unwrap();
         assert_eq!(result["imported"], json!(["Duplicate 3", "Duplicate 4"]));
     }
@@ -676,7 +679,7 @@ mod tests {
         assert_eq!(result["imported"], json!(["Foo", "Foo 3", "Foo 2", "FOO"]));
         for (name, red) in [("Foo", 0.0), ("Foo 3", 0.25), ("Foo 2", 0.5), ("FOO", 0.75)] {
             s.execute("gradient.presets.select", json!({"preset": name})).unwrap();
-            let current = s.presets.gradient.clone();
+            let current = s.presets().gradient.clone();
             assert_eq!(current.name, name);
             assert_eq!(current.stops[0].1, crate::presets::gradients::StopColor::Rgb([red, 0.0, 0.0]));
         }
@@ -705,17 +708,17 @@ mod tests {
         let r = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire"})).unwrap();
         assert_eq!(r["imported"], json!(["Ember"]));
         assert_eq!(r["warnings"].as_array().map(Vec::len), Some(1));
-        let g = s.presets.gradients.iter().find(|g| g.name == "Fire").unwrap();
+        let g = s.presets().gradients.iter().find(|g| g.name == "Fire").unwrap();
         assert_eq!(g.items[0].stops, vec![(0.0, StopColor::Foreground), (1.0, StopColor::Rgb([1.0, 0.0, 0.0]))]);
         assert_eq!(g.items[0].opacity, vec![(0.0, 1.0), (1.0, 0.0)]);
         // Re-import adds a group beside it (#10640); with `replace` it replaces the group.
-        let n = s.presets.gradients.len();
+        let n = s.presets().gradients.len();
         let r = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire"})).unwrap();
         assert_eq!(r["group"], "Fire (2)");
-        assert_eq!(s.presets.gradients.len(), n + 1);
+        assert_eq!(s.presets().gradients.len(), n + 1);
         s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire", "replace": true})).unwrap();
-        assert_eq!(s.presets.gradients.len(), n + 1);
-        assert_eq!(s.presets.gradients.iter().filter(|g| g.name == "Fire").count(), 1);
+        assert_eq!(s.presets().gradients.len(), n + 1);
+        assert_eq!(s.presets().gradients.iter().filter(|g| g.name == "Fire").count(), 1);
         for p in [json!({}), json!({"data": "@@"}), json!({"data": photocraft_paint::tile::b64_encode(b"8BGR\0\x03")}), json!({"path": "/nope.grd"})] {
             assert!(s.execute("gradient.presets.importGrd", p.clone()).is_err(), "{p}");
         }

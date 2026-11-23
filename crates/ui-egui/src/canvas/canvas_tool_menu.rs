@@ -1692,7 +1692,11 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
             pen_dialogs::open(app, command, &name);
         }
         _ => {
-            app.run(command, json!({"name": name}))?;
+            // The path name goes only to the commands whose doc takes one (Copy Fill and the
+            // other style rows work on the shape layer and take no parameters).
+            let takes_name =
+                photocraft_engine::commands::find(command).and_then(photocraft_engine::param_schema::of).is_none_or(|p| p.open() || p.has_key("name"));
+            app.run(command, if takes_name { json!({"name": name}) } else { json!({}) })?;
         }
     }
     Ok(())

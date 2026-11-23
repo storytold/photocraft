@@ -1,3 +1,4 @@
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::sync::Arc;
 
 use craft::host::{PickKind, Picked, ScriptedFiles};
@@ -29,7 +30,7 @@ fn settle(app: &mut PhotocraftApp) {
 }
 
 fn names(app: &PhotocraftApp) -> Vec<&str> {
-    app.session.actions.list.actions().iter().map(|a| a.name.as_str()).collect()
+    app.session.actions().list.actions().iter().map(|a| a.name.as_str()).collect()
 }
 
 /// The file names the Save requests of `files` suggested.
@@ -139,7 +140,7 @@ fn bulk_load_keeps_cancel_empty_and_single_file_behavior() {
     for answer in [Picked::Cancelled, Picked::Paths(Vec::new()), Picked::Contents(Vec::new())] {
         let fake = Arc::new(ScriptedFiles::answering([answer]));
         let mut app = super::runner_tests::disk_app(fake);
-        app.session.actions.list.new_action("Existing", None).unwrap();
+        app.session.actions_mut().list.new_action("Existing", None).unwrap();
         app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
         app.ui.status = "Unchanged".into();
         files::load_dialog(&mut app).unwrap();
@@ -152,7 +153,7 @@ fn bulk_load_keeps_cancel_empty_and_single_file_behavior() {
     let mut app = super::runner_tests::disk_app(fake);
     files::load_dialog(&mut app).unwrap();
     settle(&mut app);
-    assert_eq!(app.session.actions.list.actions()[0].name, "One");
+    assert_eq!(app.session.actions().list.actions()[0].name, "One");
     assert!(app.ui.status.contains("single.atn"));
     assert!(!app.ui.status_error);
 }
@@ -184,7 +185,7 @@ fn save_actions_with_a_set_selected_saves_that_set() {
     let mut app = super::runner_tests::disk_app(fake.clone());
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     for (name, set) in [("Sharpen", "Retouch"), ("Resize", "Web")] {
-        app.session.actions.list.new_action(name, Some(set.into())).unwrap();
+        app.session.actions_mut().list.new_action(name, Some(set.into())).unwrap();
     }
     app.ui.actions.panel.selected = Some(ActionSelection::Set("Web".into()));
     files::save_dialog(&mut app, None).unwrap();
@@ -199,7 +200,7 @@ fn save_actions_with_a_set_selected_saves_that_set() {
 fn save_actions_suggests_a_file_name_without_path_characters() {
     let set = "Web/Print\\Mail: v2";
     let (mut app, files) = empty_set_app(set);
-    app.session.actions.list.new_action("Loose", None).unwrap();
+    app.session.actions_mut().list.new_action("Loose", None).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Set(set.into()));
     files::save_dialog(&mut app, None).unwrap();
     settle(&mut app);
@@ -243,5 +244,5 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     assert!(!app.ui.status_error, "{status}");
     // Both sets stay loaded: the unsupported step is counted for one that is in the panel.
     assert_eq!(names(&app), ["A", "B"]);
-    assert!(app.session.actions.list.actions()[0].steps.iter().any(|step| step.command == "actions.photoshopStep"));
+    assert!(app.session.actions().list.actions()[0].steps.iter().any(|step| step.command == "actions.photoshopStep"));
 }

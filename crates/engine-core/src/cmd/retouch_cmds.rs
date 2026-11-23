@@ -10,6 +10,7 @@
 //! (`poisson`, `inpaint`, `retouch`) and the dab machinery in `photocraft-paint::retouch`; this module
 //! only parses parameters and wires them together.
 
+use crate::preset_store::PresetStoreExt;
 use photocraft_algo::inpaint::{self, CompleteParams};
 use photocraft_algo::poisson;
 use photocraft_algo::retouch::{ToneRange, dodge_burn, local_blur, local_sharpen, sponge};

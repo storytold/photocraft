@@ -1,4 +1,7 @@
-use super::{BTreeMap, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+
+use super::{BTreeMap, Preferences, Value};
 
 /// Most further keys one command may hold; Photoshop's own defaults use one.
 pub const MAX_ALTERNATES: usize = 8;
@@ -223,4 +226,66 @@ pub fn conflicts<'a>(bindings: impl IntoIterator<Item = (&'a str, &'a str)>) -> 
         }
     }
     by.into_iter().filter(|(_, ids)| ids.len() > 1).collect()
+}
+
+/// Prefix of the persisted shortcut override that plays a named action (`actions.play:<name>`).
+pub const PLAY_SHORTCUT_PREFIX: &str = "actions.play:";
+
+/// Whether a shortcut key plays an action: it belongs to the Actions library, not to a set.
+pub fn is_action_key(key: &str) -> bool {
+    key.starts_with(PLAY_SHORTCUT_PREFIX)
+}
+
+/// A saved set: the overrides of the default bindings, in the shape the preferences keep them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ShortcutSet {
+    /// Command id → main key; "" removes the default key.
+    #[serde(deserialize_with = "super::theme_ids::command_keys")]
+    pub shortcuts: BTreeMap<String, String>,
+    /// Command id → further keys, replacing the defaults.
+    #[serde(deserialize_with = "super::theme_ids::command_keys")]
+    pub alternate_shortcuts: BTreeMap<String, Vec<String>>,
+}
+
+impl ShortcutSet {
+    /// A set of these bindings, without the actions' function keys (they belong to the
+    /// actions, as in an `.atn` file, not to a set).
+    pub fn from_bindings(shortcuts: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>) -> Self {
+        let shortcuts = shortcuts.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())).collect();
+        let alternate_shortcuts = alternates.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())).collect();
+        Self { shortcuts, alternate_shortcuts }
+    }
+
+    /// The bindings `p` uses now, without the actions' function keys.
+    pub fn of(p: &Preferences) -> Self {
+        Self::from_bindings(&p.shortcuts, &p.alternate_shortcuts)
+    }
+
+    /// Put this set's bindings in place of `shortcuts` / `alternates`, keeping the actions'
+    /// function keys: switching sets with `useSet` and in the Keyboard Shortcuts dialog.
+    pub fn apply(&self, shortcuts: &mut BTreeMap<String, String>, alternates: &mut BTreeMap<String, Vec<String>>) {
+        shortcuts.retain(|id, _| is_action_key(id));
+        shortcuts.extend(self.shortcuts.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())));
+        alternates.retain(|id, _| is_action_key(id));
+        alternates.extend(self.alternate_shortcuts.iter().filter(|(id, _)| !is_action_key(id)).map(|(id, k)| (id.clone(), k.clone())));
+    }
+
+    /// Use this set's bindings in `p`, keeping the actions' function keys.
+    pub fn load_into(&self, p: &mut Preferences) {
+        self.apply(&mut p.shortcuts, &mut p.alternate_shortcuts);
+    }
+
+    /// Check every key (a set from a call or a hand-edited file must not hold garbage).
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        for (id, k) in &self.shortcuts {
+            if !k.is_empty() && normalize_shortcut(k).is_none() {
+                return Err(format!("`{k}` for `{id}` is not a valid shortcut (e.g. Cmd+Shift+N, F7)"));
+            }
+        }
+        for (id, keys) in &self.alternate_shortcuts {
+            alternate_keys(&json!(keys)).map_err(|e| format!("`{id}`: {e}"))?;
+        }
+        Ok(())
+    }
 }
