@@ -683,15 +683,6 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     if command == "image.adjustments.colorLookup" && map.get("data").and_then(Value::as_str).is_some_and(str::is_empty) {
         map.remove("data");
     }
-    // Drop display-only and other keys a closed schema does not take (Bitmap's Input row is
-    // `inputResolution`; dispatch would reject it and OK would leave the document unchanged).
-    if let Some(spec) = photocraft_engine::commands::find(command)
-        && let Some(schema) = photocraft_engine::param_schema::of(spec)
-        && !schema.open()
-    {
-        const KEEP: &[&str] = &["coalesce", "target", "layer", "channel", "targetChannel", "document"];
-        map.retain(|key, _| key.starts_with('_') || KEEP.contains(&key.as_str()) || schema.has_key(key));
-    }
     if command == "image.mode.indexedColor" {
         // The matte colour row belongs to the "custom" choice, which the command takes as the colour itself.
         let color = map.remove(rows::MATTE_COLOR);
@@ -722,6 +713,18 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
+    }
+    // After dialog keys have been reshaped into command keys (Image Processor's jpeg/width
+    // becomes jpeg.width, and so on). Doing this earlier dropped those rows.
+    // Drop display-only and other keys a closed schema does not take (Bitmap's Input row is
+    // `inputResolution`; dispatch would reject it and OK would leave the document unchanged).
+    if let Some(spec) = photocraft_engine::commands::find(command)
+        && let Some(schema) = photocraft_engine::param_schema::of(spec)
+        && !schema.open()
+        && !photocraft_engine::is_incomplete(command)
+    {
+        const KEEP: &[&str] = &["coalesce", "target", "layer", "channel", "targetChannel", "document"];
+        map.retain(|key, _| key.starts_with('_') || KEEP.contains(&key.as_str()) || schema.has_key(key));
     }
     params_of(&map)
 }

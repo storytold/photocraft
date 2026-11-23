@@ -35,6 +35,7 @@ pub mod memory;
 pub mod memory_gate;
 pub mod new_layer;
 mod param_check;
+pub use param_check::is_incomplete;
 pub mod param_schema;
 mod pixels;
 pub mod prefs;

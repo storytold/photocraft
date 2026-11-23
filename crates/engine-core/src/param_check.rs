@@ -144,6 +144,11 @@ pub(crate) fn check(spec: &CommandSpec, params: &Value) -> Result<()> {
 /// `"channel"`/`"targetChannel"` (`adjust_params` reads them for all kinds), and `_`-prefixed
 /// keys are the engine's own bookkeeping (a PSD-embedded displacement map, an imported action's
 /// descriptor), never typed by a caller.
+/// Whether `id` is on the incomplete-docs list: unknown keys are not rejected yet.
+pub fn is_incomplete(id: &str) -> bool {
+    INCOMPLETE.contains(&id)
+}
+
 fn implied(id: &str, key: &str) -> bool {
     (key == "layer" && id.starts_with("filter."))
         || (id.starts_with("image.adjustments.") && matches!(key, "layer" | "channel" | "targetChannel"))
