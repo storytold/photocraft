@@ -159,8 +159,7 @@ fn unknown_hints_are_retained_and_known_hints_clear_on_reset_or_rasterization() 
 
 #[test]
 fn external_historical_link_is_embedded_only_from_its_verified_bytes() {
-    let folder = tempfile::tempdir().unwrap();
-    let path = folder.path().join("external.xcf");
+    let path = std::env::temp_dir().join(format!("photocraft-psd-external-xcf-{}.xcf", std::process::id()));
     let bytes = xcf(true);
     std::fs::write(&path, &bytes).unwrap();
     let mut doc = document(SmartSource::Linked { path: path.to_string_lossy().into_owned() }, Some(Order::LittleEndian));
@@ -186,4 +185,5 @@ fn external_historical_link_is_embedded_only_from_its_verified_bytes() {
     // A caller that forbids external reads still gets the existing stored-pixel fallback.
     let (_, warnings) = document_to_psd_with(&doc, &PsdExportOptions { read_linked_files: false, ..Default::default() }).unwrap();
     assert!(warnings.iter().any(|w| w.contains("not read for this export")));
+    std::fs::remove_file(path).unwrap();
 }

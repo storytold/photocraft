@@ -214,7 +214,7 @@ mod source;
 
 pub(crate) use contents::on_close;
 pub use contents::{commit_child, contents_of, replace_contents_bytes, replace_contents_from_bytes};
-use contents::{edit_contents, export_contents, is_smart_child, path_param, replace_contents, set_source, update_all};
+use contents::{edit_contents, export_contents, is_smart_child, replace_contents, set_source, update_all};
 use filters::smart_mut;
 pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
@@ -223,6 +223,7 @@ pub(crate) use placing::{affine_homography, set_placement, shift_smart, transfor
 use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
 pub use rendering::WarningRenderSources;
+pub(crate) use rendering::check_historical_link;
 use rendering::refresh_or_fail;
 pub use rendering::render_with_warnings_using;
 #[cfg(test)]

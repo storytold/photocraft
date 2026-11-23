@@ -349,7 +349,7 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
 }
 
 /// Reject annotations on linked bytes before classification, preview substitution or cache lookup.
-pub(super) fn check_historical_link(sm: &SmartObject, bytes: &[u8]) -> Result<()> {
+pub(crate) fn check_historical_link(sm: &SmartObject, bytes: &[u8]) -> Result<()> {
     if matches!(sm.source, SmartSource::Linked { .. }) && sm.historical_xcf_sample_order.is_some() {
         let expected = sm
             .historical_xcf_link_digest
