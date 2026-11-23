@@ -116,6 +116,7 @@ fn export_supported_document(
         comps: (!crate::comps_map::comps_unchanged(doc)).then(|| (doc.layer_comps.clone(), doc.last_document_state.clone())),
         smart: SmartOut::new(doc, depth),
         patterns: doc.patterns.clone(),
+        pattern_space: photocraft_compose::pattern::PatternSpace::of_pixels(doc),
         background: psd_background(doc),
         stage: {
             let raw = doc.size.area().saturating_mul(fmt.bytes_per_pixel() as u64).saturating_mul(doc.walk().len() as u64 + 1);

@@ -127,7 +127,7 @@ fn wrong_greys(s: &mut Session, what: &str) -> Vec<String> {
 fn edit_fill_and_the_paint_bucket_paint_a_pattern_through_the_grey_profile() {
     let mut wrong = Vec::new();
     for depth in [8, 16] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         let pat = quadrant_pattern(&mut s);
         // Edit › Fill with the pattern on a new layer.
         s.execute("file.new", json!({"width": 40, "height": 40, "mode": "gray", "depth": depth, "background": "white"})).unwrap();
@@ -150,7 +150,7 @@ fn edit_fill_and_the_paint_bucket_paint_a_pattern_through_the_grey_profile() {
 fn edit_fill_with_a_pattern_keeps_its_colours_outside_grayscale() {
     // RGB keeps the pattern's colours exactly; CMYK and Lab keep today's conversion (checked
     // against a pattern fill layer by `pattern_fills_paint_like_edit_fill_in_every_mode`).
-    let mut s = Session::new();
+    let mut s = crate::session();
     let pat = quadrant_pattern(&mut s);
     s.execute("file.new", json!({"width": 40, "height": 40, "mode": "rgb", "depth": 8, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
@@ -158,4 +158,72 @@ fn edit_fill_with_a_pattern_keeps_its_colours_outside_grayscale() {
     for ((x, y), want) in [((5, 5), [1.0, 0.0, 0.0, 1.0]), ((15, 5), [0.0, 1.0, 0.0, 1.0]), ((5, 15), [0.0, 0.0, 1.0, 1.0])] {
         assert!(close(pixel(&mut s, x, y), want, 0.004), "RGB at {x},{y}: {:?}", pixel(&mut s, x, y));
     }
+}
+
+/// The issue's quadrants as a grey pattern holding the luma formula's greys (76, 150 and 29 of
+/// 255), defined from a Grayscale document: no document converts a grey pattern, so it paints
+/// what the colour quadrants painted in a Grayscale document before #14975. Returns its id.
+fn luma_quadrant_pattern(s: &mut Session) -> String {
+    s.execute("file.new", json!({"width": 20, "height": 20, "mode": "gray", "depth": 8, "background": "white"})).unwrap();
+    for (x, y, c) in [(0, 0, "#4c4c4c"), (10, 0, "#969696"), (0, 10, "#1d1d1d"), (10, 10, "#000000")] {
+        s.execute("select.rect", json!({"x": x, "y": y, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": c})).unwrap();
+    }
+    s.execute("select.deselect", json!({})).unwrap();
+    let r = s.execute("edit.definePattern", json!({"name": "Luma Quadrants"})).unwrap();
+    r["pattern"].as_str().unwrap().to_string()
+}
+
+/// What #14975 lists as not measured keeps the luma greys in every pattern fill: a 32-bit
+/// Grayscale document, and a Grayscale document in another grey working space. Edit › Fill, the
+/// Paint Bucket and a pattern fill layer paint the colour quadrants as they paint the grey pattern
+/// that holds the luma greys.
+#[test]
+fn unmeasured_grayscale_documents_keep_the_luma_greys_in_every_pattern_fill() {
+    let mut wrong = Vec::new();
+    for (what, depth, profile) in
+        [("32-bit", 32, None), ("Gray Gamma 2.2, 8-bit", 8, Some("gray-gamma-2.2")), ("Gray Gamma 2.2, 16-bit", 16, Some("gray-gamma-2.2"))]
+    {
+        let mut s = crate::session();
+        let colour = quadrant_pattern(&mut s);
+        let luma = luma_quadrant_pattern(&mut s);
+        let new_doc = |s: &mut Session| {
+            s.execute("file.new", json!({"width": 40, "height": 40, "mode": "gray", "depth": depth, "background": "white"})).unwrap();
+            if let Some(profile) = profile {
+                s.execute("edit.assignProfile", json!({"profile": profile})).unwrap();
+            }
+        };
+        let cells = |s: &mut Session| QUADRANT_GREYS.map(|(_, (x, y), _)| pixel(s, x, y));
+        let fill = |s: &mut Session, pat: &str| {
+            new_doc(s);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.execute("edit.fill", json!({"contents": "pattern", "pattern": pat})).unwrap();
+            cells(s)
+        };
+        let bucket = |s: &mut Session, pat: &str| {
+            new_doc(s);
+            s.execute("paint.bucket", json!({"x": 30, "y": 30, "contents": "pattern", "pattern": pat, "tolerance": 0, "antiAlias": false})).unwrap();
+            cells(s)
+        };
+        let fill_layer = |s: &mut Session, pat: &str, mode: ColorMode| {
+            new_doc(s);
+            s.execute("layer.newFillLayer.pattern", json!({"pattern": pat})).unwrap();
+            assert_eq!(pattern_mode(s), mode, "{what}: the pattern's own colour mode");
+            cells(s)
+        };
+        let painted = [
+            ("Edit › Fill", fill(&mut s, &colour), fill(&mut s, &luma)),
+            ("Paint Bucket", bucket(&mut s, &colour), bucket(&mut s, &luma)),
+            ("pattern fill layer", fill_layer(&mut s, &colour, ColorMode::Rgb), fill_layer(&mut s, &luma, ColorMode::Grayscale)),
+        ];
+        for (by, got, want) in painted {
+            for (((cell, _, _), got), want) in QUADRANT_GREYS.iter().zip(got).zip(want) {
+                // Half a level: the grey pattern holds the luma greys rounded to 8 bits.
+                if !neutral(got) || !close(got, want, 0.5 / 255.0) {
+                    wrong.push(format!("{what} {by} {cell}: {got:?}, the luma grey paints {want:?}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

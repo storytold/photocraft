@@ -115,10 +115,11 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         "pattern" => {
             let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
             let (scale, angle, _, phase) = crate::pattern_cmds::placement(CMD, p)?;
-            // In a Grayscale document the pattern converts through the grey profile, as a pattern
-            // fill layer and a Pattern Overlay paint it (#14975).
-            let tile =
-                photocraft_compose::pattern::Tile::new_in(&pat, gray_or_rgb(st.doc.mode)).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
+            // Where a pattern fill layer and a Pattern Overlay paint the pattern through the grey
+            // profile (an 8- or 16-bit Grayscale document in the default grey space), so does
+            // Edit › Fill (#14975).
+            let space = photocraft_compose::pattern::PatternSpace::of_pixels(&st.doc);
+            let tile = photocraft_compose::pattern::Tile::new_in(&pat, space).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
             // Photoshop's Fill uses the canvas origin.
             let place = photocraft_compose::pattern::Placement::new(Rect::EMPTY, false, phase, scale, angle);
             out["pattern"] = json!(pat.id);
@@ -172,13 +173,6 @@ fn color_source(s: &Session, c: [f32; 4]) -> Source {
         Some(cmyk) if c[3] >= 1.0 => Source::Cmyk { rgba: c, cmyk },
         _ => Source::Color(c),
     }
-}
-
-/// The colour mode a pattern tile is built in for Edit › Fill and the Paint Bucket in a document of
-/// `mode`: Grayscale converts through the grey profile like a pattern fill layer (#14975); every
-/// other mode keeps the RGB tile, which the target's format converts as before.
-pub(crate) fn gray_or_rgb(mode: photocraft_color::ColorMode) -> photocraft_color::ColorMode {
-    if mode == photocraft_color::ColorMode::Grayscale { mode } else { photocraft_color::ColorMode::Rgb }
 }
 
 /// `source`'s opaque colour as samples of `fmt` (alpha last, as in [`from_rgba_into`]), or `None`
