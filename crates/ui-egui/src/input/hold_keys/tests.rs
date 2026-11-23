@@ -873,3 +873,50 @@ fn space_after_an_alt_tap_or_f10_pans_and_opens_no_menu() {
         assert_eq!(h.state().ui.tool, Tool::Brush, "f10 {f10}, clicked {clicked}: the tool comes back");
     }
 }
+
+/// #9931: a ⌘⌥ `down` with the Zoom tool in one `ui.pointer` call, and its moves and release in later calls without
+/// the modifiers, duplicate the layer and move the copy: the Move stand-in keeps the gesture it was lent until the
+/// release, and the original layer stays.
+#[test]
+fn split_cmd_alt_pointer_calls_with_the_zoom_tool_move_a_copy() {
+    use crate::control::{ControlRequest, Reply, handle};
+    fn call(app: &mut PhotocraftApp, p: serde_json::Value) {
+        let ctx = testing::ctx(app);
+        let (req, _rx) = ControlRequest::new("ui.pointer", p);
+        assert!(matches!(handle(app, &ctx, &req), Reply::Done(_)));
+        for _ in 0..4 {
+            testing::frame(app);
+        }
+    }
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    testing::frame(&mut app);
+    app.run("layer.new.layer", json!({})).unwrap();
+    let orig = app.session.active().unwrap().active_layer.unwrap();
+    app.session
+        .edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(100, 100, 160, 160), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.tool_options.move_auto_select = false;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    testing::frame(&mut app);
+    let n0 = app.session.active().unwrap().doc.layers.len();
+    let z0 = testing::view(&app).expect("a view").zoom;
+    call(&mut app, json!({"command": true, "alt": true, "events": [{"kind": "down", "x": 130, "y": 130}]}));
+    call(&mut app, json!({"events": [{"kind": "move", "x": 150, "y": 140}, {"kind": "move", "x": 170, "y": 150}]}));
+    call(&mut app, json!({"events": [{"kind": "up", "x": 170, "y": 150}]}));
+    let st = app.session.active().unwrap();
+    let bounds = |id: photocraft_doc::LayerId| st.doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    assert_eq!(st.doc.layers.len(), n0 + 1, "one copy");
+    let copy = st.active_layer.unwrap();
+    assert_ne!(copy, orig);
+    assert_eq!(bounds(orig), Rect::new(100, 100, 160, 160), "the original stays");
+    assert_eq!(bounds(copy), Rect::new(140, 120, 200, 180), "the copy moved");
+    assert_eq!(st.history.undo_label(), Some(tl!("Move")));
+    assert_eq!(testing::view(&app).expect("a view").zoom, z0, "no zoom");
+    assert_eq!(app.ui.tool, Tool::Zoom);
+}

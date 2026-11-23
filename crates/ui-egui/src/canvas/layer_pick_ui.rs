@@ -183,4 +183,26 @@ mod tests {
         let crate::control::Reply::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!("inspect") };
         assert_eq!(v["result"]["layerMenu"]["layers"][0]["name"], "Red");
     }
+
+    /// With the Zoom tool, a right-click opens the view menu, and a ⌘ right-click the layer menu, as with the other
+    /// tools (`docs/control-protocol.md`, `ui.pointer`; #9931).
+    #[test]
+    fn zoom_right_click_opens_the_view_menu_and_command_the_layer_menu() {
+        for command in [false, true] {
+            let (mut a, _, red, _) = app();
+            a.ui.tool = Tool::Zoom;
+            let mut h = harness(a);
+            let ctx = h.ctx.clone();
+            let events = json!([{"kind": "down", "x": 100, "y": 100}, {"kind": "up", "x": 100, "y": 100}]);
+            let (req, _rx) = crate::control::ControlRequest::new("ui.pointer", json!({"button": "right", "command": command, "events": events}));
+            let _ = crate::control::handle(h.state_mut(), &ctx, &req);
+            h.run_steps(4);
+            let kind = h.state().ui.canvas_tool_menu.as_ref().map(|m| m.kind.clone());
+            if command {
+                assert_eq!(layer_ids(h.state()).and_then(|l| l.first().copied()), Some(red), "{kind:?}");
+            } else {
+                assert_eq!(kind, Some(MenuKind::View));
+            }
+        }
+    }
 }
