@@ -591,7 +591,9 @@ fn selection_mask(d: &Document, r: Rect, n: usize) -> Vec<bool> {
 
 fn gray_image(d: &Document, r: Rect) -> Vec<f32> {
     let buf = photocraft_compose::render(d, r);
-    buf.px.par_iter().map(|p| 0.30 * p[0] + 0.59 * p[1] + 0.11 * p[2]).collect()
+    // Fully transparent pixels have no ink/visible colour and bin as white (255 in 8-bit) in
+    // Photoshop's Measurement Log; any non-zero alpha keeps its pixel luminance (#16546).
+    buf.px.par_iter().map(|p| if p[3] <= 0.0 { 1.0 } else { 0.30 * p[0] + 0.59 * p[1] + 0.11 * p[2] }).collect()
 }
 
 fn selection_rows(d: &Document, needs_gray: bool) -> Result<(Feature, Vec<Feature>)> {

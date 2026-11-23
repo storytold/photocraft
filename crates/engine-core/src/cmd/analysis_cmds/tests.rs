@@ -592,3 +592,41 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert!(b.histogram.is_empty());
     }
 }
+
+#[test]
+fn transparent_pixels_bin_as_white_in_mixed_grayscale_selection() {
+    use photocraft_color::PixelFormat;
+    use photocraft_raster::Surface;
+
+    let measure = |right_alpha: u8| {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": 8, "height": 8, "mode": "grayscale", "background": "transparent"})).unwrap();
+        s.edit("paint", |doc, _| {
+            let mut surf = Surface::new(PixelFormat::GRAYA8);
+            surf.fill_rect(Rect::new(0, 0, 4, 8), &[128.0 / 255.0, 1.0]);
+            surf.fill_rect(Rect::new(4, 0, 8, 8), &[128.0 / 255.0, f32::from(right_alpha) / 255.0]);
+            *doc.layers[0].surface_mut().unwrap() = surf;
+            Ok(())
+        })
+        .unwrap();
+        s.execute("select.rect", json!({"x": 2, "y": 2, "width": 4, "height": 4})).unwrap();
+        s.execute("image.analysis.recordMeasurements", json!({"source": "selection"})).unwrap();
+        s.execute("measurementLog.list", json!({})).unwrap()["rows"][0]["values"].clone()
+    };
+
+    // Right half alpha = 0: 8 samples in bin 128 and 8 in bin 255 (mean 191.5, density 3064).
+    let zero = measure(0);
+    assert_eq!(zero["area"].as_f64(), Some(16.0));
+    assert!((zero["grayMean"].as_f64().unwrap() - 191.5).abs() < 1e-3, "{zero}");
+    assert!((zero["integratedDensity"].as_f64().unwrap() - 3064.0).abs() < 1e-2, "{zero}");
+    assert_eq!(zero["histogram"][0].as_u64(), Some(0));
+    assert_eq!(zero["histogram"][128].as_u64(), Some(8));
+    assert_eq!(zero["histogram"][255].as_u64(), Some(8));
+
+    // Right half alpha = 1/255: all 16 samples stay in bin 128 (mean 128, density 2048).
+    let one = measure(1);
+    assert_eq!(one["area"].as_f64(), Some(16.0));
+    assert!((one["grayMean"].as_f64().unwrap() - 128.0).abs() < 1e-3, "{one}");
+    assert!((one["integratedDensity"].as_f64().unwrap() - 2048.0).abs() < 1e-2, "{one}");
+    assert_eq!(one["histogram"][128].as_u64(), Some(16));
+}
