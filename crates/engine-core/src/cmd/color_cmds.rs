@@ -191,6 +191,8 @@ pub const COLOR_SETTINGS_PRESETS: [&str; 13] = [
 
 /// The RGB entry of "Monitor Color": the monitor profile (see [`ColorState::monitor_rgb_for`]).
 const MONITOR_RGB: &str = "monitor";
+/// The setup whose working RGB is [`MONITOR_RGB`].
+const MONITOR_COLOR: &str = "Monitor Color";
 
 /// What one named setup sets. Spaces PhotoCraft doesn't ship stand in for the closest built-in:
 /// the wide-gamut RGB is `adobe-rgb-compat`; Coated FOGRA39 is `coated-fogra39`, every other
@@ -1508,7 +1510,16 @@ fn color_settings(s: &mut Session, p: &Value) -> Result<Value> {
         // No preset given: any change but the monitor profile makes the values Custom.
         (None, _) => {
             let old = &s.color().settings;
-            let unchanged = ColorSettings { monitor_profile: old.monitor_profile.clone(), preset: old.preset.clone(), ..next.clone() } == *old;
+            // "Monitor Color" follows a changed Monitor Profile: unless the call sets one, the working
+            // RGB becomes the new monitor's, as picking the setup again would give.
+            let mut base = old.clone();
+            if old.preset == MONITOR_COLOR && next.monitor_profile != old.monitor_profile {
+                base.working_rgb = s.color().monitor_rgb_for(&next.monitor_profile);
+                if p.get("workingRgb").is_none() {
+                    next.working_rgb = base.working_rgb.clone();
+                }
+            }
+            let unchanged = ColorSettings { monitor_profile: base.monitor_profile.clone(), preset: base.preset.clone(), ..next.clone() } == base;
             if unchanged && is_settings_preset(&old.preset) { old.preset.clone() } else { CUSTOM_SETTINGS.into() }
         }
     };

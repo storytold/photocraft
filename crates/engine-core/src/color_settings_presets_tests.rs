@@ -89,6 +89,22 @@ fn monitor_color_takes_a_named_monitor_profile() {
 }
 
 #[test]
+fn monitor_color_follows_a_later_monitor_change() {
+    let mut s = session();
+    s.execute(CMD, json!({"preset": "Monitor Color", "monitorProfile": "display-p3"})).unwrap();
+    // A second call that changes only the monitor keeps the setup, on the new monitor's RGB.
+    let r = s.execute(CMD, json!({"monitorProfile": "prophoto-compat"})).unwrap();
+    assert_eq!((&r["preset"], &r["settings"]["workingRgb"]), (&json!("Monitor Color"), &json!("prophoto-compat")));
+    assert_eq!(s.color().settings.working_rgb, "prophoto-compat");
+    // A working RGB set with it that isn't the monitor's makes it Custom.
+    let r = s.execute(CMD, json!({"monitorProfile": "display-p3", "workingRgb": "srgb"})).unwrap();
+    assert_eq!((&r["preset"], &r["settings"]["workingRgb"]), (&json!(CUSTOM_SETTINGS), &json!("srgb")));
+    // Once Custom, a monitor change leaves the working RGB alone.
+    let r = s.execute(CMD, json!({"monitorProfile": "rec2020"})).unwrap();
+    assert_eq!((&r["preset"], &r["settings"]["workingRgb"]), (&json!(CUSTOM_SETTINGS), &json!("srgb")));
+}
+
+#[test]
 fn fresh_settings_are_custom() {
     let mut s = session();
     assert_eq!(ColorSettings::default().preset, CUSTOM_SETTINGS);
