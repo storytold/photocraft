@@ -1,15 +1,12 @@
 //! #10723: Layer › New › Artboard and Layer › New › Artboard from Layers, recorded as a Make of
 //! class `artboardSection` (`docs/atn.md`, "Recorded through the menus").
 
+use super::steps_artboard_section::{FROM_LAYERS, NEW, SOURCE};
 use super::*;
 use crate::actions_cmds::ActionStep;
 use crate::actions_cmds::ActionsExt;
 use photocraft_doc::{Layer, LayerId};
 use photocraft_geom::Rect;
-
-const NEW: &str = "layer.new.artboard";
-const FROM_LAYERS: &str = "layer.new.artboardFromLayers";
-const SOURCE: &str = "_atnArtboardSectionDescriptor";
 
 /// `artboardRect` with its edges in the recorded order, built here independently of the
 /// converter.

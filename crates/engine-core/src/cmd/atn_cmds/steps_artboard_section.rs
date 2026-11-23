@@ -18,7 +18,7 @@ pub(super) const NEW: &str = "layer.new.artboard";
 /// Layer › New › Artboard from Layers.
 pub(super) const FROM_LAYERS: &str = "layer.new.artboardFromLayers";
 /// The recorded descriptor, kept for exact re-export and to identify the recorded name at playback.
-const SOURCE: &str = "_atnArtboardSectionDescriptor";
+pub(super) const SOURCE: &str = "_atnArtboardSectionDescriptor";
 /// The most bytes of a recording to keep or parse, far above a measured step (a few keys and a name).
 const MAX_SOURCE_BYTES: usize = 64 * 1024;
 /// The rectangle's edges in the order the step records them, with the `[x, y, w, h]` slot each
