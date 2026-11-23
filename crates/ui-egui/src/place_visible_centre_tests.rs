@@ -33,11 +33,9 @@ fn placing_app(zoom: f32, center: [f32; 2], rotation: f32, name: &str, (w, h): (
     v.clear_pending();
     testing::shown(&mut app);
     let shown = testing::view(&app).expect("the canvas shows the view");
-    assert!(
-        (shown.center.x - f64::from(center[0])).abs() < 1e-3 && (shown.center.y - f64::from(center[1])).abs() < 1e-3,
-        "the canvas shows the view asked for: {:?}",
-        shown.center
-    );
+    // The canvas aligns the view to device pixels, so its centre may move by up to half of one.
+    let near = |a: f64, b: f32| (a - f64::from(b)).abs() <= 0.5 / f64::from(zoom) + 1e-3;
+    assert!(near(shown.center.x, center[0]) && near(shown.center.y, center[1]), "the canvas shows the view asked for: {:?}", shown.center);
     (app, files, path)
 }
 
