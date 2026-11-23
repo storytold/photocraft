@@ -737,7 +737,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Gradient Stop",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":"add|move|delete|color|opacity|set","kind":"color|opacity"="color","index":stop number,"location":0..1,"color":"#rrggbb"|"foreground"|"background" (add: default the colour there),"opacity":0..100; set: "stops":[[t 0..1,"#rrggbb"|"foreground"|"background"],…] (2..1024),"transparency":[[t,opacity 0..100],…]? replaces every stop} → {"current"}. Edits the Gradient tool's current gradient (no layer, midpoints stay centred)."##,
+            params: leak(format!(
+                r##"{{"action":"add|move|delete|color|opacity|set","kind":"color|opacity"="color","index":stop number,"location":0..1,"color":"#rrggbb"|"foreground"|"background" (add: default the colour there),"opacity":0..100,{stops}}} → {{"current"}}. Edits the Gradient tool's current gradient (no layer, midpoints stay centred; set replaces every stop, 2..=1024 colour stops)."##
+            )),
             enabled: always,
             run: stop,
             journal: true,
