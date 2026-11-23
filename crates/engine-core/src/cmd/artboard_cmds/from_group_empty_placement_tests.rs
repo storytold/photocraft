@@ -1,5 +1,6 @@
 //! Artboard from Group on a group without bounds (#14558): the canvas when the document has no
 //! artboard yet, else a board of the topmost artboard's size, `GAP` right of it at the same top.
+//! A hidden group keeps the canvas (not measured, #14553).
 
 use super::*;
 use photocraft_geom::Rect;
@@ -7,7 +8,7 @@ use photocraft_geom::Rect;
 /// 800 x 600 with the white Background, the artboards `boards` (`[x, y, w, h]`, bottom to top)
 /// and an empty top-level group "Empty" above them. Returns the session and Empty's id.
 fn session_with(boards: &[[i32; 4]]) -> (Session, LayerId) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
     for b in boards {
         s.execute("layer.new.artboard", json!({"rect": b})).unwrap();
@@ -48,6 +49,38 @@ fn without_artboards_an_empty_group_covers_the_canvas() {
     from_group(&mut s, id).unwrap();
     assert_eq!(board_rect(&s, id), Rect::new(0, 0, 800, 600));
     assert_eq!(doc(&s).bounds(), Rect::new(0, 0, 800, 600));
+}
+
+/// A hidden empty group keeps today's canvas rectangle even when a board exists: #14553 leaves a
+/// hidden top-level group unmeasured.
+#[test]
+fn a_hidden_empty_group_keeps_the_canvas_beside_a_board() {
+    let (mut s, id) = session(true);
+    s.edit("Hide", |doc, _| {
+        doc.layer_mut(id).unwrap().visible = false;
+        Ok(())
+    })
+    .unwrap();
+    let canvas = doc(&s).bounds();
+    from_group(&mut s, id).unwrap();
+    assert_eq!(board_rect(&s, id), canvas);
+}
+
+/// A visible group whose children are all hidden counts as empty (#14553), so it takes the slot.
+#[test]
+fn a_visible_group_of_hidden_layers_goes_right_of_the_board() {
+    let (mut s, id) = session(true);
+    s.edit("Hidden red", |doc, _| {
+        let fmt = doc.pixel_format();
+        let mut l = Layer::raster("Hidden red", fmt);
+        l.surface_mut().unwrap().fill_rect(Rect::new(10, 10, 50, 50), &photocraft_raster::from_rgba(&fmt, [1.0, 0.0, 0.0, 1.0]));
+        l.visible = false;
+        doc.layer_mut(id).and_then(Layer::children_mut).unwrap().push(l);
+        Ok(())
+    })
+    .unwrap();
+    from_group(&mut s, id).unwrap();
+    assert_eq!(board_rect(&s, id), Rect::new(700, 100, 1200, 450));
 }
 
 /// A group with content keeps its own bounds when boards exist.

@@ -374,13 +374,13 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
         // A hidden group keeps today's measure (not measured in the reference).
         let bounds = if l.visible { shown_children_bounds(l) } else { crate::layer_multi_cmds::layer_bounds(l) };
         // A group without bounds covers the canvas, or once there are boards, takes the slot
-        // right of the topmost one (#14558).
+        // right of the topmost one (#14558). A hidden group keeps the canvas (not measured).
         let rect = match (bounds, topmost) {
             (Some(r), _) => r,
-            (None, None) => canvas,
-            (None, Some(board)) => {
+            (None, Some(board)) if l.visible => {
                 right_of(board).ok_or_else(|| bad(cmd, format!("no room for an artboard right of the topmost one (its right edge is x = {})", board.x1)))?
             }
+            (None, _) => canvas,
         };
         set_artboard(l, Artboard { rect, background, preset });
         // As in the reference application, the new artboard is Normal at 100 % whatever the group had.
