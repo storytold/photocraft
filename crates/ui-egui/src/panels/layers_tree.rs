@@ -2,6 +2,7 @@
 //! `LayerTree` over the active document), `PhotoThumbs` (its thumbnails), the settings and filter
 //! conversions, and the row menus as entries.
 
+use photocraft_engine::link_watch::LinkWatchExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -746,7 +747,7 @@ impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
         };
         // A tile that fails to read shows zeros, and its pixels again once it reads, without moving its surface's
         // generation: the scratch read-error generation moves with both (#16252).
-        let scratch = photocraft_raster::spill::read_error_generation();
+        let scratch = crate::scratch_reads::generation();
         Revision::of(&(shown, clip, self.doc.size.width, self.doc.size.height, scratch))
     }
 

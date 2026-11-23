@@ -1,5 +1,6 @@
 use super::*;
 use craft::ui::dialog::DialogId;
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::{Map, Value, json};
 
 /// The id of the dialog on top of the host's stack: the one a test just opened.
@@ -35,6 +36,28 @@ fn set_fields(app: &mut PhotocraftApp, ctx: &egui::Context, values: &Value) {
     for (name, value) in values.as_object().expect("an object of fields") {
         set_field(app, ctx, name, value.clone());
     }
+}
+
+/// A tile that fails to read and recovers changes the pixels without a new revision or new dialog values: the
+/// preview is computed again, so it does not keep what it read during the error (`crate::scratch_reads`).
+#[test]
+fn the_preview_is_computed_again_after_a_scratch_read_error_transition() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.background_jobs = false;
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    open_filter(&mut app, "filter.stylize.solarize");
+    let ctx = app.ctx().clone();
+    let result = |app: &PhotocraftApp| app.filter_preview.as_ref().and_then(|preview| preview.result.clone()).expect("a preview result");
+    ensure_filter_preview(&mut app, 0, &ctx).expect("a preview");
+    let before = result(&app);
+    ensure_filter_preview(&mut app, 0, &ctx).expect("the same preview");
+    assert!(std::sync::Arc::ptr_eq(&result(&app), &before), "nothing changed: the same result");
+    let (revision, values) = (app.session.active().unwrap().revision, fields(&app));
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    ensure_filter_preview(&mut app, 0, &ctx).expect("a preview");
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(fields(&app), values, "the dialog values did not change");
+    assert!(!std::sync::Arc::ptr_eq(&result(&app), &before), "the preview is computed again");
 }
 
 /// #7490: the inline (web) preview path composites and uploads each changed preview once, as
@@ -123,6 +146,7 @@ fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {
         params: json!({"radius": 999.0}),
         k: 1,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     let (told, cancelled) = std::sync::mpsc::channel();
     app.filter_preview_worker
@@ -179,6 +203,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
         params,
         k: 1,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     let doc = app.session.documents()[0].doc.clone();
     let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
@@ -287,7 +312,7 @@ fn indexed_matte_preview_matches_commit_and_refreshes_tool_colors_inline_and_on_
                     });
                     let preview = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap();
                     let mut applied = photocraft_engine::Session::new();
-                    applied.color.settings = app.session.color.settings.clone();
+                    applied.color_mut().settings = app.session.color().settings.clone();
                     applied.tools.foreground = colors.0;
                     applied.tools.background = colors.1;
                     applied.add_document((*source).clone(), None);
@@ -367,7 +392,7 @@ fn cross_scale_indexed_matte_preview_rejects_old_tool_colors_from_cached_and_wor
     let old_worker = old.clone();
     let doc = app.session.documents()[0].doc.clone();
     let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
-    let color = app.session.color.settings.clone();
+    let color = app.session.color().settings.clone();
     let (release_old, wait_old) = std::sync::mpsc::channel();
     app.filter_preview_worker
         .start(old_worker.clone(), ctx.clone(), move |_| {
@@ -581,6 +606,7 @@ fn a_mid_drag_empty_result_leaves_the_preview_alone() {
         params: json!({"radius": moved}),
         k: 1,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
+        scratch: crate::scratch_reads::generation(),
     };
     let (release_empty, wait) = std::sync::mpsc::channel::<()>();
     app.filter_preview_worker

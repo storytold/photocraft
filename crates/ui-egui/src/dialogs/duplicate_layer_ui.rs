@@ -52,13 +52,14 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let selected = st.selected_layers();
     let layer = st.active_layer.and_then(|id| st.doc.layer(id)).ok_or("no active layer")?;
     let captured = json!({"document": st.doc.id.0, "selected": selected.iter().map(|id| id.0).collect::<Vec<_>>()});
-    // Several selected layers keep their names, as in Photoshop's Duplicate Layers.
+    // Several selected layers keep their names, as in Photoshop's Duplicate Layers. The window
+    // title is the menu item's name without its ellipsis (#16349).
     let (title, name) = if selected.len() > 1 {
-        (tl!("Duplicate Layers…"), None)
+        (tl!("Duplicate Layers"), None)
     } else if layer.is_group() {
-        (tl!("Duplicate Group…"), Some(st.doc.copy_name(&layer.name)))
+        (tl!("Duplicate Group"), Some(st.doc.copy_name(&layer.name)))
     } else {
-        (tl!("Duplicate Layer…"), Some(st.doc.copy_name(&layer.name)))
+        (tl!("Duplicate Layer"), Some(st.doc.copy_name(&layer.name)))
     };
     let mut options: Vec<(String, Label)> = destinations(app).into_iter().map(|(key, name)| (key, Label::from(name))).collect();
     options.push(("new".to_string(), Label::from(tl!("New"))));
