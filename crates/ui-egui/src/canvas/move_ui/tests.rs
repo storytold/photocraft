@@ -1,5 +1,6 @@
 use craft::behavior::CanvasView;
 use craft::behavior::kurbo::Point;
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_geom::Rect;
 use serde_json::json;
 
@@ -908,7 +909,7 @@ fn each_display_converts_the_snapshot_itself() {
     let _ = super::snapshot_shapes(&mut app, &ctx, &xf, 0);
     let first = keys(&app);
     assert_eq!(first.len(), 1, "the first display's texture");
-    app.session.color.settings.monitor_profile = "display-p3".into();
+    app.session.color_mut().settings.monitor_profile = "display-p3".into();
     let _ = super::snapshot_shapes(&mut app, &ctx, &xf, 0);
     let both = keys(&app);
     assert!(both.len() == 2 && both[1] != first[0], "the P3 monitor converts its own: {both:?}");
