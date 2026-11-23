@@ -1363,6 +1363,11 @@ fn batch_open_documents(
                 // A recorded Save is a step too: Batch writes the output for it.
                 charge_script_step(s)?;
                 if batch_save_point(command) {
+                    // A save point isn't executed, so the gate wouldn't see it: ask it here, as the
+                    // folder source does, before the output is written.
+                    if let Some(gate) = s.authorize {
+                        gate(command, params)?;
+                    }
                     let state = s.active_mut().ok_or(EngineError::NoDocument)?;
                     saved = Some(state.doc.clone());
                     // With no destination nothing is written, so the document stays changed.

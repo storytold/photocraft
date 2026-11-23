@@ -3025,6 +3025,13 @@ fn batch_save_points_answer_to_the_authorization_gate() {
     assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
     assert_eq!(r["errors"].as_array().unwrap().len(), 1, "{r}");
     assert!(!std::path::Path::new(&join(&out, "a.png")).exists());
+
+    // Open documents: the save point is asked too before the output is written.
+    s.execute("file.new", json!({"name": "Open", "width": 8, "height": 8})).unwrap();
+    let r = s.execute("file.automate.batch", json!({"source": "open", "steps": [["file.save", {}]], "output": out, "format": "png"})).unwrap();
+    assert!(r["files"].as_array().unwrap().is_empty(), "{r}");
+    assert!(r["errors"][0]["error"].as_str().unwrap().contains("disabled"), "{r}");
+    assert!(!std::path::Path::new(&join(&out, "Open.png")).exists());
 }
 
 /// An action automation wrote keeps automation's gate when the user batches it, from a folder or
