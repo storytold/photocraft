@@ -42,7 +42,8 @@ pub(super) fn row(label: Label) -> Param {
     let name = label.clone();
     Param::custom(KEY, label, move |ui, fields, _| {
         let mut entries = Vec::new();
-        let named = COLOR_SETTINGS_PRESETS.iter().map(|n| (*n, *n));
+        // The labels are translated; the values stay the English names scripts and saved settings use.
+        let named = COLOR_SETTINGS_PRESETS.iter().map(|n| (*n, tl!(*n)));
         for (value, label) in [(CUSTOM_SETTINGS, tl!("Custom")), (OTHER, tl!("Other"))].into_iter().chain(named) {
             if GROUP_STARTS.contains(&value) {
                 entries.push(Entry::separator());
