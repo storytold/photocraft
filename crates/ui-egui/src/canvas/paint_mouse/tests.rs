@@ -8,7 +8,7 @@ use crate::canvas::{ToolEvent, tool_event};
 
 mod right_click;
 
-pub(super) fn harness(prefs: Option<&str>) -> Harness<'static, PhotocraftApp> {
+pub(super) fn harness(prefs: Option<&str>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
@@ -34,13 +34,13 @@ pub(super) fn harness(prefs: Option<&str>) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-pub(super) fn press(h: &mut Harness<'static, PhotocraftApp>, pos: Pos2, button: PointerButton, pressed: bool) {
+pub(super) fn press(h: &mut Harness<'static, Box<PhotocraftApp>>, pos: Pos2, button: PointerButton, pressed: bool) {
     h.event(egui::Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE });
     h.run_steps(2);
 }
 
 /// Drag across the canvas centre with `button`; returns the document points it covered.
-pub(super) fn drag(h: &mut Harness<'static, PhotocraftApp>, button: PointerButton) -> (Pos2, Pos2) {
+pub(super) fn drag(h: &mut Harness<'static, Box<PhotocraftApp>>, button: PointerButton) -> (Pos2, Pos2) {
     let c = h.state().last_canvas_rect.center();
     let (a, b) = (c - vec2(80.0, 0.0), c + vec2(80.0, 0.0));
     h.event(egui::Event::PointerMoved(a));
@@ -54,7 +54,7 @@ pub(super) fn drag(h: &mut Harness<'static, PhotocraftApp>, button: PointerButto
     (a, b)
 }
 
-fn alpha_at(h: &Harness<'static, PhotocraftApp>, screen: Pos2) -> f32 {
+fn alpha_at(h: &Harness<'static, Box<PhotocraftApp>>, screen: Pos2) -> f32 {
     let app = h.state();
     let v = app.ui.views[0].clone();
     let r = app.last_canvas_rect;
@@ -64,12 +64,12 @@ fn alpha_at(h: &Harness<'static, PhotocraftApp>, screen: Pos2) -> f32 {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)[3]
 }
 
-fn strokes(h: &Harness<'static, PhotocraftApp>) -> Vec<serde_json::Value> {
+fn strokes(h: &Harness<'static, Box<PhotocraftApp>>) -> Vec<serde_json::Value> {
     h.state().session.journal.iter().filter(|(id, _)| id == "paint.stroke").map(|(_, p)| p.clone()).collect()
 }
 
 /// Where the Shift+right-click mode menu is open, if it is.
-fn mode_menu_at(h: &Harness<'static, PhotocraftApp>) -> Option<Pos2> {
+fn mode_menu_at(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<Pos2> {
     h.state()
         .ui
         .canvas_tool_menu
@@ -79,11 +79,11 @@ fn mode_menu_at(h: &Harness<'static, PhotocraftApp>) -> Option<Pos2> {
 }
 
 /// Where the Brush Preset picker is open, if it is.
-fn picker_at(h: &Harness<'static, PhotocraftApp>) -> Option<Pos2> {
+fn picker_at(h: &Harness<'static, Box<PhotocraftApp>>) -> Option<Pos2> {
     crate::brush_picker::opened_at(h.state())
 }
 
-fn mode_right_click(h: &mut Harness<'static, PhotocraftApp>, mods: Modifiers) {
+fn mode_right_click(h: &mut Harness<'static, Box<PhotocraftApp>>, mods: Modifiers) {
     let p = h.state().last_canvas_rect.center();
     h.event(egui::Event::ModifiersChanged(mods));
     h.event(egui::Event::PointerMoved(p));
@@ -263,7 +263,7 @@ fn right_drag_erases_with_the_erase_preference() {
 
 /// A secondary-button stroke across the canvas centre with the pen reporting 0.4 at the press and
 /// rising to 0.8 at the release.
-fn secondary_pen_stroke(h: &mut Harness<'static, PhotocraftApp>) {
+fn secondary_pen_stroke(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     use crate::stylus::PenSample;
     let pen = |p: f32| Some(PenSample { pressure: p, ..Default::default() });
     let c = h.state().last_canvas_rect.center();
@@ -307,7 +307,7 @@ fn shift_alt_right_through_the_control_channel_respects_the_erase_preference() {
     // As on the canvas, with the right-erase preference the erase stroke wins over the HUD
     // for Brush/Eraser; without it, Shift+Alt+right opens the HUD (#6098).
     let shift_alt = Modifiers::SHIFT | Modifiers::ALT;
-    let gesture = |h: &mut Harness<'static, PhotocraftApp>| {
+    let gesture = |h: &mut Harness<'static, Box<PhotocraftApp>>| {
         let c = h.state().last_canvas_rect.center();
         h.event(egui::Event::ModifiersChanged(shift_alt));
         h.event(egui::Event::PointerMoved(c));
@@ -372,8 +372,8 @@ fn the_brush_is_a_per_tool_option_that_presets_keep() {
     tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 5.0 }, Modifiers::NONE);
 }
 
-/// #10263: the Art History Brush starts at full opacity the first time it is picked, though it
-/// keeps the rest of the brush the old tool left (other tools still take its opacity).
+/// #10263: the Art History Brush starts at full opacity the first time it is picked, with its own
+/// tip rather than the old tool's (#12631; other tools still take its opacity).
 #[test]
 fn art_history_brush_starts_at_full_opacity() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -384,7 +384,7 @@ fn art_history_brush_starts_at_full_opacity() {
     app.ui.tool = Tool::ArtHistoryBrush;
     sync_tool_brush(&mut app);
     assert_eq!(app.session.tools.brush.opacity, 1.0, "Art History starts at 100%");
-    assert_eq!(app.session.tools.brush.size, 40.0, "and inherits the size");
+    assert_eq!(app.session.tools.brush.size, 21.0, "with its own 21 px tip");
     app.ui.tool = Tool::HistoryBrush;
     sync_tool_brush(&mut app);
     assert_eq!(app.session.tools.brush.opacity, 1.0, "the History Brush takes the Art History brush's opacity");
@@ -401,7 +401,7 @@ fn art_history_brush_starts_at_full_opacity() {
 fn each_tool_keeps_its_own_brush() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    let brush = |app: &PhotocraftApp| app.session.tools.brush.clone();
+    let brush = |app: &PhotocraftApp| (*app.session.tools.brush).clone();
     let size = |b: &BrushSettings| b.size;
     let hardness = |b: &BrushSettings| b.hardness;
     let opacity = |b: &BrushSettings| b.opacity;
@@ -480,7 +480,7 @@ fn eraser_tool_on_the_background_paints_the_background_colour() {
 }
 
 /// Shift+right-click with `tool` and the labels of the menu it opened (empty: none opened).
-fn open_tool_menu(h: &mut Harness<'static, PhotocraftApp>, tool: Tool) -> Vec<&'static str> {
+fn open_tool_menu(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool) -> Vec<&'static str> {
     h.state_mut().ui.tool = tool;
     h.run_steps(1);
     mode_right_click(h, Modifiers::SHIFT);
@@ -545,7 +545,7 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
         let doc = &h.state().session.active().unwrap().doc;
         (doc.layers[0].id, doc.layers[1].id)
     };
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(bg);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(bg));
     for tool in [Tool::Brush, Tool::Pencil, Tool::PaintBucket] {
         open_tool_menu(&mut h, tool);
         assert!(!enabled(h.state(), Item::Clear), "{tool:?}");
@@ -562,7 +562,7 @@ fn behind_and_clear_are_greyed_on_the_background_layer() {
     }
     assert!(!enabled(h.state(), Item::Behind));
     // On a normal layer they are available again.
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(top);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(top));
     assert!(enabled(h.state(), Item::Behind) && enabled(h.state(), Item::Clear));
 }
 

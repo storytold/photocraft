@@ -8,7 +8,7 @@ use super::*;
 use crate::control::dialogs::workspace_ui;
 
 /// A textured layer (a checker of two colours over a gradient) with a 20 px square selected.
-fn app_with_selection() -> PhotocraftApp {
+fn app_with_selection() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.session.execute("file.new", json!({"width": 200, "height": 160, "depth": 8})).unwrap();
     app.session.execute("layer.new.layer", json!({})).unwrap();
@@ -398,7 +398,7 @@ fn keys_wait_while_the_overlay_colour_picker_is_open() {
     let less = sampled(&app);
     let app_ctx = ctx(&app);
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_context(app_ctx).build_ui_state(
-        |ui, app: &mut PhotocraftApp| {
+        |ui, app: &mut Box<PhotocraftApp>| {
             app.framework.dialogs.run(ui);
             let ctx = ui.ctx().clone();
             take(app, &ctx);

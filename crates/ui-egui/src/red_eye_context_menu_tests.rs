@@ -13,7 +13,7 @@ use crate::state::Tool;
 
 /// A 64 × 48 RGB document with its one Background layer red, after a cleared selection (so
 /// Reselect has one to restore). The Red Eye tool is the tool.
-fn app() -> (PhotocraftApp, egui::Context) {
+fn app() -> (Box<PhotocraftApp>, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 48, "background": "white"})).unwrap();
     app.run("edit.fill", json!({"contents": "color", "color": "#d01818"})).unwrap();
