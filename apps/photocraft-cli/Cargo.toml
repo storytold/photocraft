@@ -31,6 +31,8 @@ required-features = ["gpu"]
 
 [dependencies]
 photocraft-automation = { path = "../../crates/automation" }
+# The suite's AI-MCP flag (`craft::automation::agents::mcp_flag`): `mcp` reaches the open window only with it.
+craft = { workspace = true, features = ["automation-agents"] }
 photocraft-doc = { workspace = true }
 photocraft-engine = { workspace = true }
 photocraft-io = { workspace = true, features = ["pdf-editable"] }
