@@ -6322,10 +6322,10 @@ fn wave_scales_load_play_and_save_back() {
     assert_eq!((&p["scaleHorizontal"], &p["scaleVertical"]), (&json!(25), &json!(70)), "{p}");
     let back = export_item(&id, &p, "S").unwrap().descriptor.unwrap();
     assert_eq!((get_num(&back, "SclH"), get_num(&back, "SclV")), (Some(25.0), Some(70.0)));
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 24, "height": 24})).unwrap();
     s.execute("filter.render.clouds", json!({})).unwrap();
-    s.actions.list.push(Action::new("Scaled", vec![(id, p.clone())]));
+    s.actions_mut().list.push(Action::new("Scaled", vec![ActionStep::new(id, p.clone())])).unwrap();
     let played = s.execute("actions.play", json!({"action": "Scaled"})).unwrap();
     assert_eq!(played["ran"], 1, "{p}: {played}");
 }
