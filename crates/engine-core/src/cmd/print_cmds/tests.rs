@@ -848,7 +848,7 @@ fn c5_envelope_selects_c5_media_and_keeps_requested_orientation() {
         let pdf = std::fs::read(result["pdf"].as_str().unwrap()).unwrap();
         let content = pdf_content(&pdf);
         if should_rotate {
-            assert!(content.contains("q 0 -300.000 150.000 0"), "{content}");
+            assert!(content.contains("q 0 300.000 -150.000 0"), "{content}");
         } else {
             assert!(content.contains("q 300.000 0 0 150.000"), "{content}");
         }

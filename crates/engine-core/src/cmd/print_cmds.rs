@@ -855,9 +855,8 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
         content.push_str(&format!("q -1 0 0 1 {pw:.2} 0 cm\n"));
     }
     if page.rotate_image {
-        // PDF image rows are presented top-to-bottom by viewers. This matrix keeps the
-        // artwork's Photoshop-style counterclockwise turn in that raster convention.
-        content.push_str(&format!("q 0 -{h:.3} {w:.3} 0 {x:.3} {:.3} cm /Im0 Do Q\n", y + h));
+        // This transform produces Photoshop's counterclockwise turn for PDF raster rows.
+        content.push_str(&format!("q 0 {h:.3} -{w:.3} 0 {:.3} {y:.3} cm /Im0 Do Q\n", x + w));
     } else {
         content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));
     }
