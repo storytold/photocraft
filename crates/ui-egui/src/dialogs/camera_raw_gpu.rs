@@ -190,7 +190,14 @@ impl CameraRawGpu {
 /// hands it over as a stage since craft-libs#3101, but the pass has none yet (#6916), so a
 /// sharpened or noise-reduced frame would come back without it.
 #[cfg(not(target_arch = "wasm32"))]
-fn gpu_stages(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<photocraft_algo::camera_raw::PerPixel> {
+fn gpu_stages(
+    p: &CameraRaw,
+    inputs: &DevelopInputs,
+    w: usize,
+    h: usize,
+    float: bool,
+    points: Option<(f32, f32)>,
+) -> Option<photocraft_algo::camera_raw::PerPixel> {
     photocraft_algo::camera_raw::per_pixel(p, inputs, w, h, float, points).filter(|stages| stages.detail.is_none())
 }
 
