@@ -874,7 +874,8 @@ fn backward_change_find_moves_past_the_replaced_text() {
 fn fade_allocation_failure_keeps_document_and_history() {
     for depth in [8, 16, 32] {
         let mut s = session(depth);
-        s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+        // A fadeable step: the white document inverted to black.
+        s.execute("image.adjustments.invert", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.entries();
         crate::allocation::fail_next_for_test();
