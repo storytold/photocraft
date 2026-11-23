@@ -224,12 +224,13 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
 const FADE: &str = "edit.fade";
 
 /// The preview session of `key`: everything that makes two requests the same target at any scale (document,
-/// revision, active layer, dialog and its open, and the target, sources, command, tool colours and Match Color's source layer),
-/// not the other parameters and not `k`. A frame of another session is foreign to the dialog's preview.
+/// revision, active layer, dialog and its open, the channel target, the addressed document, layer and mask or
+/// filter mask of the parameters, sources, command, tool colours and Match Color's source layer), not the other
+/// parameters and not `k`. A frame of another session is foreign to the dialog's preview.
 pub(crate) fn session_of(key: &crate::filter_dialog::FilterPreviewKey) -> PreviewSession {
     let layer = key.active.map_or(0, |l| l.0 + 1);
-    let source_layer = key.params.get("sourceLayer");
-    let target = format!("{:?}|{:?}|{}|{:?}|{:?}", key.target, key.sources, key.command, key.tool_colors, source_layer);
+    let addressed = ["document", "layer", "target", "sourceLayer"].map(|name| key.params.get(name));
+    let target = format!("{:?}|{:?}|{}|{:?}|{:?}", key.target, key.sources, key.command, key.tool_colors, addressed);
     PreviewSession::new(key.doc.0, key.revision, layer).and(key.dialog.value()).and(key.open).and(settings_hash(&[target.as_bytes()]))
 }
 
