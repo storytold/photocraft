@@ -121,7 +121,7 @@ pub fn suggest(image: &Image<'_>, panels: &[Panel], base: &CameraRaw) -> CameraR
     for panel in Panel::ALL.into_iter().filter(|p| panels.contains(p)) {
         match panel {
             Panel::WhiteBalance => {
-                if let Some([temperature, tint]) = white_balance(image, image.encoding) {
+                if let Some([temperature, tint]) = white_balance(image) {
                     out.temperature = temperature;
                     out.tint = tint;
                 }
@@ -141,15 +141,14 @@ fn percentile(values: &mut [f32], fraction: f32) -> f32 {
 }
 
 fn light(image: &Image<'_>, out: &mut CameraRaw) {
-    let enc = image.encoding;
     let gains = white_balance_gains(out.temperature, out.tint);
     let norm = luma(gains);
     let mut luminance = Vec::new();
     let mut peaks = Vec::new();
-    // auto_tone uses sRGB-like luminance for its midgrey target. Use the working
-    // transfer curve for the linear-light conversion and reserve headroom per channel.
+    // The develop gain stage uses sRGB-linear values even when the local tone
+    // stage uses the document's transfer curve.
     for (_, _, rgb) in image.samples(96) {
-        let linear = [0, 1, 2].map(|c| enc.decode(rgb[c].clamp(0.0, 1.0)) * gains[c] / norm);
+        let linear = [0, 1, 2].map(|c| srgb_to_linear(rgb[c].clamp(0.0, 1.0)) * gains[c] / norm);
         let v = linear_to_srgb(luma(linear).max(0.0));
         luminance.push([v, v, v, 1.0]);
         peaks.push(linear[0].max(linear[1]).max(linear[2]));
@@ -159,7 +158,7 @@ fn light(image: &Image<'_>, out: &mut CameraRaw) {
     // areas already touch white. Leave the global exposure down and lift shadows
     // instead. A high percentile keeps individual hot pixels from setting the limit.
     let peak = percentile(&mut peaks, 0.995);
-    let room = (enc.decode(0.95) / peak.max(1e-4)).log2().max(0.0);
+    let room = (srgb_to_linear(0.95) / peak.max(1e-4)).log2().max(0.0);
     if out.exposure > room {
         let extra = out.exposure - room;
         out.exposure = (room * 100.0).floor() / 100.0;
@@ -173,7 +172,7 @@ fn light(image: &Image<'_>, out: &mut CameraRaw) {
     out.shadows = (out.shadows * (1.0 - 0.50 * image.shadow_noise)).round();
 }
 
-fn white_balance(image: &Image<'_>, enc: Encoding) -> Option<[f32; 2]> {
+fn white_balance(image: &Image<'_>) -> Option<[f32; 2]> {
     // Estimate two chromatic ratios in separate regions. A brightly colored object or
     // a clipped highlight should not determine the balance for the entire frame.
     let mut regions = [[0.0f32; 4]; 16];
@@ -190,7 +189,7 @@ fn white_balance(image: &Image<'_>, enc: Encoding) -> Option<[f32; 2]> {
         // treats a large patch of gently colored foliage as an illuminant.
         let chroma = (hi - lo) / hi;
         let weight = (1.0 - chroma / 0.30).powi(3) * hi.powi(2);
-        let [r, g, b] = rgb.map(|v| enc.decode(v));
+        let [r, g, b] = rgb.map(srgb_to_linear);
         let index = (y / image.h.div_ceil(4)) * 4 + x / image.w.div_ceil(4);
         if let Some(region) = regions.get_mut(index) {
             region[0] += weight * (r / g).ln();
@@ -226,13 +225,13 @@ fn white_balance(image: &Image<'_>, enc: Encoding) -> Option<[f32; 2]> {
 }
 
 fn color(image: &Image<'_>, p: &mut CameraRaw) {
-    let enc = image.encoding;
     let gains = white_balance_gains(p.temperature, p.tint);
-    let exposure = p.exposure.exp2() / luma(gains);
+    let norm = luma(gains);
+    let gains = gains.map(|g| g / norm * p.exposure.exp2());
     let mut chroma = Vec::new();
     let mut visible = 0;
     for (_, _, rgb) in image.samples(96) {
-        let rgb = [0, 1, 2].map(|c| enc.encode(enc.decode(rgb[c].clamp(0.0, 1.0)) * gains[c] * exposure));
+        let rgb = [0, 1, 2].map(|c| linear_to_srgb(srgb_to_linear(rgb[c].clamp(0.0, 1.0)) * gains[c]));
         let hi = rgb[0].max(rgb[1]).max(rgb[2]);
         let lo = rgb[0].min(rgb[1]).min(rgb[2]);
         if !(0.15..0.98).contains(&hi) {

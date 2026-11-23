@@ -47,3 +47,20 @@ fn rejects_unknown_panels_and_wrong_parameter_shapes() {
         assert!(matches!(session.execute(ID, params), Err(EngineError::BadParams { .. })));
     }
 }
+
+#[test]
+fn estimate_can_name_a_pixel_layer_while_a_group_is_active() {
+    let mut session = crate::session();
+    session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+    session.execute("layer.new.layer", json!({})).unwrap();
+    session.execute("edit.fill", json!({"color": "#544743"})).unwrap();
+    let layer = session.active().unwrap().active_layer.unwrap();
+    session.execute("layer.new.group", json!({})).unwrap();
+    let group = session.active().unwrap().active_layer.unwrap();
+    assert_ne!(group, layer);
+    assert!(!session.is_enabled(ID));
+
+    let result = session.execute(ID, json!({"panel": "light", "layer": layer.0})).unwrap();
+    assert_eq!(result["layer"], json!(layer.0));
+    assert_eq!(session.active().unwrap().active_layer, Some(group));
+}

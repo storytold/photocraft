@@ -289,3 +289,18 @@ fn mask_and_invalid_pixels_do_not_control_any_auto_panel() {
     assert!(Image::new(&px, usize::MAX, 2, None).is_none());
     assert!(Image::new(&px, SIDE, SIDE, Some(&coverage[..1])).is_none());
 }
+
+#[test]
+fn color_ignores_pixels_clipped_by_exposure_in_a_gamma_encoded_document() {
+    let pixels = frame(|_, _| [0.80, 0.72, 0.65, 1.0]);
+    let mut base = CameraRaw::default();
+    base.exposure = 1.0;
+    let inputs = DevelopInputs { encoding_gamma: 4.0, ..DevelopInputs::default() };
+    let mut rendered = pixels.clone();
+    crate::camera_raw::develop(&mut rendered, SIDE, SIDE, &base, &inputs, true);
+    assert!(rendered.iter().all(|pixel| pixel[0] > 1.0));
+
+    base.vibrance = 7.0;
+    let image = Image::new(&pixels, SIDE, SIDE, None).unwrap().with_encoding_gamma(inputs.encoding_gamma);
+    assert_eq!(suggest(&image, &[Panel::Color], &base), base);
+}

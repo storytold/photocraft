@@ -51,3 +51,11 @@ fn huge_samples_do_not_overflow() {
     let got = box_average(&surf, Rect::new(0, 0, 2, 1), 4);
     assert!(got.iter().flatten().all(|v| v.is_finite()), "{got:?}");
 }
+
+#[test]
+fn transparent_pixels_do_not_darken_the_proxy() {
+    let mut surf = Surface::new(PixelFormat::RGBA32F);
+    surf.fill_rect(Rect::new(0, 0, 1, 1), &[0.8, 0.6, 0.4, 1.0]);
+    let proxy = box_average(&surf, Rect::new(0, 0, 4, 1), 2);
+    assert_eq!(proxy, [[0.8, 0.6, 0.4, 0.5], [0.0; 4]]);
+}

@@ -69,8 +69,8 @@ impl Proxy {
     }
 }
 
-/// Box averaging reads each source row once. Repeat the last source row when a block
-/// runs off the bottom, without rereading it for very tall blocks on one-row images.
+/// Box averaging weights straight RGB by opacity, then returns straight RGB and mean alpha.
+/// Repeat the last source row when a block runs off the bottom without rereading it.
 fn box_average(surf: &Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
     let (w, h) = (area.width() as usize, area.height() as usize);
     let (pw, ph) = (w.div_ceil(k), h.div_ceil(k));
@@ -86,15 +86,21 @@ fn box_average(surf: &Surface, area: Rect, k: usize) -> Vec<[f32; 4]> {
             surf.read_rgba_into(Rect::new(area.x0, y, area.x1, y + 1), &mut row);
             for (x, q) in row.iter().enumerate() {
                 if let Some(a) = acc.get_mut(x / k) {
-                    for c in 0..4 {
-                        a[c] += f64::from(q[c]) * weight;
-                    }
                     a[4] += weight;
+                    let alpha = f64::from(q[3]).min(1.0) * weight;
+                    if alpha > 0.0 && q[3].is_finite() {
+                        for c in 0..3 {
+                            a[c] += f64::from(q[c]) * alpha;
+                        }
+                        a[3] += alpha;
+                    }
                 }
             }
         }
         for (pixel, a) in proxy.iter_mut().skip(py * pw).zip(&acc) {
-            *pixel = [0, 1, 2, 3].map(|c| (a[c] / a[4]) as f32);
+            if a[3] > 0.0 {
+                *pixel = [(a[0] / a[3]) as f32, (a[1] / a[3]) as f32, (a[2] / a[3]) as f32, (a[3] / a[4]) as f32];
+            }
         }
     }
     proxy
