@@ -3,6 +3,7 @@
 use serde_json::Value;
 
 use crate::PhotocraftApp;
+use crate::dialogs::params::ParamFamily;
 
 /// No external editor sessions exist in the browser.
 #[derive(Default)]
@@ -23,5 +24,10 @@ pub(crate) fn intercept(_app: &mut PhotocraftApp, _id: &str, _params: &Value) ->
 /// No sessions to poll.
 pub(crate) fn poll(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
 
-/// No dialog to draw.
-pub(crate) fn show(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
+/// No dialog to host.
+pub(crate) fn host(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
+
+/// The `PARAM_FAMILIES` row: the browser has no editor-choice dialog, so the row owns no key.
+pub(crate) const fn family() -> ParamFamily {
+    ParamFamily::new(|_| false, |_, _, _| {})
+}

@@ -4,19 +4,24 @@
 //! cargo run --release -p photocraft-ui-egui --example free_transform_bench -- [--size 6000x4000] [--reps 9] [--steps 60]
 //! ```
 //!
-//! - begin: Ctrl+T (`transform_tool::begin`) and the first preview frame, then Esc.
-//! - drag update: one pointer move and the preview frame it draws. "scale" drags the bottom-right
-//!   handle towards the top-left corner, shrinking the box from 100 % to 20 % at 100 % view zoom,
-//!   so the scale crosses ½ and ¼ (new mip levels) mid-drag; "move" drags the box by its middle.
+//! - begin: Ctrl+T (`transform_tool::begin`) and the first frame of the document area, then Esc.
+//! - drag update: one pointer move and the frame of the document area it runs. "scale" drags the
+//!   bottom-right handle towards the top-left corner, shrinking the box from 100 % to 20 % at 100 %
+//!   view zoom, so the scale crosses ½ and ¼ (new mip levels) mid-drag; "move" drags the box by its
+//!   middle.
 //!
-//! CPU side only: the egui frame and the texture preparation it does, not GPU upload or
-//! presentation. A helper thread's work (a mip level built off the UI thread) isn't counted.
+//! CPU side only: the app's document area on the CPU canvas and the texture preparation it does,
+//! not GPU upload or presentation. A helper thread's work (a mip level built off the UI thread)
+//! isn't counted.
 
 use std::time::Instant;
 
-use photocraft_ui_egui::canvas::{ToolEvent, ViewXform};
-use photocraft_ui_egui::{PhotocraftApp, Services, transform_tool};
+use craft::behavior::kurbo::Point;
+use egui::{Event, Modifiers, PointerButton, Pos2};
+use photocraft_ui_egui::{PhotocraftApp, Services, canvas, transform_tool};
 use serde_json::json;
+
+type H = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
 
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
@@ -32,34 +37,32 @@ fn worst(v: &[f64]) -> f64 {
     v.iter().copied().fold(0.0, f64::max)
 }
 
-/// The view the frames draw through: 100 %, the document centred in a 1600 × 1000 canvas.
-fn view(w: u32, h: u32) -> ViewXform {
-    ViewXform {
-        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0)),
-        zoom: 1.0,
-        center: [w as f32 / 2.0, h as f32 / 2.0],
-        flip: false,
-        rotation: 0.0,
-        aspect: 1.0,
-    }
-}
-
 /// The texture size limit a desktop GPU reports (egui's default without a renderer is 2048,
 /// which would shrink the preview to a fraction of the layer and hide the cost being measured).
 const MAX_TEXTURE_SIDE: usize = 16384;
 
-/// One frame drawing the open box's preview, in milliseconds.
-fn frame(app: &PhotocraftApp, ctx: &egui::Context, xf: &ViewXform) -> f64 {
-    let input = egui::RawInput { screen_rect: Some(xf.rect), max_texture_side: Some(MAX_TEXTURE_SIDE), ..Default::default() };
+/// One frame of the document area, in milliseconds.
+fn frame(h: &mut H) -> f64 {
     let start = Instant::now();
-    let output = ctx.run_ui(input, |ui| transform_tool::draw_content(app, ui.painter(), xf));
-    let ms = start.elapsed().as_secs_f64() * 1e3;
-    drop(output);
-    ms
+    h.step();
+    start.elapsed().as_secs_f64() * 1e3
 }
 
-fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) {
-    transform_tool::pointer(app, ev, egui::Modifiers::NONE);
+/// The screen point of document point `at` through the view the canvas last showed.
+fn screen(h: &H, at: [f64; 2]) -> Pos2 {
+    canvas::active_view(h.state()).expect("an active document view").to_screen(Point::new(at[0], at[1]))
+}
+
+/// Queues the primary button going down or up at document point `at`.
+fn button(h: &mut H, at: [f64; 2], pressed: bool) {
+    let pos = screen(h, at);
+    h.event(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+}
+
+/// Queues a pointer move to document point `at`.
+fn move_to(h: &mut H, at: [f64; 2]) {
+    let pos = screen(h, at);
+    h.event(Event::PointerMoved(pos));
 }
 
 fn main() {
@@ -90,30 +93,38 @@ fn main() {
     if let Some(v) = app.ui.views.first_mut() {
         v.zoom = 1.0;
         v.center = [w as f32 / 2.0, h as f32 / 2.0];
-        v.fit_pending = false;
+        v.clear_pending();
     }
-    let xf = view(w, h);
-    let ctx = egui::Context::default();
-    let _ = ctx.run_ui(egui::RawInput { max_texture_side: Some(MAX_TEXTURE_SIDE), ..Default::default() }, |_| {});
+    let ctx = app.ctx().clone();
+    let (doc_w, doc_h) = (w, h);
+    let mut h: H = egui_kittest::Harness::builder()
+        .with_context(ctx.clone())
+        .with_size(egui::vec2(1600.0, 1000.0))
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| canvas::document_area(app, ui), app);
+    h.input_mut().max_texture_side = Some(MAX_TEXTURE_SIDE);
+    for _ in 0..4 {
+        h.step();
+    }
 
-    // Ctrl+T and its first preview frame.
+    // Ctrl+T and its first frame.
     let (mut begin, mut first, mut begin_total) = (Vec::new(), Vec::new(), Vec::new());
     for _ in 0..reps {
         let t0 = Instant::now();
-        transform_tool::begin(&mut app, &ctx).expect("Free Transform");
+        transform_tool::begin(h.state_mut(), &ctx).expect("Free Transform");
         let opened = t0.elapsed().as_secs_f64() * 1e3;
-        let drawn = frame(&app, &ctx, &xf);
+        let drawn = frame(&mut h);
         begin.push(opened);
         first.push(drawn);
         begin_total.push(opened + drawn);
-        transform_tool::cancel(&mut app);
+        transform_tool::cancel(h.state_mut());
+        h.step();
     }
 
     // Drags: one pointer move + its frame per update.
     let mut drag = |kind: &str| -> Vec<f64> {
-        transform_tool::begin(&mut app, &ctx).expect("Free Transform");
-        let _ = frame(&app, &ctx, &xf);
-        let q = app.ui.transform.as_ref().map(|t| t.quad).unwrap_or_default();
+        transform_tool::begin(h.state_mut(), &ctx).expect("Free Transform");
+        h.step();
+        let q = h.state().ui.transform.as_ref().map(|t| t.quad_array()).unwrap_or_default();
         let (from, to) = if kind == "scale" {
             // The bottom-right handle towards the top-left corner: 100 % → 20 %.
             let (a, c) = (q[0], q[2]);
@@ -122,18 +133,20 @@ fn main() {
             let m = [(q[0][0] + q[2][0]) / 2.0, (q[0][1] + q[2][1]) / 2.0];
             (m, [m[0] + 400.0, m[1] + 250.0])
         };
-        pointer(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 });
+        move_to(&mut h, from);
+        h.step();
+        button(&mut h, from, true);
+        h.step();
         let mut times = Vec::with_capacity(steps);
         for s in 1..=steps {
             let k = s as f64 / steps as f64;
-            let p = [from[0] + k * (to[0] - from[0]), from[1] + k * (to[1] - from[1])];
-            let t0 = Instant::now();
-            pointer(&mut app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 });
-            let moved = t0.elapsed().as_secs_f64() * 1e3;
-            times.push(moved + frame(&app, &ctx, &xf));
+            move_to(&mut h, [from[0] + k * (to[0] - from[0]), from[1] + k * (to[1] - from[1])]);
+            times.push(frame(&mut h));
         }
-        pointer(&mut app, ToolEvent::Up { x: to[0], y: to[1] });
-        transform_tool::cancel(&mut app);
+        button(&mut h, to, false);
+        h.step();
+        transform_tool::cancel(h.state_mut());
+        h.step();
         times
     };
     let mut scale = Vec::new();
@@ -153,12 +166,12 @@ fn main() {
             row("Free Transform drag update, 2 layers on 24 MP: scale through mip levels", &scale, rss, None),
             row("Free Transform drag update, 2 layers on 24 MP: move", &moving, rss, None),
         ];
-        let rep = report("free_transform_bench", json!({"width": w, "height": h, "layers": 2, "reps": reps, "steps": steps}), rows, None);
+        let rep = report("free_transform_bench", json!({"width": doc_w, "height": doc_h, "layers": 2, "reps": reps, "steps": steps}), rows, None);
         if let Err(e) = write_report(&out, &rep) {
             eprintln!("{e}");
         }
     }
-    println!("{w}×{h}, 2 layers, {reps} reps, {steps} steps per drag");
+    println!("{doc_w}×{doc_h}, 2 layers, {reps} reps, {steps} steps per drag");
     println!(
         "begin: Ctrl+T {:.1} ms + first frame {:.1} ms = {:.1} ms (median; worst {:.1} ms)",
         median(&begin),

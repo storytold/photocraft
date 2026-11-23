@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::LayerId;
 
 /// All variable definitions and data sets for a document.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Variables {
     /// Variable definitions, each bound to a layer.
     #[serde(default)]
@@ -27,7 +27,7 @@ pub struct Variables {
 }
 
 /// One named variable bound to a layer.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct VariableDef {
     /// Unique variable name (matched by data-set values and CSV headers).
     pub name: String,
@@ -38,7 +38,7 @@ pub struct VariableDef {
 }
 
 /// The aspect of a layer a variable controls (Photoshop's three variable types).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum VarKind {
     /// Show or hide the layer.
@@ -58,7 +58,7 @@ pub enum VarKind {
 }
 
 /// How a replacement image is scaled into the layer bounds (Photoshop's "Method").
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum PixelMethod {
     /// Scale to fit inside the bounds, keeping aspect (default).
@@ -73,7 +73,7 @@ pub enum PixelMethod {
 }
 
 /// Where a replacement image sits within the layer bounds.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum PixelAlign {
     TopLeft,
@@ -89,7 +89,7 @@ pub enum PixelAlign {
 }
 
 /// A named row of values, one per variable (keyed by variable name).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct DataSet {
     pub name: String,
     /// Variable name → value. A variable with no entry keeps the document's current value.
@@ -98,7 +98,7 @@ pub struct DataSet {
 }
 
 /// One variable's value within a data set.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct DataValue {
     /// Which variable (by name).
     pub variable: String,
@@ -107,7 +107,7 @@ pub struct DataValue {
 }
 
 /// The payload of a [`DataValue`], matched to the variable's [`VarKind`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum Value {
     /// For a Visibility variable.

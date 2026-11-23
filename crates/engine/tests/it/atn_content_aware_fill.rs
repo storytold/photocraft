@@ -3,7 +3,7 @@ use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_engine::{
     Session,
-    actions_cmds::Action,
+    actions_cmds::{Action, ActionStep},
     atn_cmds::{export, import},
 };
 use photocraft_raster::Surface;
@@ -50,7 +50,7 @@ fn load(d: Descriptor) -> Action {
 }
 
 fn exported(p: Value) -> Option<AtnItem> {
-    let a = Action::new("A", vec![(CMD.into(), p)]);
+    let a = Action::new("A", vec![ActionStep::new(CMD, p)]);
     let bytes = export("S", &[&a], &[], false).ok()?.0;
     atn::parse(&bytes).ok()?.actions.into_iter().next()?.items.into_iter().next()
 }
@@ -77,7 +77,7 @@ fn caf_settings_roundtrip_seven_fields_and_boolean_choices() {
     cases.push((current, p));
     for (d, p) in cases {
         let action = load(d.clone());
-        assert_eq!(action.steps, vec![(CMD.into(), p.clone())]);
+        assert_eq!(action.steps, vec![ActionStep::new(CMD, p.clone())]);
         assert_eq!(exported(p).unwrap(), item(d.clone()));
         let bytes = export("S", &[&action], &[], false).unwrap().0;
         assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0], item(d));
@@ -98,14 +98,14 @@ fn caf_source_order_and_flags_survive_without_reviving_stale_settings() {
     let imported = import(&atn::write(&file(source.clone())).unwrap()).unwrap();
     assert!(imported.unsupported.is_empty());
     let a = &imported.actions[0];
-    assert!(a.steps[0].1.get("_atnCafDescriptor").is_some());
+    assert!(a.steps[0].params.get("_atnCafDescriptor").is_some());
     let bytes = export("S", &[a], &[], false).unwrap().0;
     assert_eq!(atn::parse(&bytes).unwrap().actions[0].items[0], source);
-    let mut damaged = a.steps[0].1.clone();
+    let mut damaged = a.steps[0].params.clone();
     damaged["_atnCafDescriptor"] = json!("not base64");
     assert!(exported(damaged).is_none());
     let invalid = descriptor().with("extra", D::Boolean(true));
-    let mut damaged = a.steps[0].1.clone();
+    let mut damaged = a.steps[0].params.clone();
     damaged["_atnCafDescriptor"] = json!(photocraft_paint::tile::b64_encode(&invalid.to_bytes()));
     assert!(exported(damaged).is_none(), "valid base64 cannot hide an unrepresented source field");
 }
@@ -124,7 +124,7 @@ fn caf_edited_settings_export_without_stale_wire_metadata() {
     let imported = import(&atn::write(&file(source.clone())).unwrap()).unwrap();
     assert!(imported.unsupported.is_empty());
     let a = &imported.actions[0];
-    assert!(a.steps[0].1.get("_atnCafDescriptor").is_some());
+    assert!(a.steps[0].params.get("_atnCafDescriptor").is_some());
     for (param, index, value, wire) in [
         ("sampleAllLayers", 1, json!(true), D::Boolean(true)),
         ("scale", 4, json!(true), D::Boolean(true)),
@@ -132,7 +132,7 @@ fn caf_edited_settings_export_without_stale_wire_metadata() {
         ("output", 6, json!("current"), enm("cafOutput", "cafOutputToCurrentLayer")),
     ] {
         let mut edited = a.clone();
-        edited.steps[0].1[param] = value.clone();
+        edited.steps[0].params[param] = value.clone();
         let mut expected_params = params();
         expected_params[param] = value;
         let mut canonical = descriptor();
@@ -145,7 +145,7 @@ fn caf_edited_settings_export_without_stale_wire_metadata() {
             assert_eq!(atn::parse(&bytes).unwrap().actions[0].items, vec![expected.clone()]);
             let reloaded = import(&bytes).unwrap();
             assert!(reloaded.unsupported.is_empty());
-            assert_eq!(reloaded.actions[0].steps[0].1, expected_params);
+            assert_eq!(reloaded.actions[0].steps[0].params, expected_params);
         }
     }
 }
@@ -191,14 +191,16 @@ fn caf_unrepresented_descriptors_are_kept_and_never_partially_play() {
         let source = item(d);
         let imported = import(&atn::write(&file(source.clone())).unwrap()).unwrap();
         assert_eq!(imported.unsupported.len(), 1);
-        assert_eq!(imported.actions[0].steps[0].0, "actions.photoshopStep");
+        assert_eq!(imported.actions[0].steps[0].command, "actions.photoshopStep");
         let saved = export("S", &[&imported.actions[0]], &[], false).unwrap().0;
         assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0], source);
         let mut s = Session::new();
         s.execute("file.new", json!({"width":8,"height":8})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let past = s.active().unwrap().history.past_len();
-        s.actions.list.extend(imported.actions);
+        for action in imported.actions {
+            s.actions.list.push(action).unwrap();
+        }
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 0);
         assert!(result.get("failed").is_some());
@@ -212,13 +214,13 @@ fn caf_unrepresented_descriptors_are_kept_and_never_partially_play() {
 fn caf_native_exports_preserve_effective_defaults_and_refuse_unrepresented_options() {
     for p in [json!({"sampling":"rectangular","output":"new"}), json!({"sampling":"rectangular","output":"new","seed":1,"target":"pixels"}), params()] {
         let a = load(exported(p).unwrap().descriptor.unwrap());
-        assert_eq!(a.steps, vec![(CMD.into(), params())]);
+        assert_eq!(a.steps, vec![ActionStep::new(CMD, params())]);
     }
     let mut current = params();
     current["output"] = json!("current");
     for p in [json!({"sampling":"rectangular"}), current.clone()] {
         let a = load(exported(p).unwrap().descriptor.unwrap());
-        assert_eq!(a.steps, vec![(CMD.into(), current.clone())]);
+        assert_eq!(a.steps, vec![ActionStep::new(CMD, current.clone())]);
     }
     for (key, value) in [
         ("sampling", json!("auto")),
@@ -280,7 +282,7 @@ fn caf_action_matches_native_pixels_and_undo_at_each_depth() {
         let before = s.active().unwrap().doc.clone();
         let source = s.active().unwrap().active_layer.unwrap();
         let past = s.active().unwrap().history.past_len();
-        s.actions.list.push(load(descriptor()));
+        s.actions.list.push(load(descriptor())).unwrap();
         let result = s.execute("actions.play", json!({"action":0})).unwrap();
         assert!(result.get("failed").is_none(), "{depth}: {result}");
         assert_eq!(result["ran"], 1);
@@ -321,7 +323,7 @@ fn caf_action_matches_native_pixels_and_undo_at_each_depth() {
         let past = recorded.active().unwrap().history.past_len();
         let mut d = descriptor();
         d.items[6].1 = enm("cafOutput", "cafOutputToCurrentLayer");
-        recorded.actions.list.push(load(d));
+        recorded.actions.list.push(load(d)).unwrap();
         let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none(), "{depth}: {result}");
@@ -378,7 +380,7 @@ fn caf_current_layer_sampling_matches_distinct_multilayer_controls() {
             let mut d = descriptor();
             d.items[1].1 = D::Boolean(all_layers);
             d.items[6].1 = enm("cafOutput", "cafOutputToCurrentLayer");
-            recorded.actions.list.push(load(d));
+            recorded.actions.list.push(load(d)).unwrap();
             let result = recorded.execute("actions.play", json!({"action":0})).unwrap();
             assert_eq!(result["ran"], 1);
             assert!(result.get("failed").is_none(), "{depth}/{all_layers}: {result}");
@@ -414,7 +416,7 @@ fn caf_action_without_selection_fails_without_an_edit() {
     s.execute("file.new", json!({"width":8,"height":8})).unwrap();
     let before = s.active().unwrap().doc.clone();
     let past = s.active().unwrap().history.past_len();
-    s.actions.list.push(load(descriptor()));
+    s.actions.list.push(load(descriptor())).unwrap();
     let result = s.execute("actions.play", json!({"action":0})).unwrap();
     assert_eq!(result["ran"], 0);
     assert!(result.get("failed").is_some());

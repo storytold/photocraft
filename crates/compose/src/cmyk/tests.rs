@@ -1704,7 +1704,8 @@ fn normal_onto_nothing_is_exact() {
     };
     let mut d = doc(4, 6);
     d.layers =
-        vec![build(&LayerSpec::Group { children: vec![shape, inv], pass_through: false, blend: BlendMode::Normal, opacity: 1.0, fill: 1.0, mask: None })];
+        vec![build(&LayerSpec::Group { children: vec![shape, inv], pass_through: false, blend: BlendMode::Normal, opacity: 1.0, fill: 1.0, mask: None })]
+            .into();
     assert_matches_reference(&d);
     assert_eq!(render1(&d, 0, 0)[..4], [0.0; 4]);
 }
@@ -1865,13 +1866,14 @@ fn flattening_keeps_exact_inks() {
 /// threads) and a Color Overlay on the split path (its stand-ins).
 #[test]
 fn rgb_colours_become_ink_through_the_document_profile() {
-    let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+    let profile = craft_cms::synth::cmyk_profile(&craft_cms::synth::CmykParams {
         description: "Test Uncoated".into(),
         tvi: [0.26, 0.26, 0.26, 0.3],
         grid_a2b: 5,
         grid_b2a: 9,
         ..Default::default()
-    });
+    })
+    .unwrap();
     let bytes = profile.to_bytes();
     let space = photocraft_color::convert::CmykSpace::for_profile(Some(&bytes));
     assert!(space.is_some(), "a profile other than the built-in one");
