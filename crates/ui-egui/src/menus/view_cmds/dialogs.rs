@@ -4,7 +4,7 @@ use crate::dialogs::image_processor_ui;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
 
@@ -666,6 +666,48 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
     };
     Some((rows, DialogFields::new()))
 }
+
+/// Batch's OK with Source: Folder and no source folder chosen (#13669).
+pub(crate) const NO_SOURCE_FOLDER: &str = "You must choose a source folder.";
+/// Batch's OK with a folder destination and no destination folder chosen (#13669).
+pub(crate) const NO_DESTINATION_FOLDER: &str = "You must choose a destination folder.";
+
+/// Does a Batch folder field name a folder? No value and an empty or blank path count as nothing chosen.
+fn batch_folder_chosen(path: Option<&str>) -> bool {
+    path.is_some_and(|path| !path.trim().is_empty())
+}
+
+/// The first of the reference's OK checks the Batch dialog's values fail, in its order: the source folder, then the
+/// destination folder. Only a folder source has either: Opened Files reads no folder, and without an output it leaves
+/// the documents open.
+fn batch_missing_choice(fields: &DialogFields) -> Option<&'static str> {
+    if fields.text("source").is_some_and(|source| source != "folder") {
+        return None;
+    }
+    if !batch_folder_chosen(fields.text("input")) {
+        return Some(NO_SOURCE_FOLDER);
+    }
+    let folder_destination = fields.text("destination").is_none_or(|destination| destination == "folder");
+    (folder_destination && !batch_folder_chosen(fields.text("output"))).then_some(NO_DESTINATION_FOLDER)
+}
+
+/// The `ParamFamily::check` of the Batch dialog (#13669): OK, from the button or a confirm through the control channel,
+/// is refused while a folder source or its destination names no folder. As in the reference, a one-button alert
+/// titled "Batch" shows the message; the dialog stays open with its values (the refusal also shows under its rows and
+/// answers a control-channel confirm), and nothing runs.
+pub(crate) fn batch_check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    let message = match batch_missing_choice(&result.fields) {
+        Some(NO_SOURCE_FOLDER) => tl!("You must choose a source folder."),
+        Some(_) => tl!("You must choose a destination folder."),
+        None => return Ok(()),
+    };
+    crate::dialogs::alerts::show(app, craft::ui::dialog::Alert::new(tl!("Batch"), message));
+    Err(Label::from(message))
+}
+
+#[cfg(test)]
+#[path = "batch_ok_validation_tests.rs"]
+mod batch_ok_validation_tests;
 
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
 pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
