@@ -6,8 +6,8 @@ All three jobs remain literally disabled. There is no
 schedule or platform secret grant. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to public preview `4fdc287a589e21c373927287150acbe73fffa34c`
-([shared draft #330](https://github.com/storytold/craft-common-actions/pull/330)); this is
+Shared tooling is pinned to `077d4657f71527141717a0dfbc908a217460eabf`, the craft-common-actions
+main commit that merged [#330](https://github.com/storytold/craft-common-actions/pull/330); this is
 reviewed source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
 This is not a hosted no-key test, a native signing result or a working nightly feed.

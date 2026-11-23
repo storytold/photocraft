@@ -22,9 +22,9 @@ jobs:
       actions: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@4fdc287a589e21c373927287150acbe73fffa34c
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@077d4657f71527141717a0dfbc908a217460eabf
     with:
-      tooling-revision: 4fdc287a589e21c373927287150acbe73fffa34c
+      tooling-revision: 077d4657f71527141717a0dfbc908a217460eabf
       app-name: photocraft
       manual-actors: '[]'
       craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
