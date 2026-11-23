@@ -63,7 +63,8 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
             _ => (o.polygon_sides, 1.0),
         };
         let mut options = ShapeDragOptions::new(super::kind_of(tool))
-            .corner_radius(f64::from(o.corner_radius))
+            // The Triangle tool keeps its own radius (#13355).
+            .corner_radius(f64::from(if tool == Tool::Triangle { o.triangle_corner_radius } else { o.corner_radius }))
             .sides(sides)
             .star_ratio(ratio)
             .line_weight(f64::from(o.line_weight))
