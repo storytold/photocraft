@@ -86,6 +86,8 @@ pub mod layer_multi_cmds;
 pub mod layer_nav_cmds;
 mod layer_params;
 mod layer_references;
+#[cfg(test)]
+mod layer_style_background_enabled_tests;
 pub mod layer_xmp_cmds;
 pub mod lens_cmds;
 pub mod magnetic_cmds;
@@ -161,7 +163,10 @@ pub mod wia_cmds;
 pub(crate) use adjust_params::inject_kind;
 use adjust_params::{adjust_mode, destructive_adjust, doc_mode, new_adjustment};
 pub use adjust_params::{adjustment_from_params, adjustment_kind};
-pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_paintable, is_mask_target, paint_surface};
+pub(crate) use enabled::{
+    always, check_all_unlocked, check_layer_style_target, check_pixels_unlocked, has_paintable, is_mask_target, layer_style_allowed, layer_style_allowed_with,
+    layer_style_background_refusal, layer_style_rejects_background, paint_surface,
+};
 use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_or_channel, has_selection};
 pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, layer_param, mask_at_depth, mask_new_layer, selection_mask};
 pub(crate) use layer_references::{recorded_drop, recorded_layer};

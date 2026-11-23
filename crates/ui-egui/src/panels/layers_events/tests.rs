@@ -523,6 +523,39 @@ fn mask_and_frame_drops_follow_the_targets() {
 
 // ------------------------------------------------------------------------------------ menu picks
 
+#[test]
+fn fx_footer_menu_tracks_the_active_layer() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+    let mut app = app_of(s);
+    let check = |app: &PhotocraftApp, enabled| {
+        let st = app.session.active().unwrap();
+        let tree = PhotoLayers::new(app, st, &app.ui.layer_filter, false, None);
+        let footer = tree.footer();
+        let entries: Vec<_> = footer.style_menu.iter().filter(|entry| entry.is_item()).collect();
+        assert_eq!(entries.len(), 11);
+        for entry in entries {
+            let kind = entry.value().unwrap();
+            let command = if kind.is_empty() { "layer.layerStyle.blendingOptions".into() } else { format!("layer.layerStyle.{kind}") };
+            assert_eq!(entry.is_enabled(), enabled, "Layers panel: {command}");
+            assert_eq!(crate::menus::is_enabled(app, &command), enabled, "Layer menu: {command}");
+        }
+    };
+    check(&app, false);
+    let ctx = app.ctx().clone();
+    for command in ["layer.layerStyle.blendingOptions", "layer.layerStyle.dropShadow"] {
+        let error = crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap_err();
+        assert!(error.contains("Background"), "{command}: {error}");
+    }
+    send(&mut app, vec![LayersEvent::Footer(LayersFooterAction::Style("dropShadow".into()))]);
+    assert!(!app.dialog_open());
+
+    app.run("layer.new.layerFromBackground", json!({})).unwrap();
+    check(&app, true);
+    send(&mut app, vec![LayersEvent::Footer(LayersFooterAction::Style("dropShadow".into()))]);
+    assert!(app.dialog_open());
+}
+
 /// The row menu's `layersPanel:*` values run their rules.
 #[test]
 fn menu_pick_values_run_their_rules() {

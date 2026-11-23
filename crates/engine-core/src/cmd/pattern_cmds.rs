@@ -703,6 +703,7 @@ mod tests {
     fn a_pattern_that_would_paint_nothing_is_reported() {
         let mut s = crate::session();
         s.execute("file.new", json!({"width": 40, "height": 30, "depth": 8})).unwrap();
+        s.execute("layer.new.layerFromBackground", json!({})).unwrap();
         // A 32-bit 5000 x 5000 pattern (declared only: 400 MB as a working copy, past the cap).
         let surface = photocraft_raster::Surface::new(photocraft_doc::PixelFormat::RGBA32F);
         s.patterns.items.push(Pattern { id: "huge".into(), name: "Huge".into(), width: 5000, height: 5000, surface });

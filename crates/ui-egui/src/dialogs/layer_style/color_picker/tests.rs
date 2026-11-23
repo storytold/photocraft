@@ -14,6 +14,7 @@ fn new_app(depth: u32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("prefs.set", json!({"path":"interface.language","value":"en"})).unwrap();
     app.run("file.new", json!({"width":32,"height":24,"depth":depth,"background":"#406080"})).unwrap();
+    app.run("layer.new.layerFromBackground", json!({})).unwrap();
     app
 }
 

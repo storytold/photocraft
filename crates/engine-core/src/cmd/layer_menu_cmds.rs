@@ -524,13 +524,15 @@ fn native(_: &Session) -> Enabled {
 fn blending_options(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "layer.layerStyle.blendingOptions";
     let id = layer_param(s, p)?;
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    super::enabled::check_layer_style_target(doc, id)?;
+    let mode = doc.mode;
     let blend = match p.get("blend").and_then(Value::as_str) {
         Some(b) => Some(crate::commands::parse_blend(b).ok_or_else(|| bad(CMD, format!("unknown blend mode `{b}`")))?),
         None => None,
     };
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
     let fill = p.get("fillOpacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
-    let mode = s.active().ok_or(EngineError::NoDocument)?.doc.mode;
     let blend_if = match p.get("blendIf") {
         None => None,
         Some(v) => Some(blend_if_entries(v, mode)?),
@@ -1086,7 +1088,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Blending Options…",
             ["Layer", "Layer Style"],
             r##"{"layer":id?,"blend":"normal|multiply|…"?,"opacity":0..100?,"fillOpacity":0..100?,"blendIf":{"channel":"gray|red|green|blue|cyan|…"|index="gray","thisLayer":[black,white]|[blackLo,blackHi,whiteLo,whiteHi]?,"underlying":[…]?}|[{…},…]|null?,"channels":[bool,…]?,"knockout":"none|shallow|deep"?,"blendInteriorEffectsAsGroup":bool?,"blendClippedLayersAsGroup":bool?,"transparencyShapesLayer":bool?,"layerMaskHidesEffects":bool?,"vectorMaskHidesEffects":bool?} (Blend If values 0..255; split points fade; null resets. Advanced Blending: channels = which colour channels blend (R G B / C M Y K / L a b); PhotoCraft's defaults are knockout none, interior effects off, clipped layers as group on, transparency shapes on, masks hide effects off)"##,
-            has_layer,
+            super::enabled::layer_style_allowed,
             blending_options
         ),
         spec!(

@@ -13,6 +13,26 @@ pub(super) fn has_layer(s: &Session) -> std::result::Result<(), String> {
     d.active_layer.filter(|id| d.doc.layer(*id).is_some()).map(|_| ()).ok_or_else(|| "no active layer".into())
 }
 
+pub(crate) fn layer_style_allowed(s: &Session) -> std::result::Result<(), String> {
+    layer_style_allowed_with(s, &Value::Null)
+}
+
+pub(crate) fn layer_style_allowed_with(s: &Session, params: &Value) -> std::result::Result<(), String> {
+    let st = s.active().ok_or("no document open")?;
+    let id = super::layer_param(s, params).map_err(|err| err.to_string())?;
+    if st.doc.layer(id).is_none() {
+        return Err(EngineError::NoLayer(id).to_string());
+    }
+    check_layer_style_target(&st.doc, id).map_err(|err| err.to_string())
+}
+
+pub(crate) fn check_layer_style_target(doc: &Document, id: LayerId) -> Result<()> {
+    if doc.is_background(id) {
+        return Err(EngineError::Other("the Background layer cannot have a layer style".into()));
+    }
+    Ok(())
+}
+
 pub(super) fn has_pixel_layer(s: &Session) -> std::result::Result<(), String> {
     let l = crate::active_layer_of(s)?;
     if matches!(l.content, LayerContent::Raster(_)) {
@@ -97,4 +117,33 @@ pub(super) fn can_redo(s: &Session) -> std::result::Result<(), String> {
 
 pub(super) fn has_selection(s: &Session) -> std::result::Result<(), String> {
     s.active().filter(|d| d.doc.selection.is_some()).map(|_| ()).ok_or_else(|| "no selection".into())
+}
+
+/// Only the individual effects and Blending Options refuse Background receivers.
+pub(crate) fn layer_style_rejects_background(id: &str) -> bool {
+    matches!(
+        id,
+        "layer.layerStyle.blendingOptions"
+            | "layer.layerStyle.bevelEmboss"
+            | "layer.layerStyle.stroke"
+            | "layer.layerStyle.innerShadow"
+            | "layer.layerStyle.innerGlow"
+            | "layer.layerStyle.satin"
+            | "layer.layerStyle.colorOverlay"
+            | "layer.layerStyle.gradientOverlay"
+            | "layer.layerStyle.patternOverlay"
+            | "layer.layerStyle.outerGlow"
+            | "layer.layerStyle.dropShadow"
+    )
+}
+
+/// This refusal must precede committing a pending floating selection. Other preconditions
+/// keep their normal position after the floating selection has dropped.
+pub(crate) fn layer_style_background_refusal(s: &Session, id: &str, params: &Value) -> Option<String> {
+    if !layer_style_rejects_background(id) {
+        return None;
+    }
+    let st = s.active()?;
+    let target = super::layer_param(s, params).ok()?;
+    check_layer_style_target(&st.doc, target).err().map(|err| err.to_string())
 }

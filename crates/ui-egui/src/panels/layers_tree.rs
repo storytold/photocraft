@@ -518,7 +518,8 @@ impl LayerTree for PhotoLayers {
             (adjustments, styles)
         });
         footer.adjustment_menu = adjustments;
-        footer.style_menu = styles;
+        let style_enabled = active.is_some_and(|layer| !self.doc().is_background(layer.id));
+        footer.style_menu = styles.into_iter().map(|entry| entry.enabled(style_enabled)).collect();
         footer
     }
 

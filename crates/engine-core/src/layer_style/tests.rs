@@ -323,6 +323,7 @@ fn clear_one_effect_by_index() {
 fn color_overlay_renders() {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
     s.execute("layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})).unwrap();
     let px: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x": 3, "y": 3})).unwrap()).unwrap();
     assert!(px[0] > 0.99 && px[1] < 0.01, "{px:?}");

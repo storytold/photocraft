@@ -445,9 +445,6 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             };
             crate::smart_filter_dialog::open(app, layer, index).map(dialog_reply)
         }
-        "layer.layerStyle.blendingOptions" if params.as_object().is_none_or(|o| o.is_empty()) => {
-            crate::layer_style::open(app, Some(crate::layer_style::BLENDING)).map(dialog_reply).ok_or_else(|| "no active layer".to_string())
-        }
         // Only interactive creation opens the Color Picker; it creates the layer on OK,
         // so Cancel leaves neither an orphan layer nor an undo/redo history entry.
         // Explicit parameters continue straight to the engine.
@@ -571,11 +568,14 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         // Layer › New › Layer… (⇧⌘N) asks first, as in Photoshop; with params it runs as is.
         crate::new_layer_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => Ok(dialog_reply(crate::new_layer_ui::open(app)?)),
-        // Layer › Layer Style › <effect>… opens the Layer Style dialog on that effect.
+        // Layer › Layer Style opens the dialog on Blending Options or on the chosen effect.
         ls if params.as_object().is_none_or(|o| o.is_empty())
-            && ls.strip_prefix("layer.layerStyle.").is_some_and(|k| crate::layer_style::KINDS.iter().any(|(kind, _)| *kind == k)) =>
+            && let Some(kind) = ls.strip_prefix("layer.layerStyle.")
+            && (kind == crate::layer_style::BLENDING || crate::layer_style::KINDS.iter().any(|(key, _)| *key == kind)) =>
         {
-            let kind = &ls["layer.layerStyle.".len()..];
+            if let Some(reason) = app.session.disabled_reason(ls) {
+                return Err(reason);
+            }
             crate::layer_style::open(app, Some(kind)).map(dialog_reply).ok_or_else(|| "no active layer".to_string())
         }
         "layer.videoLayers.reloadFrame" => {
