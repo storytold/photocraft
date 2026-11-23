@@ -504,6 +504,9 @@ pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 /// Which end of the pen is in use, `Some(true)` = eraser, `None` = no pen ([`Services::pen_end`]).
 pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
 
+/// Runs once when the app leaves ([`Services::at_exit`]).
+pub type AtExitFn = Box<dyn FnOnce()>;
+
 /// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
 /// whether the app window is focused (to re-assert WinTab overlap priority on activation).
 pub type TabletPollFn = Box<dyn FnMut(bool)>;
@@ -665,6 +668,10 @@ pub struct Services {
     pub read_displays: Option<monitor_status::ReadDisplaysFn>,
     /// The macOS menu bar, when the desktop app installed one; the in-window menus are hidden then.
     pub native_menu: Option<craft::menu::NativeMenu>,
+    /// The app binary's last step as the app leaves, run once at the end of `on_exit`. On macOS
+    /// every quit ends the process inside AppKit's terminate (`craft::quit`), after `on_exit`, so
+    /// code after `eframe::run_native` never runs there.
+    pub at_exit: Option<AtExitFn>,
 }
 
 impl Services {
