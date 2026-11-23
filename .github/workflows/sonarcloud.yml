@@ -1,0 +1,26 @@
+name: SonarCloud
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sonarcloud-${{ github.ref }}
+  # A push to main is the run that publishes coverage; superseded runs there would never finish.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  sonarcloud:
+    # Track shared CI improvements on main.
+    uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
+    with:
+      timeout-minutes: 120
+      fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
+      # The coverage build's ~1.3 GB cache would not fit the repository's 10 GB cache budget.
+      build-cache: false
+    secrets: inherit
