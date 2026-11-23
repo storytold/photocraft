@@ -40,6 +40,7 @@ VERSION="$(mac_nightly_version_from_asset "$(basename -- "$INPUT")")" || mac_nig
 
 WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/photocraft-nightly-verify.XXXXXX")"
 trap 'rm -rf -- "$WORK"' EXIT
+mac_nightly_check_zip_entries "$INPUT"
 ditto -x -k --norsrc --noextattr "$INPUT" "$WORK/payload"
 mac_nightly_check_bundle "$WORK/payload" "$VERSION"
 APP="$WORK/payload/$MAC_NIGHTLY_APP"

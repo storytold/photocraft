@@ -68,7 +68,7 @@ nightly_copy_notices() {
 
 nightly_publish_archive() {
   # Exclusive creation: never replace an existing artifact, even if another writer raced the preflight.
-  python3 - "$1" "$2" <<'PY'
+  python3 -I - "$1" "$2" <<'PY'
 import os, shutil, sys
 source, destination = sys.argv[1:]
 created = False

@@ -41,7 +41,7 @@ mac_nightly_identity_is_team() {
 # team, a secure timestamp and the hardened runtime (the checks of verify.sh, made strict).
 mac_nightly_check_signature() {
   local details="$1" team="$2" ok=0
-  grep -qx "Identifier=$MAC_NIGHTLY_ID" <<<"$details" || { echo "error: the bundle is not signed as $MAC_NIGHTLY_ID" >&2; ok=1; }
+  grep -Fqx "Identifier=$MAC_NIGHTLY_ID" <<<"$details" || { echo "error: the bundle is not signed as $MAC_NIGHTLY_ID" >&2; ok=1; }
   grep -q '^Authority=Developer ID Application:' <<<"$details" || { echo 'error: not signed with a Developer ID Application identity' >&2; ok=1; }
   grep -qx "TeamIdentifier=$team" <<<"$details" || { echo 'error: signed by a different team' >&2; ok=1; }
   grep -q '^Timestamp=' <<<"$details" || { echo 'error: the signature has no secure timestamp' >&2; ok=1; }
@@ -52,6 +52,24 @@ mac_nightly_check_signature() {
 # `spctl --assess --type execute -vv`: Gatekeeper accepts the bundle as notarized.
 mac_nightly_check_assessment() {
   grep -q 'accepted' <<<"$1" && grep -qx 'source=Notarized Developer ID' <<<"$1"
+}
+
+# Before anything is unpacked: every ZIP entry is a regular file or directory inside the one Nightly
+# bundle, with no absolute path, `..`, backslash or empty component, and no link or special file.
+mac_nightly_check_zip_entries() {
+  python3 -I - "$1" "$MAC_NIGHTLY_APP" <<'PY' || mac_nightly_die 'the archive has an entry outside the bundle, a link or a special file'
+import stat, sys, zipfile
+archive, app = sys.argv[1:]
+with zipfile.ZipFile(archive) as z:
+    for info in z.infolist():
+        name = info.filename
+        parts = name.rstrip("/").split("/")
+        mode = info.external_attr >> 16
+        if (name.startswith("/") or "\\" in name or "\0" in name or parts[0] != app
+                or any(part in ("", ".", "..") for part in parts)
+                or stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR)):
+            sys.exit(f"refused entry: {name!r}")
+PY
 }
 
 # An unpacked payload directory holds exactly the GUI-only Nightly bundle: one thin arm64 PhotoCraft

@@ -145,6 +145,17 @@ class Fixture:
         self.signed.mkdir()
         self.input = self.dist / ASSET
         self.output = self.signed / ASSET
+        # Every script runs from a directory with modules a Python helper must not import (-I).
+        self.cwd = self.root / "cwd"
+        self.cwd.mkdir()
+        self.hijacked = self.root / "hijacked"
+        for module in ("shutil", "zipfile", "stat"):
+            (self.cwd / f"{module}.py").write_text(f"open({str(self.hijacked)!r}, 'a').write({module!r})\n")
+
+    def add_entry(self, info, data=b""):
+        """Append one raw entry to the input archive."""
+        with zipfile.ZipFile(self.input, "a") as z:
+            z.writestr(info, data)
 
     def bundle(self, version=VERSION, extra=None, gui=None):
         """The archive nightly.sh makes: the real template through the real plist helper."""
@@ -181,7 +192,7 @@ class Fixture:
     def run(self, script, *args, **env):
         if self.log.exists():
             self.log.unlink()
-        return subprocess.run(["bash", str(HERE / script), *map(str, args)], env=self.env(**env),
+        return subprocess.run(["bash", str(HERE / script), *map(str, args)], env=self.env(**env), cwd=self.cwd,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120)
 
     def sign(self, **env):
@@ -218,7 +229,8 @@ class Checks(unittest.TestCase):
         for broken in (DETAILS.replace("flags=0x10000(runtime)", "flags=0x0(none)"),
                        DETAILS.replace("Timestamp=23 Nov 2026\n", "Signed Time=23 Nov 2026\n"),
                        "Identifier=photocraft-1234\nSignature=adhoc\nTeamIdentifier=not set\n",
-                       DETAILS.replace("ai.storyteller.photocraft.nightly", "ai.storyteller.photocraft")):
+                       DETAILS.replace("ai.storyteller.photocraft.nightly", "ai.storyteller.photocraft"),
+                       DETAILS.replace("ai.storyteller.photocraft.nightly", "aiXstorytellerXphotocraftXnightly")):
             with self.subTest(broken=broken):
                 self.assertNotEqual(lib("mac_nightly_check_signature", broken, TEAM)[0], 0)
         self.assertNotEqual(lib("mac_nightly_check_signature", DETAILS, "ZZZZZ99999")[0], 0, "another team")
@@ -257,6 +269,7 @@ class Sign(unittest.TestCase):
     def test_signs_notarizes_and_staples_without_running_the_payload(self):
         result = self.f.sign()
         self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertFalse(self.f.hijacked.exists(), "helpers run isolated (python3 -I) beside the secrets")
         calls = self.f.calls()
         names = [call[0] for call in calls]
         self.assertNotIn("cargo", names)
@@ -318,6 +331,21 @@ class Sign(unittest.TestCase):
                 self.f.bundle(**change)
                 self.unsigned = self.f.input.read_bytes()
                 self.assert_refused_untouched(self.f.sign())
+
+    def test_refuses_links_traversal_and_foreign_entries_before_unpacking(self):
+        link = zipfile.ZipInfo(f"{APP}/Contents/Resources/link")
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        fifo = zipfile.ZipInfo(f"{APP}/Contents/Resources/fifo")
+        fifo.external_attr = (stat.S_IFIFO | 0o644) << 16
+        for label, info in (("link", link), ("special", fifo), ("traversal", zipfile.ZipInfo(f"{APP}/../outside")),
+                            ("absolute", zipfile.ZipInfo("/tmp/outside")), ("foreign root", zipfile.ZipInfo("Other.app/x"))):
+            with self.subTest(label=label):
+                self.f.bundle()
+                self.f.add_entry(info, b"/etc/passwd")
+                self.unsigned = self.f.input.read_bytes()
+                result = self.f.sign()
+                self.assert_refused_untouched(result)
+                self.assertNotIn("ditto", [call[0] for call in self.f.calls()], "refused before unpacking")
 
     def test_a_rejected_notarization_publishes_nothing_and_removes_the_keychain(self):
         result = self.f.sign(SHIM_NOTARY="Invalid")

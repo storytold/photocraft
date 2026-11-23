@@ -65,6 +65,7 @@ mac_nightly_identity_is_team "$(security find-identity -v -p codesigning "$KEYCH
 echo "==> PhotoCraft Nightly $VERSION for macOS (aarch64), identity: $IDENTITY"
 
 # ---- the unsigned bundle ---------------------------------------------------------------------------
+mac_nightly_check_zip_entries "$INPUT"
 ditto -x -k --norsrc --noextattr "$INPUT" "$WORK/payload"
 mac_nightly_check_bundle "$WORK/payload" "$VERSION"
 APP="$WORK/payload/$MAC_NIGHTLY_APP"
