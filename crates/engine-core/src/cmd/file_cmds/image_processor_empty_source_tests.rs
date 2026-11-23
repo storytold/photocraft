@@ -149,9 +149,8 @@ fn empty_explicit_inputs_error_and_invalid_recursion_keeps_its_diagnostic() {
         params["includeSubfolders"] = json!("true");
         let error = session.execute(COMMAND, params.clone()).unwrap_err();
         assert!(matches!(error, EngineError::BadParams { msg, .. } if msg.contains("includeSubfolders")));
-        params.as_object_mut().unwrap().remove("input");
         params["includeSubfolders"] = json!(false);
-        params["files"] = json!([]);
+        params["input"] = json!([]);
         assert_eq!(session.execute(COMMAND, params), Err(EngineError::Other(NO_SOURCE.into())));
     }
     assert!(!output.exists());
