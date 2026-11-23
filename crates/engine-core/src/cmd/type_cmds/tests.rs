@@ -268,7 +268,7 @@ fn a_psd_type_layer_keeps_a_name_photoshop_did_not_take_from_its_text() {
     for source in [None, Some(*b"layr"), Some(*b"rend")] {
         let y = 40 + 40 * ids.len();
         let id = s.execute("type.create", json!({"x": 0, "y": y, "text": "name"})).unwrap()["layer"].as_u64().unwrap();
-        let l = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(LayerId(id)).unwrap();
+        let l = std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(LayerId(id)).unwrap();
         l.psd_id = Some(u32::try_from(id).unwrap());
         if let Some(src) = source {
             l.psd_blocks.push((*b"lnsr", std::sync::Arc::new(src.to_vec())));
@@ -320,7 +320,7 @@ fn a_type_layer_made_here_follows_its_text_after_a_psd_round_trip() {
 fn a_psd_type_layers_given_name_survives_a_psd_round_trip() {
     let mut s = session();
     let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "name"})).unwrap()["layer"].as_u64().unwrap();
-    let l = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).layer_mut(LayerId(id)).unwrap();
+    let l = std::sync::Arc::make_mut(s.active_mut().unwrap().doc_mut()).layer_mut(LayerId(id)).unwrap();
     l.psd_id = Some(u32::try_from(id).unwrap());
     l.psd_blocks.push((*b"lnsr", std::sync::Arc::new(b"layr".to_vec())));
     let mut s = reopened_as_psd(&s);
