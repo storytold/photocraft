@@ -434,3 +434,93 @@ fn a_move_drag_between_floating_windows() {
     assert_eq!(source_square(&h, paint), before, "the move transfer preserves the source layer");
     assert_eq!(h.state().ui.document_windows.floating.len(), 2);
 }
+
+#[test]
+fn drop_target_at_uses_maximized_bounds_for_maximized_floating_window() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let group_id = h.state().ui.document_windows.floating[1].0.id;
+    let normal_rect = Rect::from_min_size(egui::pos2(50.0, 50.0), vec2(200.0, 200.0));
+    h.state_mut().ui.document_windows.floating[1].1 = normal_rect;
+
+    let vp = egui::ViewportId::from_hash_of(("test-maximized-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let max_rect = Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1200.0, 900.0));
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 900.0))), ..Default::default() },
+    );
+    viewports.insert(
+        vp,
+        egui::ViewportInfo {
+            inner_rect: Some(max_rect),
+            outer_rect: Some(max_rect),
+            maximized: Some(true),
+            native_pixels_per_point: Some(1.0),
+            ..Default::default()
+        },
+    );
+
+    let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(input, |_| {});
+
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let p = egui::pos2(400.0, 20.0);
+    assert!(!normal_rect.contains(p), "point is outside the normal placement rectangle");
+    assert!(max_rect.contains(p), "point is inside the maximized window rectangle");
+
+    let target = super::target_at(h.state(), p);
+    assert_eq!(target, Some((1, None)), "drop hits the maximized floating window despite stale normal placement rect");
+}
+
+#[test]
+fn drop_target_at_skips_minimized_floating_windows() {
+    let (mut h, _) = harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let group_id = h.state().ui.document_windows.floating[1].0.id;
+    let normal_rect = Rect::from_min_size(egui::pos2(50.0, 50.0), vec2(200.0, 200.0));
+    h.state_mut().ui.document_windows.floating[1].1 = normal_rect;
+
+    let vp = egui::ViewportId::from_hash_of(("test-minimized-vp", group_id));
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let mut viewports = egui::ViewportIdMap::default();
+    viewports.insert(
+        egui::ViewportId::ROOT,
+        egui::ViewportInfo { inner_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 900.0))), ..Default::default() },
+    );
+    viewports.insert(
+        vp,
+        egui::ViewportInfo {
+            inner_rect: Some(normal_rect),
+            outer_rect: Some(normal_rect),
+            minimized: Some(true),
+            native_pixels_per_point: Some(1.0),
+            ..Default::default()
+        },
+    );
+
+    let input = egui::RawInput { viewport_id: vp, viewports, ..Default::default() };
+    let _ = h.ctx.run_ui(input, |_| {});
+
+    let vp_key = egui::Id::unique(("floating document viewport", group_id));
+    h.ctx.data_mut(|d| d.insert_temp(vp_key, vp));
+
+    let p = normal_rect.center();
+    let target = super::target_at(h.state(), p);
+    assert_ne!(target.map(|(d, _)| d), Some(1), "drop should not target a minimized floating window");
+}

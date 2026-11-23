@@ -34,6 +34,8 @@ fn wants_wrap(preference: bool, before: &View, after: &View) -> bool {
 fn close_window(app: &mut PhotocraftApp, id: u64) {
     app.ui.window_views.remove(&id);
     app.ui.document_windows.close_window(id);
+    let key = egui::Id::unique(("floating document viewport", id));
+    app.ctx().data_mut(|d| d.remove_temp::<egui::ViewportId>(key));
 }
 
 /// Puts `app.ui.document_windows` in step with the open documents: a document no group holds joins the docked
@@ -145,8 +147,16 @@ pub fn extra_windows(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 super::tabs::close_document(app, ui.ctx(), doc_id);
             }
         }
-        if output.focus_gained && app.session.active_index() != Some(doc) {
-            app.session.set_active(doc);
+        if output.focus_gained {
+            if app.session.active_index() != Some(doc) {
+                app.session.set_active(doc);
+            }
+            if let Some(pos) = app.ui.document_windows.floating.iter().position(|(g, _)| g.id == id)
+                && pos + 1 < app.ui.document_windows.floating.len()
+            {
+                let entry = app.ui.document_windows.floating.remove(pos);
+                app.ui.document_windows.floating.push(entry);
+            }
         }
         // A window that took the wanted size shows the whole image: centre it. One the work area capped
         // keeps the zoomed spot.
@@ -239,7 +249,12 @@ fn dropped_on_main(ui: &egui::Ui, window: u64, bar: Rect, target: Option<Rect>) 
 /// window keeps the normal rect.
 fn follow_os_window(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, container: egui::Id) {
     let host = WindowHost::of(ctx);
-    let Some(facts) = host.viewport_of(container).and_then(|viewport| host.facts(viewport)) else { return };
+    let viewport = host.viewport_of(container);
+    if let Some(vp) = viewport {
+        let key = egui::Id::unique(("floating document viewport", window));
+        ctx.data_mut(|d| d.insert_temp(key, vp));
+    }
+    let Some(facts) = viewport.and_then(|vp| host.facts(vp)) else { return };
     if facts.state != WindowState::Normal {
         return;
     }
@@ -254,6 +269,32 @@ fn follow_os_window(app: &mut PhotocraftApp, ctx: &egui::Context, window: u64, c
     {
         *rect = placed;
     }
+}
+
+/// Whether the floating window `window` is currently minimized in its OS window.
+pub(crate) fn is_minimized(ctx: &egui::Context, window: u64) -> bool {
+    let key = egui::Id::unique(("floating document viewport", window));
+    let Some(viewport) = ctx.data(|d| d.get_temp::<egui::ViewportId>(key)) else { return false };
+    let host = WindowHost::of(ctx);
+    host.facts(viewport).is_some_and(|f| f.state == WindowState::Minimized)
+}
+
+/// The current bounds of the floating window `window` if it is maximized in its OS window.
+///
+/// A maximized window keeps its normal placement rectangle in `app.ui.document_windows.floating`
+/// for restoration, so hit testing (such as layer drop) uses its live viewport bounds while maximized.
+pub(crate) fn maximized_bounds(ctx: &egui::Context, window: u64) -> Option<Rect> {
+    let key = egui::Id::unique(("floating document viewport", window));
+    let viewport = ctx.data(|d| d.get_temp::<egui::ViewportId>(key))?;
+    let host = WindowHost::of(ctx);
+    let facts = host.facts(viewport)?;
+    if facts.state == WindowState::Maximized {
+        let bounds = facts.outer.unwrap_or(facts.inner);
+        if bounds.is_finite() && bounds.width() > 0.0 && bounds.height() > 0.0 {
+            return Some(bounds);
+        }
+    }
+    None
 }
 
 /// The title bar of a floating document window with the app-drawn frame (`Frame::Integrated`, the default on Windows

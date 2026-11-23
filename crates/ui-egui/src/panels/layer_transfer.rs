@@ -243,6 +243,9 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
 fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 2]>)> {
     // Floating windows take priority over docked canvas cells behind them.
     for (group, window_rect) in app.ui.document_windows.floating.iter().rev() {
+        if crate::canvas::document_windows::is_minimized(app.ctx(), group.id) {
+            continue;
+        }
         let Some(shown) = group.shown.or_else(|| group.documents.first().copied()) else { continue };
         let Some(d) = crate::canvas::tabs::document_index(app, shown) else { continue };
         let host = CanvasHost { idx: d, window: Some(group.id) };
@@ -252,7 +255,8 @@ fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 
             let at = space.view.to_doc(p);
             return Some((d, Some([at.x, at.y])));
         }
-        if window_rect.contains(p) {
+        let bounds = crate::canvas::document_windows::maximized_bounds(app.ctx(), group.id).unwrap_or(*window_rect);
+        if bounds.contains(p) {
             return Some((d, None));
         }
     }
@@ -283,6 +287,10 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     if dest == src
         && let Some(at) = at
     {
+        if app.session.active_index() != Some(dest) {
+            app.session.set_active(dest);
+            app.jobs.focus = None;
+        }
         if let Some(frame) = crate::frame_tool::frame_at(app, at)
             && let [source] = t.layers.as_slice()
         {
