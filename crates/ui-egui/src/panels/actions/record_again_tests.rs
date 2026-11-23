@@ -272,7 +272,7 @@ fn conditional_mode_change_target_dialog_answers_for_the_step() {
     assert_eq!(set_field(&mut h, child, "method", json!("threshold"))["ok"], true);
     confirm(&mut h, child).unwrap();
     assert!(!h.state().dialog_open());
-    let step = &h.state().session.actions.list.action(0).unwrap().steps[0];
+    let step = &h.state().session.actions().list.action(0).unwrap().steps[0];
     assert_eq!(step.command, "file.automate.conditionalModeChange");
     assert_eq!((&step.params["to"], &step.params["method"]), (&json!("bitmap"), &json!("threshold")), "{}", step.params);
     assert_eq!(h.state().session.active().unwrap().doc.mode, photocraft_color::ColorMode::Bitmap);
