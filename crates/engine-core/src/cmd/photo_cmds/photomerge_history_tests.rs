@@ -143,14 +143,19 @@ fn merges_within(budget: u64, first_snapshot: bool) -> bool {
 }
 
 /// With History Options › Automatically Create First Snapshot off there is no snapshot to hold
-/// the aligned layers, so they are not kept through the blend and their bytes are not charged:
-/// the merge fits a budget one byte below the least one it needs with the snapshot on.
+/// the aligned layers, so they are not kept through the blend and their bytes (about 1 MB for
+/// these tiles) are not charged: the merge fits a budget that is too small by less than 64 KiB
+/// while they are kept.
 #[test]
 fn without_a_first_snapshot_the_aligned_layers_are_not_charged() {
-    // The least budget the merge passes with while it keeps the aligned layers.
-    let (mut fails, mut passes) = (0u64, 1u64 << 30);
-    assert!(!merges_within(fails, true) && merges_within(passes, true));
-    while passes - fails > 1 {
+    // A budget the merge is refused with while it keeps the aligned layers, at most 64 KiB
+    // below one it passes with.
+    let (mut fails, mut passes) = (0u64, 1u64 << 20);
+    while !merges_within(passes, true) {
+        (fails, passes) = (passes, passes * 2);
+        assert!(passes <= 1 << 30, "the merge needs more than 1 GiB");
+    }
+    while passes - fails > 64 << 10 {
         let mid = fails + (passes - fails) / 2;
         if merges_within(mid, true) {
             passes = mid;
@@ -158,12 +163,12 @@ fn without_a_first_snapshot_the_aligned_layers_are_not_charged() {
             fails = mid;
         }
     }
-    assert!(!merges_within(passes - 1, true), "one byte less is refused while the aligned layers are kept");
-    assert!(merges_within(passes - 1, false), "nothing is kept without a first snapshot, so nothing more is charged");
+    assert!(!merges_within(fails, true), "refused while the aligned layers are kept");
+    assert!(merges_within(fails, false), "nothing is kept without a first snapshot, so nothing more is charged");
     // The result is the same merge: one state, every source masked and targeted, no snapshot.
     let mut s = tiles();
     s.edit_prefs(|p| p.history_options.automatically_create_first_snapshot = false);
-    assert_eq!(merge(&mut s, json!({"layout": "reposition", "memoryBudget": passes - 1})), ["Auto-Blend Layers"]);
+    assert_eq!(merge(&mut s, json!({"layout": "reposition", "memoryBudget": fails})), ["Auto-Blend Layers"]);
     assert_eq!(stack(&s), expect(&SOURCES, true));
     assert_eq!(targeted(&s), SOURCES);
     assert!(s.active().unwrap().snapshots().is_empty());
