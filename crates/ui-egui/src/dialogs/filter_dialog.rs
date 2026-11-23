@@ -64,11 +64,17 @@ fn is_pixel_param(key: &str) -> bool {
 
 /// [`is_pixel_param`] for `key` of `command`. Some commands use those names for relative values:
 /// Tree's and Picture Frame's `size` (a fraction of the canvas, an ornament scale) and Lens
-/// Correction's perspective `horizontal` / `vertical` (-100..100). Scaled by the proxy factor,
+/// Correction's perspective `horizontal` / `vertical` (-100..100), and Lighting Effects' light
+/// `radius` (a fraction of the canvas). Scaled by the proxy factor,
 /// their preview drew a quarter-size tree and a quarter of the perspective (#2063).
 fn is_pixel_param_of(command: &str, key: &str) -> bool {
     is_pixel_param(key)
-        && !matches!((command, key), ("filter.render.tree" | "filter.render.pictureFrame", "size") | ("filter.lensCorrection", "horizontal" | "vertical"))
+        && !matches!(
+            (command, key),
+            ("filter.render.tree" | "filter.render.pictureFrame", "size")
+                | ("filter.lensCorrection", "horizontal" | "vertical")
+                | ("filter.render.lightingEffects", "radius")
+        )
 }
 
 /// Filters whose features have a fixed size in document pixels that no dialog parameter scales:
@@ -708,6 +714,18 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
+    }
+    // After dialog keys have been reshaped into command keys (Image Processor's jpeg/width
+    // becomes jpeg.width, and so on). Doing this earlier dropped those rows.
+    // Drop display-only and other keys a closed schema does not take (Bitmap's Input row is
+    // `inputResolution`; dispatch would reject it and OK would leave the document unchanged).
+    if let Some(spec) = photocraft_engine::commands::find(command)
+        && let Some(schema) = photocraft_engine::param_schema::of(spec)
+        && !schema.open()
+        && !photocraft_engine::is_incomplete(command)
+    {
+        const KEEP: &[&str] = &["coalesce", "target", "layer", "channel", "targetChannel", "document"];
+        map.retain(|key, _| key.starts_with('_') || KEEP.contains(&key.as_str()) || schema.has_key(key));
     }
     params_of(&map)
 }

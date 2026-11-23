@@ -1595,7 +1595,7 @@ fn revert_reloads_as_one_undoable_step() {
     let id = doc(&s).id;
     assert!(s.is_enabled("file.revert"));
     s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#0000ff");
     assert!(s.active().unwrap().is_dirty());
     s.execute("file.revert", json!({})).unwrap();
     assert_eq!(doc(&s).layers.len(), 1);
@@ -1664,7 +1664,7 @@ fn save_a_copy_refuses_the_documents_own_file() {
     let mut s = crate::session();
     open_bytes_as(&mut s, &path, &bytes, None, Some(path.clone())).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#00ff00");
     let link = join(&dir, "link.png");
     std::fs::hard_link(&path, &link).unwrap();
     let rev = s.active().unwrap().revision;
@@ -2903,9 +2903,7 @@ fn flatten_all_layer_effects_keeps_masks() {
         // Layer 1: a red square with a green colour overlay, an enabled raster mask revealing
         // x < 20 and a vector mask revealing x 15..30.
         s.execute("layer.new.layer", json!({})).unwrap();
-        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
-        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-        s.execute("select.deselect", json!({})).unwrap();
+        crate::tests::fill_active(&mut s, Some(photocraft_geom::Rect::new(10, 10, 30, 30)), "#ff0000");
         let id1 = s.active().unwrap().active_layer.unwrap();
         s.edit("fx", |doc, _| {
             let l = doc.layer_mut(id1).unwrap();
@@ -2927,9 +2925,7 @@ fn flatten_all_layer_effects_keeps_masks() {
         s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
         // Layer 2: a red square at the bottom-right with the same overlay and a *disabled* mask.
         s.execute("layer.new.layer", json!({})).unwrap();
-        s.execute("select.rect", json!({"x": 30, "y": 30, "width": 8, "height": 8})).unwrap();
-        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-        s.execute("select.deselect", json!({})).unwrap();
+        crate::tests::fill_active(&mut s, Some(photocraft_geom::Rect::new(30, 30, 38, 38)), "#ff0000");
         let id2 = s.active().unwrap().active_layer.unwrap();
         s.edit("fx", |doc, _| {
             let l = doc.layer_mut(id2).unwrap();
