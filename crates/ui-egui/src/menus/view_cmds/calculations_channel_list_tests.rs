@@ -123,14 +123,24 @@ fn a_grayscale_source_lists_gray() {
 }
 
 /// Every id the list offers is one the `image.calculations` command takes for both sources, so
-/// choosing any entry sends a channel the engine reads.
+/// choosing any entry sends a channel the engine reads: the merged list through the flat params the
+/// form sends today, and the list of the source layer "Masked" through a source spec with that layer,
+/// which is the shape #14520's Layer dropdown will send. The second round is the one that covers
+/// Layer Mask and Transparency.
 #[test]
 fn every_listed_channel_id_reaches_the_engine() {
     let rows = rows(&target(), "image.calculations");
     for id in ids(&rows, "source1Channel") {
         let mut app = target();
         let r = app.run("image.calculations", json!({"source1Channel": id, "source2Channel": id, "blending": "multiply"}));
-        assert!(r.is_ok(), "{id} is listed but the engine refuses it: {:?}", r.err());
+        assert!(r.is_ok(), "{id} is listed for Merged but the engine refuses it: {:?}", r.err());
+    }
+    let (layer_ids, _, _) = for_layer(&target(), "Masked");
+    let source = |id: &str| json!({"channel": id, "layer": "Masked"});
+    for id in layer_ids {
+        let mut app = target();
+        let r = app.run("image.calculations", json!({"source1": source(&id), "source2": source(&id), "blending": "multiply"}));
+        assert!(r.is_ok(), "{id} is listed for the layer \"Masked\" but the engine refuses it: {:?}", r.err());
     }
 }
 

@@ -643,7 +643,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 choice("maskChannel", tl!("Mask Channel"), channels(&masks), "none"),
             ]
         }
-        _ => {
+        "image.calculations" => {
             // Image ▸ Calculations lists the channels of the source it reads (#14521), not the shared
             // list: the form sends no source layer yet, which is Merged, and a merged source has no
             // Layer Mask or Transparency of its own. Colour modes the issue marks not measured keep
@@ -665,6 +665,9 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 ),
             ]
         }
+        // `params_for` routes only the four ids above here, so this asks for a new arm instead of
+        // letting a fifth channel command quietly take the Calculations rows.
+        _ => return None,
     };
     Some((rows, DialogFields::new()))
 }
