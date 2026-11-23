@@ -42,7 +42,7 @@ fn harness() -> H {
             app.run("select.deselect", json!({})).unwrap();
         }
     }
-    app.session.active_mut().unwrap().active_layer = None;
+    app.session.active_mut().unwrap().set_active_layer(None);
     app.sync_views();
     let h = Harness::builder()
         .with_size(vec2(1440.0, 900.0))
