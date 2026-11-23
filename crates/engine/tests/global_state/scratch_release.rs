@@ -1,7 +1,7 @@
 //! The process-wide scratch pool is isolated from parallel unit tests (#10479); these tests take
 //! turns on it.
-use photocraft_engine::Session;
 use photocraft_engine::jobs::Started;
+use photocraft_engine::{CoreSession, Session};
 use photocraft_raster::scratch;
 use serde_json::json;
 
@@ -40,7 +40,7 @@ fn closing_a_document_leaves_none_of_its_buffers_in_the_pool() {
         s.execute(close, json!({})).unwrap();
         // The document is freed on its own thread, which releases the pool once it has.
         let t = std::time::Instant::now();
-        while Session::documents_being_released() > 0 {
+        while CoreSession::documents_being_released() > 0 {
             assert!(t.elapsed() < std::time::Duration::from_secs(30), "{close}: the closed document was not freed");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -61,7 +61,7 @@ fn closing_many_documents_frees_them_all() {
     s.execute("file.closeAll", json!({})).unwrap();
     assert!(s.documents().is_empty());
     let t = std::time::Instant::now();
-    while Session::documents_being_released() > 0 {
+    while CoreSession::documents_being_released() > 0 {
         assert!(t.elapsed() < std::time::Duration::from_secs(30), "the closed documents were not freed");
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
