@@ -10,7 +10,7 @@
 //!
 //! Where `lp` is not on the path (a Flatpak has none), the job goes to CUPS over IPP in-process
 //! (`photocraft-ipp`, through the sandbox's `--socket=cups`), and when no print server or no
-//! printer is reachable, to the app's spooler, the XDG Print portal (`Session::print_spooler`;
+//! printer is reachable, to the app's spooler, the XDG Print portal (`PrintExt::print_spooler`;
 //! `PHOTOCRAFT_PRINT_PORTAL=1` prefers it, `=0` removes it). `"printServer"` names a server for
 //! one job and always takes the IPP route; `file.printers` lists the queues (#2728).
 //!
@@ -58,7 +58,7 @@ pub struct PrintJob {
 /// A spooler's work: the job in, where it went out.
 pub type SpoolFn = std::sync::Arc<dyn Fn(&PrintJob) -> std::result::Result<String, String> + Send + Sync>;
 
-/// A further route to the printer, installed by the app on `Session::print_spooler`: the XDG
+/// A further route to the printer, installed by the app with [`PrintExt::print_spooler_mut`]: the XDG
 /// Print portal, which shows the system print dialog from inside a sandbox. It takes the jobs
 /// no other route can (no print server reachable, no printer set up), or every job when
 /// `preferred`.
@@ -71,12 +71,42 @@ pub struct Spooler {
     pub run: SpoolFn,
 }
 
-/// A stand-in for the system's printers, installed on `Session::printer_source` (tests):
+/// A stand-in for the system's printers, installed with [`PrintExt::printer_source_mut`] (tests):
 /// `file.printers`, `file.print.printers` and the Print dialog list these and do not ask the spooler.
 /// `file.print.printers` and the dialog's driver Printer menu list them on Windows only, where the
 /// GDI route is; elsewhere they answer as that route does there. In the browser `file.printers`
 /// lists none of them, as it lists no printers there without a stand-in.
 pub type PrinterSource = std::sync::Arc<dyn Fn() -> Vec<craft_print::Printer> + Send + Sync>;
+
+/// File › Print on a session: the app's further route to the printer and the test stand-in for the
+/// system's printers (session slots of this module).
+pub trait PrintExt {
+    /// A further route for File › Print when neither `lp` nor a CUPS server over IPP is reachable
+    /// (the XDG Print portal in a Flatpak).
+    fn print_spooler(&self) -> Option<&Spooler>;
+    /// The print spooler slot, to install one.
+    fn print_spooler_mut(&mut self) -> &mut Option<Spooler>;
+    /// The printers `file.printers`, `file.print.printers` and the Print dialog list in place of
+    /// the system's (tests). `None` asks the spooler.
+    fn printer_source(&self) -> Option<&PrinterSource>;
+    /// The printer source slot, to install one.
+    fn printer_source_mut(&mut self) -> &mut Option<PrinterSource>;
+}
+
+impl PrintExt for Session {
+    fn print_spooler(&self) -> Option<&Spooler> {
+        self.slot_or_default::<Option<Spooler>>().as_ref()
+    }
+    fn print_spooler_mut(&mut self) -> &mut Option<Spooler> {
+        self.slot_or_default_mut::<Option<Spooler>>()
+    }
+    fn printer_source(&self) -> Option<&PrinterSource> {
+        self.slot_or_default::<Option<PrinterSource>>().as_ref()
+    }
+    fn printer_source_mut(&mut self) -> &mut Option<PrinterSource> {
+        self.slot_or_default_mut::<Option<PrinterSource>>()
+    }
+}
 
 /// Held while a thread of this process lists printers or calls into a printer driver.
 static SPOOLER: std::sync::Mutex<()> = std::sync::Mutex::new(());

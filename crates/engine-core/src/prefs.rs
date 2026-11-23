@@ -569,7 +569,7 @@ mod validate;
 pub use cmds::specs;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
-pub use saved::{LEGACY_PREFS_FILE, SavedPrefs, parse_legacy_prefs, parse_prefs_json, reset_value};
+pub use saved::{LEGACY_PREFS_FILE, SavedPrefs, SavedPrefsExt, parse_legacy_prefs, parse_prefs_json, reset_value};
 #[cfg(not(target_arch = "wasm32"))]
 pub use saved::{read_saved, store_options};
 pub use shortcuts::{

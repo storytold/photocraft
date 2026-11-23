@@ -108,6 +108,24 @@ impl ActionState {
     }
 }
 
+/// Window › Actions on a session: its [`ActionState`] (a session slot of this module).
+pub trait ActionsExt {
+    /// The Actions list and the Batch's called actions. The list persists with the preset store
+    /// when one is attached.
+    fn actions(&self) -> &ActionState;
+    /// The Actions state, to change it.
+    fn actions_mut(&mut self) -> &mut ActionState;
+}
+
+impl ActionsExt for Session {
+    fn actions(&self) -> &ActionState {
+        self.slot_or_default::<ActionState>()
+    }
+    fn actions_mut(&mut self) -> &mut ActionState {
+        self.slot_or_default_mut::<ActionState>()
+    }
+}
+
 /// Resolve the recorded visibility target identically in engine and shell playback, and drop
 /// the `.atn` event or Custom descriptor remembered for Save Actions: the command, its journal
 /// entry (Last Filter), a smart filter and the step's dialog never see it.

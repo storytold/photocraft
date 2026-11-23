@@ -278,7 +278,7 @@ fn select_subject_repeat_reuses_the_mask_until_pixels_change() {
         s.active().unwrap().doc.selection.as_ref().unwrap().read_region_into(Rect::new(0, 0, 200, 160), &mut v);
         v
     };
-    let cached = |s: &Session| s.subject_cache.region.clone().unwrap();
+    let cached = |s: &Session| s.slot_or_default::<SubjectCache>().region.clone().unwrap();
     s.execute("select.subject", json!({})).unwrap();
     let (first, mask) = (sel(&s), cached(&s));
     s.execute("select.deselect", json!({})).unwrap();
@@ -296,7 +296,7 @@ fn select_subject_repeat_reuses_the_mask_until_pixels_change() {
         Ok(())
     })
     .unwrap();
-    assert!(s.subject_cache.region.is_none());
+    assert!(s.slot_or_default::<SubjectCache>().region.is_none());
     s.execute("select.subject", json!({})).unwrap();
     // Recomputed on the edited pixels (one changed pixel may move the edge a little).
     assert!(!std::sync::Arc::ptr_eq(&mask, &cached(&s)));
