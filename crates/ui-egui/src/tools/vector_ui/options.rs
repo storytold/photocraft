@@ -1,16 +1,17 @@
-use craft::behavior::EditEvent;
+use craft::behavior::{EditEvent, IconId};
 use craft::color_ui::ui::Paint;
 use craft::draw::ui::pen::PathOptionsPopover;
 use craft::draw::ui::shape::{self as fw, Arrowheads, ArrowheadsPopover, ShapePanel, StrokeCells, VectorMode, VectorModeSelect};
 use craft::theme::Srgba;
-use craft::ui::buttons::Button;
-use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, clicked};
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::choice::{Checkbox, Radio, RadioGroup};
+use craft::ui::contract::{Bind, PopupKind, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::display::{Divider, Text};
 use craft::ui::form::Field;
-use craft::ui::layout_components::Row;
+use craft::ui::layout_components::{Row, Stack};
+use craft::ui::popover::Popover;
 use craft::ui::runtime::env::{Label, UnitKind};
-use craft::ui::text::NumberField;
+use craft::ui::text::{NumberField, RangeAlert};
 use photocraft_engine::presets::PresetsExt;
 
 use super::path_menus::{path_alignment_menu, path_arrangement_menu, path_operations_menu};
@@ -18,6 +19,7 @@ use super::path_ops::{active_path_name, indexed_document};
 use super::shapes::is_shape_tool;
 use super::{LayerContent, PhotocraftApp, Tool, Value, copy_arrow_to_tool_defaults, json};
 use crate::history_keys;
+use crate::option_cells::number;
 
 // ---------------------------------------------------------------------------------------------
 // Options bars
@@ -28,6 +30,7 @@ struct BarOpen {
     path_options: bool,
     arrows: bool,
     rect_gear: bool,
+    shape_gear: bool,
 }
 
 /// A label from a translated string.
@@ -132,6 +135,11 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
+    if tool == Tool::CustomShape {
+        // The Custom Shape tool's own gear: what a drag keeps the placed shape to (#13465).
+        Divider::vertical().show(ui);
+        custom_shape_gear(app, ui, &mut open.shape_gear);
+    }
     if tool == Tool::Line {
         Divider::vertical().show(ui);
         let ppi = document_ppi(app);
@@ -155,6 +163,65 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
         if let Some(alert) = alert {
             crate::option_cells::range_alert(app, ui, &alert);
         }
+    }
+}
+
+/// The Custom Shape tool's gear: its constrain radios, the stored name and the label shown (#13465).
+const CUSTOM_CONSTRAINTS: [(&str, &str); 4] =
+    [("unconstrained", "Unconstrained"), ("definedProportions", "Defined Proportions"), ("definedSize", "Defined Size"), ("fixedSize", "Fixed Size")];
+
+/// The Custom Shape gear's Fixed Size fields, in whole pixels: a value typed past the range is
+/// clamped to it and raises the reference's alert ("a value between 1 px and 300000 px").
+const CUSTOM_FIXED: std::ops::RangeInclusive<f64> = 1.0..=300_000.0;
+
+/// The Custom Shape tool's gear (#13465): Unconstrained (the default), Defined Proportions, Defined
+/// Size, Fixed Size with its W and H, and the From Center check. Defined Proportions and Defined
+/// Size hold the drag to the picked preset's own path bounds, so they have no fields of their own;
+/// Fixed Size takes the typed W and H and is the only radio whose fields are enabled. The gear is
+/// the Custom Shape tool's own: the Rectangle keeps the framework's gear and its settings.
+fn custom_shape_gear(app: &mut PhotocraftApp, ui: &mut egui::Ui, open: &mut bool) {
+    let words = tl!("Set additional shape and path options");
+    let gear = IconButton::new(IconId::new("settings")).label(label(words)).tooltip(label(words)).popup(PopupKind::Dialog).expanded(*open).show(ui).response;
+    if clicked(&gear) {
+        // The popover's opener is manual: the gear's press is the pattern's to apply.
+        *open = !*open;
+    }
+    // W and H belong to the Fixed Size radio: greyed out while another one is chosen. Their value
+    // at the pass' start, so a pick and its fields agree in the same pass.
+    let fixed_on = app.ui.tool_options.custom_constraint == "fixedSize";
+    let mut alert: Option<RangeAlert> = None;
+    {
+        let o = &mut app.ui.tool_options;
+        Popover::new(label(words), Bind::bound(open)).opened_by(&gear).show(ui, |ui, _| {
+            Stack::new().show(ui, |ui, _| {
+                let picked = RadioGroup::new(label(words), Bind::given(o.custom_constraint.clone()))
+                    .show(ui, |ui, _| {
+                        for (value, text) in CUSTOM_CONSTRAINTS {
+                            if value == "fixedSize" {
+                                Row::new().show(ui, |ui, _| {
+                                    Radio::new(value.to_owned()).label(label(tl!(text))).show(ui);
+                                    let width = number(tl!("W:"), &mut o.custom_fixed_width, CUSTOM_FIXED).whole().enabled(fixed_on).show(ui).out_of_range;
+                                    let height = number(tl!("H:"), &mut o.custom_fixed_height, CUSTOM_FIXED).whole().enabled(fixed_on).show(ui).out_of_range;
+                                    alert = alert.take().or(width).or(height);
+                                });
+                            } else {
+                                Radio::new(value.to_owned()).label(label(tl!(text))).show(ui);
+                            }
+                        }
+                    })
+                    .output
+                    .value()
+                    .cloned();
+                if let Some(picked) = picked {
+                    o.custom_constraint = picked;
+                }
+                Checkbox::new(Bind::bound(&mut o.custom_from_center)).label(label(tl!("From Center"))).show(ui);
+            });
+        });
+    }
+    // A W or H typed past 1..=300,000 px comes back clamped, with the alert of the reference (#13465).
+    if let Some(alert) = alert {
+        crate::option_cells::range_alert(app, ui, &alert);
     }
 }
 
