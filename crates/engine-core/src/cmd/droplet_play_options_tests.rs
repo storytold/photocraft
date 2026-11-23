@@ -174,7 +174,9 @@ fn the_suppress_options_open_the_dropped_files_as_batch_does() {
     let raw = join(&root, "raw.dng");
     let (w, h) = (24, 16);
     std::fs::write(&raw, DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build()).unwrap();
-    let xmp = photocraft_io::camera_raw_xmp::save(&photocraft_algo::camera_raw::CameraRaw { exposure: 1.0, ..Default::default() });
+    let mut settings = photocraft_algo::camera_raw::CameraRaw::default();
+    settings.exposure = 1.0;
+    let xmp = photocraft_io::camera_raw_xmp::save(&settings);
     std::fs::write(join(&root, "raw.xmp"), xmp).unwrap();
     let steps = json!([["image.adjustments.invert", {}]]);
     let mut results = Vec::new();
