@@ -823,6 +823,9 @@ pub struct DabGenerator {
     smoother: Smoother,
     /// Start taper on the smoothed path (the end taper is the commit's: [`crate::taper::for_commit`]).
     taper: crate::taper::StartTaper,
+    /// With a start taper, a Brush Pose pressure override is applied before the taper rather than
+    /// when the dabs are built (it would replace the tapered pressure there).
+    pose_pressure: Option<f32>,
     /// Smooth Curves on the input points, before smoothing (smoothing adds dense sub-steps on
     /// straight lines between input points, which would leave the curve nothing to round).
     curve: Option<crate::stroke_curve::CurveFit>,
@@ -849,7 +852,9 @@ impl DabGenerator {
     }
 
     pub fn new(brush: &BrushSettings, zoom: f32) -> Self {
-        let brush = brush.bounded_for_render();
+        let mut brush = brush.bounded_for_render();
+        let taper = crate::taper::StartTaper::new(brush.taper.start);
+        let pose_pressure = if taper.active() { crate::taper::take_pose_pressure(&mut brush) } else { None };
         let interval = brush.build_up.then(|| 1000.0 / f64::from(brush.build_up_rate.clamp(0.1, 1000.0)));
         let dual_on = brush.dual_brush.enabled;
         let mut walker = if brush.spacing_enabled { PathWalker::new(interval) } else { PathWalker::new(interval).speed_spacing(SPEED_SPACING_MS) };
@@ -859,7 +864,8 @@ impl DabGenerator {
         }
         Self {
             smoother: Smoother::new(&brush.smoothing, zoom),
-            taper: crate::taper::StartTaper::new(brush.taper.start),
+            taper,
+            pose_pressure,
             curve: brush.smooth_curves.then(crate::stroke_curve::CurveFit::new),
             walker,
             dual_walker: dual_on.then(|| PathWalker::new(None)),
@@ -885,14 +891,21 @@ impl DabGenerator {
         }
     }
 
-    /// Scale the pressure of smoothed points that are still within the start taper.
-    fn taper_points(&mut self, pts: &mut [StrokePoint]) {
+    /// Scale the pressure of smoothed points that are still within the start taper (cutting the
+    /// segments there, see [`crate::taper::StartTaper::push`]).
+    fn taper_points(&mut self, pts: &mut Vec<StrokePoint>) {
         if !self.taper.active() {
             return;
         }
-        for p in pts {
-            *p = self.taper.apply(*p);
+        let mut out = Vec::with_capacity(pts.len());
+        for p in pts.iter() {
+            let mut p = *p;
+            if let Some(pressure) = self.pose_pressure {
+                p.pressure = pressure;
+            }
+            self.taper.push(p, &mut out);
         }
+        *pts = out;
     }
 
     /// Feed input points; appends the new primary and dual dabs.

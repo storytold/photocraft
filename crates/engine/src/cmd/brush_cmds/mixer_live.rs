@@ -160,6 +160,14 @@ impl LiveMixer {
         }
         let points = parse_points(p, CMD)?;
         let brush = resolve_brush(s, p, CMD)?;
+        // The commit's replay has the whole stroke: bake an end taper into its points, as the
+        // Brush's commit does (`taper::for_commit`). The live preview can't know where it ends.
+        let (brush, points) = if preview_limits {
+            (brush, points)
+        } else {
+            let (brush, points, _) = photocraft_paint::taper::for_commit(brush, points, num(p, "zoom").unwrap_or(1.0));
+            (brush, points)
+        };
         let bm = &brush.mixer;
         let settings = MixerSettings {
             wet: pct(p, "wet", bm.wet * 100.0),
@@ -353,8 +361,12 @@ fn mode_refusal(s: &Session) -> Result<()> {
 pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     mode_refusal(s)?;
     let points = parse_points(p, CMD)?;
-    let cached =
-        s.live_commit.take().filter(|live| live.matches(s, CMD, p, &points) && live.mixer.as_ref().is_some_and(|(before, _)| *before == s.tools.mixer));
+    // With an end taper the live pixels lack it: replay the stroke with it baked in.
+    let end_taper = resolve_brush(s, p, CMD).is_ok_and(|b| b.taper.sanitized().end > 0.0);
+    let cached = s
+        .live_commit
+        .take()
+        .filter(|live| !end_taper && live.matches(s, CMD, p, &points) && live.mixer.as_ref().is_some_and(|(before, _)| *before == s.tools.mixer));
     if let Some(live) = cached {
         let id = if crate::channel_cmds::is_channel_target(p) { None } else { Some(layer_id(s, p)?) };
         s.edit("Mixer Brush", |doc, _| {

@@ -19,9 +19,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::StrokePoint;
 use crate::brush::BrushSettings;
+use crate::dynamics::lerp_pt;
 
 /// The longest taper, in document pixels.
 pub const MAX_TAPER_PX: f32 = 2000.0;
+/// Within a taper, segments are cut to at most this length (document pixels): the walker
+/// interpolates pressure linearly between points, so two points 100 px apart would spread the
+/// taper over the whole segment, or zero it, instead of over the taper's length.
+const STEP_PX: f64 = 1.0;
+/// At most this many cuts per segment.
+const MAX_CUTS: usize = 4096;
+
+/// The cuts that divide a segment `len` long into pieces of at most [`STEP_PX`].
+fn cuts(len: f64) -> usize {
+    if len > STEP_PX { ((len / STEP_PX).ceil() as usize).min(MAX_CUTS) } else { 1 }
+}
 
 /// Taper lengths in document pixels; 0 switches that end off (the default: no taper).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
@@ -68,7 +80,8 @@ pub fn ramp(d: f64, len: f32) -> f32 {
 pub struct StartTaper {
     len: f32,
     travelled: f64,
-    last: Option<(f64, f64)>,
+    /// The last point fed, before scaling.
+    last: Option<StrokePoint>,
 }
 
 impl StartTaper {
@@ -81,18 +94,59 @@ impl StartTaper {
         self.len > 0.0
     }
 
-    /// `p` with its pressure scaled by its distance from the stroke's first point.
-    pub fn apply(&mut self, mut p: StrokePoint) -> StrokePoint {
+    /// Append `p` with its pressure scaled by its distance from the stroke's first point. A segment
+    /// that starts within the taper is cut first (see [`STEP_PX`]).
+    pub fn push(&mut self, p: StrokePoint, out: &mut Vec<StrokePoint>) {
         if !self.active() || !(p.x.is_finite() && p.y.is_finite()) {
-            return p;
+            out.push(p);
+            return;
         }
-        if let Some((x, y)) = self.last {
-            self.travelled += (p.x - x).hypot(p.y - y);
+        if let Some(prev) = self.last {
+            let seg = (p.x - prev.x).hypot(p.y - prev.y);
+            if self.travelled < f64::from(self.len) {
+                let n = cuts(seg);
+                for i in 1..n {
+                    let f = i as f64 / n as f64;
+                    let mut q = lerp_pt(&prev, &p, f);
+                    q.pressure *= ramp(self.travelled + seg * f, self.len);
+                    out.push(q);
+                }
+            }
+            self.travelled += seg;
         }
-        self.last = Some((p.x, p.y));
-        p.pressure *= ramp(self.travelled, self.len);
-        p
+        self.last = Some(p);
+        let mut q = p;
+        q.pressure *= ramp(self.travelled, self.len);
+        out.push(q);
     }
+}
+
+/// `pts` with every segment that reaches into a taper (the first `t.start` or last `t.end`
+/// pixels) cut into pieces of at most [`STEP_PX`]. Other segments, and non-finite points, stay.
+pub fn densify(pts: &[StrokePoint], t: &Taper) -> Vec<StrokePoint> {
+    let t = t.sanitized();
+    let lens = arc_lengths(pts);
+    let total = lens.last().copied().unwrap_or(0.0);
+    let (head, tail) = (f64::from(t.start), total - f64::from(t.end));
+    let mut out = Vec::with_capacity(pts.len());
+    let mut prev: Option<(StrokePoint, f64)> = None;
+    for (p, s) in pts.iter().zip(lens) {
+        if !(p.x.is_finite() && p.y.is_finite()) {
+            out.push(*p);
+            continue;
+        }
+        if let Some((a, sa)) = prev
+            && (sa < head || s > tail)
+        {
+            let n = cuts(s - sa);
+            for i in 1..n {
+                out.push(lerp_pt(&a, p, i as f64 / n as f64));
+            }
+        }
+        out.push(*p);
+        prev = Some((*p, s));
+    }
+    out
 }
 
 /// Distance along `pts` from the first point to each point (non-finite points add nothing).
@@ -150,13 +204,31 @@ pub fn for_commit(mut brush: BrushSettings, pts: Vec<StrokePoint>, zoom: f32) ->
         return (brush, pts, false);
     }
     let input = if brush.smooth_curves { crate::stroke_curve::fit_points(&pts) } else { pts };
-    let mut smoothed = crate::dynamics::smooth_points(&brush.smoothing, zoom, &input);
+    let smoothed = crate::dynamics::smooth_points(&brush.smoothing, zoom, &input);
     let total = arc_lengths(&smoothed).last().copied().unwrap_or(0.0);
-    apply(&mut smoothed, &fit(&t, total));
+    let fitted = fit(&t, total);
+    let mut out = densify(&smoothed, &fitted);
+    // A Brush Pose pressure override replaces the pen's pressure; the taper then shapes that.
+    if let Some(pressure) = take_pose_pressure(&mut brush) {
+        out.iter_mut().for_each(|p| p.pressure = pressure);
+    }
+    apply(&mut out, &fitted);
     brush.smoothing.enabled = false;
     brush.smooth_curves = false;
     brush.taper = Taper::default();
-    (brush, smoothed, true)
+    (brush, out, true)
+}
+
+/// A Brush Pose pressure override would replace the tapered pressure when the dabs are built, so
+/// with a taper the override's pressure is applied before the taper instead: this switches the
+/// override off in `brush` and returns its pressure. `None` without an override.
+pub fn take_pose_pressure(brush: &mut BrushSettings) -> Option<f32> {
+    let pose = &mut brush.pose;
+    if !(pose.enabled && pose.override_pressure) {
+        return None;
+    }
+    pose.override_pressure = false;
+    Some(pose.pressure)
 }
 
 #[cfg(test)]
@@ -193,14 +265,45 @@ mod tests {
 
     #[test]
     fn start_taper_matches_the_whole_stroke_taper() {
-        let pts = line(40, 1.0, 0.8);
-        let mut whole = pts.clone();
-        apply(&mut whole, &Taper { start: 15.0, end: 0.0 });
+        // Sparse points (5 px apart), so both sides have to cut the segments in the taper.
+        let pts = line(12, 5.0, 0.8);
+        let t = Taper { start: 15.0, end: 0.0 };
+        let mut whole = densify(&pts, &t);
+        apply(&mut whole, &t);
         let mut inc = StartTaper::new(15.0);
-        let live: Vec<_> = pts.iter().map(|p| inc.apply(*p)).collect();
+        let mut live = Vec::new();
+        for p in &pts {
+            inc.push(*p, &mut live);
+        }
         assert_eq!(whole, live);
-        assert_eq!(live[0].pressure, 0.0);
-        assert_eq!(live[39].pressure, 0.8);
+        assert_eq!(live.first().map(|q| q.pressure), Some(0.0));
+        assert_eq!(live.last().map(|q| q.pressure), Some(0.8));
+    }
+
+    #[test]
+    fn a_stroke_of_two_far_points_tapers_over_the_taper_length_not_the_segment() {
+        // Two clicks 100 px apart (a straight line): the taper must not spread over the segment,
+        // nor zero it, when the walker interpolates pressure between points.
+        let brush = BrushSettings { taper: Taper { start: 20.0, end: 20.0 }, ..Default::default() };
+        let (_, p, _) = for_commit(brush, vec![StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(100.0, 0.0, 1.0)], 1.0);
+        let full = p.iter().filter(|q| q.pressure >= 1.0).count();
+        assert!(full > 0, "the middle keeps full pressure");
+        // The point where the start taper ends is near 20 px, not near 50.
+        let first_full = p.iter().find(|q| q.pressure >= 1.0).map(|q| q.x).unwrap_or(f64::MAX);
+        assert!(first_full < 30.0, "full pressure from {first_full} px");
+    }
+
+    #[test]
+    fn a_pose_pressure_override_is_tapered_too() {
+        let mut brush = BrushSettings { taper: Taper { start: 10.0, end: 10.0 }, ..Default::default() };
+        brush.pose.enabled = true;
+        brush.pose.override_pressure = true;
+        brush.pose.pressure = 0.6;
+        let (b, p, _) = for_commit(brush, line(50, 1.0, 1.0), 1.0);
+        assert!(!b.pose.override_pressure, "the dabs no longer replace the tapered pressure");
+        assert_eq!(p.first().map(|q| q.pressure), Some(0.0));
+        assert!(p.iter().all(|q| q.pressure <= 0.6), "the override's pressure is the most");
+        assert!(p.iter().any(|q| q.pressure == 0.6));
     }
 
     #[test]
