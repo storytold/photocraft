@@ -238,3 +238,83 @@ fn reopened_camera_raw_smart_filter_keeps_legacy_close_curve_knots() {
     let dark = rendered.rgba(1, 1);
     assert!(dark[..3].iter().all(|&v| v < 0.1), "the lower midtone remains below the step: {dark:?}");
 }
+
+#[test]
+fn camera_raw_filter_preserves_alpha_separately() {
+    use photocraft_algo::camera_raw::{self, CameraRaw, DevelopInputs};
+
+    let (w, h) = (32, 32);
+    let alphas = [0.0_f32, 0.25, 0.5, 0.75, 1.0];
+    let mut px = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            let a = alphas[(x + y) % alphas.len()];
+            px.push([0.35 + (x as f32) * 0.005, 0.45, 0.55 - (y as f32) * 0.004, a]);
+        }
+    }
+    let original = px.clone();
+    let mut p = CameraRaw::default();
+    p.temperature = 20.0;
+    p.tint = -15.0;
+    p.exposure = 0.6;
+    p.contrast = 25.0;
+    p.highlights = -30.0;
+    p.shadows = 25.0;
+    p.clarity = 20.0;
+    p.texture = 25.0;
+    p.dehaze = 15.0;
+    p.sharpen_amount = 30.0;
+    p.grain_amount = 20.0;
+    p.vignette_amount = -25.0;
+
+    camera_raw::develop(&mut px, w, h, &p, &DevelopInputs::default(), true);
+
+    let mut rgb_changed = false;
+    for (i, (got, orig)) in px.iter().zip(original.iter()).enumerate() {
+        assert_eq!(got[3], orig[3], "alpha must be preserved separately at pixel {i}");
+        if (0..3).any(|c| (got[c] - orig[c]).abs() > 1e-3) {
+            rgb_changed = true;
+        }
+    }
+    assert!(rgb_changed, "RGB channels should be modified by Camera Raw Filter");
+}
+
+#[test]
+fn camera_raw_first_tiled_spatial_pass_matches_full_render_crop() {
+    use photocraft_algo::camera_raw::{self, CameraRaw, DevelopInputs};
+
+    let (full_w, full_h) = (128, 128);
+    let (tile_w, tile_h) = (96, 96);
+    let (crop_w, crop_h) = (64, 64);
+
+    let make_buf = |w: usize, h: usize| -> Vec<[f32; 4]> {
+        let mut buf = Vec::with_capacity(w * h);
+        for y in 0..h {
+            for x in 0..w {
+                let wave = ((x as f32 * 0.35).sin() * (y as f32 * 0.25).cos()) * 0.15;
+                buf.push([(0.45 + wave).clamp(0.05, 0.95), (0.50 - wave * 0.5).clamp(0.05, 0.95), 0.42, 0.8]);
+            }
+        }
+        buf
+    };
+
+    let mut p = CameraRaw::default();
+    p.texture = 40.0;
+    let inputs = DevelopInputs::default();
+
+    let mut full = make_buf(full_w, full_h);
+    camera_raw::develop(&mut full, full_w, full_h, &p, &inputs, true);
+
+    let mut first_tile = make_buf(tile_w, tile_h);
+    camera_raw::develop(&mut first_tile, tile_w, tile_h, &p, &inputs, true);
+
+    for y in 0..crop_h {
+        for x in 0..crop_w {
+            let f = full[y * full_w + x];
+            let t = first_tile[y * tile_w + x];
+            for c in 0..4 {
+                assert!((f[c] - t[c]).abs() < 1e-5, "first tiled spatial pass mismatch vs full render crop at ({x},{y}) ch {c}: full={} tile={}", f[c], t[c]);
+            }
+        }
+    }
+}
