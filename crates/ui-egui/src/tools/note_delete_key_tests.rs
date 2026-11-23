@@ -8,7 +8,7 @@ use super::*;
 use crate::lifecycle_tests::app_harness;
 
 /// The whole app with a second layer and one note, the Note tool on and the note selected.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let (mut h, _transport) = app_harness(crate::Services::default(), 1);
     let app = h.state_mut();
     app.run("layer.new.layer", json!({"name": "Ink"})).unwrap();
@@ -33,7 +33,7 @@ fn prompt(app: &PhotocraftApp) -> Option<egui::Id> {
 
 /// The app on its own context, driven by the canvas test driver: a key reaches the canvas through the window host, and
 /// the Delete the Note tool claimed is run by the key route in the pass after its claim.
-fn driven() -> PhotocraftApp {
+fn driven() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
     app.run("layer.new.layer", json!({"name": "Ink"})).unwrap();

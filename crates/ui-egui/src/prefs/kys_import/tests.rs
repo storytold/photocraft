@@ -59,7 +59,7 @@ const SAMPLE: &str = "\u{feff}<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 
 const PSP: &str = "/Users/me/Library/Preferences/Adobe Photoshop 2026 Settings/Keyboard Shortcuts.psp";
 
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(Session::new(), crate::Services::default())
 }
 
@@ -121,7 +121,7 @@ fn an_opened_kys_file_opens_the_dialog_filled() {
 
 /// An app beside a Photoshop whose live set is `set`, with the preferences `prefs` made first, and
 /// the offer asked as it is at startup.
-fn with_photoshop(set: &'static str, prefs: impl FnOnce(&mut Preferences)) -> PhotocraftApp {
+fn with_photoshop(set: &'static str, prefs: impl FnOnce(&mut Preferences)) -> Box<PhotocraftApp> {
     let mut app = app();
     app.session.edit_prefs(prefs);
     app.services.photoshop_shortcuts = Some(Box::new(move || Some((PSP.to_owned(), set.to_owned()))));

@@ -27,7 +27,7 @@ fn pngs(tag: &str, names: &[&str]) -> (String, Vec<String>) {
     (dir.to_string_lossy().into_owned(), paths)
 }
 
-fn harness(answers: Vec<Picked>) -> Harness<'static, PhotocraftApp> {
+fn harness(answers: Vec<Picked>) -> Harness<'static, Box<PhotocraftApp>> {
     let files: Arc<dyn craft::host::Files> = Arc::new(ScriptedFiles::answering(answers));
     Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -36,11 +36,11 @@ fn harness(answers: Vec<Picked>) -> Harness<'static, PhotocraftApp> {
     })
 }
 
-fn fields<'a>(h: &'a Harness<'_, PhotocraftApp>, id: craft::ui::dialog::DialogId) -> &'a DialogFields {
+fn fields<'a>(h: &'a Harness<'_, Box<PhotocraftApp>>, id: craft::ui::dialog::DialogId) -> &'a DialogFields {
     h.state().framework.dialogs.get_by_id::<HostedParamDialog>(id).expect("the dialog is open").fields()
 }
 
-fn set(h: &mut Harness<'_, PhotocraftApp>, id: craft::ui::dialog::DialogId, field: &str, value: serde_json::Value) {
+fn set(h: &mut Harness<'_, Box<PhotocraftApp>>, id: craft::ui::dialog::DialogId, field: &str, value: serde_json::Value) {
     let ctx = h.ctx.clone();
     h.state_mut().framework.dialogs.set_json_field(&ctx, id, field, value).unwrap_or_else(|e| panic!("{field}: {e}"));
 }

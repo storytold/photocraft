@@ -68,7 +68,7 @@ mod tests {
         harness.run_steps(3);
         let file = harness.get_by_label("File").rect().center();
         let ctx = harness.ctx.clone();
-        let tap = |harness: &mut Harness<'_, crate::PhotocraftApp>, dedupe: bool| {
+        let tap = |harness: &mut Harness<'_, Box<crate::PhotocraftApp>>, dedupe: bool| {
             for events in tap_frames(file) {
                 harness.input_mut().events = events;
                 if dedupe {

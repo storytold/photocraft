@@ -1280,3 +1280,60 @@ fn adjusted_crop_and_omitted_gain_table_notices_survive_development() {
     spec.default_crop_origin_double = None;
     check(&spec, Rect::new(3, 2, 11, 8), false, true);
 }
+
+/// Compare PhotoCraft's `develop_sensor` output converted from encoded ProPhoto RGB (D50, gamma 1.8)
+/// into unclipped linear Rec.709/D65 against `craft_develop::sensor` at the same stage.
+#[test]
+fn raw_open_matches_craft_develop_in_unclipped_linear_rec709_d65() {
+    use craft_develop::sensor::{Cfa as SharedCfa, Method as SharedMethod, Normalized as SharedNormalized, demosaic as shared_demosaic};
+
+    // ProPhoto RGB (ROMM, D50) -> Bradford D50->D65 -> linear Rec.709/D65.
+    const PROPHOTO_TO_REC709_D65: [[f64; 3]; 3] =
+        [[2.034_366_8, -0.727_642_7, -0.306_724_1], [-0.228_827_2, 1.231_751_6, -0.002_924_4], [-0.008_565_5, -0.153_287_2, 1.161_852_7]];
+    let apply3 = |m: &[[f64; 3]; 3], v: [f64; 3]| -> [f64; 3] {
+        [m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2], m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2], m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]]
+    };
+
+    let (w, h) = (32, 32);
+    // Mid-tone grey Bayer patch (RGGB) at ~25% of white = 65535.
+    let samples = vec![16384u16; w * h];
+    let spec = DngSpec::cfa(w, h, samples.clone());
+    let s = sensor(&spec.build());
+    let dev = develop_sensor(&s, &DevelopOptions { orient: false, ..Default::default() }).unwrap();
+    assert_eq!((dev.width as usize, dev.height as usize), (w, h));
+
+    // Shared `craft_develop::sensor` path in linear Rec.709/D65 on the same normalized sensor.
+    let norm = SharedNormalized {
+        width: w,
+        height: h,
+        cpp: 1,
+        data: samples.iter().map(|&v| f32::from(v) / 65535.0).collect(),
+        cfa: Some(SharedCfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2], origin_x: 0, origin_y: 0 }),
+    };
+    let cam_rgb = shared_demosaic(&norm, SharedMethod::Ahd);
+
+    // Compare interior pixels (avoiding Bayer border effects) in linear Rec.709/D65.
+    for y in 4..(h - 4) {
+        for x in 4..(w - 4) {
+            let idx = (y * w + x) * 3;
+            let pp_lin = [
+                (f64::from(dev.rgb[idx]) / 65535.0).powf(1.8),
+                (f64::from(dev.rgb[idx + 1]) / 65535.0).powf(1.8),
+                (f64::from(dev.rgb[idx + 2]) / 65535.0).powf(1.8),
+            ];
+            let pc_rec709 = apply3(&PROPHOTO_TO_REC709_D65, pp_lin);
+
+            let p = cam_rgb.get(x, y);
+            let shared_rec709 = [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])];
+
+            for c in 0..3 {
+                assert!(
+                    (pc_rec709[c] - shared_rec709[c]).abs() < 5e-3,
+                    "linear Rec.709/D65 mismatch at ({x},{y}) ch {c}: photocraft={} shared={}",
+                    pc_rec709[c],
+                    shared_rec709[c]
+                );
+            }
+        }
+    }
+}

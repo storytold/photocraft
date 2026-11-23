@@ -1,5 +1,5 @@
 use craft::behavior::EditEvent;
-use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::dialog::{DialogId, DialogResult, StackDialog as _};
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, NumberUnit, Param, ParamKind};
 use craft::ui::runtime::env::UnitKind;
 use craft::ui::runtime::requests::PathKind;
@@ -288,16 +288,26 @@ fn take_printer_lists(app: &mut PhotocraftApp) -> Vec<Printer> {
 /// Answers the dialog's request for a printer list. The list goes through a channel to
 /// `HostedPrint::listen`, so `State::poll`'s choice rule picks the printer. While another print holds the spooler the
 /// list is the cached one (or empty), and the dialog asks again on its next pass, after a short wait, so the real
-/// list arrives once the spooler is free.
+/// list arrives once the spooler is free. A cached list without the chosen printer is not sent, so the chosen
+/// printer and its driver settings stay, and Print stays unavailable, until a fresh list arrives. A fresh list
+/// without the chosen printer replaces it (an empty list leaves no printer chosen), and the driver settings of the
+/// replaced printer are dropped. With no printer chosen (the system's default), the driver settings stay.
 fn refresh_printers(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (list, listed) = match photocraft_engine::print_cmds::try_with_spooler(|| take_printer_lists(app)) {
         Some(list) => (list, true),
         None => (take_printer_lists(app), false),
     };
-    let (tx, rx) = std::sync::mpsc::channel();
-    let _ = tx.send(list);
     if let Some(dialog) = app.framework.dialogs.get_mut::<HostedPrint>() {
-        dialog.listen(rx);
+        let chosen = dialog.json_fields().and_then(|f| f.get("printer").and_then(Value::as_str).map(str::to_owned)).unwrap_or_default();
+        let missing = !chosen.is_empty() && !list.iter().any(|p| p.name == chosen);
+        let replaces = listed && missing;
+        if listed || !missing {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let _ = tx.send(list);
+            if dialog.listen(rx) && replaces {
+                dialog.fields_mut().remove("printerSettings");
+            }
+        }
         if !listed {
             dialog.request_refresh();
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -392,9 +402,9 @@ fn fields_set_position(f: &mut DialogFields, left: f64, top: f64) {
 
 /// The document's flattened picture at the preview size, mirrored for Emulsion Down (the sheet
 /// draws the picture unmirrored in the box). The texture lives in the context's memory under the
-/// document's id and revision.
+/// document's id and revision, and the scratch read-error generation (`crate::scratch_reads`).
 fn picture(ctx: &egui::Context, doc: &photocraft_doc::Document, revision: u64, mirror: bool) -> egui::load::SizedTexture {
-    let key = egui::Id::unique(("print-thumb", doc.id.0, revision, mirror));
+    let key = egui::Id::unique(("print-thumb", doc.id.0, revision, mirror, crate::scratch_reads::generation()));
     let tex: Option<std::sync::Arc<egui::TextureHandle>> = ctx.data(|d| d.get_temp(key));
     let tex = tex.unwrap_or_else(|| {
         let th = photocraft_compose::thumbnail(doc, 400);
@@ -559,4 +569,20 @@ pub(crate) fn print_status(app: &mut PhotocraftApp, r: &Value) {
         crate::i18n::fmt(tl!(template), &[("path", r["pdf"].as_str().unwrap_or(""))])
     };
     app.ui.status_error = false;
+}
+
+#[cfg(test)]
+mod scratch_tests {
+    /// A tile that fails to read and recovers keeps the document's revision; the preview picture still draws again,
+    /// so it does not keep the zeros it read during the error.
+    #[test]
+    fn the_preview_picture_draws_again_after_a_scratch_read_error_transition() {
+        use photocraft_doc::{ColorMode, Document, SampleType};
+        let ctx = egui::Context::default();
+        let doc = Document::new("Print", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        let first = super::picture(&ctx, &doc, 3, false).id;
+        assert_eq!(super::picture(&ctx, &doc, 3, false).id, first, "the same revision keeps its picture");
+        crate::scratch_reads::tests::simulate_read_error_transition();
+        assert_ne!(super::picture(&ctx, &doc, 3, false).id, first, "the picture draws again after the transition");
+    }
 }

@@ -21,6 +21,7 @@ use craft::ui::display::Text;
 use craft::ui::list::{List, ListRow};
 use craft::ui::patterns::form_dialogs::{DialogFields, FormDialog, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 use std::borrow::Cow;
 
@@ -46,7 +47,7 @@ fn label(text: impl ToString) -> Label {
 /// `CropSettings::choose` use: every caller passes this same list.
 pub fn user_presets(app: &PhotocraftApp) -> Vec<CropUserPreset> {
     app.session
-        .presets
+        .presets()
         .tool_presets
         .iter()
         .filter(|p| Tool::from_name(&p.tool) == Some(Tool::Crop))
@@ -224,7 +225,7 @@ mod tests {
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
     use photocraft_engine::presets::tools::ToolPreset;
 
-    fn app_over(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> PhotocraftApp {
+    fn app_over(files: &std::sync::Arc<craft::settings::testing::MemoryFiles>) -> Box<PhotocraftApp> {
         let mut doc = Document::with_background("crop", Size::new(400, 300), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         doc.resolution_dpi = 72.0;
         let mut s = photocraft_engine::Session::new();
@@ -295,8 +296,16 @@ mod tests {
         assert_eq!(names(&app), ["Poster", "3 : 2"]);
 
         // An old-format preset lists and applies; junk options are not listed.
-        app.session.presets.tool_presets.push(ToolPreset { name: "Old".into(), tool: "crop".into(), options: json!({"toolOptions": {"crop_ratio": "2:5"}}) });
-        app.session.presets.tool_presets.push(ToolPreset { name: "Junk".into(), tool: "crop".into(), options: json!({"toolOptions": {"crop": {"ratio": 5}}}) });
+        app.session.presets_mut().tool_presets.push(ToolPreset {
+            name: "Old".into(),
+            tool: "crop".into(),
+            options: json!({"toolOptions": {"crop_ratio": "2:5"}}),
+        });
+        app.session.presets_mut().tool_presets.push(ToolPreset {
+            name: "Junk".into(),
+            tool: "crop".into(),
+            options: json!({"toolOptions": {"crop": {"ratio": 5}}}),
+        });
         assert_eq!(names(&app), ["Poster", "3 : 2", "Old"]);
         crate::prefs_ui::save_preferences(&mut app).unwrap();
 
@@ -322,7 +331,7 @@ mod tests {
         confirm(&mut fresh, &ctx, id).unwrap();
         assert_eq!(names(&fresh), ["3 : 2", "Old"]);
         // Other tool presets are untouched.
-        assert!(fresh.session.presets.tool_presets.iter().any(|p| p.name == "Soft Round 100 px"));
+        assert!(fresh.session.presets().tool_presets.iter().any(|p| p.name == "Soft Round 100 px"));
     }
 
     #[test]

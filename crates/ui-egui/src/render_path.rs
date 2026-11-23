@@ -359,12 +359,12 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
 mod tests {
     use super::*;
 
-    fn app() -> PhotocraftApp {
+    fn app() -> Box<PhotocraftApp> {
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
     }
 
     /// An app with one document, active: `perf.gpu_fallback` follows the active document.
-    fn app_with_doc() -> (PhotocraftApp, u64) {
+    fn app_with_doc() -> (Box<PhotocraftApp>, u64) {
         let mut app = app();
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         let doc = app.session.active().unwrap().doc.id.0;
