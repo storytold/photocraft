@@ -127,7 +127,7 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
         let (mid, a, stretch) = prepared(&img, ny, depth, true, filter)?;
         let along_y = along_y.read(h, mid.as_ref().map_or(h, |m| m.h));
         let img = mid.unwrap_or(img);
-        let taps: Vec<Taps> = (0..ny).map(|o| taps(o, img.h, a, stretch, along_y)).collect();
+        let taps = tap_table(ny, img.h, a, stretch, along_y)?;
         for y0 in (0..ny).step_by(band) {
             let y1 = (y0 + band).min(ny);
             if ctl.cancelled() {
@@ -143,7 +143,7 @@ fn scale_in_bands(src: &Surface, bounds: Rect, [sx, sy, x0, y0]: [f64; 4], filte
     }
     // Each band of output rows loads and filters along x only the source rows its taps read.
     let (a, stretch) = filter.kernel(ny as f64 / h as f64);
-    let taps: Vec<Taps> = (0..ny).map(|o| taps(o, h, a, stretch, along_y)).collect();
+    let taps = tap_table(ny, h, a, stretch, along_y)?;
     let last = h.saturating_sub(1) as i64;
     for y0 in (0..ny).step_by(band) {
         let y1 = (y0 + band).min(ny);
@@ -383,15 +383,20 @@ struct Taps {
 
 /// Output sample `o`'s taps over `have` source samples: it reads the source at `(o + ½ − phase)/scale − ½` (the exact
 /// placement; the filter for the snapped scale sets only the kernel, `a` and `stretch`).
-fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Taps {
+fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Option<Taps> {
     let last = have.saturating_sub(1) as f64;
     let u = ((o as f64 + 0.5 - exact.phase) / exact.scale - 0.5).clamp(0.0, last);
     let j = u.floor();
     let u = j + ((u - j) * 128.0).round_ties_even() / 128.0;
     let (lo, hi) = ((u - 2.0 * stretch).floor() as i64, (u + 2.0 * stretch).ceil() as i64);
-    let w: Vec<f64> = (lo..=hi).map(|i| keys((u - i as f64) / stretch, a)).collect();
+    let n = usize::try_from(hi.checked_sub(lo)?.checked_add(1)?).ok()?;
+    let mut w: Vec<f64> = Vec::new();
+    w.try_reserve_exact(n).ok()?;
+    w.extend((lo..=hi).map(|i| keys((u - i as f64) / stretch, a)));
     let total: f64 = w.iter().sum();
-    let mut q: Vec<i64> = w.iter().map(|v| (v / total * ONE as f64).trunc() as i64).collect();
+    let mut q: Vec<i64> = Vec::new();
+    q.try_reserve_exact(n).ok()?;
+    q.extend(w.iter().map(|v| (v / total * ONE as f64).trunc() as i64));
     // The largest weight (the first, if several) takes the remainder.
     let mut big = 0;
     for (i, v) in w.iter().enumerate() {
@@ -403,7 +408,19 @@ fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Taps {
     if let Some(b) = q.get_mut(big) {
         *b = ONE - others;
     }
-    Taps { start: lo, q }
+    Some(Taps { start: lo, q })
+}
+
+/// The taps of `len` output samples over `have` source samples ([`taps`]), or `None` if the table can't be allocated:
+/// an extreme enlargement (a 1 px source to a million) builds a table larger than its pixels, and an infallible
+/// allocation of it aborted the app instead of falling back.
+fn tap_table(len: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Option<Vec<Taps>> {
+    let mut table = Vec::new();
+    table.try_reserve_exact(len).ok()?;
+    for o in 0..len {
+        table.push(taps(o, have, a, stretch, exact)?);
+    }
+    Some(table)
 }
 
 /// One filtering pass along an axis to `len` samples at the placement `exact` (rule 3 of the
@@ -411,7 +428,7 @@ fn taps(o: usize, have: usize, a: f64, stretch: f64, exact: Exact) -> Taps {
 fn pass(img: &Image, len: usize, a: f64, stretch: f64, depth: Depth, vertical: bool, exact: Exact) -> Option<Image> {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
-    let taps: Vec<Taps> = (0..len).map(|o| taps(o, have, a, stretch, exact)).collect();
+    let taps = tap_table(len, have, a, stretch, exact)?;
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
     let mut px = zeros(ow.checked_mul(oh)?.checked_mul(n)?)?;
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
@@ -500,7 +517,9 @@ fn span(o: usize, have: usize, len: usize) -> (usize, usize) {
 fn average(img: &Image, len: usize, depth: Depth, vertical: bool) -> Option<Image> {
     let have = if vertical { img.h } else { img.w };
     let n = img.n;
-    let spans: Vec<(usize, usize)> = (0..len).map(|o| span(o, have, len)).collect();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    spans.try_reserve_exact(len).ok()?;
+    spans.extend((0..len).map(|o| span(o, have, len)));
     let (ow, oh) = if vertical { (img.w, len) } else { (len, img.h) };
     let mut px = zeros(ow.checked_mul(oh)?.checked_mul(n)?)?;
     crate::par::chunks_mut(&mut px, ow * n, true, |y, row| {
@@ -540,6 +559,20 @@ mod tests {
 
     fn alpha8(s: &Surface, x: i32, y: i32) -> u8 {
         (s.pixel(x, y)[3] * 255.0).round() as u8
+    }
+
+    /// A pass to more samples than can be allocated returns `None`: its tap table (larger than the pixels it fills)
+    /// and an averaged axis' spans are allocated fallibly, so the caller falls back instead of the app aborting (a
+    /// 1 px source enlarged a millionfold built a 32 MB table before the fallible pixel buffer was asked for).
+    #[test]
+    fn a_pass_too_long_to_allocate_returns_none() {
+        let img = Image { w: 1, h: 1, n: 4, px: vec![0.5; 4] };
+        let exact = Exact { scale: 1e9, phase: 0.0 };
+        let huge = usize::MAX / 64;
+        assert!(pass(&img, huge, 1.0, 1.0, Depth::of(PixelFormat::RGBA8.sample), false, exact).is_none());
+        assert!(pass(&img, huge, 1.0, 1.0, Depth::of(PixelFormat::RGBA8.sample), true, exact).is_none());
+        assert!(average(&img, huge, Depth::of(PixelFormat::RGBA8.sample), false).is_none());
+        assert!(tap_table(huge, 1, 1.0, 1.0, exact).is_none());
     }
 
     #[test]
