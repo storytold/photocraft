@@ -147,3 +147,174 @@ fn camera_raw_smart_filter_migrates_to_shared_develop_settings() {
     assert_eq!(migrated.settings.wb.tint, -12.0);
     assert_eq!(migrated.settings.vignette.style, craft_develop_model::VignetteStyle::HighlightPriority);
 }
+
+#[test]
+fn camera_raw_migration_preserves_exposure_presence_after_native_reopen() {
+    use std::sync::Arc;
+
+    use craft_develop_model::{DevelopSettings, Process};
+    use photocraft_color::{BlendMode, ColorMode, SampleType};
+    use photocraft_doc::{Document, Layer, Size, SmartFilter, SmartObject, SmartSource};
+    use photocraft_geom::Affine;
+
+    // Original synthetic content. Exercise the native serializer, not the PSD importer.
+    let size = Size::new(2, 2);
+    let mut source = Session::new();
+    source.execute("file.new", json!({"width": 2, "height": 2, "depth": 16})).unwrap();
+    let embedded = Arc::new(photocraft_format::save_to_bytes(&source.active().unwrap().doc, &Default::default()).unwrap());
+    let mut base = DevelopSettings { process: Process::V8.version(), ..Default::default() };
+    base.light.exposure = -0.75;
+    base.light.contrast = 12.0;
+    for (params, expected) in [(json!({"encodingGamma": 1.8}), -0.75), (json!({"encodingGamma": 1.8, "exposure": 0.0}), 0.0)] {
+        let source = SmartSource::Embedded { file_name: "generated.pcraft".into(), bytes: embedded.clone() };
+        let mut smart = SmartObject::new(source, Affine::IDENTITY, None);
+        smart.smart_filters.push(SmartFilter {
+            command: "filter.cameraRaw".into(),
+            params: params.clone(),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        let mut doc = Document::new("Saved Camera Raw exposure", size, ColorMode::Rgb, SampleType::U16);
+        doc.layers.push(Layer::new("Stored filter", LayerContent::Smart(smart)));
+
+        let saved = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+        let LayerContent::Smart(smart) = &reopened.layers[0].content else { panic!("expected reopened Smart Object") };
+        let [filter] = smart.smart_filters.as_slice() else { panic!("expected one stored Camera Raw filter") };
+        assert_eq!(filter.command, "filter.cameraRaw");
+        assert_eq!(filter.params, params);
+        let migrated = photocraft_algo::camera_raw::migrate_to_develop_settings(&base, &filter.params).unwrap();
+        assert!(migrated.unmapped_fields.is_empty(), "{:?}", migrated.unmapped_fields);
+        assert_eq!(migrated.settings.process, base.process);
+        assert_eq!(migrated.settings.light.exposure, expected);
+        assert_eq!(migrated.settings.light.contrast, base.light.contrast);
+    }
+}
+
+#[test]
+fn reopened_camera_raw_smart_filter_keeps_legacy_close_curve_knots() {
+    use std::sync::Arc;
+
+    use photocraft_color::{BlendMode, ColorMode, SampleType};
+    use photocraft_doc::{Document, Layer, Rect, Size, SmartFilter, SmartObject, SmartSource};
+    use photocraft_geom::Affine;
+    use photocraft_raster::Surface;
+
+    // Original synthetic neutral ramp, saved as real embedded PhotoCraft content.
+    let size = Size::new(5, 3);
+    let mut inner = Document::new("Gray ramp", size, ColorMode::Rgb, SampleType::U16);
+    let mut ramp = Surface::new(inner.pixel_format());
+    for (x, gray) in (0..5).zip([0.125, 0.25, 0.75, 0.875, 1.0]) {
+        ramp.fill_rect(Rect::new(x, 0, x + 1, 3), &[gray, gray, gray, 1.0]);
+    }
+    inner.layers.push(Layer::new("Ramp", LayerContent::Raster(ramp)));
+    let original = photocraft_format::save_to_bytes(&inner, &Default::default()).unwrap();
+    let mut smart = SmartObject::new(SmartSource::Embedded { file_name: "ramp.pcraft".into(), bytes: Arc::new(original) }, Affine::IDENTITY, None);
+    // The modern command rejects this small gap. Store the historical settings as a
+    // Smart Filter and drive production's lenient replay, not the new-edit validator.
+    let near = f32::from_bits(127.5_f32.to_bits() + 33);
+    let curve = [[0.0, 0.0], [127.5, 0.0], [near, 255.0], [255.0, 255.0]];
+    let params = json!({"pointCurve": curve});
+    smart.smart_filters.push(SmartFilter { command: "filter.cameraRaw".into(), params: params.clone(), blend: BlendMode::Normal, opacity: 1.0, visible: true });
+    let mut document = Document::new("Stored Camera Raw curve", size, ColorMode::Rgb, SampleType::U16);
+    document.layers.push(Layer::new("Stored filter", LayerContent::Smart(smart)));
+
+    let saved = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&saved).unwrap();
+    let LayerContent::Smart(smart) = &reopened.layers[0].content else { panic!("expected reopened Smart Object") };
+    let [filter] = smart.smart_filters.as_slice() else { panic!("expected one stored Camera Raw filter") };
+    assert_eq!(filter.params, params);
+    let SmartSource::Embedded { bytes, .. } = &smart.source else { panic!("expected embedded ramp") };
+    let placed = photocraft_format::load_from_bytes(bytes).unwrap();
+    let LayerContent::Raster(ramp) = &placed.layers[0].content else { panic!("expected decoded ramp pixels") };
+    assert!((ramp.rgba(2, 1)[0] - 0.75).abs() < 0.01);
+
+    // Identity placement: the embedded raster is already the placed input. This
+    // production entry point replays the stored stack without using layer cache pixels.
+    let rendered = photocraft_engine::smart_cmds::apply_smart_filters(ramp, smart, reopened.bounds()).unwrap();
+    let bright = rendered.rgba(2, 1);
+    assert!(bright[..3].iter().all(|&v| v > 0.9), "legacy close-knot step must brighten the upper midtone: {bright:?}");
+    let dark = rendered.rgba(1, 1);
+    assert!(dark[..3].iter().all(|&v| v < 0.1), "the lower midtone remains below the step: {dark:?}");
+}
+
+#[test]
+fn camera_raw_filter_preserves_alpha_separately() {
+    use photocraft_algo::camera_raw::{self, CameraRaw, DevelopInputs};
+
+    let (w, h) = (32, 32);
+    let alphas = [0.0_f32, 0.25, 0.5, 0.75, 1.0];
+    let mut px = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            let a = alphas[(x + y) % alphas.len()];
+            px.push([0.35 + (x as f32) * 0.005, 0.45, 0.55 - (y as f32) * 0.004, a]);
+        }
+    }
+    let original = px.clone();
+    let mut p = CameraRaw::default();
+    p.temperature = 20.0;
+    p.tint = -15.0;
+    p.exposure = 0.6;
+    p.contrast = 25.0;
+    p.highlights = -30.0;
+    p.shadows = 25.0;
+    p.clarity = 20.0;
+    p.texture = 25.0;
+    p.dehaze = 15.0;
+    p.sharpen_amount = 30.0;
+    p.grain_amount = 20.0;
+    p.vignette_amount = -25.0;
+
+    camera_raw::develop(&mut px, w, h, &p, &DevelopInputs::default(), true);
+
+    let mut rgb_changed = false;
+    for (i, (got, orig)) in px.iter().zip(original.iter()).enumerate() {
+        assert_eq!(got[3], orig[3], "alpha must be preserved separately at pixel {i}");
+        if (0..3).any(|c| (got[c] - orig[c]).abs() > 1e-3) {
+            rgb_changed = true;
+        }
+    }
+    assert!(rgb_changed, "RGB channels should be modified by Camera Raw Filter");
+}
+
+#[test]
+fn camera_raw_first_tiled_spatial_pass_matches_full_render_crop() {
+    use photocraft_algo::camera_raw::{self, CameraRaw, DevelopInputs};
+
+    let (full_w, full_h) = (128, 128);
+    let (tile_w, tile_h) = (96, 96);
+    let (crop_w, crop_h) = (64, 64);
+
+    let make_buf = |w: usize, h: usize| -> Vec<[f32; 4]> {
+        let mut buf = Vec::with_capacity(w * h);
+        for y in 0..h {
+            for x in 0..w {
+                let wave = ((x as f32 * 0.35).sin() * (y as f32 * 0.25).cos()) * 0.15;
+                buf.push([(0.45 + wave).clamp(0.05, 0.95), (0.50 - wave * 0.5).clamp(0.05, 0.95), 0.42, 0.8]);
+            }
+        }
+        buf
+    };
+
+    let mut p = CameraRaw::default();
+    p.texture = 40.0;
+    let inputs = DevelopInputs::default();
+
+    let mut full = make_buf(full_w, full_h);
+    camera_raw::develop(&mut full, full_w, full_h, &p, &inputs, true);
+
+    let mut first_tile = make_buf(tile_w, tile_h);
+    camera_raw::develop(&mut first_tile, tile_w, tile_h, &p, &inputs, true);
+
+    for y in 0..crop_h {
+        for x in 0..crop_w {
+            let f = full[y * full_w + x];
+            let t = first_tile[y * tile_w + x];
+            for c in 0..4 {
+                assert!((f[c] - t[c]).abs() < 1e-5, "first tiled spatial pass mismatch vs full render crop at ({x},{y}) ch {c}: full={} tile={}", f[c], t[c]);
+            }
+        }
+    }
+}
