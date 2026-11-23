@@ -1003,8 +1003,8 @@ fn flat_contour_outer_glow_is_a_solid_band_with_one_soft_pixel() {
     let n = 60;
     let at = |m: &Map, x: usize| m.v[30 * n + x];
     // Precise, with the square's left column half covered: its edge sits mid-pixel, so the
-    // pixels out from it are 1.5, 2.5, 3.5, 4.5, 5.5 px (centre to centre) from the shape, and
-    // the reach (size + 1 = 5) ends half-way across the 4.5 px one.
+    // pixels out from it are 1.5, 2.5, 3.5, 4.5, 5.5 px (centre to centre) from the shape. The
+    // 4.5 px one has coverage 0.05, which the 0.12 knee (#15006) paints at 5/12.
     let mut shape = square_20_40();
     for y in 20..40 {
         shape.v[y * n + 19] = 0.5;
@@ -1013,18 +1013,17 @@ fn flat_contour_outer_glow_is_a_solid_band_with_one_soft_pixel() {
     for x in 16..=19 {
         assert!(at(&m, x) > 0.999, "precise, solid band at x {x}: {}", at(&m, x));
     }
-    assert!((at(&m, 15) - 0.5).abs() < 0.05, "precise, the soft outer pixel: {}", at(&m, 15));
+    assert!((at(&m, 15) - 5.0 / 12.0).abs() < 0.01, "precise, the soft outer pixel: {}", at(&m, 15));
     assert!(at(&m, 14) == 0.0 && at(&m, 0) == 0.0, "precise, beyond the reach: {} {}", at(&m, 14), at(&m, 0));
     // Precise, pixel-aligned edge: the pixels out from it are 1..5 px (centre to centre) from the
-    // shape and the reach ends at the 5 px one's centre, so the band is solid through Size (x 16,
-    // 4 px out, 1.0) and the next pixel (x 15) is beyond it. Point-sampled, as the measured Linear
-    // falloff is: an area-averaged falloff would leave x 15 half covered (the reach ends 4.5 px
-    // past the shape's edge, half-way across it), not 0.84.
+    // shape and the reach ends at the 5 px one's centre. Photoshop's x 16 (4 px out, coverage
+    // 0.1) reads 213 of 255 (#15006), and x 15 is beyond the reach.
     let shape = square_20_40();
     let m = glow_map(&shape, &contour_glow(GlowTechnique::Precise, 4.0, &FLAT), false, (0, 0));
-    for x in 16..20 {
+    for x in 17..20 {
         assert!(at(&m, x) > 0.999, "precise aligned, solid band at x {x}: {}", at(&m, x));
     }
+    assert!((at(&m, 16) * 255.0 - 213.0).abs() <= 1.0, "precise aligned, the soft outer pixel: {}", at(&m, 16));
     assert!(at(&m, 15) == 0.0, "precise aligned, beyond the reach: {}", at(&m, 15));
     // Softer, size 4: the tent's last tap (1/64, at x 16) is above what one opaque pixel gives one
     // pixel inside its reach (t[3]·t[0] ≈ 0.0137), so a straight edge is solid through its reach.
