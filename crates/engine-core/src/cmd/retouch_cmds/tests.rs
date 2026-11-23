@@ -1351,6 +1351,11 @@ fn retouch_params(id: &str, history_state: usize, target: Value) -> Value {
         "paint.sponge" => p["mode"] = json!("saturate"),
         _ => {}
     }
+    // `strength` and `exposure` are shared stroke settings: give them only to the tools whose doc
+    // takes them, since dispatch refuses an unknown key.
+    if let Some(schema) = crate::param_schema::of(crate::commands::find(id).unwrap()).filter(|s| !s.open()) {
+        p.as_object_mut().unwrap().retain(|k, _| !matches!(k.as_str(), "strength" | "exposure") || schema.has_key(k));
+    }
     p
 }
 

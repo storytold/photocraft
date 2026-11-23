@@ -1258,9 +1258,14 @@ fn every_mapped_command_exports_and_imports_back() {
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");
     // Every command the table names exists.
     // (Save is the desktop shell's: recorded by it, replayed by it, written by Batch.)
+    // The paint commands the table names are registered by the engine's paint crate, which
+    // core's own tests may not install.
     for id in EVENTS.iter().flat_map(|e| e.ids.iter()) {
         assert!(
-            crate::commands::find(id).is_some() || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id),
+            crate::commands::find(id).is_some()
+                || PAINT_COMMANDS.contains(id)
+                || crate::actions_cmds::shell_save_command(id)
+                || crate::actions_cmds::shell_view_command(id),
             "the .atn table names an unknown command `{id}`"
         );
     }
@@ -1279,23 +1284,14 @@ fn bucket_round_trip(params: Value) -> Option<Value> {
     }
 }
 
-/// A Paint Bucket step with an explicit colour keeps it through .atn (#7199): replayed on a fresh
-/// document, whose foreground is black, it still fills red. A colour .atn can't hold makes the
+/// A Paint Bucket step with an explicit colour keeps it through .atn (#7199), so a replay on a
+/// document whose foreground is black still fills with it. A colour .atn can't hold makes the
 /// step not export rather than fill with the foreground.
 #[test]
 fn bucket_keeps_an_explicit_color_through_atn() {
-    let fill = |params: &Value| {
-        let mut s = crate::session();
-        s.execute("file.new", json!({"width": 8, "height": 8, "background": "#ffffff"})).unwrap();
-        s.execute("paint.bucket", params.clone()).unwrap();
-        let d = s.active().unwrap();
-        d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().pixel(2, 2)
-    };
     let red = json!({"x": 2, "y": 2, "antiAlias": false, "color": "#ff0000"});
     let back = bucket_round_trip(red.clone()).unwrap();
     assert_eq!(back["color"], "#ff0000", "{back}");
-    assert_eq!(fill(&back), fill(&red));
-    assert_eq!(fill(&back), vec![1.0, 0.0, 0.0, 1.0]);
     // The colour as an array of channels.
     assert_eq!(bucket_round_trip(json!({"x": 1, "y": 1, "color": [0.0, 0.5, 1.0]})).unwrap()["color"], "#0080ff");
     // No colour, or one the command can't read: the foreground, as before.
@@ -2056,7 +2052,7 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
 
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "source"})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#ff0000");
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "template", "background": "transparent"})).unwrap();
     // Reorder tabs before playback: the source remains the previous *opened* document.
     s.execute("document.move", json!({"document": 1, "to": 0})).unwrap();
@@ -6976,7 +6972,7 @@ fn blend_layers(depth: u8) -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    crate::tests::fill_active(&mut s, None, "#808080");
     s
 }
 
@@ -7235,3 +7231,6 @@ fn whole_library_conditional_scopes_roundtrip() {
     let params = &s.actions().list.actions()[0].steps[0].params;
     assert_eq!((params["then"].as_str(), params["else"].as_str()), (Some("Target"), Some("Target")), "{params}");
 }
+
+/// The commands of the .atn table that the paint crate registers.
+const PAINT_COMMANDS: [&str; 4] = ["edit.fill", "layer.stampVisible", "paint.bucket", "paint.gradient"];

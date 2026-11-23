@@ -411,9 +411,11 @@ fn delete_and_fill_selection_removes_the_object_in_one_step() {
         s.undo();
         assert_eq!(px(&s, 30, 20)[1], 0.0, "undo restores the blob");
     }
-    // Parameters are ignored, never a crash; nothing selected greys it out and refuses.
+    // It takes no parameters: any are refused before it runs (#7596), never a crash; nothing
+    // selected greys it out and refuses.
     let mut s = blob_session(8);
-    assert!(s.execute("edit.deleteAndFillSelection", json!({"output": 7, "sampling": [1]})).is_ok());
+    assert!(s.execute("edit.deleteAndFillSelection", json!({"output": 7, "sampling": [1]})).unwrap_err().to_string().contains("unknown parameter"));
+    assert!(s.execute("edit.deleteAndFillSelection", json!({})).is_ok());
     s.execute("select.deselect", json!({})).unwrap();
     assert!(!s.is_enabled("edit.deleteAndFillSelection"));
     assert!(s.execute("edit.deleteAndFillSelection", json!({})).is_err());
@@ -874,7 +876,8 @@ fn backward_change_find_moves_past_the_replaced_text() {
 fn fade_allocation_failure_keeps_document_and_history() {
     for depth in [8, 16, 32] {
         let mut s = session(depth);
-        s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+        // A fadeable step: the white document inverted to black.
+        s.execute("image.adjustments.invert", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
         let history = s.active().unwrap().history.entries();
         crate::allocation::fail_next_for_test();

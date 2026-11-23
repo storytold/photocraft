@@ -10,7 +10,7 @@
 mod action_history;
 mod actions_record;
 pub mod adjust_params;
-mod allocation;
+pub mod allocation;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
@@ -38,6 +38,8 @@ pub mod memory;
 pub mod memory_gate;
 pub mod new_layer;
 mod param_check;
+pub use param_check::is_incomplete;
+pub mod param_schema;
 mod pixels;
 pub mod prefs;
 pub mod preset_store;
