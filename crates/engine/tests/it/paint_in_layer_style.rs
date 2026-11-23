@@ -1,4 +1,4 @@
-//! Tests that run paint commands, moved from the engine-core `layer_style` tests: 7 test(s).
+//! Tests that run paint commands, moved from the engine-core `layer_style` tests: 9 test(s).
 
 mod inner_shadow_ranges_tests {
 
@@ -203,5 +203,99 @@ mod tests {
         let entries: Vec<Value> = items.iter().map(|fx| json!({"kind": "stroke", "fx": serde_json::to_value(fx).unwrap(), "params": {}})).collect();
         s.execute("layer.layerStyle.replace", json!({"layer": id.0, "effects": entries})).unwrap();
         assert_eq!(px(&mut s, 24, 14), before, "both strokes render identically after the round trip");
+    }
+}
+
+mod satin_defaults_tests {
+    use photocraft_engine::Session;
+
+    use serde_json::json;
+
+    /// The issue's test document: 400 x 300 px at 72 ppi, RGB 8 bit, a white Background and a pixel
+    /// layer with an orange (255,128,0) rectangle at x 100..299, y 75..224.
+    fn test_document() -> Session {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 300, "resolution": 72, "background": "#ffffff"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 100, "y": 75, "width": 200, "height": 150})).unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#ff8000"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s
+    }
+
+    /// The flattened test document, as one row-major pixel buffer.
+    fn flattened(s: &Session) -> Vec<[f32; 4]> {
+        let d = s.active().unwrap();
+        photocraft_compose::render(&d.doc, d.doc.bounds()).into_px()
+    }
+
+    /// One 8-bit level of the flattened test document: `channel` 0 is R, 1 G and 2 B.
+    fn level(px: &[[f32; 4]], channel: usize, x: usize, y: usize) -> i32 {
+        (px[y * 400 + x][channel] * 255.0).round() as i32
+    }
+
+    /// Compare an RGB triple with the reference application's, within 1 level.
+    fn assert_rgb(px: &[[f32; 4]], x: usize, y: usize, want: [i32; 3]) {
+        let got = [level(px, 0, x, y), level(px, 1, x, y), level(px, 2, x, y)];
+        assert!(
+            got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1),
+            "({x}, {y}) = {}.{}.{}. the reference gives {}.{}.{}",
+            got[0],
+            got[1],
+            got[2],
+            want[0],
+            want[1],
+            want[2]
+        );
+    }
+
+    /// #14977 measured: OK on the factory values over the white test document. The G channel down
+    /// the centre column x 200 (every 5 px from y 75), the darkest point at y 149 and 150, the top
+    /// edge and the corners, within 1 level of the reference application's.
+    #[test]
+    fn the_factory_satin_gives_the_measured_profile() {
+        let mut s = test_document();
+        s.execute("layer.layerStyle.satin", json!({})).unwrap();
+        let px = flattened(&s);
+        let column: [i32; 30] =
+            [119, 118, 118, 116, 115, 112, 109, 105, 101, 96, 91, 85, 80, 74, 69, 65, 70, 76, 81, 86, 92, 97, 102, 106, 110, 113, 115, 117, 118, 119];
+        for (i, want) in column.iter().copied().enumerate() {
+            let y = 75 + 5 * i;
+            let got = level(&px, 1, 200, y);
+            assert!((got - want).abs() <= 1, "centre column at (200, {y}): G {got}, the reference gives {want}");
+        }
+        for y in [149, 150] {
+            assert_eq!(level(&px, 1, 200, y), 65, "the darkest point at y {y}");
+        }
+        let top_edge: [i32; 20] = [92, 98, 104, 108, 112, 115, 117, 118, 119, 119, 119, 119, 119, 118, 117, 115, 112, 108, 103, 98];
+        for (i, want) in top_edge.iter().copied().enumerate() {
+            let x = 100 + 10 * i;
+            let got = level(&px, 1, x, 75);
+            assert!((got - want).abs() <= 1, "top edge at ({x}, 75): G {got}, the reference gives {want}");
+        }
+        for y in [75, 76, 77, 78, 79] {
+            assert_rgb(&px, 200, y, [237, 119, 0]);
+        }
+        assert_rgb(&px, 100, 75, [183, 92, 0]);
+        assert_rgb(&px, 100, 150, [128, 64, 0]);
+        assert_rgb(&px, 200, 150, [129, 65, 0]);
+    }
+
+    /// #14977: the values themselves, passed as params, give the same picture the factory defaults
+    /// now must. Guard test, passes before and after: it pins the profile to the effect's own params.
+    #[test]
+    fn the_measured_values_as_params_give_the_same_profile() {
+        let mut s = test_document();
+        s.execute("layer.layerStyle.satin", json!({"angle": 90, "distance": 50, "size": 80})).unwrap();
+        let px = flattened(&s);
+        let column: [i32; 30] =
+            [119, 118, 118, 116, 115, 112, 109, 105, 101, 96, 91, 85, 80, 74, 69, 65, 70, 76, 81, 86, 92, 97, 102, 106, 110, 113, 115, 117, 118, 119];
+        for (i, want) in column.iter().copied().enumerate() {
+            let y = 75 + 5 * i;
+            let got = level(&px, 1, 200, y);
+            assert!((got - want).abs() <= 1, "centre column at (200, {y}): G {got}, the reference gives {want}");
+        }
+        assert_rgb(&px, 100, 75, [183, 92, 0]);
+        assert_rgb(&px, 200, 150, [129, 65, 0]);
     }
 }

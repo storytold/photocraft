@@ -129,6 +129,7 @@ mod paint_in_history_source_cmds;
 mod paint_in_image_cmds;
 mod paint_in_jobs;
 mod paint_in_layer_copy_cmds;
+mod paint_in_layer_duplicate_new_document_history;
 mod paint_in_layer_list_cmds;
 mod paint_in_layer_multi_cmds;
 mod paint_in_layer_place;
