@@ -6,7 +6,7 @@
 use super::*;
 
 /// An app with the reference app's 400 × 300 RGB 8-bit document.
-fn reference_app() -> PhotocraftApp {
+fn reference_app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 400, "height": 300, "depth": 8, "resolution": 72, "background": "white"})).unwrap();
     app.sync_views();
@@ -29,7 +29,7 @@ fn reference_png() -> (tempfile::TempDir, Vec<u8>, String) {
 /// Create Smart Objects when Placing `smart`) and open its Free Transform box: (app, the placed
 /// layer, history steps before the place, the guard of the file's folder, kept while the box is
 /// open so a linked file stays readable).
-fn placed_in_free_transform(linked: bool, smart: bool) -> (PhotocraftApp, LayerId, usize, tempfile::TempDir) {
+fn placed_in_free_transform(linked: bool, smart: bool) -> (Box<PhotocraftApp>, LayerId, usize, tempfile::TempDir) {
     let mut app = reference_app();
     app.session.execute("prefs.set", json!({"path": "general.alwaysCreateSmartObjectsWhenPlacing", "value": smart})).unwrap();
     let (dir, bytes, path) = reference_png();
@@ -53,8 +53,11 @@ const PLACES: [(bool, bool, &str); 4] = [
 fn a_moved_and_committed_place_is_one_state_named_as_the_place() {
     for (linked, smart, name) in PLACES {
         let (mut app, layer, steps, _dir) = placed_in_free_transform(linked, smart);
-        let t = app.ui.transform.as_mut().unwrap();
-        t.quad = t.quad.map(|[x, y]| [x + 10.0, y]);
+        app.ui.transform.as_mut().unwrap().edit_box(|b| {
+            for p in &mut b.quad {
+                *p += craft::behavior::kurbo::Vec2::new(10.0, 0.0);
+            }
+        });
         commit(&mut app);
         assert!(app.ui.transform.is_none(), "{name}: the box ended");
         let st = app.session.active().unwrap();
