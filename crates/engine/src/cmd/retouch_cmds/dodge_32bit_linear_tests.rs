@@ -146,6 +146,29 @@ fn dodge_keeps_light_above_white_with_unmeasured_settings_in_32_bit() {
 }
 
 #[test]
+fn dodge_keeps_light_above_white_when_luma_is_not_positive_in_32_bit() {
+    // A channel above white next to a negative one: luma <= 0, so Protect Tones can't scale the
+    // colour by luma. It takes the per-channel curve instead and keeps the light above white.
+    for exposure in [25, 100] {
+        for o in [[1.2f32, -0.7, 0.2], [1.01, -0.52, 0.02]] {
+            let mut s = patches(32);
+            s.edit("bright", |doc, active| {
+                let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                let px = photocraft_raster::from_rgba(&surf.format(), [o[0], o[1], o[2], 1.0]);
+                surf.write_region(photocraft_geom::Rect::new(0, 0, SIDE, SIDE), &px.repeat((SIDE * SIDE) as usize));
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(rgb(&s, SIDE / 2, SIDE / 2), o);
+            let c = dodge_each(&mut s, json!({"exposure": exposure}))[0];
+            assert!(c[0] >= o[0], "{exposure} % Dodge of {o:?} clipped light above white: {c:?}");
+            let e = dodge_burn(o, exposure as f32 / 100.0, ToneRange::Midtones, false, false);
+            assert!(c.iter().zip(e).all(|(c, e)| (c - e).abs() < 1e-5), "{exposure} % Dodge of {o:?}: got {c:?}, the per-channel curve gives {e:?}");
+        }
+    }
+}
+
+#[test]
 fn dodge_keeps_tones_in_order_in_32_bit() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 256, "height": 8, "depth": 32, "mode": "rgb"})).unwrap();

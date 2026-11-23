@@ -209,13 +209,19 @@ const MEASURED_LINEAR_EXPOSURE: f32 = 0.5;
 
 /// Dodge or Burn of a 32-bit colour with the curve the other bit depths use, except that light above
 /// white isn't clipped: Protect Tones scales such a colour to its new luma without gamut
-/// compression, which would pull it back to 1.0 (#12687, #12674). Other colours get today's result.
+/// compression, which would pull it back to 1.0 (#12687, #12674). Such a colour whose luma isn't
+/// positive (a negative channel outweighs it) can't be scaled by luma, so it takes the per-channel
+/// curve, as with Protect Tones off, which keeps light above white too. Other colours get today's
+/// result.
 #[inline]
 fn dodge_burn_float(c: [f32; 3], e: f32, range: ToneRange, burn: bool, protect: bool) -> [f32; 3] {
-    let l = luma(c);
-    if protect && c.iter().any(|&v| v > 1.0) && l > 1e-6 {
-        let nl = tone_curve(l, e, range, burn);
-        return c.map(|v| v * nl / l);
+    if protect && c.iter().any(|&v| v > 1.0) {
+        let l = luma(c);
+        if l > 1e-6 {
+            let nl = tone_curve(l, e, range, burn);
+            return c.map(|v| v * nl / l);
+        }
+        return dodge_burn(c, e, range, burn, false);
     }
     dodge_burn(c, e, range, burn, protect)
 }
