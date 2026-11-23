@@ -6,6 +6,7 @@ use craft_psd::{
 };
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{BlendRange, Document, Effect, Layer, LayerId};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::{
     Session,
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
@@ -203,13 +204,13 @@ fn atn_group_flag_survives_saved_descriptor_and_public_playback() {
         let child_before = layer(&scene.s, scene.child).clone();
         let bytes = recorded(Descriptor::new("null").with(KEY, D::Boolean(allow)));
         assert_eq!(load(&mut scene.s, &bytes)["unsupported"], json!([]));
-        assert_eq!(scene.s.actions.list.actions()[0].steps, vec![ActionStep::new(CMD, json!({"allowGroups": allow}))]);
+        assert_eq!(scene.s.actions().list.actions()[0].steps, vec![ActionStep::new(CMD, json!({"allowGroups": allow}))]);
         let saved = save(&mut scene.s);
         let parsed = atn::parse(&saved).unwrap();
         assert_eq!(parsed.actions[0].items[0].descriptor.as_ref().unwrap().get(KEY), Some(&D::Boolean(allow)));
         let imported = atn_cmds::import(&saved).unwrap();
-        assert_eq!(imported.actions[0].steps, scene.s.actions.list.actions()[0].steps);
-        scene.s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        assert_eq!(imported.actions[0].steps, scene.s.actions().list.actions()[0].steps);
+        scene.s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         let result = scene.s.execute("actions.play", json!({"action": "Paste"})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none(), "{result}");
@@ -228,7 +229,7 @@ fn atn_group_flag_survives_saved_descriptor_and_public_playback() {
 fn atn_defaults_are_explicit_and_unsupported_fields_remain_whole_steps() {
     let mut scene = fixture();
     assert_eq!(load(&mut scene.s, &recorded(Descriptor::new("null")))["unsupported"], json!([]));
-    assert_eq!(scene.s.actions.list.actions()[0].steps[0].params, json!({"allowGroups": true}));
+    assert_eq!(scene.s.actions().list.actions()[0].steps[0].params, json!({"allowGroups": true}));
     for value in [None, Some(Value::Null)] {
         let mut params = json!({});
         if let Some(value) = value {
@@ -249,7 +250,7 @@ fn atn_defaults_are_explicit_and_unsupported_fields_remain_whole_steps() {
         let original = atn::parse(&bytes).unwrap();
         let mut s = Session::new();
         assert_eq!(load(&mut s, &bytes)["unsupported"].as_array().unwrap().len(), 1);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let saved = atn::parse(&save(&mut s)).unwrap();
         assert_eq!(saved.actions[0].items[0].descriptor, original.actions[0].items[0].descriptor);
     }
