@@ -1025,7 +1025,7 @@ fn collision_key(stem: &str) -> String {
 /// `<prefix>.pdf`.
 fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.artboardsToFiles";
-    let dir = str_param(p, "dir", cmd).or_else(|_| str_param(p, "output", cmd))?.to_string();
+    let dir = artboards_destination(p)?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let (save, board) = export_options::parse(s, p, cmd)?;
     let border = name_border_param(p, cmd)?.filter(|_| !keeps_layers(&format));
@@ -1088,6 +1088,21 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     }
     Ok(json!({"files": files, "warnings": warnings}))
 }
+
+/// Validates the folder before a held export dialog closes or the engine writes any files.
+pub fn artboards_destination(params: &Value) -> Result<&str> {
+    let nonblank = |key| params.get(key).and_then(Value::as_str).filter(|path| !path.trim().is_empty());
+    let dir = nonblank("dir").or_else(|| nonblank("output")).ok_or_else(|| EngineError::Other("Choose a destination folder.".into()))?;
+    #[cfg(not(target_arch = "wasm32"))]
+    if matches!(std::path::Path::new(dir).try_exists(), Ok(false)) {
+        return Err(EngineError::Other(format!("Destination does not exist: {dir}")));
+    }
+    Ok(dir)
+}
+
+#[cfg(test)]
+#[path = "artboard_cmds/destination_tests.rs"]
+mod destination_tests;
 
 /// The scratch state an artboard export starts from. Building the boards copies their pixels
 /// (and the PNG-8 and PDF paths flatten them) before the encoder's own scratch check sees them,

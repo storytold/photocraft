@@ -231,7 +231,16 @@ pub(crate) mod params {
     fn answer_held(app: &mut PhotocraftApp) {
         for id in hosted(app) {
             let Some(result) = dialog_mut(app, id).and_then(HostedParamDialog::take_ok) else { continue };
-            let answer = if crate::actions::is_editor(app, id) {
+            let destination_error = if result.key == "file.export.artboardsToFiles" {
+                let params = crate::filter_dialog::command_params(&result.key, &result.fields);
+                photocraft_engine::artboard_cmds::artboards_destination(&params).err().map(|error| error.to_string())
+            } else {
+                None
+            };
+            let answer = if let Some(error) = destination_error {
+                alerts::alert(app, error.clone());
+                Err(Label::from(error))
+            } else if crate::actions::is_editor(app, id) {
                 // An editor of Record Again or of a paused menu step: its answer is judged as the step requires, with the
                 // values OK runs.
                 let params = crate::filter_dialog::command_params(&result.key, &result.fields);
@@ -332,6 +341,9 @@ pub(crate) mod params {
             }
             _ => PickRequest::folder(PURPOSE),
         };
+        if request.key == "dir" && key_of(app, id).as_deref() == Some("file.export.artboardsToFiles") {
+            pick = pick.title(tl!("Select Destination"));
+        }
         if let Some(dir) = start {
             pick = pick.directory(dir);
         }

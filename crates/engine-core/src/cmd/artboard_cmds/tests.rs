@@ -342,14 +342,14 @@ fn artboards_at_ordinary_coordinates_still_place_and_edit() {
 fn export_rejects_a_board_too_far_from_the_origin() {
     let mut s = session(8);
     s.execute("layer.new.artboard", json!({"x": i32::MIN, "width": 50, "height": 50, "name": "Far"})).unwrap();
-    let dir = std::env::temp_dir().join(format!("photocraft-artboards-931-{}", std::process::id()));
-    let d = dir.to_string_lossy().into_owned();
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().to_string_lossy().into_owned();
     // Moving the board to the origin needs dx = 2^31, one past i32::MAX: an error, not a panic.
     let err = s.execute("file.export.artboardsToFiles", json!({"dir": d})).unwrap_err().to_string();
     assert!(err.contains(&i32::MIN.to_string()), "{err}");
     let pdf = join(&d, "boards.pdf");
     assert!(s.execute("file.export.artboardsToPdf", json!({"path": pdf})).is_err());
-    assert!(!dir.exists(), "nothing was written");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "nothing was written");
     // One pixel in from the edge is representable and still exports.
     let one = artboard_document(doc(&s), doc(&s).artboards()[0].0);
     assert!(one.is_err());

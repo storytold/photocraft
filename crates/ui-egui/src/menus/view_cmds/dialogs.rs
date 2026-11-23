@@ -58,7 +58,8 @@ fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>,
     let key = id.to_owned();
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
         derive(&key, fields);
-        ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields))
+        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
+        if key == "file.export.artboardsToFiles" { dialog.ok_label(Label::from(tl!("Run"))) } else { dialog }
     })
 }
 
@@ -308,8 +309,8 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
         "file.export.artboardsToFiles" => {
             let (_, _, name) = doc?;
             let mut rows = vec![
-                folder("dir", tl!("Destination"), dir),
-                Param::new("prefix", tl!("File Name Prefix"), ParamKind::text(stem(&name))),
+                folder("dir", tl!("Destination:"), String::new()).not_remembered(),
+                Param::new("prefix", tl!("File Name Prefix:"), ParamKind::text(stem(&name))).not_remembered(),
                 // Include Overlapping Areas / Artboard Content Only, right below the prefix, with no caption (#13629).
                 Param::new(
                     "content",

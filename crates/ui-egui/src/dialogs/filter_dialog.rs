@@ -1081,9 +1081,14 @@ fn finish(
         _ => app.filter_preview = None,
     }
     if outcome.is_ok() && cmd == "view.newGuideLayout" {
-        app.ui.view.guide_layout = params;
+        app.ui.view.guide_layout = params.clone();
     }
     if outcome.is_ok() {
+        if command == "file.export.artboardsToFiles" {
+            let dir = params.get("dir").and_then(Value::as_str).unwrap_or_default();
+            let message = format!("{}\n{dir}", tl!("Artboards To Files was successful."));
+            super::alerts::show(app, craft::ui::dialog::Alert::new(tl!("Artboards to Files").to_string(), message));
+        }
         result.remember(ctx);
         // A step dialog of a playing action: the action continues after it.
         if let Some(token) = token {
