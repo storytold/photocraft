@@ -959,3 +959,23 @@ fn fade_in_a_blend_mode_stays_inside_the_steps_selection() {
         assert!((px(&s, 5, 5)[0] - want).abs() < 0.01, "depth {depth}: inside {} want {want}", px(&s, 5, 5)[0]);
     }
 }
+
+/// A step that changes pixels outside the selection it ends with (Content-Aware Move fills the old
+/// place and moves the selection to the new one) still fades there: 0 % Multiply puts every pixel
+/// back as it was before the step, the old place included.
+#[test]
+fn fade_still_reaches_pixels_a_step_changed_outside_its_selection() {
+    let mut s = session(8);
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute("select.rect", json!({"x": 6, "y": 6, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+    s.execute("select.rect", json!({"x": 4, "y": 4, "width": 12, "height": 12})).unwrap();
+    let before: Vec<Vec<f32>> = [(10, 10), (40, 10), (60, 40)].iter().map(|&(x, y)| px(&s, x, y)).collect();
+    s.execute("paint.contentAwareMove", json!({"offset": [30, 0]})).unwrap();
+    assert_ne!(px(&s, 10, 10), before[0], "the old place was filled");
+    s.execute("edit.fade", json!({"opacity": 0, "mode": "multiply"})).unwrap();
+    for (i, &(x, y)) in [(10, 10), (40, 10), (60, 40)].iter().enumerate() {
+        let got = px(&s, x, y);
+        assert!(got.iter().zip(&before[i]).all(|(a, b)| (a - b).abs() < 1e-6), "{x},{y}: {got:?} want {:?}", before[i]);
+    }
+}

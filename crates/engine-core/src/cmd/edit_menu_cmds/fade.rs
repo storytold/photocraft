@@ -79,13 +79,9 @@ pub fn fade_surface_in(before: &Surface, after: &mut Surface, area: Rect, mode: 
     };
     let mut tmp = crate::allocation::filled(n, 0.0f32, "fading pixels")?;
     let plain = mode == BlendMode::Normal || n == 1;
-    // The selection's coverage over `area`, one value per pixel; only a blend mode reads it.
+    // The selection over `area` (its first channel is the coverage); only a blend mode reads it.
     let coverage = match selection {
-        Some(sel) if !plain => {
-            let m = sel.channels().max(1);
-            let c = crate::allocation::read_region(sel, area, "fading pixels")?;
-            Some(c.chunks_exact(m).map(|px| px.first().copied().unwrap_or(0.0).clamp(0.0, 1.0)).collect::<Vec<f32>>())
-        }
+        Some(sel) if !plain => Some((crate::allocation::read_region(sel, area, "fading pixels")?, sel.channels().max(1))),
         _ => None,
     };
     for (i, (pa, pb)) in a.chunks_exact_mut(n).zip(b.chunks_exact(n)).enumerate() {
@@ -93,7 +89,10 @@ pub fn fade_surface_in(before: &Surface, after: &mut Surface, area: Rect, mode: 
             lerp_premul(pb, pa, &mut tmp, fmt.alpha, k);
             pa.copy_from_slice(&tmp);
         } else {
-            let s = coverage.as_ref().map_or(1.0, |c| c.get(i).copied().unwrap_or(0.0));
+            let s = coverage.as_ref().map_or(1.0, |(c, m)| c.get(i * m).copied().unwrap_or(0.0).clamp(0.0, 1.0));
+            // A pixel the step changed outside the selection (Content-Aware Fill's adjusted fill
+            // area, Content-Aware Move's old place) fades in full, as before #15603.
+            let s = if s <= 0.0 && pa != pb { 1.0 } else { s };
             if s <= 0.0 {
                 // Outside the selection the step left the pixel alone; so does Fade.
                 continue;
