@@ -134,8 +134,8 @@ fn undo_redo(s: &mut Session, before: &Document) {
 /// Matches the three measured rows: bounds and sample points, at half the measured size.
 #[test]
 fn measured_straight_rows_fill_background_and_only_the_active_raster() {
+    let (mut s, ids) = scene();
     for row in 0..3 {
-        let (mut s, ids) = scene();
         let active = if row == 1 { ids.edge } else { ids.quads };
         if row == 2 {
             s.edit("Layer 0", |d, _| {
@@ -172,6 +172,8 @@ fn measured_straight_rows_fill_background_and_only_the_active_raster() {
         unchanged(d, &plain, &untouched);
         named_one_step(&s, past, "Content-aware Crop");
         undo_redo(&mut s, &before);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(doc(&s), &before);
     }
 }
 
@@ -179,8 +181,9 @@ fn measured_straight_rows_fill_background_and_only_the_active_raster() {
 #[test]
 fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
     let (x, y) = extension_sample();
+    let (mut s, ids) = scene();
+    let original = doc(&s).clone();
     for row in 0..3 {
-        let (mut s, ids) = scene();
         // Uniform donors isolate target selection from the existing turned-fill sampling policy.
         s.edit("Uniform Quads", |d, _| {
             let fmt = d.pixel_format();
@@ -213,15 +216,20 @@ fn turned_rows_sample_each_target_and_leave_other_layers_at_plain_crop() {
         unchanged(d, &plain, &untouched);
         named_one_step(&s, past, "Content-aware Crop");
         undo_redo(&mut s, &before);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(doc(&s), &before);
+        s.execute("edit.undo", json!({})).unwrap(); // Restore the scene before the uniform edit.
+        assert_eq!(doc(&s), &original);
     }
 }
 
 /// Selecting the Background leaves each other layer identical to its plain crop.
 #[test]
 fn background_active_is_not_a_second_target() {
+    let (mut s, ids) = scene();
+    let original = doc(&s).clone();
     for turned in [false, true] {
         let (x, y) = extension_sample();
-        let (mut s, ids) = scene();
         select(&mut s, ids.background);
         let p = frame(turned);
         let plain = plain_control(&mut s, &p);
@@ -230,6 +238,8 @@ fn background_active_is_not_a_second_target() {
         pixel(doc(&s), ids.background, x, y, WHITE);
         unchanged(doc(&s), &plain, &[ids.quads, ids.small, ids.edge, ids.hidden, ids.text]);
         named_one_step(&s, past, "Content-aware Crop");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(doc(&s), &original);
     }
 }
 

@@ -2096,6 +2096,7 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
     use craft_psd::atn::{self, AtnEvent, AtnItem};
     use craft_psd::descriptor::{Descriptor, Id, Value as D};
     use std::{cell::RefCell, rc::Rc};
+    photocraft_engine::install().unwrap();
     // A one-step .atn: Close (`Cls `) with Save: Yes.
     let seed = new_action("Seed", vec![("layer.new.layer".into(), json!({}))]);
     let (bytes, _) = photocraft_engine::atn_cmds::export("Set", &[&seed], &[], false).unwrap();
