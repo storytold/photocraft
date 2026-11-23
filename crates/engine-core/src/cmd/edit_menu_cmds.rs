@@ -310,7 +310,7 @@ pub use content_aware_scale::ContentAwareScalePreview;
 use content_aware_scale::content_aware_scale;
 pub use fade::{FadePreview, fade_preview, fade_surface};
 use fade::{can_fade, fade};
-pub use find_replace::find_matches;
+pub use find_replace::{BlockedTextLayer, FindReplaceWarning, find_matches, find_replace_warning};
 use find_replace::{find_replace, has_type_layer};
 pub(crate) use presets::current_path;
 pub use presets::{PRESET_FORMAT, PresetFile};

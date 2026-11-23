@@ -137,3 +137,25 @@ mod mask_escape_tests;
 
 #[cfg(test)]
 mod unchanged_edit_history_tests;
+
+/// Enter Type mode with the byte range returned by the engine selected. A search is a view
+/// operation, so opening the selection does not re-render an imported type layer or add history.
+pub(crate) fn select_find_match(app: &mut PhotocraftApp, id: LayerId, range: std::ops::Range<usize>) -> Option<(String, usize, usize)> {
+    let st = app.session.active()?;
+    let document = st.doc.id.0;
+    let text = text_layer(&st.doc, id)?;
+    let selected = text.text.get(range.clone())?;
+    let anchor = text.text.get(..range.start)?.chars().count();
+    let caret = anchor + selected.chars().count();
+    let vertical = text.orientation == photocraft_doc::text::Orientation::Vertical;
+    let previous_tool = app.ui.tool;
+    commit(app);
+    let session = session_key(app);
+    app.ui.text_edit = Some(TextEdit { layer: id.0, document: Some(document), caret, anchor, session: session.clone(), created: false, mask: false });
+    app.ui.text_edit_return_tool = (!previous_tool.is_type()).then_some(previous_tool);
+    app.ui.type_insertion_style = None;
+    app.ui.tool = if vertical { crate::state::Tool::VerticalType } else { crate::state::Tool::Type };
+    app.ui.mask_target = false;
+    app.ui.vector_mask_target = false;
+    Some((session, anchor, caret))
+}

@@ -350,8 +350,23 @@ pub(crate) fn hosted_command(app: &PhotocraftApp, id: DialogId) -> Option<(Strin
 /// Answers `ui.dialog.{open, set, confirm, cancel, apply}`; `None` for any other method.
 pub(crate) fn method(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Option<Reply> {
     let p = &req.params;
+    use crate::dialogs::find_replace_ui as find;
     if req.method == "ui.dialog.open" {
+        if p.get("kind").and_then(Value::as_str).is_some_and(|kind| kind.eq_ignore_ascii_case(find::CONTROL_ID)) {
+            return Some(Reply::from_result(find::open(app)));
+        }
         return Some(open(app, ctx, p));
+    }
+    if p.get("dialog").and_then(Value::as_str) == Some(find::CONTROL_ID) {
+        return Some(match req.method.as_str() {
+            "ui.dialog.set" => match p.get("field").and_then(Value::as_str) {
+                Some(field) => Reply::from_result(find::set_field(app, field, p.get("value").cloned().unwrap_or(Value::Null))),
+                None => err("need `dialog` and `field`"),
+            },
+            "ui.dialog.confirm" => Reply::from_result(find::command(app, p.get("action").and_then(Value::as_str).unwrap_or("done"))),
+            "ui.dialog.cancel" => Reply::from_result(find::close(app)),
+            _ => err("unknown Find and Replace dialog method"),
+        });
     }
     if !matches!(req.method.as_str(), "ui.dialog.set" | "ui.dialog.confirm" | "ui.dialog.cancel" | "ui.dialog.apply") {
         return None;

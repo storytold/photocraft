@@ -1,5 +1,11 @@
 use super::{Document, EngineError, FindCursor, LayerContent, LayerId, Result, Session, Value, bad, bool_or, json, layer_param, str_or};
 
+use photocraft_doc::LayerPath;
+
+#[cfg(test)]
+#[path = "find_replace_hidden_tests.rs"]
+mod hidden_tests;
+
 // ------------------------------------------------------------------ Find and Replace Text
 
 /// Byte ranges of `find` in `text` (case-insensitive unless `case`; whole words only with `whole`).
@@ -39,7 +45,7 @@ pub fn find_matches(text: &str, find: &str, case: bool, whole: bool) -> Vec<(usi
 
 fn type_layers(doc: &Document) -> Vec<LayerId> {
     // Layers panel order: bottom to top (upward), with group contents in stack position.
-    doc.walk().into_iter().filter(|(p, _, l)| matches!(l.content, LayerContent::Text(_)) && !doc.locks_at(p).all).map(|(_, _, l)| l.id).collect()
+    all_text_layers(doc).filter(|(path, _)| blocked(doc, path).is_none()).map(|(_, id)| id).collect()
 }
 
 /// Index in `layers` to start a new round from `active` (going upward in `doc.walk()`).
@@ -57,7 +63,129 @@ fn start_index(doc: &Document, layers: &[LayerId], active: Option<LayerId>) -> u
 
 pub(super) fn has_type_layer(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
-    if type_layers(&d.doc).is_empty() { Err("the document has no type layers".into()) } else { Ok(()) }
+    if all_text_layers(&d.doc).next().is_none() { Err("the document has no type layers".into()) } else { Ok(()) }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockedTextLayer {
+    Hidden,
+    Locked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FindReplaceWarning {
+    pub layer: LayerId,
+    pub name: String,
+    pub reason: BlockedTextLayer,
+}
+
+fn all_text_layers(doc: &Document) -> impl Iterator<Item = (LayerPath, LayerId)> + '_ {
+    doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).map(|(p, _, l)| (p, l.id))
+}
+
+fn blocked(doc: &Document, path: &[usize]) -> Option<BlockedTextLayer> {
+    if !doc.shown_at(path) {
+        Some(BlockedTextLayer::Hidden)
+    } else if doc.locks_at(path).all {
+        Some(BlockedTextLayer::Locked)
+    } else {
+        None
+    }
+}
+
+struct Query<'a> {
+    find: &'a str,
+    case: bool,
+    whole: bool,
+    forward: bool,
+    all_layers: bool,
+}
+
+impl<'a> Query<'a> {
+    fn parse(params: &'a Value) -> Result<Self> {
+        let find = params.get("find").and_then(Value::as_str).filter(|f| !f.is_empty()).ok_or_else(|| bad("edit.findAndReplaceText", "missing `find`"))?;
+        Ok(Self {
+            find,
+            case: bool_or(params, "caseSensitive", false),
+            whole: bool_or(params, "wholeWord", false),
+            forward: bool_or(params, "forward", true),
+            all_layers: bool_or(params, "allLayers", true),
+        })
+    }
+
+    fn includes(&self, id: LayerId, layer: Option<LayerId>) -> bool {
+        self.all_layers || layer == Some(id)
+    }
+
+    fn accepts_cursor(&self, doc: &Document, c: &FindCursor) -> bool {
+        c.find == self.find
+            && c.case_sensitive == self.case
+            && c.whole_word == self.whole
+            && c.forward == self.forward
+            && c.all_layers == self.all_layers
+            && doc.path_of(c.layer).is_some_and(|p| doc.shown_at(&p))
+    }
+
+    fn next_match(&self, text: &str, cursor: Option<(usize, usize)>) -> Option<(usize, usize)> {
+        let matches = find_matches(text, self.find, self.case, self.whole);
+        if self.forward {
+            matches.into_iter().find(|m| cursor.is_none_or(|(_, end)| m.0 >= end))
+        } else {
+            matches.into_iter().rev().find(|m| cursor.is_none_or(|(start, _)| m.1 <= start))
+        }
+    }
+}
+
+fn text_of(doc: &Document, id: LayerId) -> Option<&str> {
+    match &doc.layer(id)?.content {
+        LayerContent::Text(text) => Some(&text.text),
+        _ => None,
+    }
+}
+
+/// The blocked type layer a window would reach next. The check does not change the search cursor
+/// or the document. Once the user acknowledges the warnings, the ordinary command does the work.
+pub fn find_replace_warning(
+    s: &Session,
+    params: &Value,
+    cursor: Option<&FindCursor>,
+    round_start: Option<LayerId>,
+    skip: impl Fn(LayerId, BlockedTextLayer) -> bool,
+) -> Result<Option<FindReplaceWarning>> {
+    let query = Query::parse(params)?;
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let window_layer = if query.all_layers { None } else { layer_param(s, params).ok() };
+    let layers: Vec<_> = all_text_layers(doc).filter(|(_, id)| query.includes(*id, window_layer)).map(|(p, id)| (id, blocked(doc, &p))).collect();
+
+    let find = str_or(params, "action", "changeAll") == "find";
+    let cursor = cursor.filter(|c| find && query.accepts_cursor(doc, c));
+    let ids: Vec<_> = layers.iter().map(|(id, _)| *id).collect();
+    let start = cursor
+        .and_then(|c| layers.iter().position(|(id, reason)| *id == c.layer && reason.is_none()))
+        .unwrap_or_else(|| if find { start_index(doc, &ids, s.active().and_then(|st| st.active_layer)) } else { 0 });
+    let origin = cursor.and(round_start);
+    let limit = layers.len();
+    for k in 0..limit {
+        let Some(&(id, reason)) = layers.get((start + k) % layers.len().max(1)) else { break };
+        if k > 0 && origin == Some(id) {
+            break;
+        }
+        if let Some(reason) = reason {
+            if !skip(id, reason)
+                && let Some(layer) = doc.layer(id)
+            {
+                return Ok(Some(FindReplaceWarning { layer: id, name: layer.name.clone(), reason }));
+            }
+            continue;
+        }
+        if find {
+            let range = cursor.filter(|c| k == 0 && c.layer == id).map(|c| (c.start, c.end));
+            if text_of(doc, id).is_some_and(|text| query.next_match(text, range).is_some()) {
+                break;
+            }
+        }
+    }
+    Ok(None)
 }
 
 pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
@@ -109,11 +237,14 @@ pub(super) fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
         }
         "find" | "change" | "changeFind" => {
             let doc = st.doc.clone();
-            let same_query = s
-                .edit_state
-                .find_cursor
-                .as_ref()
-                .is_some_and(|c| c.find == find && c.case_sensitive == case && c.whole_word == whole && c.forward == forward && c.all_layers == all_layers);
+            let same_query = s.edit_state.find_cursor.as_ref().is_some_and(|c| {
+                c.find == find
+                    && c.case_sensitive == case
+                    && c.whole_word == whole
+                    && c.forward == forward
+                    && c.all_layers == all_layers
+                    && doc.path_of(c.layer).is_some_and(|path| doc.shown_at(&path))
+            });
             if !same_query {
                 // A new query starts a new round: forget both the cursor and the round origin.
                 s.edit_state.find_cursor = None;
