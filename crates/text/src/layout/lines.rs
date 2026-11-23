@@ -413,7 +413,7 @@ impl Para<'_> {
     /// vertical lines keep it.
     fn trailing_tracking(&self, slots: &[KernSlot]) -> f32 {
         let env = self.env;
-        if env.wraps || env.vertical || env.path_range.is_some() {
+        if env.wraps || env.vertical || env.on_path {
             return 0.0;
         }
         slots
