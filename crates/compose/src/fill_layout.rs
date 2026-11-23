@@ -45,15 +45,25 @@ pub fn gradient_layout(style: GradientStyle, angle: f32, scale: f32, offset: (f3
     g.express(style, start, end, mid, offset).unwrap_or(unchanged)
 }
 
+/// Whether a Gradient Overlay on `frame` takes the overlay layout and sampling of #14907
+/// ([`overlay_gradient_layout`], `effects::overlay_gradient_t`): only a frame whose width and
+/// height are both even. Those are what the issue measured; on a frame with an odd width or height
+/// the pixel-centre sampling already puts the centre on a pixel, and it keeps today's layout and
+/// sampling. The CPU compositor and the GPU planner both decide by this.
+pub fn overlay_centres_on_corner(frame: Rect) -> bool {
+    frame.width().max(1).is_multiple_of(2) && frame.height().max(1).is_multiple_of(2)
+}
+
 /// [`gradient_layout`] for a Gradient Overlay (#14907). A scaled Linear overlay snaps its end
 /// points at Scale 100 as [`gradient_layout`] does, then scales that whole-pixel half-vector
 /// about the snapped midpoint, truncating toward zero: on a 150 px tall layer at 90° Scale 50
 /// runs 74 px about row 150 (the reference application's column, within 0 levels at Classic
 /// Smoothness 100) where scaling before snapping runs 75 px about 149.5. Linear at Scale 100 and
-/// every Reflected (scaled Reflected is not measured) are [`gradient_layout`] bit for bit.
+/// every Reflected (scaled Reflected is not measured) are [`gradient_layout`] bit for bit, and so
+/// is every overlay on a frame with an odd width or height ([`overlay_centres_on_corner`]).
 pub fn overlay_gradient_layout(style: GradientStyle, angle: f32, scale: f32, offset: (f32, f32), frame: Rect) -> (f32, f32, (f32, f32)) {
     let shared = gradient_layout(style, angle, scale, offset, frame);
-    if style != GradientStyle::Linear || scale == 1.0 || !scale.is_finite() {
+    if style != GradientStyle::Linear || scale == 1.0 || !scale.is_finite() || !overlay_centres_on_corner(frame) {
         return shared;
     }
     let Some(g) = Grid::new(style, angle, offset, frame) else { return shared };

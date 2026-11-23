@@ -35,10 +35,15 @@ fn gradient(style: GradientStyle, angle: f32, scale: f32, offset: (f32, f32)) ->
 }
 
 fn shape_doc(depth: SampleType, effect: Effect) -> Document {
+    shape_doc_in(depth, Rect::new(100, 75, 300, 225), effect)
+}
+
+/// [`shape_doc`] with the orange rectangle covering `shape`.
+fn shape_doc_in(depth: SampleType, shape: Rect, effect: Effect) -> Document {
     let mut d = Document::with_background("t", Size::new(400, 300), ColorMode::Rgb, depth, Color::WHITE);
     let mut l = Layer::raster("Shape", d.pixel_format());
     if let Some(s) = l.surface_mut() {
-        s.fill_rect(Rect::new(100, 75, 300, 225), &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+        s.fill_rect(shape, &[1.0, 128.0 / 255.0, 0.0, 1.0]);
     }
     l.effects.items = vec![effect];
     d.layers.push(l);
@@ -202,6 +207,41 @@ fn gradient_fills_and_strokes_keep_centre_sampling() {
     let row = render(&d, Rect::new(100, 150, 300, 151));
     assert_eq!(row.px[0], row.px[199]);
     assert_eq!(row.px[1], row.px[198]);
+}
+
+/// Layers with an odd width or height were not measured (#14907): their overlays keep today's
+/// layout and pixel-centre sampling. On such a layer today's centre already falls on a pixel.
+#[test]
+fn odd_sized_overlays_keep_todays_sampling_and_layout() {
+    let styles = [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond];
+    for frame in [Rect::new(100, 75, 301, 226), Rect::new(100, 75, 301, 225), Rect::new(100, 75, 300, 226), Rect::new(-3, 7, 30, 18)] {
+        for style in styles {
+            for angle in [0.0, 45.0, 90.0, 135.0] {
+                for scale in [1.0, 0.5, 0.1] {
+                    for offset in [(0.0, 0.0), (0.25, 0.0)] {
+                        let what = format!("{style:?} {angle} scale {scale} {offset:?} {frame:?}");
+                        let shared = crate::fill_layout::gradient_layout(style, angle, scale, offset, frame);
+                        assert_eq!(shared, crate::fill_layout::overlay_gradient_layout(style, angle, scale, offset, frame), "{what}");
+                        let (a, s, o) = shared;
+                        for (x, y) in [(frame.x0, frame.y0), ((frame.x0 + frame.x1) / 2, (frame.y0 + frame.y1) / 2), (frame.x1 - 1, frame.y1 - 1)] {
+                            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                            let today = gradient_t(style, a, s, false, o, frame, px, py);
+                            let now = overlay_gradient_t(style, a, s, false, o, frame, px, py);
+                            assert_eq!(today.to_bits(), now.to_bits(), "{what} ({x},{y})");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // A 201 x 151 Radial overlay: its middle pixel (200, 150) samples t = 0 and its neighbours
+    // mirror each other, as today.
+    let d = shape_doc_in(SampleType::U8, Rect::new(100, 75, 301, 226), overlay(gradient(GradientStyle::Radial, 90.0, 1.0, (0.0, 0.0))));
+    let red = |x: i32, y: i32| (render(&d, Rect::new(x, y, x + 1, y + 1)).px[0][0] * 255.0).round() as u8;
+    assert_eq!(red(200, 150), 0, "201 x 151 Radial: middle pixel");
+    assert_eq!(red(199, 150), red(201, 150), "201 x 151 Radial: row mirrors about the middle pixel");
+    assert_eq!(red(200, 149), red(200, 151), "201 x 151 Radial: column mirrors about the middle pixel");
 }
 
 #[test]

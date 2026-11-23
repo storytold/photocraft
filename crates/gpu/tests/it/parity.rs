@@ -1420,7 +1420,8 @@ fn satin_size_one_gpu_matches_cpu() {
 
 /// #14907: Gradient Overlays sample the corner-centred overlay layout on the GPU as on the CPU,
 /// for every style, scaled Linear and offset centres, while a gradient stroke keeps the shared
-/// pixel-centre sampling.
+/// pixel-centre sampling. Layers with an odd width or height keep today's layout and sampling on
+/// both.
 #[test]
 fn gradient_overlay_centre_gpu_matches_cpu() {
     let Some(mut g) = gpu() else { return };
@@ -1432,7 +1433,8 @@ fn gradient_overlay_centre_gpu_matches_cpu() {
         })
         .collect();
     let styles = [GradientStyle::Linear, GradientStyle::Radial, GradientStyle::Angle, GradientStyle::Reflected, GradientStyle::Diamond];
-    for style in styles {
+    let shapes = [Rect::new(100, 75, 300, 225), Rect::new(100, 75, 301, 226), Rect::new(100, 75, 301, 225)];
+    for (shape, style) in shapes.into_iter().flat_map(|shape| styles.map(|style| (shape, style))) {
         for (scale, offset) in [(1.0, (0.0, 0.0)), (0.5, (0.0, 0.0)), (0.1, (0.0, 0.0)), (1.0, (0.25, 0.0)), (0.7, (-0.1, 0.2))] {
             let gradient = Gradient { stops: stops.clone(), opacity_stops: Vec::new(), style, angle: 90.0, scale, reverse: false, align: true, offset };
             for effect in [
@@ -1448,10 +1450,10 @@ fn gradient_overlay_centre_gpu_matches_cpu() {
                 let mut doc = Document::new("Gradient overlay centre", Size::new(400, 300), ColorMode::Rgb, SampleType::U8);
                 doc.layers.push(Layer::new("Background", LayerContent::Fill(Fill::Solid(Color::WHITE))));
                 let mut layer = Layer::raster("Shape", PixelFormat::RGBA8);
-                layer.surface_mut().unwrap().fill_rect(Rect::new(100, 75, 300, 225), &[1.0, 128.0 / 255.0, 0.0, 1.0]);
+                layer.surface_mut().unwrap().fill_rect(shape, &[1.0, 128.0 / 255.0, 0.0, 1.0]);
                 layer.effects.items.push(effect);
                 doc.layers.push(layer);
-                diff_rect(&mut g, &doc, doc.bounds(), &format!("{style:?} scale {scale} offset {offset:?}")).unwrap();
+                diff_rect(&mut g, &doc, doc.bounds(), &format!("{style:?} scale {scale} offset {offset:?} {shape:?}")).unwrap();
             }
         }
     }

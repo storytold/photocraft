@@ -350,10 +350,11 @@ pub fn gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, o
 /// (the reference application's (200, 150) on a 200 × 150 layer at (100, 75)) instead of between
 /// four; a Diamond's radius is one pixel short of half its length (its row and column then
 /// match the measured ones exactly). Linear and Reflected are [`gradient_t`] bit for bit. Gradient
-/// fills, gradient strokes and shape gradients were not measured and keep [`gradient_t`].
+/// fills, gradient strokes, shape gradients and overlays on `bounds` with an odd width or height
+/// ([`crate::fill_layout::overlay_centres_on_corner`]) were not measured and keep [`gradient_t`].
 #[allow(clippy::too_many_arguments)]
 pub fn overlay_gradient_t(style: GradientStyle, angle: f32, scale: f32, reverse: bool, offset: (f32, f32), bounds: Rect, x: f32, y: f32) -> f32 {
-    gradient_t_at(style, angle, scale, reverse, offset, bounds, x, y, true)
+    gradient_t_at(style, angle, scale, reverse, offset, bounds, x, y, crate::fill_layout::overlay_centres_on_corner(bounds))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -616,10 +617,11 @@ pub(super) fn paint_fx(
 }
 
 /// A Gradient Overlay's paint: [`paint_fx`]'s gradient laid out and sampled the overlay way
-/// ([`crate::fill_layout::overlay_gradient_layout`], [`overlay_gradient_t`]; #14907).
+/// ([`crate::fill_layout::overlay_gradient_layout`], [`overlay_gradient_t`]; #14907) when
+/// `shape_bounds` is even-sized ([`crate::fill_layout::overlay_centres_on_corner`]), else as today.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_gradient_overlay(dst: &mut Buffer, m: &Map, g: &Gradient, shape_bounds: Rect, big: Rect, blend: BlendMode, opacity: f32) {
-    paint_gradient(dst, m, g, shape_bounds, big, blend, opacity, true);
+    paint_gradient(dst, m, g, shape_bounds, big, blend, opacity, crate::fill_layout::overlay_centres_on_corner(shape_bounds));
 }
 
 #[allow(clippy::too_many_arguments)]

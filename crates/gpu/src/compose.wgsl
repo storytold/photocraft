@@ -816,8 +816,9 @@ fn gradient_t(d: vec2<i32>) -> f32 {
     var t: f32;
     switch style {
         case 1: { t = sqrt(dx * dx + dy * dy) / (len / 2.0); }                  // Radial
-        // Angle; an overlay's centre pixel samples (0, 0) exactly, where Rust's atan2 is 0.
-        case 2: { t = rem_euclid((a - select(atan2(-dy, dx), 0.0, overlay && dx == 0.0 && dy == 0.0)) / 6.28318530718, 1.0); }
+        // Angle; the centre pixel (an overlay's, or any on an odd-sized frame) samples (0, 0)
+        // exactly, where Rust's atan2 is 0 and Metal's is not.
+        case 2: { t = rem_euclid((a - select(atan2(-dy, dx), 0.0, dx == 0.0 && dy == 0.0)) / 6.28318530718, 1.0); }
         case 3: { t = abs((along - corner) / (chord / 2.0)); }                  // Reflected
         case 4: { t = (abs(along) + abs(across)) / select(len / 2.0, max(len / 2.0 - 1.0, 0.5), overlay); } // Diamond
         default: { t = (along - corner) / chord + 0.5; }                        // Linear

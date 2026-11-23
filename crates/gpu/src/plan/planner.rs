@@ -1397,8 +1397,9 @@ impl<'a> Planner<'a> {
             Paint::Color(c) => p.color = [c[0], c[1], c[2], 1.0],
             Paint::Gradient(g) | Paint::OverlayGradient(g) => {
                 // effects::paint_fx: whole-pixel end points (fill_layout::gradient_layout); an
-                // overlay is laid out and sampled the overlay way (style + 8 in the shader).
-                let overlay = matches!(paint, Paint::OverlayGradient(_));
+                // overlay on an even-sized frame is laid out and sampled the overlay way (style + 8
+                // in the shader), as effects::paint_gradient_overlay decides.
+                let overlay = matches!(paint, Paint::OverlayGradient(_)) && photocraft_compose::fill_layout::overlay_centres_on_corner(sb);
                 let layout = if overlay { photocraft_compose::fill_layout::overlay_gradient_layout } else { photocraft_compose::fill_layout::gradient_layout };
                 let (angle, scale, offset) = layout(g.style, g.angle, g.scale, g.offset, sb);
                 let style = style_index(g.style) + if overlay { 8.0 } else { 0.0 };
