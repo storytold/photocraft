@@ -22,6 +22,7 @@
 #[path = "../tests/support/layout_doc.rs"]
 mod layout_doc;
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2};

@@ -14,6 +14,7 @@ use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWo
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::commands::CommandState;
 use craft::ui::value_drag::SliderScale;
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::prefs::Preferences;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -39,9 +40,10 @@ pub struct ShellUi {
 }
 
 /// The workspaces of the app.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, craft::ui::contract::PlainData)]
 pub struct Workspaces {
     /// Built-in and saved workspaces, the current one, the lock.
+    #[plain_data(assume = "craft-behavior workspace data: plain values and strings")]
     pub set: WorkspaceSet<String>,
 }
 
@@ -113,11 +115,11 @@ pub fn load(app: &mut PhotocraftApp) {
             if set.find(&stored.current).is_some() {
                 set.current = stored.current;
             }
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
         }
         None => {
             let moved = migrate(app, &prefs, &mut set);
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
             if moved {
                 store(app);
             }
@@ -320,6 +322,11 @@ pub fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     workspace_states(&app.workspaces.set).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
 }
 
+/// [`states`], derived from the workspaces.
+pub fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &app.workspaces, || states(app))
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Menu commands.
 // ---------------------------------------------------------------------------------------------------------------
@@ -374,7 +381,7 @@ fn open_extras(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 fn open_preview32(app: &mut PhotocraftApp) -> Option<Result<Value, String>> {
     let d = app.session.active()?;
-    let h = app.session.color.hdr.get(&d.doc.id).copied().unwrap_or_default();
+    let h = app.session.color().hdr.get(&d.doc.id).copied().unwrap_or_default();
     let method = if h.highlight_compression { "highlightCompression" } else { "exposureGamma" };
     let fields = DialogFields::from_pairs([
         ("method", FieldValue::Text(method.into())),
@@ -618,7 +625,7 @@ mod tests {
         }
         crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
         let d = app.session.active().unwrap().doc.id;
-        assert_eq!((app.session.color.hdr[&d].exposure, app.session.color.hdr[&d].gamma), (1.5, 1.5));
+        assert_eq!((app.session.color().hdr[&d].exposure, app.session.color().hdr[&d].gamma), (1.5, 1.5));
 
         // Highlight Compression disables the two ranges.
         menu(&mut app, PREVIEW32, &json!({})).expect("handled").unwrap();

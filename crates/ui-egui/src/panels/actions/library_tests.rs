@@ -1,3 +1,4 @@
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -16,7 +17,7 @@ fn new_app() -> Box<PhotocraftApp> {
 }
 
 fn sets(app: &PhotocraftApp) -> Vec<&str> {
-    app.session.actions.list.sets()
+    app.session.actions().list.sets()
 }
 
 /// The panel menu's `event`, then the question it opened.
@@ -90,7 +91,7 @@ fn replace_holds_the_read_file_until_ok() {
     assert_eq!(sets(&app), ["Original"]);
     crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
     assert_eq!(sets(&app), ["Replacement"]);
-    assert_eq!(app.session.actions.list.actions().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Invert"]);
+    assert_eq!(app.session.actions().list.actions().iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Invert"]);
 }
 
 /// The chosen path and the bytes read need the automation policy, and the bytes need it again on OK.
