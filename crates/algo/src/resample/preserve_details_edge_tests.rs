@@ -203,3 +203,37 @@ fn dering_holds_a_bounded_group_of_bands() {
     let group = rayon::current_num_threads().max(1) * 2;
     assert!(held <= group, "dering held {held} of {} bands at once (group {group})", 12800usize.div_ceil(BAND));
 }
+
+/// Without a canvas, positions outside the content read the default pixel, as the resize does:
+/// an opaque square on transparency keeps its partly transparent fringe instead of the clamp
+/// making it opaque, and the result equals the one in a canvas of transparency around it.
+#[test]
+fn enlarging_without_a_canvas_keeps_the_transparent_fringe() {
+    let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+    s.fill_rect(Rect::new(10, 10, 30, 30), &[0.2, 0.6, 1.0, 1.0]);
+    let o = resize_surface(&s, 2.0, 2.0, Resample::PreserveDetails);
+    // The square's first output column: Lanczos leaves it partly transparent (about 0.79).
+    let fringe = o.pixel(20, 40)[3];
+    assert!(fringe > 0.0 && fringe < 1.0, "alpha {fringe} on the square's edge");
+    let framed = resize_surface_in_canvas(&s, 2.0, 2.0, Resample::PreserveDetails, CANVAS);
+    let r = o.content_bounds().union(&framed.content_bounds());
+    assert!(o.read_region(r) == framed.read_region(r), "differs from the same square in a transparent canvas");
+}
+
+/// With a canvas much wider than the layer, dering reads only the source columns the output
+/// samples use, not the whole canvas width.
+#[test]
+fn dering_reads_only_the_columns_it_uses() {
+    let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+    s.fill_rect(Rect::new(1000, 10, 1020, 30), &[0.2, 0.6, 1.0, 1.0]);
+    let canvas = Rect::new(0, 0, 20_000, 40);
+    let mut o = resize_surface_in_canvas(&s, 2.0, 2.0, Resample::Lanczos, canvas);
+    // One worker thread, so the thread-local counter sees every read.
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let cols = pool.install(|| {
+        DERING_READ_COLUMNS.with(|c| c.set(0));
+        dering(&mut o, &s, 2.0, 2.0, Some(canvas));
+        DERING_READ_COLUMNS.with(std::cell::Cell::get)
+    });
+    assert!(cols <= 40, "one dering read spanned {cols} source columns");
+}

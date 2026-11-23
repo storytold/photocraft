@@ -452,14 +452,20 @@ pub(crate) const PD_RADIUS: f64 = 0.6;
 /// Keeps each sample of `out` (a resize of `src` by `(sx, sy)`) within the range of the two by
 /// two source pixels around its source position, channel by channel. Colour channels only count
 /// the source pixels that are not fully transparent. Source positions are clamped into the area
-/// the resize reads (the content, or with `canvas` that and the canvas).
+/// the resize reads: with `canvas` the content and the canvas, whose edges repeat outwards;
+/// without, the content and one pixel around it, since beyond the content the resize reads the
+/// default pixel (so an opaque layer's partly transparent fringe stays so).
 ///
 /// Source rows are read one at a time, whatever the scale, and bands of output rows are written
 /// a group at a time, like [`resize_pass`], so memory stays bounded.
 pub(crate) fn dering(out: &mut Surface, src: &Surface, sx: f64, sy: f64, canvas: Option<Rect>) {
     let dst = out.content_bounds();
     let content = src.content_bounds();
-    let area = canvas.map_or(content, |c| content.union(&c));
+    let area = match canvas {
+        Some(c) => content.union(&c),
+        None if content.is_empty() => content,
+        None => content.inflate(1),
+    };
     if dst.is_empty() || area.is_empty() || !(sx > 0.0 && sy > 0.0) {
         return;
     }
@@ -473,14 +479,25 @@ pub(crate) fn dering(out: &mut Surface, src: &Surface, sx: f64, sy: f64, canvas:
         let i1 = ((u + 1.0).clamp(f64::from(lo), f64::from(hi)) as i32 - lo) as usize;
         (i0, i1)
     };
-    let xs: Vec<(usize, usize)> = (dst.x0..dst.x1).map(|o| pair(o, sx, area.x0, area.x1 - 1)).collect();
-    let sw = area.width() as usize * n;
-    // Source row `k` of the area (as `pair` indexes it) into `buf`.
+    let mut xs: Vec<(usize, usize)> = (dst.x0..dst.x1).map(|o| pair(o, sx, area.x0, area.x1 - 1)).collect();
+    // Only the source columns the output reads (a small layer on a wide canvas reads a few), with
+    // `xs` rebased to them.
+    let c0 = xs.iter().map(|&(a, _)| a).min().unwrap_or(0);
+    let c1 = xs.iter().map(|&(_, b)| b + 1).max().unwrap_or(c0);
+    for (a, b) in &mut xs {
+        (*a, *b) = (*a - c0, *b - c0);
+    }
+    let sw = (c1 - c0) * n;
+    let x0 = area.x0.saturating_add(i32::try_from(c0).unwrap_or(i32::MAX));
+    let x1 = area.x0.saturating_add(i32::try_from(c1).unwrap_or(i32::MAX));
+    // Source row `k` of the area (as `pair` indexes it), columns `c0..c1`, into `buf`.
     let read_row = |k: usize, buf: &mut Vec<f32>| {
         let y = area.y0.saturating_add(i32::try_from(k).unwrap_or(i32::MAX));
-        let r = Rect::new(area.x0, y, area.x1, y.saturating_add(1));
+        let r = Rect::new(x0, y, x1, y.saturating_add(1));
         #[cfg(test)]
         DERING_MAX_READ_ROWS.fetch_max(r.height() as usize, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(test)]
+        DERING_READ_COLUMNS.with(|c| c.set(c.get().max(r.width() as usize)));
         src.read_region_into(r, buf);
     };
     let band = |out: &Surface, b: usize| -> (Rect, Vec<f32>) {
@@ -574,6 +591,11 @@ type SourceRow = (Option<usize>, Vec<f32>);
 /// before writing them, so tests can check both stay bounded.
 #[cfg(test)]
 pub(crate) static DERING_MAX_READ_ROWS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+thread_local! {
+    /// The most source columns one read of [`dering`] has spanned on this thread.
+    pub(crate) static DERING_READ_COLUMNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 #[cfg(test)]
 pub(crate) static DERING_MAX_HELD_BANDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
