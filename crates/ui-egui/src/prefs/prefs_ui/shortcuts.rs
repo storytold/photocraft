@@ -15,9 +15,11 @@ use craft::keymap::{Builtins, CommandRef, ImportOptions, Keymap, NoneDefined, Ov
 use craft::menu::Row;
 use craft::menu::shortcuts::{Area, ConflictMode, DialogState, DialogTab, Format, Options, Outcome, ShortcutWords, ShortcutsDialog, kys_error_text};
 use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
+use craft::ui::display::Text;
+use craft::ui::layout_components::Row as LayoutRow;
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::Env;
+use craft::ui::runtime::env::{Env, with_env};
 use craft::ui::runtime::windows;
 use photocraft_engine::keymap_defs;
 use photocraft_engine::prefs::{MenuCustomization, Preferences};
@@ -315,36 +317,40 @@ fn menus_body(ui: &mut egui::Ui, rows: &[Row], draft: &mut MenusDraft) -> bool {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, height, items.len(), |ui, range| {
         for row in &items[range] {
             let id = row.command.id.as_str();
-            ui.push_id(id, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{} › {}", row.path.join(" › "), row.label));
-                    // Items that can't be hidden (File › Close, Save…, Edit › Menus…) have no visibility
-                    // control at all, as in the reference application (#5096, #14335).
-                    if MenuCustomization::hideable(id) {
-                        let visible = !draft.hidden.contains(id);
-                        let shown = Checkbox::new(Bind::given(visible)).label(tl!("Visible").to_string()).show(ui);
-                        match shown.events.value() {
-                            Some(&true) => {
-                                draft.hidden.remove(id);
+            with_env(
+                ui,
+                |set| set.id_salt = Some(egui::Id::unique(id)),
+                |ui| {
+                    LayoutRow::new().show(ui, |ui, _| {
+                        Text::new(format!("{} › {}", row.path.join(" › "), row.label)).show(ui);
+                        // Items that can't be hidden (File › Close, Save…, Edit › Menus…) have no visibility
+                        // control at all, as in the reference application (#5096, #14335).
+                        if MenuCustomization::hideable(id) {
+                            let visible = !draft.hidden.contains(id);
+                            let shown = Checkbox::new(Bind::given(visible)).label(tl!("Visible").to_string()).show(ui);
+                            match shown.events.value() {
+                                Some(&true) => {
+                                    draft.hidden.remove(id);
+                                }
+                                Some(&false) => {
+                                    draft.hidden.insert(id.to_owned());
+                                }
+                                None => {}
                             }
-                            Some(&false) => {
-                                draft.hidden.insert(id.to_owned());
+                        }
+                        let current = draft.colors.get(id).map_or("none", String::as_str).to_owned();
+                        let current = COLORS.iter().copied().find(|c| *c == current).unwrap_or("none");
+                        let picked = Select::new(tl!("Color").to_string(), Bind::given(current), &colors).show(ui);
+                        if let Some(&color) = picked.events.value() {
+                            if color == "none" {
+                                draft.colors.remove(id);
+                            } else {
+                                draft.colors.insert(id.to_owned(), color.to_owned());
                             }
-                            None => {}
                         }
-                    }
-                    let current = draft.colors.get(id).map_or("none", String::as_str).to_owned();
-                    let current = COLORS.iter().copied().find(|c| *c == current).unwrap_or("none");
-                    let picked = Select::new(tl!("Color").to_string(), Bind::given(current), &colors).show(ui);
-                    if let Some(&color) = picked.events.value() {
-                        if color == "none" {
-                            draft.colors.remove(id);
-                        } else {
-                            draft.colors.insert(id.to_owned(), color.to_owned());
-                        }
-                    }
-                });
-            });
+                    });
+                },
+            );
         }
     });
     *draft != before

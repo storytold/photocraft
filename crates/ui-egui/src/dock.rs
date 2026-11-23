@@ -31,7 +31,7 @@ pub fn snapshot(app: &PhotocraftApp) -> Value {
 /// Remembers the layout in the preferences while Remember Workspace Changes is on, when it differs from the one
 /// remembered.
 pub fn persist(app: &mut PhotocraftApp) {
-    if app.panel_recovery.as_ref().is_some_and(|recovery| recovery.fallback != app.ui.docking) {
+    if app.panel_recovery.as_ref().is_some_and(|recovery| recovery.fallback != *app.ui.docking) {
         finish_recovery(app);
     }
     if !app.session.prefs().workspace.remember_workspace_changes {
@@ -64,11 +64,11 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
 
 fn restore_layout(app: &mut PhotocraftApp, v: &Value, workspace: Workspace, unreadable: bool) {
     finish_recovery(app);
+    std::sync::Arc::make_mut(&mut app.ui.docking).replace(workspace);
     if unreadable {
-        app.panel_recovery = Some(Recovery { saved: v.clone(), fallback: workspace.clone() });
+        app.panel_recovery = Some(Recovery { saved: v.clone(), fallback: (*app.ui.docking).clone() });
         crate::notices::post_panel_recovery(app);
     }
-    app.ui.docking.replace(workspace);
     apply_panels(app, v);
 }
 

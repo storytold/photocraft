@@ -39,9 +39,10 @@ pub struct ShellUi {
 }
 
 /// The workspaces of the app.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, craft::ui::contract::PlainData)]
 pub struct Workspaces {
     /// Built-in and saved workspaces, the current one, the lock.
+    #[plain_data(assume = "craft-behavior workspace data: plain values and strings")]
     pub set: WorkspaceSet<String>,
 }
 
@@ -113,11 +114,11 @@ pub fn load(app: &mut PhotocraftApp) {
             if set.find(&stored.current).is_some() {
                 set.current = stored.current;
             }
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
         }
         None => {
             let moved = migrate(app, &prefs, &mut set);
-            app.workspaces = Workspaces { set };
+            *app.workspaces = Workspaces { set };
             if moved {
                 store(app);
             }
@@ -200,7 +201,7 @@ fn restore_extras(app: &mut PhotocraftApp, id: &str) {
 /// layout is remembered. The host's chrome flags (menu bar, rail) stay as the host has them.
 pub fn select(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
     let switched = app.workspaces.set.current != id;
-    app.workspaces.set.select(id, &mut app.ui.docking).map_err(refused)?;
+    app.workspaces.set.select(id, std::sync::Arc::make_mut(&mut app.ui.docking)).map_err(refused)?;
     if switched {
         crate::dock::finish_recovery(app);
     }
@@ -216,7 +217,7 @@ pub fn save(app: &mut PhotocraftApp, name: &str) -> Result<String, String> {
 }
 
 fn save_keeping(app: &mut PhotocraftApp, name: &str, keeps: WorkspaceKeeps) -> Result<String, String> {
-    let live = app.ui.docking.clone();
+    let live = craft::behavior::dock::Workspace::clone(&app.ui.docking);
     let id = app.workspaces.set.save(name, live, WorkspaceChrome::default(), keeps).map_err(refused)?;
     let extras = captured(app.session.prefs(), keeps);
     app.session.prefs.edit(|p| {
@@ -256,12 +257,12 @@ fn delete_id(app: &mut PhotocraftApp, id: &str) -> Result<(), String> {
 /// Runs a workspace command. New and Delete without a name open their hosted dialog and return its id.
 pub fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, command: WorkspaceCommands) -> Result<Value, String> {
     let ask = if command == WorkspaceCommands::Reset {
-        app.workspaces.set.reset(&mut app.ui.docking).map_err(refused)?;
+        app.workspaces.set.reset(std::sync::Arc::make_mut(&mut app.ui.docking)).map_err(refused)?;
         crate::dock::finish_recovery(app);
         crate::dock::persist(app);
         None
     } else {
-        run_workspace(&mut app.workspaces.set, &mut app.ui.docking, command)
+        run_workspace(&mut app.workspaces.set, std::sync::Arc::make_mut(&mut app.ui.docking), command)
     };
     match ask {
         Some(WorkspaceAsk::Name) => {
@@ -323,6 +324,11 @@ pub fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
 /// The state of each workspace command, for the command source.
 pub fn states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
     workspace_states(&app.workspaces.set).into_iter().map(|(command, state)| (CommandRef::from(command), state)).collect()
+}
+
+/// [`states`], derived from the workspaces.
+pub fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    crate::app::framework::derived_states(app, name, &app.workspaces, || states(app))
 }
 
 // ---------------------------------------------------------------------------------------------------------------

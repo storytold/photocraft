@@ -63,7 +63,7 @@ fn moving_set(app: &PhotocraftApp) -> Vec<LayerId> {
     {
         let moving = app.doc_queries.moving(&app.session, st, || {
             let selected = st.selected_layers();
-            let whole = crate::move_ui::with_descendants(&st.doc, &move_targets(&st.doc, &selected));
+            let whole = crate::move_ui::with_descendants(&st.doc, &move_targets(&st.doc, selected));
             MovingLayers { selected: selected.into(), whole: whole.into() }
         });
         // Selected pixels float off the selected layers alone (a floating piece never snaps to its own layer), so
@@ -111,7 +111,9 @@ fn build(st: &photocraft_engine::DocState, options: &SnapOptions, exclude: &[Lay
     let doc = &st.doc;
     let bounds = Rect::new(0.0, 0.0, doc.size.width as f64, doc.size.height as f64);
     let guides = doc.guides.vertical.iter().map(|g| (Axis::Y, *g)).chain(doc.guides.horizontal.iter().map(|g| (Axis::X, *g)));
-    let mut t = SnapTargets::new().with_document(options, bounds, guides, Some(grid));
+    // Layer and selection edges snap a box beside them too, as in the reference application: their spans only shape
+    // the drawn smart guide.
+    let mut t = SnapTargets::new().reach_past_spans().with_document(options, bounds, guides, Some(grid));
     if options.layers {
         for (_, _, l) in doc.walk() {
             if !l.visible || exclude.contains(&l.id) {
