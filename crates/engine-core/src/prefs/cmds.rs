@@ -1,4 +1,6 @@
 use super::customize::{keyboard_shortcuts, menus};
+use super::files::{file_target, writable};
+use super::toolbar_presets;
 use super::validate::{SECTIONS, get_path, keyed};
 use super::{CommandSpec, EngineError, Map, Result, Session, ToolbarCustomization, Value, json};
 use crate::color_cmds::ColorExt;
@@ -115,8 +117,21 @@ fn preferences_section(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Edit › Toolbar: the toolbar's group layout (`toolbar` slots and `extras`, each a list of tool
-/// groups), and the older flat `hidden` list. Returns the resulting layout.
+/// groups), and the older flat `hidden` list. `loadPreset` reads a `.tbr` toolbar preset into them
+/// first (its lists, where `toolbar` / `extras` aren't given too, and its tool letters, taken with no
+/// conflict check); `savePreset` writes the result as one. A preset that can't be read or written
+/// changes nothing. Returns the resulting layout.
 fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "edit.toolbar";
+    let preset = match p.get("loadPreset").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v @ Value::Object(_)) => {
+            let (bytes, _) = crate::preset_import_cmds::file_bytes_limited(v, cmd, ".tbr file", toolbar_presets::MAX_BYTES)?;
+            Some(toolbar_presets::read(&bytes).map_err(|e| bad(cmd, e))?)
+        }
+        Some(_) => return Err(bad(cmd, "`loadPreset` is {\"path\": …} or {\"data\": base64}")),
+    };
+    let save = file_target(cmd, p.get("savePreset"))?;
     let ids = |k: &str| -> Option<Vec<String>> { p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()) };
     // A list of groups; a bare name is a group of one.
     let groups = |k: &str| -> Result<Option<Vec<Vec<String>>>> {
@@ -129,8 +144,14 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
         };
         list.iter().map(group).collect::<Result<Vec<Vec<String>>>>().map(Some)
     };
-    let (toolbar, extras) = (groups("toolbar")?, groups("extras")?);
-    s.edit_prefs(|pr| {
+    let (mut toolbar, mut extras) = (groups("toolbar")?, groups("extras")?);
+    if let Some(preset) = &preset {
+        toolbar = toolbar.or_else(|| Some(preset.toolbar.clone()));
+        extras = extras.or_else(|| Some(preset.extras.clone()));
+    }
+    let mut next = s.prefs().clone();
+    {
+        let pr = &mut next;
         if p.get("reset").and_then(Value::as_bool) == Some(true) {
             pr.toolbar = ToolbarCustomization::default();
         }
@@ -150,9 +171,26 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
             pr.toolbar.toolbar = Some(layout.toolbar);
             pr.toolbar.extras = Some(layout.extras);
         }
-    });
-    let layout = s.prefs().toolbar.layout();
-    Ok(json!({"toolbar": layout.toolbar, "extras": layout.extras}))
+        if let Some(preset) = &preset {
+            toolbar_presets::apply_letters(pr, &preset.letters);
+        }
+    }
+    let layout = next.toolbar.layout();
+    let mut out = json!({"toolbar": layout.toolbar, "extras": layout.extras});
+    // Written before the change is kept, so a target that can't be written changes nothing.
+    if let Some(target) = save {
+        let bytes = toolbar_presets::write(&next);
+        match target {
+            None => out["preset"] = json!(photocraft_paint::tile::b64_encode(&bytes)),
+            Some(path) => {
+                writable(&path).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+                toolbar_presets::write_file(&path, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+                out["presetPath"] = json!(path);
+            }
+        }
+    }
+    s.edit_prefs(|pr| *pr = next);
+    Ok(out)
 }
 
 macro_rules! spec {
@@ -238,7 +276,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Toolbar…",
             ["Edit"],
             None,
-            r##"{"toolbar":[["<tool>",…],…]?,"extras":[["<tool>",…],…]?,"hidden":["<tool>",…]?,"reset":bool=false}"##,
+            r##"{"toolbar":[["<tool>",…],…]?,"extras":[["<tool>",…],…]?,"hidden":["<tool>",…]?,"reset":bool=false,"loadPreset":{"path":".tbr"}|{"data":base64}?,"savePreset":true|{"path":".tbr"}?} (a .tbr toolbar preset: loading takes its lists and tool letters, then the other params apply; saving writes the result to the path, given back as `presetPath`, or without one returns it as base64 `preset`)"##,
             toolbar,
             true
         ),

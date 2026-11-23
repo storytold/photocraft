@@ -738,6 +738,12 @@ fn filesystem_command_paths_and_profiles_fail_closed() {
     for key in ["importKys", "exportKys", "summarize"] {
         assert!(ks(serde_json::json!({ key: {"path": "/outside/set.kys"} })).is_err(), "{key}");
     }
+    // Toolbar presets the same way.
+    let tb = |p: serde_json::Value| authorize_engine_command("edit.toolbar", &p);
+    assert!(tb(serde_json::json!({"savePreset": true, "loadPreset": {"data": ""}})).is_ok());
+    for key in ["loadPreset", "savePreset"] {
+        assert!(tb(serde_json::json!({ key: {"path": "/outside/my.tbr"} })).is_err(), "{key}");
+    }
     assert!(authorize_engine_command("filter.distort.displace", &serde_json::json!({"mapPath": "outside.png"})).is_err());
     assert!(authorize_engine_command("layer.setAdjustment", &serde_json::json!({"file": "outside.cube"})).is_err());
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "colorSettings.workingRgb", "value": "outside.icc"})).is_err());

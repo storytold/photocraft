@@ -807,6 +807,8 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
         "edit.keyboardShortcuts" => {
             params.get("path").is_some() || ["importKys", "exportKys", "summarize"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some())
         }
+        // Toolbar presets: a .tbr read or written by path.
+        "edit.toolbar" => ["loadPreset", "savePreset"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some()),
         "plugin.reload" => true,
         _ => false,
     }

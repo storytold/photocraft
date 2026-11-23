@@ -564,6 +564,7 @@ mod menus_hideable_tests;
 mod saved;
 mod shortcuts;
 mod store;
+mod toolbar_presets;
 mod validate;
 
 pub use cmds::specs;
