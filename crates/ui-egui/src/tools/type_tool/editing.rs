@@ -29,6 +29,10 @@ pub(super) fn begin_edit(app: &mut PhotocraftApp, ctx: &egui::Context, id: Layer
         && !shows_own_layout(&doc, t)
     {
         app.run("type.edit", json!({"layer": id.0, "coalesce": key}))?;
+        // The editor is installed after this command re-renders the imported text.
+        if latest_step_matches(app, key) {
+            app.recorded_type_edit = Some(key.to_owned());
+        }
     }
     focus_editor(ctx);
     Ok(())
@@ -296,6 +300,7 @@ fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
     }
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    let recorded = app.recorded_type_edit.take().as_deref() == Some(ed.session.as_str()) || latest_step_matches(app, &ed.session);
     if let Some(tool) = app.ui.text_edit_return_tool.take()
         && app.ui.tool.is_type()
     {
@@ -350,7 +355,7 @@ fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
     } else if ed.created {
         let name = photocraft_engine::type_cmds::layer_name(&text);
         let _ = app.run("type.edit", json!({"layer": ed.layer, "name": name, "coalesce": ed.session}));
-    } else if ends_an_edit && worked_on_layer(app, &ed) && !session_recorded(app, &ed) {
+    } else if ends_an_edit && worked_on_layer(app, &ed) && !recorded {
         // Ending an edit of an existing layer is a step of its own even when the session changed
         // nothing (#12050), so the History list shows the edit the user just ended. The Cancel
         // button ends through `cancel`, which never runs this.
@@ -361,21 +366,30 @@ fn commit_here(app: &mut PhotocraftApp, by_user: bool) {
 /// A coalesce key for one deliberate step inside a typing session: the ⇧⌘ style keys, the ⌥
 /// metric steps and Alt+←/→ kerning are one history step per press, so each press takes a fresh
 /// key and no two presses share a state. The key still names the session, which is how
-/// [`session_recorded`] knows the session already opened a state and must not add an empty one
+/// [`remember_history_step`] knows the session already opened a state and must not add an empty one
 /// when the edit ends (#12050).
 fn session_step_key(app: &mut PhotocraftApp, session: &str) -> String {
     format!("{session}-{}", app.ui.alloc_id())
 }
 
-/// Has this session opened a history state of its own? Its typing carries the session's key, and
-/// its one-step-per-press keys ([`session_step_key`]) carry that key with a press number, so the
-/// state they leave names the session that made it. Ending such a session adds nothing: the undo
-/// step the user just made is already there, and an empty state behind it would be a History row
-/// that undoes nothing. A state left by an *earlier* session carries that session's key, so a
-/// later unchanged edit of the same layer still records its own (#12050).
-fn session_recorded(app: &PhotocraftApp, ed: &TextEdit) -> bool {
-    let pressed = format!("{}-", ed.session);
-    app.session.active().is_some_and(|st| st.coalesce.as_deref().is_some_and(|k| k == ed.session || k.starts_with(pressed.as_str())))
+/// Remember a Type edit's history step even if a later command changes the coalescing key.
+pub(crate) fn remember_history_step(app: &mut PhotocraftApp) {
+    if let Some(ed) = &app.ui.text_edit
+        && !ed.created
+        && app.recorded_type_edit.as_deref() != Some(ed.session.as_str())
+        && ed.document.is_none_or(|doc| active_doc_id(app) == Some(doc))
+        && latest_step_matches(app, &ed.session)
+    {
+        app.recorded_type_edit = Some(ed.session.clone());
+    }
+}
+
+fn latest_step_matches(app: &PhotocraftApp, session: &str) -> bool {
+    app.session
+        .active()
+        .and_then(|st| st.coalesce.as_deref())
+        .and_then(|key| key.strip_prefix(session))
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('-'))
 }
 
 /// Is a Type tool still the tool holding this session? The frame commits the edit when a tool
@@ -426,6 +440,7 @@ pub fn cancel(app: &mut PhotocraftApp) {
     crate::type_box_preview::discard(app);
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
+    app.recorded_type_edit = None;
     if let Some(tool) = app.ui.text_edit_return_tool.take()
         && app.ui.tool.is_type()
     {
