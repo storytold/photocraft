@@ -37,7 +37,7 @@ fn select(s: &mut Session, ids: &[LayerId]) {
 
 /// The issue's focus stack: FocusL (bottom) sharp on the left half, FocusR (top) on the right.
 fn focus_pair() -> (Session, LayerId, LayerId) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "background": "transparent"})).unwrap();
     let l = focus_layer(&mut s, "FocusL", 0..W / 2);
     let r = focus_layer(&mut s, "FocusR", W / 2..W);
@@ -65,6 +65,28 @@ fn a_stack_shows_the_bottom_layer_everywhere() {
         (px[0] - detail(x, y)).abs() > 0.02 || px[3] < 0.98
     });
     assert_eq!(off, None, "the composite keeps the sharp half of each layer");
+}
+
+/// A top pixel at alpha 0.75 still wins the mask where it is sharp. Under the old mask the
+/// bottom stays hidden there and the pixel stays partly transparent; revealing the bottom would
+/// make it opaque and mix in the bottom's colour, so the old masks are kept.
+#[test]
+fn a_semi_transparent_winning_pixel_keeps_the_bottom_masked() {
+    let (mut s, l, r) = focus_pair();
+    let (x, y) = (3 * W / 4, H / 2);
+    s.edit("soften", |doc, _| {
+        let v = detail(x, y);
+        doc.layer_mut(r).unwrap().surface_mut().unwrap().fill_rect(Rect::new(x, y, x + 1, y + 1), &[v, v, v, 0.75]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert!(doc.layer(r).unwrap().mask.as_ref().unwrap().value(x, y) > 0.5, "the soft pixel wins the mask");
+    assert!(doc.layer(l).unwrap().mask.as_ref().unwrap().value(x, y) < 0.5, "FocusL stays hidden under it");
+    let img = photocraft_compose::render(doc, doc.bounds());
+    let a = img.px[(y * W + x) as usize][3];
+    assert!(a < 0.9, "the composite keeps the pixel partly transparent, alpha {a}");
 }
 
 /// Prepares one case on the focus pair (FocusL, FocusR) and returns its Auto-Blend params.

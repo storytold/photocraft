@@ -330,8 +330,13 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Stack Images leaves the bottom layer showing everywhere, under the sharp parts of the
     // layers above (#14212). Measured with two layers, Seamless Tones off and no masks before;
-    // the cases not measured keep complementary masks.
-    let reveal_bottom = method == "stack" && !seamless && ids.len() == 2 && ids.iter().all(|id| doc.layer(*id).is_some_and(|l| l.mask.is_none()));
+    // the cases not measured keep complementary masks. The reveal must leave the composite as it
+    // was, so it is kept only where the layer above hides every bottom pixel it uncovers.
+    let reveal_bottom = method == "stack"
+        && !seamless
+        && ids.len() == 2
+        && ids.iter().all(|id| doc.layer(*id).is_some_and(|l| l.mask.is_none()))
+        && revealing_the_bottom_keeps_the_composite(&doc, &ids, area, &alpha, &weights);
     let (new_layer, depth_layer) = s.edit(label, |doc, active| {
         for (i, (id, wt)) in ids.iter().zip(&weights).enumerate() {
             if doc.is_background(*id) {
@@ -378,6 +383,33 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         Ok((Some(nid), depth_id))
     })?;
     Ok(json!({"method": method, "layers": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "blended": new_layer.map(|l| l.0), "depth": depth_layer.map(|l| l.0)}))
+}
+
+/// Whether a reveal-all mask on the bottom of two stacked layers draws the same composite as its
+/// focus-weight mask (#14212). The reveal uncovers bottom pixels wherever that weight is below 1;
+/// each one must sit under an opaque, fully weighted pixel of the top layer, drawn normally at
+/// full opacity. The bottom must have no effects, which would trace the wider mask, and no pixels
+/// outside `area`, which its old mask hid.
+fn revealing_the_bottom_keeps_the_composite(doc: &Document, ids: &[LayerId], area: Rect, alpha: &[Vec<f32>], weights: &[Vec<f32>]) -> bool {
+    let (Some(bottom), Some(top)) = (doc.layer(ids[0]), doc.layer(ids[1])) else { return false };
+    let bottom_inside = bottom.surface().is_some_and(|s| {
+        let b = s.content_bounds();
+        b.is_empty() || b.intersect(&area) == b
+    });
+    let no_effects = |l: &Layer| !l.effects.enabled || l.effects.items.iter().all(|e| !e.enabled());
+    let top_plain = top.visible
+        && top.blend == photocraft_color::BlendMode::Normal
+        && top.opacity >= 1.0
+        && top.fill_opacity >= 1.0
+        && top.vector_mask.is_none()
+        && top.excluded_channels == 0
+        && no_effects(top);
+    if !bottom_inside || !no_effects(bottom) || !top_plain {
+        return false;
+    }
+    // Masks are 8-bit: a weight that rounds to 255 shows the pixel in full.
+    let full = |v: f32| v >= 1.0 - 0.5 / 255.0;
+    (0..alpha[0].len()).all(|i| alpha[0][i] <= 0.0 || full(weights[0][i]) || (full(alpha[1][i]) && full(weights[1][i])))
 }
 
 macro_rules! spec {
