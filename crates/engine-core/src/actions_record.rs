@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use photocraft_doc::{DocId, Document, LayerContent, LayerId};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::Session;
 
@@ -163,6 +163,77 @@ pub(crate) fn fold_keystroke(s: &mut Session, id: &str, params: &Value, previous
     let Some(lo) = lp.as_object_mut() else { return Keystroke::None };
     lo.insert("text".into(), Value::String(text));
     Keystroke::Folded
+}
+
+/// Replay commands and named action calls, excluding edits to the action definitions and the
+/// already-expanded Again wrapper.
+pub fn replayable(id: &str) -> bool {
+    // Again and Again on a Copy journal their concrete steps (`edit.transform`, after
+    // `layer.duplicate` for the copy) and record those: the wrappers look up the last transform in
+    // the journal, so they fail where no transform ran yet, e.g. an action played in a new session.
+    // A Conditional is recorded with its predicate, not the branch it happened to play (or none),
+    // so playback evaluates the condition again on the current document (#7198, #7238).
+    matches!(id, "actions.play" | "actions.conditional")
+        || (!id.starts_with("actions.")
+            // Browse executes its steps through Session::execute, so those concrete
+            // commands are already journaled. Recording the wrapper as well replays
+            // every script edit twice (#3057).
+            && !matches!(id, "edit.transform.again" | "edit.transform.againCopy" | "file.scripts.browse")
+            && (shell_view_command(id) || shell_save_command(id) || crate::commands::find(id).is_some_and(|c| c.journal)))
+}
+
+/// File › Save, Save As and Save a Copy, and File › Export › Export As, recorded by the desktop
+/// shell once the file has a path (#2032, #4373, #7207). The shell replays them; batch and
+/// droplets write to their destination folder instead.
+pub fn shell_save_command(id: &str) -> bool {
+    matches!(id, "file.save" | "file.saveAs" | "file.saveACopy" | "file.export.exportAs")
+}
+
+/// View-only menu commands recorded by the desktop shell. Headless playback reports
+/// them as unsupported instead of silently dropping them; Batch and droplets skip them.
+pub fn shell_view_command(id: &str) -> bool {
+    matches!(id, "view.fitOnScreen" | "view.actualPixels" | "view.zoomIn" | "view.zoomOut")
+}
+
+/// The point-based painting tools committed by the canvas; fills and gradients remain commands.
+pub(crate) fn tool_stroke(id: &str) -> bool {
+    matches!(
+        id,
+        "paint.stroke"
+            | "paint.pencil"
+            | "paint.mixerBrush"
+            | "paint.colorReplacement"
+            | "paint.blur"
+            | "paint.sharpen"
+            | "paint.smudge"
+            | "paint.dodge"
+            | "paint.burn"
+            | "paint.sponge"
+            | "paint.cloneStamp"
+            | "paint.healingBrush"
+            | "paint.historyBrush"
+            | "paint.artHistoryBrush"
+            | "paint.patternStamp"
+            | "paint.backgroundEraser"
+            | "paint.spotHealing"
+            | "paint.remove"
+    )
+}
+
+/// Visibility gestures name a layer for replay, since document-local ids change on another image.
+pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
+    if s.actions.recording.is_none() || id != "layer.setProps" || p.get("visible").is_none() {
+        return p;
+    }
+    let Some(st) = s.active() else { return p };
+    let Some(layer) = p.get("layer").and_then(Value::as_u64).map(LayerId).or(st.active_layer).and_then(|id| st.doc.layer(id)) else { return p };
+    let ordinal = st.doc.walk().into_iter().filter(|(_, _, l)| l.name == layer.name).position(|(_, _, l)| l.id == layer.id).unwrap_or(0);
+    if let Some(object) = p.as_object_mut() {
+        object.remove("layer");
+        object.remove("coalesce");
+        object.insert("_actionLayer".into(), json!({"name": layer.name, "ordinal": ordinal}));
+    }
+    p
 }
 
 #[cfg(test)]

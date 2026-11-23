@@ -1,5 +1,5 @@
 use super::history::fix_selection;
-use super::{Arc, EngineError, LayerId, Result, Session, channel_cmds, layer_multi_cmds, type_cmds};
+use super::{Arc, EngineError, LayerId, Result, Session, channel_cmds, type_cmds};
 use crate::TypeLayerRef;
 
 impl Session {
@@ -95,7 +95,7 @@ impl Session {
                 st.saved_revision = st.revision;
             }
             // Only the refreshed layers' caches changed: their changed tiles.
-            st.last_damage = layer_multi_cmds::step_damage(&before, &st.doc);
+            st.last_damage = crate::damage::step_damage(&before, &st.doc);
             st.record_damage();
         }
         busy

@@ -147,9 +147,50 @@ pub fn install() -> Result<()> {
         .get_or_init(|| {
             let mut install = Install::default();
             install.commands.extend_from_slice(TABLES);
+            register(&mut install);
             registry::install(install)
         })
         .clone()
+}
+
+/// This crate's pipeline hooks, grouped by the crate that will own them. Until the engine crates are
+/// cut out of this one, it holds every engine hook. A stage runs its hooks in the order written
+/// here: store comes last so that `sync_preset_store` runs after the other after-command hooks.
+fn register(install: &mut Install) {
+    let hooks = &mut install.hooks;
+
+    // model
+    hooks.after_command.push(crate::mask_view_cmds::after_command);
+    hooks.recorded_steps.push(("layer.duplicate", |s, id, p, pre_selected| {
+        Some(crate::artboard_cmds::recorded_duplicate(s, crate::layer_multi_cmds::recorded_step(s, id, p.clone(), pre_selected)))
+    }));
+    hooks.recorded_step = Some(crate::layer_multi_cmds::recorded_step);
+
+    // vector
+    hooks.before_command.push(crate::float_cmds::before_dispatch);
+    hooks.recorded_steps.push(("layerComp.apply", |s, _, p, _| Some(crate::comps_cmds::recorded_apply(s, p.clone()))));
+    hooks.recorded_steps.push(("edit.checkSpelling", |_, _, p, _| crate::type_spell_cmds::records(p).then(|| crate::type_spell_cmds::recorded_step(p))));
+    hooks.prefs_applied.push(|s| crate::transform_cmds::set_budget(u64::from(s.prefs().performance.effective_memory_usage_mb()) << 20));
+
+    // paint
+    hooks.coalesce_journal.push(crate::brush_cmds::coalesce_journal);
+
+    // image
+    hooks.redirect.push(crate::filters::repeat_last_filter);
+    hooks.check_params.push(|_, id, p| crate::filters::validate_params(id, p));
+    hooks.run_params.push(crate::filters_ext::journal_shape_path);
+    hooks.after_command.push(crate::edit_menu_cmds::after_command);
+    hooks.prefs_applied.push(|s| crate::plugin_cmds::sync_prefs(s));
+
+    // files
+    hooks.request_params.push(crate::file_cmds::batch_open_params);
+    hooks.after_command.push(|s, id, _| crate::automate_cmds::after_command(s, id));
+    hooks.step_recorded.push(crate::actions_cmds::note_step_origin);
+    hooks.flush_recording.push(crate::actions_cmds::flush_recording);
+
+    // store
+    hooks.check_params.push(|s, id, p| if id == "file.new" { crate::document_preset_cmds::validate_new_params(s, p) } else { Ok(()) });
+    hooks.after_command.push(|s, _, _| s.sync_preset_store());
 }
 
 /// A session with this crate's commands installed: what this crate's tests start from.

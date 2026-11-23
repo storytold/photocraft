@@ -76,6 +76,17 @@ pub(crate) fn fix(st: &mut DocState) {
     }
 }
 
+/// The `after_command` hook: a layer-mask view ends when another layer becomes active (#196).
+/// Borrowed to change only when it does: the borrow moves the document's `Tracked` revision, and
+/// this runs after every command.
+pub(crate) fn after_command(s: &mut Session, _: &str, _: &Value) {
+    if s.active().is_some_and(stale)
+        && let Some(st) = s.active_mut()
+    {
+        st.channel_view.layer_mask = None;
+    }
+}
+
 /// Whether `st` keeps a layer-mask view that no longer applies ([`fix`] ends it).
 pub(crate) fn stale(st: &DocState) -> bool {
     st.channel_view.layer_mask.is_some() && current(st).is_none()

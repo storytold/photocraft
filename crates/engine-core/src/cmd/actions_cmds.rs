@@ -27,6 +27,8 @@ use crate::{EngineError, Result, Session};
 pub use craft::automation::actions::{Action, ActionColor, ActionList, ActionStep, ActionsFile, moved_index};
 
 mod history;
+pub(crate) use crate::actions_record::tool_stroke;
+pub use crate::actions_record::{replayable, shell_save_command, shell_view_command};
 pub(crate) use history::ActionHistory;
 pub use history::{ActionHistoryContinuation, finish_pending_history, suspend_history};
 pub(crate) use history::{before_edit as before_action_edit, begin_document_history, finish_document_history, history_rows, reconcile_history_removal};
@@ -128,22 +130,6 @@ impl ActionState {
     }
 }
 
-/// Visibility gestures name a layer for replay, since document-local ids change on another image.
-pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
-    if s.actions.recording.is_none() || id != "layer.setProps" || p.get("visible").is_none() {
-        return p;
-    }
-    let Some(st) = s.active() else { return p };
-    let Some(layer) = p.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId).or(st.active_layer).and_then(|id| st.doc.layer(id)) else { return p };
-    let ordinal = st.doc.walk().into_iter().filter(|(_, _, l)| l.name == layer.name).position(|(_, _, l)| l.id == layer.id).unwrap_or(0);
-    if let Some(object) = p.as_object_mut() {
-        object.remove("layer");
-        object.remove("coalesce");
-        object.insert("_actionLayer".into(), json!({"name": layer.name, "ordinal": ordinal}));
-    }
-    p
-}
-
 /// Resolve the recorded visibility target identically in engine and shell playback, and drop
 /// the `.atn` event or Custom descriptor remembered for Save Actions: the command, its journal
 /// entry (Last Filter), a smart filter and the step's dialog never see it.
@@ -198,30 +184,6 @@ pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
     Ok(p)
 }
 
-/// Replay commands and named action calls, excluding edits to the action definitions and the
-/// already-expanded Again wrapper.
-pub fn replayable(id: &str) -> bool {
-    // Again and Again on a Copy journal their concrete steps (`edit.transform`, after
-    // `layer.duplicate` for the copy) and record those: the wrappers look up the last transform in
-    // the journal, so they fail where no transform ran yet, e.g. an action played in a new session.
-    // A Conditional is recorded with its predicate, not the branch it happened to play (or none),
-    // so playback evaluates the condition again on the current document (#7198, #7238).
-    matches!(id, "actions.play" | "actions.conditional")
-        || (!id.starts_with("actions.")
-            // Browse executes its steps through Session::execute, so those concrete
-            // commands are already journaled. Recording the wrapper as well replays
-            // every script edit twice (#3057).
-            && !matches!(id, "edit.transform.again" | "edit.transform.againCopy" | "file.scripts.browse")
-            && (shell_view_command(id) || shell_save_command(id) || crate::commands::find(id).is_some_and(|c| c.journal)))
-}
-
-/// File › Save, Save As and Save a Copy, and File › Export › Export As, recorded by the desktop
-/// shell once the file has a path (#2032, #4373, #7207). The shell replays them; batch and
-/// droplets write to their destination folder instead.
-pub fn shell_save_command(id: &str) -> bool {
-    matches!(id, "file.save" | "file.saveAs" | "file.saveACopy" | "file.export.exportAs")
-}
-
 /// The failure for a played Save step whose document `target` (the one active when the step
 /// started) is no longer open: a Save Document script event closed it. Playback stops there, so
 /// the next step without a document, such as the Close half of an imported Close with Save: Yes,
@@ -266,12 +228,6 @@ fn skipped_steps(action: &Action, from: usize) -> u64 {
     let disabled = action.disabled.range(from..len).count();
     u64::try_from(from.saturating_add(disabled)).unwrap_or(u64::MAX)
 }
-/// View-only menu commands recorded by the desktop shell. Headless playback reports
-/// them as unsupported instead of silently dropping them; Batch and droplets skip them.
-pub fn shell_view_command(id: &str) -> bool {
-    matches!(id, "view.fitOnScreen" | "view.actualPixels" | "view.zoomIn" | "view.zoomOut")
-}
-
 /// Shared validation for headless and shell playback. Does not start playback. Returns the
 /// action's index in [`ActionState::playable`], the action and the step playback starts at.
 pub fn playback_plan(s: &Session, p: &Value) -> Result<(usize, Action, usize)> {
@@ -603,31 +559,6 @@ const RECORDED_WITH_DIALOG: &[&str] = &["edit.checkSpelling"];
 pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(String, Value)> {
     let from = s.actions.recording.filter(|(_, i)| *i == action).map_or(s.journal.len(), |(from, _)| from);
     s.journal.iter().skip(from).filter(|(id, p)| recorded(id, p) && (s.actions.record_tools || !tool_stroke(id)))
-}
-
-/// The point-based painting tools committed by the canvas; fills and gradients remain commands.
-pub(crate) fn tool_stroke(id: &str) -> bool {
-    matches!(
-        id,
-        "paint.stroke"
-            | "paint.pencil"
-            | "paint.mixerBrush"
-            | "paint.colorReplacement"
-            | "paint.blur"
-            | "paint.sharpen"
-            | "paint.smudge"
-            | "paint.dodge"
-            | "paint.burn"
-            | "paint.sponge"
-            | "paint.cloneStamp"
-            | "paint.healingBrush"
-            | "paint.historyBrush"
-            | "paint.artHistoryBrush"
-            | "paint.patternStamp"
-            | "paint.backgroundEraser"
-            | "paint.spotHealing"
-            | "paint.remove"
-    )
 }
 
 pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
