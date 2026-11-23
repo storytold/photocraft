@@ -118,13 +118,35 @@ fn a_live_cmyk_stroke_previews_the_documents_cmyk_profile() {
     for (x, y) in [(80, 30), (95, 30)] {
         assert_close_inks(&format!("the preview at {x}, {y}"), &inks_of(&shown, id, x, y), &inks(&s, x, y));
     }
-    // And those inks come from the document's profile: the built-in coated CMYK asks for other ones
-    // for the same pixel, and that is what an unfixed preview stores.
+    // And those inks come from the document's profile rather than the built-in coated CMYK. This
+    // pixel lies under two dabs, so the value an unfixed stroke stores is the coated inks blended
+    // once per covering dab - near `coated`, and far from what the profile asks for: the test is a
+    // proximity gate, not a pin of an exact unfixed value.
     let apart = (0..4).map(|i| (inks_of(&shown, id, 95, 30)[i] - coated[i]).abs()).fold(0.0f32, f32::max);
     assert!(apart > 0.05, "the preview stored the built-in coated inks {coated:?}: the document's profile was not used");
 }
 
-/// Pinned to the whole quantum of the depth: these golden values came from `upstream/main`.
+/// A CMYK/16 document that carries a profile of its own goes through the same change: it stores the
+/// inks its own profile asks for, not the built-in coated ones. The golden values below were
+/// measured with the change; `upstream/main` stored the untagged 16-bit values quoted there for the
+/// same clicks, whatever profile the document carried.
+#[test]
+fn a_tagged_cmyk_16_bit_document_blends_through_its_own_profile_too() {
+    for (mode, want, coated) in [
+        ("color", [0.742_946_5, 0.606_225_67, 0.0, 0.0], [0.959_304_2, 1.0, 0.0, 0.0]),
+        ("luminosity", [0.686_488_15, 0.992_675_66, 0.943_694_23, 0.484_611_27], [0.268_467_22, 0.990_020_6, 0.909_620_8, 0.364_675_37]),
+    ] {
+        let mut s = cmyk_session(16);
+        tag_cmyk_profile(&mut s, craft_cms::Builtin::CoatedFogra39.profile().to_bytes());
+        click(&mut s, 80, 30, mode);
+        assert_inks_pinned(&format!("16-bit tagged {mode}"), &inks(&s, 80, 30), want, 1.0 / 65_535.0);
+        let apart = (0..4).map(|i| (inks(&s, 80, 30)[i] - coated[i]).abs()).fold(0.0f32, f32::max);
+        assert!(apart > 0.05, "16-bit {mode}: the tagged document stored the built-in coated inks {coated:?}");
+    }
+}
+
+/// Compare stored inks with a pinned golden value, to the quantum of the depth. The tests say which
+/// run each value came from: a run of `upstream/main`, or a run of this change.
 fn assert_inks_pinned(what: &str, got: &[f32; 4], want: [f32; 4], quantum: f32) {
     for i in 0..4 {
         assert!((got[i] - want[i]).abs() < quantum, "{what}: ink {i} is {}, want {}", got[i], want[i]);

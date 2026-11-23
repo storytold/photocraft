@@ -99,7 +99,10 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
     // engine enters it for the command, as it does for a Brush stroke). Every conversion to and
     // from the RGB blend space goes through it, so the inks mean the document's device colour and
     // not the built-in coated CMYK (#11918). Captured here and re-entered for each dab: a live
-    // preview runs this closure after the command that built it has returned.
+    // preview runs this closure after the command that built it has returned. The same scope covers
+    // the pre-stroke reads the match is measured on (`pre.rgba`, `pre.read_rgba_into`), so on a
+    // document that carries a CMYK profile of its own which pixels fall inside the tolerance can
+    // move as well as the inks the dab stores.
     let cmyk = photocraft_color::convert::active_cmyk_space();
     let mode = match rs.mode {
         ReplaceMode::Hue => BlendMode::Hue,
