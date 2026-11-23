@@ -218,33 +218,26 @@ fn remembering_dialogs_never_persists_paths_or_document_indices() {
     assert_ne!(f.int("mapDocument"), Some(0), "a document index is never remembered");
 }
 
-/// #14465 review: the Rotate Canvas dialog fills Interpolation from Preferences › General ›
-/// Image Interpolation on every opening, so a dropdown pick applies to that opening only and
-/// never carries into the next one. The reference application has no Interpolation row at all:
-/// the preference decides. The other rows of the dialog keep opening from the document
-/// (angle and direction are the ruler's, #12035).
+/// #14465 review: the Rotate Canvas dialog's resampling follows Preferences › General › Image
+/// Interpolation on every run. The reference application has no Interpolation row (#14462), so
+/// the dialog files no interpolation, before or after an OK, and the command reads the
+/// preference (`rotate_canvas_interpolation_pref_tests` in the engine). The other rows of the
+/// dialog keep opening from the document (angle and direction are the ruler's, #12035).
 #[test]
 fn arbitrary_rotation_interpolation_reopens_at_the_preference() {
     const CMD: &str = "image.rotation.arbitrary";
     let mut app = new_app();
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
 
-    // 1. The preference's default (Bicubic Automatic) opens the row at bicubic.
     let id = open(&mut app, CMD).unwrap();
-    assert_eq!(field_json(&app, id, "interpolation"), json!("bicubic"), "the row opens at the preference");
+    assert_eq!(field_json(&app, id, "interpolation"), Value::Null, "no interpolation value: the preference decides");
     set(&mut app, id, "angle", json!(30.0));
-    set(&mut app, id, "interpolation", json!("bilinear"));
     assert!(ok(&mut app, id), "OK rotates and files its values");
 
-    // 2. A later opening starts from the preference again, not from the confirmed Bilinear pick.
-    let id = open(&mut app, CMD).unwrap();
-    assert_eq!(field_json(&app, id, "interpolation"), json!("bicubic"), "a one-time Bilinear pick does not carry into the next opening");
-    cancel(&mut app, id);
-
-    // 3. A changed preference reaches the next opening.
+    // A later opening files none either, whatever the preference says.
     app.session.edit_prefs(|p| p.general.image_interpolation = photocraft_engine::prefs::Interpolation::Nearest);
     let id = open(&mut app, CMD).unwrap();
-    assert_eq!(field_json(&app, id, "interpolation"), json!("nearest"), "Nearest Neighbor shows nearest");
+    assert_eq!(field_json(&app, id, "interpolation"), Value::Null, "a reopened dialog files no interpolation");
     cancel(&mut app, id);
 }
 
