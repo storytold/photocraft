@@ -11,11 +11,16 @@ use crate::PhotocraftApp;
 
 /// An app with two custom shapes named "TriS": a triangle, then a square.
 fn app() -> Box<PhotocraftApp> {
+    app_named("TriS", "TriS")
+}
+
+/// An app with two custom shapes: a triangle named `triangle`, then a square named `square`.
+fn app_named(triangle: &str, square: &str) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
-    for knots in [json!([[10, 10], [90, 10], [50, 80]]), json!([[100, 100], [200, 100], [200, 200], [100, 200]])] {
+    for (name, knots) in [(triangle, json!([[10, 10], [90, 10], [50, 80]])), (square, json!([[100, 100], [200, 100], [200, 200], [100, 200]]))] {
         app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": knots}]}})).unwrap();
-        app.run("edit.defineCustomShape", json!({"name": "TriS"})).unwrap();
+        app.run("edit.defineCustomShape", json!({"name": name})).unwrap();
     }
     app
 }
@@ -132,6 +137,61 @@ fn a_renamed_selection_keeps_its_shape() {
     assert_eq!(app.ui.presets_ui.selected.get(SHAPES.id), Some(&second), "a shared name keys it by its position");
     panel(&mut app, PresetEvent::Footer(PresetFooterEvent::Delete));
     assert_eq!(library(&app), [("TriS".to_string(), 3)], "Delete deletes the renamed square");
+}
+
+/// Renaming another shape to the selected shape's name keys both by position, and the selection and the Custom Shape
+/// tool stay on the selected shape: the tool draws it and the footer's Delete deletes it, not the renamed one.
+#[test]
+fn renaming_another_shape_to_the_selected_name_keeps_the_selection() {
+    let mut app = app_named("A", "B");
+    let ctx = egui::Context::default();
+    app.ui.presets_ui.selected.insert(SHAPES.id.into(), "B".into());
+    app.ui.presets_ui.custom_shape = "B".into();
+    apply(&mut app, &ctx, SHAPES, &[], &[], vec![PresetEvent::rename(PresetKey::Item("A".into()), "B")]);
+    let square = custom_keys(&app)[1].clone();
+    assert_ne!(square, "B", "a shared name is keyed by position");
+    assert_eq!(app.ui.presets_ui.selected.get(SHAPES.id), Some(&square), "the selection stays on the square");
+    assert_eq!(app.ui.presets_ui.custom_shape, square, "the tool keeps the square");
+    finish_custom_shape(&mut app, [20.0, 20.0, 100.0, 100.0], true, json!(null), json!(null));
+    assert_eq!(active_shape_knots(&app), 4, "the tool draws the square");
+    apply(&mut app, &ctx, SHAPES, &[], &[], vec![PresetEvent::Footer(PresetFooterEvent::Delete)]);
+    assert_eq!(library(&app), [("B".to_string(), 3)], "Delete deletes the square");
+}
+
+/// Renaming one of two "TriS" away gives the other back its name as its key, and the selection and the Custom Shape
+/// tool on it follow, so the panel still shows it selected.
+#[test]
+fn renaming_a_duplicate_away_gives_the_selection_its_name_back() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let [first, second] = <[String; 2]>::try_from(custom_keys(&app)).unwrap();
+    app.ui.presets_ui.selected.insert(SHAPES.id.into(), second.clone());
+    app.ui.presets_ui.custom_shape = second;
+    apply(&mut app, &ctx, SHAPES, &[], &[], vec![PresetEvent::rename(PresetKey::Item(first), "Tri")]);
+    assert_eq!(custom_keys(&app), ["Tri", "TriS"]);
+    assert_eq!(app.ui.presets_ui.selected.get(SHAPES.id).map(String::as_str), Some("TriS"), "the selection is the square's key");
+    assert_eq!(app.ui.presets_ui.custom_shape, "TriS", "the tool's shape is the square's key");
+}
+
+/// Renaming the group of a selected shape whose name a custom shape shares keeps the selection and the tool on it under
+/// the group's new name.
+#[test]
+fn renaming_the_group_of_a_shared_name_keeps_the_selection() {
+    let mut app = app_named("Heart", "B");
+    let ctx = egui::Context::default();
+    let groups = all_groups(&app.session);
+    let (gi, ii) = groups.iter().enumerate().find_map(|(gi, g)| Some((gi, g.items.iter().position(|s| s.name == "Heart")?))).unwrap();
+    let group = groups[gi].name.clone();
+    let heart = shape_keys(&groups)[gi][ii].clone();
+    assert_ne!(heart, "Heart", "the preset Heart shares its name with the custom one");
+    app.ui.presets_ui.selected.insert(SHAPES.id.into(), heart.clone());
+    app.ui.presets_ui.custom_shape = heart;
+    apply(&mut app, &ctx, SHAPES, &[], &[], vec![PresetEvent::rename(PresetKey::Group(group), "Mine")]);
+    let groups = all_groups(&app.session);
+    assert_eq!(groups[gi].name, "Mine");
+    let heart = shape_keys(&groups)[gi][ii].clone();
+    assert_eq!(app.ui.presets_ui.selected.get(SHAPES.id), Some(&heart));
+    assert_eq!(app.ui.presets_ui.custom_shape, heart);
 }
 
 /// A Custom Shape tool drag with a path operation adds the chosen one of two "TriS" to the active shape layer.

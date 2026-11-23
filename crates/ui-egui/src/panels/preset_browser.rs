@@ -1027,41 +1027,39 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, panel: PresetPanel, names
             Act::CustomShapeTool => app.ui.tool = Tool::CustomShape,
             Act::ToolPreset(name) => tool_presets::select(app, &name),
             Act::Run(command, params) => {
-                let renamed = renamed_shape(app, panel, &event);
+                let chosen = shapes_before_rename(app, panel, &event);
                 let Some(reply) = run(app, &command, params) else { continue };
                 after(app, ctx, panel, &event, &reply);
-                if let Some(at) = renamed {
-                    keep_renamed_shape(app, &event, at, selected.as_deref());
+                if let Some(chosen) = chosen {
+                    keep_chosen_shapes(app, chosen);
                 }
             }
         }
     }
 }
 
-/// The group name and position of the shape a Shapes panel rename of `event` renames, taken before the rename.
-fn renamed_shape(app: &PhotocraftApp, panel: PresetPanel, event: &PresetEvent<PresetKey>) -> Option<(String, usize)> {
-    let PresetEvent::Rename { key: PresetKey::Item(key), .. } = event else { return None };
-    if panel.id != SHAPES.id {
+/// Where the Shapes panel's selection and the Custom Shape tool's shape are before a Shapes panel rename of `event`, as
+/// (group index, index in the group): a rename moves no shape, but it can change any shape's key ([`shape_keys`]).
+fn shapes_before_rename(app: &PhotocraftApp, panel: PresetPanel, event: &PresetEvent<PresetKey>) -> Option<[Option<(usize, usize)>; 2]> {
+    if panel.id != SHAPES.id || !matches!(event, PresetEvent::Rename { .. }) {
         return None;
     }
     let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
-    let (gi, ii) = shape_at(&groups, key)?;
-    Some((groups.get(gi)?.name.clone(), ii))
+    let ui = &app.ui.presets_ui;
+    Some([ui.selected.get(SHAPES.id).and_then(|key| shape_at(&groups, key)), shape_at(&groups, &ui.custom_shape)])
 }
 
-/// After a Shapes panel rename, the `selected` key (and the Custom Shape tool's shape) that was the renamed shape gets its
-/// new key: its new name, or, when another shape has that name too, the name with its group and position `at`, so it
-/// stays this shape (#14291).
-fn keep_renamed_shape(app: &mut PhotocraftApp, event: &PresetEvent<PresetKey>, (group, position): (String, usize), selected: Option<&str>) {
-    let PresetEvent::Rename { key: PresetKey::Item(old), .. } = event else { return };
-    let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
-    let keys = shape_keys(&groups);
-    let Some(new) = groups.iter().position(|g| g.name == group).and_then(|gi| keys.get(gi)?.get(position)).cloned() else { return };
+/// After a Shapes panel rename, the selection and the Custom Shape tool's shape, at `chosen` before it
+/// ([`shapes_before_rename`]), get their shapes' keys now: a name that became shared is keyed by group and position, and
+/// one no longer shared by the name alone, so each stays on its shape and the panel still shows it (#14291).
+fn keep_chosen_shapes(app: &mut PhotocraftApp, [selected, tool]: [Option<(usize, usize)>; 2]) {
+    let keys = shape_keys(&photocraft_engine::presets::shapes::all_groups(&app.session));
+    let key = |(gi, ii): (usize, usize)| keys.get(gi)?.get(ii).cloned();
     let ui = &mut app.ui.presets_ui;
-    if selected == Some(old.as_str()) {
-        ui.selected.insert(SHAPES.id.into(), new.clone());
+    if let Some(new) = selected.and_then(key) {
+        ui.selected.insert(SHAPES.id.into(), new);
     }
-    if ui.custom_shape == *old {
+    if let Some(new) = tool.and_then(key) {
         ui.custom_shape = new;
     }
 }
