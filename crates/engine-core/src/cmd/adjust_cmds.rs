@@ -338,9 +338,9 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
 /// Image › Adjustments › Brightness/Contrast's id.
 pub(crate) const BRIGHTNESS_CONTRAST_ID: &str = "image.adjustments.brightnessContrast";
 /// The reference application's alert for Brightness/Contrast on a hidden pixel layer.
-pub(crate) const BRIGHTNESS_CONTRAST_UNAVAILABLE: &str = "The command \"Brightness/Contrast\" is not currently available.";
+pub const BRIGHTNESS_CONTRAST_UNAVAILABLE: &str = "The command \"Brightness/Contrast\" is not currently available.";
 /// The reference application's alert for Brightness/Contrast on an empty pixel layer.
-pub(crate) const BRIGHTNESS_CONTRAST_EMPTY: &str = "Could not complete the Brightness/Contrast command because the active layer is empty.";
+pub const BRIGHTNESS_CONTRAST_EMPTY: &str = "Could not complete the Brightness/Contrast command because the active layer is empty.";
 
 /// Brightness/Contrast's precondition with no params: the Channels panel's target, as
 /// [`brightness_contrast_enabled_with`] checks it, else [`has_adjustable`].

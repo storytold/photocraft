@@ -15,7 +15,7 @@ const BC: &str = "image.adjustments.brightnessContrast";
 /// A 16 x 16 document with the white Background and a grey layer "Paint" filling 4,4 to 12,12,
 /// and alpha channel 0 saved from a selection over 2,2 to 8,8.
 fn session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
     s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();
     s.execute("select.saveSelection", json!({"name": "Alpha 1"})).unwrap();
