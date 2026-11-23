@@ -15,7 +15,7 @@ use crate::{Document, Effects, Layer, LayerContent, LayerId};
 
 /// One layer's state as captured by a comp. `None` = not recorded (PSD comps record only what
 /// their capture flags asked for).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct CompLayerState {
     pub layer: LayerId,
     pub visible: Option<bool>,
@@ -26,7 +26,7 @@ pub struct CompLayerState {
 }
 
 /// Layer › Layer Style state captured by "Appearance".
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct CompAppearance {
     pub blend: BlendMode,
     pub opacity: f32,
@@ -34,7 +34,7 @@ pub struct CompAppearance {
     pub effects: Effects,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct LayerComp {
     /// Stable id (the PSD `compID`). Never 0: Photoshop uses 0 for the Last Document State.
     pub id: u32,
@@ -107,7 +107,7 @@ pub fn next_comp_id(doc: &Document) -> u32 {
 }
 
 /// What an artboard paints behind its contents.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(rename_all = "camelCase")]
 pub enum ArtboardBackground {
     #[default]
@@ -151,7 +151,7 @@ impl ArtboardBackground {
 
 /// An artboard: a top-level group that clips its children to `rect` and paints `background`
 /// behind them (Layer › New › Artboard).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Artboard {
     /// The board in document pixels.
     pub rect: Rect,

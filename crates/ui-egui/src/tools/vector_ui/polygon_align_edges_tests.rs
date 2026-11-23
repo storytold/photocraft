@@ -2,14 +2,16 @@
 //! arrangement. On (the default) a drag's box snaps to whole pixels; off a polygon keeps the drag's
 //! fractional coordinates. It is greyed in Path mode (and in a pixels mode), where the box snaps.
 
+use craft::draw::ui::VectorMode;
+use craft::draw::ui::shape_drag::ShapeKind;
 use egui::Modifiers;
 use egui::accesskit::Toggled;
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
-use super::add_anchor_options_bar_tests::harness;
-use super::{finish_shape, shape_geometry};
+use super::test_input::harness;
 use crate::PhotocraftApp;
+use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 
 /// The drag every test draws, from a fractional press to a fractional release.
@@ -18,16 +20,39 @@ const DRAG: [[f64; 2]; 2] = [[10.3, 10.6], [40.7, 30.2]];
 const FRACTIONAL: [f64; 4] = [10.3, 10.6, 30.4, 19.6];
 const SNAPPED: [f64; 4] = [10.0, 11.0, 30.0, 20.0];
 
-/// Polygon tool options with Align Edges `align` in `mode` ("shape", "path" or "pixels").
-fn options(align: bool, mode: &str) -> ToolOptions {
-    ToolOptions { align_edges: align, shape_mode: mode.into(), ..Default::default() }
+/// A 200 × 100 document after one Polygon drag from `from` to `to` with the tool options `set` gives,
+/// `mods` pressed after the start. The pixel-grid snap of vector tools is off, so only Align Edges
+/// rounds.
+fn drawn(set: impl FnOnce(&mut ToolOptions), from: [f64; 2], to: [f64; 2], mods: Modifiers) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("prefs.set", json!({"path": "tools.snapVectorToolsAndTransformsToPixelGrid", "value": false})).unwrap();
+    app.sync_views();
+    app.ui.views[0].zoom = 16.0;
+    app.ui.tool = Tool::Polygon;
+    set(&mut app.ui.tool_options);
+    tool_event(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: (from[0] + to[0]) / 2.0, y: (from[1] + to[1]) / 2.0, pressure: 1.0 }, mods);
+    tool_event(&mut app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, mods);
+    tool_event(&mut app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
+    app
 }
 
-/// The `shape.create` box of a Polygon drag along `DRAG` with `mods`, or None when too small.
-fn polygon_box(o: &ToolOptions, mods: Modifiers) -> Option<[f64; 4]> {
-    let g = shape_geometry(o, Tool::Polygon, DRAG[0], DRAG[1], mods)?;
-    assert_eq!(g["kind"], "polygon");
-    serde_json::from_value(g["rect"].clone()).ok()
+/// The live polygon box `[x, y, w, h]` of the active layer after the drag, `None` when it made no layer.
+fn polygon_box(app: &mut PhotocraftApp) -> Option<[f64; 4]> {
+    let st = app.session.active().unwrap();
+    if st.doc.layers.len() == 1 {
+        return None;
+    }
+    let id = st.active_layer.unwrap().0;
+    let info = app.session.execute("shape.info", json!({"layer": id})).unwrap();
+    assert_eq!((info["live"]["kind"].as_str(), info["live"]["sides"].as_u64()), (Some("polygon"), Some(5)));
+    serde_json::from_value(info["live"]["rect"].clone()).ok()
+}
+
+/// The box a Polygon drag along `DRAG` with Align Edges `align` and `mods` draws.
+fn drag_box(align: bool, mods: Modifiers) -> Option<[f64; 4]> {
+    polygon_box(&mut drawn(|o| o.align_edges = align, DRAG[0], DRAG[1], mods))
 }
 
 fn assert_near(got: [f64; 4], want: [f64; 4], what: &str) {
@@ -37,59 +62,50 @@ fn assert_near(got: [f64; 4], want: [f64; 4], what: &str) {
 #[test]
 fn on_by_default_the_box_snaps_and_off_it_keeps_the_drags_fractions() {
     assert!(ToolOptions::default().align_edges);
-    assert_eq!(polygon_box(&ToolOptions::default(), Modifiers::NONE), Some(SNAPPED));
-    let off = options(false, "shape");
-    assert_near(polygon_box(&off, Modifiers::NONE).unwrap(), FRACTIONAL, "off");
+    assert_eq!(polygon_box(&mut drawn(|_| {}, DRAG[0], DRAG[1], Modifiers::NONE)), Some(SNAPPED));
+    assert_near(drag_box(false, Modifiers::NONE).unwrap(), FRACTIONAL, "off");
     // Shift squares on the shorter side and Alt draws from the press point, before the snap.
     for (mods, fractional, snapped) in
         [(Modifiers::SHIFT, [10.3, 10.6, 19.6, 19.6], [10.0, 11.0, 20.0, 20.0]), (Modifiers::ALT, [-20.1, -9.0, 60.8, 39.2], [-20.0, -9.0, 61.0, 39.0])]
     {
-        assert_near(polygon_box(&off, mods).unwrap(), fractional, "off");
-        assert_eq!(polygon_box(&options(true, "shape"), mods), Some(snapped));
+        assert_near(drag_box(false, mods).unwrap(), fractional, &format!("off, {mods:?}"));
+        assert_eq!(drag_box(true, mods), Some(snapped), "on, {mods:?}");
     }
 }
 
 #[test]
 fn path_and_pixels_mode_keep_snapping_with_the_greyed_checkbox_off() {
-    for mode in ["path", "pixels"] {
-        assert_eq!(polygon_box(&options(false, mode), Modifiers::NONE), Some(SNAPPED), "{mode}");
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.ui.tool_options.align_edges = false;
+    for mode in [VectorMode::Path, VectorMode::Pixels] {
+        app.ui.tool_options.shape_mode = mode;
+        assert!(super::shapes::snaps_to_pixels(&app, ShapeKind::Polygon), "{mode:?}");
     }
+    app.ui.tool_options.shape_mode = VectorMode::Shape;
+    assert!(!super::shapes::snaps_to_pixels(&app, ShapeKind::Polygon), "Shape mode with Align Edges off keeps fractions");
+    assert!(super::shapes::snaps_to_pixels(&app, ShapeKind::Star), "the Star tool has no Align Edges and still snaps");
 }
 
 #[test]
 fn a_drag_under_a_pixel_still_draws_nothing() {
-    let off = options(false, "shape");
     for end in [[11.2, 30.0], [40.0, 11.5]] {
-        assert!(shape_geometry(&off, Tool::Polygon, DRAG[0], end, Modifiers::NONE).is_none(), "{end:?}");
-    }
-}
-
-/// A 200 × 100 document after one Polygon drag along `DRAG` with the tool options `o`.
-fn drawn(o: ToolOptions) -> PhotocraftApp {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
-    app.ui.tool = Tool::Polygon;
-    app.ui.tool_options = o;
-    finish_shape(&mut app, Tool::Polygon, DRAG[0], DRAG[1], Modifiers::NONE);
-    app
-}
-
-#[test]
-fn the_new_polygon_layer_takes_the_box_the_checkbox_gives() {
-    for (align, want) in [(true, SNAPPED), (false, FRACTIONAL)] {
-        let mut app = drawn(options(align, "shape"));
-        let st = app.session.active().unwrap();
-        assert_eq!(st.doc.layers.len(), 2, "the background and one shape layer");
-        let id = st.active_layer.unwrap().0;
-        let info = app.session.execute("shape.info", json!({"layer": id})).unwrap();
-        assert_eq!((info["live"]["kind"].as_str(), info["live"]["sides"].as_u64()), (Some("polygon"), Some(5)));
-        assert_near(serde_json::from_value(info["live"]["rect"].clone()).unwrap(), want, &format!("align {align}"));
+        let mut app = drawn(|o| o.align_edges = false, DRAG[0], end, Modifiers::NONE);
+        assert_eq!(polygon_box(&mut app), None, "{end:?}");
     }
 }
 
 #[test]
 fn a_path_mode_outline_snaps_with_the_checkbox_off() {
-    let app = drawn(options(false, "path"));
+    let app = drawn(
+        |o| {
+            o.align_edges = false;
+            o.shape_mode = VectorMode::Path;
+        },
+        DRAG[0],
+        DRAG[1],
+        Modifiers::NONE,
+    );
     let doc = &app.session.active().unwrap().doc;
     assert_eq!(doc.layers.len(), 1, "no shape layer in Path mode");
     let (x0, y0, x1, y1) = doc.work_path.as_ref().unwrap().control_bounds().unwrap();
@@ -101,7 +117,7 @@ fn a_path_mode_outline_snaps_with_the_checkbox_off() {
 
 #[test]
 fn reset_tool_turns_it_back_on_and_keeps_the_default_sides() {
-    let mut app = drawn(options(false, "shape"));
+    let mut app = drawn(|o| o.align_edges = false, DRAG[0], DRAG[1], Modifiers::NONE);
     app.ui.tool_options.polygon_sides = 8;
     crate::menus::invoke(&mut app, &egui::Context::default(), crate::tool_reset::RESET, json!({})).unwrap();
     assert!(app.ui.tool_options.align_edges);
@@ -111,8 +127,8 @@ fn reset_tool_turns_it_back_on_and_keeps_the_default_sides() {
 #[test]
 fn the_bar_ends_with_align_edges_enabled_only_in_shape_mode() {
     let mut h = harness(Tool::Polygon);
-    // The Sides caption and its field, then the path menus, the last of which is Path arrangement.
-    let sides = h.query_all_by_label("Sides:").map(|n| n.rect().right()).fold(f32::MIN, f32::max);
+    // The Sides field, then the path menus, the last of which is Path arrangement.
+    let sides = h.query_all_by_label("Sides").map(|n| n.rect().right()).fold(f32::MIN, f32::max);
     let arrange = h.get_by_label("Path arrangement").rect();
     let node = h.get_by_label("Align Edges");
     assert!(arrange.left() > sides && node.rect().left() > arrange.right(), "{:?} after {arrange:?} after Sides ({sides})", node.rect());
@@ -122,10 +138,14 @@ fn the_bar_ends_with_align_edges_enabled_only_in_shape_mode() {
     node.click();
     h.run_steps(3);
     assert!(!h.state().ui.tool_options.align_edges, "a click turns it off");
+    assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(Toggled::False));
 
-    for (mode, greyed) in [("path", true), ("pixels", true), ("shape", false)] {
-        h.state_mut().ui.tool_options.shape_mode = mode.into();
+    for (mode, greyed) in [(VectorMode::Path, true), (VectorMode::Shape, false)] {
+        h.state_mut().ui.tool_options.shape_mode = mode;
         h.run_steps(4);
-        assert_eq!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), greyed, "{mode} mode");
+        assert_eq!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), greyed, "{mode:?} mode");
     }
+
+    let h = harness(Tool::Star);
+    assert!(h.query_by_label("Align Edges").is_none(), "the Star tool has no Align Edges");
 }
