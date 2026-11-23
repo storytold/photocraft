@@ -2,57 +2,67 @@
 //! application's dialog asks: Describe "<file>": (<n> bytes), the width and height in pixels, the
 //! channel count, depth, byte order and header size.
 //!
-//! A `file.openAs` with `"as": "raw"` and none of the Raw Options fields is parked here when the
-//! file isn't a camera raw (those keep opening as they did). OK runs `file.openAs` with the
-//! fields, so an action being recorded keeps them and plays back without the dialog; Cancel opens
-//! nothing. Automation never sees the dialog: it passes the fields itself.
+//! A `file.openAs` with `"as": "raw"` and none of the Raw Options fields is parked behind this
+//! form on the dialog host when the file isn't a camera raw (those keep opening as they did). OK
+//! runs `file.openAs` with the fields, so an action being recorded keeps them and plays back
+//! without the dialog; Cancel and Escape open nothing. Automation never sees the dialog: it passes
+//! the fields itself.
 //!
 //! Not measured, so not offered: what Swap and Guess do and Retain When Saving (shown greyed
 //! out), and Last Channel is Transparency, which the reader has no channels for yet.
 
+use craft::ui::contract::Bind;
+use craft::ui::dialog::DialogId;
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::runtime::env::Label;
 use photocraft_io::photoshop_raw::{ByteOrder, MAX_CHANNELS, MAX_SIDE, RawLayout};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
+use crate::dialogs::params;
 
-/// An Open As waiting on the Raw Options answer.
-pub struct Prompt {
-    /// The `file.openAs` params that asked: the path, the type and anything else given.
-    pub params: Value,
-    /// The file's name, as the title line shows it.
-    pub name: String,
-    /// The file's size in bytes.
-    pub len: u64,
-    /// The fields as the user has set them so far.
-    pub layout: RawLayout,
+/// The dialog's key.
+pub const KIND: &str = "rawOptions";
+
+/// Whether the hosted dialog with `key` is Raw Options.
+pub(crate) fn owns(key: &str) -> bool {
+    key == KIND
 }
 
-impl Prompt {
-    /// A prompt for the file `name` of `len` bytes, starting at [`RawLayout::defaults_for`].
-    pub fn new(params: Value, name: String, len: u64) -> Self {
-        Prompt { params, name, len, layout: RawLayout::defaults_for(len) }
-    }
+/// The title line: Describe "notes.txt": (16 bytes).
+pub fn describe(name: &str, len: u64) -> String {
+    crate::i18n::fmt(tl!("Describe \"{name}\": ({bytes} bytes)"), &[("name", name), ("bytes", &len.to_string())])
+}
 
-    /// The title line: Describe "notes.txt": (16 bytes).
-    pub fn describe(&self) -> String {
-        crate::i18n::fmt(tl!("Describe \"{name}\": ({bytes} bytes)"), &[("name", &self.name), ("bytes", &self.len.to_string())])
-    }
+/// The form's values for `layout`.
+pub(crate) fn fields_of(layout: &RawLayout) -> DialogFields {
+    DialogFields::from_pairs([
+        ("width", FieldValue::Int(i64::from(layout.width))),
+        ("height", FieldValue::Int(i64::from(layout.height))),
+        ("channels", FieldValue::Int(i64::from(layout.channels))),
+        ("interleaved", FieldValue::Bool(layout.interleaved)),
+        ("transparency", FieldValue::Bool(false)),
+        ("depth", FieldValue::Text(layout.depth.to_string())),
+        ("byteOrder", FieldValue::Text(if layout.byte_order == ByteOrder::IbmPc { "ibm" } else { "mac" }.into())),
+        ("header", FieldValue::Int(i64::try_from(layout.header).unwrap_or(i64::MAX))),
+        ("retain", FieldValue::Bool(false)),
+    ])
+}
 
-    /// The `file.openAs` params OK runs: the ones that asked, plus every Raw Options field.
-    pub fn answer(&self) -> Value {
-        let l = &self.layout;
-        let mut p = self.params.clone();
-        if let Some(o) = p.as_object_mut() {
-            o.insert("width".into(), l.width.into());
-            o.insert("height".into(), l.height.into());
-            o.insert("channels".into(), l.channels.into());
-            o.insert("depth".into(), l.depth.into());
-            o.insert("byteOrder".into(), json!(if l.byte_order == ByteOrder::IbmPc { "ibm" } else { "mac" }));
-            o.insert("interleaved".into(), l.interleaved.into());
-            o.insert("header".into(), l.header.into());
-        }
-        p
+/// The `file.openAs` params OK runs: the ones that asked, plus every Raw Options field.
+pub fn answer(asked: &Value, fields: &DialogFields) -> Value {
+    let int = |key: &str, default: i64| fields.int(key).unwrap_or(default).max(0);
+    let mut p = asked.clone();
+    if let Some(o) = p.as_object_mut() {
+        o.insert("width".into(), int("width", 0).into());
+        o.insert("height".into(), int("height", 0).into());
+        o.insert("channels".into(), int("channels", 1).into());
+        o.insert("depth".into(), fields.text("depth").and_then(|d| d.parse::<u32>().ok()).unwrap_or(8).into());
+        o.insert("byteOrder".into(), json!(if fields.text("byteOrder") == Some("ibm") { "ibm" } else { "mac" }));
+        o.insert("interleaved".into(), fields.get("interleaved").is_none_or(|v| *v == FieldValue::Bool(true)).into());
+        o.insert("header".into(), int("header", 0).into());
     }
+    p
 }
 
 /// Whether `params` ask Open As for the raw type without saying how to read it: no Raw Options
@@ -63,9 +73,14 @@ pub fn asks(params: &Value) -> bool {
     as_raw && !photocraft_engine::file_cmds::RAW_LAYOUT_KEYS.iter().any(|key| params.get(*key).is_some_and(|v| !v.is_null()))
 }
 
+/// Whether Raw Options is open.
+fn is_open(app: &PhotocraftApp) -> bool {
+    app.framework.dialogs.open_dialogs().iter().any(|d| d.key.as_deref() == Some(KIND))
+}
+
 /// Parks a `file.openAs` that [`asks`] behind Raw Options, unless automation sent it or the file
-/// is a camera raw. A file that can't be read (missing, not a regular file, over
-/// the open size limit) is left to the engine, which reports it.
+/// is a camera raw. A file that can't be read (missing, not a regular file, over the open size
+/// limit) is left to the engine, which reports it.
 pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id != "file.openAs" || app.automation_input || !asks(params) {
         return None;
@@ -76,94 +91,59 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Re
     if photocraft_io::raw::is_raw(&bytes) {
         return None;
     }
-    if app.raw_options.is_some() {
+    if is_open(app) {
         return Some(Err(tl!("Raw Options is already open").into()));
     }
     let name = crate::file_open::display_name(path);
-    app.raw_options = Some(Prompt::new(params.clone(), name, bytes.len() as u64));
+    open(app, params.clone(), &name, bytes.len() as u64);
     Some(Ok(json!({"rawOptions": true})))
 }
 
-/// One labelled number field of the dialog, with its unit after it.
-fn number<T: egui::emath::Numeric>(ui: &mut egui::Ui, label: &str, value: &mut T, range: std::ops::RangeInclusive<T>, unit: &str) {
-    ui.horizontal(|ui| {
-        ui.add_sized([96.0, 18.0], egui::Label::new(label));
-        ui.add(egui::DragValue::new(value).range(range).speed(1.0));
-        ui.label(unit);
-    });
+/// Opens Raw Options for the file `name` of `len` bytes that `asked` (the `file.openAs` params)
+/// names, starting at [`RawLayout::defaults_for`].
+pub(crate) fn open(app: &mut PhotocraftApp, asked: Value, name: &str, len: u64) -> DialogId {
+    let layout = RawLayout::defaults_for(len);
+    let describe = describe(name, len);
+    params::open_param_unsaved(app, KIND, fields_of(&layout), asked, move |fields: &mut DialogFields| {
+        ParamDialog::command(KIND, tl!("Raw Options"), rows(&describe, &layout)).values(Bind::bound(fields))
+    })
 }
 
-/// The dialog's fields for `l`. Interleaved needs more than one channel and Byte Order more than
-/// 8 bits, as in the reference application.
-fn fields(ui: &mut egui::Ui, l: &mut RawLayout) {
-    crate::widgets::section_label(ui, tl!("Dimensions"));
-    number(ui, tl!("Width:"), &mut l.width, 0..=MAX_SIDE, tl!("pixels"));
-    number(ui, tl!("Height:"), &mut l.height, 0..=MAX_SIDE, tl!("pixels"));
-    ui.add_space(6.0);
-    crate::widgets::section_label(ui, tl!("Channels"));
-    number(ui, tl!("Count:"), &mut l.channels, 1..=MAX_CHANNELS, "");
-    let several = l.channels > 1;
-    ui.add_enabled(several, egui::Checkbox::new(&mut l.interleaved, tl!("Interleaved")));
-    ui.add_enabled(false, egui::Checkbox::new(&mut false, tl!("Last Channel is Transparency")));
-    ui.add_space(6.0);
-    crate::widgets::section_label(ui, tl!("Depth"));
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut l.depth, 8, tl!("8 Bits"));
-        ui.radio_value(&mut l.depth, 16, tl!("16 Bits"));
-        ui.radio_value(&mut l.depth, 32, tl!("32 Bits"));
-    });
-    ui.add_space(6.0);
-    crate::widgets::section_label(ui, tl!("Byte Order"));
-    ui.add_enabled_ui(l.depth > 8, |ui| {
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut l.byte_order, ByteOrder::Mac, tl!("Mac"));
-            ui.radio_value(&mut l.byte_order, ByteOrder::IbmPc, tl!("IBM PC"));
-        });
-    });
-    ui.add_space(6.0);
-    crate::widgets::section_label(ui, tl!("Header"));
-    number(ui, tl!("Size:"), &mut l.header, 0..=u64::MAX, tl!("bytes"));
-    ui.add_enabled(false, egui::Checkbox::new(&mut false, tl!("Retain When Saving")));
-}
-
-pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(p) = &mut app.raw_options else { return };
-    let (mut ok, mut cancel) = (false, false);
-    let describe = p.describe();
-    let modal = egui::Modal::new(egui::Id::unique("raw-options")).show(ctx, |ui| {
-        ui.set_max_width(360.0);
-        ui.label(egui::RichText::new(tl!("Raw Options")).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        ui.label(describe);
-        ui.add_space(6.0);
-        fields(ui, &mut p.layout);
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
-            cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
-            ui.add_enabled(false, egui::Button::new(tl!("Guess")));
-            ui.add_enabled(false, egui::Button::new(tl!("Swap")));
-        });
-    });
-    cancel |= modal.should_close();
-    // A focused button takes Enter as its click without consuming the key: Enter on Cancel cancels.
-    if ok || (!cancel && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))) {
-        answer(app);
-    } else if cancel {
-        app.raw_options = None;
-    }
+/// The form's rows. Interleaved needs more than one channel and Byte Order more than 8 bits, as in
+/// the reference application; Last Channel is Transparency and Retain When Saving stay greyed.
+fn rows(describe: &str, layout: &RawLayout) -> Vec<Param> {
+    let side = i64::from(MAX_SIDE);
+    let several: Vec<FieldValue> = (2..=i64::from(MAX_CHANNELS)).map(FieldValue::Int).collect();
+    let never = Vec::<FieldValue>::new;
+    let options = |pairs: &[(&str, &str)]| pairs.iter().map(|(id, label)| ((*id).to_owned(), Label::from((*label).to_owned()))).collect::<Vec<_>>();
+    vec![
+        Param::read_only_text("describe", Label::Empty, describe.to_owned()).full_width(),
+        Param::section(tl!("Dimensions")),
+        Param::new("width", tl!("Width (pixels)"), ParamKind::int(Some(0), Some(side), i64::from(layout.width))),
+        Param::new("height", tl!("Height (pixels)"), ParamKind::int(Some(0), Some(side), i64::from(layout.height))),
+        Param::section(tl!("Channels")),
+        Param::new("channels", tl!("Count"), ParamKind::int(Some(1), Some(i64::from(MAX_CHANNELS)), i64::from(layout.channels))),
+        Param::new("interleaved", tl!("Interleaved"), ParamKind::bool(layout.interleaved)).enabled_when_in("channels", several),
+        Param::new("transparency", tl!("Last Channel is Transparency"), ParamKind::bool(false)).enabled_when_in("channels", never()),
+        Param::section(tl!("Depth")),
+        Param::new("depth", tl!("Depth"), ParamKind::radio(options(&[("8", tl!("8 Bits")), ("16", tl!("16 Bits")), ("32", tl!("32 Bits"))]), Some("8".into())))
+            .options_in_row(),
+        Param::section(tl!("Byte Order")),
+        Param::new("byteOrder", tl!("Byte Order"), ParamKind::radio(options(&[("mac", tl!("Mac")), ("ibm", tl!("IBM PC"))]), Some("mac".into())))
+            .options_in_row()
+            .enabled_when_in("depth", ["16", "32"]),
+        Param::section(tl!("Header")),
+        Param::new("header", tl!("Size (bytes)"), ParamKind::int(Some(0), None, 0)),
+        Param::new("retain", tl!("Retain When Saving"), ParamKind::bool(false)).enabled_when_in("channels", never()),
+    ]
 }
 
 /// OK: opens the file with the fields as set, reporting a refusal (a size the file can't fill,
-/// a layout not read yet) as an error. The dialog closes either way.
-pub fn answer(app: &mut PhotocraftApp) {
-    let Some(p) = app.raw_options.take() else { return };
-    if let Err(e) = app.run("file.openAs", p.answer()) {
-        crate::notices::error(app, e);
-    }
+/// a layout not read yet) on the status line. The dialog closes either way.
+pub(crate) fn run(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamResult) {
+    let params = answer(&params::captured(app, &result.key), &result.fields);
+    let outcome = app.run("file.openAs", params);
+    crate::dialogs::alerts::report(app, outcome);
 }
 
 #[cfg(test)]

@@ -1,10 +1,59 @@
-use super::basic::{apply_auto, reset_color_balance};
-use super::gradient_map::{gradient_presets, is_gray, swatches};
-use super::{Adjustment, EditorCx, HistSource, LayerId, PhotocraftApp, RichText, Tokens, Value, adjust_params, editor, json, needs_histogram, space_of, tone};
+//! The Properties panel's editor of an adjustment layer: the layer's value over the kind's editor
+//! closure, its live preview, its history steps and Reset.
 
-/// Root of an adjustment layer's Properties editor view state in egui memory.
-pub fn layer_mem(id: LayerId) -> egui::Id {
-    egui::Id::unique(("adjust-layer", id.0))
+use std::hash::{Hash as _, Hasher as _};
+
+use craft::behavior::EditEvent;
+use craft::color_ui::ui::ColorPickerDialog;
+use craft::imaging::ui::adjust::{AdjustContext, AdjustDialogCx, AdjustSession, ColorBalanceTone, LevelsClip, TonePicker};
+use craft::theme::Srgba;
+use craft::ui::dialog::DialogId;
+use photocraft_doc::{Adjustment, ColorMode, LayerId};
+use photocraft_engine::adjust_params;
+use serde_json::{Value, json};
+
+use super::values::{self, ValueCx};
+use super::{AdjustAsk, AdjustValue, EditorSetup, answer_color, black_white_auto, editor, gradient_presets, is_gray, swatches};
+use crate::PhotocraftApp;
+use crate::color_picker_ui::PickWindow;
+use crate::theme::Tokens;
+use crate::tone::{self, HistSource};
+
+/// Prefix of the `coalesce` keys of gesture edits (`history_keys::coalesce` appends the gesture).
+const GESTURE_KEY: &str = "properties-adjustment";
+
+/// What the Properties editor keeps for the layer it shows; built anew when another layer shows.
+pub(crate) struct PropertiesAdjust {
+    /// The layer the record belongs to.
+    pub layer: LayerId,
+    /// The settings the panel found, for Color Balance's Photoshop-style Reset.
+    pub session: AdjustSession<AdjustValue>,
+    /// The shown entry of the Channel select (an index into `values::tone_channels`).
+    pub channel: usize,
+    /// The Levels clipping display.
+    pub clipping: Option<LevelsClip>,
+    /// A tone for Color Balance to show, given once: the Reset to defaults shows Midtones again.
+    pub tone: Option<ColorBalanceTone>,
+    /// The Color Picker a colour well opened, while it is open.
+    pub pick: Option<ColorPick>,
+}
+
+/// A colour well's open Color Picker.
+pub(crate) struct ColorPick {
+    dialog: DialogId,
+    /// The key the editor asked with (`answer_color` finds the field by it).
+    key: String,
+    /// The colour the picker opened with: an OK that answers it is no edit (a colour the value holds in
+    /// finer steps than the picker's would otherwise be rewritten).
+    opened: Option<Srgba>,
+    /// The value the colour is written into.
+    before: AdjustValue,
+}
+
+impl PropertiesAdjust {
+    fn new(layer: LayerId) -> Self {
+        Self { layer, session: AdjustSession::new(), channel: 0, clipping: None, tone: None, pick: None }
+    }
 }
 
 /// Kinds whose Properties edits follow Photoshop's history and Reset (measured for Color Balance,
@@ -14,137 +63,247 @@ fn photoshop_session(kind: &str) -> bool {
     kind == "colorBalance"
 }
 
-/// The `coalesce` key of a layer's Properties edits (one history step while they follow each
-/// other, like Photoshop's "Modify … Layer").
-pub fn properties_coalesce(id: LayerId) -> String {
-    format!("properties-adjustment:{}", id.0)
+/// Kinds that draw a histogram behind their controls.
+fn has_histogram(kind: &str) -> bool {
+    matches!(kind, "levels" | "curves" | "threshold")
 }
 
-/// A layer's Properties session: document, last pass drawn, the settings the panel found, and
-/// whether the panel edited them since (or since the last Reset).
-type Session = (u64, u64, Value, bool);
-
-fn session_key(id: LayerId) -> egui::Id {
-    layer_mem(id).with("session")
+/// The `coalesce` key of a session kind's edits: one history step while they follow each other.
+/// It differs in form from the gesture keys, which end in a gesture number.
+fn layer_key(id: LayerId) -> String {
+    format!("{GESTURE_KEY}:layer-{}", id.0)
 }
 
-/// Remember the settings `id` (in document `doc`) had when the panel started showing it: kept
-/// while it is drawn pass after pass, taken anew after a pass without it (another layer,
-/// document or panel state shown).
-fn track_session(ctx: &egui::Context, doc: u64, id: LayerId, committed: &Value) {
-    let pass = ctx.cumulative_pass_nr();
-    let kept: Option<Session> = ctx.data(|d| d.get_temp(session_key(id)));
-    let (start, edited) = match kept {
-        Some((d, last, v, e)) if d == doc && last.saturating_add(1) >= pass => (v, e),
-        _ => (committed.clone(), false),
-    };
-    ctx.data_mut(|d| d.insert_temp(session_key(id), (doc, pass, start, edited)));
+fn value_cx(mode: ColorMode, committed: &Value) -> ValueCx {
+    ValueCx::new(mode, committed.clone())
 }
 
-fn set_edited(ctx: &egui::Context, id: LayerId, edited: bool) {
-    let kept: Option<Session> = ctx.data(|d| d.get_temp(session_key(id)));
-    if let Some((doc, pass, start, _)) = kept {
-        ctx.data_mut(|d| d.insert_temp(session_key(id), (doc, pass, start, edited)));
+/// The identity a session tracks: the document and the layer.
+fn session_target(doc: u64, id: LayerId) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (doc, id.0).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The Color Balance value with every tone back to 0 (Preserve Luminosity kept).
+fn zeroed(mut value: AdjustValue) -> AdjustValue {
+    if let AdjustValue::ColorBalance { value, .. } = &mut value {
+        value.reset();
     }
+    value
 }
 
-/// The settings layer `id` of document `doc` had when the Properties panel started showing it,
-/// if the panel has edited them since (or since the last Reset).
-pub fn session_start(ctx: &egui::Context, doc: u64, id: LayerId) -> Option<Value> {
-    let kept: Option<Session> = ctx.data(|d| d.get_temp(session_key(id)));
-    kept.filter(|k| k.0 == doc && k.3).map(|k| k.2)
-}
-
-/// The Properties panel's Reset for an adjustment layer whose kind follows Photoshop's session
-/// ([`photoshop_session`]): the `layer.setAdjustment` params, or None for other kinds. Edited in
-/// the panel since it started showing the layer (or since the last Reset): back to the settings it
-/// found (Tone choice kept); otherwise the defaults (Color Balance: [`reset_color_balance`]).
-/// Either way part of the layer's edit step.
-pub fn properties_reset(ctx: &egui::Context, doc: u64, id: LayerId, adj: &Adjustment) -> Option<Value> {
+/// The Properties panel's Reset for an adjustment layer: the `layer.setAdjustment` params. A kind
+/// that follows Photoshop's session ([`photoshop_session`]) goes back to the settings the panel
+/// found if it edited them since (or since the last Reset), else to the defaults (Tone choice kept
+/// in the first case, Midtones shown in the second); either way it is part of the layer's edit
+/// step. Other kinds go to the defaults for the document's mode.
+pub fn layer_reset(app: &mut PhotocraftApp, id: LayerId, adj: &Adjustment) -> Value {
     let kind = photocraft_engine::commands::adjustment_kind(adj);
-    if !photoshop_session(kind) {
-        return None;
-    }
-    let mut v = match session_start(ctx, doc, id) {
-        Some(start) => start,
-        None => {
-            let mut v = adjust_params::to_params(adj);
-            reset_color_balance(ctx, layer_mem(id), &mut v);
-            v
+    let mode = app.session.active().map_or(ColorMode::Rgb, |s| s.doc.mode);
+    let committed = adjust_params::to_params(adj);
+    let mut params = if photoshop_session(kind) {
+        let vcx = value_cx(mode, &committed);
+        match values::from_params(kind, &committed, &vcx) {
+            Ok(found) => {
+                let record = app.adjust_session.as_mut().filter(|r| r.layer == id);
+                let value = match record {
+                    Some(record) => {
+                        let was_edited = record.session.is_edited();
+                        let value = record.session.reset(|| zeroed(found));
+                        if !was_edited {
+                            record.tone = Some(ColorBalanceTone::Midtones);
+                        }
+                        value
+                    }
+                    None => zeroed(found),
+                };
+                values::to_params(&value, &vcx, true)
+            }
+            Err(_) => committed,
         }
+    } else {
+        adjust_params::default_for(kind, mode).map_or_else(|_| json!({}), |defaults| adjust_params::to_params(&defaults))
     };
-    set_edited(ctx, id, false);
-    v["layer"] = json!(id.0);
-    v["coalesce"] = json!(properties_coalesce(id));
-    Some(v)
+    params["layer"] = json!(id.0);
+    if photoshop_session(kind) {
+        params["coalesce"] = json!(layer_key(id));
+    }
+    params
 }
 
 /// The Properties-panel editor of an adjustment layer: previews live (`app.live_adjust`) while a
 /// control moves and commits one `layer.setAdjustment` per gesture.
+///
+/// Each pass applies only the edit events its own editor run reports, so a second pass in the same
+/// frame repeats nothing.
 pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
     let t = Tokens::get(ui.ctx());
-    let kind = photocraft_engine::commands::adjustment_kind(adj);
     match adj {
         Adjustment::ColorLookup { .. } => return crate::adjust_ui::color_lookup_editor(app, ui, id, adj),
         Adjustment::Invert => {
-            ui.label(RichText::new(tl!("Invert has no settings.")).color(t.text_faint));
+            ui.label(egui::RichText::new(tl!("Invert has no settings.")).color(t.text_faint));
             return;
         }
         Adjustment::Unsupported { psd_key, .. } => {
             let template = "This adjustment ({key}) is kept as imported and can't be edited yet.";
-            ui.label(RichText::new(crate::i18n::fmt(tl!(template), &[("key", psd_key)])).color(t.text_faint));
+            ui.label(egui::RichText::new(crate::i18n::fmt(tl!(template), &[("key", psd_key)])).color(t.text_faint));
             return;
         }
         _ => {}
     }
-    let committed = adjust_params::to_params(adj);
+    let kind = photocraft_engine::commands::adjustment_kind(adj);
+    let Some((doc, mode)) = app.session.active().map(|s| (s.doc.id.0, s.doc.mode)) else { return };
+    let committed_params = adjust_params::to_params(adj);
+    let vcx = value_cx(mode, &committed_params);
+    let committed = match values::from_params(kind, &committed_params, &vcx) {
+        Ok(value) => value,
+        Err(err) => {
+            app.ui.status = err;
+            return;
+        }
+    };
+
+    let mut record = match app.adjust_session.take() {
+        Some(record) if record.layer == id => record,
+        other => {
+            // A colour well's picker of the layer shown before has nothing to answer to.
+            if let Some(ColorPick { dialog, .. }) = other.and_then(|r| r.pick) {
+                app.framework.dialogs.cancel_by_id(ui.ctx(), dialog);
+                app.live_adjust = None;
+            }
+            PropertiesAdjust::new(id)
+        }
+    };
     let session = photoshop_session(kind);
-    if session && let Some(doc) = app.session.active().map(|s| s.doc.id.0) {
-        track_session(ui.ctx(), doc, id, &committed);
+    if session {
+        // The panel's body is a memoized view, so a frame that replays it runs no pass of it: the session follows the
+        // count of passes the panel showed something else or nothing (`PhotocraftApp::properties_hidden`), which stays
+        // put while it shows this layer, replays included.
+        record.session.track(session_target(doc, id), app.properties_hidden, &committed);
+        app.properties_tracked = true;
     }
-    let mut values = match &app.live_adjust {
-        Some((l, v)) if *l == id => v.clone(),
+    follow_color_pick(app, id, &mut record, &committed, &vcx);
+    let mut value = match &app.live_adjust {
+        Some((layer, params)) if *layer == id => values::from_params(kind, params, &vcx).unwrap_or_else(|_| committed.clone()),
         _ => committed.clone(),
     };
-    let gray = app.session.active().is_some_and(|s| is_gray(s.doc.mode));
-    let hist = needs_histogram(kind).then(|| tone::histograms(app, HistSource::BelowLayer(id), space_of(&values)));
-    let cx = EditorCx {
-        mem: layer_mem(id),
-        hist,
-        gray,
+
+    let gray = is_gray(mode);
+    let space = adjust_params::default_space(mode);
+    let dynamic = app.session.prefs().interface.dynamic_color_sliders;
+    let setup = EditorSetup {
+        channels: values::tone_channels(space, gray, None),
+        histograms: if has_histogram(kind) {
+            values::panel_histograms(&tone::histograms(app, HistSource::BelowLayer(id), space), space, gray, None)
+        } else {
+            Vec::new()
+        },
+        gradients: if kind == "gradientMap" { gradient_presets(app) } else { Vec::new() },
         swatches: swatches(app),
-        gradients: gradient_presets(app, kind),
-        dialog: false,
-        dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
-        isolated_curve: None,
+        tone: record.tone.take(),
+        ..Default::default()
     };
-    if matches!(kind, "levels" | "curves") {
-        crate::layer_picker::controls(app, ui, id);
+    let armed = crate::layer_picker::armed(app).filter(|(layer, _)| *layer == id).map(|(_, picker)| picker);
+    let mut picker: Option<TonePicker> = armed;
+    let out = {
+        let run = editor(kind, setup);
+        let mut cx = AdjustDialogCx::new(AdjustContext::properties(dynamic).gray(gray), &mut picker, &mut record.channel, &mut record.clipping);
+        run(ui, &mut value, &mut cx)
+    };
+    if picker != armed {
+        crate::layer_picker::arm(app, id, picker);
     }
-    let mut e = editor(ui, kind, &mut values, &cx);
-    if e.import_gradients {
-        crate::preset_files_ui::import_gradients_dialog(app);
-    }
-    if e.auto {
-        apply_auto(app, &mut values, Some(id), None, &mut e);
-    }
-    if e.changed {
-        app.live_adjust = Some((id, values.clone()));
-    }
-    if e.commit {
-        if values != committed {
-            let rev = app.session.active().map(|s| s.revision);
-            let mut p = values;
-            p["layer"] = json!(id.0);
-            if session {
-                p["coalesce"] = json!(properties_coalesce(id));
-                set_edited(ui.ctx(), id, true);
+
+    for event in out.edit {
+        match &event {
+            EditEvent::Update { value: proposed, .. } => app.live_adjust = Some((id, values::to_params(proposed, &vcx, true))),
+            EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
+                let key = if session { Some(layer_key(id)) } else { crate::history_keys::coalesce(GESTURE_KEY, &event) };
+                commit(app, id, &mut record, &committed, after, &vcx, key);
             }
-            if let Err(err) = app.run("layer.setAdjustment", p) {
-                app.ui.status = err;
-            }
-            tone::keep_after_commit(app, id, rev);
+            EditEvent::Cancel { .. } => app.live_adjust = None,
+            _ => {}
         }
-        app.live_adjust = None;
+    }
+    match out.ask {
+        Some(AdjustAsk::Auto) => match black_white_auto(app, Some(id), None) {
+            Ok(Value::Object(weights)) => {
+                let mut params = values::to_params(&value, &vcx, true);
+                if let Some(target) = params.as_object_mut() {
+                    target.extend(weights);
+                }
+                match values::from_params(kind, &params, &vcx) {
+                    Ok(auto) => commit(app, id, &mut record, &committed, &auto, &vcx, None),
+                    Err(err) => app.ui.status = err,
+                }
+            }
+            Ok(_) => {}
+            Err(err) => app.ui.status = err,
+        },
+        Some(AdjustAsk::ImportGradients) => crate::preset_files_ui::import_gradients_dialog(app),
+        Some(AdjustAsk::PickColor(request)) if record.pick.is_none() => {
+            let (key, opened) = (request.key.clone(), request.color);
+            // Properties has no parent dialog for `open_for_request`: the panel holds its picker itself.
+            let dialog = crate::color_picker_ui::open_for_window(app, PickWindow::Properties, request);
+            record.pick = Some(ColorPick { dialog, key, opened, before: value });
+        }
+        _ => {}
+    }
+    app.adjust_session = Some(record);
+}
+
+/// Runs one `layer.setAdjustment` for `value` unless it is the layer's committed value, and ends
+/// the preview. `coalesce` joins the edit to the step before it.
+fn commit(
+    app: &mut PhotocraftApp,
+    id: LayerId,
+    record: &mut PropertiesAdjust,
+    committed: &AdjustValue,
+    value: &AdjustValue,
+    vcx: &ValueCx,
+    coalesce: Option<String>,
+) {
+    if value != committed {
+        let rev = app.session.active().map(|s| s.revision);
+        let mut params = values::to_params(value, vcx, true);
+        params["layer"] = json!(id.0);
+        if let Some(key) = coalesce {
+            params["coalesce"] = json!(key);
+        }
+        record.session.edited();
+        if let Err(err) = app.run("layer.setAdjustment", params) {
+            app.ui.status = err;
+        }
+        tone::keep_after_commit(app, id, rev);
+    }
+    app.live_adjust = None;
+}
+
+/// A colour well's Color Picker while it is open: its colour previews on the layer. Once it
+/// closed, OK's colour is one edit and Cancel (or OK without a colour) leaves the layer as it was.
+fn follow_color_pick(app: &mut PhotocraftApp, id: LayerId, record: &mut PropertiesAdjust, committed: &AdjustValue, vcx: &ValueCx) {
+    let Some(pick) = record.pick.take() else { return };
+    match app.framework.dialogs.get_by_id::<ColorPickerDialog>(pick.dialog).map(ColorPickerDialog::current) {
+        Some(current) => {
+            if let Some(picked) = current {
+                let mut preview = pick.before.clone();
+                if answer_color(&mut preview, &pick.key, picked.color) {
+                    app.live_adjust = Some((id, values::to_params(&preview, vcx, true)));
+                }
+            }
+            record.pick = Some(pick);
+        }
+        None => match crate::color_picker_ui::answer_for_window(app, PickWindow::Properties) {
+            Some((key, color)) if key == pick.key && Some(color) != pick.opened => {
+                let mut answered = pick.before;
+                if answer_color(&mut answered, &key, color) {
+                    commit(app, id, record, committed, &answered, vcx, None);
+                } else {
+                    app.live_adjust = None;
+                }
+            }
+            _ => app.live_adjust = None,
+        },
     }
 }

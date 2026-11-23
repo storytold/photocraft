@@ -256,6 +256,7 @@ struct Registry {
 }
 
 struct Config {
+    query_space: fn(&Path) -> Option<(u64, u64)>,
     dir: Option<PathBuf>,
     /// Opened at configuration time; startup also reaps abandoned Unix files.
     file: Option<Arc<ScratchFile>>,
@@ -341,7 +342,17 @@ static M: Manager = Manager {
     recovering: AtomicBool::new(false),
     space_unmeasured: AtomicBool::new(false),
     registry: Mutex::new(Registry { cells: Vec::new(), hand: 0 }),
-    config: Mutex::new(Config { dir: None, file: None, last_error: None, budget: 0, paused: None, backoff: RETRY_FIRST, size_cap: None, room: None }),
+    config: Mutex::new(Config {
+        query_space: free_space,
+        dir: None,
+        file: None,
+        last_error: None,
+        budget: 0,
+        paused: None,
+        backoff: RETRY_FIRST,
+        size_cap: None,
+        room: None,
+    }),
     evictions: AtomicU64::new(0),
     reloads: AtomicU64::new(0),
     written: AtomicU64::new(0),
@@ -609,9 +620,13 @@ impl Manager {
 /// Record a volume's answer (`None` = it didn't say) and derive the growth limit from it.
 fn apply_space(c: &mut Config, used: u64, space: Option<(u64, u64)>) {
     M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
-    c.room = space.map(|(available, total)| used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20))));
+    c.room = space.map(|(available, total)| growth_limit(used, available, total));
     store_limit(c);
     M.next_space_check.store(used.saturating_add(SPACE_CHECK_EVERY), Ordering::Relaxed);
+}
+
+fn growth_limit(used: u64, available: u64, total: u64) -> u64 {
+    used.saturating_add(available.saturating_sub(RESERVE_MIN.max(total / 20)))
 }
 
 /// Publish the scratch size the volume and the size limit allow.
@@ -664,13 +679,13 @@ fn run_query(dir: PathBuf, prepare: bool, done: Arc<QueryDone>) {
     }
     // Before measuring: writes made during the query come off the free space and must not be
     // counted again on top of it. Another folder's file says nothing about this one.
-    let (open, used) = {
+    let (open, used, query_space) = {
         let c = M.config();
         let current = c.file.as_ref().filter(|_| c.dir.as_deref() == Some(dir.as_path()));
-        (prepare && current.is_none(), current.map_or(0, |f| f.used()))
+        (prepare && current.is_none(), current.map_or(0, |f| f.used()), c.query_space)
     };
     let file = open.then(|| std::fs::create_dir_all(&dir).and_then(|()| ScratchFile::create(&dir)));
-    let space = free_space(&dir);
+    let space = query_space(&dir);
     // Forget it first: a caller that joined it can rely on the answer, and a later caller asks anew.
     QUERIES.lock().unwrap_or_else(PoisonError::into_inner).retain(|q| !Arc::ptr_eq(&q.done, &done));
     M.settle(&dir, prepare, file, used, space, &done);
@@ -1122,6 +1137,18 @@ pub fn scratch_handle_for_tests() -> Option<std::fs::File> {
     M.config().file.as_ref().and_then(|f| f.duplicate_handle().ok())
 }
 
+/// Use a volume with ample space for scratch tests. Missing folders still report unknown space.
+#[doc(hidden)]
+pub fn use_test_volume_space() {
+    M.config().query_space = |dir| dir.is_dir().then_some((32 << 30, 64 << 30));
+}
+
+/// Substitute a volume-space query in an isolated test process.
+#[doc(hidden)]
+pub fn set_volume_space_for_tests(query: fn(&Path) -> Option<(u64, u64)>) {
+    M.config().query_space = query;
+}
+
 /// Runs at the start of every folder query, off every lock: tests stall it to simulate a dead mount.
 #[doc(hidden)]
 pub fn set_query_hook_for_tests(hook: Option<fn(&Path)>) {
@@ -1155,6 +1182,15 @@ fn log_error(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scratch_growth_preserves_the_larger_of_one_gib_or_five_percent() {
+        const GIB: u64 = 1 << 30;
+        let used = 3 * GIB;
+        assert_eq!(growth_limit(used, 2 * GIB, 10 * GIB), used + GIB);
+        assert_eq!(growth_limit(used, 7 * GIB, 100 * GIB), used + 2 * GIB);
+        assert_eq!(growth_limit(used, 3 * GIB, 100 * GIB), used);
+    }
 
     #[cfg(windows)]
     #[test]
@@ -1329,6 +1365,7 @@ mod tests {
             space_unmeasured: AtomicBool::new(false),
             registry: Mutex::new(Registry { cells: Vec::new(), hand: 0 }),
             config: Mutex::new(Config {
+                query_space: free_space,
                 dir: Some(base.join("growth")),
                 file: None,
                 last_error: None,
