@@ -11,7 +11,7 @@ fn doc_name(s: &Session, i: usize) -> String {
 
 /// A one-layer document named `name`, with its only layer active.
 fn source(name: &str) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"name": name, "width": 40, "height": 30, "background": "white"})).unwrap();
     s
 }

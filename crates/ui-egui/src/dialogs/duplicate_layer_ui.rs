@@ -218,7 +218,7 @@ mod tests {
         let dialog = invoke(&mut app);
         set(&mut app, dialog, "document", json!("new")).unwrap();
         confirm(&mut app, &ctx, dialog).unwrap();
-        assert_eq!(app.session.documents()[1].doc.name, "Poster copy");
+        assert_eq!(app.session.documents()[1].doc.name, "Untitled-1");
         let dialog = invoke(&mut app);
         // Either the select refuses the id or the held OK does.
         if set(&mut app, dialog, "document", json!(u64::MAX.to_string())).is_ok() {
