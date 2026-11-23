@@ -48,7 +48,18 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
                 (crate::vector_cmds::parse_path(value).is_ok_and(|path| !path.is_empty() && path.control_bounds().is_some()), "a nonempty vector path".into())
             }
             (Some(p), _) => (p.accepts(value), p.expected()),
-            (None, "layer") => (value.as_u64().is_some() || value.is_string(), "an unsigned layer id or layer name".into()),
+            // The same selectors `commands::explicit_layer` already reads: an id, a name, or a
+            // recorded Action object (`{"name":"Layer 1"}`, `{"background":true}`, index/ordinal).
+            (None, "layer") => (
+                value.as_u64().is_some()
+                    || value.is_string()
+                    || value.as_object().is_some_and(|o| {
+                        (o.len() == 1 && (o.get("name").and_then(Value::as_str).is_some() || o.get("background") == Some(&Value::Bool(true))))
+                            || o.contains_key("index")
+                            || o.contains_key("ordinal")
+                    }),
+                r#"a layer id, name, {"name":string}, {"background":true}, or an index/ordinal selector"#.into(),
+            ),
             (None, "coalesce") => (value.is_string(), "a string".into()),
             (None, "target") if id.starts_with("filter.") => (
                 value.as_str().is_some_and(|s| matches!(s, "pixels" | "mask" | "filterMask" | "quickMask"))

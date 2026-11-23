@@ -422,3 +422,17 @@ fn the_run_path_never_clamps_inside_a_documented_range() {
     }
     assert!(narrower.is_empty(), "{narrower:#?}");
 }
+
+/// `layer` accepts the same selectors `explicit_layer` already reads, including a recorded
+/// Action's `{"name":...}` object (#15255). A boolean is still rejected.
+#[test]
+fn layer_params_accept_recorded_name_selectors() {
+    crate::install().unwrap();
+    for id in ["filter.blur.gaussianBlur", "image.adjustments.levels"] {
+        for layer in [json!("Receiver"), json!(1), json!({"name": "Receiver"}), json!({"background": true})] {
+            validate_params(id, &json!({"layer": layer})).unwrap_or_else(|e| panic!("{id} {layer}: {e}"));
+        }
+        let err = validate_params(id, &json!({"layer": false})).unwrap_err().to_string();
+        assert!(err.contains("layer"), "{err}");
+    }
+}
