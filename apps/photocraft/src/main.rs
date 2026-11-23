@@ -444,7 +444,9 @@ fn report_launch_profile_error(error: &str) {
 fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
     // The trusted Launcher protocol is decided before logger/crash/update/font/prefs access.
     let argv: Vec<_> = std::env::args_os().skip(1).collect();
-    if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && build_flavor::version_query(&argv) {
+    // Plain `--version`, or the Launcher's `--launch-profile nightly-v1 --profile-root <dir>
+    // --version`: answered before root validation, process identity, IPC or any window.
+    if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv)) {
         use std::io::Write as _;
         let _ = writeln!(std::io::stdout(), "PhotoCraft {}", build_flavor::version(build_flavor::COMPILED, env!("PHOTOCRAFT_BUILT_VERSION")));
         return None;
@@ -658,6 +660,16 @@ fn main() -> eframe::Result {
     // Set once a window has posted the interruption notice; until then the record must survive.
     let unclean_notice_shown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let notice_shown_in_callback = unclean_notice_shown.clone();
+    let nightly_session: nightly_session::Shared = std::sync::Arc::new(std::sync::Mutex::new(nightly_session));
+    // The app's exit hook is the controlled return on macOS, where every quit ends the process
+    // inside AppKit's terminate (craft::quit) and `run_native` never returns. Elsewhere the
+    // return path below finishes, as before.
+    #[cfg(target_os = "macos")]
+    let finish_at_exit = {
+        let shared = nightly_session.clone();
+        let shown = unclean_notice_shown.clone();
+        move || nightly_session::finish_once(&shared, shown.load(std::sync::atomic::Ordering::Relaxed))
+    };
     let result = eframe::run_native(
         os_window::name_for(os_window::identity()),
         options,
@@ -884,6 +896,10 @@ fn main() -> eframe::Result {
                 );
                 notice_shown_in_callback.store(previous_nightly_unclean, std::sync::atomic::Ordering::Relaxed);
             }
+            #[cfg(target_os = "macos")]
+            {
+                app.services.at_exit = Some(Box::new(finish_at_exit));
+            }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
                 photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], craft::theme::variant::Tone::Neutral, None);
@@ -900,11 +916,8 @@ fn main() -> eframe::Result {
     // health ownership BEFORE primary IPC, so a successor never observes a stale busy owner.
     // A renderer failure before the window (and so before the CPU retry) has not shown an
     // earlier interruption: keep that record so the retry, or the next start, still reports it.
-    if let Some(watch) = nightly_session
-        && let Err(error) = watch.finish(unclean_notice_shown.load(std::sync::atomic::Ordering::Relaxed))
-    {
-        log::warn!("Nightly session state was left intact: {error}");
-    }
+    // On macOS a window that was created has already finished in its exit hook; this is then a no-op.
+    nightly_session::finish_once(&nightly_session, unclean_notice_shown.load(std::sync::atomic::Ordering::Relaxed));
     // The window is gone: refuse further files and free the lock, so a launch that is waiting (or
     // the CPU-compatibility relaunch below) becomes the primary instead of handing its files to a
     // process that is exiting.
