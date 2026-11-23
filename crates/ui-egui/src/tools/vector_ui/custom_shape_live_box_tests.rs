@@ -239,13 +239,61 @@ fn undoing_the_placement_ends_the_box() {
     app.run("edit.undo", json!({})).unwrap();
     testing::frame(&mut app);
     assert!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).is_none(), "the layer is gone");
-    // Where the handle was the tool draws again: a new placement, and no "Transform Path".
+    // Redo brings the layer and its record back: the box is active again and the handle scales it.
+    app.run("edit.redo", json!({})).unwrap();
+    testing::frame(&mut app);
+    let (x0, y0, x1, y1) = bounds(&app, id);
+    let steps = past(&app);
+    let layers = layer_count(&app);
+    drag(&mut app, [x1 + 3.0, y1 + 3.0], [x1 - 30.0, y1 - 30.0]);
+    assert_eq!(last_step(&app).as_deref(), Some("Transform Path"), "redone: the handle scaled");
+    assert_eq!(past(&app), steps + 1, "one History step");
+    assert_eq!(layer_count(&app), layers, "no new placement");
+    near(bounds(&app, id), [x0, y0, x1 - 30.0, y1 - 30.0]);
+    // Undo the scale and the placement: where the handle was the tool draws again, and no "Transform Path".
+    app.run("edit.undo", json!({})).unwrap();
+    app.run("edit.undo", json!({})).unwrap();
+    testing::frame(&mut app);
     let steps = past(&app);
     let layers = layer_count(&app);
     drag(&mut app, [SQUARE[2] + 3.0, SQUARE[3] + 3.0], [SQUARE[2] - 30.0, SQUARE[3] - 30.0]);
     assert_eq!(layer_count(&app), layers + 1, "the press placed a new shape");
     assert_ne!(last_step(&app).as_deref(), Some("Transform Path"), "nothing scaled");
     assert_eq!(past(&app), steps + 1, "one step: the placement");
+}
+
+/// The record names one layer: with the placed shape selected AMONG several layers the box is inactive, and
+/// the press at its box's bottom-right corner reaches the tool. Guard test, passes before and after (with
+/// this tool no selection showed a box before the fix).
+#[test]
+fn selecting_the_shape_among_several_keeps_the_box_inactive() {
+    let mut app = app();
+    let id = place(&mut app, SQUARE);
+    let bg = background(&app);
+    app.run("layer.select", json!({"layer": bg, "mode": "add"})).unwrap();
+    testing::frame(&mut app);
+    assert_eq!(app.session.active().unwrap().selected_layers().len(), 2, "both layers are selected");
+    let (x0, y0, x1, y1) = bounds(&app, id);
+    let steps = past(&app);
+    let layers = layer_count(&app);
+    drag(&mut app, [x1 + 3.0, y1 + 3.0], [x1 - 30.0, y1 - 30.0]);
+    assert_eq!(layer_count(&app), layers + 1, "the press placed a new shape: the multi-layer selection shows no box");
+    assert_ne!(last_step(&app).as_deref(), Some("Transform Path"), "nothing scaled");
+    assert_eq!(past(&app), steps + 1, "one step: the placement");
+    near(bounds(&app, id), [x0, y0, x1, y1]);
+}
+
+/// The placement record is UI state only: it is not saved with the panels, and a restored state carries no
+/// record (the rule of `clone_cursor`, same shape of assertion). Does not compile without the change.
+#[test]
+fn the_placement_record_is_not_saved() {
+    let mut app = app();
+    place(&mut app, SQUARE);
+    assert!(app.ui.presets_ui.placed_custom_shape.is_some(), "the placement left a record");
+    let saved = serde_json::to_value(&app.ui.presets_ui).unwrap();
+    assert!(saved.get("placed_custom_shape").is_none(), "the key is not in the saved JSON");
+    let restored: crate::preset_panels::PresetUi = serde_json::from_value(saved).unwrap();
+    assert!(restored.placed_custom_shape.is_none(), "the restored state carries no record");
 }
 
 /// A Pen path committed to a shape layer (the Pen tool in Shape mode): with the Custom Shape tool it keeps
