@@ -6,6 +6,8 @@
 mod binary_over_tests;
 pub(super) mod coverage;
 #[cfg(test)]
+mod coverage_snapshot_tests;
+#[cfg(test)]
 mod graph_tone_tests;
 pub(super) mod installer;
 #[cfg(test)]

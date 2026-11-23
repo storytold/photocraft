@@ -56,8 +56,9 @@ pub(in crate::xcf) fn decode<'a>(
             EffectMaskError::Metadata(_) => Failure::Limit,
         })?
         .ok_or(Failure::Invalid)?;
-    // This slice proves image-global selection snapshots only. Do not guess a
-    // different frame, custom placement or mask child-effect execution policy.
+    // This slice proves image-global selection snapshots only. Channel framing
+    // ends at its hierarchy pointer; trailing bytes are not child effect lists.
+    // Do not guess a different frame or custom placement from absent metadata.
     if (header.width(), header.height()) != (image.width, image.height) {
         return Err(Failure::Unsupported);
     }
