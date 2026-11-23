@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 use photocraft_raster::Surface;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{EngineError, Result, Session, channel_cmds::ChannelTarget};
 
@@ -10,46 +10,8 @@ mod tone;
 #[cfg(test)]
 mod tone_dialog_tests;
 
-/// A bounded, cheap-to-copy set of native colour components (never transparency).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ColorChannels(u64);
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Restriction {
-    pub colors: ColorChannels,
-    pub layer: photocraft_doc::LayerId,
-}
-
-impl ColorChannels {
-    pub fn contains(self, index: usize) -> bool {
-        index < 64 && self.0 & (1u64.checked_shl(index as u32).unwrap_or(0)) != 0
-    }
-    pub fn indices(self) -> impl Iterator<Item = usize> {
-        (0..64).filter(move |i| self.contains(*i))
-    }
-    pub fn len(self) -> usize {
-        self.0.count_ones() as usize
-    }
-    pub fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-    pub fn from_indices(indices: impl IntoIterator<Item = usize>, count: usize) -> Result<Self> {
-        let mut bits = 0;
-        for i in indices {
-            if i >= count || i >= 64 {
-                return Err(EngineError::Other("colour channel index is out of range".into()));
-            }
-            bits |= 1u64.checked_shl(i as u32).unwrap_or(0);
-        }
-        if bits == 0 {
-            return Err(EngineError::Other("select at least one colour channel".into()));
-        }
-        Ok(Self(bits))
-    }
-    pub fn params(self) -> Value {
-        json!({"colors": self.indices().collect::<Vec<_>>()})
-    }
-}
+pub use crate::state::ColorChannels;
+pub(crate) use crate::state::Restriction;
 
 /// An explicit colour target, checked before command dispatch and allocation.
 pub fn explicit(p: &Value, count: usize) -> Result<Option<ColorChannels>> {

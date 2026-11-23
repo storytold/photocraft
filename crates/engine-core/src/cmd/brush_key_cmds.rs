@@ -308,7 +308,9 @@ mod tests {
         }
         s.execute("tools.increaseBrushHardness", json!({})).unwrap();
         assert_eq!(s.tools.brush.hardness, 0.75);
-        s.execute("tools.decreaseBrushHardness", json!({"junk": [1, 2]})).unwrap();
+        assert!(s.execute("tools.decreaseBrushHardness", json!({"junk": [1, 2]})).is_err(), "an undocumented key is refused (#7596)");
+        assert_eq!(s.tools.brush.hardness, 0.75);
+        s.execute("tools.decreaseBrushHardness", json!({})).unwrap();
         assert_eq!(s.tools.brush.hardness, 0.5);
         assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("tools.decreaseBrushHardness"));
         // They need no document and are bindable under Tools.

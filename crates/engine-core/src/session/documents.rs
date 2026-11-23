@@ -1,7 +1,7 @@
 use crate::{EngineError, Result};
 
 use super::history::fix_selection;
-use super::{DocState, Document, LayerId, Session, channel_cmds, smart_cmds};
+use super::{DocState, Document, LayerId, Session, channel_cmds};
 
 /// Move item `i` of `v` to position `to`, clamped to the end. Returns where it went; `None` when
 /// `i` is out of range.
@@ -216,7 +216,7 @@ impl Session {
         // A saved copy can reuse a closed source's persisted ID. Give the new tab another ID so
         // a closed clone source stays invalid until the user explicitly picks a new source.
         // Persisted IDs can overlap the allocator, so check every replacement too.
-        while self.docs.iter().any(|st| st.doc.id == doc.id) || self.presets.clone.slots.iter().any(|slot| slot.document == Some(doc.id)) {
+        while self.docs.iter().any(|st| st.doc.id == doc.id) || crate::registry::hooks().doc_id_reserved.iter().any(|reserved| reserved(self, doc.id)) {
             doc.id = photocraft_doc::DocId::fresh();
         }
         self.open_document_order.push(doc.id);
@@ -262,12 +262,11 @@ impl Session {
         if index >= self.docs.len() {
             return None;
         }
-        smart_cmds::on_close(self, index);
+        for closing in &crate::registry::hooks().document_closing {
+            closing(self, index);
+        }
         if let Some(id) = self.docs.get(index).map(|d| d.doc.id) {
             self.cancel_jobs_on(id);
-            self.subject_cache.forget_doc(id);
-            self.object_finder.forget_doc(id);
-            self.presets.clone.forget_doc(id);
             if self.link_missing.iter().any(|(d, _)| *d == id.0) {
                 self.link_missing.retain(|(d, _)| *d != id.0);
             }

@@ -2,6 +2,7 @@
 //! (expand/contract/border/smooth/feather), Grow, Similar, Lasso.
 //! Selections are grayscale coverage surfaces clipped to the canvas.
 
+use crate::color_cmds::ColorExt;
 use photocraft_algo::selection::{self as sel, SelectionMode};
 use photocraft_doc::Document;
 use photocraft_geom::Rect;
@@ -426,7 +427,7 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
             // Pixels the current proof setup (View › Proof Setup) can't reproduce, as the gamut
             // warning shows them: judged on the composite.
             let d = s.active().ok_or(EngineError::NoDocument)?;
-            let pv = s.color.proof(d.doc.id);
+            let pv = s.color().proof(d.doc.id);
             let (m, _) = crate::color_cmds::gamut_mask(&d.doc, &pv.setup, pv.gamut_threshold)?;
             (d.doc.bounds(), m.iter().map(|v| f32::from(*v) / 255.0).collect())
         }
