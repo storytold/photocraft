@@ -113,7 +113,7 @@ fn a_remembered_step_with_values_of_its_own_is_not_saved_as_an_empty_step() {
 
 /// White 8 x 8 with a red square selected for the fill.
 fn session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width":8,"height":8,"background":"white"})).unwrap();
     s.execute("tools.setColors", json!({"foreground":"#ff0000"})).unwrap();
     s.execute("select.rect", json!({"x":3,"y":3,"width":2,"height":2})).unwrap();
@@ -188,7 +188,7 @@ fn an_empty_step_plays_with_the_remembered_settings_and_steps_never_change_them(
 #[test]
 fn remembered_settings_fill_only_what_the_step_does_not_name() {
     let resolve = |s: &Session, p: Value| crate::actions_cmds::playback_params(s, CMD, &p).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     assert_eq!(resolve(&s, json!({MARK: true})), json!({"output":"new"}));
     // Only the command's settings come over, never the overlay's.
     remember(&mut s, json!({"showOverlay":true,"opacity":50.0,"color":[1,2,3],"excluded":true,"sampling":"auto","output":"duplicate"}));
@@ -205,7 +205,7 @@ fn remembered_settings_fill_only_what_the_step_does_not_name() {
 #[test]
 fn damaged_remembered_settings_are_skipped_without_a_panic() {
     let resolve = |s: &Session| crate::actions_cmds::playback_params(s, CMD, &json!({MARK: true})).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     for damaged in [json!(3), json!(null), json!([]), json!({"output":5,"scale":"yes","sampling":true,"mirror":null})] {
         remember(&mut s, damaged.clone());
         assert_eq!(resolve(&s), json!({"output":"new"}), "{damaged}");
@@ -235,7 +235,7 @@ fn folder_batch_plays_an_empty_step_with_the_remembered_settings() {
         let bytes = std::fs::read(dir.path().join(out).join("in.psd")).unwrap();
         photocraft_io::import("in.psd", &bytes).unwrap().document.layers.len()
     };
-    let mut s = Session::new();
+    let mut s = crate::session();
     assert_eq!(layers(&mut s, "default"), 2, "nothing remembered: a new layer");
     remember(&mut s, json!({"output":"current"}));
     assert_eq!(layers(&mut s, "remembered"), 1, "the remembered Current Layer");
