@@ -14,6 +14,7 @@
 //! and a profile reassigned while PhotoCraft stays in front with no window moving practically
 //! doesn't happen; it is picked up at the next return to the front or Color Settings.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
@@ -73,8 +74,8 @@ fn refresh_note(app: &PhotocraftApp) {
 /// A reading started before the shell existed (the desktop app starts one at launch and waits
 /// for it briefly so the first frames already use the right profile): applied when it arrives.
 pub fn pending(app: &mut PhotocraftApp, rx: Receiver<Detection>) {
-    if app.session.color.displays.is_empty() {
-        app.session.color.monitor_detection = MonitorDetection::Pending;
+    if app.session.color().displays.is_empty() {
+        app.session.color_mut().monitor_detection = MonitorDetection::Pending;
     }
     app.monitors.pending = Some(rx);
 }
@@ -115,8 +116,8 @@ fn poll_with_output_name(app: &mut PhotocraftApp, ctx: &egui::Context, output_na
         }
     }
     let main = view_display(app, ctx);
-    if main != app.session.color.main_display {
-        app.session.color.main_display = main;
+    if main != app.session.color().main_display {
+        app.session.color_mut().main_display = main;
         ctx.request_repaint();
     }
     let focused = ctx.input(|i| i.focused) || std::mem::take(&mut app.monitors.window_focused);
@@ -171,7 +172,7 @@ pub fn read_now(app: &mut PhotocraftApp) {
 /// The Color Settings dialog's line: the monitor profile in use for the main window, as it is
 /// now.
 pub fn note(app: &PhotocraftApp) -> String {
-    let st = app.session.color.monitor_status();
+    let st = app.session.color().monitor_status();
     let template = if st.display.is_some() { "Monitor profile in use on {display}: {profile}" } else { "Monitor profile in use: {profile}" };
     let profile = profile_summary(&st);
     let mut note = crate::i18n::fmt(tl!(template), &[("display", st.display.as_deref().unwrap_or_default()), ("profile", &profile)]);
@@ -196,7 +197,7 @@ fn profile_summary(st: &photocraft_engine::display_color::MonitorStatus) -> Stri
 
 /// When the last re-read failed and an earlier reading is shown: why.
 fn retained(app: &PhotocraftApp) -> Option<String> {
-    match &app.session.color.monitor_detection {
+    match &app.session.color().monitor_detection {
         MonitorDetection::Retained { reason } => Some({
             let template = "previous reading kept; the last re-read failed: {reason}";
             crate::i18n::fmt(tl!(template), &[("reason", reason)])
@@ -218,10 +219,10 @@ fn start(app: &mut PhotocraftApp, now: f64) {
 /// management). Manual monitor profiles don't depend on the reading. A failed re-read keeps the
 /// previous reading and says so in the status.
 pub fn apply(app: &mut PhotocraftApp, r: Detection) {
-    if let Some(e) = app.session.color.set_displays(r) {
+    if let Some(e) = app.session.color_mut().set_displays(r) {
         log::warn!("re-reading the display profiles failed: {e}; keeping the previous ones");
     }
-    let c = &app.session.color;
+    let c = app.session.color();
     let fallbacks: Vec<(u32, String, String)> = if c.displays.is_empty() {
         let st = c.monitor_status();
         match (st.source, st.reason, &st.detection) {
@@ -277,7 +278,7 @@ fn display_for_view(app: &PhotocraftApp, ctx: &egui::Context) -> Option<u32> {
     if let Some(display) = root_output_display(app, ctx) {
         return display;
     }
-    display_at(&app.session.color.displays, window_frame(ctx)?)
+    display_at(&app.session.color().displays, window_frame(ctx)?)
 }
 
 #[cfg(target_os = "linux")]
@@ -294,7 +295,7 @@ fn root_output_display(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Optio
         return None;
     }
     let name = app.monitors.root_output_name.as_deref()?;
-    Some(app.session.color.displays.iter().find(|display| display.name == name).map(|display| display.id))
+    Some(app.session.color().displays.iter().find(|display| display.name == name).map(|display| display.id))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -314,7 +315,7 @@ fn root_output_name_known(_app: &PhotocraftApp, _ctx: &egui::Context) -> bool {
 
 /// The window is on no display we know, or on one whose size differs from what was read.
 fn displays_changed(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
-    let c = &app.session.color;
+    let c = app.session.color();
     if c.displays.is_empty() || !matches!(c.monitor_detection, MonitorDetection::Found | MonitorDetection::Retained { .. }) {
         return false;
     }
@@ -338,7 +339,7 @@ fn displays_changed(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
 
 /// Help › System Info's lines: the monitor profile of each display.
 pub fn summary_lines(app: &PhotocraftApp) -> Vec<String> {
-    let c = &app.session.color;
+    let c = app.session.color();
     if c.displays.is_empty() {
         return vec![{
             let template = "Monitor profile: {profile}";
@@ -438,13 +439,13 @@ mod tests {
         frame(&mut app, &ctx, 0.1, [100.0, 100.0], [1728.0, 1117.0], true);
         assert!(app.monitors.pending.is_none());
         // On the built-in display (no profile here): sRGB, reported once.
-        assert_eq!(app.session.color.main_display, Some(1));
+        assert_eq!(app.session.color().main_display, Some(1));
         assert_eq!(app.ui.notices.len(), 1);
         assert!(app.ui.notices[0].lines[0].contains("Built-in Retina Display has no ICC profile"));
         // Moved to the external display: its profile, without a restart.
         frame(&mut app, &ctx, 0.2, [2000.0, -500.0], [3008.0, 1692.0], true);
-        assert_eq!(app.session.color.main_display, Some(4));
-        assert_eq!(app.session.color.monitor().description, "Display P3");
+        assert_eq!(app.session.color().main_display, Some(4));
+        assert_eq!(app.session.color().monitor().description, "Display P3");
         let lines = summary_lines(&app);
         assert_eq!(lines[1], "Monitor profile on ROG PG32UQX (main window): Apple_Display (auto)", "{lines:?}");
         assert!(lines[0].starts_with("Monitor profile on Built-in Retina Display: sRGB"), "{lines:?}");
@@ -477,7 +478,7 @@ mod tests {
     fn displays_are_read_again_when_they_may_have_changed() {
         let mut app = app();
         let ctx = app.ctx().clone();
-        app.session.color.set_displays(Ok(displays(p3())));
+        app.session.color_mut().set_displays(Ok(displays(p3())));
         let reads = reader(&mut app, displays(p3()));
         let count = || reads.load(std::sync::atomic::Ordering::SeqCst);
         frame(&mut app, &ctx, 100.0, [100.0, 100.0], [1728.0, 1117.0], true);
@@ -513,7 +514,7 @@ mod tests {
         // that applies its result; the reader doesn't wake the UI.
         let mut app = app();
         let ctx = app.ctx().clone();
-        app.session.color.set_displays(Ok(displays(None)));
+        app.session.color_mut().set_displays(Ok(displays(None)));
         let (count, readers) = manual_reader(&mut app);
         frame(&mut app, &ctx, 0.0, [100.0, 100.0], [1728.0, 1117.0], false);
         let wait = frame(&mut app, &ctx, 1.0, [100.0, 100.0], [1728.0, 1117.0], true);
@@ -521,7 +522,7 @@ mod tests {
         assert!(wait <= std::time::Duration::from_millis(250), "next frame scheduled: {wait:?}");
         readers.recv().unwrap().send(Ok(displays(p3()))).unwrap();
         frame(&mut app, &ctx, 1.25, [100.0, 100.0], [1728.0, 1117.0], true);
-        assert_eq!(app.session.color.monitor().description, "Display P3");
+        assert_eq!(app.session.color().monitor().description, "Display P3");
     }
 
     /// One frame of a document window at `pos` with `focused` (its part of the shell is
@@ -543,7 +544,7 @@ mod tests {
         let mut app = app();
         // The main window is the app's own context; the document window is another window's.
         let (main, doc) = (app.ctx().clone(), egui::Context::default());
-        app.session.color.set_displays(Ok(displays(p3())));
+        app.session.color_mut().set_displays(Ok(displays(p3())));
         let reads = reader(&mut app, displays(p3()));
         frame(&mut app, &main, 100.0, [100.0, 100.0], [1728.0, 1117.0], true);
         // A new egui context asks for a few frames of its own first.
@@ -563,7 +564,7 @@ mod tests {
         let mut app = app();
         // The main window is the app's own context; the document window is another window's.
         let (main, doc) = (app.ctx().clone(), egui::Context::default());
-        app.session.color.set_displays(Ok(displays(p3())));
+        app.session.color_mut().set_displays(Ok(displays(p3())));
         let reads = reader(&mut app, displays(p3()));
         let count = || reads.load(std::sync::atomic::Ordering::SeqCst);
         // Working in the document window: PhotoCraft is in front, no reading.
@@ -596,8 +597,8 @@ mod tests {
         // r1 finding 4: the dialog's line follows a reading that arrives while it is open.
         let mut app = app();
         let ctx = app.ctx().clone();
-        app.session.color.set_displays(Ok(displays(None)));
-        app.session.color.main_display = Some(1);
+        app.session.color_mut().set_displays(Ok(displays(None)));
+        app.session.color_mut().main_display = Some(1);
         crate::prefs_ui::invoke(&mut app, &ctx, "edit.colorSettings", &serde_json::json!({})).unwrap().unwrap();
         assert!(!app.framework.dialogs.is_empty(), "Color Settings is open");
         let cell = note_cell(&app);
@@ -605,7 +606,7 @@ mod tests {
         assert!(shown().contains("on Built-in Retina Display: sRGB") && shown().contains("fallback"), "{}", shown());
         // A reading that arrives while the dialog is open changes the line the dialog draws.
         apply(&mut app, Ok(displays(p3())));
-        app.session.color.main_display = Some(4);
+        app.session.color_mut().main_display = Some(4);
         read_now(&mut app);
         assert!(!app.framework.dialogs.is_empty(), "the dialog stays open");
         assert_eq!(shown(), "Monitor profile in use on ROG PG32UQX: Apple_Display (auto)");
@@ -634,7 +635,7 @@ mod tests {
         apply(&mut app, Ok(displays(p3())));
         assert!(app.ui.notices.is_empty());
         apply(&mut app, Err("osascript failed".into()));
-        assert_eq!(app.session.color.displays.len(), 2);
+        assert_eq!(app.session.color().displays.len(), 2);
         assert!(app.ui.notices.is_empty());
         app.run("edit.colorSettings", serde_json::json!({"monitorProfile": "srgb"})).unwrap();
         apply(&mut app, Ok(displays(Some(Arc::new(vec![0u8; 200])))));
@@ -646,7 +647,7 @@ mod tests {
     #[test]
     fn root_window_uses_winit_monitor_name_to_select_its_profile() {
         let mut app = app();
-        app.session.color.set_displays(Ok(vec![
+        app.session.color_mut().set_displays(Ok(vec![
             Display { id: 1, name: "DP-1".into(), frame: [0.0, 0.0, 1920.0, 1080.0], profile_name: None, icc: None },
             Display { id: 2, name: "HDMI-1".into(), frame: [1920.0, 0.0, 1920.0, 1080.0], profile_name: None, icc: None },
         ]));

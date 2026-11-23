@@ -1,5 +1,6 @@
 //! The documented dialog API answers the import question: the default, Replace and Cancel.
 use craft::ui::dialog::DialogId;
+use photocraft_engine::presets::PresetsExt;
 
 use super::*;
 use crate::control::{ControlRequest, Reply, handle};
@@ -33,12 +34,12 @@ fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Valu
 fn group(app: &PhotocraftApp, kind: Kind, name: &str) -> Value {
     match kind {
         Kind::Brushes => json!(app.session.tools.presets.iter().filter(|p| p.group == name).collect::<Vec<_>>()),
-        Kind::Gradients => json!(app.session.presets.gradients.iter().filter(|g| g.name == name).collect::<Vec<_>>()),
+        Kind::Gradients => json!(app.session.presets().gradients.iter().filter(|g| g.name == name).collect::<Vec<_>>()),
     }
 }
 
 fn library(app: &PhotocraftApp) -> Value {
-    json!({"brushes": app.session.tools.presets.as_ref(), "gradients": app.session.presets.gradients, "selectedBrush": *app.session.tools.brush})
+    json!({"brushes": app.session.tools.presets.as_ref(), "gradients": app.session.presets().gradients, "selectedBrush": *app.session.tools.brush})
 }
 
 impl Fixture {
@@ -78,7 +79,7 @@ impl Fixture {
             }
             Kind::Gradients => {
                 assert_eq!(original[0]["items"].as_array().unwrap().len(), 2);
-                app.session.presets.gradients.iter_mut().find(|g| g.name == stem).unwrap().items[0].name = "Edited gradient".into();
+                app.session.presets_mut().gradients.iter_mut().find(|g| g.name == stem).unwrap().items[0].name = "Edited gradient".into();
             }
         }
         let edited = group(&app, kind, stem);
