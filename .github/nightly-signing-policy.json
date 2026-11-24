@@ -19,7 +19,7 @@
   "max_age_seconds": 86400,
   "candidate_policy": {
     "schema": "craft-nightly-candidate-policy/v3",
-    "epoch": "photocraft-nightly-20261123-sonar-1a4ddfda",
+    "epoch": "photocraft-nightly-20261124-sonar-19880b44",
     "repository": "storytold/photocraft",
     "branch": "main",
     "required_workflows": [
@@ -233,6 +233,62 @@
           "type": "VULNERABILITY",
           "severity": "MAJOR",
           "hash": "ccba4e415c24601f3c90259cda892a5f"
+        },
+        {
+          "key": "AaIKwgPdp41A3KPnYjkm",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/rust_source.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "1e3597d53ca2697cd24474f23f3dd9df"
+        },
+        {
+          "key": "AaIKwgSHp41A3KPnYjkn",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/engine_cut.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "8d5b0e969b98008acf17068d5f1f7f29"
+        },
+        {
+          "key": "AaIKwgSHp41A3KPnYjko",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/engine_cut.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "8d5b0e969b98008acf17068d5f1f7f29"
+        },
+        {
+          "key": "AaIKwgSHp41A3KPnYjkp",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/engine_cut.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "652c184165d354f1c10afab33097fd11"
+        },
+        {
+          "key": "AaIKwgSHp41A3KPnYjkq",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/engine_cut.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "2dc7df4b6ee7f1302d680852231f2836"
+        },
+        {
+          "key": "AaIKwgSRp41A3KPnYjkw",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/move_tests.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "ff32a731f85beee97a8bf8c7b1ccaa92"
+        },
+        {
+          "key": "AaIKwgSRp41A3KPnYjkx",
+          "rule": "pythonsecurity:S8707",
+          "component": "storytold_photocraft:scripts/engine_split/move_tests.py",
+          "type": "VULNERABILITY",
+          "severity": "MAJOR",
+          "hash": "d6d2642646179ec403ab491e0cbcd899"
         }
       ]
     }

@@ -61,7 +61,7 @@ This is not a hosted no-key test, a native signing result or a working nightly f
 
 ## Installed policy values and their sources
 
-Read on 2026-11-23; re-read anything that may have moved before the policy is promoted to `release`.
+Read on 2026-11-23, with the Sonar gate and debt re-read on 2026-11-24; re-read anything that may have moved before the policy is promoted to `release`.
 
 | Field | Value | Source |
 |---|---|---|
@@ -73,8 +73,8 @@ Read on 2026-11-23; re-read anything that may have moved before the policy is pr
 | `platforms` | three rows | v0.23.1 stable identities, as in the example; the Windows publisher subject was confirmed by reading the stable v0.23.1 `photocraft.exe` Authenticode signature on Windows |
 | `candidate_policy.required_workflows` | CI (`ci.yml`, workflow `371199934`), 19 jobs | Workflow list API; jobs that succeeded on every recent main push run (the only always-run main workflow without path filters) |
 | `candidate_policy.sonar` | `storytold` / `storytold_photocraft`, app `12526` | `sonar-project.properties`; the SonarCloud check on main commits |
-| Sonar conditions | `new_security_rating` accepted (max 5); the other five required | Quality gate of main analysis `1a4ddfda` (commit `6554712c`) |
-| Sonar `issue_types` / `debt` | `VULNERABILITY`; the 8 unresolved main vulnerabilities | `api/issues/search` at the same analysis |
+| Sonar conditions | `new_security_rating` accepted (max 5); the other five required | Quality gate of main analysis `19880b44` (commit `27c629f7`, 2026-11-24 12:40 UTC) |
+| Sonar `issue_types` / `debt` | `VULNERABILITY`; all 15 unresolved main vulnerabilities, accepted as debt for the first run (Skylar's decision) | `api/issues/search` on main at the same analysis |
 
 The candidate check refuses whenever main's unresolved vulnerability set differs from `debt`, whether
 an issue is new or fixed, and whenever a required condition fails or a listed CI job is renamed. Refresh
