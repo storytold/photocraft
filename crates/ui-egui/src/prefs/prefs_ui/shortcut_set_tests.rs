@@ -146,3 +146,23 @@ fn an_edit_still_marks_the_set_modified_and_sets_save_no_action_keys() {
     h.state_mut().run("edit.keyboardShortcuts", json!({"set": {"edit.cut": "F7"}})).unwrap();
     assert!(modified(h.state().session.prefs()));
 }
+
+#[test]
+fn deleting_a_custom_set_waits_for_confirmation_and_dialog_ok() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = harness();
+    h.state_mut().run("edit.keyboardShortcuts", json!({"set":{"edit.copy":"F9"},"saveSet":"Painting"})).unwrap();
+    open(&mut h);
+    h.run_steps(4);
+    h.get_by_label("Delete").click();
+    h.run_steps(3);
+    let question = h.get_by_label("Delete the set “Painting”?");
+    assert!(h.state().prefs_rt.shortcuts.as_ref().unwrap().profiles.sets().contains_key("Painting"));
+    let cancel = std::iter::successors(question.parent(), |node| node.parent())
+        .find_map(|scope| scope.query_by_label("Cancel"))
+        .expect("the confirmation offers Cancel");
+    cancel.click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Delete the set “Painting”?").is_none(), "Cancel closes the confirmation");
+    assert!(h.state().prefs_rt.shortcuts.as_ref().unwrap().profiles.sets().contains_key("Painting"));
+}

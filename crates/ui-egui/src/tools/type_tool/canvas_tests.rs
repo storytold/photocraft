@@ -13,6 +13,7 @@ use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 
@@ -217,10 +218,16 @@ fn panel_harness_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static
     h
 }
 
+/// Frames the options bar may take to settle. Opening the font list loads the rows' sample faces on
+/// worker threads, and each pass that runs before a face has loaded is one more frame. The rows are
+/// the fixed test catalog's (`photocraft_text::fonts::catalog`), so the count is bounded, but on a
+/// busy runner the threads can miss many passes.
+const BAR_SETTLE_STEPS: u64 = 64;
+
 fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let _ = photocraft_text::shared();
     // As tall as a window, so the bar's popup lists open in full below it.
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(16).build_app(
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(BAR_SETTLE_STEPS).build_app(
         |ui, app: &mut PhotocraftApp| {
             ui.horizontal(|ui| show_bar(app, ui));
         },
