@@ -270,6 +270,7 @@ fn ok_after_the_active_layer_changed_refuses_the_patch() {
 fn ok_after_another_document_became_active_refuses_the_patch() {
     let mut app = app("Type");
     let text = app.session.active().unwrap().active_layer.unwrap();
+    let mine = app.session.active_index().unwrap();
     drag_patch(&mut app);
     let id = prompt(&app).expect("the prompt");
     // A second document made from this one's bytes: its layers keep the ids stored in the file, so
@@ -278,15 +279,19 @@ fn ok_after_another_document_became_active_refuses_the_patch() {
     let twin = photocraft_format::load_from_bytes(&bytes).unwrap();
     assert_eq!(twin.layer(text).map(|l| l.content.kind_name()), Some("Type"), "both documents hold a Type layer {}", text.0);
     app.session.add_document(twin, None);
-    let st = app.session.active().unwrap();
-    assert_eq!(st.active_layer, Some(text), "the other document's active layer carries the same id");
-    let revision = st.revision;
-    let first = app.session.documents()[0].doc.clone();
+    let other = app.session.active_index().unwrap();
+    assert_ne!(other, mine, "the second document is the active one now");
+    assert_eq!(app.session.documents()[other].active_layer, Some(text), "the other document's active layer carries the same id");
+    let (before_other, before_mine) = (app.session.documents()[other].revision, app.session.documents()[mine].revision);
     answer(&mut app, id);
     assert!(app.ui.status_error, "OK says why nothing ran: {}", app.ui.status);
     assert!(patch_params(&app).is_empty(), "no patch ran in the other document");
-    assert_eq!(app.session.active().unwrap().revision, revision, "the other document is untouched");
-    assert_eq!(first.layer(text).unwrap().content.kind_name(), "Type", "the document the question was about keeps its text");
+    // Read both documents live, after the answer: a copy taken before it would show the old document
+    // however much the answer changed it.
+    assert_eq!(app.session.documents()[other].revision, before_other, "the other document is untouched");
+    assert_eq!(app.session.documents()[other].doc.layer(text).unwrap().content.kind_name(), "Type", "the other document keeps its text");
+    assert_eq!(app.session.documents()[mine].revision, before_mine, "the document the question was about is untouched too");
+    assert_eq!(app.session.documents()[mine].doc.layer(text).unwrap().content.kind_name(), "Type", "and keeps its text");
 }
 
 /// Pin, passes before and after the change: a locked Type layer cannot be rasterized either, so the

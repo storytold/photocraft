@@ -122,9 +122,17 @@ pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: 
 /// The document a prompt is opened for, as the id of the active document. The tag carries numbers,
 /// and `Session::add_document` only re-picks a document id, so two documents read from files can hold
 /// the same layer id (`photocraft_format` keeps the ids stored in a native file). `u64::MAX` means no
-/// document: nothing matches it, so the answer refuses.
+/// document: nothing matches it, so the answer refuses. See [`stale_document`].
 fn active_doc(app: &PhotocraftApp) -> u64 {
     app.session.active().map_or(u64::MAX, |st| st.doc.id.0)
+}
+
+/// The refusal the writing answers share. The tag names its target by number, and a document read
+/// back from a file keeps the layer ids stored in it, so that number can name a layer of another
+/// open document: when the active document is not the one the question was opened for, the answer
+/// writes in neither of them (#12121).
+fn stale_document(app: &PhotocraftApp, doc: u64) -> Option<String> {
+    (active_doc(app) != doc).then(|| "the document this question was about is no longer the active document, so nothing was rasterized".to_owned())
 }
 
 /// Opens the same question for a Patch drag on a `layer` that must be rasterized first: OK rasterizes
@@ -202,15 +210,16 @@ pub fn intercept_filter(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
 /// The `PROMPTS` entry: Proceed rasterizes, Alternate converts to a Smart Object (the filter prompt
 /// only), Cancel does nothing. The filter of a filter prompt runs at once, as the menu would, now
 /// that the layer can take it. A patch prompt's Proceed runs `paint.patch` on the layer it just
-/// rasterized (#12121). `false` for another family's answer.
+/// rasterized (#12121). Every answer that writes first refuses when the active document is not the
+/// one the question was opened for ([`stale_document`]). `false` for another family's answer.
 pub(crate) fn answer(app: &mut PhotocraftApp, ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
     let Some(Rasterize { kind, doc, layer, filter, patch }) = answer.take_tag::<Rasterize>() else { return false };
     let result = match (answer.choice, filter, patch) {
-        (PromptChoice::Proceed, None, None) => rasterize(app, kind, layer),
+        (PromptChoice::Proceed, None, None) => rasterize(app, kind, doc, layer),
         // The Patch drag had already ended when this prompt opened, so its params re-run here.
         (PromptChoice::Proceed, None, Some(params)) => rasterize_then_patch(app, kind, doc, layer, params),
         (PromptChoice::Proceed | PromptChoice::Alternate, Some((filter, params)), None) => {
-            convert_for_filter(app, ctx, answer.choice == PromptChoice::Alternate, &filter, params, layer)
+            convert_for_filter(app, ctx, answer.choice == PromptChoice::Alternate, &filter, params, doc, layer)
         }
         _ => return true,
     };
@@ -219,7 +228,10 @@ pub(crate) fn answer(app: &mut PhotocraftApp, ctx: &egui::Context, answer: &mut 
 }
 
 /// OK: rasterize the layer. The click that opened the prompt does not paint.
-fn rasterize(app: &mut PhotocraftApp, kind: Kind, layer: u64) -> Result<Value, String> {
+fn rasterize(app: &mut PhotocraftApp, kind: Kind, doc: u64, layer: u64) -> Result<Value, String> {
+    if let Some(why) = stale_document(app, doc) {
+        return Err(why);
+    }
     let revision = app.session.active().map(|st| st.revision);
     let r = app.run(kind.command(), json!({ "layer": layer }))?;
     // A painting tool's type prompt names its step as the reference does (#12888); Layer ›
@@ -237,13 +249,9 @@ fn rasterize(app: &mut PhotocraftApp, kind: Kind, layer: u64) -> Result<Value, S
 /// OK on the Patch tool's prompt: rasterize the layer, then apply the patch the drag had worked out.
 /// A patch that fails afterwards leaves the layer rasterized and reports the error in the status bar.
 fn rasterize_then_patch(app: &mut PhotocraftApp, kind: Kind, doc: u64, layer: u64, params: Value) -> Result<Value, String> {
-    // The layer id alone is not the target: a document read from a file keeps the layer ids stored in
-    // it, so another open document can hold that same number. Nothing is written when the active
-    // document is not the one the question was opened for (#12121).
-    if app.session.active().map(|st| st.doc.id.0) != Some(doc) {
-        return Err("the document this question was about is no longer the active document, so nothing was rasterized or patched".into());
-    }
-    let rasterized = rasterize(app, kind, layer)?;
+    // `rasterize` answers for the document the question was opened for, so a patch can never follow
+    // it into another document whose layers happen to carry the same ids (#12121).
+    let rasterized = rasterize(app, kind, doc, layer)?;
     // The patch params name no layer: run as they stand, its pixels go to whatever is active when OK
     // comes. The rasterize above settled the layer the question was about, so a different active
     // layer now refuses the patch instead of painting somewhere else (#12121).
@@ -255,7 +263,10 @@ fn rasterize_then_patch(app: &mut PhotocraftApp, kind: Kind, doc: u64, layer: u6
 }
 
 /// The filter prompt's answer: convert (`smart`) or rasterize the layer, then run the filter.
-fn convert_for_filter(app: &mut PhotocraftApp, ctx: &egui::Context, smart: bool, filter: &str, params: Value, layer: u64) -> Result<Value, String> {
+fn convert_for_filter(app: &mut PhotocraftApp, ctx: &egui::Context, smart: bool, filter: &str, params: Value, doc: u64, layer: u64) -> Result<Value, String> {
+    if let Some(why) = stale_document(app, doc) {
+        return Err(why);
+    }
     let command = if smart { "layer.smartObjects.convertToSmartObject" } else { Kind::Type.command() };
     let converted = app.run(command, json!({ "layer": layer }))?;
     crate::menus::invoke(app, ctx, filter, params)?;
