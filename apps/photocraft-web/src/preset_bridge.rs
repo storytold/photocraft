@@ -1,12 +1,19 @@
 //! Synchronous engine boundary for asynchronous browser storage. No browser handles cross the
 //! engine's `Send` boundary. Byte buffers are shared with the single in-flight transaction.
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::preset_store::PresetStoreExt;
+use photocraft_engine::presets::PresetsExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use photocraft_engine::{
     Session,
     actions_cmds::{ActionState, ActionsFile, is_action_key},
-    preset_store::{self, PresetBackend, *},
+    preset_store::{
+        self, ACTIONS_FILE, INDEX_FILE, MAX_ACTIONS_BYTES, MAX_GROUP_BYTES, MAX_GROUPS, MAX_INDEX_BYTES, MAX_PATTERNS_BYTES, MAX_PRESETS_PER_GROUP,
+        MAX_STORE_BYTES, MAX_TIP_BYTES, PATTERNS_FILE, PresetBackend,
+    },
 };
 use serde_json::{Value, json};
 
@@ -208,9 +215,10 @@ impl Bridge {
     pub fn verify_action_definitions(&self, actions: &ActionState) {
         let mut s = self.state();
         s.actions_unsynced = match s.files.get(ACTIONS_FILE) {
-            Some(bytes) => !serde_json::from_slice::<ActionsFile>(bytes)
-                .is_ok_and(|file| file.version == 1 && file.actions == actions.list && file.sets == actions.sets && file.set_rows == actions.set_rows),
-            None => !(actions.list.is_empty() && actions.sets.is_empty() && actions.set_rows.is_empty()),
+            Some(bytes) => {
+                !std::str::from_utf8(bytes).ok().and_then(|text| ActionsFile::from_json(text).ok()).is_some_and(|file| file == actions.list.to_file())
+            }
+            None => !(actions.list.actions().is_empty() && actions.list.sets().is_empty()),
         };
     }
 
@@ -469,7 +477,7 @@ mod tests {
     fn unmatched_definitions_cannot_commit_new_keys() {
         let bridge = Bridge::default();
         let mut actions = ActionState::default();
-        actions.list.push(photocraft_engine::actions_cmds::Action::new("New action", Vec::new()));
+        actions.list.push(photocraft_engine::actions_cmds::Action::new("New action", Vec::new())).unwrap();
         bridge.verify_action_definitions(&actions);
         bridge.stage_action_keys(ActionKeys::from_legacy(&json!({"shortcuts":{"actions.play:New action":"F6"}})));
         bridge.write("index.json", b"unrelated").unwrap();
@@ -530,7 +538,7 @@ mod tests {
         bridge.load_action_keys(2, keys.clone());
         let (session, warnings) = session(bridge.clone());
         assert!(!warnings.is_empty());
-        assert!(session.actions.list.is_empty());
+        assert!(session.actions().list.actions().is_empty());
         assert!(session.tools.presets.iter().any(|preset| preset.name == "Browser seam brush"));
         assert_eq!(bridge.committed_action_keys(), None);
         assert_eq!(bridge.read(ACTIONS_FILE, 1024).unwrap(), malformed);
@@ -746,7 +754,7 @@ mod tests {
         let (mut loaded, _) = session(b);
         loaded.load_prefs_json(&prefs).unwrap();
         assert_eq!(loaded.tools.presets, s.tools.presets);
-        assert_eq!(loaded.presets.gradients, s.presets.gradients);
-        assert!(loaded.presets.gradients.iter().any(|g| g.name == "Browser gradients"));
+        assert_eq!(loaded.presets().gradients, s.presets().gradients);
+        assert!(loaded.presets().gradients.iter().any(|g| g.name == "Browser gradients"));
     }
 }

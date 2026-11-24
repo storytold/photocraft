@@ -1,11 +1,12 @@
-use super::convert::{apply_raw_conversions, open_pixels, output_sharpening, raw_conversions};
+use super::convert::{RawStart, apply_raw_conversions, open_pixels, open_raw_pixels, output_sharpening, raw_conversions};
 use super::sidecar::{read_sidecar, write_sidecar};
 use super::{CameraRaw, LayerId, PhotocraftApp, Rect, Value, json};
+use photocraft_engine::color_cmds::ColorExt;
 
 /// Opens the dialog on the active layer.
 /// Where OK writes: a new filter on the layer, or an existing smart filter (by index).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Target {
+pub(crate) enum Target {
     NewFilter,
     SmartFilter(usize),
     /// The open-time dialog of a raw file just opened (File › Open): OK is **Open**, Cancel
@@ -99,13 +100,9 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    attach_decode(&mut raw);
     if let Some((params, original)) = kept {
-        open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
-        if let Some(d) = app.camera_raw.as_mut() {
-            d.original = original;
-        }
-        attach_raw(app, raw);
-        return Ok(());
+        return open_raw_pixels(app, ctx, layer, surf, params, RawStart { raw, original: Some(original), auto_tone: false });
     }
     // The file's sidecar (`IMG_0001.xmp` beside it) fills the dialog, as Camera Raw's does; the
     // status bar names what it could not apply.
@@ -125,43 +122,25 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, mut ra
         };
         app.ui.status_error = false;
     }
-    open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
     // Camera Raw Defaults › Apply auto tone: a file without its own settings opens with Auto.
-    if !from_sidecar
-        && app.session.prefs().raw_defaults.apply_auto_tone
-        && let Some(d) = app.camera_raw.as_mut()
-    {
-        photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut d.params);
-        d.dirty = true;
-    }
-    attach_raw(app, raw);
-    Ok(())
+    let auto_tone = !from_sidecar && app.session.prefs().raw_defaults.apply_auto_tone;
+    open_raw_pixels(app, ctx, layer, surf, params, RawStart { raw, original: None, auto_tone })
 }
 
-/// Gives the open dialog its raw: the file name, the camera tone curve it was developed with, and
-/// the decode (the open's kept one, else one made now) the preview and Open's re-develop share.
-fn attach_raw(app: &mut PhotocraftApp, mut raw: RawOpen) {
+/// Gives `raw` the decode (the open's kept one, else one made now) the dialog's preview curve and Open's re-develop
+/// share, so the file is decoded once. A raw that already holds its decode, or whose file is gone, is left as it is.
+fn attach_decode(raw: &mut RawOpen) {
+    if raw.decoded.is_some() {
+        return;
+    }
     let file = match (&raw.bytes, &raw.path) {
-        _ if raw.decoded.is_some() => None,
         (Some(b), _) => Some(std::borrow::Cow::Borrowed(b.as_slice())),
         #[cfg(not(target_arch = "wasm32"))]
         (None, Some(p)) => std::fs::read(p).ok().map(std::borrow::Cow::Owned),
         _ => None,
     };
-    let curve = match file {
-        Some(b) => {
-            raw.decoded = photocraft_io::raw::take_kept_decode(&b).or_else(|| photocraft_io::raw::RawDecode::new(&b).ok().map(std::sync::Arc::new));
-            Some(raw.decoded.as_ref().map(|d| d.tone_curve().to_vec()).unwrap_or_default())
-        }
-        None => raw.decoded.as_ref().map(|d| d.tone_curve().to_vec()),
-    };
-    if let Some(d) = app.camera_raw.as_mut() {
-        d.layer_name = raw.name.clone();
-        // The full-size preview retones the whole frame with it, as Open will.
-        let curve = curve.map(std::sync::Arc::new);
-        d.detail.raw_curve = curve.clone();
-        d.raw_curve = curve;
-        d.raw_open = Some(raw);
+    if let Some(b) = file {
+        raw.decoded = photocraft_io::raw::take_kept_decode(&b).or_else(|| photocraft_io::raw::RawDecode::new(&b).ok().map(std::sync::Arc::new));
     }
 }
 
@@ -176,7 +155,7 @@ pub(super) fn non_defaults(p: &CameraRaw) -> Value {
     let mut out = serde_json::Map::new();
     if let (Value::Object(f), Value::Object(d)) = (full, def) {
         for (k, v) in f {
-            if k != "pixelScale" && d.get(&k) != Some(&v) {
+            if d.get(&k) != Some(&v) {
                 out.insert(k, v);
             }
         }
@@ -265,7 +244,7 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         }
         .map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
     };
-    let apply = move |s: &mut photocraft_engine::Session, (r, wb): (photocraft_io::ImportResult, bool)| replace_raw_document(s, doc_id, r, wb);
+    let apply = move |s: &mut photocraft_engine::CoreSession, (r, wb): (photocraft_io::ImportResult, bool)| replace_raw_document(s, doc_id, r, wb);
     let label = crate::i18n::fmt(tl!("Developing {name}"), &[("name", &raw.name)]);
     let started = if app.background_jobs {
         app.session.start_job(REDEVELOP_JOB, json!({"name": raw.name}), &label, true, work, apply).map_err(|e| e.to_string())?
@@ -301,7 +280,7 @@ pub(super) fn return_on_failure(app: &mut PhotocraftApp, reply: &Value, original
 /// position and with the same path. Returns `{document, docId, previous, warnings, wb}`:
 /// `document` is the tab index at apply time, `docId` is the replacement's stable identity.
 pub(super) fn replace_raw_document(
-    s: &mut photocraft_engine::Session,
+    s: &mut photocraft_engine::CoreSession,
     doc_id: photocraft_doc::DocId,
     mut r: photocraft_io::ImportResult,
     wb: bool,
@@ -534,7 +513,7 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
 /// Cancel: closes the dialog; for the open-time dialog also the documents it was opening (every
 /// raw in its filmstrip).
 pub(super) fn cancel(app: &mut PhotocraftApp) {
-    let Some(d) = app.camera_raw.take() else { return };
+    let Some(d) = app.raw.take() else { return };
     if let (Target::OpenRaw, Some(raw)) = (d.target, &d.raw_open) {
         let mut opening: Vec<_> = std::mem::take(&mut app.raw_shelf).into_iter().map(|h| h.raw.document).collect();
         opening.push(raw.document);
