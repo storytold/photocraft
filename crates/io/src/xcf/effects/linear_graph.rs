@@ -15,7 +15,11 @@ pub(super) fn map(effect: &StoredEffect<'_>, budget: &mut Budget, ctl: &Interrup
     }
     allowed(effect, &["string"], ctl)?;
     let [argument] = effect.arguments.as_slice() else { return Err(Failure::Unsupported("graph requires exactly one source string")) };
-    let ArgumentValue::String(raw) = argument.value else { return Err(Failure::Invalid("graph string has a non-string source type")) };
+    let raw = match argument.value {
+        ArgumentValue::String(raw) => raw,
+        ArgumentValue::NullString => return Err(Failure::Unsupported("stored graph has no source text")),
+        _ => return Err(Failure::Invalid("graph string has a non-string source type")),
+    };
     let Plan { steps, output, note } = graph_lowering::prepare(raw, budget, ctl).map_err(|error| match error {
         graph_lowering::Failure::Cancelled => Failure::Cancelled,
         graph_lowering::Failure::Invalid(_) | graph_lowering::Failure::Source(craft_xcf::effects::Error::Source(craft_xcf::Error::Invalid(_))) => {

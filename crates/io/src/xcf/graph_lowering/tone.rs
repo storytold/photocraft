@@ -14,6 +14,7 @@ fn number(node: &Node, name: &str, default: f64, low: f64, high: f64) -> Result<
         None => default,
         Some(property) => match property.value {
             Value::Number(value) => value,
+            Value::RelativeNumber(_) => return Err(Failure::Unsupported("relative graph tone numbers have no native reference dimension")),
             _ => return Err(Failure::Invalid("graph tone property is not a typed number")),
         },
     };

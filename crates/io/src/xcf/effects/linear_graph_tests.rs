@@ -110,6 +110,8 @@ fn branches_unknown_payloads_and_unscoped_graphs_preserve_original_raster_withou
         ("invert-linear unknown-operation", "string"),
         ("invert-linear arbitrary=1", "string"),
         ("id=in invert-linear ref=in invert-linear", "string"),
+        ("exposure exposure=0.5rel", "string"),
+        ("gegl:color value='cmyk(0.1, 0.2, 0.3, 0.4)'", "string"),
         ("invert-linear", "graph"),
         ("", "string"),
     ] {
