@@ -1733,11 +1733,16 @@ pub fn page_rgb(page: &PrintPage) -> Result<Vec<u8>> {
     if page.rotate_image {
         let len = rgb.len();
         let mut rotated = vec![0; len];
-        for y in 0..h {
-            for x in 0..w {
-                let source = (y * w + x) * 3;
+        for (y, source_row) in rgb.chunks_exact(row).enumerate() {
+            for (x, pixel) in source_row.chunks_exact(3).enumerate() {
                 let target = ((w - 1 - x) * h + y) * 3;
-                rotated[target..target + 3].copy_from_slice(&rgb[source..source + 3]);
+                let Some(end) = target.checked_add(3) else {
+                    return Err(other("print image is too large"));
+                };
+                let Some(slot) = rotated.get_mut(target..end) else {
+                    return Err(other("print image is too large"));
+                };
+                slot.copy_from_slice(pixel);
             }
         }
         rgb = rotated;
