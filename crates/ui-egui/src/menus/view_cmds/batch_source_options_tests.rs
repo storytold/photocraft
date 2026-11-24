@@ -43,7 +43,7 @@ fn app_with(docs: usize, files: Arc<ScriptedFiles>) -> Box<PhotocraftApp> {
     for _ in 0..docs {
         app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
     }
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     app.sync_views();
     app
