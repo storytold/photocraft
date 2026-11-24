@@ -67,10 +67,6 @@ fn text_layers(s: &Session) -> usize {
     s.active().unwrap().doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).count()
 }
 
-fn layers(s: &Session) -> usize {
-    s.active().unwrap().doc.walk().len()
-}
-
 /// Every layer's pixels, quantised: what the commit must leave exactly as it was.
 fn pixels(s: &Session) -> Vec<u8> {
     let d = s.active().unwrap().doc.clone();

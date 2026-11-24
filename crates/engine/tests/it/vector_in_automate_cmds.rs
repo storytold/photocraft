@@ -2,7 +2,6 @@
 
 use photocraft_doc::{Layer, LayerContent};
 use serde_json::{json};
-use photocraft_engine::file_cmds::{file_name};
 use photocraft_engine::{EngineError, Session};
 
 

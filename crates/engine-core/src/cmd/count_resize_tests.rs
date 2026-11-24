@@ -4,18 +4,6 @@
 
 use serde_json::{json};
 
-use crate::Session;
-
-const POINT: [f64; 2] = [99.3, 99.7];
-
-fn doc() -> Session {
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 600, "height": 400})).unwrap();
-    s.execute("count.add", json!({"x": POINT[0], "y": POINT[1]})).unwrap();
-    s.execute("notes.add", json!({"x": 100, "y": 100})).unwrap();
-    s
-}
-
 #[test]
 fn ruler_straighten_with_crop_asks_the_gate_for_its_rotation() {
     let mut s = crate::session();

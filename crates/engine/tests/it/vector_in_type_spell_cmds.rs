@@ -3,7 +3,6 @@
 use serde_json::{json};
 use photocraft_engine::{Session};
 
-    use photocraft_engine::type_spell_cmds::{text};
 
 
     fn session(text: &str) -> (Session, u64) {

@@ -1,6 +1,5 @@
 //! Tests that run vector commands, moved from the engine-core `param_schema` tests: 1 test(s).
 
-use std::fmt::Write as _;
 
 
 use photocraft_engine::param_schema::{Params};

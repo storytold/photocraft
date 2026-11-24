@@ -1,7 +1,7 @@
 //! Tests that run vector commands, moved from the engine-core `atn_cmds` tests: 2 test(s).
 
 use craft_psd::atn::{self};
-use serde_json::{Value};
+use crate::atn_fixtures::*;
 use photocraft_engine::{Session};
 use photocraft_engine::atn_cmds::{PHOTOSHOP_STEP};
 

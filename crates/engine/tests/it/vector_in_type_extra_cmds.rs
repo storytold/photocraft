@@ -5,7 +5,6 @@ use photocraft_doc::vector::{Path, Subpath};
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
 use serde_json::{json};
 use photocraft_engine::{Session};
-use photocraft_engine::type_extra_cmds::{type_path};
 
 
 fn session(depth: u32) -> Session {
