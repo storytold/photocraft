@@ -163,7 +163,7 @@ fn complete_svgz_replacement_keeps_encoded_bytes_and_existing_encoding_refusals(
         assert_eq!(decoded.size, Size::new(2, 2));
         assert_eq!(photocraft_compose::flatten(&decoded).get(1, 1), [1., 0., 0., 1.]);
     }
-    for name in ["explicit.af", "explicit.AF"] {
+    for name in ["explicit.af", "explicit.AF", ".af"] {
         assert!(decode_source(name, &bytes).is_err(), "{name}: the explicit Affinity route must retain priority");
     }
     // The shared classifier reads UTF-16, but the app's SVG parser still requires

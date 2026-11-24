@@ -1100,7 +1100,8 @@ pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels:
         // Only the explicit .af alias precedes SVGZ sniffing in the shared registry;
         // .afphoto/.afdesign/.afpub are fallback extensions after content detection.
         // Keep that priority and the existing gzip-XCF transport unchanged.
-        if !has_extension(name, "af") && !xcf::is_gzipped_xcf(name, bytes) {
+        let explicit_affinity = name.as_bytes().last_chunk::<3>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".af"));
+        if !explicit_affinity && !xcf::is_gzipped_xcf(name, bytes) {
             // The registry's SVGZ recognition uses this same bound. Reuse the decoded
             // bytes for strict import so recognition does not inflate the source twice.
             let plain = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).map_err(|error| IoError::Svg(error.to_string()))?;
