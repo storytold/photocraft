@@ -13,6 +13,7 @@
 //! Close, Print and Export itself; the app shell fires Start, Open and Save.
 
 use crate::actions_cmds::ActionsExt;
+use crate::preset_store::PresetStoreExt;
 use photocraft_doc::{Layer, LayerContent};
 use serde_json::{Value, json};
 
@@ -542,7 +543,7 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
 /// will see. (The shells attach the store a few frames into startup; a droplet drop or a menu run
 /// is a user action after that, and an early refusal says so rather than guessing.)
 fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, inputs: &[String], called: Option<&Value>) -> Result<Value> {
-    if s.preset_store.is_none() {
+    if s.preset_store().is_none() {
         return Err(EngineError::Other(format!(
             "{cmd}: this droplet's Destination is None, which leaves the opened documents in the app: run it in the app, or give the droplet a Folder or Save and Close"
         )));
@@ -569,13 +570,13 @@ fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, input
             Some(crate::actions_cmds::ActionList::from_file(crate::actions_cmds::ActionsFile::new(actions, Vec::new())))
         }
     };
-    let previous_called = std::mem::replace(&mut s.actions.called, embedded);
+    let previous_called = std::mem::replace(&mut s.actions_mut().called, embedded);
     // The folder run nests through Batch's own scratch sessions, each raised `batch_depth`; this
     // run plays in the caller's session, so it raises the depth itself and hands it back - a
     // droplet that runs droplets stops at `MAX_BATCH_DEPTH` with the shared error text instead of
     // opening one document per level until the stack or memory runs out (#13711 review HIGH-1).
-    let previous_depth = s.actions.batch_depth;
-    s.actions.batch_depth = previous_depth.saturating_add(1);
+    let previous_depth = s.recording.batch_depth;
+    s.recording.batch_depth = previous_depth.saturating_add(1);
     let mut errors = Vec::new();
     for input in inputs {
         let ran = (|| -> Result<()> {
@@ -588,11 +589,11 @@ fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, input
                     continue;
                 }
                 // A droplet run inside a script charges each step to the script's total, as Batch does.
-                if s.actions.script_depth > 0 {
-                    if s.actions.script_steps >= MAX_SCRIPT_STEPS {
+                if s.recording.script_depth > 0 {
+                    if s.recording.script_steps >= MAX_SCRIPT_STEPS {
                         return Err(EngineError::Other(format!("the script ran more than {MAX_SCRIPT_STEPS} steps in all (scripts calling scripts)")));
                     }
-                    s.actions.script_steps += 1;
+                    s.recording.script_steps += 1;
                 }
                 let params = crate::actions_cmds::playback_params(s, id, params)?;
                 let response = s.execute(id, params)?;
@@ -618,8 +619,8 @@ fn run_droplet_open(s: &mut Session, cmd: &str, path: &str, steps: &Value, input
             errors.push(entry);
         }
     }
-    s.actions.batch_depth = previous_depth;
-    s.actions.called = previous_called;
+    s.recording.batch_depth = previous_depth;
+    s.actions_mut().called = previous_called;
     Ok(json!({"droplet": path, "output": null, "files": [], "errors": errors}))
 }
 

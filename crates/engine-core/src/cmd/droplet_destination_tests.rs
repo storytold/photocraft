@@ -6,6 +6,9 @@
 
 use super::*;
 
+use crate::actions_cmds::ActionsExt;
+use crate::preset_store::PresetStoreExt;
+
 fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-droplet-dest-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -16,7 +19,7 @@ fn tmp(name: &str) -> String {
 /// A 4x2 gray PNG at `path` (or a JPEG of it, by extension); the run's steps rotate it, so the
 /// written shape tells what ran.
 fn input_picture(path: &str) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 4, "height": 2, "background": "#808080"})).unwrap();
     crate::file_cmds::save_doc(&s.active().unwrap().doc, path, None).unwrap();
 }
@@ -27,14 +30,14 @@ fn droplet(dir: &str, extra: Value) -> String {
     if let Value::Object(map) = extra {
         p.as_object_mut().unwrap().extend(map);
     }
-    let r = Session::new().execute("file.automate.createDroplet", p).unwrap();
+    let r = crate::session().execute("file.automate.createDroplet", p).unwrap();
     r["path"].as_str().unwrap().to_string()
 }
 
 /// A session with an attached preset store: the desktop and web apps attach one once loaded
 /// (`crate::preset_store`); headless CLI/MCP sessions and plain tests never do.
 fn app_session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.attach_preset_store(crate::preset_store::open(Box::new(crate::preset_store::MemBackend::default())));
     s
 }
@@ -60,7 +63,7 @@ fn create_droplet_stores_destination_and_the_override_tick() {
     assert!(v["options"].get("destination").is_none(), "an omitted destination stores no key, as before");
     assert!(v["options"].get("overrideSaveAs").is_none(), "an omitted box stores no key, as before");
 
-    let e = Session::new()
+    let e = crate::session()
         .execute(
             "file.automate.createDroplet",
             json!({"path": format!("{dir}/Bad"), "steps": [["image.adjustments.invert", {}]], "destination": "banana", "shim": false}),
@@ -83,7 +86,7 @@ fn a_droplet_without_a_destination_key_still_runs_as_folder() {
     let before = std::fs::read(&input).unwrap();
     let dp = format!("{dir}/old.pcdroplet");
     std::fs::write(&dp, json!({"photocraftDroplet": 1, "action": {"steps": [["image.imageRotation.90cw", {}]]}, "options": {"output": format!("{dir}/out-old"), "format": "png"}}).to_string()).unwrap();
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [format!("{dir}/in")]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [format!("{dir}/in")]})).unwrap();
     assert_eq!(r["errors"], json!([]), "{r}");
     assert_eq!(r["output"], json!(format!("{dir}/out-old")), "{r}");
     assert_eq!(std::fs::read(&input).unwrap(), before, "the input keeps its bytes: the copy went to the output folder");
@@ -100,7 +103,7 @@ fn a_droplet_with_destination_folder_writes_its_copy_as_before() {
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
     let dp = droplet(&dir, json!({"destination": "folder", "output": format!("{dir}/out"), "format": "png"}));
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
     assert_eq!(r["errors"], json!([]), "{r}");
     assert_eq!(r["output"], json!(format!("{dir}/out")), "{r}");
     assert_eq!(std::fs::read(&input).unwrap(), before, "the input is not touched");
@@ -117,7 +120,7 @@ fn destination_save_and_close_overwrites_each_input_in_its_own_format() {
     input_picture(&a);
     input_picture(&b);
     let dp = droplet(&dir, json!({"destination": "saveAndClose"}));
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&a, &b]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&a, &b]})).unwrap();
     assert_eq!(r["errors"], json!([]), "{r}");
     for (path, name) in [(&a, "a.png"), (&b, "b.jpg")] {
         let out = photocraft_codecs::decode(&std::fs::read(path).unwrap()).unwrap();
@@ -135,7 +138,7 @@ fn destination_save_and_close_refuses_a_different_stored_format_without_writing(
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
     let dp = droplet(&dir, json!({"destination": "saveAndClose", "format": "jpg"}));
-    let e = Session::new().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap_err();
+    let e = crate::session().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap_err();
     assert!(e.to_string().contains("format"), "{e}");
     assert_eq!(std::fs::read(&input).unwrap(), before, "refused before writing anything");
 }
@@ -217,7 +220,7 @@ fn destination_none_is_refused_when_no_app_is_involved() {
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
     let dp = droplet(&dir, json!({"destination": "none"}));
-    let e = Session::new().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap_err();
+    let e = crate::session().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap_err();
     assert!(e.to_string().contains("app"), "the error names the app: {e}");
     assert_eq!(std::fs::read(&input).unwrap(), before, "nothing was written");
     let droplets_and_images =
@@ -235,7 +238,7 @@ fn an_unknown_stored_destination_is_refused_without_writing() {
     let before = std::fs::read(&input).unwrap();
     let dp = format!("{dir}/bad.pcdroplet");
     std::fs::write(&dp, json!({"photocraftDroplet": 1, "action": {"steps": [["image.imageRotation.90cw", {}]]}, "options": {"destination": "banana", "output": format!("{dir}/out"), "format": "png"}}).to_string()).unwrap();
-    let e = Session::new().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap_err();
+    let e = crate::session().execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap_err();
     assert!(e.to_string().contains("destination"), "{e}");
     assert_eq!(std::fs::read(&input).unwrap(), before, "refused before writing");
     assert!(!std::path::Path::new(&format!("{dir}/out")).exists());
@@ -255,7 +258,7 @@ fn a_stored_override_tick_does_not_change_the_run() {
         json!({"path": format!("{dir}/With"), "destination": "folder", "output": format!("{dir}/out-with"), "format": "png", "overrideSaveAs": true}),
     );
     let without = droplet(&dir, json!({"path": format!("{dir}/Without"), "destination": "folder", "output": format!("{dir}/out-without"), "format": "png"}));
-    let mut s = Session::new();
+    let mut s = crate::session();
     let a = s.execute("file.automate.runDroplet", json!({"droplet": &with, "input": [&ticked]})).unwrap();
     assert_eq!(a["errors"], json!([]), "{a}");
     let b = s.execute("file.automate.runDroplet", json!({"droplet": &without, "input": [&plain]})).unwrap();
@@ -285,7 +288,7 @@ fn a_none_droplet_that_runs_itself_stops_at_the_nesting_limit() {
     assert!(r["errors"][0]["error"].as_str().unwrap().contains("nested more than"), "{r}");
     assert_eq!(r["errors"][0]["limit"], json!(true), "the stop is marked, as Batch marks its children's stops");
     assert_eq!(r["files"], json!([]), "{r}");
-    assert_eq!(s.actions.batch_depth, 0, "the None run hands the caller's nesting depth back");
+    assert_eq!(s.recording.batch_depth, 0, "the None run hands the caller's nesting depth back");
     assert_eq!(std::fs::read(&input).unwrap(), before, "nothing was written at any level");
 }
 
@@ -299,16 +302,16 @@ fn a_none_droplet_plays_the_action_it_captured_not_the_live_list() {
     let dir = tmp("captured");
     let input = format!("{dir}/a.png");
     input_picture(&input);
-    let mut maker = Session::new();
-    maker.actions.list.push(Action::new("Inner", vec![ActionStep::new("image.imageRotation.90cw", json!({}))])).unwrap();
-    maker.actions.list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
+    let mut maker = crate::session();
+    maker.actions_mut().list.push(Action::new("Inner", vec![ActionStep::new("image.imageRotation.90cw", json!({}))])).unwrap();
+    maker.actions_mut().list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
     let r = maker.execute("file.automate.createDroplet", json!({"path": format!("{dir}/Top"), "action": "Top", "destination": "none", "shim": false})).unwrap();
     let dp = r["path"].as_str().unwrap().to_string();
     let v: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
     assert!(v["calledActions"].as_array().is_some_and(|a| a.iter().any(|ac| ac["name"] == "Inner")), "the droplet captured Inner: {v}");
 
     let mut s = app_session();
-    s.actions.list.push(Action::new("Inner", vec![ActionStep::new("edit.fill", json!({"color": "#000000"}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Inner", vec![ActionStep::new("edit.fill", json!({"color": "#000000"}))])).unwrap();
     let r = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap();
     assert_eq!(r["errors"], json!([]), "{r}");
     let st = s.active().unwrap();
@@ -336,17 +339,17 @@ fn a_none_droplet_with_unparsable_steps_leaves_the_caller_s_action_state_untouch
     )
     .unwrap();
     let mut s = app_session();
-    s.actions.list.push(Action::new("Live", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Live", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     let e = s.execute("file.automate.runDroplet", json!({"droplet": &dp, "input": [&input]})).unwrap_err();
     assert!(e.to_string().contains("step"), "the parse error names the steps: {e}");
     assert_eq!(s.documents().len(), 0, "a refused run opens nothing");
-    assert!(s.actions.called.is_none(), "the refused run installs no captured action list");
-    assert_eq!(s.actions.batch_depth, 0, "and leaves the caller's nesting depth alone");
+    assert!(s.actions().called.is_none(), "the refused run installs no captured action list");
+    assert_eq!(s.recording.batch_depth, 0, "and leaves the caller's nesting depth alone");
     // The live list is still the one playback finds, and a nested run starts at depth 1.
     s.execute("file.new", json!({"width": 2, "height": 1, "background": "#ff0000"})).unwrap();
     let r = s.execute("actions.play", json!({"action": "Live"})).unwrap();
     assert!(r.get("failed").is_none(), "the caller's own action still plays: {r}");
-    assert_eq!(s.actions.playable().actions().len(), 1, "playback still resolves in the caller's list");
+    assert_eq!(s.actions().playable().actions().len(), 1, "playback still resolves in the caller's list");
     let st = s.active().unwrap();
     assert_eq!((st.doc.size.width, st.doc.size.height), (2, 1), "the caller's action ran on its own document");
 }
@@ -369,13 +372,10 @@ fn a_none_droplet_refuses_a_nested_recorded_save_and_writes_no_file() {
         v.sort();
         v
     };
-    let mut maker = Session::new();
-    maker
-        .actions
-        .list
-        .push(Action::new("Inner", vec![ActionStep::new("image.imageRotation.90cw", json!({})), ActionStep::new("file.save", json!({}))]))
+    let mut maker = crate::session();
+    maker.actions_mut().list.push(Action::new("Inner", vec![ActionStep::new("image.imageRotation.90cw", json!({})), ActionStep::new("file.save", json!({}))]))
         .unwrap();
-    maker.actions.list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
+    maker.actions_mut().list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
     let dp = maker
         .execute("file.automate.createDroplet", json!({"path": format!("{dir}/Top"), "action": "Top", "destination": "none", "shim": false}))
         .unwrap()["path"]
@@ -414,9 +414,9 @@ fn a_none_droplet_treats_a_nested_engine_save_exactly_as_batch_does() {
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
-    let mut maker = Session::new();
-    maker.actions.list.push(inner(&dir)).unwrap();
-    maker.actions.list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
+    let mut maker = crate::session();
+    maker.actions_mut().list.push(inner(&dir)).unwrap();
+    maker.actions_mut().list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
     let dp = maker
         .execute("file.automate.createDroplet", json!({"path": format!("{dir}/Top"), "action": "Top", "destination": "none", "shim": false}))
         .unwrap()["path"]
@@ -433,8 +433,8 @@ fn a_none_droplet_treats_a_nested_engine_save_exactly_as_batch_does() {
     std::fs::create_dir_all(format!("{dir2}/in")).unwrap();
     let input2 = format!("{dir2}/in/a.png");
     input_picture(&input2);
-    let mut b = Session::new();
-    b.actions.list.push(inner(&dir2)).unwrap();
+    let mut b = crate::session();
+    b.actions_mut().list.push(inner(&dir2)).unwrap();
     let folder = b
         .execute(
             "file.automate.batch",
@@ -448,9 +448,9 @@ fn a_none_droplet_treats_a_nested_engine_save_exactly_as_batch_does() {
     let input3 = format!("{dir3}/a.png");
     input_picture(&input3);
     let before3 = std::fs::read(&input3).unwrap();
-    let mut o = Session::new();
+    let mut o = crate::session();
     crate::file_cmds::open_bytes_as(&mut o, "a.png", &std::fs::read(&input3).unwrap(), None, Some(input3.clone())).unwrap();
-    o.actions.list.push(inner(&dir3)).unwrap();
+    o.actions_mut().list.push(inner(&dir3)).unwrap();
     let open = o.execute("file.automate.batch", json!({"source": "open", "steps": [["actions.play", {"action": "Inner"}]]})).unwrap();
     assert_eq!(open["errors"], json!([]), "{open}");
     assert_eq!(open["files"], json!([]), "the run itself writes nothing: {open}");
@@ -494,7 +494,7 @@ fn a_none_droplet_opens_a_raw_at_the_raw_defaults_resolution() {
 #[test]
 fn a_none_droplet_gets_no_shim_even_when_one_is_asked_for() {
     let dir = tmp("shim-none");
-    let r = Session::new()
+    let r = crate::session()
         .execute(
             "file.automate.createDroplet",
             json!({"path": format!("{dir}/NoShim"), "steps": [["image.adjustments.invert", {}]], "destination": "none", "shim": true}),
@@ -503,7 +503,7 @@ fn a_none_droplet_gets_no_shim_even_when_one_is_asked_for() {
     assert_eq!(r["shim"], Value::Null, "no launcher for a run that can only be refused: {r}");
     assert!(!std::path::Path::new(&format!("{dir}/NoShim.command")).exists());
 
-    let r = Session::new()
+    let r = crate::session()
         .execute(
             "file.automate.createDroplet",
             json!({"path": format!("{dir}/WithShim"), "steps": [["image.adjustments.invert", {}]], "destination": "folder", "output": format!("{dir}/out"), "shim": true}),

@@ -87,7 +87,7 @@ fn create_droplet_uses_the_action_selected_in_the_form() {
 /// An app with one saved action, selected in the Actions panel: what Create Droplet asks for.
 fn droplet_app() -> Box<PhotocraftApp> {
     let mut app = app();
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     app
 }
