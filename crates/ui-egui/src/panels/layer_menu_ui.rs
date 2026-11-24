@@ -154,3 +154,7 @@ pub(crate) fn color_name(color: LabelColor) -> &'static str {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "layer_menu_ui/keys_tests.rs"]
+mod keys_tests;
