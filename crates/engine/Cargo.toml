@@ -7,71 +7,40 @@ license.workspace = true
 [lints]
 workspace = true
 
+# Not `src/lib.rs`: the engine's sources moved to crates/engine-core/src, and with the old path gone
+# git carries open branches' edits of `src/lib.rs` to `crates/engine-core/src/lib.rs` (photocraft#15710).
+[lib]
+path = "src/facade.rs"
+
 [features]
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
-corpus = []
+corpus = ["photocraft-engine-core/corpus"]
 
+# The engine's code and dependencies live in photocraft-engine-core; this crate re-exports it.
 [dependencies]
-photocraft-geom = { workspace = true }
-photocraft-color = { workspace = true }
-craft-cms = { workspace = true }
-# PCTIP codec from craft-libs#1564; isolated pin until the shared revision is adopted workspace-wide.
-craft-pcraft-tip = { package = "craft-pcraft-format", git = "https://github.com/storytold/craft-libs", rev = "3e970577b9bb446967c2003ec8ecaf4f28b0768c" }
-photocraft-raster = { workspace = true }
-photocraft-doc = { workspace = true }
-photocraft-ops = { workspace = true }
-photocraft-compose = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-rayon = { workspace = true }
-chrono = { workspace = true }
-web-time = { workspace = true }
-photocraft-paint = { workspace = true }
-photocraft-algo = { workspace = true }
-photocraft-text = { workspace = true }
-photocraft-vector = { workspace = true }
-photocraft-io = { workspace = true }
-craft-xml = { workspace = true }
-craft-psd = { workspace = true }
-photocraft-format = { workspace = true }
-photocraft-plugins = { workspace = true }
-base64 = "0.22"
-blake3 = { version = "1.8", default-features = false, features = ["pure"] }
-photocraft-codecs = { workspace = true }
-photocraft-formats = { workspace = true }
-flate2 = { workspace = true }
-getrandom = { workspace = true, features = ["wasm_js"] }
-craft-print = { workspace = true }
+photocraft-engine-core = { workspace = true }
 
-# Release tags use the same semantic versions as Cargo.
-semver = "1"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tempfile = "3"
-# `clock`: the local time that names History Options' snapshot on save (#2966); already in the
-# tree through rmcp. The web build has no local clock here and names it "Snapshot N".
-chrono = { workspace = true, features = ["clock"] }
-
-# `file_cmds::same_file` on Windows: the volume serial number and file index, so a hard link to a
-# file is that file (std's `MetadataExt::file_index` is unstable).
-[target.'cfg(windows)'.dependencies]
-same-file = "1"
-# `file.print` loads Windows.Data.Pdf.dll before calling into it (#5884): the safe binding
-# ui-egui and craft-print already use, pinned to the same version.
-winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
-
-# Printing on Unix: an IPP client for CUPS (pure Rust); the web build cannot print.
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
-photocraft-ipp = { workspace = true }
-
+# What tests/ and examples/ use.
 [dev-dependencies]
 craft-affinity = { workspace = true, features = ["synth"] }
+craft-cms = { workspace = true }
+craft-develop-model = { workspace = true }
+craft-psd = { workspace = true }
+photocraft-algo = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-color = { workspace = true }
+photocraft-compose = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-format = { workspace = true }
+photocraft-geom = { workspace = true }
 photocraft-io = { workspace = true, features = ["testgen"] }
-# Synthetic camera raw files for the open tests.
-photocraft-raw = { workspace = true, features = ["testgen"] }
+photocraft-paint = { workspace = true }
+photocraft-raster = { workspace = true }
 photocraft-testkit = { workspace = true }
+photocraft-text = { workspace = true }
+photocraft-vector = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 exr = { version = "1.73", default-features = false }
-# WebAssembly text -> binary for plug-in test modules (Apache-2.0 WITH LLVM-exception).
-wat = "1.228"
-# Synthetic multi-part EXR fixtures for the parts-commands tests.
+tempfile = "3"

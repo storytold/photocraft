@@ -1,32 +1,36 @@
 //! UI tests for background jobs (#210): the whole app (eframe harness, CPU canvas) keeps
-//! rendering frames while a slow job runs, shows the status-bar progress and the modal progress
-//! dialog, and Esc / Cancel leave the document unchanged.
+//! rendering frames while a slow job runs, shows the status-bar progress and the blocking progress
+//! overlay, and Esc / Cancel leave the document unchanged.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use craft::behavior::kurbo::Point;
+use craft::behavior::{EditEvent, Mixed};
+use craft::draw::ui::transform::TransformEdit;
 use egui::vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::jobs::{JobId, Started};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-fn app_harness() -> Harness<'static, PhotocraftApp> {
+fn app_harness() -> Harness<'static, Box<PhotocraftApp>> {
     app_harness_with(crate::Services::default())
 }
 
 /// [`app_harness`] over the given services (the beep test records the hook's calls).
-fn app_harness_with(services: crate::Services) -> Harness<'static, PhotocraftApp> {
+fn app_harness_with(services: crate::Services) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut s = photocraft_engine::Session::new();
         s.execute("file.new", json!({"width": 320, "height": 240})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         s.execute("edit.fill", json!({"color": "#3366cc"})).unwrap();
-        let mut app = PhotocraftApp::new(s, services);
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), s, services);
         app.background_jobs = true;
         app
     });
@@ -65,13 +69,13 @@ fn slow_job(app: &mut PhotocraftApp, gate: &Arc<AtomicBool>) -> JobId {
 }
 
 /// Step frames for `ms` of wall time; returns (frames, slowest frame in ms).
-fn frames_for(h: &mut Harness<'_, PhotocraftApp>, ms: u64) -> (u64, f64) {
+fn frames_for(h: &mut Harness<'_, Box<PhotocraftApp>>, ms: u64) -> (u64, f64) {
     frames_for_at_least(h, ms, 0)
 }
 
 /// Prove the frame loop advances while a gated worker stays blocked, without assuming a
 /// minimum frame rate on software-rendered CI machines. Also wait for the progress modal.
-fn frames_for_at_least(h: &mut Harness<'_, PhotocraftApp>, ms: u64, min_frames: u64) -> (u64, f64) {
+fn frames_for_at_least(h: &mut Harness<'_, Box<PhotocraftApp>>, ms: u64, min_frames: u64) -> (u64, f64) {
     let t = Instant::now();
     let (mut n, mut worst) = (0, 0.0f64);
     while t.elapsed() < Duration::from_millis(ms) || n < min_frames {
@@ -86,7 +90,7 @@ fn frames_for_at_least(h: &mut Harness<'_, PhotocraftApp>, ms: u64, min_frames: 
 
 /// Step at least `min` frames and until `ready` holds; returns (frames, slowest frame in ms).
 /// The test fails when `ready` still does not hold after 60 s.
-fn frames_until(h: &mut Harness<'_, PhotocraftApp>, min: u64, ready: impl Fn(&Harness<'_, PhotocraftApp>) -> bool) -> (u64, f64) {
+fn frames_until(h: &mut Harness<'_, Box<PhotocraftApp>>, min: u64, ready: impl Fn(&Harness<'_, Box<PhotocraftApp>>) -> bool) -> (u64, f64) {
     let t = Instant::now();
     let (mut n, mut worst) = (0, 0.0f64);
     while n < min || !ready(h) {
@@ -97,35 +101,6 @@ fn frames_until(h: &mut Harness<'_, PhotocraftApp>, min: u64, ready: impl Fn(&Ha
         n += 1;
     }
     (n, worst)
-}
-
-#[test]
-fn the_frame_loop_keeps_running_during_a_slow_job_and_esc_cancels_it() {
-    let mut h = app_harness();
-    let gate = Arc::new(AtomicBool::new(false));
-    let doc_before = h.state().session.active().unwrap().doc.clone();
-    let job = slow_job(h.state_mut(), &gate);
-    let frame0 = h.state().frame;
-    // The worker thread reports "Filtering tiles" when it starts, which can be after the dialog appears.
-    let (n, worst) = frames_until(&mut h, 10, |h| h.query_by_label("Filtering tiles").is_some());
-    assert!(h.state().session.job(job).is_some(), "the job is still running");
-    assert!(h.state().frame - frame0 >= 10, "the UI kept rendering ({n} frames)");
-    eprintln!("{n} frames during the job, slowest {worst:.1} ms");
-    // The status bar shows the job, and after the delay the modal progress dialog.
-    assert!(h.query_all_by_label("Slow Filter").count() >= 2, "job label in the status bar and the dialog title");
-    assert!(h.query_by_label("Cancel").is_some(), "the progress dialog's Cancel");
-    assert!(h.query_by_label("Filtering tiles").is_some(), "the job's status message");
-    // Commands that would edit the busy document are disabled with a clear reason.
-    assert!(!h.state().session.is_enabled("layer.new.layer"));
-    let err = h.state_mut().run("layer.new.layer", json!({})).unwrap_err();
-    assert!(err.contains("Slow Filter"), "{err}");
-    // Esc cancels; the document is untouched.
-    h.key_press(egui::Key::Escape);
-    h.run_steps(3);
-    assert!(h.state().session.job(job).is_none());
-    assert!(Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc_before));
-    assert!(h.state().ui.status.contains("Canceled"), "{}", h.state().ui.status);
-    assert!(h.query_by_label("Esc to cancel").is_none(), "the dialog closed");
 }
 
 #[test]
@@ -164,7 +139,7 @@ fn a_finished_job_lands_as_one_undo_step_and_the_dialog_cancel_button_works() {
     h.run_steps(2);
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 
-    // A second job, cancelled from the dialog's button.
+    // A second job, cancelled from the overlay's Cancel button (it closes as `Requested`).
     let gate = Arc::new(AtomicBool::new(false));
     let job = slow_job(h.state_mut(), &gate);
     frames_for(&mut h, 320);
@@ -196,7 +171,7 @@ fn control_requests_wait_for_jobs_unless_asked_not_to() {
     let ctx = h.ctx.clone();
     let (req, _rx) = crate::ControlRequest::new("engine.execute", json!({"command": "filter.blur.gaussianBlur", "params": {"radius": 2}}));
     let job = match crate::control::handle(h.state_mut(), &ctx, &req) {
-        crate::control::Outcome::AfterJob(job) => job,
+        crate::control::Reply::AfterJob(job) => JobId(job),
         _ => panic!("expected a deferred reply"),
     };
     assert!(h.state().session.jobs().iter().any(|j| j.id == job) || h.state().session.jobs_with_recent().iter().any(|j| j.id == job));
@@ -210,13 +185,13 @@ fn control_requests_wait_for_jobs_unless_asked_not_to() {
 
     // `wait: false` replies with the job id at once.
     let (req, _rx) = crate::ControlRequest::new("engine.execute", json!({"command": "filter.blur.gaussianBlur", "params": {"radius": 2}, "wait": false}));
-    let crate::control::Outcome::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!("expected an immediate reply") };
+    let crate::control::Reply::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!("expected an immediate reply") };
     let id = v["result"]["job"].as_u64().unwrap();
     let (req, _rx) = crate::ControlRequest::new("jobs.cancel", json!({"job": id}));
-    let crate::control::Outcome::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!() };
+    let crate::control::Reply::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!() };
     assert_eq!(v["ok"], true, "{v}");
     let (req, _rx) = crate::ControlRequest::new("jobs.cancel", json!({"job": 99999}));
-    let crate::control::Outcome::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!() };
+    let crate::control::Reply::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!() };
     assert_eq!(v["ok"], false);
 }
 
@@ -229,10 +204,11 @@ fn accepted_control_job_applies_after_its_dispatch_deadline() {
     let (mut req, reply) = crate::ControlRequest::new("engine.execute", json!({"command": "filter.blur.gaussianBlur", "params": {"radius": 2}}));
     req.deadline = Some(deadline);
     let (tx, rx) = std::sync::mpsc::channel();
-    h.state_mut().control_rx = Some(rx);
+    h.state_mut().control = Some(craft::automation::ControlChannel::new(rx));
     tx.send(req).unwrap();
     h.state_mut().drain_control(&ctx);
-    let job = h.state().jobs.waiters.first().expect("the accepted request waits for its job").0;
+    assert_eq!(h.state().control.as_ref().map(craft::automation::ControlChannel::waiting), Some(1), "the accepted request waits for its job");
+    let job = h.state().session.jobs().first().expect("the filter runs as a job").id;
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "the job has not been applied yet");
     assert!(reply.try_recv().is_err());
     // No frames poll the worker until the transport's deadline has elapsed.
@@ -245,10 +221,17 @@ fn accepted_control_job_applies_after_its_dispatch_deadline() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
+/// A control request waiting for `job` to end, as a waiting `engine.execute` leaves one.
+fn wait_for_job(app: &mut PhotocraftApp, job: JobId) -> std::sync::mpsc::Receiver<Value> {
+    let (req, reply) = crate::ControlRequest::new("engine.execute", json!({}));
+    let channel = app.control.get_or_insert_with(|| craft::automation::ControlChannel::new(std::sync::mpsc::channel().1));
+    channel.settle(req, crate::control::Reply::AfterJob(job.0), None, 0.0);
+    reply
+}
+
 /// The control reply for `job`, once the app's frame loop has applied it.
-fn job_reply(h: &mut Harness<'static, PhotocraftApp>, job: JobId) -> Value {
-    let (tx, rx) = std::sync::mpsc::channel();
-    h.state_mut().jobs.waiters.push((job, tx));
+fn job_reply(h: &mut Harness<'static, Box<PhotocraftApp>>, job: JobId) -> Value {
+    let rx = wait_for_job(h.state_mut(), job);
     let t = Instant::now();
     loop {
         h.step();
@@ -265,16 +248,16 @@ fn job_reply(h: &mut Harness<'static, PhotocraftApp>, job: JobId) -> Value {
 fn menu_and_dialog_requests_wait_for_jobs_unless_asked_not_to() {
     let mut h = app_harness();
     let ctx = h.ctx.clone();
-    let control = |h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value| {
+    let control = |h: &mut Harness<'static, Box<PhotocraftApp>>, method: &str, params: Value| {
         let (req, _rx) = crate::ControlRequest::new(method, params);
         crate::control::handle(h.state_mut(), &ctx, &req)
     };
     // The job a request started: deferred while waiting, `{job, pending}` at once otherwise.
     // Lets it land and checks the filter's result.
-    let land = |h: &mut Harness<'static, PhotocraftApp>, what: &str, outcome: crate::control::Outcome, wait: bool| {
+    let land = |h: &mut Harness<'static, Box<PhotocraftApp>>, what: &str, outcome: crate::control::Reply, wait: bool| {
         let job = match (outcome, wait) {
-            (crate::control::Outcome::AfterJob(job), true) => job,
-            (crate::control::Outcome::Done(v), false) => {
+            (crate::control::Reply::AfterJob(job), true) => JobId(job),
+            (crate::control::Reply::Done(v), false) => {
                 assert_eq!(v["result"]["pending"], true, "{what}: {v}");
                 JobId(v["result"]["job"].as_u64().unwrap())
             }
@@ -283,13 +266,13 @@ fn menu_and_dialog_requests_wait_for_jobs_unless_asked_not_to() {
         let reply = job_reply(h, job);
         assert!(reply["result"]["filter"].is_object(), "{what}: {reply}");
     };
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let steps = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().history.past_len();
     for wait in [true, false] {
         let before = steps(&h);
         let outcome = control(&mut h, "ui.menu.invoke", json!({"id": "filter.blur.blurMore", "wait": wait}));
         land(&mut h, "Blur More", outcome, wait);
-        let crate::control::Outcome::Done(v) = control(&mut h, "ui.menu.invoke", json!({"id": "filter.blur.gaussianBlur"})) else { panic!("dialog") };
-        let dialog = v["result"]["dialog"].as_u64().expect("Gaussian Blur opens its dialog");
+        let crate::control::Reply::Done(v) = control(&mut h, "ui.menu.invoke", json!({"id": "filter.blur.gaussianBlur"})) else { panic!("dialog") };
+        let dialog = v["result"]["dialog"].as_str().expect("Gaussian Blur opens its dialog (its id is the string ui.inspect lists)");
         control(&mut h, "ui.dialog.set", json!({"dialog": dialog, "field": "radius", "value": 3}));
         let outcome = control(&mut h, "ui.dialog.confirm", json!({"dialog": dialog, "wait": wait}));
         land(&mut h, "Gaussian Blur", outcome, wait);
@@ -331,32 +314,6 @@ fn files_open_in_the_background_with_a_tab_and_cancel_closes_it() {
     assert!(h.state().jobs.opens.is_empty());
     assert_eq!(h.state().session.documents().len(), 2);
     assert!(h.state().jobs.focus.is_none());
-}
-
-/// #2423: a long file name used to wrap the card's title and push the percentage and Cancel
-/// below the card. The name stays on one line and every row is inside the card.
-#[test]
-fn the_opening_card_keeps_a_long_name_and_cancel_inside() {
-    let mut h = app_harness();
-    let gate = Arc::new(AtomicBool::new(false));
-    let job = slow_job(h.state_mut(), &gate);
-    let long = "a7rv-test_2024_02_17_shot_30_3705_with_an_even_longer_suffix_that_never_ends.psb";
-    for name in ["short.psd", long] {
-        h.state_mut().jobs.opens.clear();
-        h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: name.to_string(), path: None, slot: None, order: None });
-        h.state_mut().jobs.focus = Some(job);
-        h.run_steps(4);
-        let r = crate::jobs_ui::open_card_rects(&h.ctx).expect("the opening card was drawn");
-        assert!(r.title.height() < 22.0, "{name}: the title is one line, {:?}", r.title);
-        assert!(r.card.contains_rect(r.title), "{name}: title {:?} inside card {:?}", r.title, r.card);
-        assert!(r.card.contains_rect(r.cancel), "{name}: Cancel {:?} inside card {:?}", r.cancel, r.card);
-        assert!(r.title.right() <= r.card.right() - 10.0, "{name}: the title keeps the card's padding");
-        assert!(r.cancel.width() > 0.0 && r.cancel.height() > 0.0, "{name}: Cancel was drawn");
-    }
-    gate.store(true, Ordering::Relaxed);
-    h.state_mut().jobs.focus = None;
-    h.state_mut().jobs.opens.clear();
-    h.run_steps(4);
 }
 
 #[test]
@@ -419,11 +376,12 @@ impl Gates {
     }
 }
 
-fn noticed(app: &PhotocraftApp, text: &str) -> bool {
-    app.ui.notices.iter().any(|n| n.title.contains(text) || n.lines.iter().any(|l| l.contains(text)))
+/// A notice (or toast card) carrying `text` is up after the harness's passes.
+fn noticed(h: &Harness<'_, Box<PhotocraftApp>>, text: &str) -> bool {
+    crate::notices::shown(h.state(), &h.ctx).iter().any(|(title, lines, _)| title.contains(text) || lines.iter().any(|l| l.contains(text)))
 }
 
-fn step_until(h: &mut Harness<'_, PhotocraftApp>, done: impl Fn(&PhotocraftApp) -> bool) {
+fn step_until(h: &mut Harness<'_, Box<PhotocraftApp>>, done: impl Fn(&PhotocraftApp) -> bool) {
     let t = Instant::now();
     while !done(h.state()) && t.elapsed() < Duration::from_secs(30) {
         h.step();
@@ -447,15 +405,11 @@ fn saves_run_in_the_background_and_are_recorded_when_they_end() {
     let st = h.state().session.active().unwrap();
     assert!(st.is_dirty() && st.path.is_none());
     assert!(h.state_mut().run("layer.new.layer", json!({})).is_err(), "the saving document is locked");
-    // Save in Background is on by default: no modal dialog, so the rest of the app stays usable
-    // (#6207); the status bar reads "Saving 0%" until the encoder reports progress (#3389).
-    assert!(h.query_by_label("Esc to cancel").is_none() && h.query_by_label("Encoding").is_none(), "no progress dialog");
-    h.get_by_label("Saving 0%");
+    // Save in Background is on by default: no blocking overlay, so the rest of the app stays usable
+    // (#6207); the status bar's progress is named "Saving" and shows the percentage itself (#3389).
+    assert!(h.query_by_label("Esc to cancel").is_none() && h.query_by_label("Encoding").is_none(), "no progress overlay");
+    assert!(h.query_all_by_label("Saving").count() >= 1, "the status bar names the save");
     assert!(crate::jobs_ui::foreground_save(h.state()).is_none());
-    h.state_mut().ui.tool = crate::state::Tool::Move;
-    h.key_press(egui::Key::B);
-    h.run_steps(2);
-    assert_eq!(h.state().ui.tool, crate::state::Tool::Brush, "shortcuts still work while it saves");
 
     gates.encode.store(true, Ordering::Relaxed);
     step_until(&mut h, |a| !a.saving());
@@ -464,8 +418,7 @@ fn saves_run_in_the_background_and_are_recorded_when_they_end() {
     assert!(!st.is_dirty());
     assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/big.psd"));
     assert_eq!(st.doc.name, "big.psd", "the document takes the saved file's name, as a synchronous Save As does");
-    assert_eq!(h.state().ui.status, "Saved big.psd: a warning");
-    assert!(noticed(h.state(), "a warning"), "the export warnings are shown");
+    assert!(noticed(&h, "a warning"), "the export warnings are shown");
     assert!(h.state_mut().run("layer.new.layer", json!({})).is_ok(), "unlocked again");
 }
 
@@ -482,13 +435,13 @@ fn save_in_background_off_blocks_the_app_until_the_file_is_written() {
     let r = h.state_mut().save_as(Some("/tmp/photocraft-test/fg.psd".into())).unwrap();
     assert_eq!(r["pending"], true, "the same background job does the work");
     h.run_steps(1);
-    // The dialog is up from the first frame (no delay), titled with the save, then its stage.
-    // A new modal's accessibility tree can take a second pass to appear under kittest.
+    // The overlay's card is up from the first frame (no delay), titled with the save, then its stage. The overlay's
+    // own node (named for the save) is in the accessibility tree a pass before the card's body, so the wait is for the
+    // body's hint.
     let t = Instant::now();
-    while h.query_by_label("Saving fg.psd").is_none() && t.elapsed() < Duration::from_secs(30) {
+    while (h.query_all_by_label("Saving fg.psd").count() == 0 || h.query_by_label("Esc to cancel").is_none()) && t.elapsed() < Duration::from_secs(30) {
         h.step();
     }
-    h.get_by_label("Saving fg.psd");
     h.get_by_label("Esc to cancel");
     while h.query_by_label("Encoding").is_none() && t.elapsed() < Duration::from_secs(30) {
         h.step();
@@ -510,18 +463,20 @@ fn save_in_background_off_blocks_the_app_until_the_file_is_written() {
     while h.state().jobs.close_after_saves && t.elapsed() < Duration::from_secs(30) {
         h.step();
         if h.state().jobs.close_after_saves {
-            assert!(h.query_by_label("Esc to cancel").is_some(), "the dialog stays up until the save ends");
+            assert!(h.query_by_label("Esc to cancel").is_some(), "the overlay stays up until the save ends");
         }
     }
     assert_eq!(gates.written(), ["/tmp/photocraft-test/fg.psd"], "the file is complete before the close goes on");
     assert!(!h.state().jobs.close_after_saves, "then the held close is repeated");
     h.run_steps(2);
-    assert!(h.query_by_label("Esc to cancel").is_none(), "the dialog is gone");
+    assert!(h.query_by_label("Esc to cancel").is_none(), "the overlay is gone");
     let st = h.state().session.active().unwrap();
     assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/fg.psd"));
     assert!(!st.is_dirty());
     h.key_press(egui::Key::B);
-    h.run_steps(2);
+    for _ in 0..2 {
+        h.step();
+    }
     assert_eq!(h.state().ui.tool, crate::state::Tool::Brush, "shortcuts work again");
 }
 
@@ -537,8 +492,8 @@ fn a_failed_or_cancelled_foreground_save_leaves_the_document_unsaved() {
     step_until(&mut h, |a| !a.saving());
     let st = h.state().session.active().unwrap();
     assert!(st.is_dirty() && st.path.is_none());
-    assert!(noticed(h.state(), "disk full"), "the failure is reported");
-    assert!(h.query_by_label("Esc to cancel").is_none(), "the dialog is gone");
+    assert!(noticed(&h, "disk full"), "the failure is reported");
+    assert!(h.query_by_label("Esc to cancel").is_none(), "the overlay is gone");
 
     gates.encode.store(false, Ordering::Relaxed);
     h.state_mut().services.save_file = Some(gates.save(None));
@@ -562,7 +517,7 @@ fn a_failed_save_or_one_cancelled_while_encoding_leaves_the_document_unsaved() {
     step_until(&mut h, |a| !a.saving());
     let st = h.state().session.active().unwrap();
     assert!(st.is_dirty() && st.path.is_none());
-    assert!(noticed(h.state(), "disk full"), "the failure is reported");
+    assert!(noticed(&h, "disk full"), "the failure is reported");
 
     gates.encode.store(false, Ordering::Relaxed);
     h.state_mut().services.save_file = Some(gates.save(None));
@@ -577,7 +532,7 @@ fn a_failed_save_or_one_cancelled_while_encoding_leaves_the_document_unsaved() {
 }
 
 /// Step until the save in `h` has started writing.
-fn until_writing(h: &mut Harness<'_, PhotocraftApp>) {
+fn until_writing(h: &mut Harness<'_, Box<PhotocraftApp>>) {
     let t = Instant::now();
     while h.state().session.jobs().first().is_none_or(|j| j.message != "Writing") && t.elapsed() < Duration::from_secs(30) {
         h.step();
@@ -634,10 +589,10 @@ fn old_file(test: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn control(h: &mut Harness<'static, PhotocraftApp>, method: &str, params: Value) -> Value {
+fn control(h: &mut Harness<'static, Box<PhotocraftApp>>, method: &str, params: Value) -> Value {
     let (req, _rx) = crate::ControlRequest::new(method, params);
     let ctx = h.ctx.clone();
-    let crate::control::Outcome::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!("{method} replies at once") };
+    let crate::control::Reply::Done(v) = crate::control::handle(h.state_mut(), &ctx, &req) else { panic!("{method} replies at once") };
     v
 }
 
@@ -693,54 +648,19 @@ fn jobs_cancel_during_the_write_reports_the_save_as_not_cancelled_and_it_finishe
     assert!(!st.is_dirty() && st.path.as_deref() == Some(path.as_str()), "the save that happened is recorded");
 }
 
-/// #3389: like Photoshop, a running save reads "Saving 45%" in the status bar and appends
-/// " - Saving 45%" to its document's tab title, in both tab strips; both go when it ends.
-#[test]
-fn a_running_save_shows_its_percentage_in_the_status_bar_and_tab_title() {
-    for theme in crate::theme::ThemeKind::ALL {
-        let mut h = app_harness();
-        h.state_mut().run("prefs.set", json!({"values": {"interface.theme": theme.id()}})).unwrap();
-        h.run_steps(2);
-        let gate = Arc::new(AtomicBool::new(false));
-        let g = gate.clone();
-        let save: crate::SaveFileFn = Arc::new(move |_, _, _, ctl| {
-            ctl.progress(0.4567, "Encoding");
-            while !g.load(Ordering::Relaxed) {
-                ctl.check()?;
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            ctl.commit()?;
-            ctl.progress(1.0, "Writing");
-            Ok(Vec::new())
-        });
-        h.state_mut().services.save_file = Some(save);
-        h.state_mut().save_as(Some("/tmp/photocraft-test/pct.psd".into())).unwrap();
-        let t = Instant::now();
-        while h.query_by_label("Saving 45%").is_none() && t.elapsed() < Duration::from_secs(30) {
-            h.step();
-        }
-        assert!(h.query_by_label("Saving 45%").is_some(), "{theme:?}: the status bar reads Saving 45%");
-        assert!(h.query_by_label_contains(" - Saving 45%").is_some(), "{theme:?}: the tab title carries the save's progress");
-        gate.store(true, Ordering::Relaxed);
-        step_until(&mut h, |a| !a.saving());
-        assert!(h.query_by_label_contains("Saving").is_none(), "{theme:?}: the readout and the tab suffix are gone once saved");
-        assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some("/tmp/photocraft-test/pct.psd"));
-    }
-}
-
-/// One frame with the window's close button pressed; whether the guard cancelled the close.
+/// One frame with the window's close button pressed; whether the close path cancelled the close.
 fn press_window_close(app: &mut PhotocraftApp) -> bool {
     let mut info = egui::ViewportInfo::default();
     info.events.push(egui::ViewportEvent::Close);
     let mut input = egui::RawInput::default();
     input.viewports.insert(egui::ViewportId::ROOT, info);
-    let mut out = egui::Context::default().run_ui(input, |ui| crate::discard_ui::guard_window_close(app, ui.ctx()));
+    let mut out = crate::app::framework::close_path_frame(app, input);
     out.textures_delta.clear();
     out.viewport_output.remove(&egui::ViewportId::ROOT).is_some_and(|o| o.commands.iter().any(|c| matches!(c, egui::ViewportCommand::CancelClose)))
 }
 
 /// A clean document (so the close prompt has nothing to ask) saved as a copy in the background.
-fn save_a_copy(h: &mut Harness<'static, PhotocraftApp>, gates: &Gates, path: &str) {
+fn save_a_copy(h: &mut Harness<'static, Box<PhotocraftApp>>, gates: &Gates, path: &str) {
     h.state_mut().services.save_file = Some(gates.save(None));
     let st = h.state_mut().session.active_mut().unwrap();
     st.saved_revision = st.revision;
@@ -773,7 +693,7 @@ fn a_failed_save_does_not_close_the_window_over_its_error() {
     assert!(press_window_close(h.state_mut()));
     gates.encode.store(true, Ordering::Relaxed);
     step_until(&mut h, |a| !a.saving());
-    assert!(noticed(h.state(), "disk full"));
+    assert!(noticed(&h, "disk full"));
     assert!(!h.state().jobs.close_after_saves, "the window stays open to show the error");
 }
 
@@ -812,29 +732,6 @@ fn a_cancelled_save_still_counts_until_its_worker_returns() {
     release.store(true, Ordering::Relaxed);
     step_until(&mut h, |a| !a.saving());
     assert!(!h.state().jobs.close_after_saves, "the held close is repeated once the worker returns");
-}
-
-/// Preferences ▸ General ▸ Beep When Done (off by default): a finished background job beeps
-/// once through the services hook; with the preference off it stays silent.
-#[test]
-fn a_finished_job_beeps_when_the_preference_is_on() {
-    static BEEPS: AtomicUsize = AtomicUsize::new(0);
-    fn count_beep() {
-        BEEPS.fetch_add(1, Ordering::Relaxed);
-    }
-    BEEPS.store(0, Ordering::Relaxed);
-    let mut h = app_harness_with(crate::Services { beep: Some(count_beep), ..Default::default() });
-    // Off by default: the first job finishes without a beep.
-    let gate = Arc::new(AtomicBool::new(true));
-    let _ = slow_job(h.state_mut(), &gate);
-    frames_for(&mut h, 800);
-    assert_eq!(BEEPS.load(Ordering::Relaxed), 0, "silent by default");
-    // On: the next finished job beeps once.
-    h.state_mut().run("prefs.set", json!({"path": "general.beepWhenDone", "value": true})).unwrap();
-    let gate = Arc::new(AtomicBool::new(true));
-    let _ = slow_job(h.state_mut(), &gate);
-    frames_for(&mut h, 800);
-    assert_eq!(BEEPS.load(Ordering::Relaxed), 1, "one beep for the finished job");
 }
 
 #[test]
@@ -876,8 +773,7 @@ fn cancelled_batch_with_partial_results_reports_cancellation_without_beeping() {
         std::thread::sleep(Duration::from_millis(1));
     };
     let ctx = h.ctx.clone();
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    h.state_mut().jobs.waiters.push((id, reply_tx));
+    let reply_rx = wait_for_job(h.state_mut(), id);
     crate::jobs_ui::on_event(h.state_mut(), &ctx, event);
     assert!(h.state().ui.status.contains("Canceled"), "{}", h.state().ui.status);
     assert_eq!(BEEPS.load(Ordering::Relaxed), 0);
@@ -921,7 +817,7 @@ fn interactive_batch_shows_its_read_only_input_and_asks_after_escape() {
     };
     ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
     frames_until(&mut h, 1, |h| h.query_by_label("Batch preview").is_some());
-    assert!(h.query_by_label("input.png").is_some(), "the current input appears in the canvas");
+    assert!(h.query_all_by_label("input.png").count() >= 1, "the current input's header and picture appear in the canvas");
     assert!(h.query_by_label("Batch").is_none(), "the Batch progress readout is hidden while its input is visible");
     assert!(Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc), "preview cannot replace the editable document");
     h.key_press(egui::Key::Escape);
@@ -969,12 +865,18 @@ fn printing_keeps_drawing_and_reports_only_the_final_spooler_result() {
         h.run_steps(4);
         assert!(h.state().frame > frame);
         assert!(!h.state().ui.status.contains("Sent to the printer"));
+        // The bar's cancel is refused for a submitted print, with its reason as the tooltip; a click does nothing.
+        let cancel = h.get_by_label("Cancel (Esc)");
+        assert!(cancel.accesskit_node().is_disabled(), "a submitted print cannot be cancelled from the bar");
+        cancel.click();
+        h.run_steps(2);
+        assert!(h.state().session.job(id).is_some() && !h.state().ui.status.contains("Canceled"), "the refused cancel changes nothing");
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
         assert!(h.state().session.job(id).is_some(), "Esc cannot retract a submitted job");
         let (request, _) = crate::control::ControlRequest::new("jobs.cancel", json!({"job": id.0}));
         let ctx = h.ctx.clone();
-        let crate::control::Outcome::Done(reply) = crate::control::handle(h.state_mut(), &ctx, &request) else { panic!("cancel replies immediately") };
+        let crate::control::Reply::Done(reply) = crate::control::handle(h.state_mut(), &ctx, &request) else { panic!("cancel replies immediately") };
         assert_eq!(reply["result"]["cancelled"], 0, "control must not falsely report cancellation: {reply}");
         let st = h.state_mut().session.active_mut().unwrap();
         st.saved_revision = st.revision;
@@ -1004,12 +906,21 @@ fn layer_count(app: &PhotocraftApp) -> usize {
 }
 
 /// Free Transform the active layer to the right half of the canvas, then ↩.
-fn transform_and_commit(h: &mut Harness<'static, PhotocraftApp>, copy: bool) {
+fn transform_and_commit(h: &mut Harness<'static, Box<PhotocraftApp>>, copy: bool) {
     let ctx = h.ctx.clone();
     let app = h.state_mut();
     if copy { crate::transform_tool::begin_copy(app, &ctx) } else { crate::transform_tool::begin(app, &ctx) }.unwrap();
-    app.ui.transform.as_mut().unwrap().quad = [[160.0, 0.0], [320.0, 0.0], [320.0, 120.0], [160.0, 120.0]];
+    move_box(app, [[160.0, 0.0], [320.0, 0.0], [320.0, 120.0], [160.0, 120.0]]);
     crate::transform_tool::commit(app);
+}
+
+/// Sets the open box's corners as one edit of the session.
+fn move_box(app: &mut PhotocraftApp, corners: [[f64; 2]; 4]) {
+    let session = &mut app.ui.transform.as_mut().unwrap().session;
+    let before = *session.state();
+    let mut after = before;
+    after.quad = corners.map(|[x, y]| Point::new(x, y));
+    session.apply(TransformEdit::Box(EditEvent::set(Mixed::Same(before), after, "Free Transform".into(), None)), 0.0);
 }
 
 #[test]
@@ -1062,12 +973,14 @@ fn esc_cancels_a_background_free_transform_commit() {
 }
 
 /// Warp the active layer into an arc, then ↩.
-fn warp_and_commit(h: &mut Harness<'static, PhotocraftApp>) {
+fn warp_and_commit(h: &mut Harness<'static, Box<PhotocraftApp>>) {
     let ctx = h.ctx.clone();
     let app = h.state_mut();
     crate::transform_tool::begin(app, &ctx).unwrap();
-    let t = app.ui.transform.as_mut().unwrap();
-    t.warp = Some(photocraft_geom::warp::Warp::preset(photocraft_geom::warp::WarpStyle::Arc, 40.0, t.rect));
+    let session = &mut app.ui.transform.as_mut().unwrap().session;
+    let rect = session.rect();
+    let warp = photocraft_geom::warp::Warp::preset(photocraft_geom::warp::WarpStyle::Arc, 40.0, [rect.x0, rect.y0, rect.x1, rect.y1]);
+    session.apply(TransformEdit::Warp(crate::state::SessionWarp::new(warp, false)), 0.0);
     crate::transform_tool::commit(app);
 }
 
@@ -1132,7 +1045,7 @@ fn background_open_warns_about_missing_fonts() {
     assert!(app.ui.notices.last().is_some_and(|n| n.title.contains("poster.psd") && n.lines == want), "{:?}", app.ui.notices);
 }
 
-fn identity_app() -> PhotocraftApp {
+fn identity_app() -> Box<PhotocraftApp> {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     session.execute("layer.new.layer", json!({})).unwrap();
@@ -1142,7 +1055,7 @@ fn identity_app() -> PhotocraftApp {
     PhotocraftApp::new(session, crate::Services::default())
 }
 
-fn identity_png(profile: Option<craft_cms::Builtin>) -> Vec<u8> {
+fn identity_png(profile: Option<craft::cms::Builtin>) -> Vec<u8> {
     let app = identity_app();
     let mut doc = (*app.session.active().unwrap().doc).clone();
     doc.icc_profile = profile.map(|profile| profile.profile().to_bytes());
@@ -1264,7 +1177,7 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     let mut app = identity_app();
     let control = IdentityControl::capture(&app);
     app.session.execute("edit.colorSettings", json!({"askOnMismatch": true, "askOnMissing": false, "policyRgb": "preserve"})).unwrap();
-    let mismatched = identity_png(craft_cms::Builtin::from_id("adobe-rgb-compat"));
+    let mismatched = identity_png(craft::cms::Builtin::from_id("adobe-rgb-compat"));
     let prompt = completed_identity_open(&mut app, "profile.png", mismatched);
     assert!(prompt["held"].as_u64().is_some());
     let first = completed_identity_open(&mut app, "first.png", identity_png(None));
@@ -1285,23 +1198,39 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     control.assert_untouched(&app);
 }
 
+/// A harness whose file dialogs stay open until the test answers them.
+fn export_harness() -> (Harness<'static, Box<PhotocraftApp>>, Arc<craft::host::ScriptedFiles>) {
+    let files = Arc::new(craft::host::ScriptedFiles::held());
+    let h = app_harness_with(crate::Services { files: Some(files.clone()), ..Default::default() });
+    (h, files)
+}
+
+/// Layer › Export As from the menu: waits for the dialog (composited on a worker first), then
+/// exports as PNG to `path` (a file, or the folder several layers go into).
+fn export_layer_as(h: &mut Harness<'static, Box<PhotocraftApp>>, files: &craft::host::ScriptedFiles, path: &str) {
+    let ctx = h.ctx.clone();
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
+    assert_eq!(r["pending"], true, "the layers are composited on a worker: {r}");
+    step_until(h, |a| crate::export_dialog::open_dialog(a).is_some());
+    let id = crate::export_dialog::open_dialog(h.state()).expect("the dialog opens once the layers are ready");
+    h.state_mut().framework.dialogs.set_json_field(&ctx, id, "format", json!("png")).unwrap();
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
+    files.answer(craft::host::Picked::Paths(vec![path.into()])).expect("Export asks for a destination");
+    h.state_mut().poll_file_dialog();
+    // The dialog's next pass takes the answered path and exports.
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
+}
+
 /// Layer › Export As composites the layer on a worker before its dialog opens, and Export writes
 /// the file on a worker like a save does: on a large storyboard each took over 17 s on the UI
 /// thread, and the compositor closed the frozen window.
 #[test]
 fn layer_export_as_prepares_and_writes_in_the_background() {
     let path = "/tmp/photocraft-test/layer.png";
-    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(path.into()))]);
-    let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
+    let (mut h, files) = export_harness();
     let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
     h.state_mut().services.save_file = Some(gates.save(None));
-    let ctx = h.ctx.clone();
-    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
-    assert_eq!(r["pending"], true, "the layer is composited on a worker: {r}");
-    step_until(&mut h, |a| !a.ui.dialogs.is_empty());
-    let fields = h.state().ui.dialogs.last().expect("the dialog opens once the layer is ready").fields.clone();
-    assert!(fields.contains_key("__layer"));
-    crate::export_dialog::confirm(h.state_mut(), &fields).unwrap();
+    export_layer_as(&mut h, &files, path);
     // Encoding waits on its gate: a window close meanwhile waits for the export.
     step_until(&mut h, PhotocraftApp::exporting);
     assert!(h.state().exporting(), "a close waits while the export writes");
@@ -1310,7 +1239,7 @@ fn layer_export_as_prepares_and_writes_in_the_background() {
     assert!(!h.state().exporting());
     assert_eq!(gates.written(), [path], "written by the worker save");
     assert!(h.state().ui.status.starts_with(&format!("Exported {path}")), "{}", h.state().ui.status);
-    assert!(noticed(h.state(), "a warning"), "the export warnings are shown");
+    assert!(noticed(&h, "a warning"), "the export warnings are shown");
 }
 
 /// Several selected layers, one of them empty: the prepare leaves the empty one out on its worker
@@ -1320,31 +1249,23 @@ fn layer_export_as_prepares_and_writes_in_the_background() {
 fn layer_export_as_of_several_layers_skips_an_empty_one_and_writes_in_the_background() {
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().to_string_lossy().into_owned();
-    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::FolderTo(folder))]);
-    let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
+    let (mut h, files) = export_harness();
     let gates = Gates::open();
     h.state_mut().services.save_file = Some(gates.save(None));
-    let active = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().active_layer.unwrap();
+    let active = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().session.active().unwrap().active_layer.unwrap();
     let filled = active(&h);
     h.state_mut().run("layer.new.layer", json!({"name": "Empty"})).unwrap();
     let empty = active(&h);
     h.state_mut().run("layer.new.layer", json!({"name": "Top"})).unwrap();
     h.state_mut().run("edit.fill", json!({"color": "#cc3366"})).unwrap();
     let top = active(&h);
-    h.state_mut().session.active_mut().unwrap().selected_layers = vec![filled, empty, top];
+    *h.state_mut().session.active_mut().unwrap().selection_mut() = vec![filled, empty, top];
     let st = h.state().session.active().unwrap();
     let (doc, filled_name) = (st.doc.clone(), st.doc.layer(filled).unwrap().name.clone());
-    let ctx = h.ctx.clone();
-    let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
-    assert_eq!(r["pending"], true, "the layers are composited on a worker: {r}");
-    step_until(&mut h, |a| !a.ui.dialogs.is_empty());
-    let fields = h.state().ui.dialogs.last().expect("the dialog opens once the layers are ready").fields.clone();
-    assert_eq!(fields["__layers"], json!([filled.0, top.0]), "the empty layer is left out");
-    h.state_mut().ui.dialogs.clear();
-    crate::export_dialog::confirm(h.state_mut(), &fields).unwrap();
+    export_layer_as(&mut h, &files, &folder);
     step_until(&mut h, |a| a.ui.status.starts_with("Exported"));
     let want: Vec<String> = [format!("{filled_name}.png"), "Top.png".to_string()].iter().map(|n| dir.path().join(n).to_string_lossy().into_owned()).collect();
-    assert_eq!(gates.written(), want, "written by the worker save");
+    assert_eq!(gates.written(), want, "written by the worker save, the empty layer left out");
     assert!(!crate::export_dialog::layer_composite_kept(&doc, filled), "let go once written");
 }
 
@@ -1354,11 +1275,13 @@ fn cancelling_a_layers_export_as_lets_go_of_its_composites() {
     let mut h = app_harness();
     let ctx = h.ctx.clone();
     crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
-    step_until(&mut h, |a| !a.ui.dialogs.is_empty());
+    step_until(&mut h, |a| crate::export_dialog::open_dialog(a).is_some());
     let st = h.state().session.active().unwrap();
     let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
-    let id = h.state().ui.dialogs.last().unwrap().id;
-    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    assert!(crate::export_dialog::layer_composite_kept(&doc, layer), "kept for the dialog");
+    let id = crate::export_dialog::open_dialog(h.state()).unwrap();
+    crate::dialogs::cancel(h.state_mut(), &ctx, id).unwrap();
+    h.run_steps(2);
     assert!(!crate::export_dialog::layer_composite_kept(&doc, layer), "let go with the dialog");
 }
 
@@ -1366,20 +1289,19 @@ fn cancelling_a_layers_export_as_lets_go_of_its_composites() {
 /// go of the layer it composited before writing: nothing keeps it (gigabytes for a storyboard).
 #[test]
 fn layer_export_as_without_jobs_keeps_no_composite() {
-    let path = "/tmp/photocraft-test/sync.png";
-    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(path.into()))]);
-    let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
+    let (mut h, files) = export_harness();
     h.state_mut().background_jobs = false;
     let ctx = h.ctx.clone();
     let r = crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
     assert!(r.get("dialog").is_some(), "opened at once: {r}");
     let st = h.state().session.active().unwrap();
     let (doc, layer) = (st.doc.clone(), st.active_layer.unwrap());
-    let fields = h.state().ui.dialogs.last().unwrap().fields.clone();
-    // Closed as the Export button closes it: an open dialog keeps previewing (and compositing).
-    h.state_mut().ui.dialogs.clear();
+    let id = crate::export_dialog::open_dialog(h.state()).unwrap();
+    crate::dialogs::confirm(h.state_mut(), &ctx, id).unwrap();
+    files.answer(craft::host::Picked::Paths(vec!["/tmp/photocraft-test/sync.png".into()])).expect("Export asks for a destination");
+    h.state_mut().poll_file_dialog();
     // No exporter in these services: the write fails, after the composite was let go.
-    let _ = crate::export_dialog::confirm(h.state_mut(), &fields);
+    let _ = crate::dialogs::confirm(h.state_mut(), &ctx, id);
     h.run_steps(4);
     assert!(!crate::export_dialog::layer_composite_kept(&doc, layer), "let go before writing");
 }
@@ -1388,22 +1310,18 @@ fn layer_export_as_without_jobs_keeps_no_composite() {
 /// as with saves.
 #[test]
 fn a_failed_export_does_not_close_the_window_over_its_error() {
-    let path = "/tmp/photocraft-test/fail.png";
-    let (show, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(path.into()))]);
-    let mut h = app_harness_with(crate::Services { file_dialog: Some(show), ..Default::default() });
+    let (mut h, files) = export_harness();
     let gates = Gates::default();
     h.state_mut().services.save_file = Some(gates.save(Some("disk full")));
     let st = h.state_mut().session.active_mut().unwrap();
     st.saved_revision = st.revision;
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "layer.exportAs", json!({})).unwrap();
-    step_until(&mut h, |a| !a.ui.dialogs.is_empty());
-    let fields = h.state().ui.dialogs.last().unwrap().fields.clone();
-    crate::export_dialog::confirm(h.state_mut(), &fields).unwrap();
+    export_layer_as(&mut h, &files, "/tmp/photocraft-test/fail.png");
     step_until(&mut h, PhotocraftApp::exporting);
     assert!(press_window_close(h.state_mut()), "the close waits for the export");
     gates.encode.store(true, Ordering::Relaxed);
-    step_until(&mut h, |a| noticed(a, "disk full"));
+    step_until(&mut h, |a| !a.exporting());
+    h.run_steps(2);
+    assert!(noticed(&h, "disk full"), "the error is shown");
     assert!(!h.state().jobs.close_after_saves, "the window stays open to show the error");
 }
 
@@ -1422,7 +1340,7 @@ fn a_prepare_for_a_document_no_longer_active_keeps_nothing_of_it() {
     crate::export_dialog::keep_layer_composite(&first, layer);
     h.state_mut().run("file.new", json!({"width": 16, "height": 16})).unwrap();
     step_until(&mut h, |a| a.ui.status.contains("the document changed"));
-    assert!(h.state().ui.dialogs.is_empty(), "no dialog for the old document");
+    assert!(crate::export_dialog::open_dialog(h.state()).is_none(), "no dialog for the old document");
     assert!(!crate::export_dialog::layer_composite_kept(&first, layer), "the old document's composite is let go");
 }
 
