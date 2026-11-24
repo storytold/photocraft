@@ -350,16 +350,6 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
             options.insert(k.into(), v.clone());
         }
     }
-    // The dialog's Play checkboxes are saved with the droplet, which hands them to each run.
-    for k in DROPLET_PLAY_OPTIONS {
-        match p.get(k) {
-            None | Some(Value::Null) => {}
-            Some(Value::Bool(on)) => {
-                options.insert(k.into(), json!(on));
-            }
-            Some(_) => return Err(bad(cmd, format!("\"{k}\" must be true or false"))),
-        }
-    }
     // The launcher choice travels with the droplet. A run has to know whether the `.command` name
     // next to this file belongs to the droplet before it may write its error log there, and the file
     // itself cannot say: the droplet's own earlier log can be sitting at that very path (#15869
@@ -392,6 +382,16 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
             other => return Err(bad(cmd, format!("\"errors\" is \"stop\" or \"log\", not `{other}`"))),
         },
         Some(_) => return Err(bad(cmd, "\"errors\" must be \"stop\" or \"log\"")),
+    }
+    // The dialog's Play checkboxes are saved with the droplet, which hands them to each run.
+    for k in DROPLET_PLAY_OPTIONS {
+        match p.get(k) {
+            None | Some(Value::Null) => {}
+            Some(Value::Bool(on)) => {
+                options.insert(k.into(), json!(on));
+            }
+            Some(_) => return Err(bad(cmd, format!("\"{k}\" must be true or false"))),
+        }
     }
     let mut droplet = json!({"photocraftDroplet": 1, "name": name, "action": {"name": name, "steps": steps_json}, "options": options});
     if !called.is_empty() {
@@ -792,7 +792,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"errors":"stop|log"? (saved with the droplet as Batch's stopOnError and errorLog: stop ends a run at the first failing file, log goes on and writes the file),"errorLog":path? (with errors "log": the log the run writes; blank or absent writes none),"overrideOpen":bool?,"includeSubfolders":bool?,"suppressOpenOptions":bool?,"suppressWarnings":bool? (the Play options, saved in the droplet and used by each run),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`; a choice that was given is saved with the droplet, so a later run knows to keep its errorLog off that file)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"overrideOpen":bool?,"includeSubfolders":bool?,"suppressOpenOptions":bool?,"suppressWarnings":bool? (the Play options, saved in the droplet and used by each run),"errors":"stop|log"? (saved with the droplet as Batch's stopOnError and errorLog: stop ends a run at the first failing file, log goes on and writes the file),"errorLog":path? (with errors "log": the log the run writes; blank or absent writes none),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`; a choice that was given is saved with the droplet, so a later run knows to keep its errorLog off that file)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
@@ -800,7 +800,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (a folder gives its own images, or with the droplet's includeSubfolders also its subfolders' depth first; results are written flat into output, a later one replacing an earlier one of the same name; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet, refused through errorLogError when the path names a dropped input, the droplet file, the .command launcher saved with it or any output this run planned, including one whose entry failed)"##,
+            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (a folder gives its own images, or with the droplet's includeSubfolders also its subfolders' depth first; results are written flat into output, a later one replacing an earlier one of the same name; an input whose output name was already written in the run goes to errors; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet, refused through errorLogError when the path names a dropped input, the droplet file, the .command launcher saved with it or any output this run planned, including one whose entry failed)"##,
             native,
             run_droplet
         ),
