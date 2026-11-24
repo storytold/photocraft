@@ -351,7 +351,9 @@ fn committed_key(app: &PhotocraftApp) -> Option<(HistKey, ToneSpace, HistSource)
         Some((d, r, k)) if d == doc && r == revision => k,
         _ => tone::selection_key(&st.doc),
     };
-    let source_tag = tone::tag(source, space, HistScope::Selection, sel);
+    // A tile that fails to read counts as zeros, and as its pixels again once it reads, without a new revision: the
+    // key follows the scratch read-error generation too (`crate::scratch_reads`).
+    let source_tag = crate::scratch_reads::with(tone::tag(source, space, HistScope::Selection, sel));
     Some((HistKey { doc, revision, source: source_tag, preview: 0, max_level }, space, source))
 }
 
@@ -640,6 +642,13 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
             (CommandRef::from(command), state)
         })
         .collect()
+}
+
+/// [`command_states`], derived from the panel's settings and whether a document with a selection is open.
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let active = app.session.active();
+    let facts = (&app.ui.histogram, active.is_some(), active.is_some_and(|st| st.doc.selection.is_some()));
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
 }
 
 /// Runs a scope command the menu or a key fired: the settings change, then they persist; Uncached Refresh recounts.
