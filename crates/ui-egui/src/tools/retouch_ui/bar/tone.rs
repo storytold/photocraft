@@ -59,6 +59,8 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     }
     // The cell writes only on a commit, so a shared fraction is not rounded (#12650).
     let strength = number(tl!("Strength"), &mut o.strength, 1.0..=100.0).whole().unit("%").show(ui).out_of_range;
+    let angle = if tool == Tool::Blur { blur_angle(ui, app) } else { None };
+    let o = &mut app.ui.tool_options;
     if let Some(all) = o.sample_all.slot(tool) {
         check(ui, tl!("Sample All Layers"), all, true, None);
     }
@@ -68,7 +70,17 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     if tool == Tool::Smudge {
         check(ui, tl!("Finger Painting"), &mut o.finger_painting, true, None);
     }
-    strength
+    strength.or(angle)
+}
+
+/// The Blur bar edits the active tool's brush, the same brush used by Brush Settings (#12647).
+fn blur_angle(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let before = (*app.session.tools.brush).clone();
+    let mut after = before.clone();
+    let angle = crate::eraser_ui::brush_angle_field(&mut after.angle).show(ui);
+    let key = angle.events.iter().find_map(|event| crate::history_keys::coalesce("brush", event));
+    crate::brush_panel::commit_keyed(app, &before, &after, key);
+    angle.out_of_range
 }
 
 /// The options of Color Replacement.
@@ -97,3 +109,7 @@ pub(super) fn color_replacement(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> O
     check(ui, tl!("Anti-alias"), &mut o.cr_anti_alias, true, Some(tl!("Anti-alias brush application")));
     tolerance
 }
+
+#[cfg(test)]
+#[path = "../../../blur_bar_angle_tests.rs"]
+mod blur_bar_angle_tests;
