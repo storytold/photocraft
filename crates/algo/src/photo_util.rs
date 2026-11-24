@@ -326,6 +326,7 @@ impl Rng {
 }
 
 /// Integer hash → `0..1` (position-keyed noise, independent of tiling).
+#[cfg(test)]
 pub(crate) fn hash01(x: i64, y: i64, seed: u64) -> f32 {
     let mut z = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) ^ seed.wrapping_mul(0x1656_67B1_9E37_79F9);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -337,6 +338,7 @@ pub(crate) fn hash01(x: i64, y: i64, seed: u64) -> f32 {
 pub(crate) use photocraft_color::convert::{linear_to_srgb, srgb_to_linear};
 
 /// Bilinear sample of channel `c` of a `w × h × ch` buffer, clamped to the edges.
+#[cfg(test)]
 pub(crate) fn bilinear(buf: &[f32], w: usize, h: usize, ch: usize, c: usize, x: f32, y: f32) -> f32 {
     let x = x.clamp(0.0, (w - 1) as f32);
     let y = y.clamp(0.0, (h - 1) as f32);
