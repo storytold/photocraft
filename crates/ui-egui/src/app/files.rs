@@ -466,6 +466,8 @@ impl PhotocraftApp {
                         | "tiffCompression"
                         | "tiffTransparency"
                         | "tiffPyramid"
+                        | "tiffByteOrder"
+                        | "tiffPixelOrder"
                 )
             })
         {

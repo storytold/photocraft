@@ -2021,6 +2021,42 @@ fn tiff_options_choose_compression_transparency_and_pyramid() {
     }
 }
 
+/// TIFF Options › Byte Order and Pixel Order from the command line (#15908): `--tiff-byte-order
+/// little|big` and `--tiff-pixel-order interleaved|per-channel`; every combination opens to the same
+/// image, and a bad value is a usage error that writes nothing.
+#[test]
+fn tiff_options_choose_byte_and_pixel_order() {
+    let d = tmp("tiff-order");
+    let a = d.join("a.png");
+    write_png(&a, 50, 40, 3);
+    let mut first = None;
+    for (flags, little, planar) in [
+        (&[][..], true, false),
+        (&["--tiff-byte-order", "big"][..], false, false),
+        (&["--tiff-pixel-order", "per-channel", "--tiff-compression", "lzw"][..], true, true),
+        (&["--tiff-byte-order", "big", "--tiff-pixel-order", "per-channel", "--tiff-compression", "zip"][..], false, true),
+        (&["--tiff-byte-order", "little", "--tiff-pixel-order", "interleaved"][..], true, false),
+    ] {
+        let out = d.join("a.tif");
+        ok(bin().arg("convert").arg(&a).arg(&out).args(flags));
+        let bytes = std::fs::read(&out).unwrap();
+        let info = photocraft_codecs::tiff_info(&bytes).unwrap();
+        assert_eq!((info.little_endian, info.pages[0].planar), (little, planar), "{flags:?}");
+        let px = photocraft_codecs::decode(&bytes).unwrap().data().to_vec();
+        assert_eq!(first.get_or_insert_with(|| px.clone()), &px, "{flags:?}");
+    }
+    for (flag, bad, expected) in
+        [("--tiff-byte-order", "mac", "expected little or big"), ("--tiff-pixel-order", "perChannel", "expected interleaved or per-channel")]
+    {
+        let out = d.join("bad.tif");
+        let o = bin().arg("convert").arg(&a).arg(&out).args([flag, bad]).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "{flag} {bad}");
+        assert!(err.contains(flag) && err.contains(expected), "{flag} {bad}: {err}");
+        assert!(!out.exists(), "{flag} {bad} wrote a file");
+    }
+}
+
 #[test]
 fn info_detail_adds_text_runs_and_antialiasing() {
     fn type_layer(doc: &Value) -> Option<&Value> {

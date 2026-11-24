@@ -684,3 +684,25 @@ fn tiff_options_reach_the_written_file() {
     assert_eq!(info.pages.iter().map(|p| (p.width, p.compression)).collect::<Vec<_>>(), [(200, 5), (100, 5), (50, 5)]);
     assert!(!photocraft_codecs::decode(&bytes).unwrap().layout().has_alpha());
 }
+
+/// TIFF Options › Byte Order and Pixel Order in `ExportSettings` reach the file the app writes:
+/// big-endian writes `MM`, Per Channel one plane per channel, and the image reads back the same.
+#[test]
+fn tiff_byte_and_pixel_order_reach_the_written_file() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48, "background": "white"})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    let plain = photocraft_io::export(&doc, "t.tif", &export_options(&photocraft_ui_egui::ExportSettings::default())).unwrap().bytes;
+    assert!(plain.starts_with(b"II"));
+    let settings = photocraft_ui_egui::ExportSettings {
+        tiff_compression: photocraft_codecs::TiffCompression::Deflate,
+        tiff_byte_order: photocraft_codecs::TiffByteOrder::BigEndian,
+        tiff_pixel_order: photocraft_codecs::TiffPixelOrder::PerChannel,
+        ..Default::default()
+    };
+    let bytes = photocraft_io::export(&doc, "t.tif", &export_options(&settings)).unwrap().bytes;
+    assert!(bytes.starts_with(b"MM"));
+    let info = photocraft_codecs::tiff_info(&bytes).unwrap();
+    assert!(!info.little_endian && info.pages[0].planar && info.pages[0].compression == 8);
+    assert_eq!(photocraft_codecs::decode(&bytes).unwrap().data(), photocraft_codecs::decode(&plain).unwrap().data());
+}

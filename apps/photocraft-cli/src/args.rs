@@ -16,7 +16,7 @@ use clap::error::ErrorKind;
 use clap::parser::ValueSource;
 use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use photocraft_automation::args::{AutomationArgs, ControlArgs, blank_env_is_unset, conflict, control_port, name_env_vars};
-use photocraft_codecs::{JpegFormat, TiffCompression};
+use photocraft_codecs::{JpegFormat, TiffByteOrder, TiffCompression, TiffPixelOrder};
 use photocraft_io::{DdsCompression, DpxBits, TgaBits, XmpEmbed};
 use serde_json::Value;
 
@@ -64,6 +64,12 @@ pub(crate) struct ExportArgs {
     /// Also write a TIFF image pyramid: half-size copies after the full image
     #[arg(long)]
     pub(crate) tiff_pyramid: bool,
+    /// TIFF byte order: little (little-endian, the default) or big (big-endian)
+    #[arg(long, value_name = "little|big", value_parser = tiff_byte_order)]
+    pub(crate) tiff_byte_order: Option<TiffByteOrder>,
+    /// TIFF pixel order: interleaved (the default) or per-channel (each channel stored on its own)
+    #[arg(long, value_name = "interleaved|per-channel", value_parser = tiff_pixel_order)]
+    pub(crate) tiff_pixel_order: Option<TiffPixelOrder>,
     /// A TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as its
     /// alpha, 24 none. Without it: 32 with an alpha channel or transparency, else 24
     #[arg(long, value_name = "24|32", value_parser = tga_bits)]
@@ -338,6 +344,10 @@ enum ValueError {
     DdsCompression,
     #[error("expected none, lzw or zip")]
     TiffCompression,
+    #[error("expected little or big")]
+    TiffByteOrder,
+    #[error("expected interleaved or per-channel")]
+    TiffPixelOrder,
     #[error("expected baseline, optimized or progressive")]
     JpegFormat,
     #[error("expected none or all")]
@@ -411,6 +421,19 @@ fn tiff_compression(s: &str) -> Result<TiffCompression, ValueError> {
         "lzw" => Ok(TiffCompression::Lzw),
         "zip" => Ok(TiffCompression::Deflate),
         _ => Err(ValueError::TiffCompression),
+    }
+}
+
+fn tiff_byte_order(s: &str) -> Result<TiffByteOrder, ValueError> {
+    TiffByteOrder::parse(s).ok_or(ValueError::TiffByteOrder)
+}
+
+/// The CLI spells Per Channel as a flag value (`per-channel`), not the script's `perChannel`.
+fn tiff_pixel_order(s: &str) -> Result<TiffPixelOrder, ValueError> {
+    match s {
+        "interleaved" => Ok(TiffPixelOrder::Interleaved),
+        "per-channel" => Ok(TiffPixelOrder::PerChannel),
+        _ => Err(ValueError::TiffPixelOrder),
     }
 }
 

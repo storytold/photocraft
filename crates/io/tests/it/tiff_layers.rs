@@ -106,6 +106,37 @@ fn every_compression_keeps_the_layers() {
     }
 }
 
+/// TIFF Options › Byte Order and Pixel Order: a layered TIFF written big-endian or per channel
+/// carries its layer data in the file's byte order and opens to the same document.
+#[test]
+fn every_byte_and_pixel_order_keeps_the_layers() {
+    use photocraft_codecs::{TiffByteOrder, TiffCompression, TiffPixelOrder};
+    for (mode, depth) in
+        [(ColorMode::Rgb, SampleType::U8), (ColorMode::Rgb, SampleType::U16), (ColorMode::Grayscale, SampleType::F32), (ColorMode::Cmyk, SampleType::U8)]
+    {
+        let d = gen_doc(mode, depth, Features::PIXELS);
+        for byte_order in [TiffByteOrder::LittleEndian, TiffByteOrder::BigEndian] {
+            for pixel_order in [TiffPixelOrder::Interleaved, TiffPixelOrder::PerChannel] {
+                let case = format!("{mode:?} {depth:?} {byte_order:?} {pixel_order:?}");
+                let mut opts = ExportOptions { tiff_layers: true, ..Default::default() };
+                opts.encode.tiff_byte_order = byte_order;
+                opts.encode.tiff_pixel_order = pixel_order;
+                opts.encode.tiff_compression = TiffCompression::Lzw;
+                let r = export(&d, "x.tif", &opts).unwrap_or_else(|e| panic!("{case}: {e}"));
+                assert_eq!(&r.bytes[..2], if byte_order.is_little() { b"II" } else { b"MM" }, "{case}");
+                let info = photocraft_codecs::tiff_info(&r.bytes).unwrap();
+                assert_eq!(info.pages[0].planar, pixel_order == TiffPixelOrder::PerChannel, "{case}");
+                let (_, layers) = tags(&r.bytes);
+                let (isd, w) = ImageSourceData::from_bytes(&layers.expect("layer data")).expect("parse layer data");
+                assert!(w.is_empty(), "{case}: {w:?}");
+                assert_eq!(isd.byte_order, if byte_order.is_little() { ByteOrder::Little } else { ByteOrder::Big }, "{case}");
+                let back = import("x.tif", &r.bytes).unwrap_or_else(|e| panic!("{case}: {e}")).document;
+                assert_docs_eq(&d, &back);
+            }
+        }
+    }
+}
+
 /// The Artist tag's text, and the bytes every EXIF assertion looks for.
 const ARTIST: &[u8] = b"fixture-artist";
 

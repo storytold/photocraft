@@ -3999,6 +3999,55 @@ fn save_a_copy_writes_the_tiff_compression_asked_for() {
     }
 }
 
+/// #15908: `tiffByteOrder` (TIFF Options › Byte Order: "little", "big") and `tiffPixelOrder`
+/// ("interleaved", "perChannel") pick how a TIFF is written; unset, little-endian and
+/// interleaved. Every combination opens to the same image. Anything else is refused before
+/// anything is written.
+#[test]
+fn save_a_copy_writes_the_tiff_byte_and_pixel_order_asked_for() {
+    let dir = tmp("tiff-order");
+    let mut first = None;
+    for (params, little, planar) in [
+        (json!({}), true, false),
+        (json!({"tiffByteOrder": "little", "tiffPixelOrder": "interleaved"}), true, false),
+        (json!({"tiffByteOrder": "big"}), false, false),
+        (json!({"tiffPixelOrder": "perChannel", "tiffCompression": "lzw"}), true, true),
+        (json!({"tiffByteOrder": "big", "tiffPixelOrder": "perChannel", "tiffCompression": "zip"}), false, true),
+        (json!({"tiffByteOrder": null, "tiffPixelOrder": null}), true, false),
+    ] {
+        let mut s = session(12, 6, 8);
+        let out = join(&dir, "a.tif");
+        let mut p = params.clone();
+        p["path"] = json!(out);
+        s.execute("file.saveACopy", p).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        let info = photocraft_codecs::tiff_info(&bytes).unwrap();
+        assert_eq!((info.little_endian, info.pages[0].planar), (little, planar), "{params}");
+        let doc = photocraft_io::import("a.tif", &bytes).unwrap().document;
+        assert_eq!(doc.size, photocraft_geom::Size::new(12, 6));
+        let px = photocraft_codecs::decode(&bytes).unwrap().data().to_vec();
+        assert_eq!(first.get_or_insert_with(|| px.clone()), &px, "{params}");
+    }
+    let mut s = session(8, 8, 8);
+    let state = |s: &Session| s.active().map(|st| (st.revision, st.path.clone(), st.is_dirty()));
+    let before = state(&s);
+    for bad in [
+        json!({"tiffByteOrder": "mac"}),
+        json!({"tiffByteOrder": "BIG"}),
+        json!({"tiffByteOrder": 1}),
+        json!({"tiffPixelOrder": "planar"}),
+        json!({"tiffPixelOrder": false}),
+    ] {
+        let out = join(&dir, "bad.tif");
+        let mut p = bad.clone();
+        p["path"] = json!(out);
+        let r = s.execute("file.saveACopy", p);
+        assert!(matches!(r, Err(EngineError::BadParams { .. })), "{bad}: {r:?}");
+        assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing written");
+        assert_eq!(state(&s), before, "{bad}: the document is as it was");
+    }
+}
+
 /// #8827: `tiffPyramid` writes reduced-resolution levels after the image and `tiffTransparency`
 /// false composites a transparent document over white. Bad values are refused before anything is
 /// written.

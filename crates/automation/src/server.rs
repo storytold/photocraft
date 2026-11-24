@@ -207,6 +207,13 @@ pub struct SaveParams {
     /// TIFF: Save Image Pyramid, half-size copies after the full image.
     #[serde(default, rename = "tiffPyramid")]
     pub tiff_pyramid: bool,
+    /// TIFF: Byte Order, "little" (little-endian, `II`; the default) or "big" (big-endian, `MM`).
+    #[serde(default, rename = "tiffByteOrder")]
+    pub tiff_byte_order: Option<String>,
+    /// TIFF: Pixel Order, "interleaved" (the default) or "perChannel" (each channel stored on its
+    /// own).
+    #[serde(default, rename = "tiffPixelOrder")]
+    pub tiff_pixel_order: Option<String>,
     /// TGA: 24 or 32 bits per pixel. 32 writes the alpha channel (or else the transparency) as the
     /// alpha, 24 none. Unset: 32 with an alpha channel or transparency, else 24.
     #[serde(default, rename = "tgaBits")]
@@ -1302,6 +1309,14 @@ impl PhotocraftMcp {
             Ok(c) => c,
             Err(e) => return Ok(fail(e.to_string())),
         };
+        let tiff_byte_order = match photocraft_engine::file_cmds::tiff_byte_order_param(&json!({"tiffByteOrder": p.tiff_byte_order}), "save") {
+            Ok(o) => o,
+            Err(e) => return Ok(fail(e.to_string())),
+        };
+        let tiff_pixel_order = match photocraft_engine::file_cmds::tiff_pixel_order_param(&json!({"tiffPixelOrder": p.tiff_pixel_order}), "save") {
+            Ok(o) => o,
+            Err(e) => return Ok(fail(e.to_string())),
+        };
         if let Some(q) = p.quality.filter(|q| !(1..=100).contains(q)) {
             return Ok(fail(format!("`quality` must be a whole number from 1 to 100, got {q}")));
         }
@@ -1313,8 +1328,8 @@ impl PhotocraftMcp {
         if let Some(b) = self.bridge_client() {
             // The bridge forwards to the running app's `app.save`, which takes only an optional
             // path (without one it writes back to the document's own layered file, as headless
-            // does), the Targa bits, the DDS options, the TIFF compression, transparency and
-            // pyramid, and Maximize Compatibility, so the other options are headless-only. Saying
+            // does), the Targa bits, the DDS options, the TIFF compression, transparency,
+            // pyramid, byte order and pixel order, and Maximize Compatibility, so the other options are headless-only. Saying
             // so beats saving with defaults while the caller believes their quality or format was
             // applied.
             let unsupported: Vec<&str> = [
@@ -1355,6 +1370,12 @@ impl PhotocraftMcp {
             if p.tiff_pyramid {
                 params["tiffPyramid"] = json!(true);
             }
+            if let Some(o) = tiff_byte_order {
+                params["tiffByteOrder"] = json!(o.name());
+            }
+            if let Some(o) = tiff_pixel_order {
+                params["tiffPixelOrder"] = json!(o.name());
+            }
             if let Some(maximize) = p.maximize_compatibility {
                 params["maximizeCompatibility"] = json!(maximize);
             }
@@ -1375,6 +1396,8 @@ impl PhotocraftMcp {
                     opts.encode.tiff_compression = c;
                 }
                 opts.encode.tiff_pyramid = p.tiff_pyramid;
+                opts.encode.tiff_byte_order = tiff_byte_order.unwrap_or_default();
+                opts.encode.tiff_pixel_order = tiff_pixel_order.unwrap_or_default();
                 opts.encode.dds = photocraft_io::DdsOptions { compression: dds_compression.unwrap_or_default(), mipmaps: p.dds_mipmaps };
                 if let Some(maximize) = p.maximize_compatibility {
                     opts.psd_maximize_compatibility = maximize;

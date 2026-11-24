@@ -5,7 +5,7 @@
 //! PSD importer, so everything the PSD path understands (groups, masks, effects, type, shapes,
 //! smart objects, adjustment and fill layers, alpha channels, paths, guides) opens from a TIFF
 //! as well. Export runs the PSD exporter and stores its layer section and resources in the
-//! tags, in the byte order the TIFF encoder writes, next to the flattened composite the TIFF
+//! tags, in the byte order the TIFF is written in, next to the flattened composite the TIFF
 //! itself carries.
 
 use std::sync::Arc;
@@ -384,7 +384,8 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     // A cancelled conversion stops early with an incomplete model: never encode it.
     ctl.check().map_err(|_| IoError::Cancelled)?;
     warnings.extend(w);
-    let order = if codecs::tiff_writes_little_endian() { ByteOrder::Little } else { ByteOrder::Big };
+    // The layer data is in the byte order the file is written in (TIFF Options › Byte Order).
+    let order = if opts.encode.tiff_byte_order.is_little() { ByteOrder::Little } else { ByteOrder::Big };
     let mut has_alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
     // The layers move out of the model rather than being copied, and are freed once written
     // (#6607); the model keeps its header, resources and composite for the image below.

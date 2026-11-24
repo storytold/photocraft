@@ -42,6 +42,10 @@ pub(crate) struct SaveOpts {
     pub preserve_alpha: bool,
     /// TIFF: Save Image Pyramid (`"tiffPyramid": bool`); unset, off.
     pub tiff_pyramid: bool,
+    /// TIFF: Byte Order (`"tiffByteOrder": "little" | "big"`); unset, little-endian.
+    pub tiff_byte_order: photocraft_codecs::TiffByteOrder,
+    /// TIFF: Pixel Order (`"tiffPixelOrder": "interleaved" | "perChannel"`); unset, interleaved.
+    pub tiff_pixel_order: photocraft_codecs::TiffPixelOrder,
     /// DDS: the compression and whether to write the mip chain (`"ddsCompression"`,
     /// `"ddsMipmaps"`); unset, uncompressed without mipmaps.
     pub dds: photocraft_io::DdsOptions,
@@ -74,6 +78,8 @@ impl Default for SaveOpts {
             tiff_transparency: None,
             preserve_alpha: false,
             tiff_pyramid: false,
+            tiff_byte_order: photocraft_codecs::TiffByteOrder::LittleEndian,
+            tiff_pixel_order: photocraft_codecs::TiffPixelOrder::Interleaved,
             dds: photocraft_io::DdsOptions::default(),
             pdf_spot_plates: true,
             image_previews: true,
@@ -106,6 +112,8 @@ impl SaveOpts {
             tiff_transparency: tiff_bool_param(p, "tiffTransparency", cmd)?,
             preserve_alpha: false,
             tiff_pyramid: tiff_bool_param(p, "tiffPyramid", cmd)?.unwrap_or(false),
+            tiff_byte_order: tiff_byte_order_param(p, cmd)?.unwrap_or_default(),
+            tiff_pixel_order: tiff_pixel_order_param(p, cmd)?.unwrap_or_default(),
             dds: dds_param(p, cmd)?.unwrap_or_default(),
             pdf_spot_plates: pdf_spot_plates_param(p, cmd)?,
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
@@ -186,6 +194,34 @@ pub fn tiff_compression_param(p: &Value, cmd: &str) -> Result<Option<photocraft_
             Some("zip") => Ok(Some(TiffCompression::Deflate)),
             _ => Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("`tiffCompression` must be \"none\", \"lzw\" or \"zip\", got {v}") }),
         },
+    }
+}
+
+/// The TIFF byte order in `p` (`"tiffByteOrder": "little" | "big"`, TIFF Options › Byte Order:
+/// an `II` or an `MM` file; absent or null: unset, which writes little-endian).
+/// Anything else is a bad parameter of command `cmd`.
+pub fn tiff_byte_order_param(p: &Value, cmd: &str) -> Result<Option<photocraft_codecs::TiffByteOrder>> {
+    match p.get("tiffByteOrder") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_str()
+            .and_then(photocraft_codecs::TiffByteOrder::parse)
+            .map(Some)
+            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`tiffByteOrder` must be \"little\" or \"big\", got {v}") }),
+    }
+}
+
+/// The TIFF pixel order in `p` (`"tiffPixelOrder": "interleaved" | "perChannel"`, TIFF Options ›
+/// Pixel Order: the samples of each pixel together, or each channel on its own; absent or null:
+/// unset, which writes interleaved). Anything else is a bad parameter of command `cmd`.
+pub fn tiff_pixel_order_param(p: &Value, cmd: &str) -> Result<Option<photocraft_codecs::TiffPixelOrder>> {
+    match p.get("tiffPixelOrder") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_str()
+            .and_then(photocraft_codecs::TiffPixelOrder::parse)
+            .map(Some)
+            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`tiffPixelOrder` must be \"interleaved\" or \"perChannel\", got {v}") }),
     }
 }
 
@@ -284,6 +320,8 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
         opts.encode.tiff_compression = c;
     }
     opts.encode.tiff_pyramid = save.tiff_pyramid;
+    opts.encode.tiff_byte_order = save.tiff_byte_order;
+    opts.encode.tiff_pixel_order = save.tiff_pixel_order;
     if let Some(embed) = save.embed_icc {
         opts.encode.embed_icc = embed;
     }

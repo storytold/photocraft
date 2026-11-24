@@ -482,6 +482,47 @@ async fn bridge_doc_save_forwards_tiff_options() {
     app.abort();
 }
 
+/// TIFF Options › Byte Order and Pixel Order (#15908) reach the app's `app.save` through the
+/// bridge; a bad value is refused before anything is sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn bridge_doc_save_forwards_tiff_byte_and_pixel_order() {
+    let (addr, app) = fake_app().await;
+    let client = connect(PhotocraftMcp::bridge(&addr, CONTROL_TOKEN).unwrap()).await;
+    let saved = json_of(&call(&client, "doc_save", json!({"path": "out.tif", "tiffByteOrder": "big", "tiffPixelOrder": "perChannel"})).await);
+    assert_eq!(saved, json!({"saved": {"path": "out.tif", "tiffByteOrder": "big", "tiffPixelOrder": "perChannel"}}));
+    for bad in [json!({"path": "out.tif", "tiffByteOrder": "motorola"}), json!({"path": "out.tif", "tiffPixelOrder": "planar"})] {
+        let r = call(&client, "doc_save", bad.clone()).await;
+        assert_eq!(r.is_error, Some(true), "{bad}: {}", text(&r));
+    }
+    client.cancel().await.unwrap();
+    app.abort();
+}
+
+/// Headless `doc_save`/`doc_export` write the TIFF Byte Order and Pixel Order asked for
+/// (#15908); unset, little-endian and interleaved.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_doc_save_writes_tiff_byte_and_pixel_order() {
+    let dir = tmp("tiff-order");
+    let client = connect(headless_in(&dir)).await;
+    call(&client, "doc_new", json!({"width": 40, "height": 30, "background": "white"})).await;
+    for (tool, params, little, planar) in [
+        ("doc_export", json!({"path": "plain.tif"}), true, false),
+        ("doc_export", json!({"path": "big.tif", "tiffByteOrder": "big"}), false, false),
+        ("doc_save", json!({"path": "planes.tif", "tiffPixelOrder": "perChannel", "tiffCompression": "zip"}), true, true),
+    ] {
+        let r = call(&client, tool, params.clone()).await;
+        assert_ne!(r.is_error, Some(true), "{params}: {}", text(&r));
+        let bytes = std::fs::read(dir.join(params["path"].as_str().unwrap())).unwrap();
+        let info = photocraft_codecs::tiff_info(&bytes).unwrap();
+        assert_eq!((info.little_endian, info.pages[0].planar), (little, planar), "{params}");
+    }
+    let r = call(&client, "doc_export", json!({"path": "bad.tif", "tiffByteOrder": "mac"})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    assert!(!dir.join("bad.tif").exists());
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
 /// Headless `doc_save`/`doc_export` write the TIFF Options asked for (#8827): compression,
 /// Save Transparency and Save Image Pyramid.
 #[tokio::test(flavor = "multi_thread")]
