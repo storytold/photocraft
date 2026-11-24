@@ -715,6 +715,22 @@ fn batch_with(d: &Path, input: &Path, name: &str, actions: &str, extra: &[&str])
     bin().args(["batch", "--actions"]).arg(&file).arg("--in").arg(input).arg("--out").arg(d.join(name)).args(extra).output().unwrap()
 }
 
+#[test]
+fn batch_error_log_cannot_replace_its_actions_file() {
+    let d = tmp("batch-log-actions-collision");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let actions = r#"[{"command":"image.adjustments.invert"}]"#;
+    let log = input.join("../actions.json");
+
+    let result = batch_with(&d, &input, "actions", actions, &["--error-log", &log.to_string_lossy()]);
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{error}");
+    assert!(error.contains("--error-log") && error.contains("--actions"), "{error}");
+    assert_eq!(std::fs::read(d.join("actions.json")).unwrap(), actions.as_bytes());
+    assert!(!d.join("actions").exists(), "the output folder must not be created");
+}
+
 /// #489: `batch --actions` takes `[id, params]` steps and a droplet's steps, with the same results
 /// as the object form; a malformed step fails before anything is written.
 #[test]
@@ -1411,6 +1427,7 @@ fn a_non_unicode_path_is_taken_and_non_unicode_text_is_a_usage_error() {
 #[test]
 fn batch_plays_a_photoshop_actions_file() {
     use photocraft_engine::actions_cmds::{Action, ActionStep};
+    photocraft_engine::install().unwrap();
     let d = tmp("atn");
     let input = d.join("in");
     std::fs::create_dir_all(&input).unwrap();

@@ -26,6 +26,7 @@ macro_rules! tl {
 }
 mod brush_mode_menu;
 pub mod canvas;
+mod channel_titles;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
 pub mod dialogs;
@@ -56,13 +57,13 @@ pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
+pub(crate) mod scratch_reads;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
 pub mod tone;
 pub(crate) mod tool_memory;
 pub mod updates_ui;
-pub mod work_area;
 
 use std::collections::HashMap;
 
@@ -159,6 +160,7 @@ pub use dialogs::new_guide_ui;
 pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
+pub use dialogs::paragraph_text_size;
 pub(crate) use dialogs::pattern_fill_ui;
 pub use dialogs::pdf_import_ui;
 pub use dialogs::preset_group_prompt;
@@ -240,13 +242,15 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationLocateFn, AutomationOpenPcraftFn, AutomationReadFn,
     AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn,
     CursorPosFn, DiscardAutosaveFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp,
-    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, RecoverFn,
-    Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox,
+    PrimaryDownFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn,
+    WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::cjk_fonts;
 pub use text::direction;
 pub use text::served_fonts;
+pub use tools::adjustment_brush;
 use tools::align_bar;
 pub use tools::analysis;
 pub use tools::artboard_tool;
@@ -301,7 +305,7 @@ use tools::type_transform;
 pub use tools::vector_ui;
 
 /// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
-type InfoSampleKey = (i32, i32, u64, u32, u32);
+type InfoSampleKey = (DocId, i32, i32, u64, u32, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -424,6 +428,9 @@ pub struct PhotocraftApp {
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
+    /// Where a floating document window's title bar dropped docks its document, in the main window's points, as of
+    /// the last frame: the document tab strip, or a band of its height at the top of the document area (#16415).
+    pub(crate) dock_drop_rect: Option<egui::Rect>,
     /// The window's one egui context, for code without one in hand: SAVED-tier reads and writes,
     /// the Frame tool's transforms from pointer events, and the mapping and panels that read the
     /// canvas's zoom ease (`document_display::shown_camera`). Read it through [`Self::ctx`].
@@ -609,6 +616,7 @@ pub struct PhotocraftApp {
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
     /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
+    info_cmyk_sample: Option<(InfoSampleKey, Option<[f32; 4]>)>,
     /// Move tool marquee selecting layers (`move_box`).
     pub(crate) layer_box: Option<move_box::LayerBox>,
     /// Pen paths finished, which Undo back to their finish gives back to the Pen
@@ -726,6 +734,8 @@ struct InputTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod artboards_to_files_background_tests;
+#[cfg(test)]
 mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
@@ -735,6 +745,8 @@ mod cam_no_pixels_alert_tests;
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod menu_automate_groups_tests;
+#[cfg(test)]
+mod patch_rasterize_prompt_tests;
 #[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
@@ -975,6 +987,8 @@ mod layer_thumb_bounds_tests;
 mod mask_thumb_refresh_tests;
 #[cfg(test)]
 mod menu_floor_trials;
+#[cfg(test)]
+mod scratch_read_keys_tests;
 
 #[cfg(test)]
 mod new_doc_remember_tests;
@@ -1088,3 +1102,6 @@ mod red_eye_context_menu_tests;
 
 #[cfg(test)]
 mod clone_stamp_indexed_bar_tests;
+
+#[cfg(test)]
+mod place_visible_centre_tests;

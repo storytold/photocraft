@@ -276,12 +276,13 @@ pub(crate) fn registered(panel: &str) -> bool {
 }
 
 /// What may happen to `panel`: the canvas stays docked and open and takes no tabs, but panels open beside it; the
-/// toolbar never collapses to icons and never shares its column or tab group; every other panel moves, floats and
-/// closes. A locked workspace narrows these itself.
+/// toolbar never collapses to icons, never shares its column or tab group and docks only in dock columns, so it is
+/// always a vertical strip, never one across the window (#12517); every other panel moves, floats and closes. A
+/// locked workspace narrows these itself.
 pub(crate) fn permissions(panel: &str) -> Permissions {
     match panel {
         CANVAS => Permissions::PROTECTED.accepts_splits(true),
-        TOOLBAR => Permissions::ALL.collapses(false).shares_column(false),
+        TOOLBAR => Permissions::ALL.collapses(false).shares_column(false).docks_outside_columns(false),
         _ => Permissions::ALL,
     }
 }

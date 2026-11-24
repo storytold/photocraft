@@ -14,6 +14,7 @@ use craft::ui::patterns::dock::{HostedDeleteWorkspace, HostedNewWorkspace, NewWo
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamLayout, ParamResult};
 use craft::ui::runtime::commands::CommandState;
 use craft::ui::value_drag::SliderScale;
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::prefs::Preferences;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -380,7 +381,7 @@ fn open_extras(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 fn open_preview32(app: &mut PhotocraftApp) -> Option<Result<Value, String>> {
     let d = app.session.active()?;
-    let h = app.session.color.hdr.get(&d.doc.id).copied().unwrap_or_default();
+    let h = app.session.color().hdr.get(&d.doc.id).copied().unwrap_or_default();
     let method = if h.highlight_compression { "highlightCompression" } else { "exposureGamma" };
     let fields = DialogFields::from_pairs([
         ("method", FieldValue::Text(method.into())),
@@ -624,7 +625,7 @@ mod tests {
         }
         crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
         let d = app.session.active().unwrap().doc.id;
-        assert_eq!((app.session.color.hdr[&d].exposure, app.session.color.hdr[&d].gamma), (1.5, 1.5));
+        assert_eq!((app.session.color().hdr[&d].exposure, app.session.color().hdr[&d].gamma), (1.5, 1.5));
 
         // Highlight Compression disables the two ranges.
         menu(&mut app, PREVIEW32, &json!({})).expect("handled").unwrap();
