@@ -113,15 +113,25 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut AnalysisTools, _respons
     }
     for event in state.sampler.take_events() {
         let result = match event {
-            SamplerEvent::Add { at, .. } => app.run("view.colorSamplers.add", json!({"x": at[0], "y": at[1]})),
+            SamplerEvent::Add { at, .. } => {
+                if app.session.active().is_some_and(|st| st.color_samplers.len() >= photocraft_engine::sampler_cmds::MAX_SAMPLERS) {
+                    open_max_samplers_alert(app);
+                    continue;
+                }
+                let r = app.run("view.colorSamplers.add", json!({"x": at[0], "y": at[1]}));
+                if r.is_ok() {
+                    reveal_info_panel(app);
+                }
+                r
+            }
             SamplerEvent::Move { index, to, .. } => app.run("view.colorSamplers.move", json!({"index": index, "x": to[0], "y": to[1]})),
             SamplerEvent::Remove { index, .. } => app.run("view.colorSamplers.delete", json!({"index": index})),
             _ => continue,
         };
         status_on_err(app, result);
     }
-    if let Some(toast) = state.sampler.take_error() {
-        crate::notices::post(app, toast.message.as_str().to_owned(), Vec::new(), toast.tone, None);
+    if let Some(_toast) = state.sampler.take_error() {
+        open_max_samplers_alert(app);
     }
     for event in std::mem::take(&mut state.count.events) {
         match event {
@@ -159,6 +169,28 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut AnalysisTools, _respons
             }
             NoteEvent::AskDelete { index } => super::note_alerts::ask_delete_note(app, index),
         }
+    }
+}
+
+/// The alert when the 11th Color Sampler is clicked (#11743).
+#[cfg(test)]
+pub const MAX_SAMPLERS_ALERT: &str = "Could not create a new sampler because the maximum number of samplers is 10.";
+
+/// Open the alert dialog when the Color Sampler limit is reached (#11743).
+fn open_max_samplers_alert(app: &mut PhotocraftApp) {
+    app.ui.status.clear();
+    app.ui.status_error = false;
+    let message = crate::i18n::fmt(
+        tl!("Could not create a new sampler because the maximum number of samplers is {max}."),
+        &[("max", &photocraft_engine::sampler_cmds::MAX_SAMPLERS.to_string())],
+    );
+    let _ = crate::dialogs::alerts::alert(app, message);
+}
+
+/// Open the closed Info panel when a Color Sampler point is placed (#11745).
+pub(crate) fn reveal_info_panel(app: &mut PhotocraftApp) {
+    if !crate::panel_docking::is_checked(app, "info") {
+        let _ = crate::panel_docking::show_panel(app, "info", Some(true));
     }
 }
 

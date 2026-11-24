@@ -156,7 +156,7 @@ fn mask_destination(s: &Session, p: &Value) -> Result<LayerId> {
 
 /// Move a layer's pixels, linked mask and type by whole pixels (vectors move via
 /// `vector_cmds::translate_vectors`).
-pub(crate) fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
+pub fn translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
     translate_layer_wrapped(doc, l, dx, dy, None);
 }
 

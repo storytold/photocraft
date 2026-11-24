@@ -508,6 +508,17 @@ pub struct TipCacheStats {
     pub limit: u64,
 }
 
+/// After brush preset `name` was deleted (Delete Brush Preset, or Edit › Presets › Preset Manager): the current
+/// brush no longer comes from a preset, and the library is saved.
+pub fn forget_deleted_preset(s: &mut Session, name: &str) {
+    if s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(name)) {
+        s.tools.current_preset = None;
+        // The remembered brush names the preset it was picked from: the name went away.
+        s.tools.brush_changed();
+    }
+    s.brush_presets_changed();
+}
+
 /// The session's preset store (a session slot of this crate): `None` keeps presets session-only, as
 /// in headless and test sessions. The same store holds the Actions list.
 pub trait PresetStoreExt {

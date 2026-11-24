@@ -718,6 +718,29 @@ fn style_click_does_not_mutate_document_until_confirm() {
     assert_eq!(layer_effects(&h.state().session).len(), 1);
 }
 
+/// #14977: a Satin the dialog creates starts at the measured factory values. The page's rows and
+/// their default table now live in the UI framework, whose Satin defaults are still 19 / 11 / 14;
+/// `specs` lays the app's engine defaults OVER that table, so the instance the page adds starts at
+/// the engine's 90 / 50 / 80.
+#[test]
+fn a_new_satin_in_the_dialog_starts_at_the_factory_values() {
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, Some(EffectKind::Satin.key())).unwrap();
+    let satin = first_of(&app, id, EffectKind::Satin);
+    let style = &draft(&app, id).style;
+    assert_eq!(
+        (num(style, satin, "angle"), num(style, satin, "distance"), num(style, satin, "size")),
+        (Some(90.0), Some(50.0), Some(80.0)),
+        "the new Satin page starts at the measured values"
+    );
+    assert_eq!(text(style, satin, "blend").as_deref(), Some("Multiply"), "blend mode");
+    assert_eq!(num(style, satin, "opacity"), Some(50.0), "opacity");
+    assert_eq!(param(style, satin, "invert"), Some(StyleValue::Bool(true)), "invert");
+    assert_eq!(param(style, satin, "antiAlias"), Some(StyleValue::Bool(true)), "anti-aliased");
+    cancel(&mut app, id);
+    assert!(layer_effects(&app.session).is_empty(), "Cancel added no effect");
+}
+
 /// #14944: the Outer Glow page is grouped Photoshop-style - Noise right under Opacity, the rows of
 /// the Structure, Elements and Quality blocks. The hosted page draws `specs()` rows in order, so
 /// the page order is pinned here; the group TITLES belong to the framework's page (craft-libs has

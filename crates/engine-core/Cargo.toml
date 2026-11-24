@@ -8,8 +8,6 @@ license.workspace = true
 workspace = true
 
 [features]
-# Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
-corpus = []
 # Exposes the allocation failpoints (`allocation::fail_next_for_test`) to other engine crates' tests; only dev-dependencies turn it on.
 failpoints = []
 

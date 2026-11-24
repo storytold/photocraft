@@ -7,7 +7,7 @@ use super::{Document, EngineError, Layer, LayerId, LayerMask, Result, SampleType
 /// `"background"` finds that name). A recorded `{"name":"Layer"}` uses the same lookup.
 /// `{"background":true}` targets the actual Background, independently of its name. `None`
 /// when the param is absent.
-pub(crate) fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> {
+pub fn explicit_layer(s: &Session, p: &Value) -> Result<Option<LayerId>> {
     let named = |name: &str| {
         let d = s.active().ok_or(EngineError::NoDocument)?;
         let layers = d.doc.walk();
@@ -65,7 +65,7 @@ pub(crate) fn layer_listing(doc: &Document) -> String {
 }
 
 /// The layer a command targets: [`explicit_layer`], else the active layer.
-pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
+pub fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
     match explicit_layer(s, p)? {
         Some(id) => Ok(id),
         None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
@@ -75,14 +75,14 @@ pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
 /// The active selection as the mask of a layer being created, or None without a selection.
 /// Photoshop masks a new adjustment or fill layer with the selection, so the adjustment acts on
 /// the selected area only (#1250). [`mask_new_layer`] then drops the selection (#8801).
-pub(crate) fn selection_mask(doc: &Document) -> Result<Option<LayerMask>> {
+pub fn selection_mask(doc: &Document) -> Result<Option<LayerMask>> {
     doc.selection.as_ref().map(|sel| mask_at_depth(LayerMask { surface: sel.clone(), ..LayerMask::reveal_all() }, doc.depth)).transpose()
 }
 
 /// New pixel masks use the document's depth, as PSD saves/imports do. Otherwise a later soft
 /// brush stroke quantizes differently depending on whether the document reopened as PSD or
 /// native. Converting a selection keeps its coverage and does not alter the selection itself.
-pub(crate) fn mask_at_depth(mut mask: LayerMask, depth: SampleType) -> Result<LayerMask> {
+pub fn mask_at_depth(mut mask: LayerMask, depth: SampleType) -> Result<LayerMask> {
     let format = mask.surface.format().with_sample(depth);
     if mask.surface.format() != format {
         mask.surface = mask.surface.try_convert(format)?;
