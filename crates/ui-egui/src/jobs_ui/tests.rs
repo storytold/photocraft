@@ -1361,8 +1361,9 @@ fn assert_deferred_native_view(app: &PhotocraftApp, id: photocraft_doc::DocId) {
     assert!(state.channel_view.layer_mask.is_some());
     assert!(state.channel_view.alpha_shown(0));
     assert_eq!(state.color_samplers, vec![[2., 3.]]);
-    assert_eq!(state.initial_path_selection, Some(1));
-    assert_eq!(state.initial_path_identity, Some(photocraft_io::initial_view::path_identity(&state.doc.paths[1])));
+    assert_eq!(app.ui.selected_path.as_deref(), Some("Saved chosen"));
+    assert!(state.initial_path_selection.is_none());
+    assert!(state.initial_path_identity.is_none());
     assert_eq!(state.protected_import_source.as_deref(), Some("/imports/deferred.xcf"));
     assert!(state.source_read_only && state.path.is_none() && !state.is_dirty());
     assert_eq!(state.history.past_len(), 0);
