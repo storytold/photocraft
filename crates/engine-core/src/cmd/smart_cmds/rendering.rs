@@ -540,13 +540,34 @@ pub(super) fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Resul
 }
 
 fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: Option<(String, Arc<Vec<u8>>)>) -> Result<Option<Surface>> {
+    Ok(render_capturing_source(doc, sm, ctx, snapshot)?.map(|rendered| rendered.surface))
+}
+
+struct RenderedSource {
+    surface: Surface,
+    snapshot: (String, Arc<Vec<u8>>),
+}
+
+/// Keep the exact source private until authorization and rendering both succeed. Refresh uses
+/// this same seam, so capturing a freshness baseline never reads ahead of filter authorization.
+fn render_capturing_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: Option<(String, Arc<Vec<u8>>)>) -> Result<Option<RenderedSource>> {
+    ctx.check()?;
     // A trusted UI render may have populated these stages. Check authority even on a hit.
     for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
         crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
     }
-    let Some((name, original)) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
-    check_historical_link(sm, &original)?;
-    let bytes = display_source(sm, &original);
+    ctx.check()?;
+    let Some(snapshot) = snapshot.or_else(|| source_bytes(&doc.metadata, &sm.source)) else { return Ok(None) };
+    ctx.check()?;
+    let surface = render_authorized_snapshot(doc, sm, ctx, &snapshot)?;
+    ctx.check()?;
+    Ok(Some(RenderedSource { surface, snapshot }))
+}
+
+fn render_authorized_snapshot(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapshot: &(String, Arc<Vec<u8>>)) -> Result<Surface> {
+    let (name, original) = snapshot;
+    check_historical_link(sm, original)?;
+    let bytes = display_source(sm, original);
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
     // Plain SVG uses the original strict vector path. Gzip sources use ordinary
     // file import and native-size pixels, as existing saved objects expect.
@@ -563,14 +584,14 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
         }
-        let surface = place_with_svg(&name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
+        let surface = place_with_svg(name, &bytes, doc, sm, is_svg, &mut |bytes, scale| svg_source_image_in(bytes, doc, scale))?;
         let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
         stack_cache::put(placed_key, &stage);
         Ok(stage)
     };
     let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).collect();
     if filters.is_empty() {
-        return Ok(Some(placed()?.surface));
+        return Ok(placed()?.surface);
     }
     let keys: Vec<StageKey> = filters
         .iter()
@@ -600,10 +621,10 @@ fn render_in_with_source(doc: &Document, sm: &SmartObject, ctx: &JobCtx, snapsho
         stack_cache::put(*key, &cur);
     }
     ctx.progress(1.0, "");
-    Ok(Some(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
+    Ok(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
         Some(m) => photocraft_compose::filter_mask::mix(&placed()?.surface, &cur.surface, m),
         None => cur.surface,
-    }))
+    })
 }
 
 /// Bytes held by rendered smart filter stages.
@@ -653,16 +674,13 @@ pub(super) fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
 
 fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
     let LayerContent::Smart(sm) = &mut l.content else { return Ok(false) };
-    let Some(source) = source_bytes(&doc.metadata, &sm.source) else { return Ok(false) };
-    let baseline = linked_source_baseline(sm, Some(&source));
-    match render_in_with_source(doc, sm, ctx, Some(source))? {
-        Some(px) => {
-            sm.cache = Some(px);
-            sm.linked_source_baseline = baseline;
-            Ok(true)
-        }
-        None => Ok(false),
-    }
+    let Some(rendered) = render_capturing_source(doc, sm, ctx, None)? else { return Ok(false) };
+    ctx.check()?;
+    let baseline = linked_source_baseline(sm, Some(&rendered.snapshot));
+    ctx.check()?;
+    sm.cache = Some(rendered.surface);
+    sm.linked_source_baseline = baseline;
+    Ok(true)
 }
 
 /// Re-renders the smart object `id` of `doc`.
@@ -693,7 +711,9 @@ pub(super) fn refresh_or_fail_from_source(doc: &mut Document, id: LayerId, ctx: 
     let LayerContent::Smart(object) = &mut layer.content else { return Err(other("the layer is not a smart object")) };
     let surface = render_in_with_source(doc, object, ctx, Some(source.clone()))?.ok_or_else(|| other("the smart object's contents could not be rendered"))?;
     ctx.check()?;
-    object.linked_source_baseline = linked_source_baseline(object, Some(&source));
+    let baseline = linked_source_baseline(object, Some(&source));
+    ctx.check()?;
+    object.linked_source_baseline = baseline;
     object.cache = Some(surface);
     let target = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     target.content = layer.content;
@@ -715,3 +735,68 @@ pub(super) fn refresh_or_fail_in(doc: &mut Document, id: LayerId, ctx: &JobCtx) 
 #[cfg(test)]
 #[path = "tests/source_work.rs"]
 mod source_work_tests;
+
+#[cfg(test)]
+mod refresh_authorization_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    thread_local! { static SOURCE_REQUESTS: Cell<usize> = const { Cell::new(0) }; }
+
+    fn gate(command: &str, _: &Value) -> Result<()> {
+        if command == "layer.smartObjects.updateModifiedContent" {
+            SOURCE_REQUESTS.with(|count| count.set(count.get() + 1));
+        }
+        if command == "image.adjustments.invert" {
+            return Err(other("filter denied before linked read"));
+        }
+        Ok(())
+    }
+
+    fn linked_layer(path: &std::path::Path) -> Layer {
+        let mut smart = SmartObject::new(SmartSource::Linked { path: path.to_str().unwrap().into() }, Affine::IDENTITY, Some(Surface::new(PixelFormat::RGBA8)));
+        smart.linked_source_baseline = Some(photocraft_doc::LinkedSourceBaseline { path: path.to_str().unwrap().into(), digest: [9; 32] });
+        Layer::new("Preserved linked pixels", LayerContent::Smart(smart))
+    }
+
+    #[test]
+    fn a_refused_visible_filter_precedes_refresh_source_read_and_baseline_capture() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("linked.svg");
+        std::fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#).unwrap();
+        let doc = Document::new("Refresh authority", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let mut layer = linked_layer(&path);
+        let LayerContent::Smart(smart) = &mut layer.content else { panic!("smart layer") };
+        smart.smart_filters.push(SmartFilter {
+            command: "image.adjustments.invert".into(),
+            params: serde_json::json!({}),
+            blend: BlendMode::Normal,
+            opacity: 1.,
+            visible: true,
+        });
+        let before = layer.clone();
+        SOURCE_REQUESTS.with(|count| count.set(0));
+        let _authority = crate::jobs::render_authorization_scope(Some(gate));
+        let error = refresh_layer_in(&doc, &mut layer, &JobCtx::new()).unwrap_err();
+        assert!(error.to_string().contains("filter denied"));
+        assert_eq!(SOURCE_REQUESTS.with(Cell::get), 0);
+        assert_eq!(layer, before);
+    }
+
+    #[test]
+    fn cancelled_refresh_does_not_request_linked_bytes_or_replace_its_baseline() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("linked.svg");
+        std::fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#).unwrap();
+        let doc = Document::new("Cancelled refresh", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        let mut layer = linked_layer(&path);
+        let before = layer.clone();
+        let ctx = JobCtx::new();
+        ctx.cancel();
+        SOURCE_REQUESTS.with(|count| count.set(0));
+        let _authority = crate::jobs::render_authorization_scope(Some(gate));
+        assert!(matches!(refresh_layer_in(&doc, &mut layer, &ctx), Err(EngineError::Cancelled)));
+        assert_eq!(SOURCE_REQUESTS.with(Cell::get), 0);
+        assert_eq!(layer, before);
+    }
+}
