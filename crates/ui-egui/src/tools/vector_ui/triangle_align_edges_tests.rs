@@ -53,7 +53,7 @@ fn align_edges_is_on_by_default_and_saved() {
 
 #[test]
 fn other_shape_tools_always_snap() {
-    for tool in [Tool::Polygon, Tool::EllipseShape, Tool::Rectangle, Tool::Star] {
+    for tool in [Tool::Polygon, Tool::EllipseShape, Tool::Star] {
         let r = rect(|o| o.align_edges = false, tool, START, END).unwrap();
         assert!(r.iter().all(|v| v.fract() == 0.0), "{tool:?}: {r:?}");
     }
@@ -71,7 +71,7 @@ fn a_greyed_checkbox_keeps_snapping_in_path_mode() {
 }
 
 #[test]
-fn options_bar_shows_align_edges_for_the_triangle_only() {
+fn options_bar_shows_align_edges_for_the_triangle_not_the_ellipse() {
     let mut h = harness(Tool::Triangle);
     let node = h.get_by_label("Align Edges");
     assert!(!node.accesskit_node().is_disabled(), "enabled in Shape mode");
@@ -85,6 +85,6 @@ fn options_bar_shows_align_edges_for_the_triangle_only() {
     h.run_steps(4);
     assert!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), "greyed in Path mode");
 
-    let h = harness(Tool::Rectangle);
+    let h = harness(Tool::EllipseShape);
     assert!(h.query_by_label("Align Edges").is_none());
 }

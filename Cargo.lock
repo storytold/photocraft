@@ -6619,11 +6619,13 @@ dependencies = [
  "craft-image-codecs",
  "craft-psd",
  "exr",
+ "flate2",
  "photocraft-algo",
  "photocraft-color",
  "photocraft-compose",
  "photocraft-doc",
  "photocraft-engine-core",
+ "photocraft-engine-paint",
  "photocraft-format",
  "photocraft-geom",
  "photocraft-io",
@@ -6685,6 +6687,25 @@ dependencies = [
  "wat",
  "web-time",
  "winsafe",
+]
+
+[[package]]
+name = "photocraft-engine-paint"
+version = "0.23.1"
+dependencies = [
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=5c5e0d52c387c0a4ae2908a07e476d7584f60362)",
+ "photocraft-algo",
+ "photocraft-color",
+ "photocraft-compose",
+ "photocraft-doc",
+ "photocraft-engine-core",
+ "photocraft-geom",
+ "photocraft-io",
+ "photocraft-paint",
+ "photocraft-raster",
+ "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6935,6 +6956,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-print",
  "craft-psd",
+ "craft-xml",
  "eframe",
  "egui",
  "egui_extras",
