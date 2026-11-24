@@ -8,7 +8,9 @@
 //! document. Pixels are converted to the destination's colour profile (Color Settings' intent and
 //! black point compensation) and bit depth, as Photoshop converts dragged layers.
 
+use crate::color_cmds::ColorExt;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use photocraft_color::ColorMode;
 use photocraft_doc::text_styles::{CharacterStyleDef, ParagraphStyleDef};
@@ -111,7 +113,7 @@ pub(crate) fn adapt_copies(s: &Session, copies: &mut Document, dest: &Document) 
     }
     if (copies.mode, &copies.icc_profile) != (dest.mode, &dest.icc_profile) {
         let profile = crate::color_cmds::document_profile(dest);
-        crate::color_cmds::convert_document(copies, &profile, s.color.settings.intent(), s.color.settings.bpc)?;
+        crate::color_cmds::convert_document(copies, &profile, s.color().settings.intent(), s.color().settings.bpc)?;
     }
     if copies.depth != dest.depth {
         crate::image_cmds::for_each_surface(&mut copies.layers, true, &mut |surf, _| {
@@ -405,11 +407,21 @@ pub(crate) fn duplicate_to_new_document(s: &mut Session, p: &Value) -> Result<Va
     // Its own Basic Paragraph is the source's: type that inherits from it must not gain overrides.
     nd.text_styles.basic.clone_from(&sdoc.text_styles.basic);
     let new_ids: Vec<LayerId> = nd.layers.iter().map(|l| l.id).collect();
+    // Keep the copies in the opening snapshot and use a layer-free document for undo.
+    let layers = std::mem::take(&mut nd.layers);
+    let mut before = nd.clone();
+    nd.layers = layers;
     let index = s.add_document(nd, None);
     if let (Some(name), [id]) = (typed, new_ids.as_slice()) {
         crate::type_cmds::note_typed_name(s, *id, &name);
     }
     crate::layer_multi_cmds::reselect(s, new_ids.clone(), new_ids.last().copied());
+    if let Some(st) = s.active_mut() {
+        // add_document can replace the ID to avoid collisions with open documents or clone sources.
+        before.id = st.doc.id;
+        st.history.set_current_layers(Default::default());
+        st.history.record("Duplicate Layer", Arc::new(before), st.layer_target());
+    }
     let mut out = json!({"document": index, "layers": new_ids.iter().map(|l| l.0).collect::<Vec<_>>()});
     if let [one] = new_ids.as_slice()
         && let Some(map) = out.as_object_mut()

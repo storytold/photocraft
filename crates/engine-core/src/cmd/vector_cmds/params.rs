@@ -3,7 +3,7 @@ use super::{
     Value, bad, json,
 };
 
-pub(crate) fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
+pub fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
     crate::commands::layer_param(s, p)
 }
 
@@ -11,7 +11,7 @@ pub(super) fn f64p(p: &Value, k: &str) -> Option<f64> {
     p.get(k).and_then(Value::as_f64)
 }
 
-pub(crate) fn pt(v: &Value) -> Option<Point> {
+pub fn pt(v: &Value) -> Option<Point> {
     match v {
         Value::Array(a) if a.len() >= 2 => Some(Point::new(a[0].as_f64()?, a[1].as_f64()?)),
         Value::Object(_) => Some(Point::new(v.get("x")?.as_f64()?, v.get("y")?.as_f64()?)),
@@ -19,7 +19,7 @@ pub(crate) fn pt(v: &Value) -> Option<Point> {
     }
 }
 
-pub(crate) fn nums<const N: usize>(p: &Value, k: &str) -> Option<[f64; N]> {
+pub fn nums<const N: usize>(p: &Value, k: &str) -> Option<[f64; N]> {
     let a = p.get(k)?.as_array()?;
     if a.len() < N {
         return None;
@@ -69,7 +69,7 @@ fn hex(c: &Color) -> String {
     if c.alpha < 1.0 { format!("#{:02x}{:02x}{:02x}{:02x}", q(r), q(g), q(b), q(c.alpha)) } else { format!("#{:02x}{:02x}{:02x}", q(r), q(g), q(b)) }
 }
 
-pub(crate) fn op_from(s: &str) -> Option<PathOp> {
+pub fn op_from(s: &str) -> Option<PathOp> {
     Some(match s.to_ascii_lowercase().as_str() {
         "combine" | "add" | "union" => PathOp::Combine,
         "subtract" | "minus" => PathOp::Subtract,

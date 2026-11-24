@@ -17,8 +17,8 @@ mod tone;
 #[cfg(test)]
 use channels::lab_denorm;
 pub use channels::{
-    LAB_NEUTRAL, LabOp, apply_cmy, cmy_adjustment, cmyk_channel_adjustment, ink_brightness_contrast_lut, ink_luma, ink_through, lab_channel_adjustment,
-    lab_stored_op, stored_channel_adjustment, stored_channels, threshold_white,
+    LAB_NEUTRAL, LabOp, apply_cmy, cmy_adjustment, cmyk_channel_adjustment, cmyk_mixer, ink_brightness_contrast_lut, ink_luma, ink_through,
+    lab_channel_adjustment, lab_stored_op, mix_inks, stored_channel_adjustment, stored_channels, threshold_white,
 };
 use channels::{apply_lab, gray_from_srgb_lightness, legacy_brightness_contrast, legacy_brightness_contrast_hdr};
 use color::gradient;
@@ -32,7 +32,8 @@ use tone::LUT_SIZE;
 pub(crate) use tone::apply_tone;
 pub use tone::{
     TONE_SLOPE_SPAN, contour_curve_lut, curve_lut, curve_lut_mode, curve_map_lut, curve_samples, float_tone_extrapolates, float_tone_identity, levels,
-    levels_float, levels_gamma, levels_q, modern_brightness, modern_contrast, modern_lut, posterize, posterize_in, tone_luts, tone_luts_depth, tone_luts_q,
+    levels_float, levels_gamma, levels_q, modern_brightness, modern_contrast, modern_lut, posterize, posterize_in, tone_luts, tone_luts_depth,
+    tone_luts_depth_in, tone_luts_q,
 };
 use tone::{lut, map_rgb};
 
@@ -200,7 +201,25 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
             let hi = if depth == Some(SampleType::F32) { f32::INFINITY } else { 1.0 };
             map_rgb(buf, |c| vibrance_px(c, v, s, transfer, hi))
         }
-        Adjustment::ChannelMixer { matrix, monochrome } if depth == Some(SampleType::F32) => {
+        Adjustment::ChannelMixer { cmyk: Some(rows), monochrome, .. } => {
+            // A CMYK mixer outside a CMYK document: on the screen colour's separation.
+            use photocraft_color::convert::{cmyk_to_rgb, rgb_to_cmyk};
+            // In a 32-bit document the change is added as a difference of two round trips, as
+            // [`tone::tone_in_space`] does, so samples past 0..1 the separation clips keep their
+            // magnitude (an identity mixer leaves an HDR highlight as it is).
+            let float = depth == Some(SampleType::F32);
+            map_rgb(buf, |c| {
+                let ink = rgb_to_cmyk(c);
+                let mut mixed = ink;
+                mix_inks(rows, *monochrome, &mut mixed);
+                if !float {
+                    return cmyk_to_rgb(mixed);
+                }
+                let (before, after) = (cmyk_to_rgb(ink), cmyk_to_rgb(mixed));
+                std::array::from_fn(|i| c[i] + after[i] - before[i])
+            })
+        }
+        Adjustment::ChannelMixer { matrix, monochrome, .. } if depth == Some(SampleType::F32) => {
             // 32-bit: each source percentage is cut to 1/1024 (toward zero), the constant counts
             // 255/512 of its value, and nothing clips (photoshop corpus rgb32 channel-mixer.psd:
             // pure red, green, blue, black and white all exact).
@@ -211,7 +230,7 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 if *monochrome { [mix(&m[0]); 3] } else { [mix(&m[0]), mix(&m[1]), mix(&m[2])] }
             })
         }
-        Adjustment::ChannelMixer { matrix, monochrome } => map_rgb(buf, |c| {
+        Adjustment::ChannelMixer { matrix, monochrome, .. } => map_rgb(buf, |c| {
             let mix = |row: &[f32; 4]| (row[0] * c[0] + row[1] * c[1] + row[2] * c[2] + row[3]).clamp(0.0, 1.0);
             if *monochrome { [mix(&matrix[0]); 3] } else { [mix(&matrix[0]), mix(&matrix[1]), mix(&matrix[2])] }
         }),
@@ -293,6 +312,14 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
         // Not evaluated: identity (still round-trips through PSD).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => {}
     }
+}
+
+/// What one straight-alpha sRGB colour becomes under `adj` in an 8-bit RGB document: [`apply_in`] over a 1 x 1 buffer,
+/// so a UI preview of a colour runs the code a layer's pixels run.
+pub fn adjust_color(adj: &Adjustment, color: [f32; 4]) -> [f32; 4] {
+    let mut buf = Buffer { rect: photocraft_geom::Rect { x0: 0, y0: 0, x1: 1, y1: 1 }, px: vec![color] };
+    apply_in(adj, &mut buf, Transfer::Srgb, None, ColorMode::Rgb);
+    buf.px[0]
 }
 
 /// Applies an adjustment in a document of colour `mode`: [`apply_depth`], except that in Lab
@@ -400,6 +427,8 @@ mod lookup_tests {
     }
 }
 
+#[cfg(test)]
+mod curves_channel_composite_tests;
 #[cfg(test)]
 mod gradient_map_grayscale_tests;
 #[cfg(test)]

@@ -8,7 +8,7 @@
 //! were when last seen; the layers of a file whose stamp moved are re-rendered from it, one
 //! Update Modified Content undo step per file. The desktop app takes the stamps every two seconds
 //! and when its window comes back to the front, on a worker thread so a file on a slow network
-//! share never holds up the interface ([`Session::start_link_scan`], [`Session::poll_link_scan`]);
+//! share never holds up the interface ([`LinkWatchExt::start_link_scan`], [`LinkWatchExt::poll_link_scan`]);
 //! `layer.smartObjects.updateChanged` takes them on the spot (CLI, agents).
 //!
 //! Stamps are kept per document: one in the background is looked at when it comes to the front.
@@ -66,7 +66,7 @@ pub(crate) fn update_changed(s: &mut Session, _: &Value) -> Result<Value> {
     // Drop a look still running on a worker thread. It stamped the files before this one, and
     // applying it later would replace this look's result.
     s.link_scan = None;
-    s.apply_link_stamps(doc, now)
+    apply_link_stamps(s, doc, now)
 }
 
 /// [`linked_files`] of `st`'s document with the file each path resolves to, or `None` for a path
@@ -82,10 +82,23 @@ fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBu
         .collect()
 }
 
-impl Session {
+/// Watching the active document's linked smart object files (the link fields are core session data).
+pub trait LinkWatchExt {
     /// Start stamping the active document's linked files on a worker thread, unless a look is
     /// still running (or the build has no files to look at: the web app).
-    pub fn start_link_scan(&mut self) {
+    fn start_link_scan(&mut self);
+    /// The active document's linked files that were not there at the last look (the Layers
+    /// panel's Missing filter). A path that is not followed ([`crate::doc_path`]) is never looked
+    /// at, so it is not listed.
+    fn missing_links(&self) -> HashSet<String>;
+    /// Moves whenever the missing linked files ([`Self::missing_links`]) of any open document change.
+    fn missing_links_revision(&self) -> craft_tracked::Revision;
+    /// Apply a finished look (`None` while there is none, or it is still running).
+    fn poll_link_scan(&mut self) -> Option<Result<Value>>;
+}
+
+impl LinkWatchExt for Session {
+    fn start_link_scan(&mut self) {
         if self.link_scan.is_some() || cfg!(target_arch = "wasm32") {
             return;
         }
@@ -102,7 +115,13 @@ impl Session {
         let slot: LinkScan = Arc::default();
         let out = slot.clone();
         let spawned = std::thread::Builder::new().name("link-watch".into()).spawn(move || {
-            let stamps = files.into_iter().map(|(p, file, ids)| (p, ids, stamp(file.as_deref()))).collect();
+            let stamps = files
+                .into_iter()
+                .map(|(p, file, ids)| {
+                    let stamp = stamp(file.as_deref());
+                    (p, file, ids, stamp)
+                })
+                .collect();
             *out.lock().unwrap_or_else(PoisonError::into_inner) = Some((doc, stamps));
         });
         if spawned.is_ok() {
@@ -110,110 +129,106 @@ impl Session {
         }
     }
 
-    /// The active document's linked files that were not there at the last look (the Layers
-    /// panel's Missing filter). A path that is not followed ([`crate::doc_path`]) is never looked
-    /// at, so it is not listed.
-    pub fn missing_links(&self) -> HashSet<String> {
+    fn missing_links(&self) -> HashSet<String> {
         let Some(doc) = self.active().map(|d| d.doc.id.0) else { return HashSet::new() };
         self.link_missing.iter().filter(|(d, _)| *d == doc).map(|(_, p)| p.clone()).collect()
     }
 
-    /// Moves whenever the missing linked files ([`Self::missing_links`]) of any open document change.
-    pub fn missing_links_revision(&self) -> craft_tracked::Revision {
+    fn missing_links_revision(&self) -> craft_tracked::Revision {
         self.link_missing.revision()
     }
 
-    /// Remember which of document `doc`'s files in `now` were not there, and forget the files of
-    /// closed documents. The web app has no files to look at, so it lists none.
-    fn note_missing_links(&mut self, doc: u64, now: &[(String, Vec<u64>, Option<Stamp>)]) {
-        let open: HashSet<u64> = self.documents().iter().map(|d| d.doc.id.0).collect();
-        let mut missing: HashSet<(u64, String)> = self.link_missing.iter().filter(|(d, _)| *d != doc && open.contains(d)).cloned().collect();
-        if !cfg!(target_arch = "wasm32") {
-            let document = self.active().and_then(|st| st.path.clone());
-            for (path, _, stamp) in now {
-                if stamp.is_none() && crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)).is_ok() {
-                    missing.insert((doc, path.clone()));
-                }
-            }
-        }
-        if *self.link_missing != missing {
-            *self.link_missing = missing;
-        }
-    }
-
-    /// Apply a finished look (`None` while there is none, or it is still running).
-    pub fn poll_link_scan(&mut self) -> Option<Result<Value>> {
+    fn poll_link_scan(&mut self) -> Option<Result<Value>> {
         let (doc, stamps) = self.link_scan.as_ref()?.lock().unwrap_or_else(PoisonError::into_inner).take()?;
         self.link_scan = None;
-        // A relink or embed while the look ran: it stamped files the document no longer links in
-        // that way, so drop it; the next look takes the current links.
+        // A relink or embed while the look ran, or a new folder after Save As: it stamped files
+        // the document no longer links in that way, so drop it; the next look takes the current
+        // links.
         if let Some(st) = self.active().filter(|st| st.doc.id.0 == doc)
-            && !linked_files(&st.doc).iter().map(|(p, ids)| (p, ids)).eq(stamps.iter().map(|(p, ids, _)| (p, ids)))
+            && !resolved_files(st).iter().map(|(p, file, ids)| (p, file, ids)).eq(stamps.iter().map(|(p, file, ids, _)| (p, file, ids)))
         {
             return Some(Ok(json!({"updated": []})));
         }
-        Some(self.apply_link_stamps(doc, stamps))
+        Some(apply_link_stamps(self, doc, stamps.into_iter().map(|(p, _, ids, stamp)| (p, ids, stamp)).collect()))
     }
+}
 
-    /// Compare the stamps of document `doc`'s linked files with the ones last seen and update the
-    /// layers of the changed ones. Returns `{updated: [layer ids]}`.
-    fn apply_link_stamps(&mut self, doc: u64, now: Vec<(String, Vec<u64>, Option<Stamp>)>) -> Result<Value> {
-        // The document went to the back meanwhile: it's looked at when it's in front again.
-        if self.active().map(|d| d.doc.id.0) != Some(doc) {
-            return Ok(json!({"updated": []}));
-        }
-        self.note_missing_links(doc, &now);
-        // A background job holds the document: refreshing now would replace the snapshot it works
-        // on and its result would be discarded. The stamps stay as they were, so the change is
-        // seen again by the first look after the job ends.
-        if self.active_job().is_some() {
-            return Ok(json!({"updated": []}));
-        }
-        // This document's last stamps; those of closed documents are dropped.
-        let open: HashSet<u64> = self.documents().iter().map(|d| d.doc.id.0).collect();
-        let mut before: HashMap<String, Stamp> = HashMap::new();
-        self.link_stamps.retain(|(d, p), s| {
-            if *d == doc {
-                before.insert(p.clone(), *s);
-                false
-            } else {
-                open.contains(d)
-            }
-        });
-        let mut changed = Vec::new();
-        for (path, ids, stamp) in now {
-            match (before.get(&path), stamp) {
-                // Not there right now (an app saving by delete and rename): keep the last stamp.
-                (Some(old), None) => {
-                    self.link_stamps.insert((doc, path), *old);
-                }
-                (old, Some(new)) => {
-                    if old.is_some_and(|o| *o != new) {
-                        changed.push((path.clone(), ids));
-                    }
-                    self.link_stamps.insert((doc, path), new);
-                }
-                (None, None) => {}
+/// Remember which of document `doc`'s files in `now` were not there, and forget the files of
+/// closed documents. The web app has no files to look at, so it lists none.
+fn note_missing_links(s: &mut Session, doc: u64, now: &[(String, Vec<u64>, Option<Stamp>)]) {
+    let open: HashSet<u64> = s.documents().iter().map(|d| d.doc.id.0).collect();
+    let mut missing: HashSet<(u64, String)> = s.link_missing.iter().filter(|(d, _)| *d != doc && open.contains(d)).cloned().collect();
+    if !cfg!(target_arch = "wasm32") {
+        let document = s.active().and_then(|st| st.path.clone());
+        for (path, _, stamp) in now {
+            if stamp.is_none() && crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)).is_ok() {
+                missing.insert((doc, path.clone()));
             }
         }
-        let mut updated = Vec::new();
-        for (path, ids) in changed {
-            let r = self.edit("Update Modified Content", |d, _| {
-                for id in &ids {
-                    if !crate::smart_cmds::refresh(d, LayerId(*id))? {
-                        return Err(EngineError::Other(format!("{path} can't be read")));
-                    }
-                }
-                Ok(())
-            });
-            // Not readable (still being written, or not a format smart objects read): the edit left
-            // nothing behind, and the file is tried again once it changes again, not on every look.
-            if r.is_ok() {
-                updated.extend(ids);
-            }
-        }
-        Ok(json!({"updated": updated}))
     }
+    if *s.link_missing != missing {
+        *s.link_missing = missing;
+    }
+}
+
+/// Compare the stamps of document `doc`'s linked files with the ones last seen and update the
+/// layers of the changed ones. Returns `{updated: [layer ids]}`.
+fn apply_link_stamps(s: &mut Session, doc: u64, now: Vec<(String, Vec<u64>, Option<Stamp>)>) -> Result<Value> {
+    // The document went to the back meanwhile: it's looked at when it's in front again.
+    if s.active().map(|d| d.doc.id.0) != Some(doc) {
+        return Ok(json!({"updated": []}));
+    }
+    note_missing_links(s, doc, &now);
+    // A background job holds the document: refreshing now would replace the snapshot it works
+    // on and its result would be discarded. The stamps stay as they were, so the change is
+    // seen again by the first look after the job ends.
+    if s.active_job().is_some() {
+        return Ok(json!({"updated": []}));
+    }
+    // This document's last stamps; those of closed documents are dropped.
+    let open: HashSet<u64> = s.documents().iter().map(|d| d.doc.id.0).collect();
+    let mut before: HashMap<String, Stamp> = HashMap::new();
+    s.link_stamps.retain(|(d, p), stamp| {
+        if *d == doc {
+            before.insert(p.clone(), *stamp);
+            false
+        } else {
+            open.contains(d)
+        }
+    });
+    let mut changed = Vec::new();
+    for (path, ids, stamp) in now {
+        match (before.get(&path), stamp) {
+            // Not there right now (an app saving by delete and rename): keep the last stamp.
+            (Some(old), None) => {
+                s.link_stamps.insert((doc, path), *old);
+            }
+            (old, Some(new)) => {
+                if old.is_some_and(|o| *o != new) {
+                    changed.push((path.clone(), ids));
+                }
+                s.link_stamps.insert((doc, path), new);
+            }
+            (None, None) => {}
+        }
+    }
+    let mut updated = Vec::new();
+    for (path, ids) in changed {
+        let r = s.edit("Update Modified Content", |d, _| {
+            for id in &ids {
+                if !crate::smart_cmds::refresh(d, LayerId(*id))? {
+                    return Err(EngineError::Other(format!("{path} can't be read")));
+                }
+            }
+            Ok(())
+        });
+        // Not readable (still being written, or not a format smart objects read): the edit left
+        // nothing behind, and the file is tried again once it changes again, not on every look.
+        if r.is_ok() {
+            updated.extend(ids);
+        }
+    }
+    Ok(json!({"updated": updated}))
 }
 
 #[cfg(test)]
@@ -221,6 +236,7 @@ mod tests {
     use photocraft_geom::Rect;
     use serde_json::json;
 
+    use super::LinkWatchExt;
     use crate::{EngineError, Session};
 
     fn dir(name: &str) -> std::path::PathBuf {
@@ -400,8 +416,26 @@ mod tests {
         let bytes = std::fs::read(&saved).unwrap();
         crate::file_cmds::open_bytes_as(&mut s, "doc.pcraft", &bytes, None, Some(saved.to_string_lossy().into_owned())).unwrap();
         assert_eq!(s.active().unwrap().doc.id, id);
-        *scan.lock().unwrap() = Some((id.0, vec![(stored, vec![layer], None)]));
+        *scan.lock().unwrap() = Some((id.0, vec![(stored.clone(), crate::doc_path::resolve_in(&stored, Some(&saved)).ok(), vec![layer], None)]));
         assert!(s.poll_link_scan().is_none());
+        assert!(s.missing_links().is_empty());
+    }
+
+    #[test]
+    fn a_scan_taken_in_the_old_folder_is_dropped_after_save_as() {
+        let old = dir("saveas-old");
+        let new = dir("saveas-new");
+        std::fs::write(new.join("art.png"), png(10, 10, "#ff0000")).unwrap();
+        let (mut s, layer) = placed(&new.join("art.png"));
+        s.saved_to(new.join("doc.pcraft").to_string_lossy().into_owned());
+        s.execute("layer.smartObjects.relinkToFile", json!({"path": "art.png"})).unwrap();
+        s.saved_to(old.join("doc.pcraft").to_string_lossy().into_owned());
+        let doc = s.active().unwrap().doc.id.0;
+        // The look ran in the old folder, where art.png is not.
+        let file = Some(old.join("art.png"));
+        s.link_scan = Some(std::sync::Arc::new(std::sync::Mutex::new(Some((doc, vec![("art.png".to_string(), file, vec![layer], None)])))));
+        s.saved_to(new.join("doc.pcraft").to_string_lossy().into_owned());
+        assert_eq!(s.poll_link_scan().unwrap().unwrap(), json!({"updated": []}));
         assert!(s.missing_links().is_empty());
     }
 
@@ -428,7 +462,8 @@ mod tests {
         let doc = s.active().unwrap().doc.id.0;
         let stored = super::linked_files(&s.active().unwrap().doc)[0].0.clone();
         let inject = |s: &mut Session, file: &str| {
-            let scan = std::sync::Arc::new(std::sync::Mutex::new(Some((doc, vec![(file.to_string(), vec![layer], None)]))));
+            let resolved = crate::doc_path::resolve_in(file, None).ok();
+            let scan = std::sync::Arc::new(std::sync::Mutex::new(Some((doc, vec![(file.to_string(), resolved, vec![layer], None)]))));
             s.link_scan = Some(scan);
         };
         // Taken before a relink: its file is no longer linked.

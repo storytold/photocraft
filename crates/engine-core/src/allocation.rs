@@ -2,14 +2,14 @@
 
 use crate::{EngineError, Result};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "failpoints"))]
 thread_local! {
     static FAIL_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 /// Reserve and initialize a buffer without invoking the allocator's abort-on-OOM path.
-pub(crate) fn filled<T: Clone>(len: usize, value: T, purpose: &str) -> Result<Vec<T>> {
+pub fn filled<T: Clone>(len: usize, value: T, purpose: &str) -> Result<Vec<T>> {
     let mut out = capacity(len, purpose)?;
     out.resize(len, value);
     Ok(out)
@@ -33,9 +33,9 @@ pub(crate) fn read_file_within(path: impl AsRef<std::path::Path>, max: u64) -> s
 }
 
 /// Reserve a vector for a known number of operation results.
-pub(crate) fn capacity<T>(len: usize, purpose: &str) -> Result<Vec<T>> {
+pub fn capacity<T>(len: usize, purpose: &str) -> Result<Vec<T>> {
     let bytes = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| error(purpose, "requested size overflowed"))?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "failpoints"))]
     if failpoint_hits() {
         return Err(error(purpose, "not enough memory"));
     }
@@ -47,7 +47,7 @@ pub(crate) fn capacity<T>(len: usize, purpose: &str) -> Result<Vec<T>> {
 /// `Vec::push` that reports an allocation failure instead of aborting; each call is one
 /// attempt for the test failpoints.
 pub(crate) fn try_push<T>(out: &mut Vec<T>, value: T, purpose: &str) -> Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "failpoints"))]
     if failpoint_hits() {
         return Err(error(purpose, "not enough memory"));
     }
@@ -58,8 +58,8 @@ pub(crate) fn try_push<T>(out: &mut Vec<T>, value: T, purpose: &str) -> Result<(
 
 /// Check an operation boundary where downstream encoders/decoders allocate internally.
 /// The test-only failpoint lets command tests prove their transaction boundary.
-pub(crate) fn checkpoint(purpose: &str) -> Result<()> {
-    #[cfg(test)]
+pub fn checkpoint(purpose: &str) -> Result<()> {
+    #[cfg(any(test, feature = "failpoints"))]
     if failpoint_hits() {
         return Err(error(purpose, "not enough memory"));
     }
@@ -68,7 +68,7 @@ pub(crate) fn checkpoint(purpose: &str) -> Result<()> {
 }
 
 /// Copy a region into an explicitly reserved buffer.
-pub(crate) fn read_region(surface: &photocraft_raster::Surface, area: photocraft_geom::Rect, purpose: &str) -> Result<Vec<f32>> {
+pub fn read_region(surface: &photocraft_raster::Surface, area: photocraft_geom::Rect, purpose: &str) -> Result<Vec<f32>> {
     let len = (area.width() as usize)
         .checked_mul(area.height() as usize)
         .and_then(|n| n.checked_mul(surface.channels()))
@@ -82,11 +82,11 @@ pub(crate) fn read_region(surface: &photocraft_raster::Surface, area: photocraft
 /// the canvas) into flat arrays: the allowance Image Size resamples within. A document stores
 /// only the tiles it holds, so two distant tiles, or a huge empty canvas, make a small file whose
 /// content bounds would need far more than any machine has.
-pub(crate) const MAX_DENSE_BYTES: u64 = crate::image_cmds::MAX_RESAMPLE_BYTES;
+pub const MAX_DENSE_BYTES: u64 = crate::image_cmds::MAX_RESAMPLE_BYTES;
 
 /// Refuses, before anything is allocated, an operation that would hold `bytes_per_px` bytes of
 /// dense buffers for every pixel of `area` at once.
-pub(crate) fn check_dense(area: photocraft_geom::Rect, bytes_per_px: u64, purpose: &str) -> Result<()> {
+pub fn check_dense(area: photocraft_geom::Rect, bytes_per_px: u64, purpose: &str) -> Result<()> {
     let px = u64::from(area.width()).saturating_mul(u64::from(area.height()));
     let bytes = px.saturating_mul(bytes_per_px);
     if bytes <= MAX_DENSE_BYTES {
@@ -101,26 +101,27 @@ pub(crate) fn check_dense(area: photocraft_geom::Rect, bytes_per_px: u64, purpos
     )))
 }
 
-pub(crate) fn error(purpose: &str, detail: &str) -> EngineError {
+pub fn error(purpose: &str, detail: &str) -> EngineError {
     EngineError::Other(format!("not enough memory for {purpose} ({detail}); the document was not changed"))
 }
 
-#[cfg(test)]
-pub(crate) fn fail_next_for_test() {
+/// Fail the next fallible allocation or checkpoint on this thread, then stop.
+#[cfg(any(test, feature = "failpoints"))]
+pub fn fail_next_for_test() {
     FAIL_NEXT.with(|flag| flag.set(true));
 }
 
 /// Fail the fallible allocation or checkpoint after `skip` clean attempts, then stop.
 /// `fail_after_for_test(0)` is equivalent to [`fail_next_for_test`].
-#[cfg(test)]
-pub(crate) fn fail_after_for_test(skip: usize) {
+#[cfg(any(test, feature = "failpoints"))]
+pub fn fail_after_for_test(skip: usize) {
     FAIL_AFTER.with(|flag| flag.set(Some(skip)));
 }
 
 /// Whether a test failpoint trips here: the single-shot flag, or the counted flag
 /// once its `skip` attempts have passed cleanly earlier. The shot does not advance the
 /// counted flag: a one-shot failure is not itself a clean attempt.
-#[cfg(test)]
+#[cfg(any(test, feature = "failpoints"))]
 fn failpoint_hits() -> bool {
     if FAIL_NEXT.with(|flag| flag.replace(false)) {
         return true;

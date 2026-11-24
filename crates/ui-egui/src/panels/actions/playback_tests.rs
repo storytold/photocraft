@@ -4,6 +4,7 @@
 //! application 2026-11-05.
 use super::*;
 use photocraft_engine::actions_cmds::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 use web_time::{Duration, Instant};
 
 fn names(app: &PhotocraftApp) -> Vec<String> {
@@ -16,7 +17,7 @@ fn app_with(performance: &str, seconds: u8, single: bool) -> Box<PhotocraftApp> 
     app.run("file.new", json!({"width": 8, "height": 6})).unwrap();
     app.run("actions.setPlayback", json!({"performance": performance, "seconds": seconds, "singleState": single})).unwrap();
     let steps = ["A", "B", "C"].map(|n| ActionStep::new("layer.new.layer", json!({"name": n}))).to_vec();
-    app.session.actions.list.push(Action::new("Three", steps)).unwrap();
+    app.session.actions_mut().list.push(Action::new("Three", steps)).unwrap();
     app
 }
 
@@ -131,7 +132,7 @@ fn esc_or_stop_ends_the_playback_and_keeps_the_steps_applied() {
                 frame(&mut app, &ctx, Vec::new());
             }
             _ => {
-                app.session.actions.list.push(Action::new("One", vec![ActionStep::new("layer.new.layer", json!({"name": "D"}))])).unwrap();
+                app.session.actions_mut().list.push(Action::new("One", vec![ActionStep::new("layer.new.layer", json!({"name": "D"}))])).unwrap();
                 app.run("actions.setPlayback", json!({"performance": "accelerated"})).unwrap();
                 play(&mut app, &json!({"action": "One"})).unwrap();
             }
@@ -191,7 +192,7 @@ fn nested_and_set_playback_stay_one_play() {
     let mut app = app_with("step", 1, true);
     let ctx = app.ctx().clone();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(Action::new(
             "Caller",
@@ -218,7 +219,7 @@ fn nested_and_set_playback_stay_one_play() {
     // Counted as Accelerated counts it: the Play Action step is one step of its caller.
     assert_eq!(app.ui.status, "Played 3 steps");
     let mut fast = app_with("accelerated", 1, true);
-    fast.session.actions.list.push(app.session.actions.list.actions()[1].clone()).unwrap();
+    fast.session.actions_mut().list.push(app.session.actions().list.actions()[1].clone()).unwrap();
     let v = play_targets(&mut fast, &[1], 0, 0).unwrap().unwrap();
     assert_eq!(v["ran"], 3, "{v}");
 }
