@@ -285,6 +285,12 @@ pub(crate) fn window(app: &mut PhotocraftApp, size: egui::Vec2) {
     app.canvas_tools.frames.get_or_insert_with(|| Frames::over(ctx)).screen(size);
 }
 
+/// The display scale the following frames run at: `ppp` device pixels per point, as a window on such a display.
+pub(crate) fn pixels_per_point(app: &mut PhotocraftApp, ppp: f32) {
+    let ctx = ctx(app);
+    app.canvas_tools.frames.get_or_insert_with(|| Frames::over(ctx)).pixels_per_point(ppp);
+}
+
 /// Sends the control request `method` with `params` and returns its reply, then runs frames until the window host has
 /// delivered what the request queued (`ui.pointer` queues its events for the canvas's tool host). A request maps
 /// document points through the view the canvas last showed, so the canvas shows one first.

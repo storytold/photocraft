@@ -112,6 +112,10 @@ fn shown_paths(app: &PhotocraftApp, doc: &Document) -> Vec<(PathRef, EditPath)> 
     out
 }
 
+/// How far from an anchor, in screen (device) pixels, a Convert Point press converts it: 5 px converts and 6 px does
+/// not, as measured (#12748), on every display scale (#13174). The 0.01 px covers the f32 mapping from the screen.
+const CONVERT_POINT_REACH_PX: f32 = 5.01;
+
 /// What [`show_paths`] shows for the canvas of `doc` with `mods` held: the overlay tool and each
 /// path with its `PathRef` and whether its anchors show. The one builder of the overlay's paths.
 fn plan(app: &PhotocraftApp, doc: DocId, mods: Mods) -> (BezierTool, Vec<(PathRef, EditPath, AnchorsShown)>) {
@@ -143,8 +147,11 @@ pub(crate) fn show_paths(app: &mut PhotocraftApp, ui: &mut egui::Ui, at: egui::R
     let selection = crate::direct_select::selection(app, tool);
     // Given, not bound: the paths come from the document each pass and only an edit's end (`Commit`, `Set`) changes
     // the document, so a drag's own updates are no outside change that cancels it.
-    let output =
-        BezierOverlay::new("Paths", Bind::given(paths), &selection).tool(tool).anchors(anchors).path_options(&app.ui.tool_options.path_options).show_at(ui, at);
+    let overlay = BezierOverlay::new("Paths", Bind::given(paths), &selection).tool(tool).anchors(anchors).path_options(&app.ui.tool_options.path_options);
+    // The Convert Point tool takes an anchor within 5 screen pixels on every display scale (#12748, #13174); the Pen's
+    // ⌥ convert and the other tools keep the overlay's reach.
+    let output = if tool == BezierTool::Convert && app.ui.tool == Tool::ConvertPoint { overlay.anchor_reach_px(CONVERT_POINT_REACH_PX) } else { overlay }
+        .show_at(ui, at);
     Some(BezierShown { output, refs })
 }
 
