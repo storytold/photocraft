@@ -314,6 +314,18 @@ fn print_size_uses_the_screen_resolution_preference() {
     assert_eq!(app.ui.views[0].zoom, 96.0, "96 ppi screen / 1 ppi document = 9600 %");
 }
 
+/// Window › Arrange works in the document area (the canvas panel's), not the app's whole content.
+#[test]
+fn the_arrange_space_is_the_document_area() {
+    let (mut app, ctx) = app_with(2);
+    let area = egui::Rect::from_min_size(egui::pos2(210.0, 64.0), egui::vec2(500.0, 400.0));
+    assert_ne!(area, ctx.content_rect());
+    app.last_canvas_rect = area;
+    let space = super::arrange::space(&app);
+    assert_eq!(space.area, area);
+    assert_eq!(space.size, area.size() * 0.5);
+}
+
 #[test]
 fn arrange_layouts_floating_windows_and_matching() {
     let (mut app, ctx) = app_with(3);

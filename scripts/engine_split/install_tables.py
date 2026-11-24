@@ -67,11 +67,18 @@ def tables(ref):
 
 def install_file(path):
     """The install.rs that lists the table at `path` (`crate::cmd::<module>::specs` and the like)."""
-    module = path.split("::")[-2] if path.count("::") >= 2 else ""
+    # The module path from the crate root, as crates.tsv writes units: `crate::cmd::table::paint::stroke::specs`
+    # is `cmd/table/paint/stroke`; a unit owns it when it is that path or one of its parents.
+    segs = path.split("::")[1:-1]
     for c in CRATES:
         f = f"crates/engine-{c}/src/install.rs"
-        if os.path.exists(f) and any(u.split("/")[-1] == module or u == "cmd/table/" + module for u in units(c)):
-            return f
+        if not os.path.exists(f):
+            continue
+        for u in units(c):
+            us = u.split("/")
+            # A unit `cmd/<name>` is also reached as `crate::<name>` (core re-exports cmd's modules).
+            if segs[: len(us)] == us or (us[0] == "cmd" and segs[: len(us) - 1] == us[1:]):
+                return f
     return INSTALL
 
 

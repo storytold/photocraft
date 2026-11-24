@@ -72,7 +72,6 @@ pub(crate) const INCOMPLETE: &[&str] = &[
     "layer.videoLayers.newVideoLayerFromFile",
     "layer.videoLayers.replaceFootage",
     "measurementLog.delete",
-    "notes.delete",
     "path.addToSelection",
     "path.intersectWithSelection",
     "path.set",
@@ -160,9 +159,10 @@ mod tests {
     fn every_command_with_a_closed_doc_rejects_an_unknown_key() {
         // #7596: an undocumented key used to run the command on its defaults and report success.
         crate::install().unwrap();
-        let mut checked = 0;
+        let (mut checked, mut parsed) = (0, 0);
         for spec in crate::commands::command_specs() {
             let Some(schema) = param_schema::of(spec) else { continue };
+            parsed += 1;
             let typo = json!({"zzTypo": 1});
             if schema.open() || crate::registry::is_incomplete(spec.id) {
                 assert!(check(spec, &typo).is_ok(), "{}", spec.id);
@@ -180,7 +180,11 @@ mod tests {
             }
             checked += 1;
         }
-        assert!(checked > 850, "{checked}");
+        // Most of core's commands with a parsed doc are checked: the rest have open or incomplete
+        // docs. On 24 Nov that was 860 of 943 (91 %), and 802 of 883 (91 %) once the vector commands
+        // moved to their own crate. A share instead of a count holds as further crates are cut out
+        // of core, and still fails if the check stops reaching most commands.
+        assert!(checked * 100 >= parsed * 85, "{checked} of {parsed} commands with a parsed doc checked");
     }
 
     #[test]

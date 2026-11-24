@@ -14,12 +14,13 @@ path = "src/facade.rs"
 
 [features]
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
-corpus = ["photocraft-engine-core/corpus"]
+corpus = ["photocraft-engine-vector/corpus"]
 
 # The engine's code and dependencies live in the engine crates; this crate re-exports them.
 [dependencies]
 photocraft-engine-core = { workspace = true }
 photocraft-engine-paint = { workspace = true }
+photocraft-engine-vector = { workspace = true }
 
 # What tests/ and examples/ use.
 [dev-dependencies]
