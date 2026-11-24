@@ -10,7 +10,7 @@ fn swatches(depth: SampleType) -> Session {
         surface.write_pixel(x as i32, 0, pixel);
     }
     doc.layers.push(layer);
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.add_document(doc, None);
     s
 }
