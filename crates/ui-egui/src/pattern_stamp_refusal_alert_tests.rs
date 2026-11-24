@@ -8,12 +8,11 @@ use serde_json::json;
 use super::*;
 use crate::canvas::{ToolEvent, tool_event};
 
-/// A 64 × 64 document with a painted layer active, black foreground, the Pattern Stamp current.
+/// A 64 × 64 document with an empty layer active, black foreground, the Pattern Stamp current.
 fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
-    app.run("edit.fill", json!({"color": "#dc1e1e"})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
     app.ui.tool = Tool::PatternStamp;
     app.sync_views();
@@ -80,10 +79,18 @@ fn lock_transparent_pixels_still_paints() {
     let id = active(&app);
     app.run("layer.lockLayers", json!({"layer": id, "transparency": true})).unwrap();
     let before = steps(&app);
+    let pixels = {
+        let st = app.session.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds())
+    };
+    assert!(pixels.iter().all(|pixel| *pixel == 0.0), "the target layer starts empty");
     tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 32.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 32.0 }, Modifiers::NONE);
     assert_eq!(alerts(&app), Vec::<String>::new(), "no refusal alert");
     assert_eq!(steps(&app), before + 1, "a Pattern Stamp state is still added");
+    let st = app.session.active().unwrap();
+    let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    assert_eq!(surface.read_region(st.doc.bounds()), pixels, "the press changes no pixels");
 }
 
 /// The Brush keeps the alerts it had: the Pattern Stamp's entry did not take its place.
