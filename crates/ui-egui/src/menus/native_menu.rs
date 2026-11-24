@@ -29,7 +29,7 @@ pub(crate) fn laid_out(app: &mut PhotocraftApp, ctx: &egui::Context) -> Layout {
     let label = |english: &'static str| crate::i18n::tr(lang, english).to_string();
     let keys = menu_keys(app, ctx);
     let options = LayoutOptions::new(APP_NAME).label(&label).keys(&keys);
-    mac_layout(&items::model(app, ctx).bar, &options)
+    mac_layout(items::model(app, ctx).source(), &options)
 }
 
 /// What a layout's system items give way to: the command the keymap gives a key to, in a menu or not (tool keys,

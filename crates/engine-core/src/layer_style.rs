@@ -171,7 +171,7 @@ pub fn effect_defaults(kind: &str) -> Value {
             json!({"style": "inner", "technique": "smooth", "depth": 100, "direction": "up", "size": 5, "soften": 0, "angle": 120, "useGlobalLight": true, "altitude": 30, "glossContour": "Linear", "glossAntiAlias": false, "highlightBlend": "Screen", "highlightColor": "#ffffff", "highlightOpacity": 75, "shadowBlend": "Multiply", "shadowColor": "#000000", "shadowOpacity": 75, "contour": false, "contourName": "Linear", "contourRange": 50, "contourAntiAlias": false})
         }
         "satin" => {
-            json!({"blend": "Multiply", "color": "#000000", "opacity": 50, "angle": 19, "distance": 11, "size": 14, "contour": "Linear", "antiAlias": true, "invert": true})
+            json!({"blend": "Multiply", "color": "#000000", "opacity": 50, "angle": 90, "distance": 50, "size": 80, "contour": "Linear", "antiAlias": true, "invert": true})
         }
         _ => json!({}),
     }
@@ -612,9 +612,9 @@ fn fresh_effect(kind: &str) -> Option<Effect> {
         "satin" => Effect::Satin(Satin {
             common: FxCommon::new(BlendMode::Multiply, 0.5),
             color: Color::BLACK,
-            angle: 19.0,
-            distance: 11.0,
-            size: 14.0,
+            angle: 90.0,
+            distance: 50.0,
+            size: 80.0,
             contour: Contour::Linear,
             anti_alias: true,
             invert: true,
@@ -1285,6 +1285,9 @@ fn delete_effect(s: &mut Session, p: &Value, effect: &Value) -> Result<Value> {
     })?;
     Ok(Value::Null)
 }
+
+#[cfg(test)]
+mod satin_defaults_tests;
 
 #[cfg(test)]
 mod outer_glow_defaults_tests;

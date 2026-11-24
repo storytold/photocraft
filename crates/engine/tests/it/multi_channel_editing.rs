@@ -1,4 +1,6 @@
 use photocraft_color::SampleType;
+use photocraft_engine::brush_cmds::LiveStrokeExt;
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
 use photocraft_engine::{Session, brush_cmds::LiveStroke, channel_cmds::ChannelTarget, color_channels};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;

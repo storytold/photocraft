@@ -3,6 +3,7 @@
 //! `it` so plain `cargo test` runs them without the rest of the suite.
 
 mod artboard_export_scratch;
+mod color_settings_presets;
 mod lut_row_cache_purge;
 mod mask_cache_purge;
 mod memory_gate;

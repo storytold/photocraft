@@ -36,6 +36,8 @@ impl Serialize for SavedPrefs {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         let mut v = self.prefs.to_json();
         if let Value::Object(m) = &mut v {
+            // Match inks by RGB when SettingsStore merges concurrent saves.
+            m.insert("toolColors".into(), super::tool_colors::encode(&self.prefs.tool_colors));
             m.insert("colorSettings".into(), serde_json::to_value(&self.color_settings).map_err(serde::ser::Error::custom)?);
             m.insert("presets".into(), self.presets.clone());
         }
