@@ -766,8 +766,28 @@ fn collect_font_files(dir: &Dir, prefix: &Path, depth: u32, limit: usize, out: &
 
 /// One font file below `dir`, size-limited, or why it couldn't be read.
 fn read_font(dir: &Dir, name: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
-    let file = dir.open(name).map_err(|e| e.to_string())?;
-    read_font_data(file.into_std(), max_bytes)
+    let file = open_font(dir, name).map_err(|e| e.to_string())?;
+    read_font_data(file, max_bytes)
+}
+
+/// Opens a font file without blocking on a special file: the pathname can be replaced by a FIFO
+/// between the walk and this open, and a blocking open would never reach the limits.
+#[cfg(unix)]
+fn open_font(dir: &Dir, name: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsFd as _;
+
+    use rustix::fs::{Mode, OFlags, openat};
+    match openat(dir.as_fd(), name, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK | OFlags::NOFOLLOW, Mode::empty()) {
+        Ok(fd) => Ok(std::fs::File::from(fd)),
+        // A link this walk kept: cap-std resolves it inside the capability, as before.
+        Err(rustix::io::Errno::LOOP) => dir.open(name).map(cap_std::fs::File::into_std),
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(not(unix))]
+fn open_font(dir: &Dir, name: &Path) -> std::io::Result<std::fs::File> {
+    dir.open(name).map(cap_std::fs::File::into_std)
 }
 
 /// A relative path with `/` separators, as font files are reported.

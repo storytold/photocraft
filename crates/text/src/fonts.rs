@@ -1382,7 +1382,20 @@ pub fn catalog() -> &'static Arc<Catalog> {
 /// A file's bytes, unless it is larger than `max_bytes` (then not read).
 #[cfg(not(target_arch = "wasm32"))]
 fn read_font_file(path: &std::path::Path, max_bytes: u64) -> Result<Vec<u8>, String> {
-    read_font_data(std::fs::File::open(path).map_err(|e| e.to_string())?, max_bytes)
+    read_font_data(open_font_file(path).map_err(|e| e.to_string())?, max_bytes)
+}
+
+/// Opens a font file without blocking on a special file: a path swapped for a FIFO between the
+/// walk and this open must not hang the read before the limits run.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn open_font_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new().read(true).custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32).open(path)
+}
+
+#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+fn open_font_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 /// An open font file's bytes, unless it is larger than `max_bytes` (then not read), or why not:
@@ -1391,7 +1404,12 @@ fn read_font_file(path: &std::path::Path, max_bytes: u64) -> Result<Vec<u8>, Str
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_font_data(file: std::fs::File, max_bytes: u64) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
-    let len = file.metadata().map_err(|e| e.to_string())?.len();
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    // A named pipe or device opened by a path swapped after the walk is not a font.
+    if !meta.is_file() {
+        return Err("not a regular file".into());
+    }
+    let len = meta.len();
     if len > max_bytes {
         return Err(too_large(max_bytes));
     }
