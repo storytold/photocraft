@@ -439,6 +439,7 @@ fn smart_object_records_smart_filter() {
                 psd_raw: None,
                 historical_xcf_sample_order: None,
                 historical_xcf_link_digest: None,
+                linked_source_baseline: None,
                 vector_preview: None,
                 filters_enabled: true,
                 filter_mask: None,

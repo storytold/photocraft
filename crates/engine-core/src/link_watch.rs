@@ -13,7 +13,8 @@
 //!
 //! Stamps are kept per document: one in the background is looked at when it comes to the front.
 //! A file seen for the first time is only remembered (one changed while its document was closed
-//! keeps waiting for Update Modified Content, as in Photoshop). For a historical XCF, the first
+//! keeps waiting for Update Modified Content, as in Photoshop). Ordinary links compare their
+//! saved encoded baseline and warn when it changed or cannot be verified. For a historical XCF, the first
 //! look also checks its saved fingerprint and warns if relinking is needed. This fingerprint
 //! check is retried when the file couldn't be read. Regular refreshes of files that can't be read
 //! are tried again once the stamp changes. Only smart objects
@@ -63,6 +64,7 @@ fn linked_files_by_path(d: &Document) -> BTreeMap<String, LinkedLayers> {
             let layers = by_file.entry(path.clone()).or_default();
             layers.ids.push(l.id.0);
             layers.expected.extend(sm.historical_xcf_link_digest);
+            layers.expected.extend(ordinary_digest(sm));
         }
     }
     by_file
@@ -159,6 +161,32 @@ fn first_digest(_: &std::path::Path, _: Stamp, _: &AtomicBool) -> Option<[u8; 32
 fn saved_digest(doc: &Document, layer: u64) -> Option<[u8; 32]> {
     let LayerContent::Smart(smart) = &doc.layer(LayerId(layer))?.content else { return None };
     smart.historical_xcf_link_digest
+}
+
+fn ordinary_digest(smart: &photocraft_doc::SmartObject) -> Option<[u8; 32]> {
+    if smart.historical_xcf_sample_order.is_some() {
+        return None;
+    }
+    let SmartSource::Linked { path } = &smart.source else { return None };
+    smart.linked_source_baseline.as_ref().filter(|baseline| &baseline.path == path).map(|baseline| baseline.digest)
+}
+
+fn ordinary_link_warning(doc: &Document, ids: &[u64], digest: Option<[u8; 32]>, first: bool) -> Option<&'static str> {
+    let mut unverified = false;
+    for id in ids {
+        let Some(LayerContent::Smart(smart)) = doc.layer(LayerId(*id)).map(|layer| &layer.content) else { continue };
+        if smart.historical_xcf_sample_order.is_some() {
+            continue;
+        }
+        match (ordinary_digest(smart), digest) {
+            (Some(saved), Some(observed)) if saved != observed => {
+                return Some("the linked source changed since its saved pixels were rendered; use Update Modified Content to refresh it");
+            }
+            (None, _) | (Some(_), None) => unverified = true,
+            _ => {}
+        }
+    }
+    (first && unverified).then_some("the saved linked pixels cannot be verified against the source; use Update Modified Content to refresh them")
 }
 
 /// Resolve the disk paths and identify first observations that need a fingerprint.
@@ -346,6 +374,7 @@ fn apply_link_stamps(s: &mut Session, doc: u64, now: Vec<LinkObservation>) -> Re
     if s.active().map(|d| d.doc.id.0) != Some(doc) {
         return Ok(json!({"updated": []}));
     }
+    let previously_missing: HashSet<_> = s.link_missing.iter().filter(|(id, _)| *id == doc).map(|(_, path)| path.clone()).collect();
     note_missing_links(s, doc, &now);
     // A background job holds the document: refreshing now would replace the snapshot it works
     // on and its result would be discarded. The stamps stay as they were, so the change is
@@ -368,6 +397,11 @@ fn apply_link_stamps(s: &mut Session, doc: u64, now: Vec<LinkObservation>) -> Re
     let mut warnings = BTreeSet::new();
     let mut needs_relink = Vec::new();
     for LinkObservation { path, layers, stamp, first_digest, .. } in now {
+        if let Some(state) = s.active()
+            && let Some(message) = ordinary_link_warning(&state.doc, &layers, first_digest, !before.contains_key(&path) && !previously_missing.contains(&path))
+        {
+            warnings.insert(format!("{path}: {message}"));
+        }
         match (before.get(&path), stamp) {
             // Not there right now (an app saving by delete and rename): keep the last stamp.
             (Some(old), None) => {
@@ -428,8 +462,12 @@ fn apply_link_stamps(s: &mut Session, doc: u64, now: Vec<LinkObservation>) -> Re
         });
         // Not readable (still being written, or not a format smart objects read): the edit left
         // nothing behind, and the file is tried again once it changes again, not on every look.
-        if let Ok(refreshed) = r {
-            updated.extend(refreshed);
+        match r {
+            Ok(refreshed) => updated.extend(refreshed),
+            Err(EngineError::HistoricalXcfLinkChanged(_)) => {}
+            Err(error) => {
+                warnings.insert(format!("{path}: {error}"));
+            }
         }
         if let Some(message) = stale {
             warnings.insert(format!("{path}: {message}"));
@@ -1095,5 +1133,97 @@ mod tests {
             assert_eq!(pixel[3], 1.0);
             assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
         }
+    }
+    fn reopen_ordinary_link(folder: &std::path::Path, legacy: bool) -> (Session, u64, std::path::PathBuf, std::path::PathBuf) {
+        let source = folder.join("ordinary.png");
+        let native = folder.join("saved.pcraft");
+        std::fs::write(&source, png(10, 10, "#ff0000")).unwrap();
+        let (mut s, layer) = placed(&source);
+        if legacy {
+            s.edit("Legacy linked pixels", |doc, _| {
+                let photocraft_doc::LayerContent::Smart(smart) = &mut doc.layer_mut(photocraft_doc::LayerId(layer)).unwrap().content else {
+                    panic!("smart layer")
+                };
+                smart.linked_source_baseline = None;
+                Ok(())
+            })
+            .unwrap();
+        }
+        s.execute("file.saveACopy", json!({"path":native})).unwrap();
+        s.close(0);
+        s.execute("file.openAs", json!({"path":native})).unwrap();
+        (s, layer, source, native)
+    }
+
+    #[test]
+    fn an_unchanged_ordinary_native_link_reopens_quietly_without_an_edit() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut s, layer, source, _) = reopen_ordinary_link(folder.path(), false);
+        let before = s.active().unwrap().doc.clone();
+        let LayerContent::Smart(smart) = &before.layer(photocraft_doc::LayerId(layer)).unwrap().content else { panic!("smart layer") };
+        let baseline = smart.linked_source_baseline.as_ref().unwrap();
+        assert_eq!(baseline.path, source.to_str().unwrap());
+        assert_eq!(baseline.digest, *blake3::hash(&std::fs::read(&source).unwrap()).as_bytes());
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+        assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+    }
+
+    #[test]
+    fn a_changed_ordinary_native_link_warns_even_at_its_saved_stamp_then_explicitly_refreshes() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut s, layer, source, native) = reopen_ordinary_link(folder.path(), false);
+        // Close again before changing bytes, so the next scan is truly the reopened first look.
+        s.close(0);
+        let timestamp = std::fs::metadata(&source).unwrap().modified().unwrap();
+        std::fs::write(&source, png(10, 10, "#0000ff")).unwrap();
+        std::fs::File::options().write(true).open(&source).unwrap().set_times(std::fs::FileTimes::new().set_modified(timestamp)).unwrap();
+        s.execute("file.openAs", json!({"path":native})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let result = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+        assert_eq!(result["updated"], json!([]));
+        assert!(result["warnings"][0].as_str().unwrap().contains("changed since"));
+        assert!(result.get("needsRelink").is_none(), "ordinary freshness does not revoke a historical interpretation");
+        assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert!(is(centre(&s), RED));
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+        s.execute("layer.smartObjects.updateModifiedContent", json!({"layer":layer})).unwrap();
+        assert!(is(centre(&s), BLUE));
+        s.execute("file.saveACopy", json!({"path":native})).unwrap();
+        s.close(0);
+        s.execute("file.openAs", json!({"path":native})).unwrap();
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+        assert!(is(centre(&s), BLUE));
+    }
+
+    #[test]
+    fn a_legacy_ordinary_native_link_reports_its_unverifiable_pixels_once() {
+        let folder = tempfile::tempdir().unwrap();
+        let (mut s, _, _, _) = reopen_ordinary_link(folder.path(), true);
+        let before = s.active().unwrap().doc.clone();
+        let result = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+        assert_eq!(result["updated"], json!([]));
+        assert!(result["warnings"][0].as_str().unwrap().contains("cannot be verified"));
+        assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
+    }
+
+    #[test]
+    fn an_ordinary_reopen_does_not_read_a_denied_source_to_verify_its_baseline() {
+        fn deny(id: &str, _: &serde_json::Value) -> crate::Result<()> {
+            if id == "layer.smartObjects.updateModifiedContent" {
+                return Err(EngineError::Other("linked read denied".into()));
+            }
+            Ok(())
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let (mut s, _, _, _) = reopen_ordinary_link(folder.path(), false);
+        s.authorize = Some(deny);
+        let state = s.active().unwrap();
+        let links = super::resolved_files(&s, state);
+        assert!(!links[0].check_first_digest);
+        let before = state.doc.clone();
+        let result = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+        assert!(result["warnings"][0].as_str().unwrap().contains("cannot be verified"));
+        assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
     }
 }

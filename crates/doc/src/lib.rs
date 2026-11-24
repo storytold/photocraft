@@ -595,6 +595,14 @@ impl std::fmt::Display for HistoricalXcfSampleOrder {
     }
 }
 
+/// Encoded ordinary linked source used to produce the saved pixels. This is a freshness
+/// baseline, not permission to read a file or reinterpret historical XCF samples.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
+pub struct LinkedSourceBaseline {
+    pub path: String,
+    pub digest: [u8; 32],
+}
+
 #[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
@@ -605,6 +613,8 @@ pub struct SmartObject {
     pub historical_xcf_sample_order: Option<HistoricalXcfSampleOrder>,
     /// Exact encoded linked bytes to which that explicit interpretation applies.
     pub historical_xcf_link_digest: Option<[u8; 32]>,
+    /// Native-save freshness baseline for ordinary linked contents.
+    pub linked_source_baseline: Option<LinkedSourceBaseline>,
     /// Optional source-pixel display preview for AI/PDF/EPS; ignored after source bytes change.
     pub vector_preview: Option<VectorPreview>,
     pub transform: Affine,
@@ -640,6 +650,7 @@ impl SmartObject {
             source,
             historical_xcf_sample_order: None,
             historical_xcf_link_digest: None,
+            linked_source_baseline: None,
             vector_preview: None,
             transform,
             smart_filters: Vec::new(),

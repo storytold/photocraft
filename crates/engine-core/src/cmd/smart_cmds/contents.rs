@@ -48,6 +48,7 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
             let object = smart_mut(doc, instance)?;
             object.source = new.clone();
             object.historical_xcf_link_digest = None;
+            object.linked_source_baseline = None;
             if !keep_psd {
                 object.historical_xcf_sample_order = None;
             }
@@ -192,6 +193,7 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
             sm.source = SmartSource::Embedded { file_name: format!("{stem}.pcraft"), bytes: bytes.clone() };
             sm.historical_xcf_sample_order = None;
             sm.historical_xcf_link_digest = None;
+            sm.linked_source_baseline = None;
             detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
             refresh_or_fail(doc, id)?;
         }

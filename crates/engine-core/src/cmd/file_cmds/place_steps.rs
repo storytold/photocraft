@@ -270,6 +270,11 @@ impl PlaceSteps {
             };
             let mut so = SmartObject::new(source, placement, px);
             so.historical_xcf_sample_order = self.historical_order;
+            if let Some(path) = &input.linked
+                && self.historical_order.is_none()
+            {
+                so.linked_source_baseline = Some(photocraft_doc::LinkedSourceBaseline { path: path.clone(), digest: *blake3::hash(&self.bytes).as_bytes() });
+            }
             if input.linked.is_some() && self.historical_order.is_some() {
                 so.historical_xcf_link_digest = Some(photocraft_io::linked::historical_xcf_digest(&self.bytes));
             }
@@ -278,7 +283,11 @@ impl PlaceSteps {
             if let Some(doc) = &input.doc {
                 ctx.progress(0.9, "Rendering");
                 ctx.check()?;
-                let (sharp, warnings) = crate::smart_cmds::render_with_warnings(doc, &so)?;
+                let (sharp, warnings) = crate::smart_cmds::render_with_warnings_snapshot(
+                    &so,
+                    &mut crate::smart_cmds::WarningRenderSources::new(doc),
+                    (input.name.clone(), self.bytes.clone()),
+                )?;
                 for warning in warnings {
                     if !self.warnings.contains(&warning) {
                         self.warnings.push(warning);

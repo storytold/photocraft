@@ -57,6 +57,7 @@ fn embed_nested(meta: &Metadata, l: &mut Layer) -> Result<()> {
         if let LayerContent::Smart(sm) = &mut l.content {
             super::rendering::check_historical_link(sm, &f.bytes)?;
             sm.historical_xcf_link_digest = None;
+            sm.linked_source_baseline = None;
             sm.source = SmartSource::Embedded { file_name: f.file_name, bytes: Arc::new(f.bytes) };
         }
         detach_psd(l);

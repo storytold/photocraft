@@ -333,6 +333,7 @@ pub(super) fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
             if let Some((file_name, bytes)) = source_bytes(&doc.metadata, &sm.source) {
                 super::rendering::check_historical_link(sm, &bytes)?;
                 sm.historical_xcf_link_digest = None;
+                sm.linked_source_baseline = None;
                 sm.source = SmartSource::Embedded { file_name, bytes };
             }
         } else {

@@ -612,6 +612,7 @@ fn a_linked_fifo_is_not_read() {
         perspective: None,
         historical_xcf_sample_order: None,
         historical_xcf_link_digest: None,
+        linked_source_baseline: None,
         vector_preview: None,
     };
     doc.layers.push(Layer::new("Linked", LayerContent::Smart(smart)));

@@ -391,6 +391,7 @@ pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
 
 /// Command-only rendering that retains usable SVG artwork and reports omitted embedded images.
 /// Its local source cache never enters the strict process-wide source/filter caches.
+#[cfg(test)]
 pub(crate) fn render_with_warnings(doc: &Document, sm: &SmartObject) -> Result<(Option<Surface>, Vec<String>)> {
     render_with_warnings_using(sm, &mut WarningRenderSources::new(doc))
 }
@@ -499,10 +500,20 @@ impl<'a> WarningRenderSources<'a> {
 /// Reuse only warning-aware source pixels during one shared-content update.
 pub fn render_with_warnings_using(sm: &SmartObject, sources: &mut WarningRenderSources<'_>) -> Result<(Option<Surface>, Vec<String>)> {
     let doc = sources.document;
+    let Some(snapshot) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
+    render_with_warnings_snapshot(sm, sources, snapshot)
+}
+
+pub(crate) fn render_with_warnings_snapshot(
+    sm: &SmartObject,
+    sources: &mut WarningRenderSources<'_>,
+    snapshot: (String, Arc<Vec<u8>>),
+) -> Result<(Option<Surface>, Vec<String>)> {
+    let doc = sources.document;
     if sm.vector_preview.is_some() || sm.stack_mode.is_some() {
-        return render(doc, sm).map(|surface| (surface, Vec::new()));
+        return render_in_with_source(doc, sm, &JobCtx::new(), Some(snapshot)).map(|surface| (surface, Vec::new()));
     }
-    let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok((None, Vec::new())) };
+    let (name, bytes) = snapshot;
     check_historical_link(sm, &bytes)?;
     if !photocraft_io::svg::is_svg(&bytes) {
         // Keep the same source snapshot for fallback, including authorized linked reads.
@@ -615,6 +626,14 @@ pub fn render_below_filter(doc: &Document, sm: &SmartObject, index: usize) -> Re
     render(doc, &below)
 }
 
+pub(crate) fn linked_source_baseline(sm: &SmartObject, source: Option<&(String, Arc<Vec<u8>>)>) -> Option<photocraft_doc::LinkedSourceBaseline> {
+    let SmartSource::Linked { path } = &sm.source else { return None };
+    if sm.historical_xcf_sample_order.is_some() {
+        return None;
+    }
+    Some(photocraft_doc::LinkedSourceBaseline { path: path.clone(), digest: *blake3::hash(&source?.1).as_bytes() })
+}
+
 /// Re-renders smart layer `l` (which lives in `doc`) in place. Returns false if its source is
 /// unavailable or a visible filter can't be applied (the cache is then left alone).
 pub fn refresh_layer(doc: &Document, l: &mut Layer) -> Result<bool> {
@@ -634,9 +653,12 @@ pub(super) fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
 
 fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
     let LayerContent::Smart(sm) = &mut l.content else { return Ok(false) };
-    match render_in(doc, sm, ctx)? {
+    let Some(source) = source_bytes(&doc.metadata, &sm.source) else { return Ok(false) };
+    let baseline = linked_source_baseline(sm, Some(&source));
+    match render_in_with_source(doc, sm, ctx, Some(source))? {
         Some(px) => {
             sm.cache = Some(px);
+            sm.linked_source_baseline = baseline;
             Ok(true)
         }
         None => Ok(false),
@@ -669,8 +691,9 @@ pub(super) fn refresh_or_fail_from_source(doc: &mut Document, id: LayerId, ctx: 
     ctx.check()?;
     let mut layer = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
     let LayerContent::Smart(object) = &mut layer.content else { return Err(other("the layer is not a smart object")) };
-    let surface = render_in_with_source(doc, object, ctx, Some(source))?.ok_or_else(|| other("the smart object's contents could not be rendered"))?;
+    let surface = render_in_with_source(doc, object, ctx, Some(source.clone()))?.ok_or_else(|| other("the smart object's contents could not be rendered"))?;
     ctx.check()?;
+    object.linked_source_baseline = linked_source_baseline(object, Some(&source));
     object.cache = Some(surface);
     let target = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
     target.content = layer.content;

@@ -748,6 +748,7 @@ impl Ctx<'_> {
             source: SmartSource::Linked { path: id },
             historical_xcf_sample_order: historical.map(|(order, _)| order),
             historical_xcf_link_digest: historical.map(|(_, digest)| digest),
+            linked_source_baseline: None,
             vector_preview,
             transform,
             smart_filters: stack.filters,
