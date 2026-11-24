@@ -52,7 +52,8 @@ fn stamp(_: Option<&std::path::Path>) -> Option<Stamp> {
 #[derive(Default)]
 struct LinkedLayers {
     ids: Vec<u64>,
-    expected: BTreeSet<[u8; 32]>,
+    historical: BTreeSet<[u8; 32]>,
+    has_ordinary_baseline: bool,
 }
 
 fn linked_files_by_path(d: &Document) -> BTreeMap<String, LinkedLayers> {
@@ -63,8 +64,8 @@ fn linked_files_by_path(d: &Document) -> BTreeMap<String, LinkedLayers> {
         {
             let layers = by_file.entry(path.clone()).or_default();
             layers.ids.push(l.id.0);
-            layers.expected.extend(sm.historical_xcf_link_digest);
-            layers.expected.extend(ordinary_digest(sm));
+            layers.historical.extend(sm.historical_xcf_link_digest);
+            layers.has_ordinary_baseline |= ordinary_digest(sm).is_some();
         }
     }
     by_file
@@ -171,7 +172,7 @@ fn ordinary_digest(smart: &photocraft_doc::SmartObject) -> Option<[u8; 32]> {
     smart.linked_source_baseline.as_ref().filter(|baseline| &baseline.path == path).map(|baseline| baseline.digest)
 }
 
-fn ordinary_link_warning(doc: &Document, ids: &[u64], digest: Option<[u8; 32]>, first: bool) -> Option<&'static str> {
+fn ordinary_link_warning(doc: &Document, ids: &[u64], digest: Option<[u8; 32]>) -> Option<&'static str> {
     let mut unverified = false;
     for id in ids {
         let Some(LayerContent::Smart(smart)) = doc.layer(LayerId(*id)).map(|layer| &layer.content) else { continue };
@@ -186,7 +187,7 @@ fn ordinary_link_warning(doc: &Document, ids: &[u64], digest: Option<[u8; 32]>, 
             _ => {}
         }
     }
-    (first && unverified).then_some("the saved linked pixels cannot be verified against the source; use Update Modified Content to refresh them")
+    unverified.then_some("the saved linked pixels cannot be verified against the source; use Update Modified Content to refresh them")
 }
 
 /// Resolve the disk paths and identify first observations that need a fingerprint.
@@ -197,10 +198,12 @@ fn resolved_files(s: &Session, st: &crate::DocState) -> Vec<ResolvedLink> {
         .into_iter()
         .map(|(path, layers)| {
             let file = crate::doc_path::resolve_in(&path, document).ok();
+            let previous = s.link_stamps.get(&(st.doc.id.0, path.clone()));
+            let check_ordinary = layers.has_ordinary_baseline && previous.is_none();
+            let check_historical = !layers.historical.is_empty() && previous.and_then(|stamp| stamp.checked_digests.as_ref()) != Some(&layers.historical);
             let check_first_digest = can_check_digest
                 && file.is_some()
-                && !layers.expected.is_empty()
-                && s.link_stamps.get(&(st.doc.id.0, path.clone())).and_then(|stamp| stamp.checked_digests.as_ref()) != Some(&layers.expected)
+                && (check_ordinary || check_historical)
                 && s.authorize.is_none_or(|gate| gate("layer.smartObjects.updateModifiedContent", &json!({"path":path})).is_ok());
             ResolvedLink { path, file, layers: layers.ids, check_first_digest }
         })
@@ -397,8 +400,10 @@ fn apply_link_stamps(s: &mut Session, doc: u64, now: Vec<LinkObservation>) -> Re
     let mut warnings = BTreeSet::new();
     let mut needs_relink = Vec::new();
     for LinkObservation { path, layers, stamp, first_digest, .. } in now {
-        if let Some(state) = s.active()
-            && let Some(message) = ordinary_link_warning(&state.doc, &layers, first_digest, !before.contains_key(&path) && !previously_missing.contains(&path))
+        if !before.contains_key(&path)
+            && !previously_missing.contains(&path)
+            && let Some(state) = s.active()
+            && let Some(message) = ordinary_link_warning(&state.doc, &layers, first_digest)
         {
             warnings.insert(format!("{path}: {message}"));
         }
@@ -824,7 +829,10 @@ mod tests {
         // Another app has only written the start of the file so far.
         let full = png(10, 10, "#0000ff");
         save(&path, &full[..16]);
-        assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated": []}));
+        let partial = s.execute("layer.smartObjects.updateChanged", json!({})).unwrap();
+        assert_eq!(partial["updated"], json!([]));
+        assert_eq!(partial["warnings"].as_array().unwrap().len(), 1);
+        assert!(partial["warnings"][0].as_str().unwrap().contains("malformed data"));
         assert!(is(centre(&s), RED), "the last good pixels stay");
         assert_eq!(s.active().unwrap().history.past_len(), undo, "no step for a failed update");
         save(&path, &full);
@@ -1188,7 +1196,7 @@ mod tests {
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
         s.execute("layer.smartObjects.updateModifiedContent", json!({"layer":layer})).unwrap();
         assert!(is(centre(&s), BLUE));
-        s.execute("file.saveACopy", json!({"path":native})).unwrap();
+        s.execute("file.saveACopy", json!({"path":native,"overwrite":true})).unwrap();
         s.close(0);
         s.execute("file.openAs", json!({"path":native})).unwrap();
         assert_eq!(s.execute("layer.smartObjects.updateChanged", json!({})).unwrap(), json!({"updated":[]}));
