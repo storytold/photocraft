@@ -59,9 +59,10 @@ pub(super) fn shown_scale(app: &PhotocraftApp) -> f32 {
 
 /// The styles a new Type-tool layer will receive. Use the same command parameters for the
 /// panels and creation so defaults also survive action recording/replay. The older options-bar
-/// fields remain authoritative, and text colour continues to follow the foreground colour.
-pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
-    let o = &app.ui.tool_options;
+/// fields remain authoritative, and text colour continues to follow the foreground colour. `o` is
+/// the options-bar state to read: today's live one for a panel or a plain gesture, a snapshot taken
+/// when the Paragraph Text Size dialog opened for its OK (#12044).
+pub(super) fn default_style_params(app: &PhotocraftApp, o: &crate::state::ToolOptions) -> serde_json::Value {
     let mut p = json!({});
     // Settings are editable JSON: only recognized formatting keys may reach type.create.
     // In particular a stray `text`, `box`, or `coalesce` key must not become a create parameter.
@@ -92,6 +93,45 @@ pub(super) fn default_style_params(app: &PhotocraftApp) -> serde_json::Value {
     p
 }
 
+/// The `type.create` keys a new Type Mask takes from the document's active text layer (#12077):
+/// the font, style and size the options bar shows for that layer, so the mask starts in the same
+/// type settings instead of the tool's fresh defaults. Measured is only a click (not a paragraph
+/// box) with the Horizontal Type Mask over a horizontal text layer, so any other active layer
+/// gives `None` and today's tool options apply. The colour stays the foreground colour, as the
+/// rest of the create parameters do.
+pub(super) fn mask_style_from_active_layer(app: &PhotocraftApp) -> Option<serde_json::Value> {
+    let st = app.session.active()?;
+    let t = text_layer(&st.doc, st.active_layer?)?;
+    if t.orientation != photocraft_doc::text::Orientation::Horizontal {
+        return None;
+    }
+    // The same first run the options bar names the layer by (`bar_character_values`), at the same
+    // shown size: a 12 pt layer scaled 200 % shows 24 pt. Only reached with no type session open,
+    // where `shown_scale` reads this very layer.
+    let c = t.char_runs().into_iter().next()?.style;
+    let mut p = json!({});
+    // An empty name is the layer's placeholder for the default family, not a name to hand to
+    // `type.create`: the key is only taken when the layer names one.
+    if !c.font_family.is_empty() {
+        p["font"] = json!(c.font_family);
+    }
+    if !c.font_style.is_empty() {
+        p["fontStyle"] = json!(c.font_style);
+    }
+    let size = c.size_pt * shown_scale(app);
+    // Only inherit a size `type.create` would itself accept, asked through the engine's own
+    // `check_size_tracking` so the range stays single-sourced (0.1-1296 pt today). `json!` turns
+    // a non-finite product into `null`, which the check refuses; a FINITE shown size can leave
+    // the range too: an 800 pt layer under a 2x transform shows 1600 pt, and a corrupt document
+    // can carry a 0 pt run. A refused parameter fails the whole create, and the click would make
+    // no mask at all - so such a size stays out of the parameters and the tool's own applies, as
+    // it does for a family or style the layer does not name.
+    if photocraft_engine::type_cmds::check_size_tracking(&json!({ "size": size })).is_ok() {
+        p["size"] = json!(size);
+    }
+    Some(p)
+}
+
 /// Style numbers become f32 in the engine. JSON itself permits finite f64 values too large
 /// for that conversion; a hand-edited setting must not inject infinity into a new layer.
 /// Style collections (features, axes, colour) contain only scalar values, so no recursion.
@@ -110,7 +150,7 @@ fn finite_style_value(value: &serde_json::Value) -> bool {
 
 pub(super) fn default_styles(app: &PhotocraftApp) -> (photocraft_doc::text::CharStyle, photocraft_doc::text::ParagraphStyle) {
     let (mut c, mut para) = app.session.type_defaults.clone().unwrap_or_default();
-    let mut p = default_style_params(app);
+    let mut p = default_style_params(app, &app.ui.tool_options);
     // The saved panels can appear on the very first frame. Style parsing resolves the named
     // font through shared(), which waits for the font scan; display the saved names meanwhile,
     // and let fonts_ready/axis_sliders expose the font controls when try_shared is ready.

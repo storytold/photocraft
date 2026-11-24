@@ -1,6 +1,7 @@
 //! Sampled-tip preparation and live strokes on a materialized 24 MP layer. This harness also
 //! builds against the pre-cache revision for alternating before/after runs on the same runner.
 //! `cargo run --release -p photocraft-engine --example bench_brush_mips`
+use photocraft_engine::brush_cmds::LiveStrokeExt;
 use std::hint::black_box;
 use std::time::Instant;
 
