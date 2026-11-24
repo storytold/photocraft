@@ -1,5 +1,6 @@
 //! #7671: exported Stroke widths must have the same effect as command execution.
 use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::{Value, json};
@@ -54,7 +55,7 @@ fn check_pixels(widths: &[(f64, u32)]) {
                 }
 
                 let mut native = fixture(depth);
-                native.actions.list.push(action.clone()).unwrap();
+                native.actions_mut().list.push(action.clone()).unwrap();
                 native.execute("actions.play", json!({"action": "Stroke"})).unwrap();
                 assert_eq!(pixels(&native), expected);
 
@@ -68,7 +69,7 @@ fn check_pixels(widths: &[(f64, u32)]) {
                 assert_eq!(imported.actions[0].steps[0].command, "edit.stroke");
                 let imported_width = imported.actions[0].steps[0].params["width"].clone();
                 let mut replay = fixture(depth);
-                replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+                replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
                 replay.execute("actions.play", json!({"action": "Stroke"})).unwrap();
                 if pixels(&replay) != expected {
                     lost.push(format!("depth {depth}, {location}, width {width} -> {imported_width}, expected {effective}"));
@@ -134,7 +135,7 @@ fn descriptor_width_matches_defaults_limits_and_other_stroke_options() {
         let mut direct = fixture(8);
         direct.execute("edit.stroke", params).unwrap();
         let mut replay = fixture(8);
-        replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         replay.execute("actions.play", json!({"action": "Stroke"})).unwrap();
         assert_eq!(pixels(&replay), pixels(&direct));
     }
@@ -149,7 +150,7 @@ fn descriptor_width_matches_defaults_limits_and_other_stroke_options() {
     let mut direct = fixture(8);
     direct.execute("edit.stroke", Value::Null).unwrap();
     let mut replay = fixture(8);
-    replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+    replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     replay.execute("actions.play", json!({"action": "Default"})).unwrap();
     assert_eq!(pixels(&replay), pixels(&direct));
 }

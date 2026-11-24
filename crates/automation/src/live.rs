@@ -52,6 +52,9 @@ pub struct LiveConfig {
     pub allowed: fn(&photocraft_engine::prefs::Integrations) -> bool,
     /// Prepares a headless session before its first call (the CLI's `--gpu` / `--no-gpu`).
     pub prepare_headless: Option<PrepareFn>,
+    /// The default agent folder for an empty folder setting: `Documents/ArtCraft/Agents/PhotoCraft`
+    /// (`craft::control::agents::default_folder`); tests replace it.
+    pub default_folder: Option<PathBuf>,
 }
 
 impl LiveConfig {
@@ -65,6 +68,7 @@ impl LiveConfig {
             launch_timeout: LAUNCH_TIMEOUT,
             allowed: agent_link::agents_allowed_now,
             prepare_headless: None,
+            default_folder: craft::control::agents::default_folder(APP_NAME),
         }
     }
 }
@@ -89,11 +93,14 @@ type Shared = agents::Live<Arc<BridgeClient>, Arc<Mutex<Headless>>>;
 
 pub struct Live {
     shared: Arc<Shared>,
+    /// The app's settings folder and default agent folder, for [`Self::window_folders`].
+    config_dir: PathBuf,
+    default_folder: Option<PathBuf>,
 }
 
 impl Live {
     pub fn new(cfg: LiveConfig) -> Self {
-        let LiveConfig { config_dir, when_closed, read_roots, write_root, launch, launch_timeout, allowed, prepare_headless } = cfg;
+        let LiveConfig { config_dir, when_closed, read_roots, write_root, launch, launch_timeout, allowed, prepare_headless, default_folder } = cfg;
         let consent = move |dir: &Path| {
             let integrations = agent_link::read_integrations(dir);
             Consent::new(allowed(&integrations), integrations.agents)
@@ -108,13 +115,24 @@ impl Live {
             }
             Ok(Arc::new(Mutex::new(session)))
         };
-        let mut shared = agents::LiveConfig::new(APP_NAME, config_dir, consent, connect, headless);
+        let mut shared = agents::LiveConfig::new(APP_NAME, config_dir.clone(), consent, connect, headless);
         shared.when_closed = when_closed;
         shared.read_roots = read_roots;
         shared.write_root = write_root;
         shared.launch = launch;
         shared.launch_timeout = launch_timeout;
-        Live { shared: Arc::new(agents::Live::new(shared)) }
+        shared.default_folder = default_folder.clone();
+        Live { shared: Arc::new(agents::Live::new(shared)), config_dir, default_folder }
+    }
+
+    /// The folders the open window lets agents use: its saved agent folders, the default agent
+    /// folder for an empty one, as the window's agent link opens them
+    /// (`AgentSettings::folders`). Reads the settings file, so it runs off the async runtime.
+    pub(crate) async fn window_folders(&self) -> Result<craft::control::agents::AgentFolders, String> {
+        let (dir, default) = (self.config_dir.clone(), self.default_folder.clone());
+        tokio::task::spawn_blocking(move || agent_link::read_integrations(&dir).agents.folders_with(default.as_deref()))
+            .await
+            .map_err(|e| format!("task failed: {e}"))
     }
 
     pub(crate) fn current(&self) -> Option<Target> {

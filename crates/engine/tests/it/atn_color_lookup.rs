@@ -1,6 +1,7 @@
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_doc::{Adjustment, LayerContent};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{ActionList, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
@@ -81,7 +82,7 @@ fn embedded_lookup_bytes_replay_invert_and_save_the_exact_descriptor() {
             let mut s = fixture(depth);
             let before = saved(&s);
             let original = pixels(&s);
-            s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
+            s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
             assert_eq!(s.execute("actions.play", json!({"action":"Lookup"})).unwrap()["ran"], 1);
             for (got, old) in pixels(&s).iter().zip(&original) {
                 for c in 0..3 {
@@ -169,7 +170,7 @@ fn embedded_three_dl_retains_its_nonlinear_shaper_through_action_playback() {
     for depth in [8, 16, 32] {
         let mut s = fixture(depth);
         let original = pixels(&s);
-        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action":"Lookup"})).unwrap()["ran"], 1);
         for (got, old) in pixels(&s).iter().zip(&original) {
             for c in 0..3 {
@@ -240,7 +241,7 @@ fn recorded_dither_changes_float_pixels_within_its_documented_bound() {
         let imported = atn_cmds::import(&encoded(d)).unwrap();
         assert!(imported.unsupported.is_empty());
         let mut s = fixture(32);
-        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action":"Lookup"})).unwrap()["ran"], 1);
         pixels(&s)
     };
