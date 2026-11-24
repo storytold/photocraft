@@ -637,7 +637,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             // Scale and Offset only affect Add and Subtract.
             rows.extend([
                 on_target(choice("sourceLayer", tl!("Layer"), channels(&layers), &layer)),
-                on_target(choice("sourceChannel", tl!("Source Channel"), channels(&load), &chans[0])),
+                on_target(choice("sourceChannel", tl!("Channel"), channels(&load), &chans[0])),
             ]);
             rows.extend(apply_image_other_source_rows(app));
             rows.extend([

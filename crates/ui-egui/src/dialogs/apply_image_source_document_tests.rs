@@ -163,6 +163,17 @@ fn layer_and_channel_follow_the_chosen_document() {
 }
 
 #[test]
+fn the_source_rows_read_layer_and_channel_for_every_document() {
+    let (mut app, _) = five_documents();
+    let source = index_of(&app, "source");
+    let (params, _) = params_for(&mut app, APPLY).unwrap();
+    let label = |key: &str| params.iter().find(|p| p.key == key).map(|p| p.label.as_str().to_owned());
+    assert_eq!(label("sourceChannel").as_deref(), Some("Channel"));
+    assert_eq!(label(&channel_key(source)).as_deref(), Some("Channel"));
+    assert_eq!(label("sourceLayer").as_deref(), Some("Layer"));
+}
+
+#[test]
 fn the_target_line_names_the_target() {
     let (mut app, _) = five_documents();
     let (params, _) = params_for(&mut app, APPLY).unwrap();
