@@ -383,3 +383,53 @@ fn a_commit_on_another_document_keeps_the_first_commits_session() {
     tick_until(&mut h, |app| app.vanishing_committing.is_empty());
     assert!(h.state().vanishing_committing.iter().all(|c| c.job != b_job), "B's entry goes when its job ends");
 }
+
+#[test]
+fn a_retried_commit_pastes_the_image_its_workspace_showed() {
+    // The workspace given back after a cancel showed the clipboard image it opened with, but OK pasted whatever the
+    // clipboard held by then: a copy made in another document while the job ran.
+    let mut app = app_with_layer();
+    app.background_jobs = true;
+    copy_red_square(&mut app);
+    let (a_doc, layer) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.active_layer.unwrap())
+    };
+    let steps = app.session.active().unwrap().history.past_len();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [floor()]}));
+    let job = ok_as_job(&mut h);
+
+    // Document B copies a green square while A's job runs.
+    let s = &mut h.state_mut().session;
+    s.execute("file.new", json!({"width": 240, "height": 160, "depth": 16})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap();
+    s.execute("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let a_index = s.documents().iter().position(|st| st.doc.id == a_doc).unwrap();
+    assert!(s.set_active(a_index));
+    h.state_mut().sync_views();
+
+    assert!(h.state_mut().session.cancel_job(job));
+    h.state_mut().session.join_cancelled_jobs();
+    tick_until(&mut h, |app| app.vanishing.is_some());
+    assert!(h.state().vanishing.is_some(), "the workspace comes back after the cancel");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing applied");
+
+    // Retry: the paste is the red square the workspace showed, and the clipboard keeps the green one.
+    ok_as_job(&mut h);
+    tick_until(&mut h, |app| app.vanishing_committing.is_empty());
+    let app = h.state();
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "the retry landed");
+    let l = committed(app, layer, false);
+    let hm = VpPlane { corners: [[70.0, 60.0], [170.0, 60.0], [220.0, 150.0], [20.0, 150.0]] }.homography().unwrap();
+    let (x, y) = hm.apply(0.4, 0.35);
+    let px = l.rgba(x as i32, y as i32);
+    assert!(px[0] > 0.9 && px[1] < 0.1, "the original red image, not the newer green copy: {px:?}");
+    let clip = app.session.clipboard.as_ref().expect("the clipboard keeps the newer copy");
+    let b = clip.surface.content_bounds();
+    assert!(clip.surface.rgba(b.x0, b.y0)[1] > 0.9, "{:?}", clip.surface.rgba(b.x0, b.y0));
+    assert!(app.session.vanishing_paste.is_none(), "the captured image was taken");
+}

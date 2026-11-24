@@ -214,10 +214,12 @@ pub fn over(dst: &mut Surface, top: &Surface) {
 }
 
 fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
+    // Taken first, so a refused call leaves no source behind for the next one.
+    let captured = s.vanishing_paste.take();
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = st.doc.bounds();
     let sc = scene(p, canvas)?;
-    // Paste sources resolved up front (layer pixels or the clipboard).
+    // Paste sources resolved up front (layer pixels, or the captured image or the clipboard).
     let mut pastes: Vec<(usize, Surface, Rect, [f64; 2], f64)> = Vec::new();
     for (k, item) in p.get("paste").and_then(Value::as_array).cloned().unwrap_or_default().iter().enumerate() {
         let plane = item.get("plane").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -230,8 +232,11 @@ fn vanishing_point(s: &mut Session, p: &Value) -> Result<Value> {
                 (sf.clone(), sf.content_bounds())
             }
             None => {
-                let clip = s.clipboard.as_ref().ok_or_else(|| bad(format!("paste {k}: nothing on the clipboard (or pass `layer`)")))?;
-                (clip.surface.clone(), clip.surface.content_bounds())
+                let surf = match &captured {
+                    Some(c) => c,
+                    None => &s.clipboard.as_ref().ok_or_else(|| bad(format!("paste {k}: nothing on the clipboard (or pass `layer`)")))?.surface,
+                };
+                (surf.clone(), surf.content_bounds())
             }
         };
         let at = item.get("at").and_then(pt).unwrap_or([0.25, 0.25]);

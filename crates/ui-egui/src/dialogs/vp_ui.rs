@@ -598,8 +598,9 @@ fn in_flight<T>(event: &EditEvent<T>) -> bool {
 
 /// Runs OK's command: `filter.vanishingPoint` with the planes, the paste and the strokes, on the layer the workspace
 /// opened on. With nothing to paste or clone there is nothing to run. With background jobs on, the command is a job
-/// (#210): its id comes back, and the edit lands when the job ends.
-fn apply(app: &mut PhotocraftApp, layer: LayerId, command: &VanishingPointCommand) -> Result<Option<JobId>, String> {
+/// (#210): its id comes back, and the edit lands when the job ends. The paste is `clip`, the image the workspace
+/// showed, not whatever the clipboard holds now (a workspace given back after a cancel keeps its own image).
+fn apply(app: &mut PhotocraftApp, layer: LayerId, clip: Option<&Clip>, command: &VanishingPointCommand) -> Result<Option<JobId>, String> {
     if command.paste.is_empty() && command.clone.is_empty() {
         return Ok(None);
     }
@@ -611,7 +612,13 @@ fn apply(app: &mut PhotocraftApp, layer: LayerId, command: &VanishingPointComman
     {
         params["layer"] = json!(layer.0);
     }
-    let r = app.run(VP, params)?;
+    if !command.paste.is_empty() {
+        app.session.vanishing_paste = clip.map(|c| c.surface.clone());
+    }
+    let r = app.run(VP, params);
+    // The command takes it; a call refused before it ran must not leave it for the next one.
+    app.session.vanishing_paste = None;
+    let r = r?;
     let pending = r.get("pending").and_then(Value::as_bool) == Some(true);
     Ok(r.get("job").and_then(Value::as_u64).filter(|_| pending).map(JobId))
 }
@@ -651,7 +658,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
         app.ui.status_error = message.tone == Tone::Bad;
     }
     if let Some(command) = ok {
-        let answer = apply(app, layer, &command);
+        let answer = apply(app, layer, source.preview.inputs.clip.as_ref(), &command);
         match &answer {
             // A background job: the workspace closes while it runs, and its session waits for the job, so a failure
             // or a cancel can give it back.

@@ -242,6 +242,11 @@ pub struct Session {
     batch_history_observer: Option<fn(&Session)>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
+    /// The image the next `filter.vanishingPoint` pastes in place of [`Self::clipboard`] for a
+    /// paste with no `layer` (a workspace given back after a cancelled commit keeps the image it
+    /// showed, though the clipboard changed meanwhile). The command takes it; `None` reads the
+    /// clipboard.
+    pub vanishing_paste: Option<photocraft_raster::Surface>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
     /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
     pub style_clipboard: Option<CopiedStyle>,
