@@ -1,6 +1,6 @@
 //! Render Video's Alpha Channel option for image sequences (#14163).
 
-use photocraft_codecs::{ChannelLayout, Image};
+use photocraft_codecs::{ChannelLayout, Image, SampleType};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
@@ -69,6 +69,31 @@ fn each_choice_writes_the_measured_transparent_pixel_and_keeps_the_opaque_one() 
     }
 }
 
+/// A level only 16 bits can hold: 1000 / 65535 is between two 8-bit steps.
+const FINE: f32 = 1000.0 / 65535.0;
+
+#[test]
+fn a_16_bit_frame_keeps_its_precision_and_partly_transparent_pixels() {
+    let mut s = half_red(16, false);
+    s.edit("soft", |doc, active| {
+        let id = (*active).ok_or(EngineError::NoDocument)?;
+        crate::pixels_mut(doc.layer_mut(id).ok_or(EngineError::NoDocument)?)?.write_pixel(2, 0, &[FINE, 0.25, 0.0, 0.5]);
+        Ok(())
+    })
+    .unwrap();
+    let near = |got: f32, want: f32, what: &str| assert!((got - want).abs() < 1.0 / 65535.0, "{what}: {got} vs {want}");
+    for alpha in ["straight", "premultipliedBlack", "premultipliedWhite", "premultipliedColor"] {
+        let img = render(&s, json!({"format": "png", "alpha": alpha, "matte": "#00ff00"}));
+        assert_eq!(img.sample_type(), SampleType::U16, "{alpha}");
+        // Not measured by the issue, so a partly transparent pixel keeps today's colour and alpha.
+        near(img.get(2, 0, 0), FINE, alpha);
+        near(img.get(2, 0, 3), 0.5, alpha);
+    }
+    let img = render(&s, json!({"format": "png", "alpha": "none"}));
+    assert_eq!((img.layout(), img.sample_type()), (ChannelLayout::Rgb, SampleType::U16));
+    near(img.get(2, 0, 0), FINE * 0.5, "none composites over black");
+}
+
 #[test]
 fn an_opaque_document_writes_rgb_for_every_choice() {
     let s = half_red(8, true);
@@ -96,6 +121,8 @@ fn a_wrong_alpha_or_matte_is_an_error() {
         json!({"format": "png", "alpha": "premultipliedColor", "matte": "green"}),
         json!({"format": "png", "alpha": "premultipliedColor", "matte": [0, 2, 0]}),
         json!({"format": "png", "alpha": "premultipliedColor", "matte": 7}),
+        json!({"format": "png", "alpha": "premultipliedColor", "matte": "00ff00"}),
+        json!({"format": "png", "alpha": "premultipliedColor", "matte": "#00ff0080"}),
         json!({"format": "gif", "alpha": "matte"}),
     ] {
         let r = render_video_with(&s, &params, |_, _| Ok(()), |_, _| true);

@@ -748,12 +748,12 @@ pub fn render_video_with(
 /// Render Video's Alpha Channel choice for a sequence frame (#14163).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum RenderAlpha {
-    /// No alpha in the file: transparent areas are black.
+    /// No alpha in the file: the colours are composited over black, so transparent areas are black.
     None,
-    /// The colours as composited; fully transparent pixels are white.
-    Straight,
-    /// Colours mixed with the matte by their opacity (`c·a + matte·(1 - a)`), alpha kept.
-    Premultiplied([f32; 3]),
+    /// The alpha is kept and fully transparent pixels take this colour: white for Straight, the
+    /// matte for the premultiplied choices. Partly transparent pixels keep their colour and alpha
+    /// (the issue measured only fully transparent ones).
+    Kept([f32; 3]),
 }
 
 /// `alpha` and `matte` of `file.export.renderVideo`; a wrong type or name is an error.
@@ -761,9 +761,11 @@ fn render_alpha(p: &Value) -> Result<RenderAlpha> {
     let bad = |msg: &str| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg: msg.into() };
     let matte = match p.get("matte") {
         None | Some(Value::Null) => [0.0; 3],
-        Some(Value::String(c)) => {
-            crate::commands::parse_hex(c).map(|c| [c[0], c[1], c[2]]).ok_or_else(|| bad("`matte` must be \"#rrggbb\" or [r, g, b] in 0..1"))?
-        }
+        // `parse_hex` also reads "rrggbb" and "#rrggbbaa"; the matte is "#rrggbb" only.
+        Some(Value::String(c)) => crate::commands::parse_hex(c)
+            .filter(|_| c.len() == 7 && c.starts_with('#'))
+            .map(|c| [c[0], c[1], c[2]])
+            .ok_or_else(|| bad("`matte` must be \"#rrggbb\" or [r, g, b] in 0..1"))?,
         Some(Value::Array(a)) if a.len() == 3 => {
             let mut c = [0.0; 3];
             for (slot, v) in c.iter_mut().zip(a) {
@@ -777,10 +779,9 @@ fn render_alpha(p: &Value) -> Result<RenderAlpha> {
         None | Some(Value::Null) => Ok(RenderAlpha::None),
         Some(Value::String(a)) => match a.as_str() {
             "none" => Ok(RenderAlpha::None),
-            "straight" => Ok(RenderAlpha::Straight),
-            "premultipliedBlack" => Ok(RenderAlpha::Premultiplied([0.0; 3])),
-            "premultipliedWhite" => Ok(RenderAlpha::Premultiplied([1.0; 3])),
-            "premultipliedColor" => Ok(RenderAlpha::Premultiplied(matte)),
+            "straight" | "premultipliedWhite" => Ok(RenderAlpha::Kept([1.0; 3])),
+            "premultipliedBlack" => Ok(RenderAlpha::Kept([0.0; 3])),
+            "premultipliedColor" => Ok(RenderAlpha::Kept(matte)),
             _ => Err(bad("`alpha` must be \"none\", \"straight\", \"premultipliedBlack\", \"premultipliedWhite\" or \"premultipliedColor\"")),
         },
         Some(_) => Err(bad("`alpha` must be a string")),
@@ -796,8 +797,8 @@ fn matted_frame(doc: &Document, alpha: RenderAlpha) -> Result<Document> {
     let n = fmt.channels();
     let color = fmt.mode.color_channels();
     let paint = |rgb: [f32; 3]| photocraft_raster::from_rgba(&fmt, [rgb[0], rgb[1], rgb[2], 1.0]);
-    let white = paint([1.0; 3]);
-    let matte = paint(if let RenderAlpha::Premultiplied(m) = alpha { m } else { [0.0; 3] });
+    let black = paint([0.0; 3]);
+    let clear = paint(if let RenderAlpha::Kept(c) = alpha { c } else { [0.0; 3] });
     let mut band = Vec::new();
     // A band of tile rows at a time, so no frame-sized float buffer is held.
     for y in (bounds.y0..bounds.y1).step_by(photocraft_geom::TILE_SIZE as usize) {
@@ -806,16 +807,14 @@ fn matted_frame(doc: &Document, alpha: RenderAlpha) -> Result<Document> {
         for px in band.chunks_exact_mut(n) {
             let a = px[color].clamp(0.0, 1.0);
             match alpha {
-                RenderAlpha::Straight if a <= 0.0 => px[..color].copy_from_slice(&white[..color]),
-                RenderAlpha::Straight => {}
-                RenderAlpha::None | RenderAlpha::Premultiplied(_) => {
-                    for (c, m) in px[..color].iter_mut().zip(&matte) {
-                        *c = *c * a + m * (1.0 - a);
+                RenderAlpha::None => {
+                    for (c, k) in px[..color].iter_mut().zip(&black) {
+                        *c = *c * a + k * (1.0 - a);
                     }
-                    if alpha == RenderAlpha::None {
-                        px[color] = 1.0;
-                    }
+                    px[color] = 1.0;
                 }
+                RenderAlpha::Kept(_) if a <= 0.0 => px[..color].copy_from_slice(&clear[..color]),
+                RenderAlpha::Kept(_) => {}
             }
         }
         surf.write_region(rows, &band);
