@@ -2,9 +2,8 @@
 //! (#15259). It builds each asset from a copy of the document, outside the edit and export
 //! guards, so the placeholder pixels a failed read gives would otherwise be encoded as real ones.
 //! The placeholder is transparent, so the asset is a group whose other layer still reads: a
-//! fully unreadable layer would only be refused as empty. Its own test binary: the scratch disk
-//! is process-wide.
-#![cfg(not(target_arch = "wasm32"))]
+//! fully unreadable layer would only be refused as empty. The scratch disk is process-wide, so
+//! this runs in the `global_state` binary and holds its lock.
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerId};
@@ -49,6 +48,7 @@ fn listing(dir: &Path) -> Vec<String> {
 
 #[test]
 fn image_assets_refuse_unreadable_scratch_tiles() {
+    let _scratch = crate::lock(&crate::PROCESS);
     let root = std::env::temp_dir().join(format!("photocraft-image-assets-scratch-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let out = root.join("assets");
