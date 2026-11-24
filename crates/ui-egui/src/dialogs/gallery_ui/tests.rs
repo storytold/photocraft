@@ -408,3 +408,67 @@ fn glow_color_keeps_exact_floats_until_a_new_pick_and_stores_linear() {
     };
     assert!(near(&recorded(h.state())[..3], &[0.21586, 0.05127, 1.0], 1e-3), "{:?}", recorded(h.state()));
 }
+
+type GalleryHarness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
+
+fn open_gallery(mut app: Box<PhotocraftApp>) -> GalleryHarness {
+    let ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &ctx, KEY, json!({})).unwrap();
+    let mut gallery = egui_kittest::Harness::builder().with_context(ctx).with_size(egui::vec2(1500.0, 950.0)).with_pixels_per_point(1.25).build_ui_state(
+        |ui, app: &mut Box<PhotocraftApp>| {
+            app.framework.dialogs.run(ui);
+        },
+        app,
+    );
+    gallery.run_steps(4);
+    gallery
+}
+
+fn painted_thumbnails(gallery: &GalleryHarness) -> Vec<[usize; 2]> {
+    let output = gallery.output();
+    let painted = gallery.ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
+    let drawn: std::collections::HashSet<_> = painted
+        .iter()
+        .filter_map(|item| match &item.primitive {
+            egui::epaint::Primitive::Mesh(mesh) => Some(mesh.texture_id),
+            _ => None,
+        })
+        .collect();
+    gallery
+        .ctx
+        .tex_manager()
+        .read()
+        .allocated()
+        .filter(|(id, meta)| drawn.contains(id) && meta.name.contains("filterGallery.thumbs"))
+        .map(|(_, meta)| meta.size)
+        .collect()
+}
+
+#[test]
+fn gallery_browser_paints_filter_thumbnails() {
+    let mut app = app();
+    app.run("edit.fill", json!({"color": "#3366cc"})).unwrap();
+    let gallery = open_gallery(app);
+    let artistic = GalleryFilter::ALL.iter().filter(|f| f.category() == GalleryFilter::ColoredPencil.category()).count();
+    let thumbs = painted_thumbnails(&gallery);
+    assert_eq!(thumbs.len(), artistic, "every filter in the open Artistic category is painted");
+    assert!(thumbs.iter().all(|size| size[0] > 1 && size[1] > 1));
+}
+
+#[test]
+fn gallery_replaces_blank_thumbnails_when_reopened_on_paint() {
+    let mut app = app();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let mut gallery = open_gallery(app);
+    let blank = painted_thumbnails(&gallery);
+    assert!(!blank.is_empty() && blank.iter().all(|size| *size == [1, 1]), "the first layer has no pixels");
+    let ctx = gallery.ctx.clone();
+    ui(gallery.state_mut(), json!({"cancel": true})).unwrap();
+    take(gallery.state_mut(), &ctx);
+    gallery.state_mut().run("edit.fill", json!({"color": "#3366cc"})).unwrap();
+    crate::menus::invoke(gallery.state_mut(), &ctx, KEY, json!({})).unwrap();
+    gallery.run_steps(4);
+    let painted = painted_thumbnails(&gallery);
+    assert_eq!(painted.len(), blank.len(), "every Artistic tile has a picture");
+    assert!(painted.iter().all(|size| size[0] > 1 && size[1] > 1), "reopening still paints blank previews: {painted:?}");
+}
