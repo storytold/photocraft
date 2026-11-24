@@ -96,7 +96,7 @@ pub(super) fn art_history(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<
 /// The Art History Brush's Angle and Pressure for Size, after Tolerance (#12629). They edit the
 /// tool's own brush, as the Background Eraser's do.
 fn art_history_angle_pressure(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
     let mut angle = brush.angle;
     let angle_out = number(tl!("Angle"), &mut angle, -180.0..=180.0)

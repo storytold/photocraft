@@ -170,26 +170,32 @@ fn form(kind: Kind, fields: &mut DialogFields) -> ParamDialog<'_> {
             })
         }
         Kind::DataPoints => {
+            // Full width, with the title over the columns: in a labelled row every check box is named by the row and
+            // draws no name of its own.
             let row = Param::custom("columns", tl!("Data Points"), |ui, fields, _| {
-                Row::new()
+                Stack::new()
                     .show(ui, |ui, _| {
-                        for (source, title) in sources() {
-                            Stack::new().show(ui, |ui, _| {
-                                Text::new(Label::from(title)).show(ui);
-                                for column in analysis_cmds::available(source) {
-                                    let name = analysis_cmds::COLUMNS.iter().find(|c| c.0 == column).map_or(column, |c| c.1);
-                                    let field = point_key(source, column);
-                                    let mut on = fields.bool(&field).unwrap_or(false);
-                                    Checkbox::new(Bind::bound(&mut on)).label(name.to_owned()).show(ui);
-                                    if fields.bool(&field) != Some(on) {
-                                        fields.set(field, on);
+                        Text::new(Label::from(tl!("Data Points:"))).show(ui);
+                        Row::new().show(ui, |ui, _| {
+                            for (source, title) in sources() {
+                                Stack::new().show(ui, |ui, _| {
+                                    Text::new(Label::from(title)).show(ui);
+                                    for column in analysis_cmds::available(source) {
+                                        let name = analysis_cmds::COLUMNS.iter().find(|c| c.0 == column).map_or(column, |c| c.1);
+                                        let field = point_key(source, column);
+                                        let mut on = fields.bool(&field).unwrap_or(false);
+                                        Checkbox::new(Bind::bound(&mut on)).label(name.to_owned()).show(ui);
+                                        if fields.bool(&field) != Some(on) {
+                                            fields.set(field, on);
+                                        }
                                     }
-                                }
-                            });
-                        }
+                                });
+                            }
+                        });
                     })
                     .output
-            });
+            })
+            .full_width();
             ParamDialog::command(key, tl!("Select Data Points"), vec![row])
         }
         Kind::ScaleMarker => {
@@ -211,3 +217,7 @@ fn form(kind: Kind, fields: &mut DialogFields) -> ParamDialog<'_> {
     };
     dialog.values(Bind::bound(fields))
 }
+
+#[cfg(test)]
+#[path = "data_points_labels_tests.rs"]
+mod data_points_labels_tests;

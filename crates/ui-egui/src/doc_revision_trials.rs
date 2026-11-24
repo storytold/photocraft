@@ -4,6 +4,7 @@
 
 use craft::layers::ui::thumbs::{LayerThumb, ThumbContents};
 use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
+use craft::ui::runtime::measure::last_frame_derived_builds;
 use egui_kittest::Harness;
 use photocraft_doc::{Fill, Layer, LayerContent, LayerId, PixelFormat};
 use photocraft_engine::Session;
@@ -96,8 +97,8 @@ fn thumbnail_revisions_follow_only_their_own_layer() {
     );
 }
 
-/// The Layers panel walks its rows again only when their revision moves: a rename and both disclosure toggles (a
-/// layer's effects list, a group) move it, idle frames don't.
+/// The Layers panel's model is built again only when what its rows show changed: a rename and both disclosure toggles
+/// (a layer's effects list, a group) build it once, idle frames don't.
 #[test]
 fn layers_rows_follow_renames_and_both_toggles() {
     let mut s = Session::new();
@@ -112,19 +113,20 @@ fn layers_rows_follow_renames_and_both_toggles() {
     })
     .unwrap();
     let mut h = harness(s);
-    // The panel's model, which the app holds across passes and replaces only when what the rows show changed.
-    let revision = |h: &H| h.state().layers_tree.as_ref().map(|model| model.revision());
+    let builds = |h: &H| {
+        let id = crate::panels::layers_tree::model_id();
+        last_frame_derived_builds(&h.ctx).iter().filter(|(built, _)| *built == id).map(|(_, n)| n).sum::<u32>()
+    };
     h.run_steps(2);
-    let start = revision(&h);
-    assert!(start.is_some());
-    h.run_steps(10);
-    assert_eq!(revision(&h), start, "idle frames keep the rows");
+    for frame in 0..10 {
+        h.run_steps(1);
+        assert_eq!(builds(&h), 0, "idle frame {frame} keeps the rows");
+    }
 
     let moves = |h: &mut H, command: &str, params: serde_json::Value| {
-        let before = revision(h);
         h.state_mut().run(command, params).unwrap();
-        h.run_steps(2);
-        assert_ne!(revision(h), before, "{command} moves the rows' revision");
+        h.run_steps(1);
+        assert_eq!(builds(h), 1, "{command} builds the rows once");
     };
     moves(&mut h, "layer.renameLayer", json!({"layer": a.0, "name": "Renamed"}));
     moves(&mut h, "layer.setEffectsExpanded", json!({"layer": a.0, "expanded": false}));
