@@ -180,6 +180,11 @@ fn grown(v: f32, k: f64) -> f32 {
 /// the parts Free Transform (`transform_layer`) doesn't move are touched: unlinked vector masks,
 /// gradient fill angles, effect reference points and artboards.
 pub(crate) fn transform_layer_geometry(l: &mut Layer, a: &Affine, content: bool, dpi: f32) {
+    // Decoded footage frames land where the stored frames are moved to (the stored ones are
+    // remapped with the other pixels by the caller).
+    if content && let Some(footage) = l.video.as_mut().and_then(|v| v.footage.as_mut()) {
+        crate::footage::transform(&mut footage.link, a);
+    }
     if content && let Some(f) = &mut l.frame {
         f.transform = a.mul(&f.transform);
         // Past `Frame::valid`'s bounds it would no longer load; the vector mask, moved below,
@@ -432,7 +437,7 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
             }
             // Frames away from the playhead come back on scrubbing; they turn with the canvas (#4956).
             if let Some(v) = &mut l.video {
-                v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()).for_each(re);
+                std::sync::Arc::make_mut(&mut v.frames).iter_mut().chain(v.original_frames.iter_mut().flatten()).for_each(re);
             }
             match &mut l.content {
                 LayerContent::Raster(s) => re(s),

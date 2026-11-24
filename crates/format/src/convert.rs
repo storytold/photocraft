@@ -113,6 +113,9 @@ fn opt_blob(b: &Option<Arc<Vec<u8>>>, sink: &mut dyn Sink) -> Option<Hash> {
     b.as_ref().map(|b| sink.blob(b))
 }
 
+/// Most corners a video layer's footage crop polygon may have: each crop adds at most four.
+const MAX_CLIP_CORNERS: usize = 1024;
+
 fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifest::VideoDataM {
     crate::manifest::VideoDataM {
         frames: v.frames.iter().map(|f| surface_m(f, sink)).collect(),
@@ -120,6 +123,7 @@ fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifes
         source: v.source.clone(),
         fps: v.fps,
         show_altered: v.show_altered,
+        footage: v.footage.as_ref().map(|f| crate::manifest::FootageFramesM { link: f.link.clone(), origin: f.origin.to_vec(), altered: f.altered.to_vec() }),
     }
 }
 
@@ -357,7 +361,38 @@ impl Loader<'_> {
             return Err(FormatError::corrupt("video original frame count differs from edited frame count"));
         }
         let original_frames = m.original_frames.as_ref().map(|source| source.iter().map(|f| self.surface(f)).collect::<Result<Vec<_>>>()).transpose()?;
-        Ok(photocraft_doc::VideoData { frames, original_frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered })
+        let footage = match &m.footage {
+            Some(f) if f.origin.len() != frames.len() || f.altered.len() != frames.len() => {
+                return Err(FormatError::corrupt("video footage frame list differs from the layer's frame count"));
+            }
+            Some(_) if m.original_frames.is_some() => {
+                return Err(FormatError::corrupt("a video layer has both linked footage and held original frames"));
+            }
+            Some(f) if !f.link.placement.m.iter().all(|v| v.is_finite()) || !f.link.info.fps.is_finite() => {
+                return Err(FormatError::corrupt("a video layer's footage placement or frame rate is not a number"));
+            }
+            Some(f) if f.origin.iter().flatten().any(|&n| n >= f.link.info.frames) => {
+                return Err(FormatError::corrupt("a video layer shows a footage frame past the end of its footage"));
+            }
+            Some(f) if f.link.clip.as_ref().is_some_and(|c| c.len() > MAX_CLIP_CORNERS || !c.iter().flatten().all(|v| v.is_finite())) => {
+                return Err(FormatError::corrupt("a video layer's footage crop is not a usable polygon"));
+            }
+            Some(f) => Some(photocraft_doc::FootageFrames {
+                link: f.link.clone(),
+                origin: std::sync::Arc::new(f.origin.clone()),
+                altered: std::sync::Arc::new(f.altered.clone()),
+            }),
+            None => None,
+        };
+        Ok(photocraft_doc::VideoData {
+            frames: std::sync::Arc::new(frames),
+            original_frames,
+            source: m.source.clone(),
+            fps: m.fps,
+            show_altered: m.show_altered,
+            footage,
+            shown: None,
+        })
     }
 
     fn surface(&mut self, m: &SurfaceM) -> Result<Surface> {
@@ -736,6 +771,7 @@ impl Loader<'_> {
             text_styles: m.text_styles.clone(),
             slices,
         };
+        adopt_loaded_video(&mut doc);
         // Saved only while they held for the layer as saved, so they pair with its pixels as
         // loaded. Optional side data: indices of a layer the file doesn't hold, or damaged ones,
         // are dropped (Color Table then maps by nearest colour) rather than failing the open.
@@ -750,6 +786,27 @@ impl Loader<'_> {
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {
         Ok(AlphaChannel { name: c.name.clone(), surface: self.surface(&c.surface)?, spot: c.spot, color: c.color, opacity: c.opacity, indicates: c.indicates })
     }
+}
+
+/// Each video layer with linked footage takes its loaded content as the frame at the playhead
+/// as last shown ([`photocraft_doc::VideoData::adopt_loaded`]), so reopening a document doesn't
+/// turn that unpainted frame into the layer's own pixels at the first edit.
+fn adopt_loaded_video(doc: &mut Document) {
+    fn walk(layers: &mut [photocraft_doc::Layer], at: usize, depth: usize) {
+        if depth > 256 {
+            return;
+        }
+        for l in layers {
+            if let (Some(v), photocraft_doc::LayerContent::Raster(content)) = (&mut l.video, &l.content) {
+                v.adopt_loaded(at, content);
+            }
+            if let Some(ch) = l.children_mut() {
+                walk(ch, at, depth + 1);
+            }
+        }
+    }
+    let at = doc.timeline.as_ref().map_or(0, |t| t.current);
+    walk(&mut doc.layers, at, 0);
 }
 
 /// Advance the global id counter past `max` so ids loaded from a file never

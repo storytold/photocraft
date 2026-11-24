@@ -713,6 +713,18 @@ fn import_path(
         Some(SourceFingerprint::Path { identity, .. }) => Some(identity),
         Some(SourceFingerprint::Bytes { .. }) => return Err(photocraft_io::IoError::SourceChanged),
     };
+    // A movie opens as a video-layer document whose frames are decoded from the file as they
+    // are shown: only its index is read here, never the whole file.
+    if crate::footage::is_movie(path) {
+        // An approval names the file a PSD/PSB estimate was made for; a movie at that path now is
+        // another file, which the approved open must not accept.
+        if expected.is_some() {
+            return Err(photocraft_io::IoError::SourceChanged);
+        }
+        ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
+        let document = crate::footage::movie_document(path).map_err(photocraft_io::IoError::Unsupported)?;
+        return Ok((photocraft_io::ImportResult { document, warnings: Vec::new(), source_read_only: true, preview_only: false }, false));
+    }
     // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
     // streamed from the open file instead of being read whole.
     photocraft_io::import_file_for_open_verified(name, std::path::Path::new(path), expected, opts, ctl, opened)
@@ -1297,6 +1309,11 @@ impl Session {
                 }
 
                 let outcome = match source {
+                    // A movie is read in place from its file, frame by frame; from memory (the web,
+                    // a drop) there is no file to link the video layer to.
+                    OpenSource::Bytes(_) if crate::footage::is_movie(&name_w) => {
+                        return Err(EngineError::Other(format!("{name_w}: movie files open from a file on disk, in the desktop app")));
+                    }
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
                         ctx.progress(0.02, "Decoding");

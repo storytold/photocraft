@@ -83,7 +83,7 @@ fn fixture(depth: u32) -> (Session, LayerId) {
             })
             .collect(),
     );
-    video.frames = frames;
+    video.frames = std::sync::Arc::new(frames);
     let timeline = doc.timeline.as_mut().unwrap();
     timeline.current = 1;
     timeline.work_start = 1;
@@ -161,7 +161,7 @@ fn deleting_the_last_frame_keeps_its_pixels() {
     let doc = Arc::make_mut(state.doc_mut());
     let layer = doc.layer_mut(id).unwrap();
     let video = layer.video.as_mut().unwrap();
-    video.frames.truncate(1);
+    std::sync::Arc::make_mut(&mut video.frames).truncate(1);
     video.original_frames.as_mut().unwrap().truncate(1);
     layer.content = LayerContent::Raster(video.frames[0].clone());
     let t = doc.timeline.as_mut().unwrap();

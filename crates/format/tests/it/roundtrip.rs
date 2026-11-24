@@ -1112,7 +1112,7 @@ fn video_layer_frames_survive_roundtrip() {
         frames.push(s);
     }
     let mut vd = VideoData::new(frames, 24.0);
-    vd.original_frames = Some(vd.frames.clone());
+    vd.original_frames = Some(vd.frames.to_vec());
     vd.source = VideoSource::File { path: "/tmp/seq".into() };
     vd.show_altered = false;
     l.video = Some(vd);

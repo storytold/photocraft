@@ -4,7 +4,7 @@
 //! writes it back into the playhead's frame before anything re-syncs. Headless and scriptable. Frame persistence in `.pcraft` is a
 //! follow-up; a saved document keeps the current frame as the layer's content.
 
-use photocraft_doc::{Document, Layer, LayerContent, Timeline, VideoData};
+use photocraft_doc::{Document, FrameView, Layer, LayerContent, Timeline, VideoData};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -45,27 +45,65 @@ fn check_gif_budget(w: u64, h: u64, frames: u64) -> std::result::Result<(), Stri
     Ok(())
 }
 
-/// Set every video layer's displayed content to its frame at the playhead.
+/// Set every video layer's displayed content to its frame at the playhead: a held frame as it is,
+/// a frame of linked movie footage decoded from the file (empty while the file is offline, which
+/// `inspect` reports).
 pub fn sync(doc: &mut Document) {
     let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
-    sync_layers(&mut doc.layers, cur);
+    let fmt = doc.pixel_format();
+    // Interactive display: an unreadable frame shows empty rather than failing the edit.
+    let _ = sync_layers(&mut doc.layers, cur, fmt, false);
 }
 
-fn sync_layers(layers: &mut [Layer], cur: usize) {
+/// [`sync`] for output (Render Video): a footage frame that can't be decoded is an error naming
+/// the layer and the file, never an empty frame written as if it were the footage.
+pub fn sync_for_output(doc: &mut Document) -> Result<()> {
+    let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
+    let fmt = doc.pixel_format();
+    sync_layers(&mut doc.layers, cur, fmt, true)
+}
+
+/// Shows each video layer's frame at `cur`. With `strict`, the first footage frame of a visible
+/// layer that can't be decoded stops it with that error; otherwise, and on hidden layers and in
+/// hidden groups, which output doesn't show, such a frame shows empty.
+fn sync_layers(layers: &mut [Layer], cur: usize, fmt: photocraft_color::PixelFormat, strict: bool) -> Result<()> {
     for l in layers.iter_mut() {
-        let frame = l.video.as_ref().and_then(|v| {
-            let visible = if v.show_altered { &v.frames } else { v.original_frames.as_ref().unwrap_or(&v.frames) };
-            visible.get(cur.min(visible.len().saturating_sub(1))).cloned()
-        });
-        if let Some(f) = frame
-            && let LayerContent::Raster(s) = &mut l.content
-        {
-            *s = f;
+        let strict = strict && l.visible;
+        if let Some(v) = &mut l.video {
+            let shown = match v.view(cur, !v.show_altered) {
+                Some(FrameView::Own(f)) => Some((f.clone(), None)),
+                Some(FrameView::Footage(n)) => match v.footage.as_ref().map(|f| crate::footage::frame(&f.link, n, fmt)) {
+                    Some(Ok(frame)) => {
+                        let generation = frame.generation();
+                        Some((frame, Some(generation)))
+                    }
+                    Some(Err(e)) if strict => {
+                        let file = v.footage.as_ref().map_or("", |f| f.link.path.as_str());
+                        return Err(EngineError::Other(format!("the video layer `{}`, frame {} of `{file}`: {e}", l.name, cur + 1)));
+                    }
+                    // Offline: shown empty, and remembered as shown, so moving on doesn't paint it.
+                    Some(Err(_)) => {
+                        let empty = Surface::new(fmt);
+                        let generation = empty.generation();
+                        Some((empty, Some(generation)))
+                    }
+                    None => None,
+                },
+                Some(FrameView::Blank) => Some((Surface::new(fmt), None)),
+                None => None,
+            };
+            if let Some((frame, generation)) = shown
+                && let LayerContent::Raster(s) = &mut l.content
+            {
+                *s = frame;
+                v.shown = generation;
+            }
         }
         if let Some(ch) = l.children_mut() {
-            sync_layers(ch, cur);
+            sync_layers(ch, cur, fmt, strict)?;
         }
     }
+    Ok(())
 }
 
 /// Keep edits made to every video layer's displayed content (paint, fills, filters) by writing it
@@ -78,13 +116,10 @@ pub fn store(doc: &mut Document) {
 fn store_layers(layers: &mut [Layer], cur: usize) {
     for l in layers.iter_mut() {
         if let (Some(v), LayerContent::Raster(s)) = (&mut l.video, &l.content) {
-            let at = cur.min(v.frames.len().saturating_sub(1));
             // When showing the original, the layer's displayed surface is a preview,
             // not an edit to write over the altered frame (#3060).
-            if (v.show_altered || v.original_frames.is_none())
-                && let Some(f) = v.frames.get_mut(at)
-            {
-                *f = s.clone();
+            if v.show_altered || (v.original_frames.is_none() && v.footage.is_none()) {
+                v.store(cur, s);
             }
         }
         if let Some(ch) = l.children_mut() {
@@ -136,10 +171,6 @@ fn edit_video(s: &mut Session, label: &str, f: impl FnOnce(&mut VideoData, usize
     Ok(json!({"frames": count}))
 }
 
-fn blank_of(fmt: photocraft_color::PixelFormat) -> Surface {
-    Surface::new(fmt)
-}
-
 /// Both the altered and original footage stacks must have room for an added frame.
 fn check_frame_growth(frames: usize, original_frames: Option<usize>) -> Result<()> {
     let limit = crate::timeline_cmds::MAX_DURATION;
@@ -178,26 +209,16 @@ fn insert_blank(s: &mut Session, _p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     edit_video(s, "Insert Blank Frame", move |v, cur| {
         check_frame_growth(v.frames.len(), v.original_frames.as_ref().map(Vec::len))?;
-        let at = cur.saturating_add(1).min(v.frames.len());
-        v.frames.insert(at, blank_of(fmt));
-        if let Some(original) = &mut v.original_frames {
-            // The stacks stay aligned, but never index past a shorter one.
-            original.insert(at.min(original.len()), blank_of(fmt));
-        }
+        v.insert_blank(cur.saturating_add(1), fmt);
         Ok(())
     })
 }
 
 fn duplicate_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     edit_video(s, "Duplicate Frame", |v, cur| {
-        if let Some(f) = v.frames.get(cur) {
+        if cur < v.frames.len() {
             check_frame_growth(v.frames.len(), v.original_frames.as_ref().map(Vec::len))?;
-            let f = f.clone();
-            if let Some(original) = &mut v.original_frames {
-                let orig = original.get(cur).cloned().unwrap_or_else(|| blank_of(f.format()));
-                original.insert((cur + 1).min(original.len()), orig);
-            }
-            v.frames.insert(cur + 1, f);
+            v.duplicate(cur);
         }
         Ok(())
     })
@@ -205,14 +226,7 @@ fn duplicate_frame(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn delete_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     edit_video(s, "Delete Frame", |v, cur| {
-        if v.frames.len() > 1 && cur < v.frames.len() {
-            v.frames.remove(cur);
-            if let Some(original) = &mut v.original_frames
-                && cur < original.len()
-            {
-                original.remove(cur);
-            }
-        }
+        v.remove(cur);
         Ok(())
     })
 }
@@ -220,10 +234,7 @@ fn delete_frame(s: &mut Session, _p: &Value) -> Result<Value> {
 fn restore_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     edit_video(s, "Restore Frame", move |v, cur| {
-        let original = v.original_frames.as_ref().and_then(|frames| frames.get(cur)).cloned();
-        if let Some(f) = v.frames.get_mut(cur) {
-            *f = original.unwrap_or_else(|| blank_of(fmt));
-        }
+        v.restore(cur, fmt);
         Ok(())
     })
 }
@@ -231,8 +242,8 @@ fn restore_frame(s: &mut Session, _p: &Value) -> Result<Value> {
 fn restore_all(s: &mut Session, _p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     edit_video(s, "Restore All Frames", move |v, _| {
-        for (i, f) in v.frames.iter_mut().enumerate() {
-            *f = v.original_frames.as_ref().and_then(|frames| frames.get(i)).cloned().unwrap_or_else(|| blank_of(fmt));
+        for i in 0..v.frames.len() {
+            v.restore(i, fmt);
         }
         Ok(())
     })
@@ -513,6 +524,9 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.newVideoLayerFromFile".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
+    if crate::footage::is_movie(&path) {
+        return new_movie_layer(s, p, path, fmt);
+    }
     let Footage { frames, fps: footage_fps, warnings } = load_frames(&path, fmt, &footage_import_options(s))?;
     // An explicit `fps` wins, then the rate the footage implies, then 30.
     let fps = crate::timeline_cmds::fps_param("layer.videoLayers.newVideoLayerFromFile", p)?.or(footage_fps).unwrap_or(30.0);
@@ -527,7 +541,7 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         let name = doc.next_layer_name(std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("Video"));
         let mut l = Layer::raster(name, fmt);
         let mut v = VideoData::new(frames, fps);
-        v.original_frames = Some(v.frames.clone());
+        v.original_frames = Some(v.frames.to_vec());
         v.source = photocraft_doc::VideoSource::File { path: path.clone() };
         // The first frame is the layer's content before it is placed: an active artboard takes
         // the layer only when its content is on the board, as `frames_to_layers` does.
@@ -543,6 +557,63 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": id.0, "frames": n, "warnings": warnings}))
 }
 
+/// The movie at `path`, opened: what it holds, or why it can't be read.
+fn probe_movie(cmd: &str, path: &str) -> Result<photocraft_doc::FootageLink> {
+    // A command naming the file tries it again after an earlier failure.
+    crate::footage::retry(path);
+    let info = crate::footage::probe(path).map_err(|e| EngineError::BadParams { cmd: cmd.into(), msg: e })?;
+    Ok(photocraft_doc::FootageLink::new(path.to_string(), info))
+}
+
+/// [`probe_movie`] for a video layer, which holds a frame for each of the movie's frames: a
+/// movie longer than a timeline may be is refused. Taking frames out of a movie has no such
+/// limit; its range and the 500-layer cap bound it.
+fn link_movie(cmd: &str, path: &str) -> Result<photocraft_doc::FootageLink> {
+    let link = probe_movie(cmd, path)?;
+    if link.info.frames > crate::timeline_cmds::MAX_DURATION {
+        return Err(EngineError::Other(format!(
+            "`{path}` has {} frames; a video layer is limited to {}",
+            link.info.frames,
+            crate::timeline_cmds::MAX_DURATION
+        )));
+    }
+    Ok(link)
+}
+
+/// New Video Layer from File with a movie: a layer linked to the file, its frames decoded when
+/// shown, the timeline grown to its length.
+fn new_movie_layer(s: &mut Session, p: &Value, path: String, fmt: photocraft_color::PixelFormat) -> Result<Value> {
+    let cmd = "layer.videoLayers.newVideoLayerFromFile";
+    let link = link_movie(cmd, &path)?;
+    // An explicit `fps` wins over the rate the file gives.
+    let fps = crate::timeline_cmds::fps_param(cmd, p)?.unwrap_or(link.info.fps);
+    let n = link.info.frames;
+    let id = s.edit("New Video Layer from File", |doc, active| {
+        store(doc);
+        if doc.timeline.is_none() {
+            doc.timeline = Some(Timeline::new(n, fps));
+        } else if let Some(t) = &mut doc.timeline {
+            grow_duration(t, n);
+        }
+        let name = doc.next_layer_name(std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("Video"));
+        let mut l = Layer::raster(name, fmt);
+        // The first frame is the layer's content before it is placed, as for other footage.
+        if let LayerContent::Raster(surf) = &mut l.content
+            && let Ok(frame) = crate::footage::frame(&link, 0, fmt)
+        {
+            *surf = frame;
+        }
+        let mut v = VideoData::from_footage(link, fmt);
+        v.fps = fps;
+        l.video = Some(v);
+        let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
+        *active = Some(id);
+        sync(doc);
+        Ok(id)
+    })?;
+    Ok(json!({"layer": id.0, "frames": n, "warnings": []}))
+}
+
 fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p
         .get("path")
@@ -550,10 +621,23 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.replaceFootage".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
+    if crate::footage::is_movie(&path) {
+        let link = link_movie("layer.videoLayers.replaceFootage", &path)?;
+        return edit_video(s, "Replace Footage", move |v, _| {
+            let (fps, show_altered) = (v.fps, v.show_altered);
+            *v = VideoData::from_footage(link, fmt);
+            v.fps = fps;
+            v.show_altered = show_altered;
+            Ok(())
+        });
+    }
     let Footage { frames, warnings, .. } = load_frames(&path, fmt, &footage_import_options(s))?;
     let mut out = edit_video(s, "Replace Footage", move |v, _| {
         v.original_frames = Some(frames.clone());
-        v.frames = frames;
+        v.frames = std::sync::Arc::new(frames);
+        // The new frames are held: nothing of them is linked footage any more.
+        v.footage = None;
+        v.shown = None;
         v.source = photocraft_doc::VideoSource::File { path: path.clone() };
         Ok(())
     })?;
@@ -583,6 +667,27 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
             .layer(id)
             .and_then(|l| l.video.as_ref())
             .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.reloadFrame".into(), msg: "not a video layer".into() })?;
+        if let Some(f) = &v.footage {
+            // Linked footage: drop the open file and its decoded frames, so frames are read from
+            // the file as it is now. The frame at the playhead is read here, under this session's
+            // gate and from the document's folder: a file that is gone or now unreadable is an
+            // error before the document changes, not an empty frame.
+            let link = f.link.clone();
+            let cur = st.doc.timeline.as_ref().map_or(0, |t| t.current);
+            let shown = match v.view(cur, !v.show_altered) {
+                Some(photocraft_doc::FrameView::Footage(n)) => Some(n),
+                _ => None,
+            };
+            let fmt = st.doc.pixel_format();
+            let document = st.path.clone();
+            let _authorization = crate::jobs::render_authorization_scope(s.authorize);
+            let _document = crate::doc_path::scope(document.as_deref().map(std::path::Path::new));
+            crate::footage::forget(&link.path);
+            if let Some(n) = shown {
+                crate::footage::frame(&link, n, fmt).map_err(EngineError::Other)?;
+            }
+            return edit_video(s, "Reload Frame", |_, _| Ok(()));
+        }
         (v.source.clone(), st.doc.pixel_format())
     };
     let photocraft_doc::VideoSource::File { path } = src else {
@@ -593,13 +698,61 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     let Footage { frames, warnings, .. } = load_frames(&file.to_string_lossy(), fmt, &footage_import_options(s))?;
     let mut out = edit_video(s, "Reload Frame", move |v, _| {
         v.original_frames = Some(frames.clone());
-        v.frames = frames;
+        v.frames = std::sync::Arc::new(frames);
+        v.footage = None;
+        v.shown = None;
         Ok(())
     })?;
     if !warnings.is_empty() {
         out["warnings"] = Value::from(warnings);
     }
     Ok(out)
+}
+
+/// Most layers Video Frames to Layers makes in one import, as in the reference application.
+const MAX_FRAME_LAYERS: usize = 500;
+
+/// The frames Video Frames to Layers takes from `total`: `from` to `to` (0-based, inclusive;
+/// the whole footage by default), every `every`-th of them (1 = all), at most
+/// [`MAX_FRAME_LAYERS`]. The second value says when the cap left frames out.
+fn frame_selection(cmd: &str, p: &Value, total: usize) -> Result<(Vec<usize>, Option<String>)> {
+    let bad = |msg: String| EngineError::BadParams { cmd: cmd.into(), msg };
+    let last = total.checked_sub(1).ok_or_else(|| bad("the footage has no frames".into()))?;
+    let index = |key: &str, default: usize| -> Result<usize> {
+        match p.get(key).filter(|v| !v.is_null()) {
+            None => Ok(default),
+            Some(v) => v
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|n| *n <= last)
+                .ok_or_else(|| bad(format!("`{key}` must be a frame number from 0 to {last}, not {v}"))),
+        }
+    };
+    // The dialog's shape: `range: "all"` ignores `from` and `to`, `limit: false` ignores `every`.
+    let whole = p.get("range").and_then(Value::as_str) == Some("all");
+    let (from, to) = if whole { (0, last) } else { (index("from", 0)?, index("to", last)?) };
+    if from > to {
+        return Err(bad(format!("`from` ({from}) is after `to` ({to})")));
+    }
+    let stepped = p.get("limit").and_then(Value::as_bool) != Some(false);
+    let every = match p.get("every").filter(|v| !v.is_null() && stepped) {
+        None => 1,
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n >= 1)
+            .ok_or_else(|| bad(format!("`every` must be a whole number of at least 1, not {v}")))?,
+    };
+    let chosen = (to - from) / every + 1;
+    let picked: Vec<usize> = (from..=to).step_by(every).take(MAX_FRAME_LAYERS).collect();
+    let note = (chosen > MAX_FRAME_LAYERS).then(|| format!("only the first {MAX_FRAME_LAYERS} of the {chosen} frames chosen were imported"));
+    Ok((picked, note))
+}
+
+/// The memory a surface's tiles take.
+fn surface_bytes(s: &Surface) -> u64 {
+    let tile = u64::from(photocraft_geom::TILE_SIZE.unsigned_abs()).pow(2) * s.format().bytes_per_pixel() as u64;
+    tile.saturating_mul(s.tile_count() as u64)
 }
 
 /// The pages of a TIFF that are pages of the document: full-resolution directories of the main
@@ -619,7 +772,31 @@ fn frames_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| EngineError::BadParams { cmd: "file.import.videoFramesToLayers".into(), msg: "need `path`".into() })?
         .to_string();
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
-    let Footage { frames, warnings, .. } = load_frames(&path, fmt, &footage_import_options(s))?;
+    let cmd = "file.import.videoFramesToLayers";
+    let (frames, warnings): (Vec<Surface>, Vec<String>) = if crate::footage::is_movie(&path) {
+        let link = probe_movie(cmd, &path)?;
+        let (picked, capped) = frame_selection(cmd, p, link.info.frames)?;
+        let mut frames = Vec::with_capacity(picked.len());
+        let mut kept = 0u64;
+        for n in picked {
+            let f = crate::footage::frame(&link, n, fmt).map_err(|e| EngineError::Other(format!("`{path}`: {e}")))?;
+            kept = kept.saturating_add(surface_bytes(&f));
+            if kept > footage_byte_limit() {
+                return Err(EngineError::Other(format!(
+                    "`{path}`: the frames need more than {} MiB; pick a shorter range or fewer frames",
+                    footage_byte_limit() >> 20
+                )));
+            }
+            frames.push(f);
+        }
+        (frames, capped.into_iter().collect())
+    } else {
+        let Footage { frames, warnings, .. } = load_frames(&path, fmt, &footage_import_options(s))?;
+        let (picked, capped) = frame_selection(cmd, p, frames.len())?;
+        let mut all: Vec<Option<Surface>> = frames.into_iter().map(Some).collect();
+        let frames = picked.into_iter().filter_map(|i| all.get_mut(i).and_then(Option::take)).collect();
+        (frames, warnings.into_iter().chain(capped).collect())
+    };
     let n = frames.len();
     s.edit("Video Frames to Layers", |doc, active| {
         let mut above = *active;
@@ -665,9 +842,16 @@ pub fn render_video_with(
 ) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
+    // Footage paths are document data: their reads are judged by this session's gate.
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    // Relative footage paths resolve from the document's own folder, as they do while editing.
+    let _document = crate::doc_path::scope(st.path.as_deref().map(std::path::Path::new));
     let mut base = (*st.doc).clone();
     store(&mut base);
+    // A frame of footage that can't be decoded would render empty: refuse rather than write it.
+    let duration = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
+    check_footage(&base.layers, 0..duration)?;
     let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
     // Loaded timelines bypass the duration validation used by timeline.create/setProps.
     if frames > crate::timeline_cmds::MAX_DURATION {
@@ -698,7 +882,7 @@ pub fn render_video_with(
             if let Some(t) = &mut doc.timeline {
                 t.current = f;
             }
-            sync(&mut doc);
+            sync_for_output(&mut doc)?;
             let surf = crate::file_cmds::flattened(&doc, fmt);
             let mut px = vec![[0.0f32; 4]; w * h];
             surf.read_rgba_into(bounds, &mut px);
@@ -727,7 +911,7 @@ pub fn render_video_with(
         if let Some(t) = &mut doc.timeline {
             t.current = f;
         }
-        sync(&mut doc);
+        sync_for_output(&mut doc)?;
         let path = format!("{stem}_{f:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
         write(&path, &bytes)?;
@@ -737,6 +921,29 @@ pub fn render_video_with(
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// Refuse when a video layer (inside groups too) links footage that can't be read, naming the file
+/// and why.
+/// Only visible layers are checked: a hidden layer, or one in a hidden group, adds nothing to the
+/// output, so its footage needn't be readable. Only the playhead positions in `visited` are
+/// rendered, so only the frames shown at those need the file.
+pub(crate) fn check_footage(layers: &[Layer], visited: std::ops::Range<usize>) -> Result<()> {
+    for l in layers.iter().filter(|l| l.visible) {
+        if let Some(v) = &l.video
+            && let Some(f) = &v.footage
+        {
+            // Only frames the output reads need the file: painted ones are the layer's own.
+            let needed = v.footage_frames_shown_at(visited.clone());
+            if needed > 0 {
+                crate::footage::status(&f.link, needed).map_err(|e| EngineError::Other(format!("the video layer `{}`: {e}", l.name)))?;
+            }
+        }
+        if let Some(ch) = l.children() {
+            check_footage(ch, visited.clone())?;
+        }
+    }
+    Ok(())
 }
 
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels
@@ -785,5 +992,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod footage_tests;
+#[cfg(test)]
+mod movie_tests;
 #[cfg(test)]
 mod tests;

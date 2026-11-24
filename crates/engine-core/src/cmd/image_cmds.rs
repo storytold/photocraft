@@ -33,7 +33,7 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
         // The displayed content is only a copy of the frame at the playhead; the other frames
         // would keep the old geometry and depth and come back stale when scrubbing (#4956).
         if let Some(v) = &mut l.video {
-            for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
+            for frame in std::sync::Arc::make_mut(&mut v.frames).iter_mut().chain(v.original_frames.iter_mut().flatten()) {
                 f(frame, false);
             }
         }
@@ -547,8 +547,11 @@ fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
             fc.surface = crop_surface(&fc.surface, r);
         }
         if let Some(v) = &mut l.video {
-            for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
+            for frame in std::sync::Arc::make_mut(&mut v.frames).iter_mut().chain(v.original_frames.iter_mut().flatten()) {
                 *frame = crop_surface(frame, r);
+            }
+            if let Some(footage) = &mut v.footage {
+                crate::footage::clip(&mut footage.link, r);
             }
         }
         if let LayerContent::Raster(s) = &mut l.content {

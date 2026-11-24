@@ -58,6 +58,17 @@ mod duotone_map;
 mod kra;
 pub mod linked;
 pub mod memory;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod movie;
+
+/// Movie file extensions (lower case): opened as video-layer footage by [`movie`] in the desktop
+/// app; the web build can't read them.
+pub const MOVIE_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "qt", "mkv", "webm"];
+
+/// Whether `name` has a movie extension ([`MOVIE_EXTENSIONS`]).
+pub fn is_movie_name(name: &str) -> bool {
+    std::path::Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| MOVIE_EXTENSIONS.iter().any(|m| e.eq_ignore_ascii_case(m)))
+}
 mod multichannel_map;
 mod ora;
 mod palette_map;
