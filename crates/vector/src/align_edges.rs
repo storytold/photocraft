@@ -14,9 +14,12 @@ use photocraft_geom::Affine;
 
 use crate::{flatten_path, stroke_polygons, stroke_style};
 
+/// `(x0, y0, x1, y1)`.
+type Bounds = (f64, f64, f64, f64);
+
 /// Bounds `(x0, y0, x1, y1)` of a set of points; `None` when empty or not finite.
-fn points_bounds<'a>(pts: impl Iterator<Item = &'a (f64, f64)>) -> Option<(f64, f64, f64, f64)> {
-    let mut b: Option<(f64, f64, f64, f64)> = None;
+fn points_bounds<'a>(pts: impl Iterator<Item = &'a (f64, f64)>) -> Option<Bounds> {
+    let mut b: Option<Bounds> = None;
     for &(x, y) in pts {
         if !(x.is_finite() && y.is_finite()) {
             return None;
@@ -31,7 +34,7 @@ fn points_bounds<'a>(pts: impl Iterator<Item = &'a (f64, f64)>) -> Option<(f64, 
 
 /// Bounds of the path's own geometry (`path`) and of everything the shape paints (`painted`):
 /// the fill area, grown to the stroke's outer edge when the shape has a visible stroke.
-fn painted_bounds(shape: &ShapeLayer, tol: f64) -> Option<((f64, f64, f64, f64), (f64, f64, f64, f64))> {
+fn painted_bounds(shape: &ShapeLayer, tol: f64) -> Option<(Bounds, Bounds)> {
     let lines = flatten_path(&shape.path, tol);
     let path = points_bounds(lines.iter().flat_map(|l| l.pts.iter()))?;
     let stroke = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0);
