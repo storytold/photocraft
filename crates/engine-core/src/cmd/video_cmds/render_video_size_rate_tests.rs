@@ -1,6 +1,7 @@
 //! #14164: Render Video scales the output to another size and samples the timeline at another
 //! frame rate.
 
+use super::render_video_range_tests::{distinct_frames, grey, grey_of_png};
 use super::*;
 use serde_json::json;
 
@@ -91,5 +92,18 @@ fn bad_sizes_and_rates_are_refused() {
         p["format"] = json!("png");
         let err = render(&s, p).expect_err(&format!("{params} is refused")).to_string();
         assert!(err.contains(says), "{params}: {err}");
+    }
+}
+
+/// The frames rendered at another rate are the timeline's frames at those times, not the first
+/// ones of the timeline: frames 10..19 at half the rate are 10, 12, 14, 16 and 18.
+#[test]
+fn a_half_rate_render_shows_every_other_frame() {
+    let s = distinct_frames(30);
+    let files = render(&s, json!({"format": "png", "fps": 15, "range": {"start": 10, "end": 19}})).unwrap();
+    assert_eq!(files.len(), 5);
+    for (k, (name, bytes)) in files.iter().enumerate() {
+        let want = grey(10 + 2 * k);
+        assert!((grey_of_png(bytes) - want).abs() < 1.5 / 255.0, "{name} is timeline frame {}", 10 + 2 * k);
     }
 }

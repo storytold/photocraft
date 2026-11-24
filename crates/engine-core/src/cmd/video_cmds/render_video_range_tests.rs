@@ -33,13 +33,13 @@ fn names(files: &[(String, Vec<u8>)]) -> Vec<&str> {
 }
 
 /// The grey frame `n` is painted with in [`distinct_frames`]: different for every frame under 200.
-fn grey(n: usize) -> f32 {
+pub(super) fn grey(n: usize) -> f32 {
     ((n * 37) % 200 + 20) as f32 / 255.0
 }
 
 /// A document whose video layer shows its own grey in each of `frames` frames ([`grey`]), so a
 /// rendered file says which frame it is.
-fn distinct_frames(frames: usize) -> Session {
+pub(super) fn distinct_frames(frames: usize) -> Session {
     let mut s = session(Some(frames));
     s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
@@ -57,7 +57,7 @@ fn distinct_frames(frames: usize) -> Session {
 }
 
 /// The grey at the middle of a rendered still (PNG).
-fn grey_of_png(bytes: &[u8]) -> f32 {
+pub(super) fn grey_of_png(bytes: &[u8]) -> f32 {
     let doc = photocraft_io::import("f.png", bytes).unwrap().document;
     photocraft_compose::flatten_to_surface(&doc, doc.pixel_format(), None).pixel(4, 3)[0]
 }
