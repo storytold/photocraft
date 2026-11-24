@@ -120,6 +120,8 @@ fn a_wrong_alpha_or_matte_is_an_error() {
         json!({"format": "png", "alpha": true}),
         json!({"format": "png", "alpha": "premultipliedColor", "matte": "green"}),
         json!({"format": "png", "alpha": "premultipliedColor", "matte": [0, 2, 0]}),
+        json!({"format": "png", "alpha": "premultipliedColor", "matte": [0, 1]}),
+        json!({"format": "png", "alpha": "premultipliedColor", "matte": [0, "1", 0]}),
         json!({"format": "png", "alpha": "premultipliedColor", "matte": 7}),
         json!({"format": "png", "alpha": "premultipliedColor", "matte": "00ff00"}),
         json!({"format": "png", "alpha": "premultipliedColor", "matte": "#00ff0080"}),
