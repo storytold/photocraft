@@ -225,6 +225,21 @@ fn exposure_presets_in_the_dialog_respect_preview_cancel_and_ok() {
     assert_eq!(field(h.state_mut(), id, "exposure"), json!(-2.0));
     assert!(crate::adjust_preview::display_doc(h.state_mut(), 0).is_some());
     assert_eq!(history(h.state()), before);
+
+    use egui::accesskit::Role;
+    h.get_by_role_and_label(Role::SpinButton, "Exposure").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("0".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(field(h.state_mut(), id, "exposure"), json!(0.0));
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Preset").value().as_deref(), Some("Custom"));
+    press_reset(&mut h);
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Preset").value().as_deref(), Some("Default"));
+
+    choose(&mut h, "−2 EV");
     cancel(h.state_mut(), &ctx, id);
     assert_eq!(history(h.state()), before);
 

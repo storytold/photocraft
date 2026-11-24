@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use craft::behavior::{EditEvent, EditEvents, Mixed};
 use craft::imaging::ui::adjust::{AdjustContext, AdjustField, AdjustSliders, AdjustWords};
-use craft::ui::choice::Select;
 use craft::ui::contract::{Bind, Entry, Show as _, ShowContainer as _};
 use craft::ui::form::Field;
+use craft::ui::pickers::Select;
 use craft::ui::runtime::env::Env;
 use egui::{Id, Ui};
 
@@ -14,18 +14,23 @@ use egui::{Id, Ui};
 const STOPS: [f64; 5] = [0.0, -2.0, -1.0, 1.0, 2.0];
 const CUSTOM: usize = STOPS.len();
 
-fn custom_key(ui: &Ui) -> Id {
-    // The Properties inspector keys its body by document and layer. Dialogs have their own scope.
-    ui.make_persistent_id("exposure-preset-custom")
+const CUSTOM_KEY: &str = "exposure-preset-custom";
+
+fn dialog_key() -> Id {
+    Id::new(("adjustment-dialog", CUSTOM_KEY))
 }
 
 /// Returns the menu to the named preset that matches its values after Properties resets them.
 pub(crate) fn clear_custom(ui: &Ui) {
-    ui.data_mut(|data| data.remove::<Vec<f64>>(custom_key(ui)));
+    ui.data_mut(|data| data.remove::<Vec<f64>>(ui.make_persistent_id(CUSTOM_KEY)));
+}
+
+pub(crate) fn clear_dialog_custom(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.remove::<Vec<f64>>(dialog_key()));
 }
 
 pub(super) fn show(ui: &mut Ui, values: &mut Vec<f64>, context: AdjustContext) -> EditEvents<Vec<f64>> {
-    let key = custom_key(ui);
+    let key = if context.is_dialog() { dialog_key() } else { ui.make_persistent_id(CUSTOM_KEY) };
     let manually_edited = ui.data(|data| data.get_temp::<Vec<f64>>(key).is_some_and(|edited| edited == *values));
     let active = if manually_edited { CUSTOM } else { STOPS.iter().position(|&stops| *values == [stops, 0.0, 1.0]).unwrap_or(CUSTOM) };
     let entries = [

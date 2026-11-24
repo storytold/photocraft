@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-mod exposure_presets;
+pub(crate) mod exposure_presets;
 mod session;
 pub mod values;
 

@@ -646,6 +646,15 @@ fn open_hosted(app: &mut PhotocraftApp, command: &str, recorded: Value, smart: O
     .reset_with(reset_target(kind.clone()))
     .json_form(json_form)
     .held_ok();
+    if kind == "exposure" {
+        let ctx = app.ctx().clone();
+        let reset = reset_target(kind.clone());
+        adjust_editors::exposure_presets::clear_dialog_custom(&ctx);
+        dialog = dialog.reset_with(move |opening, current| {
+            adjust_editors::exposure_presets::clear_dialog_custom(&ctx);
+            reset(opening, current)
+        });
+    }
     if let Some(idx) = app.session.active_index() {
         dialog = dialog.canvas(crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
     }
