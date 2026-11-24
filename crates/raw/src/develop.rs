@@ -130,6 +130,19 @@ impl<'a> Scale<'a> {
     }
 }
 
+/// Black and combined white-balance gain for one phase of an integer sensor row.
+/// A valid range that would overflow the combined math needs scalar normalization.
+pub(crate) fn combined_black_gain(s: &Sensor, x: usize, y: usize, sample: usize, multiplier: f32) -> Option<(f32, f32)> {
+    let black = s.black.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), sample, s.samples);
+    let range = s.white[sample.min(2)] - black;
+    if !(range.is_finite() && range > 0.0 && black.is_finite()) {
+        return Some((0.0, 0.0));
+    }
+    let gain = multiplier / range;
+    // A finite gain alone does not show that scalar normalization stays finite over U16.
+    (gain.is_finite() && ((0.0 - black) / range).is_finite() && ((f32::from(u16::MAX) - black) / range).is_finite()).then_some((black, gain))
+}
+
 /// Row `y` of a LinearRaw (3-sample or monochrome) frame from column `x0` on, `row.len() / 3`
 /// pixels: [`Scale::value`] times the white balance, clipped. Monochrome data fills all three
 /// channels with its one sample.
@@ -280,14 +293,8 @@ pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, war
     })
 }
 
-/// Develops sensor data.
-pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
-    develop(s, opts, true)
-}
-
-/// [`develop_sensor`]; `allow_fused` false keeps the full-frame path (what the tests compare the
-/// fused one against).
-fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Developed> {
+/// Validate the dimensions and CFA before either developer reads a sensor sample.
+pub(crate) fn validate_sensor(s: &Sensor) -> Result<()> {
     let c = s.crop;
     let samples = s.width.checked_mul(s.height).and_then(|n| n.checked_mul(s.samples));
     if c.is_empty()
@@ -312,6 +319,72 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     {
         return Err(RawError::malformed("invalid sensor CFA pattern"));
     }
+    Ok(())
+}
+
+/// White balance, colour transform and tone encoding shared by full and reduced developments.
+pub(crate) struct DevelopColor {
+    pub(crate) mult: [f32; 3],
+    pub(crate) to_xyz: Mat3,
+    pub(crate) lut: GammaLut,
+    pub(crate) warnings: Vec<String>,
+    out_m: [[f32; 3]; 3],
+    mono: bool,
+    grey_gain: f32,
+}
+
+impl DevelopColor {
+    pub(crate) fn new(s: &Sensor, opts: &DevelopOptions, sc: &Scale) -> Result<Self> {
+        let mut warnings = s.warnings.clone();
+        let neutral = resolve_neutral(s, opts, sc, &mut warnings)?;
+        let mult = neutral.map(|v| (1.0 / v) as f32);
+        // Balanced camera → XYZ D50: a look fitted to the camera's JPEG, the file's
+        // calibration, or the neutral fallback. Monochrome data stays neutral grey.
+        let mono = s.is_monochrome();
+        let look = opts.camera_look.as_ref().filter(|l| l.is_usable() && !mono);
+        if opts.camera_look.is_some() && look.is_none() && !mono {
+            warnings.push("the supplied camera look is not usable (non-finite or singular); ignored".into());
+        }
+        let to_xyz = match (look, s.color.balanced_to_xyz_d50(neutral)) {
+            (Some(l), _) => {
+                warnings.push(l.note());
+                l.to_xyz
+            }
+            (None, Some(m)) => m,
+            (None, None) => {
+                if s.format != RawFormat::Dng && !mono {
+                    warnings.push("no colour calibration for this camera; camera colours are treated as sRGB primaries".into());
+                }
+                color::srgb_to_xyz_d50()
+            }
+        };
+        let gain = 2f64.powf(s.baseline_exposure + opts.exposure.clamp(-10.0, 10.0));
+        let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), gain).map(|r| r.map(|v| v as f32));
+        let lut = match look {
+            Some(l) => GammaLut::with_tone(l.tone.as_ref()),
+            None => GammaLut::with_curve(&s.tone_curve),
+        };
+        Ok(Self { mult, to_xyz, lut, warnings, out_m, mono, grey_gain: gain as f32 })
+    }
+
+    /// Convert balanced camera samples to linear ProPhoto. A monochrome sample keeps all
+    /// three channels exactly equal after exposure.
+    #[inline]
+    pub(crate) fn to_prophoto(&self, p: &[f32]) -> [f32; 3] {
+        if self.mono { [self.grey_gain * p[0]; 3] } else { self.out_m.map(|row| row[0] * p[0] + row[1] * p[1] + row[2] * p[2]) }
+    }
+}
+
+/// Develops sensor data.
+pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
+    develop(s, opts, true)
+}
+
+/// [`develop_sensor`]; `allow_fused` false keeps the full-frame path (what the tests compare the
+/// fused one against).
+fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Developed> {
+    validate_sensor(s)?;
+    let c = s.crop;
     let bayer = s.cfa.as_ref().is_none_or(|cfa| cfa.is_bayer());
     // The default rendering (no Dehaze, no local tone, no black point) needs no statistic of
     // the whole frame: demosaic and encode band by band, with no full RGB frame (the same
@@ -319,52 +392,18 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     let fused = allow_fused && opts.tone.is_neutral() && s.black_point <= 0.0;
     let orient_copy = opts.orient && (2..=8).contains(&s.orientation);
     let jobs = working_memory(c.width, c.height, s.cfa.is_some(), bayer, Shape { fused, orient_copy }, opts, par::workers())?;
-    let mut warnings = s.warnings.clone();
     let sc = Scale::new(s);
-
-    let neutral = resolve_neutral(s, opts, &sc, &mut warnings)?;
-    let mult = neutral.map(|v| (1.0 / v) as f32);
-
-    // Balanced camera → XYZ D50: a look fitted to the camera's JPEG, the file's calibration,
-    // or the neutral fallback.
-    // Monochrome data stays neutral grey: no camera look and no colour calibration.
-    let mono = s.is_monochrome();
-    let look = opts.camera_look.as_ref().filter(|l| l.is_usable() && !mono);
-    if opts.camera_look.is_some() && look.is_none() && !mono {
-        warnings.push("the supplied camera look is not usable (non-finite or singular); ignored".into());
-    }
-    let to_xyz: Mat3 = match (look, s.color.balanced_to_xyz_d50(neutral)) {
-        (Some(l), _) => {
-            warnings.push(l.note());
-            l.to_xyz
-        }
-        (None, Some(m)) => m,
-        (None, None) => {
-            if s.format != RawFormat::Dng && !mono {
-                warnings.push("no colour calibration for this camera; camera colours are treated as sRGB primaries".into());
-            }
-            color::srgb_to_xyz_d50()
-        }
-    };
-    let gain = 2f64.powf(s.baseline_exposure + opts.exposure.clamp(-10.0, 10.0));
-    let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), gain);
-    let out_m: [[f32; 3]; 3] = out_m.map(|r| r.map(|v| v as f32));
-
-    // Neutral grey through `out_m`: the gain alone (the matrix maps camera white to ProPhoto
-    // white, up to rounding), so the three output channels stay exactly equal.
-    let grey_gain = gain as f32;
+    let colour = DevelopColor::new(s, opts, &sc)?;
+    let mult = colour.mult;
+    let to_xyz = colour.to_xyz;
+    let lut = &colour.lut;
     let (w, h) = (c.width, c.height);
     let band = par::band_rows(w);
     // Camera → ProPhoto, exposure, Dehaze, Shadows / Highlights / Clarity / Texture and the black
     // point, the look's (or the profile's) tone curve, gamma 1.8, 16 bits.
     let y_row = color::rgb_to_xyz(color::ROMM, color::D50_XY)[1].map(|v| v as f32);
     let lum = |v: &[f32; 3]| y_row[0] * v[0] + y_row[1] * v[1] + y_row[2] * v[2];
-    // Monochrome: the one sample, grey; no colour matrix.
-    let pro = |p: &[f32]| if mono { [grey_gain * p[0]; 3] } else { [0, 1, 2].map(|k| out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]) };
-    let lut = match look {
-        Some(l) => GammaLut::with_tone(l.tone.as_ref()),
-        None => GammaLut::with_curve(&s.tone_curve),
-    };
+    let pro = |p: &[f32]| colour.to_prophoto(p);
     // The default rendering: matrix then encode, in blocks so the encode's clamp and square root
     // run over whole slices.
     let encode_plain = |src: &[f32], dst: &mut [u16]| {
@@ -414,29 +453,16 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 };
                 if periodic && s.float_data.is_none() && s.polynomials.is_empty() {
                     // Per column of the period: black and the combined scale × white-balance gain.
-                    let mut finite_gains = true;
-                    let k: Vec<(f32, f32)> = (0..period)
+                    let k: Option<Vec<_>> = (0..period)
                         .map(|p| {
                             let x = c.x + p;
-                            let black = bl.at(x.saturating_sub(s.active.x), y.saturating_sub(s.active.y), 0, 1);
-                            let range = s.white[0] - black;
-                            // A non-finite black (a BlackLevel DOUBLE beyond f32) gives 0, as
-                            // `Scale::value` does, instead of (raw - inf) * 0 = NaN.
-                            if !(range.is_finite() && range > 0.0 && black.is_finite()) {
-                                return (0.0, 0.0);
-                            }
-                            let gain = mult[usize::from(cfa.color(x, y)).min(2)] / range;
-                            // Scalar normalization rejects a non-finite quotient before
-                            // white balance. A finite gain alone does not prove that
-                            // every U16 numerator divided by this range stays finite.
-                            finite_gains &= gain.is_finite() && ((0.0 - black) / range).is_finite() && ((f32::from(u16::MAX) - black) / range).is_finite();
-                            (black, gain)
+                            combined_black_gain(s, x, y, 0, mult[usize::from(cfa.color(x, y)).min(2)])
                         })
                         .collect();
                     // Tiny positive ranges can overflow either the combined gain
                     // or scalar U16 normalization. Select the scalar row once;
                     // keep the ordinary fast pixel loop intact.
-                    if finite_gains {
+                    if let Some(k) = k {
                         let src = &s.data[y * s.width + c.x..y * s.width + c.x + w];
                         let ks = k.iter().cycle();
                         match &sc.lin {
@@ -648,7 +674,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             orientation: s.orientation,
             baseline_exposure: s.baseline_exposure,
         },
-        warnings,
+        warnings: colour.warnings,
     })
 }
 
@@ -767,7 +793,7 @@ fn working_memory(w: usize, h: usize, cfa: bool, bayer: bool, shape: Shape, opts
 
 /// Gain-map factors (DNG OpcodeList2 GainMap) for data row `y`, columns
 /// `x0..x0 + w`, sample `k`; `None` when no map touches the row.
-fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f32>> {
+pub(crate) fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f32>> {
     let a = s.active;
     if s.gain_maps.is_empty() || y < a.y || a.width == 0 || a.height == 0 {
         return None;
@@ -794,7 +820,7 @@ fn gain_row(s: &Sensor, y: usize, x0: usize, w: usize, k: usize) -> Option<Vec<f
 /// Linear 0..1 → gamma-1.8 16-bit code. Tabulated over `s = sqrt(v)`, where
 /// the curve `s^(2/1.8)` is smooth down to 0, with linear interpolation
 /// (error below 0.2 code values).
-struct GammaLut {
+pub(crate) struct GammaLut {
     table: Vec<f32>,
     /// `[table[i], table[i + 1] - table[i]]`: the same interpolation from one load.
     pairs: Vec<[f32; 2]>,
@@ -811,7 +837,7 @@ impl GammaLut {
     }
 
     /// The gamma-1.8 encoding after a tone curve (see [`Sensor::tone_curve`]; empty: none).
-    fn with_curve(curve: &[[f32; 2]]) -> Self {
+    pub(crate) fn with_curve(curve: &[[f32; 2]]) -> Self {
         let table = (0..=GAMMA_STEPS + 1)
             .map(|i| {
                 let s = (i as f32 / GAMMA_STEPS as f32).min(1.0);
@@ -822,7 +848,7 @@ impl GammaLut {
     }
 
     /// The gamma-1.8 encoding after a fitted [`ToneCurve`] (`None`: none, plain gamma 1.8).
-    fn with_tone(tone: Option<&ToneCurve>) -> Self {
+    pub(crate) fn with_tone(tone: Option<&ToneCurve>) -> Self {
         let table = (0..=GAMMA_STEPS + 1)
             .map(|i| {
                 let s = (i as f64 / GAMMA_STEPS as f64).min(1.0);
@@ -859,9 +885,15 @@ impl GammaLut {
     }
 
     #[inline]
-    fn encode(&self, v: f32) -> u16 {
+    pub(crate) fn encode(&self, v: f32) -> u16 {
         let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
-        let x = v.sqrt() * GAMMA_STEPS as f32;
+        self.encode_sqrt(v.sqrt())
+    }
+
+    /// [`encode`](Self::encode) of `s * s`, for `s` in 0..=1.
+    #[inline]
+    pub(crate) fn encode_sqrt(&self, s: f32) -> u16 {
+        let x = s * GAMMA_STEPS as f32;
         let i = (x as usize).min(GAMMA_STEPS);
         let f = x - i as f32;
         let (a, b) = (self.table[i], self.table[i + 1]);

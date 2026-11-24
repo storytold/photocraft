@@ -400,22 +400,40 @@ type Kept = (Sensor, Option<CameraLook>);
 /// With `keep`, also hands back the sensor and the look it fitted (the default look, when
 /// `opts` named none) instead of freeing them.
 fn develop_fitted(bytes: &[u8], opts: &DevelopOptions, keep: bool) -> Result<(photocraft_raw::Developed, Option<Kept>), RawError> {
-    let sensor = decode_sensor(bytes, &opts.limits).map_err(|e| match e {
-        IoError::Raw(e) => e,
-        e => RawError::Malformed(e.to_string()),
-    })?;
+    // The sensor (and the look fitted to it) the preview stages of this open already made.
+    let (sensor, predecoded_look) = match take_predecoded(bytes, opts) {
+        Some((sensor, look)) => (sensor, Some(look)),
+        None => {
+            let sensor = decode_sensor(bytes, &opts.limits).map_err(|e| match e {
+                IoError::Raw(e) => e,
+                e => RawError::Malformed(e.to_string()),
+            })?;
+            (sensor, None)
+        }
+    };
     let mut opts = Cow::Borrowed(opts);
     let named_look = opts.camera_look.is_some();
-    if opts.camera_look.is_none()
-        && sensor.color.calibrations.is_empty()
-        && !sensor.is_monochrome()
-        && let Ok(look) = fit_preview_look(bytes, &sensor, &opts)
-    {
-        opts.to_mut().camera_look = Some(look);
+    if opts.camera_look.is_none() {
+        let look = match predecoded_look {
+            Some(look) => look,
+            None => fitted_look(bytes, &sensor, &opts),
+        };
+        if let Some(look) = look {
+            opts.to_mut().camera_look = Some(look);
+        }
     }
     let dev = photocraft_raw::develop_sensor(&sensor, &opts)?;
     let kept = (keep && !named_look).then(|| (sensor, opts.into_owned().camera_look));
     Ok((dev, kept))
+}
+
+/// The look [`develop_fitted`] fits for a file without colour calibration (none when the file
+/// has calibration, is monochrome or the fit does not hold).
+fn fitted_look(bytes: &[u8], sensor: &Sensor, opts: &DevelopOptions) -> Option<CameraLook> {
+    if !sensor.color.calibrations.is_empty() || sensor.is_monochrome() {
+        return None;
+    }
+    fit_preview_look(bytes, sensor, opts).ok()
 }
 
 /// The camera's embedded JPEG, upright, for opening in place of sensor data that can't be
@@ -514,6 +532,81 @@ fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: 
     }
 }
 
+// ------------------------------------------------------------------------------ progressive open
+
+/// What the preview stages of an interactive open learned, for the full develop that follows on
+/// the same thread: the file, the demosaic method it fits with, the sensor and the fitted look.
+struct Predecoded {
+    fingerprint: Fingerprint,
+    demosaic: Demosaic,
+    sensor: Sensor,
+    look: Option<CameraLook>,
+}
+
+thread_local! {
+    static PREDECODED: std::cell::RefCell<Option<Predecoded>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Hands the full develop the sensor and look the preview stages made for `bytes`, once. Another
+/// file or demosaic method, or `opts` that name a look, finds nothing (and drops the stash).
+fn take_predecoded(bytes: &[u8], opts: &DevelopOptions) -> Option<(Sensor, Option<CameraLook>)> {
+    let p = PREDECODED.with(|p| p.borrow_mut().take())?;
+    (p.demosaic == opts.demosaic && opts.camera_look.is_none() && p.fingerprint == Fingerprint::of(bytes)).then_some((p.sensor, p.look))
+}
+
+/// Drops the sensor and look [`publish_previews`] left for the full develop, for an open that
+/// ends (cancelled) before that develop runs.
+pub fn discard_predecoded() {
+    PREDECODED.with(|p| p.borrow_mut().take());
+}
+
+/// Long edge a preview JPEG should have at least to be worth showing: the smallest such preview
+/// of the largest one's shape decodes fastest, else the largest.
+const FIRST_PAINT_EDGE: u32 = 1920;
+
+/// The camera's embedded JPEG as a document, upright and tagged with its own colour space (8-bit
+/// sRGB or Adobe RGB, unlike the 16-bit ProPhoto of a develop). `None` without a decodable one.
+fn jpeg_preview(name: &str, bytes: &[u8]) -> Option<ImportResult> {
+    let jpeg = photocraft_raw::embedded_jpeg_preview_covering(bytes, FIRST_PAINT_EDGE)?;
+    let img = upright_preview(bytes, &jpeg, &limits()).ok()?;
+    let profile = preview_profile(bytes, img.icc.as_deref()).ok()?;
+    let mut r = image_to_document(name, &img).ok()?;
+    if let (Some(p), None) = (profile, &img.icc) {
+        r.document.icc_profile = Some(Arc::new(p.to_bytes().to_vec()));
+    }
+    Some(r)
+}
+
+/// The half-size develop of `bytes` as a document ([`photocraft_raw::develop_half`]), with the
+/// colour rendering the full develop will use. The decoded sensor and look stay behind for that
+/// full develop ([`develop_fitted`]) on this thread, so the file is decoded once.
+fn half_preview(name: &str, bytes: &[u8], demosaic: Demosaic) -> Option<ImportResult> {
+    let opts = DevelopOptions { limits: limits(), demosaic, ..Default::default() };
+    let sensor = decode_sensor(bytes, &opts.limits).ok()?;
+    let look = fitted_look(bytes, &sensor, &opts);
+    let half = photocraft_raw::develop_half(&sensor, &DevelopOptions { camera_look: look.clone(), ..opts });
+    let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
+    let r = half.ok().and_then(|dev| developed_document(name, bytes, format, dev, "half-size preview").ok());
+    PREDECODED.with(|p| *p.borrow_mut() = Some(Predecoded { fingerprint: Fingerprint::of(bytes), demosaic, sensor, look }));
+    r
+}
+
+/// The first-paint stages of opening a raw, each handed to `publish` as it is ready: the camera's
+/// embedded JPEG (when there is one), then the half-size develop. A stage that fails (no JPEG, a
+/// corrupt one, a CFA the half-size develop does not support) is skipped silently; the full
+/// develop ([`import_raw_demosaic`]) reports real errors. Call it on the thread that then runs
+/// the full develop: that one reuses the sensor decoded here. `cancelled` is polled between stages.
+pub fn publish_previews(name: &str, bytes: &[u8], demosaic: Demosaic, publish: &mut dyn FnMut(ImportResult), cancelled: &dyn Fn() -> bool) {
+    if let Some(r) = jpeg_preview(name, bytes) {
+        publish(r);
+    }
+    if !cancelled()
+        && let Some(r) = half_preview(name, bytes, demosaic)
+    {
+        publish(r);
+    }
+}
+
 /// A decoded JPEG XL preview as an image: in its stated colour space (sRGB when it states
 /// none), turned upright by the raw's orientation (DNG previews are stored as the raw is).
 fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Image, IoError> {
@@ -535,6 +628,17 @@ fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Im
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sensor decode takes the caller's limits, as the full develop passes its own (#9433).
+    #[test]
+    fn the_sensor_decode_uses_the_limits_it_is_given() {
+        use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+        let (w, h) = (40, 24);
+        let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
+        let tight = Limits { max_width: 8, max_height: 8, max_pixels: 64, max_alloc: 1 << 20 };
+        assert!(decode_sensor(&bytes, &tight).is_err());
+        assert!(decode_sensor(&bytes, &limits()).is_ok());
+    }
 
     /// A caller's tighter limits hold for the sensor decode, not only for the develop after it (#9462).
     #[test]
@@ -587,5 +691,110 @@ mod tests {
         let p3_icc = Builtin::DisplayP3.profile().to_bytes().to_vec();
         assert!(preview_profile(&srgb, Some(p3_icc.as_slice())).unwrap().unwrap().same_colors(Builtin::DisplayP3.profile()));
         assert!(preview_profile(&adobe, Some(b"not an ICC profile")).is_err());
+    }
+
+    // ---- progressive open
+
+    use photocraft_raw::testgen::{DngSpec, RafSpec, Val, XTRANS, baseline_jpeg, mosaic, mosaic_cfa, scene};
+
+    fn dng_bytes() -> Vec<u8> {
+        let (w, h) = (48, 32);
+        DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 30000)).build()
+    }
+
+    /// The DNG with a real JPEG (`jw` x `jh`) appended and referenced as IFD0's JPEGInterchangeFormat.
+    fn dng_with_jpeg(jw: usize, jh: usize) -> Vec<u8> {
+        let (w, h) = (48, 32);
+        let jpeg = baseline_jpeg(&vec![90u8; jw * jh * 3], jw, jh, 3);
+        let spec = |at: u32| {
+            let mut s = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 30000));
+            s.ifd0_extra = vec![(513, Val::Long(vec![at])), (514, Val::Long(vec![jpeg.len() as u32]))];
+            s
+        };
+        let at = spec(0).build().len() as u32;
+        let mut bytes = spec(at).build();
+        assert_eq!(bytes.len() as u32, at);
+        bytes.extend_from_slice(&jpeg);
+        bytes
+    }
+
+    fn previews_of(bytes: &[u8]) -> Vec<ImportResult> {
+        let mut out = Vec::new();
+        publish_previews("p.dng", bytes, Demosaic::default(), &mut |r| out.push(r), &|| false);
+        out
+    }
+
+    fn size(r: &ImportResult) -> (u32, u32) {
+        (r.document.size.width, r.document.size.height)
+    }
+
+    fn png(r: &ImportResult) -> Vec<u8> {
+        crate::export(&r.document, "x.png", &Default::default()).unwrap().bytes
+    }
+
+    #[test]
+    fn a_raw_without_a_jpeg_shows_the_half_size_develop_first() {
+        let p = previews_of(&dng_bytes());
+        assert_eq!(p.len(), 1);
+        assert_eq!(size(&p[0]), (24, 16));
+        assert!(p[0].document.icc_profile.is_some(), "16-bit ProPhoto, tagged");
+        assert!(!p[0].warnings.iter().any(|w| w.contains(DEVELOPED_NOTE)), "a preview is not a default open");
+    }
+
+    #[test]
+    fn a_raw_with_a_jpeg_shows_it_first_then_the_half_size_develop() {
+        let p = previews_of(&dng_with_jpeg(40, 30));
+        assert_eq!(p.iter().map(size).collect::<Vec<_>>(), vec![(40, 30), (24, 16)]);
+    }
+
+    #[test]
+    fn a_corrupt_jpeg_falls_through_to_the_next_stage() {
+        let mut bytes = dng_with_jpeg(40, 30);
+        let n = bytes.len();
+        // Keep the header (so it is found) and destroy the entropy-coded data.
+        bytes[n - 60..n - 2].fill(0xAB);
+        let p = previews_of(&bytes);
+        assert_eq!(p.iter().map(size).collect::<Vec<_>>(), vec![(24, 16)]);
+    }
+
+    #[test]
+    fn x_trans_previews_at_a_third_and_a_cfa_the_half_size_develop_cannot_do_falls_through() {
+        let (w, h) = (30, 18);
+        let raf = RafSpec::new(w, h, mosaic_cfa(&scene(w, h), w, &XTRANS, 6, 256, 16383), XTRANS.to_vec()).build();
+        let p = previews_of(&raf);
+        // The RAF's tiny stand-in JPEG does not decode: only the 3x3-binned develop is left.
+        assert_eq!(p.iter().map(size).collect::<Vec<_>>(), vec![(10, 6)]);
+        // A repeat the half-size develop does not support is an error there; the preview stage skips it.
+        let mut s = photocraft_raw::decode(&raf, &limits()).unwrap();
+        s.cfa.as_mut().unwrap().height = 3;
+        s.cfa.as_mut().unwrap().colors.truncate(18);
+        assert!(matches!(photocraft_raw::develop_half(&s, &DevelopOptions::default()), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn the_full_develop_after_the_previews_is_identical_and_decodes_once() {
+        for bytes in [dng_bytes(), dng_with_jpeg(40, 30)] {
+            let plain = import_raw_demosaic("a.dng", &bytes, Demosaic::default()).unwrap();
+            let before = decodes_on_this_thread();
+            drop(previews_of(&bytes));
+            let full = import_raw_demosaic("a.dng", &bytes, Demosaic::default()).unwrap();
+            assert_eq!(decodes_on_this_thread() - before, 1, "the preview's decode is reused");
+            assert_eq!(png(&plain), png(&full));
+            assert_eq!(plain.warnings, full.warnings);
+            // The stash is used up: a later open decodes afresh.
+            let before = decodes_on_this_thread();
+            import_raw_demosaic("a.dng", &bytes, Demosaic::default()).unwrap();
+            assert_eq!(decodes_on_this_thread() - before, 1);
+        }
+    }
+
+    #[test]
+    fn the_stash_is_not_used_for_another_file_or_method() {
+        let (a, b) = (dng_bytes(), dng_with_jpeg(40, 30));
+        drop(previews_of(&a));
+        let before = decodes_on_this_thread();
+        let full = import_raw_demosaic("b.dng", &b, Demosaic::default()).unwrap();
+        assert_eq!(decodes_on_this_thread() - before, 1);
+        assert_eq!(png(&full), png(&import_raw_demosaic("b.dng", &b, Demosaic::default()).unwrap()));
     }
 }

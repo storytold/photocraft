@@ -667,7 +667,7 @@ macro_rules! cr {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 mod identity_tests;

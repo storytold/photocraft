@@ -262,8 +262,8 @@ fn stem_of(name: &str) -> String {
 
 /// File › Export › Export As…
 pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
-    let st = app.session.active().ok_or("no document")?;
-    let (stem, size) = (stem_of(&st.doc.name), st.doc.size);
+    let doc = active_export_document(app)?;
+    let (stem, size) = (stem_of(&doc.name), doc.size);
     open_sized(app, stem, None, PixelSize::new(size.width, size.height), Vec::new())
 }
 
@@ -314,8 +314,8 @@ fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, sour
 
 /// Layer › Export As…: the same dialog for just the active layer (trimmed to its pixels).
 pub fn open_layer(app: &mut PhotocraftApp, layer: LayerId) -> Result<DialogId, String> {
-    let st = app.session.active().ok_or("no document")?;
-    let ldoc = photocraft_engine::layer_menu_cmds::layer_document(&st.doc, layer).map_err(|e| e.to_string())?;
+    let doc = active_export_document(app)?;
+    let ldoc = photocraft_engine::layer_menu_cmds::layer_document(doc, layer).map_err(|e| e.to_string())?;
     // The size fields follow the layer's trimmed size, so the dialog shows and edits the size
     // the layer exports at.
     let template = "Export As: {name}";
@@ -333,10 +333,10 @@ pub fn open_layers(app: &mut PhotocraftApp, layers: &[LayerId]) -> Result<Dialog
         [one] => return open_layer(app, *one),
         _ => {}
     }
-    let st = app.session.active().ok_or("no document")?;
-    let ldoc = exportable_layers(&st.doc, layers)?.swap_remove(0);
+    let doc = active_export_document(app)?;
+    let ldoc = exportable_layers(doc, layers)?.swap_remove(0);
     // The batch is named after the document, as Quick Export names a selection's files.
-    let stem = export_name(&stem_of(&st.doc.name));
+    let stem = export_name(&stem_of(&doc.name));
     let template = "Export As: {n} layers";
     let title = crate::i18n::fmt(tl!(template), &[("n", &layers.len().to_string())]);
     open_sized(app, stem, Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), layers.to_vec())
@@ -478,7 +478,16 @@ fn source_document_from(doc: Arc<Document>, f: &Map<String, Value>) -> Result<Ar
 }
 
 fn source_document(app: &PhotocraftApp, f: &Map<String, Value>) -> Result<Arc<Document>, String> {
-    source_document_from(app.session.active().ok_or("no document")?.doc.clone(), f)
+    source_document_from(Arc::clone(active_export_document(app)?), f)
+}
+
+/// Only completed documents can be exported. A progressive RAW preview is locked by its open job.
+fn active_export_document(app: &PhotocraftApp) -> Result<&Arc<Document>, String> {
+    let st = app.session.active().ok_or("no document")?;
+    if let Some(job) = app.session.job_on(st.doc.id) {
+        return Err(format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", job.label));
+    }
+    Ok(&st.doc)
 }
 
 fn effective_source_profile(app: &PhotocraftApp, doc: &Document) -> Arc<Profile> {
@@ -1167,7 +1176,7 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     if let Some((key, v)) = f.iter().find(|(k, v)| !valid_setting(k, v)) {
         return Err(format!("Export As: `{key}` can't be {v}"));
     }
-    let doc = app.session.active().ok_or("no document")?.doc.clone();
+    let doc = Arc::clone(active_export_document(app)?);
     let source_profile = effective_source_profile(app, &doc);
     write_export(app, &doc, &f, path, &source_profile)
 }
@@ -1178,12 +1187,12 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
 /// name (#14808). One file is written at `path`; the web downloads each file, the first under
 /// `path` and the others named as Quick Export names a selection's files.
 fn export_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[LayerId], path: &str) -> Result<Value, String> {
-    let st = app.session.active().ok_or("no document")?;
-    let source_profile = effective_source_profile(app, &st.doc);
+    let doc = active_export_document(app)?;
+    let source_profile = effective_source_profile(app, doc);
     if ids.is_empty() {
         return Err("no selected layers".into());
     }
-    let docs = exportable_layers(&st.doc, ids)?;
+    let docs = exportable_layers(doc, ids)?;
     let settings = settings(f);
     let folder = docs.len() > 1 && !cfg!(target_arch = "wasm32");
     let paths: Vec<String> = if folder {
