@@ -1436,6 +1436,33 @@ mod tests {
         assert_eq!(c.pixel(3, 1)[1], 0.0);
         assert!((c.pixel(1, 1)[0] - 0.5).abs() < 0.01 && c.pixel(1, 1)[1] == 1.0);
     }
+
+    // refine_mask and refine_mask_brushed are test-only, so these live here, not in tests/it.
+    #[test]
+    fn brushed_refine_survives_extreme_params() {
+        let canvas = Rect::new(0, 0, 64, 64);
+        let img = RgbImage::new(64, 64);
+        let sampler = ImageSampler { img: &img, origin: (0, 0) };
+        let stroke = EdgeStroke { points: vec![(32.0, 32.0)], size: 20.0, add: true };
+        let brush = EdgeBrush::new(&[stroke], canvas);
+        let mask = |r: Rect| vec![1.0_f32; r.width() as usize * r.height() as usize];
+        let p = RefineParams { radius: 1e30, feather: f32::MAX, smooth: f32::MAX, ..RefineParams::default() };
+        let _ = refine_mask_brushed(&sampler, &mask, Rect::new(16, 16, 48, 48), canvas, &p, brush.as_ref());
+    }
+
+    #[test]
+    fn feather_nan_leaves_the_mask_unblurred() {
+        // A NaN feather must act as no feather, not turn every refined pixel into NaN (unselected).
+        let canvas = Rect::new(0, 0, 64, 64);
+        let img = RgbImage::new(64, 64);
+        let sampler = ImageSampler { img: &img, origin: (0, 0) };
+        // A selected square on an unselected canvas, so the tiles are mixed and actually refined.
+        let content = Rect::new(16, 16, 48, 48);
+        let mask = |r: Rect| (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| if content.contains(x, y) { 1.0_f32 } else { 0.0 })).collect();
+        let p = RefineParams { radius: 0.0, smooth: 0.0, feather: f32::NAN, ..RefineParams::default() };
+        let out = refine_mask(&sampler, &mask, content, canvas, &p).expect("refined mask");
+        assert!(out.at(32, 32) > 0.99, "centre coverage {}", out.at(32, 32));
+    }
 }
 
 #[cfg(test)]
