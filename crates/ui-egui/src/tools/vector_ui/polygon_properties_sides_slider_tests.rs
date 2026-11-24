@@ -1,6 +1,8 @@
 //! #13316: the Properties panel of a live polygon lists Sides first, as a slider bound to its
 //! number field (whole numbers, 3-100), then Corner radius, then Star ratio, as the reference
 //! does. The shape follows the slider while it is dragged, and one drag is one History state.
+//! The row is the framework's `ShapePanel` (storytold/craft-libs); these tests drive it through
+//! `shape_properties`, which turns its edits into `shape.edit` commands.
 
 use egui::accesskit::Role;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
@@ -12,7 +14,7 @@ use serde_json::{Value, json};
 use super::shape_properties;
 use crate::PhotocraftApp;
 
-type H = Harness<'static, PhotocraftApp>;
+type H = Harness<'static, Box<PhotocraftApp>>;
 
 /// The Properties panel, 320 px wide like the dock, for a new shape `create` makes in an
 /// 800 x 600 document.
@@ -21,16 +23,17 @@ fn properties(create: Value) -> (H, LayerId) {
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     let made = app.run("shape.create", create).unwrap();
     let id = LayerId(made["layer"].as_u64().unwrap());
-    let mut h = Harness::builder().with_size(vec2(320.0, 900.0)).build_ui_state(
-        move |ui, app| {
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(320.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut Box<PhotocraftApp>| {
+            let _language = crate::i18n::language_scope(crate::i18n::Lang::EN);
             // The first frame runs before `setup_context` installs the app's fonts.
-            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
                 shape_properties(app, ui, id);
             }
         },
         app,
     );
-    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro_medium());
     h.run_steps(4);
     (h, id)
 }
@@ -55,6 +58,11 @@ fn slider(h: &H) -> Rect {
     h.get_by_role_and_label(Role::Slider, "Sides").rect()
 }
 
+/// The count the Sides slider reports.
+fn slider_value(h: &H) -> Option<f64> {
+    h.get_by_role_and_label(Role::Slider, "Sides").accesskit_node().numeric_value()
+}
+
 fn field_named(h: &H, label: &str) -> Option<Rect> {
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(label)).map(|n| n.rect())
 }
@@ -63,10 +71,10 @@ fn field(h: &H, label: &str) -> Rect {
     field_named(h, label).unwrap_or_else(|| panic!("the {label} field"))
 }
 
-/// Where the slider's knob sits for `n` sides: its track is the row inset 7 px at each end.
-fn at(h: &H, n: f32) -> Pos2 {
+/// The point `fraction` of the way along the Sides slider, on its middle line.
+fn along(h: &H, fraction: f32) -> Pos2 {
     let r = slider(h);
-    pos2(r.left() + 7.0 + (n - 3.0) / 97.0 * (r.width() - 14.0), r.center().y)
+    pos2(r.left() + fraction * r.width(), r.center().y)
 }
 
 fn button(h: &mut H, pos: Pos2, pressed: bool) {
@@ -79,29 +87,33 @@ fn move_to(h: &mut H, pos: Pos2) {
     h.run_steps(2);
 }
 
-/// Drags the knob from `from` sides through each of `through`, checking after each step that the
-/// shape already has that many sides and anchors, then releases. The first step must be past
-/// egui's 6 px click distance, so the press becomes a drag.
-fn drag(h: &mut H, id: LayerId, from: f32, through: &[f32]) {
-    let start = at(h, from);
+/// Drags the slider from `from` through each of `through` (fractions of its width), checking
+/// after each step that the shape already has the count the slider shows, as sides and as
+/// anchors, then releases. The count after each step.
+fn drag(h: &mut H, id: LayerId, from: f32, through: &[f32]) -> Vec<u32> {
+    let start = along(h, from);
     move_to(h, start);
     button(h, start, true);
     let mut last = start;
-    for &n in through {
-        last = at(h, n);
+    let mut counts = Vec::new();
+    for &f in through {
+        last = along(h, f);
         move_to(h, last);
-        let want = n.round() as u32;
-        assert_eq!(sides(h, id), (want, want as usize), "the shape follows the slider to {n}");
+        let shown = slider_value(h).expect("the slider's count");
+        assert_eq!(shown.fract(), 0.0, "the slider takes whole sides: {shown}");
+        let want = shown as u32;
+        assert_eq!(sides(h, id), (want, want as usize), "the shape follows the slider at {f}");
+        counts.push(want);
     }
     button(h, last, false);
+    counts
 }
 
 #[test]
 fn the_sides_slider_and_field_come_before_corner_radius_then_star_ratio() {
     let (h, _) = pentagon();
-    let s = h.get_by_role_and_label(Role::Slider, "Sides");
-    assert_eq!(s.accesskit_node().numeric_value(), Some(5.0));
-    let (s, f, radius, star) = (s.rect(), field(&h, "Sides"), field(&h, "Corner radius"), field(&h, "Star ratio"));
+    assert_eq!(slider_value(&h), Some(5.0));
+    let (s, f, radius, star) = (slider(&h), field(&h, "Sides"), field(&h, "Corner radius"), field(&h, "Star ratio"));
     assert!((s.center().y - f.center().y).abs() < 1.0, "the slider and its field share a row: {s:?} {f:?}");
     assert!(s.right() <= f.left() && s.width() >= 60.0, "the slider comes before its field: {s:?} {f:?}");
     assert!(f.bottom() <= radius.top(), "Sides comes before Corner radius: {f:?} {radius:?}");
@@ -112,30 +124,33 @@ fn the_sides_slider_and_field_come_before_corner_radius_then_star_ratio() {
 fn one_drag_up_and_one_drag_down_are_one_history_state_each() {
     let (mut h, id) = pentagon();
     let before = history(&h);
-    drag(&mut h, id, 5.0, &[20.0, 8.0]);
-    assert_eq!(sides(&h, id), (8, 8), "5 -> 8 sides gives 8 anchors");
+    let first = drag(&mut h, id, 0.03, &[0.5, 0.1]);
+    let up = *first.last().unwrap();
+    assert!(first[0] > up && up > 5, "the drag went up, then back down: {first:?}");
+    assert_eq!(sides(&h, id), (up, up as usize), "the polygon has the count's anchors");
     assert_eq!(history(&h), before + 1, "the drag is one History state");
-    drag(&mut h, id, 8.0, &[30.0, 4.0]);
-    assert_eq!(sides(&h, id), (4, 4));
+    let second = drag(&mut h, id, 0.1, &[0.8, 0.02]);
+    let down = *second.last().unwrap();
+    assert!(down < up, "the second drag went down: {second:?}");
     assert_eq!(history(&h), before + 2, "a second drag is a state of its own");
 
     h.state_mut().run("edit.undo", json!({})).unwrap();
     h.run_steps(2);
-    assert_eq!(sides(&h, id), (8, 8));
+    assert_eq!(sides(&h, id), (up, up as usize));
     h.state_mut().run("edit.undo", json!({})).unwrap();
     h.run_steps(2);
     assert_eq!(sides(&h, id), (5, 5));
     h.state_mut().run("edit.redo", json!({})).unwrap();
     h.run_steps(2);
-    assert_eq!(sides(&h, id), (8, 8));
-    assert_eq!(h.get_by_role_and_label(Role::Slider, "Sides").accesskit_node().numeric_value(), Some(8.0), "the slider follows undo and redo");
+    assert_eq!(sides(&h, id), (up, up as usize));
+    assert_eq!(slider_value(&h), Some(f64::from(up)), "the slider follows undo and redo");
 }
 
 #[test]
 fn the_slider_takes_whole_sides_from_3_to_100() {
     let (mut h, id) = pentagon();
-    // Past either end of the track stops at the range's end.
-    let (r, start) = (slider(&h), at(&h, 5.0));
+    // Past either end of the track stops at the range's end, in one drag.
+    let (r, start) = (slider(&h), along(&h, 0.5));
     let y = r.center().y;
     move_to(&mut h, start);
     button(&mut h, start, true);
@@ -144,35 +159,43 @@ fn the_slider_takes_whole_sides_from_3_to_100() {
     move_to(&mut h, pos2(r.left() - 40.0, y));
     assert_eq!(sides(&h, id), (3, 3));
     button(&mut h, pos2(r.left() - 40.0, y), false);
-    // Between two whole values the nearest one wins.
-    drag(&mut h, id, 3.0, &[10.4, 10.6]);
-    assert_eq!(sides(&h, id), (11, 11));
+    // Anywhere along the track the count is whole (checked in `drag`).
+    drag(&mut h, id, 0.0, &[0.137, 0.291, 0.443, 0.617, 0.759]);
 }
 
 #[test]
 fn a_press_that_leaves_the_side_count_alone_is_no_history_state() {
     let (mut h, id) = pentagon();
     let before = history(&h);
-    let knob = at(&h, 5.2);
-    move_to(&mut h, knob);
-    button(&mut h, knob, true);
-    button(&mut h, knob, false);
-    assert_eq!(sides(&h, id), (5, 5));
-    assert_eq!(history(&h), before);
+    // A press on the track jumps the thumb there: one state.
+    let at = along(&h, 0.4);
+    move_to(&mut h, at);
+    button(&mut h, at, true);
+    button(&mut h, at, false);
+    let jumped = sides(&h, id).0;
+    assert_ne!(jumped, 5);
+    assert_eq!(history(&h), before + 1);
+    // A second press at the same place lands on the thumb and changes nothing.
+    button(&mut h, at, true);
+    button(&mut h, at, false);
+    assert_eq!(sides(&h, id).0, jumped);
+    assert_eq!(history(&h), before + 1, "no state for a press that keeps the count");
 }
 
 #[test]
 fn the_sides_field_moves_the_slider() {
     let (mut h, id) = pentagon();
     let f = field(&h, "Sides");
+    let before = history(&h);
     h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Sides")).unwrap().click();
-    h.run_steps(1);
+    h.run_steps(2);
     h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
     h.event(Event::Text("8".into()));
-    h.key_press(egui::Key::Tab);
+    h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(sides(&h, id), (8, 8));
-    assert_eq!(h.get_by_role_and_label(Role::Slider, "Sides").accesskit_node().numeric_value(), Some(8.0));
+    assert_eq!(history(&h), before + 1, "a typed count is one History state");
+    assert_eq!(slider_value(&h), Some(8.0));
     assert_eq!(field(&h, "Sides"), f, "the field stays in place");
 }
 
