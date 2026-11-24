@@ -722,8 +722,11 @@ pub fn render_video_with(
     // Image sequence.
     // PSD / PSB frames would embed the files linked smart objects name: not for a restricted session.
     let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
-    // Only a PNG sequence can hold the alpha the option chooses; other formats ignore it.
-    let alpha = format.eq_ignore_ascii_case("png").then_some(alpha);
+    // Only a PNG sequence can hold the alpha the option chooses; other formats ignore it. The
+    // format is resolved as the encoder resolves it, so ".png" and "PNG" are PNG too.
+    let ext = format.rsplit(['.', '/', '\\']).next().unwrap_or(format);
+    let png = photocraft_formats::from_extension(ext).and_then(photocraft_formats::Format::raster_codec) == Some(photocraft_codecs::Format::Png);
+    let alpha = png.then_some(alpha);
     let mut files = Vec::new();
     for f in 0..frames {
         let mut doc = base.clone();
@@ -732,7 +735,12 @@ pub fn render_video_with(
         }
         sync(&mut doc);
         if let Some(alpha) = alpha {
-            doc = matted_frame(&doc, alpha)?;
+            // The frame is flattened here, before the export pipeline's scratch check, which then
+            // sees only the matted copy: refuse placeholder pixels from a failed read ourselves.
+            let guard = crate::artboard_cmds::ScratchGuard::new(&doc)?;
+            let matted = matted_frame(&doc, alpha)?;
+            guard.check()?;
+            doc = matted;
         }
         let path = format!("{stem}_{f:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;

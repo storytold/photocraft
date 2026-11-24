@@ -104,6 +104,18 @@ fn an_opaque_document_writes_rgb_for_every_choice() {
     }
 }
 
+/// The encoder reads ".png" and "PNG" as PNG, so the choice applies to every spelling of it.
+#[test]
+fn every_spelling_of_png_takes_the_choice() {
+    let s = half_red(8, false);
+    for format in ["png", ".png", "PNG", ".PNG"] {
+        let img = render(&s, json!({"format": format, "alpha": "premultipliedColor", "matte": "#00ff00"}));
+        assert_eq!(px(&img, 3, 1), [0, 255, 0, 0], "{format}: the matte fills the transparent pixel");
+        let img = render(&s, json!({"format": format}));
+        assert_eq!(px(&img, 3, 1), [0, 0, 0], "{format}: no alpha by default");
+    }
+}
+
 #[test]
 fn formats_without_the_option_keep_their_transparency() {
     let s = half_red(8, false);
