@@ -115,9 +115,16 @@ fn a_remembered_step_with_values_of_its_own_is_not_saved_as_an_empty_step() {
 fn session() -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width":8,"height":8,"background":"white"})).unwrap();
-    s.execute("tools.setColors", json!({"foreground":"#ff0000"})).unwrap();
     s.execute("select.rect", json!({"x":3,"y":3,"width":2,"height":2})).unwrap();
-    s.execute("edit.fill", json!({"contents":"foreground"})).unwrap();
+    // Painted directly: Edit › Fill is registered by another engine crate.
+    s.edit("paint", |doc, active| {
+        let surface = doc.layer_mut(active.ok_or(crate::EngineError::NoDocument)?).and_then(|l| l.surface_mut()).ok_or(crate::EngineError::NoDocument)?;
+        for (x, y) in [(3, 3), (4, 3), (3, 4), (4, 4)] {
+            surface.write_pixel(x, y, &[1.0, 0.0, 0.0, 1.0]);
+        }
+        Ok(())
+    })
+    .unwrap();
     s
 }
 
