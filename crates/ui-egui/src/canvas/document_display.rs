@@ -9,7 +9,7 @@ use craft::behavior::{CanvasView, PixelSize};
 use craft::imaging::ui::SelectionOverlay;
 use craft::ui::canvas::{
     Canvas, CanvasOutput, CanvasScrollbars, CanvasSpace, Extent, NavigationOptions, PageBorder, PageFrame, Pasteboard, PasteboardColor, PixelRect,
-    RasterDisplay, RasterSource, RotateView, ToolHost, ToolHostResponse, ViewTarget, canvas_space, easing_view, ruler_guide, tool_pass,
+    RasterDisplay, RasterSource, RotateView, ToolHost, ToolHostResponse, ViewTarget, WheelScheme, canvas_space, easing_view, ruler_guide, tool_pass,
 };
 use craft::ui::canvas_controls::{GuidesOutput, SelectionOutline};
 use craft::ui::contract::{Bind, Props, Show, ShowContainer};
@@ -137,7 +137,7 @@ pub(crate) fn view_follows_pointer(app: &PhotocraftApp) -> bool {
 pub(crate) fn navigation(app: &PhotocraftApp) -> NavigationOptions {
     let p = app.session.prefs();
     let mut options = NavigationOptions::default();
-    options.zoom_with_wheel = p.general.zoom_with_scroll_wheel;
+    options.wheel = if p.general.zoom_with_scroll_wheel { WheelScheme::Zoom } else { WheelScheme::Scroll };
     options.animated_zoom = p.general.animated_zoom;
     options.zoom_clicked_point_to_center = p.tools.zoom_clicked_point_to_center;
     options.flick_panning = p.tools.enable_flick_panning;

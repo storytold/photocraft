@@ -125,6 +125,7 @@ pub(super) fn replace(app: &mut PhotocraftApp) -> Result<Value, String> {
                 let (name, bytes) = files.into_iter().next().ok_or(crate::file_dialog::CANCELLED)?;
                 (name, bytes, None)
             }
+            Picked::Saved { .. } => return Err(crate::file_dialog::UNEXPECTED.into()),
             Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
             Picked::Unavailable(why) | Picked::Failed(why) => return Err(why),
         };

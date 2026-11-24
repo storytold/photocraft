@@ -270,11 +270,11 @@ pub(crate) mod params {
             let key = key_of(app, id);
             let Some(dialog) = dialog_mut(app, id) else { continue };
             let (colour, path, dropper, listing, footer, range) = (
-                dialog.pick_color(),
+                dialog.take_color_request(),
                 dialog.pick_path(),
                 dialog.take_eyedropper(),
                 dialog.take_listing(),
-                dialog.take_footer_action(),
+                dialog.take_action(),
                 dialog.take_range_alert(),
             );
             if let Some(alert) = range {
@@ -286,7 +286,7 @@ pub(crate) mod params {
             if let Some((row, colour)) = color_picker_ui::answer_for(app, id)
                 && let Some(dialog) = dialog_mut(app, id)
             {
-                dialog.answer_color(row, colour);
+                dialog.answer_color(&row, colour);
             }
             if let Some(request) = path {
                 start_pick(app, ctx, id, request);
