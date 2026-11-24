@@ -483,7 +483,7 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             let clipped = shared && sensor_clipped(w, h, band, &|iy, row| fill_with(iy, row, [1.0; 3], f32::INFINITY));
             let rebuild = if clipped {
                 let method = if bayer { shared_method } else { craft_develop::sensor::Method::Bilinear };
-                if rebuild_fits(w, h, method, orient_copy, &opts.limits) {
+                if rebuild_fits(w, h, method, orient_copy, &opts.limits, par::workers()) {
                     Some(method)
                 } else {
                     warnings.push("clipped highlights are clipped, not rebuilt: the frame is too large to rebuild within the memory limit".into());
@@ -495,8 +495,9 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             // Rows for the shared demosaics when nothing is rebuilt.
             let shared_row = |iy: usize, row: &mut [f32]| if clipped { fill_row(iy, row) } else { open_row(iy, row) };
             let cfa_at = |p: Vec<u8>, cw: usize, ch: usize| craft_develop::sensor::Cfa { width: cw, height: ch, pattern: p, origin_x: 0, origin_y: 0 };
+            let white = rebuild_white(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz));
             let rebuilt = |method, cw, ch, p: Vec<u8>| {
-                develop_rebuilt(w, h, band, cfa_at(p, cw, ch), method, mult, &|iy, row| fill_with(iy, row, [1.0; 3], f32::INFINITY))
+                develop_rebuilt((w, h), band, cfa_at(p, cw, ch), method, mult, white, &|iy, row| fill_with(iy, row, [1.0; 3], f32::INFINITY))
             };
             let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
             if bayer && fused && shared {
@@ -699,20 +700,21 @@ fn sensor_clipped(w: usize, h: usize, band: usize, sensor_row: &(impl Fn(usize, 
     bands.contains(&true)
 }
 
-/// Bytes [`develop_rebuilt`] holds at its peak, plus the encode that follows it.
-fn rebuild_bytes(w: usize, h: usize, method: craft_develop::sensor::Method, orient_copy: bool) -> u64 {
+/// Bytes [`develop_rebuilt`] holds at its peak, plus the encode that follows it, with
+/// `workers` threads running the whole-frame demosaic's AHD tiles at once.
+fn rebuild_bytes(w: usize, h: usize, method: craft_develop::sensor::Method, orient_copy: bool, workers: usize) -> u64 {
     let pixels = (w as u64).saturating_mul(h as u64);
     // The mosaic, its clip mask, the RGB frame, and the highlight rebuild's half-resolution
     // pyramids (well under 16 bytes a pixel), next to the whole-frame demosaic's own buffers.
     let ahd = method == craft_develop::sensor::Method::Ahd;
-    let rebuild = pixels.saturating_mul(4 + 1 + 12 + 16).saturating_add(shared_bayer_peak(w, h, h, ahd, 1, 1));
+    let rebuild = pixels.saturating_mul(4 + 1 + 12 + 16).saturating_add(shared_bayer_peak(w, h, h, ahd, 1, workers.max(1)));
     // Then the RGB frame and the encoded output (and its oriented copy).
     let encode = pixels.saturating_mul(if orient_copy { 24 } else { 18 });
     rebuild.max(encode).saturating_add((GAMMA_STEPS as u64 + 2) * 4)
 }
 
-fn rebuild_fits(w: usize, h: usize, method: craft_develop::sensor::Method, orient_copy: bool, limits: &Limits) -> bool {
-    let need = rebuild_bytes(w, h, method, orient_copy);
+fn rebuild_fits(w: usize, h: usize, method: craft_develop::sensor::Method, orient_copy: bool, limits: &Limits, workers: usize) -> bool {
+    let need = rebuild_bytes(w, h, method, orient_copy, workers);
     need <= limits.max_alloc && usize::try_from(need).is_ok()
 }
 
@@ -721,12 +723,12 @@ fn rebuild_fits(w: usize, h: usize, method: craft_develop::sensor::Method, orien
 /// clipped samples rebuilt from nearby reliable colour with the shared clip mask. Fully clipped
 /// areas come out neutral, partly clipped ones keep the colour around them.
 fn develop_rebuilt(
-    w: usize,
-    h: usize,
+    (w, h): (usize, usize),
     band: usize,
     cfa: craft_develop::sensor::Cfa,
     method: craft_develop::sensor::Method,
     mult: [f32; 3],
+    white: [f32; 3],
     sensor_row: &(impl Fn(usize, &mut [f32]) + Sync),
 ) -> Vec<f32> {
     use craft_develop::sensor::{self, highlight};
@@ -757,11 +759,26 @@ fn develop_rebuilt(
             }
         };
         rgb.data.iter_mut().for_each(|px| unbalance(px, |v, m| v / m));
-        // Balanced camera RGB [1, 1, 1] is the colour model's white.
-        highlight::reconstruct_masked(&mut rgb, mult, SENSOR_CLIP, [1.0; 3], &mask);
+        highlight::reconstruct_masked(&mut rgb, mult, SENSOR_CLIP, white, &mask);
         rgb.data.iter_mut().for_each(|px| unbalance(px, |v, m| v * m));
     }
     rgb.data.into_flattened()
+}
+
+/// The white-balanced camera RGB that `to_prophoto` (balanced camera → linear ProPhoto) renders
+/// neutral, at the brightness balanced `[1, 1, 1]` renders at: the `white` of the shared highlight
+/// rebuild, so fully clipped highlights come out neutral under the active colour model. A model
+/// that already renders `[1, 1, 1]` neutral (a calibration, the sRGB fallback, up to rounding)
+/// keeps `[1, 1, 1]` exactly, as does a matrix with no inverse.
+fn rebuild_white(to_prophoto: &Mat3) -> [f32; 3] {
+    let y_row = color::rgb_to_xyz(color::ROMM, color::D50_XY)[1];
+    let rendered = color::apply(to_prophoto, [1.0; 3]);
+    let y = y_row[0] * rendered[0] + y_row[1] * rendered[1] + y_row[2] * rendered[2];
+    let neutral = rendered.iter().all(|v| (v - y).abs() <= 1e-6 * y.abs());
+    match color::invert(to_prophoto) {
+        Some(inv) if !neutral && y.is_finite() && y > 0.0 => color::apply(&inv, [y; 3]).map(|v| v as f32),
+        _ => [1.0; 3],
+    }
 }
 
 /// How the frame is developed, for [`working_memory`].
@@ -1185,8 +1202,8 @@ mod tests {
     }
 
     /// Green clipped by the sensor in a disc, red and blue measured below white there; a grey
-    /// surround. Returns the centre pixel and the development's warnings.
-    fn clipped_green_disc(method: Demosaic, fused: bool, limits: Option<Limits>) -> ([u16; 3], Vec<String>) {
+    /// surround. Returns the centre pixel, a surround pixel and the development's warnings.
+    fn clipped_green_disc(method: Demosaic, fused: bool, limits: Option<Limits>) -> ([u16; 3], [u16; 3], Vec<String>) {
         let disc = |x: usize, y: usize| (x as f32 - 24.0).powi(2) + (y as f32 - 24.0).powi(2) < 100.0;
         let d = develop_scene(
             |x, y, c| match (disc(x, y), c) {
@@ -1199,7 +1216,14 @@ mod tests {
             fused,
             limits,
         );
-        (centre(&d), d.warnings)
+        let i = (4 * d.width as usize + 4) * 3;
+        (centre(&d), [d.rgb[i], d.rgb[i + 1], d.rgb[i + 2]], d.warnings)
+    }
+
+    /// The clipped disc is a highlight: every channel of it above every channel of the grey
+    /// surround, so a path that turns it black (or dark) fails even though black has no spread.
+    fn brighter_than(p: [u16; 3], surround: [u16; 3]) -> bool {
+        p.iter().min() > surround.iter().max()
     }
 
     fn spread(p: [u16; 3]) -> f32 {
@@ -1211,9 +1235,10 @@ mod tests {
     fn highlights_the_sensor_clipped_are_rebuilt_neutral() {
         for method in [Demosaic::Ahd, Demosaic::Bilinear] {
             for fused in [true, false] {
-                let (p, warnings) = clipped_green_disc(method, fused, None);
+                let (p, surround, warnings) = clipped_green_disc(method, fused, None);
                 // Unclipped, the balanced disc is (1.2, 1, 1.2): magenta.
                 assert!(spread(p) < 0.03, "{method:?} fused {fused}: clipped green disc {p:?} is not neutral");
+                assert!(brighter_than(p, surround), "{method:?} fused {fused}: clipped green disc {p:?} not above the surround {surround:?}");
                 assert!(!warnings.iter().any(|w| w.contains("not rebuilt")), "{method:?} fused {fused}: {warnings:?}");
             }
         }
@@ -1221,11 +1246,85 @@ mod tests {
 
     #[test]
     fn a_frame_too_large_to_rebuild_clips_after_white_balance_and_says_so() {
-        let need = rebuild_bytes(48, 48, craft_develop::sensor::Method::Bilinear, false);
+        let need = rebuild_bytes(48, 48, craft_develop::sensor::Method::Bilinear, false, 1);
         let limits = Limits { max_alloc: need - 1, ..Limits::default() };
-        let (p, warnings) = clipped_green_disc(Demosaic::Bilinear, false, Some(limits));
+        let (p, surround, warnings) = clipped_green_disc(Demosaic::Bilinear, false, Some(limits));
         assert!(warnings.iter().any(|w| w.contains("not rebuilt")), "{warnings:?}");
         assert!(spread(p) < 0.03, "clipped after balance, the disc stays neutral: {p:?}");
+        assert!(brighter_than(p, surround), "clipped after balance, the disc {p:?} stays above the surround {surround:?}");
+    }
+
+    /// A 2048 x 128 RGGB frame with a sensor-clipped stripe, developed AHD on `threads` workers
+    /// under `limits`; returns the warnings.
+    fn clipped_wide_ahd_warnings(threads: usize, limits: Limits) -> Vec<String> {
+        let (w, h) = (2048, 128);
+        let mut s = test_sensor(w, h, crate::Cfa::bayer("RGGB"), 1);
+        s.data = (0..w * h).map(|i| if (60..68).contains(&(i / w)) { 4000 } else { 1000 }).collect();
+        let opts = DevelopOptions { demosaic: Demosaic::Ahd, white_balance: WhiteBalance::Multipliers([2.0, 1.0, 2.0]), limits, ..Default::default() };
+        with_threads(threads, || develop(&s, &opts, false).unwrap()).warnings
+    }
+
+    #[test]
+    fn the_rebuild_budget_counts_the_ahd_tiles_of_every_worker() {
+        // Enough for the rebuild when one worker runs the AHD tiles; 16 workers each hold a tile's
+        // scratch at once, so the same limit must refuse the rebuild and clip after balance.
+        let one = rebuild_bytes(2048, 128, craft_develop::sensor::Method::Ahd, false, 1);
+        let limits = Limits { max_alloc: one, ..Limits::default() };
+        let refused = |w: &[String]| w.iter().any(|w| w.contains("not rebuilt"));
+        let single = clipped_wide_ahd_warnings(1, limits);
+        assert!(!refused(&single), "one worker fits: {single:?}");
+        let many = clipped_wide_ahd_warnings(16, limits);
+        assert!(refused(&many), "16 workers' tile scratch exceeds the limit: {many:?}");
+    }
+
+    #[test]
+    fn fully_clipped_highlights_stay_neutral_under_a_look_that_tints_camera_white() {
+        // A look that renders balanced camera [1, 1, 1] as ProPhoto [1, 0.5, 1]: a magenta cast if
+        // the rebuild takes [1, 1, 1] as white. Exposure is 2 EV under, so the disc is not clamped.
+        let (w, h) = (48, 48);
+        let mut s = test_sensor(w, h, crate::Cfa::bayer("RGGB"), 1);
+        let disc = |x: usize, y: usize| (x as f32 - 24.0).powi(2) + (y as f32 - 24.0).powi(2) < 100.0;
+        s.data = (0..w * h).map(|i| if disc(i % w, i / w) { 4000 } else { 1000 }).collect();
+        let tint = [[1.0, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 1.0]];
+        let to_xyz = color::mul(&color::invert(&color::xyz_d50_to_prophoto()).unwrap(), &tint);
+        let look = CameraLook { to_xyz, tone: None, delta_e: 1.0, delta_e_fallback: 2.0 };
+        let opts = DevelopOptions { white_balance: WhiteBalance::Multipliers([2.0, 1.0, 2.0]), exposure: -2.0, camera_look: Some(look), ..Default::default() };
+        for method in [Demosaic::Ahd, Demosaic::Bilinear] {
+            for fused in [true, false] {
+                let d = develop(&s, &DevelopOptions { demosaic: method, ..opts.clone() }, fused).unwrap();
+                let p = centre(&d);
+                assert!(spread(p) < 0.03, "{method:?} fused {fused}: fully clipped disc {p:?} is not neutral");
+            }
+        }
+    }
+
+    #[test]
+    fn an_odd_period_cfa_is_not_developed_as_bayer() {
+        // `RGR/GBG`: Bayer over its first two columns, red again at column 3 where a 2×2 period has
+        // green. Each colour is measured at the level its white-balance gain brings to the same
+        // grey, so a right development is grey, with and without a sensor-clipped spot.
+        let cfa = crate::Cfa { width: 3, height: 2, colors: vec![0, 1, 0, 1, 2, 1], origin_x: 0, origin_y: 0 };
+        assert!(!cfa.is_bayer());
+        let (w, h) = (48, 48);
+        let mult = [2.0f32, 1.0, 1.5];
+        for spot in [false, true] {
+            let mut s = test_sensor(w, h, Some(cfa.clone()), 1);
+            s.data = (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let level = if spot && x >= 40 && y >= 40 { 1.0 } else { 0.4 / mult[usize::from(cfa.color(x, y))] };
+                    (64.0 + level * 3936.0).round() as u16
+                })
+                .collect();
+            for method in [Demosaic::Ahd, Demosaic::Bilinear] {
+                let opts =
+                    DevelopOptions { demosaic: method, white_balance: WhiteBalance::Multipliers(mult.map(f64::from)), exposure: -1.0, ..Default::default() };
+                let d = develop(&s, &opts, false).unwrap();
+                let i = (12 * d.width as usize + 12) * 3;
+                let p = [d.rgb[i], d.rgb[i + 1], d.rgb[i + 2]];
+                assert!(spread(p) < 0.03, "{method:?} spot {spot}: balanced grey {p:?} is not grey");
+            }
+        }
     }
 
     #[test]
@@ -1235,6 +1334,12 @@ mod tests {
         // edges as well as the internal seams rather than trimming the compared output.
         let (w, h) = (600, 350);
         let mut s = test_sensor(w, h, crate::Cfa::bayer("RGGB"), 1);
+        // Keep the texture below the sensor clip, so the fused path stays on its strips instead of
+        // rebuilding the whole frame (which would compare two whole-frame renders).
+        for v in &mut s.data {
+            *v = 64 + (*v - 64) * 3 / 4;
+        }
+        assert!(s.data.iter().all(|&v| (f32::from(v) - 64.0) / 3936.0 < SENSOR_CLIP), "the fixture must not be sensor-clipped");
         s.color.calibrations.push(color::Calibration {
             temperature: 6500.0,
             color_matrix: [[0.61, 0.23, 0.16], [0.18, 0.73, 0.09], [0.07, 0.16, 0.77]],
