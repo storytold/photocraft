@@ -10,8 +10,6 @@ use crate::PhotocraftApp;
 use crate::app::framework::BuildApp as _;
 use crate::state::Tool;
 
-const RANGE_ALERT: &str = "An integer between 1% and 100% is required. Closest value inserted.";
-
 fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
@@ -51,8 +49,12 @@ fn type_into(h: &mut Harness<'static, Box<PhotocraftApp>>, field: &str, text: &s
 #[test]
 fn clone_stamp_commits_whole_percents_and_reports_clamps() {
     let mut h = bar(Tool::CloneStamp);
+    let format = crate::i18n::framework_i18n().format();
+    let fractional = format.number_ungrouped(33.7, 1);
+    let (low, high) = (format.number_ungrouped(1.0, 0), format.number_ungrouped(100.0, 0));
+    let range_alert = format!("An integer between {low}% and {high}% is required. Closest value inserted.");
     for field in ["Opacity", "Flow"] {
-        for (typed, expected, clamps) in [("33.7", 0.34, false), ("150", 1.0, true), ("0", 0.01, true), ("1", 0.01, false), ("100", 1.0, false)] {
+        for (typed, expected, clamps) in [(fractional.as_str(), 0.34, false), ("150", 1.0, true), ("0", 0.01, true), ("1", 0.01, false), ("100", 1.0, false)] {
             let pair = |app: &PhotocraftApp| {
                 let b = &app.session.tools.brush;
                 if field == "Opacity" { (b.opacity, b.flow) } else { (b.flow, b.opacity) }
@@ -63,7 +65,7 @@ fn clone_stamp_commits_whole_percents_and_reports_clamps() {
             let dialogs = h.state().framework.dialogs.open_dialogs();
             if clamps {
                 assert_eq!(dialogs.len(), 1, "{field} {typed} opens one alert");
-                assert_eq!(dialogs[0].fields.as_ref().unwrap()["message"], RANGE_ALERT);
+                assert_eq!(dialogs[0].fields.as_ref().unwrap()["message"], range_alert);
                 h.get_by_label("OK").click();
                 h.run_steps(4);
                 assert_eq!(pair(h.state()), (expected, other), "OK keeps the clamped value");
@@ -76,7 +78,8 @@ fn clone_stamp_commits_whole_percents_and_reports_clamps() {
 #[test]
 fn history_brush_keeps_fractional_edits_and_silent_clamping() {
     let mut h = bar(Tool::HistoryBrush);
-    type_into(&mut h, "Opacity", "33.7");
+    let fractional = crate::i18n::framework_i18n().format().number_ungrouped(33.7, 1);
+    type_into(&mut h, "Opacity", &fractional);
     type_into(&mut h, "Flow", "0");
     let brush = &h.state().session.tools.brush;
     assert!((brush.opacity - 0.337).abs() < 1e-6, "History Brush keeps the fractional percent");
