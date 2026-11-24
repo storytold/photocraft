@@ -11,7 +11,7 @@ use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 
 /// An 800 × 600 document with `tool` active and its options set by `set`.
-fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> Box<PhotocraftApp> {
+pub(super) fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
@@ -22,7 +22,7 @@ fn app(tool: Tool, set: impl FnOnce(&mut ToolOptions)) -> Box<PhotocraftApp> {
 
 /// A canvas drag from `from` to `to`, pressed with `press` held and moved and released with `held`
 /// (a key pressed after the drag starts), as the canvas sends it.
-fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], press: Modifiers, held: Modifiers) {
+pub(super) fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], press: Modifiers, held: Modifiers) {
     tool_event(app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, press);
     tool_event(app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, held);
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, held);
@@ -40,7 +40,7 @@ fn drawn(tool: Tool, set: impl FnOnce(&mut ToolOptions), from: [f64; 2], to: [f6
     [r[0], r[1], r[0] + r[2], r[1] + r[3]]
 }
 
-fn layer_count(app: &PhotocraftApp) -> usize {
+pub(super) fn layer_count(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.len()
 }
 

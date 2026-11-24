@@ -233,6 +233,9 @@ mod triangle_shift_equilateral_tests;
 mod rectangle_gear_tests;
 
 #[cfg(test)]
+mod triangle_gear_tests;
+
+#[cfg(test)]
 mod rectangle_click_in_shape_tests;
 
 #[cfg(test)]

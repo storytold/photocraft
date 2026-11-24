@@ -27,7 +27,7 @@ use crate::history_keys;
 struct BarOpen {
     path_options: bool,
     arrows: bool,
-    rect_gear: bool,
+    gear: bool,
 }
 
 /// A label from a translated string.
@@ -119,14 +119,14 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
         path_alignment_menu(app, ui);
         path_arrangement_menu(app, ui);
     }
-    if tool == Tool::Rectangle {
-        // The gear: what a drag is kept to (square, fixed size, proportional) and From Center.
+    if let Some(gear) = super::shapes::constraints_of(&app.ui.tool_options, tool) {
+        // The gear: what a drag is kept to (square, fixed size, proportional) and From Center. The Rectangle's says
+        // Square (#13343), the Triangle's Equilateral (#13361); the framework words it by the tool's kind.
         Divider::vertical().show(ui);
         let ppi = document_ppi(app);
-        let gear = super::shapes::constraints_of(&app.ui.tool_options);
-        let out = fw::BoxConstraintsPopover::new(Bind::given(gear), Bind::bound(&mut open.rect_gear), ppi).show(ui);
+        let out = fw::BoxConstraintsPopover::new(Bind::given(gear), Bind::bound(&mut open.gear), ppi).kind(super::kind_of(tool)).show(ui);
         if let Some(picked) = out.edits.iter().rev().find_map(EditEvent::value) {
-            super::shapes::store_constraints(&mut app.ui.tool_options, picked);
+            super::shapes::store_constraints(&mut app.ui.tool_options, tool, picked);
         }
         if let Some(alert) = out.out_of_range {
             crate::option_cells::range_alert(app, ui, &alert);

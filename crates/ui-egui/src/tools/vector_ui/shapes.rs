@@ -123,6 +123,16 @@ fn whole_box(rect: &Rect, whole: bool) -> Option<Rect> {
     (w >= 1.0 && h >= 1.0).then(|| Rect::new(x0, y0, x0 + w, y0 + h))
 }
 
+/// Whether the box a `kind` drag commits with `mods` held lands on whole pixels: [`snaps_to_pixels`], except the
+/// Triangle's equilateral triangle (its gear's Equilateral, or ⇧). The framework draws that one in the circle of the
+/// drag's whole-pixel square, so its own box is not on whole pixels, and it keeps those exact corners, as measured
+/// (#13361 D1: 406.70,300–493.30,375; #13351).
+fn snaps_box(app: &PhotocraftApp, kind: ShapeKind, mods: Mods) -> bool {
+    let equilateral =
+        kind == ShapeKind::Triangle && constraints_of(&app.ui.tool_options, Tool::Triangle).is_some_and(|gear| gear.rule(mods.shift, mods.alt).is_square());
+    snaps_to_pixels(app, kind) && !equilateral
+}
+
 /// Whether a drag of `kind` lands on whole pixels. Align Edges is the Triangle (#13370) and
 /// Rectangle (#13346) tools' option, and only in Shape mode, where its checkbox is enabled; the
 /// other Shape tools, and a greyed checkbox, still snap.
@@ -153,31 +163,56 @@ fn snapped(geometry: &ShapeGeometry, keep_angle: bool, whole: bool) -> Option<Sh
     })
 }
 
-/// The Rectangle tool's gear as the framework's [`BoxConstraints`]: the stored constraint name (serde's names), the
-/// fixed and ratio pairs (a 0 is an empty field) and From Center. The one mapping the tool's drag
-/// (`host::configure`) and the gear in the options bar share.
-pub(super) fn constraints_of(o: &ToolOptions) -> BoxConstraints {
-    let field = |v: f32| (v != 0.0).then_some(f64::from(v));
-    let mut c = BoxConstraints::default();
-    c.constraint = serde_json::from_value(json!(o.rect_constraint)).unwrap_or_default();
-    c.fixed = (field(o.rect_fixed_width), field(o.rect_fixed_height));
-    c.ratio = (field(o.rect_ratio_width), field(o.rect_ratio_height));
-    c.from_center = o.rect_from_center;
-    c
+/// A Shape tool's stored gear: the constraint name, Fixed Size W and H, Proportional W and H, and From Center.
+type GearFields<'a> = (&'a String, [f32; 4], bool);
+
+/// The stored gear of `tool`, for the tools that have one: the Rectangle's (#13343) and the Triangle's (#13361), each
+/// its own fields.
+fn gear_fields(o: &ToolOptions, tool: Tool) -> Option<GearFields<'_>> {
+    Some(match tool {
+        Tool::Rectangle => (&o.rect_constraint, [o.rect_fixed_width, o.rect_fixed_height, o.rect_ratio_width, o.rect_ratio_height], o.rect_from_center),
+        Tool::Triangle => {
+            (&o.triangle_constraint, [o.triangle_fixed_width, o.triangle_fixed_height, o.triangle_ratio_width, o.triangle_ratio_height], o.triangle_from_center)
+        }
+        _ => return None,
+    })
 }
 
-/// Stores the gear's `constraints` into the options: the inverse of [`constraints_of`].
-pub(super) fn store_constraints(o: &mut ToolOptions, constraints: &BoxConstraints) {
+/// `tool`'s gear as the framework's [`BoxConstraints`], for the tools that have one: the stored constraint name
+/// (serde's names), the fixed and ratio pairs (a 0 is an empty field) and From Center. The one mapping the tool's
+/// drag (`host::configure`) and the gear in the options bar share.
+pub(super) fn constraints_of(o: &ToolOptions, tool: Tool) -> Option<BoxConstraints> {
+    let (name, [fw, fh, rw, rh], from_center) = gear_fields(o, tool)?;
+    let field = |v: f32| (v != 0.0).then_some(f64::from(v));
+    let mut c = BoxConstraints::default();
+    c.constraint = serde_json::from_value(json!(name)).unwrap_or_default();
+    c.fixed = (field(fw), field(fh));
+    c.ratio = (field(rw), field(rh));
+    c.from_center = from_center;
+    Some(c)
+}
+
+/// Stores the gear's `constraints` into `tool`'s options: the inverse of [`constraints_of`]. A tool without a gear
+/// keeps its options.
+pub(super) fn store_constraints(o: &mut ToolOptions, tool: Tool, constraints: &BoxConstraints) {
     let field = |v: Option<f64>| v.map_or(0.0, |v| v as f32);
-    o.rect_constraint = match serde_json::to_value(constraints.constraint) {
+    let name = match serde_json::to_value(constraints.constraint) {
         Ok(Value::String(name)) => name,
         _ => "unconstrained".into(),
     };
-    o.rect_fixed_width = field(constraints.fixed.0);
-    o.rect_fixed_height = field(constraints.fixed.1);
-    o.rect_ratio_width = field(constraints.ratio.0);
-    o.rect_ratio_height = field(constraints.ratio.1);
-    o.rect_from_center = constraints.from_center;
+    let (fw, fh, rw, rh) = (field(constraints.fixed.0), field(constraints.fixed.1), field(constraints.ratio.0), field(constraints.ratio.1));
+    let from_center = constraints.from_center;
+    match tool {
+        Tool::Rectangle => {
+            (o.rect_constraint, o.rect_fixed_width, o.rect_fixed_height, o.rect_ratio_width, o.rect_ratio_height, o.rect_from_center) =
+                (name, fw, fh, rw, rh, from_center);
+        }
+        Tool::Triangle => {
+            (o.triangle_constraint, o.triangle_fixed_width, o.triangle_fixed_height, o.triangle_ratio_width, o.triangle_ratio_height, o.triangle_from_center) =
+                (name, fw, fh, rw, rh, from_center);
+        }
+        _ => {}
+    }
 }
 
 fn box_of(rect: &Rect) -> [f64; 4] {
@@ -240,7 +275,7 @@ fn report(app: &mut PhotocraftApp, e: String) {
 /// it): Path mode adds the outline to the Work Path, Custom Shape places the preset, the others
 /// make a shape layer. A geometry too small to draw changes nothing.
 pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) {
-    let Some(geometry) = snapped(geometry, mods.shift, snaps_to_pixels(app, kind)) else { return };
+    let Some(geometry) = snapped(geometry, mods.shift, snaps_box(app, kind, mods)) else { return };
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
         let Some(outline) = outline_of(app, kind, &geometry) else { return };
@@ -409,16 +444,16 @@ fn outline_of(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) ->
     }
 }
 
-/// The outline a Shape-tool drag draws for `geometry`, as the commit makes it.
-fn shape_outline(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, keep_angle: bool) -> Option<photocraft_doc::vector::Path> {
-    outline_of(app, kind, &snapped(geometry, keep_angle, snaps_to_pixels(app, kind))?)
+/// The outline a Shape-tool drag draws for `geometry` with `mods` held, as the commit makes it.
+fn shape_outline(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) -> Option<photocraft_doc::vector::Path> {
+    outline_of(app, kind, &snapped(geometry, mods.shift, snaps_box(app, kind, mods))?)
 }
 
 /// The preview and command both use the full float tool colours, including transparent paint.
 /// In Path mode only the outline shows, as the drag draws no layer.
-fn preview_layer(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, keep_angle: bool) -> Option<photocraft_doc::ShapeLayer> {
+fn preview_layer(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) -> Option<photocraft_doc::ShapeLayer> {
     let o = &app.ui.tool_options;
-    let path = shape_outline(app, kind, geometry, keep_angle)?;
+    let path = shape_outline(app, kind, geometry, mods)?;
     let paint = !draws_path(o);
     Some(photocraft_doc::ShapeLayer {
         path,
@@ -431,7 +466,7 @@ fn preview_layer(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry,
 #[cfg(test)]
 /// The shape layer the drag of `geometry` would make, for the drag's preview and its tests.
 pub(super) fn shape_preview(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) -> Option<photocraft_doc::ShapeLayer> {
-    preview_layer(app, kind, geometry, false)
+    preview_layer(app, kind, geometry, Mods::default())
 }
 
 /// `path` with every point mapped through `view` to screen points.
@@ -452,8 +487,8 @@ fn path_on_screen(path: &photocraft_doc::vector::Path, view: &CanvasView) -> pho
 /// the commit. The accent outline over its halo is the framework tool's own paint.
 pub fn show_preview(app: &PhotocraftApp, ui: &egui::Ui, at: egui::Rect, view: &CanvasView) {
     let Some((kind, geometry)) = super::host::shape_preview(app) else { return };
-    let shift = craft::ui::runtime::pointer::frame(ui.ctx()).mods.shift;
-    let Some(mut shape) = preview_layer(app, kind, geometry, shift) else { return };
+    let mods = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
+    let Some(mut shape) = preview_layer(app, kind, geometry, mods) else { return };
     shape.path = path_on_screen(&shape.path, view);
     if let Some(stroke) = &mut shape.stroke {
         // `view.zoom` is screen points per document unit.

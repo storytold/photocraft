@@ -277,7 +277,28 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             rect_ratio_height,
             rect_from_center,
         ),
-        Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
+        // The Triangle's gear settings are its own (#13361).
+        Tool::Triangle => reset!(
+            shape_mode,
+            shape_path_op,
+            shape_fill,
+            stroke_width,
+            shape_stroke,
+            shape_fill_gradient,
+            shape_stroke_gradient,
+            corner_radius,
+            align_edges,
+            polygon_sides,
+            polygon_corner_radius,
+            line_weight,
+            triangle_constraint,
+            triangle_fixed_width,
+            triangle_fixed_height,
+            triangle_ratio_width,
+            triangle_ratio_height,
+            triangle_from_center,
+        ),
+        Tool::EllipseShape | Tool::Polygon | Tool::Star | Tool::CustomShape => {
             reset!(
                 shape_mode,
                 shape_path_op,
