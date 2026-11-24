@@ -142,7 +142,8 @@ impl SaveCopyFormats {
 /// Non-document files the shell saves (Swatches panel exports, a menu set's `.mnu` file): offered
 /// alone, so the dialog never swaps their extension for a document format's. The menu-set type is the
 /// one the reference application's Save dialog shows for a menu set (#14450).
-const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), ("Color Table", &["act"]), ("Swatch Exchange", &["ase"]), ("Menu Customization", &["mnu"])];
+const OTHER_SAVE_FILTERS: &[(&str, &[&str])] =
+    &[("Color Swatches", &["aco"]), ("Color Table", &["act"]), ("Swatch Exchange", &["ase"]), ("Menu Customization", &["mnu"])];
 
 /// The extensions a Netpbm subtype's name carries; the save types offer only the neutral `.pnm`.
 const NETPBM_SUBTYPES: &[&str] = &["pbm", "pgm", "ppm", "pam", "pfm"];
