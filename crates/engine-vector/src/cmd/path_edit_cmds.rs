@@ -432,8 +432,7 @@ mod tests {
 
     #[test]
     fn deleting_components_rejects_invalid_indices_without_changing_history() {
-        let mut s = Session::new();
-        s.execute("file.new", json!({"width": 40, "height": 40})).unwrap();
+        let mut s = session();
         let path = json!({"subpaths": [
             {"closed": true, "knots": [[1,1], [30,1], [30,30], [1,30]]},
             {"closed": true, "op": "join", "knots": [[5,5], [5,10], [10,10], [10,5]]},
