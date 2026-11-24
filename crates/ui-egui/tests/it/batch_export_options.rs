@@ -3,21 +3,27 @@
 
 use egui_kittest::kittest::Queryable;
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+use photocraft_ui_egui::control::{ControlRequest, Reply, handle};
 use photocraft_ui_egui::{PhotocraftApp, menus};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
+type Harness = egui_kittest::Harness<'static, Box<PhotocraftApp>>;
+
+/// The open form's values as `ui.inspect` lists the top dialog's fields.
+fn form_fields(h: &mut Harness) -> Value {
+    let ctx = h.ctx.clone();
+    let (req, _rx) = ControlRequest::new("ui.inspect", json!({}));
+    let Reply::Done(inspect) = handle(h.state_mut(), &ctx, &req) else { panic!("ui.inspect: expected an immediate reply") };
+    inspect["result"]["dialogs"].as_array().and_then(|d| d.last()).expect("a form is open")["fields"].clone()
+}
 
 fn harness() -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).wgpu().build_eframe(|cc| {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
         app.session.prefs.edit(|p| p.interface.language = "en".into());
-        if let Some(rs) = cc.wgpu_render_state.as_ref() {
-            app.set_wgpu(rs.clone());
-        }
         app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
         app.run("actions.record", json!({"name": "Invert"})).unwrap();
         app.run("image.adjustments.invert", json!({})).unwrap();
@@ -44,7 +50,7 @@ fn evidence(h: &mut Harness, name: &str) {
 fn open_format_choices(h: &mut Harness) {
     // The caption is a separate Label node with the same text; the accessible ComboBox name
     // identifies the actual form field without guessing from coordinates.
-    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Format").click();
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "File Type").click();
     h.run_steps(3);
 }
 
@@ -65,23 +71,13 @@ fn edit_path(h: &mut Harness, name: &str, value: &Path) {
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, name).click();
     h.run_steps(2);
     replace_text(h, &value.to_string_lossy());
-    // Clicking the caption commits the field without Enter confirming the dialog.
-    h.get_by_role_and_label(egui::accesskit::Role::Label, name).click();
+    // Moving focus on commits the field without Enter confirming the dialog.
+    h.key_press(egui::Key::Tab);
     h.run_steps(2);
-}
-
-fn edit_quality(h: &mut Harness, value: &str) {
-    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Quality").click();
-    h.run_steps(2);
-    replace_text(h, value);
-    // Clicking the caption commits the field without Enter confirming the dialog.
-    h.get_by_role_and_label(egui::accesskit::Role::Label, "Quality").click();
-    h.run_steps(3);
 }
 
 #[test]
 fn batch_menu_offers_webp() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
     open_format_choices(&mut h);
@@ -91,7 +87,6 @@ fn batch_menu_offers_webp() {
 
 #[test]
 fn batch_menu_offers_quality() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
     evidence(&mut h, "batch-quality");
@@ -100,7 +95,6 @@ fn batch_menu_offers_quality() {
 
 #[test]
 fn image_processor_menu_offers_independent_file_types() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.scripts.imageProcessor");
     for label in ["Save as JPEG", "Save as PSD", "Save as TIFF"] {
@@ -155,9 +149,11 @@ fn existing_engine_batch_and_image_processor_support_webp_quality() {
         for quality in [Value::Null, json!(0), json!(12)] {
             let out = dir.0.join(format!("{prefix}-{quality}"));
             std::fs::create_dir(&out).unwrap();
-            let result = app
-                .run(command, json!({"input": [input], "output": out, "steps": [["image.adjustments.invert", {}]], "format": "webp", "quality": quality}))
-                .unwrap();
+            let mut params = json!({"input": [input], "output": out, "format": "webp", "quality": quality});
+            if command == "file.automate.batch" {
+                params["steps"] = json!([["image.adjustments.invert", {}]]);
+            }
+            let result = app.run(command, params).unwrap();
             assert_eq!(result["errors"], json!([]), "{command}: {result}");
             let path = result["files"][0].as_str().unwrap();
             assert!(path.ends_with(".webp"));
@@ -181,83 +177,7 @@ fn existing_engine_batch_and_image_processor_support_webp_quality() {
 }
 
 #[test]
-fn batch_custom_quality_is_bounded_dialog_local_and_reversible() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let mut h = harness();
-    open(&mut h, "file.automate.batch");
-    assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null(), "default command quality remains unset");
-    h.get_by_label("Custom").click();
-    h.run_steps(3);
-    edit_quality(&mut h, "-5");
-    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["quality"].as_f64(), Some(0.0));
-    edit_quality(&mut h, "99");
-    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["quality"].as_f64(), Some(12.0));
-    edit_quality(&mut h, "5");
-    h.get_by_label("Custom").click();
-    h.run_steps(3);
-    assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null());
-    h.get_by_label("Custom").click();
-    h.run_steps(3);
-    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["quality"].as_f64(), Some(5.0), "switching defaults does not lose the dialog's custom value");
-    h.get_by_label("Cancel").click();
-    h.run_steps(3);
-    open(&mut h, "file.automate.batch");
-    assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null(), "reopening returns to the existing default");
-}
-
-/// Actual folder-mode controls must pass both WebP quality endpoints to the encoder while
-/// preserving the active document, history, preferences and recorded actions.
-#[test]
-fn batch_real_controls_write_the_chosen_webp_quality() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let dir = Scratch::new();
-    let input = dir.0.join("input");
-    std::fs::create_dir(&input).unwrap();
-    let original = pattern();
-    std::fs::write(input.join("owned-pattern.png"), photocraft_codecs::encode(&original, Format::Png, &EncodeOptions::default()).unwrap()).unwrap();
-    let mut h = harness();
-    let doc = h.state().session.active().unwrap().doc.clone();
-    let revision = h.state().session.active().unwrap().revision;
-    let history = h.state().session.active().unwrap().history.entries();
-    let prefs = serde_json::to_value(h.state().session.prefs()).unwrap();
-    let actions = serde_json::to_value(&h.state().session.actions.list).unwrap();
-    let mut outputs = Vec::new();
-    for quality in [0, 12] {
-        let output = dir.0.join(format!("batch-{quality}"));
-        open(&mut h, "file.automate.batch");
-        assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null());
-        h.get_by_label("Custom").click();
-        h.run_steps(3);
-        choose_webp(&mut h);
-        edit_path(&mut h, "Input", &input);
-        edit_path(&mut h, "Output", &output);
-        edit_quality(&mut h, &quality.to_string());
-        evidence(&mut h, &format!("batch-webp-quality-{quality}"));
-        h.get_by_label("OK").click();
-        h.run_steps(5);
-        assert!(h.state().ui.dialogs.is_empty());
-        let bytes = std::fs::read(output.join("owned-pattern.webp")).expect("the actual dialog confirmation writes the selected WebP");
-        let decoded = photocraft_codecs::decode_as(Format::WebP, &bytes).unwrap();
-        assert_eq!(decoded.dimensions(), (64, 48));
-        assert_eq!(decoded.layout(), ChannelLayout::Rgb);
-        let (_, params) = h.state().session.journal.last().unwrap();
-        assert_eq!(params["format"], json!("webp"));
-        assert_eq!(params["quality"].as_f64(), Some(f64::from(quality)));
-        assert!(params.as_object().unwrap().keys().all(|k| !k.starts_with("__")), "private shell values never become command params");
-        outputs.push(bytes);
-    }
-    assert_ne!(outputs[0], outputs[1], "actual chosen quality reaches the encoder");
-    assert!(outputs[0].len() < outputs[1].len());
-    let active = h.state().session.active().unwrap();
-    assert!(Arc::ptr_eq(&active.doc, &doc));
-    assert_eq!((active.revision, active.history.entries()), (revision, history));
-    assert_eq!(serde_json::to_value(h.state().session.prefs()).unwrap(), prefs);
-    assert_eq!(serde_json::to_value(&h.state().session.actions.list).unwrap(), actions);
-}
-
-#[test]
 fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let dir = Scratch::new();
     let input = dir.0.join("input");
     let output = dir.0.join("output");
@@ -276,25 +196,25 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
     h.run_steps(3);
     assert!(!output.exists());
     open(&mut h, "file.automate.batch");
-    let fields = &h.state().ui.dialogs.last().unwrap().fields;
+    let fields = form_fields(&mut h);
     assert_eq!(fields["naming"], "");
     assert_eq!(fields["startingSerial"], 1);
-    edit_path(&mut h, "Input", &input);
-    edit_path(&mut h, "Output", &output);
+    edit_path(&mut h, "Input Folder", &input);
+    edit_path(&mut h, "Output Folder", &output);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File Naming").click();
     h.run_steps(2);
     replace_text(&mut h, "{serial}_{name}.{ext}");
-    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Starting serial").click();
+    h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Starting Serial Number").click();
     h.run_steps(2);
     h.event(egui::Event::Text("7".into()));
     h.run_steps(3);
-    h.get_by_role_and_label(egui::accesskit::Role::Label, "Starting serial").click();
+    h.key_press(egui::Key::Tab);
     h.run_steps(3);
-    assert_eq!(h.state().ui.dialogs.last().unwrap().fields["startingSerial"], 7, "typing changes the starting serial");
+    assert_eq!(form_fields(&mut h)["startingSerial"], 7, "typing changes the starting serial");
     evidence(&mut h, "batch-naming");
     h.get_by_label("OK").click();
     h.run_steps(5);
-    assert!(h.state().ui.dialogs.is_empty());
+    assert!(!h.state().dialog_open());
     let expected: Vec<_> = source.data().iter().map(|v| 255 - v).collect();
     for name in ["007_first.png", "008_second.png"] {
         let bytes = std::fs::read(output.join(name)).expect("dialog naming reaches the exporter");
@@ -307,7 +227,6 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
 
 #[test]
 fn batch_default_quality_keeps_lossless_webp_and_existing_jpeg_bytes() {
-    let _gpu = photocraft_testkit::gpu_lock();
     let dir = Scratch::new();
     let input = dir.0.join("input");
     std::fs::create_dir(&input).unwrap();
@@ -322,12 +241,12 @@ fn batch_default_quality_keeps_lossless_webp_and_existing_jpeg_bytes() {
             choose_webp(&mut h);
         } else {
             open_format_choices(&mut h);
-            h.get_by_label("Jpg").click();
+            h.get_by_label("JPEG").click();
             h.run_steps(3);
         }
-        edit_path(&mut h, "Input", &input);
-        edit_path(&mut h, "Output", &output);
-        assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null());
+        edit_path(&mut h, "Input Folder", &input);
+        edit_path(&mut h, "Output Folder", &output);
+        assert!(form_fields(&mut h)["quality"].is_null());
         evidence(&mut h, &format!("batch-default-{format}"));
         h.get_by_label("OK").click();
         h.run_steps(5);

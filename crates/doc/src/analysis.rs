@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Image › Analysis › Set Measurement Scale: `pixel_length` pixels equal `logical_length`
 /// `units`. The default is 1 pixel = 1 pixel.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct MeasurementScale {
     pub pixel_length: f64,
@@ -37,7 +37,7 @@ impl MeasurementScale {
 }
 
 /// One Count tool group: its numbered markers (document pixel coordinates, in click order).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct CountGroup {
     pub name: String,
@@ -57,7 +57,7 @@ impl Default for CountGroup {
 
 /// The Ruler tool line, optionally with a protractor second arm (⌥-drag from an end point).
 /// `start` is the vertex the angle is measured at when there is a protractor.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct Ruler {
     pub start: [f64; 2],
     pub end: [f64; 2],
@@ -66,7 +66,7 @@ pub struct Ruler {
 }
 
 /// Measurement settings and marks of a document.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct Measurement {
     pub scale: MeasurementScale,
@@ -87,7 +87,7 @@ impl Measurement {
 }
 
 /// A Note tool annotation (PSD `Anno` text annotation).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct Note {
     pub author: String,
