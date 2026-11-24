@@ -86,13 +86,13 @@ fn open_command(h: &mut H, command: &str) -> DialogId {
     dialog
 }
 
-/// Opens Artboards to Files from the menu, writing PNGs with the prefix `out` into `dir`, Artboard
+/// Opens Artboards to Files from the menu, writing PNG-24 files with the prefix `out` into `dir`, Artboard
 /// Content Only (Blue Board overlaps Red Board, and Include Overlapping Areas would put Blue's
 /// layer into Red Board's file).
 fn open(h: &mut H, dir: &str) -> DialogId {
     let dialog = open_command(h, ARTBOARDS);
     let ctx = h.ctx.clone();
-    for (key, value) in [("dir", json!(dir)), ("prefix", json!("out")), ("format", json!("png")), ("content", json!("artboard"))] {
+    for (key, value) in [("dir", json!(dir)), ("prefix", json!("out")), ("format", json!("png24")), ("content", json!("artboard"))] {
         h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, key, value).unwrap_or_else(|e| panic!("{key}: {e}"));
     }
     h.run_steps(4);

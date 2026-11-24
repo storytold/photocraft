@@ -92,6 +92,8 @@ fn ok_with_png8_writes_indexed_pngs_and_pdf_one_file() {
         set(&mut h, dialog, "dir", json!(t.path()));
         set(&mut h, dialog, "prefix", json!(format));
         set(&mut h, dialog, "format", json!(format));
+        // Every board: Export Selected Artboards opens ticked while an artboard is the active layer (#13632).
+        set(&mut h, dialog, "artboards", json!(null));
         let ctx = h.ctx.clone();
         crate::dialogs::confirm(h.state_mut(), &ctx, dialog).unwrap();
         let mut written: Vec<std::path::PathBuf> = std::fs::read_dir(t.path()).unwrap().map(|e| e.unwrap().path()).collect();
