@@ -165,8 +165,15 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
             return;
         }
     };
-    if crate::adjust_dialog::open_smart_filter(app, &f.command, &f.params, target.clone()).is_some() || !crate::filter_dialog::has_dialog(&f.command) {
-        return;
+    match crate::adjust_dialog::open_smart_filter_checked(app, &f.command, &f.params, target.clone()) {
+        Ok(_) => return,
+        // The editor refuses these parameters (a CMYK Channel Mixer, #8047): say why instead of opening nothing.
+        Err(Some(reason)) => {
+            crate::notices::error(app, reason);
+            return;
+        }
+        Err(None) if !crate::filter_dialog::has_dialog(&f.command) => return,
+        Err(None) => {}
     }
     // The hosted filter dialog carries the target as its captured value; the recorded parameters
     // overlay the schema defaults, not the user's last-used values.

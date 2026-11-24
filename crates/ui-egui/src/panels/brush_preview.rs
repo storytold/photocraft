@@ -19,7 +19,9 @@ fn js<T: serde::Serialize>(h: &mut DefaultHasher, v: &T) {
 fn tile_sig(h: &mut DefaultHasher, t: &paint::GrayTile) {
     (t.width, t.height, t.data.len()).hash(h);
     let step = (t.data.len() / 4096).max(1);
-    t.data.iter().step_by(step).for_each(|v| v.hash(h));
+    // One write of the whole sample: hashing value by value costs a hasher round per value.
+    let sample: Vec<u16> = t.data.iter().step_by(step).copied().collect();
+    sample.hash(h);
 }
 
 /// A stored tile (#1843) by its key, size and whether its full bitmap is loaded (the preview
@@ -234,7 +236,7 @@ mod tests {
         // Loading the tip re-renders the thumbnail; the stroke preview paints with the preview.
         let sig = |t: paint::StoredTile| tip_sig(&TipShape::Stored(t), 1.0, 0.0, 1.0, (false, false));
         assert_ne!(sig(r.clone()), sig(loaded));
-        let b = BrushSettings { tip: TipShape::Stored(r), size: 900.0, ..Default::default() };
+        let b = BrushSettings { tip: TipShape::Stored(r).into(), size: 900.0, ..Default::default() };
         let px = preview_pixels(&b, 120, 40, [1.0, 0.0, 0.0, 1.0]);
         assert!(px.as_chunks::<4>().0.iter().any(|p| p[3] > 128));
     }

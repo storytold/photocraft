@@ -54,7 +54,8 @@ fn ruler_prefill_keeps_the_measured_two_decimal_angle() {
 }
 
 /// #13067 (f32 double rounding): the 43x27 ruler is 32.1249984 degrees. OK with no shown pass
-/// between open and OK, and again after Alt+Reset, sends 32.12 exactly.
+/// between open and OK, and again after the dialog was drawn, sends 32.12 exactly. (Rotate Canvas
+/// has no Alt+Reset, #14462.)
 #[test]
 fn the_ruler_angle_is_rounded_before_the_first_frame() {
     let (mut app, id) = open_ruler([143, 127]);
@@ -67,11 +68,6 @@ fn the_ruler_angle_is_rounded_before_the_first_frame() {
         .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(3);
-    // Move off the pre-fill first, so only the reset can bring 32.12 back.
-    let set_ctx = h.ctx.clone();
-    h.state_mut().framework.dialogs.set_json_field(&set_ctx, id, "angle", json!(5.0)).unwrap();
-    h.run_steps(2);
-    h.get_by_label("Cancel").click_modifiers(egui::Modifiers::ALT);
-    h.run_steps(3);
-    assert_eq!(confirmed_angle(h.state_mut(), id), Some(32.12), "after Alt+Reset, OK sends the rounded angle");
+    assert!(h.query_by_label("Cancel").is_some(), "the dialog is drawn");
+    assert_eq!(confirmed_angle(h.state_mut(), id), Some(32.12), "drawn, OK sends the rounded angle");
 }

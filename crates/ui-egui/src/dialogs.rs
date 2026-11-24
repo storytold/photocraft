@@ -103,6 +103,11 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
+        ParamFamily {
+            check: Some(crate::view_cmds::dialogs::batch_check),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == "file.automate.batch", filter_dialog::run)
+        },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
@@ -299,6 +304,9 @@ pub(crate) mod params {
             if let (Some(action), Some(footer)) = (footer, family.and_then(|family| family.footer)) {
                 footer(app, ctx, id, &action);
             }
+            if key.as_deref() == Some(image_processor_ui::COMMAND) {
+                image_processor_ui::take_settings_action(app, ctx, id);
+            }
         }
     }
 
@@ -481,6 +489,8 @@ pub(crate) fn take_results(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for taker in TAKERS {
         taker(app, ctx);
     }
+    // Color Settings' Settings menu follows each pick and edit, a script's `ui.dialog.set` included (#14229).
+    crate::filter_dialog::reconcile_color_settings(app, ctx);
 }
 
 /// One pass of the dialogs: the guide edit follows its dialog, the palette shows, the filter preview and the Preferences window are fed, the
@@ -698,10 +708,13 @@ pub(super) mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub(crate) mod canvas_input;
 pub mod channel_options_ui;
+#[cfg(test)]
+mod color_lookup_no_remember_tests;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
 pub mod color_table_ui;
+pub(crate) mod conditional_mode_change_dialog;
 pub mod count_group_name_ui;
 pub mod credits;
 pub mod dds_options_ui;
@@ -729,6 +742,7 @@ pub(crate) mod image_processor_ui;
 pub mod jpeg_options_ui;
 pub mod layer_picker;
 pub mod layer_style;
+pub(crate) mod lens_batch_ui;
 pub mod liquify_ui;
 pub mod live_shape_prompt;
 pub mod mask_trash_prompt;
@@ -746,6 +760,11 @@ mod paths_export_document_bounds_tests;
 pub(crate) mod pattern_fill_ui;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
+#[cfg(test)]
+mod rotate_canvas_layout_tests;
+pub(crate) mod rotate_canvas_ui;
+#[cfg(test)]
+mod scale_effects_layout_tests;
 pub mod screen_picker;
 pub mod select_mask_ui;
 pub mod shape_dialog;
