@@ -17,20 +17,20 @@
 //! preview ([`GrayTile::preview`], at most [`PREVIEW_SIDE`] px), which the Brushes panel and the
 //! picker draw. Opening the store reads previews, never a full tip, and once a group is written
 //! its presets drop their bitmaps the same way. A tip is decoded when its brush is used
-//! ([`Session::load_brush_tips`]: picking a preset, a stroke naming one, exporting), and kept in a
+//! ([`PresetStoreExt::load_brush_tips`](crate::preset_store::PresetStoreExt::load_brush_tips): picking a preset, a stroke naming one, exporting), and kept in a
 //! byte-capped least-recently-used cache ([`TIP_CACHE_BYTES`]), so memory grows with the brushes
 //! in use, not with the size of the library. Stores written before #1843 have no previews: their
 //! tips are decoded once at the next start, a few at a time, and the groups rewritten.
 //!
 //! Built-in presets are never written (they are regenerated on start). The store syncs after
-//! every command that changes the brush presets ([`Session::brush_presets_changed`]); only groups
+//! every command that changes the brush presets ([`PresetStoreExt::brush_presets_changed`](crate::preset_store::PresetStoreExt::brush_presets_changed)); only groups
 //! whose content changed are rewritten. Every write is atomic (temp file + rename) and bounded
 //! ([`MAX_GROUP_BYTES`], [`MAX_TIP_BYTES`], [`MAX_STORE_BYTES`]); corrupt or oversized files are
 //! skipped with a warning and left on disk, never a panic.
 //!
 //! A [`Session`] has no store by default, so headless CLI/MCP sessions and tests never write.
 //! The desktop app opens the store on a background thread ([`open`]) and attaches it with
-//! [`Session::attach_preset_store`] once loaded, so the first frame never waits for it. The web
+//! [`PresetStoreExt::attach_preset_store`](crate::preset_store::PresetStoreExt::attach_preset_store) once loaded, so the first frame never waits for it. The web
 //! app hydrates a bounded memory backend from IndexedDB before accepting edits and commits
 //! changes asynchronously. Gradient presets, including imported `.grd` groups, are small and persist with
 //! the preferences document (`presets.gradients`).
@@ -47,6 +47,7 @@
 //! Legacy and corrupt data are preserved; an existing index is authoritative even when corrupt.
 //! A failed migration leaves the legacy library usable and retries at the next startup.
 
+use crate::actions_cmds::ActionsExt;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -507,6 +508,17 @@ pub struct TipCacheStats {
     pub limit: u64,
 }
 
+/// After brush preset `name` was deleted (Delete Brush Preset, or Edit › Presets › Preset Manager): the current
+/// brush no longer comes from a preset, and the library is saved.
+pub fn forget_deleted_preset(s: &mut Session, name: &str) {
+    if s.tools.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(name)) {
+        s.tools.current_preset = None;
+        // The remembered brush names the preset it was picked from: the name went away.
+        s.tools.brush_changed();
+    }
+    s.brush_presets_changed();
+}
+
 /// The session's preset store (a session slot of this crate): `None` keeps presets session-only, as
 /// in headless and test sessions. The same store holds the Actions list.
 pub trait PresetStoreExt {
@@ -514,15 +526,19 @@ pub trait PresetStoreExt {
     fn preset_store(&self) -> Option<&PresetStore>;
     /// The attached preset store, to change it.
     fn preset_store_mut(&mut self) -> Option<&mut PresetStore>;
-}
-
-impl PresetStoreExt for Session {
-    fn preset_store(&self) -> Option<&PresetStore> {
-        self.slot::<Option<PresetStore>>().ok()?.as_ref()
-    }
-    fn preset_store_mut(&mut self) -> Option<&mut PresetStore> {
-        self.slot_mut::<Option<PresetStore>>().ok()?.as_mut()
-    }
+    /// Record a brush preset change (create, delete, rename, import…): the attached store, if
+    /// any, syncs after the running command.
+    fn brush_presets_changed(&mut self);
+    /// Attach a loaded store: merge its presets into the library (a stored preset replaces the
+    /// built-in of the same name; presets created before the store finished loading win), hide
+    /// deleted built-ins, then sync. Returns the load warnings.
+    fn attach_preset_store(&mut self, opened: Opened) -> Vec<String>;
+    /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
+    fn sync_preset_store(&mut self);
+    /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so
+    /// it paints with its full bitmaps. Tips already loaded or embedded are left alone. Fails when
+    /// a tip can't be loaded: its file is missing or corrupt, or there is no preset store.
+    fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String>;
 }
 
 /// The persistent brush preset store attached to a session (see the module docs).
@@ -1125,17 +1141,18 @@ fn builtin_names() -> &'static [String] {
     NAMES.get_or_init(|| photocraft_paint::presets::builtin_shared().iter().map(|p| p.name.clone()).collect())
 }
 
-impl Session {
-    /// Record a brush preset change (create, delete, rename, import…): the attached store, if
-    /// any, syncs after the running command.
-    pub fn brush_presets_changed(&mut self) {
+impl PresetStoreExt for Session {
+    fn preset_store(&self) -> Option<&PresetStore> {
+        self.slot::<Option<PresetStore>>().ok()?.as_ref()
+    }
+    fn preset_store_mut(&mut self) -> Option<&mut PresetStore> {
+        self.slot_mut::<Option<PresetStore>>().ok()?.as_mut()
+    }
+    fn brush_presets_changed(&mut self) {
         self.tools.presets_rev += 1;
     }
 
-    /// Attach a loaded store: merge its presets into the library (a stored preset replaces the
-    /// built-in of the same name; presets created before the store finished loading win), hide
-    /// deleted built-ins, then sync. Returns the load warnings.
-    pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
+    fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
         // A session made before the store's crate was installed has nowhere to keep it.
         if let Err(error) = self.slot::<Option<PresetStore>>() {
             return vec![format!("the preset store was not attached: {error}")];
@@ -1193,31 +1210,31 @@ impl Session {
         // Otherwise in-memory actions (created before the store finished loading) win on name and
         // disk-only names are appended. An empty session takes the disk list and does not rewrite
         // it, unless loading moved stored ids to names: that is written once.
-        if std::mem::take(&mut self.actions.replaced_before_attachment) {
+        if std::mem::take(&mut self.actions_mut().replaced_before_attachment) {
             // The command replaced the action shortcuts too: the stored ids' keys have no action.
             name_id_shortcuts(self, &[]);
-        } else if self.actions.list.actions().is_empty() && self.actions.list.sets().is_empty() {
-            self.actions.list.replace(disk);
+        } else if self.actions().list.actions().is_empty() && self.actions().list.sets().is_empty() {
+            self.actions_mut().list.replace(disk);
             name_id_shortcuts(self, &action_ids);
-            let rev = self.actions.list.revision();
+            let rev = self.actions().list.revision();
             if let Some(st) = self.preset_store_mut() {
                 st.actions_rev = rev;
             }
             if !action_ids.is_empty() {
-                self.actions.list.touch();
+                self.actions_mut().list.touch();
             }
         } else {
             name_id_shortcuts(self, &action_ids);
             let ActionsFile { actions, sets, .. } = disk.to_file();
             for action in actions {
                 // A name the session already has is refused: the session's wins.
-                let _ = self.actions.list.push(action);
+                let _ = self.actions_mut().list.push(action);
             }
             for set in sets {
-                let _ = self.actions.list.new_set(&set);
+                let _ = self.actions_mut().list.new_set(&set);
             }
             // The merged list differs from the file even when nothing was added.
-            self.actions.list.touch();
+            self.actions_mut().list.touch();
         }
         self.brush_presets_changed();
         self.sync_preset_store();
@@ -1232,8 +1249,7 @@ impl Session {
         warnings
     }
 
-    /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
-    pub fn sync_preset_store(&mut self) {
+    fn sync_preset_store(&mut self) {
         let rev = self.tools.presets_rev;
         // Out of its slot while it reads the session's presets, actions and patterns.
         let Some(mut st) = self.slot_mut::<Option<PresetStore>>().ok().and_then(Option::take) else { return };
@@ -1246,17 +1262,14 @@ impl Session {
                 self.tools.brush_changed();
             }
         }
-        st.sync_actions(&self.actions.list);
+        st.sync_actions(&self.actions().list);
         st.sync_patterns(&self.patterns);
         if let Ok(slot) = self.slot_mut::<Option<PresetStore>>() {
             *slot = Some(st);
         }
     }
 
-    /// Load the stored tips of `b` (a preset's settings picked as the tool's brush, or exported) so
-    /// it paints with its full bitmaps. Tips already loaded or embedded are left alone. Fails when
-    /// a tip can't be loaded: its file is missing or corrupt, or there is no preset store.
-    pub fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String> {
+    fn load_brush_tips(&self, b: &mut BrushSettings) -> Result<(), String> {
         let load = |r: &mut StoredTile| -> Result<(), String> {
             if r.full.is_none() {
                 let st = self.preset_store().ok_or_else(|| format!("brush tip {} is not available: no preset store is attached", r.key))?;

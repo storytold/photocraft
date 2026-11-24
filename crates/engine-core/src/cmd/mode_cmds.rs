@@ -7,13 +7,16 @@
 //! inks (`Document::duotone`), which display and flat export render through. Like Photoshop the
 //! conversions flatten (Indexed, Bitmap) and require a grayscale source (Bitmap, Duotone).
 
+use crate::color_cmds::ColorExt;
 use craft_cms::{ColorSpace, TransformOptions};
 use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorIndices, ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
-use photocraft_geom::{Affine, Rect};
+use photocraft_geom::Affine;
+#[cfg(test)]
+use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -88,7 +91,7 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// [`rotate_arbitrary`]; `image_rotation` is true on the Image Rotation path and decides two
-/// things there: count points stay where they were (#11762) and the selection is dropped, in the
+/// things there: the angle rounds to hundredths of a degree, count points stay where they were (#11762) and the selection is dropped, in the
 /// same history step, so one undo brings it back (#14507). The Crop tool's straighten turn and the
 /// Ruler's Straighten pass false: they move count points with the image and warp the selection.
 /// `keep_guides` turns the guides with the canvas (#14508, measured for Image Rotation > Arbitrary)
@@ -105,6 +108,7 @@ pub(crate) fn rotate_arbitrary_with(s: &mut Session, p: &Value, image_rotation: 
         "ccw" => -angle,
         d => return Err(bad(CMD, format!("direction `{d}` (cw|ccw)"))),
     };
+    let deg = if image_rotation { (deg * 100.0).round() % 36_000.0 / 100.0 } else { deg };
     if deg.rem_euclid(360.0).abs() < 1e-9 {
         return Ok(json!({"width": s.active().map(|d| d.doc.size.width), "height": s.active().map(|d| d.doc.size.height)}));
     }
@@ -357,8 +361,8 @@ fn working_matte_color(s: &Session, doc: &Document, color: [f32; 4]) -> Result<[
         // CMYK and Lab flatten through the compositor's sRGB view on the pinned main path.
         _ => crate::color_cmds::composite_profile(doc),
     };
-    let source = s.color.working(ColorMode::Rgb);
-    let options = TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() };
+    let source = s.color().working(ColorMode::Rgb);
+    let options = TransformOptions { intent: s.color().settings.intent(), bpc: s.color().settings.bpc, ..Default::default() };
     let transform = craft_cms::transform::cached(&source, &destination, options)
         .map_err(|e| bad("image.mode.indexedColor", format!("cannot convert matte colour: {e}")))?;
     let mut output = [0.0; 16];
@@ -605,62 +609,6 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(out)
-}
-
-/// The colour table painting on `p`'s target must stay inside: an Indexed Color document's,
-/// when the target is layer pixels (masks and channels are gray, not indexed).
-pub(crate) fn paint_color_table(doc: &Document, p: &Value) -> Option<ColorTable> {
-    let pixels = crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels;
-    doc.color_table.clone().filter(|_| pixels && doc.mode == ColorMode::Indexed)
-}
-
-/// The colour `c` paints as in a document with `table` (see [`keep_in_color_table`]).
-pub(crate) fn table_color(table: &ColorTable, c: [f32; 4]) -> [f32; 4] {
-    let mut px = [c];
-    if !table.colors.is_empty() {
-        quantize::quantize(&mut px, 1, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from));
-    }
-    let [c] = px;
-    c
-}
-
-/// Map the pixels of `r` that the stroke changed (they differ from `pre`) to their nearest
-/// colour-table entry, as the Indexed Color conversion does with no dither, so painting never
-/// leaves the table (#8669). One tile at a time: a long stroke's bounds can span the canvas.
-pub(crate) fn keep_in_color_table(table: &ColorTable, pre: &Surface, surf: &mut Surface, r: Rect) {
-    if table.colors.is_empty() {
-        return;
-    }
-    let fmt = surf.format();
-    let n = fmt.channels();
-    let mut enc = [0.0f32; 8];
-    for tc in r.tiles() {
-        let t = tc.rect().intersect(&r);
-        if t.is_empty() || !surf.has_tiles_in(t) {
-            continue;
-        }
-        let (before, mut data) = (pre.read_region(t), surf.read_region(t));
-        let (mut changed, mut px) = (Vec::new(), Vec::new());
-        for (i, (q, b)) in data.chunks_exact(n).zip(before.chunks_exact(n)).enumerate() {
-            if q != b {
-                changed.push(i);
-                px.push(photocraft_raster::to_rgba(&fmt, q));
-            }
-        }
-        if px.is_empty() {
-            continue;
-        }
-        let w = px.len();
-        quantize::quantize(&mut px, w, &table.colors, Dither::None, 0.0, table.transparent.map(usize::from));
-        let mut mapped = changed.into_iter().zip(px).peekable();
-        for (i, q) in data.chunks_exact_mut(n).enumerate() {
-            if let Some((_, c)) = mapped.next_if(|(j, _)| *j == i) {
-                photocraft_raster::from_rgba_into(&fmt, c, &mut enc);
-                q.iter_mut().zip(enc).for_each(|(d, v)| *d = v);
-            }
-        }
-        surf.write_region(t, &data);
-    }
 }
 
 // ---------- Bitmap ----------
@@ -950,5 +898,5 @@ mod tests;
 #[cfg(test)]
 mod color_table_index_tests;
 #[cfg(test)]
-#[path = "rotate_canvas_interpolation_pref_tests.rs"]
-mod rotate_canvas_interpolation_pref_tests;
+#[path = "rotate_canvas_tiny_angle_tests.rs"]
+mod rotate_canvas_tiny_angle_tests;

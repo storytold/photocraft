@@ -47,7 +47,7 @@ pub(crate) fn list_error(cmd: &str, error: ActionListError) -> EngineError {
 pub(crate) fn note_automation_edit(s: &mut Session, idx: usize) {
     if s.authorize.is_some() {
         // An index past the end is a stale mark: there is no action to flag.
-        let _ = s.actions.list.set_automation(idx, true);
+        let _ = s.actions_mut().list.set_automation(idx, true);
     }
 }
 
@@ -68,7 +68,7 @@ pub(crate) fn note_step_origin(s: &mut Session, automation: bool, id: &str, para
         && recorded(id, params)
         && let Some((_, idx)) = s.recording.target
     {
-        let _ = s.actions.list.set_automation(idx, true);
+        let _ = s.actions_mut().list.set_automation(idx, true);
     }
 }
 
@@ -105,6 +105,24 @@ impl ActionState {
     /// else the user's list.
     pub fn playable(&self) -> &ActionList {
         self.called.as_ref().unwrap_or(&self.list)
+    }
+}
+
+/// Window › Actions on a session: its [`ActionState`] (a session slot of this module).
+pub trait ActionsExt {
+    /// The Actions list and the Batch's called actions. The list persists with the preset store
+    /// when one is attached.
+    fn actions(&self) -> &ActionState;
+    /// The Actions state, to change it.
+    fn actions_mut(&mut self) -> &mut ActionState;
+}
+
+impl ActionsExt for Session {
+    fn actions(&self) -> &ActionState {
+        self.slot_or_default::<ActionState>()
+    }
+    fn actions_mut(&mut self) -> &mut ActionState {
+        self.slot_or_default_mut::<ActionState>()
     }
 }
 
@@ -212,7 +230,7 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(usize, Action, usize)> {
     if s.recording.playing > 0 && s.recording.playback_stack.is_empty() {
         return Err(bad("actions.play", "an action is already playing"));
     }
-    let list = s.actions.playable();
+    let list = s.actions().playable();
     let idx = resolve(list.actions(), p, "actions.play")?;
     // Every stored step of the call is charged to the playback tree (run, disabled or skipped),
     // so refuse a call whose steps no longer fit before copying it: repeated calls to a large
@@ -224,7 +242,7 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(usize, Action, usize)> {
     }
     let action = list.action(idx).cloned().ok_or_else(|| bad("actions.play", "no such action"))?;
     // The recording's index is into the user's list, which a Batch's called actions stand in for.
-    let records_it = s.actions.called.is_none() && s.recording.target.is_some_and(|(_, i)| i == idx);
+    let records_it = s.actions().called.is_none() && s.recording.target.is_some_and(|(_, i)| i == idx);
     if s.recording.playback_stack.iter().any(|name| name == &action.name) || records_it {
         return Err(bad("actions.play", format!("recursive action call to `{}`", action.name)));
     }
@@ -477,14 +495,14 @@ fn from_step(p: &Value, len: usize) -> Result<usize> {
 }
 
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
-    let actions: Vec<Value> = s.actions.list.actions().iter().map(|a| json!({"name": a.name, "steps": a.steps.len(), "set": a.set})).collect();
-    let recording = s.recording.target.and_then(|(_, i)| s.actions.list.action(i).map(|a| a.name.clone()));
+    let actions: Vec<Value> = s.actions().list.actions().iter().map(|a| json!({"name": a.name, "steps": a.steps.len(), "set": a.set})).collect();
+    let recording = s.recording.target.and_then(|(_, i)| s.actions().list.action(i).map(|a| a.name.clone()));
     Ok(json!({"actions": actions, "sets": crate::actions_edit_cmds::set_names(s), "recording": recording, "toolRecording": s.recording.record_tools}))
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
-    let idx = resolve(s.actions.list.actions(), p, "actions.get")?;
-    let action = &s.actions.list.actions()[idx];
+    let idx = resolve(s.actions().list.actions(), p, "actions.get")?;
+    let action = &s.actions().list.actions()[idx];
     let steps: Vec<Value> = action.steps.iter().map(|step| json!([step.command, step.params])).collect();
     Ok(json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color.name()}))
 }
@@ -497,7 +515,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("actions.record", "already recording; stop first"));
     }
     let idx = if p.get("action").is_some() {
-        resolve(s.actions.list.actions(), p, "actions.record")?
+        resolve(s.actions().list.actions(), p, "actions.record")?
     } else {
         let name = match p.get("name") {
             None | Some(Value::Null) => None,
@@ -513,14 +531,14 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
             Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
             Some(_) => return Err(bad("actions.record", "\"set\" must be a set name or null")),
         };
-        let name = name.unwrap_or_else(|| s.actions.list.unique_name(""));
+        let name = name.unwrap_or_else(|| s.actions().list.unique_name(""));
         // `push`, not `new_action`: an existing set keeps its exact name, which `new_action` would trim.
-        s.actions.list.push(Action { set, ..Action::new(name, Vec::new()) }).map_err(|e| list_error("actions.record", e))?
+        s.actions_mut().list.push(Action { set, ..Action::new(name, Vec::new()) }).map_err(|e| list_error("actions.record", e))?
     };
     s.recording.target = Some((s.journal.len(), idx));
     note_automation_edit(s, idx);
     s.recording.take = s.recording.take.wrapping_add(1);
-    let name = s.actions.list.action(idx).map(|a| a.name.clone()).unwrap_or_default();
+    let name = s.actions().list.action(idx).map(|a| a.name.clone()).unwrap_or_default();
     Ok(json!({"action": name, "index": idx}))
 }
 
@@ -541,19 +559,19 @@ pub fn pending_steps(s: &Session, action: usize) -> impl Iterator<Item = &(Strin
 
 pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
     let Some((_, idx)) = s.recording.target else { return Ok(()) };
-    if s.actions.list.action(idx).is_none() {
+    if s.actions().list.action(idx).is_none() {
         return Err(bad("actions.stop", "the action being recorded no longer exists"));
     }
     let steps = fold_recorded_nudges(pending_steps(s, idx).cloned());
     s.recording.target = Some((s.journal.len(), idx));
     if !steps.is_empty() {
-        let first = s.actions.list.step_count(idx);
+        let first = s.actions().list.step_count(idx);
         let with_dialog: Vec<usize> =
             steps.iter().enumerate().filter(|(_, (id, _))| RECORDED_WITH_DIALOG.contains(&id.as_str())).map(|(i, _)| first + i).collect();
         let stop = |e: ActionListError| list_error("actions.stop", e);
-        s.actions.list.append_recorded(idx, steps.into_iter().map(ActionStep::from)).map_err(stop)?;
+        s.actions_mut().list.append_recorded(idx, steps.into_iter().map(ActionStep::from)).map_err(stop)?;
         for step in with_dialog {
-            s.actions.list.set_dialog(idx, step, true).map_err(stop)?;
+            s.actions_mut().list.set_dialog(idx, step, true).map_err(stop)?;
         }
     }
     Ok(())
@@ -616,7 +634,7 @@ fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
     };
     flush_recording(s)?;
     s.recording.target = None;
-    let action = &s.actions.list.actions()[idx];
+    let action = &s.actions().list.actions()[idx];
     Ok(json!({"action": action.name, "steps": action.steps.len()}))
 }
 
@@ -840,7 +858,7 @@ pub(crate) fn not_playing(s: &Session, cmd: &str) -> Result<()> {
 /// Move to a final zero-based index, either in an action's steps or in the action list.
 fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.move")?;
-    let idx = resolve(s.actions.list.actions(), p, "actions.move")?;
+    let idx = resolve(s.actions().list.actions(), p, "actions.move")?;
     let index = |key: &str| -> Result<usize> {
         p.get(key)
             .and_then(Value::as_u64)
@@ -850,20 +868,20 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
     let to = index("to")?;
     if p.get("step").is_some() {
         let step = index("step")?;
-        let len = s.actions.list.step_count(idx).saturating_add(pending_steps(s, idx).count());
+        let len = s.actions().list.step_count(idx).saturating_add(pending_steps(s, idx).count());
         if step >= len || to >= len {
             return Err(bad("actions.move", "step or destination is out of range"));
         }
         if s.recording.target.is_some_and(|(_, i)| i == idx) {
             flush_recording(s)?;
         }
-        s.actions.list.move_step(idx, step, idx, to).map_err(|e| list_error("actions.move", e))?;
-        let result = json!({"action": s.actions.list.actions()[idx].name, "step": to});
+        s.actions_mut().list.move_step(idx, step, idx, to).map_err(|e| list_error("actions.move", e))?;
+        let result = json!({"action": s.actions().list.actions()[idx].name, "step": to});
         note_automation_edit(s, idx);
         Ok(result)
     } else {
-        let name = s.actions.list.actions()[idx].name.clone();
-        s.actions.list.move_action(idx, to).map_err(|e| list_error("actions.move", e))?;
+        let name = s.actions().list.actions()[idx].name.clone();
+        s.actions_mut().list.move_action(idx, to).map_err(|e| list_error("actions.move", e))?;
         if let Some((_, recording)) = s.recording.target.as_mut() {
             *recording = moved_index(*recording, idx, to);
         }
@@ -875,10 +893,10 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
 /// as automation's when an automation gate is installed).
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.delete")?;
-    let idx = resolve(s.actions.list.actions(), p, "actions.delete")?;
+    let idx = resolve(s.actions().list.actions(), p, "actions.delete")?;
     if let Some(step) = p.get("step") {
         let step = step.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad("actions.delete", "step must be a non-negative integer"))?;
-        let len = s.actions.list.step_count(idx).saturating_add(pending_steps(s, idx).count());
+        let len = s.actions().list.step_count(idx).saturating_add(pending_steps(s, idx).count());
         if step >= len {
             return Err(bad("actions.delete", "step is out of range"));
         }
@@ -887,8 +905,8 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         if s.recording.target.is_some_and(|(_, i)| i == idx) {
             flush_recording(s)?;
         }
-        s.actions.list.delete_step(idx, step).map_err(|e| list_error("actions.delete", e))?;
-        let action = &s.actions.list.actions()[idx];
+        s.actions_mut().list.delete_step(idx, step).map_err(|e| list_error("actions.delete", e))?;
+        let action = &s.actions().list.actions()[idx];
         let result = json!({"action": action.name, "deletedStep": step, "steps": action.steps.len()});
         note_automation_edit(s, idx);
         return Ok(result);
@@ -896,7 +914,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     if s.recording.target.is_some() {
         return Err(bad("actions.delete", "stop recording before deleting an action"));
     }
-    let name = s.actions.list.delete_action(idx).map_err(|e| list_error("actions.delete", e))?.name;
+    let name = s.actions_mut().list.delete_action(idx).map_err(|e| list_error("actions.delete", e))?.name;
     // Its function keys go with it, or the next action given the same name would inherit them.
     remove_shortcuts(s, std::iter::once(name.as_str()));
     Ok(json!({"deleted": name}))
@@ -907,7 +925,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.toggle";
     not_playing(s, cmd)?;
-    let idx = resolve(s.actions.list.actions(), p, cmd)?;
+    let idx = resolve(s.actions().list.actions(), p, cmd)?;
     let enabled = match p.get("enabled") {
         None | Some(Value::Null) => None,
         Some(Value::Bool(b)) => Some(*b),
@@ -917,26 +935,26 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(cmd, "step must be a non-negative integer"))?),
     };
-    let len = s.actions.list.step_count(idx).saturating_add(pending_steps(s, idx).count());
+    let len = s.actions().list.step_count(idx).saturating_add(pending_steps(s, idx).count());
     if step.is_some_and(|step| step >= len) {
         return Err(bad(cmd, "step is out of range"));
     }
     if s.recording.target.is_some_and(|(_, i)| i == idx) {
         flush_recording(s)?;
     }
-    let action = &s.actions.list.actions()[idx];
+    let action = &s.actions().list.actions()[idx];
     let edit = match step {
         Some(step) => {
             let on = enabled.unwrap_or(!action.step_enabled(step));
-            s.actions.list.set_step(idx, step, on)
+            s.actions_mut().list.set_step(idx, step, on)
         }
         None => {
             let on = enabled.unwrap_or(!action.disabled.is_empty());
-            s.actions.list.set_all(idx, on)
+            s.actions_mut().list.set_all(idx, on)
         }
     };
     edit.map_err(|e| list_error(cmd, e))?;
-    let action = &s.actions.list.actions()[idx];
+    let action = &s.actions().list.actions()[idx];
     let result = json!({"action": action.name, "disabled": action.disabled});
     note_automation_edit(s, idx);
     Ok(result)
@@ -1045,22 +1063,22 @@ pub(crate) fn name_id_shortcuts(s: &mut Session, ids: &[(String, String)]) {
 /// stops working.
 fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.rename")?;
-    let idx = resolve(s.actions.list.actions(), p, "actions.rename")?;
+    let idx = resolve(s.actions().list.actions(), p, "actions.rename")?;
     let name = match p.get("name") {
         Some(Value::String(n)) if !n.trim().is_empty() => n.clone(),
         Some(Value::String(_)) => return Err(bad("actions.rename", "\"name\" is empty")),
         Some(_) => return Err(bad("actions.rename", "\"name\" must be a string")),
         None => return Err(bad("actions.rename", "needs \"name\"")),
     };
-    let old = s.actions.list.action(idx).map(|a| a.name.clone()).ok_or_else(|| bad("actions.rename", "no such action"))?;
+    let old = s.actions().list.action(idx).map(|a| a.name.clone()).ok_or_else(|| bad("actions.rename", "no such action"))?;
     let pending = s.recording.target.map_or(s.journal.len(), |(start, _)| start);
     // Names are list-wide, so a call naming `old` reaches this action; a named Batch is checked
     // against the list before the rename because its set can still refuse it.
-    let before = s.actions.list.actions().to_vec();
+    let before = s.actions().list.actions().to_vec();
     let follow = |id: &str, params: &mut Value, old: &str, new: &str| rename_call(&before, idx, id, params, old, new);
-    s.actions.list.rename(idx, &name, |step, old, new| follow(&step.command, &mut step.params, old, new)).map_err(|e| list_error("actions.rename", e))?;
+    s.actions_mut().list.rename(idx, &name, |step, old, new| follow(&step.command, &mut step.params, old, new)).map_err(|e| list_error("actions.rename", e))?;
     // The list renames its own steps; the journal entries not yet recorded are the engine's.
-    let name = s.actions.list.actions()[idx].name.clone();
+    let name = s.actions().list.actions()[idx].name.clone();
     if old == name {
         return Ok(json!({"action": name, "index": idx}));
     }
@@ -1102,7 +1120,7 @@ fn rename_call(before: &[Action], idx: usize, id: &str, params: &mut Value, old:
 fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.setColor";
     not_playing(s, cmd)?;
-    let idx = resolve(s.actions.list.actions(), p, cmd)?;
+    let idx = resolve(s.actions().list.actions(), p, cmd)?;
     let Some(color) = p.get("color").and_then(Value::as_str) else {
         return Err(bad(cmd, "needs \"color\""));
     };
@@ -1110,8 +1128,8 @@ fn set_color(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(chosen) = ActionColor::ALL.into_iter().find(|each| each.name() == color) else {
         return Err(bad(cmd, "color must be empty, red, orange, yellow, green, blue, violet, or gray"));
     };
-    s.actions.list.set_color(idx, chosen).map_err(|e| list_error(cmd, e))?;
-    let name = s.actions.list.actions()[idx].name.clone();
+    s.actions_mut().list.set_color(idx, chosen).map_err(|e| list_error(cmd, e))?;
+    let name = s.actions().list.actions()[idx].name.clone();
     Ok(json!({"action": name, "color": color}))
 }
 
@@ -1318,7 +1336,7 @@ mod security_tests {
     fn a_nested_batch_input_does_not_reset_the_shared_playback_count() {
         let mut session = crate::session();
         session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-        session.actions.list.push(Action::new("A", vec![ActionStep::new("select.all", json!({}))])).unwrap();
+        session.actions_mut().list.push(Action::new("A", vec![ActionStep::new("select.all", json!({}))])).unwrap();
         session.recording.budget_shared = true;
         session.recording.playback_steps = MAX_PLAYBACK_STEPS;
         let r = session.execute("actions.play", json!({"action": "A"}));
@@ -1338,8 +1356,8 @@ mod security_tests {
         child.disabled = (0..1000).collect();
         let calls = MAX_PLAYBACK_STEPS as usize / 1000 * 2;
         let parent = Action::new("Parent", (0..calls).map(|_| ActionStep::new("actions.play", json!({"action": "Child"}))).collect());
-        session.actions.list.push(child).unwrap();
-        session.actions.list.push(parent).unwrap();
+        session.actions_mut().list.push(child).unwrap();
+        session.actions_mut().list.push(parent).unwrap();
         let r = session.execute("actions.play", json!({"action": "Parent"})).unwrap();
         let failed = r["failed"]["error"].as_str().unwrap();
         assert!(failed.contains("step limit"), "{failed}");
