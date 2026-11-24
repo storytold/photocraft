@@ -17,7 +17,7 @@ fn print_fields(app: &mut PhotocraftApp, id: DialogId) -> &mut DialogFields {
 }
 
 /// Sets each member of the object `values` as the dialog's field of that name.
-fn set_fields(app: &mut PhotocraftApp, id: DialogId, values: Value) {
+pub(super) fn set_fields(app: &mut PhotocraftApp, id: DialogId, values: Value) {
     let fields = print_fields(app, id);
     for (key, value) in values.as_object().expect("an object") {
         fields.set(key.clone(), serde_json::from_value::<FieldValue>(value.clone()).expect("a field value"));
@@ -30,12 +30,18 @@ fn app() -> (Box<PhotocraftApp>, DialogId) {
 
 /// The Print dialog opened after a print that kept `paper` as its paper (what `file.print` remembers).
 fn app_remembering(paper: Option<Value>) -> (Box<PhotocraftApp>, DialogId) {
+    app_with_document(json!({"width": 120, "height": 80, "name": "Custom paper"}), paper)
+}
+
+/// The Print dialog over a new document made with the `file.new` params `document`, opened after a print that kept
+/// `paper` as its paper.
+pub(super) fn app_with_document(document: Value, paper: Option<Value>) -> (Box<PhotocraftApp>, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     // Print lists this printer and does not ask the spooler.
     *app.session.printer_source_mut() = Some(std::sync::Arc::new(|| {
         vec![craft::print::Printer { name: "Test native printer".into(), default: true, two_sided: None, description: String::new() }]
     }));
-    app.run("file.new", json!({"width": 120, "height": 80, "name": "Custom paper"})).unwrap();
+    app.run("file.new", document).unwrap();
     if let Some(paper) = paper {
         app.session.file_menu.last_print = Some(json!({ "paper": paper }));
     }
@@ -47,7 +53,7 @@ fn app_remembering(paper: Option<Value>) -> (Box<PhotocraftApp>, DialogId) {
 }
 
 /// No test in this binary asks the system spooler for its printers.
-fn assert_no_system_listing() {
+pub(super) fn assert_no_system_listing() {
     assert_eq!(photocraft_engine::print_cmds::system_printer_listings(), 0, "a test asked the system spooler for its printers");
 }
 
@@ -58,7 +64,7 @@ fn show(ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>) {
     super::take(app, &ctx);
 }
 
-fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+pub(super) fn harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     harness_at_scale(app, 1.0)
 }
 
@@ -77,7 +83,7 @@ fn harness_at_scale(app: Box<PhotocraftApp>, pixels_per_point: f32) -> Harness<'
     h
 }
 
-fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
+pub(super) fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
     if let Some(node) = h.query_by_label(label) {
         node.click();
     } else {
@@ -121,7 +127,7 @@ fn shown(h: &Harness<'_, Box<PhotocraftApp>>, text: &str) -> bool {
     h.query_all_by_label(text).next().is_some() || h.query_all_by_value(text).next().is_some()
 }
 
-fn enter_length(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, value: &str) {
+pub(super) fn enter_length(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, value: &str) {
     // The caption is a separate Label node with the same text; use the accessible SpinButton.
     let pos = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, label).rect().center();
     h.event(Event::PointerMoved(pos));
@@ -136,7 +142,7 @@ fn enter_length(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str, value: &st
     h.run_steps(3);
 }
 
-fn fields(h: &Harness<'_, Box<PhotocraftApp>>, id: DialogId) -> Map<String, Value> {
+pub(super) fn fields(h: &Harness<'_, Box<PhotocraftApp>>, id: DialogId) -> Map<String, Value> {
     let open = h.state().framework.dialogs.open_dialogs();
     open.into_iter().find(|d| d.id == id).and_then(|d| d.fields).and_then(|v| v.as_object().cloned()).expect("the Print dialog's values")
 }
