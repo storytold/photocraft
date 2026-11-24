@@ -13,8 +13,14 @@ use crate::PhotocraftApp;
 
 const BATCH: &str = "file.automate.batch";
 const FIELD: &str = "Starting Serial Number";
-/// The reference's alert for a Starting Serial # typed past 0..9999.
-const ALERT: &str = "An integer between 0 and 9999 is required. Closest value inserted.";
+/// The reference's alert for a Starting Serial # typed past 0..9999: "An integer between 0 and
+/// 9999 is required. Closest value inserted." The framework writes the ends in the system region's
+/// number format, the one the app's catalogs hold, so a region that groups digits reads 9,999
+/// (Windows in English (United States)) and one that does not reads 9999 (the C locale).
+fn alert() -> String {
+    let format = crate::i18n::framework_i18n().format();
+    format!("An integer between {} and {} is required. Closest value inserted.", format.integer(0), format.integer(9999))
+}
 
 type H = Harness<'static, Box<PhotocraftApp>>;
 
@@ -106,7 +112,7 @@ fn a_starting_serial_past_the_range_takes_the_closest_value_with_the_alert() {
         let (mut h, dialog) = batch();
         enter_serial(&mut h, typed);
         assert_eq!(serial(&h, dialog), Some(json!(want)), "{typed}");
-        assert_eq!(alerts(&h), vec![ALERT.to_string()], "{typed}: one alert");
+        assert_eq!(alerts(&h), vec![alert()], "{typed}: one alert");
         ok(&mut h);
         assert!(alerts(&h).is_empty(), "{typed}: OK closes the alert");
         assert_eq!(serial(&h, dialog), Some(json!(want)), "{typed}: the closest value is kept");
@@ -156,7 +162,7 @@ fn enter_after_a_value_past_the_range_shows_the_alert_and_keeps_the_dialog() {
     type_serial(&mut h, "12345");
     h.key_press(egui::Key::Enter);
     h.run_steps(4);
-    assert_eq!(alerts(&h), vec![ALERT.to_string()]);
+    assert_eq!(alerts(&h), vec![alert()]);
     assert_eq!(serial(&h, dialog), Some(json!(9999)), "the dialog is still open, with the closest value");
     ok(&mut h);
     assert!(alerts(&h).is_empty());
