@@ -440,9 +440,8 @@ pub struct PhotocraftApp {
     pub(crate) drop_places: std::collections::VecDeque<(DocId, file_open::DropPlace)>,
     /// The document each of `ui.views` belongs to, as of the last [`Self::sync_views`].
     view_docs: Vec<DocId>,
-    /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
-    /// panel selection never carries over to a same-named path in another tab.
-    path_document: Option<(DocId, u64, std::sync::Weak<Document>)>,
+    /// Document id, open generation, edit revision, and snapshot from the last view sync.
+    path_document: Option<(DocId, u64, u64, std::sync::Weak<Document>)>,
     pub fps: f32,
     pub(crate) last_frame_time: f64,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
