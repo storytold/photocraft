@@ -216,7 +216,7 @@ fn an_alt_click_without_a_drag_still_starts_a_point_mask() {
     assert_eq!([t.transform.m[4], t.transform.m[5]], [50.0, 100.0]);
 }
 
-/// Guard (pattern 4, scope): the ticket measured the Vertical Type Mask tool, so the Horizontal
+/// Guard: pins that the ticket measured the Vertical Type Mask tool only, so the Horizontal
 /// Type Mask tool keeps today's gesture — an Alt+drag there commits the plain box at once.
 #[test]
 fn an_alt_drag_with_the_horizontal_type_mask_tool_still_makes_the_box_directly() {
