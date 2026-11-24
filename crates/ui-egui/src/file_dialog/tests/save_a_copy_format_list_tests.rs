@@ -101,6 +101,19 @@ fn typing_an_unavailable_format_into_save_copy_does_not_write_it() {
 }
 
 #[test]
+fn typed_compatible_extensions_reach_the_copy_writer() {
+    for (depth, path) in [(32, "/pics/copy.FTS"), (8, "/pics/copy.qoi")] {
+        let (mut app, files, written) = app();
+        let ctx = app.ctx().clone();
+        new_document(&mut app, "rgb", depth);
+        menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
+        answer(&files, chose(path));
+        app.poll_file_dialog();
+        assert_eq!(*written.borrow(), [path]);
+    }
+}
+
+#[test]
 fn a_disallowed_suggestion_falls_back_to_psd_in_the_same_folder() {
     let request = save_request("document", "scans/image.JPG", Some(SaveCopyFormats::Rgb32));
     assert_eq!(request.file_name.as_deref(), Some("image.psd"));

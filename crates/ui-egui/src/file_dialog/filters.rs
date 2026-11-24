@@ -128,10 +128,14 @@ impl SaveCopyFormats {
         }
     }
 
+    fn lists_extension(self, ext: &str) -> bool {
+        SAVE_FILTERS.iter().any(|(_, exts)| self.includes(exts[0]) && exts.iter().any(|allowed| ext.eq_ignore_ascii_case(allowed)))
+    }
+
     pub(super) fn allows_path(self, path: &Path) -> bool {
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| SAVE_FILTERS.iter().any(|(_, exts)| self.includes(exts[0]) && exts.iter().any(|allowed| ext.eq_ignore_ascii_case(allowed))))
+        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else { return false };
+        // A typed extension can also name a supported codec via an alias, such as .fts for FITS.
+        self.lists_extension(ext) || photocraft_codecs::from_extension(ext).is_some_and(|format| format.caps().write && self.includes(format.extensions()[0]))
     }
 }
 
@@ -199,7 +203,9 @@ fn save_filters(suggested: &Path, copy: Option<SaveCopyFormats>) -> Vec<(String,
 pub(super) fn save_request(purpose: &str, suggested: &str, copy: Option<SaveCopyFormats>) -> PickRequest {
     let suggested = netpbm_as_pnm(suggested);
     let mut path = PathBuf::from(suggested);
-    if copy.is_some_and(|formats| !formats.allows_path(&path)) {
+    if let Some(formats) = copy
+        && !path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| formats.lists_extension(ext))
+    {
         path.set_extension("psd");
     }
     let mut req = PickRequest::save(purpose);
