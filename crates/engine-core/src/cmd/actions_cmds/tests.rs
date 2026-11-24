@@ -434,7 +434,7 @@ fn recording_document_activation_uses_opening_order_offset() {
 /// with none open, and the commands that create and edit a document land in the action.
 #[test]
 fn recording_starts_with_no_document_open() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("actions.record", json!({"name": "Open and ink"})).unwrap();
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
@@ -462,7 +462,7 @@ fn played_layer_names(s: &Session) -> Vec<String> {
 /// from the document the recording was made on.
 #[test]
 fn a_step_naming_a_missing_layer_stops_instead_of_acting_on_the_wrong_layer() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     other_names_document(&mut s);
     s.actions_mut()
         .list
@@ -479,7 +479,7 @@ fn a_step_naming_a_missing_layer_stops_instead_of_acting_on_the_wrong_layer() {
 /// there without hiding one of the present layers.
 #[test]
 fn an_eye_step_naming_a_missing_layer_stops_without_hiding_another_layer() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     other_names_document(&mut s);
     s.actions_mut()
         .list
@@ -496,7 +496,7 @@ fn an_eye_step_naming_a_missing_layer_stops_without_hiding_another_layer() {
 /// whatever layer is selected there, as the reference records it (Ctrl+J copied Z).
 #[test]
 fn a_target_step_acts_on_the_selected_layer_of_another_document() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     other_names_document(&mut s);
     s.actions_mut().list.push(Action::new("Dim", vec![ActionStep::new("layer.setProps", json!({"opacity": 0.5}))])).unwrap();
     let played = s.execute("actions.play", json!({"action": "Dim"})).unwrap();
