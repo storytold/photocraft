@@ -84,10 +84,16 @@ pub fn purge_cache() -> usize {
 }
 
 /// (fill only, stroke only) of a stroked shape, rendered over `canvas` in RGBA at `depth`.
-/// `None` without a stroke. Where the shape's pixels
+/// `None` without a stroke or when saved pixels define the whole appearance. Where the shape's pixels
 /// (Photoshop's rendering, `sh.cache`) reach past our fill, the part the fill doesn't explain is
 /// stroke: the stroke follows Photoshop's coverage (psd-tools double-stroke-effects).
 pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surface, Surface)> {
+    // A saved whole-shape appearance cannot be separated by redrawing its vector fill:
+    // fitting the residual stroke would leave that newly drawn fill authoritative instead.
+    // Check before the split-cache lookup as the same cached pixels can change authority.
+    if sh.cache_preserves_appearance && sh.cache.is_some() {
+        return None;
+    }
     let generation = photocraft_raster::spill::read_error_generation();
     sh.stroke.as_ref()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();

@@ -3788,3 +3788,39 @@ fn anti_aliased_inner_shadow_gated_neighbours_match_the_cpu() {
             .unwrap_or_else(|e| panic!("{e}"));
     }
 }
+
+#[test]
+fn authoritative_stroked_shape_matches_an_independent_saved_raster() {
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, StrokeAlign, Subpath};
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = Document::new("saved shape", Size::new(8, 6), ColorMode::Rgb, depth);
+        let mut saved = photocraft_raster::Surface::new(doc.pixel_format());
+        saved.fill_rect(doc.bounds(), &[0.8, 0.1, 0.3, 0.75]);
+        saved.fill_rect(Rect::new(2, 1, 6, 5), &[0.1, 0.7, 0.4, 1.0]);
+        let shape = ShapeLayer {
+            path: Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (8.0, 0.0), (8.0, 6.0), (0.0, 6.0)])]),
+            fill: Some(Fill::Solid(Color::WHITE)),
+            stroke: Some(ShapeStroke { width: 2.0, align: StrokeAlign::Outside, ..ShapeStroke::default() }),
+            cache: Some(saved.clone()),
+            cache_preserves_appearance: true,
+            ..ShapeLayer::default()
+        };
+        let mut clip = Layer::raster("clipped", doc.pixel_format());
+        clip.surface_mut().unwrap().fill_rect(Rect::new(1, 0, 7, 6), &[0.2, 0.3, 0.9, 0.6]);
+        clip.clipped = true;
+        doc.layers = vec![Layer::new("saved shape", LayerContent::Shape(shape)), clip].into();
+        let mut raster = doc.clone();
+        raster.layers[0].content = LayerContent::Raster(saved);
+        let expected = photocraft_compose::render(&raster, raster.bounds()).px;
+        // The independent oracle consumes the saved raster, never the vector path or split.
+        let actual = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+        assert_eq!(actual.len(), expected.len());
+        for (i, (a, b)) in actual.iter().zip(&expected).enumerate() {
+            for c in 0..4 {
+                assert!((a[c] - b[c]).abs() <= TOL, "{depth:?}: pixel {i} channel {c}: {a:?} vs {b:?}");
+            }
+        }
+        check(&mut g, &doc, "authoritative stroked shape");
+    }
+}

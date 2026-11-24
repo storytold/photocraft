@@ -611,3 +611,31 @@ fn saved_text_pixels_use_raster_gamma_in_gpu_plans() {
         assert_eq!(pass.extra[3], photocraft_compose::psblend::text_gamma());
     }
 }
+
+#[test]
+fn authoritative_shape_cache_is_not_replaced_by_derived_fill_and_stroke() {
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = Document::new("saved shape", Size::new(8, 6), ColorMode::Rgb, depth);
+        let mut saved = Surface::new(doc.pixel_format());
+        saved.fill_rect(doc.bounds(), &[0.8, 0.1, 0.3, 0.75]);
+        let sh = ShapeLayer {
+            path: Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (8.0, 0.0), (8.0, 6.0), (0.0, 6.0)])]),
+            fill: Some(Fill::Solid(Color::WHITE)),
+            stroke: Some(ShapeStroke { width: 2.0, ..ShapeStroke::default() }),
+            cache: Some(saved),
+            cache_preserves_appearance: true,
+            ..ShapeLayer::default()
+        };
+        let owner = Layer::new("saved shape", LayerContent::Shape(sh));
+        let id = owner.id;
+        let mut clip = Layer::raster("clipped", doc.pixel_format());
+        clip.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.1, 0.7, 0.4, 0.6]);
+        clip.clipped = true;
+        doc.layers = vec![owner, clip].into();
+        let plan = plan(&doc).unwrap();
+        let uses: Vec<_> = plan.passes.iter().filter_map(|p| p.tex.as_ref()).filter(|t| t.layer == id).collect();
+        assert!(!uses.is_empty(), "the saved source must be sampled");
+        assert!(uses.iter().all(|t| t.role == Role::Content && matches!(t.surface, SurfaceRef::Doc(_))), "{depth:?}: {uses:?}");
+    }
+}
