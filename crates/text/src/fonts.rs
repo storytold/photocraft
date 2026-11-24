@@ -218,6 +218,26 @@ pub struct FontDb {
     face_aliases: HashMap<(String, usize), String>,
     /// This is the shared engine's database: registrations also move [`shared_generation`].
     shared: bool,
+    /// The installed font files registered, by canonical path.
+    #[cfg(not(target_arch = "wasm32"))]
+    installed: HashSet<std::path::PathBuf>,
+    /// The [`Catalog::generation`] the installed fonts were last read at.
+    #[cfg(not(target_arch = "wasm32"))]
+    catalog_seen: u64,
+}
+
+/// Installed fonts the [`catalog`] lists that a [`FontDb`] hasn't registered yet
+/// ([`FontDb::installed_update`]), for [`FontDb::apply_installed`].
+#[cfg(not(target_arch = "wasm32"))]
+pub struct InstalledUpdate {
+    generation: u64,
+    /// (canonical path, path) of each new file.
+    files: Vec<(std::path::PathBuf, std::path::PathBuf)>,
+    /// New faces without a file (a suitcase font).
+    unfiled: Vec<craft::font_catalog::FaceInfo>,
+    /// The families text lays out differently with once the update is applied: those of the new
+    /// faces (legacy names too, as PSD files give them) and those removed.
+    pub families: Vec<String>,
 }
 
 impl Default for FontDb {
@@ -240,6 +260,10 @@ impl FontDb {
             traits_cache: HashMap::new(),
             face_aliases: HashMap::new(),
             shared: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            installed: HashSet::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            catalog_seen: 0,
         };
         for (_, bytes) in BUNDLED {
             db.register_static_font(bytes.as_slice());
@@ -284,26 +308,124 @@ impl FontDb {
             {
                 let _ = installed_catalog().add_file(&path, Source::App, &Limits::default());
             }
-            // One call per file: fontique's directory scan is much slower on large folders.
-            for path in installed_font_files() {
-                self.fcx.collection.load_fonts_from_paths([path]);
+            self.load_installed(installed_catalog());
+        }
+    }
+
+    /// Registers the installed fonts of `catalog` (waits for its first scan).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_installed(&mut self, catalog: &Catalog) {
+        // After the first scan, so the faces read below are of this generation or newer.
+        let _ = catalog.faces();
+        self.catalog_seen = catalog.generation();
+        let faces = catalog.faces();
+        // One call per file: fontique's directory scan is much slower on large folders.
+        for path in new_font_files(faces.iter().filter(|f| is_installed_face(f)), &mut self.installed) {
+            self.fcx.collection.load_fonts_from_paths([path]);
+        }
+        // Faces without a file (a suitcase font, added bytes) load from the Catalog. The
+        // Catalog is the source, so they register without the mirror back into it.
+        self.register_unfiled(catalog, faces.iter().filter(|f| is_installed_face(f) && f.path.is_none()));
+        self.ps_cache.clear();
+        self.face_cache.clear();
+        self.traits_cache.clear();
+        self.refresh_generics();
+    }
+
+    /// Registers `faces` (faces without a file) from the bytes `catalog` loads, each blob once.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn register_unfiled<'a>(&mut self, catalog: &Catalog, faces: impl Iterator<Item = &'a craft::font_catalog::FaceInfo>) {
+        let mut loaded = Vec::new();
+        let mut seen = HashSet::new();
+        for face in faces {
+            let Ok(data) = catalog.load(face) else { continue };
+            if seen.insert(Arc::as_ptr(&data.bytes).cast::<u8>() as usize) {
+                self.register_bytes(Blob::new(Arc::new(data.bytes.to_vec())), None);
             }
-            // Faces without a file (a suitcase font, added bytes) load from the Catalog. The
-            // Catalog is the source, so they register without the mirror back into it.
-            let mut loaded = Vec::new();
-            let mut seen = HashSet::new();
-            for face in installed_catalog().faces().iter().filter(|f| is_installed_face(f) && f.path.is_none()) {
-                let Ok(data) = installed_catalog().load(face) else { continue };
-                if seen.insert(Arc::as_ptr(&data.bytes).cast::<u8>() as usize) {
-                    self.register_bytes(Blob::new(Arc::new(data.bytes.to_vec())), None);
+            // Kept until the loop ends so a freed buffer's address cannot repeat.
+            loaded.push(data);
+        }
+    }
+
+    /// The installed fonts the [`installed_catalog`] gained since this database read them (a family the
+    /// launcher installed while the app runs), or `None` when it has none or never read them.
+    /// Fonts removed from the system stay registered until the next start; their families are in
+    /// [`InstalledUpdate::families`] all the same.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn installed_update(&self) -> Option<InstalledUpdate> {
+        self.installed_update_in(installed_catalog())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn installed_update_in(&self, catalog: &Catalog) -> Option<InstalledUpdate> {
+        if !self.system_loaded || catalog.generation() == self.catalog_seen {
+            return None;
+        }
+        let changes = catalog.changes_since(self.catalog_seen);
+        // `full`: the catalog no longer knows what changed, so every installed face is checked.
+        let wanted: Option<HashSet<String>> = (!changes.full).then(|| changes.added.iter().chain(&changes.changed).map(|f| f.to_lowercase()).collect());
+        let added: HashSet<String> = changes.added.iter().map(|f| f.to_lowercase()).collect();
+        let mut update = InstalledUpdate { generation: changes.generation, files: Vec::new(), unfiled: Vec::new(), families: changes.removed };
+        let mut new_keys = HashSet::new();
+        for face in catalog.faces().iter().filter(|f| is_installed_face(f)) {
+            let family = face.family.to_lowercase();
+            if wanted.as_ref().is_some_and(|w| !w.contains(&family)) {
+                continue;
+            }
+            let new = match &face.path {
+                Some(path) if is_private_font_path(path) => false,
+                Some(path) => {
+                    let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    let new = !self.installed.contains(&key);
+                    if new && new_keys.insert(key.clone()) {
+                        update.files.push((key, path.clone()));
+                    }
+                    new
                 }
-                // Kept until the loop ends so a freed buffer's address cannot repeat.
-                loaded.push(data);
+                // Only a family new to the catalog: a changed one has its unfiled faces registered.
+                None => {
+                    let new = added.contains(&family);
+                    if new {
+                        update.unfiled.push(face.clone());
+                    }
+                    new
+                }
+            };
+            if new {
+                for name in std::iter::once(&face.family).chain(&face.legacy_family) {
+                    if !update.families.contains(name) {
+                        update.families.push(name.clone());
+                    }
+                }
             }
-            self.ps_cache.clear();
-            self.face_cache.clear();
-            self.traits_cache.clear();
-            self.refresh_generics();
+        }
+        Some(update)
+    }
+
+    /// Registers what [`Self::installed_update`] found.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn apply_installed(&mut self, update: InstalledUpdate) {
+        self.apply_installed_in(installed_catalog(), update);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_installed_in(&mut self, catalog: &Catalog, update: InstalledUpdate) {
+        self.catalog_seen = self.catalog_seen.max(update.generation);
+        if update.files.is_empty() && update.unfiled.is_empty() {
+            return;
+        }
+        for (key, path) in update.files {
+            self.fcx.collection.load_fonts_from_paths([path]);
+            self.installed.insert(key);
+        }
+        self.register_unfiled(catalog, update.unfiled.iter());
+        self.ps_cache.clear();
+        self.face_cache.clear();
+        self.traits_cache.clear();
+        self.refresh_generics();
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+        if self.shared {
+            SHARED_GENERATION.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -925,6 +1047,23 @@ pub fn installed_catalog() -> &'static Arc<Catalog> {
     Catalog::global()
 }
 
+/// Starts the [`catalog`] for the desktop app, before its first window: the first scan on a
+/// background thread, and a poll of the suite's font store, so a family the launcher installs
+/// shows while the app runs. `wake` runs on a worker thread after a family was added, removed or
+/// changed; the app then finds the update with [`FontDb::installed_update`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn start_catalog(wake: impl Fn() + Send + Sync + 'static) {
+    use craft::font_catalog::app::{self, AppFonts};
+    app::start(AppFonts { on_change: Some(Arc::new(move |_: &Catalog| wake())), ..AppFonts::default() });
+}
+
+/// For a window's activation once [`start_catalog`] ran: checks the font folders for changes on
+/// a worker thread, without blocking.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn catalog_activated() {
+    craft::font_catalog::app::on_activated();
+}
+
 /// Fonts reserved for the system UI (PingFangUI.ttc among them). Core Text offers them, but
 /// fontique can't draw their outlines (it works around PingFangUI for the same reason), so they
 /// are not registered.
@@ -946,9 +1085,15 @@ fn is_installed_face(face: &craft::font_catalog::FaceInfo) -> bool {
 /// consumer of the installed fonts (the shaper, the script fallbacks, the SVG renderer) uses.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn installed_font_files() -> Vec<std::path::PathBuf> {
-    let mut seen = HashSet::new();
+    new_font_files(installed_catalog().faces().iter().filter(|f| is_installed_face(f)), &mut HashSet::new())
+}
+
+/// The files of `faces` whose canonical path isn't in `seen` yet (each added to it), in order,
+/// without the macOS private UI fonts.
+#[cfg(not(target_arch = "wasm32"))]
+fn new_font_files<'a>(faces: impl Iterator<Item = &'a craft::font_catalog::FaceInfo>, seen: &mut HashSet<std::path::PathBuf>) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
-    for face in installed_catalog().faces().iter().filter(|f| is_installed_face(f)) {
+    for face in faces {
         let Some(path) = &face.path else { continue };
         if is_private_font_path(path) {
             continue;
@@ -984,6 +1129,45 @@ pub fn is_hidden_family(name: &str) -> bool {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    /// A family the launcher installs into the font store while the app runs reaches the database
+    /// once the catalog's generation moves, and no file registers twice.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_family_installed_into_the_store_reaches_the_database() {
+        use craft::font_catalog::{FontEnv, Os};
+        let family = "Zetbrains Test";
+        let dir = std::env::temp_dir().join(format!("photocraft-store-test-{}", std::process::id()));
+        let store = dir.join("store");
+        std::fs::create_dir_all(&store).unwrap();
+        let catalog = super::Catalog::new(FontEnv { os: Os::None, font_store: Some(store.clone()), ..FontEnv::default() }).with_font_service(false);
+        let mut db = super::FontDb::new();
+        db.system_loaded = true;
+        db.load_installed(&catalog);
+        assert!(db.installed_update_in(&catalog).is_none(), "nothing new yet");
+        assert!(!db.has_family(family));
+
+        // JetBrains Mono renamed in its name table (ASCII and UTF-16BE records; same length).
+        let mut bytes = super::JETBRAINS_MONO_REGULAR.clone();
+        let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+        for (from, to) in [(b"JetBrains Mono".to_vec(), family.as_bytes().to_vec()), (utf16("JetBrains Mono"), utf16(family))] {
+            let mut i = 0;
+            while let Some(at) = bytes[i..].windows(from.len()).position(|w| w == from) {
+                bytes[i + at..i + at + to.len()].copy_from_slice(&to);
+                i += at + to.len();
+            }
+        }
+        std::fs::create_dir_all(store.join(family)).unwrap();
+        std::fs::write(store.join(family).join("ZetbrainsTest-Regular.ttf"), &bytes).unwrap();
+        catalog.rescan();
+
+        let update = db.installed_update_in(&catalog).expect("the catalog changed");
+        assert!(update.families.iter().any(|f| f == family), "{:?}", update.families);
+        db.apply_installed_in(&catalog, update);
+        assert!(db.has_family(family));
+        assert!(db.installed_update_in(&catalog).is_none(), "applied");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn hidden_families_sort_last_and_are_not_listed() {
         assert!(super::is_hidden_family(".Hiragino Kaku Gothic Interface"));
