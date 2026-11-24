@@ -392,10 +392,12 @@ fn read_png_indices(r: &mut ImportResult, bytes: &[u8], ctl: &Interrupt) -> Resu
 /// decoded image, when the document was built from one (a streamed PNG has none). A palette
 /// PNG's indices are read after it, by [`PngIndices`], which a stepped import can step.
 pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Option<Format>, img: Option<&Image>) -> Result<(), IoError> {
-    // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
+    // A palette BMP, PNG, GIF or PICT opens in Indexed Color mode with its colour table, as in
     // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
+    // A PICT is when it is one indexed pixel image (or a 1-bit bitmap, white and black).
     let palette = match format {
         Some(Format::Bmp) => codecs::bmp_palette(bytes).ok().flatten().map(|c| (c, None)),
+        Some(Format::Pict) => codecs::pict_palette(bytes).ok().flatten().map(|c| (c, None)),
         Some(Format::Png) => codecs::png_palette(bytes).ok().flatten().map(|p| (p.colors, p.transparent)),
         Some(Format::Gif) => codecs::gif_palette(bytes),
         _ => None,

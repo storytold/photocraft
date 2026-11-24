@@ -646,6 +646,35 @@ async fn open_reports_decode_warnings() {
     cleanup(&dir);
 }
 
+/// A 2 x 1 Macintosh PICT: a line, which is not drawn, and a 32-bit DirectBitsRect of a red and a
+/// blue pixel, from the published QuickDraw opcodes.
+fn pict_red_blue() -> Vec<u8> {
+    // picSize, picFrame, version 2, and an extended version 2 header at 72 ppi.
+    let mut v: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00];
+    v.extend_from_slice(&[0xFF, 0xFE, 0, 0, 0, 72, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0]);
+    v.extend_from_slice(&[0x00, 0x20, 0, 0, 0, 0, 0, 1, 0, 1]); // Line
+    // DirectBitsRect: base address, rowBytes 8, bounds, stored rows (pack type 1), 32-bit, 3 components.
+    v.extend_from_slice(&[0x00, 0x9A, 0, 0, 0, 0xFF, 0x80, 0x08, 0, 0, 0, 0, 0, 1, 0, 2]);
+    v.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 72, 0, 0, 0, 72, 0, 0, 0, 16, 0, 32, 0, 3, 0, 8]);
+    v.extend_from_slice(&[0; 12]);
+    v.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0]); // srcRect, dstRect, srcCopy
+    v.extend_from_slice(&[0, 255, 0, 0, 0, 0, 0, 255, 0x00, 0xFF]); // red, blue, opEndPic
+    v
+}
+
+/// A Macintosh PICT opens through `doc_open`, with the drawing it skipped reported.
+#[tokio::test(flavor = "multi_thread")]
+async fn doc_open_reads_a_pict() {
+    let dir = tmp("open-pict");
+    std::fs::write(dir.join("photo.pct"), pict_red_blue()).unwrap();
+    let client = connect(headless_in(&dir)).await;
+    let opened = json_of(&call(&client, "doc_open", json!({"path": "photo.pct"})).await);
+    assert_eq!((opened["width"].as_u64(), opened["height"].as_u64()), (Some(2), Some(1)), "{opened}");
+    assert!(opened["warnings"].to_string().contains("1 PICT drawing operation"), "{opened}");
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
 fn write_image(dir: &std::path::Path, name: &str, format: photocraft_codecs::Format) -> Vec<u8> {
     let img = photocraft_codecs::Image::from_u8(16, 8, photocraft_codecs::ChannelLayout::Rgb, (0..384).map(|i| (i * 7 % 251) as u8).collect()).unwrap();
     let bytes = photocraft_codecs::encode(&img, format, &Default::default()).unwrap();

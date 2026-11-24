@@ -3895,13 +3895,16 @@ fn folder_listing_recognises_gzipped_xcf_by_its_double_extension() {
 }
 
 /// A folder batch picks up every extension that the codecs open: Cineon, DICOM, Amiga IFF, PCX,
-/// XPM, DDS, the Netpbm family, and Photoshop templates. Not raws that this build cannot decode
+/// PICT, XPM, DDS, the Netpbm family, and Photoshop templates. Not raws that this build cannot decode
 /// natively (ORF, RAF, SRF, SR2, and RW2 variants other than raw formats 3, 4 and 5): a batch
 /// should not process an embedded JPEG preview without a word.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn folder_listing_takes_every_format_photocraft_opens() {
-    let codecs = ["a.cin", "a.dcm", "a.dicom", "a.dc3", "a.iff", "a.lbm", "a.ilbm", "a.pcx", "a.xpm", "a.dds", "a.pbm", "a.pam", "a.pfm", "a.psdt", "A.PCX"];
+    let codecs = [
+        "a.cin", "a.dcm", "a.dicom", "a.dc3", "a.iff", "a.lbm", "a.ilbm", "a.pcx", "a.pct", "a.pict", "a.xpm", "a.dds", "a.pbm", "a.pam", "a.pfm", "a.psdt",
+        "A.PCX",
+    ];
     let raws = ["a.dng", "IMG_0001.CR2", "a.nef", "a.nrw", "a.arw", "a.pef"];
     for name in codecs.into_iter().chain(raws) {
         assert!(super::openable_name(name), "{name}");
@@ -3916,6 +3919,33 @@ fn folder_listing_takes_every_format_photocraft_opens() {
     }
     // PhotoCraft does not read AVIF.
     assert!(!super::openable_name("a.avif"));
+}
+
+/// File › Open As PICT opens a Macintosh picture whatever its name: a 2 x 1 picture of a red and
+/// a blue pixel (a 32-bit DirectBitsRect, built from the published QuickDraw opcodes).
+#[test]
+fn open_as_pict_opens_the_picture() {
+    let mut pict: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0x00, 0x11, 0x02, 0xFF, 0x0C, 0x00];
+    pict.extend_from_slice(&[0xFF, 0xFE, 0, 0, 0, 72, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0]);
+    pict.extend_from_slice(&[0x00, 0x9A, 0, 0, 0, 0xFF, 0x80, 0x08, 0, 0, 0, 0, 0, 1, 0, 2]);
+    pict.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 72, 0, 0, 0, 72, 0, 0, 0, 16, 0, 32, 0, 3, 0, 8]);
+    pict.extend_from_slice(&[0; 12]);
+    pict.extend_from_slice(&[0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0]);
+    pict.extend_from_slice(&[0, 255, 0, 0, 0, 0, 0, 255, 0x00, 0xFF]);
+    let dir = tmp("open-as-pict");
+    let path = join(&dir, "picture.dat");
+    std::fs::write(&path, &pict).unwrap();
+    let mut s = Session::new();
+    s.execute("file.openAs", json!({"path": path, "as": "pict"})).unwrap();
+    let d = doc(&s);
+    assert_eq!((d.size.width, d.size.height, d.mode), (2, 1, ColorMode::Rgb));
+    let px = d.layers[0].surface().unwrap().rgba(1, 0);
+    assert_eq!(px, [0.0, 0.0, 1.0, 1.0]);
+    // A picture that ends before its pixel image is an error, and nothing opens.
+    std::fs::write(&path, &pict[..40]).unwrap();
+    let mut s = Session::new();
+    assert!(s.execute("file.openAs", json!({"path": path, "as": "pict"})).is_err());
+    assert!(s.documents().is_empty());
 }
 
 /// Save and Close never writes a source in a format other than its own: a Cineon source, which
