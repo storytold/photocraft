@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use super::dispatch::no_params;
 use super::{PhotocraftApp, Value, json};
+use crate::dialogs::image_processor_ui;
 use craft::host::{Host, PickId, PickRequest};
 use craft::ui::buttons::Button;
-use crate::dialogs::image_processor_ui;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _, ShowContainer as _, clicked};
 use craft::ui::dialog::DialogId;
