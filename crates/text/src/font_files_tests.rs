@@ -151,6 +151,16 @@ fn limits_on_file_size_file_count_and_total_size() {
     let r = db.register_font_files("mem", vec![("big.ttf".into(), Ok(over)), ("one.ttf".into(), Ok(two.clone()))], tight).unwrap();
     assert_eq!(r.families, ["PC3393 Limits Two"]);
     assert_eq!(r.skipped, [("big.ttf".to_string(), too_large(one.len() as u64))]);
+
+    // On disk, one file over the per-file limit is skipped beside good ones even when the
+    // total is nearly spent: the aggregate limit is not tripped by a file it excludes.
+    let mut over = one.clone();
+    over.push(0);
+    write(&dir.join("over.ttf"), &over);
+    let nearly = FontFileLimits { max_file_bytes: one.len() as u64, max_total_bytes: 2 * one.len() as u64 + 1, ..DEFAULT };
+    let r = db.register_font_path(&dir, nearly).unwrap();
+    assert_eq!(r.files, 2);
+    assert_eq!(r.skipped, [("over.ttf".to_string(), too_large(one.len() as u64))]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

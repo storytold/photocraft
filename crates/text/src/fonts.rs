@@ -574,24 +574,46 @@ impl FontDb {
         let mut total = 0u64;
         let mut files = Vec::with_capacity(paths.len());
         for p in &paths {
+            let name = relative_name(path, p);
             let remaining = limits.max_total_bytes.saturating_sub(total);
+            // A file over the per-file limit is skipped unread, as before.
+            if std::fs::metadata(p).is_ok_and(|m| m.len() > limits.max_file_bytes) {
+                let bytes = read_font_file(p, limits.max_file_bytes);
+                if let Ok(b) = &bytes {
+                    total = total.saturating_add(b.len() as u64);
+                }
+                files.push((name, bytes));
+                continue;
+            }
             // Read no further than what the total has left, so a file that grows between the
             // size check and the read can't retain more than the budget.
             let cap = limits.max_file_bytes.min(remaining);
             match read_font_file(p, cap) {
                 Ok(bytes) => {
                     total = total.saturating_add(bytes.len() as u64);
-                    files.push((relative_name(path, p), Ok(bytes)));
+                    files.push((name, Ok(bytes)));
                 }
                 Err(why) => {
-                    // Cut short by the aggregate budget is that limit's failure, not a bad file.
-                    let grew = std::fs::metadata(p).is_ok_and(|m| m.len() > remaining);
-                    if cap < limits.max_file_bytes && grew {
+                    // Classify a bounded read by what the file is now: over the per-file limit is
+                    // a skipped file; within it but over what the total has left is that limit's
+                    // failure.
+                    let now = std::fs::metadata(p).map_or(0, |m| m.len());
+                    if now > limits.max_file_bytes {
+                        let bytes = read_font_file(p, limits.max_file_bytes);
+                        if let Ok(b) = &bytes {
+                            total = total.saturating_add(b.len() as u64);
+                        }
+                        files.push((name, bytes));
+                    } else if cap < limits.max_file_bytes && now > remaining {
                         return Err(FontFileError::TooLarge { path: shown, max_bytes: limits.max_total_bytes });
+                    } else {
+                        files.push((name, Err(why)));
                     }
-                    files.push((relative_name(path, p), Err(why)));
                 }
             }
+        }
+        if total > limits.max_total_bytes {
+            return Err(FontFileError::TooLarge { path: shown, max_bytes: limits.max_total_bytes });
         }
         // Unreadable folders are diagnostics, not font files: they must not count against the
         // file limit, and a good font must still register beside them.

@@ -211,14 +211,33 @@ impl AuthorizedWorkspace {
             let mut files = Vec::with_capacity(found.len() + unreadable.len());
             for name in found {
                 let remaining = limits.max_total_bytes.saturating_sub(total);
+                // A file over the per-file limit is skipped unread, as before.
+                if folder.metadata(&name).is_ok_and(|m| m.len() > limits.max_file_bytes) {
+                    let bytes = read_font(&folder, &name, limits.max_file_bytes);
+                    if let Ok(b) = &bytes {
+                        total = total.saturating_add(b.len() as u64);
+                    }
+                    files.push((slash_name(&name), bytes));
+                    continue;
+                }
                 // Read no further than what the total has left, so a file that grows between the
                 // size check and the read can't retain more than the budget.
                 let cap = limits.max_file_bytes.min(remaining);
                 let bytes = read_font(&folder, &name, cap);
                 if bytes.is_err() {
-                    // Cut short by the aggregate budget is that limit's failure, not a bad file.
-                    let grew = folder.metadata(&name).is_ok_and(|m| m.len() > remaining);
-                    if cap < limits.max_file_bytes && grew {
+                    // Classify a bounded read by what the file is now: over the per-file limit is
+                    // a skipped file; within it but over what the total has left is that limit's
+                    // failure.
+                    let now = folder.metadata(&name).map_or(0, |m| m.len());
+                    if now > limits.max_file_bytes {
+                        let bytes = read_font(&folder, &name, limits.max_file_bytes);
+                        if let Ok(b) = &bytes {
+                            total = total.saturating_add(b.len() as u64);
+                        }
+                        files.push((slash_name(&name), bytes));
+                        continue;
+                    }
+                    if cap < limits.max_file_bytes && now > remaining {
                         return Err(font_error(FontFileError::TooLarge { path: path.into(), max_bytes: limits.max_total_bytes }));
                     }
                 }
@@ -226,6 +245,9 @@ impl AuthorizedWorkspace {
                     total = total.saturating_add(b.len() as u64);
                 }
                 files.push((slash_name(&name), bytes));
+            }
+            if total > limits.max_total_bytes {
+                return Err(font_error(FontFileError::TooLarge { path: path.into(), max_bytes: limits.max_total_bytes }));
             }
             for (dir, why) in unreadable {
                 files.push((slash_name(&dir), Err(format!("cannot read folder: {why}"))));
