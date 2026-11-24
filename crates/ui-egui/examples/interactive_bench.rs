@@ -18,6 +18,7 @@
 //! clipped target keeps the CPU proxy (its preview group would rebuild effect shape maps on the
 //! UI thread), so only its CPU reference rows run and the reason is printed.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use eframe::wgpu;

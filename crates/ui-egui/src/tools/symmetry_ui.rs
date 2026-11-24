@@ -134,8 +134,18 @@ fn valid(app: &PhotocraftApp, t: &Transform) -> bool {
         && app.session.active().is_some_and(|s| Arc::ptr_eq(&s.doc, &t.source))
 }
 
-/// The painting symmetry button and its menu, shown in the options bar of the painting tools.
-pub fn menu(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
+/// What the painting symmetry button and its menu show: the current symmetry, the paths it can follow and which
+/// commands are open.
+#[derive(Clone, Debug, PartialEq, craft::ui::contract::MemoProps)]
+pub(crate) struct MenuInput {
+    current: SymmetryChoice,
+    rows: Vec<SymmetryPathRow>,
+    can_transform: bool,
+    can_set: bool,
+}
+
+/// The symmetry menu's input as the app holds it now.
+pub(crate) fn menu_input(app: &PhotocraftApp, ui: &egui::Ui) -> MenuInput {
     let words = Env::of(ui).words::<SymmetryWords>();
     let current = match app.session.active().and_then(|s| s.symmetry.as_ref()) {
         None => SymmetryChoice::Off,
@@ -159,18 +169,18 @@ pub fn menu(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
                 .collect()
         })
         .unwrap_or_default();
-    let out = SymmetryMenu::new(words.group.clone(), &current)
-        .paths(&rows)
-        .can_transform(can_transform(app))
-        .can_set(crate::menus::is_enabled(app, "paint.setSymmetry"))
-        .show(ui);
-    if let Some(command) = out.command {
-        pick(app, ui.ctx(), command);
-    }
+    MenuInput { current, rows, can_transform: can_transform(app), can_set: crate::menus::is_enabled(app, "paint.setSymmetry") }
+}
+
+/// The painting symmetry button and its menu over `input`, shown in the options bar of the painting tools. Returns
+/// what the menu picked; [`pick`] runs it.
+pub(crate) fn show_menu(input: &MenuInput, ui: &mut egui::Ui) -> Option<SymmetryCommand> {
+    let words = Env::of(ui).words::<SymmetryWords>();
+    SymmetryMenu::new(words.group.clone(), &input.current).paths(&input.rows).can_transform(input.can_transform).can_set(input.can_set).show(ui).command
 }
 
 /// Runs what the menu picked. The one place a symmetry command is mapped to the app's commands.
-fn pick(app: &mut PhotocraftApp, ctx: &egui::Context, command: SymmetryCommand) {
+pub(crate) fn pick(app: &mut PhotocraftApp, ctx: &egui::Context, command: SymmetryCommand) {
     let result = match command {
         SymmetryCommand::Off => app.run("paint.symmetryDisable", json!({})),
         SymmetryCommand::Mode(m) => match mode_from_framework(m) {

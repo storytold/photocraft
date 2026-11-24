@@ -159,7 +159,10 @@ fn nan_and_out_of_range_output_is_sanitised() {
 
 #[test]
 fn hostile_modules_fail_quickly() {
-    let quick = Duration::from_secs(5);
+    // Wall-clock, not just the instruction budget: under memory pressure
+    // "memory.grow forever" took 6-8s on the artcraft k8s gate pods and
+    // tripped this 5s bound, then passed on the next main run.
+    let quick = Duration::from_secs(15);
     let cases: Vec<(&str, Vec<u8>)> = vec![
         ("infinite loop", ok_module("(loop $l (br $l)) (i32.const 0)")),
         ("memory.grow bomb, then trap", ok_module("(loop $l (br_if $l (i32.ne (memory.grow (i32.const 512)) (i32.const -1)))) unreachable")),
