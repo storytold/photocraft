@@ -319,6 +319,34 @@ fn the_save_for_web_dialog_seeds_from_the_remembered_preferences() {
     assert_eq!((o.format, o.colors), (WebFormat::Png8, 64));
 }
 
+/// AVIF is in the Format list only when this build can write it (the `avif` feature). Settings remembered from a build
+/// that could open as JPEG in one that can't; where it can, Save for Web writes an AVIF file.
+#[test]
+fn avif_is_offered_only_when_it_can_be_written() {
+    let available = photocraft_engine::web_cmds::WebFormat::Avif.available();
+    assert_eq!(web::web_formats().contains(&WebFormat::Avif), available);
+    let mut app = app();
+    app.session.prefs.edit(|p| {
+        p.dialogs.insert(WEB_COMMAND.into(), json!({"format": "avif", "quality": 70}));
+    });
+    let id = open_web(&mut app).expect("an open document");
+    pass(&mut app);
+    let o = web_dialog(&mut app, id).current().clone();
+    assert_eq!(o.format, if available { WebFormat::Avif } else { WebFormat::Jpeg });
+    assert_eq!(o.quality, 70);
+    if !available {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("pc-webui-avif-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("web.avif").to_string_lossy().into_owned();
+    answer_path(&mut app, id, &path);
+    confirm(&mut app, id);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(&bytes[4..12], b"ftypavif");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #5305: Save for Web with the suggested name runs (and so is recorded) with only the
 /// folder, so an action saves each document under its own name; another name is kept.
 #[test]

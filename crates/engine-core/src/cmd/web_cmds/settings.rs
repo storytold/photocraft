@@ -13,6 +13,9 @@ pub enum WebFormat {
     /// WebP, lossy (our VP8 encoder) or lossless. Not in Photoshop's legacy dialog, but the
     /// format people prepare web images in now (#2415, #6391).
     Webp,
+    /// AVIF (rav1e through the `avif` codecs feature), lossy at `quality`. Builds without the
+    /// feature don't offer it.
+    Avif,
 }
 
 impl WebFormat {
@@ -24,6 +27,7 @@ impl WebFormat {
             "jpeg" | "jpg" => WebFormat::Jpeg,
             "wbmp" => WebFormat::Wbmp,
             "webp" => WebFormat::Webp,
+            "avif" => WebFormat::Avif,
             _ => return None,
         })
     }
@@ -34,7 +38,12 @@ impl WebFormat {
             WebFormat::Jpeg => "jpg",
             WebFormat::Wbmp => "wbmp",
             WebFormat::Webp => "webp",
+            WebFormat::Avif => "avif",
         }
+    }
+    /// Whether this build can write the format (AVIF needs the `avif` codecs feature).
+    pub fn available(self) -> bool {
+        self != WebFormat::Avif || photocraft_codecs::Format::Avif.caps().write
     }
     pub fn indexed(self) -> bool {
         matches!(self, WebFormat::Gif | WebFormat::Png8)
@@ -73,7 +82,7 @@ pub struct WebSettings {
     /// Web Snap: palette entries within this distance (0..=1 of the channel range) snap to the
     /// web-safe cube.
     pub web_snap: f32,
-    /// JPEG and lossy WebP quality 0..=100.
+    /// JPEG, lossy WebP and AVIF quality 0..=100.
     pub quality: u8,
     /// WebP: lossless instead of lossy at `quality`.
     pub lossless: bool,
@@ -131,7 +140,10 @@ impl WebSettings {
         }
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         if let Some(f) = s("format") {
-            st.format = WebFormat::from_id(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}` (gif|png8|png24|jpeg|wbmp|webp)")))?;
+            st.format = WebFormat::from_id(f).ok_or_else(|| bad(cmd, format!("unknown format `{f}` (gif|png8|png24|jpeg|wbmp|webp|avif)")))?;
+            if !st.format.available() {
+                return Err(bad(cmd, format!("this build of PhotoCraft can't write `{f}`")));
+            }
         }
         if let Some(k) = s("palette") {
             st.palette = match k {
@@ -233,6 +245,7 @@ impl WebSettings {
             WebFormat::Jpeg => "jpeg",
             WebFormat::Wbmp => "wbmp",
             WebFormat::Webp => "webp",
+            WebFormat::Avif => "avif",
         };
         let palette = match self.palette {
             PaletteKind::Exact => "exact",

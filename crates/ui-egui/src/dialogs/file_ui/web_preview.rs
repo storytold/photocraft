@@ -2,7 +2,7 @@
 //! and the indexed encode a palette edit recolours without re-quantizing.
 use std::sync::Arc;
 
-use photocraft_engine::web_cmds::{self, Optimized, WebSettings};
+use photocraft_engine::web_cmds::{self, Optimized, WebFormat, WebSettings};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -100,18 +100,22 @@ pub fn optimized(
     let edits = base.as_object_mut().and_then(|m| m.remove("colorTableEdits"));
     let signature = format!("{signature}|{base}");
     let key = key.with("indexed-source");
-    let cached: Option<(String, Arc<Optimized>)> = ctx.data(|d| d.get_temp(key));
-    let encoded = if let Some((_, encoded)) = cached.filter(|(sig, _)| sig == &signature) {
-        encoded
+    let cached: Option<(String, Arc<Optimized>, usize)> = ctx.data(|d| d.get_temp(key));
+    let (encoded, bytes) = if let Some((_, encoded, bytes)) = cached.filter(|(sig, ..)| sig == &signature) {
+        (encoded, bytes)
     } else {
         let settings = WebSettings::from_params(&base, "preview").map_err(|e| e.to_string())?;
         let (px, w, h) = source(&settings)?;
-        let encoded = Arc::new(
-            web_cmds::optimize(&px, w as usize, photocraft_geom::Rect::new(0, 0, w as i32, h as i32), &settings, None, None, None, 72.0, true)
-                .map_err(|e| e.to_string())?,
-        );
-        ctx.data_mut(|d| d.insert_temp(key, (signature, encoded.clone())));
-        encoded
+        let (encoded, bytes) = if settings.format == WebFormat::Avif {
+            avif_estimate(&px, w, h, &settings)?
+        } else {
+            let encoded = web_cmds::optimize(&px, w as usize, rect(w, h), &settings, None, None, None, 72.0, true).map_err(|e| e.to_string())?;
+            let bytes = encoded.bytes.len();
+            (encoded, bytes)
+        };
+        let encoded = Arc::new(encoded);
+        ctx.data_mut(|d| d.insert_temp(key, (signature, encoded.clone(), bytes)));
+        (encoded, bytes)
     };
     let mut full = base;
     // A format without a palette has nothing to edit.
@@ -135,14 +139,57 @@ pub fn optimized(
             })
             .collect()
     };
-    Ok(EncodedPreview {
-        rgba,
-        bytes: encoded.bytes.len(),
-        colors: encoded.colors,
-        palette: encoded.color_table.clone(),
-        width: encoded.width as u32,
-        height: encoded.height as u32,
-    })
+    Ok(EncodedPreview { rgba, bytes, colors: encoded.colors, palette: encoded.color_table.clone(), width: encoded.width, height: encoded.height })
+}
+
+fn rect(w: u32, h: u32) -> photocraft_geom::Rect {
+    photocraft_geom::Rect::new(0, 0, w as i32, h as i32)
+}
+
+/// AVIF's preview size is estimated from a mosaic of `AVIF_TILES`² tiles, `AVIF_TILE` px square,
+/// taken at full resolution from an even grid over the image.
+const AVIF_TILES: u32 = 4;
+const AVIF_TILE: u32 = 128;
+
+/// The mosaic [`avif_estimate`] encodes, or the image itself when it is no bigger.
+fn avif_sample(px: &[[f32; 4]], w: u32, h: u32) -> (u32, u32, Vec<[f32; 4]>) {
+    let side = AVIF_TILES * AVIF_TILE;
+    if w <= side && h <= side {
+        return (w, h, px.to_vec());
+    }
+    let (tw, th) = (AVIF_TILE.min(w / AVIF_TILES).max(1), AVIF_TILE.min(h / AVIF_TILES).max(1));
+    let (sw, sh) = (tw * AVIF_TILES, th * AVIF_TILES);
+    // Tile (i, j) starts at the centre of grid cell (i, j), less half a tile.
+    let origin = |i: u32, size: u32, tile: u32| ((2 * i + 1) * size / (2 * AVIF_TILES)).saturating_sub(tile / 2).min(size - tile);
+    let sample = (0..sh)
+        .flat_map(|y| {
+            let sy = origin(y / th, h, th) + y % th;
+            (0..sw).map(move |x| px[(sy * w + origin(x / tw, w, tw) + x % tw) as usize])
+        })
+        .collect();
+    (sw, sh, sample)
+}
+
+/// AVIF encodes at about a megapixel a second, too slow to redo on every change of a full
+/// proxy, and PhotoCraft can't decode it to show the artefacts anyway. So the pane shows the
+/// image before compression (PNG-24's look, matte included) and the size comes from encoding a
+/// mosaic of tiles from across it ([`avif_sample`]), scaled up by area.
+fn avif_estimate(px: &[[f32; 4]], w: u32, h: u32, st: &WebSettings) -> Result<(Optimized, usize), String> {
+    let (sw, sh, small) = avif_sample(px, w, h);
+    let estimate = web_cmds::optimize(&small, sw as usize, rect(sw, sh), st, None, None, None, 72.0, false).map_err(|e| e.to_string())?;
+    let bytes = (estimate.bytes.len() as f64 * f64::from(w) * f64::from(h) / (f64::from(sw) * f64::from(sh))).round() as usize;
+    // As the file has it: translucent pixels keep their alpha, or everything goes over the matte.
+    let alpha = st.transparency && px.iter().any(|p| p[3] < 1.0);
+    let m = st.matte.unwrap_or([1.0, 1.0, 1.0]);
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let preview = px
+        .iter()
+        .flat_map(|p| {
+            let over = |i: usize| to8(p[i] * p[3] + m[i] * (1.0 - p[3]));
+            if alpha { p.map(to8) } else { [over(0), over(1), over(2), 255] }
+        })
+        .collect();
+    Ok((Optimized { bytes: Vec::new(), width: w, height: h, preview, ..estimate }, bytes))
 }
 
 #[cfg(test)]
@@ -155,7 +202,7 @@ mod tests {
         let key = egui::Id::unique("test-web-preview");
         let px = vec![[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
         let run = |p: &Value| optimized(&ctx, key, "fixture", p, |_| Ok((px.clone(), 2, 1))).unwrap().rgba;
-        let cached = || ctx.data(|d| d.get_temp::<(String, Arc<Optimized>)>(key.with("indexed-source"))).unwrap().1;
+        let cached = || ctx.data(|d| d.get_temp::<(String, Arc<Optimized>, usize)>(key.with("indexed-source"))).unwrap().1;
         let mut p = json!({"format": "gif", "colorTable": ["#ff0000", "#0000ff"], "dither": "none"});
         assert_eq!(run(&p), [255, 0, 0, 255, 0, 0, 255, 255]);
         let before = cached();
@@ -170,5 +217,49 @@ mod tests {
             photocraft_doc::Document::new("fixture", photocraft_geom::Size::new(100, 50), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
         assert!(dimensions(&doc, &json!({"percent": 1e308})).is_err());
         assert!(dimensions(&doc, &json!({"width": 1e300})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod avif_estimate_tests {
+    use super::*;
+
+    /// The mosaic takes full-resolution tiles from an even grid; small images are used whole.
+    #[test]
+    fn avif_sample_tiles_the_image_at_full_resolution() {
+        let (w, h) = (2048u32, 1024u32);
+        let px: Vec<[f32; 4]> = (0..w * h).map(|i| [(i % w) as f32, (i / w) as f32, 0.0, 1.0]).collect();
+        let (sw, sh, sample) = avif_sample(&px, w, h);
+        assert_eq!((sw, sh, sample.len()), (512, 512, 512 * 512));
+        // Tile (0, 0) centres on grid cell (0, 0): x 256 ± 64, y 128 ± 64; neighbours stay 1:1.
+        assert_eq!((sample[0][0], sample[0][1]), (192.0, 64.0));
+        assert_eq!((sample[1][0], sample[512][1]), (193.0, 65.0));
+        // The last tile ends inside the image.
+        assert_eq!((sample[512 * 512 - 1][0], sample[512 * 512 - 1][1]), (1855.0, 959.0));
+        let small: Vec<[f32; 4]> = vec![[0.5; 4]; 300 * 200];
+        assert_eq!(avif_sample(&small, 300, 200).2.len(), 300 * 200);
+    }
+
+    /// `PHOTOCRAFT_AVIF_SAMPLES=a.jpg:b.jpg cargo test … -- --ignored` prints the estimate next to
+    /// a real encode of each image's 2048 px proxy.
+    #[test]
+    #[ignore = "measures real photos"]
+    fn avif_estimate_against_real_sizes() {
+        let paths = std::env::var("PHOTOCRAFT_AVIF_SAMPLES").unwrap_or_default();
+        for path in paths.split(':').filter(|p| !p.is_empty()) {
+            let mut s = photocraft_engine::Session::new();
+            photocraft_engine::file_cmds::open_bytes_as(&mut s, "p.jpg", &std::fs::read(path).unwrap(), None, None).unwrap();
+            let st = WebSettings::from_params(&json!({"format": "avif"}), "t").unwrap();
+            let (wd, _, _) = web_cmds::web_document(s.active().unwrap().doc.as_ref(), &json!({"width": 2048, "resample": "bilinear"}), &st).unwrap();
+            let buf = photocraft_compose::flatten(&wd);
+            let (w, h) = (wd.size.width, wd.size.height);
+            for q in [30, 60, 90] {
+                let st = WebSettings { quality: q, ..st.clone() };
+                let real = web_cmds::optimize(&buf.px, w as usize, rect(w, h), &st, None, None, None, 72.0, false).unwrap().bytes.len() as f64;
+                let t = std::time::Instant::now();
+                let est = avif_estimate(&buf.px, w, h, &st).unwrap().1 as f64;
+                println!("{path} q{q}: real {real:.0} estimate {est:.0} ({:+.0}%) in {:.0} ms", (est / real - 1.0) * 100.0, t.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
     }
 }

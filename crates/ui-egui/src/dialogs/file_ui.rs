@@ -129,7 +129,7 @@ mod web_playback_tests {
     /// The indexed encode the preview of pane `index` keeps, for the pictures it was asked for.
     fn encoded(app: &PhotocraftApp, index: usize) -> Arc<Optimized> {
         let doc_id = app.session.active().unwrap().doc.id.0;
-        app.ctx().data(|d| d.get_temp::<(String, Arc<Optimized>)>(pane_key(doc_id, index).with("indexed-source"))).unwrap().1
+        app.ctx().data(|d| d.get_temp::<(String, Arc<Optimized>, usize)>(pane_key(doc_id, index).with("indexed-source"))).unwrap().1
     }
 
     /// Sets the frame the dialog shows, as its play row does.

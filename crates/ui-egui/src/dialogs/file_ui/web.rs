@@ -18,14 +18,25 @@ use serde_json::{Value, json};
 use super::{PhotocraftApp, web_preview};
 
 /// The engine's name of each format; the one table `options_of` and `params_of` share.
-const WEB_FORMATS: [(WebFormat, &str); 6] = [
+const WEB_FORMATS: [(WebFormat, &str); 7] = [
     (WebFormat::Gif, "gif"),
     (WebFormat::Png8, "png8"),
     (WebFormat::Png24, "png24"),
     (WebFormat::Jpeg, "jpeg"),
     (WebFormat::WebP, "webp"),
+    (WebFormat::Avif, "avif"),
     (WebFormat::Wbmp, "wbmp"),
 ];
+
+/// The formats the Format list offers: the dialog's own, and AVIF only in a build that can write it (the `avif`
+/// codecs feature).
+pub(super) fn web_formats() -> Vec<WebFormat> {
+    let mut formats = WebFormat::STANDARD.to_vec();
+    if web_cmds::WebFormat::Avif.available() {
+        formats.insert(formats.len() - 1, WebFormat::Avif);
+    }
+    formats
+}
 const PALETTES: [(ColorTable, &str); 5] = [
     (ColorTable::Perceptual, "perceptual"),
     (ColorTable::Selective, "selective"),
@@ -259,6 +270,7 @@ pub fn open_web(app: &mut PhotocraftApp) -> Option<DialogId> {
     let mut dialog = HostedSaveForWeb::new(doc.name.clone(), PixelSize::new(doc.size.width, doc.size.height), original_texture(&ctx, &doc))
         .options(options_of(&seed))
         .presets(presets)
+        .formats(web_formats())
         .slices(slices)
         .slice_warning(slice_warning(&doc));
     if let Some(t) = doc.timeline.as_ref().filter(|t| t.duration >= 2) {
