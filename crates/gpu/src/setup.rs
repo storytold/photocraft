@@ -75,22 +75,37 @@ impl Compositor {
     /// the calling thread.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn try_new_with_format_threads(device: &wgpu::Device, acc_format: wgpu::TextureFormat, threads: usize) -> Result<Self, Unsupported> {
-        Self::try_new_with_format_threads_classified(device, acc_format, threads).map_err(|e| Unsupported(e.message))
+        Self::try_new_with_format_threads_classified(device, wgpu::Backend::Noop, acc_format, threads).map_err(|e| Unsupported(e.message))
+    }
+
+    /// [`Compositor::try_new_with_format_threads`] for a device whose `adapter_backend` is known:
+    /// GL/GLES serializes pipeline creation on one adapter context, so there it builds one after
+    /// another instead of in parallel.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn try_new_with_format_threads_on_backend(device: &wgpu::Device, adapter_backend: wgpu::Backend, acc_format: wgpu::TextureFormat, threads: usize) -> Result<Self, Unsupported> {
+        Self::try_new_with_format_threads_classified(device, adapter_backend, acc_format, threads).map_err(|e| Unsupported(e.message))
     }
 
     /// [`Compositor::try_new_with_format_threads`] with an explicit failure classification for
     /// callers that cache deterministic failures across launches. Only recognized shader compiler
     /// diagnostics are marked deterministic; all other wgpu errors are transient or unknown.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn try_new_with_format_threads_classified(device: &wgpu::Device, acc_format: wgpu::TextureFormat, threads: usize) -> Result<Self, BuildFailure> {
+    pub fn try_new_with_format_threads_classified(device: &wgpu::Device, adapter_backend: wgpu::Backend, acc_format: wgpu::TextureFormat, threads: usize) -> Result<Self, BuildFailure> {
         let comp = Self::try_new_with_format(device, acc_format).map_err(|e| BuildFailure { kind: BuildFailureKind::TransientOrUnknown, message: e.0 })?;
         let pipelines = &comp.kit.pipelines;
+        // GL/GLES serializes pipeline creation on one adapter context: threads building in
+        // parallel panic there ("Could not lock adapter context"), so it builds one after another.
+        let sequential_backend = adapter_backend == wgpu::Backend::Gl;
         let pool = rayon::ThreadPoolBuilder::new().num_threads(threads.max(1)).thread_name(|index| format!("photocraft-gpu-build-{index}")).build();
-        let error = match pool {
-            Ok(pool) => pool.install(|| pipelines.build_all(device, false)),
-            Err(e) => {
-                log::warn!("GPU compositor: couldn't create dedicated build pool; building sequentially: {e}");
-                pipelines.build_all(device, true)
+        let error = if sequential_backend {
+            pipelines.build_all(device, true)
+        } else {
+            match pool {
+                Ok(pool) => pool.install(|| pipelines.build_all(device, false)),
+                Err(e) => {
+                    log::warn!("GPU compositor: couldn't create dedicated build pool; building sequentially: {e}");
+                    pipelines.build_all(device, true)
+                }
             }
         };
         match error {
