@@ -34,9 +34,11 @@ fn saved_path_selection_reaches_the_panel_and_tools_once_without_an_edit() {
     assert_eq!(state.history.past_len(), history);
     assert!(state.source_read_only);
     assert_eq!(state.protected_import_source.as_deref(), Some("paths.xcf"));
+    let revision = app.session.active_tracked().unwrap().revision();
     app.ui.selected_path = Some("Other".into());
     app.sync_views();
     assert_eq!(app.ui.selected_path.as_deref(), Some("Other"));
+    assert_eq!(app.session.active_tracked().unwrap().revision(), revision);
     assert!(app.ui.notices.is_empty());
 }
 

@@ -13,10 +13,11 @@ use crate::theme::Tokens;
 /// Consume the saved import hint once, only after the host has finalized this
 /// tab. Name-based tool routing cannot safely address duplicate/reserved names.
 pub(crate) fn apply_imported_path_selection(app: &mut PhotocraftApp) {
+    // Ordinary view synchronization must not advance the tracked document revision.
+    let Some(index) = app.session.active().and_then(|st| st.initial_path_selection) else { return };
     let Some(st) = app.session.active_mut() else { return };
-    let index = st.initial_path_selection.take();
+    st.initial_path_selection = None;
     let identity = st.initial_path_identity.take();
-    let Some(index) = index else { return };
     let selected = st.doc.paths.get(index).filter(|path| {
         identity.is_none_or(|identity| photocraft_io::initial_view::path_identity(path) == identity)
             && !matches!(path.name.as_str(), "" | "work" | "layer")
