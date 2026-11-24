@@ -258,7 +258,11 @@ fn field_view(props: &mut FieldProps<'_>, ui: &mut egui::Ui) {
     let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.parts);
     let out = input.picker(bind_tracked!(props.state)).enabled(props.enabled).show(ui);
     if props.clone_stamp && !out.open {
-        tooltip::attach(&out.response, &TooltipSpec::new(tl!("Open the Brush Preset picker")).into());
+        let face = &out.response;
+        let at = face.hover_pos().or_else(|| face.has_focus().then(|| face.rect.center()));
+        // The picker already owns a tooltip stage for its response id.
+        let tip_id = face.id.with("clone-stamp-tip");
+        tooltip::at_pointer(ui, tip_id, Some(&TooltipSpec::new(tl!("Open the Brush Preset picker")).into()), at, face.is_pointer_button_down_on());
     }
     let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
     props.out.send(FieldEvent(out, keys));
