@@ -1070,7 +1070,7 @@ fn stop_for_errors_without_a_question_channel_ends_at_the_first_failure() {
 #[test]
 fn stop_for_errors_open_documents_batch_ends_at_the_first_failure() {
     let dir = tmp("batch-stop-open-docs");
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"name": "first", "width": 2, "height": 2})).unwrap();
     s.execute("file.new", json!({"name": "second", "width": 2, "height": 2})).unwrap();
     let result = s

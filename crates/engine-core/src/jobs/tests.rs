@@ -1693,7 +1693,7 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
 /// already taken the job out of the running list, so nothing could release it.
 #[test]
 fn batch_failure_questions_opt_in_serves_one_dispatch() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     s.set_batch_failure_questions(true);
     let first = job(s
