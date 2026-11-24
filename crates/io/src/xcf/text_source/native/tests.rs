@@ -340,6 +340,8 @@ fn owned_legacy_latin1_fields_keep_editable_text_font_request_and_saved_pixels()
     let LayerContent::Text(text) = &layer.content else { panic!("editable legacy text") };
     assert_eq!(text.text, "café");
     assert_eq!(text.font_family, "example");
-    assert_eq!(text.paragraphs[0].style.direction, TextDirection::Ltr);
+    // The eight GDyntext fields carry no base direction. Preserve the shared
+    // record's Auto policy instead of inventing an explicit left-to-right one.
+    assert_eq!(text.paragraphs[0].style.direction, TextDirection::Auto);
     assert_eq!(text.cache.as_ref().unwrap().pixel(5, 6), before);
 }
