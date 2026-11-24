@@ -53,14 +53,6 @@ pub fn invert(m: &Mat3) -> Option<Mat3> {
     o.iter().flatten().all(|v| v.is_finite()).then_some(o)
 }
 
-/// A row-major 3×3 matrix from 9 values.
-pub fn from_slice(v: &[f64]) -> Option<Mat3> {
-    if v.len() < 9 || v[..9].iter().any(|x| !x.is_finite()) {
-        return None;
-    }
-    Some([[v[0], v[1], v[2]], [v[3], v[4], v[5]], [v[6], v[7], v[8]]])
-}
-
 pub fn xy_to_xyz(xy: [f64; 2]) -> [f64; 3] {
     let y = xy[1].max(1e-6);
     [xy[0] / y, 1.0, (1.0 - xy[0] - xy[1]) / y]
@@ -83,27 +75,7 @@ pub fn cct(xy: [f64; 2]) -> f64 {
 /// Approximate temperature of an EXIF `LightSource` code (the
 /// CalibrationIlluminant tags use the EXIF 2.3 table). `None` for unknown.
 pub fn illuminant_temperature(code: u32) -> Option<f64> {
-    Some(match code {
-        17 => 2856.0,        // Standard light A
-        18 => 4874.0,        // Standard light B
-        19 => 6774.0,        // Standard light C
-        20 => 5503.0,        // D55
-        21 => 6504.0,        // D65
-        22 => 7504.0,        // D75
-        23 => 5003.0,        // D50
-        24 => 3200.0,        // ISO studio tungsten
-        3 => 2850.0,         // Tungsten
-        1 | 4 | 9 => 5500.0, // Daylight, flash, fine weather
-        10 => 6500.0,        // Cloudy
-        11 => 7500.0,        // Shade
-        12 => 6430.0,        // Daylight fluorescent
-        13 => 5000.0,        // Day white fluorescent
-        14 => 4150.0,        // Cool white fluorescent
-        15 => 3525.0,        // White fluorescent
-        16 => 2925.0,        // Warm white fluorescent
-        2 => 4200.0,         // Fluorescent
-        _ => return None,
-    })
+    u16::try_from(code).ok().and_then(craft_develop::sensor::color::illuminant_temperature)
 }
 
 /// Bradford chromatic adaptation from white `src` to white `dst` (XYZ).

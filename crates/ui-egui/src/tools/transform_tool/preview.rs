@@ -1,4 +1,124 @@
-use super::{Color32, Document, LayerContent, LayerId, ViewXform, pos2};
+use craft::behavior::PixelSize;
+use craft::behavior::geometry::Homography;
+use craft::behavior::kurbo::Point;
+use craft::imaging::ui::transform_preview::{PreviewMask, PreviewPixels};
+use craft::ui::canvas::{PixelRect, RasterSource};
+use craft::ui::primitives::Revision;
+
+use super::{Color32, Document, LayerContent, LayerId};
+
+/// How a source rectangle is read into texels: the integer factor `k` that brings its long side
+/// within the GPU's texture limit, and the texel counts that follow. The pixels and a mask of the
+/// same rectangle use one `Reduction`, so the mask has one value per texel.
+struct Reduction {
+    /// Source pixels wide and high.
+    size: [usize; 2],
+    /// Source pixels per texel along each axis.
+    k: usize,
+    /// Texels wide and high.
+    texels: [usize; 2],
+}
+
+impl Reduction {
+    /// `None` for an empty rectangle.
+    fn of(b: photocraft_geom::Rect, max_side: usize) -> Option<Self> {
+        let (w, h) = (b.width() as usize, b.height() as usize);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let k = w.max(h).div_ceil(max_side.max(1)).max(1);
+        Some(Self { size: [w, h], k, texels: [w.div_ceil(k), h.div_ceil(k)] })
+    }
+
+    /// The uv extent of the texels that covers the source.
+    fn uv(&self) -> [f32; 2] {
+        [self.size[0] as f32 / (self.texels[0] * self.k) as f32, self.size[1] as f32 / (self.texels[1] * self.k) as f32]
+    }
+}
+
+/// `out` in rows of `len` texels, each with its row index, in parallel on native targets.
+fn par_rows<T: Send>(out: &mut [T], len: usize, row: impl Fn(usize, &mut [T]) + Sync) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        out.par_chunks_mut(len.max(1)).enumerate().for_each(|(i, o)| row(i, o));
+    }
+    #[cfg(target_arch = "wasm32")]
+    for (i, o) in out.chunks_mut(len.max(1)).enumerate() {
+        row(i, o);
+    }
+}
+
+/// Reads `b` of `surf` as premultiplied texels, at full resolution when it fits in `max_side`
+/// (else box-filtered down by the smallest integer factor that fits), with the uv extent of them
+/// that covers `b`. The layer's masks are [`read_mask`]'s, applied with `PreviewPixels::masked`.
+pub(crate) fn read_surface(surf: &photocraft_raster::Surface, b: photocraft_geom::Rect, max_side: usize) -> PreviewPixels {
+    let Some(r) = Reduction::of(b, max_side) else {
+        return PreviewPixels::new(egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]);
+    };
+    let (w, k, [tw, th]) = (r.size[0], r.k, r.texels);
+    let mut px = vec![Color32::TRANSPARENT; tw * th];
+    // One band of `k` source rows per output row.
+    par_rows(&mut px, tw, |ty, out| {
+        let y0 = b.y0 + (ty * k) as i32;
+        let y1 = (y0 + k as i32).min(b.y1);
+        let rows = (y1 - y0).max(0) as usize;
+        let mut buf = vec![[0u8; 4]; w * rows];
+        surf.read_rgba8_into(photocraft_geom::Rect::new(b.x0, y0, b.x1, y1), &mut buf);
+        if k == 1 {
+            for (o, p) in out.iter_mut().zip(&buf) {
+                *o = if p[3] == 255 { Color32::from_rgb(p[0], p[1], p[2]) } else { Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]) };
+            }
+            return;
+        }
+        for (tx, o) in out.iter_mut().enumerate() {
+            let (x0, x1) = (tx * k, ((tx + 1) * k).min(w));
+            let mut acc = [0u32; 4];
+            let mut n = 0u32;
+            for row in 0..rows {
+                for p in buf.get(row * w + x0..row * w + x1).unwrap_or(&[]) {
+                    let c = Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]);
+                    for (a, v) in acc.iter_mut().zip(c.to_array()) {
+                        *a += u32::from(v);
+                    }
+                    n += 1;
+                }
+            }
+            let n = n.max(1);
+            let v = acc.map(|a| ((a + n / 2) / n) as u8);
+            *o = Color32::from_rgba_premultiplied(v[0], v[1], v[2], v[3]);
+        }
+    });
+    PreviewPixels::new(egui::ColorImage::new([tw, th], px), r.uv())
+}
+
+/// The mask `surface` over `b` at the factor [`read_surface`] reads `b` with: one value per texel
+/// (the mean of the source pixels it covers), 0 hiding and 255 showing, at `density`.
+pub(crate) fn read_mask(surface: &photocraft_raster::Surface, b: photocraft_geom::Rect, max_side: usize, density: f32) -> PreviewMask {
+    let Some(r) = Reduction::of(b, max_side) else { return PreviewMask::new(vec![255], density) };
+    let (w, k, [tw, th]) = (r.size[0], r.k, r.texels);
+    let channels = surface.channels().max(1);
+    let mut values = vec![255u8; tw * th];
+    par_rows(&mut values, tw, |ty, out| {
+        let y0 = b.y0 + (ty * k) as i32;
+        let y1 = (y0 + k as i32).min(b.y1);
+        let rows = (y1 - y0).max(0) as usize;
+        let read = surface.read_region(photocraft_geom::Rect::new(b.x0, y0, b.x1, y1));
+        let at = |x: usize, row: usize| read.get((row * w + x) * channels).copied().unwrap_or(1.0);
+        for (tx, o) in out.iter_mut().enumerate() {
+            let (x0, x1) = (tx * k, ((tx + 1) * k).min(w));
+            let (mut sum, mut n) = (0.0f32, 0u32);
+            for row in 0..rows {
+                for x in x0..x1 {
+                    sum += at(x, row);
+                    n += 1;
+                }
+            }
+            *o = ((sum / n.max(1) as f32).clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    });
+    PreviewMask::new(values, density)
+}
 
 /// Texels of the moving pixels over `b`: full resolution unless the long side exceeds the GPU's
 /// `max_side` (#91: this used to be capped at 2048 px, so big layers previewed blurry), plus the
@@ -13,8 +133,6 @@ pub(super) fn preview_image(
     bare: bool,
 ) -> (egui::ColorImage, [f32; 2]) {
     let layer = doc.layer(id);
-    // Linked masks move with the pixels, so the moving texels carry them (#205).
-    let mask = layer.and_then(|l| preview_mask(l, b));
     // Groups and type/fill layers preview from a flattened render of just that layer.
     let rendered;
     let surf: Option<&photocraft_raster::Surface> = match (lifted, layer.and_then(|l| l.surface())) {
@@ -45,16 +163,21 @@ pub(super) fn preview_image(
         }
     };
     let Some(surf) = surf else { return (egui::ColorImage::new([1, 1], vec![Color32::TRANSPARENT]), [1.0, 1.0]) };
-    // A flattened render already has the masks applied.
+    let pixels = read_surface(surf, b, max_side);
+    // A flattened render already has the masks applied; linked masks move with the pixels of a
+    // raster layer, so its moving texels carry them (#205).
     let raw = lifted.is_some() || layer.is_some_and(|l| matches!(l.content, LayerContent::Raster(_)));
-    crate::transform_tex::read_surface(surf, mask.as_ref().filter(|_| raw), b, max_side)
+    let pixels = match layer.filter(|_| raw).and_then(|l| preview_mask(l, b, max_side)) {
+        Some(mask) => pixels.masked(&mask),
+        None => pixels,
+    };
+    (pixels.image, pixels.base_uv)
 }
 
 /// The layer's masks as the moving texels carry them: the enabled masks when all of them are linked
 /// (the vector mask and feathering folded in as the compositor applies them), else the linked
 /// pixel mask alone. `None` when no enabled mask moves with the pixels.
-fn preview_mask(l: &photocraft_doc::Layer, b: photocraft_geom::Rect) -> Option<crate::transform_tex::PreviewMask> {
-    use crate::transform_tex::PreviewMask;
+fn preview_mask(l: &photocraft_doc::Layer, b: photocraft_geom::Rect, max_side: usize) -> Option<PreviewMask> {
     let pixel = l.mask.as_ref().filter(|m| m.enabled);
     let vector = l.vector_mask.as_ref().filter(|v| v.enabled);
     let linked_pixel = pixel.filter(|m| m.linked);
@@ -62,9 +185,9 @@ fn preview_mask(l: &photocraft_doc::Layer, b: photocraft_geom::Rect) -> Option<c
         && vector.is_none_or(|v| v.linked)
         && let Some(surface) = photocraft_compose::masks::combined_mask(l, b)
     {
-        return Some(PreviewMask { surface, density: 1.0 });
+        return Some(read_mask(&surface, b, max_side, 1.0));
     }
-    linked_pixel.map(|m| PreviewMask { surface: m.surface.clone(), density: m.density })
+    linked_pixel.map(|m| read_mask(&m.surface, b, max_side, m.density))
 }
 
 /// The layers covering the moving one ([`covering`]), composited on their own and drawn over its
@@ -73,13 +196,14 @@ fn preview_mask(l: &photocraft_doc::Layer, b: photocraft_geom::Rect) -> Option<c
 /// under the box leaves them out ([`Above::hide_in`]). Built when the session starts and again
 /// when an edit changes the document; the box itself moves without re-compositing.
 pub(super) struct Above {
-    pub(super) ctx: egui::Context,
-    pub(super) name: String,
     pub(super) max_side: usize,
     /// The covering layers (whole layers or groups, at any depth).
     pub(super) ids: Vec<LayerId>,
-    /// Their composite and the canvas area it covers; `None` when nothing visible covers the layer.
-    pub(super) shown: Option<(crate::transform_tex::PreviewTextures, photocraft_geom::Rect)>,
+    /// Their composite (premultiplied texels) and the canvas area it covers; `None` when nothing
+    /// visible covers the layer.
+    pub(super) shown: Option<(egui::ColorImage, photocraft_geom::Rect)>,
+    /// Counts the composites made, for the raster display's texture cache.
+    revision: u64,
 }
 
 /// What covers a layer ([`covering`]) and the document to composite it from: the cheap half of
@@ -139,23 +263,26 @@ fn hide_ids(ids: &[LayerId], layers: &mut [photocraft_doc::Layer]) {
 }
 
 impl Above {
-    pub(super) fn new(ctx: &egui::Context, name: String, doc: &Document, id: LayerId, max_side: usize) -> Self {
+    // PLAN: `new` and `from_plan` lost their `ctx` and `name` arguments (the composite is a
+    // `RasterSource`, not an uploaded texture); the callers in begin.rs (tools-w27) pass neither.
+    pub(super) fn new(doc: &Document, id: LayerId, max_side: usize) -> Self {
         let plan = AbovePlan::new(doc, id);
         let image = plan.image(max_side);
-        Self::from_plan(ctx, name, max_side, plan, image)
+        Self::from_plan(max_side, plan, image)
     }
 
-    /// An `Above` from its plan and the composite made from it (on the UI thread: textures).
-    pub(super) fn from_plan(ctx: &egui::Context, name: String, max_side: usize, plan: AbovePlan, image: Option<(egui::ColorImage, [f32; 2])>) -> Self {
-        let shown = image.map(|(image, uv)| (crate::transform_tex::PreviewTextures::new(ctx, name.clone(), image, uv), plan.rect));
-        Self { ctx: ctx.clone(), name, max_side, ids: plan.ids, shown }
+    /// An `Above` from its plan and the composite made from it.
+    pub(super) fn from_plan(max_side: usize, plan: AbovePlan, image: Option<(egui::ColorImage, [f32; 2])>) -> Self {
+        Self { max_side, ids: plan.ids, shown: image.map(|(image, _)| (image, plan.rect)), revision: 0 }
     }
 
     /// Composite what covers layer `id` of `doc` (the live document) again.
     pub(super) fn rebuild(&mut self, doc: &Document, id: LayerId) {
         let plan = AbovePlan::new(doc, id);
         let image = plan.image(self.max_side);
-        *self = Self::from_plan(&self.ctx.clone(), self.name.clone(), self.max_side, plan, image);
+        let revision = self.revision + 1;
+        *self = Self::from_plan(self.max_side, plan, image);
+        self.revision = revision;
     }
 
     /// Leave the covering layers out of `layers` (the document under the box).
@@ -163,18 +290,48 @@ impl Above {
         hide_ids(&self.ids, layers);
     }
 
-    /// Draw the composite over the moving pixels.
-    pub(super) fn draw(&self, painter: &egui::Painter, xf: &ViewXform, display: Option<&photocraft_engine::display_color::CanvasDisplay>) {
-        let Some((texture, r)) = &self.shown else { return };
-        let (tex, uv) = texture.pick_display(painter.ctx(), xf.zoom * painter.ctx().pixels_per_point(), 1.0, false, display);
-        let mut mesh = egui::Mesh::with_texture(tex);
-        let corners = [(r.x0, r.y0, 0.0, 0.0), (r.x1, r.y0, uv[0], 0.0), (r.x1, r.y1, uv[0], uv[1]), (r.x0, r.y1, 0.0, uv[1])];
-        for (x, y, u, v) in corners {
-            mesh.vertices.push(egui::epaint::Vertex { pos: xf.to_screen(x as f32, y as f32), uv: pos2(u, v), color: Color32::WHITE });
+    /// The map that places the composite's unit square on the canvas area it covers; `None` when
+    /// nothing covers the layer.
+    pub(super) fn frame(&self) -> Option<Homography> {
+        let (_, r) = self.shown.as_ref()?;
+        let at = |x: i32, y: i32| Point::new(f64::from(x), f64::from(y));
+        Homography::unit_to_quad([at(r.x0, r.y0), at(r.x1, r.y0), at(r.x1, r.y1), at(r.x0, r.y1)])
+    }
+}
+
+/// The composite as a raster source: the texels as they are, at the composite's own size (it can
+/// be smaller than the area it covers when the area was reduced to fit the texture limit; the
+/// display's [frame](Above::frame) scales it).
+impl RasterSource for Above {
+    fn size(&self) -> PixelSize {
+        self.shown.as_ref().map_or(PixelSize::new(0, 0), |(image, _)| PixelSize::new(image.size[0] as u32, image.size[1] as u32))
+    }
+
+    fn revision(&self) -> Revision {
+        Revision::new(self.revision)
+    }
+
+    fn damage(&self, since: Revision) -> Option<PixelRect> {
+        // A new composite replaces every texel, so only an unchanged revision has no damage.
+        (since == self.revision()).then(PixelRect::default)
+    }
+
+    fn read(&self, region: PixelRect, factor: u32, out: &mut egui::ColorImage) {
+        let Some((image, _)) = &self.shown else { return };
+        let factor = factor.max(1) as i64;
+        let [width, height] = image.size;
+        let [out_width, out_height] = out.size;
+        for y in 0..out_height {
+            for x in 0..out_width {
+                let sx = i64::from(region.x0) + x as i64 * factor;
+                let sy = i64::from(region.y0) + y as i64 * factor;
+                let inside = sx >= 0 && sy >= 0 && (sx as usize) < width && (sy as usize) < height;
+                let texel = if inside { image.pixels.get(sy as usize * width + sx as usize).copied() } else { None };
+                if let Some(o) = out.pixels.get_mut(y * out_width + x) {
+                    *o = texel.unwrap_or(Color32::TRANSPARENT);
+                }
+            }
         }
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        painter.add(mesh);
     }
 }
 
