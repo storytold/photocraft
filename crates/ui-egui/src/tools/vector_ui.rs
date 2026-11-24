@@ -122,6 +122,9 @@ pub struct PenPath {
     /// The draft's shape layer was made on its first anchor (#12909) and takes its anchors as they are placed;
     /// `resumes` names that layer and its subpath.
     pub(crate) live_layer: bool,
+    /// The draft's Work Path was made on its first anchor (#12890) and takes each click as its own History step;
+    /// `resumes` names that path and its subpath.
+    pub(crate) live_path: bool,
 }
 
 /// The subpath a Pen path carries on: where it is and what it was when drawing resumed. The
