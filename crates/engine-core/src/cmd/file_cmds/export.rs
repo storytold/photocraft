@@ -57,7 +57,10 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate
     // into `encode`, so a PSD embeds no file a linked smart object names.
     let _authorization = crate::jobs::render_authorization_scope(s.authorize);
-    let save = SaveOpts::from_params(s, p, cmd)?;
+    let mut save = SaveOpts::from_params(s, p, cmd)?;
+    // Include ICC Profile (#13973); unset, each file embeds what it did before.
+    let icc = super::save::tiff_bool_param(p, "iccProfile", cmd)?;
+    save.embed_icc = icc;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let prefix = p.get("prefix").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
     let doc = d.doc.clone();
@@ -101,11 +104,25 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
         // The prefix is optional; only the layer name needs the empty-name fallback.
         let prefix_part = if prefix.is_empty() { String::new() } else { part(&prefix) };
         let name = format!("{prefix_part}_{:04}_{}.{format}", index, part(&l.name));
+        let save = include_icc(&mut one, &format, icc, save);
         let (bytes, _warnings) = encode(&one, &name, save)?;
         write(&name, &bytes)?;
         report.files.push(name);
     }
     Ok(report)
+}
+
+/// Include ICC Profile for one layer file: off, no profile; on, the document's profile, or the one
+/// its colours are taken to be in when it has none (PSD included), except that a CMYK document's
+/// PNG (written as RGB) carries none, as measured. Unset changes nothing.
+fn include_icc(one: &mut Document, format: &str, icc: Option<bool>, mut save: SaveOpts) -> SaveOpts {
+    match icc {
+        Some(false) => one.icc_profile = None,
+        Some(true) if format == "png" && one.mode == ColorMode::Cmyk => save.embed_icc = Some(false),
+        Some(true) if one.icc_profile.is_none() => one.icc_profile = Some(crate::color_cmds::working_profile(one.mode).to_bytes()),
+        _ => {}
+    }
+    save
 }
 
 /// Adjustment layers that can be represented as an RGB-only LUT, in document stack order.
