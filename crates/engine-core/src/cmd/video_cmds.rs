@@ -5,6 +5,7 @@
 //! follow-up; a saved document keeps the current frame as the layer's content.
 
 use photocraft_doc::{Document, Layer, LayerContent, Timeline, VideoData};
+use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -668,18 +669,23 @@ pub fn render_video_with(
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut base = (*st.doc).clone();
     store(&mut base);
-    let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
+    let duration = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
     // Loaded timelines bypass the duration validation used by timeline.create/setProps.
-    if frames > crate::timeline_cmds::MAX_DURATION {
-        return Err(EngineError::Other(format!("the timeline is {frames} frames; Render Video is limited to {} frames", crate::timeline_cmds::MAX_DURATION)));
+    if duration > crate::timeline_cmds::MAX_DURATION {
+        return Err(EngineError::Other(format!("the timeline is {duration} frames; Render Video is limited to {} frames", crate::timeline_cmds::MAX_DURATION)));
     }
-    // Only the GIF delay reads the rate (frames come from the duration); rates under 1 fps are
-    // valid timelines, so only an unusable loaded rate falls back to 30.
-    let fps = base.timeline.as_ref().map(|t| t.fps).filter(|f| f.is_finite() && *f > 0.0).unwrap_or(30.0);
+    let range = render_range(p, base.timeline.as_ref())?;
+    // Rates under 1 fps are valid timelines, so only an unusable loaded rate falls back to 30.
+    let timeline_fps = base.timeline.as_ref().map(|t| t.fps).filter(|f| f.is_finite() && *f > 0.0).unwrap_or(30.0);
+    let plan = render_plan(p, range, timeline_fps, (base.size.width, base.size.height))?;
+    // Every rendered frame, in order; `frames` counts them.
+    let frames = plan.frames.len();
+    let fps = plan.fps;
     let stem = safe_stem(&base.name);
     let fmt = base.pixel_format();
     let bounds = base.bounds();
-    let (w, h) = (bounds.width() as usize, bounds.height() as usize);
+    let out = Rect::from_xywh(0, 0, plan.size.0, plan.size.1);
+    let (w, h) = (out.width() as usize, out.height() as usize);
 
     let cancelled = || EngineError::Other("render cancelled".into());
     if !progress(0, frames) {
@@ -693,18 +699,18 @@ pub fn render_video_with(
         check_gif_budget(w as u64, h as u64, frames as u64).map_err(EngineError::Other)?;
         let delay = (100.0 / fps).round().clamp(1.0, 65535.0) as u16;
         let mut gframes = Vec::with_capacity(frames);
-        for f in 0..frames {
+        for (i, &f) in plan.frames.iter().enumerate() {
             let mut doc = base.clone();
             if let Some(t) = &mut doc.timeline {
                 t.current = f;
             }
             sync(&mut doc);
-            let surf = crate::file_cmds::flattened(&doc, fmt);
+            let surf = plan.scaled(crate::file_cmds::flattened(&doc, fmt), bounds);
             let mut px = vec![[0.0f32; 4]; w * h];
-            surf.read_rgba_into(bounds, &mut px);
+            surf.read_rgba_into(out, &mut px);
             gframes.push(gif_frame(px, w, delay)?);
             // The final report follows encoding/writing, so total means the output exists.
-            if !progress((f + 1).min(frames.saturating_sub(1)), frames) {
+            if !progress((i + 1).min(frames.saturating_sub(1)), frames) {
                 return Err(cancelled());
             }
         }
@@ -718,25 +724,253 @@ pub fn render_video_with(
         return Ok(json!({"frames": frames, "file": path}));
     }
 
+    // A movie: one file, every frame encoded in turn.
+    if is_movie_format(format) {
+        // As in the reference application, a document without a timeline has only image sequences.
+        if base.timeline.is_none() {
+            return Err(EngineError::BadParams {
+                cmd: "file.export.renderVideo".into(),
+                msg: "A movie needs a video timeline; render an image sequence instead.".into(),
+            });
+        }
+        return render_movie(p, format, &base, &plan, write, progress);
+    }
+
     // Image sequence.
     // PSD / PSB frames would embed the files linked smart objects name: not for a restricted session.
     let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
     let mut files = Vec::new();
-    for f in 0..frames {
+    for (i, &f) in plan.frames.iter().enumerate() {
         let mut doc = base.clone();
         if let Some(t) = &mut doc.timeline {
             t.current = f;
         }
         sync(&mut doc);
-        let path = format!("{stem}_{f:04}.{format}");
+        // Another size renders the flattened frame, resampled, as a one-layer document.
+        if plan.size != (base.size.width, base.size.height) {
+            doc = plan.scaled_document(&doc, fmt, bounds);
+        }
+        // Files are numbered from the first rendered frame, whatever frame the range starts at.
+        let path = format!("{stem}_{i:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
         write(&path, &bytes)?;
         files.push(path);
-        if !progress(f + 1, frames) {
+        if !progress(i + 1, frames) {
             return Err(cancelled());
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// Whether Render Video's `format` names a movie file (one file for every frame) rather than an
+/// image format.
+fn is_movie_format(format: &str) -> bool {
+    format.eq_ignore_ascii_case("mov") || format.eq_ignore_ascii_case("mp4")
+}
+
+/// The movie codec Render Video's `preset` (default the format's first) asks for in `format`.
+#[cfg(not(target_arch = "wasm32"))]
+fn movie_codec(p: &Value, format: &str) -> Result<photocraft_io::movie_out::MovieCodec> {
+    use photocraft_io::movie_out::MovieCodec;
+    let bad = |msg: String| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg };
+    let preset = match p.get("preset").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(v.as_str().ok_or_else(|| bad("`preset`: A preset name is required.".into()))?),
+    };
+    let codec = if format.eq_ignore_ascii_case("mov") {
+        // The reference application's MOV codec wasn't measured (#14165): the Animation presets
+        // write ProRes, which keeps the picture near-losslessly at any size.
+        match preset.unwrap_or("animationHigh") {
+            "animationHigh" => MovieCodec::ProRes4444,
+            "animationMedium" => MovieCodec::ProRes422Hq,
+            "uncompressed" => MovieCodec::Uncompressed,
+            other => return Err(bad(format!("`preset`: `{other}` isn't a MOV preset (animationHigh, animationMedium or uncompressed)."))),
+        }
+    } else {
+        match preset.unwrap_or("highQuality") {
+            "highQuality" => MovieCodec::H264,
+            // Their bit rates weren't measured (#14165).
+            "mediumQuality" | "lowQuality" => {
+                return Err(EngineError::Other(format!("the H.264 preset `{}` isn't available yet; use highQuality", preset.unwrap_or_default())));
+            }
+            other => return Err(bad(format!("`preset`: `{other}` isn't an H.264 preset (highQuality)."))),
+        }
+    };
+    if !codec.available() {
+        return Err(EngineError::Other(format!(
+            "{} movies can't be written by this build (whether PhotoCraft ships the encoder is still open, #14165); render a MOV or an image sequence instead",
+            codec.name()
+        )));
+    }
+    Ok(codec)
+}
+
+/// Render Video's movie output: every frame of `plan`, encoded in turn into one file named after
+/// the document.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_movie(
+    p: &Value,
+    format: &str,
+    base: &Document,
+    plan: &RenderPlan,
+    mut write: impl FnMut(&str, &[u8]) -> Result<()>,
+    mut progress: impl FnMut(usize, usize) -> bool,
+) -> Result<Value> {
+    let codec = movie_codec(p, format)?;
+    let frames = plan.frames.len();
+    let fmt = base.pixel_format();
+    let bounds = base.bounds();
+    let out = Rect::from_xywh(0, 0, plan.size.0, plan.size.1);
+    let failed = |e: photocraft_io::movie_out::MovieError| EngineError::Other(format!("render the movie: {e}"));
+    let cancelled = || EngineError::Other("render cancelled".into());
+    let mut movie = photocraft_io::movie_out::MovieWriter::new(codec, plan.size.0, plan.size.1, plan.fps).map_err(failed)?;
+    let mut px = vec![[0.0f32; 4]; out.width() as usize * out.height() as usize];
+    for (i, &f) in plan.frames.iter().enumerate() {
+        let mut doc = base.clone();
+        if let Some(t) = &mut doc.timeline {
+            t.current = f;
+        }
+        sync(&mut doc);
+        plan.scaled(crate::file_cmds::flattened(&doc, fmt), bounds).read_rgba_into(out, &mut px);
+        movie.push(&px).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
+        // The final report follows writing, so total means the file exists.
+        if !progress((i + 1).min(frames.saturating_sub(1)), frames) {
+            return Err(cancelled());
+        }
+    }
+    let bytes = movie.finish().map_err(failed)?;
+    let name = format!("{}.{}", safe_stem(&base.name), codec.extension());
+    write(&name, &bytes)?;
+    if !progress(frames, frames) {
+        return Err(cancelled());
+    }
+    let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
+    Ok(json!({"frames": frames, "file": format!("{dir}/{name}"), "codec": codec.name()}))
+}
+
+/// The web build writes no movie files: its workspace has no movie encoder.
+#[cfg(target_arch = "wasm32")]
+fn render_movie(
+    _: &Value,
+    _: &str,
+    _: &Document,
+    _: &RenderPlan,
+    _: impl FnMut(&str, &[u8]) -> Result<()>,
+    _: impl FnMut(usize, usize) -> bool,
+) -> Result<Value> {
+    Err(EngineError::Other("movie files can't be written in the web build; render an image sequence instead".into()))
+}
+
+/// Most pixels a side Render Video's `width` and `height` take, and most frames a second its
+/// `fps` takes, as in the reference application.
+const MAX_RENDER_SIDE: u32 = 5000;
+const MAX_RENDER_FPS: f64 = 5000.0;
+
+/// What Render Video writes: for each output frame, the timeline frame it shows; the output size;
+/// and the output rate.
+struct RenderPlan {
+    frames: Vec<usize>,
+    size: (u32, u32),
+    fps: f32,
+}
+
+impl RenderPlan {
+    /// `frame` (document pixels in `bounds`) at the output size: as it is when that is the
+    /// document's size, resampled otherwise.
+    fn scaled(&self, frame: Surface, bounds: Rect) -> Surface {
+        if (bounds.width(), bounds.height()) == self.size {
+            return frame;
+        }
+        let (sx, sy) = (f64::from(self.size.0) / f64::from(bounds.width().max(1)), f64::from(self.size.1) / f64::from(bounds.height().max(1)));
+        photocraft_algo::resample::resize_surface_in_canvas(&frame, sx, sy, photocraft_algo::resample::Resample::BicubicAutomatic, bounds)
+    }
+
+    /// `doc` flattened, at the output size, as a one-layer document of its mode, depth, profile
+    /// and resolution.
+    fn scaled_document(&self, doc: &Document, fmt: photocraft_color::PixelFormat, bounds: Rect) -> Document {
+        let mut out = Document::new(doc.name.clone(), photocraft_doc::Size::new(self.size.0, self.size.1), doc.mode, doc.depth);
+        out.icc_profile = doc.icc_profile.clone();
+        out.resolution_dpi = doc.resolution_dpi;
+        let mut layer = Layer::raster("Layer 1", fmt);
+        layer.content = LayerContent::Raster(self.scaled(crate::file_cmds::flattened(doc, fmt), bounds));
+        out.layers.push(layer);
+        out
+    }
+}
+
+/// Render Video's plan from its params: the frames of `range` (timeline frames at `timeline_fps`)
+/// sampled at `fps` (default the timeline's) over the same span of time, at `width` × `height`
+/// (default `document`'s size).
+fn render_plan(p: &Value, range: std::ops::RangeInclusive<usize>, timeline_fps: f32, document: (u32, u32)) -> Result<RenderPlan> {
+    let bad = |msg: String| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg };
+    let side = |key: &str, default: u32| -> Result<u32> {
+        match p.get(key).filter(|v| !v.is_null()) {
+            None => Ok(default),
+            Some(v) => v
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| (1..=MAX_RENDER_SIDE).contains(n))
+                .ok_or_else(|| bad(format!("`{key}`: An integer between 1 and {MAX_RENDER_SIDE} is required."))),
+        }
+    };
+    let size = (side("width", document.0)?, side("height", document.1)?);
+    let fps = match p.get("fps").filter(|v| !v.is_null()) {
+        None => f64::from(timeline_fps),
+        Some(v) => v
+            .as_f64()
+            .filter(|f| f.is_finite() && (1.0..=MAX_RENDER_FPS).contains(f))
+            .ok_or_else(|| bad(format!("`fps`: A number between 1.000 and {MAX_RENDER_FPS:.3} is required.")))?,
+    };
+    let (start, len) = (*range.start(), range.end() - range.start() + 1);
+    let source = f64::from(timeline_fps);
+    let frames = if (fps - source).abs() <= f64::EPSILON * source.max(1.0) {
+        range.collect()
+    } else {
+        // The same span of time at the new rate: output frame k shows the timeline frame on screen
+        // at time k / fps.
+        let count = ((len as f64) * fps / source).round().max(1.0);
+        if count > crate::timeline_cmds::MAX_DURATION as f64 {
+            return Err(bad(format!("{len} frames at {fps} fps make more than {} frames", crate::timeline_cmds::MAX_DURATION)));
+        }
+        (0..count as usize).map(|k| start + ((k as f64 * source / fps + 1e-9).floor() as usize).min(len - 1)).collect()
+    };
+    Ok(RenderPlan { frames, size, fps: fps as f32 })
+}
+
+/// The timeline frames Render Video writes, first to last, from its `range` param: `"all"` (or no
+/// `range`) for every frame, `"workArea"` for the timeline's work area, or `{"start": N, "end": M}`
+/// for frames N to M, both included. A document without a timeline has one frame, 0.
+fn render_range(p: &Value, timeline: Option<&Timeline>) -> Result<std::ops::RangeInclusive<usize>> {
+    let bad = |msg: String| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg };
+    let last = timeline.map_or(1, |t| t.duration).max(1) - 1;
+    match p.get("range") {
+        None | Some(Value::Null) => Ok(0..=last),
+        Some(Value::String(s)) if s == "all" => Ok(0..=last),
+        Some(Value::String(s)) if s == "workArea" => {
+            let mut t = timeline.cloned().ok_or_else(|| bad("`workArea` needs a timeline: the document has one frame".into()))?;
+            // A loaded work area may be out of step with the duration.
+            t.clamp();
+            Ok(t.work_start..=t.work_end - 1)
+        }
+        Some(Value::Object(o)) => {
+            if let Some(key) = o.keys().find(|k| !matches!(k.as_str(), "start" | "end")) {
+                return Err(bad(format!("`range` takes `start` and `end`, not `{key}`")));
+            }
+            let frame = |key: &str| -> Result<usize> {
+                o.get(key)
+                    .and_then(Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n <= last)
+                    .ok_or_else(|| bad(format!("`{key}`: An integer between 0 and {last} is required.")))
+            };
+            let (start, end) = (frame("start")?, frame("end")?);
+            if end < start {
+                return Err(bad("The range of frames is incorrect.".into()));
+            }
+            Ok(start..=end)
+        }
+        Some(v) => Err(bad(format!("`range` must be \"all\", \"workArea\" or {{\"start\": N, \"end\": M}}, not {v}"))),
+    }
 }
 
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels
@@ -785,5 +1019,11 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod render_video_movie_tests;
+#[cfg(test)]
+mod render_video_range_tests;
+#[cfg(test)]
+mod render_video_size_rate_tests;
 #[cfg(test)]
 mod tests;

@@ -67,6 +67,10 @@ craft-pdn = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c3
 craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362", features = ["tree-render", "tree-render-system-fonts"] }
 craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362" }
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362" }
+# Render Video's movie output: the shared MP4/MOV writer, ProRes encoder and Y'CbCr matrices.
+craft-media = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362", default-features = false, features = ["isobmff"] }
+craft-video = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362", features = ["prores", "threads"] }
+craft-color = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362" }
 # Camera-field EXIF reader/writer, shared prerequisite craft-libs#1563.
 craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362" }
 craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362" }

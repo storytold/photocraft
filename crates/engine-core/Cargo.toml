@@ -10,6 +10,8 @@ workspace = true
 [features]
 # Exposes the allocation failpoints (`allocation::fail_next_for_test`) to other engine crates' tests; only dev-dependencies turn it on.
 failpoints = []
+# H.264 MP4 output for Render Video (photocraft-io's `h264`); off until #14165 is decided.
+h264 = ["photocraft-io/h264"]
 
 [dependencies]
 craft-tracked = { workspace = true }
@@ -71,6 +73,11 @@ winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"]
 # Printing on Unix: an IPP client for CUPS (pure Rust); the web build cannot print.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 photocraft-ipp = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Reads back the movies Render Video writes (render_video_movie_tests.rs).
+craft-media = { workspace = true }
+craft-video = { workspace = true }
 
 [dev-dependencies]
 craft-affinity = { workspace = true, features = ["synth"] }
