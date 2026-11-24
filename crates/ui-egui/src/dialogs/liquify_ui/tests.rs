@@ -750,3 +750,36 @@ fn the_preview_on_a_smart_object_follows_its_filter_mask() {
     }
     assert!(masked > 0 && shown_changed > 0, "masked {masked}, changed inside the mask {shown_changed}");
 }
+
+/// Confirming Liquify through the UI (Enter / OK button, which closes the workspace directly rather
+/// than through a held OK) commits the warp once and enables Filter › Last Filter (#16610).
+#[test]
+fn ui_confirm_commits_liquify_and_enables_last_filter() {
+    let mut app = app_with_layer();
+    let before = layer_pixels(&app);
+    let past = app.session.active().unwrap().history.past_len();
+    assert!(!crate::menus::is_enabled(&app, "filter.lastFilter"));
+
+    // Escape cancels without applying or enabling Last Filter.
+    open_ws(&mut app).unwrap();
+    warp_stroke(&mut app, 40.0);
+    crate::canvas::testing::key(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(!is_open(&app) && app.liquify.is_none());
+    assert_eq!(layer_pixels(&app), before);
+    assert_eq!(app.session.active().unwrap().history.past_len(), past);
+    assert!(!crate::menus::is_enabled(&app, "filter.lastFilter"));
+
+    // Enter confirms through the workspace UI: applies once and enables Last Filter.
+    open_ws(&mut app).unwrap();
+    warp_stroke(&mut app, 40.0);
+    crate::canvas::testing::key(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+    assert!(!is_open(&app) && app.liquify.is_none());
+    let after_ok = layer_pixels(&app);
+    assert_ne!(after_ok, before, "UI confirm applies the warp");
+    assert_eq!(app.session.active().unwrap().history.past_len(), past + 1, "one Liquify history step");
+    assert!(crate::menus::is_enabled(&app, "filter.lastFilter"), "Last Filter enabled after UI confirm");
+
+    app.run("filter.lastFilter", json!({})).unwrap();
+    assert_ne!(layer_pixels(&app), after_ok, "Last Filter reapplies the Liquify warp");
+    assert_eq!(app.session.active().unwrap().history.past_len(), past + 2);
+}

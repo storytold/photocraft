@@ -16,7 +16,7 @@ use craft::imaging::ui::liquify::{
     LiquifyStroke as StepStroke, LiquifyTool as StepTool, LiquifyWorkspace, MeshSize, StrokeEvent,
 };
 use craft::ui::canvas::{PixelRect, RasterSource};
-use craft::ui::dialog::{DialogId, HostedWorkspace};
+use craft::ui::dialog::{DialogId, DialogResult, HostedWorkspace};
 use craft::ui::primitives::Revision;
 use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use egui::{Color32, ColorImage};
@@ -680,6 +680,8 @@ pub struct LiquifyApp {
     pub(crate) id: DialogId,
     /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
     smart_filter: Option<usize>,
+    /// Set once a held OK (from automation `confirm`) has already committed, so closing does not commit twice.
+    committed: bool,
     engine: Arc<Mutex<Engine>>,
     backdrop: Arc<Mutex<Backdrop>>,
     layers: Vec<(u64, String)>,
@@ -810,6 +812,7 @@ fn open_on(
         layer,
         id: DialogId::NULL,
         smart_filter,
+        committed: false,
         engine: Arc::new(Mutex::new(engine)),
         backdrop: Arc::new(Mutex::new(Backdrop { image: None, canvas, revision: 0 })),
         layers,
@@ -828,7 +831,13 @@ fn open_on(
 pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(id) = app.liquify.as_ref().map(|l| l.id) else { return };
     let Some(hosted) = app.framework.dialogs.get_mut_by_id::<Hosted>(id) else {
-        // Cancelled, or finished by the answer to OK.
+        // LiquifyWorkspace answers OK directly on button/Enter without holding it; commit that
+        // result unless a held OK (automation `confirm`) already committed it.
+        let result = app.framework.dialogs.take::<Hosted>();
+        let committed = app.liquify.as_ref().is_some_and(|l| l.committed);
+        if !committed && let Some(DialogResult::Ok(done)) = result {
+            let _ = commit(app, &done);
+        }
         app.liquify = None;
         return;
     };
@@ -870,6 +879,11 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if let Some(done) = done {
         let answer = commit(app, &done);
+        if answer.is_ok()
+            && let Some(l) = app.liquify.as_mut()
+        {
+            l.committed = true;
+        }
         if let Some(hosted) = app.framework.dialogs.get_mut_by_id::<Hosted>(id) {
             hosted.answer_ok(answer.map_err(Into::into));
         }
