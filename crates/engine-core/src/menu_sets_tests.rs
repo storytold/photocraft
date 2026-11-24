@@ -10,6 +10,7 @@
 use serde_json::{Value, json};
 
 use crate::Session;
+use crate::prefs::SavedPrefsExt;
 
 /// Run `edit.menus` and take its reply.
 fn menus(s: &mut Session, p: Value) -> Value {
