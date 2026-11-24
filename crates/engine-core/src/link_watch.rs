@@ -399,8 +399,10 @@ fn apply_link_stamps(s: &mut Session, doc: u64, now: Vec<LinkObservation>) -> Re
     let mut changed = Vec::new();
     let mut warnings = BTreeSet::new();
     let mut needs_relink = Vec::new();
-    for LinkObservation { path, layers, stamp, first_digest, .. } in now {
-        if !before.contains_key(&path)
+    for LinkObservation { path, file, layers, stamp, first_digest } in now {
+        // A path rejected by the link policy cannot be checked or refreshed.
+        if file.is_some()
+            && !before.contains_key(&path)
             && !previously_missing.contains(&path)
             && let Some(state) = s.active()
             && let Some(message) = ordinary_link_warning(&state.doc, &layers, first_digest)
