@@ -127,6 +127,9 @@ pub struct OpenPreview {
     tool: Tool,
     /// Free Transform Path: the path as it was, drawn through the box instead of pixels.
     path: Option<photocraft_doc::vector::Path>,
+    /// Free Transform Points (#13209): the anchors of that path the box moves, `[subpath, knot]`.
+    /// Set, the outline follows the box only there and the rest of the path stays put.
+    path_points: Option<Vec<[usize; 2]>>,
     /// A layer's session keeps `doc` and `opacity` up to date with edits made while the box is
     /// open ([`follow_edits`]); `None` for a lone mask or channel and Transform Selection.
     follow: Option<Follow>,
@@ -157,6 +160,7 @@ impl OpenPreview {
             split: None,
             tool,
             path: None,
+            path_points: None,
             follow: None,
             committing: None,
             content_aware: None,
