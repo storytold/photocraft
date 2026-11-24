@@ -790,7 +790,7 @@ fn a_close_queued_during_save_keeps_the_document_after_failure_or_cancel() {
         assert_eq!(h.state().session.documents().len(), 1);
         assert_eq!(h.state().discard.is_some(), !clean, "only a dirty document asks what to do with unsaved changes");
         if let Some(error) = fail {
-            assert!(noticed(h.state(), error));
+            assert!(noticed(&h, error));
         } else {
             assert!(h.state().ui.status.contains("Canceled"), "the save was explicitly canceled");
         }
