@@ -84,7 +84,7 @@ fn upsampling_keeps_unselected_working_pixels_empty() {
     // 4 x 3 working pixels with the middle two of the middle row selected, step 2, and a frame
     // whose last column and row fall in a half cell (7 x 5).
     let low = [false, false, false, false, false, true, true, false, false, false, false, false];
-    let out = upsample(&low, 4, 3, 2, 7, 5);
+    let out = upsample(&low, 4, 3, 2, 7, 5, true);
     let rows: Vec<&[u8]> = out.chunks(7).collect();
     assert_eq!(rows[0], [0; 7]);
     assert_eq!(rows[1], [0; 7]);
@@ -92,5 +92,31 @@ fn upsampling_keeps_unselected_working_pixels_empty() {
     assert_eq!(rows[3], [0, 0, 143, 191, 191, 143, 0]);
     assert_eq!(rows[4], [0; 7]);
     // Full resolution is the working selection as it is.
-    assert_eq!(upsample(&[true, false, false, true], 2, 2, 1, 2, 2), [255, 0, 0, 255]);
+    assert_eq!(upsample(&[true, false, false, true], 2, 2, 1, 2, 2, true), [255, 0, 0, 255]);
+}
+
+/// 32-bit documents were not measured for #12920 and keep the plain bilinear edge: 25 % on the
+/// unselected pixels next to it (19 % and 6 % at the corners), the same rim inside.
+#[test]
+fn without_the_rim_inside_the_edge_is_bilinear_on_both_sides() {
+    let low = [false, false, false, false, false, true, true, false, false, false, false, false];
+    let out = upsample(&low, 4, 3, 2, 7, 5, false);
+    let rows: Vec<&[u8]> = out.chunks(7).collect();
+    assert_eq!(rows[0], [0; 7]);
+    assert_eq!(rows[1], [0, 16, 48, 64, 64, 48, 16]);
+    assert_eq!(rows[2], [0, 48, 143, 191, 191, 143, 48]);
+    assert_eq!(rows[3], [0, 48, 143, 191, 191, 143, 48]);
+    assert_eq!(rows[4], [0, 16, 48, 64, 64, 48, 16]);
+}
+
+/// The fit for 32-bit documents differs from the default only in the edge's scale-up.
+#[test]
+fn the_32_bit_tuning_keeps_the_bilinear_edge() {
+    assert!(quick::Tuning::default().rim_inside && quick::Tuning::for_depth(false).rim_inside);
+    assert!(!quick::Tuning::for_depth(true).rim_inside);
+    let sampler = ImageSampler { img: &document(), origin: (0, 0) };
+    let at = |t: &quick::Tuning| quick::quick_select_with(&sampler, Rect::new(0, 0, 800, 600), &[(200.0, 175.0)], 30.0, t).expect("a selection");
+    // Today's ring outside red 1: bounds one pixel wider, 64 on the edges, 48 and 16 at the corners.
+    let ring = BTreeMap::from([(16, 4), (48, 8), (64, 692), (143, 4), (191, 692)]);
+    assert_eq!(summary(&at(&quick::Tuning::for_depth(true))), ((99, 99, 301, 251), 29304, ring));
 }

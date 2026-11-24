@@ -11,14 +11,14 @@
 use std::collections::BTreeSet;
 
 use photocraft_algo::matting;
-use photocraft_algo::segment::{grabcut, quick, subject};
+use photocraft_algo::segment::{grabcut, subject};
 use photocraft_algo::selection::{self as sel, Region, SelectionMode, combine_region};
 use photocraft_doc::{Document, LayerId};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::Value;
 
-use crate::smartselect_cmds::with_doc_sampler;
+use crate::smartselect_cmds::{quick_select, with_doc_sampler};
 use crate::{EngineError, Result};
 
 const CMD: &str = "select.refineEdge";
@@ -269,7 +269,7 @@ pub fn apply_one(doc: &Document, layer: Option<LayerId>, base: Option<Surface>, 
     };
     match edit {
         SelectionEdit::Quick { points, size, add, sample_all_layers } => {
-            let region = with_doc_sampler(doc, layer, *sample_all_layers, |smp, doc| quick::quick_select(smp, doc.bounds(), points, *size));
+            let region = with_doc_sampler(doc, layer, *sample_all_layers, |smp, doc| quick_select(smp, doc, points, *size));
             combine(region, mode(*add))
         }
         SelectionEdit::Brush { points, size, hardness, add } => paint(matting::brush_surface(points, *size, *hardness, canvas), *add),
