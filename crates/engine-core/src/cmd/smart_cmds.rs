@@ -226,14 +226,14 @@ pub use placing::{layer_to_smart, layers_to_smart, placement};
 pub use rendering::WarningRenderSources;
 pub(crate) use rendering::check_historical_link;
 use rendering::refresh_or_fail;
-pub use rendering::render_with_warnings_using;
 #[cfg(test)]
 pub(crate) use rendering::render_with_warnings;
+pub use rendering::render_with_warnings_using;
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
 pub use rendering::{SourceCacheStatistics, source_cache_statistics};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
-pub(crate) use rendering::{linked_source_baseline, render_with_warnings_snapshot, source_box};
+pub(crate) use rendering::{render_with_warnings_snapshot, source_box};
 #[cfg(test)]
 use source::svg_source_image_in;
 pub use source::vector_scale;
