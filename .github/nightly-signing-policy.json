@@ -4,10 +4,10 @@
   "repository_id": 1398080271,
   "producer_workflow_id": null,
   "producer_workflow_path": ".github/workflows/nightly.yml",
-  "producer_tooling_revision": "a4f6fd51e854773de8b24b4f92e1ad7e770c08d7",
-  "producer_workflow_ref": "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@a4f6fd51e854773de8b24b4f92e1ad7e770c08d7",
+  "producer_tooling_revision": "605d58766e8f536564da8fc81d3676ac86816dea",
+  "producer_workflow_ref": "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@605d58766e8f536564da8fc81d3676ac86816dea",
   "signer_workflow_path": ".github/workflows/nightly-sign.yml",
-  "signer_tooling_revision": "a4f6fd51e854773de8b24b4f92e1ad7e770c08d7",
+  "signer_tooling_revision": "605d58766e8f536564da8fc81d3676ac86816dea",
   "release_branch": "release",
   "manual_actors": [
     "skylartaylor"
