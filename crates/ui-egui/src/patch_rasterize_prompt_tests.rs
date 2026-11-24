@@ -263,6 +263,32 @@ fn ok_after_the_active_layer_changed_refuses_the_patch() {
     assert_eq!(st.doc.layer(text).unwrap().content.kind_name(), "Pixel", "the stored layer took the rasterize");
 }
 
+/// Review round: a document read from a file keeps the layer ids stored in it, so two open
+/// documents can hold the same number. OK must not rasterize or patch in another document than the
+/// one the question was opened for.
+#[test]
+fn ok_after_another_document_became_active_refuses_the_patch() {
+    let mut app = app("Type");
+    let text = app.session.active().unwrap().active_layer.unwrap();
+    drag_patch(&mut app);
+    let id = prompt(&app).expect("the prompt");
+    // A second document made from this one's bytes: its layers keep the ids stored in the file, so
+    // the same number names a Type layer there too, and that layer is the active one there.
+    let bytes = photocraft_format::save_to_bytes(&app.session.active().unwrap().doc, &Default::default()).unwrap();
+    let twin = photocraft_format::load_from_bytes(&bytes).unwrap();
+    assert_eq!(twin.layer(text).map(|l| l.content.kind_name()), Some("Type"), "both documents hold a Type layer {}", text.0);
+    app.session.add_document(twin, None);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.active_layer, Some(text), "the other document's active layer carries the same id");
+    let revision = st.revision;
+    let first = app.session.documents()[0].doc.clone();
+    answer(&mut app, id);
+    assert!(app.ui.status_error, "OK says why nothing ran: {}", app.ui.status);
+    assert!(patch_params(&app).is_empty(), "no patch ran in the other document");
+    assert_eq!(app.session.active().unwrap().revision, revision, "the other document is untouched");
+    assert_eq!(first.layer(text).unwrap().content.kind_name(), "Type", "the document the question was about keeps its text");
+}
+
 /// Pin, passes before and after the change: a locked Type layer cannot be rasterized either, so the
 /// drag keeps today's refusal and no prompt opens.
 #[test]
