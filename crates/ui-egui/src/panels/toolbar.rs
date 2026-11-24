@@ -1,4 +1,4 @@
-use super::{PhotocraftApp, Tool, json, vec2};
+use super::{PhotocraftApp, Tool, json};
 use craft::behavior::overlay::Side;
 use craft::color_ui::ui::{PairWell, SwatchPair, Well};
 use craft::ui::contract::{Bind, Gap, Props as _, Show as _, ShowContainer as _, Tracked, clicked};
@@ -48,6 +48,7 @@ pub(crate) const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Eraser, Tool::BackgroundEraser, Tool::MagicEraser],
         &[Tool::Gradient, Tool::PaintBucket],
         &[Tool::Blur, Tool::Sharpen, Tool::Smudge],
+        &[Tool::AdjustmentBrush],
         &[Tool::Dodge, Tool::Burn, Tool::Sponge],
     ],
     &[
@@ -182,8 +183,7 @@ fn rail<'a>(
 
 /// The rail's footer: the colour chips, then the Quick Mask and Screen Mode buttons.
 fn footer(app: &mut PhotocraftApp, ui: &mut egui::Ui, rail: RailFooter) {
-    let column = ui.available_width();
-    color_chips(app, ui, column);
+    color_chips(app, ui);
     let modes = |ui: &mut egui::Ui, app: &mut PhotocraftApp| {
         quick_mask_button(app, ui);
         ScreenModeButton::new(app.ui.view.screen_mode).show(ui);
@@ -368,10 +368,9 @@ fn chip_pair<'a>(app: &PhotocraftApp, active: &'a mut Well) -> SwatchPair<'a> {
 }
 
 /// The colour chips: a click on a chip opens the Color Picker for that colour (Photoshop).
-pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, column: f32) {
+pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut active = Well::Primary;
-    let layout = egui::Layout::top_down(egui::Align::Center);
-    let out = ui.allocate_ui_with_layout(vec2(column, 0.0), layout, |ui| chip_pair(app, &mut active).show(ui)).inner;
+    let Some(out) = Row::new().fill_width().align(RowAlign::Center).show(ui, |ui, _| chip_pair(app, &mut active).show(ui)).inner else { return };
     match out.clicked {
         Some(Well::Secondary) => {
             crate::color_picker_ui::open(app, "background");

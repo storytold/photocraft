@@ -165,11 +165,71 @@ fn options_bar_hover_previews_with_the_character_picker_also_shown() {
     h.run();
     h.query_all_by_label("Font family").next().unwrap().type_text("JetBrains Mono");
     h.run();
-    h.get_by_label("JetBrains Mono").hover();
+    h.get_by_role_and_label(Role::TreeItem, "JetBrains Mono").hover();
     h.run();
     assert_eq!(font(&mut h), "JetBrains Mono");
     h.query_all_by_label("Font family").next().unwrap().hover();
     h.run();
     assert_eq!(font(&mut h), "Inter", "leaving the row restores the committed font");
     let _ = Role::ComboBox;
+}
+
+fn history_len(app: &PhotocraftApp) -> usize {
+    app.session.active().unwrap().history.entries().len()
+}
+
+/// Keys typed into the font search stay there, on the first opening and during an edit session: the first key
+/// switches no tool, and no text reaches the type layer.
+#[test]
+fn typed_keys_stay_in_the_font_search_and_reach_no_tool_or_layer() {
+    for editing in [false, true] {
+        let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).with_max_steps(SETTLE_STEPS).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
+            let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+            app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
+            app.ui.tool = crate::state::Tool::Type;
+            if editing {
+                super::edit_active(&mut app, &cc.egui_ctx).unwrap();
+            }
+            app.sync_views();
+            app
+        });
+        h.run_steps(8);
+        let layers = h.state().session.active().unwrap().doc.layer_count();
+        field(&h).click();
+        h.run();
+        // Native typing carries a key event with the text: a key that left the search would pick a tool (J) or
+        // replace the edited text.
+        h.event(egui::Event::Key { key: egui::Key::J, physical_key: Some(egui::Key::J), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+        h.event(egui::Event::Text("JetBrains".into()));
+        h.run();
+        assert_eq!(field(&h).value().as_deref(), Some("JetBrains"), "the search took the keys (editing: {editing})");
+        assert_eq!(h.state().ui.tool, crate::state::Tool::Type, "no tool shortcut ran (editing: {editing})");
+        let st = h.state().session.active().unwrap();
+        let photocraft_doc::LayerContent::Text(text) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("type layer") };
+        assert_eq!(text.text, "Sample", "the layer's text is unchanged (editing: {editing})");
+        assert_eq!(st.doc.layer_count(), layers, "no layer was added (editing: {editing})");
+    }
+}
+
+/// Hovering a family previews it on the canvas and adds no history step; picking it commits one step.
+#[test]
+fn hovering_a_font_adds_no_history_step_and_a_pick_adds_one() {
+    let mut h = bar_harness(app_with_layer());
+    h.run_steps(4);
+    let before = history_len(h.state());
+    let layer = h.state().session.active().unwrap().active_layer.unwrap();
+    type_family(&mut h, "JetBrains Mono");
+    h.get_by_role_and_label(Role::TreeItem, "JetBrains Mono").hover();
+    h.run();
+    let (shown, _) = crate::canvas::display_doc(h.state_mut(), 0);
+    let photocraft_doc::LayerContent::Text(text) = &shown.layer(layer).unwrap().content else { panic!("type layer") };
+    assert_eq!(text.char_runs()[0].style.font_family, "JetBrains Mono", "the canvas previews the hovered family");
+    assert_eq!(layer_font(h.state()), "Inter", "hover commits nothing");
+    assert_eq!(history_len(h.state()), before, "hover adds no history step");
+    h.get_by_role_and_label(Role::TreeItem, "JetBrains Mono").click();
+    h.run();
+    assert_eq!(layer_font(h.state()), "JetBrains Mono");
+    assert_eq!(history_len(h.state()), before + 1, "the pick is one history step");
 }
