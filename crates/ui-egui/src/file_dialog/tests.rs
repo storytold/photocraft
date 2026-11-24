@@ -1691,3 +1691,5 @@ fn save_types_list_the_document_formats_then_the_rest_by_name() {
     let formats = names.iter().position(|name| *name == "Brushes").expect("the app's own resources");
     assert!(names[2..formats].is_sorted_by_key(key), "{:?}", &names[2..formats]);
 }
+
+mod image_sequence_tests;

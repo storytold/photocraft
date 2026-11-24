@@ -501,7 +501,7 @@ fn tga_sequence_frames_keep_their_transparency() {
 // ------------------------------------------------------------------ animated GIF footage
 
 /// An animated GIF of solid `w`x`h` frames: one `(colour, delay in centiseconds)` each.
-fn write_gif(path: &str, w: u32, h: u32, frames: &[([u8; 3], u16)]) {
+pub(super) fn write_gif(path: &str, w: u32, h: u32, frames: &[([u8; 3], u16)]) {
     use photocraft_codecs::web::{GifFrame, encode_gif_animated};
     let list: Vec<GifFrame> =
         frames.iter().map(|&(c, delay_cs)| GifFrame { indices: vec![0; (w * h) as usize], palette: vec![c], transparent: None, delay_cs }).collect();

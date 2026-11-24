@@ -980,6 +980,7 @@ layer.videoLayers.newVideoLayerFromFile
 layer.videoLayers.replaceFootage
 layer.videoLayers.interpretFootage
 layer.videoLayers.reloadFrame
+file.openImageSequence
 file.import.videoFramesToLayers
 file.export.renderVideo
 jobs.list

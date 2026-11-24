@@ -393,17 +393,11 @@ fn tiff_page_error(display: &std::path::Path, name: &str, page: usize, error: ph
 /// document's format.
 fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft_io::ImportOptions) -> Result<Footage> {
     let p = std::path::Path::new(path);
-    let is_img = |f: &std::path::Path| {
-        matches!(
-            f.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
-            Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "tga" | "exr" | "pcraft" | "psd")
-        )
-    };
     let files: Vec<std::path::PathBuf> = if p.is_dir() {
         let mut v: Vec<_> = std::fs::read_dir(p)
             .map_err(|e| EngineError::Other(format!("read dir `{path}`: {e}")))?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|f| is_img(f))
+            .filter(|f| is_footage_image(f))
             .collect();
         v.sort();
         v
@@ -413,6 +407,33 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
     if files.is_empty() {
         return Err(EngineError::Other(format!("no images in `{path}`")));
     }
+    load_frame_files(&files, fmt, opts, None)
+}
+
+/// Whether `f` has the extension of an image format a video layer reads frames from.
+fn is_footage_image(f: &std::path::Path) -> bool {
+    matches!(
+        f.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
+        Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "tga" | "exr" | "pcraft" | "psd")
+    )
+}
+
+/// Why a frame of canvas size `got` can't join an image sequence whose frames are all `size`;
+/// `None` when it can, or when no size is required.
+fn frame_size_error(got: photocraft_doc::Size, size: Option<photocraft_doc::Size>) -> Option<String> {
+    let want = size.filter(|want| *want != got)?;
+    Some(format!("it is {} x {} pixels, and the sequence's frames are {} x {}", got.width, got.height, want.width, want.height))
+}
+
+/// Load `files`, in order, as frames of the document's format `fmt` (see [`load_frames`]). With
+/// `size` (an image sequence opened as a document), each file is one frame, its first page or
+/// animation frame as File › Open reads it, and every frame must have that canvas size.
+fn load_frame_files(
+    files: &[std::path::PathBuf],
+    fmt: photocraft_color::PixelFormat,
+    opts: &photocraft_io::ImportOptions,
+    size: Option<photocraft_doc::Size>,
+) -> Result<Footage> {
     let mut frames: Vec<Surface> = Vec::with_capacity(files.len());
     let mut delays = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -432,11 +453,12 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
         frames.push(surface);
         Ok(())
     };
-    for f in &files {
+    for f in files {
         let bytes = crate::allocation::read_file_within(f, max_footage_bytes).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
         // A GIF (a still one is its only frame) or an animated WebP brings every frame.
         let animation = match photocraft_formats::detect(&name, &bytes) {
+            _ if size.is_some() => None,
             Some(photocraft_formats::Format::Gif) => Some(photocraft_io::import_gif_frames as ImportFrames),
             Some(photocraft_formats::Format::WebP) if photocraft_codecs::webp_is_animated(&bytes) => Some(photocraft_io::import_webp_frames as ImportFrames),
             _ => None,
@@ -444,6 +466,10 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
         if let Some(import) = animation {
             let mut over = None;
             let done = import(&name, &bytes, &mut |doc, delay_ms| {
+                if let Some(msg) = frame_size_error(doc.size, size) {
+                    over = Some(msg);
+                    return Err(photocraft_io::IoError::Cancelled);
+                }
                 if let Err(msg) = keep(&mut frames, crate::file_cmds::flattened(&doc, fmt)) {
                     over = Some(msg);
                     return Err(photocraft_io::IoError::Cancelled);
@@ -467,7 +493,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
         }
         // A multi-page TIFF: every full-resolution page of the main chain, in order, as the
         // GIF's frames are (#6379). Thumbnails, reduced-resolution copies and masks are left out.
-        if photocraft_formats::detect(&name, &bytes) == Some(photocraft_formats::Format::Tiff) {
+        if size.is_none() && photocraft_formats::detect(&name, &bytes) == Some(photocraft_formats::Format::Tiff) {
             let (pages, complete) = tiff_pages(&bytes);
             if pages.len() > 1 {
                 // A damaged or looping page chain, or one past the 10,000-directory limit, lists
@@ -485,6 +511,9 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
                     let doc = photocraft_io::import_tiff_page_with_options(&name, &bytes, Some(page), opts, &photocraft_raster::Interrupt::NONE)
                         .map_err(|e| tiff_page_error(f, &name, page, e))?
                         .document;
+                    if let Some(msg) = frame_size_error(doc.size, size) {
+                        return Err(EngineError::Other(format!("`{}`: {msg}", f.display())));
+                    }
                     // The page is flattened before admission of the next one, so the retained
                     // frames of every page count against the footage limit, as GIF and WebP
                     // frames do.
@@ -494,6 +523,9 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
             }
         }
         let mut doc = crate::file_cmds::import_with_options(&name, &bytes, opts)?;
+        if let Some(msg) = frame_size_error(doc.size, size) {
+            return Err(EngineError::Other(format!("`{}`: {msg}", f.display())));
+        }
         // A Targa's alpha opens as a channel (as in Photoshop); a frame's alpha is transparency.
         if f.extension().is_some_and(|e| e.eq_ignore_ascii_case("tga")) {
             photocraft_io::tga_alpha_channel_to_transparency(&mut doc);
@@ -541,6 +573,160 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(id)
     })?;
     Ok(json!({"layer": id.0, "frames": n, "warnings": warnings}))
+}
+
+/// The alert File › Open gives for Image Sequence with a file whose name has no number (measured
+/// in Photoshop, #14057).
+pub const NOT_A_SEQUENCE: &str = "Could not complete the Open command because the file is not part of a numeric sequence.";
+
+/// The most digits a frame number may have: up to 18 always fit a `u64`.
+const MAX_FRAME_DIGITS: usize = 18;
+
+/// A file name split around its frame number, the last run of digits before the extension:
+/// `shot2_frame001.png` is `shot2_frame`, `001`, `.png`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Numbered<'a> {
+    prefix: &'a str,
+    digits: &'a str,
+    /// What follows the number, the extension included (`.png`, `_v2.tif`).
+    suffix: &'a str,
+}
+
+impl<'a> Numbered<'a> {
+    /// `name` split around its frame number; `None` when the name before the extension has no
+    /// digits, or more than [`MAX_FRAME_DIGITS`] in its last run.
+    fn parse(name: &'a str) -> Option<Self> {
+        // The extension's own digits (`.mp4`, `.jp2`) aren't a frame number.
+        let stem_end = match name.rfind('.') {
+            Some(i) if i > 0 => i,
+            _ => name.len(),
+        };
+        let stem = name.get(..stem_end)?;
+        let end = stem.rfind(|c: char| c.is_ascii_digit())? + 1;
+        // Where the digits start: just after the last other character, whatever its byte length.
+        let start = stem.get(..end)?.char_indices().rev().find(|(_, c)| !c.is_ascii_digit()).map_or(0, |(i, c)| i + c.len_utf8());
+        let digits = name.get(start..end)?;
+        (digits.len() <= MAX_FRAME_DIGITS).then_some(Numbered { prefix: name.get(..start)?, digits, suffix: name.get(end..)? })
+    }
+
+    /// The frame number (`001` is 1).
+    fn number(&self) -> Option<u64> {
+        self.digits.parse().ok()
+    }
+
+    /// Whether `other` is a frame of the same sequence: the same text around the number, the
+    /// extension's letter case aside (`frame002.PNG` beside `frame001.png`).
+    fn same_run(&self, other: &Numbered<'_>) -> bool {
+        self.prefix == other.prefix && self.suffix.eq_ignore_ascii_case(other.suffix)
+    }
+}
+
+/// The frames of the numbered run `path` belongs to, in frame order: every file in its folder
+/// whose name differs from it only in the number (`frame001.png`, `frame002.png`, ...), the file
+/// itself included. A name without a number is [`NOT_A_SEQUENCE`]. A number missing between the
+/// first and the last frame, two files with the same number (`frame1.png`, `frame01.png`) or more
+/// files than a video layer's frame limit is an error rather than a document with frames out of
+/// place.
+fn sequence_files(path: &str) -> Result<Vec<std::path::PathBuf>> {
+    sequence_files_within(path, crate::timeline_cmds::MAX_DURATION)
+}
+
+/// [`sequence_files`] with at most `limit` frames.
+fn sequence_files_within(path: &str, limit: usize) -> Result<Vec<std::path::PathBuf>> {
+    let p = std::path::Path::new(path);
+    let name = p.file_name().and_then(|n| n.to_str()).ok_or_else(|| EngineError::Other(NOT_A_SEQUENCE.into()))?;
+    let picked = Numbered::parse(name).filter(|n| n.number().is_some()).ok_or_else(|| EngineError::Other(NOT_A_SEQUENCE.into()))?;
+    if !p.is_file() {
+        return Err(EngineError::Other(format!("`{path}` is not a file")));
+    }
+    let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    let mut run: Vec<(u64, std::path::PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|e| EngineError::Other(format!("read dir `{}`: {e}", dir.display())))? {
+        // An entry that can't be read could be a frame: refuse rather than open a shorter run.
+        let entry = entry.map_err(|e| EngineError::Other(format!("read dir `{}`: {e}", dir.display())))?;
+        let file = entry.path();
+        let number = file.file_name().and_then(|n| n.to_str()).and_then(Numbered::parse).filter(|n| n.same_run(&picked)).and_then(|n| n.number());
+        let Some(number) = number else { continue };
+        // Follows links, as opening the frame does.
+        let meta = std::fs::metadata(&file).map_err(|e| EngineError::Other(format!("`{}`: {e}", file.display())))?;
+        if !meta.is_file() {
+            continue;
+        }
+        if run.len() >= limit {
+            return Err(EngineError::Other(format!("the sequence has more than {limit} frames")));
+        }
+        run.push((number, file));
+    }
+    run.sort();
+    for pair in run.windows(2) {
+        let [(a, first), (b, second)] = pair else { continue };
+        if a == b {
+            return Err(EngineError::Other(format!("`{}` and `{}` have the same frame number", first.display(), second.display())));
+        }
+        if b - a > 1 {
+            // Named as the file picked is, with its zero padding.
+            let width = picked.digits.len();
+            let missing = format!("{}{:0width$}{}", picked.prefix, a + 1, picked.suffix);
+            return Err(EngineError::Other(format!("the sequence is missing frame `{missing}`, between `{}` and `{}`", first.display(), second.display())));
+        }
+    }
+    Ok(run.into_iter().map(|(_, f)| f).collect())
+}
+
+/// File › Open with Image Sequence ticked (#14057): the numbered run `path` (one of its frames)
+/// belongs to opens as a new unsaved document, "Untitled-N" at the frame size, holding the group
+/// "Video Group 1" with the video layer "Layer 1", one frame per file in frame order, playing at
+/// `fps` (the Frame Rate dialog's, 30 by default). History: "Open" (the document) and "Open" (the
+/// video layer), as Photoshop's. Nothing opens when a frame fails to load or the frames differ in
+/// size.
+fn open_image_sequence(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "file.openImageSequence";
+    let path = crate::file_cmds::str_param(p, "path", CMD)?.to_string();
+    let fps = crate::timeline_cmds::fps_param(CMD, p)?.unwrap_or(30.0);
+    let files = sequence_files(&path)?;
+    let first = files.first().ok_or_else(|| EngineError::Other(NOT_A_SEQUENCE.into()))?;
+    let opts = footage_import_options(s);
+    // The document takes the first frame's size, mode, depth, resolution and profile.
+    let bytes = crate::allocation::read_file_within(first, footage_byte_limit()).map_err(|e| EngineError::Other(format!("read `{}`: {e}", first.display())))?;
+    let model = crate::file_cmds::import_with_options(&first.to_string_lossy(), &bytes, &opts)?;
+    drop(bytes);
+    let name = crate::file_cmds::untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
+    let mut doc = Document::new(name, model.size, model.mode, model.depth);
+    doc.resolution_dpi = model.resolution_dpi;
+    doc.icc_profile = model.icc_profile.clone();
+    drop(model);
+    let Footage { frames, warnings, .. } = load_frame_files(&files, doc.pixel_format(), &opts, Some(doc.size))?;
+    let n = frames.len();
+    let index = s.add_document(doc, None);
+    let added = s.edit("Open", |doc, active| {
+        let fmt = doc.pixel_format();
+        let mut layer = Layer::raster(doc.next_layer_name("Layer"), fmt);
+        let mut v = VideoData::new(frames, fps);
+        v.original_frames = Some(v.frames.clone());
+        if let (Some(first), LayerContent::Raster(surf)) = (v.frames.first(), &mut layer.content) {
+            *surf = first.clone();
+        }
+        layer.video = Some(v);
+        let id = layer.id;
+        let group = Layer::group(doc.next_layer_name("Video Group"), vec![layer]);
+        doc.layers.push(group);
+        doc.timeline = Some(Timeline::new(n, fps));
+        *active = Some(id);
+        sync(doc);
+        Ok(id)
+    });
+    let id = match added {
+        Ok(id) => id,
+        Err(e) => {
+            // No empty, half-opened document is left behind.
+            s.close(index);
+            return Err(e);
+        }
+    };
+    if let Some(st) = s.active_mut() {
+        *st.selection_mut() = vec![id];
+    }
+    Ok(json!({"document": index, "layer": id.0, "frames": n, "fps": fps, "warnings": warnings}))
 }
 
 fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
@@ -780,6 +966,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.videoLayers.replaceFootage", "Replace Footage…", vl, active_video, |s, p| replace_footage(s, p)),
         spec!("layer.videoLayers.interpretFootage", "Interpret Footage…", vl, active_video, |s, p| interpret_footage(s, p)),
         spec!("layer.videoLayers.reloadFrame", "Reload Frame", vl, active_video, |s, p| reload_frame(s, p)),
+        CommandSpec {
+            id: "file.openImageSequence",
+            label: "Open Image Sequence",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"path":str (one frame of the numbered run, e.g. frame001.png),"fps":number=30 (the Frame Rate dialog's rate, above 0 and at most 1000)}"##,
+            enabled: crate::file_cmds::native,
+            journal: true,
+            run: |s, p| open_image_sequence(s, p),
+        },
         spec!("file.import.videoFramesToLayers", "Video Frames to Layers…", &["File", "Import"], has_doc, |s, p| frames_to_layers(s, p)),
         spec!("file.export.renderVideo", "Render Video…", &["File", "Export"], has_doc, |s, p| render_video(s, p)),
     ]
@@ -787,3 +983,6 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod open_sequence_tests;

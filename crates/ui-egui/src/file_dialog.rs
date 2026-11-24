@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::PickId;
 use craft::host::{PickKind, PickRequest, Picked};
+use craft::ui::contract::Bind;
+use craft::ui::dialog::{DialogId, dialog_id};
+use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
+use craft::ui::runtime::env::Label;
 use photocraft_doc::DocId;
 use serde_json::{Value, json};
 
@@ -81,9 +85,9 @@ impl FileDialogReply {
 #[cfg(target_arch = "wasm32")]
 pub type FileDialogFn = Box<dyn FnMut(FileDialogRequest, Option<&eframe::Frame>, FileDialogReply)>;
 
-/// What to do with the answer. It runs with the user's files only: Cancel and an unavailable
-/// dialog end in `Err` before it.
-type Then = Box<dyn FnOnce(&mut PhotocraftApp, Picked) -> Result<Value, String>>;
+/// What to do with the answer, and whether the request's check box was ticked. It runs with the
+/// user's files only: Cancel and an unavailable dialog end in `Err` before it.
+type Then = Box<dyn FnOnce(&mut PhotocraftApp, Picked, bool) -> Result<Value, String>>;
 
 /// The file dialog in progress.
 pub(crate) struct Pending {
@@ -128,6 +132,16 @@ impl PhotocraftApp {
     /// [`Picked::Contents`]; Cancel ends the action with [`CANCELLED`] and an unavailable dialog
     /// with its reason, neither reaching `then`.
     pub(crate) fn ask_file(&mut self, request: PickRequest, then: impl FnOnce(&mut Self, Picked) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.ask_file_checked(request, move |app, picked, _| then(app, picked))
+    }
+
+    /// [`Self::ask_file`] for a request with a [`check_box`](PickRequest::check_box): `then` also
+    /// gets whether the user ticked it (always false where the platform's picker shows none).
+    pub(crate) fn ask_file_checked(
+        &mut self,
+        request: PickRequest,
+        then: impl FnOnce(&mut Self, Picked, bool) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
         if self.file_dialog.is_some() {
             return Err("a file dialog is already open".into());
         }
@@ -137,7 +151,7 @@ impl PhotocraftApp {
             PickKind::Save => "save",
         };
         let saving = request.kind == PickKind::Save;
-        let then: Then = Box::new(move |app, picked| match picked {
+        let then: Then = Box::new(move |app, picked, checked| match picked {
             Picked::Cancelled | Picked::Downloaded(_) => Err(CANCELLED.into()),
             Picked::Unavailable(why) | Picked::Failed(why) => Err(why),
             Picked::Paths(paths) => {
@@ -145,9 +159,9 @@ impl PhotocraftApp {
                 for path in &paths {
                     path_text(path, saving)?;
                 }
-                then(app, Picked::Paths(paths))
+                then(app, Picked::Paths(paths), checked)
             }
-            picked @ Picked::Contents(_) => then(app, picked),
+            picked @ Picked::Contents(_) => then(app, picked, checked),
         });
         self.file_dialog = Some(self.start_pick(request, then)?);
         Ok(json!({ "fileDialog": kind }))
@@ -172,23 +186,24 @@ impl PhotocraftApp {
         Ok(Pending { answer, then })
     }
 
-    /// The answer of the pick in progress, once it has come.
+    /// The answer of the pick in progress, once it has come, with whether its check box was ticked.
     #[cfg(not(target_arch = "wasm32"))]
-    fn take_picked(&mut self) -> Option<Picked> {
+    fn take_picked(&mut self) -> Option<(Picked, bool)> {
         let id = self.file_dialog.as_ref()?.id;
-        self.framework.files().take_answer(id)
+        self.framework.files().take_answer_checked(id)
     }
 
-    /// The answer of the web dialog in progress, once it has come.
+    /// The answer of the web dialog in progress, once it has come. The web's picker shows no check box.
     #[cfg(target_arch = "wasm32")]
-    fn take_picked(&mut self) -> Option<Picked> {
+    fn take_picked(&mut self) -> Option<(Picked, bool)> {
         use std::sync::mpsc::TryRecvError;
-        match self.file_dialog.as_ref()?.answer.try_recv() {
-            Err(TryRecvError::Empty) => None,
-            Ok(answer) => Some(web_picked(answer)),
+        let picked = match self.file_dialog.as_ref()?.answer.try_recv() {
+            Err(TryRecvError::Empty) => return None,
+            Ok(answer) => web_picked(answer),
             // The reply was dropped unanswered: the dialog couldn't be shown.
-            Err(TryRecvError::Disconnected) => Some(Picked::Cancelled),
-        }
+            Err(TryRecvError::Disconnected) => Picked::Cancelled,
+        };
+        Some((picked, false))
     }
 
     /// Ask the user to choose a folder, starting in the folder of the most recent file when known.
@@ -316,11 +331,22 @@ impl PhotocraftApp {
     }
 
     /// File › Open: opens every chosen file in the order the dialog returns them, reporting each
-    /// failure (see [`Self::open_paths_in_order`]).
+    /// failure (see [`Self::open_paths_in_order`]). The picker offers Image Sequence (#14057),
+    /// off each time it opens, where the platform's picker shows a check box (the desktop portal's
+    /// on Linux, the macOS panel): ticked with one file picked, the Frame Rate dialog comes first
+    /// and that file's numbered run opens as a video layer (see [`open_frame_rate`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
-        let request = self.open_many_request();
-        self.ask_file(request, |app, picked| {
+        // The image sequence picked last is still waiting on its frame rate (a shortcut can reach
+        // File › Open behind the dialog).
+        if frame_rate_open(self) {
+            return Err(FRAME_RATE_OPEN.into());
+        }
+        let request = self.open_many_request().check_box(tl!("Image Sequence"));
+        self.ask_file_checked(request, |app, picked, checked| {
             match picked {
+                Picked::Paths(paths) if checked && paths.len() == 1 => {
+                    open_frame_rate(app, &path_string(&paths[0]));
+                }
                 Picked::Paths(_) => {
                     // The order the dialog returns, not name order; the last is active.
                     app.open_paths_in_order(&path_strings(&picked));
@@ -381,9 +407,9 @@ impl PhotocraftApp {
     /// replaces the action's. False when no dialog is open.
     pub(crate) fn after_file_dialog(&mut self, next: impl FnOnce(&mut Self, Result<Value, String>) -> Result<Value, String> + 'static) -> bool {
         let Some(p) = self.file_dialog.as_mut() else { return false };
-        let then = std::mem::replace(&mut p.then, Box::new(|_, _| Ok(Value::Null)));
-        p.then = Box::new(move |app, picked| {
-            let r = then(app, picked);
+        let then = std::mem::replace(&mut p.then, Box::new(|_, _, _| Ok(Value::Null)));
+        p.then = Box::new(move |app, picked, checked| {
+            let r = then(app, picked, checked);
             next(app, r)
         });
         true
@@ -431,15 +457,16 @@ impl PhotocraftApp {
     /// Called every frame: continues the action that asked once the file service has the answer.
     /// Its errors go to the status bar.
     pub fn poll_file_dialog(&mut self) {
-        let Some(picked) = self.take_picked() else { return };
-        let _ = self.finish_file_dialog(picked);
+        let Some((picked, checked)) = self.take_picked() else { return };
+        let _ = self.finish_file_dialog(picked, checked);
     }
 
-    /// Ends the file dialog in progress: its action continues with `picked`, and its errors go to
-    /// the status bar. Returns the action's result.
-    fn finish_file_dialog(&mut self, picked: Picked) -> Result<Value, String> {
+    /// Ends the file dialog in progress: its action continues with `picked` (and whether the
+    /// request's check box was ticked), and its errors go to the status bar. Returns the action's
+    /// result.
+    fn finish_file_dialog(&mut self, picked: Picked, checked: bool) -> Result<Value, String> {
         let Some(Pending { then, .. }) = self.file_dialog.take() else { return Err(CANCELLED.into()) };
-        let r = then(self, picked);
+        let r = then(self, picked, checked);
         if let Err(e) = &r
             && e != CANCELLED
         {
@@ -447,6 +474,96 @@ impl PhotocraftApp {
             self.ui.status_error = true;
         }
         r
+    }
+}
+
+/// The key of File › Open's Frame Rate dialog for an image sequence (#14057).
+pub(crate) const FRAME_RATE_KEY: &str = "openImageSequence";
+
+/// File › Open's refusal while the Frame Rate dialog waits for an answer.
+const FRAME_RATE_OPEN: &str = "the Frame Rate dialog is open";
+
+/// The Frame Rate dialog's rates, in the measured order; Custom follows them.
+pub(crate) const FRAME_RATES: [f64; 12] = [10.0, 12.0, 12.5, 15.0, 23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0];
+
+/// The id of the Custom entry of the Frame Rate list.
+const CUSTOM_RATE: &str = "custom";
+
+/// The rate the Frame Rate dialog starts at, every time (it is not remembered).
+const DEFAULT_FRAME_RATE: f64 = 30.0;
+
+/// The highest rate, as a video layer's timeline takes it (`timeline_cmds::fps_param`).
+const MAX_FRAME_RATE: f64 = 1000.0;
+
+/// The id and label of a preset rate: `23.976`, `30`.
+fn rate_id(rate: f64) -> String {
+    rate.to_string()
+}
+
+/// The Frame Rate dialog: a list of [`FRAME_RATES`] and Custom, and the rate in fps that Custom
+/// takes. OK opens the sequence (`file.openImageSequence`), Cancel nothing.
+fn frame_rate_dialog(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let mut options: Vec<(String, Label)> = FRAME_RATES.iter().map(|r| (rate_id(*r), Label::from(rate_id(*r)))).collect();
+    options.push((CUSTOM_RATE.into(), Label::from(tl!("Custom").to_string())));
+    let params = vec![
+        Param::new("rate", tl!("Frame Rate"), ParamKind::choice(options, Some(rate_id(DEFAULT_FRAME_RATE)))),
+        Param::new("fps", tl!("fps"), ParamKind::number(Some(0.001), Some(MAX_FRAME_RATE), DEFAULT_FRAME_RATE, 0.1, 3)).enabled_when("rate", CUSTOM_RATE),
+    ];
+    ParamDialog::new(FRAME_RATE_KEY, tl!("Frame Rate"), params).values(Bind::bound(fields))
+}
+
+/// Whether the Frame Rate dialog is open.
+fn frame_rate_open(app: &PhotocraftApp) -> bool {
+    app.framework.dialogs.get_by_id::<HostedParamDialog>(dialog_id(FRAME_RATE_KEY)).is_some()
+}
+
+/// Opens the Frame Rate dialog for the frame `path` picked with Image Sequence ticked, at 30 fps.
+pub(crate) fn open_frame_rate(app: &mut PhotocraftApp, path: &str) -> DialogId {
+    let mut fields = DialogFields::default();
+    fields.set("rate", rate_id(DEFAULT_FRAME_RATE));
+    fields.set("fps", DEFAULT_FRAME_RATE);
+    crate::dialogs::params::open_param_unsaved(app, FRAME_RATE_KEY, fields, json!(path), frame_rate_dialog)
+}
+
+/// The rate the Frame Rate dialog's values pick: the preset listed, or the fps typed for Custom,
+/// within what a video layer plays.
+pub(crate) fn frame_rate(fields: &DialogFields) -> Option<f64> {
+    let rate = match fields.text("rate")? {
+        CUSTOM_RATE => fields.number("fps")?,
+        id => FRAME_RATES.iter().copied().find(|r| rate_id(*r) == id)?,
+    };
+    (rate.is_finite() && rate > 0.0).then(|| rate.min(MAX_FRAME_RATE))
+}
+
+/// Whether the parameter dialog `key` is the Frame Rate dialog.
+pub(crate) fn owns_frame_rate(key: &str) -> bool {
+    key == FRAME_RATE_KEY
+}
+
+/// The Frame Rate dialog's OK: opens the image sequence picked at the rate chosen.
+pub(crate) fn run_frame_rate(app: &mut PhotocraftApp, _ctx: &egui::Context, result: ParamResult) {
+    let path = crate::dialogs::params::captured(app, FRAME_RATE_KEY);
+    let (Some(path), Some(fps)) = (path.as_str(), frame_rate(&result.fields)) else { return };
+    let _ = open_image_sequence(app, path, fps);
+}
+
+/// Opens the numbered run of the frame `path` at `fps` as a new document (`file.openImageSequence`)
+/// and shows the timeline, as Layer › Video Layers › New Video Layer from File does. A failure (a
+/// file whose name has no number gets Photoshop's alert) is reported.
+pub(crate) fn open_image_sequence(app: &mut PhotocraftApp, path: &str, fps: f64) -> Result<Value, String> {
+    match app.run("file.openImageSequence", json!({"path": path, "fps": fps})) {
+        Ok(v) => {
+            // A GIF frame salvaged from a damaged file says so, as New Video Layer from File does.
+            let what = crate::i18n::fmt(tl!("Imported {name}"), &[("name", &display_name(path))]);
+            crate::notices::footage_warnings(app, &v, &what);
+            let _ = crate::panel_docking::show_panel(app, "timeline", Some(true));
+            app.sync_views();
+            Ok(v)
+        }
+        Err(e) => {
+            crate::notices::error(app, e.clone());
+            Err(e)
+        }
     }
 }
 
