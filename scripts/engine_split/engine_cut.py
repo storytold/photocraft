@@ -244,7 +244,8 @@ def scope_items(masked, scope):
 
 def trait_in_scope(masked, scope, trait):
     items = scope_items(masked, scope)
-    if re.search(r"\b(?:use|trait)\b[^;{]*\b" + trait + r"\b", items):
+    # A whole use statement, groups included (`use a::{b, Trait};`), or the trait's own definition.
+    if re.search(r"\buse\b[^;]*\b" + re.escape(trait) + r"\b", items) or re.search(r"\btrait\s+" + re.escape(trait) + r"\b", items):
         return True
     if scope is not None and re.search(r"\buse\s+super::\*\s*;", items):
         head = next(m.start() for m in re.finditer(r"\bmod\s+\w+\s*\{", masked[:scope]) if m.end() == scope)
