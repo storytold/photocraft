@@ -149,6 +149,29 @@ fn a_file_dropped_on_another_arranged_pane_is_placed_in_that_pane_s_document() {
 }
 
 #[test]
+fn a_file_dropped_on_the_main_canvas_while_a_floating_document_is_active_goes_to_the_shown_document() {
+    let (dir, file) = png_file("floating");
+    let mut h = harness(2);
+    let ctx = h.ctx.clone();
+    let floating = serde_json::to_value(h.state().session.documents()[1].doc.id).unwrap();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatInWindow", json!({"document": floating})).unwrap();
+    h.run_steps(6);
+    assert_eq!(h.state().session.active_index(), Some(1), "the floating document is active");
+    let canvas = h.state().drop_canvas_rect.expect("the main canvas shows the docked document");
+    // A point of the main canvas no floating window covers.
+    let at = (1..10)
+        .flat_map(|i| (1..10).map(move |j| canvas.lerp_inside(vec2(i as f32 / 10.0, j as f32 / 10.0))))
+        .find(|&p| ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background))
+        .expect("part of the main canvas is uncovered");
+    let before = (layers(&h, 0), layers(&h, 1));
+    drop_at(&mut h, &file, at);
+    step_until(&mut h, |h| layers(h, 0) != before.0 || layers(h, 1) != before.1);
+    assert_eq!((layers(&h, 0), layers(&h, 1)), (before.0 + 1, before.1), "the file goes to the document the canvas shows");
+    assert_eq!(h.state().session.active_index(), Some(0), "the drop activates that document");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_file_dropped_where_the_canvas_was_during_a_batch_preview_opens() {
     use photocraft_engine::jobs::Started;
     let (dir, file) = png_file("batch");
