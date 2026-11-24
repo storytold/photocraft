@@ -3,6 +3,7 @@
 //! Each task uses only MCP tools (`doc_*`, `command_run`) the way an agent would, and checks the
 //! outcome through `doc_inspect`, `document.pixel` or the exported files, never engine internals.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::io::Write;
 
 use photocraft_automation::{AuthorizedWorkspace, PhotocraftMcp};
@@ -327,12 +328,18 @@ async fn agent_play_refuses_a_recorded_file_open() {
     let dir = tmp("actions-auth");
     let workspace = AuthorizedWorkspace::new(Some(&dir), Some(&dir)).expect("test workspace");
     let mut headless = photocraft_automation::Headless::with_workspace(workspace);
-    headless.session.actions.list.push(photocraft_engine::actions_cmds::Action {
-        name: "Open".into(),
-        steps: vec![("file.open".into(), json!({"path": "/etc/passwd"})), ("layer.new.layer".into(), json!({}))],
-        disabled: Default::default(),
-        ..Default::default()
-    });
+    use photocraft_engine::actions_cmds::ActionStep;
+    headless
+        .session
+        .actions_mut()
+        .list
+        .push(photocraft_engine::actions_cmds::Action {
+            name: "Open".into(),
+            steps: vec![ActionStep::new("file.open", json!({"path": "/etc/passwd"})), ActionStep::new("layer.new.layer", json!({}))],
+            disabled: Default::default(),
+            ..Default::default()
+        })
+        .unwrap();
     let (c, server) = connect_headless(headless).await;
     let played = run(&c, "actions.play", json!({"action": "Open"})).await;
     assert_eq!(played["ran"], 0, "{played}");
