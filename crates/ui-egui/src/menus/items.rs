@@ -320,6 +320,12 @@ pub fn base_rows(app: &PhotocraftApp) -> Vec<Row> {
         item.label = "Release Clipping Mask".into();
         item.enabled = is_enabled(app, "layer.releaseClippingMask");
     }
+    // Layer › Link Layers reads Unlink Layers when it would unlink the selected layers (#16526).
+    if crate::layer_menu_ui::unlinks(app)
+        && let Some(item) = find(&mut rows, "layer.linkLayers")
+    {
+        item.label = crate::layer_menu_ui::link_label(true).into();
+    }
     // Edit › Undo names the most recent change, a document's or the Actions library's.
     if let Some(label) = crate::actions::library::edit_undo_label(app)
         && let Some(row) = rows.iter_mut().find(|row| row.command.id == "edit.undo")

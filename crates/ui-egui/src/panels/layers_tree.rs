@@ -689,7 +689,8 @@ pub(crate) fn row_menu(app: &PhotocraftApp, tree: &PhotoLayers, target: &MenuTar
         MenuKind::Effects => commands(crate::layer_menu_ui::effects_entries(), false),
         MenuKind::Layer(id) => {
             let Some(l) = tree.layer(&id) else { return Vec::new() };
-            let mut out = commands(crate::layer_menu_ui::entries(l, target.on_selection, has_selection), target.on_selection);
+            let mut out =
+                commands(crate::layer_menu_ui::entries(l, target.on_selection, has_selection, crate::layer_menu_ui::unlinks(app)), target.on_selection);
             out.push(Entry::separator());
             out.push(Entry::new(RENAME.to_string(), tl!("Rename Layer…").to_string()));
             out

@@ -31,7 +31,7 @@ use selection::{doc_state, find_layers, select_all_layers, select_linked};
 pub(crate) use selection::{mask_targets, recorded_step, reselect, targets};
 pub use selection::{select, selected, set_selection};
 pub(crate) use structure::{check_group_depth, deletion_neighbours, relink_copies};
-pub use structure::{delete_selected, duplicate_selected, group_layers, set_visible_selected};
+pub use structure::{delete_selected, duplicate_selected, group_layers, in_one_link_group, set_visible_selected};
 use structure::{link_layers, lock_layers, merge_layers, rename_layer, reverse};
 
 // ---------- enabled predicates ----------
