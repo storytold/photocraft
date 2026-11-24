@@ -799,3 +799,6 @@ mod pen_gesture_owner_tests;
 #[cfg(test)]
 #[path = "path_selection_cursor_tests.rs"]
 mod path_selection_cursor_tests;
+
+#[cfg(test)]
+mod imported_target_tests;
