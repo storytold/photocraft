@@ -745,15 +745,16 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the open job's document is missing")?;
     // An earlier file is waiting on its prompt: this document waits after it, in order.
     if crate::open_prompt::waiting(app)
-        && let Some(st) = app.session.close(index)
+        && let Some(mut st) = app.session.close(index)
     {
         let read_only = st.source_read_only;
         let protected_import_source = st.protected_import_source.clone();
+        let initial_view = st.take_fresh_import_view();
         let doc = Arc::try_unwrap(st.into_document()).unwrap_or_else(|d| (*d).clone());
         crate::open_prompt::arrive(
             app,
             held(
-                photocraft_engine::jobs::HeldImportedDocument { document: doc, source_read_only: read_only, initial_view: None, protected_import_source },
+                photocraft_engine::jobs::HeldImportedDocument { document: doc, source_read_only: read_only, initial_view, protected_import_source },
                 None,
                 true,
             ),

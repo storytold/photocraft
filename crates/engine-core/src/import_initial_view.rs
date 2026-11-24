@@ -4,6 +4,40 @@ use std::sync::Arc;
 
 use crate::{EngineError, Result, Session};
 
+impl crate::DocState {
+    /// Transfer a just-admitted import's view when the host must defer its tab
+    /// behind an earlier Open confirmation. This is not a general view snapshot:
+    /// an edited document or an ordinary native reopen has no fresh import hint.
+    pub fn take_fresh_import_view(&mut self) -> Option<photocraft_io::NativeInitialView> {
+        if !std::mem::take(&mut self.import_initial_view_applied)
+            || self.history.past_len() != 0
+            || self.history.can_redo()
+            || self.revision != self.saved_revision
+        {
+            return None;
+        }
+        let target = match self.channel_view.target {
+            crate::channel_cmds::ChannelTarget::Composite => photocraft_io::NativeImportTarget::Composite,
+            crate::channel_cmds::ChannelTarget::LayerMask => photocraft_io::NativeImportTarget::LayerMask,
+            crate::channel_cmds::ChannelTarget::Alpha(index) => photocraft_io::NativeImportTarget::AlphaChannel(index),
+            _ => return None, // A later manual color/vector target is not an imported hint.
+        };
+        let show_layer_mask = self.channel_view.layer_mask.is_some_and(|view| {
+            view.display_only && !view.filter && view.mode == crate::mask_view_cmds::MaskViewMode::Gray && Some(view.layer) == self.active_layer()
+        });
+        Some(photocraft_io::NativeInitialView {
+            selected_layers: self.selection().to_vec(),
+            active_layer: self.active_layer(),
+            target,
+            selected_path: self.initial_path_selection.take(),
+            selected_path_identity: self.initial_path_identity.take(),
+            visible_alpha_channels: self.channel_view.alpha_visible.iter().enumerate().filter_map(|(index, visible)| visible.then_some(index)).collect(),
+            show_layer_mask,
+            samplers: std::mem::take(&mut self.color_samplers),
+        })
+    }
+}
+
 impl Session {
     /// Insert one prepared document, then apply its optional view.
     /// Color policy is resolved by the caller before admission.

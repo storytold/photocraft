@@ -4,6 +4,49 @@ use photocraft_io::{NativeImportTarget, NativeInitialView};
 use serde_json::json;
 
 #[test]
+fn deferred_fresh_import_view_keeps_path_identity_and_is_consumed_once_without_edits() {
+    let mut session = crate::session();
+    let mut document = Document::new("deferred", photocraft_geom::Size::new(8, 6), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    document.layers.push(photocraft_doc::Layer::raster("Selected", photocraft_color::PixelFormat::RGBA8));
+    let layer = document.layers[0].id;
+    document.paths.push(photocraft_doc::vector::NamedPath { name: "Source path".into(), ..Default::default() });
+    let view = NativeInitialView {
+        selected_layers: vec![layer],
+        active_layer: Some(layer),
+        selected_path: Some(0),
+        selected_path_identity: Some(photocraft_io::initial_view::path_identity(&document.paths[0])),
+        samplers: vec![[2., 3.]],
+        ..Default::default()
+    };
+    let (index, warning) = session.admit_import_with_initial_view(document, Some("deferred.xcf".into()), true, Some(view.clone()));
+    assert!(warning.is_none());
+    let mut state = session.close(index).unwrap();
+    let pixels = state.doc.clone();
+    let before = (state.revision, state.saved_revision, state.history.past_len());
+    assert_eq!(state.take_fresh_import_view(), Some(view));
+    assert!(state.take_fresh_import_view().is_none());
+    assert!(Arc::ptr_eq(&pixels, &state.doc));
+    assert_eq!((state.revision, state.saved_revision, state.history.past_len()), before);
+    assert!(state.source_read_only && state.path.is_none());
+    assert_eq!(state.protected_import_source.as_deref(), Some("deferred.xcf"));
+}
+
+#[test]
+fn edited_or_unannotated_documents_do_not_recreate_an_import_hint() {
+    for edited in [false, true] {
+        let mut session = crate::session();
+        session.execute("file.new", json!({"width":8,"height":6})).unwrap();
+        if edited {
+            session.apply_import_initial_view(Some(NativeInitialView { samplers: vec![[2., 3.]], ..Default::default() })).unwrap();
+            session.execute("layer.new.layer", json!({})).unwrap();
+        }
+        let state = session.active_mut().unwrap();
+        assert!(state.take_fresh_import_view().is_none());
+        assert_eq!(state.color_samplers.len(), usize::from(edited));
+    }
+}
+
+#[test]
 fn selected_layers_without_active_layer_keep_the_imported_default_view_and_warn() {
     let mut session = crate::session();
     session.execute("file.new", json!({"width":8,"height":6})).unwrap();
