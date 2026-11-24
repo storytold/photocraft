@@ -564,37 +564,53 @@ impl FontDb {
         let mut paths = Vec::new();
         let mut unreadable = Vec::new();
         collect_font_files_reporting(path, 0, limits.max_files.saturating_add(1), &mut paths, &mut unreadable);
+        // Deterministic registration order, one entry per file: a directory listing's isn't, and
+        // revisiting a folder reached through a link can find the same path twice.
+        paths.sort();
+        paths.dedup();
         if paths.len() > limits.max_files {
             return Err(FontFileError::TooManyFiles { path: shown, max: limits.max_files });
         }
-        // Deterministic registration order: a directory listing's isn't.
-        paths.sort();
         let mut total = 0u64;
-        let mut files = Vec::with_capacity(paths.len() + unreadable.len());
+        let mut files = Vec::with_capacity(paths.len());
         for p in &paths {
             let remaining = limits.max_total_bytes.saturating_sub(total);
-            // An oversized file is skipped unread, and one that no longer fits the total is an
-            // error before it is read.
-            let size = std::fs::metadata(p).map_or(0, |m| m.len());
-            if size > limits.max_file_bytes {
-                files.push((relative_name(path, p), Err(too_large(limits.max_file_bytes))));
-                continue;
+            // Read no further than what the total has left, so a file that grows between the
+            // size check and the read can't retain more than the budget.
+            let cap = limits.max_file_bytes.min(remaining);
+            match read_font_file(p, cap) {
+                Ok(bytes) => {
+                    total = total.saturating_add(bytes.len() as u64);
+                    files.push((relative_name(path, p), Ok(bytes)));
+                }
+                Err(why) => {
+                    // Cut short by the aggregate budget is that limit's failure, not a bad file.
+                    let grew = std::fs::metadata(p).is_ok_and(|m| m.len() > remaining);
+                    if cap < limits.max_file_bytes && grew {
+                        return Err(FontFileError::TooLarge { path: shown, max_bytes: limits.max_total_bytes });
+                    }
+                    files.push((relative_name(path, p), Err(why)));
+                }
             }
-            if size > remaining {
-                return Err(FontFileError::TooLarge { path: shown, max_bytes: limits.max_total_bytes });
-            }
-            // Bounded by what is left of the total too: the file can grow between the two.
-            let bytes = read_font_file(p, limits.max_file_bytes.min(remaining));
-            if let Ok(b) = &bytes {
-                total = total.saturating_add(b.len() as u64);
-            }
-            files.push((relative_name(path, p), bytes));
         }
-        for (dir, why) in unreadable {
-            let name = if dir == path { shown.clone() } else { relative_name(path, &dir) };
-            files.push((name, Err(format!("cannot read folder: {why}"))));
+        // Unreadable folders are diagnostics, not font files: they must not count against the
+        // file limit, and a good font must still register beside them.
+        let mut unreadable: Vec<(String, String)> = unreadable
+            .into_iter()
+            .map(|(dir, why)| (if dir == path { shown.clone() } else { relative_name(path, &dir) }, format!("cannot read folder: {why}")))
+            .collect();
+        match self.register_font_files(&shown, files, limits) {
+            Ok(mut r) => {
+                r.skipped.append(&mut unreadable);
+                Ok(r)
+            }
+            Err(FontFileError::NoFontFiles(_)) if !unreadable.is_empty() => Err(FontFileError::NoFonts { path: shown, failures: unreadable }),
+            Err(FontFileError::NoFonts { path, mut failures }) => {
+                failures.append(&mut unreadable);
+                Err(FontFileError::NoFonts { path, failures })
+            }
+            Err(e) => Err(e),
         }
-        self.register_font_files(&shown, files, limits)
     }
 
     /// Registers font files already read: `(name, bytes or why they couldn't be read)`, `source`
@@ -1272,7 +1288,7 @@ pub(crate) fn collect_font_files_reporting(
     out: &mut Vec<std::path::PathBuf>,
     unreadable: &mut Vec<(std::path::PathBuf, String)>,
 ) {
-    let mut walked = HashSet::new();
+    let mut walked = HashMap::new();
     collect_font_files_inner(dir, depth, limit, out, unreadable, &mut walked);
 }
 
@@ -1283,15 +1299,19 @@ fn collect_font_files_inner(
     limit: usize,
     out: &mut Vec<std::path::PathBuf>,
     unreadable: &mut Vec<(std::path::PathBuf, String)>,
-    walked: &mut HashSet<std::path::PathBuf>,
+    walked: &mut HashMap<std::path::PathBuf, u32>,
 ) {
     if out.len() >= limit {
         return;
     }
-    // A link can spell a folder already walked; the files below it are already counted.
+    // A link can spell a folder already walked. Revisit it only from a shallower depth: a link
+    // met near the depth limit must not hide the folders below it when the real one is reached.
     let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    if !walked.insert(key) {
-        return;
+    match walked.get(&key) {
+        Some(&seen) if seen <= depth => return,
+        _ => {
+            walked.insert(key, depth);
+        }
     }
     let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
