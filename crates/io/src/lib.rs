@@ -1096,26 +1096,35 @@ pub fn import_smart_object_source(name: &str, bytes: &[u8], max_decoded_pixels: 
 /// importing another format. Hosts with stronger generic-source admission can
 /// retain their existing fallback (preview-only rejection, typed budgets, etc.).
 pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<Option<ImportResult>, IoError> {
+    let named_svg = matches!(
+        name.rsplit(['/', '\\']).next().and_then(|base| base.rsplit_once('.')).and_then(|(_, ext)| photocraft_formats::from_extension(ext)),
+        Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz)
+    );
     if craft_svg::sniff::is_svgz(bytes) {
         // Only the explicit .af alias precedes SVGZ sniffing in the shared registry;
         // .afphoto/.afdesign/.afpub are fallback extensions after content detection.
         // Keep that priority and the existing gzip-XCF transport unchanged.
         let explicit_affinity = name.as_bytes().last_chunk::<3>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".af"));
-        if !explicit_affinity && !xcf::is_gzipped_xcf(name, bytes) {
-            // The registry's SVGZ recognition uses this same bound. Reuse the decoded
-            // bytes for strict import so recognition does not inflate the source twice.
-            let plain = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).map_err(|error| IoError::Svg(error.to_string()))?;
-            let text = craft_svg::svgz::decode(&plain).map_err(|error| IoError::Svg(error.to_string()))?;
-            if is_svg_input(name, text.as_bytes()) {
-                // Keep original encoding bytes so the strict import's decompressed-byte
-                // allowance applies before UTF-16 or legacy text conversion as usual.
-                return svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some);
-            }
+        if explicit_affinity || xcf::is_gzipped_xcf(name, bytes) {
+            return Ok(None);
         }
-    } else if svg::is_svg(bytes) {
-        return svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels).map(Some);
+        // The gzip header can occur in a non-SVG preamble. A failed speculative
+        // probe only owns the error when the filename also selects SVG.
+        let decoded = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).and_then(|plain| {
+            let text = craft_svg::svgz::decode(&plain)?;
+            Ok(is_svg_input(name, text.as_bytes()).then_some(plain))
+        });
+        return match decoded {
+            Ok(Some(plain)) => svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some),
+            Err(error) if named_svg => Err(IoError::Svg(error.to_string())),
+            Ok(None) | Err(_) => Ok(None),
+        };
     }
-    Ok(None)
+    if svg::is_svg(bytes) || (named_svg && is_svg_input(name, bytes)) {
+        svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
