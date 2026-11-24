@@ -45,7 +45,8 @@ fn stale_or_unaddressable_saved_path_selection_warns_once_without_selecting_anot
     for names in [vec!["Duplicate", "Duplicate"], vec!["work"], vec!["layer"], vec!["Changed"]] {
         let mut app = imported(&names, names.len() - 1);
         if names == ["Changed"] {
-            Arc::make_mut(&mut app.session.active_mut().unwrap().doc).paths[0].name = "Different".into();
+            let former_path = NamedPath { name: "Different".into(), ..Default::default() };
+            app.session.active_mut().unwrap().initial_path_identity = Some(photocraft_io::initial_view::path_identity(&former_path));
         }
         app.sync_views();
         assert!(app.ui.selected_path.is_none());
