@@ -1055,6 +1055,20 @@ pub fn is_xcf_input_name(name: &str) -> bool {
     SUFFIXES.iter().any(|suffix| name.get(name.len().saturating_sub(suffix.len())..).is_some_and(|tail| tail.eq_ignore_ascii_case(suffix)))
 }
 
+/// Recognize XCF for hosts that must preserve its complete import result while retaining
+/// their configured importer for other formats. Wrapped recognition reads only the shared
+/// fixed-default prefix; the subsequent import still checks the full source and trailer.
+/// Intentional XCF filenames keep malformed-input errors on the XCF admission path.
+pub fn is_xcf_input(name: &str, bytes: &[u8]) -> bool {
+    if is_xcf_input_name(name) || craft_xcf::is_xcf(bytes) {
+        return true;
+    }
+    matches!(
+        craft_xcf::transport::probe_prefix(bytes, ImportCompression::from_name(name), craft_xcf::transport::Limits::default(), &|| true,),
+        Ok(craft_xcf::transport::PrefixProbe::Xcf(_))
+    )
+}
+
 /// Which importer takes the file `name` holding `bytes`. The checks run in this order.
 pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     if craft_xcf::is_xcf(bytes) {

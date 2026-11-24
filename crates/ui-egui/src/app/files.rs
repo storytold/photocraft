@@ -99,29 +99,35 @@ impl PhotocraftApp {
             keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw,
             ..photocraft_engine::jobs::import_options(self.session.prefs())
         };
-        // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
-        // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
-        // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
-        // string. Every other format keeps the shell's import service. `detect` gets no name:
-        // given one it falls back to the extension, and a `.tif` name alone is no TIFF.
-        let typed_open = photocraft_io::is_psd(bytes) || photocraft_formats::detect("", bytes) == Some(photocraft_formats::Format::Tiff);
-        let (mut doc, warnings, damaged) = if typed_open {
-            // Read PSD damage as structured information in the same decode, not by
-            // retrying an error or matching the text of a compatibility warning. A TIFF never
-            // sets it: its layered import has no damaged-content confirmation.
-            let (r, damaged) = match photocraft_io::import_for_open(name, bytes, &opts) {
+        // Preserve the full typed result for XCF's one-time view/source policy, as well as
+        // PSD/TIFF's structured memory/damage decisions. XCF recognition uses only a bounded
+        // prefix; unrelated wrappers (including SVGZ) retain the configured import service.
+        let typed_open = photocraft_io::is_xcf_input(name, bytes)
+            || photocraft_io::is_psd(bytes)
+            || (photocraft_io::import_compression(bytes).is_none() && photocraft_formats::detect("", bytes) == Some(photocraft_formats::Format::Tiff));
+        let (imported, damaged) = if typed_open {
+            match photocraft_io::import_for_open(name, bytes, &opts) {
                 Ok(result) => result,
                 Err(photocraft_io::IoError::PsdApprovalRequired { .. }) => {
                     jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
                     return Ok(Vec::new());
                 }
                 Err(error) => return Err(error.to_string()),
-            };
-            (r.document, r.warnings, damaged)
+            }
         } else {
-            let (doc, warnings) = import(name, bytes, &opts)?;
-            (doc, warnings, false)
+            let (document, warnings) = import(name, bytes, &opts)?;
+            (
+                photocraft_io::ImportResult {
+                    document,
+                    warnings,
+                    initial_view: None,
+                    source_read_only: photocraft_io::affinity::is_affinity(bytes),
+                    preview_only: false,
+                },
+                false,
+            )
         };
+        let photocraft_io::ImportResult { document: mut doc, warnings, initial_view, source_read_only, .. } = imported;
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
@@ -136,9 +142,9 @@ impl PhotocraftApp {
             self,
             open_prompt::Held {
                 doc,
-                read_only: photocraft_io::affinity::is_affinity(bytes),
-                initial_view: None,
-                protected_import_source: None,
+                read_only: source_read_only,
+                initial_view,
+                protected_import_source: path.filter(|_| source_read_only).map(str::to_string),
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
@@ -952,3 +958,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+#[cfg(test)]
+#[path = "inline_open_tests.rs"]
+mod inline_open_tests;

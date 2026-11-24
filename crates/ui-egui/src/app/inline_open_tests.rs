@@ -1,0 +1,235 @@
+//! Inline Open must retain the same native view and protected origin as worker admission.
+use std::{cell::Cell, rc::Rc};
+
+use photocraft_doc::{ColorMode, Document, SampleType};
+use photocraft_engine::{Session, channel_cmds::ChannelTarget};
+use photocraft_geom::Size;
+use serde_json::json;
+
+use crate::{PhotocraftApp, Services};
+
+#[derive(Default)]
+struct Wire(Vec<u8>);
+impl Wire {
+    fn word(&mut self, value: u32) {
+        self.0.extend_from_slice(&value.to_be_bytes());
+    }
+    fn property(&mut self, kind: u32, bytes: &[u8]) {
+        self.word(kind);
+        self.word(bytes.len() as u32);
+        self.0.extend_from_slice(bytes);
+    }
+    fn end(&mut self) {
+        self.word(0);
+        self.word(0);
+    }
+    fn slot(&mut self) -> usize {
+        let at = self.0.len();
+        self.word(0);
+        at
+    }
+    fn point_here(&mut self, at: usize) {
+        let offset = self.0.len() as u32;
+        self.0[at..at + 4].copy_from_slice(&offset.to_be_bytes());
+    }
+    fn string(&mut self, text: &str) {
+        self.word(text.len() as u32 + 1);
+        self.0.extend_from_slice(text.as_bytes());
+        self.0.push(0);
+    }
+    fn pixels(&mut self, channels: u32, pixels: &[u8]) {
+        for value in [1, 1, channels] {
+            self.word(value);
+        }
+        let level = self.slot();
+        self.word(0);
+        self.point_here(level);
+        self.word(1);
+        self.word(1);
+        let tile = self.slot();
+        self.word(0);
+        self.point_here(tile);
+        self.0.extend_from_slice(pixels);
+    }
+}
+
+/// Original v3/U8 file: two selected layers, a selected/visible alpha channel and a sampler.
+/// Raw tile bytes and explicit big-endian pointers avoid importer-derived fixture expectations.
+fn saved_view_xcf() -> Vec<u8> {
+    let mut w = Wire(b"gimp xcf v003\0".to_vec());
+    for value in [1, 1, 0] {
+        w.word(value);
+    }
+    w.property(17, &[0]);
+    w.property(27, &[0; 8]);
+    w.end();
+    let layers = [w.slot(), w.slot()];
+    w.word(0);
+    let channel = w.slot();
+    w.word(0);
+    for ((slot, name), pixel) in layers.into_iter().zip(["Selected front", "Selected back"]).zip([[0, 255, 0, 255], [255, 0, 0, 255]]) {
+        w.point_here(slot);
+        for value in [1, 1, 1] {
+            w.word(value);
+        }
+        w.string(name);
+        w.property(2, &[]);
+        w.property(8, &1_u32.to_be_bytes());
+        w.end();
+        let hierarchy = w.slot();
+        w.word(0);
+        w.point_here(hierarchy);
+        w.pixels(4, &pixel);
+    }
+    w.point_here(channel);
+    w.word(1);
+    w.word(1);
+    w.string("Selected alpha");
+    w.property(3, &[]);
+    w.property(8, &1_u32.to_be_bytes());
+    w.end();
+    let hierarchy = w.slot();
+    w.point_here(hierarchy);
+    w.pixels(1, &[191]);
+    w.0
+}
+
+// Deterministic gzip of exactly saved_view_xcf(), generated independently with a standard
+// encoder. The prefix classifier must recognize the contents even under a misleading name.
+const WRAPPED_XCF: &[u8] = &[
+    31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 75, 207, 204, 45, 80, 168, 72, 78, 83, 40, 51, 48, 48, 102, 0, 2, 70, 40, 6, 1, 65, 24, 91, 26, 136, 57, 24, 48, 129,
+    63, 16, 239, 130, 48, 25, 85, 160, 98, 140, 72, 152, 63, 56, 53, 39, 53, 185, 36, 53, 69, 33, 173, 40, 63, 175, 4, 36, 205, 4, 85, 6, 50, 142, 5, 201, 46,
+    16, 152, 132, 102, 4, 72, 126, 25, 154, 216, 54, 48, 239, 63, 16, 162, 90, 197, 7, 183, 42, 41, 49, 57, 155, 144, 77, 127, 48, 109, 98, 20, 64, 21, 99, 84,
+    128, 88, 132, 98, 19, 194, 67, 137, 57, 5, 25, 137, 32, 21, 204, 184, 173, 97, 140, 71, 117, 36, 99, 49, 154, 21, 205, 32, 206, 126, 0, 118, 207, 135, 82,
+    132, 1, 0, 0,
+];
+const BZIP_XCF: &[u8] = &[
+    66, 90, 104, 57, 49, 65, 89, 38, 83, 89, 222, 170, 45, 59, 0, 0, 155, 255, 248, 253, 193, 224, 8, 68, 0, 72, 0, 0, 0, 136, 0, 191, 239, 221, 64, 8, 0, 16,
+    0, 1, 0, 1, 16, 128, 4, 160, 0, 138, 12, 137, 19, 70, 141, 24, 140, 128, 200, 245, 26, 61, 38, 212, 217, 65, 138, 40, 211, 35, 4, 200, 208, 192, 140, 76,
+    154, 104, 197, 62, 239, 182, 92, 107, 153, 232, 63, 37, 143, 134, 118, 190, 170, 133, 0, 89, 57, 228, 206, 5, 145, 190, 69, 66, 67, 9, 58, 10, 133, 52, 49,
+    136, 39, 25, 83, 73, 33, 173, 44, 32, 0, 226, 36, 18, 145, 3, 138, 65, 20, 18, 68, 137, 249, 168, 32, 176, 160, 18, 170, 171, 79, 167, 179, 54, 134, 134,
+    164, 142, 194, 225, 15, 14, 7, 35, 129, 113, 198, 104, 211, 148, 154, 78, 167, 194, 48, 162, 218, 227, 57, 218, 25, 30, 128, 34, 21, 254, 46, 228, 138,
+    112, 161, 33, 189, 84, 90, 118,
+];
+const XZ_XCF: &[u8] = &[
+    253, 55, 122, 88, 90, 0, 0, 4, 230, 214, 180, 70, 2, 0, 33, 1, 22, 0, 0, 0, 116, 47, 229, 163, 224, 1, 131, 0, 125, 93, 0, 51, 154, 73, 251, 227, 151, 228,
+    69, 84, 21, 244, 125, 131, 107, 137, 144, 31, 233, 164, 61, 148, 10, 11, 250, 170, 125, 130, 62, 64, 156, 241, 6, 180, 92, 12, 120, 226, 29, 228, 225, 79,
+    240, 13, 146, 65, 183, 3, 214, 54, 210, 24, 134, 204, 20, 55, 90, 61, 93, 10, 178, 232, 93, 36, 39, 59, 69, 211, 23, 249, 80, 206, 87, 113, 123, 29, 83,
+    92, 216, 49, 248, 113, 200, 79, 32, 249, 136, 166, 54, 37, 179, 97, 73, 96, 209, 20, 50, 205, 157, 25, 100, 91, 238, 2, 128, 54, 195, 129, 48, 240, 79,
+    254, 242, 45, 41, 68, 73, 107, 102, 61, 4, 241, 224, 94, 228, 131, 0, 0, 0, 0, 10, 104, 107, 178, 82, 45, 93, 221, 0, 1, 153, 1, 132, 3, 0, 0, 211, 37, 33,
+    164, 177, 196, 103, 251, 2, 0, 0, 0, 0, 4, 89, 90,
+];
+const WRAPPED_SVG: &[u8] = &[
+    31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 179, 41, 46, 75, 87, 168, 200, 205, 201, 43, 182, 85, 202, 40, 41, 41, 176, 210, 215, 47, 47, 47, 215, 43, 55, 214, 203,
+    47, 74, 215, 55, 50, 48, 48, 208, 7, 170, 80, 82, 40, 207, 76, 41, 201, 176, 85, 50, 84, 82, 200, 72, 205, 76, 207, 40, 1, 49, 245, 237, 0, 90, 22, 239,
+    220, 62, 0, 0, 0,
+];
+
+fn assert_saved_view(app: &PhotocraftApp, path: &str) {
+    let state = app.session.active().unwrap();
+    assert!(state.source_read_only);
+    assert_eq!(state.path, None);
+    assert_eq!(state.protected_import_source.as_deref(), Some(path));
+    assert!(photocraft_engine::file_cmds::check_import_destination(state, path).is_err());
+    assert_eq!(state.selected_layers.len(), 2);
+    assert_eq!(state.selected_layers.iter().map(|id| state.doc.layer(*id).unwrap().name.as_str()).collect::<Vec<_>>(), ["Selected front", "Selected back"]);
+    assert_eq!(state.doc.layer(state.active_layer.unwrap()).unwrap().name, "Selected front");
+    assert_eq!(state.channel_view.target, ChannelTarget::Alpha(0));
+    assert!(state.channel_view.alpha_shown(0));
+    assert_eq!(state.color_samplers, [[0., 0.]]);
+    assert_eq!(photocraft_compose::flatten(&state.doc).get(0, 0), [0., 1., 0., 1.]);
+    assert_eq!(state.history.past_len(), 0);
+    assert!(!state.is_dirty());
+    let native = photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap();
+    let reopened = photocraft_io::import("saved.pcraft", &native).unwrap();
+    assert!(reopened.initial_view.is_none());
+    assert!(!reopened.source_read_only);
+    assert_eq!(reopened.document.layers, state.doc.layers);
+}
+
+fn app() -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(
+        Session::new(),
+        Services {
+            import: Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|result| (result.document, result.warnings)).map_err(|error| error.to_string())
+            })),
+            ..Default::default()
+        },
+    );
+    app.background_jobs = false;
+    app.session.execute("edit.colorSettings", json!({"askOnMissing":false,"askOnMismatch":false})).unwrap();
+    app
+}
+
+#[test]
+fn inline_xcf_open_preserves_view_and_protected_source() {
+    let plain = saved_view_xcf();
+    for (name, bytes) in [
+        ("saved.xcf", plain.as_slice()),
+        ("renamed.bin", plain.as_slice()),
+        ("renamed.bin", WRAPPED_XCF),
+        ("saved.xcf.gz", WRAPPED_XCF),
+        ("renamed.bin", BZIP_XCF),
+        ("renamed.bin", XZ_XCF),
+    ] {
+        let mut app = app();
+        let path = format!("/imports/{name}");
+        app.open_bytes_from(name, bytes, Some(&path)).unwrap();
+        assert_eq!(app.session.documents().len(), 1);
+        assert_saved_view(&app, &path);
+        assert_eq!(app.ui.recent_files.first(), Some(&path));
+    }
+}
+
+#[test]
+fn inline_xcf_profile_hold_preserves_view_until_confirmed() {
+    for accept in [true, false] {
+        let mut app = app();
+        app.session.execute("edit.colorSettings", json!({"askOnMissing":true})).unwrap();
+        app.open_bytes_from("saved.xcf", &saved_view_xcf(), Some("/imports/saved.xcf")).unwrap();
+        assert!(app.session.documents().is_empty());
+        assert_eq!(app.held_opens.len(), 1);
+        assert!(app.held_opens[0].read_only && app.held_opens[0].initial_view.is_some());
+        assert_eq!(app.held_opens[0].protected_import_source.as_deref(), Some("/imports/saved.xcf"));
+        crate::open_prompt::answer(&mut app, accept.then_some("preserve")).unwrap();
+        assert!(app.held_opens.is_empty());
+        if accept {
+            assert_saved_view(&app, "/imports/saved.xcf");
+        } else {
+            assert!(app.session.documents().is_empty());
+        }
+    }
+}
+
+#[test]
+fn inline_non_xcf_wrappers_retain_configured_import_service() {
+    let calls = Rc::new(Cell::new(0));
+    let seen = calls.clone();
+    let mut app = app();
+    app.services.import = Some(Box::new(move |name, _, _| {
+        seen.set(seen.get() + 1);
+        Ok((Document::new(name, Size::new(1, 1), ColorMode::Rgb, SampleType::U8), vec!["custom importer warning".into()]))
+    }));
+    for (name, bytes) in [("custom.svgz", WRAPPED_SVG), ("unrelated.bin", &[0x1f, 0x8b][..]), ("custom.bin", b"custom".as_slice())] {
+        assert!(!photocraft_io::is_xcf_input(name, bytes));
+        assert_eq!(app.open_bytes(name, bytes).unwrap(), ["custom importer warning"]);
+        assert_eq!(app.session.active().unwrap().doc.name, name);
+        assert!(!app.session.active().unwrap().source_read_only);
+    }
+    assert_eq!(calls.get(), 3);
+}
+
+#[test]
+fn inline_xcf_prefix_recognition_does_not_accept_a_corrupt_trailer() {
+    let mut damaged = WRAPPED_XCF.to_vec();
+    let crc = damaged.len() - 8;
+    damaged[crc] ^= 1;
+    assert!(photocraft_io::is_xcf_input("renamed.bin", &damaged), "header recognition is provisional");
+    let mut app = app();
+    assert!(app.open_bytes_from("renamed.bin", &damaged, Some("/imports/renamed.bin")).is_err());
+    assert!(app.session.documents().is_empty());
+    assert!(app.held_opens.is_empty());
+    assert!(app.ui.recent_files.is_empty());
+    assert!(photocraft_io::is_xcf_input("malformed.xcf", b"not an XCF"), "an explicit decoder choice retains its normal error path");
+}
