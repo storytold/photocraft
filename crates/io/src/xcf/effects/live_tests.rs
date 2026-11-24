@@ -10,6 +10,10 @@ use photocraft_geom::Size;
 use photocraft_raster::Surface;
 
 fn fixture(refusal: Option<&str>, stage_mask: bool) -> Vec<u8> {
+    fixture_with_exposure_version(refusal, stage_mask, Some("1:0"))
+}
+
+fn fixture_with_exposure_version(refusal: Option<&str>, stage_mask: bool, exposure_version: Option<&str>) -> Vec<u8> {
     let mut w = W::new(26);
     for value in [3, 3, 0, 600] {
         w.u32(value);
@@ -46,9 +50,17 @@ fn fixture(refusal: Option<&str>, stage_mask: bool) -> Vec<u8> {
     let mask_pixels = w.slot();
     let mask = hierarchy(&mut w, 2, 1, 4, &[0.5f32.to_be_bytes(), 1f32.to_be_bytes()].concat(), craft_xcf::Compression::None);
     w.patch(mask_pixels, mask);
-    fn effect(w: &mut W, operation: &str, version: &str, args: &[(&str, f32)], mask: bool) {
-        for text in ["Tone stage", "", operation, version] {
+    fn effect(w: &mut W, operation: &str, version: Option<&str>, args: &[(&str, f32)], mask: bool) {
+        for text in ["Tone stage", "", operation] {
             w.string(text);
+        }
+        match version {
+            None => w.u32(0),
+            Some("") => {
+                w.u32(1);
+                w.out.push(0);
+            }
+            Some(version) => w.string(version),
         }
         for (name, value) in args {
             let mut argument = W { out: Vec::new(), wide: true };
@@ -64,11 +76,11 @@ fn fixture(refusal: Option<&str>, stage_mask: bool) -> Vec<u8> {
         w.ptr(if mask { 8 } else { 0 });
     }
     w.patch(contrast_slot, w.out.len());
-    effect(&mut w, "gegl:brightness-contrast", "0:0", &[("brightness", 0.25), ("contrast", 0.5)], stage_mask);
+    effect(&mut w, "gegl:brightness-contrast", Some("0:0"), &[("brightness", 0.25), ("contrast", 0.5)], stage_mask);
     w.patch(exposure_slot, w.out.len());
     let operation = if refusal == Some("invalid-value") { "gegl:exposure" } else { refusal.unwrap_or("gegl:exposure") };
     let exposure = if refusal == Some("invalid-value") { f32::NAN } else { 1. };
-    effect(&mut w, operation, "1:0", &[("black-level", 0.05), ("exposure", exposure)], false);
+    effect(&mut w, operation, exposure_version, &[("black-level", 0.05), ("exposure", exposure)], false);
     w.out
 }
 fn report(document: &Document) -> &photocraft_doc::import_conversion::ConversionReport {
@@ -128,6 +140,29 @@ fn complete_tone_sequence_installs_real_native_data_and_reopens_with_source_evid
     assert_eq!(reopened_smart.smart_filters, smart.smart_filters);
     assert_eq!(reopened_smart.cache, smart.cache);
     assert_eq!(bytes, original);
+}
+
+#[test]
+fn absent_tone_version_is_unconstrained_but_explicit_unknown_versions_preserve_pixels() {
+    fn allow(_: &str, _: &serde_json::Value) -> std::result::Result<(), crate::native_xcf_tones::AuthorizationError> {
+        Ok(())
+    }
+    let _scope = crate::native_xcf_tones::enter_import(allow);
+    let qualified = crate::import("qualified-tone.xcf", &fixture(None, false)).unwrap().document;
+    let unconstrained = crate::import("unconstrained-tone.xcf", &fixture_with_exposure_version(None, false, None)).unwrap().document;
+    let LayerContent::Smart(qualified_tone) = &qualified.layers[0].content else { panic!("known version was not installed") };
+    let LayerContent::Smart(unconstrained_tone) = &unconstrained.layers[0].content else { panic!("absent constraint blocked the known effect") };
+    assert_eq!(unconstrained_tone.smart_filters, qualified_tone.smart_filters);
+    assert_eq!(unconstrained_tone.cache, qualified_tone.cache);
+
+    for version in ["", "2:0"] {
+        let bytes = fixture_with_exposure_version(None, false, Some(version));
+        let retained = crate::import("retained-tone.xcf", &bytes).unwrap().document;
+        let layer = &retained.layers[0];
+        assert!(matches!(layer.content, LayerContent::Raster(_)), "{version:?}");
+        assert_eq!(layer.surface().unwrap().rgba(-1, 1), [-0.25, 0.25, 2., 0.5]);
+        assert!(report(&retained).entries.iter().all(|entry| entry.disposition == ConversionDisposition::RetainedUnapplied));
+    }
 }
 
 #[test]
