@@ -296,7 +296,7 @@ fn process_outputs<'a>(
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
-        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique, rename: None };
+        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique, rename: None, check_as: None };
         let r = process_one(raw_ppi, path, &out, save, options, &run);
         match r {
             Ok(Some(PublishedOutput { path: out, warning })) => {
@@ -358,7 +358,8 @@ pub(super) fn process_document_copies(
         let notices = std::cell::RefCell::new(Vec::new());
         let input = InputPolicy { prepare: &prepare, notices: &notices };
         let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
-        let options = ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false, rename: None };
+        let options =
+            ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false, rename: None, check_as: None };
         match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
             Ok(_) => {
                 written.record(&out, &path);
@@ -384,6 +385,9 @@ struct ProcessOptions<'a> {
     /// The output to use instead of `out`, or `None` to keep it, asked once the input has opened
     /// so an input that does not open fails as such; an error fails the input.
     rename: Option<&'a dyn Fn() -> Result<Option<String>>>,
+    /// The name `written` checks before the input opens instead of `out`: the one a renumbered
+    /// input will take, since an earlier output may have moved into `out`.
+    check_as: Option<String>,
 }
 
 /// Open and process one scratch input, collecting opening diagnostics even on failure.
@@ -397,7 +401,7 @@ fn process_one(
     f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
 ) -> std::result::Result<Option<PublishedOutput>, FileFailure> {
     if let Some(written) = options.written {
-        written.check(out).map_err(EngineError::Other)?;
+        written.check(options.check_as.as_deref().unwrap_or(out)).map_err(EngineError::Other)?;
     }
     let mut scratch = Session::new();
     let result = (|| -> std::result::Result<Option<PublishedOutput>, FileFailure> {
@@ -619,9 +623,12 @@ pub(super) fn process_batch_outputs(
     ctx: &crate::jobs::JobCtx,
     f: &dyn Fn(&mut Session, &str) -> Result<bool>,
 ) -> Result<Value> {
-    process_batch_outputs_with(BatchRun { raw_ppi, format, save, policy, input: None, check_duplicates: false, rename: None }, outputs, ctx, &|scratch, out| {
-        f(scratch, out).map_err(FileFailure::from)
-    })
+    process_batch_outputs_with(
+        BatchRun { raw_ppi, format, save, policy, input: None, check_duplicates: false, rename: None, shifted: None },
+        outputs,
+        ctx,
+        &|scratch, out| f(scratch, out).map_err(FileFailure::from),
+    )
 }
 
 struct BatchRun<'a> {
@@ -634,6 +641,9 @@ struct BatchRun<'a> {
     /// The output for the input at an index when it differs from the planned one, asked once
     /// that input has opened; an error fails that input.
     rename: Option<&'a dyn Fn(usize) -> Result<Option<String>>>,
+    /// The name the input at an index takes when it differs from the planned one, unchecked:
+    /// what is already written is checked against it before that input opens.
+    shifted: Option<&'a dyn Fn(usize) -> Result<Option<String>>>,
 }
 
 /// Share background progress, interruption and write ordering across native and recorded inputs.
@@ -644,7 +654,7 @@ fn process_batch_outputs_with(
     ctx: &crate::jobs::JobCtx,
     f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
 ) -> Result<Value> {
-    let BatchRun { raw_ppi, format, save, policy, input, check_duplicates, rename } = config;
+    let BatchRun { raw_ppi, format, save, policy, input, check_duplicates, rename, shifted } = config;
     let mut written = OutputClaims::default();
     let total = outputs.len();
     let mut files = Vec::new();
@@ -677,6 +687,8 @@ fn process_batch_outputs_with(
             input,
             unique: false,
             rename: rename.is_some().then_some(&resolve as &dyn Fn() -> Result<Option<String>>),
+            // A name that can't be made is reported once the input has opened.
+            check_as: shifted.and_then(|shifted| shifted(index).ok().flatten()),
         };
         let result = process_one(raw_ppi, path, out, save, options, f);
         let out = renamed.take().unwrap_or_else(|| out.clone());
@@ -1152,14 +1164,18 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             };
             #[cfg(not(target_arch = "wasm32"))]
             let sources = std::cell::OnceCell::new();
-            let rename = |index: usize| -> Result<Option<String>> {
+            // The name the input at `index` takes after the inputs that failed to open so far, when it moved.
+            let shifted = |index: usize| -> Result<Option<String>> {
                 let failed = failed_opens.get();
                 let (Some(naming), Some(Some(serial)), Some(input)) = (&naming, serials.get(index), inputs.get(index)) else { return Ok(None) };
                 if failed == 0 {
                     return Ok(None);
                 }
+                naming.name(input, serial.saturating_sub(failed), true).map(Some)
+            };
+            let rename = |index: usize| -> Result<Option<String>> {
+                let Some(out) = shifted(index)? else { return Ok(None) };
                 // The planned names were checked against the inputs and the error log; check the new one too.
-                let out = naming.name(input, serial.saturating_sub(failed), true)?;
                 #[cfg(not(target_arch = "wasm32"))]
                 batch_naming::check_replaces_no_input(sources.get_or_init(|| batch_naming::input_identities(&inputs)), &out)?;
                 validate_error_log(&policy, [], [out.clone()])?;
@@ -1300,7 +1316,16 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 result
             };
             let mut result = process_batch_outputs_with(
-                BatchRun { raw_ppi, format: &format, save, policy: &policy, input: Some(&input), check_duplicates, rename: Some(&rename) },
+                BatchRun {
+                    raw_ppi,
+                    format: &format,
+                    save,
+                    policy: &policy,
+                    input: Some(&input),
+                    check_duplicates,
+                    rename: Some(&rename),
+                    shifted: Some(&shifted),
+                },
                 outputs,
                 ctx,
                 &run,

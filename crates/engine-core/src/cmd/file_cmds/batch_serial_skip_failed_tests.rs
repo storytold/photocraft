@@ -177,6 +177,36 @@ fn a_corrupt_input_whose_renumbered_name_is_another_input_fails_to_open_first() 
 }
 
 #[test]
+fn an_output_renumbered_into_a_later_inputs_planned_name_does_not_skip_that_input() {
+    // Nine corrupt files come first, so `p1.png` (serial 14, `p114`) moves down to 5 and writes
+    // `p15`: the name `sub/p.png` was planned to take at 15. `sub/p.png` moves down to 6 too, so
+    // it writes `p6` and is not refused as a repeat of `p15`.
+    let dir = tmp("shift-into-planned");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(join(&input, "sub")).unwrap();
+    let corrupt: Vec<String> = (0..9).map(|i| format!("c{i}.png")).collect();
+    for name in &corrupt {
+        std::fs::write(join(&input, name), b"not an image").unwrap();
+    }
+    for name in ["p1.png", "sub/p.png"] {
+        write_png(&join(&input, name));
+    }
+    let output = join(&dir, "out");
+    let p = json!({
+        "input": input, "output": output, "steps": [], "format": "same", "startingSerial": 5,
+        "includeSubfolders": true, "flatOutput": true, "namingComponents": [{"component":"name"}, {"component":"serial1"}]
+    });
+    let result = crate::session().execute("file.automate.batch", p).unwrap();
+    let files: Vec<String> = result["files"].as_array().unwrap().iter().map(|f| file_name(f.as_str().unwrap()).to_string()).collect();
+    let errors: Vec<String> = result["errors"].as_array().unwrap().iter().map(|e| file_name(e["file"].as_str().unwrap()).to_string()).collect();
+    assert_eq!(files, ["p15", "p6"], "{result}");
+    assert_eq!(errors, corrupt, "{result}");
+    for name in &files {
+        assert!(std::fs::metadata(join(&output, name)).is_ok_and(|m| m.len() > 0), "{name} was written");
+    }
+}
+
+#[test]
 fn the_error_log_may_take_a_refused_inputs_name() {
     // `d.txt` takes no number, so its name `d_003.png` is never written and the log can use it.
     let dir = tmp("log-name");
