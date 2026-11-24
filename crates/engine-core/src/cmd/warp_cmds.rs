@@ -524,6 +524,10 @@ fn commit_default_sections(mesh: &mut BezierMesh, how: Split) {
 
 /// Applies a split (or removes the split nearest `at`) on `w`'s mesh (presets become custom).
 pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
+    split_warp_inner(w, at, how, None)
+}
+
+fn split_warp_inner(w: &Warp, at: Option<[f64; 2]>, how: Split, picked_anchor: Option<usize>) -> Option<Warp> {
     let mut mesh = w.to_mesh(1, 1);
     if !matches!(how, Split::Remove) && w.style == WarpStyle::Custom && mesh.us.len() == 2 && mesh.vs.len() == 2 {
         commit_default_sections(&mut mesh, how);
@@ -547,23 +551,40 @@ pub fn split_warp(w: &Warp, at: Option<[f64; 2]>, how: Split) -> Option<Warp> {
         // A horizontal split line divides rows; a vertical one divides columns.
         Split::Horizontal => mesh.split_v(t),
         Split::Vertical => mesh.split_u(s),
-        Split::Remove => {
-            let near = |k: &[f64], v: f64| (1..k.len() - 1).min_by(|a, b| (k[*a] - v).abs().total_cmp(&(k[*b] - v).abs()));
-            let (iu, iv) = (near(&mesh.us, s), near(&mesh.vs, t));
-            let du = iu.map_or(f64::MAX, |i| (mesh.us[i] - s).abs());
-            let dv = iv.map_or(f64::MAX, |i| (mesh.vs[i] - t).abs());
-            match (iu, iv) {
-                (Some(i), _) if du <= dv => mesh.remove_split_u(i),
-                (_, Some(i)) => mesh.remove_split_v(i),
-                (Some(i), None) => mesh.remove_split_u(i),
-                _ => false,
-            }
-        }
+        Split::Remove => remove_split(&mut mesh, s, t, if at.is_none() { picked_anchor } else { None }),
     };
     if ok && matches!(how, Split::Remove) {
         restore_default_grid(&mut mesh);
     }
     ok.then(|| Warp::custom(mesh, w.bounds))
+}
+
+fn remove_split(mesh: &mut BezierMesh, s: f64, t: f64, picked: Option<usize>) -> bool {
+    // Use the anchor's knot directly. Inverting a deformed mesh can land in a different patch,
+    // and an anchor at a crossing does not identify a single line.
+    if let Some(index) = picked.filter(|&i| i < mesh.points.len()) {
+        let (nx, ny) = (mesh.nx(), mesh.ny());
+        let (x, y) = (index % nx, index / nx);
+        if x.is_multiple_of(3) && y.is_multiple_of(3) {
+            let (u, v) = (x > 0 && x < nx - 1, y > 0 && y < ny - 1);
+            match (u, v) {
+                (true, false) => return mesh.remove_split_u(x / 3),
+                (false, true) => return mesh.remove_split_v(y / 3),
+                _ => {}
+            }
+        }
+    }
+
+    let near = |k: &[f64], v: f64| (1..k.len() - 1).min_by(|a, b| (k[*a] - v).abs().total_cmp(&(k[*b] - v).abs()));
+    let (iu, iv) = (near(&mesh.us, s), near(&mesh.vs, t));
+    let du = iu.map_or(f64::MAX, |i| (mesh.us[i] - s).abs());
+    let dv = iv.map_or(f64::MAX, |i| (mesh.vs[i] - t).abs());
+    match (iu, iv) {
+        (Some(i), _) if du <= dv => mesh.remove_split_u(i),
+        (_, Some(i)) => mesh.remove_split_v(i),
+        (Some(i), None) => mesh.remove_split_u(i),
+        _ => false,
+    }
 }
 
 /// After a split is removed: when what is left is the Default grid's thirds that a one-way split
@@ -615,7 +636,10 @@ fn inline_warp(cmd: &str, p: &Value) -> Result<Option<Warp>> {
 fn split(s: &mut Session, p: &Value, cmd: &str, how: Split) -> Result<Value> {
     let at = p.get("at").and_then(Value::as_array).and_then(|a| Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?]));
     if let Some(w) = inline_warp(cmd, p)? {
-        let out = split_warp(&w, at, how).ok_or_else(|| bad(cmd, "nothing to split or remove there"))?;
+        // Only the canvas's inline warp uses a grid pick. Commands on a stored smart object
+        // continue to take document coordinates.
+        let picked = p.get("pickedAnchor").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+        let out = split_warp_inner(&w, at, how, picked).ok_or_else(|| bad(cmd, "nothing to split or remove there"))?;
         return Ok(json!({"warp": out}));
     }
     // The active smart object's stored warp.
