@@ -19,7 +19,7 @@ const WHITE: [u8; 4] = [255, 255, 255, 255];
 fn session(depth: u32, background: Value) -> (Session, [u64; 3]) {
     let mut s = crate::session();
     s.execute("file.new", json!({"name": "abfiles-test", "width": 800, "height": 400, "depth": depth, "background": "transparent"})).unwrap();
-    let mut board = |name: &str, rect: [u32; 4], layer: Option<(&str, [u32; 4], &str)>| {
+    let mut board = |name: &str, rect: [u32; 4], layer: Option<(&str, [i32; 4], [u8; 4])>| {
         let mut p = json!({"name": name, "rect": rect, "background": background});
         if background == "custom" {
             p["color"] = json!("#3366CC");
@@ -28,14 +28,20 @@ fn session(depth: u32, background: Value) -> (Session, [u64; 3]) {
         if let Some((layer, [x, y, width, height], color)) = layer {
             s.execute("layer.select", json!({"layer": id})).unwrap();
             s.execute("layer.new.layer", json!({"name": layer})).unwrap();
-            s.execute("select.rect", json!({"x": x, "y": y, "width": width, "height": height, "antiAlias": false})).unwrap();
-            s.execute("edit.fill", json!({"color": color})).unwrap();
-            s.execute("select.deselect", json!({})).unwrap();
+            // Edit › Fill lives in the paint crate; fill the new layer's rectangle directly.
+            s.edit("Fill", |doc, active| {
+                let fmt = doc.pixel_format();
+                let area = photocraft_geom::Rect { x0: x, y0: y, x1: x + width, y1: y + height };
+                let rgba = color.map(|c| f32::from(c) / 255.0);
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(area, &photocraft_raster::from_rgba(&fmt, rgba));
+                Ok(())
+            })
+            .unwrap();
         }
         id
     };
-    let red = board("Red Board", [0, 0, 200, 150], Some(("Red", [20, 20, 100, 80], "#DC1E1E")));
-    let blue = board("Blue Board", [120, 30, 200, 200], Some(("Blue", [130, 40, 100, 100], "#1E1EDC")));
+    let red = board("Red Board", [0, 0, 200, 150], Some(("Red", [20, 20, 100, 80], RED)));
+    let blue = board("Blue Board", [120, 30, 200, 200], Some(("Blue", [130, 40, 100, 100], BLUE)));
     let empty = board("Empty Board", [600, 0, 100, 100], None);
     (s, [red, blue, empty])
 }
