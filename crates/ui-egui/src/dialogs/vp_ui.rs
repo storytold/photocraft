@@ -24,7 +24,7 @@ use craft::ui::primitives::Revision;
 use craft::ui::runtime::pending::Job;
 use egui::{Color32, ColorImage};
 use photocraft_algo::vanishing::{Edge, PlaneCheck as AlgoCheck, Scene, VpPlane, clone_dabs_from, clone_source};
-use photocraft_compose::composite_to_surface;
+use photocraft_compose::{composite_to_surface, effects::has_effects, siblings_of};
 use photocraft_doc::{DocId, Document, Layer, LayerContent, LayerId};
 use photocraft_engine::vp_cmds::{MAX_CLONE_DABS, MAX_CLONE_STROKES, VP, copy_changed, over, paste_onto, samples_visible, visible_image};
 use photocraft_geom::Rect;
@@ -324,7 +324,14 @@ impl Preview {
             (None, Some(work)) => surface_image(work, r, usize::MAX),
             (None, None) => surface_image(&st.out, r, usize::MAX),
         };
-        let changed = if stale {
+        // An effect on the layer or on a group around it (a shadow, a glow, an overlay over the layer's frame) reaches
+        // past the dabs, so the whole picture is drawn again.
+        let styled = st
+            .doc
+            .as_ref()
+            .and_then(|doc| siblings_of(doc, self.inputs.layer))
+            .is_some_and(|(layers, k, around)| layers.get(k).into_iter().chain(around.iter().filter_map(|(ls, g)| ls.get(*g))).any(has_effects));
+        let changed = if stale || (styled && !area.is_empty()) {
             let image = shown(canvas);
             match self.picture.get() {
                 Some(picture) => picture.replace(image),

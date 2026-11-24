@@ -342,6 +342,43 @@ fn an_empty_layer_shows_the_image_and_stamps_from_it_like_ok() {
 }
 
 #[test]
+fn a_shadow_follows_the_dabs_of_a_later_batch() {
+    let mut app = app_with_layer();
+    app.session
+        .edit("stripe", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 70, 110, 90), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("shadow", |doc, active| {
+            let mut shadow = photocraft_doc::effects::Effect::default_drop_shadow();
+            if let photocraft_doc::effects::Effect::DropShadow(s) = &mut shadow {
+                (s.distance, s.size) = (24.0, 0.0);
+            }
+            let layer = doc.layer_mut(active.unwrap()).unwrap();
+            layer.effects.items.push(shadow);
+            layer.effects.enabled = true;
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [full_plane()]}));
+    set(&mut h, json!({"clone": [{"source": [60, 80], "points": [[120, 80]], "size": 12}]}));
+    // The second batch goes on with the same stroke, so only its dabs are painted again.
+    set(&mut h, json!({"clone": [{"source": [60, 80], "points": [[120, 80], [160, 80]], "size": 12}]}));
+    let at: Vec<(i32, i32)> = (90..200).step_by(3).flat_map(|x| (50..130).step_by(3).map(move |y| (x, y))).collect();
+    let preview: Vec<[u8; 4]> = at.iter().map(|&(x, y)| shown(&h, x, y)).collect();
+    ok(&mut h);
+    let done = visible_image(&h.state().session.active().unwrap().doc);
+    for (&(x, y), p) in at.iter().zip(&preview) {
+        assert!(close(*p, done.rgba(x, y)), "({x}, {y}): {p:?} vs {:?}", done.rgba(x, y));
+    }
+}
+
+#[test]
 fn a_half_opaque_empty_layer_previews_the_stamp_as_ok_paints_it() {
     let mut app = app_with_layer();
     app.session
