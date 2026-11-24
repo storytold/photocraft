@@ -29,6 +29,9 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: ShapeKind, at: Point) -> Optio
     let units = GuideUnits::new(ruler, size[0], size[1], dpi).points_per_inch(points);
     // The options bar has no star ratio: a polygon opens as a plain polygon.
     let options = CreateShapeOptions::initial(kind, at).units(units).tool(radius, sides, 1.0);
+    // Create Rectangle opens at 100 × 100 px with From Center off every time, whatever the last OK was, and its Width
+    // takes 0, which creates nothing (#13339). Its radii still start from the options bar's Radius (not measured).
+    let options = if kind == ShapeKind::Rectangle { options.recalled().zero_width() } else { options };
     Some(app.framework.dialogs.open(CreateShapeDialog::new(options).alert_title(tl!("PhotoCraft"))))
 }
 
@@ -64,12 +67,19 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
         let _ = super::alerts::show(app, alert);
     }
     let Some(DialogResult::Ok(shape)) = app.framework.dialogs.take::<CreateShapeDialog>() else { return };
+    // Create Rectangle's Width 0: OK closes the dialog and creates nothing (#13339).
+    if shape.empty {
+        return;
+    }
 
     if let Err(e) = crate::vector_ui::create_geometry(app, &shape.geometry, shape.kind, crate::vector_ui::tool_history_name(shape.kind)) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
 }
+
+#[cfg(test)]
+mod create_rectangle_defaults_tests;
 
 #[cfg(test)]
 mod tests;
