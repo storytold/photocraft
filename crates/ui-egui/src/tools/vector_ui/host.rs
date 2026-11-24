@@ -215,6 +215,13 @@ pub(crate) fn remove_last(app: &mut PhotocraftApp) -> bool {
         return false;
     }
     let Some(pen) = app.ui.pen.as_ref() else { return false };
+    // A live draft with no anchors of its own has nothing of its own for Undo to take: its path already holds what was
+    // drawn, so the draft simply goes and History takes the real step instead, as the tool's own EmptyDraft end does
+    // (#12890).
+    if (pen.live_layer || pen.live_path) && pen.draft.knots.is_empty() {
+        drop_draft(app);
+        return false;
+    }
     // A live shape layer's anchors are History steps (#12909): Undo takes back the last one the layer took. Anchors it
     // refused are the draft's alone, and the Pen takes those back first, one by one. A live Work Path is the same, one
     // step per click (#12890).

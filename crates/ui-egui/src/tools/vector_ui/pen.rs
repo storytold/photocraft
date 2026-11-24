@@ -609,7 +609,9 @@ pub(super) fn start_live_path(app: &mut PhotocraftApp) {
 
 /// Is `pen` a draft carried on from the end point of an open subpath of the Work Path, drawn live like a fresh one
 /// (#12890)? The press that picked it up is the step "Pick-up Path". The Curvature Pen and Freeform Pen, a saved path,
-/// a vector mask and the other Path Operations were not measured and keep today's route.
+/// a vector mask and the other Path Operations were not measured and keep today's route. A Work Path that a finish hid
+/// (#12892) is not drawn, so nothing can be carried on from it: `resume_target` refuses it the same way, and minting
+/// from it here would put a live path back beside a hidden one.
 fn carries_on_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
     !pen.curvature
         && !pen.live_layer
@@ -619,6 +621,7 @@ fn carries_on_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
         && app.ui.tool_options.vector_mode == VectorMode::Path
         && pen_path_op(&app.ui.tool_options) == Some("combine")
         && targeted_vector_mask(app).is_none()
+        && work_path_shown(app)
         && pen.resumes.as_ref().is_some_and(|r| r.layer.is_none() && r.path == "work")
 }
 
@@ -631,11 +634,15 @@ pub(super) fn pick_up_live_path(app: &mut PhotocraftApp) {
     let drawn = path_json(&pen_path(pen));
     let (name, full) = (r.path.clone(), app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &drawn)));
     let Some(full) = full else { return };
-    if let Some(pen) = app.ui.pen.as_mut() {
-        pen.live_path = true;
-    }
     match run_beside_draft(app, "path.set", json!({"name": name, "path": full, "historyName": "Pick-up Path"})) {
-        Ok(_) => follow_live_layer(app),
+        // Only a write that went through makes the draft live: a refused one keeps today's route, with the anchors in
+        // the draft and the finish taking them, and leaves no live path behind (#12890).
+        Ok(_) => {
+            if let Some(pen) = app.ui.pen.as_mut() {
+                pen.live_path = true;
+            }
+            follow_live_layer(app);
+        }
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;

@@ -65,17 +65,20 @@ pub(crate) fn show_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
 /// The version of the options bar: every tool option (`app.ui.tool_options`, all of which the bar shows; keys, the
 /// canvas menu, the canvas and its task bars, panels and presets write them without a command), the commit and cancel
 /// cells and hints of an edit the canvas opens or ends ([`options_bar::edit_key`](super::options_bar::edit_key)), the
-/// Zoom tool's view, and an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
+/// Zoom tool's view, an open Free Transform, Puppet Warp or Perspective Warp, which shows its own members in place
 /// of the tool's, with what a drag on the canvas changes (the box, the picked pin, the planes; Escape ends them without
-/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets and
-/// the colours.
+/// a command, #15547), the Crop tool's frame state, the type members' caret or selection, the brush and its presets, the
+/// colours, and the path the vector bar's "Make" row works from (a Pen draft, the Work Path a finish showed or hid
+/// (#12892) and the Paths panel's selection), which a Pen drawing click by click changes without a History step
+/// (#12890).
 pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let sessions =
         (crate::transform_tool::bar_key(app), crate::puppet_ui::bar_key(app), crate::perspective_ui::bar_key(app), crate::crop_ui::bar::bar_key(app));
     let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
     // A canvas gesture's start and end change what the bar enables (the symmetry menu's Transform entry).
     let gesture = crate::canvas::tools::in_gesture(app);
-    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture))
+    let paths = (app.ui.pen.as_ref().map(|p| p.draft.knots.len()), app.ui.selected_path.clone(), serialized(&app.ui.hidden_work_path));
+    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture, paths))
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
