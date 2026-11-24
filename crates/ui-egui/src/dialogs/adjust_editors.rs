@@ -18,8 +18,8 @@ use craft::color_ui::ui::gradient::{ColorStop, GradientStops};
 use craft::draw::ui::gradient::{GradientGroup, GradientItem, GradientMap, GradientMapEditor, GradientMapOutput};
 use craft::imaging::ui::adjust::{
     AdjustDialogCx, AdjustField, AdjustSliders, AdjustWords, BlackWhite, BlackWhiteEditor, BrightnessContrast, BrightnessContrastEditor, ChannelMixer,
-    ChannelMixerEditor, ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsPanel, PhotoFilter,
-    PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
+    ColorBalance, ColorBalanceEditor, ColorBalanceTone, CurvesPanel, HueSaturation, HueSaturationEditor, Levels, LevelsPanel, PhotoFilter, PhotoFilterEditor,
+    SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneChannels, ToneCurves, ToneSpace,
 };
 use craft::imaging::ui::histogram::{ChannelColor, HistogramData};
 use craft::theme::Srgba;
@@ -35,6 +35,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
+pub(crate) mod channel_mixer_presets;
 mod session;
 pub mod values;
 
@@ -316,8 +317,8 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             AdjustOut { ask: out.pick_color.map(AdjustAsk::PickColor), edit: out.edit.events.map(|value| AdjustValue::PhotoFilter { value }) }
         }
         ("channelMixer", AdjustValue::ChannelMixer { value }) => {
-            let out = ChannelMixerEditor::new("Channel Mixer", Bind::bound(value)).context(context).show(ui);
-            lifted(out.events, |value| AdjustValue::ChannelMixer { value })
+            let edit = channel_mixer_presets::show(ui, value, context);
+            lifted(edit, |value| AdjustValue::ChannelMixer { value })
         }
         ("threshold", AdjustValue::Threshold { level }) => {
             let data = setup.histograms.first().map(|counts| HistogramData::tone(&counts[..], ChannelColor::Neutral));

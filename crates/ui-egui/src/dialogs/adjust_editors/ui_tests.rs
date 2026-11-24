@@ -224,6 +224,55 @@ fn cmyk_channel_mixer_is_kept_out_of_the_rgb_editor() {
     assert!(crate::adjust_dialog::open(h.state_mut(), "image.adjustments.channelMixer").is_ok(), "RGB mixers open");
 }
 
+/// A preset uses the normal adjustment-layer history, including reselecting and undoing.
+#[test]
+fn channel_mixer_preset_properties_commits_one_edit_and_default_is_undoable() {
+    let mut h = app_harness("channelMixer", "rgb", 8);
+    let (id, identity) = layer(&h);
+    let choose = |h: &mut Harness<'_, Box<PhotocraftApp>>, name| {
+        h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+        h.run_steps(4);
+        h.get_by_label(name).click();
+        h.run_steps(4);
+    };
+    let shown = |h: &Harness<'_, Box<PhotocraftApp>>| h.get_by_role_and_label(Role::ComboBox, "Preset").accesskit_node().value();
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "green": [20, 80, 0, 4]})).unwrap();
+    h.run_steps(4);
+    let original = photocraft_engine::adjust_params::to_params(&layer(&h).1);
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+    let steps = history_len(&h);
+
+    choose(&mut h, "Blue Mix");
+    let (_, mixed) = layer(&h);
+    let Adjustment::ChannelMixer { matrix, monochrome: true, .. } = mixed else { panic!("{mixed:?}") };
+    let [red, green, blue, constant] = matrix[0];
+    assert!(blue > red && blue > green && constant == 0.0);
+    let params = photocraft_engine::adjust_params::to_params(&mixed);
+    assert_eq!(params["green"], original["green"], "the hidden green output is kept");
+    assert_eq!(shown(&h).as_deref(), Some("Blue Mix"));
+    assert_eq!(history_len(&h), steps + 1);
+    assert!(h.state().live_adjust.is_none(), "preset selection leaves no pending preview");
+
+    choose(&mut h, "Custom");
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+    assert_eq!(layer(&h).1, mixed);
+    assert_eq!(history_len(&h), steps + 1);
+    choose(&mut h, "Blue Mix");
+    assert_eq!(shown(&h).as_deref(), Some("Blue Mix"));
+    assert_eq!(history_len(&h), steps + 1, "reselecting the same mix does not create a history step");
+
+    choose(&mut h, "Default");
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+    assert_eq!(layer(&h).1, identity);
+    assert_eq!(history_len(&h), steps + 2);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, mixed);
+    assert_eq!(shown(&h).as_deref(), Some("Blue Mix"));
+}
+
 /// #3264: wheel browsing previews without recording one edit per selected LUT.
 #[test]
 fn color_lookup_picker_cycles_luts_with_the_mouse_wheel() {

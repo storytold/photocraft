@@ -558,6 +558,58 @@ fn curves_reset_keeps_the_captured_mask_or_native_space_after_retargeting() {
     }
 }
 
+/// The Channel Mixer menu affects the dialog's preview until OK. Manual Monochrome and Reset
+/// update the same menu while keeping the original document and history intact.
+#[test]
+fn channel_mixer_preset_dialog_previews_and_resets() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::NodeT;
+
+    let (mut h, id) = open_in_harness(app_with_image(), "image.adjustments.channelMixer");
+    let doc = h.state().session.active().unwrap().doc.clone();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let initial = params(h.state_mut(), id);
+    let shown = |h: &Harness<'_, Box<PhotocraftApp>>| h.get_by_role_and_label(Role::ComboBox, "Preset").accesskit_node().value();
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+
+    h.get_by_role_and_label(Role::CheckBox, "Monochrome").click();
+    h.run_steps(4);
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+    assert_eq!(field(h.state_mut(), id, "monochrome"), json!(true));
+
+    h.get_by_role_and_label(Role::CheckBox, "Monochrome").click();
+    h.run_steps(4);
+    assert_eq!(params(h.state_mut(), id), initial, "the manual toggle returns to the same coefficients");
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+    press_reset(&mut h);
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+
+    h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+    h.run_steps(4);
+    h.get_by_label("Infrared Mix").click();
+    h.run_steps(4);
+    assert_eq!(shown(&h).as_deref(), Some("Infrared Mix"));
+    let mixed = params(h.state_mut(), id);
+    let gray: Vec<f64> = serde_json::from_value(mixed["gray"].clone()).unwrap();
+    assert!(gray[1] > 100.0 && gray[0] < 0.0 && gray[2] < 0.0 && gray[3] == 0.0);
+    assert_eq!(gray.iter().sum::<f64>(), 100.0);
+    for output in ["red", "green", "blue"] {
+        assert_eq!(mixed[output], initial[output], "the dialog keeps the hidden output {output}");
+    }
+    assert!(crate::adjust_preview::display_doc(h.state_mut(), 0).is_some());
+    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+
+    press_reset(&mut h);
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+    assert_eq!(params(h.state_mut(), id), initial);
+    assert!(h.state().framework.dialogs.stack().ids().any(|open| open == id), "Reset keeps the dialog open");
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+}
+
 /// #9879: the reference application's Photo Filter reopens at Warming Filter (85) and 25 % after
 /// any OK, but keeps Preserve Luminosity as last confirmed (measured 2026-11-08); ⌥ reopens at all
 /// the last settings; Levels still opens at its neutral settings.
