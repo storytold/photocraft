@@ -46,7 +46,7 @@ pub(crate) fn open_new(app: &mut PhotocraftApp) -> Option<DialogId> {
     let rgb = [foreground[0], foreground[1], foreground[2]];
     // A foreground picked as CMYK opens showing those inks, as its own picker does, so OK keeps
     // them even when the foreground is finer than the picker's hex (#8568).
-    let kept = app.session.tools.picked_cmyk(rgb).map(inks_model);
+    let kept = app.session.tools.picked_role_cmyk(0).map(inks_model);
     Some(color_picker_ui::open_for(app, "Color Picker (Solid Color)", Srgba::from_rgb_array(rgb), kept, PickTarget::NewSolidFill { document }))
 }
 

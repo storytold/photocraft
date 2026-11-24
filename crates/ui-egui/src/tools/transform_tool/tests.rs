@@ -2215,3 +2215,6 @@ fn an_unskewed_box_shows_its_horizontal_skew_as_zero() {
     h.run_steps(2);
     assert_eq!(h.get_by_label("Horizontal skew").value().as_deref(), Some("0"));
 }
+
+#[path = "warp_remove_split_tests.rs"]
+mod warp_remove_split_tests;
