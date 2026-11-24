@@ -156,9 +156,10 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
-    // The Polygon tool's Align Edges, at the bar's right end (#13326). Only a shape layer has pixel
-    // edges to align: greyed in Path mode (and in a pixels mode).
-    if tool == Tool::Polygon {
+    // The Rectangle (#13346) and Polygon (#13326) tools' Align Edges, at the bar's right end (the
+    // Rectangle's after its gear). Only a shape layer has pixel edges to align: greyed in Path mode
+    // (and in a pixels mode).
+    if matches!(tool, Tool::Rectangle | Tool::Polygon) {
         Divider::vertical().show(ui);
         let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
         let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);

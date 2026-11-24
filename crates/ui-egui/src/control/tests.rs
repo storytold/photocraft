@@ -552,7 +552,13 @@ fn agent_can_inspect_and_choose_pen_make_selection_from_full_context_menu() {
     let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
     assert_eq!(app.ui.canvas_tool_menu.as_ref().unwrap().pos, screen_point(&app, 8.0, 8.0));
     let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).unwrap();
-    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 9);
+    // #12915: (8,8) lies on the closed work path's diagonal, so the menu now leads with the
+    // segment's Add Anchor Point entry above one more separator.
+    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 10);
+    assert!(
+        entries.iter().any(|row| row.get("id") == Some(&json!("path.addAnchor")) && row.get("enabled") == Some(&json!(true))),
+        "the segment entry heads the menu"
+    );
     assert!(entries.iter().any(|row| row.get("id") == Some(&json!("path.toSelection")) && row.get("enabled") == Some(&json!(true))));
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"file.new"}))["ok"], false);
     let chosen = call(&mut app, &ctx, "ui.context.choose", json!({"id":"path.toSelection"}));
