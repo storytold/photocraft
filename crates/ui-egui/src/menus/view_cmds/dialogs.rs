@@ -186,6 +186,15 @@ fn selected_artboards(app: &PhotocraftApp) -> Vec<u64> {
     st.selected_layers().iter().copied().filter(is_board).map(|id| id.0).collect()
 }
 
+/// Artboards to Files' Export Selected Artboards boards (#13632): [`selected_artboards`], unless a hidden board is
+/// among them. That case was not measured, so it keeps the export of every board (the checkbox greyed).
+fn selected_visible_artboards(app: &PhotocraftApp) -> Vec<u64> {
+    let selected = selected_artboards(app);
+    let Some(st) = app.session.active() else { return Vec::new() };
+    let hidden = |id: &u64| st.doc.layers.iter().any(|l| l.id.0 == *id && !l.visible);
+    if selected.iter().any(hidden) { Vec::new() } else { selected }
+}
+
 /// Artboards to PDF's Export Selected Artboards (#13647): a checkbox over the command's own `artboards`, the ids of
 /// `selected`. It opens ticked when there are any, else greyed and unticked, and it is set from the selection at every
 /// open (a host-drawn row remembers nothing). Unticked, `artboards` is null and the command exports every board.
@@ -325,6 +334,9 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                         Some("overlapping".to_owned()),
                     ),
                 ),
+                // Export Selected Artboards, below the overlap radios (#13632): as Artboards to PDF's, ticked when an
+                // artboard is the active layer, else greyed, and set from the selection at every open.
+                export_selected_artboards(selected_visible_artboards(app)),
                 // The reference application's list, PSD chosen when the dialog opens (#13635).
                 choice("format", tl!("File Type"), artboard_formats(), "psd"),
             ];
@@ -949,6 +961,9 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
     })
 }
 
+#[cfg(test)]
+#[path = "../../artboards_to_files_selected_tests.rs"]
+mod artboards_to_files_selected_tests;
 #[cfg(test)]
 #[path = "artboards_to_pdf_mode_tests.rs"]
 mod artboards_to_pdf_mode_tests;
