@@ -88,10 +88,22 @@ fn app() -> (Box<PhotocraftApp>, Open) {
     (app, open)
 }
 
-/// Opens `path` as File › Open does.
+/// Opens `path` as File › Open does, then lets its look at the linked files answer, as the
+/// passes after the open do.
 fn open_file(app: &mut PhotocraftApp, path: &Path) {
     let p = path.to_string_lossy().into_owned();
     app.open_file(&p, &std::fs::read(path).unwrap()).unwrap();
+    settle_looks(app);
+}
+
+/// Shows the dialogs of the looks still running, waiting (at most 10 s) until each has answered.
+fn settle_looks(app: &mut PhotocraftApp) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !app.link_looks.is_empty() {
+        assert!(std::time::Instant::now() < deadline, "the look at the linked files answers");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        take_late_looks(app);
+    }
 }
 
 /// The open Cannot Locate Linked Assets dialogs.
@@ -506,7 +518,7 @@ fn a_look_that_answers_late_shows_the_dialog_when_it_arrives() {
     let ctx = app.ctx().clone();
     let (answer, look) = std::sync::mpsc::channel();
     let mut looked_from = None;
-    ask_with(&mut app, document, Some(&abs(&s.doc)), std::time::Duration::from_millis(1), |_, opened| {
+    ask_with(&mut app, document, Some(&abs(&s.doc)), |_, opened| {
         looked_from = opened.map(Path::to_path_buf);
         look
     });
@@ -538,7 +550,7 @@ fn a_late_answer_follows_what_happened_to_the_document_meanwhile() {
     let late = |app: &mut PhotocraftApp| {
         let document = app.session.active().unwrap().doc.id;
         let (answer, look) = std::sync::mpsc::channel();
-        ask_with(app, document, Some(&abs(&s.doc)), std::time::Duration::from_millis(1), |_, _| look);
+        ask_with(app, document, Some(&abs(&s.doc)), |_, _| look);
         assert_eq!(app.link_looks.len(), 1);
         answer
     };
@@ -582,5 +594,33 @@ fn a_late_answer_follows_what_happened_to_the_document_meanwhile() {
     drop(late(&mut app));
     crate::dialogs::take_results(&mut app, &ctx);
     assert!(no_dialogs(&app));
+    assert!(app.link_looks.is_empty());
+}
+
+/// The open never waits for its look at the linked files, not even for one that answers soon (a
+/// share that is slow to answer): the document opens at once, and the dialog shows on a later pass.
+#[test]
+fn an_open_does_not_wait_for_a_look_that_answers_soon() {
+    let s = saved(true, None);
+    let (mut app, _) = app();
+    open_file(&mut app, &s.doc);
+    let document = app.session.active().unwrap().doc.id;
+    let ctx = app.ctx().clone();
+    let (answer, look) = std::sync::mpsc::channel();
+    let art = s.art.clone();
+    let worker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        answer.send(vec![(art.clone(), vec![abs(&art)])]).unwrap();
+    });
+    let started = std::time::Instant::now();
+    ask_with(&mut app, document, Some(&abs(&s.doc)), |_, _| look);
+    assert!(started.elapsed() < std::time::Duration::from_millis(200), "the open went on without waiting: {:?}", started.elapsed());
+    assert!(no_dialogs(&app), "nothing is shown before the look answers");
+    assert_eq!(app.link_looks.len(), 1, "the look is kept");
+    worker.join().unwrap();
+    crate::dialogs::take_results(&mut app, &ctx);
+    let shown = dialogs(&app);
+    assert_eq!(shown.len(), 1, "{:?}", app.framework.dialogs.open_dialogs());
+    assert_eq!(listed(shown[0]), json!([{"file": abs(&s.art), "paths": [abs(&s.art)]}]));
     assert!(app.link_looks.is_empty());
 }

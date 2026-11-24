@@ -11,8 +11,8 @@
 //! - Cancel is not measured in the reference yet: it does what OK does.
 //!
 //! Only an interactive open asks ([`crate::jobs_ui::after_open`]). The files are looked at on a
-//! worker thread, and the open waits at most half a second for the answer; one that comes later (a
-//! share that is slow to answer) shows the dialog when it arrives ([`LateLook`]). An automation
+//! worker thread, and the open does not wait for the answer: the dialog shows when it arrives
+//! ([`LateLook`]), on the next pass for local files, later for a share that is slow to answer. An automation
 //! open never shows the dialog and lists the files in its `warnings` instead
 //! ([`photocraft_engine::link_watch::missing_file_warnings`]).
 //!
@@ -22,7 +22,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 use craft::behavior::IconId;
 use craft::ui::buttons::Button;
@@ -41,12 +41,7 @@ use crate::PhotocraftApp;
 /// The dialog's key; each open document's dialog is its own instance of it.
 const KEY: &str = "photocraft.missingLinks";
 
-/// How long an open waits for its linked files to be looked at. Local files answer at once; a
-/// share that doesn't answer in time doesn't hold the interface up: the document opens, and the
-/// dialog follows when the look answers ([`LateLook`]).
-const LOOK_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
-
-/// A look at an opened document's linked files that did not answer within [`LOOK_WAIT`], kept
+/// A look at an opened document's linked files that had not answered when the open went on, kept
 /// until it does ([`take`]).
 pub(crate) struct LateLook {
     document: DocId,
@@ -150,29 +145,26 @@ impl StackDialog for MissingLinksDialog {
 /// it. Relative links are taken from `path` (else the document's own file).
 pub(crate) fn ask(app: &mut PhotocraftApp, document: DocId, path: Option<&str>) {
     let ctx = app.ctx().clone();
-    ask_with(app, document, path, LOOK_WAIT, |doc, opened| photocraft_engine::link_watch::missing_files_look(doc, opened, move || ctx.request_repaint()));
+    ask_with(app, document, path, |doc, opened| photocraft_engine::link_watch::missing_files_look(doc, opened, move || ctx.request_repaint()));
 }
 
-/// [`ask`] with the look to start and how long to wait for its answer before the open goes on
-/// without it. A look still running then is kept, and [`take`] shows the dialog once it answers.
+/// [`ask`] with the look to start. The interface never waits for the look (a file on a share that
+/// doesn't answer can take it seconds): an answer already there is shown at once, and a look still
+/// running is kept for [`take`] to show once it answers.
 pub(crate) fn ask_with(
     app: &mut PhotocraftApp,
     document: DocId,
     path: Option<&str>,
-    wait: std::time::Duration,
     look: impl FnOnce(&Document, Option<&Path>) -> Receiver<Vec<MissingFile>>,
 ) {
     let Some(st) = app.session.documents().iter().find(|st| st.doc.id == document) else { return };
     let opened = path.or(st.path.as_deref()).map(Path::new);
     let answer = look(&st.doc, opened);
-    match answer.recv_timeout(wait) {
+    match answer.try_recv() {
         Ok(missing) => list(app, document, missing),
-        Err(RecvTimeoutError::Timeout) => {
-            log::warn!("{}: its linked files did not answer in time; Cannot Locate Linked Assets waits for them", st.doc.name);
-            app.link_looks.push(LateLook { document, answer });
-        }
+        Err(TryRecvError::Empty) => app.link_looks.push(LateLook { document, answer }),
         // The look could not be started.
-        Err(RecvTimeoutError::Disconnected) => {}
+        Err(TryRecvError::Disconnected) => {}
     }
 }
 
