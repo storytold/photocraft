@@ -15,3 +15,7 @@ A Photoshop action's step name is stored in the action file, so a saved Camera R
 Review menu and dialog layout in the supported interfaces, run the engine/UI tests and the existing PSD/action/XMP round-trip tests, and complete the normal platform gates. This is a feature naming change, not a legal determination.
 
 The catalog cleanup removes 136 dormant rows for branded composer labels, PDF presets, old Photoshop defaults and the unused raw-opening label. No active non-localization call sites use those keys. Current PhotoCraft defaults and required compatibility descriptions remain intact. Regression guards cover production Rust display literals and catalog keys; explicit exceptions document interchange descriptions and identifiers.
+
+## Video timeline paint layers
+
+- **Open Image Sequence…**: File › Open Image Sequence…, a numbered run of images opened as one video layer.

@@ -168,3 +168,43 @@ fn file_open_waits_for_the_frame_rate_dialog() {
     assert!(!app.file_dialog_open());
     assert_eq!(crate::dialogs::params::captured(&app, FRAME_RATE_KEY), json!(d.path().join("frame002.png").to_str().unwrap()));
 }
+
+/// File › Open Image Sequence… answered with `file` of `folder`.
+fn opened_from_menu(folder: &Path, file: &str) -> Box<PhotocraftApp> {
+    let (mut app, dialogs, _) = app();
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.openImageSequence", json!({})).unwrap();
+    let request = last_request(&dialogs);
+    assert_eq!((request.kind, request.check_box), (PickKind::Open, None), "one file, no check box to tick");
+    answer(&dialogs, Picked::Paths(vec![folder.join(file)]));
+    app.poll_file_dialog();
+    crate::dialogs::testing::show(&mut app);
+    app
+}
+
+/// File › Open Image Sequence… reaches the sequence without File › Open's check box, which
+/// Windows' system dialog can't show: one frame picked, the Frame Rate dialog, then the run opens
+/// as the video layer File › Open's Image Sequence gives.
+#[test]
+fn open_image_sequence_menu_opens_the_run_without_the_check_box() {
+    let d = sequence_folder();
+    let mut app = opened_from_menu(d.path(), "frame003.png");
+    assert_eq!(documents(&app), ["Untitled"], "nothing opened before the Frame Rate dialog");
+    set(&mut app, "rate", json!("24"));
+    crate::dialogs::testing::confirm(&mut app, dialog_id(FRAME_RATE_KEY)).unwrap();
+    assert_eq!(documents(&app), ["Untitled", "Untitled-1"]);
+    let st = app.session.active().unwrap();
+    let video = st.doc.layers[0].children().unwrap()[0].video.as_ref().unwrap();
+    assert_eq!((video.frames.len(), video.fps), (3, 24.0));
+    assert!(crate::panel_docking::is_shown(&app, "timeline"));
+}
+
+/// While the Frame Rate dialog waits, the menu item is refused, as File › Open is.
+#[test]
+fn open_image_sequence_menu_waits_for_the_frame_rate_dialog() {
+    let d = sequence_folder();
+    let mut app = opened_from_menu(d.path(), "frame001.png");
+    let ctx = egui::Context::default();
+    assert_eq!(menus::invoke(&mut app, &ctx, "file.openImageSequence", json!({})), Err(FRAME_RATE_OPEN.to_string()));
+    assert!(!app.file_dialog_open());
+}

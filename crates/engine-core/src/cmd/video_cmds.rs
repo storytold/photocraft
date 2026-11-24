@@ -968,8 +968,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("layer.videoLayers.reloadFrame", "Reload Frame", vl, active_video, |s, p| reload_frame(s, p)),
         CommandSpec {
             id: "file.openImageSequence",
-            label: "Open Image Sequence",
-            menu: &[],
+            label: "Open Image Sequence…",
+            menu: &["File"],
             shortcut: None,
             params: r##"{"path":str (one frame of the numbered run, e.g. frame001.png),"fps":number=30 (the Frame Rate dialog's rate, above 0 and at most 1000)}"##,
             enabled: crate::file_cmds::native,

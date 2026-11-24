@@ -209,6 +209,7 @@ fn wraps(id: &str) -> bool {
         "file.openAs"
             | "file.openAsSmartObject"
             | "file.openExrParts"
+            | "file.openImageSequence"
             | "file.saveACopy"
             | "file.placeEmbedded"
             | "file.placeLinked"

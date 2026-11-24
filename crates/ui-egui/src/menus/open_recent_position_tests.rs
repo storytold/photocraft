@@ -28,13 +28,23 @@ fn open_recent_follows_open_as_smart_object() {
         } else if row.path.len() == 1 {
             flat.push(id_of(row));
         }
-        if flat.len() >= 8 {
+        if flat.len() >= 9 {
             break;
         }
     }
     assert_eq!(
         flat,
-        vec!["file.new", "file.newFromClipboard", "file.open", "file.openAs", "file.openAsSmartObject", "Open Recent", "file.openExrParts", "---"]
+        vec![
+            "file.new",
+            "file.newFromClipboard",
+            "file.open",
+            "file.openAs",
+            "file.openAsSmartObject",
+            "Open Recent",
+            "file.openExrParts",
+            "file.openImageSequence",
+            "---"
+        ]
     );
 }
 

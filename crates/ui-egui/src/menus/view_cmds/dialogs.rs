@@ -747,6 +747,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     let label = photocraft_engine::commands::find(id).map_or(id, |c| c.label);
     match id {
         "file.openAs" => Some(app.open_dialog_file()),
+        "file.openImageSequence" => Some(app.open_image_sequence_dialog()),
         "file.openAsSmartObject" => Some(app.open_dialog_as_smart_object()),
         "file.saveACopy" => Some(save_a_copy(app)),
         "file.placeEmbedded" | "file.placeLinked" => {

@@ -358,6 +358,30 @@ impl PhotocraftApp {
         })
     }
 
+    /// File › Open Image Sequence…: the plain Open dialog for one frame of a numbered run, then the
+    /// Frame Rate dialog, which opens the run as a video layer (see [`open_frame_rate`]). It needs
+    /// no control inside the system dialog, so it works where File › Open's Image Sequence check
+    /// box can't be shown (Windows, the in-app fallback chooser).
+    pub fn open_image_sequence_dialog(&mut self) -> Result<Value, String> {
+        if frame_rate_open(self) {
+            return Err(FRAME_RATE_OPEN.into());
+        }
+        let mut request = open_filters(PickRequest::open("document"), &[]);
+        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
+            request = request.directory(dir);
+        }
+        self.ask_file(request, |app, picked| match picked {
+            Picked::Paths(paths) => {
+                let [path] = paths.as_slice() else { return Err(UNEXPECTED.into()) };
+                open_frame_rate(app, &path_string(path));
+                Ok(Value::Null)
+            }
+            // A browser hands over contents without a folder to find the other frames in.
+            Picked::Contents(_) => Err(tl!("Image sequences can only be opened from a folder on this computer").to_string()),
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err(UNEXPECTED.into()),
+        })
+    }
+
     /// File › Open as Smart Object…: the File › Open dialog (same filters, several files); each
     /// chosen file opens as its own document holding one embedded smart object, in name order,
     /// reporting each failure as File › Open does.
