@@ -85,6 +85,7 @@ mod integration_batch;
 mod jpeg_exif_resolution;
 mod keyboard_shortcut_bulk;
 mod kra;
+mod import_initial_view;
 mod kys_import;
 mod layer_delete_last;
 mod layer_mask_depth;
