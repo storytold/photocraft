@@ -454,7 +454,8 @@ impl CanvasTool for Preflight<'_, '_> {
 
 impl Preflight<'_, '_> {
     /// The refusals of a painting press: a hidden or locked target, a layer that must be rasterized first, a group, a
-    /// Clone Stamp with no source. Each says why itself; true when the press is refused.
+    /// Clone Stamp with no source, the Spot Healing Brush's Alt-click. Each says why itself; true when the press is
+    /// refused.
     fn refused(&self, pointer: &ToolPointer, at: [f64; 2]) -> bool {
         let tool = self.tool;
         let pressure = pointer.sample.pressure;
@@ -467,7 +468,10 @@ impl Preflight<'_, '_> {
             }
             // Auto-Select's press picks the layer to move, so the hidden active layer is not its target.
             let picks = tool == Tool::Move && !crate::move_ui::moves_selected_pixels_with(app, tool) && app.ui.tool_options.move_auto_select != mods.cmd;
-            (!picks && press_refused(app, tool))
+            // The Spot Healing Brush's Alt-click heals nothing whatever the target is, so its alert comes before the
+            // target-painting refusals (#12563).
+            crate::retouch_ui::spot_healing_alt_click(app, tool, mods)
+                || (!picks && press_refused(app, tool))
                 || crate::rasterize_prompt::intercept(app, tool, at[0], at[1], pressure)
                 || refuse_group(app, tool)
                 || crate::retouch_ui::clone_stamp_without_source(app, tool)

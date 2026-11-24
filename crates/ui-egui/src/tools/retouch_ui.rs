@@ -520,6 +520,24 @@ pub fn content_aware_move_no_pixels(app: &mut PhotocraftApp, points: &[[f64; 2]]
     true
 }
 
+/// The Spot Healing Brush's "Don't show again" for [`spot_healing_alt_click`].
+pub(crate) const SPOT_HEALING_ALT_PREF: &str = "spotHealing.altClick";
+
+/// The Spot Healing Brush samples by itself, so an Alt-click (Option-click) heals nothing and adds
+/// no History state: it says so in the reference's alert, with Continue, Cancel and "Don't show
+/// again", and the tool stays (#12563). Returns whether `mods` make the press such a one; once the
+/// box was ticked the press still heals nothing, with no alert.
+pub(crate) fn spot_healing_alt_click(app: &mut PhotocraftApp, tool: Tool, mods: Mods) -> bool {
+    if tool != Tool::SpotHealing || !mods.alt {
+        return false;
+    }
+    let message = tl!(
+        "The Spot Healing Brush Tool automatically samples pixels to correct a spot with one step. To manually set the source, use the Healing Brush Tool."
+    );
+    let _ = crate::dialogs::alerts::alert_once_continue(app, message, SPOT_HEALING_ALT_PREF);
+    true
+}
+
 /// Whether `select.lasso` through `points` would select any pixel of `canvas`: the same
 /// rasterization (its coverage over the canvas's coordinates), kept where it rounds to a nonzero
 /// 8-bit value as the selection stores it. Only the lasso's bounds are rasterized, a strip of rows
@@ -728,3 +746,7 @@ mod clone_stamp_no_source_alert_tests;
 #[cfg(test)]
 #[path = "remove_options_bar_labels_tests.rs"]
 mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "../spot_healing_alt_click_tests.rs"]
+mod spot_healing_alt_click_tests;
