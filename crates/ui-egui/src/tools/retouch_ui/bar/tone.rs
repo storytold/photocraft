@@ -59,6 +59,10 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     }
     // The cell writes only on a commit, so a shared fraction is not rounded (#12650).
     let strength = number(tl!("Strength"), &mut o.strength, 1.0..=100.0).whole().unit("%").show(ui).out_of_range;
+    // Sharpen's Angle follows Strength (#12946); the bar shows either field's range alert.
+    let angle = if tool == Tool::Sharpen { brush_angle(ui, app) } else { None };
+    let strength = strength.or(angle);
+    let o = &mut app.ui.tool_options;
     if let Some(all) = o.sample_all.slot(tool) {
         check(ui, tl!("Sample All Layers"), all, true, None);
     }
@@ -69,6 +73,23 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
         check(ui, tl!("Finger Painting"), &mut o.finger_painting, true, None);
     }
     strength
+}
+
+/// The brush Angle cell, as the Background Eraser's: whole degrees -180..180 over the tool's own
+/// brush (the shell swaps one in per tool), so it is the angle the Brush Settings panel shows.
+fn brush_angle(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+    let before = (*app.session.tools.brush).clone();
+    let mut brush = before.clone();
+    let out = number(tl!("Angle"), &mut brush.angle, -180.0..=180.0)
+        .whole()
+        .unit("°")
+        .icon(IconSpec::svg(IconId::new("rotate_cw")))
+        .tooltip(tl!("Set the brush angle"))
+        .show(ui);
+    // One scrub is one gesture, so one history step.
+    let key = out.events.iter().find_map(|e| crate::history_keys::coalesce("brush", e));
+    crate::brush_panel::commit_keyed(app, &before, &brush, key);
+    out.out_of_range
 }
 
 /// The options of Color Replacement.
@@ -97,3 +118,7 @@ pub(super) fn color_replacement(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> O
     check(ui, tl!("Anti-alias"), &mut o.cr_anti_alias, true, Some(tl!("Anti-alias brush application")));
     tolerance
 }
+
+#[cfg(test)]
+#[path = "../../../sharpen_bar_angle_tests.rs"]
+mod sharpen_bar_angle_tests;
