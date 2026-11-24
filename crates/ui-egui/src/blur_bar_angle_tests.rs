@@ -68,13 +68,14 @@ fn the_blur_bar_reads_and_edits_the_same_angle_as_brush_settings() {
 #[test]
 fn entering_an_angle_past_either_limit_keeps_the_limit_and_shows_one_alert() {
     let mut h = blur_bar();
+    let bound = crate::i18n::framework_i18n().format().number_ungrouped(180.0, 0);
     for (typed, expected) in [("200", 180.0), ("-200", -180.0)] {
         type_angle(&mut h, typed);
         assert_eq!(h.state().session.tools.brush.angle, expected);
         let dialogs = h.state().framework.dialogs.open_dialogs();
         assert_eq!(dialogs.len(), 1);
         let message = dialogs[0].fields.as_ref().unwrap()["message"].as_str().unwrap();
-        assert!(message.contains("180") && message.contains("Closest value inserted"), "{message}");
+        assert!(message.contains(&bound) && message.contains("Closest value inserted"), "{message}");
 
         h.get_by_role_and_label(Role::Button, "OK").click();
         h.run_steps(4);
