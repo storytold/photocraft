@@ -358,7 +358,7 @@ pub(super) fn convert_svg_source(source: SourceImage, doc: &Document) -> Result<
 
 /// The scale a vector source is rasterised at for its placement: the larger axis scale of the
 /// transform in 1/16 steps (so nudges reuse the cache), between 1/16 and 64.
-pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
+pub fn vector_scale(sm: &SmartObject) -> f64 {
     let [a, b, c, d, ..] = sm.transform.m;
     let k = (a * a + b * b).sqrt().max((c * c + d * d).sqrt());
     if !k.is_finite() {

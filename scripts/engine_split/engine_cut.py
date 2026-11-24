@@ -150,12 +150,18 @@ SUPER_PATH = re.compile(r"(?<![A-Za-z0-9_:])super::(\w+)")
 
 def point_cmd_at_core(text, crate, path=""):
     """`crate::cmd::x` for an x the crate doesn't hold becomes `crate::commands::x`, and so does
-    `super::x` in a module declared in `cmd.rs` (`cmd/<module>.rs`), whose parent was core's `cmd`."""
+    `super::x` at the top level of a module declared in `cmd.rs` (`cmd/<module>.rs`), whose parent
+    was core's `cmd`."""
     own = own_cmd_names(crate)
     masked = mask(text)
     edits = [(m.start(), m.end(), f"crate::commands::{m.group(1)}") for m in CMD_PATH.finditer(masked) if m.group(1) not in own]
     if path in {f"{crate_src(crate)}/{u}.rs" for u in units(crate) if u.startswith("cmd/") and u.count("/") == 1}:
-        edits += [(m.start(), m.end(), f"crate::commands::{m.group(1)}") for m in SUPER_PATH.finditer(masked) if m.group(1) not in own and m.group(1) != "super"]
+        # Only at the file's own depth: inside an inline `mod x { .. }`, `super` is the module itself.
+        edits += [
+            (m.start(), m.end(), f"crate::commands::{m.group(1)}")
+            for m in SUPER_PATH.finditer(masked)
+            if m.group(1) not in own and m.group(1) != "super" and enclosing_mod(masked, m.start()) is None
+        ]
     edits += [(m.start(), m.end(), "use crate::commands::{") for m in CMD_USE.finditer(masked)]
     for s, e, r in sorted(edits, reverse=True):
         text = text[:s] + r + text[e:]
@@ -183,34 +189,68 @@ def trait_root(path, crate):
 
 
 def add_trait_imports(path, crate):
-    """Adds `use <root>::<module>::<Trait>;` for each trait method the file calls."""
+    """Adds `use <root>::<module>::<Trait>;` to each module scope that calls a trait method
+    without the trait in scope (its own import, or its parent's through `use super::*`)."""
     methods = TRAITS.get(crate, {})
-    if not methods:
+    root = trait_root(path, crate)
+    if not methods or root is None:
         return False
     text = read(path)
     masked = mask(text)
-    root = trait_root(path, crate)
     needed = {}
     for m in re.finditer(r"\.(" + "|".join(methods) + r")\s*\(", masked):
         module, trait = methods[m.group(1)]
-        if re.search(r"\b(?:use|trait)\b[^;{]*\b" + trait + r"\b", masked):
-            continue
-        needed.setdefault(trait, (module, m.start()))
-    if not needed or root is None:
+        scope = enclosing_mod(masked, m.start())
+        if not trait_in_scope(masked, scope, trait):
+            needed[(scope, trait)] = module
+    if not needed:
         return False
-    for trait, (module, pos) in sorted(needed.items(), key=lambda x: -x[1][1]):
-        body = enclosing_mod(mask(text), pos)
+    inserts = []
+    for (scope, trait), module in needed.items():
         line = f"use {root}::{module}::{trait};\n"
-        if body is not None:
-            nl = text.index("\n", body) + 1
+        if scope is not None:
+            nl = text.index("\n", scope) + 1
             indent = re.match(r"[ \t]*", text[nl:]).group(0)
-            text = text[:nl] + indent + line + text[nl:]
+            inserts.append((nl, indent + line))
         else:
-            um = re.search(r"^use ", mask(text), re.M)
-            at = um.start() if um else 0
-            text = text[:at] + line + text[at:]
+            um = re.search(r"^use ", masked, re.M)
+            inserts.append((um.start() if um else 0, line))
+    for at, line in sorted(inserts, reverse=True):
+        text = text[:at] + line + text[at:]
     write(path, text)
     return True
+
+
+def scope_items(masked, scope):
+    """The text of a module scope (the file for `None`, else the inline module whose body starts
+    at `scope`) with its nested inline modules blanked."""
+    from rust_source import block_end
+
+    if scope is None:
+        start, end = 0, len(masked)
+    else:
+        start = scope
+        end = block_end(masked, masked.rfind("{", 0, scope)) - 1
+    out = list(masked[start:end])
+    for m in re.finditer(r"\bmod\s+\w+\s*\{", masked[start:end]):
+        a = start + m.start()
+        if enclosing_mod(masked, a) != scope:
+            continue
+        b = block_end(masked, a)
+        for k in range(m.end() + start, min(b, end) - 1):
+            out[k - start] = " "
+    return "".join(out)
+
+
+def trait_in_scope(masked, scope, trait):
+    items = scope_items(masked, scope)
+    # A whole use statement, groups included (`use a::{b, Trait};`), or the trait's own definition.
+    if re.search(r"\buse\b[^;]*\b" + re.escape(trait) + r"\b", items) or re.search(r"\btrait\s+" + re.escape(trait) + r"\b", items):
+        return True
+    if scope is not None and re.search(r"\buse\s+super::\*\s*;", items):
+        head = next(m.start() for m in re.finditer(r"\bmod\s+\w+\s*\{", masked[:scope]) if m.end() == scope)
+        return trait_in_scope(masked, enclosing_mod(masked, head), trait)
+    return False
 
 
 def enclosing_mod(masked, pos):
@@ -266,8 +306,8 @@ def import_names(crate, files=None):
         masked = mask(read(f))
         ranges = regions.get(f, [])
         hits = [(m.start(), m.group(1)) for m in re.finditer(r"\bcrate::([A-Za-z_][A-Za-z0-9_]*)", masked)]
-        for m in re.finditer(r"\buse crate::\{([^}]*)\}", masked):
-            hits += [(m.start(), n) for n in re.findall(r"(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*)", m.group(1))]
+        for m in re.finditer(r"\buse crate::\{", masked):
+            hits += [(m.start(), n) for n in group_roots(masked, m.end() - 1)]
         for pos, n in hits:
             if n in own or n == "self":
                 continue
@@ -275,6 +315,26 @@ def import_names(crate, files=None):
             if not in_test(ranges, pos):
                 in_code.add(n)
     return sorted(in_code), sorted(used - in_code)
+
+
+def group_roots(masked, brace):
+    """The first path segment of each top-level branch of the use group whose `{` is at `brace`:
+    `{pixels::{self, PixelTarget}, allocation::DenseBudget}` gives `pixels`, `allocation`."""
+    depth, start, roots = 0, brace + 1, []
+    for i in range(brace, len(masked)):
+        c = masked[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        if (c == "," and depth == 1) or depth == 0:
+            m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", masked[start:i])
+            if m:
+                roots.append(m.group(1))
+            start = i + 1
+            if depth == 0:
+                break
+    return roots
 
 
 def import_block(crate):
@@ -303,11 +363,12 @@ def branch(crate, base, head):
     added = [l.split("\t")[-1] for l in changed if l.startswith("A")]
     # Files git left in core that the crate's modules declare.
     roots = [unit_root(u) for u in units(crate)]
-    left = [f for r in roots if r for f in reach(r)]
-    for f in left:
+    moved = []
+    for f in [f for r in roots if r for f in reach(r)]:
         dst = crate_src(crate) + f[len(CORE) :]
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         git("mv", f, dst)
+        moved.append(dst)
     # Declarations and table entries the branch added in core for the crate's modules.
     own = {u.split("/")[-1] for u in units(crate)}
     for core_file, crate_file in ((f"{CORE}/cmd.rs", f"{crate_src(crate)}/cmd.rs"), (f"{CORE}/lib.rs", f"{crate_src(crate)}/lib.rs")):
@@ -320,14 +381,8 @@ def branch(crate, base, head):
                 if not decl_re(name).search(ct):
                     write(crate_file, ct.rstrip("\n") + "\n" + m.group(0))
         write(core_file, text)
-    inst = f"{CORE}/install.rs"
-    text = read(inst)
-    entry = re.compile(r'^[ \t]*\("[^"]+",\s*crate::(?:cmd::)?(' + "|".join(sorted(own)) + r')::specs\),[ \t]*\n', re.M)
-    for m in list(entry.finditer(text))[::-1]:
-        text = text[: m.start()] + text[m.end() :]
-        not_done.append(f"{crate_src(crate)}/install.rs: add the table entry `{m.group(0).strip()}` to TABLES")
-    write(inst, text)
-    finish(crate, left + [f for f in added if f.startswith(crate_src(crate) + "/") and os.path.exists(f)])
+    move_table_entries(crate, own, not_done)
+    finish(crate, moved + [f for f in added if f.startswith(crate_src(crate) + "/") and os.path.exists(f)])
     # Import block names the moved code now needs.
     lib = f"{crate_src(crate)}/lib.rs"
     lt = read(lib)
@@ -347,6 +402,29 @@ def branch(crate, base, head):
     report(not_done)
 
 
+def move_table_entries(crate, own, not_done):
+    """Moves `TABLES` entries the branch added to core's install.rs for the crate's modules into the
+    crate's install.rs: written there first, then removed from core, so an entry is never in neither."""
+    inst, crate_inst = f"{CORE}/install.rs", f"{crate_src(crate)}/install.rs"
+    text = read(inst)
+    entry = re.compile(r'^[ \t]*\("([^"]+)",\s*crate::(?:cmd::)?(' + "|".join(sorted(own)) + r')::specs\),[ \t]*\n', re.M)
+    found = list(entry.finditer(text))
+    if not found:
+        return
+    ct = read(crate_inst) if os.path.exists(crate_inst) else ""
+    tables = re.search(r"const TABLES: &\[Table\] = &\[\n(.*?)^\];", ct, re.S | re.M)
+    if not tables:
+        not_done += [f"{crate_inst}: add the table entry `{m.group(0).strip()}` to TABLES (left in core's install.rs)" for m in found]
+        return
+    add = "".join(f'    ("{m.group(1)}", crate::{m.group(2)}::specs),\n' for m in found if f"crate::{m.group(2)}::specs" not in tables.group(1))
+    write(crate_inst, ct[: tables.end(1)] + add + ct[tables.end(1) :])
+    for m in found[::-1]:
+        text = text[: m.start()] + text[m.end() :]
+    write(inst, text)
+    for m in found:
+        print(f"table entry {m.group(1)} moved to {crate_inst}'s TABLES (end of the list; check its place in the registry order)")
+
+
 USE_STMT = re.compile(r"^([ \t]*)(?:pub(?:\([^)]*\))?\s+)?use\s+", re.M)
 
 
@@ -362,12 +440,15 @@ def widen(text, pos, end):
         if stmt.start() < pos < semi and ";" not in masked[stmt.end() : pos]:
             body = text[stmt.end() : semi]
             name = text[pos:end]
-            if "{" not in body:
-                head = text[stmt.start() : stmt.end()]
+            head = text[stmt.start() : stmt.end()]
+            # A plain import, or a group of this one name: the whole statement becomes `pub use`.
+            if "{" not in body or re.fullmatch(r"\{\s*" + re.escape(name) + r"\s*,?\s*\}", body[body.index("{") :].strip()):
                 return text[: stmt.start()] + stmt.group(1) + "pub use " + text[stmt.end() :] if not head.lstrip().startswith("pub use") else text
             if "{" in body[body.index("{") + 1 : body.rindex("}")]:
                 return None
             prefix = body[: body.index("{")]
+            # The statement's own attributes (a `#[cfg(..)]` above the group) go with the name.
+            attrs = re.search(r"(?:^[ \t]*#\[[^\n]*\][ \t]*\n)*\Z", text[: stmt.start()], re.M).group(0)
             # Edit only at and after `pos`, so the offsets of earlier names stay valid.
             after = re.match(r"\s*,\s*", text[end:semi])
             if after:
@@ -382,7 +463,7 @@ def widen(text, pos, end):
             line_end = text.index("\n", semi) + 1
             if re.fullmatch(r"\{\s*\}", text[stmt.end() + len(prefix) : semi].strip() or "{}"):
                 return text[: stmt.start()] + f"{stmt.group(1)}pub use {prefix}{name};\n" + text[line_end:]
-            return text[:line_end] + f"{stmt.group(1)}pub use {prefix}{name};\n" + text[line_end:]
+            return text[:line_end] + attrs + f"{stmt.group(1)}pub use {prefix}{name};\n" + text[line_end:]
     ls = text.rfind("\n", 0, pos) + 1
     le = text.find("\n", pos)
     line = text[ls:le]
@@ -394,7 +475,7 @@ def child_module(f, name):
     src = read(f)
     for d in MOD_DECL.finditer(mask(src)):
         if d.group(2) == name:
-            return module_file(f, name, src[d.start(1) : d.end(1)])
+            return module_file(f, name, src[d.start(1) : d.end(1)], root=f == f"{CORE}/lib.rs")
     return None
 
 
