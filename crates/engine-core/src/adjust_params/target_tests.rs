@@ -177,7 +177,8 @@ fn adjustment_layer_pickers_use_the_target_colors() {
 fn grayscale_pickers_map_to_the_targets_gray_level() {
     for kind in ["curves", "levels"] {
         let mut s = crate::session();
-        s.execute("file.new", json!({"width": 8, "height": 8, "mode": "grayscale", "background": "backgroundColor", "backgroundColor": [0.3, 0.3, 0.3]})).unwrap();
+        s.execute("file.new", json!({"width": 8, "height": 8, "mode": "grayscale", "background": "backgroundColor", "backgroundColor": [0.3, 0.3, 0.3]}))
+            .unwrap();
         set_target(&mut s, "shadows", "#404040");
         s.execute(&format!("image.adjustments.{kind}"), json!({"eyedropper": {"point": "black", "at": [2, 2]}})).unwrap();
         let got = pixel(&mut s);
