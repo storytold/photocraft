@@ -44,3 +44,15 @@ details and tests the `.ico` sizes and the WiX icon references.
 
 Replace `photocraft.svg` (and `photocraft-small.svg`), then run `packaging/icons.sh`. It needs
 `resvg`, plus `iconutil` on macOS; the `.ico` is packed by `cargo xtask ico`.
+
+## Nightly channel
+
+The nightly derivatives keep the foreground artwork, alpha and Mac padding unchanged. Only the
+background contribution changes from the stable blue to the selected deep background. There is
+no letter badge or crescent; the app and Launcher also identify the channel in text.
+
+`photocraft-nightly.png` and its nine-frame ICO use the existing own256 master. The separate
+`photocraft-nightly-1024.png` and eleven-slot ICNS use the actual padded Mac1024 master, not an
+upscale. Input/output hashes, the palette-fit recipe and container sizes are recorded in
+[`nightly-provenance.json`](nightly-provenance.json). Stable source files are not recoloured.
+The old N-marked private Windows isolation package is separate and is not rebuilt for this art.

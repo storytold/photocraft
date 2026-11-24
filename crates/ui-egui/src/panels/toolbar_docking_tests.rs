@@ -1,9 +1,11 @@
-//! The toolbar as a dock panel (#12517): its tool flyouts open to the right of the button wherever it is docked, and
-//! flip to the left only where they would leave the window.
+//! The toolbar as a dock panel (#12517): it is always a vertical strip (it never docks above, below or beside the
+//! canvas, only in dock columns), and its tool flyouts open to the right of the button wherever it is docked and flip
+//! to the left only where they would leave the window.
 
 use super::*;
-use crate::panels::registry::TOOLBAR;
-use craft::behavior::dock::{Action, DockPlacement, Target};
+use crate::panels::registry::{CANVAS, TOOLBAR};
+use craft::behavior::DockSide;
+use craft::behavior::dock::{Action, DockPlacement, PanelPlace, Permissions, Target};
 use egui::{PointerButton, Pos2, Rect};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -86,4 +88,41 @@ fn flyouts_open_to_the_right_at_the_left_edge() {
     let (button, row) = lasso_flyout(&mut h);
     assert!(button.left() < 80.0, "the toolbar is at the left window edge: {button:?}");
     assert!(row.left() >= button.right() - 0.5, "the flyout opens to the right of the button: row {row:?}, button {button:?}");
+}
+
+/// Where the toolbar is: in a frame of the docked tree (`Node`), in a dock column or floating.
+fn toolbar_place(app: &PhotocraftApp) -> Option<PanelPlace> {
+    app.ui.docking.layout().place(&TOOLBAR.to_owned())
+}
+
+/// The toolbar never docks across the window: a move beside the canvas on any side is refused and changes nothing,
+/// while docking it at either edge still works.
+#[test]
+fn the_toolbar_never_docks_beside_the_canvas() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = app.ctx().clone();
+    let before = serde_json::to_value(&app.ui.docking).unwrap();
+    for zone in ["top", "bottom", "left", "right"] {
+        let params = json!({"panel": "toolbar", "anchor": "canvas", "zone": zone});
+        assert!(crate::menus::invoke(&mut app, &ctx, "window.panel.move", params).is_err(), "the toolbar docks {zone} of the canvas");
+        assert_eq!(serde_json::to_value(&app.ui.docking).unwrap(), before, "{zone}");
+    }
+    crate::menus::invoke(&mut app, &ctx, "window.panel.dock", json!({"panel": "toolbar", "column": true, "side": "end"})).unwrap();
+    assert!(matches!(toolbar_place(&app), Some(PanelPlace::Dock { .. })), "{:?}", toolbar_place(&app));
+}
+
+/// A workspace saved while the toolbar could still dock below the canvas loads with it in a dock column of its own.
+#[test]
+fn a_saved_toolbar_below_the_canvas_loads_in_a_dock_column() {
+    let mut old = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    // Unrestricted permissions, as the release before this change let the toolbar dock there.
+    let below = Action::move_column(TOOLBAR.to_owned(), Target::at(CANVAS.to_owned(), DockPlacement::Split(DockSide::Bottom)));
+    std::sync::Arc::make_mut(&mut old.ui.docking).apply(below, false, |_: &String| Permissions::ALL).unwrap();
+    assert!(matches!(toolbar_place(&old), Some(PanelPlace::Node(_))));
+    let saved = crate::panel_docking::snapshot(&old);
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    crate::panel_docking::load(&mut app, &saved);
+    assert!(matches!(toolbar_place(&app), Some(PanelPlace::Dock { .. })), "{:?}", toolbar_place(&app));
+    assert!(app.ui.docking.layout().contains(&CANVAS.to_owned()));
 }

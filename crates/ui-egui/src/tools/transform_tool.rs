@@ -213,10 +213,10 @@ impl Several {
     }
 
     /// Composite the moving layers over their frame and their styles' reach.
-    fn render(&mut self) -> PreviewTextures {
+    fn render(&mut self, serials: &mut craft::ui::primitives::Serials) -> PreviewTextures {
         self.rect = self.frame.inflate(style_reach(&self.moving, &self.ids));
         let (image, uv) = composite_image(&self.moving, self.rect, self.max_side);
-        PreviewTextures::new(self.name.clone(), PreviewPixels::new(image, uv))
+        PreviewTextures::new(serials, self.name.clone(), PreviewPixels::new(image, uv))
     }
 }
 
