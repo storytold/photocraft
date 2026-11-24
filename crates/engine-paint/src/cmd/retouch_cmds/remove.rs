@@ -175,9 +175,11 @@ fn stamp_footprints(win: &Rect, w: usize, strokes: &[Stroke], m: &mut [bool]) ->
     Ok(())
 }
 
-/// The hole over the plan's window: the Add strokes' footprints and their enclosed areas, less the
-/// Subtract strokes' footprints (#12543) and a margin, limited to the selection. Empty when nothing
-/// would change.
+/// The hole over the plan's window: the Add strokes' footprints and their enclosed areas grown by
+/// GROW, less the Subtract strokes' footprints (#12543) and limited to the selection. The
+/// Subtract strokes' footprints do not grow themselves: the difference comes out after the Add
+/// area has grown, so no grown edge reaches into them and their pixels stay as they were. Empty
+/// when nothing would change.
 fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
     let win = plan.window;
     let (w, h) = (win.width() as usize, win.height() as usize);
@@ -186,6 +188,7 @@ fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
     if plan.close_loops {
         m = photocraft_algo::remove::close_loops(w, h, &m);
     }
+    m = photocraft_algo::remove::dilate(w, h, &m, GROW);
     if !plan.subtracts.is_empty() {
         let mut cut = vec![false; w * h];
         stamp_footprints(&win, w, &plan.subtracts, &mut cut)?;
@@ -193,7 +196,6 @@ fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
             *keep &= !gone;
         }
     }
-    m = photocraft_algo::remove::dilate(w, h, &m, GROW);
     if let Some(sel) = sel {
         for (v, c) in m.iter_mut().zip(coverage(sel, win)) {
             *v &= c > 0.0;
@@ -310,3 +312,7 @@ pub(super) fn remove(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "remove_new_layer_name_tests.rs"]
 mod remove_new_layer_name_tests;
+
+#[cfg(test)]
+#[path = "remove_subtract_grow_tests.rs"]
+mod remove_subtract_grow_tests;

@@ -156,6 +156,27 @@ fn an_alt_drag_takes_its_footprint_out_of_the_pending_area() {
     }
 }
 
+/// The hole's two-pixel growth stops at a Subtract footprint: pixels inside the Alt-drag's
+/// footprint next to its edge keep their red. The map of the applied document before the engine
+/// order fix had these two filled (no longer red); they are the fringe of the growth into the
+/// subtracted footprint. The hole mask itself is pinned in the engine crate
+/// (`retouch_cmds/remove.rs`, `remove_subtract_grow_tests`).
+#[test]
+fn the_grown_hole_edge_stops_at_the_subtracted_footprint() {
+    let mut app = measured();
+    stroke_the_square(&mut app);
+    drag(&mut app, &[[345.0, 280.0], [375.0, 280.0]], egui::Modifiers::ALT);
+    assert!(crate::retouch_ui::remove_pending_commit(&mut app));
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    for at in [(350, 264), (350, 296)] {
+        assert!(
+            is_red(px(&app, at.0, at.1)),
+            "{at:?} sits inside the Alt-drag's footprint, within the grown edge, and keeps the red: {:?}",
+            px(&app, at.0, at.1)
+        );
+    }
+}
+
 /// The same with the options bar's Subtract picked instead of Alt held.
 #[test]
 fn subtract_on_the_bar_takes_its_footprint_out_too() {
