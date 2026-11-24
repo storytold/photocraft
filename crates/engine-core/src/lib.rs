@@ -55,7 +55,7 @@ pub mod shortcut_sets;
 mod slots;
 pub mod snap;
 mod state;
-pub use variables_cmds::{DATA_SET_FILE_MISSING, DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
+pub use variables_cmds::{DATA_SET_FILE_MISSING, DATA_SET_LAYER_LOCKED, DataSetsExported, data_set_preview, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
 use std::sync::Arc;

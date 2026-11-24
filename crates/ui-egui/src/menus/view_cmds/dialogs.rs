@@ -377,7 +377,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             plain(vec![
                 folder("dir", tl!("Destination"), dir),
                 Param::new("naming", tl!("File Naming"), ParamKind::text("{name}")),
-                choice("format", tl!("File Type"), export_formats(), "png"),
+                choice("extension", tl!("File Extension"), opts(&[(".psd", ".psd"), (".PSD", ".PSD")]), ".psd"),
             ])
         }
         "layer.new.artboard" => {

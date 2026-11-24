@@ -1057,6 +1057,8 @@ mod artboards_to_pdf_reverse_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
+mod export_data_sets_extension_tests;
+#[cfg(test)]
 mod export_quality_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;

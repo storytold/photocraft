@@ -928,10 +928,14 @@ async fn doc_exports_and_data_set_import_are_capability_scoped() {
     assert_ne!(layers.is_error, Some(true), "{}", text(&layers));
     assert_eq!(json_of(&layers)["count"], 1, "{}", text(&layers));
     assert_eq!(std::fs::read_dir(root.join("layers")).unwrap().count(), 1);
-    let sets = call(&client, "doc_export_data_sets", json!({"dir": "sets", "format": "png"})).await;
+    let sets = call(&client, "doc_export_data_sets", json!({"dir": "sets"})).await;
     assert_ne!(sets.is_error, Some(true), "{}", text(&sets));
     assert_eq!(json_of(&sets)["count"], 2, "{}", text(&sets));
     assert_eq!(std::fs::read_dir(root.join("sets")).unwrap().count(), 2);
+    // The MCP tool takes `extension` (deny_unknown_fields) and writes `.PSD` files.
+    let upper = call(&client, "doc_export_data_sets", json!({"dir": "upper", "extension": ".PSD"})).await;
+    assert_ne!(upper.is_error, Some(true), "{}", text(&upper));
+    assert!(json_of(&upper)["files"].as_array().unwrap().iter().all(|f| f.as_str().unwrap().ends_with(".PSD")), "{}", text(&upper));
     // A colliding template is refused before any file of the batch is written.
     let clash = call(&client, "doc_export_data_sets", json!({"dir": "clash", "naming": "{document}"})).await;
     assert_eq!(clash.is_error, Some(true), "{}", text(&clash));
