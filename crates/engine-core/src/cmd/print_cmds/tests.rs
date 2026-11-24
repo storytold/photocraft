@@ -345,7 +345,7 @@ fn test_printers() -> PrinterSource {
 #[test]
 fn printer_commands_answer_without_a_document_and_reject_bad_settings() {
     let mut s = crate::session();
-    s.printer_source = Some(test_printers());
+    *s.printer_source_mut() = Some(test_printers());
     let r = s.execute("file.print.printers", json!({})).unwrap();
     assert_eq!(r["supported"], cfg!(windows));
     let listed = if cfg!(windows) { json!([{"name": "Studio", "default": false}, {"name": "Office", "default": true}]) } else { json!([]) };
@@ -805,11 +805,11 @@ fn disabled_printing_never_spools() {
 #[test]
 fn printers_lists_the_spooler_destinations_without_a_document() {
     let mut s = crate::session();
-    s.printer_source = Some(test_printers());
+    *s.printer_source_mut() = Some(test_printers());
     let r = s.execute("file.printers", json!({})).unwrap();
     assert_eq!(r["printers"], json!([{"name": "Studio", "default": false}, {"name": "Office", "default": true}]));
     assert_eq!(r["default"], "Office");
-    s.printer_source = Some(std::sync::Arc::new(Vec::new));
+    *s.printer_source_mut() = Some(std::sync::Arc::new(Vec::new));
     let r = s.execute("file.printers", json!({})).unwrap();
     assert_eq!((r["printers"].clone(), r["default"].clone()), (json!([]), Value::Null));
 }
@@ -829,7 +829,7 @@ fn printer_listings_enter_the_spooler_one_thread_at_a_time() {
             let (inside, most, start) = (Arc::clone(&inside), Arc::clone(&most), Arc::clone(&start));
             std::thread::spawn(move || {
                 let mut s = crate::session();
-                s.printer_source = Some(Arc::new(move || {
+                *s.printer_source_mut() = Some(Arc::new(move || {
                     let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
                     most.fetch_max(now, Ordering::SeqCst);
                     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -858,7 +858,7 @@ fn a_panic_inside_the_spooler_does_not_block_later_callers() {
     assert!(panicked.is_err());
     assert_eq!(with_spooler(|| 7), 7);
     let mut s = crate::session();
-    s.printer_source = Some(test_printers());
+    *s.printer_source_mut() = Some(test_printers());
     assert_eq!(s.execute("file.printers", json!({})).unwrap()["default"], "Office");
 }
 
@@ -869,7 +869,7 @@ fn a_thread_holding_the_spooler_does_not_wait_for_itself() {
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut s = crate::session();
-        s.printer_source = Some(test_printers());
+        *s.printer_source_mut() = Some(test_printers());
         // Inside one outer hold, so no other test takes the lock between the calls.
         let answers = with_spooler(|| {
             let nested = with_spooler(|| with_spooler(|| 7));
@@ -893,7 +893,7 @@ fn listings_without_waiting_return_the_last_lists_while_the_spooler_is_busy() {
     let asked = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&asked);
     let mut s = crate::session();
-    s.printer_source = Some(Arc::new(move || {
+    *s.printer_source_mut() = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
         vec![craft_print::Printer { name: "Office".into(), default: true, two_sided: None, description: String::new() }]
     }));
@@ -903,7 +903,7 @@ fn listings_without_waiting_return_the_last_lists_while_the_spooler_is_busy() {
     let holder = {
         let released = Arc::clone(&released);
         let mut lister = crate::session();
-        lister.printer_source = s.printer_source.clone();
+        *lister.printer_source_mut() = s.printer_source().cloned();
         std::thread::spawn(move || {
             with_spooler(|| {
                 // Lists this stand-in's printers once with the lock held, so another test's listing
@@ -943,7 +943,7 @@ fn uncached_listings_do_not_wait(cache_other: bool) {
     let asked = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&asked);
     let mut s = crate::session();
-    s.printer_source = Some(Arc::new(move || {
+    *s.printer_source_mut() = Some(Arc::new(move || {
         counted.fetch_add(1, Ordering::SeqCst);
         vec![craft_print::Printer { name: "Proofing".into(), default: true, two_sided: None, description: String::new() }]
     }));
@@ -955,7 +955,7 @@ fn uncached_listings_do_not_wait(cache_other: bool) {
         with_spooler(|| {
             if cache_other {
                 let mut other = crate::session();
-                other.printer_source = Some(test_printers());
+                *other.printer_source_mut() = Some(test_printers());
                 list_system_printers(&other);
                 let _ = list_rgb_printers(&other);
             } else {
@@ -1047,7 +1047,7 @@ fn a_preferred_app_spooler_takes_the_job() {
     }
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut s = session("rgb", 8);
-    s.print_spooler = Some(recording_spooler(true, &seen));
+    *s.print_spooler_mut() = Some(recording_spooler(true, &seen));
     let r = s.execute("file.print", json!({"copies": 2, "paper": "a4", "orientation": "landscape"})).unwrap();
     assert_eq!((r["sent"].as_bool(), r["backend"].as_str(), r["spooler"].as_str()), (Some(true), Some("test"), Some("queued")));
     assert!(r["pdf"].is_null(), "{r}");
@@ -1273,7 +1273,7 @@ mod cups {
         let e = s.execute("file.print", json!({"printServer": server, "printer": "Office"})).unwrap_err().to_string();
         assert!(e.contains("`Office`"), "{e}");
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        s.print_spooler = Some(recording_spooler(false, &seen));
+        *s.print_spooler_mut() = Some(recording_spooler(false, &seen));
         let r = s.execute("file.print", json!({"printServer": server})).unwrap();
         assert_eq!((r["backend"].as_str(), r["spooler"].as_str()), (Some("test"), Some("queued")));
         assert_eq!(seen.lock().unwrap().len(), 1);
@@ -1295,7 +1295,7 @@ mod cups {
             let r = s.execute("file.print", json!({"copies": 2})).unwrap();
             assert_eq!((r["sent"].as_bool(), r["backend"].as_str(), r["spooler"].as_str()), (Some(true), Some("ipp"), Some("job 42 on Office")));
             let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            s.print_spooler = Some(recording_spooler(false, &seen));
+            *s.print_spooler_mut() = Some(recording_spooler(false, &seen));
             // The IPP route first, then the app's spooler only when there is no server.
             let r = s.execute("file.print", json!({})).unwrap();
             assert_eq!(r["backend"], "ipp");

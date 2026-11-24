@@ -1,5 +1,6 @@
 use super::convert::{ReplacementSet, clip_name, export, import_first_with_keys};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::ActionsFile;
 
 mod replacement;
@@ -50,13 +51,13 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     // keeps it as an empty folder, like one New Set made, and `replace` drops the set's actions.
     if replace {
         // The function keys of the actions it replaces go with them.
-        let replaced: Vec<String> = s.actions.list.actions().iter().filter(|a| a.set.as_deref() == Some(imp.set.as_str())).map(|a| a.name.clone()).collect();
+        let replaced: Vec<String> = s.actions().list.actions().iter().filter(|a| a.set.as_deref() == Some(imp.set.as_str())).map(|a| a.name.clone()).collect();
         crate::actions_cmds::remove_shortcuts(s, replaced.iter().map(String::as_str));
     }
     let file = ActionsFile::new(imp.actions, vec![imp.set.clone()]);
     // Play, Conditional, Batch and Create Droplet steps call actions by name: follow the renames in
     // the actions just loaded, each target looked up once by the name the file gave it.
-    let merged = s.actions.list.merge_file(file, replace, |step, renames| {
+    let merged = s.actions_mut().list.merge_file(file, replace, |step, renames| {
         let (id, params) = (step.command.as_str(), &mut step.params);
         // A qualified Batch or Create Droplet reference belongs to the file's original set, not
         // to a foreign set which happens to have the destination override's name.
@@ -81,10 +82,10 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     // Actions an automation client loads keep its gate when the user plays them.
     if s.authorize.is_some() {
         for &index in &merged.added {
-            s.actions.list.set_automation(index, true).map_err(|e| crate::actions_cmds::list_error(cmd, e))?;
+            s.actions_mut().list.set_automation(index, true).map_err(|e| crate::actions_cmds::list_error(cmd, e))?;
         }
     }
-    let names: Vec<String> = merged.added.iter().map(|&index| s.actions.list.actions()[index].name.clone()).collect();
+    let names: Vec<String> = merged.added.iter().map(|&index| s.actions().list.actions()[index].name.clone()).collect();
     // Keys go by the file's action order, so two actions the file gives one name keep their own.
     let keys: Vec<(String, String)> = function_keys.into_iter().filter_map(|(index, key)| Some((names.get(index)?.clone(), key))).collect();
     if !keys.is_empty() {
@@ -124,21 +125,21 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
     let (set, actions): (String, Vec<&Action>) = if p.get("action").is_some() {
-        let idx = crate::actions_cmds::resolve(s.actions.list.actions(), p, cmd)?;
-        let a = &s.actions.list.actions()[idx];
+        let idx = crate::actions_cmds::resolve(s.actions().list.actions(), p, cmd)?;
+        let a = &s.actions().list.actions()[idx];
         (set_param.or_else(|| a.set.clone()).unwrap_or_else(|| a.name.clone()), vec![a])
     } else if let Some(set) = set_param {
-        let list: Vec<&Action> = s.actions.list.actions().iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
+        let list: Vec<&Action> = s.actions().list.actions().iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
         // An empty set New Set made is written with no actions, as Photoshop saves one.
-        if list.is_empty() && !s.actions.list.sets().contains(&set.as_str()) {
+        if list.is_empty() && !s.actions().list.sets().contains(&set.as_str()) {
             return Err(bad(cmd, format!("no actions in a set named `{set}`")));
         }
         (set, list)
     } else {
-        if s.actions.list.actions().is_empty() {
+        if s.actions().list.actions().is_empty() {
             return Err(bad(cmd, "there are no actions to save"));
         }
-        (DEFAULT_SET.to_string(), s.actions.list.actions().iter().collect())
+        (DEFAULT_SET.to_string(), s.actions().list.actions().iter().collect())
     };
     let names: Vec<String> = actions.iter().map(|a| a.name.clone()).collect();
     let keys: Vec<(String, String)> =

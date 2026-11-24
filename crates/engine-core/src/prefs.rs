@@ -8,9 +8,9 @@
 //! edits exactly what the desktop app persists, and the shell has no second store to keep in sync.
 //!
 //! The engine never touches the filesystem for preferences (it must build for wasm). Frontends
-//! persist [`Session::prefs_to_json`] wherever the platform keeps settings (the desktop app: the
+//! persist [`SavedPrefsExt::prefs_to_json`](crate::prefs::SavedPrefsExt::prefs_to_json) wherever the platform keeps settings (the desktop app: the
 //! OS config directory; the web shell: browser storage) and restore it with
-//! [`Session::load_prefs_json`].
+//! [`SavedPrefsExt::load_prefs_json`](crate::prefs::SavedPrefsExt::load_prefs_json).
 //!
 //! Engine-side values are applied by [`Session::apply_prefs`]: the history state limit and
 //! History Options › Allow Non-Linear History (every open document), the effect-cache memory
@@ -569,7 +569,7 @@ mod validate;
 pub use cmds::specs;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
-pub use saved::{LEGACY_PREFS_FILE, SavedPrefs, parse_legacy_prefs, parse_prefs_json, reset_value};
+pub use saved::{LEGACY_PREFS_FILE, SavedPrefs, SavedPrefsExt, parse_legacy_prefs, parse_prefs_json, reset_value};
 #[cfg(not(target_arch = "wasm32"))]
 pub use saved::{read_saved, store_options};
 pub use shortcuts::{
@@ -1897,15 +1897,16 @@ mod tests;
 
 #[cfg(test)]
 mod color_settings_path_tests {
+    use crate::color_cmds::ColorExt;
     use serde_json::json;
 
     #[test]
     fn a_path_that_only_starts_with_color_settings_is_not_in_that_section() {
         let mut s = crate::session();
-        let before = s.color.settings.clone();
+        let before = s.color().settings.clone();
         for path in ["colorSettingsworkingRgb", "colorSettings.", "colorSettings..workingRgb"] {
             assert!(s.execute("prefs.set", json!({"path": path, "value": "/dev/zero"})).is_err(), "{path}");
         }
-        assert_eq!(s.color.settings, before);
+        assert_eq!(s.color().settings, before);
     }
 }

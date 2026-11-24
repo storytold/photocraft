@@ -123,12 +123,12 @@ fn whole_box(rect: &Rect, whole: bool) -> Option<Rect> {
     (w >= 1.0 && h >= 1.0).then(|| Rect::new(x0, y0, x0 + w, y0 + h))
 }
 
-/// Whether a drag of `kind` lands on whole pixels. Align Edges (#13370) is the Triangle tool's
-/// option, and only in Shape mode, where its checkbox is enabled; the other Shape tools, and a
-/// greyed checkbox, still snap.
+/// Whether a drag of `kind` lands on whole pixels. Align Edges is the Triangle (#13370) and
+/// Rectangle (#13346) tools' option, and only in Shape mode, where its checkbox is enabled; the
+/// other Shape tools, and a greyed checkbox, still snap.
 pub(super) fn snaps_to_pixels(app: &PhotocraftApp, kind: ShapeKind) -> bool {
     let o = &app.ui.tool_options;
-    !(kind == ShapeKind::Triangle && o.shape_mode == super::VectorMode::Shape && !o.align_edges)
+    !(matches!(kind, ShapeKind::Triangle | ShapeKind::Rectangle) && o.shape_mode == super::VectorMode::Shape && !o.align_edges)
 }
 
 /// `geometry` as a drag commits it: boxes on whole pixels, a line aligned to pixel edges
@@ -213,6 +213,16 @@ fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKin
     })
 }
 
+/// `p` (a drag's `shape.create` geometry of `kind`) with the Polygon tool's own corner radius, which
+/// rounds every vertex of the next polygon it drags (#13302). The Create Polygon dialog keeps its own.
+fn with_tool_radius(app: &PhotocraftApp, kind: ShapeKind, mut p: Value) -> Value {
+    let r = app.ui.tool_options.polygon_corner_radius;
+    if kind == ShapeKind::Polygon && r > 0.0 {
+        p["cornerRadius"] = json!(r);
+    }
+    p
+}
+
 /// `shape.create` params with the options bar's fill and stroke.
 fn create_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind) -> Result<Value, String> {
     let mut p = geometry_params(app, geometry, kind)?;
@@ -289,7 +299,7 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
         return;
     }
     let mut p = match create_params(app, &geometry, kind) {
-        Ok(p) => p,
+        Ok(p) => with_tool_radius(app, kind, p),
         Err(e) => return report(app, e),
     };
     p["historyName"] = json!(tool_history_name(kind));
@@ -395,7 +405,7 @@ fn outline_of(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) ->
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, box_of(rect), *keep_proportions))
     } else {
-        photocraft_engine::vector_cmds::shape_path(&geometry_params(app, geometry, kind).ok()?).ok()
+        photocraft_engine::vector_cmds::shape_path(&with_tool_radius(app, kind, geometry_params(app, geometry, kind).ok()?)).ok()
     }
 }
 

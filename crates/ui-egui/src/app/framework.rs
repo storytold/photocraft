@@ -9,6 +9,7 @@
 //! The `craft` facade features PhotoCraft enables for this: `text`, `text-font-picker`,
 //! `font-manager`, `menu`, `timeline` and `print`, plus `dialogs` on native targets.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -49,7 +50,7 @@ pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<De
     let wake = ctx.clone();
     let mut spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), Arc::new(SystemWindows))
         .wheel(wheel)
-        .app_id(crate::os_window::APP_ID)
+        .app_id(crate::os_window::app_id())
         .system(SystemReader::start(move || wake.request_repaint()));
     if let Some(decision) = frame {
         spec = spec.frame(decision);
@@ -371,6 +372,10 @@ impl Framework {
     /// in-memory suite the app starts with.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_suite(&mut self, ctx: &egui::Context) {
+        // A nightly keeps its in-memory suite; never open the stable shared theme store.
+        if !crate::os_window::stable_services_allowed() {
+            return;
+        }
         use craft::theme_store::{StoreOptions, SuiteDir, SuiteWatch};
         let ctx = ctx.clone();
         let options = StoreOptions::new(concat!("photocraft ", env!("CARGO_PKG_VERSION")));
@@ -676,7 +681,7 @@ impl PhotocraftApp {
     pub(crate) fn framework_before_input(&mut self, ctx: &egui::Context) {
         // The catalog's rows change only with the action names; the bindings with the rows and the
         // shortcut preferences.
-        let list = &self.session.actions.list;
+        let list = &self.session.actions().list;
         let actions_rev = list.revision();
         if self.framework.catalog_rows_rev != Some(actions_rev) {
             let same = self.framework.catalog_rows_rev.is_some()

@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::{ActionList, ActionStep, ActionsFile};
 
 /// PhotoCraft's own roundtrip accepts a combined Set, but Photoshop applies only its rename.
@@ -132,7 +133,7 @@ fn expanded_properties_replay_like_direct_edits_at_every_depth() {
             let action = Action::new("Properties", vec![ActionStep::new("layer.setProps", params)]);
             let (bytes, _) = export("Set", &[&action], &[], false).unwrap();
             let mut replay = prepare();
-            replay.actions.list = ActionList::from_file(ActionsFile::new(import(&bytes).unwrap().actions, Vec::new()));
+            replay.actions_mut().list = ActionList::from_file(ActionsFile::new(import(&bytes).unwrap().actions, Vec::new()));
             let result = replay.execute("actions.play", json!({"action": "Properties"})).unwrap();
             assert!(result["failed"].is_null(), "{result}");
             assert_eq!(result["ran"], 3);

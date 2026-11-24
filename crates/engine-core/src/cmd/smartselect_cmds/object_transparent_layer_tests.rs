@@ -4,6 +4,7 @@
 //! The documents are the ones the issue measured against the reference application.
 
 use super::*;
+use crate::smartselect_cmds::SmartSelectExt;
 
 const W: u32 = 800;
 const H: u32 = 600;
@@ -169,14 +170,14 @@ fn object_finder_click_samples_the_single_pixel_before_downsampling() {
     assert_eq!(result["changed"], false);
     assert!(s.active().unwrap().doc.selection.is_none());
     assert_eq!(s.active().unwrap().history.past_len(), before);
-    assert!(s.object_finder.is_empty());
+    assert!(s.object_finder().is_empty());
 
     // The same pixel is opaque with Sample All Layers. The repeat can reuse the cached object.
     for _ in 0..2 {
         let result = s.execute("select.object", json!({"point": HOLE, "sampleAllLayers": true})).unwrap();
         assert_eq!(result["changed"], true);
         assert_eq!(cov(&s, HOLE[0] as i32, HOLE[1] as i32), 1.0);
-        assert_eq!(s.object_finder.len(), 1);
+        assert_eq!(s.object_finder().len(), 1);
     }
 }
 
@@ -185,7 +186,7 @@ fn object_finder_cache_checks_the_single_pixel_before_reusing_a_region() {
     let mut s = one_pixel_hole();
     let result = s.execute("select.object", json!({"point": [241, 217]})).unwrap();
     assert_eq!(result["changed"], true);
-    assert_eq!(s.object_finder.len(), 1);
+    assert_eq!(s.object_finder().len(), 1);
     let before = s.active().unwrap().history.past_len();
     let doc = s.active().unwrap().doc.clone();
 
@@ -193,5 +194,5 @@ fn object_finder_cache_checks_the_single_pixel_before_reusing_a_region() {
     assert_eq!(result["changed"], false);
     assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
     assert_eq!(s.active().unwrap().history.past_len(), before);
-    assert_eq!(s.object_finder.len(), 1);
+    assert_eq!(s.object_finder().len(), 1);
 }

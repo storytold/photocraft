@@ -341,6 +341,7 @@ pub fn finish_pending_history(s: &mut Session) {
 
 #[cfg(test)]
 mod tests {
+    use crate::color_cmds::ColorExt;
     /// Batch 16 review: a kept clone can't reopen a scope its continuation already resumed and
     /// finished, even with the document and history unchanged.
     #[test]
@@ -396,10 +397,10 @@ mod tests {
                 json!({"path":"colorSettings.intent","value":"perceptual","values":{"actions.createSingleHistoryState":!single}}),
             ] {
                 let before = s.prefs().clone();
-                let color = s.color.settings.clone();
+                let color = s.color().settings.clone();
                 assert!(s.execute("prefs.set", params).is_err());
                 assert_eq!(s.prefs(), &before);
-                assert_eq!(s.color.settings, color);
+                assert_eq!(s.color().settings, color);
             }
             for params in [json!({"path":"actions.createSingleHistoryState"}), json!({"path":"actions"}), json!({})] {
                 assert_eq!(s.execute("prefs.reset", params).is_err(), !single);

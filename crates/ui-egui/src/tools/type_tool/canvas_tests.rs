@@ -13,6 +13,7 @@ use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 
@@ -217,8 +218,10 @@ fn panel_harness_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static
     h
 }
 
-/// Frames the options bar may take to settle: opening the font list loads the rows' samples over several
-/// passes, more of them where the system has more fonts.
+/// Frames the options bar may take to settle. Opening the font list loads the rows' sample faces on
+/// worker threads, and each pass that runs before a face has loaded is one more frame. The rows are
+/// the fixed test catalog's (`photocraft_text::fonts::catalog`), so the count is bounded, but on a
+/// busy runner the threads can miss many passes.
 const BAR_SETTLE_STEPS: u64 = 64;
 
 fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
