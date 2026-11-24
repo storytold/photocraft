@@ -230,8 +230,9 @@ pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
 /// anchor, the segment goes on its own: its anchors stay and the subpath opens there, as in
 /// Photoshop (#13203). With nothing selected, the path Direct Selection targets is deleted: a
 /// saved path, the work path or a vector mask. The work path with the Pen, Freeform Pen,
-/// Curvature Pen or Path Selection is [`delete_key_deletes_work_path`]. A shape layer's path
-/// wasn't measured: the key keeps deleting the layer.
+/// Curvature Pen or Path Selection is [`delete_key_deletes_work_path`]. A shape layer's path was
+/// measured (#13291): the key deletes the whole shape layer ("Delete Layer"), as the reference
+/// application does, so it falls through to the layer delete.
 pub(crate) fn delete_key_edits_path(app: &PhotocraftApp) -> Option<(&'static str, Value)> {
     if delete_key_deletes_work_path(app) {
         return Some(("path.delete", json!({"name": "work"})));
@@ -264,7 +265,7 @@ pub(crate) fn delete_key_edits_path(app: &PhotocraftApp) -> Option<(&'static str
         PathRef::Saved(i) => Some(("path.delete", json!({"name": st.doc.paths.get(i)?.name}))),
         // One "Delete Path" step; the Paths panel's trash keeps `layer.vectorMask.delete` (#13291).
         PathRef::Layer(id) if targeted_vector_mask_id(app) == Some(id) => Some(("path.delete", json!({"name": "layer", "layer": id}))),
-        // A shape layer's own path: not measured in the reference yet (#13291).
+        // A shape layer's own path: measured (#13291), the key deletes the whole shape layer ("Delete Layer"), so fall through to the layer delete.
         _ => None,
     }
 }

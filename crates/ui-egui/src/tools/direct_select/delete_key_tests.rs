@@ -176,6 +176,39 @@ fn delete_with_nothing_selected_deletes_the_targeted_vector_mask() {
     }
 }
 
+/// #13291, measured 2026-11-23 in the reference application: with Direct Selection, a shape layer's
+/// path targeted and nothing selected, Delete and Backspace delete the whole shape layer in one
+/// "Delete Layer" step. True for a live shape and for a shape made from a drawn path.
+#[test]
+fn delete_with_nothing_selected_deletes_the_targeted_shape_layer() {
+    for from_path in [false, true] {
+        for key in [egui::Key::Delete, egui::Key::Backspace] {
+            let mut app = app();
+            let red = app.session.active().unwrap().active_layer.unwrap();
+            let info = if from_path {
+                app.run("path.toShape", json!({"name": "Path 1", "layerName": "Shape", "fill": "#cc3333"})).unwrap()
+            } else {
+                app.run("shape.create", json!({"kind": "rect", "rect": [500, 400, 100, 100], "fill": "#cc3333", "name": "Shape"})).unwrap()
+            };
+            let shape = photocraft_doc::LayerId(info["layer"].as_u64().unwrap());
+            app.ui.selected_path = None;
+            app.ui.vector_mask_target = false;
+            let tag = format!("{key:?}, from a drawn path: {from_path}");
+            assert_eq!(app.session.active().unwrap().active_layer, Some(shape), "{tag}: the shape layer is active");
+            let (count, n) = (layers(&app), steps(&app));
+            press(&mut app, key);
+            let st = app.session.active().unwrap();
+            assert_eq!(layers(&app), count - 1, "{tag}: one layer less");
+            assert!(st.doc.layer(shape).is_none(), "{tag}: the shape layer is deleted");
+            assert!(st.doc.layer(red).is_some(), "{tag}: the Red layer stays");
+            assert!(path1(&app).is_some(), "{tag}: the saved path stays");
+            assert_eq!((steps(&app), last_step(&app).as_deref()), (n + 1, Some("Delete Layer")), "{tag}");
+            app.run("edit.undo", json!({})).unwrap();
+            assert!(app.session.active().unwrap().doc.layer(shape).is_some(), "{tag}: Undo brings the shape layer back");
+        }
+    }
+}
+
 #[test]
 fn without_a_targeted_path_delete_keeps_its_usual_route() {
     let mut app = app();
