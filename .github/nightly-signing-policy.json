@@ -10,6 +10,10 @@
   "signer_tooling_revision": "605d58766e8f536564da8fc81d3676ac86816dea",
   "release_branch": "release",
   "manual_actors": [
+    "bflatastic",
+    "dylanmtaylor",
+    "echelon",
+    "FredApps",
     "skylartaylor"
   ],
   "max_age_seconds": 86400,

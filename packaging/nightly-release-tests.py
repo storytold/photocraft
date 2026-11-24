@@ -544,14 +544,51 @@ class NightlyEnabledCallers(unittest.TestCase):
                 self.assertEqual(indicator, ">-")
                 self.assertEqual(" ".join(expression.split()), expected, "guards may only change with review")
 
-    def test_manual_actor_is_the_reviewed_login_in_caller_and_policy(self):
+    def test_manual_actors_are_the_release_managers_in_caller_and_policy(self):
         source = (ROOT / ".github/workflows/nightly.yml").read_text()
-        rows = re.findall(r"(?m)^      manual-actors: '(\[[^']*\])'$", source)
-        self.assertEqual(len(rows), 1)
         policy = json.loads(INSTALLED_POLICY.read_text())
-        self.assertEqual(json.loads(rows[0]), ["skylartaylor"])
-        self.assertEqual(policy["manual_actors"], json.loads(rows[0]), "caller and policy grant the same actor")
+        self.assertEqual(reviewed_manual_actors(source, policy), RELEASE_MANAGERS)
         self.assertEqual(policy["automatic_signer_actors"], [], "no automatic signer without a schedule")
+
+    def test_an_actor_outside_the_release_managers_is_refused(self):
+        source = (ROOT / ".github/workflows/nightly.yml").read_text()
+        policy = json.loads(INSTALLED_POLICY.read_text())
+        caller = json.dumps(RELEASE_MANAGERS, separators=(",", ":"))
+        widened = sorted(RELEASE_MANAGERS + ["echelon-robot"], key=str.lower)
+        for change in ("caller", "policy", "both", "order", "case"):
+            mutated_source, mutated_policy = source, copy.deepcopy(policy)
+            if change in ("caller", "both"):
+                mutated_source = source.replace(caller, json.dumps(widened, separators=(",", ":")))
+            if change in ("policy", "both"):
+                mutated_policy["manual_actors"] = widened
+            if change == "order":
+                mutated_policy["manual_actors"] = list(reversed(RELEASE_MANAGERS))
+            if change == "case":
+                mutated_policy["manual_actors"] = [login.lower() for login in RELEASE_MANAGERS]
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                reviewed_manual_actors(mutated_source, mutated_policy)
+
+
+# Mirrors the storytold release-managers team (id 19837241) minus echelon-robot, which only has
+# read access to photocraft. Update by PR, in the caller and the policy, when the team changes.
+RELEASE_MANAGERS = ["bflatastic", "dylanmtaylor", "echelon", "FredApps", "skylartaylor"]
+
+
+def reviewed_manual_actors(caller_source, policy):
+    """The one reviewed manual-actor list, identical in the producer caller and the policy."""
+    rows = re.findall(r"(?m)^      manual-actors: '(\[[^']*\])'$", caller_source)
+    if len(rows) != 1:
+        raise ValueError("exactly one literal manual-actors list is required")
+    caller = json.loads(rows[0])
+    if caller != policy["manual_actors"]:
+        raise ValueError("caller and policy must grant the same actors in the same order")
+    if caller != RELEASE_MANAGERS:
+        raise ValueError("manual actors must be exactly the reviewed release managers")
+    if caller != sorted(caller, key=str.lower) or len({login.lower() for login in caller}) != len(caller):
+        raise ValueError("manual actors must be distinct and sorted case-insensitively")
+    if set(caller) & {login for login in policy["automatic_signer_actors"]}:
+        raise ValueError("manual and automatic actors overlap")
+    return caller
 
 
 INSTALLED_POLICY = ROOT / ".github/nightly-signing-policy.json"

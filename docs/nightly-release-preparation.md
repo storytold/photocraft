@@ -1,8 +1,8 @@
 # Windows, Linux and macOS release-ref nightly: supervised manual go-live
 
 **Enabled for supervised manual runs, not yet qualified.** The producer (`nightly.yml`, main) and the
-signer (`nightly-sign.yml`, release) keep only their exact context guards and run when the reviewed
-manual actor dispatches them. `nightly-dispatch.yml` stays literally off and there is no schedule:
+signer (`nightly-sign.yml`, release) keep only their exact context guards and run when one of the reviewed
+manual actors dispatches them. `nightly-dispatch.yml` stays literally off and there is no schedule:
 it only forwards scheduled producers. The installed policy
 [`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is real v3 except
 that `producer_workflow_id` is `null` until `nightly.yml` is registered on main. Read it then
@@ -25,9 +25,15 @@ neither callee's inputs nor the policy fields. The earlier pins, `a4f6fd51` (#34
 source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
 
-**First runs.** The first runs are manual dispatches in this order: `nightly.yml` on main (only
-`skylartaylor` passes the producer's plan step), then `nightly-sign.yml` on `release` with that
-producer run ID and attempt. `nightly-dispatch.yml` only matters once a schedule is approved.
+**First runs.** The first runs are manual dispatches in this order: `nightly.yml` on main (only a
+listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `release` with that
+producer run ID and attempt, by a listed manual actor. `nightly-dispatch.yml` only matters once a
+schedule is approved.
+
+**Manual actors.** `bflatastic`, `dylanmtaylor`, `echelon`, `FredApps` and `skylartaylor`, in the
+producer's `manual-actors` and the policy's `manual_actors`. The list mirrors the release-managers
+team (id 19837241), leaving out `echelon-robot`, which can only read photocraft; update it by PR
+in both places when the team changes.
 
 **Admission timing.** The candidate check reads the newest CI run on the candidate commit and
 main's latest finished Sonar analysis, so when to dispatch matters:
@@ -63,7 +69,7 @@ Read on 2026-11-23; re-read anything that may have moved before the policy is pr
 | `repository_id` | `1398080271` | `gh api repos/storytold/photocraft --jq .id` |
 | `producer_workflow_id` | `null` (pending) | Only exists once `nightly.yml` is registered on main |
 | `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `605d5876…` (craft-common-actions #339) | The callers' pin |
-| `manual_actors` / `automatic_signer_actors` | `["skylartaylor"]` / `[]` | Go-live checklist; equals the producer caller's `manual-actors` |
+| `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members who can push (4 admin, FredApps write); equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist (Linux tarball is about 126 MB) |
 | `platforms` | three rows | v0.23.1 stable identities, as in the example; the Windows publisher subject was confirmed by reading the stable v0.23.1 `photocraft.exe` Authenticode signature on Windows |
 | `candidate_policy.required_workflows` | CI (`ci.yml`, workflow `371199934`), 19 jobs | Workflow list API; jobs that succeeded on every recent main push run (the only always-run main workflow without path filters) |
@@ -186,7 +192,7 @@ were audited by this source change; no secret values were read.
 ## Bounded integration and acceptance
 
 1. The callers reference the same reviewed public commit in `uses` and `tooling-revision`.
-   The producer and signer are enabled only for the reviewed manual actor; the dispatcher stays
+   The producer and signer are enabled only for the reviewed manual actors; the dispatcher stays
    literally off until a schedule is separately approved. Future shared pin updates require review of the exact
    public immutable source and interface. Do not claim dormant source as a working pipeline.
    Do not temporarily call old same-run signing or use mutable `@main`/`@release` tooling.
