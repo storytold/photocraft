@@ -490,6 +490,9 @@ fn batch_menu_runs_the_action_chosen_in_the_form() {
     assert!(!cancelled.exists());
 
     let id = open_form(&mut app, &ctx, "file.automate.batch");
+    // The Source folder is a Choose… row now (#13668): a reopened form starts with no path, so this
+    // run names its folder again rather than leaning on the first form's remembered one.
+    set(&mut app, &ctx, id, "input", json!(source.to_string_lossy()));
     set(&mut app, &ctx, id, "action", json!("RotateRGB"));
     set(&mut app, &ctx, id, "output", json!(cancelled.to_string_lossy()));
     let rotate = app.session.actions().list.actions().iter().position(|action| action.name == "RotateRGB").unwrap();
