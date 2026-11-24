@@ -597,6 +597,7 @@ impl PhotocraftApp {
             return jobs_ui::start_save(self, path, settings.clone(), copy, save, false);
         }
         let st = self.session.active().ok_or("no document")?;
+        photocraft_engine::file_cmds::check_import_destination(st, &path).map_err(|error| error.to_string())?;
         ensure_memory_to_save(&st.doc, &path)?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
