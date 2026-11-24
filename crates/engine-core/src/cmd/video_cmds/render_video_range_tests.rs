@@ -32,25 +32,65 @@ fn names(files: &[(String, Vec<u8>)]) -> Vec<&str> {
     files.iter().map(|(n, _)| n.as_str()).collect()
 }
 
+/// The grey frame `n` is painted with in [`distinct_frames`]: different for every frame under 200.
+fn grey(n: usize) -> f32 {
+    ((n * 37) % 200 + 20) as f32 / 255.0
+}
+
+/// A document whose video layer shows its own grey in each of `frames` frames ([`grey`]), so a
+/// rendered file says which frame it is.
+fn distinct_frames(frames: usize) -> Session {
+    let mut s = session(Some(frames));
+    s.execute("layer.videoLayers.newBlankVideoLayer", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    for n in 0..frames {
+        s.execute("timeline.setFrame", json!({"frame": n})).unwrap();
+        s.edit("Paint", |doc, _| {
+            if let Some(Layer { content: LayerContent::Raster(r), .. }) = doc.layer_mut(id) {
+                r.fill_rect(photocraft_geom::Rect::from_xywh(0, 0, 8, 6), &[grey(n), grey(n), grey(n), 1.0]);
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+    s
+}
+
+/// The grey at the middle of a rendered still (PNG).
+fn grey_of_png(bytes: &[u8]) -> f32 {
+    let doc = photocraft_io::import("f.png", bytes).unwrap().document;
+    photocraft_compose::flatten_to_surface(&doc, doc.pixel_format(), None).pixel(4, 3)[0]
+}
+
+fn close(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1.5 / 255.0
+}
+
 #[test]
 fn a_start_and_end_render_only_those_frames_numbered_from_the_first() {
-    let s = session(Some(150));
+    let s = distinct_frames(30);
     let files = render(&s, json!({"format": "png", "range": {"start": 20, "end": 24}})).unwrap();
     assert_eq!(names(&files), ["rv_0000.png", "rv_0001.png", "rv_0002.png", "rv_0003.png", "rv_0004.png"]);
+    for (i, (name, bytes)) in files.iter().enumerate() {
+        assert!(close(grey_of_png(bytes), grey(20 + i)), "{name} is frame {}", 20 + i);
+    }
 }
 
 #[test]
 fn a_range_limits_an_animated_gif_too() {
-    let s = session(Some(150));
-    let files = render(&s, json!({"format": "gif", "range": {"start": 0, "end": 9}})).unwrap();
+    let s = distinct_frames(30);
+    let files = render(&s, json!({"format": "gif", "range": {"start": 5, "end": 14}})).unwrap();
     assert_eq!(files.len(), 1);
-    let mut frames = 0;
-    photocraft_io::import_gif_frames("rv.gif", &files[0].1, &mut |_, _| {
-        frames += 1;
+    let mut greys = Vec::new();
+    photocraft_io::import_gif_frames("rv.gif", &files[0].1, &mut |doc, _| {
+        greys.push(photocraft_compose::flatten_to_surface(&doc, doc.pixel_format(), None).pixel(4, 3)[0]);
         Ok(())
     })
     .unwrap();
-    assert_eq!(frames, 10);
+    assert_eq!(greys.len(), 10);
+    for (i, g) in greys.iter().enumerate() {
+        assert!(close(*g, grey(5 + i)), "GIF frame {i} is timeline frame {}", 5 + i);
+    }
 }
 
 #[test]
