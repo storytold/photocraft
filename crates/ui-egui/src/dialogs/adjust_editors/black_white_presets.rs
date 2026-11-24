@@ -91,7 +91,9 @@ pub(super) fn show(ui: &mut Ui, value: &mut BlackWhite, context: AdjustContext) 
         manual = (!reset).then(|| (*after).into());
     }
     ui.data_mut(|d| match manual {
-        Some(value) => d.insert_temp(id, value),
+        Some(value) => {
+            d.insert_temp(id, value);
+        }
         None => d.remove::<ManualValue>(id),
     });
 
