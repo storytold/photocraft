@@ -342,7 +342,7 @@ fn printed_pdf_bakes_counterclockwise_rotation_into_image_samples() {
         emulsion_down: false,
     };
     let pdf = print_pdf(&page);
-    assert_eq!(pdf_image(&pdf), (3, 2, "/DeviceGray".into(), vec![64, 192, 255, 0, 128, 224]));
+    assert_eq!(pdf_image(&pdf), (3, 2, "/DeviceGray".into(), vec![224, 128, 0, 255, 192, 64]));
     assert!(pdf_content(&pdf).contains("q 72.000 0 0 108.000 100.000 200.000 cm /Im0 Do Q"));
 }
 
