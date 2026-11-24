@@ -6,6 +6,7 @@
 //! provides the Help › System Info text (including the monitor profile in use).
 
 use craft::ui::dialog::{PromptAnswer, PromptChoice, StandardPrompt};
+use photocraft_engine::color_cmds::ColorExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -352,8 +353,8 @@ pub fn system_info_json(app: &PhotocraftApp) -> serde_json::Value {
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "gpu": app.perf.gpu_info,
-        "monitor": app.session.color.monitor_status(),
-        "displays": app.session.color.display_statuses(),
+        "monitor": app.session.color().monitor_status(),
+        "displays": app.session.color().display_statuses(),
         "lines": system_info(app),
         "diagnostics": {
             "budget": {
@@ -633,8 +634,8 @@ mod tests {
         // A display read before, then a re-read that fails on a profile in the home folder.
         let display =
             photocraft_engine::display_color::Display { id: 1, name: "Display".into(), frame: [0.0, 0.0, 800.0, 600.0], profile_name: None, icc: None };
-        app.session.color.set_displays(Ok(vec![display]));
-        app.session.color.set_displays(Err(format!("cannot read profile `{profile}`: not found")));
+        app.session.color_mut().set_displays(Ok(vec![display]));
+        app.session.color_mut().set_displays(Err(format!("cannot read profile `{profile}`: not found")));
         app.run("file.new", json!({"width": 8, "height": 8, "name": "Jane_Smith_wedding_proofs.psd"})).unwrap();
         let doc = app.session.active().unwrap().doc.id.0;
         let blending = "Advanced Blending on `Jane_Smith` (composited on the CPU)";

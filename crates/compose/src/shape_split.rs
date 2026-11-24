@@ -95,6 +95,8 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     depth.hash(&mut h);
     format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(&mut h);
     (sh.density.to_bits(), sh.feather.to_bits()).hash(&mut h);
+    // Align Edges moves both parts at render time without touching the path.
+    sh.use_aligned_rendering.hash(&mut h);
     if let Some(c) = &sh.cache {
         format!("{:?}{:?}", c.format(), c.default_pixel()).hash(&mut h);
         for (k, t) in c.tiles() {
@@ -106,8 +108,12 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
         return Some(parts);
     }
     let fmt = PixelFormat::RGBA8.with_sample(depth);
-    let fill_only = ShapeLayer { stroke: None, cache: None, ..sh.clone() };
-    let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
+    // Align Edges fits the whole shape (the stroke's outer edge) to pixels: both parts take that
+    // one transform, never each their own bounds.
+    let aligned = photocraft_vector::align_edges::aligned_shape(sh, photocraft_vector::DEFAULT_TOLERANCE);
+    let base = aligned.as_ref().unwrap_or(sh);
+    let fill_only = ShapeLayer { stroke: None, cache: None, ..base.clone() };
+    let stroke_only = ShapeLayer { fill: None, cache: None, ..base.clone() };
     let mut parts = (photocraft_vector::render_shape(&fill_only, fmt, canvas), photocraft_vector::render_shape(&stroke_only, fmt, canvas));
     if let Some(cache) = &sh.cache {
         fit_stroke(&parts.0, &mut parts.1, cache, canvas);
@@ -364,5 +370,28 @@ mod tests {
         }
         // Other tests share the cache, so only what this test can rely on: a purge frees bytes.
         assert!(purge_cache() > 0, "something to purge");
+    }
+
+    /// Align Edges: the fill and stroke parts (used under layer effects) both take the whole
+    /// shape's transform. A 1 px stroke on 10..30 has its outer edge at 9.5..30.5, so the whole
+    /// shape moves by +0.5: the fill must move too, though its own bounds are already whole.
+    #[test]
+    fn align_edges_split_parts_share_the_whole_shape_transform() {
+        let canvas = Rect::new(0, 0, 48, 48);
+        let sh = ShapeLayer {
+            path: photocraft_vector::shapes::rect(10.0, 10.0, 20.0, 20.0),
+            fill: Some(Fill::Solid(Color::BLACK)),
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            use_aligned_rendering: true,
+            ..Default::default()
+        };
+        let (fill, stroke) = split(&sh, canvas, SampleType::U8).unwrap();
+        let alpha = |s: &Surface, x| photocraft_raster::to_rgba(&s.format(), &s.pixel(x, 20))[3];
+        // Stroke on columns 10 and 30 (its outer edge 10..31), the fill 10.5..30.5 inside it.
+        assert_eq!([alpha(&stroke, 9), alpha(&stroke, 10), alpha(&stroke, 11), alpha(&stroke, 30), alpha(&stroke, 31)], [0.0, 1.0, 0.0, 1.0, 0.0]);
+        assert!((alpha(&fill, 10) - 0.5).abs() < 0.01 && (alpha(&fill, 30) - 0.5).abs() < 0.01, "the fill moved with the stroke");
+        // Off: both parts at their stored place.
+        let (fill, _) = split(&ShapeLayer { use_aligned_rendering: false, ..sh.clone() }, canvas, SampleType::U8).unwrap();
+        assert_eq!([alpha(&fill, 9), alpha(&fill, 10), alpha(&fill, 29), alpha(&fill, 30)], [0.0, 1.0, 1.0, 0.0]);
     }
 }

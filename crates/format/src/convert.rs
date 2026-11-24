@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::{
-    AlphaChannel, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask, Metadata,
-    NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
+    AlphaChannel, ColorIndices, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask,
+    Metadata, NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
 };
 use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
 
 use crate::manifest::{
-    ChannelM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM, PatternM,
-    SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
+    ChannelM, ColorIndicesM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM,
+    PatternM, SmartSourceM, SurfaceM, TileRef, VectorPreviewM,
 };
 use crate::{FormatError, Result};
 
@@ -155,6 +155,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             psd_raw: opt_blob(&s.psd_raw, sink),
             path: s.path.clone(),
             stroke: s.stroke.clone(),
+            use_aligned_rendering: s.use_aligned_rendering,
             // Older PhotoCraft versions cannot deserialize ArrowLine.
             // The saved path preserves the arrow's visual appearance.
             live: match &s.live {
@@ -278,6 +279,13 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> Result<DocM> {
             .map(|p| PatternM { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: surface_m(&p.surface, sink) })
             .collect(),
         color_table: d.color_table.clone(),
+        // Only while they hold for the layer saved here (and the document is Indexed Color): on
+        // open, identical tiles load as one, so loaded pixels can't show a change made since.
+        color_indices: d
+            .color_indices
+            .as_ref()
+            .filter(|c| d.color_table.is_some() && d.layer(c.layer).and_then(Layer::surface).is_some_and(|p| c.holds(c.layer, p)))
+            .map(|c| ColorIndicesM { layer: c.layer.0, indices: surface_m(&c.indices, sink) }),
         duotone: d.duotone.clone(),
         variables: d.variables.clone(),
         timeline: d.timeline.clone(),
@@ -498,21 +506,24 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape { fill, cache, psd_raw, path, stroke, live, arrow_live, triangle_live, density, feather } => LayerContent::Shape(ShapeLayer {
-                path: path.clone(),
-                fill: fill.clone(),
-                stroke: stroke.clone(),
-                live: arrow_live
-                    .as_ref()
-                    .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
-                    .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
-                    .cloned()
-                    .or_else(|| live.clone()),
-                cache: self.opt_surface(cache)?,
-                psd_raw: self.opt_blob(psd_raw)?,
-                density: *density,
-                feather: *feather,
-            }),
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, use_aligned_rendering, live, arrow_live, triangle_live, density, feather } => {
+                LayerContent::Shape(ShapeLayer {
+                    path: path.clone(),
+                    fill: fill.clone(),
+                    stroke: stroke.clone(),
+                    use_aligned_rendering: *use_aligned_rendering,
+                    live: arrow_live
+                        .as_ref()
+                        .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
+                        .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
+                        .cloned()
+                        .or_else(|| live.clone()),
+                    cache: self.opt_surface(cache)?,
+                    psd_raw: self.opt_blob(psd_raw)?,
+                    density: *density,
+                    feather: *feather,
+                })
+            }
             ContentM::Smart {
                 contents_id,
                 source,
@@ -690,7 +701,7 @@ impl Loader<'_> {
             }
         }
         let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
-        Ok(Document {
+        let mut doc = Document {
             id,
             name: m.name.clone(),
             size: m.size,
@@ -698,7 +709,7 @@ impl Loader<'_> {
             mode: m.mode,
             depth: m.depth,
             icc_profile: self.opt_blob(&m.icc_profile)?,
-            layers,
+            layers: layers.into(),
             channels,
             guides: m.guides.clone(),
             ruler_origin: m.ruler_origin,
@@ -712,6 +723,7 @@ impl Loader<'_> {
             quick_mask_unselected: m.quick_mask_unselected,
             patterns,
             color_table: m.color_table.clone(),
+            color_indices: None,
             duotone: m.duotone.clone(),
             variables,
             timeline: m.timeline.clone(),
@@ -723,7 +735,16 @@ impl Loader<'_> {
             notes: m.notes.clone(),
             text_styles: m.text_styles.clone(),
             slices,
-        })
+        };
+        // Saved only while they held for the layer as saved, so they pair with its pixels as
+        // loaded. Optional side data: indices of a layer the file doesn't hold, or damaged ones,
+        // are dropped (Color Table then maps by nearest colour) rather than failing the open.
+        doc.color_indices = m.color_indices.as_ref().and_then(|c| {
+            let layer = *self.id_map.get(&c.layer)?;
+            let pixels = doc.layer(layer)?.surface()?.clone();
+            Some(ColorIndices { layer, pixels, indices: self.surface(&c.indices).ok()? })
+        });
+        Ok(doc)
     }
 
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {

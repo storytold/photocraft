@@ -242,6 +242,10 @@ fn object(base: &Value) -> Map<String, Value> {
 // ---------------------------------------------------------------------------------------------
 // Params -> value
 
+/// Why [`from_params`] refuses a CMYK document's Channel Mixer (cyan, magenta, yellow and black outputs, #8047).
+pub const CMYK_MIXER_UNAVAILABLE: &str =
+    "Editing a CMYK Channel Mixer (cyan, magenta, yellow and black outputs) is not available in this editor yet; the mixer is kept as it is";
+
 /// The typed value of the adjustment `kind` the engine reads from `params`.
 ///
 /// The engine parses and clamps first (`adjust_params::from_params`), so the value holds what the engine would apply.
@@ -251,8 +255,20 @@ pub fn from_params(kind: &str, params: &Value, cx: &ValueCx) -> Result<AdjustVal
     let tone = matches!(kind, "levels" | "curves");
     let given = if tone && cx.gray() { adjust_params::gray_tone_params(params) } else { params.clone() };
     let mode = if tone { cx.tone_mode() } else { cx.mode };
+    // The framework Channel Mixer editor has red, green and blue outputs only. Opened on a CMYK mixer (#8047) it
+    // would show RGB defaults, and its edits would be dropped: the engine keeps the ink outputs while the params carry
+    // ink keys. Refuse it, so the mixer is kept as it is, until the framework has an ink-output editor. Checked on the
+    // given params (an imported monochrome one fails the engine's own parse) and on the parsed ones (a CMYK
+    // document's defaults).
+    let cmyk_mixer = |p: &Value| kind == "channelMixer" && adjust_params::MIXER_INKS.iter().any(|k| p.get(*k).is_some());
+    if cmyk_mixer(params) {
+        return Err(CMYK_MIXER_UNAVAILABLE.to_owned());
+    }
     let adjustment = adjust_params::from_params(kind, &given, None, mode).map_err(|e| e.to_string())?;
     let mut v = adjust_params::to_dialog_params(&adjustment);
+    if cmyk_mixer(&v) {
+        return Err(CMYK_MIXER_UNAVAILABLE.to_owned());
+    }
     let space = space_of(&v, cx.mode);
     if tone && space == ToneSpace::Lab && cx.colour_set() {
         let pencil = flag(&v, "pencil", false);
@@ -438,6 +454,15 @@ pub fn to_params(value: &AdjustValue, cx: &ValueCx, edited: bool) -> Value {
     write_params(value, cx)
 }
 
+/// What a colour of the image becomes under a Hue/Saturation value: the engine's adjustment run over that one colour
+/// (the editor's range swatches and spectrum bar).
+pub fn hue_saturation_adjusted(value: &HueSaturation, color: Srgba) -> Srgba {
+    let cx = ValueCx::default();
+    let params = write_params(&AdjustValue::HueSaturation { value: *value }, &cx);
+    let Ok(adjustment) = adjust_params::from_params("hueSaturation", &params, None, cx.mode) else { return color };
+    Srgba::from_array(photocraft_compose::adjust::adjust_color(&adjustment, color.to_array()))
+}
+
 fn write_params(value: &AdjustValue, cx: &ValueCx) -> Value {
     let mut out = object(&cx.base);
     match value {
@@ -514,6 +539,12 @@ fn write_params(value: &AdjustValue, cx: &ValueCx) -> Value {
         }
         AdjustValue::GradientMap { value } => write_gradient_map(&mut out, value),
         AdjustValue::SelectiveColor { value } => {
+            // The rows carry every range: the single-colour values and `relative` the dialog was opened with would be
+            // read after them (and over them) by the engine. `colors`, the chosen row, stays: without those values it
+            // changes nothing.
+            for key in ["cyan", "magenta", "yellow", "black", "relative"] {
+                out.remove(key);
+            }
             out.insert("method".into(), json!(if value.method == SelectiveMethod::Absolute { "absolute" } else { "relative" }));
             for (key, row) in photocraft_engine::adjust_cmds::RANGES.iter().zip(value.ranges) {
                 out.insert((*key).into(), json!(row));
@@ -625,6 +656,23 @@ mod tests {
         s.execute("file.new", json!({"width": 32, "height": 24, "mode": mode, "depth": depth})).unwrap();
         s.execute("channel.target", json!({"colors": [0, 2]})).unwrap();
         s
+    }
+
+    #[test]
+    fn hue_saturation_swatches_run_the_engines_adjustment() {
+        let red = Srgba::from_array([1.0, 0.0, 0.0, 1.0]);
+        let blue = Srgba::from_array([0.0, 0.0, 1.0, 1.0]);
+        let same = |a: Srgba, b: Srgba| a.to_array().iter().zip(b.to_array()).all(|(x, y)| (x - y).abs() < 1e-3);
+        let neutral = HueSaturation::default();
+        assert!(same(hue_saturation_adjusted(&neutral, red), red));
+        let mut shifted = neutral;
+        shifted.hue = 60.0;
+        let moved = hue_saturation_adjusted(&shifted, red).to_array();
+        assert!(moved[1] > 0.5 && moved[0] > 0.5 && moved[2] < 0.2, "red turns yellow: {moved:?}");
+        let mut reds = neutral;
+        reds.ranges[0].hue = 60.0;
+        assert!(same(hue_saturation_adjusted(&reds, blue), blue), "a Reds-only edit leaves blue");
+        assert!(!same(hue_saturation_adjusted(&reds, red), red));
     }
 
     #[test]

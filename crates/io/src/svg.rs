@@ -1047,7 +1047,7 @@ fn import_parsed_with_limits(
             }
         }
     } else {
-        doc.layers = conv.convert_children(tree.root().children(), 0, 0, tree.root().abs_transform());
+        doc.layers = conv.convert_children(tree.root().children(), 0, 0, tree.root().abs_transform()).into();
     }
     if doc.layers.is_empty() && !conv.noted.contains(&"raster-panic") {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
