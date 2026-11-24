@@ -105,12 +105,12 @@ fn reset_all(app: &mut PhotocraftApp) {
     // Every other painting tool gets its own starting brush. Left without one, it would take the
     // live brush when picked (`sync_tool_brush`), and the tools' starting tips differ (#11810).
     let (live, current) = (app.ui.brush_tool, (*app.session.tools.brush).clone());
-    let remembered = app.ui.tool_brushes.clone();
+    let quick_selection = app.ui.tool_brushes.iter().find(|(tool, _)| *tool == Tool::QuickSelection).map(|(_, brush)| brush.clone());
     app.ui.tool_brushes = Tool::ALL
         .iter()
         .filter(|t| **t != live && crate::paint_mouse::has_brush_picker(**t))
         .map(|t| {
-            let old = remembered.iter().find(|(tool, _)| tool == t).map(|(_, brush)| brush).unwrap_or(&current);
+            let old = if *t == Tool::QuickSelection { quick_selection.as_ref().unwrap_or(&current) } else { &current };
             (*t, crate::paint_mouse::fresh_brush(*t, old))
         })
         .collect();

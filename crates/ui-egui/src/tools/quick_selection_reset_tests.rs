@@ -110,3 +110,26 @@ fn reset_all_with_another_tool_active_keeps_the_remembered_quick_selection_geome
     pick(&mut app, Tool::QuickSelection);
     assert_reset(&mut app);
 }
+
+#[test]
+fn reset_all_keeps_other_tools_session_fields_from_the_live_brush() {
+    let mut app = app();
+    pick(&mut app, Tool::Brush);
+    let remembered = &mut app.session.tools.brush;
+    remembered.color = [0.9, 0.1, 0.2, 1.0];
+    remembered.background = [0.1, 0.8, 0.2, 1.0];
+    remembered.erase = true;
+    remembered.seed = 11;
+    pick(&mut app, Tool::QuickSelection);
+    let live = &mut app.session.tools.brush;
+    live.color = [0.2, 0.3, 0.9, 1.0];
+    live.background = [0.8, 0.7, 0.1, 1.0];
+    live.erase = false;
+    live.seed = 22;
+    let expected = (live.color, live.background, live.seed);
+
+    invoke(&mut app, "tool.resetAll", json!({"confirmed": true}));
+    let b = app.ui.tool_brushes.iter().find(|(tool, _)| *tool == Tool::Brush).map(|(_, brush)| brush).unwrap();
+    assert_eq!((b.color, b.background, b.seed), expected);
+    assert!(!b.erase);
+}
