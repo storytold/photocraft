@@ -379,7 +379,7 @@ fn auto_blend_budget_counts_the_score_and_winner_planes_in_both_stack_modes() {
 
 #[test]
 fn auto_blend_stack_rejects_a_budget_below_its_weight_peak() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
     let mut layers = Vec::new();
     for index in 0..12 {
@@ -427,7 +427,7 @@ fn auto_blend_budget_for_three_full_resolution_photos() {
 
 #[test]
 fn auto_blend_stack_uses_the_memory_budget_before_allocating() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 16, "height": 16, "background": "transparent"})).unwrap();
     let mut layers = Vec::new();
     for (name, left) in [("Left", 0), ("Right", 8)] {
