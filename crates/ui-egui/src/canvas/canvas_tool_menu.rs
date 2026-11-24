@@ -811,10 +811,15 @@ fn shape_layer_row(command: &str) -> bool {
     )
 }
 
-/// Shape tools whose Shape-mode right-click opens [`SHAPE_MENU`] (#13249). The Ellipse (#13232)
-/// and the other shape tools join here once measured.
+/// Is the active document's active layer a pixel layer?
+fn active_is_pixel_layer(app: &PhotocraftApp) -> bool {
+    app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))
+}
+
+/// Shape tools whose Shape-mode right-click opens [`SHAPE_MENU`]: the Line (#13249) and the
+/// Ellipse (#13232). The other shape tools join here once measured.
 pub fn shape_tool_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::Line)
+    matches!(tool, Tool::Line | Tool::EllipseShape)
 }
 
 /// Does a right-click with a shape tool open its menu? Only where measured: Shape mode, over
@@ -1390,6 +1395,11 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
         if command == "view.newGuidesFromShape" {
             return app.session.active().is_some();
         }
+        // Copy Fill and Paste Fill are measured enabled over a pixel layer as well (#13705, #13706),
+        // copied fill or not; Copy Complete Stroke and Paste Complete Stroke grey there.
+        if matches!(command, "path.style.copyFill" | "path.style.pasteFill") && active_is_pixel_layer(app) {
+            return true;
+        }
         if shape_layer_row(command) {
             return crate::menus::is_enabled(app, command);
         }
@@ -1705,6 +1715,13 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
         app.run(command, json!({}))?;
         return Ok(());
     }
+    // The shape menu's fill rows act on the active layer, not on a path. Over a pixel layer, where
+    // they stay live (#13705), there is no path to name: they run as they are, and the command
+    // reports the layer it can't use, as New Guides From Shape does there.
+    if shape_tool_menu(menu.tool) && matches!(command, "path.style.copyFill" | "path.style.pasteFill") {
+        app.run(command, json!({}))?;
+        return Ok(());
+    }
     let pending = pen_pending(app);
     let pending_layer = pending && (app.ui.tool_options.vector_mode == craft::draw::ui::VectorMode::Shape || app.ui.vector_mask_target);
     if pending && !crate::vector_ui::pen_commit(app, false) {
@@ -1913,3 +1930,9 @@ mod object_selection_menu_tests;
 
 #[cfg(test)]
 mod line_menu_tests;
+
+#[cfg(test)]
+mod ellipse_menu_tests;
+
+#[cfg(test)]
+mod shape_fill_rows_tests;

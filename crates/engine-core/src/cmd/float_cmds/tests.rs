@@ -65,6 +65,41 @@ fn any_other_command_drops_it_and_undo_puts_it_back() {
     assert!(alpha(&st.doc, id, 12, 12) == 0.0 && alpha(&st.doc, id, 35, 20) == 1.0);
 }
 
+/// Copy Fill and Paste Fill act on a shape layer's fill. Refused (on the pixel layer, as from the
+/// shape tools' canvas menu, #13705), they leave a floating piece where it is. Paste Fill on a
+/// shape layer it names goes through: the piece drops first, as before any other command, so the
+/// move isn't lost when the fill change moves the document on.
+#[test]
+fn the_fill_rows_keep_a_floating_piece_only_when_refused() {
+    let (mut s, id) = session();
+    let fill = |s: &Session, layer: u64| match &s.active().unwrap().doc.layer(LayerId(layer)).unwrap().content {
+        photocraft_doc::LayerContent::Shape(shape) => shape.fill.clone(),
+        _ => panic!("layer {layer} is not a shape layer"),
+    };
+    let red = s.execute("shape.create", json!({"kind": "rect", "rect": [50, 5, 10, 10], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("path.style.copyFill", json!({})).unwrap();
+    let green = s.execute("shape.create", json!({"kind": "rect", "rect": [50, 40, 10, 10], "fill": "#00ff00"})).unwrap()["layer"].as_u64().unwrap();
+    assert_ne!(fill(&s, green), fill(&s, red));
+    s.execute("layer.select", json!({"layer": id.0})).unwrap();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    for cmd in ["path.style.copyFill", "path.style.pasteFill"] {
+        assert!(s.execute(cmd, json!({})).is_err(), "{cmd} is refused on the pixel layer");
+        let st = s.active().unwrap();
+        assert_eq!(floating(st).map(|f| (f.layer, f.offset)), Some((id, (15, 0))), "{cmd} leaves the piece floating");
+        assert_eq!((st.history.past_len(), alpha(&st.doc, id, 12, 12)), (steps, 1.0), "{cmd} drops nothing");
+    }
+    // Paste Fill named a shape layer goes through, so the piece drops into the pixel layer first.
+    s.execute("path.style.pasteFill", json!({"layer": green})).unwrap();
+    let st = s.active().unwrap();
+    assert!(floating(st).is_none());
+    assert_eq!(st.history.past_len(), steps + 2, "the Move, then the Paste Fill");
+    assert!(alpha(&st.doc, id, 12, 12) == 0.0 && alpha(&st.doc, id, 27, 12) == 1.0, "the piece landed where it was shown");
+    assert_eq!(st.active_layer, Some(id));
+    assert_eq!(fill(&s, green), fill(&s, red), "the named shape layer took the copied fill");
+}
+
 /// The History panel's Step Backward / Step Forward treat a floating piece like Edit › Undo /
 /// Redo: no Move step is recorded and the redo states survive.
 #[test]

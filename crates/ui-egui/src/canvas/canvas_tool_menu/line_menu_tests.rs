@@ -50,17 +50,17 @@ fn right_click_entries(h: &mut Harness<'static, Box<PhotocraftApp>>) -> Vec<Valu
 }
 
 /// The entries' labels, a separator as `None`.
-fn shown(entries: &[Value]) -> Vec<Option<String>> {
+pub(super) fn shown(entries: &[Value]) -> Vec<Option<String>> {
     entries.iter().map(|e| if e["separator"] == json!(true) { None } else { e["label"].as_str().map(String::from) }).collect()
 }
 
 /// The labels of the greyed entries.
-fn greyed(entries: &[Value]) -> Vec<String> {
+pub(super) fn greyed(entries: &[Value]) -> Vec<String> {
     entries.iter().filter(|e| e["enabled"] == json!(false)).filter_map(|e| e["label"].as_str().map(String::from)).collect()
 }
 
 /// The issue's notation: rows joined by " · ", separators written " ― ".
-fn menu(spec: &str) -> Vec<Option<String>> {
+pub(super) fn menu(spec: &str) -> Vec<Option<String>> {
     spec.split(" ― ")
         .enumerate()
         .flat_map(|(i, group)| (i > 0).then_some(None).into_iter().chain(group.split(" · ").map(|label| Some(label.to_owned()))))
@@ -89,7 +89,7 @@ fn over_a_pixel_layer_the_menu_lists_the_reference_rows() {
         list(
             "Define Custom Shape… · Make Selection… · Fill Path… · Stroke Path… · Rasterize Layer · Rasterize Layer Style · \
              Rasterize Vector Mask · Unite Shapes · Subtract Front Shape · Unite Shapes at Overlap · Subtract Shapes at Overlap · \
-             Copy Fill · Copy Complete Stroke · Paste Fill · Paste Complete Stroke"
+             Copy Complete Stroke · Paste Complete Stroke"
         )
     );
 }
@@ -189,7 +189,7 @@ fn greyed_rows_run_nothing() {
     let mut app = pixel_layer();
     assert!(open_here(&mut app, Tool::Line, [10.0, 10.0]));
     let before = app.session.journal.len();
-    for command in ["path.toSelection", "layer.rasterize.layer", "path.style.pasteFill", "path.transform"] {
+    for command in ["path.toSelection", "layer.rasterize.layer", "path.style.pasteStroke", "path.transform"] {
         pick(&mut app, command);
         assert!(open_here(&mut app, Tool::Line, [10.0, 10.0]));
     }
