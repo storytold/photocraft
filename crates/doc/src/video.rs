@@ -15,6 +15,45 @@ pub enum VideoSource {
     File { path: String },
 }
 
+/// The frames of the video timeline a layer shows on: its bar in the Timeline panel, from `start`
+/// up to but not including `end`. A paint layer for one frame of a shot spans just that frame.
+///
+/// Outside the span the layer is hidden. The engine keeps [`Layer::visible`](crate::Layer) at
+/// `eye && contains(current frame)` whenever the playhead or a span changes, so every renderer,
+/// exporter and panel reads that one flag; `eye` holds the visibility the user chose (the Layers
+/// panel's eye), which the playhead never changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
+pub struct FrameSpan {
+    /// First frame shown (0-based).
+    pub start: usize,
+    /// The frame after the last one shown; always above `start`.
+    pub end: usize,
+    /// The user's own visibility for the layer.
+    pub eye: bool,
+}
+
+impl FrameSpan {
+    /// The frames `start..end`, at least one frame long, with the eye on.
+    pub fn new(start: usize, end: usize) -> Self {
+        FrameSpan { start, end: end.max(start.saturating_add(1)), eye: true }
+    }
+
+    /// Whether `frame` is one the layer shows on.
+    pub fn contains(&self, frame: usize) -> bool {
+        (self.start..self.end).contains(&frame)
+    }
+
+    /// Number of frames spanned.
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+
+    /// A span always holds at least one frame.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// A video layer's frame stack (Layer › Video Layers). The layer's displayed content surface is a
 /// cache of `frames[timeline.current]`, which the engine keeps in sync as the playhead moves.
 ///

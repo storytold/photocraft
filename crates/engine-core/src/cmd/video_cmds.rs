@@ -49,6 +49,77 @@ fn check_gif_budget(w: u64, h: u64, frames: u64) -> std::result::Result<(), Stri
 pub fn sync(doc: &mut Document) {
     let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
     sync_layers(&mut doc.layers, cur);
+    show_spans(doc);
+}
+
+// ------------------------------------------------------------------ frame spans
+
+/// The playhead, while the document has a timeline: a [`FrameSpan`] only hides a layer then.
+fn span_frame(doc: &Document) -> Option<usize> {
+    doc.timeline.as_ref().map(|t| t.current)
+}
+
+/// Records each spanned layer's eye from its visibility where the layer is on screen (the
+/// timeline off, or the playhead inside its span). Off its frames `visible` is the span's doing,
+/// so the eye kept there stands. Call before the playhead or a span changes.
+pub(crate) fn store_spans(doc: &mut Document) {
+    fn walk(layers: &mut [Layer], cur: Option<usize>) {
+        for l in layers {
+            if let Some(span) = &mut l.span
+                && cur.is_none_or(|f| span.contains(f))
+            {
+                span.eye = l.visible;
+            }
+            if let Some(ch) = l.children_mut() {
+                walk(ch, cur);
+            }
+        }
+    }
+    let cur = span_frame(doc);
+    walk(&mut doc.layers, cur);
+}
+
+/// Sets each spanned layer's visibility from its eye and whether the playhead is on its frames.
+/// Call after the playhead or a span changes (after [`store_spans`]).
+pub(crate) fn show_spans(doc: &mut Document) {
+    fn walk(layers: &mut [Layer], cur: Option<usize>) {
+        for l in layers {
+            if let Some(span) = l.span {
+                l.visible = span.eye && cur.is_none_or(|f| span.contains(f));
+            }
+            if let Some(ch) = l.children_mut() {
+                walk(ch, cur);
+            }
+        }
+    }
+    let cur = span_frame(doc);
+    walk(&mut doc.layers, cur);
+}
+
+/// After any edit: a spanned layer the edit left visible off its frames (its eye clicked there,
+/// Show All Layers) keeps that as its eye and stays hidden until the playhead reaches its frames;
+/// on its frames, its visibility is its eye.
+pub fn apply_spans(doc: &mut Document) {
+    fn walk(layers: &mut [Layer], cur: Option<usize>) {
+        for l in layers {
+            if let Some(span) = &mut l.span {
+                match cur {
+                    Some(f) if !span.contains(f) => {
+                        if l.visible {
+                            span.eye = true;
+                        }
+                        l.visible = false;
+                    }
+                    _ => span.eye = l.visible,
+                }
+            }
+            if let Some(ch) = l.children_mut() {
+                walk(ch, cur);
+            }
+        }
+    }
+    let cur = span_frame(doc);
+    walk(&mut doc.layers, cur);
 }
 
 fn sync_layers(layers: &mut [Layer], cur: usize) {
@@ -73,6 +144,7 @@ fn sync_layers(layers: &mut [Layer], cur: usize) {
 pub fn store(doc: &mut Document) {
     let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
     store_layers(&mut doc.layers, cur);
+    store_spans(doc);
 }
 
 fn store_layers(layers: &mut [Layer], cur: usize) {

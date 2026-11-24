@@ -262,6 +262,8 @@ impl Session {
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
+        // A layer with a frame span stays hidden off its frames, whatever the edit did to its eye.
+        crate::video_cmds::apply_spans(&mut doc);
         if let Some(restrict) = restrict {
             channel_cmds::restrict_to_color(&before, &mut doc, restrict.layer, restrict.colors)?;
         }

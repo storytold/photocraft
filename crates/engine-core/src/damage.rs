@@ -169,6 +169,8 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
         blend_if,
         advanced,
         video: _,
+        // A frame range composites only through `visible`, which the engine keeps from it.
+        span: _,
         xmp: _,
     } = a;
     *id == b.id

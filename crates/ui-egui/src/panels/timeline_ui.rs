@@ -28,6 +28,9 @@ pub struct TimelineUi {
     /// Drives playback; the playhead follows its position while it runs.
     #[serde(skip)]
     clock: PlaybackClock,
+    /// The layer tracks' zoom, scroll and bar drag.
+    #[serde(skip)]
+    pub(crate) layers: super::timeline_layers::LayerTracksUi,
 }
 
 /// `PlaybackClock` has no equality; two states are equal when both play or both are stopped.
@@ -134,6 +137,11 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Text::new(format!("{:.2}s", tl.time())).role(TypeRole::Mono).shade(Shade::Muted).show(ui);
         });
         Row::new().show(ui, |ui, _| {
+            // Paint prep's everyday step: a clean layer for the frame under the playhead.
+            if clicked(&Button::new(tl!("New Layer for This Frame")).show(ui)) {
+                stop = true;
+                act = Some(("layer.frameRange.newLayerForFrame", json!({})));
+            }
             if clicked(&IconButton::new(IconId::new("trash")).label(tl!("Delete Timeline")).tooltip(tl!("Delete Timeline")).show(ui)) {
                 stop = true;
                 act = Some(("timeline.delete", json!({})));
@@ -162,6 +170,10 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((cmd, p)) = act {
         let _ = app.run(cmd, p);
     }
+
+    // The layers, each with a bar over the frames it shows on.
+    let current = app.session.active().and_then(|d| d.doc.timeline.as_ref()).map_or(tl.current, |t| t.current);
+    super::timeline_layers::show(app, ui, tl.fps, tl.duration, current);
 }
 
 #[cfg(test)]
@@ -220,7 +232,7 @@ mod tests {
 
         // Scrubbing the playhead pauses playback and moves the frame.
         play(&mut h);
-        let slider = h.get_by_role(egui::accesskit::Role::Slider).rect();
+        let slider = h.get_by_role_and_label(egui::accesskit::Role::Slider, "Playhead").rect();
         let target = egui::pos2(slider.right() - 8.0, slider.center().y);
         h.event(egui::Event::PointerMoved(target));
         h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });

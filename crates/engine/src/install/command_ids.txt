@@ -1016,3 +1016,10 @@ actions.delete
 actions.toggle
 actions.rename
 actions.setColor
+layer.frameRange.newLayerForFrame
+layer.frameRange.startAtPlayhead
+layer.frameRange.endAtPlayhead
+layer.frameRange.split
+layer.frameRange.clear
+layer.frameRange.set
+layer.frameRange.list

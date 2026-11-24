@@ -18,4 +18,8 @@ The catalog cleanup removes 136 dormant rows for branded composer labels, PDF pr
 
 ## Video timeline paint layers
 
+PhotoCraft's own names for showing a layer on some frames of the video timeline only:
+
+- **Frame Range**: the frames a layer shows on (Layer › Frame Range; `layer.frameRange.*`; `Layer::span` in code).
+- **New Layer for This Frame**, **Start at Playhead**, **End at Playhead**, **Split at Playhead**, **Show on Every Frame**: the Frame Range menu's items.
 - **Open Image Sequence…**: File › Open Image Sequence…, a numbered run of images opened as one video layer.

@@ -221,6 +221,11 @@ fn layer_sel(
         };
         v["video"] = json!({"frames": vid.frames.len(), "fps": vid.fps, "showAltered": vid.show_altered, "source": source});
     }
+    // Layer › Frame Range: the timeline frames the layer shows on (0-based, `end` exclusive) and
+    // the eye the user set, which `visible` follows on those frames.
+    if let Some(sp) = l.span {
+        v["frameRange"] = json!({"start": sp.start, "end": sp.end, "eye": sp.eye});
+    }
     v
 }
 

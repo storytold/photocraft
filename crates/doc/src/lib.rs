@@ -51,7 +51,7 @@ pub use variables::{DataSet, DataValue, PixelAlign, PixelMethod, VarKind, Variab
 pub use vector::{
     ClippingPath, FillRule, Knot, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
 };
-pub use video::{Timeline, VideoData, VideoSource};
+pub use video::{FrameSpan, Timeline, VideoData, VideoSource};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -738,6 +738,9 @@ pub struct Layer {
     pub advanced: AdvancedBlending,
     /// Layer › Video Layers frame stack (None for a normal layer).
     pub video: Option<VideoData>,
+    /// The frames of the video timeline the layer shows on (its bar in the Timeline panel);
+    /// `None` = every frame. See [`FrameSpan`] for how it drives `visible`.
+    pub span: Option<FrameSpan>,
     /// The layer's own XMP packet (Photoshop's `layer.xmpMetadata.rawData`), where scripts and
     /// embedding apps keep data about the layer under their own namespaces. Copied by
     /// [`Layer::duplicate`], as in Photoshop. PSD `shmd` › `cust` › `layerXMP`.
@@ -776,6 +779,7 @@ impl Layer {
             blend_if: BlendIf::default(),
             advanced: AdvancedBlending::default(),
             video: None,
+            span: None,
             xmp: None,
         }
     }

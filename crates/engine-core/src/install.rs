@@ -106,6 +106,7 @@ const TABLES: &[Table] = &[
     ("migrate_cmds", crate::migrate_cmds::specs),
     ("timeline_cmds", crate::timeline_cmds::specs),
     ("video_cmds", crate::video_cmds::specs),
+    ("frame_range_cmds", crate::cmd::frame_range_cmds::specs),
     ("jobs", crate::jobs::specs),
     ("wia_cmds", crate::wia_cmds::specs),
     ("variables_cmds", crate::variables_cmds::specs),

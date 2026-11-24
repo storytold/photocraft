@@ -231,6 +231,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
         blend_if: l.blend_if.clone(),
         advanced: l.advanced,
         video: l.video.as_ref().map(|v| video_m(v, sink)),
+        span: l.span,
         xmp: l.xmp.as_deref().map(str::to_string),
     }
 }
@@ -609,6 +610,7 @@ impl Loader<'_> {
             blend_if: m.blend_if.clone(),
             advanced: m.advanced,
             video: m.video.as_ref().map(|v| self.video(v)).transpose()?,
+            span: m.span.map(|s| photocraft_doc::FrameSpan { end: s.end.max(s.start.saturating_add(1)), ..s }),
             xmp: m.xmp.as_deref().map(Arc::from),
         })
     }
