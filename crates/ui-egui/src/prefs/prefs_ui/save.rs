@@ -217,7 +217,7 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
 ///
 fn show_link_warnings(app: &mut PhotocraftApp, result: &serde_json::Value) {
     let warnings: Vec<String> = result["warnings"].as_array().into_iter().flatten().filter_map(|warning| warning.as_str().map(str::to_owned)).collect();
-    crate::notices::io_warnings(app, &tl!("Linked Smart Objects"), &warnings);
+    crate::notices::io_warnings(app, tl!("Linked Smart Objects"), &warnings);
 }
 
 /// A saved or closed document needs no `Autosave::forget` here: the timer's next `due` finds it
