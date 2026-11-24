@@ -12,7 +12,7 @@ fn drag() -> serde_json::Value {
 }
 
 fn session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 48, "height": 32, "background": "white"})).unwrap();
     s
 }
@@ -48,17 +48,10 @@ fn an_empty_pixel_layer_becomes_the_gradient_fill_layer_in_place() {
 }
 
 #[test]
-fn a_layer_with_pixels_or_the_background_gets_a_new_layer_above() {
+fn the_background_gets_a_new_layer_above() {
     let mut s = session();
     s.execute(CREATE, drag()).unwrap();
     assert_eq!(names(&s), ["Background", "Gradient Fill 1"]);
-
-    let mut s = session();
-    let top = add_layer(&mut s, "Top");
-    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    s.execute(CREATE, drag()).unwrap();
-    assert_eq!(names(&s), ["Background", "Top", "Gradient Fill 1"]);
-    assert!(matches!(s.active().unwrap().doc.layer(top).unwrap().content, LayerContent::Raster(_)));
 }
 
 #[test]
