@@ -664,3 +664,23 @@ fn a_reopened_dialog_never_paints_the_previous_dialogs_preview() {
         !a.filter_preview_worker.busy()
     });
 }
+
+/// A preview belongs to what the command addresses: another document, layer or mask in the parameters is another
+/// session, while a slider on the same target keeps the session's last frame.
+#[test]
+fn an_addressed_layer_or_mask_is_its_own_preview_session() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+    open_filter(&mut app, "filter.blur.gaussianBlur");
+    let ctx = app.ctx().clone();
+    assert!(ensure_filter_preview(&mut app, 0, &ctx).is_some(), "the preview reaches the canvas");
+    let key = app.filter_preview.as_ref().unwrap().key.clone();
+    let mut slider = key.clone();
+    slider.params["radius"] = json!(9.0);
+    assert!(same_target(&app, &slider), "a slider keeps the session");
+    for (name, value) in [("target", json!("mask")), ("layer", json!(7)), ("document", json!(1))] {
+        let mut other = key.clone();
+        other.params[name] = value;
+        assert!(!same_target(&app, &other), "another {name} is another session");
+    }
+}

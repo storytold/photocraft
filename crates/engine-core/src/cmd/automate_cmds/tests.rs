@@ -370,7 +370,7 @@ fn droplets_carry_the_actions_their_play_steps_call() {
             json!({"steps": [
             {"command": "actions.play", "id": "ignored", "params": {"action": 1}, "tag": "keep"},
             "image.imageRotation.180", ["image.imageRotation.180"], {"id": "image.imageRotation.180"},
-            {"command": "image.imageRotation.180", "id": "actions.play", "params": {"action": 3}}
+            {"command": "image.imageRotation.180", "id": "actions.play", "params": {}}
         ], "action": 3}),
             &["Rotate"][..],
             None,

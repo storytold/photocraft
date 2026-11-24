@@ -173,8 +173,9 @@ impl PlaceSteps {
             None if self.input.fit && (w * base > cw || h * base > ch) => (cw / w).min(ch / h),
             None => base,
         };
-        let center = match p.get("center").and_then(Value::as_array) {
-            Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
+        let center = match (self.input.on_selection, p.get("center").and_then(Value::as_array)) {
+            (Some(c), _) => c,
+            (None, Some(c)) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
             _ => (cw / 2.0, ch / 2.0),
         };
         // `scale` is the caller's: bound the resampled size before allocating it (a frame's image
@@ -285,6 +286,7 @@ impl PlaceSteps {
             bounds,
             smart,
             frame: input.frame.as_ref().map(|(id, _)| *id),
+            deselect: input.on_selection.is_some(),
         })
     }
 }
