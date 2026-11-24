@@ -90,6 +90,18 @@ pub fn parse(args: Vec<OsString>) -> Result<Launch, String> {
     }
 }
 
+/// The Launcher's version check: the selector/root pair followed by exactly `--version` (or `-V`),
+/// answered like a plain version query. Only [`parse`]'s lexical checks apply; the root is never
+/// validated or touched, and `-- --version` stays a file name.
+pub fn version_query(args: &[OsString]) -> bool {
+    let Some((last, pair)) = args.split_last() else { return false };
+    if last != "--version" && last != "-V" {
+        return false;
+    }
+    let lexical = pair.iter().cloned().chain(std::iter::once(OsString::from("--"))).collect();
+    matches!(parse(lexical), Ok(Launch { profile: Profile::NightlyV1(_), args }) if args.len() == 1)
+}
+
 /// The existing renderer retry is signalled by its process-local failure marker. Ordinary
 /// Launcher calls still use the strict selector/root protocol; this is not authentication.
 pub fn parse_startup(args: Vec<OsString>, compatibility_retry: bool) -> Result<Launch, String> {
@@ -188,6 +200,35 @@ mod tests {
         ] {
             assert!(parse(argv).is_err());
         }
+    }
+
+    #[test]
+    fn the_launcher_version_check_is_a_version_query_only_in_its_exact_form() {
+        let pair = &["--launch-profile", VERSION, "--profile-root", absolute()];
+        let reversed = &["--profile-root", absolute(), "--launch-profile", VERSION];
+        for flag in ["--version", "-V"] {
+            for form in [pair, reversed] {
+                let mut argv = args(form);
+                argv.push(flag.into());
+                assert!(version_query(&argv), "{argv:?}");
+            }
+        }
+        for argv in [
+            args(&["--version"]),
+            args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--", "--version"]),
+            args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--version", "--"]),
+            args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--new-instance", "--version"]),
+            args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--version", "--version"]),
+            args(&["--version", "--launch-profile", VERSION, "--profile-root", absolute()]),
+            args(&["--launch-profile", "future-v2", "--profile-root", absolute(), "--version"]),
+            args(&["--launch-profile", VERSION, "--profile-root", "relative", "--version"]),
+            args(&["--launch-profile", VERSION, "--version"]),
+            args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--help"]),
+        ] {
+            assert!(!version_query(&argv), "{argv:?}");
+        }
+        // Outside the query the strict protocol still refuses the version flag.
+        assert!(parse(args(&["--launch-profile", VERSION, "--profile-root", absolute(), "--version"])).is_err());
     }
 
     #[test]
