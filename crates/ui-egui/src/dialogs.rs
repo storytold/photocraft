@@ -30,7 +30,7 @@ pub(crate) mod params {
     use super::{
         PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
         equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
-        smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
+        selection_channel_ui, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
 
@@ -84,6 +84,7 @@ pub(crate) mod params {
         ParamFamily { check: Some(equalize_ui::check), ..ParamFamily::new(equalize_ui::owns, equalize_ui::run) },
         ParamFamily::new(channel_options_ui::owns, channel_options_ui::run),
         ParamFamily { check: Some(merge_channels_ui::check), ..ParamFamily::new(merge_channels_ui::owns, merge_channels_ui::run) },
+        ParamFamily { check: Some(selection_channel_ui::check), ..ParamFamily::new(selection_channel_ui::owns, selection_channel_ui::run) },
         ParamFamily {
             check: Some(filter_dialog::check),
             footer: Some(color_table_ui::footer_action),
@@ -503,6 +504,7 @@ pub fn run(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::type_panels_ui::color_picker::check(app, ui.ctx());
     palette::show(app, ui);
     crate::filter_dialog::reconcile_match_color(app);
+    selection_channel_ui::reconcile(app);
     filter_preview_ui::feed(app, ui.ctx());
     crate::prefs_ui::feed(app);
     app.framework.dialogs.run(ui);
@@ -767,6 +769,7 @@ pub(crate) mod rotate_canvas_ui;
 mod scale_effects_layout_tests;
 pub mod screen_picker;
 pub mod select_mask_ui;
+pub mod selection_channel_ui;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
 pub(crate) mod shared_picture;

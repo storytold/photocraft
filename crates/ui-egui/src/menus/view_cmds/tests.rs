@@ -772,14 +772,17 @@ fn save_selection_opens_its_dialog_and_saves_on_confirm() {
     assert_eq!(app.session.active().unwrap().revision, revision, "saved before confirmation");
     assert!(app.session.active().unwrap().doc.channels.is_empty());
     assert_eq!(fields(&app, dialog)["channel"], "new");
-    assert_eq!(choice_ids(&mut app, "select.saveSelection", "operation"), ["new", "replace", "add", "subtract", "intersect"]);
+    // A new channel: the operation reads New Channel, and combining needs an existing channel.
+    let operations = crate::selection_channel_ui::testing::options(&app, dialog, "operation");
+    assert_eq!(operations, [("new".into(), true), ("add".into(), false), ("subtract".into(), false), ("intersect".into(), false)]);
     set(&mut app, &ctx, dialog, "name", json!("Keep"));
     confirm(&mut app, &ctx, dialog).unwrap();
     let names: Vec<_> = app.session.active().unwrap().doc.channels.iter().map(|c| c.name.clone()).collect();
     assert_eq!(names, ["Keep"]);
-    // A second save lists the new channel as a destination.
-    open_form(&mut app, &ctx, "select.saveSelection");
-    assert_eq!(choice_ids(&mut app, "select.saveSelection", "channel"), ["new", "Keep"]);
+    // A second save lists the new channel as a destination, by its place.
+    let dialog = open_form(&mut app, &ctx, "select.saveSelection");
+    let channels = crate::selection_channel_ui::testing::options(&app, dialog, "channel");
+    assert_eq!(channels, [("new".into(), true), ("0".into(), true)]);
 }
 
 #[test]
@@ -792,11 +795,11 @@ fn load_selection_opens_its_dialog_and_loads_on_confirm() {
     let dialog = open_form(&mut app, &ctx, "select.loadSelection");
     assert!(app.session.active().unwrap().doc.selection.is_none(), "loaded before confirmation");
     let shown = fields(&app, dialog);
-    assert_eq!(shown["channel"], "Keep");
+    assert_eq!(shown["channel"], "0", "Keep, the first alpha channel");
     assert_eq!(shown["invert"], false);
     assert_eq!(shown["operation"], "new");
-    let channels = choice_ids(&mut app, "select.loadSelection", "channel");
-    assert!(channels.contains(&"Keep".to_owned()) && channels.contains(&"transparency".to_owned()));
+    let channels: Vec<String> = crate::selection_channel_ui::testing::options(&app, dialog, "channel").into_iter().map(|(id, _)| id).collect();
+    assert!(channels.contains(&"0".to_owned()) && channels.contains(&"transparency".to_owned()));
     // The layer has no mask, so its mask is not offered.
     assert!(!channels.contains(&"mask".to_owned()), "{channels:?}");
     confirm(&mut app, &ctx, dialog).unwrap();

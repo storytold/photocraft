@@ -19,7 +19,7 @@ pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
 
 /// The command ids whose dialog is a hosted parameter form built by [`params_for`] (Open EXR Parts included).
 /// The dialogs area's `PARAM_FAMILIES` row owns exactly these.
-const FORM_COMMANDS: [&str; 21] = [
+const FORM_COMMANDS: [&str; 19] = [
     "file.openExrParts",
     "layer.videoLayers.interpretFootage",
     "file.fileInfo",
@@ -37,8 +37,6 @@ const FORM_COMMANDS: [&str; 21] = [
     "file.automate.lensCorrection",
     "file.scripts.imageProcessor",
     "file.automate.batch",
-    "select.saveSelection",
-    "select.loadSelection",
     "image.applyImage",
     "image.calculations",
 ];
@@ -492,7 +490,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             Param::new("tiff/height", tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("tiff/resize", true),
         ]),
         "file.automate.batch" => batch_form(app, &dir),
-        "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => channel_form(app, id),
+        "image.applyImage" | "image.calculations" => channel_form(app, id),
         _ => None,
     }
 }
@@ -581,8 +579,8 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
     Some((rows, DialogFields::new()))
 }
 
-/// The channel workflow forms (see channels_panel.rs for the channel references): Save and Load Selection, Apply
-/// Image and Calculations.
+/// The channel workflow forms (see channels_panel.rs for the channel references): Apply Image and Calculations. Save
+/// and Load Selection have their own dialog, with the Document (`selection_channel_ui`).
 fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFields)> {
     let st = app.session.active()?;
     let d = &st.doc;
@@ -592,7 +590,6 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
         chans.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
     }
     chans.extend(d.channels.iter().map(|c| c.name.clone()));
-    let alphas: Vec<String> = std::iter::once("new".to_string()).chain(d.channels.iter().map(|c| c.name.clone())).collect();
     // The active layer's transparency, and its mask only when it has one.
     let layer = st.active_layer.and_then(|l| d.layer(l));
     let mut load = chans.clone();
@@ -603,28 +600,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
         load.push("mask".into());
     }
     load.push("selection".into());
-    let operation = |with_replace: bool| {
-        let mut list = vec![("new", tl!("New"))];
-        if with_replace {
-            list.push(("replace", tl!("Replace")));
-        }
-        list.extend([("add", tl!("Add")), ("subtract", tl!("Subtract")), ("intersect", tl!("Intersect"))]);
-        opts(&list)
-    };
     let rows = match id {
-        "select.saveSelection" => vec![
-            choice("channel", tl!("Channel"), channels(&alphas), "new"),
-            Param::new("name", tl!("Name"), ParamKind::text("")),
-            choice("operation", tl!("Operation"), operation(true), "new"),
-        ],
-        "select.loadSelection" => {
-            let first = d.channels.first().map_or_else(|| chans[0].clone(), |c| c.name.clone());
-            vec![
-                choice("channel", tl!("Channel"), channels(&load), &first),
-                Param::new("invert", tl!("Invert"), ParamKind::bool(false)),
-                choice("operation", tl!("Operation"), operation(false), "new"),
-            ]
-        }
         "image.applyImage" => {
             let mut masks = vec!["none".to_string()];
             masks.extend(load.iter().cloned());
@@ -854,6 +830,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app).value().to_string()}))),
         "file.export.dataSetsAsFiles" if cfg!(target_arch = "wasm32") => Some(Err(tl!("Data Sets as Files is unavailable on the web").to_string())),
         "file.automate.batch" if crate::actions::selected_action(app).is_none() => Some(Err("record an action in the Actions panel first".into())),
+        // Save Selection and Load Selection have their own dialog, with the Document.
+        "select.saveSelection" | "select.loadSelection" => Some(crate::selection_channel_ui::open(app, id).map(opened)),
         _ if is_form(id) => {
             let (rows, fields) = params_for(app, id)?;
             Some(Ok(opened(open_form(app, id, label, rows, fields, Value::Null))))

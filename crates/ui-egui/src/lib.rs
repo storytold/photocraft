@@ -165,6 +165,7 @@ pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
 pub use dialogs::screen_picker;
 pub use dialogs::select_mask_ui;
+pub use dialogs::selection_channel_ui;
 pub use dialogs::shape_dialog;
 pub(crate) use dialogs::shape_fill_ui;
 use dialogs::sizing;
