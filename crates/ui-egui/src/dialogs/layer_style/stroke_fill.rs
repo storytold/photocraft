@@ -176,7 +176,7 @@ pub(super) fn apply_params(params: &mut Value, snapshot: Option<&Value>) {
 }
 
 fn fields_cache(id: DialogId) -> egui::Id {
-    egui::Id::new(("layer-style-stroke-fill", id.value()))
+    egui::Id::unique(("layer-style-stroke-fill", id.value()))
 }
 
 pub(super) fn remember(ctx: &egui::Context, id: DialogId, fields: Fields) {
