@@ -68,9 +68,9 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
             .star_ratio(ratio)
             .line_weight(f64::from(o.line_weight))
             .mode(o.shape_mode);
-        // The gear belongs to the Rectangle tool alone.
-        if tool == Tool::Rectangle {
-            options = options.constraints(super::shapes::constraints_of(o));
+        // Each gear belongs to its own tool: the Rectangle's (#13343) and the Triangle's (#13361).
+        if let Some(gear) = super::shapes::constraints_of(o, tool) {
+            options = options.constraints(gear);
         }
         state.shapes.options(options).preview(true);
         return Which::Shapes;
