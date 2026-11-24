@@ -373,7 +373,10 @@ fn a_none_droplet_refuses_a_nested_recorded_save_and_writes_no_file() {
         v
     };
     let mut maker = crate::session();
-    maker.actions_mut().list.push(Action::new("Inner", vec![ActionStep::new("image.imageRotation.90cw", json!({})), ActionStep::new("file.save", json!({}))]))
+    maker
+        .actions_mut()
+        .list
+        .push(Action::new("Inner", vec![ActionStep::new("image.imageRotation.90cw", json!({})), ActionStep::new("file.save", json!({}))]))
         .unwrap();
     maker.actions_mut().list.push(Action::new("Top", vec![ActionStep::new("actions.play", json!({"action": "Inner"}))])).unwrap();
     let dp = maker
