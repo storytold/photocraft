@@ -281,7 +281,9 @@ pub fn movie_document(path: &str) -> Result<Document, String> {
     let mut layer = photocraft_doc::Layer::raster(stem, fmt);
     layer.video = Some(photocraft_doc::VideoData::from_footage(FootageLink::new(path.to_string(), info), fmt));
     doc.layers.push(layer);
-    crate::video_cmds::sync(&mut doc);
+    // The first frame must decode: a movie whose pictures can't be read isn't opened as an empty
+    // layer. Later frames show empty when they fail, as when scrubbing.
+    crate::video_cmds::sync_for_output(&mut doc).map_err(|e| e.to_string())?;
     Ok(doc)
 }
 

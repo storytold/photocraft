@@ -145,3 +145,17 @@ fn frames_can_be_taken_from_a_movie_longer_than_a_video_layer_may_be() {
     assert!(err.contains("limited to"), "{err}");
     crate::footage::forget(&path);
 }
+
+/// A movie whose first frame can't be decoded is refused by File › Open with the reason, not
+/// opened as an empty layer.
+#[test]
+fn a_movie_whose_first_frame_fails_does_not_open() {
+    let path = std::env::temp_dir().join(format!("pc-movie-cmds-{}-first-damaged.mp4", std::process::id())).to_string_lossy().into_owned();
+    crate::footage::register(
+        &path,
+        Box::new(crate::footage::testing::Synthetic { fail_at: Some(0), ..crate::footage::testing::Synthetic::new(W, H, 3, 25.0) }),
+    );
+    let err = crate::footage::movie_document(&path).map(|_| ()).unwrap_err();
+    assert!(err.contains("damaged"), "{err}");
+    crate::footage::forget(&path);
+}
