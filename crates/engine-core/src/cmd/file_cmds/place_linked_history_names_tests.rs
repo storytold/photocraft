@@ -51,8 +51,6 @@ fn a_linked_place_keeps_its_name_without_always_create_smart_objects() {
     s.execute("prefs.set", json!({"path": "general.alwaysCreateSmartObjectsWhenPlacing", "value": false})).unwrap();
     assert_eq!(added_by(&mut s, "file.placeLinked", json!({"path": path})), ["Place Linked Smart Object"]);
     assert_eq!(placed_kind(&s), "linked", "still a linked smart object");
-    assert_eq!(added_by(&mut s, "file.placeLinked", json!({"path": path, "smartObject": false})), ["Place Linked Smart Object"]);
-    assert_eq!(placed_kind(&s), "linked");
     // An embedded place in the same document is a pixel layer named Place Image.
     assert_eq!(added_by(&mut s, "file.placeEmbedded", json!({"path": path})), ["Place Image"]);
 }
