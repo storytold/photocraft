@@ -17,6 +17,18 @@ HERE="$ROOT/packaging/web"
 
 if [[ "${1:-}" != "--skip-build" ]]; then
   command -v trunk >/dev/null || { echo "error: trunk not found (cargo install trunk --locked)" >&2; exit 1; }
+  # wasm-opt's --converge repeats its passes until the size stops shrinking, which adds minutes.
+  # PHOTOCRAFT_WEB_WASM_OPT_CONVERGE=0 (pull-request CI) builds without it: the wasm is slightly
+  # larger than a release build produces. Trunk reads the flag only from index.html, so the
+  # attribute is removed for the build and the file restored afterwards.
+  INDEX="$ROOT/apps/photocraft-web/index.html"
+  if [[ "${PHOTOCRAFT_WEB_WASM_OPT_CONVERGE:-1}" == "0" ]]; then
+    cp "$INDEX" "$INDEX.orig"
+    trap 'mv -f "$INDEX.orig" "$INDEX"' EXIT
+    sed -i.sed 's| data-wasm-opt-params="--converge"||' "$INDEX"
+    rm -f "$INDEX.sed"
+    grep -q -- '--converge' "$INDEX" && { echo "error: --converge still in $INDEX" >&2; exit 1; }
+  fi
   (cd "$ROOT/apps/photocraft-web" && trunk build --release)
   (cd "$ROOT/apps/photocraft-web-boot" && trunk build --release)
 fi

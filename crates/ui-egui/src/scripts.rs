@@ -181,7 +181,7 @@ impl AppCommands<'_> {
         }
         let session = &self.app.session;
         let doc = match target {
-            Some(serial) => session.documents().iter().find(|d| d.serial == serial),
+            Some(serial) => session.documents().iter().map(|d| &**d).find(|d| d.serial == serial),
             None => session.active(),
         };
         match id {
@@ -464,7 +464,8 @@ fn browse(app: &mut PhotocraftApp) -> Result<Value, String> {
                 app.run("file.scripts.browse", json!({ "name": name, "script": String::from_utf8_lossy(&bytes) }))
             }
         }
-        Picked::Cancelled | Picked::Unavailable(_) => Err("the file dialog gave an unexpected answer".into()),
+        // Save answers: an Open picker gives neither.
+        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err("the file dialog gave an unexpected answer".into()),
     })
 }
 
@@ -502,7 +503,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let journal = app.session.journal.len();
     // A script command may also fold into the last journal entry (typing, a brush gesture).
-    let recording = app.session.actions.recording.is_some();
+    let recording = app.session.recording.target.is_some();
     let last = if recording { app.session.journal.last().cloned() } else { None };
     // The run is taken out while it pumps, so its commands can go through the app.
     let kept = last.clone();
@@ -521,7 +522,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 // run afterwards. The commands it ran stay done, but out of an action being
                 // recorded, as when it ends normally.
                 active.run.cancel();
-                if recording && app.session.actions.recording.is_some() {
+                if recording && app.session.recording.target.is_some() {
                     app.session.journal.truncate(journal);
                     if let (Some(last), Some(entry)) = (kept, app.session.journal.last_mut()) {
                         *entry = last;
@@ -558,7 +559,7 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     // The commands a script runs are its own: an action recorded meanwhile holds the script
     // step, which runs them again when it plays, not each of them.
-    if recording && app.session.actions.recording.is_some() {
+    if recording && app.session.recording.target.is_some() {
         app.session.journal.truncate(journal);
         if let (Some(last), Some(entry)) = (last, app.session.journal.last_mut()) {
             *entry = last;
@@ -692,12 +693,12 @@ fn ask_picker(app: &mut PhotocraftApp, id: u64, kind: ScriptDialog, args: &Value
             // The web gives a file's name and contents, not a path: the script gets the name.
             Picked::Contents(files) if multiple => json!(files.into_iter().map(|(n, _)| n).collect::<Vec<_>>()),
             Picked::Contents(files) => json!(files.into_iter().next().map(|(n, _)| n)),
-            Picked::Unavailable(why) => {
+            Picked::Unavailable(why) | Picked::Failed(why) => {
                 app.ui.status = why;
                 app.ui.status_error = true;
                 Value::Null
             }
-            Picked::Cancelled => Value::Null,
+            Picked::Cancelled | Picked::Downloaded(_) => Value::Null,
         };
         answer(app, value);
         Ok(Value::Null)
@@ -1260,7 +1261,9 @@ fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
         let loads: Vec<Value> = match picked {
             Picked::Paths(paths) => paths.into_iter().map(|p| json!({ "path": p.to_string_lossy() })).collect(),
             Picked::Contents(files) => files.into_iter().map(|(name, bytes)| text(name, bytes)).collect::<Result<_, _>>()?,
-            Picked::Cancelled | Picked::Unavailable(_) => return Err("the file dialog gave an unexpected answer".into()),
+            Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => {
+                return Err("the file dialog gave an unexpected answer".into());
+            }
         };
         let mut last = Value::Null;
         for params in loads {

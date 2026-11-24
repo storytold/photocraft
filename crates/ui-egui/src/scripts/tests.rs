@@ -11,6 +11,7 @@ use photocraft_engine::Session;
 use serde_json::{Value, json};
 
 use super::*;
+use photocraft_engine::actions_cmds::ActionsExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -298,7 +299,7 @@ fn a_listed_script_runs_with_its_first_tag_as_app_name_and_records_without_tags(
     let starts = log.starts.borrow();
     assert_eq!(starts[0], ScriptStart { name: "tool.jsx".into(), source: "// tool".into(), app_name: Some("Photoshop".into()) });
     assert_eq!(layer_names(&app), ["from the script"]);
-    let action = app.session.actions.list.actions().iter().find(|a| a.name == "With a script").unwrap();
+    let action = app.session.actions().list.actions().iter().find(|a| a.name == "With a script").unwrap();
     assert_eq!(
         action.steps,
         [ActionStep::new("file.scripts.run", json!({"name": "tool.jsx", "source": "// tool"}))],
@@ -314,7 +315,7 @@ fn a_run_that_does_not_start_is_not_recorded() {
     app.run("actions.record", json!({"name": "Nothing"})).unwrap();
     assert!(resolve_and_start(&mut app, json!({"name": "a.js", "source": "1"}), None, None).is_err());
     app.run("actions.stop", json!({})).unwrap();
-    let action = app.session.actions.list.actions().iter().find(|a| a.name == "Nothing").unwrap();
+    let action = app.session.actions().list.actions().iter().find(|a| a.name == "Nothing").unwrap();
     assert!(action.steps.is_empty(), "{:?}", action.steps);
 }
 
@@ -363,7 +364,7 @@ fn an_action_waits_for_its_script_step_and_goes_on_after_it() {
     let mut app = app(vec![ok, failing], &log);
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(photocraft_engine::actions_cmds::Action::new(
             "Scripted",
@@ -384,7 +385,7 @@ fn an_action_waits_for_its_script_step_and_goes_on_after_it() {
     crate::actions::play(&mut app, &json!({"action": "Scripted"})).unwrap();
     settle(&mut app);
     assert_eq!(layer_names(&app), ["before", "from the script", "after", "before"]);
-    assert_eq!(app.session.actions.playing, 0);
+    assert_eq!(app.session.recording.playing, 0);
 }
 
 #[test]
@@ -410,7 +411,7 @@ fn a_script_step_fails_without_a_script_service() {
     let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(photocraft_engine::actions_cmds::Action::new(
             "Scripted",
@@ -446,7 +447,7 @@ fn a_playback_scripts_commands_run_under_the_gate_it_paused_with() {
     let mut app = app(vec![vec![Act::Try("layer.new.layer", json!({"name": "from the script"}))]], &log);
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(photocraft_engine::actions_cmds::Action::new("Scripted", vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"}))]))
         .unwrap();
@@ -516,7 +517,7 @@ fn stopping_the_playback_ends_its_script() {
     let mut app = app(vec![program], &log);
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(photocraft_engine::actions_cmds::Action::new("Scripted", vec![ActionStep::new("file.scripts.run", json!({"name": "step.jsx", "source": "1"}))]))
         .unwrap();
