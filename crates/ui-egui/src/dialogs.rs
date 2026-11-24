@@ -700,6 +700,8 @@ pub(crate) mod canvas_input;
 pub mod channel_options_ui;
 #[cfg(test)]
 mod color_lookup_no_remember_tests;
+#[cfg(test)]
+mod color_lookup_smart_edit_tests;
 pub(crate) mod color_picker_preview;
 pub mod color_picker_ui;
 pub mod color_range_ui;
