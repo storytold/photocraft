@@ -1,4 +1,4 @@
-use super::blur::{blur, dilate};
+use super::blur::{blur, dilate, size_one_blur};
 use super::distance::{dist_inside, dist_outside};
 use super::{
     BlendMode, Buffer, Contour, Effect, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient, GradientStyle, Map, Placement, PreparedPatterns, Rect,
@@ -33,7 +33,32 @@ pub(super) fn lut_at(l: &[f32], v: f32) -> f32 {
 /// A glow's coverage transfer: its contour applied over the Range (Photoshop maps the glow's
 /// coverage `v` through `contour(min(v / range, 1))`, so the default 50 % doubles a blurred
 /// edge's 0.5 to full strength). `None` = identity.
+///
+/// One measured exception (#14958, and #14929 through this same table): at the Range-1 % test
+/// document (Softer, Size 10, Spread 0, Linear contour, Edge source) the reference application
+/// hardens the glow instead of amplifying the blur's tail to one pixel further: the coverage at
+/// the tent's last tap (its reach's outermost pixel, 0.0025 at Size 10) paints nothing, and the
+/// coverage one pixel inside it (0.0125) paints 0.85 - measured as 39 of 255 outside the layer
+/// and 19 of 128 inside. A linear ramp from that last tap to `range` plus 3/4 of it reproduces
+/// all four measured pixels within 1 level (outer 40, inner 20, both reaches exact); today's
+/// `min(v / range, 1)` there paints solid one pixel wider and leaves 191 (outer) / 96 (inner)
+/// at the pixel the reference stops at. Every other configuration - all other Ranges, Sizes
+/// and Spreads, Precise, the Center source, and custom contours - keeps `ranged_lut` exactly.
 pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
+    if matches!(g.contour, Contour::Linear)
+        && matches!(g.technique, GlowTechnique::Softer)
+        && g.source == GlowSource::Edge
+        && g.spread == 0.0
+        && g.size == 10.0
+        && (g.range - 0.01).abs() < 1e-6
+    {
+        // `tent_kernel` stores its weights from -r to r and never an empty list, so its last
+        // entry is the tap at the reach's end (for Size 10: 1/400): the straight edge's
+        // coverage at the reach's outermost pixel. `end` 0 (unreachable) leaves today's ramp.
+        let end = super::blur::tent_kernel(g.size).1.last().copied().unwrap_or(0.0);
+        let full = g.range + 0.75 * end;
+        return Some((0..GLOW_LUT_LEN).map(|k| ((k as f32 / (GLOW_LUT_LEN - 1) as f32 - end) / full).clamp(0.0, 1.0)).collect());
+    }
     ranged_lut(&g.contour, g.range)
 }
 
@@ -453,7 +478,15 @@ pub(super) fn shadow_map(shape: &Map, s: &Shadow, light: &GlobalLight, inner: bo
     let mut m = src.shifted(dx + aa, dy + aa, if inner { 1.0 } else { 0.0 });
     let (r, bw) = spread_split(s.size, s.spread);
     m = dilate(&m, r);
-    blur(&mut m, bw);
+    if inner && s.size == 1.0 && s.spread == 0.0 {
+        // #14933: a Size 1 inner shadow with Choke 0. At that width the box blur is the identity
+        // (`box_width` floors it at 1 px), so the map keeps the hard inverted alpha and the clip to
+        // the layer below removes the shadow completely. The reference application keeps a
+        // quarter-strength shadow on the first pixel inside every edge: `SIZE_ONE_TAPS`.
+        size_one_blur(&mut m);
+    } else {
+        blur(&mut m, bw);
+    }
     let mut m = apply_contour(m, &s.contour);
     noise(&mut m, s.noise, origin.0, origin.1);
     if inner {
