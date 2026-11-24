@@ -75,7 +75,10 @@ fn sync_layers(layers: &mut [Layer], cur: usize, fmt: photocraft_color::PixelFor
                         let generation = frame.generation();
                         Some((frame, Some(generation)))
                     }
-                    Some(Err(e)) if strict => return Err(EngineError::Other(format!("the video layer `{}`, frame {}: {e}", l.name, cur + 1))),
+                    Some(Err(e)) if strict => {
+                        let file = v.footage.as_ref().map_or("", |f| f.link.path.as_str());
+                        return Err(EngineError::Other(format!("the video layer `{}`, frame {} of `{file}`: {e}", l.name, cur + 1)));
+                    }
                     // Offline: shown empty, and remembered as shown, so moving on doesn't paint it.
                     Some(Err(_)) => {
                         let empty = Surface::new(fmt);
@@ -671,6 +674,8 @@ pub fn render_video_with(
 ) -> Result<Value> {
     let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png");
+    // Footage paths are document data: their reads are judged by this session's gate.
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut base = (*st.doc).clone();
     store(&mut base);

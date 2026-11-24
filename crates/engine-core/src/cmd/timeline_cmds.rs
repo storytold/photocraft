@@ -30,6 +30,8 @@ fn has_timeline(s: &Session) -> std::result::Result<(), String> {
 
 /// Mutate the document timeline without a history step (navigation / metadata).
 fn with_timeline(s: &mut Session, f: impl FnOnce(&mut Option<Timeline>)) -> Result<Value> {
+    // Moving the playhead decodes linked footage, whose paths this session's gate judges.
+    let _authorization = crate::jobs::render_authorization_scope(s.authorize);
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let generation = photocraft_raster::spill::read_error_generation();
     let mut doc = (*st.doc).clone();

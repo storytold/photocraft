@@ -233,12 +233,15 @@ fn footage_that_cant_be_read_is_reported_not_rendered() {
     let file = video(&s, id).footage.as_ref().unwrap().link.path.clone();
     // The file goes away: with no movie reader installed in tests, it can't be opened again.
     crate::footage::forget(&file);
+    // Inspecting doesn't open files: until something tries the file, its state is unknown.
     let info = crate::inspect::layer(layer(&s, id));
-    assert_eq!(info["video"]["footage"]["online"], false);
-    assert!(info["video"]["footage"]["offline"].as_str().unwrap().contains(&file));
+    assert!(info["video"]["footage"]["online"].is_null());
 
     goto(&mut s, 2);
     assert!(close(shown(&s, id, 10, 10)[3], 0.0), "an offline frame shows nothing, not a stale frame");
+    let info = crate::inspect::layer(layer(&s, id));
+    assert_eq!(info["video"]["footage"]["online"], false);
+    assert!(info["video"]["footage"]["offline"].as_str().unwrap().contains(&file));
     let dir = std::env::temp_dir().join(format!("pc-footage-offline-{}", std::process::id()));
     let err = s.execute("file.export.renderVideo", json!({"dir": dir.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
     assert!(err.contains(&file), "Render Video names the missing file: {err}");
@@ -274,10 +277,11 @@ fn a_deleting_crop_stays_exact_on_slanted_footage() {
 /// Render Video stops at a frame the decoder fails on instead of writing an empty frame.
 #[test]
 fn render_video_fails_on_a_frame_that_cant_be_decoded() {
-    let (mut s, _, _) = linked_with("damaged", Synthetic { fail_at: Some(1), ..Synthetic::new(W, H, 4, 24.0) });
+    let (mut s, id, _) = linked_with("damaged", Synthetic { fail_at: Some(1), ..Synthetic::new(W, H, 4, 24.0) });
+    let file = video(&s, id).footage.as_ref().unwrap().link.path.clone();
     let dir = std::env::temp_dir().join(format!("pc-footage-damaged-{}", std::process::id()));
     let err = s.execute("file.export.renderVideo", json!({"dir": dir.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
-    assert!(err.contains("frame 2") && err.contains("damaged"), "the error names the frame and why: {err}");
+    assert!(err.contains("frame 2") && err.contains("damaged") && err.contains(&file), "the error names the frame, the file and why: {err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -308,4 +312,31 @@ fn a_saved_frame_past_the_footage_is_refused() {
     let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
     let err = photocraft_format::load_from_bytes(&bytes).unwrap_err().to_string();
     assert!(err.contains("past the end"), "{err}");
+}
+
+/// A session whose gate refuses the footage's path reads none of it: not for Render Video, not
+/// when moving the playhead, and not from frames a trusted session decoded and cached before.
+#[test]
+fn a_restricted_session_reads_no_footage_it_may_not() {
+    let (mut s, id, synthetic) = linked("restricted", 4);
+    goto(&mut s, 2);
+    assert!(close(shown(&s, id, 10, 10)[0], synthetic.level(2)), "trusted: frame 2 is decoded and cached");
+    goto(&mut s, 0);
+    s.authorize = Some(|_, params| if params.get("path").is_some() { Err(EngineError::Other("outside the read roots".into())) } else { Ok(()) });
+    goto(&mut s, 2);
+    assert!(close(shown(&s, id, 10, 10)[3], 0.0), "the cached frame isn't shown to the restricted session");
+    let mut wrote = false;
+    let err = render_video_with(
+        &s,
+        &json!({"format": "png"}),
+        |_, _| {
+            wrote = true;
+            Ok(())
+        },
+        |_, _| true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("may not be read"), "{err}");
+    assert!(!wrote, "nothing is written");
 }

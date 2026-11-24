@@ -105,7 +105,23 @@ fn surface_bytes(s: &Surface) -> u64 {
 #[derive(Default)]
 struct Registry {
     sources: HashMap<String, Result<Arc<Source>, String>>,
+    /// Bumped by [`register`] and [`forget`] for a path: an open that started before either
+    /// sees a different number when it finishes, and its decoder is not kept.
+    generations: HashMap<String, u64>,
     cache: Cache,
+}
+
+impl Registry {
+    fn generation(&self, path: &str) -> u64 {
+        self.generations.get(path).copied().unwrap_or(0)
+    }
+
+    /// Drop what is held for `path` and invalidate opens in progress.
+    fn invalidate(&mut self, path: &str) {
+        self.sources.remove(path);
+        self.cache.forget(path);
+        *self.generations.entry(path.to_string()).or_insert(0) += 1;
+    }
 }
 
 fn registry() -> &'static Mutex<Registry> {
@@ -121,7 +137,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub fn register(path: &str, decoder: Box<dyn FootageDecoder>) -> FootageInfo {
     let info = decoder.info();
     let mut r = lock(registry());
-    r.cache.forget(path);
+    r.invalidate(path);
     r.sources.insert(path.to_string(), Ok(Arc::new(Source { decoder: Mutex::new(decoder), info })));
     info
 }
@@ -129,9 +145,7 @@ pub fn register(path: &str, decoder: Box<dyn FootageDecoder>) -> FootageInfo {
 /// Close the file at `path`: its decoder and cached frames go, and the next use opens it again
 /// (Reload Frame, a relinked file).
 pub fn forget(path: &str) {
-    let mut r = lock(registry());
-    r.sources.remove(path);
-    r.cache.forget(path);
+    lock(registry()).invalidate(path);
 }
 
 /// The limit on decoded frames kept in memory, in bytes (0 = the default, 1 GiB).
@@ -142,9 +156,14 @@ pub fn set_cache_limit(bytes: u64) {
 /// The decoder for `path`, opening the file the first time. A failure is kept, so a missing file
 /// is not looked for again on every frame; [`forget`] retries.
 fn source(path: &str) -> Result<Arc<Source>, String> {
-    if let Some(s) = lock(registry()).sources.get(path) {
-        return s.clone();
-    }
+    let seen = {
+        let r = lock(registry());
+        if let Some(s) = r.sources.get(path) {
+            return s.clone();
+        }
+        r.generation(path)
+    };
+    // Opened outside the lock: reading a file's index can take a while.
     let opened = match OPENER.get() {
         Some(open) => open(path).map(|decoder| {
             let info = decoder.info();
@@ -152,17 +171,50 @@ fn source(path: &str) -> Result<Arc<Source>, String> {
         }),
         None => Err("this build of PhotoCraft can't read movie files".to_string()),
     };
-    lock(registry()).sources.entry(path.to_string()).or_insert(opened).clone()
+    keep_opened(path, seen, opened)
+}
+
+/// Keep `opened` as the decoder for `path` unless the path was registered again or forgotten
+/// since generation `seen`: then it is handed back without being kept, so the next use opens
+/// the file again. Another open that finished first wins.
+fn keep_opened(path: &str, seen: u64, opened: Result<Arc<Source>, String>) -> Result<Arc<Source>, String> {
+    let mut r = lock(registry());
+    if r.generation(path) != seen {
+        return opened;
+    }
+    r.sources.entry(path.to_string()).or_insert(opened).clone()
+}
+
+/// Refuse to read the file at `path` for a session that may not: a footage path is document
+/// data, not a request parameter, so every read rechecks it with the gate of the session the
+/// work is done for, as linked smart objects do. Before any cache, so a frame decoded for a
+/// trusted session is not handed to a restricted one.
+fn authorized(path: &str) -> Result<(), String> {
+    crate::jobs::authorize_render_command("layer.videoLayers.newVideoLayerFromFile", &serde_json::json!({"path": path}))
+        .map_err(|e| format!("`{path}` may not be read here: {e}"))
+}
+
+/// What is known about the file `link` names without opening it: `Some(Ok)` when it is open,
+/// `Some(Err)` with the reason it could not be read, `None` when nothing has tried it yet.
+pub fn known_status(link: &FootageLink, frames_used: usize) -> Option<Result<(), String>> {
+    let r = lock(registry());
+    Some(match r.sources.get(&link.path)? {
+        Ok(s) if s.info.frames < frames_used => Err(format!("`{}` has {} frames, but the layer shows {frames_used}", link.path, s.info.frames)),
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("`{}` is offline: {e}", link.path)),
+    })
 }
 
 /// Open the movie at `path` and say what it holds.
 pub fn probe(path: &str) -> Result<FootageInfo, String> {
+    authorized(path)?;
     source(path).map(|s| s.info)
 }
 
 /// Whether the file a layer links to can be read: `Err` says why not (missing, unreadable, or
 /// shorter than the frames the layer shows).
 pub fn status(link: &FootageLink, frames_used: usize) -> Result<(), String> {
+    authorized(&link.path)?;
     let s = source(&link.path).map_err(|e| format!("`{}` is offline: {e}", link.path))?;
     if s.info.frames < frames_used {
         return Err(format!("`{}` has {} frames, but the layer shows {frames_used}", link.path, s.info.frames));
@@ -173,6 +225,7 @@ pub fn status(link: &FootageLink, frames_used: usize) -> Result<(), String> {
 /// Footage frame `n` of `link`'s file in `format`, cropped by the link's clip and moved where the
 /// link places it in the document. `Err` names the file and why the frame can't be read.
 pub fn frame(link: &FootageLink, n: usize, format: PixelFormat) -> Result<Surface, String> {
+    authorized(&link.path)?;
     let decoded = decoded(&link.path, n, format)?;
     Ok(place(decoded, link))
 }
@@ -423,5 +476,33 @@ pub(crate) mod testing {
             doc.layers.push(l);
             Ok(doc)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::Synthetic;
+    use super::*;
+
+    fn opened(frames: usize) -> Result<Arc<Source>, String> {
+        let decoder = Synthetic::new(8, 6, frames, 24.0);
+        let info = decoder.info();
+        Ok(Arc::new(Source { decoder: Mutex::new(Box::new(decoder)), info }))
+    }
+
+    /// An open of a file that was forgotten while it ran is handed back but not kept, so the next
+    /// use opens the file again; without anything in between, the opened decoder is kept.
+    #[test]
+    fn an_open_overtaken_by_forget_is_not_kept() {
+        let path = format!("test-footage://{}/overtaken.mp4", std::process::id());
+        let seen = lock(registry()).generation(&path);
+        // Reload Frame closes the file while the open is still reading its index.
+        forget(&path);
+        assert!(keep_opened(&path, seen, opened(2)).is_ok(), "the caller still gets what it opened");
+        assert!(!lock(registry()).sources.contains_key(&path), "but it isn't kept");
+
+        let seen = lock(registry()).generation(&path);
+        assert!(keep_opened(&path, seen, opened(2)).is_ok());
+        assert!(lock(registry()).sources.get(&path).is_some_and(Result::is_ok), "an open nothing overtook is kept");
     }
 }
