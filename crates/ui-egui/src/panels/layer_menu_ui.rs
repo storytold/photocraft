@@ -12,6 +12,16 @@ pub(crate) fn mask_toggle_label(enabled: bool) -> &'static str {
     if enabled { "Disable Layer Mask" } else { "Enable Layer Mask" }
 }
 
+/// English action key for `layer.linkLayers`: Unlink Layers when the command would unlink ([`unlinks`]).
+pub(crate) fn link_label(unlinks: bool) -> &'static str {
+    if unlinks { "Unlink Layers" } else { "Link Layers" }
+}
+
+/// Whether Link Layers would unlink: the selected layers of the active document are one link group (#16526).
+pub(crate) fn unlinks(app: &crate::PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| photocraft_engine::layer_multi_cmds::in_one_link_group(&st.doc, st.selected_layers()))
+}
+
 /// The command behind "Add Layer Mask" (the panel button and this menu). Like Photoshop, an active
 /// selection becomes the mask; ⌥ inverts it (Hide Selection, or Hide All without a selection).
 pub fn add_mask_command(has_selection: bool, alt: bool) -> &'static str {
@@ -48,8 +58,9 @@ pub fn single_layer_only(id: &str) -> bool {
     matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle") || (id.starts_with("layer.layerMask.") && !adds_mask)
 }
 
-/// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
-pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
+/// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind). `unlinks`: Link Layers
+/// reads Unlink Layers ([`unlinks`]).
+pub fn entries(l: &Layer, multi: bool, has_selection: bool, unlinks: bool) -> Vec<Entry> {
     let mut v: Vec<Entry> = vec![Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions"))];
     v.push(None);
     v.push(Some((if multi { tl!("Duplicate Layers…") } else { tl!("Duplicate Layer…") }, "layer.duplicate")));
@@ -111,7 +122,7 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         if l.clipped { "layer.releaseClippingMask" } else { "layer.createClippingMask" },
     )));
     v.push(None);
-    v.push(Some((tl!("Link Layers"), "layer.linkLayers")));
+    v.push(Some((tl!(link_label(unlinks)), "layer.linkLayers")));
     v.push(Some((tl!("Select Linked Layers"), "layer.selectLinkedLayers")));
     v.push(None);
     v.push(Some((tl!("Copy Layer Style"), "layer.layerStyle.copyLayerStyle")));

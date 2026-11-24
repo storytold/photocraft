@@ -3,6 +3,16 @@ use super::{Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, Re
 
 // ---------- structural commands ----------
 
+/// Whether `layers` all belong to one link group, so Link Layers without `linked` unlinks them. The menus read it to
+/// offer Unlink Layers in place of Link Layers.
+pub fn in_one_link_group(doc: &Document, layers: &[LayerId]) -> bool {
+    let mut groups = layers.iter().map(|id| doc.layer(*id).and_then(|l| l.link_group));
+    match groups.next() {
+        Some(Some(first)) => groups.all(|group| group == Some(first)),
+        _ => false,
+    }
+}
+
 /// Set an explicit link state idempotently, or toggle when omitted, with singleton cleanup and Undo.
 pub(super) fn link_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let requested = match p.get("linked") {
@@ -14,7 +24,7 @@ pub(super) fn link_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let groups = sel.iter().map(|id| doc.layer(*id).map(|l| l.link_group).ok_or(EngineError::NoLayer(*id))).collect::<Result<Vec<_>>>()?;
     let first = groups.first().copied().flatten();
-    let same_group = first.is_some() && groups.iter().all(|group| *group == first);
+    let same_group = in_one_link_group(doc, &sel);
     // A recorded Link/Unlink is an operation, not the UI's state-dependent toggle.
     // An explicit repeat must neither allocate a group nor add an undo entry.
     let linked_group = same_group && doc.walk().iter().filter(|(_, _, layer)| layer.link_group == first).take(2).count() == 2;

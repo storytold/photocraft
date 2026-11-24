@@ -136,7 +136,7 @@ fn row_menu_entries_follow_the_target() {
         s.execute("layer.new.layer", json!({"name": "Source"})).unwrap();
         (c.setup)(&mut s);
         let l = active_layer(&s);
-        let ids: Vec<&str> = entries(&l, c.multi, c.selection).into_iter().flatten().map(|e| e.1).collect();
+        let ids: Vec<&str> = entries(&l, c.multi, c.selection, false).into_iter().flatten().map(|e| e.1).collect();
         for id in c.present {
             assert!(ids.contains(id), "{}: {id} is offered", c.case);
         }
@@ -150,7 +150,7 @@ fn row_menu_entries_follow_the_target() {
     s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     grouped(&mut s);
-    let e: Vec<(&str, &str)> = entries(&active_layer(&s), false, false).into_iter().flatten().collect();
+    let e: Vec<(&str, &str)> = entries(&active_layer(&s), false, false, false).into_iter().flatten().collect();
     assert!(e.contains(&("Merge Group", "layer.mergeGroup")), "{e:?}");
     // The empty space: four sizes, a separator, two clip choices, the current ones checked.
     let mut s = Session::new();
@@ -278,7 +278,40 @@ fn every_entry_is_a_known_command() {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
     let l = s.active().unwrap().doc.layers[0].clone();
-    for (_, id) in entries(&l, false, true).into_iter().chain(entries(&l, false, false)).chain(entries(&l, true, false)).chain(effects_entries()).flatten() {
+    for (_, id) in entries(&l, false, true, false).into_iter().chain(entries(&l, false, false, false)).chain(entries(&l, true, false, true)).chain(effects_entries()).flatten() {
         assert!(crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) || photocraft_engine::commands::find(id).is_some(), "{id}");
     }
+}
+
+/// Once the selected layers are linked, Layer › Link Layers and the row menu read Unlink Layers and choosing it
+/// unlinks them; a selection that is not one link group reads Link Layers again (#16526).
+#[test]
+fn link_layers_reads_unlink_layers_when_it_would_unlink() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let id = |v: serde_json::Value| v["layer"].as_u64().unwrap();
+    let a = id(s.execute("layer.new.layer", json!({})).unwrap());
+    let b = id(s.execute("layer.new.layer", json!({})).unwrap());
+    let c = id(s.execute("layer.new.layer", json!({})).unwrap());
+    s.execute("layer.select", json!({"layer": a})).unwrap();
+    s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+    let mut app = crate::PhotocraftApp::new(s, Default::default());
+    let labels = |app: &crate::PhotocraftApp| {
+        let bar = crate::menus::menu_rows(app).into_iter().find(|r| r.command.id == "layer.linkLayers").map(|r| r.label);
+        let row = entries(&active_layer(&app.session), true, false, unlinks(app)).into_iter().flatten().find(|e| e.1 == "layer.linkLayers").map(|e| e.0);
+        (bar.unwrap(), row.unwrap())
+    };
+    assert_eq!(labels(&app), ("Link Layers".into(), "Link Layers"), "two unlinked layers");
+    app.run("layer.linkLayers", json!({})).unwrap();
+    assert_eq!(labels(&app), ("Unlink Layers".into(), "Unlink Layers"), "the linked pair");
+    app.run("layer.select", json!({"layer": a})).unwrap();
+    assert_eq!(labels(&app).0, "Unlink Layers", "one layer of the pair unlinks too");
+    app.run("layer.select", json!({"layer": c, "mode": "add"})).unwrap();
+    assert_eq!(labels(&app).0, "Link Layers", "with an unlinked layer it links all three");
+    app.run("layer.select", json!({"layer": a})).unwrap();
+    app.run("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
+    app.run("layer.linkLayers", json!({})).unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    assert!([a, b].iter().all(|l| doc.layer(LayerId(*l)).unwrap().link_group.is_none()), "Unlink Layers unlinked them");
+    assert_eq!(labels(&app).0, "Link Layers");
 }
