@@ -21,8 +21,14 @@ fn folder(name: &str) -> std::path::PathBuf {
 fn write_bar(path: &std::path::Path, w: u32, h: u32, bar: u32) {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": w, "height": h, "background": "#ffffff"})).unwrap();
-    s.execute("select.rect", json!({"x": 0, "y": 0, "width": bar, "height": h})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    // Edit › Fill lives in the paint crate; paint the bar into the Background directly.
+    s.edit("Fill", |doc, active| {
+        let fmt = doc.pixel_format();
+        let bar = photocraft_geom::Rect { x0: 0, y0: 0, x1: bar as i32, y1: h as i32 };
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(bar, &photocraft_raster::from_rgba(&fmt, RED));
+        Ok(())
+    })
+    .unwrap();
     let bytes = photocraft_io::export(&s.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
     std::fs::write(path, bytes).unwrap();
 }
