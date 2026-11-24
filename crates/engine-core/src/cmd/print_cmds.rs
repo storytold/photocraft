@@ -826,6 +826,38 @@ fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
     s
 }
 
+/// Rotate interleaved print samples counterclockwise in raster order.
+///
+/// Native PDF viewers do not all agree on the orientation of an image XObject's
+/// rows when a page-level matrix is used. Baking the rotation into the samples
+/// keeps the PDF and the OS print dialog on the same side of that ambiguity.
+fn rotated_print_image(image: &PrintImage) -> Option<PrintImage> {
+    let width = usize::try_from(image.width).ok()?;
+    let height = usize::try_from(image.height).ok()?;
+    let channels = image.channels;
+    if width == 0 || height == 0 || channels == 0 {
+        return None;
+    }
+    let pixels = width.checked_mul(height)?;
+    let expected = pixels.checked_mul(channels)?;
+    if image.data.len() != expected {
+        return None;
+    }
+    let mut data = vec![0; expected];
+    for y in 0..height {
+        for x in 0..width {
+            let source_pixel = y.checked_mul(width)?.checked_add(x)?;
+            let target_pixel = (width.checked_sub(1)?.checked_sub(x)?).checked_mul(height)?.checked_add(y)?;
+            let source = source_pixel.checked_mul(channels)?;
+            let target = target_pixel.checked_mul(channels)?;
+            let source_samples = image.data.get(source..source.checked_add(channels)?)?;
+            let target_samples = data.get_mut(target..target.checked_add(channels)?)?;
+            target_samples.copy_from_slice(source_samples);
+        }
+    }
+    Some(PrintImage { width: image.height, height: image.width, channels, data, icc: image.icc.clone() })
+}
+
 /// A one-page PDF.
 pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     let mut out: Vec<u8> = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
@@ -836,7 +868,8 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
         out.extend_from_slice(body);
         out.extend_from_slice(b"\nendobj\n");
     };
-    let img = &page.image;
+    let rotated = page.rotate_image.then(|| rotated_print_image(&page.image)).flatten();
+    let img = rotated.as_ref().unwrap_or(&page.image);
     let (pw, ph) = page.paper;
     let (x, y, w, h) = page.rect;
     // 1 catalog, 2 pages, 3 page, 4 contents, 5 image, 6 font, 7 ICC (optional).
@@ -854,8 +887,8 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
     if page.emulsion_down {
         content.push_str(&format!("q -1 0 0 1 {pw:.2} 0 cm\n"));
     }
-    if page.rotate_image {
-        // This transform produces Photoshop's counterclockwise turn for PDF raster rows.
+    if page.rotate_image && rotated.is_none() {
+        // Keep a safe fallback for malformed image buffers; valid print images are baked above.
         content.push_str(&format!("q 0 {h:.3} -{w:.3} 0 {:.3} {y:.3} cm /Im0 Do Q\n", x + w));
     } else {
         content.push_str(&format!("q {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n"));

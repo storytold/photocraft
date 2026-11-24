@@ -330,6 +330,23 @@ fn page_of(channels: usize, data: Vec<u8>, emulsion_down: bool) -> PrintPage {
 }
 
 #[test]
+fn printed_pdf_bakes_counterclockwise_rotation_into_image_samples() {
+    let page = PrintPage {
+        paper: (600.0, 800.0),
+        image: PrintImage { width: 2, height: 3, channels: 1, data: vec![0, 64, 128, 192, 224, 255], icc: None },
+        rect: (100.0, 200.0, 72.0, 108.0),
+        marks: Marks::default(),
+        rotate_image: true,
+        description: None,
+        label: None,
+        emulsion_down: false,
+    };
+    let pdf = print_pdf(&page);
+    assert_eq!(pdf_image(&pdf), (3, 2, "/DeviceGray".into(), vec![64, 192, 255, 0, 128, 224]));
+    assert!(pdf_content(&pdf).contains("q 72.000 0 0 108.000 100.000 200.000 cm /Im0 Do Q"));
+}
+
+#[test]
 fn windows_print_image_is_rgb_mirrored_for_emulsion_down() {
     assert_eq!(page_rgb(&page_of(3, vec![1, 2, 3, 4, 5, 6], false)).unwrap(), [1, 2, 3, 4, 5, 6]);
     assert_eq!(page_rgb(&page_of(3, vec![1, 2, 3, 4, 5, 6], true)).unwrap(), [4, 5, 6, 1, 2, 3]);
@@ -848,7 +865,7 @@ fn c5_envelope_selects_c5_media_and_keeps_requested_orientation() {
         let pdf = std::fs::read(result["pdf"].as_str().unwrap()).unwrap();
         let content = pdf_content(&pdf);
         if should_rotate {
-            assert!(content.contains("q 0 300.000 -150.000 0"), "{content}");
+            assert!(content.contains("q 150.000 0 0 300.000"), "{content}");
         } else {
             assert!(content.contains("q 300.000 0 0 150.000"), "{content}");
         }
