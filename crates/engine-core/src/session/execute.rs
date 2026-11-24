@@ -1,8 +1,5 @@
 use super::history::{fix_selection, visibility_changes};
-use super::{
-    Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, layer_multi_cmds, retouch_cmds,
-    smart_cmds,
-};
+use super::{Arc, Document, EngineError, LayerId, Result, Session, Value, channel_cmds, commands, hidden_target, jobs, smart_cmds};
 use crate::color_channels;
 
 impl Session {
@@ -25,38 +22,16 @@ impl Session {
         }
     }
 
-    /// Offer a finished live stroke to the next command: a `paint.stroke` / `paint.pencil` whose
-    /// params match it exactly takes its pixels instead of rendering the stroke again (its result
-    /// then says `"fromLive": true`); any other command drops the offer. The command still runs
-    /// through the normal dispatch, so authorization, the journal and history are unchanged.
-    pub fn offer_live_stroke(&mut self, live: brush_cmds::LiveStroke) -> Result<()> {
-        self.live_commit = Some(live.into_commit()?);
-        Ok(())
-    }
-
-    /// [`Self::offer_live_stroke`] for a live Clone Stamp or History Brush stroke, taken by the
-    /// `paint.cloneStamp` / `paint.historyBrush` it was drawn for. Refused for the Healing Brush
-    /// (it blends on release) and when the brush, layer or clone source changed during the stroke.
-    pub fn offer_live_retouch(&mut self, live: retouch_cmds::LiveRetouch) -> Result<()> {
-        let commit = live.into_commit(self)?;
-        self.live_commit = Some(commit);
-        Ok(())
-    }
-
-    /// [`Self::offer_live_stroke`] for a live Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke,
-    /// taken by the command it was drawn for: the stroke's finishing dabs are run first. Refused
-    /// when the brush, tool options or layer changed during the stroke.
-    pub fn offer_live_dab(&mut self, live: retouch_cmds::LiveDab) -> Result<()> {
-        // A refused offer withdraws the previous one too.
-        self.live_commit = None;
-        let commit = live.into_commit(self)?;
-        self.live_commit = Some(commit);
-        Ok(())
-    }
-
     /// Withdraw an offer the command didn't take.
     pub fn clear_live_stroke(&mut self) {
         self.live_commit = None;
+    }
+
+    /// The per-command value checks `dispatch` and `precheck` share: the documented keys, then the
+    /// `check_params` hooks.
+    pub(crate) fn validate_params(&self, id: &str, spec: &crate::registry::CommandSpec, params: &Value) -> Result<()> {
+        crate::param_check::check(spec, params)?;
+        crate::registry::hooks().check_params.iter().try_for_each(|check| check(self, id, params))
     }
 
     /// Check a call without running it: the command exists, its params have the shape
@@ -71,8 +46,7 @@ impl Session {
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
-        crate::param_check::check(spec, params)?;
-        crate::filters::validate_params(id, params)?;
+        self.validate_params(id, spec, params)?;
         if id == "layer.new.layer" {
             crate::new_layer::parse(params)?;
         }
@@ -95,8 +69,8 @@ impl Session {
 
     /// What `dispatch` checks once the params are valid, before a floating selection drops (so a
     /// refused command leaves it floating) and again after: the precondition (on a named layer
-    /// for commands that take one), a job running on the document, a hidden target, the Magic
-    /// Eraser's colour-mode alert. The run params (the Channels panel's target filled in) when it
+    /// for commands that take one), a job running on the document, a hidden target, then the
+    /// engine crates' `admit` hooks (the Magic Eraser's colour-mode alert). The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
@@ -113,12 +87,8 @@ impl Session {
         if let Some(why) = hidden_target::refusal(self, id, params) {
             return Err(EngineError::Other(why.into()));
         }
-        // The Magic Eraser's alert for an Indexed Color or Bitmap document (#12032), the same
-        // error its `run` gives: checked here too, so a floating selection stays floating (#13169).
-        if id == "paint.magicEraser"
-            && let Some(why) = self.active().and_then(|st| crate::eraser_cmds::magic_eraser_refusal(&st.doc))
-        {
-            return Err(EngineError::Other(why.into()));
+        for admit in &crate::registry::hooks().admit {
+            admit(self, id, params)?;
         }
         Ok(run_params)
     }
@@ -338,7 +308,7 @@ impl Session {
         // document, seconds on the CPU path, #1773), a new or deleted layer's bounds (a
         // duplicate or a paste), and everything when that can't be bounded. A command may still
         // report its own, tighter damage after this.
-        let damage = layer_multi_cmds::step_damage(&before, &st.doc);
+        let damage = crate::damage::step_damage(&before, &st.doc);
         let keep_clean = st.keeps_clean(&before);
         #[cfg(any(test, debug_assertions))]
         let hint_before = before.clone();
@@ -370,15 +340,15 @@ impl Session {
             self.hint_before = Some(hint_before);
         }
         if damage.is_none_or(|d| !d.is_empty()) {
-            // Free the mask early; a stale entry would only miss (it is keyed by pixels).
-            self.subject_cache = Default::default();
-            self.object_finder = Default::default();
+            for edited in &crate::registry::hooks().pixels_edited {
+                edited(self);
+            }
         }
         Ok(r)
     }
 
     /// A command's own rect for the pixels its latest [`Session::edit`] changed: sub-tile precise
-    /// for a brush dab, where the edit's own damage ([`layer_multi_cmds::step_damage`]) has tile
+    /// for a brush dab, where the edit's own damage ([`crate::layer_multi_cmds::step_damage`]) has tile
     /// precision. The redraw area becomes the intersection of the two, so a hint can only narrow
     /// it (or bound a change `step_damage` can't). The hint is first grown as `step_damage` grows
     /// a change (by a mask's feather and by effects, `grow_hint`), so the intersection keeps a
@@ -390,7 +360,7 @@ impl Session {
             && let Some(st) = self.active()
             && st.doc.id == before.id
         {
-            let misses = layer_multi_cmds::hint_misses(&before, &st.doc, rect);
+            let misses = crate::damage::hint_misses(&before, &st.doc, rect);
             if misses > 0 {
                 let step = st.history.undo_label().unwrap_or("?");
                 eprintln!("warning: `{step}` hinted damage {rect:?} that misses {misses} changed tile(s); the canvas may not redraw them");
@@ -398,7 +368,7 @@ impl Session {
             }
         }
         let Some(st) = self.active_mut() else { return };
-        let rect = layer_multi_cmds::grow_hint(&st.doc, rect);
+        let rect = crate::damage::grow_hint(&st.doc, rect);
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
         st.record_damage();
     }
@@ -408,7 +378,7 @@ impl Session {
 /// Image › Adjustments, all but Invert (#10484), filter plug-ins included (`plugin.run`; the
 /// other `plugin.*` commands manage plug-ins). Catalogue queries still answer.
 fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
-    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == crate::plugin_cmds::RUN)
+    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == "plugin.run")
         && id != "image.adjustments.invert"
         && !id.ends_with(".list")
         // Only the Filter Gallery answers `{"list": true}` with its catalogue; other commands ignore it.

@@ -2,8 +2,9 @@
 //! and settings toggle, the framework's `PaintBar`, and the symmetry menu.
 
 use craft::draw::ui::symmetry::SymmetryCommand;
-use craft::draw::ui::{EraserMode, MixerValues, PaintBar, PaintTool, PaintValues, Smoothing};
+use craft::draw::ui::{EraserMode, MixerLoad, MixerValues, PaintBar, PaintTool, PaintValues, Smoothing};
 use craft::theme::Srgba;
+use craft::ui::choice::SwatchImage;
 use craft::ui::contract::{Entry, MemoProps, MemoView, Outbox};
 use craft::ui::dialog::{Alert, HostedAlert};
 use craft::ui::patterns::blend_keys::{BlendKeyEntry, blend_entries};
@@ -131,10 +132,30 @@ fn paint_values(app: &PhotocraftApp, tool: Tool, b: &BrushSettings) -> PaintValu
     mixer.flow = f64::from(b.mixer.flow);
     mixer.sample_all_layers = b.mixer.sample_all_layers;
     mixer.combination = o.mixer_combination;
-    mixer.load_color = app.session.tools.mixer.next_load(app.session.tools.foreground).map(Srgba::from_array);
+    mixer.current_load = mixer_load(app);
     mixer.solid_colors_only = b.mixer.solid_colors_only;
     v.mixer = mixer;
     v
+}
+
+/// What the Mixer Brush holds, as the Current Brush Load swatch shows it: the sampled tip image of an Alt-click while
+/// the foreground stays, else the loaded colour, else nothing (a clean brush).
+fn mixer_load(app: &PhotocraftApp) -> MixerLoad {
+    let mixer = &app.session.tools.mixer;
+    let foreground = app.session.tools.foreground;
+    match mixer.next_load(foreground) {
+        None => MixerLoad::Clean,
+        Some(color) => match mixer.spatial.as_deref().filter(|load| load.len() == 64 * 64 && mixer.color == Some(foreground)) {
+            Some(load) => MixerLoad::Image(SwatchImage::new(mixer_load_image(load))),
+            None => MixerLoad::Color(Srgba::from_array(color)),
+        },
+    }
+}
+
+/// The sampled tip image of a Mixer Brush load (64 x 64 straight RGBA cells, row by row) as the swatch draws it.
+pub(crate) fn mixer_load_image(load: &[[f32; 4]]) -> egui::ColorImage {
+    let bytes: Vec<u8> = load.iter().flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+    egui::ColorImage::from_rgba_unmultiplied([64, 64], &bytes)
 }
 
 /// Writes the bar's `after` values onto `brush` and the tool options. Only what differs from
@@ -329,3 +350,26 @@ mod mixer_blend_combination_tests;
 #[cfg(test)]
 #[path = "../../mixer_load_solid_colors_tests.rs"]
 mod mixer_load_solid_colors_tests;
+
+#[cfg(test)]
+mod mixer_load_image_tests {
+    use super::mixer_load_image;
+
+    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+    #[test]
+    fn the_sampled_image_keeps_its_left_right_top_and_bottom() {
+        let load: Vec<[f32; 4]> = (0..64 * 64).map(|i| if i % 64 < 32 { GREEN } else { BLUE }).collect();
+        let image = mixer_load_image(&load);
+        assert_eq!(image.size, [64, 64]);
+        assert_eq!(image[(10, 32)], egui::Color32::from_rgb(0, 255, 0));
+        assert_eq!(image[(54, 32)], egui::Color32::from_rgb(0, 0, 255));
+        // Row 0 is the tip's top, as `load_at` reads it; alpha is kept and values past 0..1 clamp.
+        let load: Vec<[f32; 4]> = (0..64 * 64).map(|i| if i < 32 * 64 { [1.0, 0.0, 0.0, 0.5] } else { [1.5, -0.2, 0.0, 1.0] }).collect();
+        let image = mixer_load_image(&load);
+        let (top, bottom) = (image[(32, 10)], image[(32, 54)]);
+        assert_eq!((top.r() > 0, top.g(), top.b(), top.a()), (true, 0, 0, 128), "top of the image {top:?}");
+        assert_eq!(bottom, egui::Color32::from_rgb(255, 0, 0), "bottom of the image");
+    }
+}

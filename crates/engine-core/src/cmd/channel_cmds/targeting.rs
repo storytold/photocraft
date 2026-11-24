@@ -9,7 +9,7 @@ use super::{ColorMode, Document, EngineError, Layer, LayerId, Rect, Result, Sess
 
 /// Where a pixel command writes, from its `"target"` param.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Target {
+pub enum Target {
     Pixels,
     Mask,
     /// A smart object's filter mask (`"target":"filterMask"`): where it is black the smart
@@ -21,7 +21,7 @@ pub(crate) enum Target {
 
 /// An alpha index that cannot fit this platform stays an unaddressable alpha target. Using
 /// usize::MAX makes the later checked lookup fail instead of wrapping or falling back to pixels.
-pub(crate) fn target_of(p: &Value) -> Target {
+pub fn target_of(p: &Value) -> Target {
     match p.get("target") {
         Some(Value::String(s)) => match s.as_str() {
             "mask" => Target::Mask,
@@ -35,7 +35,7 @@ pub(crate) fn target_of(p: &Value) -> Target {
 }
 
 /// The target is an alpha channel or the Quick Mask (no layer involved).
-pub(crate) fn is_channel_target(p: &Value) -> bool {
+pub fn is_channel_target(p: &Value) -> bool {
     matches!(target_of(p), Target::Alpha(_) | Target::QuickMask)
 }
 
@@ -65,7 +65,7 @@ pub(crate) fn invert_region(s: &mut Surface, r: Rect) -> Result<()> {
 }
 
 /// The surface a pixel command writes to and whether the layer's transparency is locked.
-pub(crate) fn target_surface<'a>(doc: &'a mut Document, layer: Option<LayerId>, p: &Value) -> Result<(&'a mut Surface, bool)> {
+pub fn target_surface<'a>(doc: &'a mut Document, layer: Option<LayerId>, p: &Value) -> Result<(&'a mut Surface, bool)> {
     match target_of(p) {
         Target::Alpha(i) => {
             let n = doc.channels.len();
@@ -119,6 +119,11 @@ pub(crate) fn channel_surface_for_filter<'a>(doc: &'a mut Document, layer: Optio
     Ok(Some(surf))
 }
 
+/// The fill-key commands (Edit › Fill shortcuts with the foreground, background or history),
+/// routed to the Channels panel target like `edit.fill`.
+pub const FILL_KEY_IDS: [&str; 5] =
+    ["edit.fillForeground", "edit.fillBackground", "edit.fillForegroundPreserve", "edit.fillBackgroundPreserve", "edit.fillHistory"];
+
 /// Commands that edit a targeted layer mask in place of the layer: the Image › Adjustments table,
 /// the filters and the fills (Edit › Fill and its keys). A mask target enables them on any layer
 /// with a mask, so ⌘I inverts an adjustment layer's mask (#780) and Fill fills it (#2456) as in
@@ -129,7 +134,7 @@ fn edits_mask(id: &str) -> bool {
         || id == "edit.fill"
         // Copying a targeted mask (#2928).
         || matches!(id, "edit.copy" | "edit.cut" | "edit.clear")
-        || crate::fill_key_cmds::IDS.contains(&id)
+        || FILL_KEY_IDS.contains(&id)
 }
 
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
@@ -237,7 +242,7 @@ pub(crate) fn routed(id: &str) -> bool {
         || matches!(id, "paint.magicEraser" | "paint.backgroundEraser" | "paint.colorReplacement" | "shape.paint" | "path.fill" | "path.stroke" | "edit.clear" | "edit.cut")
         || id.starts_with("image.adjustments.")
         || matches!(id, "edit.fill" | "image.applyImage")
-        || crate::fill_key_cmds::IDS.contains(&id)
+        || FILL_KEY_IDS.contains(&id)
         || PAINT_IDS.contains(&id)
         // Pasting into a targeted mask or channel (#1035); Copy takes a targeted mask (#2928).
         || id == "edit.copy"
@@ -254,7 +259,7 @@ pub(crate) fn routed(id: &str) -> bool {
 }
 
 /// Fill in `"target"` from the targeted channel (or Quick Mask mode) when the caller gave none.
-pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
+pub fn inject_target(s: &Session, id: &str, params: Value) -> Value {
     if !routed(id) || params.get("target").is_some() {
         return params;
     }
@@ -307,7 +312,7 @@ pub(crate) fn filter_mask_layer(s: &Session, id: &str, params: &Value) -> Option
 }
 
 /// The colour channel pixel commands are limited to, if a single colour channel is targeted.
-pub(crate) fn color_restriction(s: &Session, id: &str, params: &Value) -> Option<crate::color_channels::Restriction> {
+pub fn color_restriction(s: &Session, id: &str, params: &Value) -> Option<crate::color_channels::Restriction> {
     if !routed(id) || is_channel_target(params) || crate::commands::is_mask_target(params) {
         return None;
     }
@@ -325,7 +330,7 @@ pub(crate) fn color_restriction(s: &Session, id: &str, params: &Value) -> Option
 
 /// After a pixel edit with colour channel `k` targeted, put the other channels (and the layer's
 /// transparency) of layer `id` back as they were. Only changed tiles are touched.
-pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: LayerId, colors: crate::color_channels::ColorChannels) -> Result<()> {
+pub fn restrict_to_color(before: &Document, after: &mut Document, id: LayerId, colors: crate::color_channels::ColorChannels) -> Result<()> {
     let Some(old) = before.layer(id).and_then(Layer::surface) else { return Ok(()) };
     let Some(new) = after.layer_mut(id).and_then(Layer::surface_mut) else { return Ok(()) };
     let extent = before.bounds().union(&old.content_bounds()).union(&new.content_bounds());
@@ -387,12 +392,12 @@ pub(crate) fn clear_channel(doc: &mut Document, target: &Value, background: [f32
         return Ok(());
     }
     let (surf, _) = target_surface(doc, None, target)?;
-    crate::fill_cmds::fill_color(surf, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
+    crate::pixel_fill::fill_color(surf, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
 }
 
 /// The active document targets an alpha channel or is in Quick Mask mode, so pixel commands
 /// work without a pixel layer.
-pub(crate) fn edits_channel(s: &Session) -> bool {
+pub fn edits_channel(s: &Session) -> bool {
     s.active().is_some_and(|st| {
         st.doc.quick_mask.is_some() && st.channel_view.target == ChannelTarget::Composite
             || matches!(st.channel_view.target, ChannelTarget::Alpha(i) if i < st.doc.channels.len())
@@ -400,7 +405,7 @@ pub(crate) fn edits_channel(s: &Session) -> bool {
 }
 
 /// Target the active layer's mask, as clicking its thumbnail does.
-pub(crate) fn target_layer_mask(s: &mut Session) {
+pub fn target_layer_mask(s: &mut Session) {
     target(s, ChannelTarget::LayerMask);
 }
 

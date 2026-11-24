@@ -1,3 +1,6 @@
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::preset_store::PresetStoreExt;
+
 use super::{JobEvent, JobOutcome, PhotocraftApp, Started, Value, json, prefs};
 
 /// View › Rulers follows `unitsAndRulers.showRulers` when the preference changes (at launch, from
@@ -29,6 +32,10 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     app.prefs_rt.loaded = true;
     let reset = adopt_stored(app);
+    #[cfg(target_arch = "wasm32")]
+    {
+        app.prefs_rt.saved_colors = Some(app.session.prefs().tool_colors.0.clone());
+    }
     // Applies Memory Usage and the scratch disks even when the stored preferences were reset.
     app.session.apply_prefs();
     crate::dock::restore(app);
@@ -220,7 +227,7 @@ pub(super) fn presets_store(app: &mut PhotocraftApp) {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => app.services.preset_store = None,
         }
     }
-    if let Some(w) = app.session.preset_store.as_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {
+    if let Some(w) = app.session.preset_store_mut().map(|s| s.take_warnings()).and_then(|w| w.into_iter().next()) {
         app.ui.status = w;
     }
 }

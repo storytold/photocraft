@@ -1,5 +1,6 @@
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 /// A real action file with one step, used by both descriptor and playback checks.
 fn file(event: AtnEvent, descriptor: Descriptor) -> Vec<u8> {
@@ -68,7 +69,7 @@ fn code_spellings_in_text_steps_keep_their_bytes_and_flags() {
         let mut s = crate::session();
         let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
         assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{:?}", original.actions[0].items[0].event);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]));
         let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
@@ -115,7 +116,7 @@ fn clouds_events_map_and_refuse_unrepresentable_native_settings() {
 fn clouds_recorded_through_the_dialog_save() {
     for id in ["filter.render.clouds", "filter.render.differenceClouds"] {
         let mut s = crate::session();
-        s.actions.list.push(Action::new("Render", vec![ActionStep::new(id, json!({"seed": 0}))])).unwrap();
+        s.actions_mut().list.push(Action::new("Render", vec![ActionStep::new(id, json!({"seed": 0}))])).unwrap();
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]), "{id}");
         let back = import(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
@@ -243,7 +244,7 @@ fn duplicate_render_keys_keep_their_bytes_and_flags() {
         let mut s = crate::session();
         let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
         assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{event}/{key}");
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, PHOTOSHOP_STEP);
         let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
         assert_eq!(saved["skipped"], json!([]));
         let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
@@ -252,66 +253,5 @@ fn duplicate_render_keys_keep_their_bytes_and_flags() {
         let mut compared = original.clone();
         compared.actions[0].items = back.actions[0].items.clone();
         assert_eq!(atn::write(&compared).unwrap(), bytes, "{event}/{key}");
-    }
-}
-
-/// Imported playback uses current tool colors and the same filter path as direct commands.
-#[test]
-fn render_actions_match_direct_filters_and_undo() {
-    let cases = [
-        (*b"Clds", desc("null"), "filter.render.clouds", json!({})),
-        (*b"DfrC", desc("null"), "filter.render.differenceClouds", json!({})),
-        (*b"Fbrs", fibers(23, 6, -7), "filter.render.fibers", json!({"variance": 23, "strength": 6, "seed": -7})),
-        (*b"LnsF", flare(240, [5.0, -5.0], "Nkn1"), "filter.render.lensFlare", json!({"brightness": 240, "centerX": 5.0, "centerY": -5.0, "lens": "prime105"})),
-        // Just right of the canvas: the dialog's 0..1 range does not clamp a recorded centre.
-        (*b"LnsF", flare(100, [1.4, 0.25], "Zm"), "filter.render.lensFlare", json!({"brightness": 100, "centerX": 1.4, "centerY": 0.25, "lens": "zoom"})),
-    ];
-    for single_state in [true, false] {
-        for mode in ["rgb", "gray"] {
-            for depth in [8, 16, 32] {
-                for (event, descriptor, id, params) in &cases {
-                    let setup = || {
-                        let mut s = crate::session();
-                        s.execute("file.new", json!({"width": 8, "height": 6, "mode": mode, "depth": depth, "background": "transparent"})).unwrap();
-                        s.execute("edit.fill", json!({"contents": "color", "color": "#304050"})).unwrap();
-                        s.execute("tools.setColors", json!({"foreground": "#fe1020", "background": "#1050e0"})).unwrap();
-                        s
-                    };
-                    let mut action = setup();
-                    let mut direct = setup();
-                    action.execute("actions.setHistory", json!({"singleState": single_state})).unwrap();
-                    let before_doc = action.active().unwrap().doc.clone();
-                    let history = action.active().unwrap().history.past_len();
-                    let before = action.execute("document.pixel", json!({"x": 3, "y": 2})).unwrap();
-                    action
-                        .execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&file(AtnEvent::Code(*event), descriptor.clone()))}))
-                        .unwrap();
-                    let played = action.execute("actions.play", json!({"action": "Render"})).unwrap();
-                    assert!(played.get("failed").is_none(), "{played}");
-                    direct.execute(id, params.clone()).unwrap();
-                    let surface = |s: &Session| {
-                        let st = s.active().unwrap();
-                        st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds())
-                    };
-                    assert_eq!(surface(&action), surface(&direct), "{mode}/{depth}/{id}");
-                    let after_doc = action.active().unwrap().doc.clone();
-                    let changed = after_doc.as_ref() != before_doc.as_ref();
-                    let added = usize::from(!single_state || changed);
-                    assert_eq!(action.active().unwrap().history.past_len(), history + added, "{mode}/{depth}/{id}, singleState={single_state}");
-                    // An unchanged grouped action preserves the setup row instead of adding one.
-                    if added > 0 {
-                        action.execute("edit.undo", json!({})).unwrap();
-                    } else {
-                        assert!(std::sync::Arc::ptr_eq(&action.active().unwrap().doc, &before_doc));
-                    }
-                    assert_eq!(action.active().unwrap().doc.as_ref(), before_doc.as_ref(), "{mode}/{depth}/{id} undo");
-                    assert_eq!(action.execute("document.pixel", json!({"x": 3, "y": 2})).unwrap(), before);
-                    if added > 0 {
-                        action.execute("edit.redo", json!({})).unwrap();
-                        assert_eq!(action.active().unwrap().doc.as_ref(), after_doc.as_ref(), "{mode}/{depth}/{id} redo");
-                    }
-                }
-            }
-        }
     }
 }

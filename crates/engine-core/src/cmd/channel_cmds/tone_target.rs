@@ -123,7 +123,7 @@ mod rabbit_tests {
         for (kind, params) in [("levels", json!({"gamma":2})), ("curves", json!({"points":[[0,255],[255,0]]}))] {
             let mut s = crate::session();
             s.execute("file.new", json!({"width":8,"height":8})).unwrap();
-            s.execute("edit.fill", json!({"contents":"color","color":"#404040"})).unwrap();
+            crate::tests::fill_active(&mut s, None, "#404040");
             s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
             s.execute("channel.target", json!({"channel":"vectorMask"})).unwrap();
             let before = s.active().unwrap().doc.clone();

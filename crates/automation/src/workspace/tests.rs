@@ -1,4 +1,5 @@
 use super::*;
+use photocraft_engine::color_cmds::ColorExt;
 
 fn roots(name: &str) -> (PathBuf, PathBuf, AuthorizedWorkspace) {
     let base = std::env::temp_dir().join(format!("photocraft-workspace-{}-{name}", std::process::id()));
@@ -747,7 +748,7 @@ fn filesystem_command_paths_and_profiles_fail_closed() {
     // Grayscale conversion it runs would read the desktop's working gray from a file.
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", serde_json::json!({"width": 4, "height": 4})).unwrap();
-    session.color.settings.working_gray = "/outside/gray.icc".into();
+    session.color_mut().settings.working_gray = "/outside/gray.icc".into();
     session.authorize = Some(authorize_desktop_engine_step);
     let params = serde_json::json!({"to": "grayscale"});
     assert!(authorize_desktop_engine_command("file.automate.conditionalModeChange", &params).is_ok());
@@ -798,9 +799,9 @@ fn desktop_mode_changes_never_read_a_working_space_file() {
         path.to_string_lossy().into_owned()
     };
     let mut session = photocraft_engine::Session::new();
-    session.color.settings.working_rgb = icc("rgb.icc", craft_cms::Builtin::ProPhotoCompat);
-    session.color.settings.working_gray = icc("gray.icc", craft_cms::Builtin::GrayGamma22);
-    session.color.settings.working_cmyk = icc("cmyk.icc", craft_cms::Builtin::CoatedCmyk);
+    session.color_mut().settings.working_rgb = icc("rgb.icc", craft_cms::Builtin::ProPhotoCompat);
+    session.color_mut().settings.working_gray = icc("gray.icc", craft_cms::Builtin::GrayGamma22);
+    session.color_mut().settings.working_cmyk = icc("cmyk.icc", craft_cms::Builtin::CoatedCmyk);
     session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
     session.authorize = Some(authorize_desktop_engine_step);
     let mode = |session: &photocraft_engine::Session| session.active().unwrap().doc.mode;
@@ -841,8 +842,8 @@ fn built_in_working_spaces_convert_without_a_profile_under_the_desktop_gate() {
     // Desktop Color Settings that name built-in profiles (the usual case) read no file, so a
     // mode change without `profile` converts to them, as Halftone Preview's Bitmap → Grayscale does.
     let mut session = photocraft_engine::Session::new();
-    session.color.settings.working_rgb = "adobe-rgb-compat".into();
-    session.color.settings.working_gray = "dot-gain-20-compat".into();
+    session.color_mut().settings.working_rgb = "adobe-rgb-compat".into();
+    session.color_mut().settings.working_gray = "dot-gain-20-compat".into();
     session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
     session.authorize = Some(authorize_desktop_engine_step);
     session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
@@ -858,7 +859,7 @@ fn a_stale_working_space_id_is_not_mistaken_for_a_profile_file() {
     // Preferences are loaded without validation, so a working space can hold an id this build no
     // longer knows. It names no file: the conversion uses the mode's built-in default.
     let mut session = photocraft_engine::Session::new();
-    session.color.settings.working_gray = "obsolete-profile".into();
+    session.color_mut().settings.working_gray = "obsolete-profile".into();
     session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
     session.authorize = Some(authorize_desktop_engine_step);
     let gray = session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
@@ -871,7 +872,7 @@ fn indexed_to_rgb_without_a_profile_keeps_its_own_profile_under_the_desktop_gate
     // Indexed → RGB without `profile` keeps the document's profile and reads no working space,
     // so a file-backed working RGB doesn't refuse it.
     let mut session = photocraft_engine::Session::new();
-    session.color.settings.working_rgb = "/outside/rgb.icc".into();
+    session.color_mut().settings.working_rgb = "/outside/rgb.icc".into();
     session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
     session.execute("image.mode.indexedColor", serde_json::json!({})).unwrap();
     session.authorize = Some(authorize_desktop_engine_step);
@@ -1194,6 +1195,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.addAnchor"
             | "path.deleteAnchor"
             | "path.deleteSegment"
+            | "path.deleteComponents"
             | "path.mergeShapeComponents"
             | "path.setOperation"
             | "path.clippingPath.set"
@@ -1208,6 +1210,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.vectorMask.add"
             | "layer.vectorMask.edit"
             | "layer.vectorMask.info"
+            | "layer.vectorMask.currentPath"
             | "paint.symmetryFromPath"
             | "edit.defineCustomShape"
             // `"as":"path"` pastes the clipboard as a vector path (#10694).

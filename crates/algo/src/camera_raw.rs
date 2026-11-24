@@ -167,9 +167,14 @@ pub fn per_pixel(p: &CameraRaw, inputs: &DevelopInputs, w: usize, h: usize, floa
     craft_develop::camera_raw::per_pixel(&to_shared(p), inputs, w, h, float, points)
 }
 
-/// Whether `p` needs a spatial pass on the GPU (`Dehaze`, `Shadows`/`Highlights`, `Clarity`, `Texture`).
+/// Whether `p` needs a spatial pass on the GPU (`Dehaze`, `Shadows`/`Highlights`, `Clarity`, `Texture`, `Detail`).
 pub fn spatial(p: &CameraRaw) -> bool {
     craft_develop::camera_raw::spatial(&to_shared(p))
+}
+
+/// Whether a stage before Whites and Blacks reads neighbouring pixels (`Dehaze`, `Shadows`/`Highlights`, `Texture`, `Clarity`).
+pub fn spatial_tone(p: &CameraRaw) -> bool {
+    craft_develop::camera_raw::spatial_tone(&to_shared(p))
 }
 
 /// Image black and white points for `Whites` and `Blacks`, measured on the CPU.
