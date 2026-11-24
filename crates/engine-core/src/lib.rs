@@ -11,11 +11,13 @@ mod action_history;
 mod actions_record;
 pub mod adjust_params;
 pub mod allocation;
+pub mod brush_defs;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
 mod clip_group;
 pub mod color_channels;
+pub mod content_sampling;
 mod crop_fill;
 mod damage;
 pub mod display_color;
@@ -25,7 +27,7 @@ pub mod filters_ext;
 mod group_options;
 pub mod guide_layout;
 pub mod hidden_target;
-mod hooks;
+pub mod hooks;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
@@ -40,6 +42,7 @@ pub mod new_layer;
 mod param_check;
 pub use param_check::is_incomplete;
 pub mod param_schema;
+pub mod pixel_fill;
 mod pixels;
 pub mod prefs;
 pub mod preset_store;
@@ -78,15 +81,12 @@ pub use cmd as commands;
 pub use cmd::actions_cmds;
 pub use cmd::actions_edit_cmds;
 pub use cmd::adjust_cmds;
-pub use cmd::adjustment_brush_cmds;
 pub use cmd::align_cmds;
 pub use cmd::analysis_cmds;
 pub use cmd::artboard_cmds;
 pub use cmd::atn_cmds;
 pub use cmd::automate_cmds;
 pub use cmd::background_cmds;
-pub use cmd::brush_cmds;
-pub use cmd::brush_key_cmds;
 pub use cmd::brush_preset_cmds;
 pub use cmd::channel_cmds;
 pub use cmd::color_cmds;
@@ -98,14 +98,10 @@ pub use cmd::distort_cmds;
 pub use cmd::document_preset_cmds;
 pub use cmd::edit_cmds;
 pub use cmd::edit_menu_cmds;
-pub use cmd::eraser_cmds;
 pub use cmd::export_preset_cmds;
 pub use cmd::exr_cmds;
 pub use cmd::extra_cmds;
-pub use cmd::face_cmds;
 pub use cmd::file_cmds;
-pub use cmd::fill_cmds;
-pub use cmd::fill_key_cmds;
 pub use cmd::float_cmds;
 pub use cmd::font_library_cmds;
 pub use cmd::frame_cmds;
@@ -136,22 +132,17 @@ pub use cmd::migrate_cmds;
 pub use cmd::mode_cmds;
 pub use cmd::multichannel_cmds;
 pub use cmd::notes_cmds;
-pub use cmd::paint_cmds;
 pub use cmd::path_edit_cmds;
 pub use cmd::pattern_cmds;
 pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
 pub use cmd::photo_cmds;
-pub use cmd::pick_cmds;
 pub use cmd::plugin_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
 pub use cmd::rasterize_style_cmds;
-pub use cmd::redeye_cmds;
 pub use cmd::render_cmds;
-pub use cmd::retouch_cmds;
 pub use cmd::sample_cmds;
-pub use cmd::sampler_cmds;
 pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;
@@ -159,7 +150,6 @@ pub use cmd::smart_cmds;
 pub use cmd::smart_svg_cmds;
 pub use cmd::smartselect_cmds;
 pub use cmd::solid_fill_cmds;
-pub use cmd::stamp_cmds;
 pub use cmd::style_asl_cmds;
 pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
@@ -182,10 +172,12 @@ pub use cmd::web_cmds;
 pub use cmd::wia_cmds;
 pub use doc_state::{CopiedStyle, DocState, DocStateInputs, PRECHECKED, ToolState, selected_in};
 pub use error::{EngineError, Result};
-pub use install::{install, session};
+pub use install::{command_tables, install, register, session};
+pub use session::fix_selection;
 pub use session::move_item;
 use session::restore_target;
-pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};
+pub(crate) use session::{carry_visibility, visibility_changes};
+pub use state::LiveCommit;
 
 /// A type layer for [`Session::refresh_type_layers`]: in the open document, or in its first
 /// History snapshot (the document as opened) when `first_snapshot`. The caller picks each against
@@ -199,13 +191,13 @@ pub struct TypeLayerRef {
 
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.
-pub(crate) fn pixels_mut(l: &mut photocraft_doc::Layer) -> Result<&mut photocraft_raster::Surface> {
+pub fn pixels_mut(l: &mut photocraft_doc::Layer) -> Result<&mut photocraft_raster::Surface> {
     let id = l.id;
     l.surface_mut().ok_or_else(|| EngineError::Other(format!("layer {id:?} has no pixels")))
 }
 
 /// The active document's active layer, for `enabled` predicates.
-pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_doc::Layer, String> {
+pub fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_doc::Layer, String> {
     let d = s.active().ok_or("no document open")?;
     d.active_layer.and_then(|id| d.doc.layer(id)).ok_or_else(|| "no active layer".into())
 }
@@ -318,8 +310,8 @@ pub struct Session {
     /// ([`LinkWatchExt::missing_links`](crate::link_watch::LinkWatchExt::missing_links)). Written only when the set changes, so its revision says when the list did.
     link_missing: craft_tracked::Tracked<std::collections::HashSet<(u64, String)>>,
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
-    /// ([`Session::offer_live_stroke`]).
-    pub(crate) live_commit: Option<state::LiveCommit>,
+    /// (`photocraft_engine_paint::brush_cmds::LiveStrokeExt` and `retouch_cmds::LiveRetouchExt` offer it).
+    pub live_commit: Option<state::LiveCommit>,
     /// Documents a background open decoded but held back until the user answers the profile
     /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
     /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
@@ -347,33 +339,16 @@ pub struct Session {
 }
 
 #[cfg(test)]
-mod brush_pressure_size_default_tests;
-#[cfg(test)]
 mod embed_all_linked_tests;
 #[cfg(test)]
-mod eraser_gray_background_tests;
-#[cfg(test)]
 mod fill_layer_mode_tests;
-#[cfg(test)]
-mod mixer_indexed_bitmap_tests;
 
-#[cfg(test)]
-mod mixer_toggle_commands_tests;
-#[cfg(test)]
-mod pattern_mode_tests;
 #[cfg(test)]
 mod second_keys_zoom_actions_tests;
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
-mod fx_mode_tests;
-
-#[cfg(test)]
 mod dense_budget_tests;
 
-#[cfg(test)]
-mod brush_clear_background_tests;
 pub mod command_hints;
-#[cfg(test)]
-mod pencil_auto_erase_exact_tests;

@@ -2157,3 +2157,15 @@ fn save_hook_closing_the_target_stops_an_imported_close_with_save() {
         assert!(app.session.recording.playback_stack.is_empty());
     }
 }
+
+/// #8047: a recorded Channel Mixer step with ink outputs reopened in an RGB document is refused by
+/// the RGB-only editor. Playback must say why, not fall back to the generic step editor over it.
+#[test]
+fn a_recorded_cmyk_channel_mixer_step_reports_the_editors_refusal() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    let open = app.framework.dialogs.open_dialogs().len();
+    let result = open_recorded_editor(&mut app, "image.adjustments.channelMixer", &json!({"cyan": [80, 0, 0, 0, 0]}));
+    assert_eq!(result, Err(crate::adjust_editors::values::CMYK_MIXER_UNAVAILABLE.to_string()));
+    assert_eq!(app.framework.dialogs.open_dialogs().len(), open, "no editor opened");
+}

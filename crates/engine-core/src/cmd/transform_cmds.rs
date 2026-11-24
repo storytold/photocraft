@@ -76,7 +76,7 @@ pub(crate) fn whole_layer_bounds(doc: &Document, layer: &Layer) -> Rect {
 
 /// Warp a surface whose pixels outside the content read as `default` (masks, selections):
 /// warp the content with alpha, then flatten back onto the default value.
-pub(crate) fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
+pub fn warp_gray(s: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
     let default = s.default_pixel().first().copied().unwrap_or(0.0);
     let fmt = s.format();
     let src = s.content_bounds();
