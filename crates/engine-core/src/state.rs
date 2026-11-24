@@ -247,7 +247,7 @@ pub struct ColorChannels(u64);
 
 /// The colour channels the running command may change, on one layer.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Restriction {
+pub struct Restriction {
     pub colors: ColorChannels,
     pub layer: photocraft_doc::LayerId,
 }
@@ -286,21 +286,21 @@ impl ColorChannels {
 // ---------------------------------------------------------------------------------------------
 // Live strokes (`brush_cmds`)
 
-/// A finished live stroke offered to its own commit ([`Session::offer_live_stroke`],
-/// [`Session::offer_live_retouch`]): when the committing command matches it (same command,
+/// A finished live stroke offered to its own commit (the paint crate's `offer_live_stroke` and
+/// `offer_live_retouch`): when the committing command matches it (same command,
 /// document revision, params, seed and points), it takes these pixels instead of rendering the
 /// stroke again.
 pub struct LiveCommit {
     /// Mixer load before and after the stroke; transient, never serialized into the journal.
-    pub(crate) mixer: Option<(MixerState, MixerState)>,
-    pub(crate) cmd: String,
-    pub(crate) base: (photocraft_doc::DocId, u64),
-    pub(crate) params: Value,
+    pub mixer: Option<(MixerState, MixerState)>,
+    pub cmd: String,
+    pub base: (photocraft_doc::DocId, u64),
+    pub params: Value,
     /// The Brush's and Pencil's seed; the retouching tools have none.
-    pub(crate) seed: Option<u64>,
-    pub(crate) points: Vec<StrokePoint>,
-    pub(crate) surface: Surface,
-    pub(crate) bounds: Rect,
+    pub seed: Option<u64>,
+    pub points: Vec<StrokePoint>,
+    pub surface: Surface,
+    pub bounds: Rect,
 }
 
 impl LiveCommit {
@@ -314,7 +314,8 @@ impl LiveCommit {
         p
     }
 
-    pub(crate) fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
+    /// Whether a commit of `cmd` with `p` and `pts` on the session's active document takes these pixels.
+    pub fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
         let base = s.active().map(|st| (st.doc.id, st.revision));
         self.cmd == cmd
             && base == Some(self.base)
@@ -430,6 +431,6 @@ pub fn builtin() -> Vec<Pattern> {
 /// A file's size and modification time (nanoseconds since 1970).
 pub type Stamp = (u64, u128);
 
-/// Stamps of a document's linked files taken on a worker thread: (document id, [(file, layer
-/// ids, stamp)]).
-pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Vec<u64>, Option<Stamp>)>)>>>;
+/// Stamps of a document's linked files taken on a worker thread: (document id, [(stored path,
+/// the file it resolved to, layer ids, stamp)]).
+pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Option<std::path::PathBuf>, Vec<u64>, Option<Stamp>)>)>>>;

@@ -115,7 +115,13 @@ impl LinkWatchExt for Session {
         let slot: LinkScan = Arc::default();
         let out = slot.clone();
         let spawned = std::thread::Builder::new().name("link-watch".into()).spawn(move || {
-            let stamps = files.into_iter().map(|(p, file, ids)| (p, ids, stamp(file.as_deref()))).collect();
+            let stamps = files
+                .into_iter()
+                .map(|(p, file, ids)| {
+                    let stamp = stamp(file.as_deref());
+                    (p, file, ids, stamp)
+                })
+                .collect();
             *out.lock().unwrap_or_else(PoisonError::into_inner) = Some((doc, stamps));
         });
         if spawned.is_ok() {
@@ -135,14 +141,15 @@ impl LinkWatchExt for Session {
     fn poll_link_scan(&mut self) -> Option<Result<Value>> {
         let (doc, stamps) = self.link_scan.as_ref()?.lock().unwrap_or_else(PoisonError::into_inner).take()?;
         self.link_scan = None;
-        // A relink or embed while the look ran: it stamped files the document no longer links in
-        // that way, so drop it; the next look takes the current links.
+        // A relink or embed while the look ran, or a new folder after Save As: it stamped files
+        // the document no longer links in that way, so drop it; the next look takes the current
+        // links.
         if let Some(st) = self.active().filter(|st| st.doc.id.0 == doc)
-            && !linked_files(&st.doc).iter().map(|(p, ids)| (p, ids)).eq(stamps.iter().map(|(p, ids, _)| (p, ids)))
+            && !resolved_files(st).iter().map(|(p, file, ids)| (p, file, ids)).eq(stamps.iter().map(|(p, file, ids, _)| (p, file, ids)))
         {
             return Some(Ok(json!({"updated": []})));
         }
-        Some(apply_link_stamps(self, doc, stamps))
+        Some(apply_link_stamps(self, doc, stamps.into_iter().map(|(p, _, ids, stamp)| (p, ids, stamp)).collect()))
     }
 }
 
@@ -409,8 +416,26 @@ mod tests {
         let bytes = std::fs::read(&saved).unwrap();
         crate::file_cmds::open_bytes_as(&mut s, "doc.pcraft", &bytes, None, Some(saved.to_string_lossy().into_owned())).unwrap();
         assert_eq!(s.active().unwrap().doc.id, id);
-        *scan.lock().unwrap() = Some((id.0, vec![(stored, vec![layer], None)]));
+        *scan.lock().unwrap() = Some((id.0, vec![(stored.clone(), crate::doc_path::resolve_in(&stored, Some(&saved)).ok(), vec![layer], None)]));
         assert!(s.poll_link_scan().is_none());
+        assert!(s.missing_links().is_empty());
+    }
+
+    #[test]
+    fn a_scan_taken_in_the_old_folder_is_dropped_after_save_as() {
+        let old = dir("saveas-old");
+        let new = dir("saveas-new");
+        std::fs::write(new.join("art.png"), png(10, 10, "#ff0000")).unwrap();
+        let (mut s, layer) = placed(&new.join("art.png"));
+        s.saved_to(new.join("doc.pcraft").to_string_lossy().into_owned());
+        s.execute("layer.smartObjects.relinkToFile", json!({"path": "art.png"})).unwrap();
+        s.saved_to(old.join("doc.pcraft").to_string_lossy().into_owned());
+        let doc = s.active().unwrap().doc.id.0;
+        // The look ran in the old folder, where art.png is not.
+        let file = Some(old.join("art.png"));
+        s.link_scan = Some(std::sync::Arc::new(std::sync::Mutex::new(Some((doc, vec![("art.png".to_string(), file, vec![layer], None)])))));
+        s.saved_to(new.join("doc.pcraft").to_string_lossy().into_owned());
+        assert_eq!(s.poll_link_scan().unwrap().unwrap(), json!({"updated": []}));
         assert!(s.missing_links().is_empty());
     }
 
@@ -437,7 +462,8 @@ mod tests {
         let doc = s.active().unwrap().doc.id.0;
         let stored = super::linked_files(&s.active().unwrap().doc)[0].0.clone();
         let inject = |s: &mut Session, file: &str| {
-            let scan = std::sync::Arc::new(std::sync::Mutex::new(Some((doc, vec![(file.to_string(), vec![layer], None)]))));
+            let resolved = crate::doc_path::resolve_in(file, None).ok();
+            let scan = std::sync::Arc::new(std::sync::Mutex::new(Some((doc, vec![(file.to_string(), resolved, vec![layer], None)]))));
             s.link_scan = Some(scan);
         };
         // Taken before a relink: its file is no longer linked.

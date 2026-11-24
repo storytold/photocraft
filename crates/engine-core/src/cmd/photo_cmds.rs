@@ -356,7 +356,7 @@ pub(crate) fn luma_alpha(surf: &Surface, area: Rect, k: usize) -> (usize, usize,
 
 /// Registers `images` (surface, content area) and returns full-resolution placements.
 /// `focal35` is the 35 mm-equivalent focal length when known (EXIF).
-pub(crate) fn register(images: &[(&Surface, Rect)], layout: Layout, reference: Option<usize>, geometric: bool, focal35: Option<f64>) -> Option<Alignment> {
+pub fn register(images: &[(&Surface, Rect)], layout: Layout, reference: Option<usize>, geometric: bool, focal35: Option<f64>) -> Option<Alignment> {
     let side = images.iter().map(|(_, r)| r.width().max(r.height()) as usize).max().unwrap_or(1);
     let k = side.div_ceil(REGISTER_SIDE).max(1);
     let prepared: Vec<panorama::PreparedImage> = images
@@ -387,7 +387,7 @@ const DIRECT_MIN_OVERLAP: f64 = 0.25;
 const DIRECT_MIN_CORRELATION: f64 = 0.5;
 
 /// The error of either registration when the layers have no detail in common.
-pub(crate) const NO_DETAIL: &str = "Auto-Align couldn't find enough matching detail between the layers";
+pub const NO_DETAIL: &str = "Auto-Align couldn't find enough matching detail between the layers";
 
 /// Registers `images` (surface, content area, all of one size) by intensity
 /// ([`photocraft_algo::direct`]), for layers that nearly coincide (a focus or exposure bracket,
@@ -396,7 +396,7 @@ pub(crate) const NO_DETAIL: &str = "Auto-Align couldn't find enough matching det
 /// nothing full-resolution is held or warped. A layer whose best pose overlaps its neighbour
 /// too little or explains too little of it is no fit, and fails with [`NO_DETAIL`]. Planar
 /// layouts only; Auto means a similarity (Collage).
-pub(crate) fn register_direct(images: &[(&Surface, Rect)], layout: Layout, reference: usize) -> std::result::Result<Alignment, String> {
+pub fn register_direct(images: &[(&Surface, Rect)], layout: Layout, reference: usize) -> std::result::Result<Alignment, String> {
     use photocraft_algo::direct::{self, Plane, Pose};
     use photocraft_algo::transform::Homography;
     let (motion, layout) = match layout {
@@ -471,7 +471,7 @@ fn exif_focal(srcs: &[Source]) -> Option<f64> {
 
 /// Warps the content of `surf` inside `rect` by a placement shifted by `offset`; image
 /// coordinates are surface coordinates minus `origin`.
-pub(crate) fn warp_placed(surf: &Surface, rect: Rect, origin: (f64, f64), pl: &Placement, offset: (f64, f64), interp: Interp) -> Result<Surface> {
+pub fn warp_placed(surf: &Surface, rect: Rect, origin: (f64, f64), pl: &Placement, offset: (f64, f64), interp: Interp) -> Result<Surface> {
     let pl = pl.translated(offset.0, offset.1);
     if let Some(h) = plane_matrix(&pl, origin) {
         return Ok(warp_surface(surf, rect, &h, interp)?);
@@ -480,7 +480,7 @@ pub(crate) fn warp_placed(surf: &Surface, rect: Rect, origin: (f64, f64), pl: &P
 }
 
 /// The projective matrix of a planar, distortion-free placement (surface px → panorama px).
-pub(crate) fn plane_matrix(pl: &Placement, origin: (f64, f64)) -> Option<Homography> {
+pub fn plane_matrix(pl: &Placement, origin: (f64, f64)) -> Option<Homography> {
     (pl.projection == panorama::Projection::Plane && pl.k1 == 0.0).then(|| {
         let t = Homography([1.0, 0.0, -pl.center[0] - origin.0, 0.0, 1.0, -pl.center[1] - origin.1, 0.0, 0.0, 1.0]);
         pl.h.mul(&t)
@@ -591,7 +591,7 @@ pub(crate) type BlendGeometry<'a> = (&'a [Placement], &'a [(usize, usize)], (f64
 
 /// Result of [`seam_blend`]: per input, the pixels to keep (blended inside its seam region)
 /// and its mask; plus the blended composite.
-pub(crate) struct Blended {
+pub struct Blended {
     pub layers: Vec<(Surface, Surface)>,
     pub composite: Surface,
     pub gains: Vec<Vec<f32>>,
@@ -602,7 +602,7 @@ pub(crate) struct Blended {
 /// exposure and colour, `geometry` enables vignette removal. `budget` is the bytes of bands built
 /// at a time and the cap on any single band (an error beyond it); `None` is 5 GiB batches with
 /// no cap.
-pub(crate) struct BlendOptions<'a> {
+pub struct BlendOptions<'a> {
     pub seamless: bool,
     pub gains: bool,
     pub geometry: Option<BlendGeometry<'a>>,
@@ -797,7 +797,7 @@ fn build_layers(
 
 /// Gain compensation (+ optional vignetting), seams in `order`, multi-band blending. Inputs are
 /// surfaces already in panorama coordinates with alpha. `geometry` enables vignette removal.
-pub(crate) fn seam_blend(
+pub fn seam_blend(
     warped: Vec<Surface>,
     canvas: Rect,
     order: &[usize],
@@ -850,7 +850,7 @@ fn data_clamp(v: f32, fmt: PixelFormat) -> f32 {
 }
 
 /// Seam order: the reference first, then by distance of each image's centre from it.
-pub(crate) fn seam_order(warped: &[Surface], reference: usize) -> Vec<usize> {
+pub fn seam_order(warped: &[Surface], reference: usize) -> Vec<usize> {
     let centre = |s: &Surface| {
         let b = s.content_bounds();
         ((b.x0 + b.x1) as f64 / 2.0, (b.y0 + b.y1) as f64 / 2.0)

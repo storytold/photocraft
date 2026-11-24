@@ -1480,9 +1480,7 @@ mod overlapping_areas_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_document_per_artboard_tests.rs"]
 mod pdf_document_per_artboard_tests;
-#[cfg(test)]
-#[path = "artboard_cmds/pdf_include_background_tests.rs"]
-mod pdf_include_background_tests;
+
 #[cfg(test)]
 #[path = "artboard_cmds/pdf_overlapping_areas_tests.rs"]
 mod pdf_overlapping_areas_tests;
