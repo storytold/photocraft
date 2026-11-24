@@ -218,13 +218,20 @@ fn lifted<T>(events: EditEvents<T>, wrap: impl Fn(T) -> AdjustValue) -> AdjustOu
     AdjustOut { ask: None, edit: events.map(wrap) }
 }
 
+fn reset_legacy_toggle(value: BrightnessContrast, previous_legacy: bool, reset: bool) -> BrightnessContrast {
+    if reset && value.legacy != previous_legacy { BrightnessContrast::new(0.0, 0.0, value.legacy) } else { value }
+}
+
 /// Shows the editor of `kind` over `value` for one pass.
 fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, cx: &mut AdjustDialogCx<'_>) -> AdjustOut {
     let context = cx.context;
     match (kind, value) {
         ("brightnessContrast", AdjustValue::BrightnessContrast { value }) => {
-            let out = BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).context(context).show(ui);
-            lifted(out.events, |value| AdjustValue::BrightnessContrast { value })
+            let legacy = value.legacy;
+            let out = BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(&mut *value)).context(context).show(ui);
+            let reset = context.is_dialog();
+            *value = reset_legacy_toggle(*value, legacy, reset);
+            lifted(out.events.map(|value| reset_legacy_toggle(value, legacy, reset)), |value| AdjustValue::BrightnessContrast { value })
         }
         ("levels", AdjustValue::Levels { levels }) => {
             let mut panel = LevelsPanel::new("Levels", Bind::bound(levels), setup.channels.clone())
@@ -482,6 +489,19 @@ mod tests {
         let mut map = from_params("gradientMap", &json!({}), &ValueCx::new(ColorMode::Rgb, json!({}))).unwrap();
         assert!(answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}1"), Srgba::rgb(0.0, 1.0, 0.0)));
         assert!(!answer_color(&mut map, &format!("{GRADIENT_STOP_KEY}9"), Srgba::BLACK), "no such stop");
+    }
+
+    /// Toggling Use Legacy in the Brightness/Contrast dialog starts both sliders over at 0 in the
+    /// new mode; an edit that keeps the mode, and the Properties panel (no reset), keep the values.
+    #[test]
+    fn toggling_use_legacy_in_the_dialog_resets_brightness_and_contrast() {
+        for legacy in [false, true] {
+            let toggled = BrightnessContrast::new(40.0, -80.0, !legacy);
+            assert_eq!(reset_legacy_toggle(toggled, legacy, true), BrightnessContrast::new(0.0, 0.0, !legacy));
+            assert_eq!(reset_legacy_toggle(toggled, legacy, false), toggled, "the Properties panel keeps its values");
+            let kept = BrightnessContrast::new(40.0, -80.0, legacy);
+            assert_eq!(reset_legacy_toggle(kept, legacy, true), kept, "an edit in the same mode is kept");
+        }
     }
 }
 
