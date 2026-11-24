@@ -4,7 +4,7 @@ use super::kit::{Kit, tex_entry, uniform_entry};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::pipelines::{NO_EFFECT_MAPS, Pipelines};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
-use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
+use super::{Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing};
 
 /// Classification of a synchronous compositor pipeline build failure.
 ///
@@ -356,7 +356,7 @@ impl Compositor {
 
     /// How far beyond a page cell the effect maps of `f` must be computed to be exact in it.
     pub(crate) fn fx_apron(doc: &Document, f: &plan::FxLayer<'_>) -> i32 {
-        let vector_shape = matches!(f.layer.content, LayerContent::Shape(_)) && photocraft_compose::effect_outline(f.layer).is_none();
+        let vector_shape = photocraft_compose::uses_vector_effects(f.layer) && photocraft_compose::effect_outline(f.layer).is_none();
         let progs: Vec<fx::MapProgram> = f
             .layer
             .effects

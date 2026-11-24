@@ -888,7 +888,7 @@ impl<'a> Planner<'a> {
         // Linked patterns tile from the effects reference point (else the layer's top-left).
         let premerge = photocraft_compose::effects::premerges_layer(layer);
         let anchor = layer.effects.reference.unwrap_or((f64::from(sb.x0), f64::from(sb.y0)));
-        let vector_shape = matches!(layer.content, LayerContent::Shape(_)) && !outline;
+        let vector_shape = photocraft_compose::uses_vector_effects(layer) && !outline;
         let rev = items.iter().copied().enumerate().rev().collect();
         let mut work = EffectState {
             layer,

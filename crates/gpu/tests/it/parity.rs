@@ -3810,17 +3810,22 @@ fn authoritative_stroked_shape_matches_an_independent_saved_raster() {
         clip.surface_mut().unwrap().fill_rect(Rect::new(1, 0, 7, 6), &[0.2, 0.3, 0.9, 0.6]);
         clip.clipped = true;
         doc.layers = vec![Layer::new("saved shape", LayerContent::Shape(shape)), clip].into();
-        let mut raster = doc.clone();
-        raster.layers[0].content = LayerContent::Raster(saved);
-        let expected = photocraft_compose::render(&raster, raster.bounds());
-        // The independent oracle consumes the saved raster, never the vector path or split.
-        let actual = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
-        assert_eq!(actual.len(), expected.px.len());
-        for (i, (a, b)) in actual.iter().zip(&expected.px).enumerate() {
-            for c in 0..4 {
-                assert!((a[c] - b[c]).abs() <= TOL, "{depth:?}: pixel {i} channel {c}: {a:?} vs {b:?}");
+        for with_effect in [false, true] {
+            if with_effect {
+                doc.layers[0].effects.items = vec![Effect::Stroke(stroke(1.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.0, 0.0, 1.0))))];
             }
+            let mut raster = doc.clone();
+            raster.layers[0].content = LayerContent::Raster(saved.clone());
+            let expected = photocraft_compose::render(&raster, raster.bounds());
+            // The independent oracle consumes the saved raster, never the vector path or split.
+            let actual = render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+            assert_eq!(actual.len(), expected.px.len());
+            for (i, (a, b)) in actual.iter().zip(&expected.px).enumerate() {
+                for c in 0..4 {
+                    assert!((a[c] - b[c]).abs() <= TOL, "{depth:?}, effect={with_effect}: pixel {i} channel {c}: {a:?} vs {b:?}");
+                }
+            }
+            check(&mut g, &doc, "authoritative stroked shape");
         }
-        check(&mut g, &doc, "authoritative stroked shape");
     }
 }

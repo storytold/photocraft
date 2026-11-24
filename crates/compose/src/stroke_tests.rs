@@ -338,6 +338,16 @@ fn authoritative_stroked_shape_composites_like_its_saved_pixels() {
         assert!(shape_split::split(&sh, d.bounds(), depth).is_some());
         sh.cache_preserves_appearance = true;
         assert!(shape_split::split(&sh, d.bounds(), depth).is_none());
+        let mut inside = sh.clone();
+        inside.stroke.as_mut().unwrap().align = StrokeAlign::Inside;
+        let authoritative = Layer::new("saved inside stroke", LayerContent::Shape(inside.clone()));
+        assert!(!uses_vector_effects(&authoritative));
+        assert!(effect_outline(&authoritative).is_none());
+        // With no saved pixels the vector model remains usable, even with a stale flag.
+        inside.cache = None;
+        let uncached = Layer::new("uncached", LayerContent::Shape(inside));
+        assert!(uses_vector_effects(&uncached));
+        assert!(effect_outline(&uncached).is_some());
         let layer = Layer::new("saved shape", LayerContent::Shape(sh));
         let mut clipped = Layer::raster("clipped", d.pixel_format());
         clipped.surface_mut().unwrap().fill_rect(Rect::new(1, 0, 7, 6), &[0.2, 0.3, 0.9, 0.6]);
