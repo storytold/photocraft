@@ -88,12 +88,12 @@ pub(crate) fn openable_name(_path: &str) -> bool {
 }
 
 /// Whether a folder entry is one the batch commands open: an `OPENABLE` extension, an extension
-/// of a format `photocraft-codecs` reads in this build, or GIMP's gzipped `.xcf.gz`, whose last
-/// extension alone says nothing.
+/// of a format `photocraft-codecs` reads in this build, or an XCF transport suffix, whose last
+/// extension alone does not identify the drawing.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn openable_name(path: &str) -> bool {
     let lower = file_name(path).to_ascii_lowercase();
-    lower.ends_with(".xcf.gz")
+    photocraft_io::is_xcf_input_name(&lower)
         || lower.rsplit_once('.').is_some_and(|(_, ext)| OPENABLE.contains(&ext) || photocraft_codecs::from_extension(ext).is_some_and(|f| f.caps().read))
 }
 
