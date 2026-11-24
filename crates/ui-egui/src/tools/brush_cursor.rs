@@ -85,7 +85,8 @@ fn build(brush: &BrushSettings) -> BrushTip {
     {
         return BrushTip::new(size, BrushTipOutline::traced(TipRings::new(normal), TipRings::new(full)));
     }
-    let normal = photocraft_paint::half_coverage_radius(brush.size / 2.0, brush.hardness).max(1.0);
+    // Unclamped: a tip under 3 points across shows at its own size inside the framework's small-tip arms (#13602).
+    let normal = photocraft_paint::half_coverage_radius(brush.size / 2.0, brush.hardness);
     BrushTip::round(size, f64::from(normal))
 }
 
