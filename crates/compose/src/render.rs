@@ -378,6 +378,7 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
             fx_clip: Default::default(),
             fx_over_budget: false,
             tone_luts: prepare_tones(std::slice::from_ref(layer), 0),
+            curve_levels: true,
             doc: None,
             layer_keys: Default::default(),
         },
