@@ -16,6 +16,19 @@ pub enum ObjectFinderMode {
     Manual,
 }
 
+/// Object Selection › gear › Overlay Options › the Show Overlay radios (#12860). Only Never is
+/// measured (no tint at all); Auto and Always keep today's hover preview.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OverlayShow {
+    /// Auto Show Overlay: the tint follows the hover preview as today.
+    #[default]
+    Auto,
+    /// Always Show Overlay: not measured in detail, so it behaves as Auto.
+    Always,
+    /// Never Show Overlay: no tint.
+    Never,
+}
+
 /// Options-bar state for tools (Photoshop keeps these per tool).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -34,6 +47,20 @@ pub struct ToolOptions {
     pub object_finder_mode: ObjectFinderMode,
     /// Object Selection › Hard Edge (#12855): off, the result gets a softer, slightly wider rim.
     pub object_hard_edge: bool,
+    /// Object Selection › gear › Overlay Options › Color (#12860): the id of the hover tint's colour
+    /// in [`crate::object_finder::OVERLAY_COLORS`], `"magenta"` by default.
+    #[serde(default = "default_object_overlay_color")]
+    pub object_overlay_color: String,
+    /// Overlay Options › Outline, whole px 0..50 (#12860); 0 (the default) asks for no outline.
+    pub object_overlay_outline: f32,
+    /// Overlay Options › Opacity, whole percents 0..100 (#12860), 32 by default. Settings written
+    /// before #12860 load as 32, as the field's default.
+    #[serde(default = "thirty_two")]
+    pub object_overlay_opacity: f32,
+    /// Overlay Options › the three Show Overlay radios (#12860), Auto by default.
+    pub object_overlay_show: OverlayShow,
+    /// Object Selection › bar › Show all objects (#12860): off by default, and N flips it while held.
+    pub object_show_all_objects: bool,
     /// Remove tool: the fill goes to a new layer above the target (Photoshop's Create a new layer).
     pub remove_new_layer: bool,
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
@@ -365,6 +392,15 @@ fn fifty() -> f32 {
     50.0
 }
 
+/// The Overlay Options Color dropdown's measured default (#12860).
+fn default_object_overlay_color() -> String {
+    "magenta".into()
+}
+
+fn thirty_two() -> f32 {
+    32.0
+}
+
 /// The session brush starts out as the Brush's (the tool the app opens with).
 pub(super) fn default_brush_tool() -> Tool {
     Tool::Brush
@@ -447,6 +483,11 @@ impl Default for ToolOptions {
             object_subtract: true,
             object_finder_mode: ObjectFinderMode::Auto,
             object_hard_edge: true,
+            object_overlay_color: default_object_overlay_color(),
+            object_overlay_outline: 0.0,
+            object_overlay_opacity: 32.0,
+            object_overlay_show: OverlayShow::Auto,
+            object_show_all_objects: false,
             remove_new_layer: false,
             remove_after_each_stroke: true,
             adjustment_brush_kind: photocraft_engine::adjustment_brush_cmds::DEFAULT_KIND.into(),

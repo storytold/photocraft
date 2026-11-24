@@ -24,13 +24,15 @@ use std::sync::Arc;
 use craft::behavior::kurbo::{Point, Rect};
 use craft::ui::canvas_controls::{HoverMask, HoverOutline, HoverShape};
 use craft::ui::contract::Show as _;
+use craft::ui::style::DataColor;
+use egui::Color32;
 use photocraft_algo::selection::Region;
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_engine::smartselect_cmds::{empty_sampled_area, find_object, sampled_target};
 
 use crate::PhotocraftApp;
 use crate::canvas::tools::in_gesture;
-use crate::state::{ObjectFinderMode, Tool};
+use crate::state::{ObjectFinderMode, OverlayShow, Tool, ToolOptions};
 
 /// Seconds the pointer must rest before an object is looked up.
 pub const DEBOUNCE: f64 = 0.12;
@@ -90,6 +92,68 @@ fn active(app: &PhotocraftApp, pressed: bool) -> bool {
         && !in_gesture(app)
         && app.ui.transform.is_none()
         && app.session.active().is_some()
+}
+
+/// The colour a hand-written or stale setting that names no colour in the list tints with: the
+/// measured default.
+const DEFAULT_OVERLAY_RGB: [u8; 3] = [0xCC, 0x1A, 0x7E];
+
+/// The gear popup's Overlay Options › Color list (#12860), in the reference application's order and
+/// wording: `(id, label, swatch rgb)`. The names, their order and the Magenta default are measured;
+/// what each name is worth in RGB is not (#12860 measured no tint on its screen at all), so the
+/// nine names the app already draws as a layer label keep that swatch
+/// (`theme::AppTheme::layer_label_colors`) and the four it has no label for take the same
+/// lightness at their own hue.
+pub(crate) const OVERLAY_COLORS: [(&str, &str, [u8; 3]); 13] = [
+    ("blue", "Blue", [0x78, 0xAD, 0xF6]),
+    ("green", "Green", [0x85, 0xDC, 0x6A]),
+    ("chartreuse", "Chartreuse", [0xB5, 0xDC, 0x6A]),
+    ("yellow", "Yellow", [0xDC, 0xD6, 0x4B]),
+    ("orange", "Orange", [0xF7, 0x97, 0x44]),
+    ("red", "Red", [0xFC, 0x5D, 0x5B]),
+    ("magenta", "Magenta", DEFAULT_OVERLAY_RGB),
+    ("purple", "Purple", [0xA9, 0x6A, 0xDC]),
+    ("indigo", "Indigo", [0x54, 0x4B, 0xE7]),
+    ("fuchsia", "Fuchsia", [0xB0, 0x14, 0xC0]),
+    ("seafoam", "Seafoam", [0x1C, 0x84, 0x88]),
+    ("white", "White", [0xF2, 0xF2, 0xF2]),
+    ("black", "Black", [0x1A, 0x1A, 0x1A]),
+];
+
+/// The Opacity field's measured range, in percents (#12860). The Outline field takes whole px
+/// 0..=50; its setting is stored and shown today and joins the tint with the framework prop
+/// (craft-libs#2783), so it is not read here yet.
+pub(crate) const OVERLAY_OPACITY_RANGE: std::ops::RangeInclusive<f32> = 0.0..=100.0;
+
+/// What the gear's Overlay Options ask the hover tint to look like (#12860): the colour of the
+/// chosen name and the opacity as a share 0..=1. `None` draws nothing, which is what Never Show
+/// Overlay means; Always keeps today's preview, as the issue leaves it.
+pub(crate) struct OverlayLook {
+    pub color: Color32,
+    pub opacity: f32,
+}
+
+/// A remembered number that the options bar never showed: a hand-edited preference can hold a
+/// number outside the field's range or not a number at all (`tool_memory::sanitize` does not know
+/// these fields), and the tint must not go invisible or infinite. `def` is the measured default.
+fn overlay_fit(value: f32, range: std::ops::RangeInclusive<f32>, def: f32) -> f32 {
+    if value.is_finite() { value.clamp(*range.start(), *range.end()) } else { def }
+}
+
+/// The look [`show`] draws for `options`, or `None` when nothing is drawn.
+pub(crate) fn overlay_look(options: &ToolOptions) -> Option<OverlayLook> {
+    if options.object_overlay_show == OverlayShow::Never {
+        return None;
+    }
+    let rgb = OVERLAY_COLORS.iter().find(|(id, ..)| *id == options.object_overlay_color).map_or(DEFAULT_OVERLAY_RGB, |(.., rgb)| *rgb);
+    let opacity = overlay_fit(options.object_overlay_opacity, OVERLAY_OPACITY_RANGE, 32.0) / *OVERLAY_OPACITY_RANGE.end();
+    Some(OverlayLook { color: Color32::from_rgb(rgb[0], rgb[1], rgb[2]), opacity })
+}
+
+/// Whether `look` draws anything on the canvas: the measured bottom of the Opacity field, 0 %,
+/// shows no overlay, like Never Show Overlay (which leaves no look at all).
+pub(crate) fn overlay_draws(look: &OverlayLook) -> bool {
+    look.opacity > 0.0
 }
 
 /// The hover mask of an object: the one place a region becomes the tint the outline shows.
@@ -284,8 +348,16 @@ pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, at: Option<Point>
     if up.shown.is_none() {
         return;
     }
+    let Some(look) = overlay_look(&app.ui.tool_options) else { return };
+    if !overlay_draws(&look) {
+        return;
+    }
     let Some((_, mask)) = app.object_finder.as_ref().and_then(|f| f.mask.as_ref()) else { return };
-    HoverOutline::new(tl!("Object Finder"), Some(HoverShape::Mask(mask.clone()))).show(ui);
+    // Only the colour reaches the framework with the `craft` revision pinned today: `HoverOutline`
+    // tints at its own fixed alpha with a one-texel edge and takes no opacity or outline width,
+    // which is what craft-libs#2783 adds. Both values are stored and read here, and the call takes
+    // them as soon as a pinned revision carries that change.
+    HoverOutline::new(tl!("Object Finder"), Some(HoverShape::Mask(mask.clone()))).color(DataColor::new(look.color)).show(ui);
 }
 
 #[cfg(test)]

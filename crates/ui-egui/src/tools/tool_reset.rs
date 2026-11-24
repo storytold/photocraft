@@ -129,6 +129,9 @@ fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
         Tool::Zoom => &["zoom_in"],
         Tool::Patch => &["patch_structure", "patch_color"],
         Tool::ContentAwareMove => &["cam_mode"],
+        // #12860 measured only that Reset Tool puts the Overlay Options Opacity back to 32 %. The
+        // other four are not measured, so they keep what they hold, which is what they do today.
+        Tool::ObjectSelection => &["object_overlay_color", "object_overlay_outline", "object_overlay_show", "object_show_all_objects"],
         _ => &[],
     }
 }
@@ -214,7 +217,23 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::MagneticLasso => reset!(feather, anti_alias, magnetic),
         Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),
         Tool::QuickSelection => reset!(enhance_edge),
-        Tool::ObjectSelection => reset!(enhance_edge, object_finder, object_subtract, object_finder_mode, object_hard_edge),
+        // Reset Tool restoring the Overlay Options Opacity is measured (0 back to 32 %); whether it
+        // restores Color, Outline, the Show Overlay radios and Show all objects is not (#12860), so
+        // those keep the setting they have, as they do today.
+        Tool::ObjectSelection => {
+            reset!(
+                enhance_edge,
+                object_finder,
+                object_subtract,
+                object_finder_mode,
+                object_hard_edge,
+                object_overlay_color,
+                object_overlay_outline,
+                object_overlay_opacity,
+                object_overlay_show,
+                object_show_all_objects
+            )
+        }
         Tool::Crop => reset!(crop),
         Tool::PerspectiveCrop => reset!(perspective_crop, perspective_crop_grid),
         Tool::Eyedropper => reset!(eyedropper),

@@ -70,6 +70,8 @@ mod gradient_options_bar_mode_tests;
 #[cfg(test)]
 mod line_tool_defaults_tests;
 #[cfg(test)]
+mod object_finder_overlay_tests;
+#[cfg(test)]
 mod object_selection_gear_tests;
 #[cfg(test)]
 mod object_selection_mode_tests;
