@@ -120,6 +120,7 @@ fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifes
         source: v.source.clone(),
         fps: v.fps,
         show_altered: v.show_altered,
+        footage: v.footage.as_ref().map(|f| crate::manifest::FootageFramesM { link: f.link.clone(), origin: f.origin.clone(), altered: f.altered.clone() }),
     }
 }
 
@@ -357,7 +358,20 @@ impl Loader<'_> {
             return Err(FormatError::corrupt("video original frame count differs from edited frame count"));
         }
         let original_frames = m.original_frames.as_ref().map(|source| source.iter().map(|f| self.surface(f)).collect::<Result<Vec<_>>>()).transpose()?;
-        Ok(photocraft_doc::VideoData { frames, original_frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered })
+        let footage = match &m.footage {
+            Some(f) if f.origin.len() != frames.len() || f.altered.len() != frames.len() => {
+                return Err(FormatError::corrupt("video footage frame list differs from the layer's frame count"));
+            }
+            Some(_) if m.original_frames.is_some() => {
+                return Err(FormatError::corrupt("a video layer has both linked footage and held original frames"));
+            }
+            Some(f) if !f.link.placement.m.iter().all(|v| v.is_finite()) || !f.link.info.fps.is_finite() => {
+                return Err(FormatError::corrupt("a video layer's footage placement or frame rate is not a number"));
+            }
+            Some(f) => Some(photocraft_doc::FootageFrames { link: f.link.clone(), origin: f.origin.clone(), altered: f.altered.clone() }),
+            None => None,
+        };
+        Ok(photocraft_doc::VideoData { frames, original_frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered, footage, shown: None })
     }
 
     fn surface(&mut self, m: &SurfaceM) -> Result<Surface> {

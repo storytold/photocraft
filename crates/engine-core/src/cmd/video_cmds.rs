@@ -4,7 +4,7 @@
 //! writes it back into the playhead's frame before anything re-syncs. Headless and scriptable. Frame persistence in `.pcraft` is a
 //! follow-up; a saved document keeps the current frame as the layer's content.
 
-use photocraft_doc::{Document, Layer, LayerContent, Timeline, VideoData};
+use photocraft_doc::{Document, FrameView, Layer, LayerContent, Timeline, VideoData};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -45,25 +45,36 @@ fn check_gif_budget(w: u64, h: u64, frames: u64) -> std::result::Result<(), Stri
     Ok(())
 }
 
-/// Set every video layer's displayed content to its frame at the playhead.
+/// Set every video layer's displayed content to its frame at the playhead: a held frame as it is,
+/// a frame of linked movie footage decoded from the file (empty while the file is offline).
 pub fn sync(doc: &mut Document) {
     let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
-    sync_layers(&mut doc.layers, cur);
+    let fmt = doc.pixel_format();
+    sync_layers(&mut doc.layers, cur, fmt);
 }
 
-fn sync_layers(layers: &mut [Layer], cur: usize) {
+fn sync_layers(layers: &mut [Layer], cur: usize, fmt: photocraft_color::PixelFormat) {
     for l in layers.iter_mut() {
-        let frame = l.video.as_ref().and_then(|v| {
-            let visible = if v.show_altered { &v.frames } else { v.original_frames.as_ref().unwrap_or(&v.frames) };
-            visible.get(cur.min(visible.len().saturating_sub(1))).cloned()
-        });
-        if let Some(f) = frame
-            && let LayerContent::Raster(s) = &mut l.content
-        {
-            *s = f;
+        if let Some(v) = &mut l.video {
+            let shown = match v.view(cur, !v.show_altered) {
+                Some(FrameView::Own(f)) => Some((f.clone(), None)),
+                Some(FrameView::Footage(n)) => v.footage.as_ref().map(|f| {
+                    let frame = crate::footage::frame(&f.link, n, fmt).unwrap_or_else(|_| Surface::new(fmt));
+                    let generation = frame.generation();
+                    (frame, Some(generation))
+                }),
+                Some(FrameView::Blank) => Some((Surface::new(fmt), None)),
+                None => None,
+            };
+            if let Some((frame, generation)) = shown
+                && let LayerContent::Raster(s) = &mut l.content
+            {
+                *s = frame;
+                v.shown = generation;
+            }
         }
         if let Some(ch) = l.children_mut() {
-            sync_layers(ch, cur);
+            sync_layers(ch, cur, fmt);
         }
     }
 }
@@ -78,13 +89,10 @@ pub fn store(doc: &mut Document) {
 fn store_layers(layers: &mut [Layer], cur: usize) {
     for l in layers.iter_mut() {
         if let (Some(v), LayerContent::Raster(s)) = (&mut l.video, &l.content) {
-            let at = cur.min(v.frames.len().saturating_sub(1));
             // When showing the original, the layer's displayed surface is a preview,
             // not an edit to write over the altered frame (#3060).
-            if (v.show_altered || v.original_frames.is_none())
-                && let Some(f) = v.frames.get_mut(at)
-            {
-                *f = s.clone();
+            if v.show_altered || (v.original_frames.is_none() && v.footage.is_none()) {
+                v.store(cur, s);
             }
         }
         if let Some(ch) = l.children_mut() {
@@ -136,10 +144,6 @@ fn edit_video(s: &mut Session, label: &str, f: impl FnOnce(&mut VideoData, usize
     Ok(json!({"frames": count}))
 }
 
-fn blank_of(fmt: photocraft_color::PixelFormat) -> Surface {
-    Surface::new(fmt)
-}
-
 /// Both the altered and original footage stacks must have room for an added frame.
 fn check_frame_growth(frames: usize, original_frames: Option<usize>) -> Result<()> {
     let limit = crate::timeline_cmds::MAX_DURATION;
@@ -178,26 +182,16 @@ fn insert_blank(s: &mut Session, _p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     edit_video(s, "Insert Blank Frame", move |v, cur| {
         check_frame_growth(v.frames.len(), v.original_frames.as_ref().map(Vec::len))?;
-        let at = cur.saturating_add(1).min(v.frames.len());
-        v.frames.insert(at, blank_of(fmt));
-        if let Some(original) = &mut v.original_frames {
-            // The stacks stay aligned, but never index past a shorter one.
-            original.insert(at.min(original.len()), blank_of(fmt));
-        }
+        v.insert_blank(cur.saturating_add(1), fmt);
         Ok(())
     })
 }
 
 fn duplicate_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     edit_video(s, "Duplicate Frame", |v, cur| {
-        if let Some(f) = v.frames.get(cur) {
+        if cur < v.frames.len() {
             check_frame_growth(v.frames.len(), v.original_frames.as_ref().map(Vec::len))?;
-            let f = f.clone();
-            if let Some(original) = &mut v.original_frames {
-                let orig = original.get(cur).cloned().unwrap_or_else(|| blank_of(f.format()));
-                original.insert((cur + 1).min(original.len()), orig);
-            }
-            v.frames.insert(cur + 1, f);
+            v.duplicate(cur);
         }
         Ok(())
     })
@@ -205,14 +199,7 @@ fn duplicate_frame(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn delete_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     edit_video(s, "Delete Frame", |v, cur| {
-        if v.frames.len() > 1 && cur < v.frames.len() {
-            v.frames.remove(cur);
-            if let Some(original) = &mut v.original_frames
-                && cur < original.len()
-            {
-                original.remove(cur);
-            }
-        }
+        v.remove(cur);
         Ok(())
     })
 }
@@ -220,10 +207,7 @@ fn delete_frame(s: &mut Session, _p: &Value) -> Result<Value> {
 fn restore_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     edit_video(s, "Restore Frame", move |v, cur| {
-        let original = v.original_frames.as_ref().and_then(|frames| frames.get(cur)).cloned();
-        if let Some(f) = v.frames.get_mut(cur) {
-            *f = original.unwrap_or_else(|| blank_of(fmt));
-        }
+        v.restore(cur, fmt);
         Ok(())
     })
 }
@@ -231,8 +215,8 @@ fn restore_frame(s: &mut Session, _p: &Value) -> Result<Value> {
 fn restore_all(s: &mut Session, _p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     edit_video(s, "Restore All Frames", move |v, _| {
-        for (i, f) in v.frames.iter_mut().enumerate() {
-            *f = v.original_frames.as_ref().and_then(|frames| frames.get(i)).cloned().unwrap_or_else(|| blank_of(fmt));
+        for i in 0..v.frames.len() {
+            v.restore(i, fmt);
         }
         Ok(())
     })
@@ -668,6 +652,8 @@ pub fn render_video_with(
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut base = (*st.doc).clone();
     store(&mut base);
+    // A frame of footage that can't be decoded would render empty: refuse rather than write it.
+    check_footage(&base.layers)?;
     let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
     // Loaded timelines bypass the duration validation used by timeline.create/setProps.
     if frames > crate::timeline_cmds::MAX_DURATION {
@@ -739,6 +725,22 @@ pub fn render_video_with(
     Ok(json!({"frames": files.len(), "dir": dir}))
 }
 
+/// Refuse when a video layer (inside groups too) links footage that can't be read, naming the file
+/// and why.
+pub(crate) fn check_footage(layers: &[Layer]) -> Result<()> {
+    for l in layers {
+        if let Some(v) = &l.video
+            && let Some(f) = &v.footage
+        {
+            crate::footage::status(&f.link, v.footage_frames_used()).map_err(|e| EngineError::Other(format!("the video layer `{}`: {e}", l.name)))?;
+        }
+        if let Some(ch) = l.children() {
+            check_footage(ch)?;
+        }
+    }
+    Ok(())
+}
+
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels
 /// under 50 % opacity get the frame's transparent index, the rest are drawn opaque, and the
 /// palette is built from the visible pixels with one entry kept for transparency.
@@ -785,5 +787,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod footage_tests;
 #[cfg(test)]
 mod tests;

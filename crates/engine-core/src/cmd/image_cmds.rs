@@ -550,6 +550,9 @@ fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
             for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
                 *frame = crop_surface(frame, r);
             }
+            if let Some(footage) = &mut v.footage {
+                crate::footage::clip(&mut footage.link, r);
+            }
         }
         if let LayerContent::Raster(s) = &mut l.content {
             *s = crop_surface(s, r);

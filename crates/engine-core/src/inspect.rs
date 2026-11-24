@@ -220,6 +220,20 @@ fn layer_sel(
             photocraft_doc::VideoSource::File { path } => json!({ "file": path }),
         };
         v["video"] = json!({"frames": vid.frames.len(), "fps": vid.fps, "showAltered": vid.show_altered, "source": source});
+        // Linked movie footage: decoded on demand, so say whether the file can be read.
+        if let Some(f) = &vid.footage {
+            let status = crate::footage::status(&f.link, vid.footage_frames_used());
+            v["video"]["footage"] = json!({
+                "file": f.link.path,
+                "width": f.link.info.width,
+                "height": f.link.info.height,
+                "frames": f.link.info.frames,
+                "fps": f.link.info.fps,
+                "paintedFrames": f.altered.iter().zip(&f.origin).filter(|(a, o)| **a && o.is_some()).count(),
+                "online": status.is_ok(),
+                "offline": status.err(),
+            });
+        }
     }
     v
 }
