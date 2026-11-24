@@ -5,6 +5,7 @@
 //! A visible pixel layer, a targeted layer mask, an alpha channel or Quick Mask target and a smart
 //! object keep working, and the other adjustments keep their checks.
 
+use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -20,9 +21,14 @@ fn session() -> Session {
     s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();
     s.execute("select.saveSelection", json!({"name": "Alpha 1"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap();
-    s.execute("select.rect", json!({"x": 4, "y": 4, "width": 8, "height": 8})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": [0.5, 0.5, 0.5, 1.0]})).unwrap();
     s.execute("select.deselect", json!({})).unwrap();
+    // Painted directly, since Edit › Fill lives in photocraft-engine-paint.
+    s.edit("grey square", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        surf.fill_rect(Rect::new(4, 4, 12, 12), &[0.5, 0.5, 0.5, 1.0]);
+        Ok(())
+    })
+    .unwrap();
     s
 }
 
