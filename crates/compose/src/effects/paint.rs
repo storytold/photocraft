@@ -88,11 +88,8 @@ fn softer_edge_lut(size: f32, range: f32) -> Vec<f32> {
 /// Odd Sizes end in whole taps (Size 5's outermost pixel paints in full at Range 1 %), and a
 /// Size of one pixel or less has no falloff.
 fn softer_edge_floor(size: f32) -> f32 {
-    let t = super::blur::tent_kernel(size).1;
-    // The tent's last tap is the end tap squared, and the one before it twice the end tap times a
-    // full one, so the end tap is partial when the last is under half of the one before.
-    match t.as_slice() {
-        [.., before, last] if 2.0 * last < 0.999 * before => *last,
+    match super::blur::box_end_taps(size) {
+        Some((end, next)) if end < 0.999 * next => end * end,
         _ => 0.0,
     }
 }
