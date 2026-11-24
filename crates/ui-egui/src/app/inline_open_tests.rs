@@ -284,6 +284,66 @@ fn automation_xcf_open_preserves_typed_view_and_protected_authorized_origin() {
 }
 
 #[test]
+fn automation_relative_save_checks_write_root_identity_before_any_writer() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(directory.path()).unwrap();
+    let source = root.join("source.psd").to_string_lossy().into_owned();
+    for background in [false, true] {
+        let mut app = app();
+        let origin = source.clone();
+        app.services.automation_read = Some(Box::new(|path| {
+            assert_eq!(path, "source.psd");
+            Ok(crate::AutomationReadResult { name: "source.psd".into(), bytes: BZIP_XCF.to_vec(), save_path: Some(path.into()) })
+        }));
+        app.services.automation_locate = Some(Box::new(move |_| Some(origin.clone())));
+        let write_root = root.clone();
+        app.services.automation_write_location = Some(Box::new(move |path| Ok(write_root.join(path).to_string_lossy().into_owned())));
+        let writes = Arc::new(AtomicUsize::new(0));
+        let count = writes.clone();
+        app.services.automation_write = Some(Box::new(move |_, _| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }));
+        let count = writes.clone();
+        app.services.automation_save = Some(Arc::new(move |_, _, _, _| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Err("stub worker writer must not be reached".into())
+        }));
+        let encodes = Rc::new(Cell::new(0));
+        let count = encodes.clone();
+        app.services.export = Some(Box::new(move |_, _, _| {
+            count.set(count.get() + 1);
+            Ok((Vec::new(), Vec::new()))
+        }));
+        assert_eq!(automation_open(&mut app, "source.psd", false)["ok"], true);
+        assert_eq!(app.session.active().unwrap().protected_import_source.as_deref(), Some(source.as_str()));
+        app.background_jobs = background;
+        let ctx = app.ctx().clone();
+        let (request, _reply) = crate::control::ControlRequest::new("app.save", json!({"path":"source.psd"}));
+        let crate::control::Reply::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("synchronous guard") };
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert_eq!(writes.load(Ordering::Relaxed), 0);
+        assert_eq!(encodes.get(), 0);
+        assert!(app.jobs.saves.is_empty());
+        assert!(app.session.active().unwrap().path.is_none());
+
+        // A different authorized destination still reaches a stub writer; no
+        // destination is created, including on the regression's failing path.
+        app.background_jobs = false;
+        let (request, _reply) = crate::control::ControlRequest::new("app.save", json!({"path":"copy.pcraft"}));
+        let crate::control::Reply::Done(reply) = crate::control::handle(&mut app, &ctx, &request) else { panic!("stub save") };
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(writes.load(Ordering::Relaxed), 1);
+        assert_eq!(encodes.get(), 1);
+    }
+    assert!(std::fs::read_dir(&root).unwrap().next().is_none());
+}
+
+#[test]
 fn automation_non_xcf_keeps_configured_importer_approval_and_save_provenance() {
     let mut app = app();
     let calls = Rc::new(Cell::new(0));

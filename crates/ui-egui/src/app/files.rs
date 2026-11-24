@@ -825,9 +825,15 @@ impl PhotocraftApp {
             )?
         };
         // Shared by synchronous and worker saves, before encoding or writer dispatch.
-        // This checks the supplied destination; read-root locations are not write authority.
+        // A relative request names a different file under the write root than
+        // under the process CWD. Read-root locations are not write authority.
         let state = self.session.active().ok_or("no document")?;
-        photocraft_engine::file_cmds::check_import_destination(state, &target).map_err(|error| error.to_string())?;
+        let identity = match self.services.automation_write_location.as_ref() {
+            Some(locate) => locate(&target)?,
+            None if state.protected_import_source.is_some() => return Err("automation save destination identity is not configured".into()),
+            None => target.clone(),
+        };
+        photocraft_engine::file_cmds::check_import_destination(state, &identity).map_err(|error| error.to_string())?;
         let reply = |path: &str, warnings: &[String]| json!({"path": path, "warnings": warnings});
         // Only the target is granted: a linked smart object's stored path is document data, so
         // PSD export writes that layer as pixels instead of embedding the file.
