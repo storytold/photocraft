@@ -4922,3 +4922,38 @@ fn softer_outer_glow_fades_out_before_its_size() {
         }
     }
 }
+
+/// Align Edges on a shape with a layer effect (the compositor's fill/stroke split and the effect
+/// cache): toggling the flag alone re-renders, and the stroke and the fill move together. A 1 px
+/// stroke on 10..30 moves to columns 10 and 30 (reference measurement), the fill with it.
+#[test]
+fn align_edges_toggle_rerenders_a_shape_under_a_layer_effect() {
+    use photocraft_doc::{ShapeLayer, ShapeStroke};
+    let shape = |aligned| ShapeLayer {
+        path: photocraft_vector::shapes::rect(10.0, 10.0, 20.0, 20.0),
+        fill: Some(Fill::Solid(Color::rgb(1.0, 0.0, 0.0))),
+        stroke: Some(ShapeStroke { width: 1.0, paint: Fill::Solid(Color::BLACK), ..Default::default() }),
+        use_aligned_rendering: aligned,
+        ..Default::default()
+    };
+    let doc = |aligned| {
+        let mut d = doc_white(48, 48);
+        let mut l = Layer::new("shape", LayerContent::Shape(shape(aligned)));
+        l.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 0.5), color: Color::rgb(0.0, 0.0, 1.0) });
+        d.layers.push(l);
+        d
+    };
+    let mut d = doc(false);
+    let off = flatten(&d).px.clone();
+    let LayerContent::Shape(sh) = &mut d.layers.last_mut().unwrap().content else { panic!("shape") };
+    sh.use_aligned_rendering = true;
+    let on = flatten(&d).px.clone();
+    assert_ne!(on, off, "the flag alone must not hit a stale cache");
+    assert_eq!(on, flatten(&doc(true)).px, "same as a fresh aligned layer");
+    // Row 20: column 9 white, 10 the stroke's colour under the overlay, 11 the fill's.
+    let at = |px: &[[f32; 4]], x: usize| px[20 * 48 + x];
+    assert!(close4(at(&on, 9), [1.0; 4]));
+    assert!(close4(at(&on, 10), at(&on, 30)), "both stroke columns alike");
+    assert!(!close4(at(&on, 10), at(&on, 11)), "stroke, then fill");
+    assert!(!close4(at(&off, 9), [1.0; 4]), "unaligned the stroke covers half of column 9");
+}

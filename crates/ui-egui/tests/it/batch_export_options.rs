@@ -149,9 +149,11 @@ fn existing_engine_batch_and_image_processor_support_webp_quality() {
         for quality in [Value::Null, json!(0), json!(12)] {
             let out = dir.0.join(format!("{prefix}-{quality}"));
             std::fs::create_dir(&out).unwrap();
-            let result = app
-                .run(command, json!({"input": [input], "output": out, "steps": [["image.adjustments.invert", {}]], "format": "webp", "quality": quality}))
-                .unwrap();
+            let mut params = json!({"input": [input], "output": out, "format": "webp", "quality": quality});
+            if command == "file.automate.batch" {
+                params["steps"] = json!([["image.adjustments.invert", {}]]);
+            }
+            let result = app.run(command, params).unwrap();
             assert_eq!(result["errors"], json!([]), "{command}: {result}");
             let path = result["files"][0].as_str().unwrap();
             assert!(path.ends_with(".webp"));

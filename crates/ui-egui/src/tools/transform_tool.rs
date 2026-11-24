@@ -42,6 +42,7 @@ pub use commit::{apply_click, auto_commit, cancel, commit, end_if_left, follow_e
 pub(crate) use draw::styled_composite;
 pub use draw::{SessionShown, show_in_canvas};
 pub(crate) use draw::{moves_selection, selection_map};
+pub(crate) use options_bar::bar_key;
 pub use options_bar::{options_bar, reset_warp};
 pub(crate) use preview::read_surface;
 pub(crate) use preview::solo_layer;
@@ -122,6 +123,7 @@ pub struct OpenPreview {
     /// The armed split tool of the Warp phase, one-shot (#12498). Hover, placing and the quick split are the
     /// warp grid's.
     split: Option<WarpSplit>,
+    warp_grid: warp::GridSelection,
     /// The tool the session began with: picking another one applies the transform.
     tool: Tool,
     /// Free Transform Path: the path as it was, drawn through the box instead of pixels.
@@ -154,6 +156,7 @@ impl OpenPreview {
             above: None,
             styled: None,
             split: None,
+            warp_grid: warp::GridSelection::default(),
             tool,
             path: None,
             follow: None,
@@ -212,10 +215,10 @@ impl Several {
     }
 
     /// Composite the moving layers over their frame and their styles' reach.
-    fn render(&mut self) -> PreviewTextures {
+    fn render(&mut self, serials: &mut craft::ui::primitives::Serials) -> PreviewTextures {
         self.rect = self.frame.inflate(style_reach(&self.moving, &self.ids));
         let (image, uv) = composite_image(&self.moving, self.rect, self.max_side);
-        PreviewTextures::new(self.name.clone(), PreviewPixels::new(image, uv))
+        PreviewTextures::new(serials, self.name.clone(), PreviewPixels::new(image, uv))
     }
 }
 
