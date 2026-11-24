@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod align_edges;
 pub mod edit;
 pub mod feather;
 pub mod flatten;
@@ -587,7 +588,13 @@ impl CompiledShape {
 
     /// [`CompiledShape::new`] with the feather computed over `coverage` while gradients still lay
     /// out in `gradient_frame`: measuring a shape beyond the canvas it is drawn in.
+    ///
+    /// A shape with Align Edges on (`use_aligned_rendering`) renders [`align_edges::aligned_path`]
+    /// instead of its stored path: every renderer (layer caches, the compositor's fill/stroke
+    /// split, previews, extents) compiles shapes here, so they all agree.
     pub fn with_frames(shape: &ShapeLayer, tol: f64, coverage: Rect, gradient_frame: Rect) -> Self {
+        let aligned = align_edges::aligned_shape(shape, tol);
+        let shape = aligned.as_ref().unwrap_or(shape);
         let pb = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
         let g = gradient_frame;
         let cb = (f64::from(g.x0), f64::from(g.y0), f64::from(g.x1), f64::from(g.y1));
