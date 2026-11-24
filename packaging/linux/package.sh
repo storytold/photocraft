@@ -7,7 +7,7 @@
 #   $DIST/photocraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
 #   $DIST/photocraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"] [--arch-tar-dir DIRECTORY]
 #
 # Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com). By default AppImage tooling
 # is downloaded at verified pins into $CARGO_TARGET_DIR. Build on an old distro (CI: Ubuntu 22.04,
@@ -27,10 +27,16 @@ APP_ID=ai.storyteller.photocraft
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar"
+ARCH_TAR_DIR=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
+    --arch-tar-dir)
+      [[ -n "${2:-}" ]] || { echo "error: --arch-tar-dir needs a directory" >&2; exit 2; }
+      ARCH_TAR_DIR="$2"
+      shift 2
+      ;;
     -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -51,6 +57,11 @@ if [[ "${PHOTOCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* 
   export PHOTOCRAFT_OVERRIDE_VERSION="$VERSION"
 fi
 BASENAME="photocraft-$VERSION-linux-$ARCH"
+
+if [[ -n "$ARCH_TAR_DIR" && "$IS_NIGHTLY" != 1 ]]; then
+  echo "error: --arch-tar-dir is only for Nightly builds" >&2
+  exit 2
+fi
 
 echo "==> PhotoCraft $VERSION for Linux $ARCH ($FORMATS, channel=${PHOTOCRAFT_BUILD_CHANNEL:-stable})"
 
@@ -128,6 +139,17 @@ if has tar; then
   cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
+fi
+
+# The Arch handoff keeps the same basename as the plain tarball in a separate directory.
+# Flatpak, OCI and direct tar consumers still get the original binary, not this launcher.
+if [[ -n "$ARCH_TAR_DIR" ]]; then
+  mkdir -p "$ARCH_TAR_DIR"
+  if [[ "$(cd "$ARCH_TAR_DIR" && pwd -P)" == "$(cd "$DIST" && pwd -P)" ]]; then
+    echo "error: the Arch tar directory must differ from the release directory" >&2
+    exit 2
+  fi
+  bash "$HERE/nightly-arch-tar.sh" "$STAGE/usr" "$WORK/arch-tar" "$ARCH_TAR_DIR" "$BASENAME"
 fi
 
 # ---- .deb / .rpm --------------------------------------------------------------------------------
