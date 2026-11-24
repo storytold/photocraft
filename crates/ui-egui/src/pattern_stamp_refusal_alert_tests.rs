@@ -55,6 +55,16 @@ fn a_hidden_target_layer() {
     refused(&mut app, "Could not use the pattern stamp because the target layer is hidden.");
 }
 
+/// Layer refusals keep their priority when the colour mode also refuses the stroke.
+#[test]
+fn an_indexed_hidden_target_still_reports_the_hidden_layer() {
+    let mut app = app();
+    app.run("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none"})).unwrap();
+    let id = active(&app);
+    app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
+    refused(&mut app, "Could not use the pattern stamp because the target layer is hidden.");
+}
+
 #[test]
 fn lock_all() {
     let mut app = app();

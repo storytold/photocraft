@@ -64,12 +64,17 @@ pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
 /// The alert a press with `tool` gets, if any. `hidden` is the press-time hidden-target refusal
 /// (`canvas::tool_input`), which this only words; the lock and the group are checked here. Lock
 /// transparent pixels is no refusal, and a group's targeted mask paints. A tool with a
-/// [`mode_tool_name`] gets its colour-mode alert first, in an Indexed Color or Bitmap document; the
-/// Pattern Stamp gets the engine's colour-mode alert first (its wording depends on its pattern too,
-/// #12887) and falls through to the layer alerts (#12886).
+/// [`mode_tool_name`] gets its colour-mode alert first, in an Indexed Color or Bitmap document. The
+/// Pattern Stamp's layer alerts take priority over its colour-mode alert (#12886); that wording
+/// depends on its pattern too (#12887).
 pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
-    // The Pattern Stamp's colour-mode alert depends on its pattern too (#12887).
+    // The Pattern Stamp's colour-mode alert depends on its pattern too (#12887), but a layer refusal
+    // is the more specific reason the press cannot paint.
     if tool == Tool::PatternStamp {
+        let template = if hidden { Some(HIDDEN) } else { layer_refusal(app, tool) };
+        if let Some(template) = template {
+            return Some(crate::i18n::fmt(tl!(template), &[("tool", tl!("pattern stamp"))]));
+        }
         use photocraft_engine::retouch_cmds::{PATTERN_STAMP_INDEXED_REFUSAL, pattern_stamp_press_refusal};
         let p = crate::retouch_ui::pattern_stamp_params(app, &[]);
         if pattern_stamp_press_refusal(&app.session, &p).is_some() {
