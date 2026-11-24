@@ -1,6 +1,11 @@
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
-use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::{
+    Session,
+    actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
+    atn_cmds,
+};
 use serde_json::{Value, json};
 
 fn class(name: &str) -> Class {
@@ -13,7 +18,7 @@ fn ordinal(name: &str) -> ReferenceItem {
 
 fn load(s: &mut Session, reference: ReferenceItem) {
     let descriptor = Descriptor::new("null").with("null", D::Reference(vec![reference]));
-    s.actions.list = vec![imported(AtnEvent::Code(*b"slct"), descriptor)];
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(vec![imported(AtnEvent::Code(*b"slct"), descriptor)], Vec::new()));
 }
 
 fn bytes(event: AtnEvent, descriptor: Descriptor) -> Vec<u8> {
@@ -49,7 +54,7 @@ fn roundtrip(action: &Action, reference: &ReferenceItem, target: Option<&Referen
 }
 
 fn replay(s: &mut Session, action: &Action) {
-    s.actions.list = vec![action.clone()];
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(vec![action.clone()], Vec::new()));
     let result = s.execute("actions.play", json!({"action":"Select"})).unwrap();
     assert_eq!(result["ran"], 1, "{result}");
     assert!(result.get("failed").is_none(), "{result}");
@@ -122,7 +127,8 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
         let first = u32::from(!background);
         let expected = [Some("Base"), Some("L1"), Some("L2"), None, Some("Gchild"), Some("G"), Some("L3")];
         for (offset, name) in expected.into_iter().enumerate() {
-            s.execute("layer.select", json!({"layer":layer(&s,"L2")})).unwrap();
+            let pick = json!({"layer":layer(&s,"L2")});
+            s.execute("layer.select", pick).unwrap();
             let reference = index("Lyr ", first + offset as u32);
             let action = select(reference.clone());
             roundtrip(&action, &reference, None);
@@ -130,7 +136,8 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
             assert_eq!(s.active().unwrap().active_layer.unwrap().0, layer(&s, name.unwrap_or("L2")));
         }
         for (code, expected) in [("Trgt", "L2"), ("Frwr", "Gchild"), ("Bckw", "L1"), ("Frnt", "L3"), ("Back", "Base")] {
-            s.execute("layer.select", json!({"layer":layer(&s,"L2")})).unwrap();
+            let pick = json!({"layer":layer(&s,"L2")});
+            s.execute("layer.select", pick).unwrap();
             let reference = ordinal(code);
             let action = select(reference.clone());
             roundtrip(&action, &reference, None);
@@ -140,7 +147,7 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
         for invalid in [first + 7, u32::MAX].into_iter().chain((!background).then_some(0)) {
             let action = select(index("Lyr ", invalid));
             let before = selection(&s);
-            assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+            assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
             assert_eq!(selection(&s), before);
         }
     }
@@ -150,8 +157,10 @@ fn indexes_and_ordinals_use_the_recorded_stack_with_or_without_background() {
 #[test]
 fn group_end_does_not_replace_the_current_selection() {
     let mut s = scene(true);
-    s.execute("layer.select", json!({"layer":layer(&s,"L1")})).unwrap();
-    s.execute("layer.select", json!({"layer":layer(&s,"L2"),"mode":"add"})).unwrap();
+    let pick = json!({"layer":layer(&s,"L1")});
+    s.execute("layer.select", pick).unwrap();
+    let pick = json!({"layer":layer(&s,"L2"),"mode":"add"});
+    s.execute("layer.select", pick).unwrap();
     for modifier in [None, Some("addToSelection"), Some("removeFromSelection"), Some("addToSelectionContinuous")] {
         let mut d = Descriptor::new("null").with("null", D::Reference(vec![index("Lyr ", 3)]));
         if let Some(modifier) = modifier {
@@ -183,7 +192,7 @@ fn indexed_moves_follow_the_measured_boundary_table() {
         let before = selection(&s);
         if target == 0 {
             let doc = s.active().unwrap().doc.clone();
-            assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+            assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
             assert_eq!(s.active().unwrap().doc, doc);
             assert_eq!(selection(&s), before);
             continue;
@@ -219,7 +228,7 @@ fn indexed_moves_follow_the_measured_boundary_table() {
         let action = moved(index("Lyr ", 2), index("Lyr ", invalid));
         let doc = s.active().unwrap().doc.clone();
         let state = selection(&s);
-        assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+        assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
         assert_eq!(s.active().unwrap().doc, doc);
         assert_eq!(selection(&s), state);
     }
@@ -229,8 +238,10 @@ fn indexed_moves_follow_the_measured_boundary_table() {
 #[test]
 fn indexed_move_preserves_multiple_selected_sources() {
     let mut s = scene(true);
-    s.execute("layer.select", json!({"layer":layer(&s,"L1")})).unwrap();
-    s.execute("layer.select", json!({"layer":layer(&s,"L2"),"mode":"add"})).unwrap();
+    let pick = json!({"layer":layer(&s,"L1")});
+    s.execute("layer.select", pick).unwrap();
+    let pick = json!({"layer":layer(&s,"L2"),"mode":"add"});
+    s.execute("layer.select", pick).unwrap();
     let before = selection(&s);
     let action = moved(ordinal("Trgt"), index("Lyr ", 6));
     roundtrip(&action, &ordinal("Trgt"), Some(&index("Lyr ", 6)));
@@ -271,7 +282,7 @@ fn nested_empty_group_boundaries_reparent_at_the_correct_level() {
         assert_eq!(doc.layer(inner).unwrap().children().unwrap().len(), usize::from(target == 3));
         let action = moved(index("Lyr ", 5), index("Lyr ", 4));
         let before = doc.clone();
-        assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+        assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
         assert_eq!(s.active().unwrap().doc, before);
     }
 }
@@ -301,7 +312,7 @@ fn document_indexes_survive_tab_moves_close_and_reopen_with_old_ids() {
     for invalid in [0, u32::MAX, 4] {
         let before = s.active_index();
         let action = select(index("Dcmn", invalid));
-        assert!(s.execute(&action.steps[0].0, action.steps[0].1.clone()).is_err());
+        assert!(s.execute(&action.steps[0].command, action.steps[0].params.clone()).is_err());
         assert_eq!(s.active_index(), before);
     }
 }
@@ -372,7 +383,7 @@ fn invalid_comp_indexes_and_unsupported_references_preserve_state() {
     assert_eq!(s.active().unwrap().doc, before);
     assert!(s.execute("layerComp.apply", json!({"comp":{"id":u32::MAX}})).is_err());
     assert_eq!(s.active().unwrap().doc, before);
-    let negative = Action::new("Select", vec![("layerComp.apply".into(), json!({"comp":{"index":-1}}))]);
+    let negative = Action::new("Select", vec![ActionStep::new("layerComp.apply", json!({"comp":{"index":-1}}))]);
     let (saved, _) = atn_cmds::export("References", &[&negative], &[], false).unwrap();
     assert_eq!(
         atn::parse(&saved).unwrap().actions[0].items[0].descriptor.as_ref().unwrap().get("null"),
@@ -389,7 +400,7 @@ fn invalid_comp_indexes_and_unsupported_references_preserve_state() {
         let data = bytes(event, d.clone());
         let result = atn_cmds::import(&data).unwrap();
         assert_eq!(result.unsupported.len(), 1);
-        assert_eq!(result.actions[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(result.actions[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         let (saved, _) = atn_cmds::export("References", &[&result.actions[0]], &[], false).unwrap();
         assert_eq!(atn::parse(&saved).unwrap().actions[0].items[0].descriptor, Some(d));
     }
@@ -423,7 +434,7 @@ fn unrepresentable_comp_indexes_are_rejected_before_recording() {
     }
     s.execute("actions.stop", json!({})).unwrap();
     assert!(accepted.is_empty(), "unrepresentable indexes were accepted: {accepted:?}");
-    assert!(s.actions.list.last().unwrap().steps.is_empty());
+    assert!(s.actions().list.actions().last().unwrap().steps.is_empty());
 }
 
 /// Valid extreme indexes survive recording and export as ATN Index references.
@@ -435,7 +446,7 @@ fn accepted_comp_boundary_indexes_record_and_export() {
         s.execute("layerComp.apply", json!({"comp":{"index":valid}})).unwrap();
     }
     s.execute("actions.stop", json!({})).unwrap();
-    let action = s.actions.list.last().unwrap();
+    let action = s.actions().list.actions().last().unwrap();
     assert_eq!(action.steps.len(), 2);
     let (saved, skipped) = atn_cmds::export("References", &[action], &[], false).unwrap();
     assert!(skipped.is_empty());
@@ -476,15 +487,17 @@ fn empty_comp_list_index_is_noop() {
 #[test]
 fn group_end_index_never_targets_the_selection() {
     let mut s = scene(true);
-    s.execute("layer.select", json!({"layer":layer(&s,"L1")})).unwrap();
-    s.execute("layer.select", json!({"layer":layer(&s,"L2"),"mode":"add"})).unwrap();
+    let pick = json!({"layer":layer(&s,"L1")});
+    s.execute("layer.select", pick).unwrap();
+    let pick = json!({"layer":layer(&s,"L2"),"mode":"add"});
+    s.execute("layer.select", pick).unwrap();
     let past = s.active().unwrap().history.past_len();
     let doc = s.active().unwrap().doc.clone();
     assert!(s.execute("layer.translate", json!({"layer":{"index":3},"dx":1,"dy":0})).is_err());
     let offset = Descriptor::new("Ofst").with("Hrzn", D::UnitFloat { unit: *b"#Pxl", value: 1.0 }).with("Vrtc", D::UnitFloat { unit: *b"#Pxl", value: 0.0 });
     let action =
         imported(AtnEvent::Code(*b"move"), Descriptor::new("null").with("null", D::Reference(vec![index("Lyr ", 3)])).with("T   ", D::Descriptor(offset)));
-    s.actions.list = vec![action];
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(vec![action], Vec::new()));
     let result = s.execute("actions.play", json!({"action":"Select"})).unwrap();
     assert!(result.get("failed").is_some(), "{result}");
     assert_eq!(s.active().unwrap().history.past_len(), past);
@@ -502,7 +515,8 @@ fn forward_ordinal_precondition_checks_the_resolved_layer() {
     s.execute("edit.fill", json!({"contents":"color","color":"#000000"})).unwrap();
     s.execute("type.create", json!({"text":"C","size":2})).unwrap();
     s.execute("layer.renameLayer", json!({"name":"C"})).unwrap();
-    s.execute("layer.select", json!({"layer":layer(&s,"A")})).unwrap();
+    let pick = json!({"layer":layer(&s,"A")});
+    s.execute("layer.select", pick).unwrap();
     s.execute("channel.target", json!({"colors":[0]})).unwrap();
     let b = photocraft_doc::LayerId(layer(&s, "B"));
     let before = s.active().unwrap().doc.layer(b).cloned();

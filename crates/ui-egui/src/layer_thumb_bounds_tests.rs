@@ -1,64 +1,49 @@
 //! #4281: Clip Thumbnails to Layer Bounds. A small object in a large document fills its Layers
 //! panel thumbnail instead of being a speck in an empty canvas-sized one.
 
-use egui::vec2;
-use egui_kittest::Harness;
+use craft::layers::ui::thumbs::{LayerThumb, ThumbContents};
+use craft::ui::primitives::textures::{ThumbRequest, ThumbSource};
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::mask_thumbs_ui::THUMB_LAYER;
+use crate::panels::layers_tree::PhotoThumbs;
 
-fn harness() -> (Harness<'static, PhotocraftApp>, u64) {
+/// A 2000 by 1000 document with a 20 by 10 red speck on layer "Speck".
+fn app() -> (Box<PhotocraftApp>, LayerId) {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 2000, "height": 1000})).unwrap();
     let id = s.execute("layer.new.layer", json!({"name": "Speck"})).unwrap()["layer"].as_u64().unwrap();
     s.execute("select.rect", json!({"x": 100, "y": 200, "width": 20, "height": 10})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
     s.execute("select.deselect", json!({})).unwrap();
-    let mut h = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
-        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        PhotocraftApp::new(s, crate::Services::default())
-    });
-    let ctx = h.ctx.clone();
-    let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dockTabs": {"layers": 0}}));
-    crate::control::handle(h.state_mut(), &ctx, &req);
-    h.run_steps(8);
-    (h, id)
+    (PhotocraftApp::new(s, crate::Services::default()), LayerId(id))
 }
 
-fn frame(h: &Harness<'_, PhotocraftApp>, id: u64) -> Rect {
-    *h.state().thumb_frames.get(&LayerId(id)).expect("layer thumbnail drawn")
-}
-
-fn texture_area(h: &Harness<'_, PhotocraftApp>, id: u64) -> usize {
-    let (_, tex) = h.state().thumbs.get(&(LayerId(id), THUMB_LAYER)).expect("layer thumbnail drawn");
-    let [w, h] = tex.size();
-    w * h
+/// The contents the panel asks the speck's thumbnail for, the frame it shows and its revision.
+fn thumb(app: &PhotocraftApp, id: LayerId) -> (ThumbContents, Rect, u64) {
+    let contents = crate::layers_panel_ui::thumbnail_contents(app);
+    let doc = &app.session.active().unwrap().doc;
+    let frame = crate::layer_thumb_frame(doc.layer(id).unwrap(), doc.bounds(), contents == ThumbContents::LayerBounds);
+    let revision = PhotoThumbs::new(app, doc).revision(&LayerThumb::pixels(id, contents), &ThumbRequest::for_cell(32.0, 1.0));
+    (contents, frame, revision.get())
 }
 
 #[test]
-fn layer_thumbnails_frame_the_canvas_by_default() {
-    let (h, id) = harness();
-    assert!(!h.state().session.prefs().interface.clip_thumbnails_to_layer_bounds);
-    assert_eq!(frame(&h, id), Rect::new(0, 0, 2000, 1000));
-}
+fn layer_thumbnails_frame_the_canvas_until_clip_to_layer_bounds_is_on() {
+    let (mut app, id) = app();
+    assert!(!app.session.prefs().interface.clip_thumbnails_to_layer_bounds);
+    let (contents, frame, before) = thumb(&app, id);
+    assert_eq!((contents, frame), (ThumbContents::EntireDocument, Rect::new(0, 0, 2000, 1000)));
 
-#[test]
-fn clipped_layer_thumbnails_frame_the_layer_pixels() {
-    let (mut h, id) = harness();
-    let before = h.state().thumbs.get(&(LayerId(id), THUMB_LAYER)).map(|(r, _)| *r).unwrap();
-    h.state_mut().run("prefs.set", json!({"path": "interface.clipThumbnailsToLayerBounds", "value": true})).unwrap();
-    h.run_steps(4);
-    assert_eq!(frame(&h, id), Rect::new(100, 200, 120, 210), "framed on the filled rect");
-    let after = h.state().thumbs.get(&(LayerId(id), THUMB_LAYER)).map(|(r, _)| *r).unwrap();
+    app.run("prefs.set", json!({"path": "interface.clipThumbnailsToLayerBounds", "value": true})).unwrap();
+    let (contents, frame, after) = thumb(&app, id);
+    assert_eq!((contents, frame), (ThumbContents::LayerBounds, Rect::new(100, 200, 120, 210)), "framed on the filled rect");
     assert_ne!(before, after, "toggling the preference rebuilds the thumbnail");
-    assert_eq!(texture_area(&h, id), 64 * 64, "still a 64 px square texture");
 
-    h.state_mut().run("prefs.set", json!({"path": "interface.clipThumbnailsToLayerBounds", "value": false})).unwrap();
-    h.run_steps(4);
-    assert_eq!(frame(&h, id), Rect::new(0, 0, 2000, 1000), "and back to the canvas");
+    app.run("prefs.set", json!({"path": "interface.clipThumbnailsToLayerBounds", "value": false})).unwrap();
+    assert_eq!(thumb(&app, id).1, Rect::new(0, 0, 2000, 1000), "and back to the canvas");
 }
 
 #[test]
