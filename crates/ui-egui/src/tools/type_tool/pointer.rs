@@ -17,7 +17,7 @@ use super::defaults::{default_style_params, mask_style_from_active_layer};
 use super::editing::begin_edit;
 use super::layout::{hit_layer, offset_at};
 
-use super::{LayerId, PLACEHOLDER, PhotocraftApp, Point, TextEdit, active_doc_id, json, session_key, text_layer};
+use super::{LayerId, PARAGRAPH_PLACEHOLDER, PLACEHOLDER, PhotocraftApp, Point, TextEdit, active_doc_id, json, session_key, text_layer};
 use crate::canvas::document_display::CanvasHost;
 use crate::canvas::tools::{FamilyTool, ToolScope};
 
@@ -225,7 +225,13 @@ fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     // Horizontal Type Mask gets the Type tool's placeholder, as Photoshop's does (#12072); the
     // vertical mask's placeholder is not measured yet, so it keeps starting empty.
     let placeholder = app.ui.tool != crate::state::Tool::VerticalTypeMask && app.session.prefs().type_.fill_new_type_layers_with_placeholder;
-    let text = if placeholder { PLACEHOLDER } else { "" };
+    // A dragged box gets the whole Lorem ipsum paragraph (#12046); the Horizontal Type Mask's box follows the Type
+    // tool's, as #12072 measured.
+    let text = match (placeholder, is_box) {
+        (false, _) => "",
+        (true, true) => PARAGRAPH_PLACEHOLDER,
+        (true, false) => PLACEHOLDER,
+    };
     let mut p = default_style_params(app);
     // #12077: the measured case - a click, not a paragraph box, with the Horizontal Type Mask over
     // a horizontal text layer - starts the mask in that layer's font, style and size, as the
@@ -370,6 +376,10 @@ impl CanvasTool for TypeTool<'_> {
 #[cfg(test)]
 #[path = "mask_placeholder_tests.rs"]
 mod mask_placeholder_tests;
+
+#[cfg(test)]
+#[path = "paragraph_placeholder_tests.rs"]
+mod paragraph_placeholder_tests;
 
 #[cfg(test)]
 #[path = "mask_click_text_layer_tests.rs"]

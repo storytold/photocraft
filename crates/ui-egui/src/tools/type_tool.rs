@@ -58,6 +58,9 @@ pub(crate) use pointer::{TypeState, box_shape, drain, tool};
 pub(crate) use values::doc_unit;
 
 pub const PLACEHOLDER: &str = "Lorem Ipsum";
+/// The placeholder of a new paragraph box made by dragging with the Type tools, measured in Photoshop (#12046). Point
+/// text keeps [`PLACEHOLDER`].
+pub const PARAGRAPH_PLACEHOLDER: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Quis ipsum suspendisse ultrices gravida. Risus commodo viverra maecenas accumsan lacus vel facilisis.";
 
 fn text_layer(doc: &Document, id: LayerId) -> Option<&TextLayer> {
     match &doc.layer(id)?.content {
