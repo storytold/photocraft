@@ -167,6 +167,17 @@ impl VideoData {
         self.frames[at] = content.clone();
     }
 
+    /// After loading a document: the layer's saved content stands for the frame at `at` as it was
+    /// last shown, so an unpainted footage frame there stays unpainted until the content is
+    /// actually edited (a save keeps no `shown`, the pixel state of the decode).
+    pub fn adopt_loaded(&mut self, at: usize, content: &Surface) {
+        let Some(f) = &self.footage else { return };
+        let at = at.min(self.frames.len().saturating_sub(1));
+        if !f.altered.get(at).copied().unwrap_or(true) {
+            self.shown = Some(content.generation());
+        }
+    }
+
     /// Insert a blank frame at `at` (clamped to the end). A blank frame has no footage behind it.
     pub fn insert_blank(&mut self, at: usize, format: photocraft_color::PixelFormat) {
         let at = at.min(self.frames.len());

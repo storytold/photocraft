@@ -759,6 +759,7 @@ impl Loader<'_> {
             text_styles: m.text_styles.clone(),
             slices,
         };
+        adopt_loaded_video(&mut doc);
         // Saved only while they held for the layer as saved, so they pair with its pixels as
         // loaded. Optional side data: indices of a layer the file doesn't hold, or damaged ones,
         // are dropped (Color Table then maps by nearest colour) rather than failing the open.
@@ -773,6 +774,27 @@ impl Loader<'_> {
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {
         Ok(AlphaChannel { name: c.name.clone(), surface: self.surface(&c.surface)?, spot: c.spot, color: c.color, opacity: c.opacity, indicates: c.indicates })
     }
+}
+
+/// Each video layer with linked footage takes its loaded content as the frame at the playhead
+/// as last shown ([`photocraft_doc::VideoData::adopt_loaded`]), so reopening a document doesn't
+/// turn that unpainted frame into the layer's own pixels at the first edit.
+fn adopt_loaded_video(doc: &mut Document) {
+    fn walk(layers: &mut [photocraft_doc::Layer], at: usize, depth: usize) {
+        if depth > 256 {
+            return;
+        }
+        for l in layers {
+            if let (Some(v), photocraft_doc::LayerContent::Raster(content)) = (&mut l.video, &l.content) {
+                v.adopt_loaded(at, content);
+            }
+            if let Some(ch) = l.children_mut() {
+                walk(ch, at, depth + 1);
+            }
+        }
+    }
+    let at = doc.timeline.as_ref().map_or(0, |t| t.current);
+    walk(&mut doc.layers, at, 0);
 }
 
 /// Advance the global id counter past `max` so ids loaded from a file never

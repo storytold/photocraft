@@ -340,3 +340,73 @@ fn a_restricted_session_reads_no_footage_it_may_not() {
     assert!(err.contains("may not be read"), "{err}");
     assert!(!wrote, "nothing is written");
 }
+
+/// Hidden layers add nothing to the output, so Render Video doesn't stop at their footage: a
+/// damaged frame or a missing file only matters on a layer that shows.
+#[test]
+fn render_video_ignores_the_footage_of_hidden_layers() {
+    let (mut s, id, _) = linked_with("hidden-damaged", Synthetic { fail_at: Some(1), ..Synthetic::new(W, H, 3, 24.0) });
+    s.edit("Hide", |doc, _| {
+        if let Some(l) = doc.layer_mut(id) {
+            l.visible = false;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let files = render_video_with(&s, &json!({"format": "png"}), |_, _| Ok(()), |_, _| true).unwrap();
+    assert_eq!(files["frames"], 3, "every frame renders without the hidden layer");
+    let file = video(&s, id).footage.as_ref().unwrap().link.path.clone();
+    crate::footage::forget(&file);
+    assert!(render_video_with(&s, &json!({"format": "png"}), |_, _| Ok(()), |_, _| true).is_ok(), "nor does its missing file stop it");
+}
+
+/// The same relative path stored in two documents in different folders names two files: each
+/// document shows its own, not whichever was decoded first.
+#[test]
+fn relative_footage_paths_name_the_file_beside_each_document() {
+    let dir = |name: &str| std::env::temp_dir().join(format!("pc-footage-rel-{}-{name}", std::process::id()));
+    let (a, b) = (dir("a"), dir("b"));
+    // Different lengths, so their frame 0 is drawn in different greys.
+    let (short, long) = (Synthetic::new(W, H, 3, 24.0), Synthetic::new(W, H, 9, 24.0));
+    let (short_level, long_level) = (short.level(0), long.level(0));
+    crate::footage::register(&a.join("clip.mp4").to_string_lossy(), Box::new(short));
+    crate::footage::register(&b.join("clip.mp4").to_string_lossy(), Box::new(long));
+    let shown_in = |folder: &std::path::Path| {
+        let mut s = crate::session();
+        s.execute("file.new", json!({"width": W, "height": H})).unwrap();
+        s.active_mut().unwrap().path = Some(folder.join("doc.pcraft").to_string_lossy().into_owned());
+        let info = photocraft_doc::FootageInfo { width: W, height: H, frames: 3, fps: 24.0 };
+        let id = s
+            .edit("Link", |doc, active| {
+                let fmt = doc.pixel_format();
+                doc.timeline = Some(Timeline::new(3, 24.0));
+                let mut l = Layer::raster("Movie", fmt);
+                l.video = Some(VideoData::from_footage(FootageLink::new("clip.mp4".into(), info), fmt));
+                let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
+                *active = Some(id);
+                sync(doc);
+                Ok(id)
+            })
+            .unwrap();
+        shown(&s, id, 10, 10)[0]
+    };
+    assert!(close(shown_in(&a), short_level), "the document in a shows a's clip");
+    assert!(close(shown_in(&b), long_level), "the document in b shows b's clip");
+}
+
+/// Reopening a native document doesn't turn the unpainted footage frame at the playhead into the
+/// layer's own pixels the first time anything is stored.
+#[test]
+fn a_reopened_document_keeps_its_footage_frame_unpainted() {
+    let (mut s, id, _) = linked("reopened", 6);
+    goto(&mut s, 2);
+    let doc = s.active().unwrap().doc.clone();
+    let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+    let loaded = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let mut again = crate::session();
+    again.add_document(loaded, None);
+    goto(&mut again, 3);
+    let v = again.active().unwrap().doc.layer(id).unwrap().video.clone().unwrap();
+    assert!(v.footage.as_ref().unwrap().altered.iter().all(|a| !a), "no frame became painted");
+    assert!(v.frames.iter().all(|f| f.tile_count() == 0));
+}

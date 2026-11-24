@@ -133,19 +133,28 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The registry's name for the file a stored footage path names: the file it resolves to from
+/// the document being worked on ([`crate::doc_path`]), so two documents naming different files
+/// `clip.mp4` don't share a decoder or frames, and two naming the same file do. A path that
+/// can't be resolved keeps its own text.
+fn key_of(path: &str) -> String {
+    crate::doc_path::resolve(path).map_or_else(|_| path.to_string(), |p| p.to_string_lossy().into_owned())
+}
+
 /// Use `decoder` for the file at `path` from now on, dropping any decoder and frames held for it.
 pub fn register(path: &str, decoder: Box<dyn FootageDecoder>) -> FootageInfo {
     let info = decoder.info();
+    let key = key_of(path);
     let mut r = lock(registry());
-    r.invalidate(path);
-    r.sources.insert(path.to_string(), Ok(Arc::new(Source { decoder: Mutex::new(decoder), info })));
+    r.invalidate(&key);
+    r.sources.insert(key, Ok(Arc::new(Source { decoder: Mutex::new(decoder), info })));
     info
 }
 
 /// Close the file at `path`: its decoder and cached frames go, and the next use opens it again
 /// (Reload Frame, a relinked file).
 pub fn forget(path: &str) {
-    lock(registry()).invalidate(path);
+    lock(registry()).invalidate(&key_of(path));
 }
 
 /// The limit on decoded frames kept in memory, in bytes (0 = the default, 1 GiB).
@@ -156,12 +165,13 @@ pub fn set_cache_limit(bytes: u64) {
 /// The decoder for `path`, opening the file the first time. A failure is kept, so a missing file
 /// is not looked for again on every frame; [`forget`] retries.
 fn source(path: &str) -> Result<Arc<Source>, String> {
+    let key = key_of(path);
     let seen = {
         let r = lock(registry());
-        if let Some(s) = r.sources.get(path) {
+        if let Some(s) = r.sources.get(&key) {
             return s.clone();
         }
-        r.generation(path)
+        r.generation(&key)
     };
     // Opened outside the lock: reading a file's index can take a while.
     let opened = match OPENER.get() {
@@ -171,18 +181,18 @@ fn source(path: &str) -> Result<Arc<Source>, String> {
         }),
         None => Err("this build of PhotoCraft can't read movie files".to_string()),
     };
-    keep_opened(path, seen, opened)
+    keep_opened(&key, seen, opened)
 }
 
 /// Keep `opened` as the decoder for `path` unless the path was registered again or forgotten
 /// since generation `seen`: then it is handed back without being kept, so the next use opens
 /// the file again. Another open that finished first wins.
-fn keep_opened(path: &str, seen: u64, opened: Result<Arc<Source>, String>) -> Result<Arc<Source>, String> {
+fn keep_opened(key: &str, seen: u64, opened: Result<Arc<Source>, String>) -> Result<Arc<Source>, String> {
     let mut r = lock(registry());
-    if r.generation(path) != seen {
+    if r.generation(key) != seen {
         return opened;
     }
-    r.sources.entry(path.to_string()).or_insert(opened).clone()
+    r.sources.entry(key.to_string()).or_insert(opened).clone()
 }
 
 /// Refuse to read the file at `path` for a session that may not: a footage path is document
@@ -197,8 +207,9 @@ fn authorized(path: &str) -> Result<(), String> {
 /// What is known about the file `link` names without opening it: `Some(Ok)` when it is open,
 /// `Some(Err)` with the reason it could not be read, `None` when nothing has tried it yet.
 pub fn known_status(link: &FootageLink, frames_used: usize) -> Option<Result<(), String>> {
+    let key = key_of(&link.path);
     let r = lock(registry());
-    Some(match r.sources.get(&link.path)? {
+    Some(match r.sources.get(&key)? {
         Ok(s) if s.info.frames < frames_used => Err(format!("`{}` has {} frames, but the layer shows {frames_used}", link.path, s.info.frames)),
         Ok(_) => Ok(()),
         Err(e) => Err(format!("`{}` is offline: {e}", link.path)),
@@ -231,7 +242,8 @@ pub fn frame(link: &FootageLink, n: usize, format: PixelFormat) -> Result<Surfac
 }
 
 fn decoded(path: &str, n: usize, format: PixelFormat) -> Result<Surface, String> {
-    let key = Key { path: path.to_string(), frame: n, format };
+    let file = key_of(path);
+    let key = Key { path: file.clone(), frame: n, format };
     if let Some(hit) = lock(registry()).cache.get(&key) {
         return Ok(hit);
     }
@@ -244,7 +256,7 @@ fn decoded(path: &str, n: usize, format: PixelFormat) -> Result<Surface, String>
     // The decode ran outside the registry lock: a file registered again or forgotten meanwhile
     // must not get this frame in its cache, so keep it only while the same decoder is current.
     let mut r = lock(registry());
-    let current = r.sources.get(path).and_then(|s| s.as_ref().ok()).is_some_and(|s| Arc::ptr_eq(s, &src));
+    let current = r.sources.get(&file).and_then(|s| s.as_ref().ok()).is_some_and(|s| Arc::ptr_eq(s, &src));
     if current {
         r.cache.put(key, surface.clone());
     }

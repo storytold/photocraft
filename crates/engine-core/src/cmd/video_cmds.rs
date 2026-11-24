@@ -63,10 +63,12 @@ pub fn sync_for_output(doc: &mut Document) -> Result<()> {
     sync_layers(&mut doc.layers, cur, fmt, true)
 }
 
-/// Shows each video layer's frame at `cur`. With `strict`, the first footage frame that can't be
-/// decoded stops it with that error; without, such a frame shows empty.
+/// Shows each video layer's frame at `cur`. With `strict`, the first footage frame of a visible
+/// layer that can't be decoded stops it with that error; otherwise, and on hidden layers and in
+/// hidden groups, which output doesn't show, such a frame shows empty.
 fn sync_layers(layers: &mut [Layer], cur: usize, fmt: photocraft_color::PixelFormat, strict: bool) -> Result<()> {
     for l in layers.iter_mut() {
+        let strict = strict && l.visible;
         if let Some(v) = &mut l.video {
             let shown = match v.view(cur, !v.show_altered) {
                 Some(FrameView::Own(f)) => Some((f.clone(), None)),
@@ -677,6 +679,8 @@ pub fn render_video_with(
     // Footage paths are document data: their reads are judged by this session's gate.
     let _authorization = crate::jobs::render_authorization_scope(s.authorize);
     let st = s.active().ok_or(EngineError::NoDocument)?;
+    // Relative footage paths resolve from the document's own folder, as they do while editing.
+    let _document = crate::doc_path::scope(st.path.as_deref().map(std::path::Path::new));
     let mut base = (*st.doc).clone();
     store(&mut base);
     // A frame of footage that can't be decoded would render empty: refuse rather than write it.
@@ -754,8 +758,10 @@ pub fn render_video_with(
 
 /// Refuse when a video layer (inside groups too) links footage that can't be read, naming the file
 /// and why.
+/// Only visible layers are checked: a hidden layer, or one in a hidden group, adds nothing to the
+/// output, so its footage needn't be readable.
 pub(crate) fn check_footage(layers: &[Layer]) -> Result<()> {
-    for l in layers {
+    for l in layers.iter().filter(|l| l.visible) {
         if let Some(v) = &l.video
             && let Some(f) = &v.footage
         {

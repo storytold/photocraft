@@ -32,6 +32,8 @@ fn has_timeline(s: &Session) -> std::result::Result<(), String> {
 fn with_timeline(s: &mut Session, f: impl FnOnce(&mut Option<Timeline>)) -> Result<Value> {
     // Moving the playhead decodes linked footage, whose paths this session's gate judges.
     let _authorization = crate::jobs::render_authorization_scope(s.authorize);
+    // Relative footage paths resolve from the document's own folder, as they do while editing.
+    let _document = crate::doc_path::scope(s.active().and_then(|d| d.path.as_deref()).map(std::path::Path::new));
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     let generation = photocraft_raster::spill::read_error_generation();
     let mut doc = (*st.doc).clone();
