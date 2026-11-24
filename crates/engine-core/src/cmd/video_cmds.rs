@@ -668,11 +668,14 @@ pub fn render_video_with(
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mut base = (*st.doc).clone();
     store(&mut base);
-    let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
+    let duration = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
     // Loaded timelines bypass the duration validation used by timeline.create/setProps.
-    if frames > crate::timeline_cmds::MAX_DURATION {
-        return Err(EngineError::Other(format!("the timeline is {frames} frames; Render Video is limited to {} frames", crate::timeline_cmds::MAX_DURATION)));
+    if duration > crate::timeline_cmds::MAX_DURATION {
+        return Err(EngineError::Other(format!("the timeline is {duration} frames; Render Video is limited to {} frames", crate::timeline_cmds::MAX_DURATION)));
     }
+    let range = render_range(p, base.timeline.as_ref())?;
+    // Every rendered frame, in order; `frames` counts them.
+    let frames = range.end() - range.start() + 1;
     // Only the GIF delay reads the rate (frames come from the duration); rates under 1 fps are
     // valid timelines, so only an unusable loaded rate falls back to 30.
     let fps = base.timeline.as_ref().map(|t| t.fps).filter(|f| f.is_finite() && *f > 0.0).unwrap_or(30.0);
@@ -693,7 +696,7 @@ pub fn render_video_with(
         check_gif_budget(w as u64, h as u64, frames as u64).map_err(EngineError::Other)?;
         let delay = (100.0 / fps).round().clamp(1.0, 65535.0) as u16;
         let mut gframes = Vec::with_capacity(frames);
-        for f in 0..frames {
+        for (i, f) in range.clone().enumerate() {
             let mut doc = base.clone();
             if let Some(t) = &mut doc.timeline {
                 t.current = f;
@@ -704,7 +707,7 @@ pub fn render_video_with(
             surf.read_rgba_into(bounds, &mut px);
             gframes.push(gif_frame(px, w, delay)?);
             // The final report follows encoding/writing, so total means the output exists.
-            if !progress((f + 1).min(frames.saturating_sub(1)), frames) {
+            if !progress((i + 1).min(frames.saturating_sub(1)), frames) {
                 return Err(cancelled());
             }
         }
@@ -722,21 +725,58 @@ pub fn render_video_with(
     // PSD / PSB frames would embed the files linked smart objects name: not for a restricted session.
     let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
     let mut files = Vec::new();
-    for f in 0..frames {
+    for (i, f) in range.enumerate() {
         let mut doc = base.clone();
         if let Some(t) = &mut doc.timeline {
             t.current = f;
         }
         sync(&mut doc);
-        let path = format!("{stem}_{f:04}.{format}");
+        // Files are numbered from the first rendered frame, whatever frame the range starts at.
+        let path = format!("{stem}_{i:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
         write(&path, &bytes)?;
         files.push(path);
-        if !progress(f + 1, frames) {
+        if !progress(i + 1, frames) {
             return Err(cancelled());
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// The timeline frames Render Video writes, first to last, from its `range` param: `"all"` (or no
+/// `range`) for every frame, `"workArea"` for the timeline's work area, or `{"start": N, "end": M}`
+/// for frames N to M, both included. A document without a timeline has one frame, 0.
+fn render_range(p: &Value, timeline: Option<&Timeline>) -> Result<std::ops::RangeInclusive<usize>> {
+    let bad = |msg: String| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg };
+    let last = timeline.map_or(1, |t| t.duration).max(1) - 1;
+    match p.get("range") {
+        None | Some(Value::Null) => Ok(0..=last),
+        Some(Value::String(s)) if s == "all" => Ok(0..=last),
+        Some(Value::String(s)) if s == "workArea" => {
+            let mut t = timeline.cloned().ok_or_else(|| bad("`workArea` needs a timeline: the document has one frame".into()))?;
+            // A loaded work area may be out of step with the duration.
+            t.clamp();
+            Ok(t.work_start..=t.work_end - 1)
+        }
+        Some(Value::Object(o)) => {
+            if let Some(key) = o.keys().find(|k| !matches!(k.as_str(), "start" | "end")) {
+                return Err(bad(format!("`range` takes `start` and `end`, not `{key}`")));
+            }
+            let frame = |key: &str| -> Result<usize> {
+                o.get(key)
+                    .and_then(Value::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n <= last)
+                    .ok_or_else(|| bad(format!("`{key}`: An integer between 0 and {last} is required.")))
+            };
+            let (start, end) = (frame("start")?, frame("end")?);
+            if end < start {
+                return Err(bad("The range of frames is incorrect.".into()));
+            }
+            Ok(start..=end)
+        }
+        Some(v) => Err(bad(format!("`range` must be \"all\", \"workArea\" or {{\"start\": N, \"end\": M}}, not {v}"))),
+    }
 }
 
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels
@@ -785,5 +825,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod render_video_range_tests;
 #[cfg(test)]
 mod tests;
