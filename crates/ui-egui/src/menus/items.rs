@@ -60,6 +60,14 @@ pub struct MenuModel {
 }
 
 impl MenuModel {
+    /// The tagged, translated menus before any platform layout: what the native bar and the Help search lay out
+    /// themselves, so a bar is never laid out twice.
+    pub fn source(&self) -> &MenuBar {
+        &self.built.source
+    }
+}
+
+impl MenuModel {
     /// The rows with labels as shown, after the user's Edit › Menus customization; each translated label carries its
     /// English name.
     pub fn rows(&self) -> &[Row] {
@@ -70,6 +78,7 @@ impl MenuModel {
 /// One build of the model: the rows and the bar laid out from them.
 struct Built {
     rows: Vec<Row>,
+    source: MenuBar,
     bar: MenuBar,
 }
 
@@ -468,6 +477,11 @@ pub(crate) fn fresh_bar(app: &PhotocraftApp) -> MenuBar {
     build(app).bar
 }
 
+/// The platform the menus are laid out for: the shell's, so a test can run the macOS layout on any build.
+pub(crate) fn target(ctx: &egui::Context) -> Target {
+    Target::of_shell(&craft::ui::runtime::windows::shell_of(ctx, egui::ViewportId::ROOT))
+}
+
 fn build(app: &PhotocraftApp) -> Built {
     let lang = crate::i18n::current();
     let mut rows = menu_rows(app);
@@ -505,7 +519,7 @@ fn build(app: &PhotocraftApp) -> Built {
     let label = |s: &'static str| crate::i18n::tr(lang, s).to_string();
     let keys = |chord: &Chord| craft::ui::runtime::commands::holder(app.ctx(), chord);
     let options = LayoutOptions::new(crate::native_menu::APP_NAME).label(&label).keys(&keys);
-    let mut bar = layout(&bar, Target::current(), &options).bar;
     translate_titles(&mut bar, lang);
-    Built { rows, bar }
+    let laid = layout(&bar, target(app.ctx()), &options).bar;
+    Built { rows, source: bar, bar: laid }
 }

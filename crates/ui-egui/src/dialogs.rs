@@ -30,7 +30,7 @@ pub(crate) mod params {
     use super::{
         PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
         equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
-        smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
+        paragraph_text_size, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
 
@@ -82,6 +82,7 @@ pub(crate) mod params {
         ParamFamily::new(history_options_ui::owns, history_options_ui::run),
         ParamFamily::new(brush_preset_dialog::owns, brush_preset_dialog::run),
         ParamFamily { check: Some(equalize_ui::check), ..ParamFamily::new(equalize_ui::owns, equalize_ui::run) },
+        ParamFamily::new(paragraph_text_size::owns, paragraph_text_size::run),
         ParamFamily::new(channel_options_ui::owns, channel_options_ui::run),
         ParamFamily { check: Some(merge_channels_ui::check), ..ParamFamily::new(merge_channels_ui::owns, merge_channels_ui::run) },
         ParamFamily {
@@ -102,6 +103,11 @@ pub(crate) mod params {
             check: Some(image_processor_ui::check),
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
+        },
+        ParamFamily {
+            check: Some(crate::view_cmds::dialogs::batch_check),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == "file.automate.batch", filter_dialog::run)
         },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
@@ -299,6 +305,9 @@ pub(crate) mod params {
             if let (Some(action), Some(footer)) = (footer, family.and_then(|family| family.footer)) {
                 footer(app, ctx, id, &action);
             }
+            if key.as_deref() == Some(image_processor_ui::COMMAND) {
+                image_processor_ui::take_settings_action(app, ctx, id);
+            }
         }
     }
 
@@ -481,6 +490,8 @@ pub(crate) fn take_results(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for taker in TAKERS {
         taker(app, ctx);
     }
+    // Color Settings' Settings menu follows each pick and edit, a script's `ui.dialog.set` included (#14229).
+    crate::filter_dialog::reconcile_color_settings(app, ctx);
 }
 
 /// One pass of the dialogs: the guide edit follows its dialog, the palette shows, the filter preview and the Preferences window are fed, the
@@ -743,6 +754,7 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub mod paragraph_text_size;
 #[cfg(test)]
 mod paths_export_default_tests;
 #[cfg(test)]

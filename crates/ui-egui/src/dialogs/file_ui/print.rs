@@ -140,6 +140,7 @@ pub fn open_print(app: &mut PhotocraftApp) -> DialogId {
             fields.set(k, v);
         }
     }
+    write_settings(&mut fields, &state.settings);
     let sections = sections(&fields);
     app.framework.dialogs.open(HostedPrint::new(state, fields, sections).json_form(|fields, listing| {
         if fields.text("paper") == Some("custom") {
@@ -537,6 +538,8 @@ pub(super) fn print_params(f: &DialogFields) -> Value {
             p.insert(k.to_string(), v);
         }
     }
+    // The ruler unit is the dialog's own display setting; `file.print` takes no `units`.
+    p.remove("units");
     // The driver's printable area belongs to a print to the printer, not to a file or a dry run.
     if f.text("output").is_some_and(|output| !output.is_empty()) || f.bool("dryRun") == Some(true) {
         p.remove("printable");
