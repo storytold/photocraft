@@ -53,6 +53,11 @@ fn opened(id: DialogId) -> Value {
     json!({"dialog": id.value().to_string()})
 }
 
+pub(crate) fn open_command_form(app: &mut PhotocraftApp, id: &str, label: &str) -> Option<DialogId> {
+    let (rows, fields) = params_for(app, id)?;
+    Some(open_form(app, id, label, rows, fields, Value::Null))
+}
+
 /// Opens the hosted parameter form of command `id`. `fixed` holds values the command needs that no row edits.
 fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>, fields: DialogFields, fixed: Value) -> DialogId {
     let title = crate::dialogs::filter_dialog::title_of(title);
@@ -862,10 +867,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
         "file.scripts.loadFilesIntoStack" => Some(Ok(json!({"dialog": crate::stack_dialog::open(app).value().to_string()}))),
         "file.export.dataSetsAsFiles" if cfg!(target_arch = "wasm32") => Some(Err(tl!("Data Sets as Files is unavailable on the web").to_string())),
         "file.automate.batch" if crate::actions::selected_action(app).is_none() => Some(Err("record an action in the Actions panel first".into())),
-        _ if is_form(id) => {
-            let (rows, fields) = params_for(app, id)?;
-            Some(Ok(opened(open_form(app, id, label, rows, fields, Value::Null))))
-        }
+        _ if is_form(id) => open_command_form(app, id, label).map(|dialog| Ok(opened(dialog))),
         _ => None,
     }
 }

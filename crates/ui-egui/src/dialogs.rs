@@ -104,7 +104,11 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == image_processor_ui::COMMAND, filter_dialog::run)
         },
-        ParamFamily { check: Some(fit_image_ui::check), ..ParamFamily::new(|key| key == fit_image_ui::COMMAND, filter_dialog::run) },
+        ParamFamily {
+            check: Some(fit_image_ui::check),
+            cancel: Some(filter_dialog::cancel),
+            ..ParamFamily::new(|key| key == fit_image_ui::COMMAND, filter_dialog::run)
+        },
         ParamFamily {
             check: Some(crate::view_cmds::dialogs::batch_check),
             cancel: Some(filter_dialog::cancel),

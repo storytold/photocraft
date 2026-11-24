@@ -98,6 +98,12 @@ fn fit_image_editor_refuses_an_invalid_dimension() {
     assert!(is_open(&h, dialog));
     assert_eq!(h.state().session.actions().list, original);
     assert_eq!(h.state().session.active().unwrap().doc.size, size);
+    let alert = crate::dialogs::alerts::alerts(h.state())[0];
+    confirm(&mut h, alert).unwrap();
+    assert_eq!(set_field(&mut h, dialog, "width", json!(6))["ok"], true);
+    confirm(&mut h, dialog).unwrap();
+    let action = h.state().session.actions().list.action(0).unwrap();
+    assert_eq!(action.steps[0].params["width"], json!(6));
 }
 
 /// Cancel preserves the step and document; OK runs only that step and stores its new settings.
