@@ -8,7 +8,8 @@ use super::*;
 use crate::canvas::testing;
 use crate::state::Tool;
 
-fn app() -> Box<PhotocraftApp> {
+/// A 400 × 300 white document with red and blue as the foreground and background colours.
+pub(super) fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 400, "height": 300, "background": "white"})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
@@ -16,7 +17,7 @@ fn app() -> Box<PhotocraftApp> {
 }
 
 /// A click with `tool` at `at`, through the canvas pass.
-fn click(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) {
+pub(super) fn click(app: &mut PhotocraftApp, tool: Tool, at: [f64; 2]) {
     app.ui.tool = tool;
     testing::click(app, at, egui::Modifiers::NONE);
 }
@@ -29,11 +30,13 @@ fn drag(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2]) {
     testing::release(app, end, egui::Modifiers::NONE);
 }
 
-fn layers(app: &PhotocraftApp) -> usize {
+/// The active document's layer count.
+pub(super) fn layers(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.len()
 }
 
-fn live(app: &PhotocraftApp) -> LiveShape {
+/// The active layer's live shape.
+pub(super) fn live(app: &PhotocraftApp) -> LiveShape {
     let st = app.session.active().unwrap();
     let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
     let LayerContent::Shape(sh) = &l.content else { panic!("not a shape layer") };
@@ -41,18 +44,20 @@ fn live(app: &PhotocraftApp) -> LiveShape {
 }
 
 /// Writes fields of the hosted dialog `id`, as `ui.dialog.set` does.
-fn set(app: &mut PhotocraftApp, id: DialogId, fields: Value) {
+pub(super) fn set(app: &mut PhotocraftApp, id: DialogId, fields: Value) {
     let ctx = app.ctx().clone();
     for (k, v) in fields.as_object().unwrap() {
         app.framework.dialogs.set_json_field(&ctx, id, k, v.clone()).unwrap_or_else(|e| panic!("{k}: {e}"));
     }
 }
 
-fn confirm_by_id(app: &mut PhotocraftApp, id: DialogId) {
+/// OK on dialog `id` through the app's dialog path.
+pub(super) fn confirm_by_id(app: &mut PhotocraftApp, id: DialogId) {
     crate::dialogs::testing::confirm(app, id).unwrap();
 }
 
-fn only_dialog(app: &PhotocraftApp) -> DialogId {
+/// The one open dialog, a Create Shape dialog.
+pub(super) fn only_dialog(app: &PhotocraftApp) -> DialogId {
     assert_eq!(app.framework.dialogs.stack().ids().count(), 1, "a click opens one dialog");
     app.framework.dialogs.get::<CreateShapeDialog>().expect("it is a Create Shape dialog").id()
 }
