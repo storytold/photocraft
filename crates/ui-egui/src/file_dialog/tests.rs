@@ -776,7 +776,7 @@ fn place_embedded_uses_the_single_file_picker_and_accepts_contents() {
 
     // Cancel leaves the document alone and does not report an error.
     menus::invoke(&mut app, &ctx, "file.placeEmbedded", json!({})).unwrap();
-    assert_eq!(last_request(&files).kind, PickKind::Open);
+    assert_eq!(last_request(&files).kind, PickKind::OpenMany);
     cancel(&files);
     app.poll_file_dialog();
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers_before);

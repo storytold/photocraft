@@ -25,12 +25,12 @@ pub(crate) fn int_i32(cmd: &str, p: &Value, key: &str) -> Result<Option<i32>> {
 
 /// An id (layer comp, slice, style…) from a JSON value: a bad-params error unless it is a whole
 /// number in `u32` range. `as u32` would wrap `2^32 + 1` to `1` and target a real item.
-pub(crate) fn u32_id(cmd: &str, key: &str, v: &Value) -> Result<u32> {
+pub fn u32_id(cmd: &str, key: &str, v: &Value) -> Result<u32> {
     v.as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| bad(cmd, format!("`{key}` = {v} is not a valid id (0..={})", u32::MAX)))
 }
 
 /// [`u32_id`] of `p[key]`: `None` when absent.
-pub(crate) fn u32_id_param(cmd: &str, p: &Value, key: &str) -> Result<Option<u32>> {
+pub fn u32_id_param(cmd: &str, p: &Value, key: &str) -> Result<Option<u32>> {
     p.get(key).map(|v| u32_id(cmd, key, v)).transpose()
 }
 
@@ -82,7 +82,7 @@ pub(crate) fn cmyk_param(cmd: &str, p: &Value, key: &str) -> Result<Option<[f32;
     }
 }
 
-pub(crate) fn color_param(cmd: &str, p: &Value, key: &str, default: [f32; 4]) -> Result<[f32; 4]> {
+pub fn color_param(cmd: &str, p: &Value, key: &str, default: [f32; 4]) -> Result<[f32; 4]> {
     Ok(match p.get(key) {
         Some(Value::Array(a)) if a.len() >= 3 => {
             let mut out = [0.0, 0.0, 0.0, 1.0];
@@ -96,7 +96,7 @@ pub(crate) fn color_param(cmd: &str, p: &Value, key: &str, default: [f32; 4]) ->
     })
 }
 
-pub(crate) fn parse_hex(s: &str) -> Option<[f32; 4]> {
+pub fn parse_hex(s: &str) -> Option<[f32; 4]> {
     let s = s.trim_start_matches('#');
     // `from_str_radix` accepts a leading '+', so "+f" would read as 0x0f.
     if !s.bytes().all(|c| c.is_ascii_hexdigit()) {

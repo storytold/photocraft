@@ -397,7 +397,7 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     }))
 }
 
-pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
+pub fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
     if let Some(st) = s.active() {
         let locks = st.doc.effective_locks(id);
         if locks.all || locks.pixels {
@@ -436,10 +436,12 @@ fn default_name(kind: &str) -> &'static str {
 }
 
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
-/// A tool history override labels new layers. Additions use the Add Shape label.
+/// Line Tool additions keep the tool's History name. Other shape additions use Add Shape.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
-    let label = super::paths::pen_history_name(p, CMD, "New Shape Layer")?;
+    let add_to = p.get("addTo").and_then(Value::as_u64);
+    let default_label = if add_to.is_some() { "Add Shape" } else { "New Shape Layer" };
+    let label = super::paths::pen_history_name(p, CMD, default_label)?;
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("rect");
     let (path, live) = if kind == "path" {
         let v = p.get("path").ok_or_else(|| bad(CMD, "kind \"path\" needs `path`"))?;
@@ -451,10 +453,11 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
-    if let Some(target) = p.get("addTo").and_then(Value::as_u64) {
+    if let Some(target) = add_to {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
-        with_shape(s, id, "Add Shape", |sh, _| {
+        let label = if kind == "line" && label == "Line Tool" { label } else { "Add Shape" };
+        with_shape(s, id, label, |sh, _| {
             for mut sp in path.subpaths {
                 // A joined subpath (a hole) belongs to the component before it, which takes `op`.
                 if sp.op != PathOp::Join {
@@ -696,7 +699,7 @@ fn bake_components(sh: &mut ShapeLayer, tol: f64) -> Result<()> {
 /// inverted path (a vector mask's) stays inverted around the merged area. An open subpath is
 /// refused: tracing its fill would close it, or drop a straight one or a lone anchor (a dot under
 /// a round or square cap), losing the stroked geometry.
-pub(crate) fn bake_path(path: &Path, tol: f64) -> Result<Path> {
+pub fn bake_path(path: &Path, tol: f64) -> Result<Path> {
     if path.subpaths.iter().any(|sp| !sp.closed && !sp.knots.is_empty()) {
         return Err(EngineError::Other("Merge Shape Components needs closed paths: close or delete the open subpaths first".into()));
     }
