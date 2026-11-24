@@ -10,7 +10,7 @@ fn pixel(s: &mut crate::Session) -> [f32; 3] {
 }
 
 fn filled(depth: u32, color: [f32; 3]) -> crate::Session {
-    let mut s = crate::Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
     s.execute("edit.fill", json!({"color": color})).unwrap();
     s
@@ -30,7 +30,7 @@ fn close(a: [f32; 3], b: [f32; 3], tolerance: f32) -> bool {
 
 #[test]
 fn target_colors_default_to_photoshops_and_persist() {
-    let s = crate::Session::new();
+    let s = crate::session();
     let t = &s.prefs().target_colors;
     assert_eq!((t.shadows.as_str(), t.midtones.as_str(), t.highlights.as_str()), ("#000000", "#808080", "#ffffff"));
     for picker in [CurvesEyedropper::Black, CurvesEyedropper::NeutralGray, CurvesEyedropper::White] {
@@ -38,12 +38,12 @@ fn target_colors_default_to_photoshops_and_persist() {
     }
     assert_eq!(t.rgb("nope"), None);
 
-    let mut s = crate::Session::new();
+    let mut s = crate::session();
     set_target(&mut s, "shadows", "#102030");
     set_target(&mut s, "midtones", "#a08060");
     set_target(&mut s, "highlights", "#f0e0c8");
     let saved = s.prefs_to_json();
-    let mut restored = crate::Session::new();
+    let mut restored = crate::session();
     assert!(restored.load_prefs_json(&saved).unwrap().is_empty());
     assert_eq!(restored.prefs().target_colors, s.prefs().target_colors, "kept across restarts");
     assert_eq!(CurvesEyedropper::Black.target_in(&restored), rgb("#102030"));
@@ -95,7 +95,7 @@ fn default_targets_leave_the_eyedroppers_unchanged() {
     let base = json!({"points": [[0, 8], [120, 150], [255, 245]], "red": [[0, 0], [100, 130], [255, 255]]});
     let levels_base = json!({"outBlack": 10, "red": {"outWhite": 240}});
     for picker in [CurvesEyedropper::Black, CurvesEyedropper::NeutralGray, CurvesEyedropper::White] {
-        let s = crate::Session::new();
+        let s = crate::session();
         let target = picker.target_in(&s);
         let sample = [0.3, 0.45, 0.6];
         assert_eq!(
@@ -177,7 +177,7 @@ fn adjustment_layer_pickers_use_the_target_colors() {
 #[test]
 fn grayscale_pickers_map_to_the_targets_gray_level() {
     for kind in ["curves", "levels"] {
-        let mut s = crate::Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 8, "height": 8, "mode": "grayscale"})).unwrap();
         s.execute("edit.fill", json!({"color": [0.3, 0.3, 0.3]})).unwrap();
         set_target(&mut s, "shadows", "#404040");
