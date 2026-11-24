@@ -4957,3 +4957,36 @@ fn align_edges_toggle_rerenders_a_shape_under_a_layer_effect() {
     assert!(!close4(at(&on, 10), at(&on, 11)), "stroke, then fill");
     assert!(!close4(at(&off, 9), [1.0; 4]), "unaligned the stroke covers half of column 9");
 }
+
+#[test]
+fn saved_text_pixels_blend_as_raster_until_native_rerender() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for blend in [photocraft_color::BlendMode::Normal, photocraft_color::BlendMode::Multiply] {
+            let mut doc = Document::with_background("saved text", Size::new(2, 2), ColorMode::Rgb, depth, Color::rgb(0.2, 0.5, 0.8));
+            let mut raster = Layer::raster("saved samples", doc.pixel_format());
+            raster.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.8, 0.15, 0.05, 0.5]);
+            raster.blend = blend;
+            let cache = raster.surface().unwrap().clone();
+            doc.layers.push(raster);
+            let expected = render(&doc, doc.bounds()).px;
+            let mut text = photocraft_doc::TextLayer { cache: Some(cache.clone()), cache_uses_raster_blending: true, ..Default::default() };
+            let mut layer = Layer::new("editable saved text", LayerContent::Text(text.clone()));
+            layer.blend = blend;
+            doc.layers[1] = layer;
+            assert_eq!(text_gamma(&doc.layers[1]), 1.0);
+            assert_eq!(render(&doc, doc.bounds()).px, expected, "{depth:?} {blend:?}: identical saved samples must composite identically");
+
+            // A typography render takes ownership of the cache and restores native
+            // text blending, even if this control happens to have the same samples.
+            text.set_rendered_cache(cache);
+            assert!(!text.cache_uses_raster_blending);
+            doc.layers[1].content = LayerContent::Text(text);
+            assert_eq!(text_gamma(&doc.layers[1]), psblend::text_gamma());
+            let edited = render(&doc, doc.bounds()).px;
+            assert!(
+                edited.iter().zip(&expected).any(|(a, b)| a.iter().zip(b).any(|(x, y)| (x - y).abs() > 0.01)),
+                "{depth:?} {blend:?}: native text gamma remains active"
+            );
+        }
+    }
+}

@@ -585,3 +585,29 @@ fn planning_reads_cached_rows_instead_of_rebuilding_them() {
         assert!(rows.as_ref() == Some(&planted), "{}: the plan rebuilt rows the cache held", a.label());
     }
 }
+
+#[test]
+fn saved_text_pixels_use_raster_gamma_in_gpu_plans() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut doc = Document::with_background("saved text", Size::new(2, 2), ColorMode::Rgb, depth, Color::WHITE);
+        let mut raster = Layer::raster("samples", doc.pixel_format());
+        raster.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.2, 0.4, 0.8, 0.5]);
+        let cache = raster.surface().unwrap().clone();
+        let mut text = photocraft_doc::TextLayer { cache: Some(cache.clone()), cache_uses_raster_blending: true, ..Default::default() };
+        let layer = Layer::new("saved text", LayerContent::Text(text.clone()));
+        let id = layer.id;
+        doc.layers.push(layer);
+        let saved = plan(&doc).unwrap();
+        let pass = saved.passes.iter().find(|p| p.kernel == Kernel::LayerBlend && p.tex.as_ref().is_some_and(|tex| tex.layer == id)).unwrap();
+        assert_eq!(pass.flags & F_TEXT_GAMMA, 0, "{depth:?}: saved pixels must use the raster shader path");
+        assert_eq!(pass.extra[3], 1.0);
+        drop(saved);
+
+        text.set_rendered_cache(cache);
+        doc.layers[1].content = LayerContent::Text(text);
+        let edited = plan(&doc).unwrap();
+        let pass = edited.passes.iter().find(|p| p.kernel == Kernel::LayerBlend && p.tex.as_ref().is_some_and(|tex| tex.layer == id)).unwrap();
+        assert_ne!(pass.flags & F_TEXT_GAMMA, 0, "{depth:?}: newly rendered text keeps native text blending");
+        assert_eq!(pass.extra[3], photocraft_compose::psblend::text_gamma());
+    }
+}
