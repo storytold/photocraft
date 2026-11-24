@@ -85,6 +85,11 @@ fn opts(list: &[(&'static str, &'static str)]) -> Vec<(String, Label)> {
     list.iter().map(|(id, label)| ((*id).to_owned(), Label::from(*label))).collect()
 }
 
+/// Options named by the user's own text (action and set names): shown as they are.
+fn named(list: &[String]) -> Vec<(String, Label)> {
+    list.iter().map(|n| (n.clone(), Label::from(n.clone()))).collect()
+}
+
 /// Channel and layer options: the engine's fixed ids read as English words, every other name is data.
 fn channels(list: &[String]) -> Vec<(String, Label)> {
     let special = |id: &str| -> Option<Label> {

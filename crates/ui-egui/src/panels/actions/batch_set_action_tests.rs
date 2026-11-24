@@ -26,7 +26,7 @@ fn app_with(n: usize) -> (Box<PhotocraftApp>, egui::Context) {
 fn push(app: &mut PhotocraftApp, name: &str, set: Option<&str>, steps: Vec<(&'static str, Value)>) {
     let mut action = Action::new(name, steps.into_iter().map(|(id, params)| ActionStep::new(id, params)).collect());
     action.set = set.map(str::to_owned);
-    app.session.actions.list.push(action).unwrap();
+    app.session.actions_mut().list.push(action).unwrap();
 }
 
 /// One frame of the app on `ctx`.
@@ -100,7 +100,7 @@ fn batch_set_dropdown_lists_every_set_and_the_action_list_follows_it() {
     push(&mut app, "Alpha", Some("A"), vec![("image.adjustments.invert", json!({}))]);
     push(&mut app, "Beta", Some("A"), vec![("layer.new.layer", json!({}))]);
     push(&mut app, "Gamma", Some("B"), vec![("image.imageRotation.90cw", json!({}))]);
-    app.session.actions.list.new_set("Zed").unwrap();
+    app.session.actions_mut().list.new_set("Zed").unwrap();
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     assert_eq!(fields(&app, id)["set"], json!(""), "the ungrouped actions are listed first");
     set(&mut app, &ctx, id, "set", json!("A"));
@@ -228,7 +228,7 @@ fn batch_ok_on_an_empty_set_runs_nothing() {
     let output = dir.path().join("out");
     app.run("file.saveACopy", json!({"path": input})).unwrap();
     push(&mut app, "Alpha", Some("A"), vec![("image.adjustments.invert", json!({}))]);
-    app.session.actions.list.new_set("Zed").unwrap();
+    app.session.actions_mut().list.new_set("Zed").unwrap();
     app.ui.actions.panel.selected = Some(craft::automation::ui::actions::ActionSelection::Action(0));
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, id, "input", json!(dir.path().to_string_lossy()));
@@ -258,7 +258,7 @@ fn batch_ok_after_the_chosen_set_vanished_runs_nothing() {
     set(&mut app, &ctx, id, "input", json!(dir.path().to_string_lossy()));
     set(&mut app, &ctx, id, "output", json!(output.to_string_lossy()));
     // Set A held its only action, so the entry the row opened on is gone and index 0 is B's now.
-    app.session.actions.list.delete_action(0).unwrap();
+    app.session.actions_mut().list.delete_action(0).unwrap();
     crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
     assert!(app.ui.status_error && app.ui.status.contains("action"), "the command reports the action it cannot find: {}", app.ui.status);
     assert!(!output.exists(), "set B's rotation was not run under set A's vanished choice");
@@ -290,7 +290,7 @@ fn action_form_choices_lists_the_sets_in_panel_order_with_their_own_actions() {
     push(&mut app, "Invert", Some("A"), vec![("image.adjustments.invert", json!({}))]);
     push(&mut app, "Empty", Some("A"), vec![]);
     push(&mut app, "Turn", Some("B"), vec![("image.imageRotation.90cw", json!({}))]);
-    app.session.actions.list.new_set("Zed").unwrap();
+    app.session.actions_mut().list.new_set("Zed").unwrap();
     let choices = action_form_choices(&app);
     let listed: Vec<(&str, Vec<(usize, &str)>)> =
         choices.iter().map(|entry| (entry.id.as_str(), entry.actions.iter().map(|action| (action.index, action.name.as_str())).collect())).collect();

@@ -163,7 +163,7 @@ pub struct ActionSetChoices {
 /// a name the reference application's would; the choice is still carried by the list index, which
 /// names the action without the set.
 pub fn action_form_choices(app: &PhotocraftApp) -> Vec<ActionSetChoices> {
-    let list = &app.session.actions.list;
+    let list = &app.session.actions().list;
     let offered = |indices: Vec<usize>| -> Vec<ActionChoice> {
         indices.into_iter().filter_map(|index| list.action(index).map(|action| ActionChoice { index, name: action.name.clone() })).collect()
     };
@@ -181,7 +181,7 @@ pub fn action_form_choices(app: &PhotocraftApp) -> Vec<ActionSetChoices> {
 /// The action the two forms open on, as its index in the list: the same selection rule as
 /// [`selected_action`] (#10612), in the index form the rows submit.
 fn opened_action_index(app: &PhotocraftApp) -> Option<usize> {
-    let list = &app.session.actions.list;
+    let list = &app.session.actions().list;
     selected_action_index(app)
         .or_else(|| selected_set_actions(app).first().copied())
         .or_else(|| if list.actions().is_empty() { None } else { Some(0) })
@@ -198,7 +198,7 @@ fn opened_action_index(app: &PhotocraftApp) -> Option<usize> {
 pub(crate) fn set_and_action_rows(app: &PhotocraftApp) -> Option<Vec<Param>> {
     let open = opened_action_index(app)?;
     let choices = action_form_choices(app);
-    let open_set = app.session.actions.list.set_of(open).unwrap_or_default().to_owned();
+    let open_set = app.session.actions().list.set_of(open).unwrap_or_default().to_owned();
     let set_options: Vec<(String, Label)> = choices
         .iter()
         .map(|entry| {
