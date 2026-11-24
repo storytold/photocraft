@@ -96,6 +96,23 @@ pub fn insert_new(doc: &mut Document, anchor: Option<LayerId>, mut layer: Layer,
     id
 }
 
+/// A plain, unlocked pixel layer with no pixels, mask, clipping or video: a layer Stamp Visible or a pattern fill fills instead of adding one.
+/// Pixels it has only through a visible default pixel (no tiles stored) count as pixels.
+pub fn is_empty_pixel_layer(doc: &Document, id: LayerId) -> bool {
+    let Some(l) = doc.layer(id) else { return false };
+    let locks = doc.effective_locks(id);
+    // Only the default pixel's alpha counts: a mode or profile conversion keeps it transparent but
+    // gives its colour channels other values (no ink in CMYK, a neutral a/b in Lab).
+    matches!(&l.content, LayerContent::Raster(s)
+        if s.content_bounds().is_empty() && s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0))
+        && l.video.is_none()
+        && l.visible
+        && l.mask.is_none()
+        && l.vector_mask.is_none()
+        && !l.clipped
+        && !(locks.all || locks.pixels || locks.transparency)
+}
+
 /// The pixel holding the middle of `bounds`, which decides the board content is on: a new or
 /// pasted layer, or one the Move tool drops (auto-nesting). The edges are added before halving
 /// (halving each first put 9..11 at 9) and the sum is floored, not truncated toward zero (which

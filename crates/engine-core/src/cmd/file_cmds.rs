@@ -48,10 +48,10 @@ use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
-pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
 pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
+pub(crate) use open::{batch_open_notice, batch_open_params, remember_batch_open};
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
@@ -343,7 +343,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"centerOnSelection":bool=false (as File > Place Embedded: centre on a hard-edged rectangular selection, over center, and remove the selection in the same step),"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -455,6 +455,10 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.clearCanvasGuides", "Clear Canvas Guides", &["View"], None, "{}", has_doc, |s, _| clear_canvas_guides(s)),
     ]
 }
+
+#[cfg(test)]
+#[path = "file_cmds/place_selection_centre_tests.rs"]
+mod place_selection_centre_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]

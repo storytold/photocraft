@@ -38,14 +38,7 @@ use crate::commands::{CommandSpec, layer_param, parse_blend};
 use crate::jobs::JobCtx;
 use crate::{EngineError, Result, Session};
 
-/// An open Edit Contents document and the shared contents it updates when saved or closed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SmartLink {
-    pub child: DocId,
-    pub parent: DocId,
-    pub layer: LayerId,
-    pub contents_id: SmartContentsId,
-}
+pub use crate::state::SmartLink;
 
 /// PSD placed-layer keys that describe the smart object's source; stale once we change it.
 const PLACED_KEYS: [&[u8; 4]; 3] = [b"SoLd", b"PlLd", b"SoLE"];
@@ -204,9 +197,8 @@ use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
 use rendering::refresh_or_fail;
 #[cfg(test)]
-pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};
-#[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
+pub use rendering::{SourceCacheStatistics, source_cache_statistics};
 pub(crate) use rendering::{WarningRenderSources, render_with_warnings, render_with_warnings_using, source_box};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]

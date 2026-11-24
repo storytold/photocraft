@@ -6,6 +6,7 @@ use std::sync::{LazyLock, OnceLock};
 use serde_json::{Value, json};
 
 use crate::hooks::Hooks;
+use crate::slots::SlotInit;
 use crate::{EngineError, Result, Session};
 
 type Run = fn(&mut Session, &Value) -> Result<Value>;
@@ -34,18 +35,38 @@ pub type Table = (&'static str, fn() -> Vec<CommandSpec>);
 /// What a process installs before its first session.
 #[derive(Default)]
 pub struct Install {
-    /// Registry order: these tables in turn, each in its own order. Menus, the Command Palette
-    /// and `command.list` list commands in it.
+    /// The commands: these tables in turn, each in its own order, which is the registry order
+    /// unless [`Self::order`] gives one. Menus, the Command Palette and `command.list` list
+    /// commands in registry order.
     pub commands: Vec<Table>,
+    /// The registry order across the tables of several crates: command ids, one per line. Commands
+    /// it lists come in its order, then any others in table order. The app's comes from
+    /// `crates/engine/src/install/command_ids.txt`.
+    pub order: Option<&'static str>,
     /// The pipeline hooks of the crates whose tables these are.
-    pub(crate) hooks: Hooks,
+    pub hooks: Hooks,
+    /// Each crate's commands whose docs do not yet name every key they read: their params are not
+    /// checked for unknown keys ([`is_incomplete`]). A crate lists only its own commands, sorted.
+    pub incomplete: Vec<&'static [&'static str]>,
+    /// The session slots of the crates whose tables these are, one per type.
+    pub(crate) slots: Vec<SlotInit>,
+}
+
+impl Install {
+    /// Give every session a slot of `T` ([`Session::slot`]); a type already registered keeps its one.
+    pub(crate) fn slot<T: Default + Send + 'static>(&mut self) {
+        let init = SlotInit::of::<T>();
+        if !self.slots.iter().any(|s| s.id() == init.id()) {
+            self.slots.push(init);
+        }
+    }
 }
 
 /// Install `install` for this process. Installing the same tables again (the same names in the
 /// same order) does nothing. Different tables are refused with [`EngineError::InstallConflict`],
 /// and from then on every command fails with it and the registry lists nothing.
-/// Only the tables are compared: each crate's `register` adds its hooks with its tables, so the
-/// same tables come with the same hooks.
+/// Only the tables are compared: each crate's `register` adds its hooks and slots with its tables,
+/// so the same tables come with the same hooks and slots.
 pub fn install(install: Install) -> Result<()> {
     INSTALLED.install(install)
 }
@@ -60,10 +81,28 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
     INSTALLED.registry().ok()?.get(id)
 }
 
+/// Whether the installed command `id` is on a crate's incomplete-docs list: unknown keys are not
+/// rejected yet.
+pub fn is_incomplete(id: &str) -> bool {
+    INSTALLED.installed().is_ok_and(|install| install.incomplete.iter().any(|list| list.contains(&id)))
+}
+
 /// The installed pipeline hooks (none before an install, or after a conflicting one).
 pub(crate) fn hooks() -> &'static Hooks {
     static NO_HOOKS: LazyLock<Hooks> = LazyLock::new(Hooks::default);
     INSTALLED.installed().map_or(&*NO_HOOKS, |install| &install.hooks)
+}
+
+/// The installed session slots; none before an install or after a conflicting one (a session made
+/// then reports the install at its first command, and at each slot it reads).
+pub(crate) fn slot_inits() -> &'static [SlotInit] {
+    INSTALLED.installed().map_or(&[], |install| install.slots.as_slice())
+}
+
+/// Why a session has no slot of a type: the install's error, or [`EngineError::NotInstalled`] when
+/// the crate that registers it was not installed before the session was made.
+pub(crate) fn slot_error() -> EngineError {
+    INSTALLED.installed().err().unwrap_or(EngineError::NotInstalled)
 }
 
 /// The installed command `id`, for running it: [`EngineError::NotInstalled`] before an install,
@@ -149,7 +188,7 @@ impl InstallCell {
 
     fn registry(&self) -> Result<&Registry> {
         let install = self.installed()?;
-        Ok(self.registry.get_or_init(|| Registry::new(build(&install.commands))))
+        Ok(self.registry.get_or_init(|| Registry::new(build(&install.commands, install.order))))
     }
 }
 
@@ -173,13 +212,18 @@ impl Registry {
     }
 }
 
-/// Every command of `tables`, in their order.
-fn build(tables: &[Table]) -> Vec<CommandSpec> {
+/// Every command of `tables`, in registry order: by `order` where it lists them, else in table order.
+fn build(tables: &[Table], order: Option<&str>) -> Vec<CommandSpec> {
     let specs = tables.iter().flat_map(|(_, specs)| specs());
     // The dispatch guard's unit test needs a command that panics on purpose (REL-3).
     #[cfg(test)]
     let specs = specs.chain(std::iter::once(test_panic_command()));
-    specs.collect()
+    let mut specs: Vec<CommandSpec> = specs.collect();
+    if let Some(order) = order {
+        let rank: HashMap<&str, usize> = order.lines().enumerate().map(|(i, id)| (id, i)).collect();
+        specs.sort_by_key(|c| rank.get(c.id).copied().unwrap_or(usize::MAX));
+    }
+    specs
 }
 
 /// A command whose `run` panics on purpose, so the last-resort guard in `jobs::dispatch`
@@ -225,5 +269,14 @@ mod tests {
         let conflict = cell.install(Install { commands: vec![a, b], ..Install::default() }).unwrap_err();
         assert_eq!(conflict, EngineError::InstallConflict { at: 1, installed: "(none)".into(), requested: "b".into() });
         assert_eq!(cell.registry().err(), Some(conflict), "every later lookup reports the conflict");
+    }
+
+    #[test]
+    fn an_order_sorts_the_commands_of_several_tables_and_keeps_the_rest_after_them() {
+        let a: Table = ("a", || vec![spec("a.one"), spec("a.two")]);
+        let b: Table = ("b", || vec![spec("b.one"), spec("b.two")]);
+        let ids = |specs: Vec<CommandSpec>| specs.into_iter().map(|c| c.id).filter(|id| *id != "test.panic").collect::<Vec<_>>();
+        assert_eq!(ids(build(&[a, b], None)), ["a.one", "a.two", "b.one", "b.two"]);
+        assert_eq!(ids(build(&[a, b], Some("b.one\na.two\na.one\n"))), ["b.one", "a.two", "a.one", "b.two"]);
     }
 }

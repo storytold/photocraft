@@ -16,6 +16,7 @@
 //!   display unchanged: the canvas texture is clamped to 0–1, so there is nothing above white
 //!   to compress.
 
+use crate::color_cmds::ColorExt;
 use craft_cms::{Builtin, Intent, Lut3d, Transform};
 use photocraft_color::SampleType;
 use photocraft_color::convert::{linear_to_srgb, srgb_to_linear};
@@ -238,8 +239,8 @@ pub fn set_kind(s: &mut Session, kind: ProofKind) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let (id, doc) = (st.doc.id, st.doc.clone());
     let plates = matches!(kind, ProofKind::Plate(_) | ProofKind::CmyPlate);
-    let working = if plates { Some(s.color.resolve("working-cmyk", Some(&doc), Some(photocraft_color::ColorMode::Cmyk))?) } else { None };
-    let pv = s.color.proof_mut(id);
+    let working = if plates { Some(s.color().resolve("working-cmyk", Some(&doc), Some(photocraft_color::ColorMode::Cmyk))?) } else { None };
+    let pv = s.color_mut().proof_mut(id);
     if let Some(w) = working {
         pv.setup.profile = w;
         pv.setup.name = "working-cmyk".into();
@@ -258,7 +259,7 @@ fn run_kind(s: &mut Session, id: &str) -> Result<Value> {
 fn preview_32(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "view.thirtyTwoBitPreviewOptions";
     let id = s.active().ok_or(EngineError::NoDocument)?.doc.id;
-    let mut h = s.color.hdr.get(&id).copied().unwrap_or_default();
+    let mut h = s.color().hdr.get(&id).copied().unwrap_or_default();
     if let Some(m) = p.get("method").and_then(Value::as_str) {
         h.highlight_compression = match m {
             "exposureGamma" | "exposureAndGamma" => false,
@@ -272,7 +273,7 @@ fn preview_32(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(g) = p.get("gamma").and_then(Value::as_f64) {
         h.gamma = (g as f32).clamp(0.1, 9.99);
     }
-    s.color.hdr.insert(id, h);
+    s.color_mut().hdr.insert(id, h);
     Ok(json!({"method": if h.highlight_compression { "highlightCompression" } else { "exposureGamma" }, "exposure": h.exposure, "gamma": h.gamma}))
 }
 
@@ -318,6 +319,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color_cmds::ColorExt;
 
     /// The shared sRGB functions match the removed copies bit for bit.
     #[test]
@@ -380,11 +382,11 @@ mod tests {
                 let r = s.execute(id, json!({})).unwrap();
                 assert_eq!(r["proofColors"], true);
                 let d = s.active().unwrap().doc.clone();
-                let pv = s.color.proof(d.id);
+                let pv = s.color().proof(d.id);
                 assert_eq!(pv.setup.kind.id(), id.trim_start_matches("view.proofSetup."));
-                let lut = s.color.display_lut(&d, 5).unwrap();
+                let lut = s.color().display_lut(&d, 5).unwrap();
                 assert_eq!(lut.data().len(), 125);
-                let bytes = s.color.canvas_lut(&d, 5).unwrap().unwrap();
+                let bytes = s.color().canvas_lut(&d, 5).unwrap().unwrap();
                 assert_eq!(bytes.len(), 125 * 4);
             }
         }
@@ -395,7 +397,7 @@ mod tests {
         let mut s = session("rgb", 8);
         s.execute("view.proofSetup.workingCyanPlate", json!({})).unwrap();
         let d = s.active().unwrap().doc.clone();
-        let lut = s.color.display_lut(&d, 5).unwrap();
+        let lut = s.color().display_lut(&d, 5).unwrap();
         // Pure cyan: heavy cyan plate → dark gray; white: no ink → white; red: little cyan.
         let cyan = sample(&lut, [0, 4, 4]);
         let white = sample(&lut, [4, 4, 4]);
@@ -407,7 +409,7 @@ mod tests {
         assert!(cyan[0] < red[0] && cyan[0] < 0.6, "cyan {cyan:?} red {red:?}");
         // Back to the plain working CMYK proof via Proof Setup.
         s.execute("view.proofSetup", json!({"profile": "working-cmyk"})).unwrap();
-        assert_eq!(s.color.proof(d.id).setup.kind, ProofKind::Profile);
+        assert_eq!(s.color().proof(d.id).setup.kind, ProofKind::Profile);
     }
 
     #[test]
@@ -415,7 +417,7 @@ mod tests {
         let mut s = session("rgb", 8);
         s.execute("view.proofSetup.legacyMacintoshRgb", json!({})).unwrap();
         let d = s.active().unwrap().doc.clone();
-        let lut = s.color.display_lut(&d, 5).unwrap();
+        let lut = s.color().display_lut(&d, 5).unwrap();
         let mid = sample(&lut, [2, 2, 2]);
         let white = sample(&lut, [4, 4, 4]);
         // 0.5^1.8 = 0.287 linear vs 0.214 for sRGB 0.5: the gamma-1.8 display is brighter.
@@ -429,21 +431,21 @@ mod tests {
         assert!(s.execute("view.thirtyTwoBitPreviewOptions", json!({"exposure": 1})).is_err(), "8-bit: disabled");
         let mut s = session("rgb", 32);
         let d = s.active().unwrap().doc.clone();
-        assert!(s.color.canvas_lut(&d, 5).unwrap().is_none());
+        assert!(s.color().canvas_lut(&d, 5).unwrap().is_none());
         let r = s.execute("view.thirtyTwoBitPreviewOptions", json!({"exposure": 1.0, "gamma": 1.0})).unwrap();
         assert_eq!(r["exposure"], 1.0);
-        assert!(hdr_active(&s.color, &d));
-        let lut = s.color.display_lut(&d, 5).unwrap();
+        assert!(hdr_active(s.color(), &d));
+        let lut = s.color().display_lut(&d, 5).unwrap();
         // +1 stop doubles linear light: sRGB 0.25 (0.0508 linear) → 0.1016 linear ≈ 0.354 sRGB.
         let q = sample(&lut, [1, 1, 1]);
         assert!((q[0] - 0.354).abs() < 0.02, "{q:?}");
-        assert!(s.color.canvas_lut(&d, 5).unwrap().is_some());
+        assert!(s.color().canvas_lut(&d, 5).unwrap().is_some());
         // The GPU canvas applies it in its shader: its LUT leaves it out (none for sRGB).
-        assert_eq!(s.color.hdr_preview(&d), Some(HdrPreview { highlight_compression: false, exposure: 1.0, gamma: 1.0 }));
-        assert!(s.color.gpu_canvas_lut(&d, 5).unwrap().is_none());
+        assert_eq!(s.color().hdr_preview(&d), Some(HdrPreview { highlight_compression: false, exposure: 1.0, gamma: 1.0 }));
+        assert!(s.color().gpu_canvas_lut(&d, 5).unwrap().is_none());
         // Highlight Compression: identity mapping, so no LUT.
         s.execute("view.thirtyTwoBitPreviewOptions", json!({"method": "highlightCompression"})).unwrap();
-        assert!(!hdr_active(&s.color, &d));
+        assert!(!hdr_active(s.color(), &d));
         assert!(s.execute("view.thirtyTwoBitPreviewOptions", json!({"method": "nope"})).is_err());
         // Clamped ranges.
         let r = s.execute("view.thirtyTwoBitPreviewOptions", json!({"method": "exposureGamma", "exposure": 99, "gamma": 0})).unwrap();

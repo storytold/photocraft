@@ -268,13 +268,13 @@ impl DocState {
     }
 
     /// Record the current revision conservatively until its damage has been determined.
-    pub(crate) fn record_unknown_damage(&mut self) {
+    pub fn record_unknown_damage(&mut self) {
         self.last_damage = None;
         self.record_damage_span(self.revision.saturating_sub(1), self.revision, None);
     }
 
     /// Record the latest revision or command span after its damage has been determined.
-    pub(crate) fn record_damage(&mut self) {
+    pub fn record_damage(&mut self) {
         // Keep the effect reach at the time of the edit: later pixel-neutral revisions can
         // change which effects are visible without changing this already-painted damage.
         // The existing growth walk is recursive, so refuse a bounded answer on hostile depth.
@@ -349,7 +349,7 @@ pub struct ToolState {
     pub brush: craft_tracked::Tracked<photocraft_paint::BrushSettings>,
     /// Brush presets (built-ins plus user presets; see `brush.presets.*`), tracked as the brush is.
     pub presets: craft_tracked::Tracked<Arc<Vec<photocraft_paint::BrushPreset>>>,
-    /// Bumped whenever `presets` changes ([`Session::brush_presets_changed`]); the preset store
+    /// Bumped whenever `presets` changes ([`PresetStoreExt::brush_presets_changed`](crate::preset_store::PresetStoreExt::brush_presets_changed)); the preset store
     /// syncs when it moves.
     pub presets_rev: u64,
     /// Mixer Brush paint carried between strokes.

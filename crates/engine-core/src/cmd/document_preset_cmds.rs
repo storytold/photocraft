@@ -1,6 +1,8 @@
 //! Named New Document configurations. The existing preferences services persist these with the
 //! other presets; selecting one only returns settings, and document creation stays in `file.new`.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use photocraft_color::{ColorMode, SampleType};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -270,44 +272,44 @@ pub(crate) fn load_recent(value: Value) -> Vec<DocumentSettings> {
 fn add_recent(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.recent.add";
     let settings = DocumentSettings::from_params(s, p.get("settings").unwrap_or(&Value::Null), CMD)?;
-    let recent = &mut s.presets.recent_documents;
+    let recent = &mut s.presets_mut().recent_documents;
     recent.retain(|r| r.command_params() != settings.command_params());
     recent.insert(0, settings);
     recent.truncate(MAX_RECENT);
-    s.presets_changed();
-    Ok(json!({"recent":s.presets.recent_documents}))
+    presets_changed(s);
+    Ok(json!({"recent":s.presets().recent_documents}))
 }
 
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.presets.save";
     let name = checked_name(req_str(p, "name", CMD)?).map_err(|e| bad(CMD, e))?;
-    if s.presets.documents.iter().any(|pr| pr.name.eq_ignore_ascii_case(&name)) {
+    if s.presets().documents.iter().any(|pr| pr.name.eq_ignore_ascii_case(&name)) {
         return Err(bad(CMD, format!("A preset named \"{name}\" already exists; choose another name")));
     }
-    if s.presets.documents.len() >= MAX_PRESETS {
+    if s.presets().documents.len() >= MAX_PRESETS {
         return Err(bad(CMD, format!("At most {MAX_PRESETS} document presets can be saved")));
     }
     let settings = DocumentSettings::from_params(s, p.get("settings").unwrap_or(&Value::Null), CMD)?;
     let preset = DocumentPreset { name, settings };
     let result = json!({"preset":preset});
-    s.presets.documents.push(preset);
-    s.presets_changed();
+    s.presets_mut().documents.push(preset);
+    presets_changed(s);
     Ok(result)
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.presets.get";
     let name = req_str(p, "name", CMD)?;
-    let preset = s.presets.documents.iter().find(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such document preset"))?;
+    let preset = s.presets().documents.iter().find(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such document preset"))?;
     Ok(json!({"preset":preset,"params":preset.settings.command_params()}))
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.presets.delete";
     let name = req_str(p, "name", CMD)?;
-    let index = s.presets.documents.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such document preset"))?;
-    s.presets.documents.remove(index);
-    s.presets_changed();
+    let index = s.presets().documents.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such document preset"))?;
+    s.presets_mut().documents.remove(index);
+    presets_changed(s);
     Ok(json!({"deleted":name}))
 }
 
@@ -317,12 +319,12 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.presets.rename";
     let name = req_str(p, "name", CMD)?;
     let new_name = checked_name(req_str(p, "newName", CMD)?).map_err(|e| bad(CMD, e))?;
-    let index = s.presets.documents.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such document preset"))?;
-    if s.presets.documents.iter().enumerate().any(|(i, pr)| i != index && pr.name.eq_ignore_ascii_case(&new_name)) {
+    let index = s.presets().documents.iter().position(|pr| pr.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(CMD, "No such document preset"))?;
+    if s.presets().documents.iter().enumerate().any(|(i, pr)| i != index && pr.name.eq_ignore_ascii_case(&new_name)) {
         return Err(bad(CMD, format!("A preset named \"{new_name}\" already exists; choose another name")));
     }
-    s.presets.documents[index].name.clone_from(&new_name);
-    s.presets_changed();
+    s.presets_mut().documents[index].name.clone_from(&new_name);
+    presets_changed(s);
     Ok(json!({"renamed":new_name}))
 }
 
@@ -335,7 +337,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{}",
             enabled: always,
-            run: |s, _| Ok(json!({"presets":s.presets.documents})),
+            run: |s, _| Ok(json!({"presets":s.presets().documents})),
             journal: false,
         },
         CommandSpec {
@@ -385,7 +387,7 @@ pub fn specs() -> Vec<CommandSpec> {
             shortcut: None,
             params: "{} -> {recent:[settings]} (newest first; each settings.command params minus unit/resolutionUnit go to file.new)",
             enabled: always,
-            run: |s, _| Ok(json!({"recent":s.presets.recent_documents})),
+            run: |s, _| Ok(json!({"recent":s.presets().recent_documents})),
             journal: false,
         },
         CommandSpec {
@@ -405,6 +407,7 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prefs::SavedPrefsExt;
 
     fn settings() -> Value {
         json!({"width":16,"height":24,"resolution":254.5,"mode":"lab","depth":16,
@@ -432,14 +435,14 @@ mod tests {
         let preset = saved(&mut s, "Press", config.clone());
         assert_eq!(preset["settings"]["profile"], "coated-cmyk");
         let next = reload(&s);
-        let params = next.presets.documents[0].settings.command_params();
+        let params = next.presets().documents[0].settings.command_params();
         assert_eq!(params["profile"], "coated-cmyk");
         let mut s2 = crate::session();
         s2.execute("file.new", params).unwrap();
         assert!(s2.active().unwrap().doc.icc_profile.is_some());
         let plain = saved(&mut s, "Plain", settings());
         assert!(plain["settings"].get("profile").is_none());
-        assert!(s.presets.documents[1].settings.command_params().get("profile").is_none());
+        assert!(s.presets().documents[1].settings.command_params().get("profile").is_none());
     }
 
     #[test]
@@ -454,7 +457,7 @@ mod tests {
                 assert_eq!(preset["name"], "Product square");
                 assert_eq!(preset["settings"], config);
                 let mut next = reload(&s);
-                assert_eq!(next.presets.documents, s.presets.documents);
+                assert_eq!(next.presets().documents, s.presets().documents);
                 let rev = next.prefs.rev();
                 let selected = next.execute("document.presets.get", json!({"name":"product SQUARE"})).unwrap();
                 assert_eq!(selected["preset"], preset);
@@ -509,7 +512,7 @@ mod tests {
         assert!(s.prefs.rev() > rev);
         let mut s = reload(&s);
         assert_eq!(s.execute("document.presets.list", json!({})).unwrap()["presets"].as_array().unwrap().len(), 1);
-        assert_eq!(s.presets.documents[0].name, "Keep me");
+        assert_eq!(s.presets().documents[0].name, "Keep me");
         assert!(s.execute("document.presets.get", json!({"name":"Delete me"})).is_err());
         assert!(s.execute("document.presets.delete", json!({"name":"Delete me"})).is_err());
     }
@@ -518,7 +521,7 @@ mod tests {
     fn old_preferences_and_malformed_presets_keep_unrelated_settings() {
         let mut original = crate::session();
         original.edit_prefs(|p| p.general.beep_when_done = true);
-        original.presets.tool_presets[0].name = "Unrelated tool preset".into();
+        original.presets_mut().tool_presets[0].name = "Unrelated tool preset".into();
         let valid = saved(&mut original, "Keep me", settings());
         for invalid in [json!("bad collection"), json!([false, {}, {"name":"broken","settings":{}}])] {
             let mut value = original.prefs_value();
@@ -526,8 +529,8 @@ mod tests {
             let mut s = crate::session();
             s.load_prefs_json(&value.to_string()).unwrap();
             assert!(s.prefs().general.beep_when_done);
-            assert_eq!(s.presets.tool_presets[0].name, "Unrelated tool preset");
-            assert!(s.presets.documents.is_empty());
+            assert_eq!(s.presets().tool_presets[0].name, "Unrelated tool preset");
+            assert!(s.presets().documents.is_empty());
         }
         let mut value = original.prefs_value();
         let mut bad = valid.clone();
@@ -535,8 +538,8 @@ mod tests {
         value["presets"]["documents"] = json!([bad, valid, valid]);
         let mut s = crate::session();
         s.load_prefs_json(&value.to_string()).unwrap();
-        assert_eq!(s.presets.documents.len(), 1, "keep valid entries, discard bad/duplicate entries");
-        assert_eq!(s.presets.documents[0].name, "Keep me");
+        assert_eq!(s.presets().documents.len(), 1, "keep valid entries, discard bad/duplicate entries");
+        assert_eq!(s.presets().documents[0].name, "Keep me");
         for without_presets in [false, true] {
             let mut value = original.prefs_value();
             if without_presets {
@@ -546,7 +549,7 @@ mod tests {
             }
             let mut old = crate::session();
             old.load_prefs_json(&value.to_string()).unwrap();
-            assert!(old.presets.documents.is_empty());
+            assert!(old.presets().documents.is_empty());
             assert!(old.prefs().general.beep_when_done);
         }
     }
@@ -557,7 +560,7 @@ mod tests {
         let mut config = settings();
         saved(&mut s, "Keep me", config.clone());
         config["width"] = json!(99);
-        assert_eq!(s.presets.documents[0].settings.width, 16);
+        assert_eq!(s.presets().documents[0].settings.width, 16);
         let before = s.prefs_value();
         let rev = s.prefs.rev();
         for name in ["", " \t\n ", "Keep me", " keep ME ", &"x".repeat(256)] {
@@ -620,7 +623,7 @@ mod tests {
         value["presets"]["recent_documents"] = json!([{"width":-1}, recent[1], "junk", recent[1], recent[2]]);
         let mut next = crate::session();
         next.load_prefs_json(&value.to_string()).unwrap();
-        assert_eq!(next.presets.recent_documents.iter().map(|r| r.width).collect::<Vec<_>>(), [25, 24]);
+        assert_eq!(next.presets().recent_documents.iter().map(|r| r.width).collect::<Vec<_>>(), [25, 24]);
         assert!(next.documents().is_empty(), "recording never creates a document");
     }
 
@@ -630,7 +633,7 @@ mod tests {
         for name in ["One", "Two", "Three"] {
             saved(&mut s, name, settings());
         }
-        let names = |s: &Session| s.presets.documents.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        let names = |s: &Session| s.presets().documents.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
         s.execute("document.presets.rename", json!({"name":"Two","newName":" Zwei "})).unwrap();
         assert_eq!(names(&s), ["One", "Zwei", "Three"]);
         s.execute("document.presets.rename", json!({"name":"Zwei","newName":"ZWEI"})).unwrap();

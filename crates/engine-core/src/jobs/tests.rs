@@ -1,3 +1,4 @@
+use crate::actions_cmds::ActionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::{Duration, Instant};
@@ -684,53 +685,6 @@ fn smart_filter_edits_run_as_jobs() {
 }
 
 #[test]
-fn content_aware_move_runs_as_a_job() {
-    let mut inline = session(160, 120);
-    let mut s = session(160, 120);
-    for t in [&mut inline, &mut s] {
-        t.execute("select.rect", json!({"x": 20, "y": 40, "width": 30, "height": 30})).unwrap();
-    }
-    let p = json!({"offset": [90, 10], "structure": 3, "color": 4});
-    inline.execute("paint.contentAwareMove", p.clone()).unwrap();
-    let before = s.active().unwrap().doc.clone();
-    let id = job(s.start("paint.contentAwareMove", p.clone()).unwrap());
-    let e = wait_event(&mut s, id);
-    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
-    assert_eq!(v["offset"], json!([90, 10]));
-    assert_eq!(pixels(&s), pixels(&inline), "same result as the synchronous command");
-    let sel = |s: &Session| s.active().unwrap().doc.selection.as_ref().unwrap().read_region(s.active().unwrap().doc.bounds());
-    assert_eq!(sel(&s), sel(&inline), "the selection moved the same way");
-    // Cancelled at once: the document stays as it was.
-    s.undo();
-    let id = job(s.start("paint.contentAwareMove", p).unwrap());
-    assert!(s.cancel_job(id));
-    s.join_cancelled_jobs();
-    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
-    assert_eq!(pixels(&s), before.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().read_region(before.bounds()));
-}
-
-#[test]
-fn remove_runs_as_a_job() {
-    let mut inline = session(160, 120);
-    let mut s = session(160, 120);
-    let p = json!({"points": [[60, 50], [100, 70]], "size": 24});
-    inline.execute("paint.remove", p.clone()).unwrap();
-    let before = pixels(&s);
-    let id = job(s.start("paint.remove", p.clone()).unwrap());
-    let e = wait_event(&mut s, id);
-    let JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
-    assert!(v["damage"].is_array(), "{v}");
-    assert_eq!(pixels(&s), pixels(&inline), "same result as the synchronous command");
-    // Cancelled at once: the document stays as it was.
-    s.undo();
-    let id = job(s.start("paint.remove", p).unwrap());
-    assert!(s.cancel_job(id));
-    s.join_cancelled_jobs();
-    assert_eq!(wait_event(&mut s, id).outcome, JobOutcome::Cancelled);
-    assert_eq!(pixels(&s), before);
-}
-
-#[test]
 fn open_runs_as_a_job_and_cancel_adds_nothing() {
     let mut src = session(40, 30);
     let doc = (*src.active().unwrap().doc).clone();
@@ -1119,7 +1073,7 @@ fn admit(_: &str, _: &Value) -> Result<()> {
 
 /// Whether the action named `name` is marked as written by automation.
 fn marked(s: &Session, name: &str) -> bool {
-    s.actions.list.actions().iter().find(|a| a.name == name).unwrap().automation
+    s.actions().list.actions().iter().find(|a| a.name == name).unwrap().automation
 }
 
 /// A background step a gated client starts during the user's recording marks the recorded action
@@ -1175,13 +1129,25 @@ fn a_users_job_applied_while_a_gated_client_waits_stays_the_users() {
 /// Exercise six terminal job routes so prepared paint snapshots cannot outlive a completed or discarded job.
 #[test]
 fn every_job_terminal_path_drops_a_live_commit_stroke() {
-    use crate::brush_cmds::mixer_live::LiveMixer;
     use std::sync::atomic::{AtomicBool, Ordering};
 
     for outcome in 0..6 {
         let mut s = session(32, 32);
-        let live = LiveMixer::begin(&s, &json!({"points": [[16, 16]], "size": 4})).unwrap();
-        live.prepare_commit(&mut s).unwrap();
+        // A Mixer Brush stroke's offer, as `LiveMixer::prepare_commit` leaves it.
+        let st = s.active().unwrap();
+        let (base, bounds) = ((st.doc.id, st.revision), st.doc.bounds());
+        let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        let points = vec![photocraft_paint::StrokePoint::new(16.0, 16.0, 1.0)];
+        s.live_commit = Some(crate::state::LiveCommit {
+            mixer: None,
+            cmd: "paint.mixerBrush".into(),
+            base,
+            params: json!({"size": 4}),
+            seed: Some(1),
+            points,
+            surface,
+            bounds,
+        });
         let gate = Arc::new(AtomicBool::new(false));
         let worker_gate = gate.clone();
         let id = job(s

@@ -6,7 +6,7 @@
 //! stage. Each crate's `register` adds its hooks to the [`Install`](crate::registry::Install) that
 //! also carries its command tables; the process installs both once.
 
-use photocraft_doc::LayerId;
+use photocraft_doc::{DocId, LayerId};
 use serde_json::Value;
 
 use crate::commands::CommandSpec;
@@ -18,6 +18,8 @@ pub type RequestParams = fn(&Session, &str, &Value) -> Option<Value>;
 pub type Redirect = fn(&Session, &str, &Value) -> Option<(String, Value)>;
 /// Refuses params the command can't take.
 pub type CheckParams = fn(&Session, &str, &Value) -> Result<()>;
+/// Refuses a command the session can't run now, after core's own admission checks.
+pub type Admit = fn(&Session, &str, &Value) -> Result<()>;
 /// Runs once the params are valid, before the command: `Some` is the command's result, and the
 /// command itself doesn't run.
 pub type BeforeCommand = fn(&mut Session, &str, &CommandSpec, &Value) -> Result<Option<Value>>;
@@ -39,6 +41,12 @@ pub type CoalesceJournal = fn(&mut Session, &str, &Value) -> bool;
 pub type FlushRecording = fn(&mut Session) -> Result<()>;
 /// Applies the preferences to the crate's own state.
 pub type PrefsApplied = fn(&mut Session);
+/// The document at this index is about to close.
+pub type DocumentClosing = fn(&mut Session, usize);
+/// Whether the crate still refers to a document id, so a newly opened document must not take it.
+pub type DocIdReserved = fn(&Session, DocId) -> bool;
+/// An edit changed the active document's pixels.
+pub type PixelsEdited = fn(&mut Session);
 
 /// The hooks of every installed crate, per stage, in the order the crates registered them.
 #[derive(Default)]
@@ -49,6 +57,9 @@ pub struct Hooks {
     pub redirect: Vec<Redirect>,
     /// After the documented-keys check, in `dispatch` and `precheck`; the first error refuses.
     pub check_params: Vec<CheckParams>,
+    /// At the end of `admit` (in `precheck`, and in `dispatch` before and after a floating
+    /// selection drops); the first error refuses.
+    pub admit: Vec<Admit>,
     /// Before the command runs; the first `Some` finishes it.
     pub before_command: Vec<BeforeCommand>,
     /// After a successful run, each in turn.
@@ -67,6 +78,12 @@ pub struct Hooks {
     pub flush_recording: Vec<FlushRecording>,
     /// After the preferences changed and core applied its own, each in turn.
     pub prefs_applied: Vec<PrefsApplied>,
+    /// Before a document closes, each in turn; the document is still open.
+    pub document_closing: Vec<DocumentClosing>,
+    /// When a document is added; any `true` gives it a fresh id.
+    pub doc_id_reserved: Vec<DocIdReserved>,
+    /// After an edit that changed pixels (or left the whole document to redraw), each in turn.
+    pub pixels_edited: Vec<PixelsEdited>,
 }
 
 impl Hooks {

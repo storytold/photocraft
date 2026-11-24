@@ -1,5 +1,6 @@
 use craft::behavior::PixelSize;
 use craft::ui::patterns::form_dialogs::DocumentOptions;
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::{
     DocId, ExportSettings, FormatChoices, PhotocraftApp, SAVE_OPTIONS_OPEN, SaveKind, Value, file_open, jobs_ui, json, notices, open_prompt, plain_raster,
@@ -129,7 +130,7 @@ impl PhotocraftApp {
         let warnings = file_open::with_missing_fonts_of(&doc, warnings);
         // A developed raw has no embedded profile to ask about.
         let developed = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-        let question = self.session.color.open_question(&doc).filter(|_| !developed);
+        let question = self.session.color().open_question(&doc).filter(|_| !developed);
         let wants_raw = camera_raw_ui::wants_open_dialog(self, &warnings);
         open_prompt::arrive(
             self,

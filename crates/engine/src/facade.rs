@@ -14,19 +14,27 @@ use std::ops::{Deref, DerefMut};
 /// `CoreSession::new()` and `default()` install no commands: an app constructs [`Session`].
 pub use photocraft_engine_core::Session as CoreSession;
 pub use photocraft_engine_core::*;
+// The painting commands' modules, at the paths they had inside the engine.
+pub use photocraft_engine_paint::{
+    adjustment_brush_cmds, brush_cmds, brush_key_cmds, eraser_cmds, face_cmds, fill_cmds, fill_key_cmds, paint_cmds, pick_cmds, redeye_cmds, retouch_cmds,
+    sampler_cmds, stamp_cmds,
+};
+
+mod install;
+
+pub use install::install;
 
 /// The engine's commands (`photocraft_engine_core::cmd`), with [`command_specs`](commands::command_specs)
 /// and [`find`](commands::find) installing every engine command first.
 pub mod commands {
     pub use crate::{command_specs, find};
     pub use photocraft_engine_core::cmd::*;
+    pub use photocraft_engine_paint::cmd::{
+        adjustment_brush_cmds, brush_cmds, brush_key_cmds, eraser_cmds, face_cmds, fill_cmds, fill_key_cmds, paint_cmds, pick_cmds, redeye_cmds, retouch_cmds,
+        sampler_cmds, stamp_cmds,
+    };
 }
 pub use commands as cmd;
-
-/// Install every engine command for this process. Later calls return the first call's result.
-pub fn install() -> Result<()> {
-    photocraft_engine_core::install()
-}
 
 /// Every engine command in registry order, installed first: for callers that read the registry
 /// before any session exists (menus, docs, tests).

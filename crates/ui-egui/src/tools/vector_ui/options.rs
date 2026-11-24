@@ -11,6 +11,7 @@ use craft::ui::form::Field;
 use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::{Label, UnitKind};
 use craft::ui::text::NumberField;
+use photocraft_engine::presets::PresetsExt;
 
 use super::path_menus::{path_alignment_menu, path_arrangement_menu, path_operations_menu};
 use super::path_ops::{active_path_name, indexed_document};
@@ -153,6 +154,16 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
         }
         if let Some(alert) = alert {
             crate::option_cells::range_alert(app, ui, &alert);
+        }
+    }
+    // The Rectangle tool's Align Edges, at the bar's right end after the gear (#13346). Only a
+    // shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
+    if tool == Tool::Rectangle {
+        Divider::vertical().show(ui);
+        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
+        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
+        if let Some(next) = on.value().copied() {
+            app.ui.tool_options.align_edges = next;
         }
     }
 }
@@ -451,12 +462,12 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let was_linked = app.ui.arrow_default == Some(target);
     let mut linked = was_linked;
     let recent_colors: Vec<Srgba> = crate::paint_picker::recent_colors(&app.session).into_iter().map(|c| Srgba::new(c[0], c[1], c[2], 1.0)).collect();
-    let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets.gradients, fg, bg);
-    let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets.gradient, recent: &mut app.ui.recent_gradients, fg, bg };
+    let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets().gradients, fg, bg);
+    let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets().gradient, recent: &mut app.ui.recent_gradients, fg, bg };
     let current = [sh.fill.clone(), sh.stroke.as_ref().map(|s| s.paint.clone())];
     let mut library = crate::shape_paint_ui::ChipLibrary::new(
         &recent_colors,
-        &app.session.presets.swatches,
+        &app.session.presets().swatches,
         &mut app.ui.paint_folders,
         gradients,
         &mut app.ui.shape_gradient_state,
