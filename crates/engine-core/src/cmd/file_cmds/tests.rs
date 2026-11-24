@@ -1864,6 +1864,7 @@ fn save_a_copy_writes_the_jpeg_format_asked_for() {
         assert_eq!(photocraft_io::import("a.jpg", &bytes).unwrap().document.size.width, 40, "{params}");
     }
     // Layers to Files takes it too.
+    s.execute("layer.new.layer", json!({"name": "Ink"})).unwrap();
     s.execute("file.export.layersToFiles", json!({"dir": dir, "format": "jpg", "jpegFormat": "progressive"})).unwrap();
     let layers: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| !p.ends_with("a.jpg")).collect();
     assert!(!layers.is_empty());
