@@ -19,6 +19,7 @@ use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_format::zip::ZipWriter;
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::{Interrupt, Surface};
+use std::io::Write as _;
 
 use crate::{ExportResult, ImportResult, IoError};
 
@@ -451,6 +452,72 @@ fn png(w: u32, h: u32, px: &[[f32; 4]], sample: CSample) -> Result<Vec<u8>> {
     Ok(codecs::encode(&image, Format::Png, &opts)?)
 }
 
+/// Whether OpenRaster must materialize the surface's default pixel instead of exporting only
+/// its stored content. Formats without alpha are opaque even when their last channel is zero.
+fn default_is_visible(surface: &Surface) -> bool {
+    !surface.format().alpha || surface.default_pixel().last().is_some_and(|alpha| *alpha > 0.0)
+}
+
+/// Apply a layer's mask and fill opacity to one rectangle of straight RGBA pixels.
+fn apply_pixel_options(layer: &Layer, rect: Rect, pixels: &mut [[f32; 4]], mask_values: &mut Vec<f32>) {
+    if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled) {
+        mask.values_into(rect, mask_values);
+        for (pixel, value) in pixels.iter_mut().zip(mask_values.iter()) {
+            pixel[3] *= value;
+        }
+    }
+    if layer.fill_opacity < 1.0 {
+        for pixel in pixels {
+            pixel[3] *= layer.fill_opacity.clamp(0.0, 1.0);
+        }
+    }
+}
+
+/// Admit a streamed layer by the worst-case RGBA16 storage the reader charges, not by a
+/// union-sized float buffer the writer no longer allocates.
+fn admit_streamed_layer(rect: Rect) -> Result<()> {
+    if rect.width() > MAX_SIDE || rect.height() > MAX_SIDE {
+        return Err(IoError::Unsupported(format!("a {}×{} layer exceeds the OpenRaster side limit", rect.width(), rect.height())));
+    }
+    let bytes = u64::from(rect.width()).saturating_mul(u64::from(rect.height())).saturating_mul(8);
+    if bytes > MAX_ENTRY as u64 {
+        return Err(IoError::Unsupported(format!("a {}×{} layer is too large to save to OpenRaster", rect.width(), rect.height())));
+    }
+    Ok(())
+}
+
+/// Encode one rectangle as PNG, asking `read_row` for one row of straight RGBA floats at a time.
+fn png_rows<F>(rect: Rect, sample: CSample, mut read_row: F) -> Result<Vec<u8>>
+where
+    F: FnMut(Rect, &mut [[f32; 4]]),
+{
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, rect.width(), rect.height());
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(match sample {
+            CSample::U16 => png::BitDepth::Sixteen,
+            _ => png::BitDepth::Eight,
+        });
+        let mut writer = encoder.write_header().map_err(|e| invalid(e.to_string()))?;
+        {
+            let mut stream = writer.stream_writer().map_err(|e| invalid(e.to_string()))?;
+            let mut pixels = vec![[0.0; 4]; rect.width() as usize];
+            for y in rect.y0..rect.y1 {
+                let row = Rect::new(rect.x0, y, rect.x1, y + 1);
+                read_row(row, &mut pixels);
+                stream.write_all(&encode_rgba(&pixels, sample)).map_err(|e| invalid(e.to_string()))?;
+            }
+            stream.finish().map_err(|e| invalid(e.to_string()))?;
+        }
+        writer.finish().map_err(|e| invalid(e.to_string()))?;
+    }
+    if out.len() > MAX_ENTRY {
+        return Err(IoError::Unsupported("an OpenRaster layer PNG exceeds the 512 MiB entry limit".into()));
+    }
+    Ok(out)
+}
+
 /// `px` (row-major over `rect`) cut down to the pixels that aren't fully transparent, with
 /// transparent pixels zeroed, so masked-out or empty margins aren't written.
 /// Most bytes of straight RGBA floats one layer may take while it is written. A layer is one PNG
@@ -558,6 +625,41 @@ impl Writer<'_> {
         }
     }
 
+    /// Encode a raster whose default pixel is visible without allocating the union of the
+    /// canvas and distant stored tiles. The first row pass finds the same cropped bounds as
+    /// `crop`; the second encodes those rows with transparent pixels zeroed.
+    fn stream_default_png(&mut self, layer: &Layer, surface: &Surface) -> Result<(Rect, Vec<u8>)> {
+        let full = self.doc.bounds().union(&surface.content_bounds());
+        admit_streamed_layer(full)?;
+        let mut cropped = Rect::EMPTY;
+        let mut mask_values = Vec::new();
+        let mut pixels = vec![[0.0; 4]; full.width() as usize];
+        for y in full.y0..full.y1 {
+            let row = Rect::new(full.x0, y, full.x1, y + 1);
+            surface.read_rgba_into(row, &mut pixels);
+            apply_pixel_options(layer, row, &mut pixels, &mut mask_values);
+            let mut visible = pixels.iter().enumerate().filter(|(_, pixel)| pixel[3] > 0.0).map(|(x, _)| x as i32);
+            if let Some(first) = visible.next() {
+                let last = visible.next_back().unwrap_or(first);
+                cropped = cropped.union(&Rect::new(full.x0 + first, y, full.x0 + last + 1, y + 1));
+            }
+        }
+        if cropped.is_empty() {
+            return Ok((Rect::from_xywh(0, 0, 1, 1), png(1, 1, &[[0.0; 4]], self.sample)?));
+        }
+        let sample = self.sample;
+        let data = png_rows(cropped, sample, |row, pixels| {
+            surface.read_rgba_into(row, pixels);
+            apply_pixel_options(layer, row, pixels, &mut mask_values);
+            for pixel in pixels {
+                if pixel[3] <= 0.0 {
+                    *pixel = [0.0; 4];
+                }
+            }
+        })?;
+        Ok((cropped, data))
+    }
+
     /// The layer's own pixels (straight RGBA floats) and their bounds; its pixel mask applied.
     fn pixels(&mut self, layer: &Layer) -> Result<(Rect, Vec<[f32; 4]>)> {
         let canvas = self.doc.bounds();
@@ -566,7 +668,7 @@ impl Writer<'_> {
                 let content = s.content_bounds();
                 // OpenRaster has no default pixel: a visible one must be materialized across the
                 // canvas, including when pruning left no stored tiles at all.
-                let r = if s.default_pixel().last().is_some_and(|alpha| *alpha > 0.0) { canvas.union(&content) } else { content };
+                let r = if default_is_visible(s) { canvas.union(&content) } else { content };
                 admit_layer(r)?;
                 (r, photocraft_compose::surface_to_buffer(s, r).into_px())
             }
@@ -585,18 +687,7 @@ impl Writer<'_> {
                 (r, photocraft_compose::render_layer(&solo, r).into_px())
             }
         };
-        if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled) {
-            let mut values = Vec::new();
-            mask.values_into(rect, &mut values);
-            for (p, m) in buf.iter_mut().zip(values) {
-                p[3] *= m;
-            }
-        }
-        if layer.fill_opacity < 1.0 {
-            for p in &mut buf {
-                p[3] *= layer.fill_opacity.clamp(0.0, 1.0);
-            }
-        }
+        apply_pixel_options(layer, rect, &mut buf, &mut Vec::new());
         Ok(crop(rect, buf))
     }
 
@@ -629,11 +720,17 @@ impl Writer<'_> {
                     if self.dry {
                         continue;
                     }
-                    let (rect, px) = self.pixels(layer)?;
-                    let (rect, px) = if rect.is_empty() { (Rect::from_xywh(0, 0, 1, 1), vec![[0.0; 4]]) } else { (rect, px) };
+                    let (rect, data) = match &layer.content {
+                        LayerContent::Raster(surface) if default_is_visible(surface) => self.stream_default_png(layer, surface)?,
+                        _ => {
+                            let (rect, px) = self.pixels(layer)?;
+                            let (rect, px) = if rect.is_empty() { (Rect::from_xywh(0, 0, 1, 1), vec![[0.0; 4]]) } else { (rect, px) };
+                            let data = png(rect.width(), rect.height(), &px, self.sample)?;
+                            (rect, data)
+                        }
+                    };
                     let src = format!("data/layer{}.png", self.next);
                     self.next += 1;
-                    let data = png(rect.width(), rect.height(), &px, self.sample)?;
                     self.archive.add(&src, &data).map_err(|e| IoError::Ora(e.to_string()))?;
                     nodes.push(craft_ora::Node::Layer(craft_ora::Layer { props, x: rect.x0, y: rect.y0, src: Some(src) }));
                 }
