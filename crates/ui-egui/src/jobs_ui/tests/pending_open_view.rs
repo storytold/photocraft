@@ -1,6 +1,7 @@
 use super::*;
 use crate::jobs_ui::{OpenSource, finish_open};
-use photocraft_doc::DocId;
+use photocraft_doc::{DocId, Document, LayerId};
+use photocraft_engine::DocState;
 use photocraft_io::NativeImportTarget;
 
 // Original 2x2, uncompressed XCF v11 fixture. Its source properties independently
@@ -188,6 +189,12 @@ fn assert_pending_open_preserves_view(damage: bool, target: NativeImportTarget) 
     assert_eq!(control(&mut app, "ui.dialog.confirm", json!({"dialog":prompt}))["ok"], true);
     assert!(app.held_opens.is_empty());
     let state = app.session.documents().iter().find(|state| state.doc.id == id).unwrap();
+    assert_readmitted_view(state, selected.as_slice(), active, target, &pixels, &source);
+    unchanged.assert_untouched(&app);
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+}
+
+fn assert_readmitted_view(state: &DocState, selected: &[LayerId], active: Option<LayerId>, target: NativeImportTarget, pixels: &Document, source: &str) {
     assert_eq!(state.selection(), selected);
     assert_eq!(state.active_layer(), active);
     assert_eq!(state.color_samplers, [[1., 1.]]);
@@ -204,12 +211,10 @@ fn assert_pending_open_preserves_view(damage: bool, target: NativeImportTarget) 
     assert_eq!(state.channel_view.target, want);
     assert_eq!(state.doc.layers, pixels.layers);
     assert!(state.source_read_only && state.path.is_none());
-    assert_eq!(state.protected_import_source.as_deref(), Some(source.as_str()));
-    assert!(photocraft_engine::file_cmds::check_import_destination(state, &source).is_err());
+    assert_eq!(state.protected_import_source.as_deref(), Some(source));
+    assert!(photocraft_engine::file_cmds::check_import_destination(state, source).is_err());
     assert_eq!(state.history.past_len(), 0);
     assert!(!state.is_dirty());
-    unchanged.assert_untouched(&app);
-    assert_eq!(std::fs::read(&source).unwrap(), bytes);
 }
 
 fn control(app: &mut PhotocraftApp, method: &str, params: Value) -> Value {
