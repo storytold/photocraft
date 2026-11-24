@@ -355,6 +355,16 @@ fn a_square_hole_near_an_outside_edge_keeps_the_same_corner_profile() {
     assert_eq!(near.at(7, 7), far.at(7, 7));
 }
 
+#[test]
+fn a_nearby_slope_does_not_widen_the_rim_of_a_straight_edge() {
+    let canvas = Rect::new(0, 0, 30, 30);
+    let edge = |sloped: bool| {
+        let mask = (0..30).flat_map(|y| (0..30).map(move |x| if x >= 10 && (!sloped || x + y >= 20) { 255 } else { 0 })).collect();
+        soften_edge(&Region { bbox: canvas, mask }, canvas)
+    };
+    assert_eq!(edge(true).at(9, 12), edge(false).at(9, 12));
+}
+
 /// Hard Edge on is left as it is (#12855): the tool is driven by a segmentation model, so the
 /// reference's own figures (rectangle 99,99,300,250 · 29651 · 700; disc 423,99,578,252 · 17305 ·
 /// 1569) are not a target, only the difference Hard Edge makes.

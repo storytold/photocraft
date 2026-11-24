@@ -465,12 +465,22 @@ const SOFT_EDGE_RAMP: (f64, f64) = (0.10, 0.55);
 /// coverage step before taking the square root, so distant taps don't light up clear pixels.
 const SLOPED_EDGE_RAMP: (f64, f64) = (1.0 / 1024.0, 0.70);
 
-/// Look for a one-pixel step of the same boundary between adjacent rows or columns.
+/// Keep the straight ramp when the filter's sample footprint contains only a straight edge.
+/// Otherwise look for a one-pixel step of the same boundary across adjacent lines.
 /// A line with multiple transitions can straddle a hole or a narrow strip, so it
 /// cannot establish that a boundary continued into the next line.
 fn has_sloped_edge(at: &impl Fn(i32, i32) -> f64, x: i32, y: i32) -> bool {
     const OFFSETS: [i32; 7] = [-3, -2, -1, 0, 1, 2, 3];
+    const TAPS: [usize; 4] = [1, 2, 3, 4];
     let rows = OFFSETS.map(|dy| OFFSETS.map(|dx| at(x.saturating_add(dx), y.saturating_add(dy)) >= 0.5));
+    let columns = std::array::from_fn(|column| rows.map(|row| row[column]));
+    let straight = |lines: &[[bool; OFFSETS.len()]; OFFSETS.len()]| {
+        let first = TAPS.map(|column| lines[TAPS[0]][column]);
+        first.iter().any(|&covered| covered != first[0]) && TAPS[1..].iter().all(|&row| TAPS.map(|column| lines[row][column]) == first)
+    };
+    if straight(&rows) || straight(&columns) {
+        return false;
+    }
     let has_step = |lines: [[bool; OFFSETS.len()]; OFFSETS.len()]| {
         let mut previous: Option<(usize, bool)> = None;
         for line in lines {
@@ -485,7 +495,7 @@ fn has_sloped_edge(at: &impl Fn(i32, i32) -> f64, x: i32, y: i32) -> bool {
         }
         false
     };
-    has_step(rows) || has_step(std::array::from_fn(|column| rows.map(|row| row[column])))
+    has_step(rows) || has_step(columns)
 }
 
 /// Object Selection with Hard Edge off (#12855): `region` with the reference application's
