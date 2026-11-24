@@ -46,23 +46,44 @@ fn check_gif_budget(w: u64, h: u64, frames: u64) -> std::result::Result<(), Stri
 }
 
 /// Set every video layer's displayed content to its frame at the playhead: a held frame as it is,
-/// a frame of linked movie footage decoded from the file (empty while the file is offline).
+/// a frame of linked movie footage decoded from the file (empty while the file is offline, which
+/// `inspect` reports).
 pub fn sync(doc: &mut Document) {
     let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
     let fmt = doc.pixel_format();
-    sync_layers(&mut doc.layers, cur, fmt);
+    // Interactive display: an unreadable frame shows empty rather than failing the edit.
+    let _ = sync_layers(&mut doc.layers, cur, fmt, false);
 }
 
-fn sync_layers(layers: &mut [Layer], cur: usize, fmt: photocraft_color::PixelFormat) {
+/// [`sync`] for output (Render Video): a footage frame that can't be decoded is an error naming
+/// the layer and the file, never an empty frame written as if it were the footage.
+pub fn sync_for_output(doc: &mut Document) -> Result<()> {
+    let cur = doc.timeline.as_ref().map_or(0, |t| t.current);
+    let fmt = doc.pixel_format();
+    sync_layers(&mut doc.layers, cur, fmt, true)
+}
+
+/// Shows each video layer's frame at `cur`. With `strict`, the first footage frame that can't be
+/// decoded stops it with that error; without, such a frame shows empty.
+fn sync_layers(layers: &mut [Layer], cur: usize, fmt: photocraft_color::PixelFormat, strict: bool) -> Result<()> {
     for l in layers.iter_mut() {
         if let Some(v) = &mut l.video {
             let shown = match v.view(cur, !v.show_altered) {
                 Some(FrameView::Own(f)) => Some((f.clone(), None)),
-                Some(FrameView::Footage(n)) => v.footage.as_ref().map(|f| {
-                    let frame = crate::footage::frame(&f.link, n, fmt).unwrap_or_else(|_| Surface::new(fmt));
-                    let generation = frame.generation();
-                    (frame, Some(generation))
-                }),
+                Some(FrameView::Footage(n)) => match v.footage.as_ref().map(|f| crate::footage::frame(&f.link, n, fmt)) {
+                    Some(Ok(frame)) => {
+                        let generation = frame.generation();
+                        Some((frame, Some(generation)))
+                    }
+                    Some(Err(e)) if strict => return Err(EngineError::Other(format!("the video layer `{}`, frame {}: {e}", l.name, cur + 1))),
+                    // Offline: shown empty, and remembered as shown, so moving on doesn't paint it.
+                    Some(Err(_)) => {
+                        let empty = Surface::new(fmt);
+                        let generation = empty.generation();
+                        Some((empty, Some(generation)))
+                    }
+                    None => None,
+                },
                 Some(FrameView::Blank) => Some((Surface::new(fmt), None)),
                 None => None,
             };
@@ -74,9 +95,10 @@ fn sync_layers(layers: &mut [Layer], cur: usize, fmt: photocraft_color::PixelFor
             }
         }
         if let Some(ch) = l.children_mut() {
-            sync_layers(ch, cur, fmt);
+            sync_layers(ch, cur, fmt, strict)?;
         }
     }
+    Ok(())
 }
 
 /// Keep edits made to every video layer's displayed content (paint, fills, filters) by writing it
@@ -684,7 +706,7 @@ pub fn render_video_with(
             if let Some(t) = &mut doc.timeline {
                 t.current = f;
             }
-            sync(&mut doc);
+            sync_for_output(&mut doc)?;
             let surf = crate::file_cmds::flattened(&doc, fmt);
             let mut px = vec![[0.0f32; 4]; w * h];
             surf.read_rgba_into(bounds, &mut px);
@@ -713,7 +735,7 @@ pub fn render_video_with(
         if let Some(t) = &mut doc.timeline {
             t.current = f;
         }
-        sync(&mut doc);
+        sync_for_output(&mut doc)?;
         let path = format!("{stem}_{f:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
         write(&path, &bytes)?;

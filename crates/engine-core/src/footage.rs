@@ -171,7 +171,7 @@ pub fn status(link: &FootageLink, frames_used: usize) -> Result<(), String> {
 }
 
 /// Footage frame `n` of `link`'s file in `format`, cropped by the link's clip and moved where the
-/// link places it in the document.
+/// link places it in the document. `Err` names the file and why the frame can't be read.
 pub fn frame(link: &FootageLink, n: usize, format: PixelFormat) -> Result<Surface, String> {
     let decoded = decoded(&link.path, n, format)?;
     Ok(place(decoded, link))
@@ -188,7 +188,13 @@ fn decoded(path: &str, n: usize, format: PixelFormat) -> Result<Surface, String>
     }
     let doc = lock(&src.decoder).decode(n)?;
     let surface = crate::file_cmds::flattened(&doc, format);
-    lock(registry()).cache.put(key, surface.clone());
+    // The decode ran outside the registry lock: a file registered again or forgotten meanwhile
+    // must not get this frame in its cache, so keep it only while the same decoder is current.
+    let mut r = lock(registry());
+    let current = r.sources.get(path).and_then(|s| s.as_ref().ok()).is_some_and(|s| Arc::ptr_eq(s, &src));
+    if current {
+        r.cache.put(key, surface.clone());
+    }
     Ok(surface)
 }
 
@@ -196,8 +202,10 @@ fn decoded(path: &str, n: usize, format: PixelFormat) -> Result<Surface, String>
 /// exactly for whole-pixel moves and quarter turns, resampled otherwise.
 fn place(s: Surface, link: &FootageLink) -> Surface {
     let frame = Rect::from_xywh(0, 0, link.info.width, link.info.height);
-    let keep = link.clip.map_or(frame, |c| c.intersect(&frame));
-    let s = if keep == frame { s } else { photocraft_algo::resample::crop_surface(&s, keep) };
+    let (s, keep) = match &link.clip {
+        Some(polygon) => keep_inside(&s, polygon, frame),
+        None => (s, frame),
+    };
     let a = link.placement;
     if a == Affine::IDENTITY {
         return s;
@@ -212,7 +220,23 @@ fn place(s: Surface, link: &FootageLink) -> Surface {
     let exact = [m0, m1, m2, m3].iter().all(|v| unit(*v)) && whole(dx) && whole(dy);
     let interp = if exact { photocraft_algo::transform::Interp::Nearest } else { photocraft_algo::transform::Interp::Bicubic };
     let h = photocraft_algo::transform::Homography([m0, m2, dx, m1, m3, dy, 0.0, 0.0, 1.0]);
-    photocraft_algo::transform::warp_surface(&s, keep, &h, interp).unwrap_or_else(|_| Surface::new(s.format()))
+    let warped = photocraft_algo::transform::warp_surface(&s, keep, &h, interp).unwrap_or_else(|_| Surface::new(s.format()));
+    // Resampling spreads the kept edge over the pixels around it: hold the result to the crop as
+    // it lands in the document, as the painted frames were cropped there.
+    match &link.clip {
+        Some(polygon) => {
+            let landed: Vec<[f64; 2]> = polygon
+                .iter()
+                .map(|&[x, y]| {
+                    let p = a.apply(photocraft_geom::Point::new(x, y));
+                    [p.x, p.y]
+                })
+                .collect();
+            let bounds = warped.content_bounds();
+            keep_inside(&warped, &landed, bounds).0
+        }
+        None => warped,
+    }
 }
 
 /// Change `link` as a whole-image map `a` (document pixel → new document pixel) changes the
@@ -222,22 +246,125 @@ pub(crate) fn transform(link: &mut FootageLink, a: &Affine) {
 }
 
 /// Keep only the part of the footage that lands inside `r` (document pixels): Delete Cropped
-/// Pixels on a layer whose frames are decoded.
+/// Pixels on a layer whose frames are decoded. The crop's corners are mapped back into footage
+/// pixels, so the kept part is exactly the crop whatever turn or scale the footage has, and a
+/// later crop narrows it further.
 pub(crate) fn clip(link: &mut FootageLink, r: Rect) {
-    let Some(inv) = link.placement.inverse() else { return };
-    let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)].map(|(x, y)| inv.apply(photocraft_geom::Point::new(f64::from(x), f64::from(y))));
+    let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)];
+    let quad: Vec<[f64; 2]> = match link.placement.inverse() {
+        Some(inv) => corners
+            .iter()
+            .map(|&(x, y)| {
+                let p = inv.apply(photocraft_geom::Point::new(f64::from(x), f64::from(y)));
+                [p.x, p.y]
+            })
+            .collect(),
+        // A placement that collapses the footage shows nothing; nothing of it survives a crop.
+        None => Vec::new(),
+    };
+    let quad = if quad.iter().flatten().all(|v| v.is_finite()) { quad } else { Vec::new() };
+    let kept = match &link.clip {
+        Some(old) => intersect_convex(old, &quad),
+        None => quad,
+    };
+    link.clip = Some(kept);
+}
+
+/// Twice the signed area of `p` (positive when its corners run counter-clockwise in a y-up frame).
+fn signed_area2(p: &[[f64; 2]]) -> f64 {
+    (0..p.len())
+        .map(|i| {
+            let ([x0, y0], [x1, y1]) = (p[i], p[(i + 1) % p.len()]);
+            x0 * y1 - x1 * y0
+        })
+        .sum()
+}
+
+/// The part of convex polygon `subject` inside convex polygon `clip` (Sutherland-Hodgman), in
+/// either winding. Empty when they don't overlap or either is degenerate.
+fn intersect_convex(subject: &[[f64; 2]], clip: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let area = signed_area2(clip);
+    if clip.len() < 3 || area == 0.0 {
+        return Vec::new();
+    }
+    let side = area.signum();
+    let mut out = subject.to_vec();
+    for i in 0..clip.len() {
+        let (a, b) = (clip[i], clip[(i + 1) % clip.len()]);
+        // Positive on the polygon's inner side of edge a→b.
+        let inside = |p: [f64; 2]| side * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]));
+        let input = std::mem::take(&mut out);
+        for j in 0..input.len() {
+            let (p, q) = (input[j], input[(j + 1) % input.len()]);
+            let (dp, dq) = (inside(p), inside(q));
+            if dp >= 0.0 {
+                out.push(p);
+            }
+            if (dp >= 0.0) != (dq >= 0.0) {
+                let t = dp / (dp - dq);
+                out.push([p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])]);
+            }
+        }
+        if out.is_empty() {
+            break;
+        }
+    }
+    out
+}
+
+/// The x range `[from, to)` of pixels on row `y` whose centres lie inside convex `polygon`.
+fn row_span(polygon: &[[f64; 2]], y: i32) -> Option<(i32, i32)> {
+    let cy = f64::from(y) + 0.5;
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for i in 0..polygon.len() {
+        let (a, b) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+        if (a[1] <= cy) != (b[1] <= cy) {
+            let x = a[0] + (cy - a[1]) / (b[1] - a[1]) * (b[0] - a[0]);
+            lo = lo.min(x);
+            hi = hi.max(x);
+        }
+    }
+    // Pixel x is kept when its centre x + 0.5 is in [lo, hi).
+    let (from, to) = ((lo - 0.5).ceil(), (hi - 0.5).ceil());
+    (from < to && from.is_finite() && to.is_finite()).then(|| (from.max(f64::from(i32::MIN)) as i32, to.min(f64::from(i32::MAX)) as i32))
+}
+
+/// `s` with only the pixels of `frame` whose centres are inside convex `polygon`, and the
+/// rectangle that holds them.
+fn keep_inside(s: &Surface, polygon: &[[f64; 2]], frame: Rect) -> (Surface, Rect) {
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for p in corners {
-        x0 = x0.min(p.x);
-        y0 = y0.min(p.y);
-        x1 = x1.max(p.x);
-        y1 = y1.max(p.y);
+    for &[x, y] in polygon {
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
     }
-    if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
-        return;
+    let bounds = if polygon.len() < 3 || !(x0 < x1 && y0 < y1) {
+        Rect::EMPTY
+    } else {
+        Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32).intersect(&frame)
+    };
+    if bounds.is_empty() {
+        return (Surface::with_default(s.format(), &s.default_pixel()), Rect::EMPTY);
     }
-    let c = Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32);
-    link.clip = Some(link.clip.map_or(c, |old| old.intersect(&c)));
+    let mut out = photocraft_algo::resample::crop_surface(s, bounds);
+    // An axis-aligned crop on whole pixels is already exact; only slanted edges need each row.
+    let aligned = polygon.len() == 4 && polygon.iter().all(|[x, y]| x.fract() == 0.0 && y.fract() == 0.0) && {
+        let xs: std::collections::BTreeSet<i64> = polygon.iter().map(|p| p[0] as i64).collect();
+        let ys: std::collections::BTreeSet<i64> = polygon.iter().map(|p| p[1] as i64).collect();
+        xs.len() <= 2 && ys.len() <= 2
+    };
+    if !aligned {
+        let clear = s.default_pixel();
+        for y in bounds.y0..bounds.y1 {
+            match row_span(polygon, y) {
+                Some((from, to)) => {
+                    let (from, to) = (from.clamp(bounds.x0, bounds.x1), to.clamp(bounds.x0, bounds.x1));
+                    out.fill_rect(Rect::new(bounds.x0, y, from, y + 1), &clear);
+                    out.fill_rect(Rect::new(to, y, bounds.x1, y + 1), &clear);
+                }
+                None => out.fill_rect(Rect::new(bounds.x0, y, bounds.x1, y + 1), &clear),
+            }
+        }
+    }
+    (out, bounds)
 }
 
 #[cfg(test)]
@@ -251,11 +378,15 @@ pub(crate) mod testing {
     pub struct Synthetic {
         pub info: FootageInfo,
         pub decodes: Arc<std::sync::atomic::AtomicUsize>,
+        /// A frame whose decode fails, as a damaged file's would.
+        pub fail_at: Option<usize>,
+        /// Runs at the start of every decode, while the decoder is busy.
+        pub during_decode: Option<Box<dyn Fn() + Send>>,
     }
 
     impl Synthetic {
         pub fn new(width: u32, height: u32, frames: usize, fps: f32) -> Self {
-            Synthetic { info: FootageInfo { width, height, frames, fps }, decodes: Arc::default() }
+            Synthetic { info: FootageInfo { width, height, frames, fps }, decodes: Arc::default(), fail_at: None, during_decode: None }
         }
 
         /// The grey value footage frame `n` is drawn with.
@@ -271,6 +402,12 @@ pub(crate) mod testing {
 
         fn decode(&mut self, n: usize) -> Result<Document, String> {
             self.decodes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Some(f) = &self.during_decode {
+                f();
+            }
+            if self.fail_at == Some(n) {
+                return Err(format!("frame {n} is damaged"));
+            }
             let v = self.level(n);
             let fmt = PixelFormat { mode: photocraft_color::ColorMode::Rgb, sample: photocraft_color::SampleType::U8, alpha: true };
             let mut doc = Document::new(

@@ -37,9 +37,11 @@ pub struct FootageLink {
     /// turns) change it as they change the stored pixels, so a decoded frame lands where the
     /// painted frames are.
     pub placement: photocraft_geom::Affine,
-    /// The part of the footage frame that is kept, in footage pixels (a crop that deleted the
-    /// cropped pixels); `None` keeps the whole frame.
-    pub clip: Option<photocraft_geom::Rect>,
+    /// The part of the footage frame that is kept, as a convex polygon in footage pixels: a crop
+    /// that deleted the cropped pixels, mapped back through `placement`, so it stays exact when
+    /// the footage is turned or scaled. A footage pixel is kept when its centre is inside.
+    /// `None` keeps the whole frame.
+    pub clip: Option<Vec<[f64; 2]>>,
 }
 
 impl FootageLink {
@@ -238,7 +240,7 @@ impl VideoData {
     /// The footage frame count this layer needs from its file: one more than the highest footage
     /// frame any of its frames shows (0 without linked footage).
     pub fn footage_frames_used(&self) -> usize {
-        self.footage.as_ref().map_or(0, |f| f.origin.iter().flatten().map(|n| n + 1).max().unwrap_or(0))
+        self.footage.as_ref().map_or(0, |f| f.origin.iter().flatten().map(|n| n.saturating_add(1)).max().unwrap_or(0))
     }
 }
 

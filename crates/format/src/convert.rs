@@ -113,6 +113,9 @@ fn opt_blob(b: &Option<Arc<Vec<u8>>>, sink: &mut dyn Sink) -> Option<Hash> {
     b.as_ref().map(|b| sink.blob(b))
 }
 
+/// Most corners a video layer's footage crop polygon may have: each crop adds at most four.
+const MAX_CLIP_CORNERS: usize = 1024;
+
 fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifest::VideoDataM {
     crate::manifest::VideoDataM {
         frames: v.frames.iter().map(|f| surface_m(f, sink)).collect(),
@@ -367,6 +370,12 @@ impl Loader<'_> {
             }
             Some(f) if !f.link.placement.m.iter().all(|v| v.is_finite()) || !f.link.info.fps.is_finite() => {
                 return Err(FormatError::corrupt("a video layer's footage placement or frame rate is not a number"));
+            }
+            Some(f) if f.origin.iter().flatten().any(|&n| n >= f.link.info.frames) => {
+                return Err(FormatError::corrupt("a video layer shows a footage frame past the end of its footage"));
+            }
+            Some(f) if f.link.clip.as_ref().is_some_and(|c| c.len() > MAX_CLIP_CORNERS || !c.iter().flatten().all(|v| v.is_finite())) => {
+                return Err(FormatError::corrupt("a video layer's footage crop is not a usable polygon"));
             }
             Some(f) => Some(photocraft_doc::FootageFrames { link: f.link.clone(), origin: f.origin.clone(), altered: f.altered.clone() }),
             None => None,

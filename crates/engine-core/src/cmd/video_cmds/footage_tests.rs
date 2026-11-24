@@ -18,16 +18,21 @@ fn path(name: &str) -> String {
 
 /// A document the footage's size with a video layer linked to `frames` synthetic frames.
 fn linked(name: &str, frames: usize) -> (Session, LayerId, Synthetic) {
+    linked_with(name, Synthetic::new(W, H, frames, 24.0))
+}
+
+/// [`linked`] with the decoder `decoder` (a damaged frame, a hook while decoding). The returned
+/// `Synthetic` shares its decode count and draws the same levels.
+fn linked_with(name: &str, decoder: Synthetic) -> (Session, LayerId, Synthetic) {
     let file = path(name);
-    let synthetic = Synthetic::new(W, H, frames, 24.0);
-    let counter = Synthetic { info: synthetic.info, decodes: synthetic.decodes.clone() };
-    let info = crate::footage::register(&file, Box::new(counter));
+    let twin = Synthetic { decodes: decoder.decodes.clone(), ..Synthetic::new(W, H, decoder.info.frames, decoder.info.fps) };
+    let info = crate::footage::register(&file, Box::new(decoder));
     let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H})).unwrap();
     let id = s
         .edit("New Video Layer from File", |doc, active| {
             let fmt = doc.pixel_format();
-            doc.timeline = Some(Timeline::new(frames, info.fps));
+            doc.timeline = Some(Timeline::new(info.frames, info.fps));
             let mut l = Layer::raster("Movie", fmt);
             l.video = Some(VideoData::from_footage(FootageLink::new(file.clone(), info), fmt));
             let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
@@ -36,7 +41,7 @@ fn linked(name: &str, frames: usize) -> (Session, LayerId, Synthetic) {
             Ok(id)
         })
         .unwrap();
-    (s, id, synthetic)
+    (s, id, twin)
 }
 
 fn layer(s: &Session, id: LayerId) -> &Layer {
@@ -238,4 +243,69 @@ fn footage_that_cant_be_read_is_reported_not_rendered() {
     let err = s.execute("file.export.renderVideo", json!({"dir": dir.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
     assert!(err.contains(&file), "Render Video names the missing file: {err}");
     assert!(std::fs::read_dir(&dir).map_or(true, |mut d| d.next().is_none()), "and writes no frames");
+}
+
+/// A crop that deletes pixels keeps exactly the crop of footage that was turned by an angle that
+/// isn't a quarter turn, as it does for the painted frames: no footage outside it comes back.
+#[test]
+fn a_deleting_crop_stays_exact_on_slanted_footage() {
+    let (mut s, id, _) = linked("slanted-crop", 3);
+    // Image Rotation by 30° about the canvas origin, as an arbitrary rotation moves the footage.
+    let turn = photocraft_geom::Affine::rotate(30f64.to_radians());
+    s.edit("Turn", |doc, _| {
+        crate::canvas_geom::transform_geometry(doc, &turn);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.crop", json!({"x": 0, "y": 4, "width": 12, "height": 10, "deleteCroppedPixels": true})).unwrap();
+    goto(&mut s, 1);
+    let LayerContent::Raster(frame) = &layer(&s, id).content else { panic!("a video layer shows raster content") };
+    let canvas = s.active().unwrap().doc.bounds();
+    let shown = frame.content_bounds();
+    assert!(!shown.is_empty(), "part of the footage is inside the crop");
+    for y in shown.y0..shown.y1 {
+        for x in shown.x0..shown.x1 {
+            let alpha = frame.pixel(x, y)[3];
+            assert!(alpha == 0.0 || canvas.contains(x, y), "footage at ({x}, {y}) is outside the {canvas:?} crop (alpha {alpha})");
+        }
+    }
+}
+
+/// Render Video stops at a frame the decoder fails on instead of writing an empty frame.
+#[test]
+fn render_video_fails_on_a_frame_that_cant_be_decoded() {
+    let (mut s, _, _) = linked_with("damaged", Synthetic { fail_at: Some(1), ..Synthetic::new(W, H, 4, 24.0) });
+    let dir = std::env::temp_dir().join(format!("pc-footage-damaged-{}", std::process::id()));
+    let err = s.execute("file.export.renderVideo", json!({"dir": dir.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
+    assert!(err.contains("frame 2") && err.contains("damaged"), "the error names the frame and why: {err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A frame decoded while its file was closed (Reload Frame, a relink) isn't cached for the file
+/// as it is opened next.
+#[test]
+fn a_frame_decoded_while_the_file_is_closed_is_not_cached() {
+    let file = path("closed-mid-decode");
+    let closing = file.clone();
+    let decoder = Synthetic { during_decode: Some(Box::new(move || crate::footage::forget(&closing))), ..Synthetic::new(W, H, 3, 24.0) };
+    crate::footage::register(&file, Box::new(decoder));
+    let link = FootageLink::new(file.clone(), crate::footage::probe(&file).unwrap());
+    let fmt = photocraft_color::PixelFormat { mode: photocraft_color::ColorMode::Rgb, sample: photocraft_color::SampleType::U8, alpha: true };
+    assert!(crate::footage::frame(&link, 0, fmt).is_ok(), "the decode itself completes");
+    // Had the frame been cached, this would be a cache hit; the file is closed, so it can't be read.
+    assert!(crate::footage::frame(&link, 0, fmt).is_err(), "the closed file's frame was cached");
+}
+
+/// A native document whose video layer shows a footage frame past the end of its file is
+/// refused as damaged rather than read into a layer that overflows counting its frames.
+#[test]
+fn a_saved_frame_past_the_footage_is_refused() {
+    let (s, id, _) = linked("past-the-end", 2);
+    let mut doc = (*s.active().unwrap().doc).clone();
+    if let Some(f) = doc.layer_mut(id).and_then(|l| l.video.as_mut()).and_then(|v| v.footage.as_mut()) {
+        f.origin[0] = Some(usize::MAX);
+    }
+    let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+    let err = photocraft_format::load_from_bytes(&bytes).unwrap_err().to_string();
+    assert!(err.contains("past the end"), "{err}");
 }
