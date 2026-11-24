@@ -1,5 +1,5 @@
-//! #11775: Record Measurements labels a Count tool row "Count N"; selection and ruler rows keep
-//! their labels, and N is the number the row gets today (the shared counter).
+//! #11775, #16513: Record Measurements uses source-specific label prefixes ("Measurement N",
+//! "Ruler N", "Count N") with independent per-source sequences.
 
 use serde_json::{Value, json};
 
@@ -33,20 +33,36 @@ fn a_count_row_is_labelled_count_n() {
 }
 
 #[test]
-fn other_rows_keep_their_labels_and_the_counter_is_shared() {
+fn each_source_uses_its_own_label_prefix_and_independent_sequence() {
     let mut s = five_counts();
-    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
-    let selection = record(&mut s, "selection");
-    assert_eq!(selection["label"], json!("Measurement 1"), "{selection}");
-    let count = record(&mut s, "count");
-    assert_eq!(count["label"], json!("Count 2"), "{count}");
-    // `auto` picks the selection over the counts, and keeps its label.
+    // A failed ruler measurement must not consume "Ruler 1".
+    assert!(s.execute("image.analysis.recordMeasurements", json!({"source": "ruler"})).is_err());
+
+    s.execute("image.analysis.rulerTool", json!({"start": [32, 64], "end": [62, 104]})).unwrap();
+    let ruler1 = record(&mut s, "ruler");
+    assert_eq!(ruler1["source"], json!("Ruler Tool"), "{ruler1}");
+    assert_eq!(ruler1["label"], json!("Ruler 1"), "{ruler1}");
+
+    let ruler2 = record(&mut s, "ruler");
+    assert_eq!(ruler2["label"], json!("Ruler 2"), "{ruler2}");
+
+    let count1 = record(&mut s, "count");
+    assert_eq!(count1["source"], json!("Count Tool"), "{count1}");
+    assert_eq!(count1["label"], json!("Count 1"), "{count1}");
+
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 16, "height": 16})).unwrap();
+    let sel1 = record(&mut s, "selection");
+    assert_eq!(sel1["source"], json!("Selection"), "{sel1}");
+    assert_eq!(sel1["label"], json!("Measurement 1"), "{sel1}");
+
+    // `auto` picks the selection over ruler/counts and advances the selection sequence only.
     let auto = record(&mut s, "auto");
     assert_eq!(auto["source"], json!("Selection"), "{auto}");
-    assert_eq!(auto["label"], json!("Measurement 3"), "{auto}");
-    s.execute("image.analysis.rulerTool", json!({"start": [0, 0], "end": [3, 4]})).unwrap();
-    let ruler = record(&mut s, "ruler");
-    assert_eq!(ruler["label"], json!("Measurement 4"), "{ruler}");
-    let count = record(&mut s, "count");
-    assert_eq!(count["label"], json!("Count 5"), "{count}");
+    assert_eq!(auto["label"], json!("Measurement 2"), "{auto}");
+
+    let count2 = record(&mut s, "count");
+    assert_eq!(count2["label"], json!("Count 2"), "{count2}");
+
+    let ruler3 = record(&mut s, "ruler");
+    assert_eq!(ruler3["label"], json!("Ruler 3"), "{ruler3}");
 }

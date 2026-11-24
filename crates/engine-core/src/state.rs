@@ -213,8 +213,10 @@ pub struct LogRow {
 pub struct AnalysisState {
     pub log: Vec<LogRow>,
     pub(crate) next_row: u64,
-    /// Counter for "Measurement N" labels.
+    /// Independent per-source counters for "Measurement N", "Ruler N", and "Count N" labels.
     pub(crate) next_measurement: u64,
+    pub(crate) next_ruler: u64,
+    pub(crate) next_count: u64,
     pub data_points: DataPoints,
 }
 
