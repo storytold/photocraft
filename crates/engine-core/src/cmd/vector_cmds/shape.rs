@@ -435,13 +435,26 @@ fn default_name(kind: &str) -> &'static str {
     }
 }
 
+/// The label of a shape addition (`addTo`): Add Shape, or the tool's own step named by
+/// `addHistoryName`. Only the Polygon tool's press-time operation names its addition ("Polygon
+/// Tool", storytold/photocraft#13320); any other value is refused.
+fn addition_history_name(p: &Value, cmd: &str) -> Result<&'static str> {
+    match p.get("addHistoryName") {
+        None | Some(Value::Null) => Ok("Add Shape"),
+        Some(v) if v.as_str() == Some("Polygon Tool") => Ok("Polygon Tool"),
+        Some(_) => Err(bad(cmd, "`addHistoryName` must be \"Polygon Tool\"")),
+    }
+}
+
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
-/// Line Tool additions keep the tool's History name. Other shape additions use Add Shape.
+/// Line Tool additions keep the tool's History name; the Polygon tool's press-time additions take
+/// the one `addHistoryName` names ([`addition_history_name`]). Other shape additions use Add Shape.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let add_to = p.get("addTo").and_then(Value::as_u64);
     let default_label = if add_to.is_some() { "Add Shape" } else { "New Shape Layer" };
     let label = super::paths::pen_history_name(p, CMD, default_label)?;
+    let add_label = addition_history_name(p, CMD)?;
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("rect");
     let (path, live) = if kind == "path" {
         let v = p.get("path").ok_or_else(|| bad(CMD, "kind \"path\" needs `path`"))?;
@@ -456,7 +469,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(target) = add_to {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
-        let label = if kind == "line" && label == "Line Tool" { label } else { "Add Shape" };
+        let label = if kind == "line" && label == "Line Tool" { label } else { add_label };
         with_shape(s, id, label, |sh, _| {
             for mut sp in path.subpaths {
                 // A joined subpath (a hole) belongs to the component before it, which takes `op`.

@@ -192,6 +192,9 @@ mod pen_rubber_band_tests;
 mod paint_tests;
 
 #[cfg(test)]
+mod polygon_press_path_ops_tests;
+
+#[cfg(test)]
 mod triangle_box_geometry_tests;
 #[cfg(test)]
 mod triangle_properties_fields_tests;

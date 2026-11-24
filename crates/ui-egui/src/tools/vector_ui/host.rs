@@ -33,11 +33,19 @@ pub(crate) struct VectorTools {
     pub(crate) freeform: FreeformPenTool,
     /// Path Selection.
     pub(crate) path_selection: PathSelectionTool,
+    /// The modifiers held at the last press, which can pick a Shape-tool drag's path operation (#13320).
+    pub(crate) press_mods: Mods,
 }
 
 impl Default for VectorTools {
     fn default() -> Self {
-        Self { pen: PenTool::new(), shapes: ShapeDragTool::new(), freeform: FreeformPenTool::default(), path_selection: Default::default() }
+        Self {
+            pen: PenTool::new(),
+            shapes: ShapeDragTool::new(),
+            freeform: FreeformPenTool::default(),
+            path_selection: Default::default(),
+            press_mods: Mods::default(),
+        }
     }
 }
 
@@ -152,11 +160,14 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
         pen::sync_live_layer_from_draft(app);
     }
     end_for_other_tool(app);
+    if pointer.press.is_some() {
+        state.press_mods = pointer.mods;
+    }
     for event in state.shapes.take_events() {
         match event {
             ShapeDragEvent::Draw(EditEvent::Commit { after, .. }) => {
                 let mods = craft::ui::runtime::pointer::frame(app.ctx()).mods;
-                super::shapes::finish_drag(app, state.shapes.kind(), &after, mods);
+                super::shapes::finish_drag_pressed(app, state.shapes.kind(), &after, mods, state.press_mods);
             }
             ShapeDragEvent::Click { at, kind, .. } => {
                 super::shapes::click(app, kind, [at.x, at.y]);

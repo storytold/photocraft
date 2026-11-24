@@ -236,10 +236,18 @@ fn report(app: &mut PhotocraftApp, e: String) {
     app.ui.status_error = true;
 }
 
+/// [`finish_drag_pressed`] with no modifiers held at the press.
+#[cfg(test)]
+pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) {
+    finish_drag_pressed(app, kind, geometry, mods, Mods::default());
+}
+
 /// Finish a Shape-tool drag with the geometry the framework tool committed (⇧ and ⌥ are already in
 /// it): Path mode adds the outline to the Work Path, Custom Shape places the preset, the others
-/// make a shape layer. A geometry too small to draw changes nothing.
-pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) {
+/// make a shape layer. A geometry too small to draw changes nothing. `mods` are the modifiers held
+/// at the release, `press` the ones held at the press, which can pick the path operation
+/// ([`press_path_op`]).
+pub fn finish_drag_pressed(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods, press: Mods) {
     let Some(geometry) = snapped(geometry, mods.shift, snaps_to_pixels(app, kind)) else { return };
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
@@ -257,7 +265,7 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
         path.subpaths.extend(outline.subpaths);
         // The first component of a path always combines; the later ones take the drag's operation.
         if first_new > 0
-            && let Some(op) = drag_path_op(app)
+            && let Some(op) = drag_path_op(app, kind, press)
             && let Some(sp) = path.subpaths.get_mut(first_new)
         {
             sp.op = path_op_of(op);
@@ -272,7 +280,7 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
     if let ShapeGeometry::Custom { rect, keep_proportions } = &geometry {
         // With an operation other than New Layer the shape joins the active shape layer as one
         // component, its holes joined to it as in Path mode.
-        if let Some(op) = drag_path_op(app)
+        if let Some(op) = drag_path_op(app, kind, press)
             && let Some(id) = super::options::selected_shape(&app.session)
             && let Some(outline) = outline_of(app, kind, &geometry)
         {
@@ -304,21 +312,46 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
     };
     p["historyName"] = json!(tool_history_name(kind));
     // With an operation other than New Layer the drag joins the active shape layer.
-    if let Some(op) = drag_path_op(app)
+    if let Some(op) = drag_path_op(app, kind, press)
         && let Some(id) = super::options::selected_shape(&app.session)
     {
         p["addTo"] = json!(id.0);
         p["op"] = json!(op);
+        // The press's operation is the Polygon tool's own step (#13320); the options bar's stays Add Shape.
+        if press_path_op(app, kind, press).is_some() {
+            p["addHistoryName"] = json!("Polygon Tool");
+        }
     }
     if let Err(e) = app.run("shape.create", p) {
         report(app, e);
     }
 }
 
-/// The operation the next Shape-tool drag is added with (the options bar's Path operations);
-/// None for a new shape layer. The one place press modifiers can override it (#13227).
-fn drag_path_op(app: &PhotocraftApp) -> Option<&'static str> {
-    super::pen::shape_path_op(&app.ui.tool_options)
+/// The operation the next Shape-tool drag is added with: the one the modifiers held at the press
+/// pick ([`press_path_op`]), else the options bar's Path operations; None for a new shape layer.
+fn drag_path_op(app: &PhotocraftApp, kind: ShapeKind, press: Mods) -> Option<&'static str> {
+    press_path_op(app, kind, press).or_else(|| super::pen::shape_path_op(&app.ui.tool_options))
+}
+
+/// The Polygon tool's ⇧, ⌥ or ⇧⌥ held at the press, in Shape mode with one shape layer selected:
+/// the drag joins that layer as a Combine, Subtract or Intersect component, as in the reference
+/// application (#13320). The same keys still constrain and draw from the centre while held. Not
+/// measured, so None (the options bar's operation, as before): another shape tool, Path mode, a
+/// pixel layer or none active, several layers selected, and ⌘ / Ctrl held as well.
+fn press_path_op(app: &PhotocraftApp, kind: ShapeKind, press: Mods) -> Option<&'static str> {
+    if kind != ShapeKind::Polygon || app.ui.tool_options.shape_mode != super::VectorMode::Shape || press.cmd || press.ctrl {
+        return None;
+    }
+    let st = app.session.active()?;
+    if st.selected_layers().len() != 1 || super::options::selected_shape(&app.session).is_none() {
+        return None;
+    }
+    match (press.shift, press.alt) {
+        (true, false) => Some("combine"),
+        (false, true) => Some("subtract"),
+        (true, true) => Some("intersect"),
+        (false, false) => None,
+    }
 }
 
 fn path_op_of(op: &str) -> photocraft_doc::vector::PathOp {
