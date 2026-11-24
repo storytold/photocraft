@@ -18,10 +18,10 @@ set -euo pipefail
 HERE="$ROOT/packaging/linux"
 APP_ID=ai.storyteller.photocraft
 FLATPAK_ID="$APP_ID"
+# The remote indexes both app IDs on the stable ref branch; IDs isolate installations.
 FLATPAK_BRANCH=stable
 if [[ "${PHOTOCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* ]]; then
   FLATPAK_ID="$APP_ID.nightly"
-  FLATPAK_BRANCH=nightly
 fi
 FLATHUB=https://dl.flathub.org/repo/flathub.flatpakrepo
 
