@@ -17,7 +17,7 @@ const CUSTOM: usize = STOPS.len();
 const CUSTOM_KEY: &str = "exposure-preset-custom";
 
 fn dialog_key() -> Id {
-    Id::new(("adjustment-dialog", CUSTOM_KEY))
+    Id::unique(("adjustment-dialog", CUSTOM_KEY))
 }
 
 /// Returns the menu to the named preset that matches its values after Properties resets them.
