@@ -1,43 +1,59 @@
 # Align Edges
 
-Shape tools expose **Align Edges** in the options bar. The corresponding scripted
-setting is `useAlignedRendering` on `shape.create`, `shape.edit`, `shape.info`,
-`path.toShape` and `shape.presets.place`. It defaults to false for new shapes;
-appending with `addTo` preserves the target setting when omitted. Tool presets
-retain the preference; Reset Tool restores false.
+A shape layer's **Align Edges** (`ShapeLayer::use_aligned_rendering`, PSD block `sn2P`, scripting
+key `useAlignedRendering`) fits the whole shape to whole document pixels when it is rendered, as the
+reference application does. The stored path is never changed: an anchor at 10.5 stays at 10.5, and
+turning the flag off renders the original soft edges again.
 
-The Triangle and Rectangle tools also expose **Snap Bounding Box**, enabled by default. That
-separate tool preference (`align_edges`) rounds the drag box before creating the
-path; it does not toggle render-time Align Edges or edit an existing layer.
+## The rule
 
-Alignment affects both fill and stroke. Straight horizontal and vertical source
-edges at fractional coordinates snap to document pixel boundaries on a render-only
-copy. Curve extrema at anchors with axis-aligned handles snap too, including
-ellipse boundaries; extrema inside a Bézier segment are not detected. Handles
-move with their anchors, preserving adjoining curve tangents.
-Curves and diagonals retain antialiasing; flattened curve chords are never snapped.
-Stored paths, live parameters, stroke widths and dash settings are unchanged.
-Turning the option off restores the original coverage. Existing one-pixel stroke
-and dash-cap coverage rules remain in use after edge alignment. Straight outline
-edges of wider integer-width strokes also snap when every source knot has
-coincident handles. Paths with curved segments, including rounded rectangles,
-retain outline antialiasing on their straight sides too. Centered fractional-width strokes
-keep their area coverage so a subpixel outline cannot collapse to zero width.
-Inside/outside strokes use a doubled outline before clipping to the fill; some
-fractional requested widths therefore produce a snapped integral-width outline
-(for example, 1.5 px becomes a 3 px outline before clipping). Curved source
-outlines retain antialiasing.
+Measured in the reference application (a black shape on white):
 
-Native projects retain the setting. PSD `strokeStyleStrokeAdjust` is an independent
-stroke-style property: it neither enables Align Edges on import nor changes when
-Align Edges is toggled. Existing values survive stroke appearance edits. PSD/PSB
-stores Align Edges in the layer's `sn2P` (Using Aligned Rendering) block: four
-big-endian bytes, nonzero for enabled, as specified by
-[Adobe's PSD format documentation](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/).
-An absent block defaults to false. Unchanged valid blocks stay byte-identical.
-Fill/stroke splitting retains the layer setting for ordinary fills as well as
-live lines, so layer effects and clipped content use the same aligned coverage.
+1. Take the bounds of what the shape paints: the fill area, or the stroke's outer edge when it has
+   a visible stroke (a centred stroke reaches half its width beyond the path, an outside stroke its
+   whole width, an inside stroke nothing).
+2. Round the left and top edge to the nearest whole pixel (a half rounds up: 10.5 becomes 11) and
+   the width and height to whole pixels (20.5 becomes 21).
+3. Translate and scale the whole path so its painted bounds fill that box. The fill and the stroke
+   take this one transform; the stroke keeps its width.
 
-Aligned previews rasterize in document pixels before the view transform. Large
-previews use bounded work per frame and a temporary coarse fallback until native
-coverage is ready. Cache identities include the setting and geometry provenance.
+So curves stay antialiased (an ellipse moves, it is not bent), diagonals just move with the shape,
+and the inner edges of a shape with several subpaths are not snapped one by one. A few results:
+
+| Shape | Reference application, Align Edges on |
+|---|---|
+| Rectangle 10.5..30.5, fill | covers columns 11..30 (off: columns 10 and 30 half covered) |
+| Rectangle 10.25..30.75 / 10.4..30.6 / 10.75..30.25 | covers 10..30 / 10..29 / 11..30 |
+| 1 px centred stroke on rectangle 10..30 | the stroke paints columns 10 and 30 |
+| 2 px stroke on rectangle 10.25..30.25 | columns 9-10 and 29-30 |
+| Fill + 1 px stroke at 10.5 | unchanged: its outer edge 10..31 is already whole |
+| Pen triangle (10.5,10.5) (30.5,10.5) (10.5,30.5) | moves by half a pixel on both axes |
+
+Not measured, and chosen here: a shape thinner than half a pixel keeps its size (rounding would
+make it vanish); an inverted path (it paints everywhere) is not moved; a 1 px Line paints its band
+19.5..20.5 on row 20 (the reference's Line tool could not be driven by script).
+
+The rule lives in `photocraft_vector::align_edges` and is applied in `CompiledShape`, which every
+renderer uses: layer caches, the compositor (also its fill/stroke split under layer effects, which
+starts from `align_edges::aligned_shape` so both parts move together), previews and extents.
+
+## The checkbox
+
+The shape tools and the Pen (in Shape mode) have one **Align Edges** checkbox at the options bar's
+right end, on by default and after Reset Tool, greyed in Path mode. It does both: the drag lands on
+whole pixels (with it off, the Rectangle's and Triangle's drags keep their fractions; the other
+tools' drags always land on whole pixels), and the new shape layer gets Align Edges. With a shape layer selected the checkbox
+shows and edits that layer's flag, as Fill and Stroke do; the Properties panel has it too. Tool
+presets store it as `useAlignedRendering` (older settings and presets as `align_edges`).
+
+## Files
+
+- PSD: `sn2P` is a four-byte value, nonzero for on. It is separate from the stroke's Stroke Adjust.
+  The reference application writes it as 1 when on and leaves it out when off (checked by saving
+  both), so a PSD shape layer without it renders without Align Edges.
+- `.pcraft`: `use_aligned_rendering`, written only when on. Files from before it existed have no
+  such field and keep rendering as they did (off).
+- Scripting: `shape.create`, `shape.edit`, `path.toShape` and `shape.presets.place` take
+  `useAlignedRendering`; `shape.info` reports it. Without the param a new layer is off (scripts
+  keep their old results); `addTo` keeps the target layer's value. The UI always passes the
+  checkbox's value.

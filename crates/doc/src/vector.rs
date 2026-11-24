@@ -347,11 +347,9 @@ pub struct ShapeLayer {
     /// `None` = no fill (Photoshop's fill "none").
     pub fill: Option<Fill>,
     pub stroke: Option<ShapeStroke>,
-    /// Align Edges: snap fill and stroke edges to document pixels at render time.
+    /// Align Edges (PSD `sn2P`, scripting `useAlignedRendering`): at render time the whole shape
+    /// is fitted to whole document pixels (`photocraft_vector::align_edges`); `path` is unchanged.
     pub use_aligned_rendering: bool,
-    /// Original PSD coordinate grid, retained independently of the export block.
-    /// Supplies the half-quantum alignment allowance after an integer translation.
-    pub psd_coordinate_frame: Option<[u32; 2]>,
     pub live: Option<LiveShape>,
     /// Rasterized appearance (from PSD or `photocraft-vector`).
     pub cache: Option<Surface>,
@@ -372,7 +370,6 @@ impl Default for ShapeLayer {
             fill: None,
             stroke: None,
             use_aligned_rendering: false,
-            psd_coordinate_frame: None,
             live: None,
             cache: None,
             psd_raw: None,

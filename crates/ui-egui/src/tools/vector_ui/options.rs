@@ -156,15 +156,11 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
-    // The Rectangle tool's Align Edges, at the bar's right end after the gear (#13346). Only a
-    // shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
-    if tool == Tool::Rectangle {
+    // Every shape tool's one Align Edges, at the bar's right end after the gear (#13346, #13370).
+    // Only a shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
+    if is_shape_tool(tool) {
         Divider::vertical().show(ui);
-        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
-        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Snap Bounding Box").to_owned()).enabled(shape_mode).show(ui);
-        if let Some(next) = on.value().copied() {
-            app.ui.tool_options.align_edges = next;
-        }
+        super::alignment::shape_tool_option(app, ui);
     }
 }
 
@@ -203,9 +199,8 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
-    if app.ui.tool_options.vector_mode == VectorMode::Shape {
-        super::alignment::pen_option(app, ui);
-    }
+    // Align Edges, enabled in Shape mode only (greyed in Path mode).
+    super::alignment::pen_option(app, ui);
     Divider::vertical().show(ui);
     path_operations_menu(app, ui);
     let o = &mut app.ui.tool_options;
@@ -485,7 +480,7 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
         .show(ui);
     let fw::ShapePanelOutput { events, pick_color, out_of_range, .. } = output;
     let paint_gradients = [library.gradient(fw::ShapePaint::Fill), library.gradient(fw::ShapePaint::Stroke)];
-    super::alignment::option(app, ui, Some(id), false);
+    super::alignment::option(app, ui, Some(id), false, true);
 
     let mut applied = false;
     let mut recent: Option<[f32; 3]> = None;

@@ -1,17 +1,10 @@
 # photocraft-raw
 
-A pure-Rust camera raw developer over the shared `craft-raw` decoder. It has no `unsafe`,
-does no I/O (`&[u8]` in) and builds for `wasm32-unknown-unknown` (sequential there,
-rayon-parallel on native). The adapter enforces pixel and allocation limits before decoding.
-
-Floating-point samples retain their source units and signed/HDR values until development;
-linearization is applied by the decoder, while polynomial corrections remain deferred.
-Explicit decoder notices preserve calibration and CFA fallback provenance. Non-DNG samples
-are not rewritten by the app's separate DNG clipping policy.
-
-The adapter and fixture corrections follow [PhotoCraft #11029](https://github.com/storytold/photocraft/pull/11029).
-The fixes in [craft-libs #1300](https://github.com/storytold/craft-libs/pull/1300) are now merged;
-`craft-raw` uses the shared immutable revision pinned in the workspace manifest.
+A clean-room, pure-Rust camera raw decoder and developer. The crate is standalone (no workspace
+dependencies; its decoding dependencies are `flate2` for Deflate DNG and `jxl-oxide`, a pure-Rust
+JPEG XL decoder, for DNG 1.7, native builds only), has no `unsafe`, does no I/O (`&[u8]` in), builds for `wasm32-unknown-unknown`
+(sequential there, rayon-parallel on native) and never panics on hostile input: every offset is
+bounds-checked and sizes are checked against `Limits` before allocating.
 
 ```rust
 use photocraft_raw::{develop, DevelopOptions, Demosaic};

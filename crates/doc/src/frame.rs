@@ -55,7 +55,6 @@ impl Frame {
             fill: None,
             stroke: Some(stroke),
             use_aligned_rendering: false,
-            psd_coordinate_frame: None,
             cache: None,
             psd_raw: None,
             live: None,

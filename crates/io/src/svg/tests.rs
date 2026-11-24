@@ -1120,7 +1120,7 @@ fn bounded_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
 /// Each level of embedded SVG image adds the parser's and renderer's frames on top of the one it
 /// sits in. Every chain the bounded path takes (base64 grows each level, so the XML byte budget
 /// ends it before [`MAX_EMBEDDED_SVG_DEPTH`]) parses and renders on a 1 MB thread stack (Windows'
-/// main-thread size); over-budget images are omitted by the non-strict renderer.
+/// main-thread size); deeper ones are refused.
 #[test]
 fn the_deepest_chain_of_embedded_svg_images_fits_a_small_stack() {
     let chain = |levels: usize| {

@@ -130,17 +130,17 @@ fn options_bar_shows_align_edges_at_its_right_end() {
     // The Radius field.
     let radius = h.query_all_by_label("Radius").map(|n| n.rect().right()).fold(f32::MIN, f32::max);
     let gear = h.get_by_label(GEAR).rect();
-    let node = h.get_by_label("Snap Bounding Box");
+    let node = h.get_by_label("Align Edges");
     assert!(node.rect().left() > gear.right() && gear.left() > radius, "{:?} after {gear:?} after the radius ({radius})", node.rect());
     assert!((node.rect().center().y - gear.center().y).abs() < 4.0, "on the gear's row");
     assert!(!node.accesskit_node().is_disabled(), "enabled in Shape mode");
     assert_eq!(node.accesskit_node().toggled(), Some(Toggled::True));
-    h.get_by_label("Snap Bounding Box").click();
+    h.get_by_label("Align Edges").click();
     h.run_steps(3);
     assert!(!h.state().ui.tool_options.align_edges, "clicking toggles the option");
-    assert_eq!(h.get_by_label("Snap Bounding Box").accesskit_node().toggled(), Some(Toggled::False));
+    assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(Toggled::False));
 
     h.state_mut().ui.tool_options.shape_mode = VectorMode::Path;
     h.run_steps(4);
-    assert!(h.get_by_label("Snap Bounding Box").accesskit_node().is_disabled(), "greyed in Path mode");
+    assert!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), "greyed in Path mode");
 }

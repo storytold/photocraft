@@ -60,13 +60,6 @@ fn layers(app: &PhotocraftApp) -> usize {
 
 #[test]
 fn a_type_mask_click_on_text_edits_that_layer_as_the_type_tool_does() {
-    // This unoptimized fixture moves several full app/harness states through two frames.
-    // Windows test threads have only 2 MiB; reserve a bounded stack for the fixture,
-    // keeping all three tools and their full frame/history assertions enabled.
-    std::thread::Builder::new().stack_size(8 * 1024 * 1024).spawn(check_type_mask_click_on_text).unwrap().join().unwrap();
-}
-
-fn check_type_mask_click_on_text() {
     let escape = key(egui::Key::Escape, Modifiers::NONE);
     let mut states = Vec::new();
     for tool in [Tool::Type, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {

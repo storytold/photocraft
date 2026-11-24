@@ -13,7 +13,6 @@ impl PhotocraftApp {
     /// (`request_discard`, such as a sizing pass) leaves the record open, so a frame is one
     /// record across all its passes.
     pub(crate) fn finish_frame(&mut self, ctx: &egui::Context, ui_ms: f64) {
-        crate::shape_stroke_ui::finish_frame(self, ctx);
         self.perf.stage.ui_ms += ui_ms;
         self.perf.stage.stroking |= self.live_stroke.is_some();
         if ctx.will_discard() {

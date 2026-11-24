@@ -487,7 +487,7 @@ impl ToolSet {
             crate::paint_mouse::sync_tool_brush(app);
         }
         if let Some(value) = self.use_aligned_rendering {
-            app.ui.tool_options.use_aligned_rendering = value;
+            app.ui.tool_options.align_edges = value;
         }
         self.apply_gradient_and_trace(app);
         let eyedropper = &mut app.ui.tool_options.eyedropper;

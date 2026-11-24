@@ -293,11 +293,10 @@ pub enum ContentM {
         path: Path,
         #[serde(default)]
         stroke: Option<ShapeStroke>,
-        /// Optional pixel alignment; absent in legacy files.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not", alias = "pixel_align_stroke")]
+        /// Align Edges. Absent in files from before it existed, which keep rendering as they did
+        /// (off); written only when on, so files without it stay readable by older versions.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         use_aligned_rendering: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        psd_coordinate_frame: Option<[u32; 2]>,
         #[serde(default)]
         live: Option<LiveShape>,
         /// Arrow parameters stored separately for backward compatibility.

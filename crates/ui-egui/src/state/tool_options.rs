@@ -146,10 +146,6 @@ pub struct ToolOptions {
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
     pub stroke_width: f32,
-    /// Align fill and stroke edges of new shapes to document pixels.
-    #[serde(default)]
-    #[serde(rename = "useAlignedRendering", alias = "pixel_align_stroke")]
-    pub use_aligned_rendering: bool,
     #[serde(default)]
     pub shape_stroke: crate::shape_stroke_ui::StrokeOptions,
     /// Shape tools: the gradient the next shape's fill / stroke takes (the swatches' Gradient
@@ -157,9 +153,12 @@ pub struct ToolOptions {
     pub shape_fill_gradient: Option<photocraft_doc::Fill>,
     pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
-    /// Shape tools' Align Edges: snap the drawn shape's box to whole pixels. On by default; the
-    /// Triangle (#13370) and Rectangle (#13346) tools show it, enabled in Shape mode only; the other
-    /// shape tools always snap.
+    /// The shape tools' and the Pen's (Shape mode) one Align Edges checkbox, as in the reference
+    /// application: a drag lands on whole pixels, and the new shape layer gets Align Edges
+    /// (`ShapeLayer::use_aligned_rendering`), which fits it to whole pixels at render time. On by
+    /// default and after Reset Tool; enabled in Shape mode only. Scripted and stored by the
+    /// reference's name, `useAlignedRendering` (`align_edges` in older settings and presets).
+    #[serde(rename = "useAlignedRendering", alias = "align_edges")]
     pub align_edges: bool,
     pub polygon_sides: u32,
     /// The Polygon tool's corner radius in px for the next polygon (#13302): its own, not the
@@ -502,7 +501,6 @@ impl Default for ToolOptions {
             shape_mode: VectorMode::Shape,
             shape_fill: true,
             stroke_width: 0.0,
-            use_aligned_rendering: false,
             shape_stroke: Default::default(),
             shape_fill_gradient: None,
             shape_stroke_gradient: None,

@@ -987,12 +987,6 @@ fn ui_fonts(ctx: &egui::Context, ui_language: &str) -> UiFonts<'static> {
         .craft_faces(&crate::cjk_fonts::craft_faces())
         .ui_language(ui_language)
         .emoji(emoji);
-    // Headless passes cannot wait for the native index's repaint before strict glyph checks.
-    // Use the same system faces, with a blocking lookup only in the test fixture.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    if let Some(provider) = craft::ui::fonts::system_font_provider(ui_language) {
-        fonts = fonts.system_provider(provider);
-    }
     if let Some(locale) = crate::cjk_fonts::os_locale() {
         fonts = fonts.os_locale(locale);
     }

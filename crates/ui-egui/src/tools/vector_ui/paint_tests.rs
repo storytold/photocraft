@@ -714,12 +714,14 @@ fn align_edges_framework_controls_edit_layers_and_preserve_undo() {
         let mut app = app("rgb", 8);
         app.run("shape.create", json!({"rect": [20.5,20.5,80.0,60.0], "useAlignedRendering": false})).unwrap();
         let original = shape(&app).path.clone();
+        // The tool option starts off too, so the click shows where it lands.
+        app.ui.tool_options.align_edges = false;
         let mut h = harness(app, properties);
         h.get_by_label("Align Edges").click();
         h.run_steps(3);
         assert!(shape(h.state()).use_aligned_rendering);
         assert_eq!(shape(h.state()).path, original);
-        assert_eq!(h.state().ui.tool_options.use_aligned_rendering, !properties);
+        assert_eq!(h.state().ui.tool_options.align_edges, !properties);
         if let Ok(dir) = std::env::var("PHOTOCRAFT_ALIGN_EDGES_SNAPSHOT_DIR") {
             let name = if properties { "align-edges-properties.png" } else { "align-edges-toolbar.png" };
             h.render().unwrap().save(std::path::Path::new(&dir).join(name)).unwrap();
@@ -733,7 +735,7 @@ fn align_edges_framework_controls_edit_layers_and_preserve_undo() {
 fn align_edges_framework_creation_and_preview_keep_the_option() {
     for enabled in [false, true] {
         let mut app = app("rgb", 8);
-        app.ui.tool_options.use_aligned_rendering = enabled;
+        app.ui.tool_options.align_edges = enabled;
         let geometry = geometry(Tool::Rectangle, [10.0, 10.0], [30.0, 30.0]);
         let preview = shapes::shape_preview(&app, shapes::kind_of(Tool::Rectangle), &geometry).unwrap();
         assert_eq!(preview.use_aligned_rendering, enabled);
@@ -748,9 +750,9 @@ fn align_edges_framework_pen_captures_and_edits_draft_option() {
     let mut app = app("rgb", 8);
     app.ui.tool = Tool::Pen;
     app.ui.tool_options.vector_mode = VectorMode::Shape;
-    app.ui.tool_options.use_aligned_rendering = true;
+    app.ui.tool_options.align_edges = true;
     app.ui.pen = Some(PenPath::corners(&[[20.5, 20.5], [80.5, 60.5]], super::capture_pen_owner(&app)));
-    app.ui.tool_options.use_aligned_rendering = false;
+    app.ui.tool_options.align_edges = false;
     assert!(pen_commit(&mut app, false));
     assert!(shape(&app).use_aligned_rendering, "the captured draft keeps its option");
 }
@@ -776,7 +778,7 @@ fn align_edges_framework_tool_presets_use_the_canonical_key() {
 #[test]
 fn align_edges_framework_line_preview_matches_committed_pixels() {
     let mut app = app("rgb", 8);
-    app.ui.tool_options.use_aligned_rendering = true;
+    app.ui.tool_options.align_edges = true;
     let line = ShapeGeometry::Line { from: craft::behavior::kurbo::Point::new(20.0, 20.0), to: craft::behavior::kurbo::Point::new(80.0, 20.0), weight: 3.0 };
     let preview = shapes::shape_preview(&app, shapes::kind_of(Tool::Line), &line).unwrap();
     shapes::finish_drag(&mut app, shapes::kind_of(Tool::Line), &line, Mods::default());

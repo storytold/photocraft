@@ -50,7 +50,7 @@ rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # The tables of craft-host's `SectionStore` (`app/framework.rs`); already linked through craft-host.
-toml = { version = "1.1", default-features = false, features = ["std", "serde", "display"] }
+toml = { version = "1.1", default-features = false, features = ["std", "serde"] }
 log = { workspace = true }
 base64 = "0.23"
 web-time = { workspace = true }
@@ -58,7 +58,7 @@ web-time = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # `FilePanels::pump_with`: rfd's folder picker and file paths exist on native only. Agents in the
 # open window (`craft::automation::agents`: the link, the launcher's switch, the Agents page) too.
-craft = { workspace = true, features = ["dialogs", "update", "automation-agents", "ui-system_fonts"] }
+craft = { workspace = true, features = ["dialogs", "update", "automation-agents"] }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"

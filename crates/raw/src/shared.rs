@@ -87,7 +87,7 @@ fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
         out.push("raw default crop was invalid, incomplete or out-of-range; adjusted within the active area".into());
     }
     if image.notices.assumed_cfa {
-        out.push("raw colour filter phase (Bayer phase) was not recorded or recognized; the decoder's fallback pattern was assumed".into());
+        out.push("raw colour filter phase (Bayer phase) was not recorded or recognized; the decoder's fallback pattern was used".into());
     }
     // Unknown means the decoder has not annotated provenance; it does not mean
     // the file omitted its levels. Report only an explicit fallback decision.
@@ -99,17 +99,17 @@ fn warnings(image: &craft_raw::RawImage) -> Vec<String> {
             out.push("raw white level not recorded in a documented tag; assumed full sample range".into());
         }
     }
+    if image.notices.gain_table_omitted {
+        out.push("the raw camera profile's invalid gain table map was omitted".to_string());
+    }
     for op in image.opcodes.list1.iter().chain(&image.opcodes.list2).chain(&image.opcodes.list3) {
         if !matches!(op, craft_raw::Opcode::GainMap { .. } | craft_raw::Opcode::MapPolynomial { .. }) {
             out.push("some raw correction opcodes are not applied by PhotoCraft".to_string());
             break;
         }
     }
-    if image.notices.gain_table_omitted {
-        out.push("the raw camera profile's invalid ProfileGainTableMap (gain table map) was omitted".to_string());
-    }
-    if image.color.profile.gain_table_map.is_some() {
-        out.push("the raw camera profile's ProfileGainTableMap (gain table map) is not applied by PhotoCraft".to_string());
+    if image.notices.gain_table_omitted || image.color.profile.gain_table_map.is_some() {
+        out.push("the raw camera profile's ProfileGainTableMap is not applied by PhotoCraft".to_string());
     }
     out
 }

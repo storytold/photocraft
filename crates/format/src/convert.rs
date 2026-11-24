@@ -156,7 +156,6 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             path: s.path.clone(),
             stroke: s.stroke.clone(),
             use_aligned_rendering: s.use_aligned_rendering,
-            psd_coordinate_frame: s.psd_coordinate_frame,
             // Older PhotoCraft versions cannot deserialize ArrowLine.
             // The saved path preserves the arrow's visual appearance.
             live: match &s.live {
@@ -461,7 +460,7 @@ impl Loader<'_> {
         })
     }
 
-    fn layer(&mut self, m: &LayerM, depth: usize, frame: [u32; 2]) -> Result<Layer> {
+    fn layer(&mut self, m: &LayerM, depth: usize) -> Result<Layer> {
         if depth > MAX_GROUP_DEPTH {
             return Err(too_deep());
         }
@@ -471,18 +470,10 @@ impl Loader<'_> {
         if let ContentM::Group { children: kids, .. } = &m.content {
             children.reserve(kids.len());
             for c in kids {
-                children.push(self.layer(c, depth + 1, frame)?);
+                children.push(self.layer(c, depth + 1)?);
             }
         }
-        let mut layer = self.layer_with(m, children)?;
-        // Older native files predate explicit PSD coordinate provenance.
-        if let LayerContent::Shape(shape) = &mut layer.content
-            && shape.psd_raw.is_some()
-            && shape.psd_coordinate_frame.is_none()
-        {
-            shape.psd_coordinate_frame = Some(frame);
-        }
-        Ok(layer)
+        self.layer_with(m, children)
     }
 
     /// One layer, given its already converted group children.
@@ -515,36 +506,24 @@ impl Loader<'_> {
                     warp: warp.clone(),
                 })
             }
-            ContentM::Shape {
-                fill,
-                cache,
-                psd_raw,
-                path,
-                stroke,
-                use_aligned_rendering,
-                psd_coordinate_frame,
-                live,
-                arrow_live,
-                triangle_live,
-                density,
-                feather,
-            } => LayerContent::Shape(ShapeLayer {
-                path: path.clone(),
-                fill: fill.clone(),
-                stroke: stroke.clone(),
-                use_aligned_rendering: *use_aligned_rendering,
-                psd_coordinate_frame: *psd_coordinate_frame,
-                live: arrow_live
-                    .as_ref()
-                    .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
-                    .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
-                    .cloned()
-                    .or_else(|| live.clone()),
-                cache: self.opt_surface(cache)?,
-                psd_raw: self.opt_blob(psd_raw)?,
-                density: *density,
-                feather: *feather,
-            }),
+            ContentM::Shape { fill, cache, psd_raw, path, stroke, use_aligned_rendering, live, arrow_live, triangle_live, density, feather } => {
+                LayerContent::Shape(ShapeLayer {
+                    path: path.clone(),
+                    fill: fill.clone(),
+                    stroke: stroke.clone(),
+                    use_aligned_rendering: *use_aligned_rendering,
+                    live: arrow_live
+                        .as_ref()
+                        .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
+                        .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
+                        .cloned()
+                        .or_else(|| live.clone()),
+                    cache: self.opt_surface(cache)?,
+                    psd_raw: self.opt_blob(psd_raw)?,
+                    density: *density,
+                    feather: *feather,
+                })
+            }
             ContentM::Smart {
                 contents_id,
                 source,
@@ -662,7 +641,7 @@ impl Loader<'_> {
             max_ids(&m.layers, 0, &mut max)?;
             self.preserve_ids = reserve_ids_through(max);
         }
-        let layers = m.layers.iter().map(|l| self.layer(l, 0, [m.size.width, m.size.height])).collect::<Result<Vec<_>>>()?;
+        let layers = m.layers.iter().map(|l| self.layer(l, 0)).collect::<Result<Vec<_>>>()?;
         let mut channels = Vec::with_capacity(m.channels.len());
         for c in &m.channels {
             channels.push(self.channel(c)?);

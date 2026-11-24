@@ -518,7 +518,7 @@ pub fn vogk_bytes(s: &LiveShape, dpi: f32) -> Option<Vec<u8>> {
 // Shape layers
 // ---------------------------------------------------------------------------
 
-/// Adobe's layer-level `sn2P` block is a four-byte, nonzero-is-true value.
+/// The layer-level `sn2P` block (Align Edges) is a four-byte, nonzero-is-true value.
 /// It is independent of the `vstk` descriptor's Stroke Adjust property.
 fn aligned_rendering(data: &[u8]) -> Option<bool> {
     Some(u32::from_be_bytes(data.try_into().ok()?) != 0)
@@ -531,7 +531,6 @@ pub fn shape_from_blocks(sh: &mut ShapeLayer, block: &dyn Fn(&[u8; 4]) -> Option
         && let Some((p, _)) = path_from_vmsk(&d, w, h)
     {
         sh.path = p;
-        sh.psd_coordinate_frame = Some([w, h]);
     }
     if let Some(f) = block(b"vscg").and_then(|d| fill_from_vscg(&d)) {
         sh.fill = Some(f);
@@ -558,9 +557,13 @@ fn has_fill_block(raw: &[([u8; 4], Vec<u8>)]) -> bool {
 pub fn shape_blocks(sh: &ShapeLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>, w: u32, h: u32, dpi: f32) {
     let find = |raw: &Vec<([u8; 4], Vec<u8>)>, k: &[u8; 4]| raw.iter().position(|(key, _)| key == k);
     // The layer's Align Edges setting, not the stroke's Stroke Adjust setting.
+    // The reference application writes `sn2P` = 1 for on and leaves the block out for off.
     match find(raw, b"sn2P") {
         Some(i) if aligned_rendering(&raw[i].1).unwrap_or(false) == sh.use_aligned_rendering => {}
-        Some(i) => raw[i].1 = u32::from(sh.use_aligned_rendering).to_be_bytes().to_vec(),
+        Some(i) if sh.use_aligned_rendering => raw[i].1 = 1u32.to_be_bytes().to_vec(),
+        Some(i) => {
+            raw.remove(i);
+        }
         None if sh.use_aligned_rendering => raw.push((*b"sn2P", 1u32.to_be_bytes().to_vec())),
         None => {}
     }
@@ -875,8 +878,9 @@ mod align_edges_tests {
             assert_eq!(raw, unchanged);
             imported.use_aligned_rendering = !enabled;
             shape_blocks(&imported, &mut raw, 64, 64, 72.0);
-            let data = &raw.iter().find(|(key, _)| key == b"sn2P").unwrap().1;
-            assert_eq!(data, &u32::from(!enabled).to_be_bytes());
+            // As the reference application saves it: `sn2P` = 1 when on, no block when off.
+            let data = raw.iter().find(|(key, _)| key == b"sn2P").map(|(_, d)| d.clone());
+            assert_eq!(data, (!enabled).then(|| 1u32.to_be_bytes().to_vec()));
         }
     }
 
@@ -903,36 +907,5 @@ mod align_edges_tests {
             shape_blocks(&shape, &mut raw, 64, 64, 72.0);
             assert_eq!(raw[0].1, data, "unchanged true values stay byte-identical");
         }
-    }
-    /// Layer-wide snapping no longer needs the old canvas quantum to sharpen a rectangle.
-    #[test]
-    fn pixel_alignment_narrowed_psd_canvas_keeps_crisp_edges_after_recolor() {
-        let shape = ShapeLayer {
-            path: photocraft_vector::shapes::rect(10.0, 10.0, 60.0, 60.0),
-            use_aligned_rendering: true,
-            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
-            ..Default::default()
-        };
-        let mut raw = Vec::new();
-        shape_blocks(&shape, &mut raw, 300_000, 300_000, 72.0);
-        let mut imported = ShapeLayer::default();
-        shape_from_blocks(&mut imported, &|key| raw.iter().find(|(k, _)| k == key).map(|(_, bytes)| bytes.clone()), 300_000, 300_000, 72.0);
-        assert_ne!(imported.path, shape.path, "fixture must exercise PSD path quantization");
-        shape_blocks(&imported, &mut raw, 1000, 1000, 72.0);
-        let mut reopened = ShapeLayer::default();
-        shape_from_blocks(&mut reopened, &|key| raw.iter().find(|(k, _)| k == key).map(|(_, bytes)| bytes.clone()), 1000, 1000, 72.0);
-        assert_eq!(reopened.psd_coordinate_frame, Some([1000, 1000]));
-        assert!(reopened.use_aligned_rendering);
-        reopened.stroke.as_mut().unwrap().paint = Fill::Solid(photocraft_doc::Color::rgb(0.4, 0.2, 0.7));
-        let path = reopened.path.clone();
-        let rect = photocraft_geom::Rect::new(0, 0, 80, 80);
-        let pixels = photocraft_vector::CompiledShape::new(&reopened, photocraft_vector::DEFAULT_TOLERANCE, rect).render_rgba(rect);
-        for y in 0..80 {
-            for x in 0..80 {
-                let edge = (10..70).contains(&x) && (y == 10 || y == 69) || (10..70).contains(&y) && (x == 10 || x == 69);
-                assert_eq!(pixels[y * 80 + x][3], f32::from(edge), "({x},{y})");
-            }
-        }
-        assert_eq!(reopened.path, path);
     }
 }

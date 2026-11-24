@@ -183,7 +183,8 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
     macro_rules! serialized_key {
-        (use_aligned_rendering) => {
+        // The one Align Edges checkbox goes by the reference application's script name.
+        (align_edges) => {
             "useAlignedRendering"
         };
         ($f:ident) => {
@@ -245,14 +246,14 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, sponge_flow, vibrance),
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
-        Tool::Pen => reset!(vector_mode, use_aligned_rendering, pen_path_op, pen_auto_add_delete, path_options),
-        Tool::CurvaturePen => reset!(vector_mode, use_aligned_rendering, pen_path_op),
-        Tool::FreeformPen => reset!(vector_mode, use_aligned_rendering, pen_path_op, curve_fit),
+        Tool::Pen => reset!(vector_mode, align_edges, pen_path_op, pen_auto_add_delete, path_options),
+        Tool::CurvaturePen => reset!(vector_mode, align_edges, pen_path_op),
+        Tool::FreeformPen => reset!(vector_mode, align_edges, pen_path_op, curve_fit),
         Tool::Line => reset!(
             shape_mode,
             shape_path_op,
             shape_fill,
-            use_aligned_rendering,
+            align_edges,
             stroke_width,
             shape_stroke,
             shape_fill_gradient,
@@ -271,7 +272,6 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             shape_mode,
             shape_path_op,
             shape_fill,
-            use_aligned_rendering,
             stroke_width,
             shape_stroke,
             shape_fill_gradient,
@@ -292,7 +292,6 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 shape_mode,
                 shape_path_op,
                 shape_fill,
-                use_aligned_rendering,
                 stroke_width,
                 shape_stroke,
                 shape_fill_gradient,

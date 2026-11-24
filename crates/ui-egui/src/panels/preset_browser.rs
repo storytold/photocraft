@@ -689,7 +689,7 @@ fn shape_fill(app: &PhotocraftApp) -> Value {
 /// The `shape.presets.place` params of `key`: at its default place, or in a square centred on the document point under
 /// the drop at `at`.
 fn shape_place(app: &PhotocraftApp, key: &str, at: Option<Pos2>) -> Value {
-    let mut params = json!({"preset": key, "fill": shape_fill(app), "useAlignedRendering": app.ui.tool_options.use_aligned_rendering});
+    let mut params = json!({"preset": key, "fill": shape_fill(app), "useAlignedRendering": app.ui.tool_options.align_edges});
     if let Some(pos) = at
         && let (Some(c), Some(d)) = (crate::canvas::document_display::doc_point_at(app, pos), app.session.active())
     {
@@ -761,7 +761,7 @@ pub fn finish_custom_shape(app: &mut PhotocraftApp, rect: [f64; 4], keep: bool, 
     let r = run(
         app,
         "shape.presets.place",
-        json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.use_aligned_rendering}),
+        json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.align_edges}),
     );
     if r.is_none() && !photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == name)) {
         let template = "No custom shape \"{name}\": pick one in the options bar or Window › Shapes";

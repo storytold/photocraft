@@ -327,7 +327,6 @@ fn group_key_tracks_uncached_shape_alignment() {
     let LayerContent::Group(g) = &mut group.content else { unreachable!() };
     let LayerContent::Shape(sh) = &mut g.children[0].content else { unreachable!() };
     sh.use_aligned_rendering = true;
-    sh.psd_coordinate_frame = Some([1000, 2000]);
     assert_ne!(before, group_key(&group, &light, &mut |_| {}));
 }
 
