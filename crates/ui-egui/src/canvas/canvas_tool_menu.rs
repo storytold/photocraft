@@ -750,6 +750,20 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
 
+/// Several layers are selected in the front document (#12358).
+fn several_layers_selected(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.selected_layers().len() > 1)
+}
+
+/// Several layers are selected in the front document, every one a pixel layer: the case #12358
+/// measured on the Count tool's layer menu.
+fn several_pixel_layers_selected(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| {
+        let selected = st.selected_layers();
+        selected.len() > 1 && selected.iter().all(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Raster(_))))
+    })
+}
+
 /// Is a path with at least two points being drawn with the Pen?
 pub(crate) fn pen_pending(app: &PhotocraftApp) -> bool {
     app.ui.pen.as_ref().is_some_and(|p| p.draft.knots.len() >= 2)
@@ -871,7 +885,16 @@ fn inside_corners(corners: &[craft::draw::ui::corner::CornerPoint], p: [f64; 2])
 /// Photoshop (#12913): the points of the path being drawn, or nothing when the document has no
 /// path at all. A path that exists but isn't active, and the Path Selection and Direct Selection
 /// menus, keep the table's label. The Add Anchor Point menu names the selected anchors (#12710).
+/// The layer rows that act on every selected layer (Duplicate, Delete, Rasterize) read in the
+/// plural with several layers selected, as in the Layers panel menu (#12358).
 pub(crate) fn row_label(app: &PhotocraftApp, menu: &CanvasToolMenu, label: &'static str, command: &str) -> &'static str {
+    // Only these rows count the selected layers (the menu asks for every row each frame).
+    if crate::layer_menu_ui::layer_count_label(command, false).is_some() {
+        let multi = several_layers_selected(app);
+        if let Some(label) = crate::layer_menu_ui::layer_count_label(command, multi) {
+            return label;
+        }
+    }
     if menu.tool == Tool::AddAnchorPoint {
         return add_anchor_row_label(app, menu, label, command);
     }
@@ -1424,6 +1447,16 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if inside_selection(menu) && command == "select.loadSelection" {
         return app.session.active().is_some_and(|st| st.doc.channels.iter().any(|c| c.spot.is_none())) && crate::menus::is_enabled(app, command);
     }
+    // #12358, measured on the Count tool's layer menu: with several pixel layers selected,
+    // Blending Options…, Color Range… and Load Selection… work on one layer, so they are greyed.
+    // Other layer kinds and the other tools' layer menus weren't measured with several layers and
+    // keep `menus::is_enabled`.
+    if menu.tool == Tool::Count
+        && matches!(command, "layer.layerStyle.blendingOptions" | "select.colorRange" | "select.loadSelection")
+        && several_pixel_layers_selected(app)
+    {
+        return false;
+    }
     if !(path_menu(menu.tool) || shape_tool_menu(menu.tool)) {
         return crate::menus::is_enabled(app, command);
     }
@@ -1848,6 +1881,12 @@ pub fn entries(app: &PhotocraftApp, menu: &CanvasToolMenu) -> Vec<Entry<String>>
             "Stroke Subpath…" => tl!("Stroke Subpath…"),
             "Stroke Subpaths…" => tl!("Stroke Subpaths…"),
             "Rasterize Vector Mask" => tl!("Rasterize Vector Mask"),
+            // `layer_menu_ui::layer_count_label`'s labels, likewise (#12358).
+            "Duplicate Layer…" => tl!("Duplicate Layer…"),
+            "Delete Layer" => tl!("Delete Layer"),
+            "Duplicate Layers…" => tl!("Duplicate Layers…"),
+            "Delete Layers" => tl!("Delete Layers"),
+            "Rasterize Layers" => tl!("Rasterize Layers"),
             key => tl!(key),
         };
         out.push(Entry::new(command.to_string(), text.to_string()).enabled(entry_enabled(app, menu, command)).checked(mode_checked(app, menu, command)));
@@ -1955,6 +1994,9 @@ mod delete_anchor_menu_tests;
 
 #[cfg(test)]
 mod convert_point_menu_tests;
+
+#[cfg(test)]
+mod layer_plural_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
