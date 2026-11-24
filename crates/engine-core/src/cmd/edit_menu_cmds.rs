@@ -311,7 +311,7 @@ use content_aware_scale::content_aware_scale;
 pub use fade::{FadePreview, fade_preview, fade_surface};
 use fade::{can_fade, fade};
 pub use find_replace::find_matches;
-use find_replace::{find_replace, has_type_layer};
+use find_replace::{can_find_replace, find_replace};
 pub(crate) use presets::current_path;
 pub use presets::{PRESET_FORMAT, PresetFile};
 use presets::{can_define_shape, define_brush_preset, define_custom_shape, preset_manager};
@@ -378,7 +378,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ["Edit"],
             None,
             r##"{"find":text,"replace":text,"action":"changeAll|find|change|changeFind","caseSensitive":bool=false,"wholeWord":bool=false,"forward":bool=true,"allLayers":bool=true}"##,
-            has_type_layer,
+            can_find_replace,
             find_replace
         ),
         spec!(
@@ -414,10 +414,6 @@ pub(crate) static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(
 #[cfg(test)]
 #[path = "edit_menu_cmds/tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "edit_menu_cmds/fade_visibility_tests.rs"]
-mod fade_visibility_tests;
 
 #[cfg(test)]
 #[path = "edit_menu_cmds/caf_new_layer_name_tests.rs"]
