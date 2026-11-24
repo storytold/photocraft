@@ -5,6 +5,7 @@
 //! follow-up; a saved document keeps the current frame as the layer's content.
 
 use photocraft_doc::{Document, Layer, LayerContent, Timeline, VideoData};
+use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -674,15 +675,17 @@ pub fn render_video_with(
         return Err(EngineError::Other(format!("the timeline is {duration} frames; Render Video is limited to {} frames", crate::timeline_cmds::MAX_DURATION)));
     }
     let range = render_range(p, base.timeline.as_ref())?;
+    // Rates under 1 fps are valid timelines, so only an unusable loaded rate falls back to 30.
+    let timeline_fps = base.timeline.as_ref().map(|t| t.fps).filter(|f| f.is_finite() && *f > 0.0).unwrap_or(30.0);
+    let plan = render_plan(p, range, timeline_fps, (base.size.width, base.size.height))?;
     // Every rendered frame, in order; `frames` counts them.
-    let frames = range.end() - range.start() + 1;
-    // Only the GIF delay reads the rate (frames come from the duration); rates under 1 fps are
-    // valid timelines, so only an unusable loaded rate falls back to 30.
-    let fps = base.timeline.as_ref().map(|t| t.fps).filter(|f| f.is_finite() && *f > 0.0).unwrap_or(30.0);
+    let frames = plan.frames.len();
+    let fps = plan.fps;
     let stem = safe_stem(&base.name);
     let fmt = base.pixel_format();
     let bounds = base.bounds();
-    let (w, h) = (bounds.width() as usize, bounds.height() as usize);
+    let out = Rect::from_xywh(0, 0, plan.size.0, plan.size.1);
+    let (w, h) = (out.width() as usize, out.height() as usize);
 
     let cancelled = || EngineError::Other("render cancelled".into());
     if !progress(0, frames) {
@@ -696,15 +699,15 @@ pub fn render_video_with(
         check_gif_budget(w as u64, h as u64, frames as u64).map_err(EngineError::Other)?;
         let delay = (100.0 / fps).round().clamp(1.0, 65535.0) as u16;
         let mut gframes = Vec::with_capacity(frames);
-        for (i, f) in range.clone().enumerate() {
+        for (i, &f) in plan.frames.iter().enumerate() {
             let mut doc = base.clone();
             if let Some(t) = &mut doc.timeline {
                 t.current = f;
             }
             sync(&mut doc);
-            let surf = crate::file_cmds::flattened(&doc, fmt);
+            let surf = plan.scaled(crate::file_cmds::flattened(&doc, fmt), bounds);
             let mut px = vec![[0.0f32; 4]; w * h];
-            surf.read_rgba_into(bounds, &mut px);
+            surf.read_rgba_into(out, &mut px);
             gframes.push(gif_frame(px, w, delay)?);
             // The final report follows encoding/writing, so total means the output exists.
             if !progress((i + 1).min(frames.saturating_sub(1)), frames) {
@@ -725,12 +728,16 @@ pub fn render_video_with(
     // PSD / PSB frames would embed the files linked smart objects name: not for a restricted session.
     let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
     let mut files = Vec::new();
-    for (i, f) in range.enumerate() {
+    for (i, &f) in plan.frames.iter().enumerate() {
         let mut doc = base.clone();
         if let Some(t) = &mut doc.timeline {
             t.current = f;
         }
         sync(&mut doc);
+        // Another size renders the flattened frame, resampled, as a one-layer document.
+        if plan.size != (base.size.width, base.size.height) {
+            doc = plan.scaled_document(&doc, fmt, bounds);
+        }
         // Files are numbered from the first rendered frame, whatever frame the range starts at.
         let path = format!("{stem}_{i:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
@@ -741,6 +748,82 @@ pub fn render_video_with(
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// Most pixels a side Render Video's `width` and `height` take, and most frames a second its
+/// `fps` takes, as in the reference application.
+const MAX_RENDER_SIDE: u32 = 5000;
+const MAX_RENDER_FPS: f64 = 5000.0;
+
+/// What Render Video writes: for each output frame, the timeline frame it shows; the output size;
+/// and the output rate.
+struct RenderPlan {
+    frames: Vec<usize>,
+    size: (u32, u32),
+    fps: f32,
+}
+
+impl RenderPlan {
+    /// `frame` (document pixels in `bounds`) at the output size: as it is when that is the
+    /// document's size, resampled otherwise.
+    fn scaled(&self, frame: Surface, bounds: Rect) -> Surface {
+        if (bounds.width(), bounds.height()) == self.size {
+            return frame;
+        }
+        let (sx, sy) = (f64::from(self.size.0) / f64::from(bounds.width().max(1)), f64::from(self.size.1) / f64::from(bounds.height().max(1)));
+        photocraft_algo::resample::resize_surface_in_canvas(&frame, sx, sy, photocraft_algo::resample::Resample::BicubicAutomatic, bounds)
+    }
+
+    /// `doc` flattened, at the output size, as a one-layer document of its mode, depth, profile
+    /// and resolution.
+    fn scaled_document(&self, doc: &Document, fmt: photocraft_color::PixelFormat, bounds: Rect) -> Document {
+        let mut out = Document::new(doc.name.clone(), photocraft_doc::Size::new(self.size.0, self.size.1), doc.mode, doc.depth);
+        out.icc_profile = doc.icc_profile.clone();
+        out.resolution_dpi = doc.resolution_dpi;
+        let mut layer = Layer::raster("Layer 1", fmt);
+        layer.content = LayerContent::Raster(self.scaled(crate::file_cmds::flattened(doc, fmt), bounds));
+        out.layers.push(layer);
+        out
+    }
+}
+
+/// Render Video's plan from its params: the frames of `range` (timeline frames at `timeline_fps`)
+/// sampled at `fps` (default the timeline's) over the same span of time, at `width` × `height`
+/// (default `document`'s size).
+fn render_plan(p: &Value, range: std::ops::RangeInclusive<usize>, timeline_fps: f32, document: (u32, u32)) -> Result<RenderPlan> {
+    let bad = |msg: String| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg };
+    let side = |key: &str, default: u32| -> Result<u32> {
+        match p.get(key).filter(|v| !v.is_null()) {
+            None => Ok(default),
+            Some(v) => v
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .filter(|n| (1..=MAX_RENDER_SIDE).contains(n))
+                .ok_or_else(|| bad(format!("`{key}`: An integer between 1 and {MAX_RENDER_SIDE} is required."))),
+        }
+    };
+    let size = (side("width", document.0)?, side("height", document.1)?);
+    let fps = match p.get("fps").filter(|v| !v.is_null()) {
+        None => f64::from(timeline_fps),
+        Some(v) => v
+            .as_f64()
+            .filter(|f| f.is_finite() && (1.0..=MAX_RENDER_FPS).contains(f))
+            .ok_or_else(|| bad(format!("`fps`: A number between 1.000 and {MAX_RENDER_FPS:.3} is required.")))?,
+    };
+    let (start, len) = (*range.start(), range.end() - range.start() + 1);
+    let source = f64::from(timeline_fps);
+    let frames = if (fps - source).abs() <= f64::EPSILON * source.max(1.0) {
+        range.collect()
+    } else {
+        // The same span of time at the new rate: output frame k shows the timeline frame on screen
+        // at time k / fps.
+        let count = ((len as f64) * fps / source).round().max(1.0);
+        if count > crate::timeline_cmds::MAX_DURATION as f64 {
+            return Err(bad(format!("{len} frames at {fps} fps make more than {} frames", crate::timeline_cmds::MAX_DURATION)));
+        }
+        (0..count as usize).map(|k| start + ((k as f64 * source / fps + 1e-9).floor() as usize).min(len - 1)).collect()
+    };
+    Ok(RenderPlan { frames, size, fps: fps as f32 })
 }
 
 /// The timeline frames Render Video writes, first to last, from its `range` param: `"all"` (or no
@@ -827,5 +910,7 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod render_video_range_tests;
+#[cfg(test)]
+mod render_video_size_rate_tests;
 #[cfg(test)]
 mod tests;
