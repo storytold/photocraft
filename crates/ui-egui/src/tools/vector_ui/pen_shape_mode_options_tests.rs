@@ -389,4 +389,3 @@ fn the_freeform_pen_shape_bar_gains_the_same_row() {
         assert!(h.query_by_role_and_label(Role::Button, "Shape").is_some(), "{tool:?} Path mode: Make: Shape stays");
     }
 }
-
