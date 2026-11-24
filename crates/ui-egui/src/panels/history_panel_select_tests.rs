@@ -55,11 +55,11 @@ fn current_key(app: &PhotocraftApp) -> HistoryKey {
 }
 
 fn snapshots(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().snapshots.len()
+    app.session.active().unwrap().snapshots().len()
 }
 
 fn last_snapshot(app: &PhotocraftApp) -> u64 {
-    app.session.active().unwrap().snapshots.last().unwrap().id
+    app.session.active().unwrap().snapshots().last().unwrap().id
 }
 
 fn top_pixel(app: &PhotocraftApp) -> [f32; 4] {
@@ -169,7 +169,7 @@ fn snapshot_rows_select_rename_and_delete() {
 
     apply(&mut app, HistoryEvent::rename(id, "Lesson start"));
     assert_eq!(app.perf.last_command, "history.renameSnapshot");
-    let names: Vec<String> = app.session.active().unwrap().snapshots.iter().skip(1).map(|s| s.name.clone()).collect();
+    let names: Vec<String> = app.session.active().unwrap().snapshots().iter().skip(1).map(|s| s.name.clone()).collect();
     assert_eq!(names, ["Lesson start"]);
 
     let kept = steps(&app);
@@ -338,7 +338,7 @@ fn a_new_state_at_the_history_limit_deselects_the_snapshot() {
     let mut app = app();
     app.run("history.newSnapshot", json!({})).unwrap();
     // What a click on the snapshot row does: the command, then the selection at the state it made.
-    let id = app.session.active().unwrap().snapshots[0].id;
+    let id = app.session.active().unwrap().snapshots()[0].id;
     app.run("history.selectSnapshot", json!({"snapshot": id})).unwrap();
     select_snapshot(&mut app, id);
     assert_eq!(selected_snapshot(&app), Some(id), "the snapshot is selected");
@@ -433,7 +433,7 @@ fn snapshot_thumbnails_follow_their_document() {
     assert_eq!(first, revision(&app), "the same picture keeps its revision");
     // The revision follows the snapshot document's `Arc` address, so each closed document stays alive for the
     // test: a freed address handed to the next document would read as the same picture.
-    let mut closed = vec![app.session.active().unwrap().snapshots[0].doc.clone()];
+    let mut closed = vec![app.session.active().unwrap().snapshots()[0].doc.clone()];
     // Closed and reopened with the same id.
     app.session.close(0);
     app.sync_views();
@@ -442,7 +442,7 @@ fn snapshot_thumbnails_follow_their_document() {
     let reopened = revision(&app);
     assert_ne!(reopened, first);
     // Closed and reopened with no sync in between: still a fresh one.
-    closed.push(app.session.active().unwrap().snapshots[0].doc.clone());
+    closed.push(app.session.active().unwrap().snapshots()[0].doc.clone());
     app.session.close(0);
     app.session.add_document(doc, None);
     assert_ne!(revision(&app), reopened);
