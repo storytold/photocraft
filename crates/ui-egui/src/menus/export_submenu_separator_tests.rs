@@ -5,11 +5,7 @@ use super::*;
 /// The File › Export entries as the menu bar shows them, `---` for a separator.
 fn export_ids() -> Vec<String> {
     let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    menu_rows(&app)
-        .into_iter()
-        .filter(|r| r.path == ["File", "Export"])
-        .map(|r| if r.label == "---" { "---".to_string() } else { r.command.id })
-        .collect()
+    menu_rows(&app).into_iter().filter(|r| r.path == ["File", "Export"]).map(|r| if r.label == "---" { "---".to_string() } else { r.command.id }).collect()
 }
 
 #[test]
