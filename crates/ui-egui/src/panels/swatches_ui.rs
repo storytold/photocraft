@@ -42,14 +42,28 @@ fn run(app: &mut PhotocraftApp, cmd: &str, params: Value) -> Option<Value> {
     }
 }
 
-/// Set the foreground (or background) colour from a swatch.
+/// Set the foreground (or background) colour from a swatch. While the Gradient Editor has a colour stop selected, the
+/// swatch recolours that stop instead and the foreground stays, as in Photoshop (#10783).
 pub fn use_swatch(app: &mut PhotocraftApp, name: &str, background: bool) {
+    if !background
+        && let Some(rgb) = swatch_rgb(app, name)
+        && crate::gradient_ui::panel_color_picked(app, rgb, None)
+    {
+        return;
+    }
     let target = if background { "background" } else { "foreground" };
     if run(app, "swatches.use", json!({"swatch": name, "target": target})).is_some() && !background {
         // Clicking a swatch recolours the selected characters (#364), or the selected type and
         // shape layers whatever the tool, as in Photoshop (#9238).
         crate::apply_color::swatch_picked(app);
     }
+}
+
+/// The colour of the swatch called `name` (the first of that name, as `swatches.use` finds it), as `swatches.use` sets
+/// it.
+fn swatch_rgb(app: &PhotocraftApp, name: &str) -> Option<[f32; 3]> {
+    let swatch = app.session.presets.swatches.iter().flat_map(|g| &g.entries).find(|e| e.name == name)?;
+    Some(photocraft_engine::presets::swatches::SwatchConv::new(&app.session).rgb(&swatch.color))
 }
 
 /// The converter that shows CMYK swatches and the colour models behind them: the working CMYK profile's.

@@ -12,18 +12,21 @@ use craft::ui::layout_components::Row;
 use craft::ui::runtime::env::Label;
 use serde_json::json;
 
-use super::{properties_panel, selected_gradient, stops};
+use super::{EditorSink, properties_panel, record_editor_selection, selected_gradient, stops};
 use crate::{PhotocraftApp, color_picker_ui, panel_docking};
 
 /// The panel body: the selected gradient fill layer's rows, else the tool gradient's stop bar with Save As Preset and
-/// the Gradients panel.
+/// the Gradients panel. The bar's selection is recorded for the Color and Swatches panels, which recolour a selected
+/// colour stop (#10783).
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(layer) = selected_gradient(app) {
-        properties_panel::show(app, ui, &layer);
+        let selected = properties_panel::show(app, ui, &layer);
+        record_editor_selection(app, EditorSink::Layer(layer.id), selected);
         return;
     }
     Text::new(tl!("The gradient the Gradient tool paints with").to_string()).shade(Shade::Muted).show(ui);
-    tool_gradient(app, ui);
+    let selected = tool_gradient(app, ui);
+    record_editor_selection(app, EditorSink::Tool, selected);
     Row::new().show(ui, |ui, _| {
         let save = Button::new(tl!("Save As Preset")).tooltip(Label::from(tl!("Adds the current gradient to the Gradients panel").to_string())).show(ui);
         if save.clicked() {
@@ -37,8 +40,9 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The stop bar of the Gradient tool's current gradient. An edit is one `gradient.presets.stop {action: "set"}` on
 /// commit (no document step); a drag in progress shows through `LiveGradient::preset` and is dropped on cancel. A second
-/// pass in one frame gets no pointer input, so its editor reports no event and applies nothing again.
-fn tool_gradient(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// pass in one frame gets no pointer input, so its editor reports no event and applies nothing again. Returns the stop
+/// bar's selection.
+fn tool_gradient(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<StopRef> {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     let mut shown = app.gradient.preset.clone().unwrap_or_else(|| stops::of_preset(&app.session.presets().gradient, fg, bg));
     let sampler = stops::sampler(fg, bg);
@@ -82,4 +86,5 @@ fn tool_gradient(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         };
         crate::screen_picker::hold(app, ui.ctx(), ("gradient-editor", stop), gesture);
     }
+    output.selected
 }
