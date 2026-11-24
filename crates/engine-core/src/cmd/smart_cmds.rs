@@ -191,22 +191,24 @@ use contents::{edit_contents, export_contents, is_smart_child, path_param, repla
 use filters::smart_mut;
 pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
-pub(crate) use placing::detach_psd;
+pub use placing::detach_psd;
 pub(crate) use placing::{affine_homography, set_placement, shift_smart, transform_placement};
 use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
+pub use rendering::WarningRenderSources;
 use rendering::refresh_or_fail;
-#[cfg(test)]
-pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};
+pub use rendering::render_with_warnings_using;
 #[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
-pub(crate) use rendering::{WarningRenderSources, render_with_warnings, render_with_warnings_using, source_box};
+pub use rendering::{SourceCacheStatistics, source_cache_statistics};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
+pub(crate) use rendering::{render_with_warnings, source_box};
 #[cfg(test)]
 use source::svg_source_image_in;
+pub use source::vector_scale;
 pub use source::{SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image};
 use source::{authorize_source, authorized_source_bytes};
-pub(crate) use source::{restore_unrendered, take_caches, vector_scale};
+pub(crate) use source::{restore_unrendered, take_caches};
 
 const SO: &[&str] = &["Layer", "Smart Objects"];
 const SF: &[&str] = &["Layer", "Smart Filter"];

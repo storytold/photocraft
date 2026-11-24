@@ -55,16 +55,21 @@ pub(crate) use open::{batch_open_notice, batch_open_params, remember_batch_open}
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
+pub use paths::join;
 pub(crate) use paths::openable_name;
+pub use paths::sanitize;
+pub use paths::stem;
 pub use paths::{
     extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
     template_name, untitled_name,
 };
-pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
+pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, read_file, read_file_limited, write_file};
 pub(crate) use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
+pub use save::SaveOpts;
+pub(crate) use save::encode;
 use save::save_a_copy;
-pub(crate) use save::{SaveOpts, encode, save_doc};
+pub use save::save_doc;
 pub use save::{
     dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, maximize_compatibility_param, pcraft_full_composite_param, pdf_spot_plates_param,
     tga_bits_param, tiff_bool_param, tiff_compression_param, tiff_would_write_layers,
@@ -88,7 +93,7 @@ fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn native_doc(s: &Session) -> std::result::Result<(), String> {
+pub fn native_doc(s: &Session) -> std::result::Result<(), String> {
     native(s)?;
     has_doc(s)
 }
@@ -140,7 +145,7 @@ impl crate::DocState {
     }
 }
 
-pub(crate) fn str_param<'a>(p: &'a Value, key: &str, cmd: &str) -> Result<&'a str> {
+pub fn str_param<'a>(p: &'a Value, key: &str, cmd: &str) -> Result<&'a str> {
     p.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("missing \"{key}\"") })
 }
 
@@ -343,7 +348,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"centerOnSelection":bool=false (as File > Place Embedded: centre on a hard-edged rectangular selection, over center, and remove the selection in the same step),"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -455,6 +460,10 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.clearCanvasGuides", "Clear Canvas Guides", &["View"], None, "{}", has_doc, |s, _| clear_canvas_guides(s)),
     ]
 }
+
+#[cfg(test)]
+#[path = "file_cmds/place_selection_centre_tests.rs"]
+mod place_selection_centre_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]
