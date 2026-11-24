@@ -325,6 +325,9 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                         Some("overlapping".to_owned()),
                     ),
                 ),
+                // Include Background in Export, ticked, the last control before the file type (#13631). Unticked, each board's
+                // white fill is left out of PNG, TIFF and WebP files.
+                Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
                 // The reference application's list, PSD chosen when the dialog opens (#13635).
                 choice("format", tl!("File Type"), artboard_formats(), "psd"),
             ];
