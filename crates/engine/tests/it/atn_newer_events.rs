@@ -856,7 +856,7 @@ fn video_and_isolate_events_use_current_document_state() {
         let video = st.doc.layer(st.active_layer.unwrap()).unwrap().video.as_ref().unwrap();
         assert_eq!(video.frames.len(), 1);
         assert_eq!(video.fps, 30.0);
-        assert!(video.frames[0].content_bounds().is_empty());
+        assert!(video.frames[0].pixels().unwrap().content_bounds().is_empty());
         assert!(s.undo());
         assert_eq!(s.active().unwrap().doc, before);
 

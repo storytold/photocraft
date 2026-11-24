@@ -163,13 +163,34 @@ pub struct SurfaceM {
     pub tiles: Vec<TileRef>,
 }
 
+/// One frame of a video layer: pixels stored in the bundle, or a frame of the layer's plate, read
+/// from its file. Older files hold only pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FrameM {
+    Plate { plate_frame: usize },
+    Pixels(SurfaceM),
+}
+
+/// The image sequence a video layer's [`FrameM::Plate`] frames read: one frame per file, each
+/// flattened to `format` at canvas size `size`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlateM {
+    pub files: Vec<photocraft_doc::PlateFile>,
+    pub format: PixelFormat,
+    pub size: Size,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VideoDataM {
-    pub frames: Vec<SurfaceM>,
+    pub frames: Vec<FrameM>,
     /// Optional for backward compatibility with native documents created before original
     /// frame snapshots were stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub original_frames: Option<Vec<SurfaceM>>,
+    pub original_frames: Option<Vec<FrameM>>,
+    /// Present when frames read a plate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plate: Option<PlateM>,
     pub source: photocraft_doc::VideoSource,
     pub fps: f32,
     #[serde(default)]

@@ -945,7 +945,7 @@ fn video_memory_counts_originals_and_deduplicates_displayed_frames() {
         let video = doc.layers[0].video.as_mut().unwrap();
         video.original_frames = Some(video.frames.clone());
         // Original footage and the displayed frame alias the stack, except this painted frame.
-        video.frames[2].write_pixel(1, 1, &[0.0, 1.0, 0.0, 1.0]);
+        video.frames[2].pixels_mut().unwrap().write_pixel(1, 1, &[0.0, 1.0, 0.0, 1.0]);
         let mut cur = Arc::new(doc);
         let mut h = History { max_bytes: usize::MAX, ..History::default() };
         assert_eq!(h.pixel_bytes(&cur), 4 * tile);

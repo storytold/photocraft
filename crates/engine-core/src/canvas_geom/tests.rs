@@ -394,14 +394,14 @@ fn turns_move_stored_video_frames() {
         let l = doc.layer_mut(active.unwrap()).unwrap();
         let frame = l.surface().unwrap().clone();
         let mut v = photocraft_doc::VideoData::new(vec![frame.clone(), frame.clone()], 24.0);
-        v.original_frames = Some(vec![frame.clone(), frame]);
+        v.original_frames = Some(vec![frame.clone().into(), frame.into()]);
         l.video = Some(v);
         Ok(())
     })
     .unwrap();
     s.execute(command(Turn::FlipHorizontal), json!({})).unwrap();
     let v = doc(&s).layers[1].video.as_ref().unwrap();
-    for frame in v.frames.iter().chain(v.original_frames.iter().flatten()) {
+    for frame in v.held_pixels() {
         assert_eq!(frame.pixel(W as i32 - 2, 2), vec![1.0, 0.0, 0.0, 1.0]);
         assert_eq!(frame.pixel(1, 2)[3], 0.0);
     }

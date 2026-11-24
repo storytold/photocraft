@@ -510,7 +510,7 @@ pub(super) fn write_gif(path: &str, w: u32, h: u32, frames: &[([u8; 3], u16)]) {
 
 fn frame_rgb(s: &Session, id: LayerId, frame: usize) -> Vec<f32> {
     let v = s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap();
-    v.frames[frame].pixel(1, 1)[..3].to_vec()
+    super::frame_pixels(v, frame).pixel(1, 1)[..3].to_vec()
 }
 
 #[test]

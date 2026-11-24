@@ -220,6 +220,17 @@ fn layer_sel(
             photocraft_doc::VideoSource::File { path } => json!({ "file": path }),
         };
         v["video"] = json!({"frames": vid.frames.len(), "fps": vid.fps, "showAltered": vid.show_altered, "source": source});
+        // An image sequence's plate: how many frames are still read from its files, how many are
+        // decoded in its cache, and why the frame at the playhead couldn't be read, if so.
+        if let Some(plate) = &vid.plate {
+            v["video"]["plate"] = json!({
+                "files": plate.len(),
+                "unpaintedFrames": vid.frames.iter().filter(|f| f.plate_index().is_some()).count(),
+                "cachedFrames": plate.cached_frames().len(),
+                "cachedBytes": plate.cached_bytes(),
+                "problem": vid.plate_problem,
+            });
+        }
     }
     // Layer › Frame Range: the timeline frames the layer shows on (0-based, `end` exclusive) and
     // the eye the user set, which `visible` follows on those frames.

@@ -213,6 +213,12 @@ impl Session {
     /// Preserve its identity unless an open document or a picked clone source reserves it.
     /// Identity-dependent callers must read the admitted document at the returned index.
     pub fn add_document(&mut self, mut doc: Document, path: Option<String>) -> usize {
+        // A video layer reading an image sequence's plate shows its frame at the playhead read
+        // from the plate, so storing it later keeps an unpainted frame a reference to its file.
+        if doc.walk().iter().any(|(_, _, l)| l.video.as_ref().is_some_and(photocraft_doc::VideoData::reads_plate)) {
+            let _document = crate::doc_path::scope(path.as_deref().map(std::path::Path::new));
+            crate::video_cmds::sync(&mut doc);
+        }
         // A saved copy can reuse a closed source's persisted ID. Give the new tab another ID so
         // a closed clone source stays invalid until the user explicitly picks a new source.
         // Persisted IDs can overlap the allocator, so check every replacement too.

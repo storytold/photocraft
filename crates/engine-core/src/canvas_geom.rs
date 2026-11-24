@@ -432,7 +432,8 @@ fn remap_pixels(doc: &mut Document, map: &dyn Fn(i32, i32) -> (i32, i32)) {
             }
             // Frames away from the playhead come back on scrubbing; they turn with the canvas (#4956).
             if let Some(v) = &mut l.video {
-                v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()).for_each(re);
+                crate::video_cmds::hold_plate_frames(v);
+                v.all_frames_mut().filter_map(photocraft_doc::VideoFrame::pixels_mut).for_each(re);
             }
             match &mut l.content {
                 LayerContent::Raster(s) => re(s),

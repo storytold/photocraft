@@ -80,7 +80,7 @@ fn crop_moves_stored_video_frames() {
         let l = doc.layer_mut(active.unwrap()).unwrap();
         let frame = l.surface().unwrap().clone();
         let mut v = photocraft_doc::VideoData::new(vec![frame.clone(), frame.clone()], 24.0);
-        v.original_frames = Some(vec![frame.clone(), frame]);
+        v.original_frames = Some(vec![frame.clone().into(), frame.into()]);
         l.video = Some(v);
         Ok(())
     })
@@ -88,7 +88,7 @@ fn crop_moves_stored_video_frames() {
     s.execute("image.crop", json!({"x": -10, "y": -5, "width": 60, "height": 30})).unwrap();
     let v = doc(&s).layers[1].video.as_ref().unwrap();
     let red = vec![1.0, 0.0, 0.0, 1.0];
-    for frame in v.frames.iter().chain(v.original_frames.iter().flatten()) {
+    for frame in v.held_pixels() {
         assert_eq!(frame.pixel(20, 10), red);
         assert_eq!(frame.pixel(5, 5)[3], 0.0);
     }
@@ -105,7 +105,7 @@ fn delete_cropped_pixels_crops_stored_video_frames() {
         let mut blue = red.clone();
         blue.fill_rect(Rect::new(0, 0, 40, 20), &[0.0, 0.0, 1.0, 1.0]);
         let mut v = photocraft_doc::VideoData::new(vec![red.clone(), blue.clone()], 24.0);
-        v.original_frames = Some(vec![red, blue]);
+        v.original_frames = Some(vec![red.into(), blue.into()]);
         l.video = Some(v);
         Ok(())
     })
@@ -116,6 +116,7 @@ fn delete_cropped_pixels_crops_stored_video_frames() {
     let originals = v.original_frames.as_ref().unwrap();
     assert_eq!((v.frames.len(), originals.len()), (2, 2));
     for frames in [&v.frames, originals] {
+        let frames: Vec<_> = frames.iter().map(|f| f.pixels().unwrap()).collect();
         // The red square (10..20, 5..15) keeps only its right half; the full blue frame
         // keeps exactly the 25×20 crop.
         assert_eq!(frames[0].content_bounds(), Rect::new(0, 5, 5, 15));

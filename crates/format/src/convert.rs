@@ -113,10 +113,21 @@ fn opt_blob(b: &Option<Arc<Vec<u8>>>, sink: &mut dyn Sink) -> Option<Hash> {
     b.as_ref().map(|b| sink.blob(b))
 }
 
+/// A frame of a video layer: painted (or otherwise held) pixels are stored, a plate frame is a
+/// reference to its file.
+fn frame_m(f: &photocraft_doc::VideoFrame, sink: &mut dyn Sink) -> crate::manifest::FrameM {
+    match f {
+        photocraft_doc::VideoFrame::Pixels(s) => crate::manifest::FrameM::Pixels(surface_m(s, sink)),
+        photocraft_doc::VideoFrame::Plate(i) => crate::manifest::FrameM::Plate { plate_frame: *i },
+    }
+}
+
 fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifest::VideoDataM {
     crate::manifest::VideoDataM {
-        frames: v.frames.iter().map(|f| surface_m(f, sink)).collect(),
-        original_frames: v.original_frames.as_ref().map(|frames| frames.iter().map(|f| surface_m(f, sink)).collect()),
+        frames: v.frames.iter().map(|f| frame_m(f, sink)).collect(),
+        original_frames: v.original_frames.as_ref().map(|frames| frames.iter().map(|f| frame_m(f, sink)).collect()),
+        // Only a plate some frame still reads is worth keeping.
+        plate: v.plate.as_ref().filter(|_| v.reads_plate()).map(|p| crate::manifest::PlateM { files: p.files.clone(), format: p.format, size: p.size }),
         source: v.source.clone(),
         fps: v.fps,
         show_altered: v.show_altered,
@@ -352,12 +363,31 @@ pub(crate) struct Loader<'a> {
 
 impl Loader<'_> {
     fn video(&mut self, m: &crate::manifest::VideoDataM) -> Result<photocraft_doc::VideoData> {
-        let frames = m.frames.iter().map(|f| self.surface(f)).collect::<Result<Vec<_>>>()?;
+        let plate_len = m.plate.as_ref().map_or(0, |p| p.files.len());
+        let mut frame = |f: &crate::manifest::FrameM| -> Result<photocraft_doc::VideoFrame> {
+            match f {
+                crate::manifest::FrameM::Pixels(s) => Ok(photocraft_doc::VideoFrame::Pixels(self.surface(s)?)),
+                crate::manifest::FrameM::Plate { plate_frame } if *plate_frame < plate_len => Ok(photocraft_doc::VideoFrame::Plate(*plate_frame)),
+                crate::manifest::FrameM::Plate { .. } => Err(FormatError::corrupt("video frame refers to a plate frame the layer does not list")),
+            }
+        };
+        let frames = m.frames.iter().map(&mut frame).collect::<Result<Vec<_>>>()?;
         if m.original_frames.as_ref().is_some_and(|o| o.len() != frames.len()) {
             return Err(FormatError::corrupt("video original frame count differs from edited frame count"));
         }
-        let original_frames = m.original_frames.as_ref().map(|source| source.iter().map(|f| self.surface(f)).collect::<Result<Vec<_>>>()).transpose()?;
-        Ok(photocraft_doc::VideoData { frames, original_frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered })
+        let original_frames = m.original_frames.as_ref().map(|source| source.iter().map(&mut frame).collect::<Result<Vec<_>>>()).transpose()?;
+        let plate = m.plate.as_ref().map(|p| {
+            let mut plate = photocraft_doc::Plate::new(p.files.clone(), p.format, p.size);
+            plate.from_saved_document = true;
+            Arc::new(plate)
+        });
+        let mut v = photocraft_doc::VideoData::new(Vec::new(), m.fps);
+        v.frames = frames;
+        v.original_frames = original_frames;
+        v.plate = plate;
+        v.source = m.source.clone();
+        v.show_altered = m.show_altered;
+        Ok(v)
     }
 
     fn surface(&mut self, m: &SurfaceM) -> Result<Surface> {

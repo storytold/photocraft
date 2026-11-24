@@ -355,7 +355,14 @@ fn pixels_equal_with(a: &Document, b: &Document, video_equal: fn(&VideoData, &Vi
 /// (`VideoData`'s own, shallow equality) and the same tile pointers in every frame, painted and
 /// original. Pointer compares only, like [`surfaces_equal`].
 fn video_frames_equal(a: &VideoData, b: &VideoData) -> bool {
-    let frames = |x: &[photocraft_raster::Surface], y: &[photocraft_raster::Surface]| x.len() == y.len() && x.iter().zip(y).all(|(f, g)| surfaces_equal(f, g));
+    // `VideoData`'s equality already matched plate frames by index and plate.
+    let frames = |x: &[photocraft_doc::VideoFrame], y: &[photocraft_doc::VideoFrame]| {
+        x.len() == y.len() && x.iter().zip(y).all(|(f, g)| match (f.pixels(), g.pixels()) {
+            (Some(f), Some(g)) => surfaces_equal(f, g),
+            (None, None) => f.plate_index() == g.plate_index(),
+            _ => false,
+        })
+    };
     *a == *b
         && frames(&a.frames, &b.frames)
         && match (&a.original_frames, &b.original_frames) {

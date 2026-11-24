@@ -32,8 +32,10 @@ pub(crate) fn for_each_surface(layers: &mut [Layer], masks: bool, f: &mut dyn Fn
         }
         // The displayed content is only a copy of the frame at the playhead; the other frames
         // would keep the old geometry and depth and come back stale when scrubbing (#4956).
+        // Plate frames are read into the document first: the edit changes every frame.
         if let Some(v) = &mut l.video {
-            for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
+            crate::video_cmds::hold_plate_frames(v);
+            for frame in v.all_frames_mut().filter_map(photocraft_doc::VideoFrame::pixels_mut) {
                 f(frame, false);
             }
         }
@@ -422,7 +424,7 @@ fn check_hidden_resample_budget(cmd: &str, doc: &mut Document, sx: f64, sy: f64,
     for_each_layer(&mut doc.layers, &mut |l| {
         clipped.extend(l.fill_cache.as_ref().map(|fc| std::ptr::from_ref(&fc.surface)));
         if let Some(v) = &l.video {
-            clipped.extend(v.frames.iter().chain(v.original_frames.iter().flatten()).map(std::ptr::from_ref));
+            clipped.extend(v.held_pixels().map(std::ptr::from_ref));
         }
         if let LayerContent::Raster(s) = &l.content {
             clipped.insert(std::ptr::from_ref(s));
@@ -547,7 +549,8 @@ fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
             fc.surface = crop_surface(&fc.surface, r);
         }
         if let Some(v) = &mut l.video {
-            for frame in v.frames.iter_mut().chain(v.original_frames.iter_mut().flatten()) {
+            crate::video_cmds::hold_plate_frames(v);
+            for frame in v.all_frames_mut().filter_map(photocraft_doc::VideoFrame::pixels_mut) {
                 *frame = crop_surface(frame, r);
             }
         }

@@ -19,6 +19,7 @@ pub mod import_conversion;
 pub mod layer_tree;
 pub mod mode;
 pub mod pattern;
+pub mod plate;
 pub mod slices;
 pub mod text;
 pub mod text_styles;
@@ -51,7 +52,8 @@ pub use variables::{DataSet, DataValue, PixelAlign, PixelMethod, VarKind, Variab
 pub use vector::{
     ClippingPath, FillRule, Knot, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
 };
-pub use video::{FrameSpan, Timeline, VideoData, VideoSource};
+pub use plate::{DEFAULT_PLATE_CACHE_BYTES, Plate, PlateFile};
+pub use video::{FrameSpan, ShownPlateFrame, Timeline, VideoData, VideoFrame, VideoSource};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -1168,9 +1170,7 @@ impl Document {
                 visit(&mask.surface);
             }
             if let Some(video) = &layer.video {
-                for frame in video.frames.iter().chain(video.original_frames.iter().flatten()) {
-                    visit(frame);
-                }
+                video.held_pixels().for_each(&mut visit);
             }
         }
         for channel in self.channels.iter().chain(&self.quick_mask) {

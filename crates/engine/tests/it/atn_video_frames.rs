@@ -50,7 +50,7 @@ fn load(s: &mut Session, source: AtnItem) {
 fn pixels(s: &Session, id: LayerId, original: bool) -> Vec<Vec<f32>> {
     let video = s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap();
     let frames = if original { video.original_frames.as_ref().unwrap() } else { &video.frames };
-    frames.iter().map(|frame| frame.pixel(0, 0)).collect()
+    frames.iter().map(|frame| frame.pixels().unwrap().pixel(0, 0)).collect()
 }
 
 /// Distinguish both frame order and original footage from the altered display cache.
@@ -79,11 +79,11 @@ fn fixture(depth: u32) -> (Session, LayerId) {
                 let mut original = frame.clone();
                 let red = original.pixel(0, 0)[0];
                 original.write_pixel(0, 0, &[red, 1.0, 0.0, 1.0]);
-                original
+                original.into()
             })
             .collect(),
     );
-    video.frames = frames;
+    video.frames = frames.into_iter().map(Into::into).collect();
     let timeline = doc.timeline.as_mut().unwrap();
     timeline.current = 1;
     timeline.work_start = 1;
@@ -163,7 +163,7 @@ fn deleting_the_last_frame_keeps_its_pixels() {
     let video = layer.video.as_mut().unwrap();
     video.frames.truncate(1);
     video.original_frames.as_mut().unwrap().truncate(1);
-    layer.content = LayerContent::Raster(video.frames[0].clone());
+    layer.content = LayerContent::Raster(video.frames[0].pixels().unwrap().clone());
     let t = doc.timeline.as_mut().unwrap();
     *t = photocraft_doc::video::Timeline::new(1, 24.0);
     let before = pixels(&s, id, false);

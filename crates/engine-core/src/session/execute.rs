@@ -246,6 +246,7 @@ impl Session {
         let _document = crate::doc_path::scope(self.active().and_then(|d| d.path.as_deref()).map(std::path::Path::new));
         photocraft_compose::discard_unreadable_pixel_caches();
         let scratch_generation = photocraft_raster::spill::read_error_generation();
+        let plate_generation = crate::video_cmds::plate_read_generation();
         let restrict = self.color_restrict;
         let filter_mask_layer = self.filter_mask_layer;
         let sampler_map = self.sampler_map.take();
@@ -270,7 +271,10 @@ impl Session {
         if let Some(id) = filter_mask_layer {
             smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;
         }
-        if let Err(error) = photocraft_raster::spill::check_since(scratch_generation).and_then(|()| before.scratch_health()).and_then(|()| doc.scratch_health())
+        if let Err(error) = photocraft_raster::spill::check_since(scratch_generation)
+            .and_then(|()| crate::video_cmds::check_plate_reads_since(plate_generation))
+            .and_then(|()| before.scratch_health())
+            .and_then(|()| doc.scratch_health())
         {
             st.set_active_layer(previous_active_layer);
             return Err(EngineError::Other(error));

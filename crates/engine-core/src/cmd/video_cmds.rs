@@ -1,10 +1,17 @@
 //! Layer › Video Layers (and Rasterize › Video). A video layer holds a stack of frames; the
 //! layer's displayed raster content is the frame at the timeline playhead, kept in sync by [`sync`]
 //! after any edit or navigation. Paint, fills and filters edit that displayed content, so [`store`]
-//! writes it back into the playhead's frame before anything re-syncs. Headless and scriptable. Frame persistence in `.pcraft` is a
-//! follow-up; a saved document keeps the current frame as the layer's content.
+//! writes it back into the playhead's frame before anything re-syncs. Headless and scriptable.
+//!
+//! An image sequence's unpainted frames stay in their files ([`photocraft_doc::Plate`]): syncing
+//! reads the frame at the playhead through the plate's cache ([`plate`]), and storing keeps a frame
+//! nobody changed as a reference to its file, so only painted frames are held in memory.
 
-use photocraft_doc::{Document, Layer, LayerContent, Timeline, VideoData};
+mod plate;
+
+pub(crate) use plate::{check_since as check_plate_reads_since, failure_generation as plate_read_generation, hold_plate_frames};
+
+use photocraft_doc::{Document, Layer, LayerContent, ShownPlateFrame, Timeline, VideoData, VideoFrame};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -124,11 +131,8 @@ pub fn apply_spans(doc: &mut Document) {
 
 fn sync_layers(layers: &mut [Layer], cur: usize) {
     for l in layers.iter_mut() {
-        let frame = l.video.as_ref().and_then(|v| {
-            let visible = if v.show_altered { &v.frames } else { v.original_frames.as_ref().unwrap_or(&v.frames) };
-            visible.get(cur.min(visible.len().saturating_sub(1))).cloned()
-        });
-        if let Some(f) = frame
+        if let Some(v) = &mut l.video
+            && let Some(f) = shown_frame(v, cur)
             && let LayerContent::Raster(s) = &mut l.content
         {
             *s = f;
@@ -137,6 +141,40 @@ fn sync_layers(layers: &mut [Layer], cur: usize) {
             sync_layers(ch, cur);
         }
     }
+}
+
+/// The pixels `v` shows at frame `cur`, recording in `v` which plate frame they came from (or why
+/// it could not be read: the frame then shows empty, and [`VideoData::plate_problem`] says why).
+fn shown_frame(v: &mut VideoData, cur: usize) -> Option<Surface> {
+    let visible = if v.show_altered { &v.frames } else { v.original_frames.as_ref().unwrap_or(&v.frames) };
+    let at = cur.min(visible.len().saturating_sub(1));
+    let index = match visible.get(at)? {
+        VideoFrame::Pixels(s) => {
+            let s = s.clone();
+            v.shown = None;
+            v.plate_problem = None;
+            return Some(s);
+        }
+        VideoFrame::Plate(i) => *i,
+    };
+    let Some(plate) = v.plate.clone() else {
+        v.shown = None;
+        v.plate_problem = Some(format!("frame {}: the layer has lost its plate", at + 1));
+        return None;
+    };
+    let surface = match plate::plate_frame(&plate, index) {
+        Ok(s) => {
+            v.plate_problem = None;
+            s
+        }
+        Err(why) => {
+            v.plate_problem = Some(format!("frame {}: {why}", at + 1));
+            Surface::new(plate.format)
+        }
+    };
+    // Recorded even when empty: storing an untouched missing frame keeps it a plate reference.
+    v.shown = Some(ShownPlateFrame { index, surface: surface.clone() });
+    Some(surface)
 }
 
 /// Keep edits made to every video layer's displayed content (paint, fills, filters) by writing it
@@ -156,7 +194,11 @@ fn store_layers(layers: &mut [Layer], cur: usize) {
             if (v.show_altered || v.original_frames.is_none())
                 && let Some(f) = v.frames.get_mut(at)
             {
-                *f = s.clone();
+                // A plate frame still sharing every tile with what was read stays in its file.
+                let untouched = matches!((&*f, &v.shown), (VideoFrame::Plate(i), Some(shown)) if shown.index == *i && s.changed_rect(&shown.surface) == Some(photocraft_geom::Rect::EMPTY));
+                if !untouched {
+                    *f = VideoFrame::Pixels(s.clone());
+                }
             }
         }
         if let Some(ch) = l.children_mut() {
@@ -251,22 +293,23 @@ fn insert_blank(s: &mut Session, _p: &Value) -> Result<Value> {
     edit_video(s, "Insert Blank Frame", move |v, cur| {
         check_frame_growth(v.frames.len(), v.original_frames.as_ref().map(Vec::len))?;
         let at = cur.saturating_add(1).min(v.frames.len());
-        v.frames.insert(at, blank_of(fmt));
+        v.frames.insert(at, blank_of(fmt).into());
         if let Some(original) = &mut v.original_frames {
             // The stacks stay aligned, but never index past a shorter one.
-            original.insert(at.min(original.len()), blank_of(fmt));
+            original.insert(at.min(original.len()), blank_of(fmt).into());
         }
         Ok(())
     })
 }
 
 fn duplicate_frame(s: &mut Session, _p: &Value) -> Result<Value> {
-    edit_video(s, "Duplicate Frame", |v, cur| {
+    let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
+    edit_video(s, "Duplicate Frame", move |v, cur| {
         if let Some(f) = v.frames.get(cur) {
             check_frame_growth(v.frames.len(), v.original_frames.as_ref().map(Vec::len))?;
             let f = f.clone();
             if let Some(original) = &mut v.original_frames {
-                let orig = original.get(cur).cloned().unwrap_or_else(|| blank_of(f.format()));
+                let orig = original.get(cur).cloned().unwrap_or_else(|| blank_of(f.pixels().map_or(fmt, Surface::format)).into());
                 original.insert((cur + 1).min(original.len()), orig);
             }
             v.frames.insert(cur + 1, f);
@@ -294,7 +337,7 @@ fn restore_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     edit_video(s, "Restore Frame", move |v, cur| {
         let original = v.original_frames.as_ref().and_then(|frames| frames.get(cur)).cloned();
         if let Some(f) = v.frames.get_mut(cur) {
-            *f = original.unwrap_or_else(|| blank_of(fmt));
+            *f = original.unwrap_or_else(|| blank_of(fmt).into());
         }
         Ok(())
     })
@@ -304,7 +347,7 @@ fn restore_all(s: &mut Session, _p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     edit_video(s, "Restore All Frames", move |v, _| {
         for (i, f) in v.frames.iter_mut().enumerate() {
-            *f = v.original_frames.as_ref().and_then(|frames| frames.get(i)).cloned().unwrap_or_else(|| blank_of(fmt));
+            *f = v.original_frames.as_ref().and_then(|frames| frames.get(i)).cloned().unwrap_or_else(|| blank_of(fmt).into());
         }
         Ok(())
     })
@@ -410,10 +453,11 @@ mod limits {
     struct Overrides {
         psd_max_pixel_bytes: Option<u64>,
         max_footage_bytes: Option<u64>,
+        plate_cache_bytes: Option<u64>,
     }
 
     thread_local! {
-        static CURRENT: Cell<Overrides> = const { Cell::new(Overrides { psd_max_pixel_bytes: None, max_footage_bytes: None }) };
+        static CURRENT: Cell<Overrides> = const { Cell::new(Overrides { psd_max_pixel_bytes: None, max_footage_bytes: None, plate_cache_bytes: None }) };
     }
 
     /// Restores the previous overrides when dropped.
@@ -422,16 +466,26 @@ mod limits {
     impl Scoped {
         /// Lowers the PSD/layered-TIFF memory admission limit for the current thread.
         pub(crate) fn psd_max_pixel_bytes(limit: u64) -> Self {
-            Self::set(Overrides { psd_max_pixel_bytes: Some(limit), ..Default::default() })
+            Self::set(|o| o.psd_max_pixel_bytes = Some(limit))
         }
 
         /// Lowers the retained footage-frame limit for the current thread.
         pub(crate) fn max_footage_bytes(limit: u64) -> Self {
-            Self::set(Overrides { max_footage_bytes: Some(limit), ..Default::default() })
+            Self::set(|o| o.max_footage_bytes = Some(limit))
         }
 
-        fn set(next: Overrides) -> Self {
-            Self(CURRENT.with(|current| current.replace(next)))
+        /// Lowers the bytes of decoded frames a plate keeps, for the current thread.
+        pub(crate) fn plate_cache_bytes(limit: u64) -> Self {
+            Self::set(|o| o.plate_cache_bytes = Some(limit))
+        }
+
+        /// Changes one override, keeping the others an enclosing scope set.
+        fn set(change: impl FnOnce(&mut Overrides)) -> Self {
+            Self(CURRENT.with(|current| {
+                let mut next = current.get();
+                change(&mut next);
+                current.replace(next)
+            }))
         }
     }
 
@@ -447,6 +501,10 @@ mod limits {
 
     pub(super) fn max_footage_bytes() -> Option<u64> {
         CURRENT.with(|current| current.get().max_footage_bytes)
+    }
+
+    pub(super) fn plate_cache_bytes() -> Option<u64> {
+        CURRENT.with(|current| current.get().plate_cache_bytes)
     }
 }
 
@@ -594,20 +652,39 @@ fn load_frame_files(
                 continue;
             }
         }
-        let mut doc = crate::file_cmds::import_with_options(&name, &bytes, opts)?;
-        if let Some(msg) = frame_size_error(doc.size, size) {
-            return Err(EngineError::Other(format!("`{}`: {msg}", f.display())));
-        }
-        // A Targa's alpha opens as a channel (as in Photoshop); a frame's alpha is transparency.
-        if f.extension().is_some_and(|e| e.eq_ignore_ascii_case("tga")) {
-            photocraft_io::tga_alpha_channel_to_transparency(&mut doc);
-        }
-        keep(&mut frames, crate::file_cmds::flattened_checked(&doc, fmt, "layer.videoLayers.newVideoLayerFromFile")?)
-            .map_err(|msg| EngineError::Other(format!("`{}`: {msg}", f.display())))?;
+        keep(&mut frames, decode_frame(f, &bytes, fmt, opts, size)?).map_err(|msg| EngineError::Other(format!("`{}`: {msg}", f.display())))?;
     }
     // Only a lone GIF or WebP says how fast it plays; a sequence mixing files has no single rate.
     let fps = if files.len() == 1 { fps_from_delays(&delays) } else { None };
     Ok(Footage { frames, fps, warnings })
+}
+
+/// One frame from the image file `f` holding `bytes`: its first page or animation frame, as File ›
+/// Open reads it, flattened to `fmt`; with `size`, refused unless the canvas is that size. A plate
+/// frame read again later goes through here too, so it matches the frame read at open.
+fn decode_frame(
+    f: &std::path::Path,
+    bytes: &[u8],
+    fmt: photocraft_color::PixelFormat,
+    opts: &photocraft_io::ImportOptions,
+    size: Option<photocraft_doc::Size>,
+) -> Result<Surface> {
+    let name = f.to_string_lossy();
+    let mut doc = crate::file_cmds::import_with_options(&name, bytes, opts)?;
+    if let Some(msg) = frame_size_error(doc.size, size) {
+        return Err(EngineError::Other(format!("`{}`: {msg}", f.display())));
+    }
+    // A Targa's alpha opens as a channel (as in Photoshop); a frame's alpha is transparency.
+    if f.extension().is_some_and(|e| e.eq_ignore_ascii_case("tga")) {
+        photocraft_io::tga_alpha_channel_to_transparency(&mut doc);
+    }
+    crate::file_cmds::flattened_checked(&doc, fmt, "layer.videoLayers.newVideoLayerFromFile")
+}
+
+/// [`decode_frame`] of the file at `f`.
+fn read_frame(f: &std::path::Path, fmt: photocraft_color::PixelFormat, opts: &photocraft_io::ImportOptions, size: Option<photocraft_doc::Size>) -> Result<Surface> {
+    let bytes = crate::allocation::read_file_within(f, footage_byte_limit()).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
+    decode_frame(f, &bytes, fmt, opts, size)
 }
 
 fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
@@ -635,7 +712,7 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         v.source = photocraft_doc::VideoSource::File { path: path.clone() };
         // The first frame is the layer's content before it is placed: an active artboard takes
         // the layer only when its content is on the board, as `frames_to_layers` does.
-        if let (Some(first), LayerContent::Raster(surf)) = (v.frames.first(), &mut l.content) {
+        if let (Some(first), LayerContent::Raster(surf)) = (v.frames.first().and_then(VideoFrame::pixels), &mut l.content) {
             *surf = first.clone();
         }
         l.video = Some(v);
@@ -761,22 +838,29 @@ fn open_image_sequence(s: &mut Session, p: &Value) -> Result<Value> {
     // The document takes the first frame's size, mode, depth, resolution and profile.
     let bytes = crate::allocation::read_file_within(first, footage_byte_limit()).map_err(|e| EngineError::Other(format!("read `{}`: {e}", first.display())))?;
     let model = crate::file_cmds::import_with_options(&first.to_string_lossy(), &bytes, &opts)?;
-    drop(bytes);
     let name = crate::file_cmds::untitled_name("Untitled", |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
     let mut doc = Document::new(name, model.size, model.mode, model.depth);
     doc.resolution_dpi = model.resolution_dpi;
     doc.icc_profile = model.icc_profile.clone();
     drop(model);
-    let Footage { frames, warnings, .. } = load_frame_files(&files, doc.pixel_format(), &opts, Some(doc.size))?;
-    let n = frames.len();
+    // A plate of a format read the same way every time stays in its files.
+    let (video, warnings) = if plate::streams(photocraft_formats::detect(&first.to_string_lossy(), &bytes)) {
+        (VideoData::from_plate(open_plate(&files, doc.pixel_format(), &opts, doc.size)?, fps), Vec::new())
+    } else {
+        let Footage { frames, warnings, .. } = load_frame_files(&files, doc.pixel_format(), &opts, Some(doc.size))?;
+        let mut v = VideoData::new(frames, fps);
+        v.original_frames = Some(v.frames.clone());
+        (v, warnings)
+    };
+    drop(bytes);
+    let n = video.len();
     let index = s.add_document(doc, None);
     let added = s.edit("Open", |doc, active| {
         let fmt = doc.pixel_format();
         let mut layer = Layer::raster(doc.next_layer_name("Layer"), fmt);
-        let mut v = VideoData::new(frames, fps);
-        v.original_frames = Some(v.frames.clone());
-        if let (Some(first), LayerContent::Raster(surf)) = (v.frames.first(), &mut layer.content) {
-            *surf = first.clone();
+        let mut v = video;
+        if let (Some(first), LayerContent::Raster(surf)) = (shown_frame(&mut v, 0), &mut layer.content) {
+            *surf = first;
         }
         layer.video = Some(v);
         let id = layer.id;
@@ -801,6 +885,48 @@ fn open_image_sequence(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"document": index, "layer": id.0, "frames": n, "fps": fps, "warnings": warnings}))
 }
 
+/// The plate of the image sequence `files`: every frame is read once, so a file that doesn't
+/// decode or has another canvas size refuses the open as before, but only the frames from the
+/// first on that fit the plate's cache are kept; the others are read again when shown.
+fn open_plate(
+    files: &[std::path::PathBuf],
+    fmt: photocraft_color::PixelFormat,
+    opts: &photocraft_io::ImportOptions,
+    size: photocraft_doc::Size,
+) -> Result<std::sync::Arc<photocraft_doc::Plate>> {
+    if files.len() > crate::timeline_cmds::MAX_DURATION {
+        return Err(EngineError::Other(format!("the footage has more than {} frames", crate::timeline_cmds::MAX_DURATION)));
+    }
+    let budget = plate_cache_budget();
+    let mut listed = Vec::with_capacity(files.len());
+    let mut kept = Vec::new();
+    let mut kept_bytes = 0u64;
+    for f in files {
+        listed.push(plate::plate_file(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?);
+        let frame = read_frame(f, fmt, opts, Some(size))?;
+        let bytes = photocraft_raster::stored_tiles_bytes(frame.tile_count() as u64, &frame.format());
+        if kept.len() + 1 == listed.len() && (kept.is_empty() || kept_bytes.saturating_add(bytes) <= budget) {
+            kept_bytes = kept_bytes.saturating_add(bytes);
+            kept.push(frame);
+        }
+    }
+    let plate = photocraft_doc::Plate::new(listed, fmt, size);
+    plate.set_cache_budget(budget);
+    for (i, f) in kept.into_iter().enumerate() {
+        plate.keep(i, f);
+    }
+    Ok(std::sync::Arc::new(plate))
+}
+
+/// Bytes of decoded frames a plate keeps around the playhead.
+fn plate_cache_budget() -> u64 {
+    #[cfg(test)]
+    if let Some(limit) = limits::plate_cache_bytes() {
+        return limit;
+    }
+    photocraft_doc::DEFAULT_PLATE_CACHE_BYTES.min(footage_byte_limit() / 2)
+}
+
 fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p
         .get("path")
@@ -810,8 +936,10 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     let Footage { frames, warnings, .. } = load_frames(&path, fmt, &footage_import_options(s))?;
     let mut out = edit_video(s, "Replace Footage", move |v, _| {
+        let frames: Vec<VideoFrame> = frames.into_iter().map(VideoFrame::Pixels).collect();
         v.original_frames = Some(frames.clone());
         v.frames = frames;
+        v.plate = None;
         v.source = photocraft_doc::VideoSource::File { path: path.clone() };
         Ok(())
     })?;
@@ -833,7 +961,7 @@ fn interpret_footage(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     // Reload the whole stack from its file source (what a frame reload needs for a sequence).
-    let (src, fmt) = {
+    let (src, fmt, plate) = {
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let id = st.active_layer.ok_or(EngineError::NoDocument)?;
         let v = st
@@ -841,8 +969,11 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
             .layer(id)
             .and_then(|l| l.video.as_ref())
             .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.reloadFrame".into(), msg: "not a video layer".into() })?;
-        (v.source.clone(), st.doc.pixel_format())
+        (v.source.clone(), st.doc.pixel_format(), v.plate.clone())
     };
+    if let Some(plate) = plate {
+        return reload_plate(s, &plate);
+    }
     let photocraft_doc::VideoSource::File { path } = src else {
         return Err(EngineError::BadParams { cmd: "layer.videoLayers.reloadFrame".into(), msg: "this layer has no file source to reload".into() });
     };
@@ -850,14 +981,30 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     let file = crate::doc_path::resolve(&path).map_err(|why| crate::doc_path::refusal("the footage", &path, why))?;
     let Footage { frames, warnings, .. } = load_frames(&file.to_string_lossy(), fmt, &footage_import_options(s))?;
     let mut out = edit_video(s, "Reload Frame", move |v, _| {
+        let frames: Vec<VideoFrame> = frames.into_iter().map(VideoFrame::Pixels).collect();
         v.original_frames = Some(frames.clone());
         v.frames = frames;
+        v.plate = None;
         Ok(())
     })?;
     if !warnings.is_empty() {
         out["warnings"] = Value::from(warnings);
     }
     Ok(out)
+}
+
+/// Reload Frame on a layer that reads a plate: its files are read again as they are now, and every
+/// frame shows them again, painted frames included, as reloading footage does.
+fn reload_plate(s: &mut Session, old: &photocraft_doc::Plate) -> Result<Value> {
+    let files: Vec<std::path::PathBuf> = old.files.iter().map(|f| std::path::PathBuf::from(&f.path)).collect();
+    let plate = open_plate(&files, old.format, &footage_import_options(s), old.size)?;
+    edit_video(s, "Reload Frame", move |v, _| {
+        let fresh = VideoData::from_plate(plate, v.fps);
+        v.frames = fresh.frames;
+        v.original_frames = fresh.original_frames;
+        v.plate = fresh.plate;
+        Ok(())
+    })
 }
 
 /// The pages of a TIFF that are pages of the document: full-resolution directories of the main
@@ -957,6 +1104,7 @@ pub fn render_video_with(
                 t.current = f;
             }
             sync(&mut doc);
+            plate_problems(&doc).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
             let surf = crate::file_cmds::flattened(&doc, fmt);
             let mut px = vec![[0.0f32; 4]; w * h];
             surf.read_rgba_into(bounds, &mut px);
@@ -986,6 +1134,7 @@ pub fn render_video_with(
             t.current = f;
         }
         sync(&mut doc);
+        plate_problems(&doc).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
         let path = format!("{stem}_{f:04}.{format}");
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
         write(&path, &bytes)?;
@@ -995,6 +1144,14 @@ pub fn render_video_with(
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// `Err` naming the first video layer whose frame at the playhead could not be read from its plate.
+pub(crate) fn plate_problems(doc: &Document) -> std::result::Result<(), String> {
+    match doc.walk().into_iter().find_map(|(_, _, l)| l.video.as_ref().and_then(|v| v.plate_problem.as_ref()).map(|p| (l, p))) {
+        Some((l, p)) => Err(format!("`{}` {p}", l.name)),
+        None => Ok(()),
+    }
 }
 
 /// One animated GIF frame from straight RGBA pixels, as Save for Web's GIF does (#3061): pixels
@@ -1053,8 +1210,20 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Frame `i` of `v`'s altered stack, read from the plate if it is a plate frame.
+#[cfg(test)]
+pub(crate) fn frame_pixels(v: &VideoData, i: usize) -> Surface {
+    match &v.frames[i] {
+        VideoFrame::Pixels(s) => s.clone(),
+        VideoFrame::Plate(p) => plate::plate_frame(v.plate.as_ref().expect("a plate frame has a plate"), *p).expect("the plate frame reads"),
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod open_sequence_tests;
+
+#[cfg(test)]
+mod plate_tests;

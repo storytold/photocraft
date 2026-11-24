@@ -1123,14 +1123,14 @@ fn video_layer_frames_survive_roundtrip() {
     let v = back.layers.last().unwrap().video.as_ref().expect("video survived");
     assert_eq!(v.frames.len(), 3);
     assert_eq!(v.original_frames.as_ref().map(Vec::len), Some(3));
-    assert_eq!(v.original_frames.as_ref().unwrap()[2].rgba(1, 1), v.frames[2].rgba(1, 1));
+    assert_eq!(v.original_frames.as_ref().unwrap()[2].pixels().unwrap().rgba(1, 1), v.frames[2].pixels().unwrap().rgba(1, 1));
     assert_eq!(v.fps, 24.0);
     assert!(!v.show_altered);
     assert_eq!(v.source, VideoSource::File { path: "/tmp/seq".into() });
     assert_eq!(back.timeline.as_ref().unwrap().duration, 3);
     // A middle frame's pixel survived.
     let mut px = [[0.0f32; 4]; 1];
-    v.frames[2].read_rgba_into(Rect::from_xywh(1, 1, 1, 1), &mut px);
+    v.frames[2].pixels().unwrap().read_rgba_into(Rect::from_xywh(1, 1, 1, 1), &mut px);
     assert!(px[0][0] > 0.9 && px[0][2] < 0.1, "frame 2 is reddish: {:?}", px[0]);
 }
 

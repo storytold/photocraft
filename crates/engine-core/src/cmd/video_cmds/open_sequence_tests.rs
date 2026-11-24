@@ -65,7 +65,8 @@ fn bar_width(frame: &Surface) -> u32 {
 
 /// The bar widths of every frame of the video layer `id`, in frame order.
 fn bars(s: &Session, id: LayerId) -> Vec<u32> {
-    s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap().frames.iter().map(bar_width).collect()
+    let v = s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap();
+    (0..v.len()).map(|i| bar_width(&super::frame_pixels(v, i))).collect()
 }
 
 /// The measured result: one new unsaved "Untitled-1", 40 x 30, holding "Video Group 1" with the
@@ -247,7 +248,7 @@ fn each_file_is_one_frame_even_an_animated_gif() {
     let r = open(&mut s, &d, "clip1.gif", json!({})).unwrap();
     assert_eq!(r["frames"], 2);
     let id = LayerId(r["layer"].as_u64().unwrap());
-    let frames = &s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap().frames;
-    assert!(frames.iter().all(|f| f.pixel(20, 15) == RED), "each file's first frame");
+    let v = s.active().unwrap().doc.layer(id).unwrap().video.as_ref().unwrap();
+    assert!((0..v.len()).all(|i| super::frame_pixels(v, i).pixel(20, 15) == RED), "each file's first frame");
     assert_eq!(s.active().unwrap().doc.timeline.as_ref().unwrap().duration, 2);
 }

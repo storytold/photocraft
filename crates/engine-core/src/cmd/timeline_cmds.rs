@@ -41,10 +41,16 @@ fn with_timeline(s: &mut Session, f: impl FnOnce(&mut Option<Timeline>)) -> Resu
     crate::video_cmds::sync(&mut doc);
     // Storing and syncing video frames bypasses edit_with: apply the same scratch guard.
     photocraft_raster::spill::check_since(generation).and_then(|()| doc.scratch_health()).map_err(EngineError::Other)?;
+    // A frame of an image sequence whose file is missing or changed shows empty: say so.
+    let unreadable = crate::video_cmds::plate_problems(&doc).err();
     *st.doc_mut() = Arc::new(doc);
     st.revision += 1;
     st.record_unknown_damage();
-    info(s)
+    let mut out = info(s)?;
+    if let Some(why) = unreadable {
+        out["warnings"] = json!([why]);
+    }
+    Ok(out)
 }
 
 fn bad(cmd: &str, msg: String) -> EngineError {

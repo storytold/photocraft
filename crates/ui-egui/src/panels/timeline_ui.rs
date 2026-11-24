@@ -171,6 +171,15 @@ pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let _ = app.run(cmd, p);
     }
 
+    // An image sequence frame whose file is missing or changed shows empty: say which and why.
+    let problem = app.session.active().and_then(|d| {
+        d.doc.walk().into_iter().find_map(|(_, _, l)| l.video.as_ref().and_then(|v| v.plate_problem.clone()).map(|p| (l.name.clone(), p)))
+    });
+    if let Some((layer, why)) = problem {
+        let text = crate::i18n::fmt(crate::i18n::t("{layer} can't show this frame of its image sequence: {reason}"), &[("layer", &layer), ("reason", &why)]);
+        let _ = Notice::new(Tone::Warn, text).show(ui);
+    }
+
     // The layers, each with a bar over the frames it shows on.
     let current = app.session.active().and_then(|d| d.doc.timeline.as_ref()).map_or(tl.current, |t| t.current);
     super::timeline_layers::show(app, ui, tl.fps, tl.duration, current);
