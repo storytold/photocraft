@@ -271,14 +271,22 @@ fn a_point_outside_the_canvas_still_errors_on_a_pixel_layer() {
     assert!(e.contains("no pixels in that area"), "{e}");
 }
 
-/// An 800x600 document whose Background is painted flat `color`, Background active.
+/// An 800x600 document whose Background is painted flat `color`, Background active. The fill is a
+/// surface write: `edit.fill` belongs to another engine crate since main split the engine, and this
+/// crate's session installs only its own tables.
 fn flat_background_document(color: &str) -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
-    s.execute("select.all", json!({})).unwrap();
-    s.execute("edit.fill", json!({"color": color})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
+    let rgba = rgba(color);
+    paint_new_layer(&mut s, move |_, _| rgba);
     s
+}
+
+/// `#rrggbb` as straight RGBA floats for the surface writes.
+fn rgba(hex: &str) -> [f32; 4] {
+    let h = hex.trim_start_matches('#');
+    let part = |i: usize| u8::from_str_radix(&h[(i * 2)..(i * 2 + 2)], 16).unwrap() as f32 / 255.0;
+    [part(0), part(1), part(2), 1.0]
 }
 
 /// #15472 review F1: flatness must not depend on the working step. 800 % 3 = 2, so a scaled
@@ -301,7 +309,7 @@ fn uniform_red_background_click_selects_the_whole_canvas_at_254() {
 #[test]
 fn one_deviating_pixel_breaks_the_uniform_answer() {
     let mut s = flat_background_document("#dc1e1e");
-    s.execute("paint.pencil", json!({"points": [[600, 400]], "size": 2, "color": "#000000"})).unwrap();
+    paint_rect(&mut s, Rect::new(600, 400, 602, 402), |_, _| [0.0, 0.0, 0.0, 1.0]);
     let r = s.execute("select.object", json!({"point": [200, 175]})).unwrap();
     assert_eq!(r["changed"], false, "one dark pixel makes the layer not flat");
     assert!(s.active().unwrap().doc.selection.is_none());
@@ -327,9 +335,7 @@ fn a_hide_all_layer_mask_does_not_gate_the_area_answer() {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Flat"})).unwrap();
-    s.execute("select.all", json!({})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
+    paint_new_layer(&mut s, |_, _| [1.0, 1.0, 1.0, 1.0]);
     s.execute("layer.layerMask.hideAll", json!({})).unwrap();
     let r = s.execute("select.object", json!({"point": [200, 175]})).unwrap();
     assert_eq!(r["changed"], true, "the raw surface decides, mask ignored, as the object lookup does");
