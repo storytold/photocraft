@@ -1,3 +1,5 @@
+use std::sync::TryLockError;
+
 use craft::font_manager::picker::{FontFilters, FontPickerSettings, FontPreviewSize};
 use craft::text::ui::character::FontPickerSource;
 use craft::ui::contract::Bind;
@@ -42,16 +44,27 @@ pub fn styles(family: &str) -> Vec<String> {
     if names.is_empty() { vec!["Regular".into()] } else { names }
 }
 
+/// The faces of `family` in the shared font engine, without waiting for it: `None` while the font scan runs or
+/// another thread holds the engine (a background job laying out or re-rendering type, which can take seconds on a
+/// large document). The panels draw every frame, so they show what they can meanwhile instead of freezing.
+pub(crate) fn faces_unless_busy(family: &str) -> Option<Vec<photocraft_text::FaceInfo>> {
+    let engine = photocraft_text::try_shared()?;
+    let mut held = match engine.try_lock() {
+        Ok(held) => held,
+        Err(TryLockError::Poisoned(e)) => e.into_inner(),
+        Err(TryLockError::WouldBlock) => return None,
+    };
+    Some(held.fonts.faces(family))
+}
+
 /// PSD text can identify a face only by its PostScript name. Show its real subfamily too.
 pub(crate) fn selected_style(style: &photocraft_doc::text::CharStyle) -> String {
-    // Drawn every frame: while the font scan runs, the stored style name stands in.
+    // Drawn every frame: while the font scan runs or a job holds the engine, the stored style name stands in.
     if let Some(ps) = &style.postscript_name
-        && let Some(engine) = photocraft_text::try_shared()
+        && let Some(faces) = faces_unless_busy(&style.font_family)
+        && let Some(face) = faces.into_iter().find(|f| f.postscript_name.as_ref() == Some(ps))
     {
-        let faces = engine.lock().unwrap_or_else(|e| e.into_inner()).fonts.faces(&style.font_family);
-        if let Some(face) = faces.into_iter().find(|f| f.postscript_name.as_ref() == Some(ps)) {
-            return face.style;
-        }
+        return face.style;
     }
     if style.font_style.is_empty() { if style.italic { "Italic".into() } else { "Regular".into() } } else { style.font_style.clone() }
 }

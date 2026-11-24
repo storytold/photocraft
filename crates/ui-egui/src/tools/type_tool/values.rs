@@ -5,8 +5,6 @@
 //! A pass applies only the edit events of its own input (the controls report only those), so a second pass in one
 //! frame never applies an earlier pass's events again.
 
-use std::sync::PoisonError;
-
 use craft::behavior::{EditEvent, Mixed, Preview};
 use craft::font_manager::axes::{FontAxis, NamedInstance};
 use craft::text::ui::DocUnit;
@@ -207,16 +205,15 @@ impl TargetFace {
     }
 }
 
-/// The face of the target's family, `None` while the selection mixes families, the font scan runs or the face
-/// has no axes.
+/// The face of the target's family, `None` while the selection mixes families, the font scan runs, a job holds the
+/// font engine or the face has no axes.
 pub(crate) fn face_axes(app: &PhotocraftApp) -> Option<TargetFace> {
     let (chars, _) = target_styles(app);
     let first = chars.first()?;
     if chars.iter().any(|c| c.font_family != first.font_family) {
         return None;
     }
-    let engine = photocraft_text::try_shared()?;
-    let faces = engine.lock().unwrap_or_else(PoisonError::into_inner).fonts.faces(&first.font_family);
+    let faces = fonts::faces_unless_busy(&first.font_family)?;
     let face = faces.iter().find(|f| f.italic == first.italic && !f.font_axes.is_empty()).or_else(|| faces.iter().find(|f| !f.font_axes.is_empty()))?;
     Some(TargetFace { axes: face.font_axes.clone(), instances: face.instances.clone(), weight: Some(f32::from(first.weight)), italic: first.italic })
 }

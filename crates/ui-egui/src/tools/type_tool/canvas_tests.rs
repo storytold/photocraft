@@ -1421,6 +1421,25 @@ fn postscript_only_style_shows_actual_subfamily() {
     assert_eq!(super::selected_style(&style), "SemiBold");
 }
 
+/// While another thread holds the font engine (a background job laying out or re-rendering type), the Character
+/// panel and the axis sliders don't wait for it: the stored style name stands in, and the faces come once it is free.
+#[test]
+fn a_held_font_engine_does_not_hold_up_the_character_panel() {
+    let engine = photocraft_text::shared();
+    let style = photocraft_doc::text::CharStyle {
+        font_family: "Inter".into(),
+        font_style: "Bold".into(),
+        postscript_name: Some("Inter-SemiBold".into()),
+        ..Default::default()
+    };
+    let held = engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(super::selected_style(&style), "Bold", "the stored name, without waiting");
+    assert!(super::fonts::faces_unless_busy("Inter").is_none());
+    drop(held);
+    assert_eq!(super::selected_style(&style), "SemiBold");
+    assert!(super::fonts::faces_unless_busy("Inter").is_some_and(|faces| !faces.is_empty()));
+}
+
 /// A family's style list is the craft catalog's list for it, variable faces' named instances
 /// included; an unknown family offers Regular alone.
 #[test]
