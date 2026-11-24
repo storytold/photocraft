@@ -18,7 +18,7 @@ fn import_only_bytes() -> Vec<u8> {
     zip.finish().unwrap()
 }
 
-fn imported_app(source: &std::path::Path, bytes: &[u8]) -> Box<PhotocraftApp> {
+fn imported_app(source: &std::path::Path, bytes: &[u8], expected_pixel: [f32; 4]) -> Box<PhotocraftApp> {
     let imported = photocraft_io::import(source.to_str().unwrap(), bytes).unwrap();
     assert!(imported.source_read_only);
     let mut app = app();
@@ -30,7 +30,7 @@ fn imported_app(source: &std::path::Path, bytes: &[u8]) -> Box<PhotocraftApp> {
     assert!(state.source_read_only);
     assert!(state.path.is_none());
     assert_eq!(state.protected_import_source.as_deref(), source.to_str());
-    assert_eq!(photocraft_compose::flatten(&state.doc).get(0, 0), [0., 1., 0., 1.]);
+    assert_eq!(photocraft_compose::flatten(&state.doc).get(0, 0), expected_pixel);
     app
 }
 
@@ -42,7 +42,7 @@ fn desktop_save_as_and_copy_refuse_import_sources_and_hardlink_aliases_before_en
     let bytes = import_only_bytes();
     std::fs::write(&source, &bytes).unwrap();
     std::fs::hard_link(&source, &alias).unwrap();
-    let mut app = imported_app(&source, &bytes);
+    let mut app = imported_app(&source, &bytes, [0., 1., 0., 1.]);
     app.background_jobs = false;
     let encoded = Rc::new(std::cell::Cell::new(0));
     let count = encoded.clone();
@@ -87,7 +87,7 @@ fn desktop_background_save_refuses_an_import_alias_before_starting_a_worker() {
     let bytes = import_only_bytes();
     std::fs::write(&source, &bytes).unwrap();
     std::fs::hard_link(&source, &alias).unwrap();
-    let mut app = imported_app(&source, &bytes);
+    let mut app = imported_app(&source, &bytes, [0., 1., 0., 1.]);
     app.background_jobs = true;
     let writes = Arc::new(AtomicUsize::new(0));
     let called = writes.clone();
@@ -112,4 +112,36 @@ fn desktop_background_save_refuses_an_import_alias_before_starting_a_worker() {
     assert_eq!(identity(&app), (before.doc.name.clone(), before.path, before.revision, before.saved_revision));
     assert_eq!(std::fs::read(&source).unwrap(), bytes);
     assert_eq!(std::fs::read(&alias).unwrap(), bytes);
+}
+
+/// Original 1×1 RGB v3 XCF with empty property/layer/channel lists, compressed once
+/// with deterministic gzip and bzip2. No external asset or runtime compressor is needed.
+#[test]
+fn desktop_save_as_protects_compressed_xcf_sources_disguised_as_native_files() {
+    const GZIP: &[u8] = &[
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 75, 207, 204, 45, 80, 168, 72, 78, 83, 40, 51, 48, 48, 102, 0, 2, 70, 40, 198, 0, 0, 118, 76, 159, 139, 42, 0, 0, 0,
+    ];
+    const BZIP2: &[u8] = &[
+        66, 90, 104, 57, 49, 65, 89, 38, 83, 89, 93, 140, 232, 177, 0, 0, 11, 121, 128, 96, 0, 64, 0, 64, 0, 72, 0, 9, 162, 65, 64, 32, 0, 33, 160, 154, 100,
+        198, 161, 0, 0, 33, 88, 42, 32, 156, 218, 6, 253, 154, 72, 248, 187, 146, 41, 194, 132, 130, 236, 103, 69, 136,
+    ];
+    for bytes in [GZIP, BZIP2] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("wrapped.pcraft");
+        let alias = directory.path().join("alias.pcraft");
+        std::fs::write(&source, bytes).unwrap();
+        std::fs::hard_link(&source, &alias).unwrap();
+        let mut app = imported_app(&source, bytes, [0., 0., 0., 0.]);
+        app.background_jobs = false;
+        app.services.write = Some(Box::new(|path, bytes| std::fs::write(path, bytes).map_err(|error| error.to_string())));
+        let before = app.session.active().unwrap().clone();
+        assert_eq!(before.doc.size, photocraft_geom::Size::new(1, 1));
+        let error = app.save_as(Some(alias.to_str().unwrap().into())).unwrap_err();
+        assert!(error.contains("import-only source"), "{error}");
+        assert!(Arc::ptr_eq(&before.doc, &app.session.active().unwrap().doc));
+        assert_eq!(identity(&app), (before.doc.name.clone(), before.path, before.revision, before.saved_revision));
+        assert_eq!(app.session.active().unwrap().history.past_len(), before.history.past_len());
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        assert_eq!(std::fs::read(&alias).unwrap(), bytes);
+    }
 }
