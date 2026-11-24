@@ -91,7 +91,7 @@ fn options_bar_shows_align_edges_for_the_triangle() {
 /// options bar, on after Reset Tool: here too, exactly one, on, enabled in Shape mode.
 #[test]
 fn every_shape_tool_and_the_pen_show_one_align_edges_checkbox() {
-    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::Line, Tool::CustomShape, Tool::Pen] {
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape, Tool::Pen] {
         let mut h = harness(tool);
         h.state_mut().ui.tool_options.vector_mode = VectorMode::Shape;
         h.run_steps(3);

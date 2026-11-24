@@ -156,9 +156,11 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
-    // Every shape tool's one Align Edges, at the bar's right end after the gear (#13346, #13370).
-    // Only a shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
-    if is_shape_tool(tool) {
+    // Every shape tool's one Align Edges, at the bar's right end after the gear (#13346, #13370,
+    // #13326). Not the Star tool's, which the reference application doesn't have (its stars are the
+    // Polygon tool's). Only a shape layer has pixel edges to align: greyed in Path mode (and in a
+    // pixels mode).
+    if is_shape_tool(tool) && tool != Tool::Star {
         Divider::vertical().show(ui);
         super::alignment::shape_tool_option(app, ui);
     }

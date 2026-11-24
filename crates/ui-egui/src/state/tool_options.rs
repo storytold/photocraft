@@ -155,7 +155,8 @@ pub struct ToolOptions {
     pub corner_radius: f32,
     /// The shape tools' and the Pen's (Shape mode) one Align Edges checkbox, as in the reference
     /// application: a drag lands on whole pixels, and the new shape layer gets Align Edges
-    /// (`ShapeLayer::use_aligned_rendering`), which fits it to whole pixels at render time. On by
+    /// (`ShapeLayer::use_aligned_rendering`), which fits it to whole pixels at render time. With it off, the Rectangle (#13346),
+    /// Triangle (#13370) and Polygon (#13326) drags keep their fractions. On by
     /// default and after Reset Tool; enabled in Shape mode only. Scripted and stored by the
     /// reference's name, `useAlignedRendering` (`align_edges` in older settings and presets).
     #[serde(rename = "useAlignedRendering", alias = "align_edges")]

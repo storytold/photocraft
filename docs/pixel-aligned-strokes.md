@@ -39,9 +39,9 @@ starts from `align_edges::aligned_shape` so both parts move together), previews 
 
 ## The checkbox
 
-The shape tools and the Pen (in Shape mode) have one **Align Edges** checkbox at the options bar's
+The shape tools (not the Star tool, which the reference application lacks) and the Pen (in Shape mode) have one **Align Edges** checkbox at the options bar's
 right end, on by default and after Reset Tool, greyed in Path mode. It does both: the drag lands on
-whole pixels (with it off, the Rectangle's and Triangle's drags keep their fractions; the other
+whole pixels (with it off, the Rectangle's, Triangle's and Polygon's drags keep their fractions; the other
 tools' drags always land on whole pixels), and the new shape layer gets Align Edges. With a shape layer selected the checkbox
 shows and edits that layer's flag, as Fill and Stroke do; the Properties panel has it too. Tool
 presets store it as `useAlignedRendering` (older settings and presets as `align_edges`).
