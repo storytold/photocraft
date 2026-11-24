@@ -464,7 +464,7 @@ fn played_layer_names(s: &Session) -> Vec<String> {
 fn a_step_naming_a_missing_layer_stops_instead_of_acting_on_the_wrong_layer() {
     let mut s = Session::new();
     other_names_document(&mut s);
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new("On B", vec![ActionStep::new("layer.select", json!({"name": "B"})), ActionStep::new("layer.new.layer", json!({"name": "Made"}))]))
         .unwrap();
@@ -481,7 +481,7 @@ fn a_step_naming_a_missing_layer_stops_instead_of_acting_on_the_wrong_layer() {
 fn an_eye_step_naming_a_missing_layer_stops_without_hiding_another_layer() {
     let mut s = Session::new();
     other_names_document(&mut s);
-    s.actions
+    s.actions_mut()
         .list
         .push(Action::new("Hide B", vec![ActionStep::new("layer.setProps", json!({"visible": false, "_actionLayer": {"name": "B", "ordinal": 0}}))]))
         .unwrap();
@@ -498,7 +498,7 @@ fn an_eye_step_naming_a_missing_layer_stops_without_hiding_another_layer() {
 fn a_target_step_acts_on_the_selected_layer_of_another_document() {
     let mut s = Session::new();
     other_names_document(&mut s);
-    s.actions.list.push(Action::new("Dim", vec![ActionStep::new("layer.setProps", json!({"opacity": 0.5}))])).unwrap();
+    s.actions_mut().list.push(Action::new("Dim", vec![ActionStep::new("layer.setProps", json!({"opacity": 0.5}))])).unwrap();
     let played = s.execute("actions.play", json!({"action": "Dim"})).unwrap();
     assert!(played.get("failed").is_none(), "{played}");
     let doc = s.active().unwrap().doc.clone();
