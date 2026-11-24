@@ -10,19 +10,25 @@ use serde_json::json;
 
 use super::convert_point_history_tests::drag;
 use crate::PhotocraftApp;
+use crate::canvas::testing::{shown, to_screen};
 use crate::state::Tool;
 
 /// The measured document: 800 × 600 px with a closed corner square as the Work Path, shown at
 /// `zoom` (device pixels per document pixel) on a display of `ppp` device pixels per point.
 fn app(tool: Tool, zoom: f32, ppp: f32) -> Box<PhotocraftApp> {
+    centred_app(tool, zoom, ppp, [100.0, 300.0])
+}
+
+/// [`app`] with the view centred on the document point `center` (the corner is at (100, 300)).
+fn centred_app(tool: Tool, zoom: f32, ppp: f32, center: [f32; 2]) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     crate::canvas::testing::pixels_per_point(&mut app, ppp);
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
-    // The corner (100, 300) in the middle of the canvas, at `zoom`; the new view's fit-on-screen request would replace
-    // both on the first pass.
+    // The corner (100, 300) at about the middle of the canvas, at `zoom`; the new view's fit-on-screen request would
+    // replace both on the first pass.
     let view = &mut app.ui.views[0];
-    (view.zoom, view.center) = (zoom, [100.0, 300.0]);
+    (view.zoom, view.center) = (zoom, center);
     view.clear_pending();
     app.ui.tool = tool;
     let path = json!({"subpaths": [{"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]}]});
@@ -70,6 +76,29 @@ fn the_reach_is_5_screen_pixels_on_any_display_scale() {
             let at = format!("display scale {ppp}, zoom {zoom}");
             assert!(converts_from(&mut app(Tool::ConvertPoint, zoom, ppp), inside), "5 px at {at}");
             assert!(!converts_from(&mut app(Tool::ConvertPoint, zoom, ppp), outside), "6 px at {at}");
+        }
+    }
+}
+
+/// #13174: the 0.01 px over 5 covers the f32 mapping between the screen and the document. With the view centred on a
+/// fractional document point the corner falls between device pixels, and a press 5 device px from the corner's mapped
+/// screen position still converts it while one 6 px away does not.
+#[test]
+fn the_reach_holds_on_fractional_view_centres() {
+    for center in [[100.37, 300.61], [99.5, 300.25], [100.123_45, 299.876_54], [100.999, 300.001], [97.3, 302.9]] {
+        for ppp in [1.0, 1.25, 1.5, 2.0] {
+            for zoom in [1.0, 1.5, 2.0] {
+                let at = format!("centre {center:?}, display scale {ppp}, zoom {zoom}");
+                for (px, converts) in [(5.0, true), (6.0, false)] {
+                    let mut app = centred_app(Tool::ConvertPoint, zoom, ppp, center);
+                    let dx = px / f64::from(zoom);
+                    shown(&mut app);
+                    let (corner, press) = (to_screen(&app, [100.0, 300.0]), to_screen(&app, [100.0 - dx, 300.0]));
+                    let device_px = f64::from((corner - press).length() * ppp);
+                    assert!((device_px - px).abs() < 1e-3, "the press is {device_px} device px from the corner at {at}");
+                    assert_eq!(converts_from(&mut app, dx), converts, "{px} px at {at}");
+                }
+            }
         }
     }
 }
