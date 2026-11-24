@@ -580,7 +580,7 @@ fn type_edit_menu_lists_spelling_suggestions_for_the_word_under_the_pointer() {
     app.run("type.insertText", json!({"layer": id, "text": " Zqx"})).unwrap();
     assert!(open_here(&mut app, Tool::Type, [600.0, 15.0]));
     let menu = app.ui.canvas_tool_menu.clone().unwrap();
-    assert!(matches!(&menu.kind, MenuKind::TypeEdit { spelling: Some(s) } if s.word == "Zqx"));
+    assert!(matches!(&menu.kind, MenuKind::TypeEdit { spelling: Some(s), .. } if s.word == "Zqx"));
     choose(&mut app, &ctx, SPELLING_ADD);
     assert!(app.session.prefs().user_dictionary.iter().any(|w| w == "Zqx"));
 }

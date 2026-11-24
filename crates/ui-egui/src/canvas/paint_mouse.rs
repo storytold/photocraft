@@ -301,7 +301,7 @@ pub(crate) fn context_popup(app: &mut PhotocraftApp, tool: Tool, mods: Mods, doc
         return Some(ContextPopup::BrushPicker);
     }
     if menu::editing_text(app, tool) {
-        return Some(ContextPopup::Menu(MenuKind::TypeEdit { spelling: None }));
+        return Some(ContextPopup::Menu(MenuKind::TypeEdit { spelling: None, mask: false }));
     }
     if menu::type_layer_at(app, tool, doc).is_some() {
         return Some(ContextPopup::Menu(MenuKind::TypeLayer { shape: menu::TypeShape::Other }));
