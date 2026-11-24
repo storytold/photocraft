@@ -784,6 +784,8 @@ pub(crate) fn after_open(
         app.opened_from(p);
     }
     app.sync_views();
+    // This tab has passed the requeue decision even if other Opens still run.
+    crate::vector_ui::apply_imported_path_selection(app);
     // Fonts the document's type uses that aren't installed join the import warnings (#4559).
     let warnings = crate::file_open::with_missing_fonts(app, warnings.to_vec());
     let warnings = warnings.as_slice();

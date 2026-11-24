@@ -42,6 +42,7 @@ pub(crate) use path_ops::{
     active_shape_path, active_type_path, delete_key_edits_path, deselect_loaded_path, edit_path, free_transform_path, saved_path_components_selected,
     targeted_vector_mask, work_path_shown,
 };
+pub(crate) use paths_panel::apply_imported_path_selection;
 pub use paths_panel::{PathEntry, PathRow, path_rows, paths_panel};
 #[cfg(test)]
 use pen::pen_path_op;

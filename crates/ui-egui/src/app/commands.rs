@@ -376,6 +376,11 @@ impl PhotocraftApp {
             self.ui.canvas_tool_menu = None;
         }
         self.path_document = document;
+        // A ready Open may still be requeued behind another prompt. Keep its
+        // exact index/identity for that handoff until the host finalizes the tab.
+        if self.jobs.opens.is_empty() && !crate::open_prompt::waiting(self) {
+            vector_ui::apply_imported_path_selection(self);
+        }
         vector_ui::cancel_stale_pen(self);
         crate::direct_select::cancel_stale(self);
         type_transform::cancel_stale(self);
