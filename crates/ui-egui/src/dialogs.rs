@@ -415,6 +415,7 @@ pub(crate) const PROMPTS: &[PromptRow] = &[
     disk_change_prompt::answer,
     rasterize_prompt::answer,
     live_shape_prompt::answer,
+    assign_profile_layers_alert::answer,
     preset_group_prompt::answer,
     crate::prefs_ui::shortcuts::answer,
     open_prompt::answer_prompt,
@@ -634,10 +635,11 @@ const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.expo
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 5] {
+fn dont_show_again_keys() -> [&'static str; 6] {
     [
         delete_layer_prompt::PREF,
         live_shape_prompt::PREF,
+        assign_profile_layers_alert::PREF,
         crate::analysis::note_alerts::DELETE_NOTE_PREF,
         crate::retouch_ui::CAM_NO_PIXELS_PREF,
         crate::prefs_ui::shortcuts::SWITCH_PREF,
@@ -705,6 +707,9 @@ pub mod adjust_preview;
 pub mod alerts;
 #[cfg(test)]
 mod arbitrary_ruler_prefill_tests;
+pub mod assign_profile_layers_alert;
+#[cfg(test)]
+mod assign_profile_layers_alert_tests;
 pub(crate) mod bitmap_dialog;
 pub mod blend_options;
 pub mod blur_pins;
