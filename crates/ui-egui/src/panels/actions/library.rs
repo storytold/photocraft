@@ -1,256 +1,212 @@
-//! One protected confirmation route for the destructive Classic Actions commands.
-use serde_json::{Map, Value, json};
+//! Clear All Actions, Reset Actions… and Replace Actions…: the question before each whole-list
+//! command, and Edit › Undo of the last one.
+//!
+//! A panel menu event asks with the framework's [`LibraryPrompt`] on the dialog host, tagged with
+//! what OK runs ([`Held`]); the answer reaches [`answer`] through the dialog host's prompt rows.
+//! OK runs only while the list is at the revision it was asked at, and the command must pass both
+//! the authorization it was asked under and the current one.
 
-use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
-use crate::state::DialogKind;
-use crate::{
-    PhotocraftApp,
-    widgets::{ButtonRole, DialogButton, dialog_buttons},
-};
+use craft::automation::ui::actions::{ActionsWords, LibraryPrompt};
+use craft::host::{PickRequest, Picked};
+use craft::ui::dialog::{PromptAnswer, PromptChoice};
+use craft::ui::runtime::env::Env;
+use craft::ui::runtime::words::CommonWords;
+use photocraft_engine::actions_cmds::ActionsExt;
+use serde_json::{Value, json};
 
-const MARK: &str = "__actionsLibrary";
+use crate::PhotocraftApp;
+use crate::dialogs::alerts;
+
+const CLEAR_ALL: &str = "actions.clearAll";
+const RESET: &str = "actions.reset";
+const REPLACE: &str = "actions.replace";
+const UNDO: &str = "actions.undoLibrary";
+
+/// The largest Actions file Replace reads: its bytes travel base64-encoded in the command's
+/// params, which stay well under the engine's import limit.
 const MAX_PICKED_BYTES: u64 = photocraft_engine::preset_import_cmds::MAX_FILE_BYTES / 7 * 3;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
-    Clear,
-    Reset,
-    Replace,
-}
-
-impl Kind {
-    fn command(self) -> &'static str {
-        match self {
-            Self::Clear => "actions.clearAll",
-            Self::Reset => "actions.reset",
-            Self::Replace => "actions.replace",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Clear => "Clear All Actions",
-            Self::Reset => "Reset Actions",
-            Self::Replace => "Replace Actions",
-        }
-    }
-}
-
-/// The revision, authorization, and chosen payload a pending confirmation may use.
-pub(crate) struct Held {
-    id: u64,
-    kind: Kind,
+/// When a question was asked and under which authorization.
+#[derive(Clone, Copy)]
+struct Asked {
     revision: u64,
     gate: Option<super::Gate>,
     automated: bool,
-    replace_data: Option<Replacement>,
-    append: bool,
-    accept: bool,
-    choice_append: bool,
 }
 
-struct Replacement {
-    name: String,
-    count: usize,
-    params: Value,
+impl Asked {
+    fn now(app: &PhotocraftApp) -> Self {
+        let gate = app.session.authorize.or(if app.automation_input { app.services.automation_authorize } else { None });
+        Asked { revision: app.session.actions().list.revision(), gate, automated: app.automation_input || gate.is_some() }
+    }
+
+    /// The asking authorization and the current one both allow `command` with `params`.
+    fn authorize(&self, app: &PhotocraftApp, command: &str, params: &Value) -> Result<(), String> {
+        super::authorize_owned(app, command, params, self.gate, self.automated)
+    }
+}
+
+/// What OK of a library question runs: the prompt's tag.
+struct Held {
+    prompt: LibraryPrompt,
+    asked: Asked,
+    /// Replace: the chosen file's path (checked again on OK) and the command's params with the
+    /// bytes read when the file was chosen, so OK replaces with exactly what the question counted.
     path: Option<String>,
+    data: Option<Value>,
 }
 
-/// Identify dialogs owned by the Classic Actions library controller.
-pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
-    fields.contains_key(MARK)
+fn command(prompt: &LibraryPrompt) -> &'static str {
+    match prompt {
+        LibraryPrompt::ClearAll => CLEAR_ALL,
+        LibraryPrompt::Reset => RESET,
+        _ => REPLACE,
+    }
 }
 
-/// Refuse library edits while its store, recording, or playback owns the definitions.
+/// Refuses a library change while the library is still loading, or a recording or playback holds
+/// one of its actions (a Step by Step wait, a paused menu item editor or Check Spelling).
 pub(crate) fn idle(app: &PhotocraftApp, command: &str) -> Result<(), String> {
     super::suspended_guard(app, command)?;
     if app.services.preset_store.is_some() {
         return Err(tl!("Wait for the Actions library to load.").into());
     }
-    if app.session.actions.recording.is_some()
-        || app.session.actions.playing > 0
-        || super::playback::pending(app)
-        || app.paused_playbacks.paused.values().any(|paused| paused.menu_editor.is_some())
-        || app.ui.type_panels.spell.as_ref().and_then(|spell| spell.resume).is_some_and(|token| app.paused_playbacks.paused.contains_key(&token))
-    {
+    let paused = &app.paused_playbacks.paused;
+    let editor = paused.values().any(|p| p.menu_editor.is_some());
+    let spelling = app.ui.type_panels.spell.as_ref().and_then(|spell| spell.resume).is_some_and(|token| paused.contains_key(&token));
+    if app.session.recording.target.is_some() || app.session.recording.playing > 0 || super::playback::pending(app) || editor || spelling {
         return Err(tl!("Stop recording or playback before changing the Actions library.").into());
     }
     Ok(())
 }
 
-fn effective_gate(app: &PhotocraftApp, captured: Option<super::Gate>, automated: bool) -> Result<Option<super::Gate>, String> {
-    let service = if automated || app.automation_input { app.services.automation_authorize } else { None };
-    let live = super::continuation_gate(app.session.authorize, service)?;
-    super::continuation_gate(captured, live)
+/// Clear All Actions: asks first.
+pub(super) fn clear_all(app: &mut PhotocraftApp) -> Result<Value, String> {
+    idle(app, CLEAR_ALL)?;
+    let asked = Asked::now(app);
+    asked.authorize(app, CLEAR_ALL, &json!({"confirm": true}))?;
+    ask(app, Held { prompt: LibraryPrompt::ClearAll, asked, path: None, data: None })
 }
 
-fn authorize(app: &PhotocraftApp, command: &str, params: &Value, gate: Option<super::Gate>, automated: bool) -> Result<(), String> {
-    let gate = effective_gate(app, gate, automated)?;
-    if let Some(gate) = gate {
-        gate(command, params).map_err(|error| error.to_string())?;
+/// Reset Actions…: asks whether the starting sets replace the list (OK) or join it (Append). The
+/// question opens when either answer is allowed; the chosen one is checked again on the answer.
+pub(super) fn reset(app: &mut PhotocraftApp) -> Result<Value, String> {
+    idle(app, RESET)?;
+    let asked = Asked::now(app);
+    let allowed = |mode: &str| asked.authorize(app, RESET, &json!({"confirm": true, "mode": mode}));
+    if let (Err(error), Err(_)) = (allowed("replace"), allowed("append")) {
+        return Err(error);
     }
-    if (automated || app.automation_input || gate.is_some())
-        && let Some(check) = app.services.automation_command.as_ref()
-    {
-        check(command, params)?;
-    }
-    Ok(())
+    ask(app, Held { prompt: LibraryPrompt::Reset, asked, path: None, data: None })
 }
 
-/// Ask for the chosen library edit without reading or changing the library before consent.
-pub(super) fn open(app: &mut PhotocraftApp, kind: Kind) -> Result<Value, String> {
-    let command = kind.command();
-    idle(app, command)?;
-    if app.held_actions_library.is_some() {
-        return Err(tl!("Confirm or cancel the pending Actions library change first.").into());
+/// Replace Actions…: picks one `.atn` file, reads and counts it, then asks. The list stays as it
+/// is until OK.
+pub(super) fn replace(app: &mut PhotocraftApp) -> Result<Value, String> {
+    idle(app, REPLACE)?;
+    let asked = Asked::now(app);
+    let mut request = PickRequest::open("actions").filter("Actions", &["atn"]);
+    if let Some(dir) = crate::file_dialog::last_used_dir(&app.ui.recent_files) {
+        request = request.directory(dir);
     }
-    let revision = app.session.actions.rev;
-    let automated = app.automation_input;
-    let gate = effective_gate(app, None, automated)?;
-    let authorize = |params: &Value| self::authorize(app, command, params, gate, automated);
-    let mut held = Held { id: 0, kind, revision, gate, automated, replace_data: None, append: false, accept: true, choice_append: false };
-    if kind == Kind::Reset {
-        held.append = authorize(&json!({"confirm":true,"mode":"append"})).is_ok();
-        let replace = authorize(&json!({"confirm":true,"mode":"replace"}));
-        held.accept = replace.is_ok();
-        if !held.append {
-            replace?;
-        }
-    } else if kind == Kind::Clear {
-        authorize(&json!({"confirm":true}))?;
-    }
-    if kind != Kind::Replace {
-        return Ok(prompt(app, held));
-    }
-    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: Some(vec!["atn".into()]) }, move |app, answer| {
-        idle(app, command)?;
-        if app.session.actions.rev != revision || app.held_actions_library.is_some() {
+    app.ask_file(request, move |app, picked| {
+        idle(app, REPLACE)?;
+        if app.session.actions().list.revision() != asked.revision {
             return Err(tl!("The actions changed. Request Replace Actions again.").into());
         }
-        let (name, bytes, path) = match answer {
-            FileDialogAnswer::Paths(paths) => {
-                let path = paths.into_iter().next().ok_or("cancelled")?;
-                self::authorize(app, command, &json!({"confirm":true,"path":path}), gate, automated)?;
+        let (name, bytes, path) = match picked {
+            Picked::Paths(paths) => {
+                let path = paths.into_iter().next().ok_or(crate::file_dialog::CANCELLED)?.to_string_lossy().into_owned();
+                asked.authorize(app, REPLACE, &json!({"confirm": true, "path": path}))?;
                 let bytes = photocraft_format::read_file_limited(std::path::Path::new(&path), MAX_PICKED_BYTES).map_err(|error| format!("{path}: {error}"))?;
-                (crate::file_open::display_name(&path), bytes, Some(path))
+                (path.clone(), bytes, Some(path))
             }
-            FileDialogAnswer::Contents(name, bytes) => (crate::file_open::display_name(&name), bytes, None),
-            _ => return Err(tl!("Choose one Actions file.").into()),
+            Picked::Contents(files) => {
+                let (name, bytes) = files.into_iter().next().ok_or(crate::file_dialog::CANCELLED)?;
+                (name, bytes, None)
+            }
+            Picked::Cancelled | Picked::Downloaded(_) => return Err(crate::file_dialog::CANCELLED.into()),
+            Picked::Unavailable(why) | Picked::Failed(why) => return Err(why),
         };
         if bytes.len() as u64 > MAX_PICKED_BYTES {
             return Err(tl!("The Actions file is too large.").into());
         }
-        let params = json!({"confirm":true,"data":photocraft_engine::paint::tile::b64_encode(&bytes)});
-        self::authorize(app, command, &params, gate, automated)?;
+        let data = json!({"confirm": true, "data": photocraft_engine::paint::tile::b64_encode(&bytes)});
+        asked.authorize(app, REPLACE, &data)?;
         let count = photocraft_engine::atn_cmds::validate_replacement(&bytes)?;
-        held.replace_data = Some(Replacement { name, count, params, path });
-        Ok(prompt(app, held))
+        let prompt = LibraryPrompt::replace(count, crate::file_open::display_name(&name));
+        ask(app, Held { prompt, asked, path, data: Some(data) })
     })
 }
 
-fn prompt(app: &mut PhotocraftApp, mut held: Held) -> Value {
-    let mut fields = Map::new();
-    fields.insert(MARK.into(), json!(true));
-    fields.insert("__label".into(), json!(held.kind.label()));
-    let id = app.ui.open_dialog(DialogKind::Command, fields);
-    held.id = id;
-    app.held_actions_library = Some(held);
-    json!({"dialog":id})
-}
-
-/// Draw the warning for the exact held library edit.
-pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, id: u64) {
-    let Some(held) = app.held_actions_library.as_ref().filter(|held| held.id == id) else { return };
-    match &held.replace_data {
-        Some(replacement) => {
-            ui.label(crate::i18n::fmt(
-                tl!("Replace all actions with {count} actions from {file}?"),
-                &[("count", &replacement.count.to_string()), ("file", &replacement.name)],
-            ));
-        }
-        None if held.kind == Kind::Reset => {
-            ui.label(tl!("Replace the current actions?"));
-        }
-        None => {
-            ui.label(tl!("Clear all actions?"));
-        }
+/// Opens the question for `held`. Another open question is answered first.
+fn ask(app: &mut PhotocraftApp, held: Held) -> Result<Value, String> {
+    let env = Env::of_root(app.ctx());
+    let prompt = held.prompt.prompt(&env.words::<ActionsWords>(), &env.words::<CommonWords>());
+    match alerts::open_prompt(app, prompt.tag(held)) {
+        Ok(id) => Ok(json!({"dialog": id.value()})),
+        Err(_) => Err(tl!("Answer the open question first.").into()),
     }
 }
 
-/// Whether OK is available for this still-owned dialog.
-pub(crate) fn can_confirm(app: &PhotocraftApp, id: u64) -> bool {
-    app.held_actions_library.as_ref().is_some_and(|held| held.id == id && held.accept)
-}
-
-/// Draw the destructive choices and retain which Reset button was pressed.
-pub(crate) fn buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: u64) -> Option<ButtonRole> {
-    let held = app.held_actions_library.as_mut().filter(|held| held.id == id)?;
-    let ok = DialogButton::new(ButtonRole::Default, tl!("OK"), 84.0).enabled(held.accept);
-    let cancel = DialogButton::new(ButtonRole::Cancel, tl!("Cancel"), 84.0);
-    if held.kind != Kind::Reset {
-        return dialog_buttons(ui, &[ok, cancel]);
-    }
-    let append = DialogButton::new(ButtonRole::Alternate, tl!("Append"), 84.0).enabled(held.append);
-    let clicked = dialog_buttons(ui, &[ok, cancel, append]);
-    held.choice_append = clicked == Some(ButtonRole::Alternate);
-    clicked
-}
-
-/// Recheck the held source and payload against the current authorization before dispatch.
-pub(crate) fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
-    if !app.held_actions_library.as_ref().is_some_and(|held| held.id == id) {
-        return Err(tl!("No Actions library change belongs to this dialog.").into());
-    }
-    let held = app.held_actions_library.take().ok_or("missing Actions library confirmation")?;
-    let command = held.kind.command();
-    idle(app, command)?;
-    if held.revision != app.session.actions.rev {
-        return Err(tl!("The Actions library changed. Open the confirmation again.").into());
-    }
-    let params = match held.kind {
-        Kind::Clear => json!({"confirm":true}),
-        Kind::Reset => {
-            if (held.choice_append && !held.append) || (!held.choice_append && !held.accept) {
-                return Err(tl!("This Reset Actions choice is unavailable.").into());
-            }
-            json!({"confirm":true,"mode":if held.choice_append { "append" } else { "replace" }})
-        }
-        Kind::Replace => {
-            let replacement = held.replace_data.ok_or("missing validated Actions file")?;
-            if let Some(path) = replacement.path {
-                authorize(app, command, &json!({"confirm":true,"path":path}), held.gate, held.automated)?;
-            }
-            replacement.params
-        }
+/// The `PROMPTS` row of the library questions: OK (or Reset's Append) runs the held command and
+/// reports a refusal on the status bar. `false` for another family's answer.
+pub(crate) fn answer(app: &mut PhotocraftApp, _ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
+    let Some(held) = answer.take_tag::<Held>() else { return false };
+    let append = match answer.choice {
+        PromptChoice::Proceed => false,
+        PromptChoice::Alternate => true,
+        _ => return true,
     };
-    authorize(app, command, &params, held.gate, held.automated)?;
+    if let Err(error) = confirm(app, held, append) {
+        alerts::report_error(app, error);
+    }
+    true
+}
+
+/// Runs the held command when the list is unchanged and both authorizations allow it.
+fn confirm(app: &mut PhotocraftApp, held: Held, append: bool) -> Result<Value, String> {
+    let command = command(&held.prompt);
+    idle(app, command)?;
+    if app.session.actions().list.revision() != held.asked.revision {
+        return Err(tl!("The Actions library changed. Choose the command again.").into());
+    }
+    let params = match (&held.prompt, held.data) {
+        (LibraryPrompt::Reset, _) => json!({"confirm": true, "mode": if append { "append" } else { "replace" }}),
+        (_, Some(data)) => data,
+        _ => json!({"confirm": true}),
+    };
+    if let Some(path) = &held.path {
+        held.asked.authorize(app, command, &json!({"confirm": true, "path": path}))?;
+    }
+    held.asked.authorize(app, command, &params)?;
     let saved = app.session.authorize;
-    app.session.authorize = effective_gate(app, held.gate, held.automated)?;
+    // Different policy functions must not replace the asking caller's gate.
+    if let (Some(asked), Some(current)) = (held.asked.gate, saved)
+        && !std::ptr::fn_addr_eq(asked, current)
+    {
+        return Err(tl!("The command permissions changed. Choose the command again.").into());
+    }
+    app.session.authorize = held.asked.gate.or(saved);
     let result = app.run(command, params);
     app.session.authorize = saved;
     result
 }
 
-/// Discard only the matching dialog's held edit.
-pub(crate) fn cancel(app: &mut PhotocraftApp, id: u64) {
-    if app.held_actions_library.as_ref().is_some_and(|held| held.id == id) {
-        app.held_actions_library = None;
-    }
-}
-
-/// The library label is shown only when Edit Undo will reach the library.
+/// The Edit › Undo label while Undo reaches the last library change: no Pen point, transform or
+/// crop box step and no newer document edit comes first, and nothing holds the library.
 pub(crate) fn edit_undo_label(app: &PhotocraftApp) -> Option<&'static str> {
     if crate::vector_ui::pen_can_undo(app)
         || crate::transform_tool::is_enabled(app, "edit.undo").is_some()
         || crate::crop_ui::is_enabled(app, "edit.undo").is_some()
-        || idle(app, "actions.undoLibrary").is_err()
+        || idle(app, UNDO).is_err()
     {
         return None;
     }
     photocraft_engine::actions_edit_cmds::undo_library_label(&app.session)
 }
 
-/// Route an eligible Edit Undo through normal command authorization.
+/// Edit › Undo of the last library change, through the command's own authorization.
 pub(crate) fn undo(app: &mut PhotocraftApp) -> Result<Value, String> {
-    app.run("actions.undoLibrary", json!({}))
+    app.run(UNDO, json!({}))
 }
