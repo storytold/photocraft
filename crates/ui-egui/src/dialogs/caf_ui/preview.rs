@@ -67,7 +67,13 @@ pub(super) fn compute_base(doc: &Document, layer: LayerId, command: &FillCommand
 /// Coverage at proxy resolution: whether each proxy pixel's document point has an opaque sample.
 /// Brush strokes can reach beyond the plan's window, so pixels outside `rect` are read from the
 /// composite (Sample All Layers) or the layer itself.
-fn sampling_coverage(doc: &Document, layer: LayerId, plan: &photocraft_engine::edit_menu_cmds::CafPlan, proxy: &Proxy, sample_all: bool) -> Result<Vec<bool>, String> {
+fn sampling_coverage(
+    doc: &Document,
+    layer: LayerId,
+    plan: &photocraft_engine::edit_menu_cmds::CafPlan,
+    proxy: &Proxy,
+    sample_all: bool,
+) -> Result<Vec<bool>, String> {
     let Some(alpha) = plan.opts.alpha_channel else { return Ok(vec![true; proxy.pw * proxy.ph]) };
     let surface = doc.layer(layer).and_then(|l| l.surface()).ok_or("no pixel layer")?;
     let composite = (sample_all && plan.rect != proxy.canvas).then(|| photocraft_compose::render_reduced(doc, proxy.pw as u32, proxy.ph as u32));

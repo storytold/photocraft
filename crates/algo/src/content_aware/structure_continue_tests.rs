@@ -211,7 +211,8 @@ const UNMEASURED_TOLERANCE: i32 = 2;
 /// has to say what these settings now do. Compared within [`UNMEASURED_TOLERANCE`] levels per
 /// channel, see there for why.
 fn unmeasured_colour_adaptation() -> Vec<(&'static str, FillOptions, [i32; 27])> {
-    let at = |level: &str| FillOptions { color_adaptation: color_level(level), rotations: Vec::new(), scale: false, mirror: false, alpha_channel: None, seed: 1 };
+    let at =
+        |level: &str| FillOptions { color_adaptation: color_level(level), rotations: Vec::new(), scale: false, mirror: false, alpha_channel: None, seed: 1 };
     vec![
         ("None", at("none"), [60, 120, 200, 60, 120, 200, 60, 120, 200, 60, 120, 200, 60, 120, 200, 80, 180, 90, 60, 120, 200, 60, 120, 200, 80, 180, 90]),
         ("High", at("high"), [65, 122, 191, 65, 119, 186, 64, 117, 183, 48, 132, 70, 77, 162, 98, 70, 163, 91, 47, 129, 76, 60, 120, 198, 80, 180, 90]),
