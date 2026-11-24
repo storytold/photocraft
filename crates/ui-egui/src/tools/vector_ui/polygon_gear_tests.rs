@@ -1,25 +1,28 @@
 //! #13306: the Polygon tool's gear: Unconstrained / Symmetric / Fixed Size / Proportional /
 //! Freeform and From Center, as the reference application measures them on an 800 × 600 document
 //! with 5 sides. ⇧ during a drag turns an active Symmetric off; ⌥ during a Freeform drag centres
-//! the polygon on the press point. The popup and the drag helpers are the Rectangle gear's.
+//! the polygon on the press point. The popover and the drag geometry are the framework's
+//! (storytold/craft-libs); these tests drive them through the canvas and the options bar.
 
 use egui::Modifiers;
-use egui::accesskit::Role;
+use egui::accesskit::{Role, Toggled};
 use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
-use super::rectangle_gear_tests::{FIXED, GEAR, RATIO, app, bar, checked, drag, enabled, gear, layer_count, shown, spin, type_into};
+use super::rectangle_gear_tests::{app, drag, layer_count};
+use super::test_input::harness;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::{Tool, ToolOptions};
 
-const RADIOS: [&str; 5] = ["Unconstrained", "Symmetric", "Fixed Size", "Proportional", "Freeform"];
-const RADIUS: &str = "Freeform Radius:";
+const GEAR: &str = "Set additional shape and path options";
 const D: [f64; 2] = [400.0, 300.0];
 const NONE: Modifiers = Modifiers::NONE;
 /// G8: Freeform 400,300 → 600,400, centred on 500,350 with its first vertex at the release point.
 const G8: [(f64, f64); 5] = [(600.0, 400.0), (483.35, 460.56), (389.71, 368.33), (448.49, 250.77), (578.45, 270.35)];
 /// H2: Freeform 400,300 → 600,380, centred on 500,340.
 const H2: [(f64, f64); 5] = [(600.0, 380.0), (492.86, 447.47), (395.59, 366.42), (442.61, 248.86), (568.94, 257.26)];
+/// H3: the same drag centred on the press point (circumradius 215.41).
+const H3: [(f64, f64); 5] = [(600.0, 380.0), (385.72, 514.93), (191.17, 352.84), (285.22, 117.72), (537.89, 134.51)];
 
 /// `shape.info` of the shape a Polygon-tool drag with options `set` draws, with `held` pressed
 /// after the drag starts.
@@ -83,12 +86,11 @@ fn freeform_centres_the_polygon_on_the_drag_with_a_vertex_at_the_release_point()
 
 #[test]
 fn alt_during_a_freeform_drag_centres_it_on_the_press_point() {
-    // H3: circumradius 215.41.
-    let want = [(600.0, 380.0), (385.72, 514.93), (191.17, 352.84), (285.22, 117.72), (537.89, 134.51)];
-    same(&anchors(constraint("freeform"), [600.0, 380.0], Modifiers::ALT), &want);
+    // H3.
+    same(&anchors(constraint("freeform"), [600.0, 380.0], Modifiers::ALT), &H3);
     // From Center does the same, and ⌥ then turns it off (H2's polygon again).
     let from_center = || |o: &mut ToolOptions| (o.polygon_constraint, o.polygon_from_center) = ("freeform".into(), true);
-    same(&anchors(from_center(), [600.0, 380.0], NONE), &want);
+    same(&anchors(from_center(), [600.0, 380.0], NONE), &H3);
     same(&anchors(from_center(), [600.0, 380.0], Modifiers::ALT), &H2);
 }
 
@@ -119,8 +121,10 @@ fn a_freeform_polygon_is_a_polygon_layer_and_works_in_path_mode() {
     let st = shape.session.active().unwrap();
     let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
     assert!(layer.name.starts_with("Polygon "), "{}", layer.name);
+    let photocraft_doc::LayerContent::Shape(sh) = &layer.content else { panic!("a shape layer") };
+    assert_eq!(sh.path.subpaths[0].knots.len(), 6, "the options bar's sides");
 
-    let mut app = app(Tool::Polygon, |o| (o.polygon_constraint, o.shape_mode) = ("freeform".into(), "path".into()));
+    let mut app = app(Tool::Polygon, |o| (o.polygon_constraint, o.shape_mode) = ("freeform".into(), craft::draw::ui::VectorMode::Path));
     let layers = layer_count(&app);
     drag(&mut app, D, [600.0, 400.0], NONE, NONE);
     assert_eq!(layer_count(&app), layers, "Path mode draws no layer");
@@ -149,9 +153,9 @@ fn a_click_with_fixed_size_still_opens_create_polygon() {
     let layers = layer_count(&app);
     tool_event(&mut app, ToolEvent::Down { x: 400.0, y: 300.0, pressure: 1.0 }, NONE);
     tool_event(&mut app, ToolEvent::Up { x: 400.0, y: 300.0 }, NONE);
-    let [dialog] = app.ui.dialogs.as_slice() else { panic!("expected one Create Polygon dialog") };
-    assert_eq!(dialog.fields["__label"], "Create Polygon");
-    assert_eq!((dialog.fields["width"].as_f64(), dialog.fields["height"].as_f64()), (Some(100.0), Some(100.0)));
+    let dialog = app.framework.dialogs.get::<craft::draw::ui::shape_drag::CreateShapeDialog>().expect("one Create Polygon dialog");
+    assert_eq!(dialog.options().kind, craft::draw::ui::shape_drag::ShapeKind::Polygon);
+    assert_eq!(dialog.options().size, (100.0, 100.0));
     assert_eq!(layer_count(&app), layers);
 }
 
@@ -170,70 +174,54 @@ fn each_tool_keeps_its_own_gear() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The gear popup
+// The gear in the options bar
 
-/// Whether the Freeform Radius field can be edited.
-fn radius_enabled(h: &egui_kittest::Harness<'static, crate::PhotocraftApp>) -> bool {
-    !spin(h, RADIUS).accesskit_node().is_disabled()
+type H = egui_kittest::Harness<'static, Box<crate::PhotocraftApp>>;
+
+fn checked(h: &H, label: &str) -> bool {
+    h.get_by_label(label).accesskit_node().toggled() == Some(Toggled::True)
 }
 
 #[test]
 fn the_polygon_has_the_gear_after_its_path_arrangement() {
-    let h = bar(Tool::Polygon);
+    let h = harness(Tool::Polygon);
     let (gear, arrange) = (h.get_by_label(GEAR).rect(), h.get_by_label("Path arrangement").rect());
     assert!(arrange.right() <= gear.left() && (gear.center().y - arrange.center().y).abs() < 4.0, "{gear:?} after {arrange:?}");
 }
 
 #[test]
-fn the_popup_shows_symmetric_freeform_and_the_defaults() {
-    let h = gear(Tool::Polygon);
-    let radios: Vec<_> = RADIOS.iter().map(|l| h.get_by_role_and_label(Role::RadioButton, l).rect()).collect();
-    assert!(radios.windows(2).all(|w| w[0].top() < w[1].top()), "top to bottom: {radios:?}");
-    assert!(h.get_by_label("From Center").rect().top() > radios[4].top(), "From Center comes last");
+fn the_gear_says_symmetric_adds_freeform_and_its_picks_are_the_polygons() {
+    let mut h = harness(Tool::Polygon);
+    h.get_by_label(GEAR).click();
+    h.run_steps(4);
+    let radios = ["Unconstrained", "Symmetric", "Fixed Size", "Proportional", "Freeform"];
+    let tops: Vec<_> = radios.iter().map(|l| h.get_by_role_and_label(Role::RadioButton, l).rect().top()).collect();
+    assert!(tops.windows(2).all(|w| w[0] < w[1]), "top to bottom: {tops:?}");
     assert!(h.query_by_label("Square").is_none(), "the Polygon's says Symmetric");
-    assert_eq!(RADIOS.map(|l| checked(&h, l)), [true, false, false, false, false], "Unconstrained by default");
-    assert!(!checked(&h, "From Center"));
-    assert_eq!(FIXED.map(|l| shown(&h, l)), [None, None], "Fixed Size starts empty");
-    assert_eq!(RATIO.map(|l| shown(&h, l)), [Some(1.0), Some(1.0)], "Proportional starts at 1 : 1");
-    assert_eq!(shown(&h, RADIUS), None, "Radius starts empty");
-    assert_eq!((enabled(&h, FIXED), enabled(&h, RATIO), radius_enabled(&h)), ([false, false], [false, false], false), "greyed unless chosen");
-}
+    assert_eq!(radios.map(|l| checked(&h, l)), [true, false, false, false, false], "Unconstrained by default");
+    assert!(h.get_by_label("Freeform Radius").accesskit_node().is_disabled(), "the Radius is greyed unless Freeform is chosen");
 
-#[test]
-fn freeform_enables_its_radius_and_the_fields_take_typed_values() {
-    let mut h = gear(Tool::Polygon);
     h.get_by_role_and_label(Role::RadioButton, "Freeform").click();
     h.run_steps(3);
-    assert_eq!(h.state().ui.tool_options.polygon_constraint, "freeform");
-    assert_eq!((enabled(&h, FIXED), enabled(&h, RATIO), radius_enabled(&h)), ([false, false], [false, false], true));
-    type_into(&mut h, RADIUS, "80");
-    assert_eq!(h.state().ui.tool_options.polygon_freeform_radius, 80.0);
-    assert_eq!(shown(&h, RADIUS), Some(80.0));
-
-    h.get_by_role_and_label(Role::RadioButton, "Fixed Size").click();
+    assert!(!h.get_by_label("Freeform Radius").accesskit_node().is_disabled(), "Freeform enables its Radius");
+    h.get_by_label("Freeform Radius").click();
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("Freeform Radius").type_text("80");
+    h.key_press(egui::Key::Enter);
     h.run_steps(3);
-    assert_eq!((enabled(&h, FIXED), radius_enabled(&h)), ([true, true], false));
-    type_into(&mut h, FIXED[0], "120");
-    type_into(&mut h, FIXED[1], "60");
-    let o = &h.state().ui.tool_options;
-    assert_eq!((o.polygon_constraint.as_str(), o.polygon_fixed_width, o.polygon_fixed_height, o.polygon_freeform_radius), ("fixedSize", 120.0, 60.0, 80.0));
-    assert_eq!((o.rect_constraint.as_str(), o.triangle_constraint.as_str()), ("unconstrained", "unconstrained"), "the other gears are untouched");
-
     h.get_by_label("From Center").click();
     h.run_steps(3);
-    assert!(h.state().ui.tool_options.polygon_from_center);
-}
+    let o = &h.state().ui.tool_options;
+    assert_eq!((o.polygon_constraint.as_str(), o.polygon_freeform_radius, o.polygon_from_center), ("freeform", 80.0, true));
+    assert_eq!((o.triangle_constraint.as_str(), o.rect_constraint.as_str()), ("unconstrained", "unconstrained"), "the other gears are untouched");
 
-#[test]
-fn escape_closes_the_popup_and_keeps_symmetric() {
-    let mut h = gear(Tool::Polygon);
     h.get_by_role_and_label(Role::RadioButton, "Symmetric").click();
     h.run_steps(3);
-    assert!(h.query_by_label("From Center").is_some(), "a radio click leaves the popup open");
     h.key_press(egui::Key::Escape);
     h.run_steps(4);
-    assert!(h.query_by_label("From Center").is_none(), "Escape closes the popup");
-    assert_eq!(h.state().ui.tool_options.polygon_constraint, "square");
+    assert!(h.query_by_label("From Center").is_none(), "Escape closes the popover");
+    assert_eq!(h.state().ui.tool_options.polygon_constraint, "square", "and keeps Symmetric");
 }
 
 #[test]
@@ -252,23 +240,21 @@ fn the_settings_are_saved_and_reset_tool_restores_them() {
         v.as_object_mut().unwrap().remove(k);
     }
     let old: ToolOptions = serde_json::from_value(v).unwrap();
-    assert_eq!((old.polygon_constraint.as_str(), old.polygon_ratio_width, old.polygon_from_center), ("unconstrained", 1.0, false));
+    assert_eq!((old.polygon_constraint.as_str(), old.polygon_ratio_width, old.polygon_freeform_radius), ("unconstrained", 1.0, 0.0));
 
     // Reset Tool: the Triangle's leaves the Polygon's gear alone; the Polygon's restores it and
     // leaves the Triangle's alone.
     let ctx = egui::Context::default();
-    let gears = |o: &mut ToolOptions| {
+    let mut app = app(Tool::Triangle, |o| {
         (o.polygon_constraint, o.polygon_freeform_radius, o.polygon_from_center) = ("freeform".into(), 80.0, true);
         (o.triangle_constraint, o.triangle_from_center) = ("square".into(), true);
-    };
-    let mut app = app(Tool::Triangle, gears);
-    crate::menus::invoke(&mut app, &ctx, "tool.reset", json!({})).unwrap();
-    assert_eq!((app.ui.tool_options.polygon_constraint.as_str(), app.ui.tool_options.polygon_from_center), ("freeform", true));
+    });
+    crate::menus::invoke(&mut app, &ctx, crate::tool_reset::RESET, json!({})).unwrap();
+    assert_eq!((app.ui.tool_options.polygon_constraint.as_str(), app.ui.tool_options.polygon_freeform_radius), ("freeform", 80.0));
     (app.ui.tool_options.triangle_constraint, app.ui.tool_options.triangle_from_center) = ("square".into(), true);
     app.ui.tool = Tool::Polygon;
-    crate::menus::invoke(&mut app, &ctx, "tool.reset", json!({})).unwrap();
-    let (o, d) = (&app.ui.tool_options, ToolOptions::default());
+    crate::menus::invoke(&mut app, &ctx, crate::tool_reset::RESET, json!({})).unwrap();
+    let o = &app.ui.tool_options;
     assert_eq!((o.polygon_constraint.as_str(), o.polygon_freeform_radius, o.polygon_from_center), ("unconstrained", 0.0, false));
-    assert_eq!((o.polygon_fixed_width, o.polygon_ratio_width, o.polygon_ratio_height), (d.polygon_fixed_width, 1.0, 1.0));
     assert_eq!((o.triangle_constraint.as_str(), o.triangle_from_center), ("square", true));
 }

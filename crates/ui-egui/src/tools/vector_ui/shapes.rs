@@ -163,17 +163,27 @@ fn snapped(geometry: &ShapeGeometry, keep_angle: bool, whole: bool) -> Option<Sh
     })
 }
 
-/// A Shape tool's stored gear: the constraint name, Fixed Size W and H, Proportional W and H, and From Center.
-type GearFields<'a> = (&'a String, [f32; 4], bool);
+/// A Shape tool's stored gear: the constraint name, Fixed Size W and H, Proportional W and H, From Center, and
+/// Freeform's Radius (the Polygon's only; 0 for the others).
+type GearFields<'a> = (&'a String, [f32; 4], bool, f32);
 
-/// The stored gear of `tool`, for the tools that have one: the Rectangle's (#13343) and the Triangle's (#13361), each
-/// its own fields.
+/// The stored gear of `tool`, for the tools that have one: the Rectangle's (#13343), the Triangle's (#13361) and the
+/// Polygon's (#13306), each its own fields.
 fn gear_fields(o: &ToolOptions, tool: Tool) -> Option<GearFields<'_>> {
     Some(match tool {
-        Tool::Rectangle => (&o.rect_constraint, [o.rect_fixed_width, o.rect_fixed_height, o.rect_ratio_width, o.rect_ratio_height], o.rect_from_center),
-        Tool::Triangle => {
-            (&o.triangle_constraint, [o.triangle_fixed_width, o.triangle_fixed_height, o.triangle_ratio_width, o.triangle_ratio_height], o.triangle_from_center)
-        }
+        Tool::Rectangle => (&o.rect_constraint, [o.rect_fixed_width, o.rect_fixed_height, o.rect_ratio_width, o.rect_ratio_height], o.rect_from_center, 0.0),
+        Tool::Triangle => (
+            &o.triangle_constraint,
+            [o.triangle_fixed_width, o.triangle_fixed_height, o.triangle_ratio_width, o.triangle_ratio_height],
+            o.triangle_from_center,
+            0.0,
+        ),
+        Tool::Polygon => (
+            &o.polygon_constraint,
+            [o.polygon_fixed_width, o.polygon_fixed_height, o.polygon_ratio_width, o.polygon_ratio_height],
+            o.polygon_from_center,
+            o.polygon_freeform_radius,
+        ),
         _ => return None,
     })
 }
@@ -182,13 +192,14 @@ fn gear_fields(o: &ToolOptions, tool: Tool) -> Option<GearFields<'_>> {
 /// (serde's names), the fixed and ratio pairs (a 0 is an empty field) and From Center. The one mapping the tool's
 /// drag (`host::configure`) and the gear in the options bar share.
 pub(super) fn constraints_of(o: &ToolOptions, tool: Tool) -> Option<BoxConstraints> {
-    let (name, [fw, fh, rw, rh], from_center) = gear_fields(o, tool)?;
+    let (name, [fw, fh, rw, rh], from_center, radius) = gear_fields(o, tool)?;
     let field = |v: f32| (v != 0.0).then_some(f64::from(v));
     let mut c = BoxConstraints::default();
     c.constraint = serde_json::from_value(json!(name)).unwrap_or_default();
     c.fixed = (field(fw), field(fh));
     c.ratio = (field(rw), field(rh));
     c.from_center = from_center;
+    c.radius = field(radius);
     Some(c)
 }
 
@@ -210,6 +221,11 @@ pub(super) fn store_constraints(o: &mut ToolOptions, tool: Tool, constraints: &B
         Tool::Triangle => {
             (o.triangle_constraint, o.triangle_fixed_width, o.triangle_fixed_height, o.triangle_ratio_width, o.triangle_ratio_height, o.triangle_from_center) =
                 (name, fw, fh, rw, rh, from_center);
+        }
+        Tool::Polygon => {
+            (o.polygon_constraint, o.polygon_fixed_width, o.polygon_fixed_height, o.polygon_ratio_width, o.polygon_ratio_height, o.polygon_from_center) =
+                (name, fw, fh, rw, rh, from_center);
+            o.polygon_freeform_radius = field(constraints.radius);
         }
         _ => {}
     }
@@ -242,17 +258,26 @@ fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKin
             "arrowWidth": o.arrow_width, "arrowLength": o.arrow_length,
             // Settings saved with the old 0..100 range draw at the nearest value (#13258).
             "arrowConcavity": if o.arrow_concavity.is_finite() { o.arrow_concavity.round().clamp(-50.0, 50.0) } else { 0.0 }}),
-        // PhotoCraft's drag rules keep `radial_polygons` off, so no tool sends a radial polygon and `shape.create` has no kind for it
-        ShapeGeometry::RadialPolygon { .. } => return Err(tl!("This shape can't be created").into()),
+        // The Polygon gear's Freeform (#13306): a regular polygon turned to the release, which a live polygon (no
+        // rotation) can't hold, so it goes as its path.
+        ShapeGeometry::RadialPolygon { .. } => json!({"kind": "path", "path": photocraft_engine::vector_cmds::path_json(&radial_path(geometry))}),
         ShapeGeometry::Custom { .. } => return Err(tl!("A custom shape is placed from its preset").into()),
     })
 }
 
+/// The outline of a radial polygon (a Freeform polygon, #13306) as a path of corner knots, in the framework's order:
+/// the first corner at the release, the others clockwise.
+fn radial_path(geometry: &ShapeGeometry) -> photocraft_doc::vector::Path {
+    let pts: Vec<(f64, f64)> = geometry.to_path(0.1).elements().iter().filter_map(|el| el.end_point()).map(|p| (p.x, p.y)).collect();
+    photocraft_doc::vector::Path::new(vec![photocraft_doc::vector::Subpath::polygon(&pts)])
+}
+
 /// `p` (a drag's `shape.create` geometry of `kind`) with the Polygon tool's own corner radius, which
-/// rounds every vertex of the next polygon it drags (#13302). The Create Polygon dialog keeps its own.
+/// rounds every vertex of the next polygon it drags (#13302). The Create Polygon dialog keeps its own. A Freeform
+/// polygon goes as a path, which takes no corner radius (not measured).
 fn with_tool_radius(app: &PhotocraftApp, kind: ShapeKind, mut p: Value) -> Value {
     let r = app.ui.tool_options.polygon_corner_radius;
-    if kind == ShapeKind::Polygon && r > 0.0 {
+    if kind == ShapeKind::Polygon && r > 0.0 && p["kind"] != "path" {
         p["cornerRadius"] = json!(r);
     }
     p
@@ -338,6 +363,12 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
         Err(e) => return report(app, e),
     };
     p["historyName"] = json!(tool_history_name(kind));
+    // A Freeform polygon goes as its path (#13306); its layer is still named as a polygon.
+    if matches!(geometry, ShapeGeometry::RadialPolygon { .. })
+        && let Some(st) = app.session.active()
+    {
+        p["name"] = json!(st.doc.next_layer_name("Polygon"));
+    }
     // With an operation other than New Layer the drag joins the active shape layer.
     if let Some(op) = drag_path_op(app)
         && let Some(id) = super::options::selected_shape(&app.session)
@@ -439,6 +470,8 @@ fn outline_of(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) ->
         let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, box_of(rect), *keep_proportions))
+    } else if matches!(geometry, ShapeGeometry::RadialPolygon { .. }) {
+        Some(radial_path(geometry))
     } else {
         photocraft_engine::vector_cmds::shape_path(&with_tool_radius(app, kind, geometry_params(app, geometry, kind).ok()?)).ok()
     }

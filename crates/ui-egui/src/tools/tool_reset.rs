@@ -298,7 +298,29 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             triangle_ratio_height,
             triangle_from_center,
         ),
-        Tool::EllipseShape | Tool::Polygon | Tool::Star | Tool::CustomShape => {
+        // The Polygon's gear settings are its own (#13306).
+        Tool::Polygon => reset!(
+            shape_mode,
+            shape_path_op,
+            shape_fill,
+            stroke_width,
+            shape_stroke,
+            shape_fill_gradient,
+            shape_stroke_gradient,
+            corner_radius,
+            align_edges,
+            polygon_sides,
+            polygon_corner_radius,
+            line_weight,
+            polygon_constraint,
+            polygon_fixed_width,
+            polygon_fixed_height,
+            polygon_ratio_width,
+            polygon_ratio_height,
+            polygon_freeform_radius,
+            polygon_from_center,
+        ),
+        Tool::EllipseShape | Tool::Star | Tool::CustomShape => {
             reset!(
                 shape_mode,
                 shape_path_op,

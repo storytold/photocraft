@@ -236,6 +236,9 @@ mod rectangle_gear_tests;
 mod triangle_gear_tests;
 
 #[cfg(test)]
+mod polygon_gear_tests;
+
+#[cfg(test)]
 mod rectangle_click_in_shape_tests;
 
 #[cfg(test)]

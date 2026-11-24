@@ -121,7 +121,8 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
     }
     if let Some(gear) = super::shapes::constraints_of(&app.ui.tool_options, tool) {
         // The gear: what a drag is kept to (square, fixed size, proportional) and From Center. The Rectangle's says
-        // Square (#13343), the Triangle's Equilateral (#13361); the framework words it by the tool's kind.
+        // Square (#13343), the Triangle's Equilateral (#13361), the Polygon's Symmetric with Freeform (#13306); the
+        // framework words it by the tool's kind.
         Divider::vertical().show(ui);
         let ppi = document_ppi(app);
         let out = fw::BoxConstraintsPopover::new(Bind::given(gear), Bind::bound(&mut open.gear), ppi).kind(super::kind_of(tool)).show(ui);
