@@ -21,7 +21,7 @@ fn menus(s: &mut Session, p: Value) -> Value {
 fn menu_sets_are_a_separate_list_from_the_keyboard_shortcut_sets() {
     // The issue measures the two dropdowns as independent: the Menus tab's Set is not the
     // Keyboard Shortcuts tab's, and neither call touches the other's list.
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"hide": ["edit.fade"], "saveSet": "Mine"})).unwrap();
     s.execute("edit.keyboardShortcuts", json!({"set": {"edit.copy": "F9"}, "saveSet": "Keys"})).unwrap();
     let r = menus(&mut s, json!({}));
@@ -38,7 +38,7 @@ fn menu_sets_are_a_separate_list_from_the_keyboard_shortcut_sets() {
 
 #[test]
 fn the_menus_tab_starts_at_the_built_in_default_set() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     let r = menus(&mut s, json!({}));
     assert_eq!(r["activeSet"], json!(""), "no saved set is in use");
     assert_eq!(r["defaultsName"], json!("PhotoCraft Defaults"), "the built-in set's name");
@@ -48,7 +48,7 @@ fn the_menus_tab_starts_at_the_built_in_default_set() {
 
 #[test]
 fn the_first_edit_marks_the_set_modified_and_save_clears_it() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"hide": ["edit.fade"]})).unwrap();
     let r = menus(&mut s, json!({}));
     assert_eq!(r["modified"], json!(true), "an edit to the built-in set");
@@ -72,7 +72,7 @@ fn the_first_edit_marks_the_set_modified_and_save_clears_it() {
 #[test]
 fn new_always_makes_a_set_from_the_menus_in_use() {
     // New is always enabled, even when nothing was edited: that is how "<defaults> Copy" happens.
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"saveSet": "Mine"})).unwrap();
     assert_eq!(s.prefs().menus.hidden, Vec::<String>::new(), "the copy took the unedited menus");
     let r = menus(&mut s, json!({"saveSet": "Mine Copy"}));
@@ -83,7 +83,7 @@ fn new_always_makes_a_set_from_the_menus_in_use() {
 
 #[test]
 fn delete_is_refused_for_the_built_in_set_and_the_menus_stay() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     let err = s.execute("edit.menus", json!({"deleteSet": "PhotoCraft Defaults"})).unwrap_err().to_string();
     assert!(err.contains("built-in"), "{err}");
     s.execute("edit.menus", json!({"hide": ["edit.fade"], "saveSet": "Mine"})).unwrap();
@@ -100,7 +100,7 @@ fn delete_is_refused_for_the_built_in_set_and_the_menus_stay() {
 
 #[test]
 fn loading_a_set_applies_before_the_call_s_own_changes() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"hide": ["edit.fade"], "color": {"edit.fill": "red"}, "saveSet": "Mine"})).unwrap();
     s.execute("edit.menus", json!({"reset": true})).unwrap();
     assert!(s.prefs().menus.hidden.is_empty() && s.prefs().menus.colors.is_empty(), "reset clears the menus");
@@ -118,7 +118,7 @@ fn loading_a_set_applies_before_the_call_s_own_changes() {
 
 #[test]
 fn the_dialogs_ok_sends_every_set_and_the_one_in_use() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"sets": {"A": {"hidden": ["edit.fade"], "colors": {"edit.fill": "red"}}, "B": {}}, "activeSet": "A"})).unwrap();
     let r = menus(&mut s, json!({}));
     assert_eq!(r["sets"], json!(["A", "B"]));
@@ -138,7 +138,7 @@ fn a_replacement_that_leaves_out_the_set_in_use_clears_its_name() {
     // `sets` replaces every saved set, so a set the replacement leaves out is gone - the same as
     // `deleteSet`. Its name does not stay behind as the one in use: a later replacement that holds
     // that name again would otherwise select it with no `useSet` and no `activeSet` in the call.
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"hide": ["edit.fade"], "saveSet": "A"})).unwrap();
     s.execute("edit.menus", json!({"sets": {}})).unwrap();
     assert!(s.prefs().menu_set.is_empty(), "the set the replacement left out is not the one in use");
@@ -157,7 +157,7 @@ fn two_names_that_are_one_set_name_after_the_trim_are_refused() {
     // A set name is stored trimmed (`bad_set_names_are_errors_and_a_good_one_is_trimmed`), so in one
     // `sets` map `A` and ` A ` name the same set. Letting the later entry replace the earlier one
     // would answer with one set where the call sent two, and lose one set's menus without a word.
-    let mut s = Session::new();
+    let mut s = crate::session();
     let err = s.execute("edit.menus", json!({"sets": {"A": {"hidden": ["edit.fade"]}, " A ": {"hidden": ["edit.paste"]}}})).unwrap_err().to_string();
     assert!(err.contains("twice"), "{err}");
     let r = menus(&mut s, json!({}));
@@ -173,7 +173,7 @@ fn modified_flag_ignores_the_none_colour_sentinel() {
     // entry rather than storing one. A saved set may still carry one (the dialog's OK sends what it
     // has), and then asking for no colour again is a no-op that must not mark the set modified, nor
     // leave a phantom colour in the menus.
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"sets": {"A": {"colors": {"edit.fill": "none"}}}})).unwrap();
     let r = menus(&mut s, json!({"useSet": "A"}));
     assert_eq!(r["colors"], json!({}), "the sentinel is not a colour in the menus");
@@ -189,7 +189,7 @@ fn modified_flag_ignores_the_none_colour_sentinel() {
 #[test]
 fn re_listed_items_in_another_order_are_not_a_change() {
     // The marker compares the sets, not the order they were edited in.
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"hide": ["edit.paste", "edit.fade"], "saveSet": "Mine"})).unwrap();
     s.execute("edit.menus", json!({"show": ["edit.fade"]})).unwrap();
     s.execute("edit.menus", json!({"hide": ["edit.fade"]})).unwrap();
@@ -201,7 +201,7 @@ fn re_listed_items_in_another_order_are_not_a_change() {
 fn a_hand_edited_set_leaves_an_item_that_cannot_be_hidden_shown() {
     // #14335: File › Close and the rest can't be hidden. A set that came from an older or
     // hand-edited preferences file may still list one: it loads and stays shown.
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("prefs.set", json!({"values": {"menuSets": {"Old": {"hidden": ["file.close", "edit.fade"], "colors": {}}}, "menuSet": "Old"}})).unwrap();
     s.execute("edit.menus", json!({"useSet": "Old"})).unwrap();
     assert!(!s.prefs().menus.is_hidden("file.close"), "shown, as measured");
@@ -220,7 +220,7 @@ fn a_save_of_a_legacy_set_keeps_the_row_the_engine_cannot_hide() {
     // hand-edited file could then never be saved under another name. What a CALL may send stays
     // checked: the same rows through `sets` are an error, pinned below and in
     // `a_hand_edited_set_leaves_an_item_that_cannot_be_hidden_shown`.
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("prefs.set", json!({"values": {"menuSets": {"Old": {"hidden": ["file.close", "edit.fade"], "colors": {}}}, "menuSet": "Old"}})).unwrap();
     s.execute("edit.menus", json!({"useSet": "Old"})).unwrap();
     let r = menus(&mut s, json!({"saveSet": "Copy"}));
@@ -235,7 +235,7 @@ fn a_save_of_a_legacy_set_keeps_the_row_the_engine_cannot_hide() {
 
 #[test]
 fn a_saved_set_holds_only_valid_colours_and_a_bounded_count() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     assert!(s.execute("edit.menus", json!({"sets": {"A": {"colors": {"edit.fill": "plaid"}}}})).is_err(), "unknown colour");
     assert!(s.execute("edit.menus", json!({"sets": {"PhotoCraft Defaults": {}}})).is_err(), "the built-in name is reserved");
     let many: serde_json::Map<String, Value> = (0..=64).map(|i| (format!("S{i}"), json!({}))).collect();
@@ -249,7 +249,7 @@ fn a_saved_set_holds_only_valid_colours_and_a_bounded_count() {
 
 #[test]
 fn bad_set_names_are_errors_and_a_good_one_is_trimmed() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     for name in ["", "   ", "photocraft defaults", "a\u{7}b", &"x".repeat(65)] {
         assert!(s.execute("edit.menus", json!({"saveSet": name})).is_err(), "{name:?}");
         assert!(s.execute("edit.menus", json!({"deleteSet": name})).is_err(), "{name:?}");
@@ -271,11 +271,11 @@ fn bad_set_names_are_errors_and_a_good_one_is_trimmed() {
 
 #[test]
 fn menu_sets_are_saved_with_the_preferences_and_an_older_file_loads_without_them() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("edit.menus", json!({"hide": ["edit.fade"], "color": {"edit.fill": "red"}, "saveSet": "Mine"})).unwrap();
     let saved = s.prefs_to_json();
     assert!(saved.contains("\"menuSets\"") && saved.contains("\"Mine\""), "{saved}");
-    let mut t = Session::new();
+    let mut t = crate::session();
     assert!(t.load_prefs_json(&saved).unwrap().is_empty(), "the saved file loads clean");
     let r = menus(&mut t, json!({}));
     assert_eq!(r["activeSet"], json!("Mine"), "the set in use is remembered");
@@ -284,7 +284,7 @@ fn menu_sets_are_saved_with_the_preferences_and_an_older_file_loads_without_them
     s.execute("edit.menus", json!({"useSet": "Mine"})).unwrap();
     assert_eq!(s.prefs().menus.colors["edit.fill"], "red", "the set's colours came back");
     // A preferences file from before menu sets: the built-in set, nothing saved.
-    let mut old = Session::new();
+    let mut old = crate::session();
     assert!(old.load_prefs_json(r#"{"menus":{"hidden":["edit.fade"]}}"#).unwrap().is_empty());
     let r = menus(&mut old, json!({}));
     assert_eq!(r["activeSet"], json!(""));
