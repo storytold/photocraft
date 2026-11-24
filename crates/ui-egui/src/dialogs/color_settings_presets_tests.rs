@@ -270,3 +270,10 @@ fn monitor_color_follows_a_monitor_profile_change() {
     let c = &app.session.color().settings;
     assert_eq!((c.preset.as_str(), c.working_rgb.as_str(), c.monitor_profile.as_str()), ("Monitor Color", "display-p3", "display-p3"));
 }
+
+#[test]
+fn every_setup_has_a_spelled_out_label_that_reads_its_name_in_english() {
+    for name in COLOR_SETTINGS_PRESETS {
+        assert_eq!(preset_label(name), Some(name), "a setup missing from `preset_label`, or a misspelled key, shows untranslated");
+    }
+}

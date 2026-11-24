@@ -43,7 +43,7 @@ pub(super) fn row(label: Label) -> Param {
     Param::custom(KEY, label, move |ui, fields, _| {
         let mut entries = Vec::new();
         // The labels are translated; the values stay the English names scripts and saved settings use.
-        let named = COLOR_SETTINGS_PRESETS.iter().map(|n| (*n, tl!(*n)));
+        let named = COLOR_SETTINGS_PRESETS.iter().map(|n| (*n, preset_label(n).unwrap_or(n)));
         for (value, label) in [(CUSTOM_SETTINGS, tl!("Custom")), (OTHER, tl!("Other"))].into_iter().chain(named) {
             if GROUP_STARTS.contains(&value) {
                 entries.push(Entry::separator());
@@ -55,6 +55,27 @@ pub(super) fn row(label: Label) -> Param {
             fields.set(KEY, FieldValue::Text(picked));
         }
         out.response().clone()
+    })
+}
+
+/// A named setup's translated label, spelled out so `cargo xtask i18n-coverage` lists each one;
+/// `None` for a name the menu doesn't have.
+fn preset_label(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Europe General Purpose 3" => tl!("Europe General Purpose 3"),
+        "Europe Prepress 3" => tl!("Europe Prepress 3"),
+        "Europe Web/Internet 2" => tl!("Europe Web/Internet 2"),
+        "Monitor Color" => tl!("Monitor Color"),
+        "Japan Color for Newspaper" => tl!("Japan Color for Newspaper"),
+        "Japan General Purpose 2" => tl!("Japan General Purpose 2"),
+        "Japan Magazine Advertisement Color" => tl!("Japan Magazine Advertisement Color"),
+        "Japan Prepress 2" => tl!("Japan Prepress 2"),
+        "Japan Web/Internet" => tl!("Japan Web/Internet"),
+        "North America General Purpose 2" => tl!("North America General Purpose 2"),
+        "North America Newspaper" => tl!("North America Newspaper"),
+        "North America Prepress 2" => tl!("North America Prepress 2"),
+        "North America Web/Internet" => tl!("North America Web/Internet"),
+        _ => return None,
     })
 }
 
