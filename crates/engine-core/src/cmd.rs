@@ -153,12 +153,13 @@ pub(crate) use layer_references::{recorded_drop, recorded_layer};
 pub use ops::translate_layer;
 use ops::{arrange, merge_group, move_mask, set_mask, set_mask_and_deselect};
 pub(crate) use ops::{layer_copy, translate_layer_wrapped};
+pub use params::cmyk_param;
 pub use params::color_param;
 pub use params::parse_hex;
 pub use params::u32_id;
 pub use params::u32_id_param;
 use params::{bad, set_clipped};
-pub(crate) use params::{check_f32_values, cmyk_param, int, int_i32};
+pub(crate) use params::{check_f32_values, int, int_i32};
 pub use photocraft_color::blend::parse_blend;
 
 pub use crate::registry::{CommandSpec, list_entry, list_entry_matches, search_keywords};

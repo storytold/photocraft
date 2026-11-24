@@ -3,10 +3,9 @@
 use craft::behavior::{EditEvent, Mixed};
 use craft::draw::stroke::StrokeStyle;
 use craft::draw::ui::RADIUS_RANGE;
-use craft::draw::ui::shape::{ShapeAppearance, ShapeBar, ShapeChange, ShapePaint, ShapeToolSettings, VectorMode};
+use craft::draw::ui::shape::{ShapeAppearance, ShapeBar, ShapeChange, ShapePaint, ShapeToolSettings};
 use craft::draw::ui::shape_drag::ShapeKind;
-use craft::ui::choice::Checkbox;
-use craft::ui::contract::{Bind, Props as _, Show as _};
+use craft::ui::contract::{Bind, Show as _};
 use craft::ui::dialog::{Alert, HostedAlert};
 use craft::ui::display::Divider;
 use craft::ui::runtime::env::Env;
@@ -158,18 +157,9 @@ fn tool_settings(o: &crate::state::ToolOptions, live: Option<&photocraft_doc::Li
     settings
 }
 
-/// What the bar shows after the framework's cells for one tool: the Triangle's Align Edges and the
-/// Polygon's own corner radius.
+/// What the bar shows after the framework's cells for one tool: the Polygon's own corner radius.
+/// (Align Edges, every shape tool's, sits at the bar's right end: `vector_ui::alignment`.)
 fn tool_extras(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
-    if tool == Tool::Triangle {
-        Divider::vertical().show(ui);
-        // Only a shape layer has pixel edges to align: greyed in Path mode (#13370).
-        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
-        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
-        if let Some(next) = on.value().copied() {
-            app.ui.tool_options.align_edges = next;
-        }
-    }
     if tool == Tool::Polygon {
         // The tool's own corner radius for the next polygon, after Sides (#13302); the active shape is not touched.
         // A value typed past the Rectangle Radius's range takes the closest one and says so.

@@ -56,7 +56,7 @@ fn layer_text(app: &PhotocraftApp) -> String {
 fn stacked_variant(app: &mut PhotocraftApp, s: &str) -> LayerId {
     // A click on the stack's spot would edit the text under it, so the layer is made where the click would.
     app.ui.text_edit = None;
-    let mut p = default_style_params(app);
+    let mut p = default_style_params(app, &app.ui.tool_options);
     p["text"] = json!(s);
     p["orientation"] = json!("horizontal");
     p["x"] = json!(50.0);
