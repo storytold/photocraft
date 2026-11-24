@@ -287,6 +287,7 @@ path.addAnchor
 path.deleteAnchor
 path.deleteSegment
 path.mergeShapeComponents
+path.deleteComponents
 path.setOperation
 select.quick
 select.object
@@ -407,6 +408,7 @@ paint.sharpen
 paint.smudge
 paint.historyBrush
 paint.artHistoryBrush
+paint.adjustmentBrush
 paint.redEye
 image.imageSize
 image.canvasSize
