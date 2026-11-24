@@ -615,6 +615,11 @@ pub(super) fn merge_target(app: &PhotocraftApp) -> Option<(&'static str, Value, 
 /// reach of the start point closes the path; a click draws nothing. The points at indices `straight` were ⌥-clicked: the
 /// segment into each one stays straight.
 pub(crate) fn freeform_finish_owned(app: &mut PhotocraftApp, points: &[[f64; 3]], straight: &[usize], owner: PenOwner) {
+    freeform_finish_continued(app, points, straight, owner, None);
+}
+
+/// Fits a trace started at the final anchor of a selected, open Work Path subpath.
+pub(super) fn freeform_finish_continued(app: &mut PhotocraftApp, points: &[[f64; 3]], straight: &[usize], owner: PenOwner, continuation: Option<usize>) {
     if !owner.valid(app) {
         return;
     }
@@ -635,6 +640,21 @@ pub(crate) fn freeform_finish_owned(app: &mut PhotocraftApp, points: &[[f64; 3]]
     } else {
         fit_with_straight_segments(&trace, straight, fit, closed)
     };
+    if let Some(subpath) = continuation
+        && !closed
+        && let Some((_, _, path)) = resume_target(app)
+        && let Some(sub) = path.subpaths.get(subpath)
+        && let Some(first) = sub.knots.first()
+        && !near_start(&[first.anchor.x, first.anchor.y], last, reach)
+        && let Some(mut joined) = resume_end(app, subpath, sub.knots.len() - 1)
+        && let Some(join) = joined.draft.knots.last_mut()
+    {
+        // The recorded shared anchor is a corner; its incoming handle stays as it was.
+        join.out_ctrl = join.anchor;
+        join.smooth = false;
+        joined.draft.knots.extend(pen.draft.knots.into_iter().skip(1));
+        pen = joined;
+    }
     pen.owner = Some(owner);
     if let Err(e) = commit_path_named(app, &pen, closed, true) {
         app.ui.pen = Some(PenPath { commit_failed: true, freeform_origin: true, ..pen });

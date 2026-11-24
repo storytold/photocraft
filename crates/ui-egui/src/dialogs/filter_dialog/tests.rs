@@ -2,6 +2,7 @@ use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, HostedParamDialog, Param, ParamKind};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use photocraft_engine::color_cmds::ColorExt;
 
 use super::*;
 
@@ -112,7 +113,7 @@ fn indexed_matte_tool_seeds_use_document_encoded_rgb() {
     use craft::cms::Transform;
 
     let mut session = photocraft_engine::Session::new();
-    session.color.settings.working_rgb = "display-p3".into();
+    session.color_mut().settings.working_rgb = "display-p3".into();
     session.execute("file.new", json!({"width": 2, "height": 2, "background": "transparent"})).unwrap();
     session.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
     let mut app = PhotocraftApp::new(session, crate::Services::default());
@@ -121,9 +122,9 @@ fn indexed_matte_tool_seeds_use_document_encoded_rgb() {
     let colors = rows::indexed_matte_defaults(&app);
 
     let doc = app.session.active().unwrap().doc.clone();
-    let source = app.session.color.working(photocraft_doc::ColorMode::Rgb);
+    let source = app.session.color().working(photocraft_doc::ColorMode::Rgb);
     let destination = photocraft_engine::color_cmds::document_profile(&doc);
-    let transform = Transform::new(&source, &destination, app.session.color.settings.intent(), app.session.color.settings.bpc).unwrap();
+    let transform = Transform::new(&source, &destination, app.session.color().settings.intent(), app.session.color().settings.bpc).unwrap();
     for (value, input) in [("foreground", [0.2, 0.4, 0.8]), ("background", [0.8, 0.4, 0.2])] {
         let mut output = [0.0; 16];
         transform.eval(&input, &mut output).unwrap();
@@ -218,33 +219,26 @@ fn remembering_dialogs_never_persists_paths_or_document_indices() {
     assert_ne!(f.int("mapDocument"), Some(0), "a document index is never remembered");
 }
 
-/// #14465 review: the Rotate Canvas dialog fills Interpolation from Preferences › General ›
-/// Image Interpolation on every opening, so a dropdown pick applies to that opening only and
-/// never carries into the next one. The reference application has no Interpolation row at all:
-/// the preference decides. The other rows of the dialog keep opening from the document
-/// (angle and direction are the ruler's, #12035).
+/// #14465 review: the Rotate Canvas dialog's resampling follows Preferences › General › Image
+/// Interpolation on every run. The reference application has no Interpolation row (#14462), so
+/// the dialog files no interpolation, before or after an OK, and the command reads the
+/// preference (`rotate_canvas_interpolation_pref_tests` in the engine). The other rows of the
+/// dialog keep opening from the document (angle and direction are the ruler's, #12035).
 #[test]
 fn arbitrary_rotation_interpolation_reopens_at_the_preference() {
     const CMD: &str = "image.rotation.arbitrary";
     let mut app = new_app();
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
 
-    // 1. The preference's default (Bicubic Automatic) opens the row at bicubic.
     let id = open(&mut app, CMD).unwrap();
-    assert_eq!(field_json(&app, id, "interpolation"), json!("bicubic"), "the row opens at the preference");
+    assert_eq!(field_json(&app, id, "interpolation"), Value::Null, "no interpolation value: the preference decides");
     set(&mut app, id, "angle", json!(30.0));
-    set(&mut app, id, "interpolation", json!("bilinear"));
     assert!(ok(&mut app, id), "OK rotates and files its values");
 
-    // 2. A later opening starts from the preference again, not from the confirmed Bilinear pick.
-    let id = open(&mut app, CMD).unwrap();
-    assert_eq!(field_json(&app, id, "interpolation"), json!("bicubic"), "a one-time Bilinear pick does not carry into the next opening");
-    cancel(&mut app, id);
-
-    // 3. A changed preference reaches the next opening.
+    // A later opening files none either, whatever the preference says.
     app.session.edit_prefs(|p| p.general.image_interpolation = photocraft_engine::prefs::Interpolation::Nearest);
     let id = open(&mut app, CMD).unwrap();
-    assert_eq!(field_json(&app, id, "interpolation"), json!("nearest"), "Nearest Neighbor shows nearest");
+    assert_eq!(field_json(&app, id, "interpolation"), Value::Null, "a reopened dialog files no interpolation");
     cancel(&mut app, id);
 }
 
@@ -345,12 +339,12 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     let d_fresh = open(&mut app, "view.proofSetup").unwrap();
     assert_eq!(fields_of(&app, d_fresh).text("profile"), Some("working-cmyk"));
     ok(&mut app, d_fresh);
-    assert_eq!(app.session.color.proof(doc1_id).setup.name, "working-cmyk");
+    assert_eq!(app.session.color().proof(doc1_id).setup.name, "working-cmyk");
 
     // 1. A preset sets sRGB and turns Proof Colors on.
     crate::menus::invoke(&mut app, &ctx, "view.proofSetup.internetStandardRgb", Value::Null).unwrap();
-    assert_eq!(app.session.color.proof(doc1_id).setup.name, "srgb");
-    assert!(app.session.color.proof(doc1_id).enabled);
+    assert_eq!(app.session.color().proof(doc1_id).setup.name, "srgb");
+    assert!(app.session.color().proof(doc1_id).enabled);
 
     // 2. The dialog starts with the document's condition; an unchanged OK keeps it and Proof Colors on.
     let d_id = open(&mut app, "view.proofSetup").unwrap();
@@ -360,7 +354,7 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     assert_eq!(f.bool("bpc"), Some(true));
     assert_eq!(f.bool("simulatePaper"), Some(false));
     ok(&mut app, d_id);
-    let pv = app.session.color.proof(doc1_id);
+    let pv = app.session.color().proof(doc1_id);
     assert_eq!(pv.setup.name, "srgb");
     assert!(pv.enabled);
 
@@ -375,7 +369,7 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     // 4. Cancel keeps the document.
     set(&mut app, d_id, "profile", json!("display-p3"));
     cancel(&mut app, d_id);
-    assert_eq!(app.session.color.proof(doc1_id).setup.name, "srgb");
+    assert_eq!(app.session.color().proof(doc1_id).setup.name, "srgb");
 
     // 5. Each document opens the dialog at its own condition.
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -396,8 +390,8 @@ fn proof_setup_dialog_reflects_active_document_proof_condition() {
     // 6. An edit in the dialog updates the active document only.
     set(&mut app, d_id1, "profile", json!("adobe-rgb-compat"));
     ok(&mut app, d_id1);
-    assert_eq!(app.session.color.proof(doc1_id).setup.name, "adobe-rgb-compat");
-    assert_eq!(app.session.color.proof(doc2_id).setup.name, "display-p3");
+    assert_eq!(app.session.color().proof(doc1_id).setup.name, "adobe-rgb-compat");
+    assert_eq!(app.session.color().proof(doc2_id).setup.name, "display-p3");
 }
 
 /// The Color Lookup dialog's own fields run the command: `fileName` used to be filled with `0`
@@ -1864,4 +1858,64 @@ fn indexed_matte_other_shows_the_color_row_and_none_hides_it() {
     harness.run_steps(3);
     assert_eq!(fields_of(harness.state(), id).text("matte"), Some("none"));
     assert!(try_set(harness.state_mut(), id, "matteColor", json!([0.0, 0.0, 1.0])).is_err(), "None hides the colour row");
+}
+
+/// An alpha channel chosen as Lens Blur's depth map reaches the command as the `channel` source and its index: the
+/// menu's own `channel:N` id was sent as is, and the engine refused it at OK and in the preview.
+#[test]
+fn lens_blur_alpha_channel_source_runs() {
+    let mut app = new_app();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    for name in ["Mask", "Depth"] {
+        app.run("select.all", json!({})).unwrap();
+        app.run("select.saveSelection", json!({"name": name})).unwrap();
+    }
+    app.run("select.deselect", json!({})).unwrap();
+    let id = open(&mut app, LENS_BLUR).unwrap();
+    passes(&mut app, 2);
+    set(&mut app, id, "depthMap", json!("channel:1"));
+    passes(&mut app, 2);
+    let params = command_params(LENS_BLUR, &fields_of(&app, id));
+    assert_eq!((&params["depthMap"], &params["depthChannel"]), (&json!("channel"), &json!(1)), "{params}");
+    app.run(LENS_BLUR, params).expect("the command takes the channel source");
+    // The other sources pass through.
+    set(&mut app, id, "depthMap", json!("transparency"));
+    let params = command_params(LENS_BLUR, &fields_of(&app, id));
+    assert_eq!((&params["depthMap"], params.get("depthChannel")), (&json!("transparency"), None));
+}
+
+/// A Lens Blur depth channel is an index into the document the dialog opened on: when the control channel makes another
+/// document active under the open dialog, preview and OK refuse the channel instead of blurring by that document's
+/// channel at the same index; back on the first document, OK applies it there.
+#[test]
+fn lens_blur_refuses_a_depth_channel_after_the_document_changed() {
+    let mut app = new_app();
+    for _ in 0..2 {
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        for name in ["Mask", "Depth"] {
+            app.run("select.all", json!({})).unwrap();
+            app.run("select.saveSelection", json!({"name": name})).unwrap();
+        }
+        app.run("select.deselect", json!({})).unwrap();
+    }
+    let ctx = app.ctx().clone();
+    match_color_control(&mut app, &ctx, "ui.window.open", json!({"document": 0}));
+    let id = open(&mut app, LENS_BLUR).unwrap();
+    passes(&mut app, 2);
+    set(&mut app, id, "depthMap", json!("channel:1"));
+    passes(&mut app, 2);
+    let steps: Vec<_> = app.session.documents().iter().map(|st| st.history.past_len()).collect();
+
+    match_color_control(&mut app, &ctx, "ui.window.open", json!({"document": 1}));
+    assert!(crate::canvas::ensure_filter_preview(&mut app, 1, &ctx).is_none(), "no preview with the other document's channel");
+    assert!(!ok(&mut app, id), "OK is refused and the dialog stays open");
+    assert_eq!(app.session.documents().iter().map(|st| st.history.past_len()).collect::<Vec<_>>(), steps, "nothing was blurred");
+    // Sources that name no channel are not bound to a document.
+    let opened = crate::dialogs::params::captured(&app, LENS_BLUR);
+    assert!(validate_lens_blur_document(&app, LENS_BLUR, &opened, Some("transparency")).is_ok());
+
+    match_color_control(&mut app, &ctx, "ui.window.open", json!({"document": 0}));
+    assert!(ok(&mut app, id), "on the document it opened on, the channel is accepted");
+    assert_eq!(app.session.documents()[0].history.past_len(), steps[0] + 1, "Lens Blur ran on the first document");
+    assert_eq!(app.session.documents()[1].history.past_len(), steps[1], "the second document is untouched");
 }

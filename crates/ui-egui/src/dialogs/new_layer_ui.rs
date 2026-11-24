@@ -43,7 +43,8 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
             Param::new("name", tl!("Name:"), ParamKind::text(name.clone())),
             Param::new("clipToPrevious", tl!("Use Previous Layer to Create Clipping Mask"), ParamKind::bool(false)),
             color_param(),
-            crate::dialogs::blend_options::blend_param("mode", tl!("Mode:"), false, BlendMode::Normal),
+            // Opacity shares the Mode row, as in the reference application.
+            crate::dialogs::blend_options::blend_param("mode", tl!("Mode:"), false, BlendMode::Normal).beside_next(),
             opacity_param(),
             Param::new("fillNeutral", neutral_label(mode(fields)), ParamKind::bool(false)).enabled_when_in("mode", neutral_modes),
         ];
@@ -161,6 +162,29 @@ mod tests {
         assert!((l.opacity - 0.6).abs() < 1e-6);
         assert!(l.surface().unwrap().tile_count() > 0, "filled with 50% gray");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    }
+
+    /// #15539: Opacity sits on the Mode row, right of the Mode dropdown, and keeps its % unit.
+    #[test]
+    fn opacity_shares_the_mode_row() {
+        use egui::accesskit::Role;
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut app = app();
+        let ctx = app.ctx().clone();
+        crate::menus::invoke(&mut app, &ctx, COMMAND, json!({})).unwrap();
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_max_steps(64)
+            .with_context(ctx)
+            .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        let mode = h.query_all_by_role(Role::ComboBox).find(|n| n.accesskit_node().label().as_deref() == Some("Mode")).expect("Mode").rect();
+        let opacity = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity")).expect("Opacity").rect();
+        assert!((mode.center().y - opacity.center().y).abs() < 1.0, "Mode {mode:?} and Opacity {opacity:?} share a row");
+        assert!(mode.right() <= opacity.left(), "Opacity is right of Mode");
+        assert_eq!(opacity_param().unit, Some(UnitKind::Percent));
     }
 
     #[test]
