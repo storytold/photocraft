@@ -338,6 +338,11 @@ pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 /// caller falls back to the bytes path for the zip form.
 pub type AutomationOpenPcraftFn = Box<dyn FnMut(&str) -> Result<Option<(String, Document)>, String>>;
 
+/// Where a path an automation read opened is on disk (absolute), for Open Recent: the person
+/// reopens it outside automation, where a root-relative request path names nothing. `None`
+/// when no read root holds it.
+pub type AutomationLocateFn = Box<dyn Fn(&str) -> Option<String>>;
+
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// Same policy as [`AutomationCommandFn`] for each step a command runs (`actions.play`).
@@ -351,6 +356,7 @@ pub struct AutomationServices {
     pub read: Option<AutomationReadFn>,
     pub write: Option<AutomationWriteFn>,
     pub open_pcraft: Option<AutomationOpenPcraftFn>,
+    pub locate: Option<AutomationLocateFn>,
     pub save: Option<SaveFileFn>,
     pub command: Option<AutomationCommandFn>,
     pub authorize: Option<AutomationAuthorizeFn>,
@@ -487,11 +493,19 @@ pub type CapsLockFn = Box<dyn FnMut() -> bool>;
 /// Called once per frame; `None` when the window is decorated or the platform needs no fixing.
 pub type WindowFrameFn = Box<dyn FnMut()>;
 
+/// Whether the physical primary mouse button is down now, read from the OS. A move of a floating document window by
+/// its title bar runs in the OS (its hit test answers the caption), so the app never sees the press or the release;
+/// the button going up ends the move (#16415).
+pub type PrimaryDownFn = Box<dyn Fn() -> bool + Send + Sync>;
+
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// Which end of the pen is in use, `Some(true)` = eraser, `None` = no pen ([`Services::pen_end`]).
 pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
+
+/// Runs once when the app leaves ([`Services::at_exit`]).
+pub type AtExitFn = Box<dyn FnOnce()>;
 
 /// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
 /// whether the app window is focused (to re-assert WinTab overlap priority on activation).
@@ -546,6 +560,9 @@ pub struct Services {
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
     pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
+    /// Where an automation open's file is on disk, for Open Recent. Without it an automation
+    /// open is not listed there.
+    pub automation_locate: Option<AutomationLocateFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
@@ -635,6 +652,8 @@ pub struct Services {
     pub window_frame: Option<WindowFrameFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// Physical primary mouse button currently down (Windows): ends an OS move of a floating document window.
+    pub primary_down: Option<PrimaryDownFn>,
     /// Which end of the pen is in use, where the platform reports it outside the stylus feed
     /// (Windows: the feed carries no pen samples there). Read for the eraser-end tool switch.
     pub pen_end: Option<PenEndFn>,
@@ -649,6 +668,10 @@ pub struct Services {
     pub read_displays: Option<monitor_status::ReadDisplaysFn>,
     /// The macOS menu bar, when the desktop app installed one; the in-window menus are hidden then.
     pub native_menu: Option<craft::menu::NativeMenu>,
+    /// The app binary's last step as the app leaves, run once at the end of `on_exit`. On macOS
+    /// every quit ends the process inside AppKit's terminate (`craft::quit`), after `on_exit`, so
+    /// code after `eframe::run_native` never runs there.
+    pub at_exit: Option<AtExitFn>,
 }
 
 impl Services {
@@ -657,6 +680,7 @@ impl Services {
         self.automation_read = a.read;
         self.automation_write = a.write;
         self.automation_open_pcraft = a.open_pcraft;
+        self.automation_locate = a.locate;
         self.automation_save = a.save;
         self.automation_command = a.command;
         self.automation_authorize = a.authorize;

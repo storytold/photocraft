@@ -9,7 +9,7 @@ use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::{AllocationError, Interrupt, PruneCursor, RowWriteError, Surface};
 
 use crate::renderer::{BandRenderer, RenderError};
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
+use crate::{BmpBits, ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
@@ -1899,6 +1899,9 @@ pub fn export_flat_with_renderer(
                 if format == Format::Tga {
                     img = tga_image(doc, img, opts.tga_bits, opts.preserve_alpha, &mut warnings)?;
                 }
+                if format == Format::Bmp {
+                    img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
+                }
                 if format == Format::Dds {
                     img = dds_image(doc, img, &mut warnings)?;
                 }
@@ -1948,6 +1951,9 @@ pub fn export_flat_with_renderer(
     let mut img = prepare_flat(img, format, &mut warnings)?;
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, opts.preserve_alpha, &mut warnings)?;
+    }
+    if format == Format::Bmp {
+        img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
     }
     if format == Format::Dds {
         img = dds_image(doc, img, &mut warnings)?;
@@ -2253,6 +2259,29 @@ fn tga_image(doc: &Document, img: Image, bits: Option<TgaBits>, preserve_alpha: 
     }
 }
 
+/// The image an RGB BMP of `bits` per pixel holds: 24 composites a transparent image over white,
+/// 32 gives an opaque image an opaque alpha; `None` keeps the image (32 with transparency, else
+/// 24). Grayscale images are written as they are. 16 bits is refused: the encoder has no 16-bit
+/// BMP.
+fn bmp_image(img: Image, bits: Option<BmpBits>, warnings: &mut Vec<String>) -> Result<Image, IoError> {
+    let Some(bits) = bits else { return Ok(img) };
+    if !img.layout().is_rgb() {
+        warnings.push(format!("{}-bit BMP applies to RGB images; the grayscale image is written as it is", bits.bits()));
+        return Ok(img);
+    }
+    match bits {
+        BmpBits::Bits16 => Err(IoError::Unsupported("16-bit BMP is not supported yet; use 24 or 32 bits".into())),
+        BmpBits::Bits24 if img.layout().has_alpha() => {
+            warnings.push("transparency composited over white; a 24-bit BMP has no alpha".into());
+            matte_over_white(&img)
+        }
+        BmpBits::Bits32 if !img.layout().has_alpha() => {
+            map_bands(&img, ChannelLayout::Rgba, img.sample_type(), |vals| vals.as_chunks::<3>().0.iter().flat_map(|&[r, g, b]| [r, g, b, 1.0]).collect())
+        }
+        _ => Ok(img),
+    }
+}
+
 /// The image a DDS texture holds (#8563): as with a 32-bit Targa, the document's alpha channel
 /// becomes the texture's alpha when it has exactly one (spot channels don't count), the colours
 /// composited over white where the layers are transparent; BC1 keeps it as on/off, BC2 and BC3
@@ -2545,6 +2574,9 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions, ct
             let dpi = opts.encode.embed_metadata.then_some((doc.resolution_dpi, doc.resolution_dpi));
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi, opts.encode.png_stereo)?;
             let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
+            if opts.encode.png_interlaced {
+                warnings.push("written without interlacing: the palette PNG exporter does not interlace".into());
+            }
             if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {
                 warnings.push("text metadata is not supported by the palette PNG exporter; it will be dropped".into());
             }
