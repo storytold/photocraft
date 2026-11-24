@@ -55,7 +55,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let mut seen_warnings = std::collections::HashSet::<String>::new();
     warn_dedup(err, &o.warnings, &mut seen_warnings);
     warn_dedup(err, &missing_font_warnings(&o.document), &mut seen_warnings);
-    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(CliError::Other)?;
+    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
     let mut renderer = policy.create_renderer();
     let ws = match renderer.as_mut() {
         Some(renderer) => files::save_with_renderer(&o.document, output, a.export.format.as_deref(), &opts, None, Some(&mut **renderer)),
@@ -112,7 +112,7 @@ const QUICK_EXPORT_CPU_NOTE: &str = "file.export.quickExport runs on the CPU com
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();
-    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(CliError::Other)?;
+    let policy = crate::gpu::GpuPolicy::from_args(&a.gpu)?;
     policy.apply_to_headless(&mut h);
     // Opening, running commands and exporting can all notice the same missing font:
     // one `run` invocation reports each warning line at most once.

@@ -1,4 +1,6 @@
 //! A caret's pending font is view state; inserted runs still travel through `type.edit`.
+use craft::text::ui::editor::EditKind;
+
 use super::options_bar::styles_at;
 use super::{LayerId, PhotocraftApp, json, text_layer};
 use crate::state::TypeInsertionStyle;
@@ -12,8 +14,8 @@ pub(super) fn pending(app: &PhotocraftApp) -> Option<&TypeInsertionStyle> {
 }
 
 /// Backspace/Delete select the removed character before replacing it; the typing font survives that.
-fn pending_across_deletion(app: &PhotocraftApp, start: usize, end: usize, text: &str) -> Option<TypeInsertionStyle> {
-    if !text.is_empty() {
+fn pending_across_deletion(app: &PhotocraftApp, start: usize, end: usize, kind: EditKind) -> Option<TypeInsertionStyle> {
+    if kind != EditKind::Deleted {
         return None;
     }
     let ed = app.ui.text_edit.as_ref()?;
@@ -47,10 +49,10 @@ pub(super) fn set_font(app: &mut PhotocraftApp, props: &serde_json::Value) -> bo
     true
 }
 
-/// Replace and style the inserted characters atomically, including paste and IME preedit.
-pub(super) fn replace(app: &mut PhotocraftApp, start: usize, end: usize, text: &str) -> bool {
+/// Replace and style the inserted characters atomically, including paste and a composition's marked text.
+pub(super) fn replace(app: &mut PhotocraftApp, start: usize, end: usize, text: &str, kind: EditKind) -> bool {
     let Some(ed) = app.ui.text_edit.clone() else { return false };
-    let pending = pending(app).cloned().or_else(|| pending_across_deletion(app, start, end, text));
+    let pending = pending(app).cloned().or_else(|| pending_across_deletion(app, start, end, kind));
     let caret = start.saturating_add(text.chars().count());
     let mut params = json!({"layer": ed.layer, "replace": {"start": start, "end": end, "text": text}, "coalesce": ed.session});
     if let Some(p) = &pending

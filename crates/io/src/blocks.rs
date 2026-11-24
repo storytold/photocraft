@@ -9,14 +9,10 @@ use photocraft_geom::Affine;
 
 /// `brst` (channel blending restrictions): a list of big-endian u32 channel indices left out of
 /// blending → a bit mask (bit `i` = channel `i`; indices above 31 are ignored).
-pub fn parse_brst(data: &[u8]) -> u32 {
-    data.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]])).filter(|&i| i < 32).fold(0, |m, i| m | 1 << i)
-}
+pub use craft_psd::tagged::channel_restrictions as parse_brst;
 
 /// Inverse of [`parse_brst`]; `None` when every channel blends (no block).
-pub fn brst_data(mask: u32) -> Option<Vec<u8>> {
-    (mask != 0).then(|| (0..32u32).filter(|i| mask & 1 << i != 0).flat_map(u32::to_be_bytes).collect())
-}
+pub use craft_psd::tagged::channel_restrictions_data as brst_data;
 
 /// The Advanced Blending blocks, as (key, value for `a`, Photoshop's default value): `knko`
 /// (0 none, 1 shallow, 2 deep), `infx`, `clbl`, `tsly`, `lmgm`, `vmgm`. Each is stored as one
@@ -713,18 +709,7 @@ pub(crate) fn quilt_knots(env: &Descriptor, key: &str, patches: usize) -> Option
 
 /// Text content and transform from a `TySh` block (best effort).
 pub fn parse_tysh(data: &[u8]) -> Option<(String, Affine)> {
-    let f = |at: usize| data.get(at..at + 8).map(|b| f64::from_be_bytes(b.try_into().unwrap_or([0; 8])));
-    let mut m = [0.0; 6];
-    for (i, v) in m.iter_mut().enumerate() {
-        *v = f(2 + i * 8)?;
-    }
-    // text version (2) at 50, descriptor version (4) at 52, descriptor at 56.
-    let rest = data.get(52..)?;
-    let text = parse_prefix_versioned(rest).and_then(|d| match d.get("Txt ") {
-        Some(Value::Text(t)) => Some(t.to_string_lossy()),
-        _ => None,
-    });
-    Some((text.unwrap_or_default(), Affine { m }))
+    craft_psd::text::envelope::parse_tysh_text_prefix(data).map(|(text, m)| (text, Affine { m }))
 }
 
 /// Parses a version-16 descriptor at the start of `data` (trailing bytes allowed).
