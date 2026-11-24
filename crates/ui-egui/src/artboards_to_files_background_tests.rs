@@ -185,7 +185,7 @@ fn the_checkbox_is_ticked_right_before_the_file_type_and_layer_comps_has_none() 
 fn ticked_writes_rgb_pngs_with_the_white_fill() {
     let mut h = harness();
     let dir = tempfile::tempdir().unwrap();
-    let dialog = open(&mut h, &dir.path().to_string_lossy(), "png");
+    let dialog = open(&mut h, &dir.path().to_string_lossy(), "png24");
     let [red, blue, empty] = run(&mut h, dialog, dir.path());
     assert_eq!((red.size, red.png_colour_type(), red.at(0, 0), red.at(30, 30)), ((200, 150), 2, WHITE, RED), "RGB, white kept");
     red.assert_pixels([20, 20, 120, 100], RED, Some(WHITE));
@@ -199,7 +199,7 @@ fn ticked_writes_rgb_pngs_with_the_white_fill() {
 fn unticked_writes_rgba_pngs_transparent_outside_the_layers() {
     let mut h = harness();
     let dir = tempfile::tempdir().unwrap();
-    let dialog = open(&mut h, &dir.path().to_string_lossy(), "png");
+    let dialog = open(&mut h, &dir.path().to_string_lossy(), "png24");
     click(&mut h);
     assert_eq!(checkbox(&h), (true, false), "the click unticks it");
     assert_eq!(params(&h, dialog)["includeBackground"], json!(false));
