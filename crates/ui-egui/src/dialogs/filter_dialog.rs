@@ -280,6 +280,49 @@ fn document_derived(command: &str, key: &str) -> bool {
         || command == "view.proofSetup"
 }
 
+/// The commands whose dialog reopens with the values of the last successful run, also a run from an action, a script
+/// or the control channel, as the reference does for Auto-Blend Layers (#14209). A dialog run remembers its values
+/// itself on OK.
+const STICKY_RUNS: &[&str] = &["edit.autoBlendLayers"];
+
+/// Remembers, for the next opening of their dialog, the values the runs journaled from `from` on passed (#14209): only
+/// the keys a run passed that its dialog shows and remembers change, so a run that omits a value keeps the remembered
+/// one. A failed run journals nothing, and a dialog's Cancel runs nothing, so neither stores anything.
+pub(crate) fn remember_runs(app: &mut PhotocraftApp, from: usize) {
+    let runs: Vec<(String, Value)> =
+        app.session.journal.get(from..).unwrap_or_default().iter().filter(|(id, _)| STICKY_RUNS.contains(&id.as_str())).cloned().collect();
+    for (command, passed) in runs {
+        remember_run(app, &command, &passed);
+    }
+}
+
+/// Merges the values `passed` to `command` into its dialog's remembered values.
+fn remember_run(app: &mut PhotocraftApp, command: &str, passed: &Value) {
+    use craft::ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
+    let (Some(spec), Some(passed)) = (photocraft_engine::commands::find(command), passed.as_object()) else { return };
+    let key = SaveKey::named(super::params::memory_scope(command));
+    let ctx = app.ctx().clone();
+    let mut fields = saved_value::<Option<DialogFields>>(&ctx, &key).unwrap_or_default();
+    let mut changed = false;
+    for param in params(app, command, spec.params).iter().filter(|p| p.is_remembered()) {
+        let Some(v) = passed.get(&param.key) else { continue };
+        let value = match &param.kind {
+            ParamKind::Bool { .. } => v.as_bool().map(FieldValue::Bool),
+            ParamKind::Int { .. } => v.as_i64().map(FieldValue::Int),
+            ParamKind::Range { .. } => v.as_f64().map(FieldValue::Number),
+            ParamKind::Choice { .. } => v.as_str().map(|s| FieldValue::Text(s.to_owned())),
+            _ => None,
+        };
+        if let Some(value) = value {
+            fields.set(param.key.clone(), value);
+            changed = true;
+        }
+    }
+    if changed {
+        set_saved_value::<Option<DialogFields>>(&ctx, &key, Some(fields));
+    }
+}
+
 /// The rows of `command`'s dialog for the parameter notation `spec`: the framework's parse of it,
 /// then the app's rows (documents, angle dials, units, the rows only the open document can fill).
 pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<Param> {
