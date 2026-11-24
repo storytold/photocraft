@@ -1,0 +1,135 @@
+//! #12917: Make Selection from a path is Photoshop's dialog: Rendering (Feather Radius in pixels,
+//! Anti-aliased) and Operation (New / Add to / Subtract from / Intersect with Selection, the last
+//! three greyed without a selection). OK with the defaults selects inside the path in one
+//! Selection Change History step; each Operation runs `path.toSelection` with its mode. The
+//! combining operations keep the Make Selection step (not measured).
+
+use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
+use serde_json::{Value, json};
+
+use super::tests::{choose_open, dialog_open};
+use crate::PhotocraftApp;
+use crate::state::Tool;
+
+const OPERATIONS: [&str; 4] = ["New Selection", "Add to Selection", "Subtract from Selection", "Intersect with Selection"];
+const MODES: [&str; 4] = ["replace", "add", "subtract", "intersect"];
+
+/// A document with the reference's closed triangle as the Work Path, with or without a selection
+/// (a rectangle the triangle overlaps).
+fn app(selection: bool) -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 500})).unwrap();
+    let knots = json!([[100, 300], [300, 300], [200, 450]]);
+    app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": knots}]}})).unwrap();
+    if selection {
+        app.run("select.rect", json!({"x": 20, "y": 20, "width": 200, "height": 320})).unwrap();
+    }
+    app.ui.tool = Tool::Pen;
+    app
+}
+
+/// The app's dialog pass: the host draws the dialogs and the families take their answers.
+fn draw(ui: &mut egui::Ui, app: &mut Box<PhotocraftApp>) {
+    crate::dialogs::run(app, ui);
+}
+
+/// The Pen canvas menu's Make Selection… dialog, drawn as the window shows it.
+fn dialog(mut app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
+    choose_open(&mut app, "path.toSelection");
+    assert!(dialog_open(&app), "Make Selection… opened its dialog");
+    let ctx = app.ctx().clone();
+    let mut h = Harness::builder().with_size(egui::vec2(900.0, 700.0)).with_context(ctx).build_ui_state(draw, app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(4);
+    h
+}
+
+fn click(h: &mut Harness<'_, Box<PhotocraftApp>>, label: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(3);
+}
+
+fn steps(app: &PhotocraftApp) -> Vec<String> {
+    app.session.active().unwrap().history.entries().iter().map(|e| e.to_string()).collect()
+}
+
+fn last_step(app: &PhotocraftApp) -> Option<String> {
+    steps(app).last().cloned()
+}
+
+fn selection_bounds(app: &PhotocraftApp) -> Option<[i32; 4]> {
+    let r = app.session.active().unwrap().doc.selection.as_ref()?.content_bounds();
+    Some([r.x0, r.y0, r.x1, r.y1])
+}
+
+/// The params of the last command run.
+fn last_params(app: &PhotocraftApp) -> Value {
+    let (id, params) = app.session.journal.last().cloned().unwrap();
+    assert_eq!(id, "path.toSelection");
+    params
+}
+
+fn enabled(h: &Harness<'_, Box<PhotocraftApp>>, label: &str) -> bool {
+    !h.get_by_label(label).accesskit_node().is_disabled()
+}
+
+#[test]
+fn without_a_selection_only_new_selection_is_available() {
+    let h = dialog(app(false));
+    assert!(enabled(&h, "New Selection"));
+    for label in &OPERATIONS[1..] {
+        assert!(!enabled(&h, label), "{label} is greyed out without a selection");
+    }
+}
+
+/// A combining mode picked while there was a selection runs as New Selection when the selection is
+/// gone by OK: there is nothing to combine with.
+#[test]
+fn without_a_selection_a_combining_mode_falls_back_to_new_selection() {
+    let mut h = dialog(app(true));
+    click(&mut h, "Subtract from Selection");
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.run_steps(2);
+    click(&mut h, "OK");
+    assert_eq!(last_params(h.state()).get("mode"), Some(&json!("replace")));
+    assert_eq!(selection_bounds(h.state()), Some([100, 300, 300, 450]));
+}
+
+#[test]
+fn ok_with_the_defaults_selects_the_triangle_in_one_selection_change_step() {
+    let mut h = dialog(app(false));
+    let before = steps(h.state());
+    click(&mut h, "OK");
+    assert!(!dialog_open(h.state()), "OK closed the dialog");
+    assert_eq!(selection_bounds(h.state()), Some([100, 300, 300, 450]));
+    let after = steps(h.state());
+    assert_eq!(after.len(), before.len() + 1, "one History step: {after:?}");
+    assert_eq!(after[..before.len()], before[..], "the earlier steps keep their names");
+    assert_eq!(after.last().map(String::as_str), Some("Selection Change"));
+    assert_eq!(h.state().ui.selected_path, None, "OK deselects the path, as ⌘↩ does");
+}
+
+#[test]
+fn each_operation_runs_make_selection_with_its_mode() {
+    for (label, mode) in OPERATIONS.into_iter().zip(MODES) {
+        let mut h = dialog(app(true));
+        click(&mut h, label);
+        click(&mut h, "OK");
+        assert_eq!(last_params(h.state()).get("mode").and_then(Value::as_str), Some(mode), "{label}");
+        let want = if mode == "replace" { "Selection Change" } else { "Make Selection" };
+        assert_eq!(last_step(h.state()).as_deref(), Some(want), "{label}: the combining operations keep today's step name");
+    }
+}
+
+/// OK that adds no step (the path went while the dialog was open) renames nothing, and the dialog refuses
+/// the OK (it stays open) instead of closing.
+#[test]
+fn ok_that_fails_does_not_rename_the_previous_step() {
+    let mut h = dialog(app(true));
+    h.state_mut().run("path.delete", json!({"name": "work"})).unwrap();
+    let before = steps(h.state());
+    click(&mut h, "OK");
+    assert_eq!(steps(h.state()), before);
+    assert!(dialog_open(h.state()), "the refused OK keeps the dialog open");
+}

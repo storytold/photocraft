@@ -1,33 +1,51 @@
-//! Exercise the actual editor window, including its layer and tool-preset targets.
+//! The app's mapping of the gradient editor's edits onto commands, on a layer target.
+//! The editor's own rows, fields, selection and tear-off are the framework's and tested there.
 
 use super::*;
+use egui::accesskit::Role;
+use egui::{Pos2, Rect, vec2};
 use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
+use photocraft_doc::Fill;
 
-fn editor(layer: bool) -> (Harness<'static, PhotocraftApp>, Sink) {
+/// A harness around `gradient_ui::editor::show`. With `layer` a Gradient Fill layer is selected
+/// (three colour stops, three opacity stops), else the same gradient is the tool's current one.
+pub(super) fn editor(layer: bool) -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
-    let mut params = json!({"stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]], "transparency": [[0, 25], [0.5, 60], [1, 100]]});
-    let sink = if layer {
+    let mut params = json!({"stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]], "transparency": [[0, 25], [0.4, 60], [1, 100]]});
+    if layer {
         params["from"] = json!([20, 60]);
         params["to"] = json!([180, 60]);
         app.run(cmds::CREATE, params).unwrap();
-        Sink::Layer(app.session.active().unwrap().active_layer.unwrap())
     } else {
         app.run("gradient.presets.select", params).unwrap();
-        Sink::Preset
-    };
-    let mut h = Harness::builder().with_size(vec2(1000.0, 900.0)).build_ui_state(|ui, app: &mut PhotocraftApp| editor_window(app, ui.ctx()), app);
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
-    h.run_steps(2);
-    h.state_mut().ui.panels.gradient_editor = true;
+    }
+    let ctx = app.ctx().clone();
+    let mut h = Harness::builder()
+        .with_size(vec2(1000.0, 900.0))
+        .with_context(ctx)
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::gradient_ui::editor::show(app, ui), app);
     h.run_steps(4);
-    (h, sink)
+    h
 }
 
-fn click(h: &mut Harness<PhotocraftApp>, pos: Pos2) {
+/// The gradient of the active layer.
+fn layer_fill(h: &Harness<Box<PhotocraftApp>>) -> Fill {
+    let st = h.state().session.active().unwrap();
+    match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+        photocraft_doc::LayerContent::Fill(f @ Fill::Gradient { .. }) => f.clone(),
+        other => panic!("{}", other.kind_name()),
+    }
+}
+
+fn history(h: &Harness<Box<PhotocraftApp>>) -> usize {
+    h.state().session.active().unwrap().history.past_len()
+}
+
+fn click(h: &mut Harness<Box<PhotocraftApp>>, pos: Pos2) {
     h.event(egui::Event::PointerMoved(pos));
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
@@ -36,13 +54,31 @@ fn click(h: &mut Harness<PhotocraftApp>, pos: Pos2) {
     h.run_steps(3);
 }
 
-fn select(h: &mut Harness<PhotocraftApp>, location: f32, opacity: bool) {
-    let rect = h.get_by_label("Gradient stops").rect();
-    click(h, pos2(rect.left() + 8.0 + location * (rect.width() - 16.0), rect.top() + if opacity { 6.0 } else { 50.0 }));
+/// The rect of the first marker whose accessible name or value contains `text`: the bar's markers
+/// are named with their location, and their order is the bar's geometry order, not location order.
+fn marker(h: &Harness<Box<PhotocraftApp>>, text: &str) -> Rect {
+    h.get_all_by_role(Role::GraphicsObject)
+        .find(|n| {
+            let n = n.accesskit_node();
+            n.label().is_some_and(|l| l.contains(text)) || n.value().is_some_and(|v| v.contains(text))
+        })
+        .unwrap_or_else(|| panic!("no marker named {text:?}"))
+        .rect()
 }
 
-fn type_number(h: &mut Harness<PhotocraftApp>, index: usize, value: &str, commit: bool) {
-    h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(index).unwrap().click();
+/// Selects the marker at `text` (a location such as "50%") with a click.
+fn select(h: &mut Harness<Box<PhotocraftApp>>, text: &str) {
+    let at = marker(h, text).center();
+    click(h, at);
+}
+
+/// Types `value` into the number field named `name` of the selected marker, and commits it with
+/// Enter when `commit`.
+fn type_number(h: &mut Harness<Box<PhotocraftApp>>, name: &str, value: &str, commit: bool) {
+    h.get_all_by_role(Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no number field {name:?}"))
+        .click();
     h.run_steps(2);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(value.into()));
@@ -53,94 +89,65 @@ fn type_number(h: &mut Harness<PhotocraftApp>, index: usize, value: &str, commit
     }
 }
 
-#[test]
-fn top_opacity_and_bottom_color_select_their_own_fields_in_both_editor_modes() {
-    for layer in [true, false] {
-        let (mut h, sink) = editor(layer);
-        let before = sink.fill(h.state()).unwrap();
-        assert!(h.query_by_label("Color stops").is_none(), "editor has one combined strip");
-        assert!(h.query_by_label("Opacity stops").is_none());
-        assert!(h.get_all_by_label("Color").any(|n| n.accesskit_node().role() == egui::accesskit::Role::Button));
-        select(&mut h, 0.5, true);
-        let key = strip_key(h.state(), sink).with("selection");
-        assert_eq!(h.ctx.data(|d| d.get_temp::<Marker>(key)), Some(Marker::Opacity(1)));
-        assert!(h.query_by_label("Color").is_none(), "opacity selection hides color controls");
-        select(&mut h, 0.5, false);
-        assert_eq!(h.ctx.data(|d| d.get_temp::<Marker>(key)), Some(Marker::Color(1)));
-        assert!(h.get_all_by_label("Color").any(|n| n.accesskit_node().role() == egui::accesskit::Role::Button));
-        assert_eq!(sink.fill(h.state()).unwrap(), before, "selecting stops never edits the gradient");
-    }
+/// Adds a colour stop: selects a colour marker, then Insert adds one halfway in its row.
+pub(super) fn add_stop(h: &mut Harness<Box<PhotocraftApp>>) {
+    let at = h
+        .get_all_by_role(Role::GraphicsObject)
+        .find(|n| n.accesskit_node().label().is_some_and(|l| l.to_lowercase().contains("color")))
+        .or_else(|| h.get_all_by_role(Role::GraphicsObject).next())
+        .expect("the bar has markers")
+        .rect()
+        .center();
+    click(h, at);
+    h.key_press(egui::Key::Insert);
+    h.run_steps(3);
 }
 
+/// Presses on the marker at `text`, drags it `dx` points along the bar in two steps, runs
+/// `during` with the button still down, then releases.
+fn drag_marker(h: &mut Harness<Box<PhotocraftApp>>, text: &str, dx: f32, during: impl FnOnce(&mut Harness<Box<PhotocraftApp>>)) {
+    let from = marker(h, text).center();
+    let to = from + vec2(dx, 0.0);
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(from + (to - from) * 0.5));
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(to));
+    h.run_steps(1);
+    during(h);
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+}
+
+/// On a layer target a typed opacity and a stop drag are one `gradient.fill.set` history step
+/// each; the drag adds no step before the release, and undo restores each state.
 #[test]
-fn selected_editor_opacity_commits_once_and_delete_preserves_minimum() {
-    let (mut h, sink) = editor(true);
-    select(&mut h, 0.5, true);
-    let before = sink.fill(h.state()).unwrap();
-    let history = h.state().session.active().unwrap().history.past_len();
-    type_number(&mut h, 0, "35", false);
-    assert_eq!(sink.fill(h.state()).unwrap(), before, "typing previews until committed");
-    h.key_press(egui::Key::Enter);
-    h.run_steps(3);
-    let after = sink.fill(h.state()).unwrap();
-    assert!(matches!(&after, Fill::Gradient { opacity_stops, .. } if (opacity_stops[1].1 - 0.35).abs() < 1e-5));
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
-    h.get_by_label("Delete").click();
-    h.run_steps(3);
-    let Fill::Gradient { stops, opacity_stops, .. } = sink.fill(h.state()).unwrap() else { panic!() };
-    assert_eq!(stops.len(), 3);
-    assert_eq!(opacity_stops.len(), 2);
-    select(&mut h, 0.0, true);
-    assert!(h.get_by_label("Delete").accesskit_node().is_disabled());
+fn a_typed_opacity_and_a_stop_drag_are_one_history_step_each() {
+    let mut h = editor(true);
+    let start = layer_fill(&h);
+    let steps = history(&h);
+
+    select(&mut h, "40%");
+    type_number(&mut h, "Opacity", "35", true);
+    let typed = layer_fill(&h);
+    assert!(
+        matches!(&typed, Fill::Gradient { opacity_stops, .. } if opacity_stops.iter().any(|s| (s.1 - 0.35).abs() < 1e-5)),
+        "the typed opacity reached the fill"
+    );
+    assert_eq!(history(&h), steps + 1, "one step for the typed value");
+
+    drag_marker(&mut h, "40%", 80.0, |h| {
+        assert_eq!(layer_fill(h), typed, "nothing is committed while the button is down");
+        assert_eq!(history(h), steps + 1, "no step before the release");
+    });
+    let dragged = layer_fill(&h);
+    assert_ne!(dragged, typed, "the drag moved the stop");
+    assert_eq!(history(&h), steps + 2, "one step for the drag");
+
     h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(sink.fill(h.state()).unwrap(), after);
+    assert_eq!(layer_fill(&h), typed, "undo restores the state before the drag");
     h.state_mut().run("edit.undo", json!({})).unwrap();
-    assert_eq!(sink.fill(h.state()).unwrap(), before);
-    h.state_mut().run("edit.redo", json!({})).unwrap();
-    assert_eq!(sink.fill(h.state()).unwrap(), after);
-}
-
-#[test]
-fn editor_location_follows_reordered_color_and_opens_existing_picker() {
-    for layer in [true, false] {
-        let (mut h, sink) = editor(layer);
-        select(&mut h, 0.0, false);
-        type_number(&mut h, 0, "70", true);
-        let key = strip_key(h.state(), sink).with("selection");
-        assert_eq!(h.ctx.data(|d| d.get_temp::<Marker>(key)), Some(Marker::Color(1)));
-        assert!(matches!(sink.fill(h.state()).unwrap(), Fill::Gradient { stops, .. } if (stops[1].0 - 0.7).abs() < 1e-5));
-        h.get_all_by_label("Color").find(|n| n.accesskit_node().role() == egui::accesskit::Role::Button).unwrap().click();
-        h.run_steps(3);
-        assert!(!h.state().ui.dialogs.is_empty());
-    }
-}
-
-#[test]
-fn editor_opacity_location_changes_only_opacity_in_both_modes() {
-    for layer in [true, false] {
-        let (mut h, sink) = editor(layer);
-        let Fill::Gradient { stops: before, .. } = sink.fill(h.state()).unwrap() else { panic!() };
-        select(&mut h, 0.0, true);
-        type_number(&mut h, 1, "70", true);
-        let Fill::Gradient { stops, opacity_stops, .. } = sink.fill(h.state()).unwrap() else { panic!() };
-        assert_eq!(stops, before, "opacity location must not move a color stop");
-        assert!((opacity_stops[1].0 - 0.7).abs() < 1e-5);
-        let key = strip_key(h.state(), sink).with("selection");
-        assert_eq!(h.ctx.data(|d| d.get_temp::<Marker>(key)), Some(Marker::Opacity(1)));
-    }
-}
-
-#[test]
-fn preset_editor_opacity_fields_do_not_edit_document_history() {
-    let (mut h, sink) = editor(false);
-    let before = h.state().session.active().unwrap().doc.clone();
-    let history = h.state().session.active().unwrap().history.past_len();
-    select(&mut h, 0.5, true);
-    type_number(&mut h, 0, "35", true);
-    assert!(matches!(sink.fill(h.state()).unwrap(), Fill::Gradient { opacity_stops, .. } if (opacity_stops[1].1 - 0.35).abs() < 1e-5));
-    h.get_by_label("Delete").click();
-    h.run_steps(3);
-    assert!(matches!(sink.fill(h.state()).unwrap(), Fill::Gradient { stops, opacity_stops, .. } if stops.len() == 3 && opacity_stops.len() == 2));
-    assert_eq!(h.state().session.active().unwrap().doc, before);
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    assert_eq!(layer_fill(&h), start, "undo restores the state before the typed value");
 }

@@ -7,7 +7,6 @@ use super::{FORMAT, FORMAT_HIGH, HashMap, NonZeroU64, TILE_UNIFORM_SIZE, VIEW_FL
 pub(super) struct Resources {
     pub(super) view_bgl: wgpu::BindGroupLayout,
     pub(super) tile_bgl: wgpu::BindGroupLayout,
-    pub(super) shadow_pipeline: wgpu::RenderPipeline,
     pub(super) tile_pipeline: wgpu::RenderPipeline,
     pub(super) sampler: wgpu::Sampler,
     pub(super) mip_bgl: wgpu::BindGroupLayout,
@@ -49,17 +48,13 @@ pub(super) struct Resources {
     /// Signatures belong to their renderer resources, including identity transforms (mode 0).
     pub(super) display_lut_signatures: HashMap<(u64, u32), (u64, u8)>,
     pub(super) identity_lut: wgpu::BindGroup,
-    /// Transparency checkerboard and gamut warning colours (Preferences › Transparency & Gamut).
+    /// Gamut warning colours (Preferences › Transparency & Gamut).
     pub(super) style: CanvasStyle,
 }
 
-/// Canvas colours from Preferences › Transparency & Gamut.
+/// The gamut warning colours from Preferences › Transparency & Gamut.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CanvasStyle {
-    /// Checker square side in points (0 = no checkerboard: transparency shows white).
-    pub checker_square: f32,
-    pub checker_light: [f32; 3],
-    pub checker_dark: [f32; 3],
     pub gamut_color: [f32; 3],
     /// Gamut warning opacity 0..1.
     pub gamut_opacity: f32,
@@ -67,7 +62,7 @@ pub struct CanvasStyle {
 
 impl Default for CanvasStyle {
     fn default() -> Self {
-        Self { checker_square: 8.0, checker_light: [1.0; 3], checker_dark: [0.8; 3], gamut_color: [0.5; 3], gamut_opacity: 1.0 }
+        Self { gamut_color: [0.5; 3], gamut_opacity: 1.0 }
     }
 }
 
@@ -79,7 +74,7 @@ pub(super) fn lut_bind_group(
     bgl: &wgpu::BindGroupLayout,
     size: u32,
     bytes: &[u8],
-    shaper: Option<&photocraft_cms::GpuMatrixShaper>,
+    shaper: Option<&craft::cms::GpuMatrixShaper>,
 ) -> wgpu::BindGroup {
     let extent = wgpu::Extent3d { width: size, height: size, depth_or_array_layers: size };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -173,11 +168,11 @@ pub(super) struct Tile {
     pub(super) page: Option<(u64, u32)>,
 }
 
-fn uniform_entry(binding: u32, size: u64, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+fn uniform_entry(binding: u32, size: u64, vis: wgpu::ShaderStages, dynamic: bool) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: vis,
-        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: NonZeroU64::new(size) },
+        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: dynamic, min_binding_size: NonZeroU64::new(size) },
         count: None,
     }
 }
@@ -236,17 +231,21 @@ fn pipeline(
 }
 
 impl Resources {
+    /// Create the shared canvas pipelines, layouts and display resources.
     pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, target: wgpu::TextureFormat, high: bool) -> Self {
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_canvas"), source: wgpu::ShaderSource::Wgsl(CANVAS_WGSL.into()) });
         let vis = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
+        // Dynamic offset zero avoids WARP/DX12 aliasing copied uniform descriptors
+        // between views (https://github.com/gfx-rs/wgpu/issues/1002).
         let view_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_canvas_view"),
-            entries: &[uniform_entry(0, VIEW_UNIFORM_SIZE, vis), sampler_entry(1)],
+            entries: &[uniform_entry(0, VIEW_UNIFORM_SIZE, vis, true), sampler_entry(1)],
         });
+        // Avoid reusing the last tile's placement on software DX12.
         let tile_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_canvas_tile"),
-            entries: &[texture_entry(0), uniform_entry(1, TILE_UNIFORM_SIZE, vis)],
+            entries: &[texture_entry(0), uniform_entry(1, TILE_UNIFORM_SIZE, vis, true)],
         });
         let lut_entry = wgpu::BindGroupLayoutEntry {
             binding: 0,
@@ -270,16 +269,11 @@ impl Resources {
         };
         let lut_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_display_lut"),
-            entries: &[lut_entry, curves_entry, uniform_entry(2, 48, wgpu::ShaderStages::FRAGMENT)],
+            entries: &[lut_entry, curves_entry, uniform_entry(2, 48, wgpu::ShaderStages::FRAGMENT, false)],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pc_canvas"),
             bind_group_layouts: &[Some(&view_bgl), Some(&tile_bgl), Some(&lut_bgl)],
-            immediate_size: 0,
-        });
-        let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("pc_canvas_shadow"),
-            bind_group_layouts: &[Some(&view_bgl)],
             immediate_size: 0,
         });
         // Premultiplied "over", with egui's alpha rule (keeps a transparent window's alpha sane).
@@ -295,7 +289,6 @@ impl Resources {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let shadow_pipeline = pipeline(device, "pc_canvas_shadow", &shadow_layout, &module, ("vs_shadow", "fs_shadow"), target, Some(blend));
         let tile_pipeline = pipeline(device, "pc_canvas_tile", &layout, &module, ("vs_tile", "fs_tile"), target, Some(blend));
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("pc_canvas_trilinear"),
@@ -333,7 +326,7 @@ impl Resources {
         };
         let encode_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_encode"),
-            entries: &[unfilterable, uniform_entry(1, 16, wgpu::ShaderStages::FRAGMENT)],
+            entries: &[unfilterable, uniform_entry(1, 16, wgpu::ShaderStages::FRAGMENT, true)],
         });
         let encode_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pc_encode"),
@@ -351,7 +344,6 @@ impl Resources {
             style: CanvasStyle::default(),
             view_bgl,
             tile_bgl,
-            shadow_pipeline,
             tile_pipeline,
             sampler,
             mip_bgl,

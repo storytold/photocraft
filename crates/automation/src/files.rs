@@ -146,7 +146,11 @@ pub fn save_with_renderer_keeping(
         .or_else(|| path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()))
         .ok_or_else(|| AutomationError::BadRequest(format!("cannot tell the format of `{}`; pass a format", path.display())))?;
     if ext == photocraft_format::EXTENSION {
-        let named = named_for_output(doc, &path.to_string_lossy());
+        let mut named = doc.clone();
+        // Native filenames may contain a literal backslash on Unix.
+        if let Some(name) = path.file_name() {
+            named.name = name.to_string_lossy().into_owned();
+        }
         let mut local = PcraftWriter::new();
         let w = writer.unwrap_or(&mut local);
         w.save_path(&named, path, &native_options(&named, opts)?)?;
@@ -203,7 +207,9 @@ pub fn save_bytes_with_renderer(
         }
         return Ok((bytes, warnings));
     }
-    let result = photocraft_io::export_with_renderer(doc, &ext, opts, &photocraft_raster::Interrupt::NONE, renderer)?;
+    // No ambient authority: a linked path inside the document must not be read and embedded.
+    let opts = ExportOptions { read_linked_files: false, ..opts.clone() };
+    let result = photocraft_io::export_with_renderer(doc, &ext, &opts, &photocraft_raster::Interrupt::NONE, renderer)?;
     Ok((result.bytes, result.warnings))
 }
 

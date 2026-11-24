@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 /// The binary, without the variables `mcp` and `serve` fall back to: a test that wants one sets it.
 fn bin() -> Command {
-    let mut cmd = Command::new(crate::binary());
+    let mut cmd = crate::command();
     for var in ENV_VARS {
         cmd.env_remove(var);
     }
@@ -167,9 +167,9 @@ fn server_modes_reject_ignored_or_conflicting_options() {
         for flag in ["--control-token", "--control-token-file"] {
             server_usage_error(&[sub, flag, "unused"], if sub == "mcp" { "requires --bridge" } else { "requires --port" });
         }
+        server_usage_error(&[sub, "--automation-write-root", ".", "--automation-write-root", "."], "cannot be used multiple times");
         for flag in ["--automation-read-root", "--automation-write-root"] {
-            server_usage_error(&[sub, flag, ".", flag, "."], "cannot be used multiple times");
-            server_usage_error(&[sub, &format!("{flag}=")], &format!("a value is required for '{flag} "));
+            server_usage_error(&[sub, &format!("{flag}=")], "root needs a non-empty directory");
             server_usage_error(&[sub, flag, "--automation-write-root", "."], &format!("a value is required for '{flag} "));
         }
         let transport = if sub == "mcp" { "--bridge" } else { "--port" };
@@ -193,7 +193,7 @@ fn server_validation_does_not_consume_stdio_or_create_files() {
     let other = d.join("other.token");
     let token_flag = format!("--control-token-file={}", token.display());
     let other_flag = format!("--control-token-file={}", other.display());
-    for tail in [&["stray"][..], &["--automation-read-root", ".", "--automation-read-root", "."], &["--port", "0"], &[&other_flag]] {
+    for tail in [&["stray"][..], &["--automation-write-root", ".", "--automation-write-root", "."], &["--port", "0"], &[&other_flag]] {
         let mut child = bin()
             .current_dir(&d)
             .args(["serve", "--port", "0", &token_flag])
@@ -515,11 +515,11 @@ fn batch_applies_actions_to_directory() {
     .stdout;
     assert!(out.contains("2 succeeded, 0 failed"), "{out}");
     let clean_log = std::fs::read(&log).unwrap();
-    assert!(clean_log.starts_with(&[0xff, 0xfe]));
+    assert!(clean_log.starts_with(&[0xfe, 0xff]));
     let (pairs, remainder) = clean_log[2..].as_chunks::<2>();
     assert!(remainder.is_empty());
-    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
-    assert_eq!(body, "Batch Start\r\n\r\nBatch End\r\n");
+    let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert_eq!(body, "Start Batch\r\n\r\nEnd Batch\r\n");
     for n in ["one", "two"] {
         let info = ok(bin().arg("info").arg(outp.join(format!("{n}.pcraft")))).stdout;
         let v: Value = serde_json::from_str(&info).unwrap();
@@ -557,11 +557,11 @@ fn batch_recursive_naming_stop_and_error_log() {
         assert!(output.join(file).is_file(), "{file}: {stdout}");
     }
     let bytes = std::fs::read(log).unwrap();
-    assert!(bytes.starts_with(&[0xff, 0xfe]));
+    assert!(bytes.starts_with(&[0xfe, 0xff]));
     let (pairs, remainder) = bytes[2..].as_chunks::<2>();
     assert!(remainder.is_empty());
-    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
-    assert!(errors.contains("Batch Start\r\n") && errors.contains("b.png") && errors.ends_with("Batch End\r\n"), "{errors}");
+    let errors = String::from_utf16(&pairs.iter().map(|pair| u16::from_be_bytes(*pair)).collect::<Vec<_>>()).unwrap();
+    assert!(errors.contains("Start Batch\r\n") && errors.contains("b.png") && errors.ends_with("End Batch\r\n"), "{errors}");
 
     let stopped = root.join("stopped");
     let result = run(&stopped, &["--recursive", "--stop-on-error"]);
@@ -713,6 +713,22 @@ fn batch_with(d: &Path, input: &Path, name: &str, actions: &str, extra: &[&str])
     let file = d.join(format!("{name}.json"));
     std::fs::write(&file, actions).unwrap();
     bin().args(["batch", "--actions"]).arg(&file).arg("--in").arg(input).arg("--out").arg(d.join(name)).args(extra).output().unwrap()
+}
+
+#[test]
+fn batch_error_log_cannot_replace_its_actions_file() {
+    let d = tmp("batch-log-actions-collision");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let actions = r#"[{"command":"image.adjustments.invert"}]"#;
+    let log = input.join("../actions.json");
+
+    let result = batch_with(&d, &input, "actions", actions, &["--error-log", &log.to_string_lossy()]);
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{error}");
+    assert!(error.contains("--error-log") && error.contains("--actions"), "{error}");
+    assert_eq!(std::fs::read(d.join("actions.json")).unwrap(), actions.as_bytes());
+    assert!(!d.join("actions").exists(), "the output folder must not be created");
 }
 
 /// #489: `batch --actions` takes `[id, params]` steps and a droplet's steps, with the same results
@@ -867,6 +883,24 @@ fn dds_converts_both_ways_with_the_compression_asked_for() {
     }
 }
 
+/// #8064: `--no-maximize-compatibility` writes a layered PSD/PSB with Photoshop's placeholder
+/// instead of the merged image, flagged in resource 1057; without it, the real image.
+#[test]
+fn no_maximize_compatibility_writes_the_psd_placeholder() {
+    let d = tmp("maximize-compat");
+    let a = d.join("a.png");
+    write_png(&a, 32, 16, 3);
+    for (args, ext, real) in
+        [(&[][..], "psd", true), (&["--no-maximize-compatibility"][..], "psd", false), (&["--no-maximize-compatibility"][..], "psb", false)]
+    {
+        let out = d.join(format!("a.{ext}"));
+        ok(bin().arg("run").arg(&a).args(["--cmd", "layer.new.layer"]).arg("--out").arg(&out).args(args));
+        let psd = craft_psd::PsdFile::from_bytes(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!(psd.has_real_merged_data(), Some(real), "{args:?} {ext}");
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// `--tga-bits` picks a TGA's bits per pixel (byte 16 of its header); anything but 24 or 32 is a
 /// usage error and nothing is written.
 #[test]
@@ -959,6 +993,88 @@ fn jpeg_format_chooses_the_scans() {
         assert_eq!(o.status.code(), Some(2), "--jpeg-format {bad}");
         assert!(err.contains("--jpeg-format") && err.contains("expected baseline, optimized or progressive"), "--jpeg-format {bad}: {err}");
         assert!(!out.exists(), "--jpeg-format {bad} wrote a file");
+    }
+}
+
+/// #9466: `--metadata none` leaves the document's XMP packet and free-form text out of a flat
+/// export from `convert`, `run --out` and `batch`, as Export As's Metadata: None does, and changes
+/// nothing else (pixels, ICC profile, resolution). The default, and `all`, keep them as before (the
+/// text where the format holds it, as PNG does), and a PSD or `.pcraft` keeps the XMP either way.
+/// A value it doesn't name is a usage error and nothing is written.
+#[test]
+fn metadata_none_leaves_out_the_document_xmp() {
+    const XMP: &str = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+<rdf:Description rdf:about=\"\" xmlns:photoshop=\"http://ns.adobe.com/photoshop/1.0/\">\
+<photoshop:DocumentAncestors><rdf:Bag><rdf:li>xmp.did:11111111-2222-3333-4444-555555555555</rdf:li></rdf:Bag></photoshop:DocumentAncestors>\
+</rdf:Description></rdf:RDF></x:xmpmeta>";
+    let d = tmp("metadata");
+    let input = d.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let a = input.join("a.png");
+    let data: Vec<u8> = (0..8 * 6 * 4).map(|i| (i as u8).wrapping_mul(7).wrapping_add(3)).collect();
+    let mut img = photocraft_codecs::Image::from_u8(8, 6, photocraft_codecs::ChannelLayout::Rgba, data).unwrap();
+    img.meta.xmp = Some(XMP.into());
+    img.meta.dpi = Some((300.0, 300.0));
+    img.meta.text = vec![("Comment".into(), "free-form-note".into())];
+    // Display P3 rather than sRGB, so no export can pass for keeping it by writing its default.
+    let p3 = craft_cms::Builtin::DisplayP3.profile().to_bytes().to_vec();
+    img.icc = Some(p3.clone());
+    std::fs::write(&a, photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+    let ancestors = |p: &Path| String::from_utf8_lossy(&std::fs::read(p).unwrap()).contains("DocumentAncestors");
+    let decoded = |p: &Path| photocraft_codecs::decode(&std::fs::read(p).unwrap()).unwrap();
+    let note = |p: &Path| decoded(p).meta.text.iter().any(|(_, v)| v == "free-form-note");
+    assert!(ancestors(&a) && note(&a), "the input carries the packet and the text");
+    let invert = r#"[{"command":"image.adjustments.invert"}]"#;
+    for ext in ["png", "webp", "jpg", "tif"] {
+        let mut converted_files = Vec::new();
+        for flag in [None, Some("all"), Some("none")] {
+            let extra: Vec<&str> = flag.map(|f| vec!["--metadata", f]).unwrap_or_default();
+            let name = format!("{ext}-{}", flag.unwrap_or("default"));
+            let converted = d.join(format!("convert-{name}.{ext}"));
+            ok(bin().arg("convert").arg(&a).arg(&converted).args(&extra));
+            let ran = d.join(format!("run-{name}.{ext}"));
+            ok(bin().arg("run").arg(&a).arg("--out").arg(&ran).args(&extra));
+            let o = batch_with(&d, &input, &format!("batch-{name}"), invert, &[&["--format", ext][..], &extra[..]].concat());
+            assert!(o.status.success(), "batch {name}: {}", String::from_utf8_lossy(&o.stderr));
+            let batched = d.join(format!("batch-{name}")).join(format!("a.{ext}"));
+            for out in [&converted, &ran, &batched] {
+                assert_eq!(ancestors(out), flag != Some("none"), "{name}: {}", out.display());
+                // PNG holds free-form text; JPEG, WebP and TIFF (but for its named tags) don't.
+                assert_eq!(note(out), ext == "png" && flag != Some("none"), "{name} text: {}", out.display());
+            }
+            converted_files.push(converted);
+        }
+        // Only the XMP and text go: the pixels, profile and resolution are the default export's.
+        let (default, none) = (decoded(&converted_files[0]), decoded(&converted_files[2]));
+        assert_eq!(none.data(), default.data(), "{ext}: pixels");
+        assert_eq!(default.icc.as_deref(), Some(&p3[..]), "{ext}: the default export keeps the input's Display P3 profile");
+        assert_eq!(none.icc, default.icc, "{ext}: ICC profile");
+        assert_eq!(none.meta.dpi, default.meta.dpi, "{ext}: resolution");
+        assert!(none.meta.dpi.is_some_and(|(x, y)| (x - 300.0).abs() < 0.5 && (y - 300.0).abs() < 0.5), "{ext}: {:?}", none.meta.dpi);
+    }
+    // A layered save keeps the document's XMP whatever the option.
+    for ext in ["psd", "pcraft"] {
+        let out = d.join(format!("layered.{ext}"));
+        ok(bin().arg("convert").arg(&a).arg(&out).args(["--metadata", "none"]));
+        let back = d.join(format!("layered-{ext}.png"));
+        ok(bin().arg("convert").arg(&out).arg(&back));
+        assert!(ancestors(&back), "{ext} kept the packet");
+    }
+    for bad in ["None", "exif", "0", ""] {
+        let out = d.join("bad.png");
+        let (mut convert, mut run) = (bin(), bin());
+        convert.arg("convert").arg(&a).arg(&out).args(["--metadata", bad]);
+        run.arg("run").arg(&a).arg("--out").arg(&out).args(["--metadata", bad]);
+        for cmd in [&mut convert, &mut run] {
+            let o = cmd.output().unwrap();
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert_eq!(o.status.code(), Some(2), "--metadata {bad}: {err}");
+            assert!(err.contains("--metadata") && err.contains("expected none or all"), "--metadata {bad}: {err}");
+            assert!(!out.exists(), "--metadata {bad} wrote a file");
+        }
+        let o = batch_with(&d, &input, "bad-batch", invert, &["--metadata", bad]);
+        assert_eq!(o.status.code(), Some(2), "batch --metadata {bad}");
+        assert!(!d.join("bad-batch").exists(), "batch --metadata {bad} wrote a folder");
     }
 }
 
@@ -1310,13 +1426,15 @@ fn a_non_unicode_path_is_taken_and_non_unicode_text_is_a_usage_error() {
 /// PhotoCraft can't play are warned about up front.
 #[test]
 fn batch_plays_a_photoshop_actions_file() {
-    use photocraft_engine::actions_cmds::Action;
+    use photocraft_engine::actions_cmds::{Action, ActionStep};
+    photocraft_engine::install().unwrap();
     let d = tmp("atn");
     let input = d.join("in");
     std::fs::create_dir_all(&input).unwrap();
     write_png(&input.join("a.png"), 8, 4, 3);
-    let invert = Action::new("Negative", vec![("image.adjustments.invert".into(), json!({})), ("select.all".into(), json!({}))]);
-    let odd = Action::new("Odd", vec![(photocraft_engine::atn_cmds::PHOTOSHOP_STEP.into(), json!({"event": "syntheticFill", "name": "Generative Fill"}))]);
+    let invert = Action::new("Negative", vec![ActionStep::new("image.adjustments.invert", json!({})), ActionStep::new("select.all", json!({}))]);
+    let odd =
+        Action::new("Odd", vec![ActionStep::new(photocraft_engine::atn_cmds::PHOTOSHOP_STEP, json!({"event": "syntheticFill", "name": "Generative Fill"}))]);
     let (bytes, skipped) = photocraft_engine::atn_cmds::export("Set", &[&invert, &odd], &[], false).unwrap();
     assert!(skipped.is_empty());
     let atn = d.join("Set.atn");
@@ -1342,7 +1460,7 @@ fn batch_plays_a_photoshop_actions_file() {
 fn extensionless_version_12_actions_file_is_read_as_atn() {
     let d = tmp("atn-v12");
     let path = d.join("Legacy Actions");
-    std::fs::write(&path, include_bytes!("../../../../crates/psd/tests/fixtures/atn/v12-commands.atn")).unwrap();
+    std::fs::write(&path, include_bytes!("../../../../crates/engine/tests/fixtures/atn/v12-commands.atn")).unwrap();
     let (steps, set, warnings) = photocraft_cli::load_actions_file(&path, None).unwrap();
     assert_eq!(set.len(), 1);
     assert_eq!(steps, vec![("actions.play".to_string(), json!({"action": set[0].name}))]);
@@ -1757,6 +1875,120 @@ fn batch_skips_deselect_with_nothing_selected() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn every_configured_read_root_must_be_a_valid_directory() {
+    let d = tmp("invalid-read-roots");
+    let good = d.join("good");
+    std::fs::create_dir_all(&good).unwrap();
+    let file = d.join("file");
+    std::fs::write(&file, b"not a directory").unwrap();
+    for sub in ["mcp", "serve"] {
+        for invalid in [d.join("missing"), file.clone()] {
+            for roots in [[&good, &invalid], [&invalid, &good]] {
+                let o = bin()
+                    .arg(sub)
+                    .arg("--automation-read-root")
+                    .arg(roots[0])
+                    .arg(format!("--automation-read-root={}", roots[1].display()))
+                    .stdin(Stdio::null())
+                    .output()
+                    .unwrap();
+                assert_eq!(o.status.code(), Some(1), "{sub}: {}", String::from_utf8_lossy(&o.stderr));
+                assert!(String::from_utf8_lossy(&o.stderr).contains("automation read root"));
+                assert!(o.stdout.is_empty(), "invalid roots must fail before the server starts");
+            }
+        }
+    }
+}
+
+#[test]
+fn serve_reads_roots_in_order_and_supports_absolute_paths_in_each_root() {
+    let d = tmp("serve-read-roots");
+    let first = d.join("first");
+    let second = d.join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    write_png(&first.join("shared.png"), 3, 2, 3);
+    write_png(&second.join("shared.png"), 7, 4, 5);
+    write_png(&second.join("fallback.png"), 6, 5, 7);
+    let mut child = bin()
+        .args(["serve", "--automation-read-root"])
+        .arg(&first)
+        .arg(format!("--automation-read-root={}", second.display()))
+        .arg("--automation-read-root")
+        .arg(&first)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for (id, path) in [(1, "shared.png".into()), (2, "fallback.png".into()), (3, second.join("shared.png").to_string_lossy().into_owned())] {
+        writeln!(stdin, "{}", json!({"id": id, "method": "doc.open", "params": {"path": path}})).unwrap();
+    }
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let replies: Vec<Value> = String::from_utf8(output.stdout).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(replies.len(), 3);
+    for (reply, (width, height)) in replies.iter().zip([(3, 2), (6, 5), (7, 4)]) {
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["result"]["width"], width, "{reply}");
+        assert_eq!(reply["result"]["height"], height, "{reply}");
+    }
+}
+
+#[test]
+fn mcp_reads_roots_in_order_with_fallback() {
+    let d = tmp("mcp-read-roots");
+    let first = d.join("first");
+    let second = d.join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    write_png(&first.join("shared.png"), 3, 2, 3);
+    write_png(&second.join("shared.png"), 7, 4, 5);
+    write_png(&second.join("fallback.png"), 6, 5, 7);
+    let mut child = bin()
+        .arg("mcp")
+        .arg(format!("--automation-read-root={}", first.display()))
+        .arg("--automation-read-root")
+        .arg(&second)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut send = |value: Value| {
+        writeln!(stdin, "{value}").unwrap();
+        stdin.flush().unwrap();
+    };
+    let mut recv = |id: u64| -> Value {
+        loop {
+            let mut line = String::new();
+            assert!(stdout.read_line(&mut line).unwrap() > 0, "server closed");
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value["id"] == id {
+                return value;
+            }
+        }
+    };
+    send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}));
+    assert_eq!(recv(1)["result"]["serverInfo"]["name"], "photocraft");
+    send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    for (id, path, width) in [(2, "shared.png", 3), (3, "fallback.png", 6)] {
+        send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"doc_open","arguments":{"path":path}}}));
+        let reply = recv(id);
+        assert_ne!(reply["result"]["isError"], true, "{reply}");
+        let opened: Value = serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(opened["width"], width, "{reply}");
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// TIFF Options from the command line (#8827): `--tiff-compression`, `--tiff-transparency on|off`
 /// and `--tiff-pyramid`; a bad value is a usage error that writes nothing.
 #[test]
@@ -1814,4 +2046,96 @@ fn info_detail_adds_text_runs_and_antialiasing() {
     assert!(text.get("antialias").is_some(), "{text}");
     assert!(text["runs"].as_array().is_some_and(|r| !r.is_empty()), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Flags that don't go together are usage errors before anything starts. Adding PhotoCraft to an
+/// MCP client is the ArtCraft Launcher's job, so there is no `mcp install`, and plain `mcp` does
+/// what `--live` did, so there is no `--live` either.
+#[test]
+fn mcp_rejects_mismatched_flags() {
+    for (args, needle) in [
+        (&["mcp", "install"][..], "install"),
+        (&["mcp", "--live"], "--live"),
+        (&["mcp", "--client", "json"], "--client"),
+        (&["mcp", "--headless", "--bridge", "127.0.0.1:1"], "--bridge"),
+        (&["mcp", "--headless", "--control-token-file", "t"], "--control-token-file"),
+        (&["mcp", "--headless", "--when-closed", "launch"], "--when-closed"),
+        (&["mcp", "--when-closed", "sometimes"], "sometimes"),
+        (&["mcp", "--bridge", "127.0.0.1:1", "--when-closed", "error"], "--when-closed"),
+    ] {
+        let o = bin().args(args).stdin(Stdio::null()).output().unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {err}");
+        assert!(err.contains(needle), "{args:?}: {err}");
+    }
+}
+
+/// One MCP exchange with `photocraft-cli mcp <args>`: initialize, then each tool call; returns the
+/// tool results.
+fn mcp_session(args: &[&str], env: &[(&str, &std::ffi::OsStr)], calls: &[(&str, Value)]) -> Vec<Value> {
+    let mut cmd = bin();
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut send = |v: Value| {
+        writeln!(stdin, "{v}").unwrap();
+        stdin.flush().unwrap();
+    };
+    let mut recv = |id: u64| -> Value {
+        loop {
+            let mut line = String::new();
+            assert!(stdout.read_line(&mut line).unwrap() > 0, "server closed");
+            let v: Value = serde_json::from_str(&line).unwrap();
+            if v["id"] == id {
+                return v;
+            }
+        }
+    };
+    send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}));
+    recv(1);
+    send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    let mut out = Vec::new();
+    for (i, (name, arguments)) in calls.iter().enumerate() {
+        let id = 2 + i as u64;
+        send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":arguments}}));
+        out.push(recv(id)["result"].clone());
+    }
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    out
+}
+
+/// Plain `mcp` without the person's consent works headless, as it always did: commands run, UI
+/// tools say they need the open app. `--headless` too, and it doesn't read a PHOTOCRAFT_CONTROL_PORT
+/// exported for another tool (here not even a port).
+#[test]
+fn mcp_without_consent_works_headless() {
+    let dir = tmp("mcp-plain");
+    let empty = tmp("mcp-plain-launcher");
+    // `crate::command()` keeps the machine's launcher and flags out already; this test names its
+    // own settings and an empty launcher folder as well, to say what it relies on.
+    let env = [("PHOTOCRAFT_CONFIG_DIR", dir.as_os_str()), ("CRAFT_MCP_DIR", empty.as_os_str())];
+    let calls = [("command_list", json!({})), ("ui_inspect", json!({}))];
+    let r = mcp_session(&["mcp", "--when-closed", "error"], &env, &calls);
+    assert_ne!(r[0]["isError"], true, "headless commands run: {}", r[0]);
+    assert_eq!(r[1]["isError"], true, "{}", r[1]);
+    assert!(r[1]["content"][0]["text"].as_str().unwrap().contains("bridge"), "{}", r[1]);
+    let mut env = env.to_vec();
+    env.push(("PHOTOCRAFT_CONTROL_PORT", std::ffi::OsStr::new("not-a-port")));
+    let r = mcp_session(&["mcp", "--headless"], &env, &calls[..1]);
+    assert_ne!(r[0]["isError"], true, "{}", r[0]);
+    // Without the `AI-MCP` flag a Control Port saved before the agents switch (which the app
+    // reads as "agents may connect") still leaves plain `mcp` headless: it neither looks for
+    // the app nor applies When PhotoCraft Is Closed ("error" would fail this call).
+    std::fs::write(dir.join("preferences.json"), r#"{"integrations": {"controlPort": 7878}}"#).unwrap();
+    let r = mcp_session(&["mcp", "--when-closed", "error"], &env[..2], &calls[..1]);
+    assert_ne!(r[0]["isError"], true, "without the flag plain mcp stays headless: {}", r[0]);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&empty);
 }
