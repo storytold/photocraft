@@ -18,6 +18,31 @@ pub fn placement(sm: &SmartObject) -> Homography {
     sm.perspective.map(Homography).unwrap_or_else(|| affine_homography(&sm.transform))
 }
 
+/// The box Free Transform and the Move tool's transform controls show on a smart object: its own
+/// source rect (the contents' canvas, in source pixels) and that rect's four corners, clockwise
+/// from the top left, where the placement puts them. A smart object's box keeps referencing the
+/// object's bounds, so after a rotation it reopens aligned to the object, and its fields read
+/// relative to the original placement. `None` for anything else (pixel layers, groups, shapes,
+/// type, frames), for a warped object (its box is the warp's), when the source can't be read, or
+/// when the placement is degenerate or not finite.
+pub fn placed_box(doc: &Document, layer: &Layer) -> Option<([f64; 4], [[f64; 2]; 4])> {
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    if layer.frame.is_some() || sm.warp.as_ref().is_some_and(|w| !w.is_identity()) {
+        return None;
+    }
+    let s = source_box(doc, sm)?;
+    let h = placement(sm);
+    let corners = [(s[0], s[1]), (s[2], s[1]), (s[2], s[3]), (s[0], s[3])];
+    let quad = corners.map(|(x, y)| {
+        let (px, py) = h.apply(x, y);
+        [px, py]
+    });
+    let finite = s.iter().chain(quad.iter().flatten()).all(|v| v.is_finite());
+    // Twice the signed area: a collapsed box (a zero scale) has none.
+    let area: f64 = (0..4).map(|i| quad[i][0] * quad[(i + 1) % 4][1] - quad[(i + 1) % 4][0] * quad[i][1]).sum();
+    (finite && s[2] > s[0] && s[3] > s[1] && area.abs() > 1e-9).then_some((s, quad))
+}
+
 pub(crate) fn affine_homography(a: &Affine) -> Homography {
     let [a, b, c, d, e, f] = a.m;
     Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0])

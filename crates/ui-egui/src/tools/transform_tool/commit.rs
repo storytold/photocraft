@@ -24,9 +24,11 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
     let Some(mut t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
-    // An untouched box closes without a step: a ⌥⌘T copy or a place stays.
+    // An untouched box closes without a step: a ⌥⌘T copy or a place stays. A smart object's box
+    // opens away from its frame's corners, so the session alone can't tell ([`FreeTransform::untouched`]).
+    let (untouched, map) = (t.untouched(), t.doc_map());
     let result = match t.session.commit() {
-        TransformRequest::Apply(result) => Some(result),
+        TransformRequest::Apply(result) if !untouched => Some(result),
         _ => None,
     };
     if crate::frame_tool::frame_transform(&t) {
@@ -49,6 +51,20 @@ pub fn commit(app: &mut PhotocraftApp) {
     let quad = result.state.quad.map(|p| [p.x, p.y]);
     let interpolation = result.interpolation.id();
     let warp = result.warp.map(|w| w.warp);
+    // A smart object's box is over its source: what the commit applies is the change in document
+    // space since the box opened, the preview rect's corners through it.
+    let (rect, quad) = match (t.placed, map) {
+        (Some(p), Some(m)) if warp.is_none() => {
+            let b = p.frame;
+            let mapped = [(b.x0, b.y0), (b.x1, b.y0), (b.x1, b.y1), (b.x0, b.y1)].map(|(x, y)| {
+                let at = m.apply(Point::new(x, y));
+                [at.x, at.y]
+            });
+            ([b.x0, b.y0, b.x1, b.y1], mapped)
+        }
+        (Some(_), None) if warp.is_none() => return keep_open(app, t, preview, "The transform box is degenerate".into()),
+        _ => (rect, quad),
+    };
     if t.selection {
         let mut p = json!({"rect": rect, "interpolation": interpolation});
         match &warp {

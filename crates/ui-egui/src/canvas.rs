@@ -66,6 +66,7 @@ pub(super) mod tile_overlay;
 pub mod tool_feedback;
 pub(crate) mod tools;
 mod transform_controls;
+pub(crate) use transform_controls::PlacedBoxMemo;
 pub(crate) mod viewport_pages;
 
 pub(crate) use cursor_policy::alt_samples;

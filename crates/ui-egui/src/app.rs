@@ -173,6 +173,7 @@ impl PhotocraftApp {
             transform_preview: None,
             transform_area: None,
             transform_preparing: None,
+            placed_box_memo: None,
             move_mods: Default::default(),
             nudge_bundle: Default::default(),
             style_preview: None,

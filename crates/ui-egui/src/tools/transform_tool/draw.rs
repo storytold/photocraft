@@ -251,6 +251,12 @@ fn gesture_open<T>(events: &EditEvents<T>) -> bool {
 /// transform takes the texture's rect.
 pub(super) fn texture_quad(t: &FreeTransform, pv: &OpenPreview) -> [Point; 4] {
     let quad = t.session.quad();
+    // A smart object's box is over its source: the texture is the layer's pixels over the document
+    // rect it opened on, carried by what the box did since.
+    if let (Some(p), Some(m)) = (t.placed, t.doc_map()) {
+        let b = p.frame;
+        return [(b.x0, b.y0), (b.x1, b.y0), (b.x1, b.y1), (b.x0, b.y1)].map(|(x, y)| m.apply(Point::new(x, y)));
+    }
     let Some(sv) = pv.several.as_ref().filter(|sv| sv.rect != sv.frame) else { return quad };
     let Some(h) = t.session.homography() else { return quad };
     let r = sv.rect;
@@ -307,11 +313,14 @@ fn path_outline(t: &FreeTransform, pv: &OpenPreview) -> Option<EditPath> {
             }),
             true,
         ),
-        None => {
-            let h = t.session.homography()?;
-            let rect: Rect = t.session.rect();
-            (Box::new(move |p| h.apply_in_front(p, rect)), false)
-        }
+        None => match t.doc_map() {
+            Some(m) => (Box::new(move |p| m.apply_in_front(p)), false),
+            None => {
+                let h = t.session.homography()?;
+                let rect: Rect = t.session.rect();
+                (Box::new(move |p| h.apply_in_front(p, rect)), false)
+            }
+        },
     };
     let subpaths = source.subpaths.iter().flat_map(|sub| mapped_runs(&flatten(sub, bends), sub.closed, &*map)).collect();
     Some(EditPath::new(source.key, subpaths).colored(source.color))
@@ -406,6 +415,12 @@ pub(crate) fn selection_map(app: &PhotocraftApp, document: DocId) -> Option<Poin
         );
     }
     let rect = t.session.rect();
+    if t.placed.is_some() {
+        return Some(match t.doc_map() {
+            Some(m) => PointMap::new(move |p| m.apply_in_front(p)).bends(),
+            None => PointMap::new(|_| None),
+        });
+    }
     Some(match t.session.homography() {
         Some(h) => PointMap::new(move |p| h.apply_in_front(p, rect)).bends(),
         None => PointMap::new(|_| None),

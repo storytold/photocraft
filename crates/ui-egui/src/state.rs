@@ -31,7 +31,7 @@ pub use text_edit::{TextEdit, TypeInsertionStyle, TypeTransform};
 pub use tool::Tool;
 pub use tool_options::{ObjectFinderMode, SampleAllLayers, ToolOptions};
 use tool_options::{default_brush_tool, yes};
-pub use transform::{CamTransform, ContentAwareOptions, Extras, FreeTransform, MadeLayer, SessionWarp};
+pub use transform::{CamTransform, ContentAwareOptions, DocMap, Extras, FreeTransform, MadeLayer, Placed, SessionWarp, placed_state};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Panels {

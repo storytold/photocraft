@@ -1696,3 +1696,29 @@ fn lens_blur_smart_filter_refuses_an_alpha_channel_depth_on_edit() {
     s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"depthMap": "none"}})).unwrap();
     assert_eq!(active_smart(&s).smart_filters[0].params["depthMap"], json!("none"));
 }
+
+/// The box Free Transform and the Move tool's controls show on a smart object: the source rect's
+/// corners where the placement puts them. Turned with the object; absent for a warped object and
+/// for a pixel layer, whose box stays upright.
+#[test]
+fn placed_box_is_the_source_rect_through_the_placement() {
+    let mut s = session(8);
+    paint(&mut s);
+    let pixels = s.active().unwrap();
+    assert!(placed_box(&pixels.doc, pixels.doc.layer(pixels.active_layer.unwrap()).unwrap()).is_none(), "a pixel layer has no placed box");
+    let id = convert(&mut s);
+    s.execute("edit.transform", json!({"layer": id, "scaleX": 50, "scaleY": 50, "rotate": 30})).unwrap();
+    let d = s.active().unwrap();
+    let layer = d.doc.layer(LayerId(id)).unwrap();
+    let (source, quad) = placed_box(&d.doc, layer).expect("a rotated smart object has a placed box");
+    let h = placement(&active_smart(&s));
+    let corners = [(source[0], source[1]), (source[2], source[1]), (source[2], source[3]), (source[0], source[3])];
+    for (corner, got) in corners.iter().zip(quad) {
+        let want = h.apply(corner.0, corner.1);
+        assert!((want.0 - got[0]).abs() < 1e-9 && (want.1 - got[1]).abs() < 1e-9, "{corner:?} lands on {want:?}, not {got:?}");
+    }
+    assert!((quad[1][1] - quad[0][1]).abs() > 1e-3, "the top edge is turned with the object");
+    s.execute("edit.transform.warp", json!({"style": "arc", "bend": 30})).unwrap();
+    let d = s.active().unwrap();
+    assert!(placed_box(&d.doc, d.doc.layer(LayerId(id)).unwrap()).is_none(), "a warped object keeps the warp's own box");
+}

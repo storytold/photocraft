@@ -546,6 +546,9 @@ pub struct PhotocraftApp {
     transform_area: Option<crate::transform_tool::OpenArea>,
     /// A large layer's Free Transform box being prepared in the background.
     transform_preparing: Option<crate::transform_tool::Preparing>,
+    /// The smart object box the Move tool's transform controls last showed, with what it was read at
+    /// (`canvas::transform_controls`): reading the source's bounds can decode it, so it is kept per frame.
+    pub(crate) placed_box_memo: Option<canvas::PlacedBoxMemo>,
     /// Move-tool ⇧/⌥ drag state (move_mods).
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Cached document for a modal text Style Options color preview.

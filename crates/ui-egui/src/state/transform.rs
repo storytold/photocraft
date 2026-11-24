@@ -1,9 +1,11 @@
 use super::{Deserialize, Serialize};
 
 use craft::behavior::geometry::TransformMode;
+use craft::behavior::geometry::quad::BoxState;
 use craft::behavior::kurbo::{Point, Rect};
 use craft::draw::ui::transform::{TransformSession, TransformWarp};
 use craft::imaging::ui::warp::WarpMesh;
+use photocraft_algo::transform::Homography;
 use serde_json::{Value, json};
 
 /// The source frame as `[x0, y0, x1, y1]`, the form the engine commands and the record take.
@@ -72,6 +74,50 @@ impl TransformWarp for SessionWarp {
     }
 }
 
+/// The box a smart object opens on: its corners where its placement puts the source's own rect,
+/// with the reference point at their centre (the image of the rect's centre). The Free Transform
+/// session and the Move tool's controls both start from it.
+pub fn placed_state(quad: [[f64; 2]; 4]) -> BoxState {
+    let points = quad.map(|[x, y]| Point::new(x, y));
+    let centre = Point::new(points.iter().map(|p| p.x).sum::<f64>() / 4.0, points.iter().map(|p| p.y).sum::<f64>() / 4.0);
+    BoxState::new(points, centre)
+}
+
+/// A smart object's box that keeps referencing the object's own bounds (its source rect, as the
+/// session's frame), so it reopens aligned to a rotated object and its fields are relative to the
+/// original placement. The session's quad is then the placement of the source rect, in document
+/// space, while the preview texture still covers the document-space rect [`frame`](Self::frame).
+#[derive(Clone, Copy, Debug)]
+pub struct Placed {
+    /// Document to source: the placement the box opened with, inverted.
+    pub inverse: Homography,
+    /// The box as it opened. The session is untouched while its quad is this.
+    pub quad: [Point; 4],
+    /// The axis-aligned rect the preview texture covers, in document space.
+    pub frame: Rect,
+}
+
+/// What the document-space map of a placed box does to points: the box's changes since it opened.
+#[derive(Clone, Copy, Debug)]
+pub struct DocMap {
+    h: Homography,
+    frame: [f64; 4],
+}
+
+impl DocMap {
+    /// `p` carried through the map.
+    pub fn apply(&self, p: Point) -> Point {
+        let (x, y) = self.h.apply(p.x, p.y);
+        Point::new(x, y)
+    }
+
+    /// [`apply`](Self::apply) for a point on the front side of the map's horizon (the side the
+    /// frame lies on); `None` behind it.
+    pub fn apply_in_front(&self, p: Point) -> Option<Point> {
+        (self.h.w(p.x, p.y) * self.h.front_side(self.frame) > 0.0).then(|| self.apply(p))
+    }
+}
+
 /// Free Transform in progress: the framework session (box, mode, warp, undo steps) and what PhotoCraft
 /// adds to say what the box moves.
 #[derive(Clone, Debug)]
@@ -101,9 +147,33 @@ pub struct FreeTransform {
     /// Edit › Content-Aware Scale (#3096): the box only scales and moves, and OK runs
     /// `edit.contentAwareScale` with these options instead of `edit.transform`.
     pub content_aware: Option<ContentAwareOptions>,
+    /// A smart object's box over its own bounds ([`Placed`]); `None` for the document-space box every
+    /// other layer gets.
+    pub placed: Option<Placed>,
 }
 
 impl FreeTransform {
+    /// The box has not been changed: closing it leaves the document as it was. A placed box starts
+    /// away from its frame's corners, on the object, so it is compared with where it opened.
+    pub fn untouched(&self) -> bool {
+        match (&self.placed, self.session.warp()) {
+            (Some(p), None) => self.session.quad() == p.quad,
+            _ => self.session.is_untouched(),
+        }
+    }
+
+    /// For a placed box, the document-space map of what the box did since it opened: the object's
+    /// source goes through the new placement, having come from the old one. `None` for any other box
+    /// and for a degenerate one.
+    pub fn doc_map(&self) -> Option<DocMap> {
+        let p = self.placed.as_ref()?;
+        let s = self.session.homography()?;
+        let [a, b, c] = [s.row(0), s.row(1), s.row(2)];
+        let now = Homography([a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]]);
+        let h = now.mul(&p.inverse);
+        h.0.iter().all(|v| v.is_finite()).then_some(DocMap { h, frame: [p.frame.x0, p.frame.y0, p.frame.x1, p.frame.y1] })
+    }
+
     /// The source frame as `[x0, y0, x1, y1]`.
     pub fn rect_array(&self) -> [f64; 4] {
         rect_array(self.session.rect())

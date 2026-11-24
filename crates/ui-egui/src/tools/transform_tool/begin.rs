@@ -1,5 +1,5 @@
-use craft::behavior::geometry::BoxAllow;
-use craft::behavior::kurbo::Rect;
+use craft::behavior::geometry::{BoxAllow, BoxState};
+use craft::behavior::kurbo::{Point, Rect};
 use craft::draw::ui::transform::{TransformEdit, TransformSession};
 use craft::imaging::ui::transform_preview::{PreviewPixels, PreviewTextures, StyledPreview};
 
@@ -11,7 +11,7 @@ use super::{
     Arc, BezierMesh, CAS_ONLY_SCALES, Color32, DocId, Document, Follow, Homography, LOCKED, LayerContent, LayerId, MadeLayer, OpenPreview, OtherTexels,
     PhotocraftApp, Several, Warp, WarpStyle, default_interpolation, json, settings, swap_mode_texels,
 };
-use crate::state::{FreeTransform, SessionWarp};
+use crate::state::{FreeTransform, Placed, SessionWarp, placed_state};
 
 /// The source frame `r` (`[x0, y0, x1, y1]`) as the session's frame.
 fn frame_of(r: [f64; 4]) -> Rect {
@@ -26,10 +26,51 @@ fn type_allow(typed: bool) -> BoxAllow {
 /// The session over the source frame `rect`: the stored settings, the interpolation default and the nudge pause.
 /// `warp_ok` is false where the content cannot warp (a lone mask or channel, several layers, Content-Aware Scale).
 fn open_session(app: &PhotocraftApp, rect: [f64; 4], allow: BoxAllow, warp_ok: bool) -> TransformSession<SessionWarp> {
-    TransformSession::new(frame_of(rect))
-        .allow(allow.with_warp(warp_ok))
-        .settings(&settings(app), default_interpolation(app))
-        .nudge_pause(crate::nudge_bundle::pause(app))
+    configured(app, TransformSession::new(frame_of(rect)), allow, warp_ok)
+}
+
+/// `session` with what [`open_session`] gives every session.
+fn configured(app: &PhotocraftApp, session: TransformSession<SessionWarp>, allow: BoxAllow, warp_ok: bool) -> TransformSession<SessionWarp> {
+    session.allow(allow.with_warp(warp_ok)).settings(&settings(app), default_interpolation(app)).nudge_pause(crate::nudge_bundle::pause(app))
+}
+
+/// A smart object's box over its own bounds: the source rect (the session's frame, in source
+/// pixels) and what the box needs to map document points ([`Placed`]), when `layer` has one
+/// (`smart_cmds::placed_box`). `b` is the document-space rect the preview texture covers.
+fn placed_of(doc: &Document, layer: &photocraft_doc::Layer, b: photocraft_geom::Rect) -> Option<([f64; 4], [[f64; 2]; 4], Placed)> {
+    let (source, quad) = photocraft_engine::smart_cmds::placed_box(doc, layer)?;
+    let LayerContent::Smart(sm) = &layer.content else { return None };
+    let inverse = photocraft_engine::smart_cmds::placement(sm).inverse()?;
+    let frame = Rect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
+    Some((source, quad, Placed { inverse, quad: placed_state(quad).quad, frame }))
+}
+
+/// The session over a smart object's own bounds, starting on the box its placement gives them.
+fn placed_session(app: &PhotocraftApp, source: [f64; 4], quad: [[f64; 2]; 4], allow: BoxAllow) -> TransformSession<SessionWarp> {
+    configured(app, TransformSession::with_state(frame_of(source), placed_state(quad)), allow, true)
+}
+
+/// A placed box goes back to the document-space box over the preview texture's rect, keeping where
+/// the box is: Warp works over document space (its mesh is made from the frame and the box).
+fn demote_placed(app: &mut PhotocraftApp) {
+    let Some(t) = app.ui.transform.as_ref() else { return };
+    let Some(p) = t.placed else { return };
+    // An untouched box is exactly the upright one again, not that box through a map that only
+    // rounds to it.
+    let map = if t.untouched() { None } else { t.doc_map() };
+    let (allow, mode) = (t.session.allows(), t.session.current_mode());
+    let b = p.frame;
+    let corners = [(b.x0, b.y0), (b.x1, b.y0), (b.x1, b.y1), (b.x0, b.y1)];
+    let to_box = |(x, y): (f64, f64)| {
+        let at = Point::new(x, y);
+        map.map_or(at, |m| m.apply(at))
+    };
+    let state = BoxState::new(corners.map(to_box), to_box(((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0)));
+    let session = configured(app, TransformSession::with_state(b, state).mode(mode), allow, true);
+    if let Some(t) = app.ui.transform.as_mut() {
+        t.session = session;
+        t.placed = None;
+    }
 }
 
 /// The Frame tool's entry: [`begin`] with the session marked to commit when the press that opened it is released.
@@ -89,6 +130,9 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     }
     crate::type_tool::commit(app);
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
+    // A smart object's box frames its own bounds, so it reopens on the object as placed. Its
+    // pixels move whole, so no selection lifts any.
+    let placed = if frame_only { None } else { placed_of(&doc, layer, b) };
     let session = app.ui.alloc_id();
     // Preview document: the moving pixels removed (layer hidden, or the selection lifted out).
     let mut pd = (*doc).clone();
@@ -161,7 +205,10 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             ..OpenPreview::new(session, shown, textures, app.ui.tool)
         });
         app.ui.transform = Some(FreeTransform {
-            session: open_session(app, rect, allow, !frame_only),
+            session: match &placed {
+                Some((source, quad, _)) => placed_session(app, *source, *quad, allow),
+                None => open_session(app, rect, allow, !frame_only),
+            },
             id: session,
             layer: id.0,
             layers: Vec::new(),
@@ -170,6 +217,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             path: None,
             made: None,
             content_aware: None,
+            placed: placed.map(|(_, _, p)| p),
         });
         Ok(())
     };
@@ -338,6 +386,7 @@ fn begin_several(app: &mut PhotocraftApp, ctx: &egui::Context, doc: Arc<Document
         path: None,
         made: None,
         content_aware: None,
+        placed: None,
     });
     Ok(())
 }
@@ -477,6 +526,7 @@ pub(crate) fn begin_content_aware(
         path: None,
         made: None,
         content_aware: Some(Default::default()),
+        placed: None,
     });
     Ok(())
 }
@@ -578,6 +628,7 @@ fn begin_lone(
         path: None,
         made: None,
         content_aware: None,
+        placed: None,
     });
     Ok(())
 }
@@ -609,6 +660,7 @@ fn begin_path(app: &mut PhotocraftApp, params: serde_json::Value, path: photocra
         path: Some(params),
         made: None,
         content_aware: None,
+        placed: None,
     });
     Ok(())
 }
@@ -669,6 +721,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, _ctx: &egui::Context) -> Result<
         path: None,
         made: None,
         content_aware: None,
+        placed: None,
     });
     Ok(())
 }
@@ -713,7 +766,9 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !t.session.allows().warp || t.session.warp().is_some() {
         return;
     }
-    let (layer, untouched) = (t.layer, t.session.is_untouched() && !t.selection && t.path.is_none());
+    demote_placed(app);
+    let Some(t) = app.ui.transform.as_ref() else { return };
+    let (layer, untouched) = (t.layer, t.untouched() && !t.selection && t.path.is_none());
     if warps_type(app) {
         return enter_type_warp(app, ctx);
     }
@@ -805,7 +860,7 @@ pub fn warps_type(app: &PhotocraftApp) -> bool {
 /// of the options bar (Warp Text's). A box scaled or rotated first is applied first (that keeps
 /// type editable). The preview shows the type without its current Warp Text, under that style.
 fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if app.ui.transform.as_ref().is_some_and(|t| !t.session.is_untouched()) {
+    if app.ui.transform.as_ref().is_some_and(|t| !t.untouched()) {
         commit(app);
         if app.ui.transform.is_some() {
             return; // refused: the box stays as it was

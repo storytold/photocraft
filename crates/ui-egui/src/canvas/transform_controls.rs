@@ -88,6 +88,49 @@ fn framed(app: &PhotocraftApp, pressed: bool) -> Option<kurbo::Rect> {
     Some(kurbo::Rect::new(f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)))
 }
 
+/// What the Move tool's controls last read of a smart object's box, and the document state, layer and
+/// revision they read it at ([`placed_controls`]).
+pub(crate) struct PlacedBoxMemo {
+    key: (photocraft_doc::DocId, u64, photocraft_doc::LayerId),
+    shown: Option<([f64; 4], [[f64; 2]; 4])>,
+}
+
+/// The box over the single framed smart object: its source rect and where its placement puts it
+/// (`smart_cmds::placed_box`), as Free Transform opens it. `None` for several layers, floating pixels
+/// and any other layer. Reading the source's bounds can decode it (an SVG every time), so the answer is
+/// kept for the document revision and layer it was read at.
+fn placed_controls(app: &mut PhotocraftApp) -> Option<([f64; 4], [[f64; 2]; 4])> {
+    let (key, shown) = {
+        let st = app.session.active()?;
+        let layers = framed_layers(app, false);
+        let [layer] = layers.as_slice() else { return None };
+        if photocraft_engine::float_cmds::floating(st).is_some() {
+            return None;
+        }
+        // A linked layer's box frames its whole link group, as Free Transform's does (`begin`).
+        let targets = photocraft_engine::transform_cmds::selection_targets(st);
+        if photocraft_engine::transform_cmds::box_targets(&st.doc, &targets) != [layer.id] {
+            return None;
+        }
+        let key = (st.doc.id, st.revision, layer.id);
+        if let Some(memo) = app.placed_box_memo.as_ref().filter(|memo| memo.key == key) {
+            return memo.shown;
+        }
+        (key, photocraft_engine::smart_cmds::placed_box(&st.doc, layer))
+    };
+    app.placed_box_memo = Some(PlacedBoxMemo { key, shown });
+    shown
+}
+
+/// The frame and starting box of the Move tool's controls: a smart object's own bounds and its
+/// placement ([`placed_controls`]), else `bounds` (what [`frame`] returned) as an upright box.
+pub(crate) fn box_start(app: &mut PhotocraftApp, bounds: kurbo::Rect) -> (kurbo::Rect, BoxState) {
+    match placed_controls(app) {
+        Some((source, quad)) => (kurbo::Rect::new(source[0], source[1], source[2], source[3]), crate::state::placed_state(quad)),
+        None => (bounds, BoxState::from_rect(bounds)),
+    }
+}
+
 /// The reference application's alert when a Move-tool transform control is dragged on a frame
 /// that holds the Background among other layers (measured, #11101).
 pub(crate) const CONTROLS_LOCKED: &str = "Could not transform because the layer is locked.";
@@ -136,12 +179,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect,
     if session_box_shown {
         return;
     }
-    let Some(start) = frame(app) else { return };
+    let Some(bounds) = frame(app) else { return };
+    let (start, state) = box_start(app, bounds);
     let settings = crate::transform_tool::settings(app);
     // The rules a new session starts with (`TransformSession::box_rules` in Free mode), so the drag reads the same
     // before and after the hand-off.
     let rules = BoxRules::in_mode(TransformMode::Free).with_scale(settings.scale_rule()).with_aspect_linked(settings.aspect_linked);
-    let out = TransformBox::new(CONTROLS_LABEL, Bind::given(BoxState::from_rect(start)), start, 0.0)
+    let out = TransformBox::new(CONTROLS_LABEL, Bind::given(state), start, 0.0)
         .rules(rules)
         .rotate_zone(RotateZone::Band)
         .reference_point(false)

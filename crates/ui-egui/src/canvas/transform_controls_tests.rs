@@ -1,4 +1,4 @@
-use super::transform_controls::{ControlsPress, begin_controls, frame, frame_layers};
+use super::transform_controls::{ControlsPress, begin_controls, box_start, frame, frame_layers};
 use super::*;
 use serde_json::json;
 
@@ -321,4 +321,33 @@ fn the_background_among_several_joins_the_frame_and_its_handles_refuse() {
     app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
     assert_eq!(begin_controls(&mut app, &ctx), ControlsPress::Started);
     assert_eq!(app.ui.transform.as_ref().unwrap().layers, [a.0, b.0]);
+}
+
+/// A smart object's box keeps referencing the object's own bounds: after a rotation the Move tool's
+/// controls (and the Free Transform their press starts) sit on the turned object, while a pixel
+/// layer's box stays the upright bounds.
+#[test]
+fn move_transform_controls_follow_a_rotated_smart_object() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200, "background": "transparent"})).unwrap();
+    app.session.execute("select.rect", json!({"x": 40, "y": 40, "width": 50, "height": 40})).unwrap();
+    app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_show_transform = true;
+    let bounds = frame(&app).unwrap();
+    let (start, state) = box_start(&mut app, bounds);
+    assert_eq!((start, state.quad), (bounds, craft::behavior::geometry::quad::BoxState::from_rect(bounds).quad), "a pixel layer's box is upright");
+
+    app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.session.execute("edit.transform", json!({"rotate": 30})).unwrap();
+    app.sync_views();
+    let bounds = frame(&app).unwrap();
+    let (start, state) = box_start(&mut app, bounds);
+    assert!((state.quad[1].y - state.quad[0].y).abs() > 1e-3, "the top edge is turned with the object");
+    assert!(start != bounds, "the frame is the object's own bounds, not the upright ones");
+    let ctx = app.ctx().clone();
+    assert_eq!(begin_controls(&mut app, &ctx), ControlsPress::Started);
+    let t = app.ui.transform.as_ref().expect("the press starts Free Transform");
+    assert_eq!((t.session.rect(), t.session.quad()), (start, state.quad), "the session opens on the box the controls showed");
 }
