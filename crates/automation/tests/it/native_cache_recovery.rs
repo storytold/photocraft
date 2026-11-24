@@ -22,9 +22,19 @@ fn assert_recovered(doc: &Document, warnings: &[String]) {
     assert!(warnings[0].contains("Linked art") && warnings[0].contains("no saved render cache"), "{warnings:?}");
 }
 
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn automation_rebuilds_eligible_caches_on_native_open() {
     let scratch = std::env::temp_dir().join(format!("photocraft-automation-native-open-{}", std::process::id()));
+    let _cleanup = RemoveOnDrop(scratch.clone());
+    let _ = std::fs::remove_dir_all(&scratch);
     let root = scratch.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let outside = scratch.join("outside.png");
@@ -62,7 +72,6 @@ fn automation_rebuilds_eligible_caches_on_native_open() {
     let (scoped_doc, save_path) = (state.doc.clone(), state.path.clone());
     drop(headless);
 
-    std::fs::remove_dir_all(scratch).unwrap();
     assert_recovered(&scoped_doc, &warnings);
     for result in opened {
         assert_recovered(&result.document, &result.warnings);

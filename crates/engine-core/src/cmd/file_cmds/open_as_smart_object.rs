@@ -7,7 +7,7 @@
 
 use super::open::decode_open_source;
 use super::paths::{file_name, read_file, stem, untitled_name};
-use super::{Affine, Arc, Document, Layer, LayerContent, Result, Session, SmartObject, SmartSource, Value, flattened_checked, json, str_param};
+use super::{Affine, Arc, Document, EngineError, Layer, LayerContent, Result, Session, SmartObject, SmartSource, Value, flattened_checked, json, str_param};
 use crate::layer_place::Place;
 
 const CMD: &str = "file.openAsSmartObject";
@@ -39,15 +39,31 @@ pub(super) fn open_as_smart_object(s: &mut Session, p: &Value) -> Result<Value> 
         },
         move |ctx, (path, name, bytes, mut decoded)| {
             super::recover_decoded_native_caches(&mut decoded, ctx)?;
+            if decoded.native_pcraft
+                && let Some(layer) = super::native_cache::unrestored_embedded_layer(&decoded.imported.document)
+            {
+                return Err(EngineError::Other(format!("couldn't rebuild the cache for \"{layer}\"")));
+            }
             ctx.check()?;
             ctx.progress(0.9, "Flattening");
             let r = decoded.imported;
             // The file as one image: the smart object's rendered contents.
             let pixels = crate::jobs::scratch_checked(Some(&r.document), || flattened_checked(&r.document, r.document.pixel_format(), CMD))?;
-            Ok((path, name, bytes, r, pixels, confirm_damage && decoded.damaged))
+            // A raw is decided by the decoder that read the file, not by the warning text, which a
+            // native document can carry over from the raw it was developed from.
+            let raw = !decoded.native_pcraft && r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
+            Ok((path, name, bytes, r, pixels, Flags { damaged: confirm_damage && decoded.damaged, raw }))
         },
-        |s, (path, name, bytes, r, pixels, damaged)| apply(s, &path, &name, bytes, r, pixels, damaged),
+        |s, (path, name, bytes, r, pixels, flags)| apply(s, &path, &name, bytes, r, pixels, flags),
     )
+}
+
+/// What the worker found about the file that decides how the document is completed.
+struct Flags {
+    /// The file had damaged data and the caller asked to confirm it.
+    damaged: bool,
+    /// A camera raw, developed by the raw decoder: it gets the raw defaults and no profile prompt.
+    raw: bool,
 }
 
 fn apply(
@@ -57,12 +73,14 @@ fn apply(
     bytes: Arc<Vec<u8>>,
     r: photocraft_io::ImportResult,
     pixels: photocraft_raster::Surface,
-    damaged: bool,
+    Flags { damaged, raw }: Flags,
 ) -> Result<Value> {
     let warnings = r.warnings;
     let mut src = r.document;
     super::tag_exr_colorspace(s, file, &mut src);
-    super::raw_defaults(s, &warnings, &mut src);
+    if raw {
+        super::raw_defaults(s, &warnings, &mut src);
+    }
     let layer_name = stem(path);
     // "<name>-1", the next free number while a document with that name is open.
     let name = untitled_name(&layer_name, |n| s.documents().iter().any(|d| d.doc.name == n) || s.held_open_named(n));
@@ -82,7 +100,6 @@ fn apply(
 
     // File › Open's completion: a raw has no embedded profile to ask about; otherwise the profile
     // prompt holds the document, and without a question the Color Settings policy is applied.
-    let raw = warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
     let question = s.color.open_question(&doc).filter(|_| !raw);
     if damaged || question.is_some() {
         let held = s.hold_open(doc, false);

@@ -1409,10 +1409,12 @@ impl Session {
                 }))
             }
             WorkResult::Decoded(imported) => {
-                let photocraft_io::DecodedOpen { imported: mut r, damaged, .. } = *imported;
+                let photocraft_io::DecodedOpen { imported: mut r, damaged, native_pcraft } = *imported;
                 crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
-                crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
-                let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
+                let raw = !native_pcraft && r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
+                if raw {
+                    crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
+                }
                 let damaged = confirm_damage && damaged;
                 let question = s.color.open_question(&r.document).filter(|_| !raw);
                 if damaged || question.is_some() {

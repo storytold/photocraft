@@ -88,10 +88,16 @@ impl PlaceSteps {
                 match png {
                     Some(png) => self.stage = Stage::DecodePng(Box::new(png)),
                     None => {
-                        let imported = ctx
-                            .stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::import_with_options_and_interrupt(&input.name, bytes, &input.opts, ctl))
+                        let mut decoded = ctx
+                            .stage(0.0, 0.6, "Decoding", |ctl| photocraft_io::decode_for_open(&input.name, bytes, None, &input.opts, ctl))
                             .map_err(|e| self.io_error(e))?;
-                        self.decoded(imported, false, ctx)?;
+                        if decoded.native_pcraft {
+                            super::recover_decoded_native_caches(&mut decoded, ctx)?;
+                            if let Some(layer) = super::native_cache::unrestored_embedded_layer(&decoded.imported.document) {
+                                return Err(EngineError::Other(format!("couldn't rebuild the cache for \"{layer}\"")));
+                            }
+                        }
+                        self.decoded(decoded.imported, false, ctx)?;
                     }
                 }
             }

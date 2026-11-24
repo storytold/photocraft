@@ -145,3 +145,69 @@ fn native_revert_returns_the_named_warning_for_uncached_linked_art() {
     assert_eq!(reverted["warnings"], before["warnings"], "Revert must report the same warning with the affected layer name");
     assert!(object(&opened.active().unwrap().doc).cache.is_none());
 }
+
+#[test]
+fn native_place_and_open_as_smart_object_recover_or_reject_embedded_caches() {
+    let scratch = tempfile::tempdir().unwrap();
+    let reference = placed_png(scratch.path());
+    let cache = object(&reference).cache.as_ref().unwrap();
+    let bounds = cache.content_bounds();
+
+    let recoverable = scratch.path().join("recoverable.pcraft");
+    std::fs::write(&recoverable, without_cache(reference.clone())).unwrap();
+
+    let mut host = Session::new();
+    host.execute("file.new", json!({ "width": 8, "height": 8 })).unwrap();
+    host.execute("file.placeEmbedded", json!({ "path": recoverable })).unwrap();
+    let placed_layer = host.active().unwrap().doc.layers.last().unwrap();
+    let LayerContent::Smart(placed) = &placed_layer.content else { panic!("expected placed Smart Object") };
+    assert_eq!(placed.cache.as_ref().unwrap().read_region(bounds), cache.read_region(bounds));
+
+    let mut unrecoverable = reference;
+    unrecoverable.icc_profile = Some(craft_cms::Builtin::DisplayP3.profile().to_bytes());
+    let unrecoverable_path = scratch.path().join("unrecoverable.pcraft");
+    std::fs::write(&unrecoverable_path, without_cache(unrecoverable)).unwrap();
+
+    let place_err = host.execute("file.placeEmbedded", json!({ "path": unrecoverable_path })).unwrap_err();
+    assert!(place_err.to_string().contains("couldn't rebuild the cache for \"embedded\""), "{place_err}");
+
+    let mut opener = Session::new();
+    let open_err = opener.execute("file.openAsSmartObject", json!({ "path": unrecoverable_path })).unwrap_err();
+    assert!(open_err.to_string().contains("couldn't rebuild the cache for \"embedded\""), "{open_err}");
+}
+
+#[test]
+fn native_open_does_not_treat_developed_note_in_layer_name_as_raw() {
+    let scratch = tempfile::tempdir().unwrap();
+    let mut reference = placed_png(scratch.path());
+    reference.resolution_dpi = 72.0;
+    reference.icc_profile = None;
+    reference.layers[0].name = format!("Photo {}", photocraft_io::raw::DEVELOPED_NOTE);
+    smart_mut(&mut reference).source = SmartSource::Linked { path: "not-present.png".to_string() };
+    let bundle = without_cache(reference);
+    let path = scratch.path().join("native-note.pcraft");
+    std::fs::write(&path, &bundle).unwrap();
+
+    let mut session = Session::new();
+    session.prefs.edit(|p| p.raw_defaults.resolution = 300.0);
+    session.execute("edit.colorSettings", json!({ "askOnMissing": true })).unwrap();
+
+    let report = match session.start_open("native-note.pcraft", OpenSource::Bytes(Arc::new(bundle.clone()))).unwrap() {
+        Started::Done(report) => report,
+        Started::Job(id) => session.wait_job(id).unwrap(),
+    };
+    assert_eq!(report["color"]["missing"], json!(true), "native open must keep the missing-profile question");
+    let held = report["held"].as_u64().expect("held for profile question");
+    let (doc, _) = session.take_held_open(held).expect("held document");
+    assert_eq!(doc.resolution_dpi, 72.0, "native open must keep saved resolution");
+
+    let smart_report = session.execute("file.openAsSmartObject", json!({ "path": path })).unwrap();
+    assert_eq!(smart_report["color"]["missing"], json!(true), "Open as Smart Object must keep the missing-profile question");
+    let (smart_doc, _) = session.take_held_open(smart_report["held"].as_u64().expect("held smart open")).expect("held smart doc");
+    assert_eq!(smart_doc.resolution_dpi, 72.0, "Open as Smart Object must keep saved resolution");
+
+    let mut direct = Session::new();
+    direct.prefs.edit(|p| p.raw_defaults.resolution = 300.0);
+    file_cmds::open_bytes_as(&mut direct, "native-note.pcraft", &bundle, None, None).unwrap();
+    assert_eq!(direct.active().unwrap().doc.resolution_dpi, 72.0);
+}

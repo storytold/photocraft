@@ -67,9 +67,12 @@ pub(super) fn import_source_at_raw_ppi(raw_ppi: f64, name: &str, bytes: &[u8]) -
 
 fn import_at_raw_ppi_with_warnings(raw_ppi: f64, name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult> {
     let opts = photocraft_io::ImportOptions::default();
-    let (mut r, _) = import_result_for_open(name, bytes, &opts, Some(&crate::jobs::JobCtx::new()))?;
-    raw_resolution(raw_ppi, &r.warnings, &mut r.document);
-    Ok(r)
+    let mut decoded = decode_open_source(name, bytes, &opts)?;
+    super::recover_decoded_native_caches(&mut decoded, &crate::jobs::JobCtx::new())?;
+    if !decoded.native_pcraft {
+        raw_resolution(raw_ppi, &decoded.imported.warnings, &mut decoded.imported.document);
+    }
+    Ok(decoded.imported)
 }
 
 /// Decode a complete source or document. The job context enables native cache recovery when the
@@ -220,8 +223,8 @@ pub fn open_bytes_as_with_options(
     opts.psd_high_memory_approved = approve_high_memory;
     opts.psd_approved_estimate = None;
     let raw = super::raw_open::prepare(s, &decode_name, &file_name(name), path.as_deref(), bytes)?;
-    let (r, raw_settings) = if let Some((imported, settings)) = raw {
-        (imported, Some(settings))
+    let (r, raw_settings, native_pcraft) = if let Some((imported, settings)) = raw {
+        (imported, Some(settings), false)
     } else {
         let mut decoded =
             photocraft_io::decode_for_open(&decode_name, bytes, as_ext, &opts, &photocraft_raster::Interrupt::NONE).map_err(|e| match as_ext {
@@ -229,14 +232,16 @@ pub fn open_bytes_as_with_options(
                 None => crate::error::io_open_error(&decode_name, e),
             })?;
         super::recover_decoded_native_caches(&mut decoded, &crate::jobs::JobCtx::new())?;
-        (decoded.imported, None)
+        (decoded.imported, None, decoded.native_pcraft)
     };
     if (s.batch_open.is_some() || s.batch_open_notices.is_some()) && r.preview_only {
         return Err(EngineError::Other(format!("{name}: only an embedded preview could be read; Batch cannot process it as the source")));
     }
     let mut doc = r.document;
     tag_exr_colorspace(s, &decode_name, &mut doc);
-    raw_defaults(s, &r.warnings, &mut doc);
+    if !native_pcraft {
+        raw_defaults(s, &r.warnings, &mut doc);
+    }
     let path = match template_name(s, name) {
         Some(untitled) => {
             doc.name = untitled;
