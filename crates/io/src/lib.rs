@@ -1348,7 +1348,9 @@ pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels:
             Ok(None) | Err(_) => Ok(None),
         };
     }
-    if svg::is_svg(bytes) || (named_svg && is_svg_input(name, bytes)) {
+    // A bzip2 or XZ signature gets the shared XCF probe before any SVG
+    // extension fallback. The generic registry does not recognize these wrappers.
+    if svg::is_svg(bytes) || (named_svg && import_compression(bytes).is_none() && is_svg_input(name, bytes)) {
         svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels).map(Some)
     } else {
         Ok(None)

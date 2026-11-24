@@ -61,6 +61,9 @@ fn modern_shared_wrapper_aliases_accept_original_bzip_and_xz_sources() {
             let result = crate::import_with_options_as("source.bin", &bytes, Some(ext), &ImportOptions::default()).unwrap();
             assert_eq!(result.document.size, photocraft_geom::Size::new(1, 1));
         }
+        let placed = crate::import_smart_object_source("renamed.svg", &bytes, 16).unwrap();
+        assert_eq!(placed.document.size, photocraft_geom::Size::new(1, 1));
+        assert!(placed.source_read_only);
     }
 }
 
