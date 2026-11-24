@@ -12,9 +12,11 @@ use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Text;
 use craft::ui::form::Field;
+use craft::ui::layout_components::Row;
 use craft::ui::patterns::preferences::PathSetting;
 use craft::ui::pickers::Select;
 use craft::ui::runtime::env::system_appearance;
+use craft::ui::sections::Section;
 use craft::ui::style::TypeRole;
 use craft::ui::text::{NumberField, TextField};
 use serde_json::{Value, json};
@@ -153,7 +155,7 @@ fn memory_percent_row(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
     let mut on = stored.is_some();
     let mut percent = Some(f64::from(stored.unwrap_or(70)));
     let (was_on, was) = (on, percent);
-    ui.horizontal(|ui| {
+    Row::new().show(ui, |ui, _| {
         Checkbox::new(Bind::bound(&mut on)).label(tl!("Memory Usage Percent")).show(ui);
         NumberField::new(tl!("Memory Usage Percent"), Bind::bound(&mut percent)).range(1.0..=95.0).unit("%").enabled(on).show(ui);
     });
@@ -207,7 +209,7 @@ impl PrefsCustom {
             Text::new(line.clone()).show(ui);
         }
         help(ui, tl!("Applies at next launch."));
-        egui::CollapsingHeader::new(tl!("Advanced")).show(ui, |ui| {
+        Section::new(tl!("Advanced")).initially_open(false).show(ui, |ui, _| {
             let backend: String = draft.get(GPU_BACKEND).unwrap_or_else(|| "auto".into());
             if let Some(next) = choose(ui, tl!("GPU Backend"), "graphics-backend", backend, &choices_of(GPU_BACKEND)) {
                 draft.set(GPU_BACKEND, &next);
@@ -328,7 +330,7 @@ fn scratch_disks_row(ui: &mut egui::Ui, draft: &mut SettingsDraft) {
         let on = disk.get("enabled").and_then(Value::as_bool).unwrap_or(false);
         let path = disk.get("path").and_then(Value::as_str).unwrap_or("").to_string();
         let path_key = format!("{SCRATCH_DISKS}[{i}].path");
-        ui.horizontal(|ui| {
+        Row::new().show(ui, |ui, _| {
             let mut next = on;
             Checkbox::new(Bind::bound(&mut next)).label(tl!("Enabled")).id_salt(("disk-enabled", i)).show(ui);
             if next != on {

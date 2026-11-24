@@ -231,7 +231,7 @@ impl PartialEq for CamTransform {
 }
 
 /// View-menu overlays.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, craft::ui::contract::MemoProps)]
 #[serde(default)]
 pub struct Extras {
     pub rulers: bool,
