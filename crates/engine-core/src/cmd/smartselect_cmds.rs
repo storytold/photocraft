@@ -465,29 +465,27 @@ const SOFT_EDGE_RAMP: (f64, f64) = (0.10, 0.55);
 /// coverage step before taking the square root, so distant taps don't light up clear pixels.
 const SLOPED_EDGE_RAMP: (f64, f64) = (1.0 / 1024.0, 0.70);
 
-/// The found mask is antialiased around 50% coverage. Rows at an axis-aligned boundary
-/// are uniform, or repeat the same mixed pattern beside only clear or only filled rows.
-/// At a sloped edge, the mixed rows shift or sit between both clear and filled rows.
-/// Probe beyond the filter taps so shallow slopes can show a change over several pixels.
+/// Look for a one-pixel step of the same boundary between adjacent rows or columns.
+/// A line with multiple transitions can straddle a hole or a narrow strip, so it
+/// cannot establish that a boundary continued into the next line.
 fn has_sloped_edge(at: &impl Fn(i32, i32) -> f64, x: i32, y: i32) -> bool {
-    const OFFSETS: [i32; 5] = [-4, -2, 0, 2, 4];
-    let mut clear_row = false;
-    let mut filled_row = false;
-    let mut mixed_row = None;
-    for dy in OFFSETS {
-        let row = OFFSETS.map(|dx| at(x.saturating_add(dx), y.saturating_add(dy)) >= 0.5);
-        match row.iter().filter(|covered| **covered).count() {
-            0 => clear_row = true,
-            n if n == OFFSETS.len() => filled_row = true,
-            _ => {
-                if mixed_row.is_some_and(|previous| previous != row) {
-                    return true;
-                }
-                mixed_row = Some(row);
+    const OFFSETS: [i32; 7] = [-3, -2, -1, 0, 1, 2, 3];
+    let rows = OFFSETS.map(|dy| OFFSETS.map(|dx| at(x.saturating_add(dx), y.saturating_add(dy)) >= 0.5));
+    let has_step = |lines: [[bool; OFFSETS.len()]; OFFSETS.len()]| {
+        let mut previous: Option<(usize, bool)> = None;
+        for line in lines {
+            let first = line[0];
+            let edge = line.iter().position(|covered| *covered != first).filter(|&i| line[i..].iter().all(|covered| *covered != first));
+            if let Some(i) = edge
+                && previous.is_some_and(|(prior, side)| side == first && prior.abs_diff(i) == 1)
+            {
+                return true;
             }
+            previous = edge.map(|i| (i, first));
         }
-    }
-    clear_row && filled_row && mixed_row.is_some()
+        false
+    };
+    has_step(rows) || has_step(std::array::from_fn(|column| rows.map(|row| row[column])))
 }
 
 /// Object Selection with Hard Edge off (#12855): `region` with the reference application's

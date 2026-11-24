@@ -341,6 +341,20 @@ fn soften_edge_preserves_the_profile_at_a_square_hole_corner() {
     assert_eq!(soft.at(9, 9), 0.0);
 }
 
+#[test]
+fn a_square_hole_near_an_outside_edge_keeps_the_same_corner_profile() {
+    let canvas = Rect::new(0, 0, 30, 30);
+    let hole = Rect::new(7, 7, 13, 13);
+    let softened = |bbox: Rect| {
+        let mask = (bbox.y0..bbox.y1).flat_map(|y| (bbox.x0..bbox.x1).map(move |x| if hole.contains(x, y) { 0 } else { 255 })).collect();
+        soften_edge(&Region { bbox, mask }, canvas)
+    };
+    // Moving the outside edge into the slope probe leaves the filter taps at this corner unchanged.
+    let near = softened(Rect::new(5, 5, 25, 25));
+    let far = softened(canvas);
+    assert_eq!(near.at(7, 7), far.at(7, 7));
+}
+
 /// Hard Edge on is left as it is (#12855): the tool is driven by a segmentation model, so the
 /// reference's own figures (rectangle 99,99,300,250 · 29651 · 700; disc 423,99,578,252 · 17305 ·
 /// 1569) are not a target, only the difference Hard Edge makes.
