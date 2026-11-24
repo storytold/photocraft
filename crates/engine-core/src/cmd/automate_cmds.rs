@@ -350,6 +350,31 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
             options.insert(k.into(), v.clone());
         }
     }
+    // The Errors dropdown (#13713): the choice becomes the policy Batch already reads, so a droplet
+    // saved without it keeps today's behaviour (go on after a failure, write no log).
+    match p.get("errors") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(mode)) => match mode.as_str() {
+            "stop" => {
+                options.insert("stopOnError".into(), json!(true));
+            }
+            "log" => {
+                options.insert("stopOnError".into(), json!(false));
+                // Type-checked where it is stored, the way Batch's own policy parse reads it: a run
+                // takes the saved value with `as_str`, so a number saved here would later write no
+                // log and report no error. `null` stays "not given", as elsewhere in this command.
+                match p.get("errorLog") {
+                    None | Some(Value::Null) => {}
+                    Some(path @ Value::String(_)) => {
+                        options.insert("errorLog".into(), path.clone());
+                    }
+                    Some(_) => return Err(bad(cmd, "\"errorLog\" must be a file path string")),
+                }
+            }
+            other => return Err(bad(cmd, format!("\"errors\" is \"stop\" or \"log\", not `{other}`"))),
+        },
+        Some(_) => return Err(bad(cmd, "\"errors\" must be \"stop\" or \"log\"")),
+    }
     // The dialog's Play checkboxes are saved with the droplet, which hands them to each run.
     for k in DROPLET_PLAY_OPTIONS {
         match p.get(k) {
@@ -467,17 +492,58 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // The Play options are saved with the droplet: Override Open makes a recorded Open read each
     // dropped input, and the two Suppress options open the inputs as Batch does with them.
-    // Include All Subfolders was applied above, where the dropped folders became files.
-    for key in ["quality", "overrideOpen", "suppressOpenOptions", "suppressWarnings"] {
+    // Include All Subfolders was applied above, where the dropped folders became files. The Errors
+    // dropdown's stopOnError goes with them, so a droplet stops or goes on as saved (#13713).
+    for key in ["quality", "overrideOpen", "stopOnError", "suppressOpenOptions", "suppressWarnings"] {
         if let Some(value) = opts.get(key) {
             bp[key] = value.clone();
         }
     }
+    // A droplet that logs errors writes the log itself, so its frame lines say Droplet (#13713).
+    // Batch is deliberately not given `errorLog`: its own log rules (#13665) stay untouched.
+    let error_log = opts.get("errorLog").and_then(Value::as_str).filter(|path| !path.trim().is_empty()).map(str::to_string);
     if let Some(called) = v.get("calledActions") {
         bp["calledActions"] = called.clone();
     }
     let r = s.execute("file.automate.batch", bp)?;
-    Ok(json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]}))
+    let mut result = json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]});
+    for key in ["stopped", "skipped"] {
+        if let Some(value) = r.get(key) {
+            result[key] = value.clone();
+        }
+    }
+    if let Some(log) = error_log {
+        let none = Vec::new();
+        let entries = crate::file_cmds::error_log_entries(r.get("errors").and_then(Value::as_array).unwrap_or(&none));
+        let bytes = crate::file_cmds::encode_droplet_error_log(entries.iter().map(|(file, error)| (file.as_str(), error.as_str())));
+        // The log may never replace a file of its own run: the same rule Batch applies to its log
+        // (#13665), checked here against the dropped inputs, every destination the run planned, and
+        // the droplet being run. The droplet file is in neither of the first two lists: a dropped folder
+        // only contributes images and Batch never writes a result under the droplet's name, so a
+        // droplet saved with its log aimed at its own file replaced its definition and the next run
+        // of it could no longer be read (#13713 review). The results the run returned in `files` are
+        // not enough either: an entry that failed has a planned output Batch still protected its log
+        // against, and Batch reports that plan in `plannedOutputs` so the guard here can use it too
+        // (#13713 review).
+        let names = |key: &str| -> Vec<String> {
+            r.get(key).and_then(Value::as_array).map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+        };
+        let written: Vec<String> = names("files");
+        let planned: Vec<String> = names("plannedOutputs");
+        let protected: Vec<&str> = inputs
+            .iter()
+            .map(String::as_str)
+            .chain(written.iter().map(String::as_str))
+            .chain(planned.iter().map(String::as_str))
+            .chain(std::iter::once(path))
+            .collect();
+        if protected.iter().any(|file| crate::file_cmds::same_destination(&log, file)) {
+            result["errorLogError"] = json!(crate::file_cmds::ERROR_LOG_CONFLICT);
+        } else if let Err(error) = write_file(&log, &bytes) {
+            result["errorLogError"] = json!(error.to_string());
+        }
+    }
+    Ok(result)
 }
 
 /// The images a dropped folder contributes: its own, sorted by name, or with Include All
@@ -679,7 +745,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"overrideOpen":bool?,"includeSubfolders":bool?,"suppressOpenOptions":bool?,"suppressWarnings":bool? (the Play options, saved in the droplet and used by each run),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"overrideOpen":bool?,"includeSubfolders":bool?,"suppressOpenOptions":bool?,"suppressWarnings":bool? (the Play options, saved in the droplet and used by each run),"errors":"stop|log"? (saved with the droplet as Batch's stopOnError and errorLog: stop ends a run at the first failing file, log goes on and writes the file),"errorLog":path? (with errors "log": the log the run writes; blank or absent writes none),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
@@ -687,7 +753,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors} (a folder gives its own images, or with the droplet's includeSubfolders also its subfolders' depth first; results are written flat into output, a later one replacing an earlier one of the same name)"##,
+            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (a folder gives its own images, or with the droplet's includeSubfolders also its subfolders' depth first; results are written flat into output, a later one replacing an earlier one of the same name; an input whose output name was already written in the run goes to errors; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet, refused through errorLogError when the path names a dropped input, the droplet file or any output this run planned, including one whose entry failed)"##,
             native,
             run_droplet
         ),
@@ -718,6 +784,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "droplet_errors_tests.rs"]
+mod droplet_errors_tests;
 #[cfg(test)]
 #[path = "droplet_play_options_tests.rs"]
 mod droplet_play_options_tests;

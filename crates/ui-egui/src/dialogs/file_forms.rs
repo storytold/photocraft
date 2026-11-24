@@ -123,6 +123,25 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
     ]);
     rows.push(Param::new("output", tl!("Output"), ParamKind::text(format!("{dir}/droplet-output"))).browse(PathKind::Folder));
     rows.push(Param::new("format", tl!("Format"), ParamKind::choice(ids(&["same", "png", "jpg", "psd", "tiff"]), Some("same".into()))));
+    // Errors (#13713), worded as the reference application words its two entries and in its order,
+    // opening on Stop for Errors. The ids are the words `create_droplet` turns into Batch's own
+    // `stopOnError` and `errorLog`, so a droplet saved without this key keeps today's behaviour.
+    rows.push(Param::new(
+        "errors",
+        tl!("Errors"),
+        ParamKind::choice(
+            vec![("stop".to_owned(), Label::from(tl!("Stop for Errors").to_string())), ("log".to_owned(), Label::from(tl!("Log Errors to File").to_string()))],
+            Some("stop".to_owned()),
+        ),
+    ));
+    // Save As… is greyed with Stop for Errors and opens the log's save dialog with Log Errors to
+    // File; the chosen path stays in its field.
+    rows.push(
+        Param::new("errorLog", tl!("Save As…"), ParamKind::text(""))
+            .browse(PathKind::SaveFile)
+            .enabled_when("errors", "log")
+            .tooltip(tl!("Specify name and choose location for error log file")),
+    );
     Ok(open_form(app, CREATE_DROPLET, tl!("Create Droplet"), rows))
 }
 

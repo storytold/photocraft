@@ -79,3 +79,84 @@ fn create_droplet_uses_the_action_selected_in_the_form() {
     assert!(app.framework.dialogs.cancel_by_id(&ctx, id));
     assert!(!cancelled.exists());
 }
+
+/// An app with one saved action, selected in the Actions panel: what Create Droplet asks for.
+fn droplet_app() -> Box<PhotocraftApp> {
+    let mut app = app();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
+    app
+}
+
+/// #13713: the form carries the reference application's Errors dropdown, opening on Stop for Errors
+/// and offering only its two entries.
+#[test]
+fn create_droplet_opens_on_stop_for_errors_offering_the_two_reference_choices() {
+    let mut app = droplet_app();
+    let ctx = app.ctx().clone();
+    let id = open_create_droplet(&mut app).unwrap();
+    let hosted = app.framework.dialogs.get_by_id::<HostedParamDialog>(id).unwrap();
+    assert_eq!(hosted.fields().text("errors"), Some("stop"), "the dropdown opens on Stop for Errors");
+    assert_eq!(hosted.fields().text("errorLog"), Some(""), "no log is chosen at first");
+    set(&mut app, &ctx, id, "errors", json!("log"));
+    assert!(app.framework.dialogs.set_json_field(&ctx, id, "errors", json!("quiet")).is_err(), "only the two reference choices are offered");
+    assert_eq!(app.framework.dialogs.get_by_id::<HostedParamDialog>(id).unwrap().fields().text("errors"), Some("log"), "the choice took");
+}
+
+/// #13713: OK stores the choice in the droplet: Stop for Errors as `stopOnError`, and Log Errors to
+/// File with the path Save As… chose.
+#[test]
+fn create_droplet_ok_stores_the_errors_choice_in_the_droplet() {
+    let mut app = droplet_app();
+    let ctx = app.ctx().clone();
+    let dir = tempfile::tempdir().unwrap();
+    let saved_at = |app: &mut PhotocraftApp, name: &str, setup: &dyn Fn(&mut PhotocraftApp, &egui::Context, DialogId)| -> Value {
+        let path = dir.path().join(name).to_string_lossy().into_owned();
+        let id = open_create_droplet(app).unwrap();
+        set(app, &ctx, id, "path", json!(path));
+        setup(app, &ctx, id);
+        crate::dialogs::confirm(app, &ctx, id).unwrap();
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap()
+    };
+    let v = saved_at(&mut app, "stop.pcdroplet", &|_, _, _| {});
+    assert_eq!(v["options"]["stopOnError"], json!(true), "the form's default Stop for Errors is stored");
+    assert!(v["options"].get("errorLog").is_none(), "Stop for Errors stores no log path");
+    let log = dir.path().join("log").join("droplog.txt").to_string_lossy().into_owned();
+    let v = saved_at(&mut app, "log.pcdroplet", &|app, ctx, id| {
+        set(app, ctx, id, "errors", json!("log"));
+        set(app, ctx, id, "errorLog", json!(log));
+    });
+    assert_eq!(v["options"]["errorLog"], json!(log), "the chosen log path rides in the droplet");
+    assert_eq!(v["options"]["stopOnError"], json!(false), "a logging droplet goes on after a failure");
+}
+
+/// #13713: Save As… is greyed while Errors shows Stop for Errors and goes live with Log Errors to
+/// File; the Output row's Browse stays live either way.
+#[test]
+fn create_droplet_greys_save_as_until_log_errors_to_file_is_picked() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    let app = droplet_app();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000.0, 800.0))
+        .with_max_steps(64)
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app: &mut Box<PhotocraftApp>| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    open_create_droplet(h.state_mut()).unwrap();
+    h.run_steps(4);
+    // The rows in form order: Output's Browse…, then Save As…'s.
+    let browses = |h: &Harness<'_, Box<PhotocraftApp>>| h.query_all_by_label("Browse…").map(|node| node.accesskit_node().is_disabled()).collect::<Vec<bool>>();
+    assert_eq!(browses(&h), vec![false, true], "Save As… is greyed with Stop for Errors, Output stays live");
+    let pick = |h: &mut Harness<'_, Box<PhotocraftApp>>, caption: &str| {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Errors").click();
+        h.run_steps(2);
+        h.get_by_label(caption).click();
+        h.run_steps(2);
+    };
+    pick(&mut h, "Log Errors to File");
+    assert_eq!(browses(&h), vec![false, false], "Save As… opens the log's save dialog with Log Errors to File");
+    pick(&mut h, "Stop for Errors");
+    assert_eq!(browses(&h), vec![false, true], "and is greyed again back on Stop for Errors");
+}
