@@ -1,4 +1,4 @@
-//! Canvas context menus for the selection tools, the Pen, the Line tool in Shape mode, the Zoom and
+//! Canvas context menus for the selection tools, the Pen, the shape tools, the Zoom and
 //! Hand tools, text being edited with a Type tool, committed type under a Type tool, the pasteboard
 //! (outside the image), a guide, a pending crop, the layer list and the painting tools' mode list.
 //! The menu is state in `UiState::canvas_tool_menu`; [`run`] shows it on the framework's menu layer
@@ -811,19 +811,59 @@ fn shape_layer_row(command: &str) -> bool {
     )
 }
 
-/// Shape tools whose Shape-mode right-click opens [`SHAPE_MENU`] (#13249). The Ellipse (#13232)
-/// and the other shape tools join here once measured.
+/// Shape tools whose right-click opens [`SHAPE_MENU`]: the Line (#13249), the Rectangle (#13341)
+/// and the Triangle (#13367). The other shape tools join here once measured.
 pub fn shape_tool_menu(tool: Tool) -> bool {
-    matches!(tool, Tool::Line)
+    matches!(tool, Tool::Line | Tool::Rectangle | Tool::Triangle)
 }
 
-/// Does a right-click with a shape tool open its menu? Only where measured: Shape mode, over
-/// a pixel or shape layer. Path and Pixels mode, and other layer kinds, keep opening nothing.
-fn shape_menu_measured(app: &PhotocraftApp) -> bool {
-    app.ui.tool_options.shape_mode == craft::draw::ui::VectorMode::Shape
-        && app.session.active().is_some_and(|st| {
-            st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Raster(_) | LayerContent::Shape(_)))
-        })
+/// Shape tools whose menu was measured in Path mode too, over a Work Path with a pixel layer
+/// active: the Rectangle (#13341) and the Triangle (#13367).
+fn shape_menu_in_path_mode(tool: Tool) -> bool {
+    matches!(tool, Tool::Rectangle | Tool::Triangle)
+}
+
+/// Does a right-click with shape tool `tool` at document point `doc` open its menu? Only where
+/// measured: in Shape mode over a pixel or shape layer, and for [`shape_menu_in_path_mode`]'s tools
+/// in Path mode over a pixel layer with the Work Path shown. Pixels mode, Path mode elsewhere and
+/// other layer kinds keep opening nothing; so does the Rectangle's right-click on a shape or on a
+/// corner radius widget, which #13341 left unmeasured.
+fn shape_menu_measured(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
+    use craft::draw::ui::VectorMode;
+    let Some(st) = app.session.active() else { return false };
+    let Some(layer) = st.active_layer.and_then(|id| st.doc.layer(id)) else { return false };
+    let pixel = matches!(layer.content, LayerContent::Raster(_));
+    let opens = match app.ui.tool_options.shape_mode {
+        VectorMode::Shape => pixel || matches!(layer.content, LayerContent::Shape(_)),
+        VectorMode::Path => shape_menu_in_path_mode(tool) && pixel && crate::vector_ui::active_path_name(app).as_deref() == Some("work"),
+        _ => false,
+    };
+    opens && !(tool == Tool::Rectangle && rectangle_keeps_right_click(app, doc))
+}
+
+/// Is document point `doc` on a shape (as Path Selection picks one) or on a corner radius widget?
+/// The Rectangle's right-click there wasn't measured (#13341), so it opens nothing, as before. The
+/// widgets sit inside the corners of the selected live shapes (`shape_controls::corner_targets`), so
+/// a point inside one of those outlines counts as on a widget.
+fn rectangle_keeps_right_click(app: &PhotocraftApp, doc: [f64; 2]) -> bool {
+    if !doc.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    let tol = crate::path_components::press_tolerance(app);
+    let on_shape = app.session.active().is_some_and(|st| crate::vector_ui::pick_shape_at(&st.doc, doc, tol).is_some());
+    on_shape || crate::shape_controls::corner_targets(app).iter().any(|t| inside_corners(&t.corners, doc))
+}
+
+/// Is `p` inside the polygon through the corners' vertices (even-odd)?
+fn inside_corners(corners: &[craft::draw::ui::corner::CornerPoint], p: [f64; 2]) -> bool {
+    let mut inside = false;
+    for (i, c) in corners.iter().enumerate() {
+        let (a, b) = (c.vertex, corners[(i + 1) % corners.len()].vertex);
+        if (a.y > p[1]) != (b.y > p[1]) && p[0] < (b.x - a.x) * (p[1] - a.y) / (b.y - a.y) + a.x {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 /// The label a row shows, untranslated. The Pen's transform row names what it acts on, as in
@@ -1536,7 +1576,7 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
             if tool == Tool::RedEye && !red_eye_measured(app, Some(doc)) {
                 return false;
             }
-            if shape_tool_menu(tool) && !shape_menu_measured(app) {
+            if shape_tool_menu(tool) && !shape_menu_measured(app, tool, doc) {
                 return false;
             }
             capture(app, &mut menu, doc, point);
@@ -1910,6 +1950,12 @@ mod convert_point_menu_tests;
 
 #[cfg(test)]
 mod object_selection_menu_tests;
+
+#[cfg(test)]
+mod rectangle_menu_tests;
+
+#[cfg(test)]
+mod triangle_menu_tests;
 
 #[cfg(test)]
 mod line_menu_tests;
