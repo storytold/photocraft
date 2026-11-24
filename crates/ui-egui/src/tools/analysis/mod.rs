@@ -76,6 +76,9 @@ pub struct AnalysisUi {
     pub log_selected: Selection<u64>,
     /// Notes panel: the note shown (index).
     pub note_selected: Option<usize>,
+    /// A note was just made with a click: the panel's text field takes the keyboard when it next shows the note.
+    #[serde(skip)]
+    pub focus_note_text: bool,
     /// Note tool options: author of new notes.
     pub note_author: String,
     /// Note tool options: colour of new notes.
@@ -89,6 +92,7 @@ impl Default for AnalysisUi {
         Self {
             log_selected: Selection::default(),
             note_selected: None,
+            focus_note_text: false,
             note_author: String::new(),
             note_color: photocraft_engine::notes_cmds::DEFAULT_NOTE_COLOR,
             use_measurement_scale: false,
@@ -173,9 +177,13 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             Ok(doc) => app.pick_file_bytes(move |app, name, bytes| {
                 app.refocus(doc)?;
                 let r = photocraft_engine::notes_cmds::import_notes_from(&mut app.session, &name, &bytes).map_err(|e| e.to_string());
-                if r.is_ok() {
+                if let Ok(v) = &r {
                     let _ = crate::panel_docking::show_panel(app, NOTES, Some(true));
                     app.sync_views();
+                    // Notes whose icon landed off the canvas stay there; the alert says so (#13914).
+                    if v["outside"] == json!(true) {
+                        crate::dialogs::alerts::alert(app, tl!("Some notes are placed outside the canvas."));
+                    }
                 }
                 r
             }),
@@ -206,6 +214,7 @@ pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Val
     let params = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": a.note_color});
     let result = app.run("notes.add", params)?;
     app.ui.analysis.note_selected = result["index"].as_u64().map(|v| v as usize);
+    app.ui.analysis.focus_note_text = app.ui.analysis.note_selected.is_some();
     let _ = crate::panel_docking::show_panel(app, NOTES, Some(true));
     app.ui.view.show.notes = true;
     Ok(result)

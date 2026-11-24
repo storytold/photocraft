@@ -33,13 +33,19 @@ mod app_dirs;
 mod app_icon;
 #[cfg(target_os = "macos")]
 mod apple_events;
+#[cfg(test)]
+mod build_channel;
+mod build_flavor;
 mod caps_lock;
 mod crash_guard;
 mod cursor;
 mod gpu_startup;
 mod launch_args;
+mod launch_profile;
 #[cfg(target_os = "macos")]
 mod mac_window;
+mod process_identity;
+mod profile_root;
 // Pure logic is tested on every platform; only Linux runs the check.
 #[cfg(not(target_arch = "wasm32"))]
 mod external_svg;
@@ -47,6 +53,7 @@ mod external_svg;
 mod linux_libs;
 mod logging;
 mod monitor_profile;
+mod nightly_session;
 mod photoshop_settings;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
@@ -69,7 +76,7 @@ use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::Prefix;
 use photocraft_ui_egui::window_policy::{self, Backend, Frame, TitleBarPref};
 
-use photocraft_ui_egui::os_window::APP_ID;
+use photocraft_ui_egui::os_window;
 
 /// The smallest the main window may be, in points.
 const MIN_WINDOW_SIZE: [f32; 2] = [760.0, 480.0];
@@ -83,8 +90,9 @@ fn title_bar_pref(prefs: &photocraft_engine::prefs::Preferences) -> TitleBarPref
 
 /// The automation roots: `--automation-read-root` / `--automation-write-root` (or their
 /// variables) win; a direction without one takes Preferences › AI Integrations' folder, and with
-/// that empty too the default agent folder `Documents/ArtCraft/Agents/PhotoCraft`, created when
-/// first used (`AgentSettings::folders`). A flag's
+/// that empty too the channel's default agent folder: stable uses
+/// `Documents/ArtCraft/Agents/PhotoCraft`; Nightly uses its private profile's `AgentFiles`.
+/// It is created only when first used (`AgentSettings::folders_with`). A flag's
 /// root that can't be opened stops the launch (exit status 2) as before. A preference's root that
 /// can't be opened, or isn't an absolute path (it would depend on the folder the app was started
 /// from), is left out, so that direction fails closed, and the warning says why: a folder moved
@@ -95,7 +103,20 @@ fn automation_workspace(
     flags: &photocraft_automation::args::AutomationArgs,
     prefs: &craft::automation::agents::AgentSettings,
 ) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
-    automation_workspace_in(flags, prefs, craft::control::agents::default_folder(AGENT_APP_NAME).as_deref())
+    automation_workspace_for_profile(flags, prefs, launch_profile::current(), || craft::control::agents::default_folder(AGENT_APP_NAME))
+}
+
+fn automation_workspace_for_profile(
+    flags: &photocraft_automation::args::AutomationArgs,
+    prefs: &craft::automation::agents::AgentSettings,
+    profile: &launch_profile::Profile,
+    stable_default: impl FnOnce() -> Option<std::path::PathBuf>,
+) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
+    let default = match profile.root() {
+        Some(root) => Some(profile_root::agent_directory(root).map_err(photocraft_automation::AutomationError::BadRequest)?),
+        None => stable_default(),
+    };
+    automation_workspace_in(flags, prefs, default.as_deref())
 }
 
 /// The app's name in its default agent folder, `Documents/ArtCraft/Agents/PhotoCraft`.
@@ -163,8 +184,12 @@ fn control_port_for(cli: Option<u16>, prefs: &photocraft_engine::prefs::Integrat
 /// (`main` turns `centered` off, #4826). Wayland compositors place windows themselves.
 fn native_options(frame: &Frame) -> eframe::NativeOptions {
     let viewport = egui::ViewportBuilder::default().with_icon(app_icon::viewport_icon(std::env::current_exe().ok().as_deref()));
-    let viewport =
-        viewport.with_app_id(APP_ID).with_title("PhotoCraft").with_inner_size([1440.0, 900.0]).with_min_inner_size(MIN_WINDOW_SIZE).with_drag_and_drop(true);
+    let viewport = viewport
+        .with_app_id(os_window::app_id())
+        .with_title(os_window::name_for(os_window::identity()))
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size(MIN_WINDOW_SIZE)
+        .with_drag_and_drop(true);
     eframe::NativeOptions {
         viewport: window_policy::apply(viewport, frame),
         centered: true,
@@ -227,18 +252,19 @@ fn claim_single_instance(
     mut launch_options: Vec<launch_args::PerProcess>,
 ) -> std::ops::ControlFlow<(), Option<single_instance::Primary>> {
     use std::ops::ControlFlow::{Break, Continue};
-    let new_instance_env = std::env::var("PHOTOCRAFT_NEW_INSTANCE").ok();
+    let nightly = launch_profile::current().is_nightly();
+    let new_instance_env = if nightly { None } else { std::env::var("PHOTOCRAFT_NEW_INSTANCE").ok() };
     // A variable documented as the equivalent of a per-launch flag counts as that flag: a
     // launch that sets only `PHOTOCRAFT_PRESENT_MODE` (say) has per-process options too, so it
     // keeps its own process instead of handing its files over and being ignored.
     launch_options.extend_from_slice(&single_instance::env_launch_options());
     let context = single_instance::LaunchContext {
-        per_user_settings: app_dirs::current().mode == app_dirs::Mode::Platform,
-        new_instance_flag: new_instance,
+        per_user_settings: launch_profile::current().is_nightly() || app_dirs::current().mode == app_dirs::Mode::Platform,
+        new_instance_flag: new_instance && !nightly,
         new_instance_env: new_instance_env.as_deref(),
-        control,
+        control: control && !nightly,
         unreadable_paths,
-        launch_options: &launch_options,
+        launch_options: if nightly { &[] } else { &launch_options },
     };
     match (single_instance::skip_reason(&context), services::config_dir()) {
         (Some(reason), _) => {
@@ -390,7 +416,66 @@ fn write_start_marker(sentinel: &gpu_startup::SharedSentinel, plan: &gpu_startup
     }
 }
 
+fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
+    process_identity::initialize(build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1, os_window::id_for(os_window::LaunchIdentity::NightlyV1))
+}
+
+fn report_launch_profile_error(error: &str) {
+    eprintln!("PhotoCraft launch profile: {error}");
+    let desktop_session = cfg!(windows)
+        || cfg!(target_os = "macos")
+        || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
+    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+        if let Err(error) = initialize_nightly_process_identity() {
+            eprintln!("PhotoCraft launch profile: {error}");
+            return;
+        }
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        let _ = rfd::MessageDialog::new()
+            .set_title("PhotoCraft Nightly")
+            .set_description(error)
+            .set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
+}
+
+/// Select the immutable launch profile before any startup service or side effect.
+fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
+    // The trusted Launcher protocol is decided before logger/crash/update/font/prefs access.
+    let argv: Vec<_> = std::env::args_os().skip(1).collect();
+    // Plain `--version`, or the Launcher's `--launch-profile nightly-v1 --profile-root <dir>
+    // --version`: answered before root validation, process identity, IPC or any window.
+    if build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1 && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv)) {
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), "PhotoCraft {}", build_flavor::version(build_flavor::COMPILED, env!("PHOTOCRAFT_BUILT_VERSION")));
+        return None;
+    }
+    let early = launch_profile::parse_startup(argv, std::env::var_os("PHOTOCRAFT_GPU_STARTUP_FAILURE").is_some())
+        .and_then(|launch| {
+            build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
+            initialize_nightly_process_identity().map_err(|error| error.to_string())?;
+            Ok(launch)
+        })
+        .and_then(|launch| {
+            launch_profile::prepare(launch, |root| launch_profile::validate_root(root, |key| std::env::var_os(key), std::env::current_exe().ok().as_deref()))
+        })
+        .unwrap_or_else(|error| {
+            report_launch_profile_error(&error);
+            std::process::exit(2)
+        });
+    let identity = if early.profile.is_nightly() { os_window::LaunchIdentity::NightlyV1 } else { os_window::LaunchIdentity::Stable };
+    if let Err(error) = launch_profile::install(early.profile).and_then(|()| os_window::select_identity(identity)) {
+        report_launch_profile_error(&error);
+        std::process::exit(2);
+    }
+
+    Some(early.args)
+}
+
 fn main() -> eframe::Result {
+    let Some(arguments) = prepare_launch() else { return Ok(()) };
+
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
     photocraft_engine::malloc_tuning::apply();
@@ -398,7 +483,9 @@ fn main() -> eframe::Result {
     let logger = logging::install();
     crash_guard::install_hook();
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(done) = craft_update::self_update::finish(&photocraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if !launch_profile::current().is_nightly()
+        && let Some(done) = craft_update::self_update::finish(&photocraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>())
+    {
         if let Err(e) = done {
             eprintln!("PhotoCraft update helper failed: {e}");
             std::process::exit(1);
@@ -409,10 +496,10 @@ fn main() -> eframe::Result {
     // The system font scan can take seconds (minutes on some Macs): run it off the UI thread.
     photocraft_ui_egui::type_tool::warm_fonts();
     // `--help` and `--version` print to standard output and exit 0. A usage error (an unknown
-    // option, a missing or bad value, a bad PHOTOCRAFT_CONTROL_PORT: issues #701, #6429, #6431)
+    // option, a missing or bad value, a bad PHOTOCRAFT_CONTROL_PORT for Stable: issues #701, #6429, #6431)
     // names the argument on standard error and exits 2, so a launcher sees the failure. Neither
     // panics when the stream is closed or a pipe (`photocraft --help | head -1`).
-    let launch = launch_args::parse(launch_args::command(), std::env::args_os().skip(1)).unwrap_or_else(|e| e.exit());
+    let launch = launch_args::parse(launch_args::command_for_profile(launch_profile::current().is_nightly()), arguments).unwrap_or_else(|e| e.exit());
     let launch_args::FileNames { openable: files, unreadable: unreadable_paths } = launch.file_names();
     let launch_args::LaunchArgs {
         files: _,
@@ -453,7 +540,12 @@ fn main() -> eframe::Result {
     let _ = (new_instance, &launch_options);
 
     // Bind and authenticate the authorized control listener before display/GPU initialization.
-    let ControlSetup { control, warning: control_warning } = control_setup(&prefs.integrations, control_port, auth, &automation);
+    let ControlSetup { control, warning: control_warning } = if launch_profile::current().is_nightly() {
+        // No inherited stable token file/Launcher agent switch is consulted by this first protocol.
+        ControlSetup { control: None, warning: None }
+    } else {
+        control_setup(&prefs.integrations, control_port, auth, &automation)
+    };
 
     #[cfg(target_os = "linux")]
     let native_session = linux_libs::session_from_env(|name| std::env::var(name).ok());
@@ -551,8 +643,35 @@ fn main() -> eframe::Result {
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
     let started_sentinel = sentinel.clone();
+    // After primary IPC claim, before entering the window loop. Stable and secondaries do not
+    // own a Nightly record. No document names, paths or diagnostic payload is collected.
+    let (nightly_session, session_health_warning) = match nightly_session::Session::begin_with_health(
+        launch_profile::current().root(),
+        photocraft_engine::build_info::VERSION,
+        photocraft_engine::build_info::git_sha(),
+    ) {
+        Ok(state) => state,
+        Err(error) => {
+            log::warn!("Nightly session health is unavailable: {error}");
+            (None, true)
+        }
+    };
+    let previous_nightly_unclean = nightly_session.as_ref().is_some_and(nightly_session::Session::previous_unclean);
+    // Set once a window has posted the interruption notice; until then the record must survive.
+    let unclean_notice_shown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let notice_shown_in_callback = unclean_notice_shown.clone();
+    let nightly_session: nightly_session::Shared = std::sync::Arc::new(std::sync::Mutex::new(nightly_session));
+    // The app's exit hook is the controlled return on macOS, where every quit ends the process
+    // inside AppKit's terminate (craft::quit) and `run_native` never returns. Elsewhere the
+    // return path below finishes, as before.
+    #[cfg(target_os = "macos")]
+    let finish_at_exit = {
+        let shared = nightly_session.clone();
+        let shown = unclean_notice_shown.clone();
+        move || nightly_session::finish_once(&shared, shown.load(std::sync::atomic::Ordering::Relaxed))
+    };
     let result = eframe::run_native(
-        "PhotoCraft",
+        os_window::name_for(os_window::identity()),
         options,
         Box::new(move |cc| {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -683,21 +802,24 @@ fn main() -> eframe::Result {
             // switch (Settings › AI agents) is the one consent; without it, as before, a Control
             // Port saved in the preferences. The launch flags (`--control`) manage the connection
             // for the whole run instead.
-            app.services.agent_switch = Some(craft::automation::agents::AgentSwitch::watch(photocraft_automation::agent_link::LAUNCHER_APP_ID, {
-                let ctx = cc.egui_ctx.clone();
-                move || ctx.request_repaint()
-            }));
-            let link = if let Some((listener, token, _)) = control {
-                let host = craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx);
-                let (requests, server) = craft::automation::server::serve(listener, token, host)?;
-                eprintln!("photocraft: control server listening on {}", server.addr);
-                app = app.with_control(requests);
-                craft::automation::agents::AgentLink::from_launch(server)
-            } else {
-                app.services.agent_automation = Some(Box::new(services::agent_automation));
-                craft::automation::agents::AgentLink::new(services::config_dir(), photocraft_engine::build_info::long_version())
-            };
-            app.services.agent_link = Some(link);
+            if !launch_profile::current().is_nightly() {
+                app.services.agent_switch = Some(craft::automation::agents::AgentSwitch::watch(photocraft_automation::agent_link::LAUNCHER_APP_ID, {
+                    let ctx = cc.egui_ctx.clone();
+                    move || ctx.request_repaint()
+                }));
+                let link = if let Some((listener, token, _)) = control {
+                    let host = craft::ui::runtime::windows::WindowHost::of(&cc.egui_ctx);
+                    let (requests, server) = craft::automation::server::serve(listener, token, host)?;
+                    eprintln!("photocraft: control server listening on {}", server.addr);
+                    app = app.with_control(requests);
+                    craft::automation::agents::AgentLink::from_launch(server)
+                } else {
+                    app.services.agent_automation = Some(Box::new(services::agent_automation));
+                    craft::automation::agents::AgentLink::new(services::config_dir(), photocraft_engine::build_info::long_version())
+                };
+                app.services.agent_link = Some(link);
+            }
+
             #[cfg(target_os = "macos")]
             {
                 app.services.os_events = Some(apple_events.connect(&cc.egui_ctx));
@@ -754,6 +876,30 @@ fn main() -> eframe::Result {
                 let lines = unreadable_paths.iter().map(|p| i18n::fmt(line, &[("path", p.as_str())])).collect();
                 photocraft_ui_egui::notices::post(&mut app, i18n::t("Could not open"), lines, craft::theme::variant::Tone::Bad, None);
             }
+            if previous_nightly_unclean || session_health_warning {
+                use photocraft_ui_egui::i18n;
+                let message = if previous_nightly_unclean {
+                    i18n::t(
+                        "The previous PhotoCraft Nightly session did not finish normally. You can report a problem from About. No diagnostics have been sent.",
+                    )
+                } else {
+                    i18n::t(
+                        "PhotoCraft Nightly could not record session health in its private profile. You can still edit, but abnormal-exit detection is unavailable.",
+                    )
+                };
+                photocraft_ui_egui::notices::post(
+                    &mut app,
+                    i18n::t("PhotoCraft Nightly"),
+                    vec![message.to_owned()],
+                    craft::theme::variant::Tone::Neutral,
+                    None,
+                );
+                notice_shown_in_callback.store(previous_nightly_unclean, std::sync::atomic::Ordering::Relaxed);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                app.services.at_exit = Some(Box::new(finish_at_exit));
+            }
             // Portable marker found but its data folder isn't writable (#228): say where settings went.
             if let Some(w) = &app_dirs::current().warning {
                 photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], craft::theme::variant::Tone::Neutral, None);
@@ -766,6 +912,12 @@ fn main() -> eframe::Result {
             Ok(app)
         }),
     );
+    // This is a controlled return, even for a handled startup error or CPU relaunch. Release
+    // health ownership BEFORE primary IPC, so a successor never observes a stale busy owner.
+    // A renderer failure before the window (and so before the CPU retry) has not shown an
+    // earlier interruption: keep that record so the retry, or the next start, still reports it.
+    // On macOS a window that was created has already finished in its exit hook; this is then a no-op.
+    nightly_session::finish_once(&nightly_session, unclean_notice_shown.load(std::sync::atomic::Ordering::Relaxed));
     // The window is gone: refuse further files and free the lock, so a launch that is waiting (or
     // the CPU-compatibility relaunch below) becomes the primary instead of handing its files to a
     // process that is exiting.
@@ -1100,6 +1252,55 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[test]
+    fn nightly_agent_workspace_uses_its_private_profile_not_stable_documents() {
+        let dir = temp_dir("nightly-agent-roots");
+        let private = dir.join("nightly profile");
+        let stable = dir.join("redirected Documents/ArtCraft/Agents/PhotoCraft");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::create_dir_all(&stable).unwrap();
+        std::fs::write(stable.join("existing-document"), b"stable document bytes").unwrap();
+        let profile = super::launch_profile::Profile::NightlyV1(private.clone());
+        let (ws, warning) = super::automation_workspace_for_profile(&flags(None, None), &craft::automation::agents::AgentSettings::default(), &profile, || {
+            panic!("Nightly must never consult the stable agent-folder fallback")
+        })
+        .unwrap();
+        assert_eq!(warning, None);
+        let canonical_private = std::fs::canonicalize(&private).unwrap();
+        assert!(ws.read_folders().iter().all(|p| p.starts_with(&canonical_private)));
+        assert!(ws.write_folder().unwrap().starts_with(&canonical_private));
+        ws.write("nightly-document", b"nightly document bytes").unwrap();
+        assert_eq!(ws.read("nightly-document").unwrap(), b"nightly document bytes");
+        assert_eq!(std::fs::read(stable.join("existing-document")).unwrap(), b"stable document bytes");
+        assert_eq!(std::fs::read_dir(&stable).unwrap().count(), 1);
+        drop(ws);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stable_agent_workspace_preserves_the_resolved_default_folder() {
+        let dir = temp_dir("stable-agent-roots");
+        let stable = dir.join("redirected Documents/ArtCraft/Agents/PhotoCraft");
+        let (ws, warning) = super::automation_workspace_for_profile(
+            &flags(None, None),
+            &craft::automation::agents::AgentSettings::default(),
+            &super::launch_profile::Profile::Stable,
+            || Some(stable.clone()),
+        )
+        .unwrap();
+        assert_eq!(warning, None);
+        // These accessors preserve the configured spelling, not Windows' canonical
+        // verbatim prefix or expanded short names. The held capability still opens it.
+        assert_eq!(ws.read_folders(), vec![stable.clone()]);
+        assert_eq!(ws.write_folder(), Some(stable.clone()));
+        ws.write("stable-document", b"stable document bytes").unwrap();
+        assert_eq!(std::fs::read(stable.join("stable-document")).unwrap(), b"stable document bytes");
+        assert_eq!(ws.read("stable-document").unwrap(), b"stable document bytes");
+        assert_eq!(ws.read_with_save_path("stable-document").unwrap().1.as_deref(), Some("stable-document"));
+        drop(ws);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Empty preferences fall back to the default agent folder, created when first used, for
     /// both directions (one shared capability); a flag or the person's own folder still wins.
     #[test]
@@ -1179,7 +1380,7 @@ mod tests {
     fn the_desktop_entry_names_the_window_class() {
         let entry = include_str!("../../../packaging/linux/ai.storyteller.photocraft.desktop");
         let class = entry.lines().find_map(|line| line.strip_prefix("StartupWMClass="));
-        assert_eq!(class, Some(super::APP_ID));
+        assert_eq!(class, Some(super::os_window::APP_ID));
     }
 
     /// Both flatpak manifests build with the craft-i18n commit `craft-i18n.rev` pins: CI and

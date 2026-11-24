@@ -625,7 +625,7 @@ pub(super) fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(bad("path.stroke", format!("unknown tool `{o}` ({})", tools.join("|"))));
         }
     }
-    crate::brush_cmds::validate_brush(&brush, "path.stroke")?;
+    crate::brush_defs::validate_brush(&brush, "path.stroke")?;
     let lines = vector::flatten_path(&path, 0.1);
     let id = layer_id(s, p)?;
     let bg = s.tools.background;

@@ -268,6 +268,9 @@ impl eframe::App for PhotocraftApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.close_control();
+        if let Some(at_exit) = self.services.at_exit.take() {
+            at_exit();
+        }
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -278,6 +281,8 @@ impl eframe::App for PhotocraftApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
         self.framework_before_input(ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::text::installed_fonts::on_input(raw_input);
         if let Some(tablet_poll) = self.services.tablet_poll.as_mut() {
             tablet_poll(raw_input.focused);
         }
@@ -351,3 +356,6 @@ mod apply_data_set_alert_tests;
 
 #[cfg(test)]
 mod apply_data_set_missing_file_tests;
+
+#[cfg(test)]
+mod exit_hook_tests;
