@@ -1,7 +1,10 @@
 use craft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_doc::LayerContent;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{ActionList, ActionsFile};
+use photocraft_engine::prefs::SavedPrefsExt;
+use photocraft_engine::presets::PresetsExt;
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::json;
 
@@ -94,7 +97,7 @@ fn smart_filter_params_resolve_custom_shapes_and_keep_portable_geometry() {
         assert_eq!(saved(&s), after);
 
         let mut reopened = Session::new();
-        assert!(!reopened.presets.shapes.iter().flat_map(|g| &g.items).any(|shape| shape.id.as_deref() == Some(SHAPE_ID)));
+        assert!(!reopened.presets().shapes.iter().flat_map(|g| &g.items).any(|shape| shape.id.as_deref() == Some(SHAPE_ID)));
         reopened.add_document(photocraft_format::load_from_bytes(&after).unwrap(), None);
         reopened.execute("layer.smartFilter.setParams", json!({"index":0,"params":{"radius":6}})).unwrap();
         assert_eq!(smart_params(&reopened)["shapePath"], path);
@@ -127,7 +130,7 @@ fn smart_filter_selector_changes_replace_the_old_custom_geometry() {
         let stale = if replacement.get("shapeId").is_some() { "shapeName" } else { "shapeId" };
         assert!(smart_params(&s).get(stale).is_none());
         let mut expected = fixture(16);
-        expected.load_presets_json(s.presets.to_json(&s));
+        expected.load_presets_json(s.presets().to_json(&s));
         expected.execute("filter.convertForSmartFilters", json!({})).unwrap();
         expected.execute("filter.blur.shapeBlur", json!({"radius":5,"shapeId":"replacement-triangle"})).unwrap();
         assert_ne!(pixels(&s), old_pixels);
@@ -213,7 +216,7 @@ fn custom_shape_uses_installed_id_despite_name_collision_and_undoes() {
         let mut s = fixture(depth);
         install_square(&mut s);
         let before = saved(&s);
-        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions.clone(), Vec::new()));
         assert_eq!(s.execute("actions.play", json!({"action":"Shape"})).unwrap()["ran"], 1);
         assert_eq!(pixels(&s), expected, "{depth}-bit square custom kernel");
         s.execute("edit.undo", json!({})).unwrap();
@@ -240,7 +243,7 @@ fn custom_shape_smart_filter_keeps_geometry_across_save_without_preset_library()
         .unwrap();
     assert!(filter.params["shapePath"].is_object());
     let mut reopened = Session::new();
-    assert!(!reopened.presets.shapes.iter().flat_map(|g| &g.items).any(|shape| shape.id.as_deref() == Some(SHAPE_ID)));
+    assert!(!reopened.presets().shapes.iter().flat_map(|g| &g.items).any(|shape| shape.id.as_deref() == Some(SHAPE_ID)));
     reopened.add_document(doc, None);
     reopened.execute("layer.smartFilter.setVisible", json!({"index":0,"visible":false})).unwrap();
     assert_ne!(pixels(&reopened), expected);
@@ -257,7 +260,7 @@ fn imported_csh_id_resolves_in_an_action_after_reimport_and_preference_reload() 
     let p = json!({"data":photocraft_paint::tile::b64_encode(&bytes)});
     s.execute("shape.presets.importCsh", p.clone()).unwrap();
     s.execute("shape.presets.importCsh", p).unwrap();
-    let matches: Vec<_> = s.presets.shapes.iter().flat_map(|g| &g.items).filter(|shape| shape.id.as_deref() == Some(id.as_str())).collect();
+    let matches: Vec<_> = s.presets().shapes.iter().flat_map(|g| &g.items).filter(|shape| shape.id.as_deref() == Some(id.as_str())).collect();
     assert_eq!(matches.len(), 2, "both imports retain the source's opaque ID");
     let path = photocraft_engine::vector_cmds::path_json(&matches[0].path);
     let mut expected = fixture(16);
@@ -265,7 +268,7 @@ fn imported_csh_id_resolves_in_an_action_after_reimport_and_preference_reload() 
     let mut square = fixture(16);
     square.execute("filter.blur.shapeBlur", json!({"radius":5,"shape":"square"})).unwrap();
     assert_ne!(pixels(&expected), pixels(&square), "the non-square imported triangle must differ from a square kernel");
-    let prefs = s.presets.to_json(&s);
+    let prefs = s.presets().to_json(&s);
     let mut s = fixture(16);
     s.load_presets_json(prefs);
     let shape =
@@ -276,7 +279,7 @@ fn imported_csh_id_resolves_in_an_action_after_reimport_and_preference_reload() 
         .with("keyOriginType", D::Integer(9));
     let imported = atn_cmds::import(&encoded(d)).unwrap();
     assert!(imported.unsupported.is_empty());
-    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     let before = saved(&s);
     assert_eq!(s.execute("actions.play", json!({"action":"Shape"})).unwrap()["ran"], 1);
     assert_eq!(pixels(&s), pixels(&expected));
@@ -314,7 +317,7 @@ fn missing_or_invalid_custom_shapes_refuse_before_document_or_history_changes() 
         assert_eq!(s.active().unwrap().history.past_len(), history);
     }
     let imported = atn_cmds::import(&encoded(descriptor())).unwrap();
-    s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+    s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
     // Playback reports a failed step in its successful response; native command errors are not outer errors.
     let result = s.execute("actions.play", json!({"action":"Shape"})).unwrap();
     assert_eq!(result["ran"], 0);
@@ -332,7 +335,7 @@ fn shape_ids_persist_and_old_preferences_without_ids_still_load() {
     let prefs = s.prefs_to_json();
     let mut reopened = Session::new();
     reopened.load_prefs_json(&prefs).unwrap();
-    assert!(reopened.presets.shapes.iter().flat_map(|g| &g.items).any(|shape| shape.id.as_deref() == Some(SHAPE_ID) && shape.name == "Renamed Square"));
+    assert!(reopened.presets().shapes.iter().flat_map(|g| &g.items).any(|shape| shape.id.as_deref() == Some(SHAPE_ID) && shape.name == "Renamed Square"));
     let before = reopened.prefs_to_json();
     assert!(reopened.execute("shape.presets.new", json!({"id":SHAPE_ID,"path":"M 0 0 L 10 0 L 5 10 Z"})).is_err());
     assert_eq!(reopened.prefs_to_json(), before);
@@ -343,7 +346,7 @@ fn shape_ids_persist_and_old_preferences_without_ids_still_load() {
         }
     }
     reopened.load_prefs_json(&old.to_string()).unwrap();
-    assert!(reopened.presets.shapes.iter().flat_map(|g| &g.items).all(|shape| shape.id.is_none()));
+    assert!(reopened.presets().shapes.iter().flat_map(|g| &g.items).all(|shape| shape.id.is_none()));
 }
 
 /// Outer descriptor metadata and its encoding stay whole when the native mapper cannot reproduce them.

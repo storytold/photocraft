@@ -18,6 +18,8 @@
 //! what the refreshes did (`refresh_kinds`: `Refresh::kind` counts, also "rect" / "full" without
 //! an adapter; `fallbacks`: `CpuReason::kind` of any refresh the wgpu compositor didn't draw).
 
+use photocraft_engine::brush_cmds::LiveStrokeExt;
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use eframe::egui_wgpu::RenderState;
