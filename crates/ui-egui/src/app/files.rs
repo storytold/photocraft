@@ -105,29 +105,20 @@ impl PhotocraftApp {
         let typed_open = photocraft_io::is_xcf_input(name, bytes)
             || photocraft_io::is_psd(bytes)
             || (photocraft_io::import_compression(bytes).is_none() && photocraft_formats::detect("", bytes) == Some(photocraft_formats::Format::Tiff));
-        let (imported, damaged) = if typed_open {
-            match photocraft_io::import_for_open(name, bytes, &opts) {
+        let (mut doc, warnings, initial_view, source_read_only, damaged) = if typed_open {
+            let (imported, damaged) = match photocraft_io::import_for_open(name, bytes, &opts) {
                 Ok(result) => result,
                 Err(photocraft_io::IoError::PsdApprovalRequired { .. }) => {
                     jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
                     return Ok(Vec::new());
                 }
                 Err(error) => return Err(error.to_string()),
-            }
+            };
+            (imported.document, imported.warnings, imported.initial_view, imported.source_read_only, damaged)
         } else {
-            let (document, warnings) = import(name, bytes, &opts)?;
-            (
-                photocraft_io::ImportResult {
-                    document,
-                    warnings,
-                    initial_view: None,
-                    source_read_only: photocraft_io::affinity::is_affinity(bytes),
-                    preview_only: false,
-                },
-                false,
-            )
+            let (doc, warnings) = import(name, bytes, &opts)?;
+            (doc, warnings, None, photocraft_io::affinity::is_affinity(bytes), false)
         };
-        let photocraft_io::ImportResult { document: mut doc, warnings, initial_view, source_read_only, .. } = imported;
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back

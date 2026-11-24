@@ -155,7 +155,7 @@ impl PhotocraftApp {
             use photocraft_engine::channel_cmds::ChannelTarget;
             let channel = st.channel_view.target;
             match photocraft_engine::mask_view_cmds::current(st) {
-                Some(v) if v.display_only => {
+                Some(_) if photocraft_engine::mask_view_cmds::editing(st).is_none() => {
                     // Saved display state does not grant the mask edit ownership.
                     // Clear a previous document's UI target and follow the public channel target.
                     self.ui.mask_target = channel == ChannelTarget::LayerMask;
