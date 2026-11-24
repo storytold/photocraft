@@ -178,11 +178,12 @@ fn write_stream_seeks_back_and_keeps_the_original_on_failure() {
 #[test]
 fn write_refuses_to_replace_files_photocraft_reads_but_does_not_write() {
     let (inside, _, workspace) = roots("read-only-kinds");
-    let files: [(&str, &[u8]); 11] = [
+    let files: [(&str, &[u8]); 12] = [
         ("scan.jp2", b"keep"),
         ("IMG_0001.dng", b"II*\x00\x08\x00\x00\x00 keep"),
         ("IMG_0002.NEF", b"MM\x00*\x00\x00\x00\x08 keep"),
         ("photo.jp2", b"\xFF\xD8\xFF\xE0\x00\x02\xFF\xC0 keep"),
+        ("SCAN.JP2", b"\xFF\xD8\xFF\xE0\x00\x02\xFF\xC0 keep"),
         ("notes.md", b"# keep"),
         ("data.csv", b"a,b\n1,2\n"),
         ("letter.rtf", b"{\\rtf1 keep}"),
