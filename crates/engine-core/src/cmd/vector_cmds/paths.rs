@@ -393,15 +393,11 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
                 .then(&Affine::translate(cx + tx, cy + ty)),
         )
     };
-    let mut out = match &map {
+    let out = match &map {
         PathMap::Affine(a) => json!({ "name": name, "matrix": a.m }),
         PathMap::Projective(h) => json!({ "name": name, "homography": h.0 }),
         PathMap::Warp(_) => json!({ "name": name, "warp": true }),
     };
-    // The step names the anchors it moved, so Transform Again replays the point transform (#13209).
-    if let Some(anchors) = &anchors {
-        out["anchors"] = json!(anchors);
-    }
     let label = if anchors.is_some() { "Transform Points" } else { "Transform Path" };
     if !vector_mask
         && let Some(id) = layer_id
