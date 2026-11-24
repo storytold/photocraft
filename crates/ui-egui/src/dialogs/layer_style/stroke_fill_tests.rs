@@ -109,6 +109,12 @@ fn stroke_gradient_snapshot_survives_cancel_and_preserves_unedited_values_on_sav
     let id = open(&mut app, Some("stroke")).unwrap();
     let instance = first_of(&app, id, EffectKind::Stroke);
     edit(&mut app, id, |d| d.set_param(instance, "reverse", StyleValue::Bool(true)));
+    let default = json!({"size": 8});
+    app.run("layer.layerStyle.makeDefault", json!({"kind": "stroke", "params": default})).unwrap();
+    let oversized = style_params_json(&draft(&app, id).style.effect(instance).unwrap().params);
+    assert!(app.run("layer.layerStyle.makeDefault", json!({"kind": "stroke", "params": oversized})).is_err());
+    let stored = app.run("layer.layerStyle.defaultFor", json!({"kind": "stroke"})).unwrap();
+    assert_eq!(stored["params"], default, "an oversized imported gradient cannot replace the saved default");
     save_new_style(&mut app, id, layer);
     let preset = photocraft_engine::presets::styles::find_style(&app.session, &json!({"preset": "Style"}), "test").unwrap();
     assert_eq!(preset.effects, expected);

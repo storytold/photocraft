@@ -1126,6 +1126,9 @@ fn make_default(s: &mut Session, p: &Value) -> Result<Value> {
         _ => return Err(bad(CMD, "`params` must be an object")),
     };
     crate::commands::check_f32_values(CMD, &params)?;
+    if kind == "stroke" && params.get("fillType").and_then(Value::as_str) == Some("gradient") {
+        check_gradient_params(&params, CMD)?;
+    }
     s.presets_mut().layer_defaults.insert(kind.to_string(), params);
     presets_changed(s);
     Ok(json!({"kind": kind}))

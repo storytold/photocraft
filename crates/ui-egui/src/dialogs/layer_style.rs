@@ -946,8 +946,9 @@ fn save_new_style(app: &mut PhotocraftApp, dialog: DialogId, layer: LayerId) {
         .collect();
     let b = &style.blending;
     let params = json!({"layer": layer.0, "effects": entries, "blend": b.blend, "fillOpacity": b.fill_opacity, "opacity": b.opacity});
-    if let Ok(v) = app.run("style.presets.new", params) {
-        app.ui.status = crate::i18n::fmt(tl!("Style {name} saved"), &[("name", v["name"].as_str().unwrap_or("Style"))]);
+    match app.run("style.presets.new", params) {
+        Ok(v) => app.ui.status = crate::i18n::fmt(tl!("Style {name} saved"), &[("name", v["name"].as_str().unwrap_or("Style"))]),
+        Err(error) => fail(app, error),
     }
 }
 
