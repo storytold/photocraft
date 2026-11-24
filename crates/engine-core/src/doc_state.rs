@@ -268,13 +268,13 @@ impl DocState {
     }
 
     /// Record the current revision conservatively until its damage has been determined.
-    pub(crate) fn record_unknown_damage(&mut self) {
+    pub fn record_unknown_damage(&mut self) {
         self.last_damage = None;
         self.record_damage_span(self.revision.saturating_sub(1), self.revision, None);
     }
 
     /// Record the latest revision or command span after its damage has been determined.
-    pub(crate) fn record_damage(&mut self) {
+    pub fn record_damage(&mut self) {
         // Keep the effect reach at the time of the edit: later pixel-neutral revisions can
         // change which effects are visible without changing this already-painted damage.
         // The existing growth walk is recursive, so refuse a bounded answer on hostile depth.
