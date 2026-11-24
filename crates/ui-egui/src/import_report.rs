@@ -63,19 +63,19 @@ fn short(text: &str, limit: usize) -> String {
 }
 
 /// Translate stored outcome keys into stable localizable labels with an explicit unknown fallback.
-fn disposition(key: &str) -> &'static str {
-    match key {
+fn disposition<T>(key: &str, translate: impl FnOnce(&'static str) -> T) -> T {
+    translate(match key {
         "native_equivalent" => "Native equivalent",
         "native_approximation" => "Native approximation",
         "retained_unapplied" => "Retained, not applied",
         "skipped_nonessential" => "Nonessential data skipped",
         _ => "Unknown outcome",
-    }
+    })
 }
 
 /// Translate stored conversion reasons into localizable UI labels without interpreting retained payloads.
-fn reason(key: &str) -> &'static str {
-    match key {
+fn reason<T>(key: &str, translate: impl FnOnce(&'static str) -> T) -> T {
+    translate(match key {
         "native_policy" => "Native rules",
         "native_limitation" => "Native capability limit",
         "missing_mapping" => "Conversion not implemented",
@@ -84,7 +84,7 @@ fn reason(key: &str) -> &'static str {
         "retention_limit" => "Retention limit",
         "numerical_conversion" => "Precision conversion",
         _ => "Unknown reason",
-    }
+    })
 }
 
 /// Display the cached read-only report as a modal with bounded paging and release its cache when closed.
@@ -129,11 +129,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                                 let name = short(source["name"].as_str().unwrap_or(""), 160);
                                 let title = if name.is_empty() { format!("{kind} #{index}") } else { format!("{kind} #{index} · {name}") };
                                 ui.label(egui::RichText::new(title).strong().color(tokens.text));
-                                let outcome = crate::i18n::t(disposition(entry["disposition"].as_str().unwrap_or("")));
+                                let outcome = disposition(entry["disposition"].as_str().unwrap_or(""), crate::i18n::t);
                                 let caption = if entry["disposition"] == "native_equivalent" {
                                     outcome.to_string()
                                 } else {
-                                    format!("{} · {}", outcome, crate::i18n::t(reason(entry["reason"].as_str().unwrap_or(""))))
+                                    format!("{} · {}", outcome, reason(entry["reason"].as_str().unwrap_or(""), crate::i18n::t))
                                 };
                                 ui.label(egui::RichText::new(caption).color(tokens.text_dim));
                                 for field in ["sourceDescription", "nativeDescription"] {
@@ -331,28 +331,47 @@ mod tests {
         assert_eq!(app.ui, before);
     }
 
+    /// Dynamic labels use the same translation path as static UI text. New English keys may
+    /// legitimately be absent from a pinned catalog (see i18n's feature-PR fallback policy).
     #[test]
-    /// Require every dynamically selected report outcome/reason label to have translations rather than falling back to
-    /// English keys.
-    fn dynamic_outcome_labels_are_localized() {
-        let labels = [
-            disposition("native_equivalent"),
-            disposition("native_approximation"),
-            disposition("retained_unapplied"),
-            disposition("skipped_nonessential"),
-            disposition("unknown"),
-            reason("native_policy"),
-            reason("native_limitation"),
-            reason("missing_mapping"),
-            reason("resource_unavailable"),
-            reason("invalid_optional_data"),
-            reason("retention_limit"),
-            reason("numerical_conversion"),
-            reason("unknown"),
+    fn dynamic_outcome_labels_use_translation_with_english_fallback() {
+        let outcomes = [
+            ("native_equivalent", "Native equivalent"),
+            ("native_approximation", "Native approximation"),
+            ("retained_unapplied", "Retained, not applied"),
+            ("skipped_nonessential", "Nonessential data skipped"),
+            ("unknown", "Unknown outcome"),
         ];
-        for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus() && l.code() != "en") {
-            for label in labels {
-                assert_ne!(crate::i18n::tr(lang, label), label, "{}: {label}", lang.code());
+        let reasons = [
+            ("native_policy", "Native rules"),
+            ("native_limitation", "Native capability limit"),
+            ("missing_mapping", "Conversion not implemented"),
+            ("resource_unavailable", "Resource unavailable"),
+            ("invalid_optional_data", "Invalid optional data"),
+            ("retention_limit", "Retention limit"),
+            ("numerical_conversion", "Precision conversion"),
+            ("unknown", "Unknown reason"),
+        ];
+        for (key, english) in outcomes {
+            assert_eq!(disposition(key, |label| format!("translated:{label}")), format!("translated:{english}"));
+            for lang in crate::i18n::Lang::all() {
+                let actual = disposition(key, |label| crate::i18n::tr(lang, label));
+                assert_eq!(actual, crate::i18n::tr(lang, english));
+                assert!(!actual.is_empty());
+                if !crate::i18n::has(lang, english) {
+                    assert_eq!(actual, english);
+                }
+            }
+        }
+        for (key, english) in reasons {
+            assert_eq!(reason(key, |label| format!("translated:{label}")), format!("translated:{english}"));
+            for lang in crate::i18n::Lang::all() {
+                let actual = reason(key, |label| crate::i18n::tr(lang, label));
+                assert_eq!(actual, crate::i18n::tr(lang, english));
+                assert!(!actual.is_empty());
+                if !crate::i18n::has(lang, english) {
+                    assert_eq!(actual, english);
+                }
             }
         }
     }

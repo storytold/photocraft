@@ -35,6 +35,7 @@ mod system_locale;
 mod tone_targets;
 mod variables_data_sets;
 mod workspace_presets;
+mod xcf_native_workflows;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 

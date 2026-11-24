@@ -139,11 +139,11 @@ pub(crate) struct ConvertArgs {
 }
 
 /// Accept only the historical flag's explicit spellings, never platform or sample guesses.
-fn historical_xcf_sample_order(value: &str) -> Result<photocraft_io::HistoricalXcfSampleOrder, &'static str> {
+fn historical_xcf_sample_order(value: &str) -> Result<photocraft_io::HistoricalXcfSampleOrder, ValueError> {
     match value {
         "little-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::LittleEndian),
         "big-endian" => Ok(photocraft_io::HistoricalXcfSampleOrder::BigEndian),
-        _ => Err("expected little-endian or big-endian"),
+        _ => Err(ValueError::HistoricalXcfSampleOrder),
     }
 }
 
@@ -351,6 +351,8 @@ pub(crate) struct ServeArgs {
 /// Why a value was refused: clap prints it after the flag and its value (exit 2).
 #[derive(Debug, thiserror::Error)]
 enum ValueError {
+    #[error("expected little-endian or big-endian")]
+    HistoricalXcfSampleOrder,
     #[error("expected 24 or 32")]
     TgaBits,
     #[error("expected 8, 10, 12 or 16")]
@@ -638,6 +640,18 @@ fn check_server(sub: &mut clap::Command, m: &ArgMatches, has_transport: bool, tr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historical_xcf_order_accepts_only_explicit_spellings() {
+        use photocraft_io::HistoricalXcfSampleOrder::{BigEndian, LittleEndian};
+        assert_eq!(historical_xcf_sample_order("little-endian").unwrap(), LittleEndian);
+        assert_eq!(historical_xcf_sample_order("big-endian").unwrap(), BigEndian);
+        for value in ["native", "LE", "BE", "", " little-endian", "big-endian "] {
+            let error = historical_xcf_sample_order(value).unwrap_err();
+            assert!(matches!(error, ValueError::HistoricalXcfSampleOrder));
+            assert_eq!(error.to_string(), "expected little-endian or big-endian");
+        }
+    }
 
     /// `--pdf-dpi` only takes a positive finite number: a mistyped value is refused at parse time
     /// instead of silently becoming the importer's 300 DPI fallback.
