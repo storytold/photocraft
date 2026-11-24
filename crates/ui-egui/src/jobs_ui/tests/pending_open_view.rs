@@ -113,12 +113,14 @@ fn saved_view_xcf(target: NativeImportTarget) -> Vec<u8> {
 fn later_xcf_waiting_on_an_earlier_prompt_keeps_view_and_source_policy() {
     for damage in [false, true] {
         for target in [NativeImportTarget::Composite, NativeImportTarget::LayerMask, NativeImportTarget::AlphaChannel(0)] {
-            assert_pending_open_preserves_view(damage, target);
+            for from_bytes in [false, true] {
+                assert_pending_open_preserves_view(damage, target, from_bytes);
+            }
         }
     }
 }
 
-fn assert_pending_open_preserves_view(damage: bool, target: NativeImportTarget) {
+fn assert_pending_open_preserves_view(damage: bool, target: NativeImportTarget, from_bytes: bool) {
     let mut app = super::identity_app();
     let unchanged = super::IdentityControl::capture(&app);
     app.session.execute("edit.colorSettings", json!({"askOnMismatch":true,"askOnMissing":false,"policyRgb":"preserve"})).unwrap();
@@ -159,16 +161,18 @@ fn assert_pending_open_preserves_view(damage: bool, target: NativeImportTarget) 
     // Complete the actual background engine decode/apply before the UI
     // event is delivered, while the first file still owns its question.
     let folder = tempfile::tempdir().unwrap();
-    let source = folder.path().join("later.xcf");
+    let source = folder.path().join(if from_bytes { "later.psd" } else { "later.xcf" });
     std::fs::write(&source, &bytes).unwrap();
     let source = source.to_str().unwrap().to_owned();
-    let later = match app.session.start_open_for_user_with_background("later.xcf", OpenSource::Path(source.clone()), true).unwrap() {
+    let input = if from_bytes { OpenSource::Bytes(Arc::new(bytes.clone())) } else { OpenSource::Path(source.clone()) };
+    let later = match app.session.start_open_for_user_with_background("later.xcf", input, true).unwrap() {
         Started::Job(job) => app.session.wait_job(job).unwrap(),
-        Started::Done(_) => panic!("native path Open must use the background worker"),
+        Started::Done(_) => panic!("native Open must use the background worker"),
     };
     assert!(later.get("held").is_none(), "the later file has no question of its own");
     let id = DocId(later["docId"].as_u64().unwrap());
     let before = app.session.documents().iter().find(|state| state.doc.id == id).unwrap();
+    assert_eq!(before.protected_import_source.as_deref(), (!from_bytes).then_some(source.as_str()));
     let selected = before.selection().to_vec();
     let active = before.active_layer();
     let pixels = before.doc.clone();
@@ -226,4 +230,68 @@ fn control(app: &mut PhotocraftApp, method: &str, params: Value) -> Value {
     };
     ctx.run_ui(Default::default(), |ui| crate::dialogs::run(app, ui)).textures_delta.clear();
     result
+}
+
+fn finish_byte_worker(app: &mut PhotocraftApp) -> Value {
+    let tab = app.jobs.opens.pop().expect("open_file tracked its byte worker");
+    let result = app.session.wait_job(tab.job).unwrap();
+    crate::jobs_ui::finish_open_tab(app, &tab, &result).unwrap();
+    result
+}
+
+#[test]
+fn byte_backed_open_file_retains_known_import_origin_without_changing_writable_inputs() {
+    for read_only in [false, true] {
+        let mut app = super::identity_app();
+        let unchanged = super::IdentityControl::capture(&app);
+        app.background_jobs = true;
+        app.session.execute("edit.colorSettings", json!({"askOnMissing":false,"askOnMismatch":false})).unwrap();
+        let bytes = if read_only { saved_view_xcf(NativeImportTarget::Composite) } else { super::identity_png(None) };
+        let folder = tempfile::tempdir().unwrap();
+        let source = folder.path().join(if read_only { "known-origin.psd" } else { "normal.png" });
+        std::fs::write(&source, &bytes).unwrap();
+        let source = source.to_str().unwrap();
+        app.open_file(source, &bytes).unwrap();
+        let result = finish_byte_worker(&mut app);
+        assert!(result.get("held").is_none());
+        let state = app.session.active().unwrap();
+        assert_eq!(state.source_read_only, read_only);
+        assert_eq!(state.protected_import_source.as_deref(), read_only.then_some(source));
+        assert_eq!(state.path.as_deref(), (!read_only).then_some(source));
+        if read_only {
+            assert!(photocraft_engine::file_cmds::check_import_destination(state, source).is_err());
+        }
+        unchanged.assert_untouched(&app);
+        assert_eq!(std::fs::read(source).unwrap(), bytes);
+    }
+}
+
+#[test]
+fn byte_backed_profile_hold_carries_known_import_origin_through_confirmation() {
+    let mut app = super::identity_app();
+    let unchanged = super::IdentityControl::capture(&app);
+    app.background_jobs = true;
+    app.session.execute("edit.colorSettings", json!({"askOnMissing":true,"askOnMismatch":false,"policyRgb":"preserve"})).unwrap();
+    let bytes = saved_view_xcf(NativeImportTarget::LayerMask);
+    let folder = tempfile::tempdir().unwrap();
+    let source = folder.path().join("known-held-origin.psd");
+    std::fs::write(&source, &bytes).unwrap();
+    let source = source.to_str().unwrap();
+    app.open_file(source, &bytes).unwrap();
+    let result = finish_byte_worker(&mut app);
+    assert!(result["held"].is_number(), "this exercises the worker's own profile hold");
+    assert_eq!(app.held_opens.len(), 1);
+    let held = app.held_opens.front().unwrap();
+    assert!(held.read_only && held.question.is_some());
+    assert_eq!(held.protected_import_source.as_deref(), Some(source));
+    let inspected = control(&mut app, "ui.inspect", json!({}));
+    let prompt = inspected["result"]["dialogs"][0]["id"].clone();
+    assert_eq!(control(&mut app, "ui.dialog.confirm", json!({"dialog":prompt}))["ok"], true);
+    assert!(app.held_opens.is_empty());
+    let state = app.session.active().unwrap();
+    assert!(state.source_read_only && state.path.is_none());
+    assert_eq!(state.protected_import_source.as_deref(), Some(source));
+    assert!(photocraft_engine::file_cmds::check_import_destination(state, source).is_err());
+    unchanged.assert_untouched(&app);
+    assert_eq!(std::fs::read(source).unwrap(), bytes);
 }

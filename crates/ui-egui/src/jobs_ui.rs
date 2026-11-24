@@ -721,7 +721,9 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
         doc: imported.document,
         read_only: imported.source_read_only,
         initial_view: imported.initial_view,
-        protected_import_source: imported.protected_import_source,
+        // Byte workers cannot return a filesystem origin. Preserve a shell path
+        // already captured for this Open, without granting it ordinary Save.
+        protected_import_source: imported.protected_import_source.or_else(|| path.filter(|_| imported.source_read_only).map(str::to_string)),
         damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
         name: name.to_string(),
         path: path.map(str::to_string),
@@ -743,6 +745,15 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     // handler may have moved or closed tabs, so the apply-time index is no longer authority.
     let document = v.get("docId").and_then(Value::as_u64).map(DocId).ok_or("the open job returned no document identity")?;
     let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the open job's document is missing")?;
+    if let Some(path) = path
+        && let Some(state) = app.session.document_mut(document)
+        && state.source_read_only
+        && state.protected_import_source.is_none()
+    {
+        // Bind the known shell origin to this validated identity before it can
+        // be closed/requeued; another tab's path is never a fallback authority.
+        state.protected_import_source = Some(path.to_string());
+    }
     // An earlier file is waiting on its prompt: this document waits after it, in order.
     if crate::open_prompt::waiting(app)
         && let Some(mut st) = app.session.close(index)
