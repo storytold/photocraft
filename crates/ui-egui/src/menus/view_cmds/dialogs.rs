@@ -575,7 +575,10 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
             "same",
         ),
         Param::new("naming", tl!("File Naming"), ParamKind::text("")).hint("{name}").tooltip("{name} · {serial} · {date} (UTC)"),
-        Param::new("startingSerial", tl!("Starting Serial Number"), ParamKind::int(Some(1), None, 1)),
+        // Whole numbers 0..9999, as the reference's Starting Serial # (#13662): a value typed past them becomes the
+        // closest one with the reference's "An integer between 0 and 9999 is required. Closest value inserted." alert,
+        // and an emptied field counts as 0.
+        Param::new("startingSerial", tl!("Starting Serial Number"), ParamKind::int(Some(0), Some(9999), 1)).empty_value(0),
         // Off sends no quality, which keeps the command's JPEG and lossless WebP defaults.
         Param::new("quality", tl!("Quality"), ParamKind::optional_number(0.0, 12.0, None, 8.0, 0)),
         Param::new("stopOnError", tl!("Stop For Errors"), ParamKind::bool(false)),
@@ -970,3 +973,6 @@ mod artboards_to_pdf_mode_tests;
 #[cfg(test)]
 #[path = "../../artboards_to_pdf_selected_tests.rs"]
 mod artboards_to_pdf_selected_tests;
+#[cfg(test)]
+#[path = "batch_starting_serial_tests.rs"]
+mod batch_starting_serial_tests;

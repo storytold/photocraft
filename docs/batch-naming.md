@@ -9,7 +9,7 @@ whole filename; without `{ext}`, no extension is added.
 | --- | --- |
 | `{name}`, `{NAME}`, `{Name}` | Input filename without its last extension, unchanged, uppercase, or initial capital |
 | `{serial}`, `{serial:1}` … `{serial:4}` | Input position plus **Starting serial** (default 1), padded to at least 3 or the specified number of digits |
-| `{letter}`, `{LETTER}` | Serial letters: a … z, aa …; uppercase with `{LETTER}` |
+| `{letter}`, `{LETTER}` | Serial letters: a … z, aa …, following the serial (from starting serial 0, the first input is a); uppercase with `{LETTER}` |
 | `{date}` | UTC date at the start of the batch, in `YYYY-MM-DD` form |
 | `{date:mmddyy}`, `{date:mmdd}`, `{date:yyyymmdd}`, `{date:yymmdd}`, `{date:yyddmm}`, `{date:ddmmyy}` | Other UTC date arrangements |
 | `{ext}`, `{EXT}` | Output extension, lowercase or uppercase; a dot is added when this is the final component, unless the template already supplied one |
@@ -35,7 +35,9 @@ returns its per-file results with `errorLogError` instead of `errorLog`.
 
 Unknown tokens, unmatched braces, invalid parameter types, path separators, reserved filename
 characters, excessive filename length (255 UTF-8 bytes), and serial overflow are rejected before
-export writes begin. Starting serial must be an integer from 1 to 4,294,967,295.
+export writes begin. Starting serial must be an integer from 0 to 4,294,967,295; the Batch
+dialog's **Starting serial** field takes 0 to 9,999, as Photoshop's does, and counts an empty
+field as 0.
 A custom template that resolves to an existing input file is also rejected before processing;
 the same guard checks default flat output names. This prevents an early result from destroying
 a later unread input. Ordinary per-file read,
