@@ -63,6 +63,18 @@ pub fn render_reduced_damage(doc: &Document, w: u32, h: u32, damage: Rect) -> Bu
     render_reduced_in_bands(doc, doc.bounds(), w, h, Some(damage), 0)
 }
 
+/// The composite of area `rect` reduced by the whole `factor`: output pixel `t` is the premultiplied average of the
+/// area's pixels `[t·factor, (t+1)·factor)` counted from the area's own origin, clipped to the area, so the result is
+/// `rect`'s size divided by `factor`, rounded up. A canvas display reads its texture regions this way; the cells follow
+/// the region, not multiples of `factor` in the document (a detail region need not start on one).
+pub fn render_reduced_by(doc: &Document, rect: Rect, factor: u32) -> Buffer {
+    match render_reduced_cells(doc, rect, Cells::Factor(factor), None, 0, true, &mut ReducedStats::default(), Interrupt::NONE) {
+        Ok(buf) => buf,
+        // Only an interrupt fails a reduction, and this one has none.
+        Err(_) => Buffer::transparent(Rect::EMPTY),
+    }
+}
+
 /// [`render_reduced_rect`] (or, with `damage`, [`render_reduced_damage`]) of area `b` with an
 /// explicit band height (see [`render_bands`]).
 pub(crate) fn render_reduced_in_bands(doc: &Document, b: Rect, w: u32, h: u32, damage: Option<Rect>, band_rows: i32) -> Buffer {
