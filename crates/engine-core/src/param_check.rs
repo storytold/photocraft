@@ -72,7 +72,6 @@ pub(crate) const INCOMPLETE: &[&str] = &[
     "layer.videoLayers.newVideoLayerFromFile",
     "layer.videoLayers.replaceFootage",
     "measurementLog.delete",
-    "notes.delete",
     "path.addToSelection",
     "path.intersectWithSelection",
     "path.set",
