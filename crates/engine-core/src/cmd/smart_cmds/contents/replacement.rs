@@ -57,6 +57,7 @@ fn prepare(snapshot: Arc<Document>, id: LayerId, source: Source, ctx: &JobCtx) -
         // source's byte order or linked-byte approval into its cold renders.
         object.historical_xcf_sample_order = None;
         object.historical_xcf_link_digest = None;
+        object.linked_source_baseline = None;
         detach_psd(document.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
         warnings.extend(
             unapplied_filters(smart(&document, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")),
