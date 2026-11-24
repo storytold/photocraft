@@ -1256,16 +1256,12 @@ fn every_mapped_command_exports_and_imports_back() {
     ];
     let unexpected: Vec<&str> = missing.iter().copied().filter(|id| !allowed.contains(id)).collect();
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");
-    // Every command the table names exists.
+    // Every command the table names exists: the app's registry order lists every engine
+    // crate's commands, including those core's own tests don't install.
     // (Save is the desktop shell's: recorded by it, replayed by it, written by Batch.)
-    // The paint commands the table names are registered by the engine's paint crate, which
-    // core's own tests may not install.
     for id in EVENTS.iter().flat_map(|e| e.ids.iter()) {
         assert!(
-            crate::commands::find(id).is_some()
-                || PAINT_COMMANDS.contains(id)
-                || crate::actions_cmds::shell_save_command(id)
-                || crate::actions_cmds::shell_view_command(id),
+            ENGINE_COMMAND_IDS.lines().any(|line| line == *id) || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id),
             "the .atn table names an unknown command `{id}`"
         );
     }
@@ -6776,5 +6772,6 @@ fn whole_library_conditional_scopes_roundtrip() {
     assert_eq!((params["then"].as_str(), params["else"].as_str()), (Some("Target"), Some("Target")), "{params}");
 }
 
-/// The commands of the .atn table that the paint crate registers.
-const PAINT_COMMANDS: [&str; 4] = ["edit.fill", "layer.stampVisible", "paint.bucket", "paint.gradient"];
+/// Every engine command id, one per line: the app's registry order, which the top crate's order
+/// test keeps equal to the ids every engine crate installs.
+const ENGINE_COMMAND_IDS: &str = include_str!("../../../../engine/src/install/command_ids.txt");
