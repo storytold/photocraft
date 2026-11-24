@@ -1,5 +1,6 @@
 //! Re-develop completion must follow the replacement document across intervening tab changes.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
