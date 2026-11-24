@@ -676,9 +676,9 @@ pub const COUNT_MENU: &[Row] = &[
 /// Right-click with the Content-Aware Move tool inside an active selection (#12194).
 pub const CAM_INSIDE_SELECTION_MENU: &[Row] = &[Some(("Color Range…", "select.colorRange")), Some(("Load Selection…", "select.loadSelection"))];
 
-/// The selection menu as measured in the reference application with the Red Eye tool (#12577) and
-/// the Object Selection tool (#12866): no Distort or Perspective, and Delete and Fill Selection
-/// after the fills.
+/// The selection menu as measured in the reference application with the Red Eye tool (#12577),
+/// the Object Selection tool (#12866) and the Horizontal Type tool away from text (#12042): no
+/// Distort or Perspective, and Delete and Fill Selection after the fills.
 pub const MEASURED_SELECTION_MENU: &[Row] = selection_menu![
     None,
     Some(("Fill…", "edit.fill")),
@@ -954,17 +954,10 @@ fn red_eye_measured(app: &PhotocraftApp, doc: Option<[f64; 2]>) -> bool {
     })
 }
 
-/// The Horizontal Type tool's off-text right-click, where the reference application measured the
-/// layer menu (#12042): no active selection. With one, its right-click keeps opening nothing
-/// (that case is not measured).
-fn type_off_text_measured(app: &PhotocraftApp) -> bool {
-    app.session.active().is_some_and(|st| st.doc.selection.is_none())
-}
-
 /// Tools whose plain canvas right-click opens a menu: the selection tools' actions, the
 /// Content-Aware Move menu, the path menu, the Color Sampler's, the Red Eye tool's, the shape
-/// tools' (in Shape mode only: [`open`] checks it) and the Horizontal Type tool's layer menu away
-/// from text (also gated by [`open`], #12042).
+/// tools' (in Shape mode only: [`open`] checks it) and the Horizontal Type tool's layer or
+/// selection menu away from text (#12042).
 pub fn applies(tool: Tool) -> bool {
     matches!(
         tool,
@@ -983,8 +976,8 @@ pub fn applies(tool: Tool) -> bool {
             | Tool::ColorSampler
             // The layer menu (#11772).
             | Tool::Count
-            // The layer menu away from text (#12042); Vertical Type and the Type Mask tools are
-            // not measured and stay on their no-menu path.
+            // The layer or selection menu away from text (#12042); Vertical Type and the Type
+            // Mask tools are not measured and stay on their no-menu path.
             | Tool::Type
             // Sample Size and Copy Color (#11747).
             | Tool::Eyedropper
@@ -1124,9 +1117,9 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
                 if menu.has_path { SHAPE_MENU } else { SHAPE_MENU_NO_PATH }
             } else if sampler_menu(menu) {
                 SAMPLER_MENU
-            } else if matches!(menu.tool, Tool::Count | Tool::Type) {
+            } else if menu.tool == Tool::Count {
                 COUNT_MENU
-            } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection) {
+            } else if matches!(menu.tool, Tool::RedEye | Tool::ObjectSelection | Tool::Type) {
                 if menu.has_selection { MEASURED_SELECTION_MENU } else { COUNT_MENU }
             } else if menu.tool == Tool::Eyedropper {
                 EYEDROPPER_MENU
@@ -1460,8 +1453,7 @@ pub fn open_at(app: &mut PhotocraftApp, tool: Tool, mods: Mods, at: Pos2, doc: [
 /// what the rows need: the misspelled word, the type layer, the saved crop presets, the layers
 /// under the point, the sampler, the eyedropper's colour, the point entry. `false` (and nothing
 /// open) when the menu has nothing to show: a non-finite point, a crop that isn't pending, no layers,
-/// a tool without the menu, Content-Aware Move outside RGB, Gray and Lab, an unmeasured Red Eye, or
-/// a Type tool off text with a selection (#12042).
+/// a tool without the menu, Content-Aware Move outside RGB, Gray and Lab, or an unmeasured Red Eye.
 pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: [f64; 2], point: Option<(PathRef, BezierHit)>) -> bool {
     if !at.x.is_finite() || !at.y.is_finite() || !doc.iter().all(|v| v.is_finite()) {
         return false;
@@ -1547,9 +1539,6 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, kind: MenuKind, at: Pos2, doc: 
                 return false;
             }
             if tool == Tool::RedEye && !red_eye_measured(app, Some(doc)) {
-                return false;
-            }
-            if tool == Tool::Type && !type_off_text_measured(app) {
                 return false;
             }
             if shape_tool_menu(tool) && !shape_menu_measured(app) {

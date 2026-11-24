@@ -1,8 +1,10 @@
 //! #12042: a right-click with the Horizontal Type tool away from text opens the generic layer
 //! menu at the pointer, with the reference application's entries and greyed rules (the same rows
-//! the Layers panel menu enables through the main menus). Over committed type the #7324 type
-//! layer menu stays; while editing, the type edit menu stays. The Vertical Type and Type Mask
-//! tools, and the menu with an active selection, are not measured: they keep today's no menu.
+//! the Layers panel menu enables through the main menus). With an active selection it opens the
+//! selection menu the Red Eye and Object Selection tools open, inside the selection and outside
+//! it. Over committed type the #7324 type layer menu stays, with or without a selection; while
+//! editing, the type edit menu stays. The Vertical Type and Type Mask tools are not measured:
+//! they keep today's no menu.
 
 use serde_json::json;
 
@@ -11,7 +13,7 @@ use photocraft_doc::LayerContent;
 use super::Tool;
 use super::count_tests::{call, listed, right_click};
 use super::tests::{labels, open_here, screen_of};
-use super::{COUNT_MENU, MenuKind, available, entry_enabled, rows};
+use super::{COUNT_MENU, MEASURED_SELECTION_MENU, MenuKind, available, entry_enabled, rows};
 use crate::PhotocraftApp;
 
 /// A 64 × 48 document: committed "Hello" at the left (no edit running) and a pixel layer "Ink"
@@ -31,6 +33,19 @@ fn type_app() -> (Box<PhotocraftApp>, egui::Context) {
 /// The open menu, or panic with the app state.
 fn open_menu(app: &PhotocraftApp) -> super::CanvasToolMenu {
     app.ui.canvas_tool_menu.clone().expect("the right-click opened a menu")
+}
+
+/// `type_app` with a rectangular selection at (x, y, width, height).
+fn selected_type_app(rect: [i64; 4]) -> (Box<PhotocraftApp>, egui::Context) {
+    let (mut app, ctx) = type_app();
+    app.run("select.rect", json!({"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]})).unwrap();
+    app.sync_views();
+    (app, ctx)
+}
+
+/// The labels of the open menu's greyed rows, in menu order.
+fn greyed(app: &PhotocraftApp, menu: &super::CanvasToolMenu) -> Vec<String> {
+    rows(menu).iter().flatten().filter(|(_, id)| !available(app, menu, id)).map(|(label, _)| (*label).to_string()).collect()
 }
 
 #[test]
@@ -191,19 +206,123 @@ fn while_editing_the_type_edit_menu_still_opens() {
 }
 
 #[test]
-fn unmeasured_tools_and_a_selection_keep_opening_nothing() {
-    // Vertical Type and both Type Mask tools: not measured, they open nothing today and still do.
-    for tool in [Tool::VerticalType, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {
-        let (mut app, _ctx) = type_app();
-        app.ui.tool = tool;
-        right_click(&mut app, 30.0, 2.0);
-        assert!(app.ui.canvas_tool_menu.is_none(), "{tool:?} keeps opening nothing");
+fn with_a_selection_off_text_right_click_opens_the_selection_menu_inside_and_outside() {
+    // Selection at (40, 30), 10 × 10, pixel layer "Ink" active: (42, 32) is inside it, (30, 2)
+    // outside it, both away from the glyphs.
+    for (x, y, place) in [(42.0, 32.0, "inside"), (30.0, 2.0, "outside")] {
+        let (mut app, ctx) = selected_type_app([40, 30, 10, 10]);
+        let st = app.session.active().unwrap();
+        let (doc, revision, steps) = (st.doc.clone(), st.revision, st.history.past_len());
+        right_click(&mut app, x, y);
+        let menu = open_menu(&app);
+        assert_eq!(menu.tool, Tool::Type, "the menu is the Type tool's");
+        assert!(matches!(menu.kind, MenuKind::Tool), "the selection menu, not a type menu: {:?}", menu.kind);
+        assert!(menu.has_selection, "the right-click captured the selection, {place} it");
+        assert_eq!(labels(rows(&menu)), labels(MEASURED_SELECTION_MENU), "{place} the selection: the Red Eye and Object Selection rows");
+        assert_eq!(
+            listed(&mut app, &ctx),
+            [
+                "select.deselect",
+                "select.inverse",
+                "select.modify.feather",
+                "select.selectAndMask",
+                "―",
+                "select.saveSelection",
+                "select.toWorkPath",
+                "―",
+                "layer.new.layerViaCopy",
+                "layer.new.layerViaCut",
+                "layer.new.layer",
+                "―",
+                "edit.freeTransform",
+                "select.transformSelection",
+                "―",
+                "edit.fill",
+                "edit.stroke",
+                "edit.contentAwareFill",
+                "edit.deleteAndFillSelection",
+                "―",
+                "filter.lastFilter",
+                "―",
+                "edit.fade",
+            ],
+            "over the control channel too, {place} the selection"
+        );
+        // Measured with the pixel layer active: only the two filter-history rows are greyed.
+        assert_eq!(greyed(&app, &menu), ["Last Filter", "Fade…"], "{place} the selection");
+        let st = app.session.active().unwrap();
+        assert!(app.ui.text_edit.is_none(), "no text edit starts");
+        assert_eq!(st.doc, doc, "the layers, the history and the selection stay as they were");
+        assert_eq!(st.revision, revision, "no document revision is bumped");
+        assert_eq!(st.history.past_len(), steps, "no history state is added");
     }
-    // The menu with an active selection is not measured: the right-click keeps opening nothing.
-    let (mut app, _ctx) = type_app();
+}
+
+#[test]
+fn with_a_selection_an_active_text_layer_greys_the_selection_menu_as_measured() {
+    // The text layer active (no pixel layer above it) and a live selection.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.ui.tool = Tool::Type;
+    app.run("type.create", json!({"text": "Hello", "size": 14, "x": 1, "y": 22})).unwrap();
     app.run("select.rect", json!({"x": 40, "y": 30, "width": 10, "height": 10})).unwrap();
-    right_click(&mut app, 30.0, 2.0);
-    assert!(app.ui.canvas_tool_menu.is_none(), "with a selection, nothing opens (not measured)");
+    app.sync_views();
+    right_click(&mut app, 50.0, 40.0);
+    let menu = open_menu(&app);
+    assert!(matches!(menu.kind, MenuKind::Tool), "the selection menu, got {:?}", menu.kind);
+    assert_eq!(labels(rows(&menu)), labels(MEASURED_SELECTION_MENU), "the same menu as with a pixel layer active");
+    // Measured with a text layer active: those rows grey. Free Transform is the one row the
+    // reference greys here and this application does not: #2630 lets a text layer take Free
+    // Transform and a selection does not narrow it, pinned by
+    // `transform_type_tests::type_layers_offer_free_transform_but_not_distort_or_perspective`
+    // (also for the marquee's menu) and `free_transform_with_a_selection_frames_and_moves_the_whole_type_layer`.
+    assert_eq!(
+        greyed(&app, &menu),
+        ["Layer Via Cut", "Fill…", "Stroke…", "Content-Aware Fill…", "Delete and Fill Selection", "Last Filter", "Fade…"],
+        "measured with a text layer active, except Free Transform (#2630)"
+    );
+    assert!(available(&app, &menu, "edit.freeTransform"), "Free Transform stays live for editable type (#2630)");
+    for (label, id) in [
+        ("Layer Via Copy", "layer.new.layerViaCopy"),
+        ("New Layer…", "layer.new.layer"),
+        ("Transform Selection", "select.transformSelection"),
+        ("Deselect", "select.deselect"),
+        ("Select Inverse", "select.inverse"),
+    ] {
+        assert!(available(&app, &menu, id), "{label} stays live with a text layer active");
+    }
+    // Every row greys exactly like its menu-bar twin: the Type tool adds no menu-local rule here.
+    for (_, id) in rows(&menu).iter().flatten() {
+        assert_eq!(entry_enabled(&app, &menu, id), crate::menus::is_enabled(&app, id), "{id}");
+    }
+}
+
+#[test]
+fn with_a_selection_right_click_over_glyphs_still_opens_the_type_layer_menu() {
+    // A selection beside the glyphs and one covering them: over the glyphs the #7324 menu wins.
+    for rect in [[40, 30, 10, 10], [4, 4, 30, 30]] {
+        let (mut app, ctx) = selected_type_app(rect);
+        right_click(&mut app, 16.0, 16.0);
+        let menu = open_menu(&app);
+        assert!(matches!(menu.kind, MenuKind::TypeLayer { .. }), "the type layer menu over the glyph, got {:?}", menu.kind);
+        let ids = listed(&mut app, &ctx);
+        assert!(ids.iter().any(|id| id == "type.editText"), "its rows, not the selection menu's: {ids:?}");
+        assert!(!ids.iter().any(|id| id == "select.deselect"), "no selection rows over the glyph");
+    }
+}
+
+#[test]
+fn unmeasured_type_tools_keep_opening_nothing() {
+    // Vertical Type and both Type Mask tools: not measured, they open nothing today and still do,
+    // with no selection and with one.
+    for tool in [Tool::VerticalType, Tool::HorizontalTypeMask, Tool::VerticalTypeMask] {
+        for with_selection in [false, true] {
+            let (mut app, _ctx) = if with_selection { selected_type_app([40, 30, 10, 10]) } else { type_app() };
+            app.ui.tool = tool;
+            right_click(&mut app, 30.0, 2.0);
+            assert!(app.ui.canvas_tool_menu.is_none(), "{tool:?} keeps opening nothing (selection: {with_selection})");
+        }
+    }
 }
 
 #[test]
