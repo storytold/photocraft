@@ -66,29 +66,12 @@ fn run_dispatches_all_enabled_formats_with_their_own_dimensions() {
 }
 
 #[test]
-fn processor_dialog_restores_png_and_webp_without_requiring_jpeg() {
+fn processor_dialog_offers_jpeg_psd_and_tiff() {
     let (mut app, ctx, id) = open();
-    let output = tempfile::tempdir().unwrap();
-    for (key, value) in [
-        ("output", json!(output.path())),
-        ("jpeg/enabled", json!(false)),
-        ("png/enabled", json!(true)),
-        ("webp/enabled", json!(true)),
-        ("webp/quality", json!(12)),
-    ] {
-        set(&mut app, &ctx, id, key, value);
-    }
-    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
-    let mut formats = Vec::new();
-    for file in std::fs::read_dir(output.path()).unwrap() {
-        let path = file.unwrap().path();
-        let bytes = std::fs::read(&path).unwrap();
-        let doc = photocraft_io::import(path.to_str().unwrap(), &bytes).unwrap().document;
-        assert_eq!((doc.size.width, doc.size.height), (40, 20));
-        formats.push(path.extension().unwrap().to_string_lossy().into_owned());
-    }
-    formats.sort();
-    assert_eq!(formats, ["png", "webp"]);
+    ctx.run_ui(Default::default(), |ui| crate::dialogs::run(&mut app, ui)).textures_delta.clear();
+    let fields = app.framework.dialogs.open_dialogs().into_iter().find(|dialog| dialog.id == id).unwrap().fields.unwrap();
+    let formats: Vec<_> = fields.as_object().unwrap().keys().filter_map(|key| key.strip_suffix("/enabled")).collect();
+    assert_eq!(formats, ["jpeg", "psd", "tiff"]);
 }
 
 #[test]

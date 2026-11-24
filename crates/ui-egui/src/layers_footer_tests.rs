@@ -1,7 +1,8 @@
 //! The Layers panel footer's buttons run PhotoCraft's commands (#2561, #153, #4728). New Group: like
 //! Photoshop CC 2014 and later, a click with two or more layers selected puts them in a new,
 //! collapsed group, and with one layer it adds an empty group; Shift-click groups the selection
-//! too, Alt-click asks in the New Group dialog first and Cmd-click adds the empty group below the
+//! too, Alt-click asks in the New Group dialog first (New Group from Layers also with one
+//! non-Background layer active, which it groups, #14717) and Cmd-click adds the empty group below the
 //! active layer. New Layer: Cmd-click adds it below the active layer. Delete removes the targeted
 //! mask at once, or asks before deleting the layer (Alt deletes without asking). Add a mask
 //! targets the new mask; with a path selected it is a vector mask from that path.
@@ -41,6 +42,14 @@ fn two(both: bool) -> Session {
         s.execute("layer.select", json!({"layer": a})).unwrap();
         s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
     }
+    s
+}
+
+/// `two(false)` with the Background active.
+fn background_active() -> Session {
+    let mut s = two(false);
+    let bg = s.active().unwrap().doc.layers[0].id;
+    s.execute("layer.select", json!({"layer": bg.0})).unwrap();
     s
 }
 
@@ -185,14 +194,66 @@ fn footer_buttons_run_photocraft_commands() {
             },
         },
         Case {
-            case: "Alt New Group, one selected",
+            case: "Alt New Group, one selected: New Group from Layers groups it (#14717)",
             doc: || two(false),
             before: none,
             button: "Create a new group",
             mods: Modifiers::ALT,
             after: |h| {
+                group_dialog(h, "layer.new.groupFromLayers");
+                let groups = groups(h);
+                assert_eq!(groups.len(), 1);
+                let children: Vec<&str> = groups[0].children().unwrap().iter().map(|l| l.name.as_str()).collect();
+                assert_eq!(children, ["B"]);
+                assert_eq!(top(h)[1..], ["A".to_string(), groups[0].name.clone()], "the group takes B's place");
+            },
+        },
+        Case {
+            case: "Alt New Group, Background active: an empty group",
+            doc: background_active,
+            before: none,
+            button: "Create a new group",
+            mods: Modifiers::ALT,
+            after: |h| {
                 group_dialog(h, "layer.new.group");
-                empty_group(h, ["A", "B", "*"]);
+                assert!(groups(h)[0].children().unwrap().is_empty());
+                assert!(layer(h, "Background").is_some_and(|l| !l.is_group()));
+            },
+        },
+        Case {
+            case: "Alt New Group, no layer active: an empty group",
+            doc: || {
+                let mut s = two(false);
+                s.execute("select.deselectLayers", json!({})).unwrap();
+                s
+            },
+            before: none,
+            button: "Create a new group",
+            mods: Modifiers::ALT,
+            after: |h| {
+                group_dialog(h, "layer.new.group");
+                assert!(groups(h)[0].children().unwrap().is_empty());
+            },
+        },
+        Case {
+            case: "Alt New Group, one artboard active: an empty group, the artboard stays a board",
+            doc: || {
+                let mut s = Session::new();
+                s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+                s.execute("layer.new.artboard", json!({"name": "Board", "rect": [0, 0, 100, 100]})).unwrap();
+                s
+            },
+            before: none,
+            button: "Create a new group",
+            mods: Modifiers::ALT,
+            after: |h| {
+                let id = h.state().framework.dialogs.stack().top().expect("the New Group dialog opened");
+                confirm(h, id);
+                h.run_steps(4);
+                let plain: Vec<Layer> = groups(h).into_iter().filter(|g| g.artboard().is_none()).collect();
+                assert_eq!(plain.len(), 1, "OK adds one group: {:?}", top(h));
+                assert!(plain[0].children().unwrap().is_empty());
+                assert!(doc(h).layers.iter().any(|l| l.artboard().is_some()), "the artboard stays at the top level");
             },
         },
         Case {

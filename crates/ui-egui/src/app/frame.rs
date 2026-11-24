@@ -1,6 +1,6 @@
 use super::{
     PhotocraftApp, canvas, discard_ui, gpu_canvas, gpu_status, i18n, jobs_ui, last_brush, monitor_status, native_menu, notices, paint_mouse, panels, prefs_ui,
-    screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds, work_area,
+    screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds,
 };
 use craft::ui::contract::Bind;
 use craft::ui::runtime::env::WindowKey;
@@ -90,12 +90,11 @@ impl PhotocraftApp {
         transform_tool::end_if_left(self);
         prefs_ui::tick(self, ctx, std::time::Instant::now());
         updates_ui::tick(self);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::text::installed_fonts::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
-        // A window bigger than its display (1440 × 900 on 1366 × 768) runs under the taskbar:
-        // maximize it into the work area once (#315).
-        work_area::fit_window(ctx);
         // The runtime's close path, which asks PhotoCraft when the window was asked to close.
         craft::ui::shell::embed::logic(ctx, || discard_ui::close_decision(self));
         // A component refused its input (a zoom field turning a Tab or Alt away, a dialog field):
@@ -127,8 +126,9 @@ impl PhotocraftApp {
         self.queue_web_places();
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
         self.drain_os_events(ctx);
-        // The main window's file drops reach `open_dropped` through the document area's drop
-        // target, and the runtime repaints while files hover.
+        // The main window's file drops reach `open_dropped` through the tab strip's drop target, or
+        // the document area's window-wide one (`canvas::window_drop`), and the runtime repaints
+        // while files hover.
         crate::file_open::log_drag_over(ctx, ctx.input(|i| i.raw.hovered_files.len()));
         self.place_next_dropped(ctx);
         #[cfg(not(target_arch = "wasm32"))]

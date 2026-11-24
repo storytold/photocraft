@@ -227,19 +227,16 @@ fn check_at(name: &str, sets: &[Case], size: (usize, usize)) {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn white_balance_and_exposure() {
     check("white balance", &[cr! { temperature: 40.0, tint: -25.0}, cr! { temperature: -70.0, tint: 60.0, exposure: -1.2}, cr! { exposure: 1.5}]);
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn contrast_without_texture_or_clarity() {
     check("contrast", &[cr! { contrast: 60.0}, cr! { contrast: -80.0, exposure: 0.4}]);
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn whites_and_blacks() {
     check(
         "whites/blacks",
@@ -255,7 +252,6 @@ fn whites_and_blacks() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn tone_curves() {
     check(
         "tone curves",
@@ -276,13 +272,11 @@ fn tone_curves() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn vibrance_and_saturation() {
     check("presence", &[cr! { vibrance: 70.0}, cr! { saturation: -60.0}, cr! { vibrance: -40.0, saturation: 50.0}]);
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn color_mixer() {
     let ramp = |k: f32| std::array::from_fn(|i| ((i as f32 * 37.0 + k) % 200.0) - 100.0);
     check(
@@ -297,7 +291,6 @@ fn color_mixer() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn color_grading() {
     check(
         "color grading",
@@ -314,7 +307,6 @@ fn color_grading() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn vignette() {
     check(
         "vignette",
@@ -333,7 +325,6 @@ fn vignette() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn grain_in_full_resolution_coordinates() {
     check(
         "grain",
@@ -347,7 +338,6 @@ fn grain_in_full_resolution_coordinates() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn every_per_pixel_stage_at_once() {
     let mut hsl = [0.0; 8];
     hsl[1] = 35.0;
@@ -376,19 +366,26 @@ fn every_per_pixel_stage_at_once() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
-fn identity_leaves_pixels_alone_and_detail_has_no_pass() {
+fn identity_leaves_pixels_alone_and_detail_has_stages() {
     let Some(mut g) = gpu() else { return };
     let p = Case::default();
     let src = image(64, 32, Depth::Float);
     let stages = per_pixel(&p, 64, 32, false, None).unwrap();
     let out = g.dev.develop(&g.device, &g.queue, None, &src, Some(1), [64, 32], &stages).unwrap();
     assert_eq!(out, src, "the CPU develop returns early, unclipped");
+    // The stages hand Detail over (craft-libs#3101), but the pass has no Detail stage yet, so the
+    // dialog keeps these on the CPU (`camera_raw_gpu::gpu_stages` in photocraft-ui-egui).
     for set in [cr! { sharpen_amount: 10.0}, cr! { noise_luminance: 10.0, clarity: 20.0}, cr! { noise_color: 10.0, dehaze: 20.0}] {
-        assert!(spatial(&set) && per_pixel(&set, 64, 32, false, Some((0.0, 1.0))).is_none(), "{set:?}");
+        assert!(spatial(&set) && per_pixel(&set, 64, 32, false, Some((0.0, 1.0))).is_some_and(|s| s.detail.is_some()), "{set:?}");
     }
     // Whites and Blacks need the image's points, unless a spatial stage's passes measure them.
+    // Detail comes after them, so with only Detail the points are measured on the CPU.
     assert!(per_pixel(&cr! { whites: 10.0}, 64, 32, false, None).is_none());
+    let sharpened = cr! { whites: 10.0, sharpen_amount: 30.0};
+    assert!(per_pixel(&sharpened, 64, 32, false, None).is_none());
+    let points = white_black_points(&src, 64, 32, &sharpened);
+    let s = per_pixel(&sharpened, 64, 32, false, points).unwrap();
+    assert!(s.whites_blacks.is_some() && s.measure_whites_blacks.is_none() && s.detail.is_some());
     let toned = per_pixel(&cr! { whites: 10.0, shadows: 20.0}, 64, 32, false, None).unwrap();
     assert!(toned.local_tone.is_some() && toned.whites_blacks.is_none() && toned.measure_whites_blacks == Some([10.0, 0.0]));
     for p in [cr! { blacks: -10.0, dehaze: 20.0}, cr! { blacks: -10.0, clarity: 20.0}, cr! { blacks: -10.0, texture: 20.0}] {
@@ -404,7 +401,6 @@ fn identity_leaves_pixels_alone_and_detail_has_no_pass() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn a_cached_source_is_reused_and_a_new_key_uploads() {
     let Some(mut g) = gpu() else { return };
     let p = cr! { exposure: 0.5};
@@ -436,7 +432,6 @@ fn bad_sizes_and_faulted_devices_are_errors() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn shadows_and_highlights() {
     let sets = [
         cr! { shadows: 50.0},
@@ -452,7 +447,6 @@ fn shadows_and_highlights() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn shadows_and_highlights_on_tiny_odd_and_flat_frames() {
     let Some(mut g) = gpu() else { return };
     let p = cr! { shadows: 60.0, highlights: -40.0, whites: 20.0};
@@ -479,7 +473,6 @@ fn shadows_and_highlights_on_tiny_odd_and_flat_frames() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn shadows_and_highlights_with_per_pixel_stages() {
     let mut hsl = [0.0; 8];
     hsl[1] = 35.0;
@@ -533,7 +526,6 @@ fn assert_moves(sets: &[Case]) {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn clarity_texture_and_dehaze() {
     let sets = [
         cr! { clarity: 50.0},
@@ -554,7 +546,6 @@ fn clarity_texture_and_dehaze() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages() {
     let mut hsl = [0.0; 8];
     hsl[1] = 35.0;
@@ -605,7 +596,6 @@ fn clarity_texture_and_dehaze_with_shadows_highlights_and_per_pixel_stages() {
 }
 
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn clarity_texture_and_dehaze_on_tiny_and_odd_frames() {
     let Some(mut g) = gpu() else { return };
     let p = cr! { dehaze: 45.0, clarity: 50.0, texture: 60.0, whites: 20.0, blacks: -20.0};
@@ -634,7 +624,6 @@ fn clarity_texture_and_dehaze_on_tiny_and_odd_frames() {
 /// does there. The scene of algo's `dehaze_leaves_no_halo_beside_dark_objects`: a clear sky and a
 /// dark tower hazed with `I = J·t + A·(1 − t)`.
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
 fn dehaze_opens_the_dark_channel_like_the_cpu() {
     let Some(mut g) = gpu() else { return };
     let (w, h) = (600usize, 400usize);
@@ -656,8 +645,130 @@ fn dehaze_opens_the_dark_channel_like_the_cpu() {
     }
 }
 
+/// Each of Detail's controls alone and together: sharpening (Detail at 0 and 100, Masking off
+/// and on), luminance and colour noise reduction (their Detail at 0 and 100), at full size and on
+/// a proxy.
 #[test]
-#[ignore = "WGSL shaders pending migration to craft_develop (#587)"]
+fn detail_sharpening_and_noise_reduction() {
+    let sets = [
+        cr! { sharpen_amount: 60.0},
+        cr! { sharpen_amount: 100.0, sharpen_radius: 3.0, sharpen_detail: 100.0},
+        // Detail at 0 limits each change to 1.5 % of Amount's strength: 150 still moves over 2 %.
+        cr! { sharpen_amount: 150.0, sharpen_radius: 0.5, sharpen_detail: 0.0},
+        cr! { sharpen_amount: 80.0, sharpen_radius: 1.5, sharpen_masking: 60.0},
+        cr! { sharpen_amount: 120.0, sharpen_detail: 70.0, sharpen_masking: 100.0},
+        cr! { sharpen_amount: 100.0, sharpen_masking: 15.0},
+        cr! { noise_luminance: 50.0},
+        cr! { noise_luminance: 100.0, noise_luminance_detail: 0.0},
+        cr! { noise_luminance: 80.0, noise_luminance_detail: 100.0},
+        cr! { noise_color: 60.0},
+        cr! { noise_color: 100.0, noise_color_detail: 0.0},
+        cr! { noise_color: 30.0, noise_color_detail: 100.0},
+        cr! { noise_luminance: 40.0, noise_color: 50.0, sharpen_amount: 70.0},
+        cr! { noise_luminance: 40.0, noise_color: 50.0, sharpen_amount: 90.0, sharpen_masking: 40.0, sharpen_detail: 60.0},
+        // A proxy: the radii scale with the pixel scale (sharpening's and its mask's at their floor).
+        cr! { noise_luminance: 60.0, noise_color: 70.0, sharpen_amount: 100.0, sharpen_masking: 30.0, pixel_scale: 0.143},
+        cr! { sharpen_amount: 120.0, sharpen_radius: 3.0, encoding_gamma: 1.8, pixel_scale: 0.5},
+    ];
+    assert_moves(&sets);
+    check("detail", &sets);
+}
+
+#[test]
+fn detail_with_every_other_stage() {
+    let mut hsl = [0.0; 8];
+    hsl[1] = 35.0;
+    hsl[5] = -50.0;
+    let all = cr! {
+    temperature: 25.0,
+    tint: 10.0,
+    exposure: 0.3,
+    contrast: 25.0,
+    dehaze: 35.0,
+    shadows: 45.0,
+    highlights: -55.0,
+    clarity: 40.0,
+    texture: 30.0,
+    whites: 20.0,
+    blacks: -15.0,
+    vibrance: 30.0,
+    saturation: 10.0,
+    curve_darks: 20.0,
+    point_curve: vec![[0.0, 8.0], [255.0, 250.0]],
+    hsl_hue: hsl,
+    hsl_sat: hsl,
+    hsl_lum: hsl,
+    grade_shadows: Wheel { hue: 210.0, sat: 25.0, lum: 0.0 },
+    sharpen_amount: 80.0,
+    sharpen_masking: 25.0,
+    noise_luminance: 30.0,
+    noise_color: 40.0,
+    vignette_amount: -30.0,
+    grain_amount: 20.0,
+    pixel_scale: 0.2};
+    let sets = [
+        all.clone(),
+        // Whites and Blacks measured on the CPU (Detail, after them, is the only spatial stage),
+        cr! { whites: 60.0, blacks: -40.0, contrast: 20.0, sharpen_amount: 90.0, noise_luminance: 30.0},
+        cr! { whites: -50.0, blacks: 45.0, exposure: -0.3, noise_color: 60.0},
+        // and on the GPU after Clarity.
+        cr! { clarity: 50.0, whites: 30.0, blacks: -60.0, sharpen_amount: 70.0, sharpen_masking: 50.0},
+        cr! {
+        shadows: 50.0,
+        vignette_amount: 40.0,
+        vignette_style: StoredVignetteStyle::PaintOverlay,
+        noise_color: 50.0,
+        sharpen_amount: 60.0},
+    ];
+    check("detail + every stage", &sets);
+    let Some(mut g) = gpu() else { return };
+    // At the dialog's proxy size, with and without the other stages.
+    let proxy = cr! { noise_luminance: 50.0, noise_color: 50.0, sharpen_amount: 100.0, sharpen_masking: 20.0, pixel_scale: 0.143};
+    for p in [Case { inputs: DevelopInputs { pixel_scale: 0.143, ..all.inputs }, ..all.clone() }, proxy] {
+        for depth in DEPTHS {
+            let d = compare_at(&mut g, &p, depth, (858, 572));
+            eprintln!("detail 858x572 {depth:?}: max |GPU - CPU| = {d:.2e}");
+        }
+    }
+}
+
+#[test]
+fn detail_on_tiny_odd_and_flat_frames() {
+    let Some(mut g) = gpu() else { return };
+    let p = cr! { noise_luminance: 60.0, noise_color: 50.0, sharpen_amount: 100.0, sharpen_masking: 30.0, whites: 20.0};
+    for size in [(1, 1), (2, 2), (40, 2), (2, 40), (3, 3), (5, 3), (37, 23), (300, 7)] {
+        for depth in DEPTHS {
+            let d = compare_at(&mut g, &p, depth, size);
+            eprintln!("detail {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
+        }
+    }
+    // A flat frame: nothing to reduce or sharpen, no edges for the mask.
+    let flat = vec![[0.4, 0.35, 0.3, 1.0]; 64 * 48];
+    for depth in DEPTHS {
+        compare_image(&mut g, &p, depth, &flat, (64, 48));
+    }
+}
+
+/// Settings that change which of Detail's parts run, in turn on one pass: each develop picks its
+/// own plan and textures and still matches the CPU.
+#[test]
+fn detail_parts_switch_on_and_off_between_develops() {
+    let Some(mut g) = gpu() else { return };
+    let sets = [
+        cr! { noise_color: 50.0},
+        cr! { sharpen_amount: 80.0, sharpen_masking: 40.0},
+        cr! { exposure: 0.3},
+        cr! { noise_luminance: 50.0, sharpen_amount: 80.0},
+        cr! { noise_color: 50.0},
+    ];
+    for p in &sets {
+        for depth in DEPTHS {
+            compare_at(&mut g, p, depth, (171, 113));
+        }
+    }
+}
+
+#[test]
 fn dehaze_remakes_its_copy_when_the_white_balance_changes() {
     let Some(mut g) = gpu() else { return };
     // The dialog's proxy width, so the copy is subsampled as there; the cache key doesn't hold the
@@ -674,4 +785,22 @@ fn dehaze_remakes_its_copy_when_the_white_balance_changes() {
         let d = out.iter().zip(&cpu).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
         assert!(d <= TOL, "temperature {temperature}: off by {d}");
     }
+}
+
+/// Each luminance noise reduction setting makes its own plan; a drag through a hundred of them
+/// keeps at most 64 cached, and every develop still matches the CPU.
+#[test]
+fn a_slider_drag_keeps_the_plan_cache_bounded() {
+    let Some(mut g) = gpu() else { return };
+    for (i, amount) in (1..=100).enumerate() {
+        let p = cr! { noise_luminance: amount as f32, noise_luminance_detail: (i % 7) as f32 * 10.0};
+        if i % 33 == 0 {
+            compare_at(&mut g, &p, Depth::Eight, (64, 48));
+        } else {
+            let stages = per_pixel(&p, 64, 48, false, None).unwrap();
+            g.dev.develop(&g.device, &g.queue, None, &image(64, 48, Depth::Eight), None, [64, 48], &stages).unwrap();
+        }
+        assert!(g.dev.cached_plans() <= 64, "{} plans after {} settings", g.dev.cached_plans(), i + 1);
+    }
+    assert!(g.dev.cached_plans() > 0);
 }

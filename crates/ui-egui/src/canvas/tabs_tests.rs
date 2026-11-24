@@ -6,6 +6,7 @@ use egui::vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::actions_cmds::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -112,7 +113,7 @@ fn ctrl_tab_records_a_relative_document_switch() {
     h.key_press_modifiers(ctrl(), egui::Key::Tab);
     h.run_steps(2);
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    let steps = &h.state().session.actions.list.action(0).expect("the recorded action").steps;
+    let steps = &h.state().session.actions().list.action(0).expect("the recorded action").steps;
     assert_eq!(steps, &[ActionStep::new("document.activate", json!({"offset": -1}))]);
 }
 
