@@ -712,6 +712,10 @@ pub(crate) fn batch_check(app: &mut PhotocraftApp, result: &ParamResult) -> Resu
 #[path = "batch_ok_validation_tests.rs"]
 mod batch_ok_validation_tests;
 
+#[cfg(test)]
+#[path = "layers_to_files_tests.rs"]
+mod layers_to_files_tests;
+
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
 pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
@@ -746,6 +750,14 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     }
     if !no_params(params) {
         return None;
+    }
+    if id == "file.export.layersToFiles"
+        && let Some(st) = app.session.active()
+        && photocraft_engine::file_cmds::layers_to_files_needs_more_layers(&st.doc)
+    {
+        let message = tl!("Layers to Files needs a document with multiple layers.");
+        crate::dialogs::alerts::alert(app, message);
+        return Some(Err(message.to_owned()));
     }
     let label = photocraft_engine::commands::find(id).map_or(id, |c| c.label);
     match id {
