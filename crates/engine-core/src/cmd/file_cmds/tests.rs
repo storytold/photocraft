@@ -4481,7 +4481,7 @@ fn null_pdf_options_count_as_absent() {
     assert_eq!((o.page, o.resolution, o.name, o.image), (1, 72.0, None, None));
     let dir = tmp("pdf-null-options");
     let pdf = pdf_file(&dir, "doc.pdf");
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.openAs", json!({"path": pdf, "page": null, "crop": null})).expect("null options open with the defaults");
     assert_eq!(s.documents().len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
@@ -4527,7 +4527,7 @@ fn huge_pdf_numbers_clamp_or_are_refused_not_wrapped() {
 fn pdf_pages_and_images_open_untitled() {
     let dir = tmp("pdf-untitled");
     let pdf = pdf_file(&dir, "doc.pdf");
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.openAs", json!({"path": pdf})).unwrap();
     let st = s.active().unwrap();
     assert_eq!(st.doc.name, "doc", "named after the file, not its path");
@@ -4551,7 +4551,7 @@ fn forced_pdf_open_keeps_page_answers_and_refuses_raster_input() {
     let pdf = pdf_file(&dir, "doc.bin");
     let image = png(&dir, "image.png", 6, 5, "#00ff00");
     for format in ["pdf", "ai"] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.openAs", json!({"path": pdf, "as": format, "page": 2, "resolution": 72, "crop": "mediaBox", "mode": "gray", "depth": 16})).unwrap();
         let st = s.active().unwrap();
         assert_eq!((st.doc.size.width, st.doc.size.height), (100, 100));
