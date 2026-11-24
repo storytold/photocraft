@@ -86,6 +86,7 @@ fn first_tile(data: &[u8]) -> SourceTile<'_> {
             channels: 3,
             indexed: false,
             precision: SourcePrecision { storage: craft_xcf::Precision::GAMMA8, transfer: Transfer::Nonlinear },
+            transfer_is_assumed: false,
             sample_order: SampleOrder::BigEndian,
         },
         data,
