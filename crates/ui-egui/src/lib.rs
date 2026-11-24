@@ -750,6 +750,8 @@ mod patch_shift_constrain_tests;
 mod paths_scroll_tests;
 #[cfg(test)]
 mod pencil_pressure_toggles_tests;
+#[cfg(test)]
+mod smudge_alt_finger_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
