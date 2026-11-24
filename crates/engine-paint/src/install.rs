@@ -68,9 +68,16 @@ pub fn register(install: &mut Install) {
     // The Magic Eraser's alert for an Indexed Color or Bitmap document (#12032), the same error
     // its `run` gives: checked as the command is admitted too, so a floating selection stays
     // floating (#13169).
-    hooks.admit.push(|s, id, _| match s.active().and_then(|st| crate::eraser_cmds::magic_eraser_refusal(&st.doc)) {
-        Some(why) if id == "paint.magicEraser" => Err(crate::EngineError::Other(why.into())),
-        _ => Ok(()),
+    // The Red Eye tool's refusals (a mask or channel target, an adjustment layer, several selected
+    // layers), likewise (#12574).
+    hooks.admit.push(|s, id, params| {
+        if id == "paint.redEye" {
+            return crate::redeye_cmds::target_refusal(s, params);
+        }
+        match s.active().and_then(|st| crate::eraser_cmds::magic_eraser_refusal(&st.doc)) {
+            Some(why) if id == "paint.magicEraser" => Err(crate::EngineError::Other(why.into())),
+            _ => Ok(()),
+        }
     });
 }
 

@@ -9,7 +9,7 @@ use super::*;
 
 /// A document with a red pupil on its own layer ("pupil"), the active one.
 fn eye() -> (Session, u64) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 64, "height": 64, "mode": "rgb", "depth": 8})).unwrap();
     let id = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     s.execute("paint.pencil", json!({"points": [[32, 32]], "size": 14, "hardness": 100, "color": "#f21818"})).unwrap();
