@@ -382,12 +382,40 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path, "shim": shim_path, "steps": steps.len()}))
 }
 
+/// The droplet path as the launcher names it: canonicalised, so a droplet reached through two
+/// spellings gets one launcher.
+#[cfg(not(target_arch = "wasm32"))]
+fn canonical_droplet(droplet: &str) -> String {
+    std::fs::canonicalize(droplet).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| droplet.to_string())
+}
+
+/// The launcher that belongs to a canonicalised droplet path: the `.command` script next to it.
+/// `create_droplet` writes it (`write_shim`); a run needs the same name to keep its error log off it.
+#[cfg(not(target_arch = "wasm32"))]
+fn launcher_for(canonical_droplet: &str) -> String {
+    format!("{}.command", canonical_droplet.trim_end_matches(".pcdroplet").trim_end_matches(".json"))
+}
+
+/// The launcher of a droplet that is about to run, when one is there: `create_droplet` wrote it for
+/// `"shim": true` and by default on Unix, so the run has to look for the file rather than decide from
+/// the platform. No file, nothing to protect, and a log path that only looks like a launcher stays the
+/// writable destination the Errors row asks for. On the web there is no launcher at all.
+#[cfg(not(target_arch = "wasm32"))]
+fn launcher_of_droplet(droplet: &str) -> Option<String> {
+    let launcher = launcher_for(&canonical_droplet(droplet));
+    std::path::Path::new(&launcher).is_file().then_some(launcher)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn launcher_of_droplet(_: &str) -> Option<String> {
+    None
+}
+
 /// A tiny shell script next to the droplet: drop files on it (or pass them) to run the droplet.
 #[cfg(not(target_arch = "wasm32"))]
 fn write_shim(droplet: &str) -> Result<String> {
-    let abs = std::fs::canonicalize(droplet).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| droplet.to_string());
-    let base = abs.trim_end_matches(".pcdroplet").trim_end_matches(".json");
-    let shim = format!("{base}.command");
+    let abs = canonical_droplet(droplet);
+    let shim = launcher_for(&abs);
     // Single quotes keep shell expansions inert; embedded quotes need to end the
     // quoted segment, emit a literal quote, then resume it.
     let quoted_abs = format!("'{}'", abs.replace('\'', "'\\''"));
@@ -481,24 +509,29 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         let entries = crate::file_cmds::error_log_entries(r.get("errors").and_then(Value::as_array).unwrap_or(&none));
         let bytes = crate::file_cmds::encode_droplet_error_log(entries.iter().map(|(file, error)| (file.as_str(), error.as_str())));
         // The log may never replace a file of its own run: the same rule Batch applies to its log
-        // (#13665), checked here against the dropped inputs, every destination the run planned, and
-        // the droplet being run. The droplet file is in neither of the first two lists: a dropped folder
-        // only contributes images and Batch never writes a result under the droplet's name, so a
-        // droplet saved with its log aimed at its own file replaced its definition and the next run
-        // of it could no longer be read (#13713 review). The results the run returned in `files` are
-        // not enough either: an entry that failed has a planned output Batch still protected its log
-        // against, and Batch reports that plan in `plannedOutputs` so the guard here can use it too
-        // (#13713 review).
+        // (#13665), checked here against the dropped inputs, every destination the run planned, the
+        // droplet being run and the `.command` launcher saved next to it. The droplet file is in
+        // neither of the first two lists: a dropped folder only contributes images and Batch never
+        // writes a result under the droplet's name, so a droplet saved with its log aimed at its own
+        // file replaced its definition and the next run of it could no longer be read (#13713 review).
+        // The results the run returned in `files` are not enough either: an entry that failed has a
+        // planned output Batch still protected its log against, and Batch reports that plan in
+        // `plannedOutputs` so the guard here can use it too (#13713 review). The launcher is missing
+        // from all three as well: it is not an image, not a result and not the definition, so a log
+        // aimed at it wrote UTF-16 log bytes over the shell script and the next launch had no script
+        // to run (#15869 review).
         let names = |key: &str| -> Vec<String> {
             r.get(key).and_then(Value::as_array).map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
         };
         let written: Vec<String> = names("files");
         let planned: Vec<String> = names("plannedOutputs");
+        let launcher: Option<String> = launcher_of_droplet(path);
         let protected: Vec<&str> = inputs
             .iter()
             .map(String::as_str)
             .chain(written.iter().map(String::as_str))
             .chain(planned.iter().map(String::as_str))
+            .chain(launcher.iter().map(String::as_str))
             .chain(std::iter::once(path))
             .collect();
         if protected.iter().any(|file| crate::file_cmds::same_destination(&log, file)) {
@@ -706,7 +739,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (an input whose output name was already written in the run goes to errors; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet, refused through errorLogError when the path names a dropped input, the droplet file or any output this run planned, including one whose entry failed)"##,
+            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (an input whose output name was already written in the run goes to errors; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet, refused through errorLogError when the path names a dropped input, the droplet file, the .command launcher saved with it or any output this run planned, including one whose entry failed)"##,
             native,
             run_droplet
         ),

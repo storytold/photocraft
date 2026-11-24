@@ -336,3 +336,77 @@ fn an_error_log_naming_the_planned_output_of_a_failed_entry_never_replaces_it() 
     let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
     assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
 }
+
+// ---------------------------------------------------------------- the launcher next to the droplet
+
+/// #15869 review: the guard above still missed one file of the run, the `.command` launcher
+/// `createDroplet` writes next to the droplet (`write_shim`). It is neither the definition, a dropped
+/// input nor a batch result, so a droplet saved with its log aimed at the launcher replaced the
+/// launcher with UTF-16 log bytes and the next launch had no script to run. The rule below keys on the
+/// launcher being there, not on the platform: `shim` defaults to `cfg!(unix)`, but a droplet saved
+/// with `"shim": true` on Windows carries the very same file and needs the same protection.
+#[test]
+fn an_error_log_naming_the_droplet_launcher_never_replaces_it() {
+    let dir = tmp("log-launcher");
+    let (a, b) = inputs(&dir);
+    let launcher = format!("{dir}/Fails.command");
+    let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": launcher.clone(), "shim": true}));
+    let script = std::fs::read(&launcher).expect("`\"shim\": true` writes the launcher next to the droplet");
+    assert_eq!(&script[..2], b"#!", "{launcher} is a shell script");
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "the run went on to both files: {r}");
+    assert_eq!(std::fs::read(&launcher).unwrap(), script, "{launcher} still holds the launcher, not the log");
+    assert_eq!(&script[..2], b"#!", "the launcher is still launchable");
+    let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
+    assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
+}
+
+/// The other half of the same rule: a launcher that was never written is nothing to protect, so a log
+/// that merely carries the `.command` suffix stays writable - that is the destination a user picks in
+/// the Errors row, and refusing it would break the log the choice asks for.
+#[test]
+fn a_log_named_like_a_launcher_writes_when_no_launcher_was_generated() {
+    let dir = tmp("log-launcher-none");
+    let (a, b) = inputs(&dir);
+    let log = format!("{dir}/Fails.command");
+    let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": log.clone()}));
+    assert!(!std::path::Path::new(&log).exists(), "the default here writes no launcher to protect");
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    assert!(r.get("errorLogError").is_none(), "a log name that is not a launcher is no collision: {r}");
+    let text = decode_be(&std::fs::read(&log).unwrap());
+    assert!(text.starts_with("Start Droplet\r\n\r\n") && text.ends_with("\r\nEnd Droplet\r\n"), "{text:?}");
+}
+
+/// The default, saved with no `shim` key at all, on the platform the run happens to be on: Unix wrote
+/// a launcher, so the log aimed at that name is refused and the script stays; elsewhere the default
+/// wrote none, so the very same droplet writes its log to that name. One rule, two answers, and both
+/// are pinned here so the difference is the launcher's existence and never a platform test.
+#[test]
+fn a_default_droplet_protects_its_launcher_only_where_one_was_written() {
+    let dir = tmp("log-launcher-default");
+    let (a, b) = inputs(&dir);
+    let launcher = format!("{dir}/Default.command");
+    let dp = crate::session()
+        .execute(
+            "file.automate.createDroplet",
+            json!({"path": format!("{dir}/Default"), "steps": failing_steps(), "format": "png", "output": format!("{dir}/out"), "errors": "log", "errorLog": launcher}),
+        )
+        .unwrap()["path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let script = std::fs::read(&launcher).ok();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
+    match script {
+        Some(script) => {
+            assert_eq!(std::fs::read(&launcher).unwrap(), script, "{launcher} still holds the launcher, not the log");
+            assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
+        }
+        None => {
+            assert!(refused.is_empty(), "no launcher was written, so nothing blocks the log: {r}");
+            let text = decode_be(&std::fs::read(&launcher).unwrap());
+            assert!(text.starts_with("Start Droplet\r\n\r\n"), "{text:?}");
+        }
+    }
+}
