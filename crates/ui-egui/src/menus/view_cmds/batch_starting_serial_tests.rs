@@ -1,6 +1,6 @@
 //! File › Automate › Batch: Starting Serial # takes whole numbers 0..9999 (#13662). A value typed
 //! past them becomes the closest one and, once the field is left, the reference's "Closest value
-//! inserted" alert says so; letters are not taken.
+//! inserted" alert says so; an emptied field counts as 0, and letters are not taken.
 
 use craft::ui::dialog::{DialogId, HostedAlert, StackDialog};
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
@@ -48,6 +48,18 @@ fn type_serial(h: &mut H, text: &str) {
     h.run_steps(1);
     h.event(egui::Event::Text(text.into()));
     h.run_steps(1);
+}
+
+/// Empties the field and leaves it with Tab.
+fn empty_serial(h: &mut H) {
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some(FIELD)).expect("the Starting Serial field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
 }
 
 /// Types `text`, then leaves the field with Tab (Enter would also answer the dialog).
@@ -112,10 +124,41 @@ fn starting_serials_from_zero_to_9999_are_kept_without_an_alert() {
 }
 
 #[test]
+fn an_emptied_starting_serial_counts_as_zero() {
+    let (mut h, dialog) = batch();
+    enter_serial(&mut h, "42");
+    empty_serial(&mut h);
+    assert_eq!(serial(&h, dialog), Some(json!(0)));
+    assert!(alerts(&h).is_empty(), "an empty field is no value past the range");
+}
+
+#[test]
 fn letters_are_not_taken() {
     let (mut h, dialog) = batch();
     enter_serial(&mut h, "42");
     enter_serial(&mut h, "abc");
     assert_eq!(serial(&h, dialog), Some(json!(42)), "the previous value stays");
     assert!(alerts(&h).is_empty(), "no number, no alert");
+}
+
+/// Enter in the field shows the alert over the dialog rather than also running the batch with
+/// the corrected value; the dialog stays open with 9999 until the user presses OK there.
+#[test]
+fn enter_after_a_value_past_the_range_shows_the_alert_and_keeps_the_dialog() {
+    let (mut h, dialog) = batch();
+    // Should Enter run the batch anyway, it reads a folder that is not there and writes nothing.
+    let missing = std::env::temp_dir().join(format!("photocraft-batch-serial-missing-{}", std::process::id()));
+    let ctx = h.ctx.clone();
+    for (key, path) in [("input", missing.join("in")), ("output", missing.join("out"))] {
+        h.state_mut().framework.dialogs.set_json_field(&ctx, dialog, key, json!(path.to_string_lossy())).unwrap();
+    }
+    h.run_steps(4);
+    type_serial(&mut h, "12345");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert_eq!(alerts(&h), vec![ALERT.to_string()]);
+    assert_eq!(serial(&h, dialog), Some(json!(9999)), "the dialog is still open, with the closest value");
+    ok(&mut h);
+    assert!(alerts(&h).is_empty());
+    assert_eq!(serial(&h, dialog), Some(json!(9999)), "OK on the alert leaves the Batch dialog open");
 }
