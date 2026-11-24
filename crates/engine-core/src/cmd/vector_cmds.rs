@@ -32,11 +32,11 @@ use crate::{EngineError, Result, Session};
 /// Keys PSD uses for a shape layer's vector data; dropped when a shape is rasterized.
 pub(crate) const SHAPE_BLOCKS: [&[u8; 4]; 8] = [b"vmsk", b"vsms", b"vogk", b"vstk", b"vscg", b"SoCo", b"GdFl", b"PtFl"];
 
-pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
+pub fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
-pub(crate) fn has_doc(s: &Session) -> std::result::Result<(), String> {
+pub fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 
@@ -69,15 +69,21 @@ mod paths;
 mod shape;
 mod vector_mask;
 
-pub(crate) use params::{layer_id, nums, op_from, pt};
+pub use params::{layer_id};
+pub use params::nums;
+pub use params::op_from;
+pub use params::pt;
 pub use params::{parse_path, parse_stroke, path_json};
 pub use paths::STROKE_PATH_TOOLS;
 use paths::{
     clipping_path_clear, clipping_path_set, path_delete, path_fill, path_rename, path_set, path_stroke, path_to_selection, path_to_selection_with_mode,
     path_transform, paths_list, resolve_path, select_to_work_path,
 };
-pub(crate) use paths::{is_work, path_mut};
-pub(crate) use shape::{bake_path, map_path, map_shape, shift_shape, translate_vectors_wrapped, with_shape};
+pub use paths::{is_work};
+pub use paths::path_mut;
+pub(crate) use shape::{map_path, map_shape, shift_shape, translate_vectors_wrapped};
+pub use shape::bake_path;
+pub use shape::with_shape;
 use shape::{
     can_paste_shape_fill, can_paste_shape_stroke, combine_shapes, copy_shape_fill, copy_shape_stroke, has_shape_fill, has_shape_stroke, merge_components,
     paste_shape_fill, paste_shape_stroke, path_to_shape, selection_to_shape, shape_create, shape_edit, shape_info, shape_rasterize,
@@ -85,7 +91,7 @@ use shape::{
 pub use shape::{preview_shape_stroke, refresh_shape, shape_path, transform_shape, translate_vectors};
 use vector_mask::{toggle_vector_mask, vector_mask_add, vector_mask_delete, vector_mask_edit, vector_mask_info, vector_mask_rasterize, with};
 
-pub(crate) fn leak(s: String) -> &'static str {
+pub fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 

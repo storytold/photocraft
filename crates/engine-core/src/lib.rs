@@ -71,7 +71,7 @@ pub use photocraft_paint::BrushSettings;
 
 pub mod cmd;
 mod doc_state;
-mod error;
+pub mod error;
 mod install;
 pub mod registry;
 mod session;
@@ -224,7 +224,7 @@ pub struct Session {
     /// Text layer changed by the last journal entry, for folding Type tool keystrokes.
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
-    coalesce_request: Option<String>,
+    pub coalesce_request: Option<String>,
     /// The outer action's original document/history states, independent of command transactions.
     action_history: Option<action_history::ActionHistory>,
     /// Weak leases expire when every copy of a suspended continuation is abandoned.
