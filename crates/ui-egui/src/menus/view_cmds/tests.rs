@@ -750,7 +750,7 @@ fn row_keys(app: &mut PhotocraftApp, command: &str) -> Vec<String> {
 #[test]
 fn batch_dialog_offers_destination_none_save_and_close_and_folder() {
     let (mut app, ctx) = app_with(0);
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     let shown = fields(&app, id);
     assert_eq!(shown["destination"], json!("none"), "the default is None");
@@ -781,7 +781,7 @@ fn batch_dialog_on_destination_none_opens_the_folder_files_and_writes_nothing() 
     for name in ["a.png", "b.png"] {
         app.run("file.saveACopy", json!({"path": input.join(name).to_string_lossy()})).unwrap();
     }
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     let out = dir.path().join("batch").to_string_lossy().into_owned();
     set(&mut app, &ctx, id, "input", json!(input.to_string_lossy()));
@@ -808,7 +808,7 @@ fn batch_dialog_greys_the_folder_fields_until_folder_is_picked() {
     use egui_kittest::kittest::{NodeT, Queryable};
 
     let (mut app, _) = app_with(0);
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     let mut h = Harness::builder()
         .with_size(egui::vec2(1000.0, 800.0))
         .with_max_steps(64)
@@ -859,7 +859,7 @@ fn ticking_override_save_as_shows_the_reference_note_with_ok() {
     const NOTE: &str = "When this option is on, files will be saved to the destination folder only by \"save as\" steps in the action. \
                         If there are no \"save\" or \"save as\" steps, no files will be saved.";
     let (mut app, _) = app_with(0);
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     let mut h = Harness::builder()
         .with_size(egui::vec2(1000.0, 800.0))
         .with_max_steps(64)
@@ -906,7 +906,7 @@ fn batch_dialog_save_and_close_ignores_the_stale_file_type_and_override_tick() {
     let source = input.join("a.png");
     app.run("file.saveACopy", json!({"path": source.to_string_lossy()})).unwrap();
     let bytes_before = std::fs::read(&source).unwrap();
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, id, "input", json!(input.to_string_lossy()));
     // Type the folder-run values while Folder is picked, then move back to Save and Close: the
@@ -938,7 +938,7 @@ fn batch_dialog_none_ignores_a_retained_override_tick() {
     app.run("file.saveACopy", json!({"path": source.to_string_lossy()})).unwrap();
     let bytes_before = std::fs::read(&source).unwrap();
     // An Invert-only action: the very action the command's rule refuses an Override with.
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     let id = open_form(&mut app, &ctx, "file.automate.batch");
     set(&mut app, &ctx, id, "input", json!(input.to_string_lossy()));
     set(&mut app, &ctx, id, "destination", json!("folder"));
@@ -962,7 +962,7 @@ fn batch_dialog_greys_override_save_as_for_save_and_close() {
     use egui_kittest::kittest::{NodeT, Queryable};
 
     let (mut app, _) = app_with(0);
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     let mut h = Harness::builder()
         .with_size(egui::vec2(1000.0, 800.0))
         .with_max_steps(64)
