@@ -78,6 +78,9 @@ fn derive(id: &str, fields: &mut DialogFields) {
     if id == artboard_name_options::COMMAND {
         artboard_name_options::derive(fields);
     }
+    if id == "image.applyImage" {
+        apply_image_mask_derive(fields);
+    }
 }
 
 /// Choice options from `(id, label)` pairs whose labels are `tl!` literals at the call site.
@@ -626,8 +629,6 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             ]
         }
         "image.applyImage" => {
-            let mut masks = vec!["none".to_string()];
-            masks.extend(load.iter().cloned());
             // Source layer: Merged, then the pixel layers top to bottom (the engine takes
             // the topmost layer of a name), shown by their own names.
             let mut layers = vec!["merged".to_string()];
@@ -637,7 +638,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 }
             }
             // Scale and Offset only affect Add and Subtract.
-            vec![
+            let mut rows = vec![
                 choice("sourceLayer", tl!("Layer"), channels(&layers), "merged"),
                 choice("sourceChannel", tl!("Source Channel"), channels(&load), &chans[0]),
                 Param::new("sourceInvert", tl!("Invert"), ParamKind::bool(false)),
@@ -646,8 +647,9 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
                 Param::new("scale", tl!("Scale"), ParamKind::number(Some(0.001), Some(2.0), 1.0, 0.1, 3)),
                 Param::new("offset", tl!("Offset"), ParamKind::int(Some(-255), Some(255), 0)),
                 Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
-                choice("maskChannel", tl!("Mask Channel"), channels(&masks), "none"),
-            ]
+            ];
+            rows.extend(apply_image_mask_rows(app));
+            rows
         }
         _ => vec![
             choice("source1Channel", tl!("Source 1 Channel"), channels(&load), &chans[0]),
@@ -666,6 +668,124 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
     };
     Some((rows, DialogFields::new()))
 }
+
+/// Apply Image's Mask... checkbox (#14489): off by default; ticked, it shows the mask group below it.
+const MASK_ON: &str = "__mask";
+/// The mask group's Source: the index of one of [`apply_image_documents`].
+const MASK_SOURCE: &str = "__maskSource";
+/// The mask group's Invert.
+const MASK_INVERT: &str = "__maskInvert";
+
+/// The mask Layer row of the source document `index`: each candidate document has its own Layer and Channel rows,
+/// as their lists are that document's, and only the chosen document's pair is shown.
+fn mask_layer_key(index: usize) -> String {
+    format!("__maskLayer/{index}")
+}
+
+/// The mask Channel row of the source document `index`.
+fn mask_channel_key(index: usize) -> String {
+    format!("__maskChannel/{index}")
+}
+
+/// The shell key that shows the Layer and Channel rows of document `index`: the mask ticked and that document chosen
+/// (a row takes one `visible_when` condition).
+fn mask_shown_key(index: usize) -> String {
+    format!("__maskShown/{index}")
+}
+
+/// The open documents Apply Image can read from (#14480, #14489): those with the target's pixel size and bit depth,
+/// whatever their colour mode, in the order they were opened, as `(index, document)`. The target is among them.
+pub(crate) fn apply_image_documents(app: &PhotocraftApp) -> Vec<(usize, &photocraft_doc::Document)> {
+    let Some(target) = app.session.active() else { return Vec::new() };
+    let (size, depth) = (target.doc.size, target.doc.depth);
+    app.session.documents().iter().enumerate().filter(|(_, st)| st.doc.size == size && st.doc.depth == depth).map(|(i, st)| (i, &*st.doc)).collect()
+}
+
+/// The Layer list of a source document and its default: Merged, then its pixel layers top to bottom (the engine takes
+/// the topmost layer of a name), Merged first; a single-layer document lists only that layer.
+fn apply_image_layers(doc: &photocraft_doc::Document) -> (Vec<String>, String) {
+    let all = doc.walk();
+    if let [(_, _, only)] = all.as_slice() {
+        return (vec![only.name.clone()], only.name.clone());
+    }
+    let mut layers = vec!["merged".to_string()];
+    for (_, _, l) in all.into_iter().rev() {
+        if l.surface().is_some() && !layers.contains(&l.name) {
+            layers.push(l.name.clone());
+        }
+    }
+    (layers, "merged".to_string())
+}
+
+/// The mask Channel list of a source document and its default (#14489): its composite, read as luminosity and so named
+/// Gray, the colour channels of a colour document, then its alpha channels (and Selection while it has one). A colour
+/// document starts at its first colour channel, a one-channel document at Gray. The reference draws a rule before the
+/// alpha channels; the hosted choice row takes no separators.
+fn apply_image_mask_channels(doc: &photocraft_doc::Document) -> (Vec<(String, Label)>, String) {
+    let mode = doc.pixel_format().mode;
+    let composite = photocraft_engine::channel_cmds::composite_name(mode).to_string();
+    let mut list = vec![(composite.clone(), Label::from(tl!("Gray")))];
+    let mut default = composite;
+    if mode.color_channels() > 1 {
+        let colors = photocraft_engine::channel_cmds::color_names(mode);
+        if let Some(first) = colors.first() {
+            default = (*first).to_string();
+        }
+        list.extend(colors.iter().map(|n| (n.to_string(), Label::from(n.to_string()))));
+    }
+    let mut rest: Vec<String> = doc.channels.iter().map(|c| c.name.clone()).collect();
+    if doc.selection.is_some() {
+        rest.push("selection".into());
+    }
+    list.extend(channels(&rest));
+    (list, default)
+}
+
+/// Apply Image's Mask... checkbox and the group it opens (#14489): Source (the documents of [`apply_image_documents`],
+/// the first by default), then that document's Layer and Channel, and Invert.
+fn apply_image_mask_rows(app: &PhotocraftApp) -> Vec<Param> {
+    let documents = apply_image_documents(app);
+    let shown = |row: Param| row.visible_when(MASK_ON, true);
+    let names: Vec<(String, Label)> = documents.iter().map(|(i, d)| (i.to_string(), Label::from(d.name.clone()))).collect();
+    let first = names.first().map(|(id, _)| id.clone()).unwrap_or_default();
+    let mut rows = vec![Param::new(MASK_ON, tl!("Mask…"), ParamKind::bool(false)), shown(choice(MASK_SOURCE, tl!("Source"), names, &first))];
+    for (i, doc) in documents {
+        let (layers, layer) = apply_image_layers(doc);
+        let (list, channel) = apply_image_mask_channels(doc);
+        rows.push(choice(&mask_layer_key(i), tl!("Layer"), channels(&layers), &layer).visible_when(mask_shown_key(i), true));
+        rows.push(choice(&mask_channel_key(i), tl!("Channel"), list, &channel).visible_when(mask_shown_key(i), true));
+    }
+    rows.push(shown(Param::new(MASK_INVERT, tl!("Invert"), ParamKind::bool(false))));
+    rows
+}
+
+/// Brings the mask group's shell keys and the `mask*` parameters of `image.applyImage` up to date: the chosen
+/// document's Layer and Channel rows are shown, and OK sends `maskDocument`, `maskLayer`, `maskChannel` and, only when
+/// Invert is ticked, `maskInvert`. With Mask unticked it sends no mask at all.
+fn apply_image_mask_derive(fields: &mut DialogFields) {
+    let on = fields.bool(MASK_ON) == Some(true);
+    let source = fields.text(MASK_SOURCE).and_then(|s| s.parse::<usize>().ok());
+    let documents: Vec<usize> = fields.iter().filter_map(|(k, _)| k.strip_prefix("__maskLayer/").and_then(|i| i.parse().ok())).collect();
+    for i in documents {
+        fields.set(mask_shown_key(i), on && source == Some(i));
+    }
+    for key in ["maskDocument", "maskLayer", "maskChannel", "maskInvert"] {
+        fields.remove(key);
+    }
+    let Some(i) = source.filter(|_| on) else { return };
+    let Some(channel) = fields.text(&mask_channel_key(i)).map(str::to_owned) else { return };
+    let layer = fields.text(&mask_layer_key(i)).unwrap_or("merged").to_owned();
+    fields.set("maskDocument", FieldValue::Int(i64::try_from(i).unwrap_or(i64::MAX)));
+    fields.set("maskLayer", layer);
+    fields.set("maskChannel", channel);
+    if fields.bool(MASK_INVERT) == Some(true) {
+        fields.set("maskInvert", true);
+    }
+}
+
+#[cfg(test)]
+#[path = "../../dialogs/apply_image_mask_group_tests.rs"]
+mod apply_image_mask_group_tests;
 
 /// Batch's OK with Source: Folder and no source folder chosen (#13669).
 pub(crate) const NO_SOURCE_FOLDER: &str = "You must choose a source folder.";
