@@ -124,7 +124,7 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
         (Target::Layer, _) => {
             let Some(st) = app.session.active() else { return };
             // The locked Background has no opacity or fill. Batch the other layers into one undo step.
-            let ids: Vec<u64> = st.selected_layers().into_iter().filter(|id| !st.doc.is_background(*id)).map(|id| id.0).collect();
+            let ids: Vec<u64> = st.selected_layers().iter().copied().filter(|id| !st.doc.is_background(*id)).map(|id| id.0).collect();
             let key = if shift { "fill" } else { "opacity" };
             let params = match ids.as_slice() {
                 [] => return,
@@ -390,8 +390,8 @@ mod tests {
         let selected: Vec<_> = doc.layers.iter().take(10_001).map(|layer| layer.id).collect();
         a.session.add_document(doc, None);
         let st = a.session.active_mut().unwrap();
-        st.active_layer = selected.last().copied();
-        st.selected_layers = selected;
+        st.set_active_layer(selected.last().copied());
+        *st.selection_mut() = selected;
         let before = st.history.past_len();
 
         assert!(fire(&mut a, D::OpacityFive, 0.0));
