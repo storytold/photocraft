@@ -254,7 +254,7 @@ fn copy_keeps_selected_external_alias_and_unknown_records_without_reading_their_
 fn copy_refuses_a_truncated_selected_record_without_changing_document_or_clipboard() {
     let (mut s, _) = source_session(fixture(8));
     s.execute("edit.copy", json!({})).unwrap();
-    let before_clip = s.clipboard.clone().unwrap();
+    let before_clip = (*s.clipboard).clone().unwrap();
     s.edit("truncate selected linked record", |doc, _| {
         let (_, _, block) = doc.metadata.psd_global_blocks.iter_mut().find(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD")).unwrap();
         let mut truncated = block.to_vec();
@@ -361,7 +361,7 @@ fn ambiguous_invalid_utf8_ids_do_not_replace_the_clipboard() {
     s.execute("edit.fill", json!({"contents":"foreground"})).unwrap();
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
-    let before_clip = s.clipboard.clone().unwrap();
+    let before_clip = (*s.clipboard).clone().unwrap();
     s.edit("ambiguous source IDs", |doc, active| {
         let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content else { panic!("smart") };
         let SmartSource::Embedded { bytes, .. } = &sm.source else { panic!("embedded") };

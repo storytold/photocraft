@@ -183,7 +183,7 @@ impl Compositor {
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
             }
         }
-        let fr = self.frame_res(device, queue, canvas, &plan);
+        let fr = self.frame_res(device, queue, canvas, &plan)?;
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
@@ -217,7 +217,7 @@ impl Compositor {
             stats.chunks += chunks.len();
             work += part.width() as u64 * part.height() as u64 * plan.passes.len() as u64;
             let mut batch = flush.then_some(&mut last_submit);
-            self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+            self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch)?;
             // The device was lost in a submit inside the cell: issue no more work.
             if let Some(f) = self.fault() {
                 return Err(Unsupported(f.to_string()));
@@ -251,7 +251,7 @@ impl Compositor {
                     return Err(Unsupported(f.to_string()));
                 }
                 let mut batch = Some(&mut last_submit);
-                self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
+                self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch)?;
                 if let Some(f) = self.fault() {
                     return Err(Unsupported(f.to_string()));
                 }
@@ -408,7 +408,7 @@ impl Compositor {
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
-    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>) -> FrameRes {
+    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>) -> Result<FrameRes, Unsupported> {
         let grid = tile_grid(canvas);
         let area = |s: &Surface| s.tile_bounds().intersect(&grid);
         let areas = plan
@@ -417,7 +417,7 @@ impl Compositor {
             .map(|p| (p.tex.as_ref().map_or(Rect::EMPTY, |t| area(t.surface.get())), p.mask.as_ref().map_or(Rect::EMPTY, |m| area(m.surface.get()))))
             .collect();
         let luts = plan.passes.iter().map(|p| p.lut.as_ref().map(|rows| lut_texture(device, queue, rows))).collect();
-        let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat))).collect();
-        FrameRes { areas, luts, patterns }
+        let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat)).transpose()).collect::<Result<_, _>>()?;
+        Ok(FrameRes { areas, luts, patterns })
     }
 }

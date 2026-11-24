@@ -6,17 +6,22 @@
 //! - **macOS**: `NSEvent.mouseLocation`, converted into the content view of our window under it.
 //! - **X11**: `QueryPointer` on our window (a second, pure-Rust X connection).
 //! - **Windows**: `GetCursorPos`, relative to the window's client area.
-//! - **Wayland**: winit 0.30 delivers no file drops there, so there's nothing to place.
+//! - **Wayland**: winit delivers file drops, and egui's last pointer position is used as fallback.
 //!
 //! No `unsafe`: every OS call goes through a safe binding.
 //!
 //! [`service`] builds the pointer-position service for the app's window, `None` where it can't
 //! be read.
 
-pub use platform::service;
+pub use platform::{primary_down_service, service};
 
 #[cfg(target_os = "macos")]
 mod platform {
+    /// Not read here: the title-bar move of a floating document window reaches the app as a press and a release.
+    pub fn primary_down_service() -> Option<photocraft_ui_egui::PrimaryDownFn> {
+        None
+    }
+
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSEvent, NSWindow};
     use photocraft_ui_egui::CursorPosFn;
@@ -45,6 +50,11 @@ mod platform {
 
 #[cfg(target_os = "linux")]
 mod platform {
+    /// Not read here: the title-bar move of a floating document window reaches the app as a press and a release.
+    pub fn primary_down_service() -> Option<photocraft_ui_egui::PrimaryDownFn> {
+        None
+    }
+
     use eframe::wgpu::rwh::{HasWindowHandle, RawWindowHandle};
     use photocraft_ui_egui::CursorPosFn;
     use x11rb::protocol::xproto::ConnectionExt;
@@ -81,7 +91,17 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use photocraft_ui_egui::CursorPosFn;
+    use photocraft_ui_egui::{CursorPosFn, PrimaryDownFn};
+
+    /// The physical left button (`GetAsyncKeyState`): a floating document window's title-bar move runs in the OS, which
+    /// tells the app nothing when it ends (#16415).
+    pub fn primary_down_service() -> Option<PrimaryDownFn> {
+        // `GetAsyncKeyState` reads the physical button: with the buttons swapped, the primary one is the right.
+        Some(Box::new(|| {
+            let swapped = winsafe::GetSystemMetrics(winsafe::co::SM::SWAPBUTTON) != 0;
+            winsafe::GetAsyncKeyState(if swapped { winsafe::co::VK::RBUTTON } else { winsafe::co::VK::LBUTTON })
+        }))
+    }
 
     pub fn service(_cc: &eframe::CreationContext<'_>) -> Option<CursorPosFn> {
         Some(Box::new(|ctx: &egui::Context| {
@@ -104,6 +124,11 @@ fn client_points(screen_px: egui::Pos2, inner_min: egui::Pos2, ppp: f32) -> egui
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod platform {
+    /// Not read here: the title-bar move of a floating document window reaches the app as a press and a release.
+    pub fn primary_down_service() -> Option<photocraft_ui_egui::PrimaryDownFn> {
+        None
+    }
+
     use photocraft_ui_egui::CursorPosFn;
 
     pub fn service(_cc: &eframe::CreationContext<'_>) -> Option<CursorPosFn> {

@@ -209,13 +209,14 @@ impl B {
     fn bevel_fields(&mut self, width: f32) -> [In; 2] {
         [FieldKind::BevelInside, FieldKind::BevelOutside].map(|k| self.field(k, width))
     }
-    /// `Map::shifted` by whole pixels (`invert`: of `1 - a`); identity shifts of the plain map
-    /// are skipped.
+    /// `Map::shifted`, whole-pixel or sub-pixel (`invert`: of `1 - a`, per tap as the CPU inverts
+    /// its map before sampling); identity shifts of the plain map are skipped. A sub-pixel shift
+    /// reads the tap beyond its base, so the radius ceils rather than truncates.
     fn shift(&mut self, src: In, dx: f32, dy: f32, outside: f32, invert: bool) -> In {
         if dx == 0.0 && dy == 0.0 && !invert {
             return src;
         }
-        let r = dx.abs().max(dy.abs()) as i32;
+        let r = dx.abs().max(dy.abs()).ceil() as i32;
         self.push(stage(Kernel::MShift, Some(src), None, [dx, dy, outside, f32::from(u8::from(invert))], r))
     }
     /// `dilate(src, r)` given `dist_outside(src)`.
@@ -255,9 +256,10 @@ impl B {
         self.stages.push(s);
     }
 
+    /// `invert` flips the coverage after the contour (`fs_mfinish` mode 2), as the CPU's `satin_map` (#14981).
     fn finish_lut(&mut self, a: In, b: Option<In>, invert: bool, lut: Option<Vec<f32>>, times_shape: bool, out: usize) {
         let flag = |v: bool| f32::from(u8::from(v));
-        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
+        let mut s = stage(Kernel::MFinish, Some(a), b, [flag(b.is_some()), 2.0 * flag(invert), flag(lut.is_some()), flag(times_shape)], 0);
         s.lut = lut.map(Arc::new);
         if times_shape {
             s.s = Some(In::Shape);
@@ -336,8 +338,10 @@ fn bands(r: Rect, rows: i32) -> Vec<Rect> {
     let mut out = Vec::new();
     let mut y = r.y0;
     while y < r.y1 {
-        out.push(Rect::new(r.x0, y, r.x1, (y + rows).min(r.y1)));
-        y += rows;
+        // Saturating near the coordinate ceiling: a wrapped edge would never reach `y1`.
+        let end = y.saturating_add(rows.max(1)).min(r.y1);
+        out.push(Rect::new(r.x0, y, r.x1, end));
+        y = end;
     }
     out
 }
@@ -427,12 +431,20 @@ fn fields_in_windows<const N: usize>(
     })
 }
 
-/// The layer's shape (`compose::layer_shape`) over `r`, in parallel bands.
+/// The layer's shape (`compose::layer_shape`) over `r`, in parallel bands. Callers hand the
+/// result back with `photocraft_raster::scratch::give` once they have read it.
 pub(crate) fn shape(doc: &photocraft_doc::Document, layer: &Layer, r: Rect) -> Vec<f32> {
     if r.is_empty() {
         return Vec::new();
     }
-    par_map(bands(r, BAND), |band| photocraft_compose::layer_shape(doc, layer, band)).concat()
+    let parts = par_map(bands(r, BAND), |band| photocraft_compose::layer_shape(doc, layer, band));
+    let mut shape = photocraft_raster::scratch::take_cap(parts.iter().map(Vec::len).sum());
+    // A band can be a pooled mask (Transparency Shapes Layer off): hand each back once copied.
+    for part in parts {
+        shape.extend_from_slice(&part);
+        photocraft_raster::scratch::give(part);
+    }
+    shape
 }
 
 /// Write `v` (row-major over `r`) into the region-sized `shape`.

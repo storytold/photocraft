@@ -7,7 +7,7 @@
 //!   that large with `ERROR_INVALID_PARAMETER` ("The parameter is incorrect", #375).
 //! - **A clear out-of-memory error.** The buffer is reserved up front with `try_reserve_exact`,
 //!   and a file larger than the memory available says how much it needed. A file that grows past
-//!   its stat length while being read grows the buffer with `try_reserve` too.
+//!   its stat length while being read grows the buffer with fallible, bounded reservations too.
 //! - **A total limit.** No read returns more than [`MAX_OPEN_BYTES`], so a file that keeps growing
 //!   while it is read cannot keep an open or a save from finishing.
 //!
@@ -33,6 +33,13 @@ pub fn read_file(path: &Path) -> io::Result<Vec<u8>> {
 /// [`read_file`] with a chosen read size (tests use small ones to exercise the loop).
 pub fn read_file_with(path: &Path, chunk: usize) -> io::Result<Vec<u8>> {
     read_path(path, chunk, MAX_OPEN_BYTES)
+}
+
+/// [`read_file`] with the caller's own total limit, in bytes: a file larger than `max` is a
+/// `FileTooLarge` error and is not read, so a caller holding part of a budget can refuse it
+/// before reserving anything.
+pub fn read_file_limited(path: &Path, max: u64) -> io::Result<Vec<u8>> {
+    read_path(path, READ_CHUNK, max.min(MAX_OPEN_BYTES))
 }
 
 /// [`read_file_with`] with a chosen total limit (tests use small ones).
@@ -85,8 +92,9 @@ fn read_all_with(reader: &mut impl Read, size_hint: u64, chunk: usize, max: u64)
     loop {
         if buf.len() == buf.capacity() {
             let mut probe = [0; 4096];
+            let probe_len = chunk.min(probe.len());
             let n = loop {
-                match reader.read(&mut probe) {
+                match reader.read(&mut probe[..probe_len]) {
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                     r => break r?,
                 }
@@ -95,7 +103,15 @@ fn read_all_with(reader: &mut impl Read, size_hint: u64, chunk: usize, max: u64)
                 break;
             }
             let needed = buf.len() as u64 + n as u64;
-            buf.try_reserve(n.max(chunk)).map_err(|_| out_of_memory(needed))?;
+            // Refuse before reserving, so a caller with a small limit never allocates past it.
+            if needed > max {
+                return Err(too_large(max));
+            }
+            let room = usize::try_from(max - buf.len() as u64).unwrap_or(usize::MAX);
+            // Keep geometric growth for expanding files, capped at the caller's remaining budget.
+            // try_reserve can double capacity even when the requested increment fits.
+            let growth = n.max(chunk).max(buf.capacity()).min(room);
+            buf.try_reserve_exact(growth).map_err(|_| out_of_memory(needed))?;
             buf.extend_from_slice(&probe[..n]);
         }
         let room = u64::try_from((buf.capacity() - buf.len()).min(chunk)).unwrap_or(u64::MAX);
@@ -171,6 +187,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn probe_reads_respect_the_configured_chunk_size() {
+        struct SmallReads<'a> {
+            data: &'a [u8],
+            max_request: usize,
+        }
+        impl Read for SmallReads<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if buf.len() > self.max_request {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "read request exceeds the configured chunk size"));
+                }
+                self.data.read(buf)
+            }
+        }
+        let data = b"ninebytes";
+        for chunk in [0, 1, 7, 4096] {
+            for hint in [0, 3, data.len() as u64] {
+                let mut reader = SmallReads { data, max_request: chunk.max(1) };
+                let result = read_all_with(&mut reader, hint, chunk, 64);
+                assert_eq!(result.unwrap_or_else(|e| panic!("chunk {chunk}, hint {hint}: {e}")), data);
+            }
+        }
+    }
+
     /// Nothing over the total limit is returned (#8601): a file larger than it, a reader that
     /// gives more than it whatever its hint says, and one that never ends are `FileTooLarge`
     /// errors, while a file exactly at the limit is read whole.
@@ -199,6 +239,31 @@ mod tests {
         let buf = read_all_with(&mut std::io::Cursor::new(&data), data.len() as u64, 4096, MAX_OPEN_BYTES).unwrap();
         assert_eq!(buf, data);
         assert_eq!(buf.capacity(), data.len());
+    }
+
+    /// Growing the buffer past the hint never reserves more than the caller's limit, so a small
+    /// limit is never outgrown by the read chunk.
+    #[test]
+    fn growing_past_the_hint_stays_within_the_limit() {
+        let data = vec![3u8; 4_000];
+        // A 3,000-byte initial capacity would double past the limit with try_reserve.
+        for hint in [0, 3_000] {
+            let buf = read_all_with(&mut std::io::Cursor::new(&data), hint, 1 << 20, 5_000).unwrap();
+            assert_eq!(buf, data);
+            assert!(buf.capacity() <= 5_000, "hint {hint}, reserved {}", buf.capacity());
+        }
+        let e = read_all_with(&mut std::io::Cursor::new(vec![3u8; 9_000]), 0, 1 << 20, 5_000).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::FileTooLarge);
+    }
+
+    #[test]
+    fn a_caller_limit_refuses_a_larger_file_before_reading_it() {
+        let data = vec![7u8; 10_000];
+        let p = temp("limited", &data);
+        assert_eq!(read_file_limited(&p, data.len() as u64).unwrap(), data, "exactly at the limit");
+        let e = read_file_limited(&p, data.len() as u64 - 1).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::FileTooLarge);
+        assert!(e.to_string().contains("was not read"), "{e}");
     }
 
     #[test]

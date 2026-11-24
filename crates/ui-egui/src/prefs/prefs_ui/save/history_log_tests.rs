@@ -9,7 +9,7 @@ type Appends = Rc<RefCell<Vec<(String, String)>>>;
 
 /// Build an enabled text-log fixture after consuming the setup command while logging is off.
 /// The captured append calls expose retries, filtering and exact serialized batches.
-fn app(destination: prefs::LogDestination) -> (PhotocraftApp, Appends) {
+fn app(destination: prefs::LogDestination) -> (Box<PhotocraftApp>, Appends) {
     let calls = Appends::default();
     let sink = calls.clone();
     let services = Services {
@@ -37,9 +37,11 @@ fn failed_append_reports_the_path_and_error_without_undoing_the_edit_or_replayin
     for destination in [prefs::LogDestination::TextFile, prefs::LogDestination::Both] {
         let (mut app, calls) = app(destination);
         let sink = calls.clone();
+        let file = Rc::new(RefCell::new(String::new()));
+        let written = file.clone();
         app.services.append_text = Some(Box::new(move |path, text| {
             sink.borrow_mut().push((path.into(), text.into()));
-            // A sink can have written part of this text before returning an error.
+            written.borrow_mut().extend(text.chars().take(2));
             Err("disk full".into())
         }));
         let result = app.run("edit.fill", json!({"color": "#ff0000"}));
@@ -54,8 +56,9 @@ fn failed_append_reports_the_path_and_error_without_undoing_the_edit_or_replayin
         let journal = app.session.journal.clone();
         assert_eq!(journal.last().unwrap().0, "edit.fill");
 
-        // Exercise the same upkeep entry point as the running application.
-        tick(&mut app, &egui::Context::default());
+        // Exercise upkeep on the same context as the running application.
+        let ctx = app.ctx().clone();
+        tick(&mut app, &ctx, Instant::now());
         assert_eq!(&*calls.borrow(), &[("history.txt".into(), "Fill\n".into())]);
         assert!(app.ui.status_error);
         for part in ["History Log", "history.txt", "disk full"] {
@@ -70,36 +73,56 @@ fn failed_append_reports_the_path_and_error_without_undoing_the_edit_or_replayin
         app.ui.status = "another status".into();
         app.ui.status_error = false;
         for _ in 0..3 {
-            tick(&mut app, &egui::Context::default());
+            tick(&mut app, &ctx, Instant::now());
             assert_eq!(app.ui.status, "another status");
             assert!(!app.ui.status_error);
         }
         assert_eq!(calls.borrow().len(), 1);
 
         let sink = calls.clone();
+        let written = file.clone();
         app.services.append_text = Some(Box::new(move |path, text| {
             sink.borrow_mut().push((path.into(), text.into()));
+            written.borrow_mut().push_str(text);
             Ok(())
         }));
         app.run("layer.renameLayer", json!({"name": "Renamed"})).unwrap();
-        tick(&mut app, &egui::Context::default());
-        tick(&mut app, &egui::Context::default());
+        tick(&mut app, &ctx, Instant::now());
+        tick(&mut app, &ctx, Instant::now());
         assert_eq!(&*calls.borrow(), &[("history.txt".into(), "Fill\n".into()), ("history.txt".into(), "Rename Layer\n".into())]);
+        assert_eq!(*file.borrow(), "FiRename Layer\n");
         assert_eq!(app.prefs_rt.log_len, app.session.journal.len());
         assert_eq!(app.session.active().unwrap().doc.layers[0].name, "Renamed");
     }
 }
 
-/// Translate only the History Log label; braces in paths and I/O errors remain literal data.
+/// A translation can move the path after the cause. Neither argument is a second format string.
 #[test]
-fn failed_append_uses_the_translated_history_log_label_and_keeps_literal_details() {
+fn failed_append_uses_the_catalog_order_and_keeps_literal_details() {
     let (mut app, _) = app(prefs::LogDestination::Both);
     app.session.edit_prefs(|p| p.history_log.file_path = "history-{error}.txt".into());
     app.services.append_text = Some(Box::new(|_, _| Err("cannot write {path}".into())));
     app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    crate::i18n::with_language(crate::i18n::Lang::from_code("fr").unwrap(), || history_log(&mut app));
-    assert_eq!(app.ui.status, "Journal de l'historique (history-{error}.txt): cannot write {path}");
+    let fr = crate::i18n::fixture_lang("fr", "\tHistory Log\tJournal de l'historique\n\t{log} ({path}): {error}\t{log} : {error} ({path})\n");
+    crate::i18n::with_language(fr, || history_log(&mut app));
+    assert_eq!(app.ui.status, "Journal de l'historique : cannot write {path} (history-{error}.txt)");
     assert!(app.ui.status_error);
+}
+
+/// Adjacent right-to-left folder names keep their separator order on screen. Direction marks
+/// belong only to the status, since adding them to the append target would select another file.
+#[test]
+fn failed_append_preserves_mixed_direction_path_order() {
+    let path = "/mnt/תיק/מסמכים/log.txt";
+    let (mut app, _) = app(prefs::LogDestination::TextFile);
+    app.session.edit_prefs(|p| p.history_log.file_path = path.into());
+    app.services.append_text = Some(Box::new(move |target, _| {
+        assert_eq!(target, path);
+        Err("disk full".into())
+    }));
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    crate::i18n::with_language(crate::i18n::Lang::EN, || history_log(&mut app));
+    assert!(app.ui.status.contains(&craft_i18n::path(path, crate::i18n::Dir::Rtl)), "{}", app.ui.status);
 }
 
 /// Successful writes must preserve both ordinary and error status messages from other work.
