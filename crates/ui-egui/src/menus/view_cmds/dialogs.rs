@@ -652,10 +652,13 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
         "image.calculations" => {
             // Image ▸ Calculations lists the channels of the source it reads (#14521), not the shared
             // list: the form sends no source layer yet, which is Merged, and a merged source has no
-            // Layer Mask or Transparency of its own. Colour modes the issue marks not measured keep
-            // the shared list, as they keep its default.
+            // Layer Mask or Transparency of its own. Colour modes the issue marks not measured keep the
+            // shared list, as they keep its default - and so does a Merged source on a document without
+            // a Background, which the issue marks not measured as well (whether Transparency is listed
+            // there).
             let alpha_names: Vec<String> = d.channels.iter().map(|c| c.name.clone()).collect();
-            let (list, default) = calculations_channels(mode, None, &alpha_names).unwrap_or_else(|| (channels(&load), chans[0].clone()));
+            let (list, default) =
+                calculations_channels(mode, None, d.background().is_some(), &alpha_names).unwrap_or_else(|| (channels(&load), chans[0].clone()));
             vec![
                 choice("source1Channel", tl!("Source 1 Channel"), list.clone(), &default),
                 Param::new("source1Invert", tl!("Invert Source 1"), ParamKind::bool(false)),
@@ -689,11 +692,18 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
 ///
 /// `layer` is the source layer the dialog chose. The form sends no layer until #14520 adds its Layer
 /// dropdown, which is Merged, so it offers neither Layer Mask nor Transparency. `None` is returned
-/// for the colour modes the issue marks *not measured* (CMYK, Lab, Indexed and the rest), whose
-/// list and default stay the shared ones of [`channel_form`]. A row starts at the source's first
-/// colour channel, "Red" on an RGB document; a one-channel source starts at its composite.
-fn calculations_channels(mode: photocraft_doc::ColorMode, layer: Option<&photocraft_doc::Layer>, alphas: &[String]) -> Option<(Vec<(String, Label)>, String)> {
-    if !matches!(mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale) {
+/// for the colour modes the issue marks *not measured* (CMYK, Lab, Indexed and the rest), and for a
+/// Merged source on a document without a Background, which the issue marks *not measured* too
+/// (`has_background`): whether that source lists Transparency is unknown, so its list and default
+/// stay the shared ones of [`channel_form`]. A row starts at the source's first colour channel,
+/// "Red" on an RGB document; a one-channel source starts at its composite.
+fn calculations_channels(
+    mode: photocraft_doc::ColorMode,
+    layer: Option<&photocraft_doc::Layer>,
+    has_background: bool,
+    alphas: &[String],
+) -> Option<(Vec<(String, Label)>, String)> {
+    if !matches!(mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale) || (layer.is_none() && !has_background) {
         return None;
     }
     let composite = photocraft_engine::channel_cmds::composite_name(mode);

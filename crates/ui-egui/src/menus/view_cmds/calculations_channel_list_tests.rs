@@ -34,6 +34,36 @@ fn target() -> Box<PhotocraftApp> {
     app
 }
 
+/// The issue marks Merged on a document without a Background *not measured* (whether Transparency is
+/// listed there), so that source keeps today's shared list: its entries, their order and the composite
+/// default. Only the measured colour modes with a Background get the per-source list.
+#[test]
+fn a_merged_source_without_a_background_keeps_the_list_of_today() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 12, "background": "transparent"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "Top"})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("channel.new", json!({"name": "Alpha 1", "fill": "white"})).unwrap();
+    app.sync_views();
+    let st = app.session.active().expect("the document is open");
+    assert!(st.doc.background().is_none(), "the document has no Background layer");
+    // The shared list, as `cmyk_and_lab_sources_keep_the_list_of_today` pins it for the modes the
+    // issue leaves alone: no "Gray" name, no Red default, and the entries a merged source has no
+    // plane of its own for.
+    let want = ["RGB", "Red", "Green", "Blue", "Alpha 1", "transparency", "selection"].to_vec();
+    let shared = rows(&app, "image.calculations");
+    for key in ["source1Channel", "source2Channel"] {
+        assert_eq!(ids(&shared, key), want, "{key} on a document without a Background");
+        assert_eq!(options(&shared, key).1.as_deref(), Some("RGB"), "{key} keeps the composite default");
+    }
+    // The same document with a Background, which is the measured configuration, gets the per-source
+    // list built from the merged source it reads.
+    let measured = target();
+    let measured_rows = rows(&measured, "image.calculations");
+    assert_eq!(ids(&measured_rows, "source1Channel"), ["RGB", "Red", "Green", "Blue", "Alpha 1"], "with a Background the merged list is the reference one");
+    assert_eq!(options(&measured_rows, "source1Channel").1.as_deref(), Some("Red"), "with a Background the row starts at Red");
+}
+
 /// The rows of `command`'s form on the document `app` builds, in English.
 fn rows(app: &PhotocraftApp, command: &str) -> Vec<Param> {
     crate::i18n::with_language(crate::i18n::Lang::EN, || channel_form(app, command).expect("the command has a form").0)
@@ -172,7 +202,8 @@ fn for_layer(app: &PhotocraftApp, layer: &str) -> (Vec<String>, Vec<String>, Str
     let chosen = doc.walk().into_iter().find(|(_, _, l)| l.name == layer).map(|(_, _, l)| l);
     let names: Vec<String> = doc.channels.iter().map(|c| c.name.clone()).collect();
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
-        let (options, default) = calculations_channels(doc.pixel_format().mode, chosen, &names).expect("a measured mode lists its own channels");
+        let (options, default) =
+            calculations_channels(doc.pixel_format().mode, chosen, doc.background().is_some(), &names).expect("a measured mode lists its own channels");
         (options.iter().map(|(id, _)| id.clone()).collect(), options.iter().map(|(_, l)| l.as_str().to_owned()).collect(), default)
     })
 }
