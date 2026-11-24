@@ -10,6 +10,7 @@ use craft::automation::actions::{Action, ActionStep};
 use craft::automation::ui::actions::ActionSelection;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -23,7 +24,7 @@ const NO_ERROR_LOG: &str = "You must specify a file to log errors to.";
 fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 4, "height": 3})).unwrap();
-    app.session.actions.list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     app
 }
