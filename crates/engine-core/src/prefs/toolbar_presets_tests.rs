@@ -186,3 +186,20 @@ fn a_hidden_list_given_with_a_preset_applies_after_it() {
     load(&mut t, &bytes).unwrap();
     assert!(t.prefs().toolbar.layout().toolbar.iter().flatten().any(|t| t == "Zoom"), "without `hidden` the preset's layout is kept");
 }
+
+#[test]
+fn an_extras_list_given_with_a_preset_takes_its_tools_off_the_presets_toolbar() {
+    let bytes = save(&mut crate::session());
+    let mut s = crate::session();
+    s.execute("edit.toolbar", json!({"loadPreset": {"data": b64_encode(&bytes)}, "extras": [["Zoom"]]})).unwrap();
+    let layout = s.prefs().toolbar.layout();
+    assert!(layout.toolbar.iter().flatten().all(|t| t != "Zoom"), "the given extras list wins over the preset's toolbar");
+    assert_eq!(layout.extras.first(), Some(&vec!["Zoom".to_string()]));
+
+    // A toolbar given too keeps a tool both lists name.
+    let mut t = crate::session();
+    t.execute("edit.toolbar", json!({"loadPreset": {"data": b64_encode(&bytes)}, "toolbar": [["Zoom"]], "extras": [["Zoom"]]})).unwrap();
+    let layout = t.prefs().toolbar.layout();
+    assert_eq!(layout.toolbar, [vec!["Zoom".to_string()]]);
+    assert!(layout.extras.iter().flatten().all(|t| t != "Zoom"));
+}

@@ -144,11 +144,15 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
         };
         list.iter().map(group).collect::<Result<Vec<Vec<String>>>>().map(Some)
     };
-    let (mut toolbar, mut extras) = (groups("toolbar")?, groups("extras")?);
-    if let Some(preset) = &preset {
-        toolbar = toolbar.or_else(|| Some(preset.toolbar.clone()));
-        extras = extras.or_else(|| Some(preset.extras.clone()));
-    }
+    let (given_toolbar, given_extras) = (groups("toolbar")?, groups("extras")?);
+    // Tools a given extras list names leave any toolbar that wasn't given too, the preset's or the
+    // current one; a given toolbar keeps them, as a tool listed twice keeps its toolbar place.
+    let named: Vec<String> = given_extras.iter().flatten().flatten().filter_map(|n| ToolbarCustomization::tool_name(n)).collect();
+    let without_named = |groups: &[Vec<String>]| -> Vec<Vec<String>> {
+        groups.iter().map(|g| g.iter().filter(|t| ToolbarCustomization::tool_name(t).is_none_or(|t| !named.contains(&t))).cloned().collect()).collect()
+    };
+    let toolbar = given_toolbar.or_else(|| preset.as_ref().map(|preset| without_named(&preset.toolbar)));
+    let extras = given_extras.or_else(|| preset.as_ref().map(|preset| preset.extras.clone()));
     let mut next = s.prefs().clone();
     {
         let pr = &mut next;
@@ -160,10 +164,7 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if toolbar.is_some() || extras.is_some() {
             let current = pr.toolbar.layout();
-            // Tools a new extras list names leave the current toolbar for it.
-            let named: Vec<String> = extras.iter().flatten().flatten().filter_map(|n| ToolbarCustomization::tool_name(n)).collect();
-            let toolbar =
-                toolbar.clone().unwrap_or_else(|| current.toolbar.iter().map(|g| g.iter().filter(|t| !named.contains(t)).cloned().collect()).collect());
+            let toolbar = toolbar.clone().unwrap_or_else(|| without_named(&current.toolbar));
             let extras = extras.clone().unwrap_or(current.extras);
             // The new layout holds the hidden tools now: a `hidden` list given too moves its tools
             // to the extras, after the lists (and a preset's) are taken; without one the layout is
