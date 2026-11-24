@@ -263,9 +263,9 @@ fn align_edges_moves_an_ellipse_without_bending_its_curve() {
 /// pixels is unchanged.
 #[test]
 fn align_edges_ellipse_bounds_round_like_rectangles() {
-    for (x0, x1, first, last) in [(10.75, 40.25, 11, 40), (10.4, 40.6, 10, 39)] {
+    for (x0, x1, first, last) in [(10.75, 40.25, 11usize, 40usize), (10.4, 40.6, 10, 39)] {
         let s = shape_doc(json!({"kind":"ellipse","rect":[x0, x0, x1 - x0, x1 - x0]}), true);
-        let y = (first + last + 1) / 2;
+        let y = (first + last).div_ceil(2);
         let got = row(&s, y, &[first - 1, first, last, last + 1]);
         assert_eq!((got[0], got[3]), (255, 255), "{x0}..{x1}: {got:?}");
         assert!(got[1] < 60 && got[2] < 60, "{x0}..{x1}: {got:?}");
