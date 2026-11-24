@@ -233,3 +233,99 @@ fn inline_xcf_prefix_recognition_does_not_accept_a_corrupt_trailer() {
     assert!(app.ui.recent_files.is_empty());
     assert!(photocraft_io::is_xcf_input("malformed.xcf", b"not an XCF"), "an explicit decoder choice retains its normal error path");
 }
+
+fn automation_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> serde_json::Value {
+    let ctx = app.ctx().clone();
+    let (request, _reply) = crate::control::ControlRequest::new("app.open", json!({"path":path,"approveHighMemory":approved}));
+    match crate::control::handle(app, &ctx, &request) {
+        crate::control::Reply::Done(reply) => reply,
+        _ => panic!("the authorized inline open must complete"),
+    }
+}
+
+#[test]
+fn automation_xcf_open_preserves_typed_view_and_protected_authorized_origin() {
+    let plain = saved_view_xcf();
+    for source in [plain.as_slice(), WRAPPED_XCF, BZIP_XCF, XZ_XCF] {
+        let mut app = app();
+        app.session.execute("edit.colorSettings", json!({"askOnMissing":true})).unwrap();
+        app.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+        let reads = Rc::new(Cell::new(0));
+        let count = reads.clone();
+        let expected = source.to_vec();
+        let read_bytes = expected.clone();
+        app.services.automation_read = Some(Box::new(move |path| {
+            assert_eq!(path, "incoming/source.psd");
+            count.set(count.get() + 1);
+            Ok(crate::AutomationReadResult { name: "source.psd".into(), bytes: read_bytes.clone(), save_path: Some(path.into()) })
+        }));
+        app.services.automation_locate = Some(Box::new(|path| {
+            assert_eq!(path, "incoming/source.psd");
+            Some("/imports/source.psd".into())
+        }));
+        app.services.import = Some(Box::new(|_, _, _| Err("the tuple importer must not discard XCF metadata".into())));
+        let reply = automation_open(&mut app, "incoming/source.psd", true);
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reads.get(), 1);
+        assert_eq!(app.session.documents().len(), 1);
+        assert!(app.held_opens.is_empty(), "automation does not invoke profile-path prompts");
+        assert!(app.session.prefs().script_events.enabled);
+        assert_saved_view(&app, "/imports/source.psd");
+        // Guard assertions only: no save/export/writer is invoked against the source.
+        let state = app.session.active().unwrap();
+        assert!(photocraft_engine::file_cmds::check_import_destination(state, "/imports/source.psd").is_err());
+        assert!(photocraft_engine::file_cmds::check_import_destination(state, "/exports/copy.pcraft").is_ok());
+        let initial = app.session.active_mut().unwrap().take_fresh_import_view().unwrap();
+        assert_eq!(initial.selected_layers.len(), 2);
+        assert_eq!(initial.samplers, [[0., 0.]]);
+        assert!(app.session.active_mut().unwrap().take_fresh_import_view().is_none(), "the typed handoff is one-time");
+        assert_eq!(source, expected);
+    }
+}
+
+#[test]
+fn automation_non_xcf_keeps_configured_importer_approval_and_save_provenance() {
+    let mut app = app();
+    let calls = Rc::new(Cell::new(0));
+    let seen = calls.clone();
+    app.services.import = Some(Box::new(move |name, bytes, options| {
+        assert_eq!(bytes, b"custom source");
+        assert!(options.psd_high_memory_approved);
+        seen.set(seen.get() + 1);
+        Ok((Document::new(name, Size::new(1, 1), ColorMode::Rgb, SampleType::U8), vec!["custom warning".into()]))
+    }));
+    app.services.automation_read =
+        Some(Box::new(|path| Ok(crate::AutomationReadResult { name: "custom.psd".into(), bytes: b"custom source".to_vec(), save_path: Some(path.into()) })));
+    let reply = automation_open(&mut app, "custom.psd", true);
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["result"]["warnings"], json!(["custom warning"]));
+    assert_eq!(calls.get(), 1);
+    let state = app.session.active_mut().unwrap();
+    assert!(!state.source_read_only);
+    assert_eq!(state.path.as_deref(), Some("custom.psd"));
+    assert!(state.protected_import_source.is_none());
+    assert!(state.take_fresh_import_view().is_none());
+}
+
+#[test]
+fn automation_xcf_decode_failure_preserves_existing_document_and_view() {
+    let mut app = app();
+    app.run("file.new", json!({"width":2,"height":2})).unwrap();
+    app.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
+    let before = app.session.active().unwrap().doc.clone();
+    let selected = app.session.active().unwrap().selected_layers.clone();
+    let mut damaged = WRAPPED_XCF.to_vec();
+    let crc = damaged.len() - 8;
+    damaged[crc] ^= 1;
+    app.services.automation_read =
+        Some(Box::new(move |_| Ok(crate::AutomationReadResult { name: "source.psd".into(), bytes: damaged.clone(), save_path: Some("source.psd".into()) })));
+    app.services.import = Some(Box::new(|_, _, _| panic!("a typed decode failure must not fall back to the tuple importer")));
+    let reply = automation_open(&mut app, "source.psd", false);
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().selected_layers, selected);
+    assert!(app.session.prefs().script_events.enabled);
+    assert!(app.ui.recent_files.is_empty());
+    assert!(app.held_opens.is_empty());
+}

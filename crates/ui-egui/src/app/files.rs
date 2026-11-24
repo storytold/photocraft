@@ -181,13 +181,20 @@ impl PhotocraftApp {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
         opts.psd_high_memory_approved = approved;
-        let (mut doc, warnings) = import(name, bytes, &opts)?;
+        // Like inline Open, XCF needs the complete typed result: tuple adapters
+        // cannot carry its source protection or the one-time saved editing view.
+        // Other formats keep the configured importer and its existing policy.
+        let (mut doc, mut warnings, initial_view, source_read_only) = if photocraft_io::is_xcf_input(name, bytes) {
+            let imported = photocraft_io::import_with_options(name, bytes, &opts).map_err(|error| error.to_string())?;
+            (imported.document, imported.warnings, imported.initial_view, imported.source_read_only)
+        } else {
+            let (doc, warnings) = import(name, bytes, &opts)?;
+            (doc, warnings, None, photocraft_io::affinity::is_affinity(bytes))
+        };
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
-        // The caller records the path it read from.
-        self.session.add_document(doc, None);
-        if let Some(st) = self.session.active_mut() {
-            st.source_read_only = photocraft_io::affinity::is_affinity(bytes);
-        }
+        // The authorized caller records the origin after successful admission.
+        let (_, view_warning) = self.session.admit_import_with_initial_view(doc, None, source_read_only, initial_view);
+        warnings.extend(view_warning);
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
         self.ui.status_error = false;
@@ -817,6 +824,10 @@ impl PhotocraftApp {
                 "pass `path`: a save without one writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file, and to OpenRaster only when it holds everything (adjustment layers, styles and masks don't fit)",
             )?
         };
+        // Shared by synchronous and worker saves, before encoding or writer dispatch.
+        // This checks the supplied destination; read-root locations are not write authority.
+        let state = self.session.active().ok_or("no document")?;
+        photocraft_engine::file_cmds::check_import_destination(state, &target).map_err(|error| error.to_string())?;
         let reply = |path: &str, warnings: &[String]| json!({"path": path, "warnings": warnings});
         // Only the target is granted: a linked smart object's stored path is document data, so
         // PSD export writes that layer as pixels instead of embedding the file.
