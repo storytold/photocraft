@@ -1097,9 +1097,10 @@ pub fn import_smart_object_source(name: &str, bytes: &[u8], max_decoded_pixels: 
 /// retain their existing fallback (preview-only rejection, typed budgets, etc.).
 pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<Option<ImportResult>, IoError> {
     if craft_svg::sniff::is_svgz(bytes) {
-        // These explicit routes precede SVGZ sniffing in the shared registry. Do not
-        // reinterpret an Affinity file or the existing gzip-XCF transport as SVG.
-        if route(name, &[]) != Route::Affinity && !xcf::is_gzipped_xcf(name, bytes) {
+        // Only the explicit .af alias precedes SVGZ sniffing in the shared registry;
+        // .afphoto/.afdesign/.afpub are fallback extensions after content detection.
+        // Keep that priority and the existing gzip-XCF transport unchanged.
+        if !has_extension(name, "af") && !xcf::is_gzipped_xcf(name, bytes) {
             // The registry's SVGZ recognition uses this same bound. Reuse the decoded
             // bytes for strict import so recognition does not inflate the source twice.
             let plain = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).map_err(|error| IoError::Svg(error.to_string()))?;
