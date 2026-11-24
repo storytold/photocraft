@@ -1,6 +1,6 @@
 //! Photoshop brushes (`.abr`) → brush presets.
 //!
-//! [`photocraft_psd::abr`] reads the file; this module maps its tips and `brushPreset`
+//! [`craft_psd::abr`] reads the file; this module maps its tips and `brushPreset`
 //! descriptors onto [`BrushSettings`] (Brush Tip Shape, Shape Dynamics, Scattering, Texture,
 //! Dual Brush, Color Dynamics, Transfer, Brush Pose, Noise, Wet Edges, Build-up, Smoothing and
 //! the captured tool options). Settings without an equivalent are listed in
@@ -9,12 +9,12 @@
 
 use std::collections::BTreeSet;
 
+use craft_psd::abr::{self, AbrFile, AbrSample, LegacyTip};
+use craft_psd::descriptor::{Descriptor, Value};
+use craft_psd::patterns::PsdPattern;
 use photocraft_paint::{
     BrushPreset, BrushSettings, Control, DualBrush, Dynamic, GrayTile, MaskMode, MixerSettings, Pattern, PatternStyle, Pose, ShapeDynamics, TipShape, Transfer,
 };
-use photocraft_psd::abr::{self, AbrFile, AbrSample, LegacyTip};
-use photocraft_psd::descriptor::{Descriptor, Value};
-use photocraft_psd::patterns::PsdPattern;
 
 /// Largest sampled tip edge kept as is; bigger tips are downsampled to it.
 pub const MAX_TIP_EDGE: u32 = 2500;
@@ -82,7 +82,7 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
                 ),
                 LegacyTip::Sampled(s) => {
                     let (tip, size) = m.tip(s);
-                    (BrushSettings { size, tip, aliased: !b.anti_alias, ..base }, format!("Sampled Brush {}", i + 1))
+                    (BrushSettings { size, tip: tip.into(), aliased: !b.anti_alias, ..base }, format!("Sampled Brush {}", i + 1))
                 }
             };
             let name = if b.name.trim().is_empty() { default_name } else { b.name.trim().to_string() };
@@ -93,7 +93,7 @@ pub fn map_file_with(f: &AbrFile, group: &str, ctl: &photocraft_raster::Interrup
         for (i, s) in f.samples.iter().enumerate() {
             step(i)?;
             let (tip, size) = m.tip(s);
-            let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip, ..Default::default() };
+            let brush = BrushSettings { pressure_size: false, spacing: 0.25, size, tip: tip.into(), ..Default::default() };
             out.presets.push(BrushPreset {
                 name: format!("Sampled Brush {}", i + 1),
                 brush,
@@ -359,7 +359,7 @@ impl Mapper<'_> {
         let mut b = BrushSettings { pressure_size: false, spacing: 0.25, ..Default::default() };
         if let Some(t) = obj(d, "Brsh") {
             let (tip, sampled_size) = self.tip_shape(t)?;
-            b.tip = tip;
+            b.tip = tip.into();
             b.size = num(t, "Dmtr").map(|v| v as f32).or(sampled_size).unwrap_or(b.size).clamp(1.0, 5000.0);
             if let Some(v) = pct(t, "Hrdn") {
                 b.hardness = v.clamp(0.0, 1.0);

@@ -13,6 +13,9 @@
 //!   preferences by path;
 //! - or `self.<snake_key>` in an inherent `impl` of the section's struct in `prefs.rs` (helpers
 //!   such as `TransparencyAndGamut::colors`).
+//!
+//! The `impl Session` blocks of `prefs.rs` (e.g. `apply_prefs`) are engine code, not the model,
+//! so they are scanned like any other source, as the scorecard's prefs audit does.
 
 use photocraft_engine::prefs::{HIDDEN_UNTIL_IMPLEMENTED, Preferences};
 use std::path::{Path, PathBuf};
@@ -110,20 +113,26 @@ fn inherent_impls(src: &str, name: &str) -> String {
         .join("\n")
 }
 
+/// Agent settings the framework's `AgentSettings` reads itself (the control link binds
+/// `control_port`; `read_folder()` supplies the read root; the shared live client picks the
+/// closed-app choice from `when_app_closed`), so no PhotoCraft source names the field.
+const READ_BY_THE_FRAMEWORK: &[&str] = &["integrations.controlPort", "integrations.readRoot", "integrations.whenAppClosed"];
+
 #[test]
 fn every_preference_is_read_or_hidden() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let prefs_rs = std::fs::read_to_string(root.join("crates/engine/src/prefs.rs")).unwrap();
+    let prefs_rs = std::fs::read_to_string(root.join("crates/engine-core/src/prefs.rs")).unwrap();
     let mut files = Vec::new();
     rust_sources(&root.join("crates"), &mut files);
     rust_sources(&root.join("apps"), &mut files);
-    let prefs_dir = root.join("crates/engine/src/prefs");
+    let prefs_dir = root.join("crates/engine-core/src/prefs");
     let files: Vec<(PathBuf, String)> = files
         .into_iter()
-        .filter(|p| !p.ends_with("engine/src/prefs.rs") && !p.starts_with(&prefs_dir))
+        .filter(|p| !p.ends_with("engine-core/src/prefs.rs") && !p.starts_with(&prefs_dir))
         .filter_map(|p| std::fs::read_to_string(&p).ok().map(|t| (p, production(&t))))
         .collect();
     let mut sources: Vec<String> = files.iter().map(|(_, t)| t.clone()).collect();
+    sources.push(inherent_impls(&production(&prefs_rs), "Session"));
     // A module split into child files (`foo.rs` + `foo/*.rs`) counts as one file too, so a section
     // named in the parent and a field read in a child still count as a read.
     for (path, text) in &files {
@@ -174,6 +183,7 @@ fn every_preference_is_read_or_hidden() {
                 (path, read)
             }
         };
+        let read = read || READ_BY_THE_FRAMEWORK.contains(&path.as_str());
         let hidden = HIDDEN_UNTIL_IMPLEMENTED.contains(&path.as_str());
         if !read && !hidden {
             unread.push(path);
@@ -201,6 +211,10 @@ fn the_scanner_finds_reads() {
     assert!(has_ident("let fh = &p.file_handling;", "", "file_handling"));
     assert!(!has_ident("my_file_handling", "", "file_handling"));
     assert_eq!(snake("recentFileCount"), "recent_file_count");
+    let prefs = "pub struct Performance {\n}\nimpl Session {\n    fn apply(&self) { self.prefs().performance.effect_cache_mb; }\n}\nimpl Performance {\n    fn x(&self) { self.other; }\n}\n";
+    let session = inherent_impls(prefs, "Session");
+    assert!(has_ident(&session, ".", "effect_cache_mb") && has_ident(&session, "", "performance"));
+    assert!(!has_ident(&session, ".", "other"));
     assert_eq!(production("fn a() {}\n#[cfg(test)]\nmod tests {\n p.x.y\n}"), "fn a() {}\n");
 }
 

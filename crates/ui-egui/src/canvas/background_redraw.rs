@@ -15,6 +15,7 @@
 //! going back to a state drawn a moment ago (⌥-click on an eye and again, an undo and its redo)
 //! uploads those blocks instead of compositing every layer again.
 
+use photocraft_engine::color_cmds::ColorExt;
 use std::collections::VecDeque;
 #[cfg(test)]
 use std::sync::atomic::AtomicU64;
@@ -111,6 +112,9 @@ pub(crate) struct Redraw {
     stop: Arc<AtomicBool>,
     started_ms: f64,
     fallback: Option<crate::render_path::CpuReason>,
+    /// Time spent on the failed GPU composite attempts that led to this redraw (ms), recorded once
+    /// when it ends.
+    gpu_attempt_ms: f64,
     /// The state the blocks are drawn from, and what the texels depend on besides it.
     doc: Arc<Document>,
     display: u64,
@@ -229,7 +233,7 @@ impl KeptComposites {
 /// application setting, not part of the document. Read from the session's settings, which the
 /// engine keeps in step with the process-wide value compose reads (`psblend::set_text_gamma`).
 fn text_gamma(app: &PhotocraftApp) -> u32 {
-    app.session.color.settings.blend_text_gamma.to_bits()
+    app.session.color().settings.blend_text_gamma.to_bits()
 }
 
 /// Bytes kept composites of document `doc` may hold: what Memory Usage leaves beside its pixels
@@ -286,22 +290,31 @@ pub(crate) fn start(
     visible: Rect,
     region: Rect,
     fallback: Option<crate::render_path::CpuReason>,
+    gpu_attempt_ms: f64,
 ) {
     let all = blocks(doc.bounds());
-    let display_key = display.as_deref().map_or(0, |d| d.texture_key);
+    // What the texture stores, like `texture_key`: a Multichannel document's inks follow the Spot
+    // dot gain, so blocks drawn with another gain aren't this state's.
+    let display_key = display.as_deref().map_or(0, |d| d.texture_key) ^ super::display::ink_preview_key(&doc);
     let gamma = text_gamma(app);
     // Taken again when a running redraw continues: the edit (or Memory Usage) may have changed it.
     let cap = keep_cap(app, doc.id);
     app.kept.trim(cap);
-    let (mut pending, since, fallback, mut keep) = match app.redraws.remove(&doc.id) {
+    let (mut pending, since, fallback, gpu_attempt_ms, mut keep) = match app.redraws.remove(&doc.id) {
         Some(mut old) if old.blocks == all => {
             // Blocks drawn from another state aren't part of this one's composite.
             let same = old.display == display_key && old.text_gamma == gamma && (Arc::ptr_eq(&old.doc, &doc) || *old.doc == *doc);
             let (collected, bytes) =
                 if same && old.collected_bytes <= cap { (std::mem::take(&mut old.collected), old.collected_bytes) } else { (vec![None; all.len()], 0) };
-            (std::mem::take(&mut old.pending), (old.started_ms, old.drawn), fallback.or_else(|| old.fallback.take()), (collected, bytes, cap))
+            (
+                std::mem::take(&mut old.pending),
+                (old.started_ms, old.drawn),
+                fallback.or_else(|| old.fallback.take()),
+                gpu_attempt_ms + old.gpu_attempt_ms,
+                (collected, bytes, cap),
+            )
         }
-        _ => (vec![false; all.len()], (crate::gpu_canvas::now_ms(), 0), fallback, (vec![None; all.len()], 0, cap)),
+        _ => (vec![false; all.len()], (crate::gpu_canvas::now_ms(), 0), fallback, gpu_attempt_ms, (vec![None; all.len()], 0, cap)),
     };
     for (p, b) in pending.iter_mut().zip(&all) {
         *p |= !b.intersect(&region).is_empty();
@@ -328,14 +341,14 @@ pub(crate) fn start(
         }
         keep = (vec![None; all.len()], 0, keep.2);
     }
-    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, keep });
+    spawn(app, ctx, Spawn { doc, display, display_key, text_gamma: gamma, format, visible, blocks: all, pending, since, fallback, gpu_attempt_ms, keep });
 }
 
 /// After an edit drew its own damage: continue document `doc.id`'s redraw, if one is running, on
 /// the edited document, so blocks still to come don't bring back what was there before it.
 pub(crate) fn restart(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas, doc: Arc<Document>, display: Option<Arc<CanvasDisplay>>, visible: Rect) {
     if app.redraws.contains_key(&doc.id) {
-        start(app, ctx, gpu, doc, display, visible, Rect::EMPTY, None);
+        start(app, ctx, gpu, doc, display, visible, Rect::EMPTY, None, 0.0);
     }
 }
 
@@ -384,6 +397,7 @@ pub(crate) fn poll(app: &mut PhotocraftApp, gpu: &GpuCanvas, doc: DocId) {
     }
     let ms = crate::gpu_canvas::now_ms() - r.started_ms;
     app.perf.record("background", r.drawn, ms, 0.0);
+    app.perf.record_gpu_attempt(r.gpu_attempt_ms);
     crate::notices::slow_cpu_refresh(app, doc.0, ms, r.fallback.as_ref());
 }
 
@@ -402,12 +416,10 @@ fn collect(r: &mut Redraw, p: Piece) {
     r.collected_bytes = bytes;
 }
 
-/// The active document's redraw in the status bar: "Redrawing" and how much is done.
-pub(crate) fn status(app: &PhotocraftApp, ui: &mut egui::Ui) {
-    let Some(r) = app.session.active().and_then(|st| app.redraws.get(&st.doc.id)) else { return };
-    let t = crate::theme::Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(format!("{:.0}%", r.fraction() * 100.0)).color(t.text_dim).size(11.5).monospace());
-    ui.label(egui::RichText::new(tl!("Redrawing")).color(t.text_dim).size(12.0));
+/// The active document's redraw as the status bar shows it: "Redrawing" and how much is done.
+pub(crate) fn progress(app: &PhotocraftApp) -> Option<crate::panels::status_bar::Progress> {
+    let r = app.session.active().and_then(|st| app.redraws.get(&st.doc.id))?;
+    Some(crate::panels::status_bar::Progress { label: tl!("Redrawing").to_owned(), fraction: Some(r.fraction()), cancel: None, refused: None })
 }
 
 /// Stop document `doc`'s redraw (its canvas was redrawn some other way, or is gone).
@@ -455,6 +467,7 @@ struct Spawn {
     /// When it started and the pixels uploaded so far.
     since: (f64, u64),
     fallback: Option<crate::render_path::CpuReason>,
+    gpu_attempt_ms: f64,
     /// Blocks collected for [`Kept`], their bytes, and the cap.
     keep: (Vec<Option<Vec<u8>>>, u64, u64),
 }
@@ -471,6 +484,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
         pending,
         since: (started_ms, drawn),
         fallback,
+        gpu_attempt_ms,
         keep: (collected, collected_bytes, cap),
     } = s;
     let id = doc.id;
@@ -512,6 +526,7 @@ fn spawn(app: &mut PhotocraftApp, ctx: &egui::Context, s: Spawn) {
             stop,
             started_ms,
             fallback,
+            gpu_attempt_ms,
             doc: kept_doc,
             display: display_key,
             text_gamma,
@@ -570,5 +585,7 @@ fn draw(
     }
 }
 
+#[cfg(test)]
+mod gpu_tests;
 #[cfg(test)]
 mod tests;

@@ -1,7 +1,8 @@
 //! #7669: strict ATN export must not replace a native fractional Crystallize cell size.
-use photocraft_engine::actions_cmds::Action;
+use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
+use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
-use photocraft_psd::{atn, descriptor::Value as D};
 use serde_json::{Value, json};
 
 const CRYSTALLIZE: &str = "filter.pixelate.crystallize";
@@ -34,12 +35,12 @@ fn fractional_cell_sizes_remain_native_and_are_refused_by_strict_export() {
     for depth in [8, 16, 32] {
         for cell_size in [3.1, 5.4, 5.5, 5.6, 10.25, 299.9] {
             let params = json!({"cellSize": cell_size});
-            let action = Action::new("Fractional Crystallize", vec![(CRYSTALLIZE.into(), params.clone())]);
+            let action = Action::new("Fractional Crystallize", vec![ActionStep::new(CRYSTALLIZE, params.clone())]);
             let mut direct = fixture(depth);
             direct.execute(CRYSTALLIZE, params).unwrap();
             let expected = pixels(&direct);
             let mut native = fixture(depth);
-            native.actions.list.push(action.clone());
+            native.actions_mut().list.push(action.clone()).unwrap();
             native.execute("actions.play", json!({"action": "Fractional Crystallize"})).unwrap();
             assert_eq!(pixels(&native), expected);
 
@@ -51,9 +52,9 @@ fn fractional_cell_sizes_remain_native_and_are_refused_by_strict_export() {
             if let Ok((bytes, skipped)) = atn_cmds::export("Crystallize", &[&action], &[], false) {
                 let imported = atn_cmds::import(&bytes).unwrap();
                 assert!(skipped.is_empty() && imported.unsupported.is_empty() && imported.warnings.is_empty());
-                let exported = imported.actions[0].steps[0].1["cellSize"].clone();
+                let exported = imported.actions[0].steps[0].params["cellSize"].clone();
                 let mut replay = fixture(depth);
-                replay.actions.list = imported.actions;
+                replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
                 replay.execute("actions.play", json!({"action": "Fractional Crystallize"})).unwrap();
                 let changed = pixels(&replay) != expected;
                 if cell_size == 5.4 {
@@ -73,11 +74,11 @@ fn integer_cell_sizes_and_defaults_preserve_playback() {
         let mut cases = vec![Value::Null, json!({}), json!({"target": "pixels"}), json!({"cellSize": 5.0})];
         cases.extend([3, 5, 10, 100, 300].map(|cell_size| json!({"cellSize": cell_size})));
         for params in cases {
-            let action = Action::new("Integer Crystallize", vec![(CRYSTALLIZE.into(), params.clone())]);
+            let action = Action::new("Integer Crystallize", vec![ActionStep::new(CRYSTALLIZE, params.clone())]);
             let mut direct = fixture(depth);
             direct.execute(CRYSTALLIZE, params.clone()).unwrap();
             let mut native = fixture(depth);
-            native.actions.list.push(action.clone());
+            native.actions_mut().list.push(action.clone()).unwrap();
             native.execute("actions.play", json!({"action": "Integer Crystallize"})).unwrap();
             assert_eq!(pixels(&native), pixels(&direct));
 
@@ -92,9 +93,9 @@ fn integer_cell_sizes_and_defaults_preserve_playback() {
             assert!(imported.unsupported.is_empty() && imported.warnings.is_empty());
             assert_eq!(imported.actions.len(), 1);
             assert_eq!(imported.actions[0].steps.len(), 1);
-            assert_eq!(imported.actions[0].steps[0].0, CRYSTALLIZE);
+            assert_eq!(imported.actions[0].steps[0].command, CRYSTALLIZE);
             let mut replay = fixture(depth);
-            replay.actions.list = imported.actions;
+            replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             replay.execute("actions.play", json!({"action": "Integer Crystallize"})).unwrap();
             assert_eq!(pixels(&replay), pixels(&direct), "depth {depth}: {params}");
         }
@@ -104,8 +105,10 @@ fn integer_cell_sizes_and_defaults_preserve_playback() {
 /// Skipping is explicit and reports exactly which edits were lost, preserving supported order.
 #[test]
 fn skipping_fractional_cell_sizes_reports_action_and_step() {
-    let action =
-        Action::new("Mixed Crystallize", [5.0, 5.4, 10.0, 10.25].into_iter().map(|cell_size| (CRYSTALLIZE.into(), json!({"cellSize": cell_size}))).collect());
+    let action = Action::new(
+        "Mixed Crystallize",
+        [5.0, 5.4, 10.0, 10.25].into_iter().map(|cell_size| ActionStep::new(CRYSTALLIZE, json!({"cellSize": cell_size}))).collect(),
+    );
     let error = atn_cmds::export("Crystallize", &[&action], &[], false).unwrap_err();
     assert!(error.contains("step 2 of `Mixed Crystallize`"), "{error}");
     assert!(error.contains(CRYSTALLIZE) && error.contains("skipUnsupported"), "{error}");
@@ -123,8 +126,8 @@ fn skipping_fractional_cell_sizes_reports_action_and_step() {
     let steps = &imported.actions[0].steps;
     assert_eq!(steps.len(), 2);
     for (step, cell_size) in steps.iter().zip([5.0, 10.0]) {
-        assert_eq!(step.0, CRYSTALLIZE);
-        assert_eq!(step.1["cellSize"].as_f64(), Some(cell_size));
+        assert_eq!(step.command, CRYSTALLIZE);
+        assert_eq!(step.params["cellSize"].as_f64(), Some(cell_size));
     }
 }
 
@@ -142,7 +145,7 @@ fn non_pixel_targets_and_malformed_fields_are_still_refused() {
         json!({"cellSize": -2147483649_i64}),
         json!({"cellSize": 1e100}),
     ] {
-        let action = Action::new("Unsupported Crystallize", vec![(CRYSTALLIZE.into(), params.clone())]);
+        let action = Action::new("Unsupported Crystallize", vec![ActionStep::new(CRYSTALLIZE, params.clone())]);
         assert!(atn_cmds::export("Crystallize", &[&action], &[], false).is_err(), "{params}");
         let (bytes, skipped) = atn_cmds::export("Crystallize", &[&action], &[], true).unwrap();
         assert_eq!(skipped, vec![atn_cmds::Skipped { action: "Unsupported Crystallize".into(), step: 0, id: CRYSTALLIZE.into() }]);
