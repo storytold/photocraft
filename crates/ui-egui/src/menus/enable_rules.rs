@@ -121,6 +121,18 @@ pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Opti
         return true;
     }
     let Some(rule) = selection_targets(id).filter(|_| selected.len() > 1) else { return disabled_for(doc, active, id) };
+    if id == "layer.mergeLayers" {
+        // The engine merges only top-level targets and refuses the edit when all of them are hidden.
+        let walk = doc.walk();
+        let visible = walk.iter().any(|(path, _, layer)| {
+            selected.contains(&layer.id)
+                && layer.visible
+                && !walk.iter().any(|(ancestor, _, other)| selected.contains(&other.id) && ancestor.len() < path.len() && path.starts_with(ancestor))
+        });
+        if !visible {
+            return true;
+        }
+    }
     let layers = selected.iter().filter_map(|l| doc.layer(*l));
     let can = |l: &Layer| !disabled_for(doc, Some(l), id) && (!matches!(rule, Targets::WithoutMask) || l.mask.is_none());
     let any = match rule {
@@ -546,6 +558,28 @@ mod merge_layers_selection_tests {
         assert!(crate::menus::is_enabled(&app, "layer.mergeLayers"));
         app.session.execute("layer.mergeLayers", json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.walk().len(), 1);
+    }
+
+    /// Merge Layers needs at least one visible top-level target, just as the engine does.
+    #[test]
+    fn all_hidden_merge_targets_grey_merge_layers() {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 20})).unwrap();
+        s.execute("layer.new.layer", json!({"name": "R1"})).unwrap();
+        let r1 = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.new.layer", json!({"name": "R2"})).unwrap();
+        let r2 = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.select", json!({"layer": r1.0})).unwrap();
+        s.execute("layer.select", json!({"layer": r2.0, "mode": "add"})).unwrap();
+        s.execute("layer.hideLayers", json!({})).unwrap();
+        assert!(s.execute("layer.mergeLayers", json!({})).is_err());
+
+        let mut app = crate::PhotocraftApp::new(s, crate::Services::default());
+        assert!(!crate::menus::is_enabled(&app, "layer.mergeLayers"), "all selected merge targets are hidden");
+
+        app.session.execute("layer.showLayers", json!({"layer": r2.0})).unwrap();
+        assert!(crate::menus::is_enabled(&app, "layer.mergeLayers"), "one visible merge target is enough");
+        app.session.execute("layer.mergeLayers", json!({})).unwrap();
     }
 
     /// A single layer is still mergeable: with one layer selected the command merges down onto
