@@ -72,7 +72,9 @@ pub struct Pattern {
     /// Indexed source stores an RGB surface), so this is the only place the mode survives. `None`
     /// for a pattern whose source is not a document of a known mode: the built-ins, and patterns
     /// read from a `.pat` or PSD block, which say what their pixels are but not what they came
-    /// from. Not part of the id: the same pixels keep one id whatever their source.
+    /// from. Not part of the id: the same pixels keep one id whatever their source, and the id is
+    /// how the library and a document dedupe, so defining pixels that are already stored keeps the
+    /// source mode of the pattern that got there first.
     pub source_mode: Option<ColorMode>,
     pub surface: Surface,
 }

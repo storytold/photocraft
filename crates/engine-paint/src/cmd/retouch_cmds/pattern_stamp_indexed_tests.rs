@@ -146,6 +146,35 @@ fn an_indexed_source_pattern_paints_in_other_documents_as_before() {
     }
 }
 
+/// The one measured row of #12887 this change knowingly does not keep: the reference refuses an
+/// Indexed pattern from ANOTHER image, whose colours are not in the document's colour table, and
+/// paints only the one that carries that table. PhotoCraft records the source mode, not the table,
+/// so this paints - the deviation tracked as #16642, pinned here exactly as it behaves, with the
+/// landed colours shown to be outside the document's own table.
+#[test]
+fn a_pattern_defined_in_another_indexed_document_paints_today() {
+    let mut s = crate::session();
+    let pat = indexed_doc_and_pattern(&mut s);
+    // A second Indexed document, cyan over magenta: its own exact palette, which holds none of the
+    // tile's red, green and blue.
+    s.execute("file.new", json!({"width": 64, "height": 64, "depth": 8, "mode": "rgb"})).unwrap();
+    for (y, color) in [(0, "#00ffff"), (32, "#ff00ff")] {
+        s.execute("select.rect", json!({"x": 0, "y": y, "width": 64, "height": 32})).unwrap();
+        s.execute("edit.fill", json!({"color": color})).unwrap();
+    }
+    s.execute("select.deselect", json!({})).unwrap();
+    to_indexed(&mut s);
+    let table = s.active().unwrap().doc.color_table.clone().expect("an Indexed document has a colour table");
+    assert!(!table.colors.contains(&[255, 0, 0]), "the second table holds {table:?}");
+    let before = state(&s);
+    assert_eq!(press_refusal(&s, &stroke(&pat, false)), None, "no refusal for a foreign Indexed source");
+    s.execute("paint.patternStamp", stroke(&pat, false)).unwrap_or_else(|e| panic!("foreign Indexed source: {e}"));
+    let after = state(&s);
+    assert_eq!(after.1, before.1 + 1, "one history step");
+    assert_eq!(after.0[25 * 64 + 5], [1.0, 0.0, 0.0, 1.0], "the tile's red lands, though this table has no red");
+    assert_eq!(after.0[25 * 64 + 12], [0.0, 1.0, 0.0, 1.0], "and its green, which this table lacks too");
+}
+
 #[test]
 fn a_pattern_whose_source_is_not_an_indexed_image_is_refused_in_an_indexed_document() {
     let mut s = crate::session();

@@ -265,6 +265,8 @@ pub fn export_global_blocks_with_warnings(doc: &Document, warnings: &mut Vec<Str
 
 fn export_global_blocks_with_warnings_limit(doc: &Document, warnings: &mut Vec<String>, limit: u64) -> Vec<photocraft_doc::PsdGlobalBlock> {
     let raw = &doc.metadata.psd_global_blocks;
+    // The comparison covers every field, `Pattern::source_mode` included; a pattern this reader
+    // decoded names no source on either side, so a file's blocks are still reused verbatim.
     if from_global_blocks(doc) == doc.patterns {
         return repair_legacy_blocks(raw);
     }

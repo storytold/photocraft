@@ -563,6 +563,20 @@ fn patterns_survive_a_restart() {
 
     let (u, _) = session(&dir);
     assert_eq!(user_patterns(&u), [("Toner".to_string(), 8)]);
+
+    // An index written before the source member: the pattern still loads, whole but with no
+    // source recorded, so nothing written by the older build is lost or refused differently.
+    let index = dir.0.join(PATTERNS_FILE);
+    let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&index).unwrap()).unwrap();
+    for entry in manifest["patterns"].as_array_mut().unwrap() {
+        assert!(entry.as_object_mut().unwrap().remove("source_mode").is_some(), "the writer named the member");
+    }
+    std::fs::write(&index, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    let (older, w) = session(&dir);
+    assert!(w.iter().all(|w| !w.contains("Toner")), "{w:?}");
+    let toner = older.patterns.items.iter().find(|p| p.name == "Toner").cloned().unwrap();
+    assert_eq!(toner.source_mode, None, "an older index records no source");
+    assert_eq!((toner.width, toner.height), (8, 6), "its pixels and size still load");
 }
 
 fn define_pattern(s: &mut Session, name: &str, color: &str, width: u32) {
