@@ -132,5 +132,25 @@ class NeutralSelection(unittest.TestCase):
         self.assertEqual(self.skipped('docs/a.md'), ['photocraft-algo', 'photocraft-compose', 'photocraft-geom'])
 
 
+class TestLinuxSkip(unittest.TestCase):
+    def skipped(self, *changed):
+        return select.linux_to_skip(list(changed), PACKAGES, ROOT)
+
+    def test_a_leaf_change_skips_what_does_not_build_on_it(self):
+        self.assertEqual(self.skipped('crates/ui-egui/src/lib.rs'), ['photocraft-compose', 'photocraft-raster'])
+
+    def test_a_change_reaches_the_packages_built_on_it_but_never_skips_gpu(self):
+        self.assertEqual(self.skipped('crates/compose/src/lib.rs'), ['photocraft-raster'])
+        self.assertNotIn('photocraft-gpu', self.skipped('crates/ui-egui/src/lib.rs'))
+
+    def test_shared_inputs_skip_nothing(self):
+        for path in ['crates/raster/Cargo.toml', 'Cargo.lock', '.github/workflows/ci.yml']:
+            with self.subTest(path=path):
+                self.assertEqual(self.skipped('crates/ui-egui/src/lib.rs', path), [])
+
+    def test_documentation_only_skips_everything_but_gpu(self):
+        self.assertEqual(self.skipped('docs/a.md'), ['photocraft', 'photocraft-compose', 'photocraft-raster', 'photocraft-ui-egui'])
+
+
 if __name__ == '__main__':
     unittest.main()
