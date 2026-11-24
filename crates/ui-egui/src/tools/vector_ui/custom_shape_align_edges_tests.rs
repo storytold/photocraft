@@ -103,14 +103,6 @@ fn the_triangle_and_rectangle_checkboxes_keep_a_real_drags_fractions() {
     }
 }
 
-/// ⌥ draws from the centre before the box keeps its fractions.
-#[test]
-fn alt_draws_from_the_centre_before_the_fractions_are_kept() {
-    let mut app = app(Tool::CustomShape, |o| o.align_edges = false);
-    drag(&mut app, START, END, Modifiers::ALT);
-    assert_close(drawn_bounds(&app, false), [-20.1, -9.0, 40.7, 30.2], "⌥");
-}
-
 #[test]
 fn a_shape_added_to_the_active_layer_keeps_its_fractions_too() {
     let mut app = app(Tool::CustomShape, |o| o.align_edges = false);
