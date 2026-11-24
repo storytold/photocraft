@@ -93,13 +93,15 @@ fn log_errors_to_file_stores_the_log_path() {
     assert_eq!(saved["options"].get("stopOnError"), Some(&json!(false)), "{saved}");
 }
 
-/// A droplet saved without the Errors choice keeps today's parameters.
+/// A droplet saved without the Errors choice keeps today's parameters. The launcher choice was given
+/// here (`"shim": false`) and is stored, because a run needs the droplet's own record of it to know
+/// whether the `.command` name next to the file is a launcher (#15869 review).
 #[test]
 fn a_droplet_saved_without_the_choice_stores_neither_key() {
     let dir = tmp("store-none");
     let dp = failing_droplet(&dir, json!({}));
     let saved: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
-    assert_eq!(saved["options"], json!({"format": "png", "output": format!("{dir}/out")}), "{saved}");
+    assert_eq!(saved["options"], json!({"format": "png", "output": format!("{dir}/out"), "shim": false}), "{saved}");
 }
 
 #[test]
@@ -342,9 +344,9 @@ fn an_error_log_naming_the_planned_output_of_a_failed_entry_never_replaces_it() 
 /// #15869 review: the guard above still missed one file of the run, the `.command` launcher
 /// `createDroplet` writes next to the droplet (`write_shim`). It is neither the definition, a dropped
 /// input nor a batch result, so a droplet saved with its log aimed at the launcher replaced the
-/// launcher with UTF-16 log bytes and the next launch had no script to run. The rule below keys on the
-/// launcher being there, not on the platform: `shim` defaults to `cfg!(unix)`, but a droplet saved
-/// with `"shim": true` on Windows carries the very same file and needs the same protection.
+/// launcher with UTF-16 log bytes and the next launch had no script to run. What counts as this
+/// droplet's launcher is the choice saved with it: `shim` defaults to `cfg!(unix)`, but a droplet saved
+/// with `"shim": true` records a launcher on every platform and gets the same protection there.
 #[test]
 fn an_error_log_naming_the_droplet_launcher_never_replaces_it() {
     let dir = tmp("log-launcher");
@@ -361,9 +363,12 @@ fn an_error_log_naming_the_droplet_launcher_never_replaces_it() {
     assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
 }
 
-/// The other half of the same rule: a launcher that was never written is nothing to protect, so a log
-/// that merely carries the `.command` suffix stays writable - that is the destination a user picks in
-/// the Errors row, and refusing it would break the log the choice asks for.
+/// The other half of the same rule: a launcher that was never generated is nothing to protect, so a
+/// log that merely carries the `.command` suffix stays writable - that is the destination a user picks
+/// in the Errors row. And it stays writable run after run: the first run leaves a log FILE at that
+/// name, and a later run must update its own log instead of reading that file as a launcher and
+/// refusing from then on (#15869 review round two). What decides is the droplet's record of the
+/// `shim` choice, not whether some file stands at the launcher path.
 #[test]
 fn a_log_named_like_a_launcher_writes_when_no_launcher_was_generated() {
     let dir = tmp("log-launcher-none");
@@ -371,16 +376,23 @@ fn a_log_named_like_a_launcher_writes_when_no_launcher_was_generated() {
     let log = format!("{dir}/Fails.command");
     let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": log.clone()}));
     assert!(!std::path::Path::new(&log).exists(), "the default here writes no launcher to protect");
-    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
-    assert!(r.get("errorLogError").is_none(), "a log name that is not a launcher is no collision: {r}");
-    let text = decode_be(&std::fs::read(&log).unwrap());
-    assert!(text.starts_with("Start Droplet\r\n\r\n") && text.ends_with("\r\nEnd Droplet\r\n"), "{text:?}");
+    let first = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a.clone()]})).unwrap();
+    assert!(first.get("errorLogError").is_none(), "a log name that is not a launcher is no collision: {first}");
+    let once = decode_be(&std::fs::read(&log).unwrap());
+    assert!(once.starts_with("Start Droplet\r\n\r\n") && once.ends_with("\r\nEnd Droplet\r\n"), "{once:?}");
+    assert_eq!(once.matches("File: \"").count(), 1, "one entry after the first run: {once:?}");
+    // The second run finds a file at the launcher path: it is the first run's own log, so it updates it.
+    let second = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    assert!(second.get("errorLogError").is_none(), "the log the first run left is not a launcher: {second}");
+    let twice = decode_be(&std::fs::read(&log).unwrap());
+    assert_ne!(twice, once, "the second run wrote its log over its own, not over a launcher");
+    assert_eq!(twice.matches("File: \"").count(), 2, "{twice:?}");
 }
 
-/// The default, saved with no `shim` key at all, on the platform the run happens to be on: Unix wrote
-/// a launcher, so the log aimed at that name is refused and the script stays; elsewhere the default
-/// wrote none, so the very same droplet writes its log to that name. One rule, two answers, and both
-/// are pinned here so the difference is the launcher's existence and never a platform test.
+/// The default, saved with no `shim` key at all, so the droplet carries no record and the run takes
+/// `create_droplet`'s own default on the platform it runs on: on Unix that default writes a launcher,
+/// which the log aimed at it may not replace; elsewhere it writes none, and the very same droplet
+/// writes its log to that name.
 #[test]
 fn a_default_droplet_protects_its_launcher_only_where_one_was_written() {
     let dir = tmp("log-launcher-default");
