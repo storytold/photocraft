@@ -4,9 +4,8 @@
 signer (`nightly-sign.yml`, release) keep only their exact context guards and run when one of the reviewed
 manual actors dispatches them. `nightly-dispatch.yml` stays literally off and there is no schedule:
 it only forwards scheduled producers. The installed policy
-[`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is real v3 except
-that `producer_workflow_id` is `null` until `nightly.yml` is registered on main. Read it then
-and commit it before the policy reaches `release`:
+[`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is the real v3
+policy. Its `producer_workflow_id` is the registration of `nightly.yml` on main, read with:
 
 ```bash
 gh api repos/storytold/photocraft/actions/workflows/nightly.yml --jq .id
@@ -67,7 +66,7 @@ Read on 2026-11-23; re-read anything that may have moved before the policy is pr
 | Field | Value | Source |
 |---|---|---|
 | `repository_id` | `1398080271` | `gh api repos/storytold/photocraft --jq .id` |
-| `producer_workflow_id` | `null` (pending) | Only exists once `nightly.yml` is registered on main |
+| `producer_workflow_id` | `428462603` | `gh api repos/storytold/photocraft/actions/workflows/nightly.yml` after `nightly.yml` reached main (path `.github/workflows/nightly.yml`, state `active`) |
 | `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `605d5876…` (craft-common-actions #339) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members who can push (4 admin, FredApps write); equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist (Linux tarball is about 126 MB) |
@@ -120,9 +119,8 @@ those values in the same reviewed change that promotes the policy to `release`.
 
 ## Policy fields and their required authority
 
-`.github/nightly-signing-policy.json` is installed with the values and sources listed above; its only
-unresolved field is the pending `producer_workflow_id`, so the shared validator refuses it until that
-ID is committed. The adjacent
+`.github/nightly-signing-policy.json` is installed with the values and sources listed above, and the
+shared validator accepts it. The adjacent
 [`nightly-signing-policy.example.json`](nightly-signing-policy.example.json) stays intentionally
 invalid (`null` unresolved values), not installable configuration. Its `platforms` rows do carry
 the reviewed public values: each fixed `nightly-unsigned-<platform>` artifact kind and stable's

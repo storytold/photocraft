@@ -611,12 +611,14 @@ class NightlyInstalledPolicy(unittest.TestCase):
         self.assertEqual(self.policy["schema"], "craft-nightly-release-policy/v3")
         self.assertEqual(self.policy["repository"], "storytold/photocraft")
         self.assertEqual(self.policy["release_branch"], "release")
-        for key in ("repository_id",):
-            self.assertIs(type(self.policy[key]), int)
-            self.assertGreater(self.policy[key], 0)
-        # Read from the API once nightly.yml is registered on main; null until then, never invented.
-        workflow_id = self.policy["producer_workflow_id"]
-        self.assertTrue(workflow_id is None or (type(workflow_id) is int and workflow_id > 0))
+        # Both read from the GitHub API (the repository and nightly.yml's registration on main).
+        for key in ("repository_id", "producer_workflow_id"):
+            with self.subTest(key=key):
+                self.assertIs(type(self.policy[key]), int)
+                self.assertGreater(self.policy[key], 0)
+        self.assertNotEqual(self.policy["producer_workflow_id"],
+                            self.policy["candidate_policy"]["required_workflows"][0]["workflow_id"],
+                            "the producer is not its own quality workflow")
 
     def test_paths_and_tooling_match_the_callers(self):
         pin = caller_pin("nightly.yml")
