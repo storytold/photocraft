@@ -53,6 +53,11 @@ fn manual_id(ui: &Ui) -> egui::Id {
     ui.make_persistent_id("black-white-manual-value")
 }
 
+pub(crate) fn clear_custom(ui: &Ui) {
+    ui.data_mut(|d| d.remove::<ManualValue>(manual_id(ui)));
+    ui.ctx().request_repaint();
+}
+
 /// The Properties host applies accepted Color Picker colors and Auto outside the editor's pass.
 pub(super) fn mark_custom(ui: &Ui, value: &AdjustValue) {
     if let AdjustValue::BlackWhite { value } = value {

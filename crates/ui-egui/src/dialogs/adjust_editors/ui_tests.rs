@@ -554,19 +554,22 @@ fn black_white_presets_distinguish_manual_edits_from_named_choices() {
     let (id, defaults) = layer(&h);
     let Adjustment::BlackWhite { weights, .. } = &defaults else { panic!("{defaults:?}") };
     let red = weights[0];
-    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "reds": red + 7.0})).unwrap();
-    h.run_steps(4);
-    assert_black_white_preset(&h, "Custom");
+    let type_default = |h: &mut Harness<'_, Box<PhotocraftApp>>| {
+        h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "reds": red + 7.0})).unwrap();
+        h.run_steps(4);
+        assert_black_white_preset(h, "Custom");
+        h.get_by_role_and_label(Role::SpinButton, "Reds").click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(red.to_string()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(4);
+        assert_eq!(layer(h).1, defaults);
+        assert_black_white_preset(h, "Custom");
+    };
 
-    h.get_by_role_and_label(Role::SpinButton, "Reds").click();
-    h.run_steps(1);
-    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-    h.event(egui::Event::Text(red.to_string()));
-    h.run_steps(1);
-    h.key_press(egui::Key::Tab);
-    h.run_steps(4);
-    assert_eq!(layer(&h).1, defaults);
-    assert_black_white_preset(&h, "Custom");
+    type_default(&mut h);
 
     h.state_mut().run("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap();
     h.run_steps(4);
@@ -583,4 +586,12 @@ fn black_white_presets_distinguish_manual_edits_from_named_choices() {
     assert_black_white_preset(&h, "Default");
     assert_eq!(layer(&h).1, defaults);
     assert_eq!(history_len(&h), history);
+
+    type_default(&mut h);
+    h.get_by_role_and_label(Role::Button, "Reset to defaults").scroll_to_me();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "Reset to defaults").click();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Default");
+    assert_eq!(layer(&h).1, defaults);
 }

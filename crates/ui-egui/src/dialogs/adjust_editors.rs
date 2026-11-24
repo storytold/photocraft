@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
-mod black_white_presets;
+pub(crate) mod black_white_presets;
 mod session;
 pub mod values;
 
