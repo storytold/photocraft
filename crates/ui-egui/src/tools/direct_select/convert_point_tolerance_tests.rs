@@ -19,9 +19,11 @@ fn app(tool: Tool, zoom: f32, ppp: f32) -> Box<PhotocraftApp> {
     app.ctx().set_pixels_per_point(ppp);
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
-    app.ui.views[0].zoom = zoom;
-    // The new view's fit-on-screen request would replace the zoom on the first pass.
-    app.ui.views[0].clear_pending();
+    // The corner (100, 300) in the middle of the canvas, at `zoom`; the new view's fit-on-screen request would replace
+    // both on the first pass.
+    let view = &mut app.ui.views[0];
+    (view.zoom, view.center) = (zoom, [100.0, 300.0]);
+    view.clear_pending();
     app.ui.tool = tool;
     let path = json!({"subpaths": [{"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]}]});
     app.run("path.set", json!({"name": "work", "path": path})).unwrap();
