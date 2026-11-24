@@ -698,11 +698,7 @@ fn a_failed_save_does_not_close_the_window_over_its_error() {
 }
 
 fn save_and_close_shortcut(h: &mut Harness<'_, Box<PhotocraftApp>>, key: egui::Key) {
-    let modifiers = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
-    h.key_down_modifiers(modifiers, key);
-    h.step();
-    h.key_up_modifiers(modifiers, key);
-    h.step();
+    crate::shortcut_dispatch::tests::tap(h, key, egui::Modifiers::COMMAND);
 }
 
 fn start_save_shortcut(h: &mut Harness<'_, Box<PhotocraftApp>>, path: &str, save: crate::SaveFileFn, clean: bool) {
@@ -717,9 +713,8 @@ fn start_save_shortcut(h: &mut Harness<'_, Box<PhotocraftApp>>, path: &str, save
     if clean {
         st.saved_revision = st.revision;
     }
-    h.ctx.set_os(egui::os::OperatingSystem::Windows);
     save_and_close_shortcut(h, egui::Key::S);
-    assert!(h.state().saving(), "Ctrl+S started the background save");
+    assert!(h.state().saving(), "the Save shortcut started the background save: {}", h.state().ui.status);
 }
 
 #[test]
@@ -747,8 +742,8 @@ fn close_shortcut_waits_for_a_save_of_a_clean_document() {
     gate.store(true, Ordering::Relaxed);
     step_until(&mut h, |app| !app.saving());
 
-    assert!(remained_open, "Ctrl+W must keep the tab open while the save is running");
-    assert!(!wrote_early, "the worker was still held when Ctrl+W ran");
+    assert!(remained_open, "the Close shortcut must keep the tab open while the save is running");
+    assert!(!wrote_early, "the worker was still held when Close ran");
     assert!(h.state().discard.is_none());
     assert!(h.state().session.documents().is_empty(), "the tab closes once saved");
     let saved = photocraft_io::import_with_options("save-before-close.psd", &std::fs::read(path).unwrap(), &Default::default()).unwrap().document;
