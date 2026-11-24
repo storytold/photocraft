@@ -530,6 +530,10 @@ fn apply_transform(
                 && let Some(cache) = &mut t.cache
             {
                 *cache = warp_surface_with(cache, cache.content_bounds(), h, Interp::Nearest, ctl)?.ok_or(EngineError::Cancelled)?;
+                // This cache-preserving path skips type refresh below. Move the
+                // retained PSD envelope too, preserving unknown text/style data;
+                // an unpatchable envelope must be regenerated on the next export.
+                t.psd_raw = t.psd_raw.as_ref().and_then(|raw| photocraft_text::psd::translate_tysh(raw, a.m[4], a.m[5])).map(std::sync::Arc::new);
             }
             t.transform = a.mul(&t.transform);
         }
