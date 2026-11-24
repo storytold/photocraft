@@ -461,12 +461,41 @@ const SOFT_EDGE_ACROSS: [f64; 4] = [30.0 / 256.0, 6.0 / 256.0, 118.0 / 256.0, 10
 const SOFT_EDGE_DOWN: [f64; 4] = [29.0 / 256.0, 11.0 / 256.0, 99.0 / 256.0, 117.0 / 256.0];
 /// Hard Edge off: the filtered coverage that maps to 0 and the one that maps to 1 (#12855).
 const SOFT_EDGE_RAMP: (f64, f64) = (0.10, 0.55);
+/// A wider transition for sloped edges (#13538). Drop traces below a quarter of an 8-bit
+/// coverage step before taking the square root, so distant taps don't light up clear pixels.
+const SLOPED_EDGE_RAMP: (f64, f64) = (1.0 / 1024.0, 0.70);
+
+/// The found mask is antialiased around 50% coverage. Rows at an axis-aligned boundary
+/// are uniform, or repeat the same mixed pattern beside only clear or only filled rows.
+/// At a sloped edge, the mixed rows shift or sit between both clear and filled rows.
+/// Probe beyond the filter taps so shallow slopes can show a change over several pixels.
+fn has_sloped_edge(at: &impl Fn(i32, i32) -> f64, x: i32, y: i32) -> bool {
+    const OFFSETS: [i32; 5] = [-4, -2, 0, 2, 4];
+    let mut clear_row = false;
+    let mut filled_row = false;
+    let mut mixed_row = None;
+    for dy in OFFSETS {
+        let row = OFFSETS.map(|dx| at(x.saturating_add(dx), y.saturating_add(dy)) >= 0.5);
+        match row.iter().filter(|covered| **covered).count() {
+            0 => clear_row = true,
+            n if n == OFFSETS.len() => filled_row = true,
+            _ => {
+                if mixed_row.is_some_and(|previous| previous != row) {
+                    return true;
+                }
+                mixed_row = Some(row);
+            }
+        }
+    }
+    clear_row && filled_row && mixed_row.is_some()
+}
 
 /// Object Selection with Hard Edge off (#12855): `region` with the reference application's
 /// softer rim. A four-tap filter runs across ([`SOFT_EDGE_ACROSS`]) and then down
-/// ([`SOFT_EDGE_DOWN`]), and a ramp maps [`SOFT_EDGE_RAMP`] to 0..1. On the reference
-/// application's test rectangle that softens both sides by one pixel, as it measures: the outer
-/// pixel on the left drops to about 176 and on the top to about 197, the old rim pixel on the
+/// ([`SOFT_EDGE_DOWN`]), and a ramp maps the filtered coverage to 0..1. The wider ramp
+/// retains intermediate coverage on sloped boundaries that the straight-edge ramp clips.
+/// On the reference rectangle, the straight-edge ramp softens both sides by one pixel.
+/// The outer pixel on the left drops to about 176 and on the top to about 197, the old rim pixel on the
 /// right and bottom becomes fully selected, a new rim pixel of about 65 follows it, and then a
 /// line of value 1, which sets the right and bottom bounds. The result can reach one pixel
 /// further out on the left and top and two on the right and bottom. Pixels past `canvas` repeat
@@ -491,6 +520,7 @@ fn soften_edge(region: &Region, canvas: Rect) -> Region {
     };
     let (w, h) = (bbox.width() as usize, bbox.height() as usize);
     let (lo, hi) = SOFT_EDGE_RAMP;
+    let (sloped_lo, sloped_hi) = SLOPED_EDGE_RAMP;
     // The vertical pass reads two rows above and one below, so the horizontal pass keeps four
     // rows, not the whole box: a large found object costs its 8-bit mask, not eight bytes a pixel
     // more.
@@ -506,8 +536,15 @@ fn soften_edge(region: &Region, canvas: Rect) -> Region {
     let mut mask = Vec::with_capacity(w * h);
     for y in bbox.y0..bbox.y1 {
         across(y.saturating_add(1), &mut rows[3]);
-        let filtered = (0..w).map(|i| SOFT_EDGE_DOWN.iter().zip(&rows).map(|(k, row)| k * row[i]).sum::<f64>());
-        mask.extend(filtered.map(|v| (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8));
+        mask.extend((bbox.x0..).take(w).enumerate().map(|(i, x)| {
+            let v = SOFT_EDGE_DOWN.iter().zip(&rows).map(|(k, row)| k * row[i]).sum::<f64>();
+            let coverage = if v > sloped_lo && v < sloped_hi && has_sloped_edge(&at, x, y) {
+                ((v - sloped_lo) / (sloped_hi - sloped_lo)).sqrt()
+            } else {
+                ((v - lo) / (hi - lo)).clamp(0.0, 1.0)
+            };
+            (coverage * 255.0).round() as u8
+        }));
         rows.rotate_left(1);
     }
     trimmed(Region { bbox, mask }, w)

@@ -289,19 +289,56 @@ fn hard_edge_off_matches_the_reference_rectangle() {
     assert_eq!(counts(&v), (29992, 1049, 694), "the reference: 29988, 1066, 710");
 }
 
-/// The disc: the reference gives 423,99,578,252 with Hard Edge on and off, and mostly changes
-/// the low values (1057 partly selected below 128 on, 978 off). Ours with Hard Edge on is
-/// 424,99,576,251, narrower than the reference's; off, the line of 1s takes the right and bottom
-/// a pixel further, to within a pixel of the reference's bounds on every side. Off has fewer low
-/// values, as in the reference, but our partly selected count drops (1200 to 724) where the
-/// reference's stays at about 1570.
+/// The corrected measurements in #12855 count every partial pixel: the disc has 1569 with
+/// Hard Edge on and 1570 with it off. Off also increases the number at or above half coverage.
 #[test]
 fn hard_edge_off_on_the_reference_disc() {
-    let (on_bounds, on) = measure([500, 175], true);
+    let (_, on) = measure([500, 175], true);
     let (off_bounds, off) = measure([500, 175], false);
-    assert_eq!(on_bounds, [424, 99, 576, 251]);
-    assert_eq!((off_bounds, counts(&off)), ([424, 99, 577, 252], (17419, 724, 432)));
-    assert!(counts(&off).2 < counts(&on).2, "fewer low values with Hard Edge off");
+    let expected_bounds = [423, 99, 578, 252];
+    assert!(off_bounds.into_iter().zip(expected_bounds).all(|(actual, expected)| actual.abs_diff(expected) <= 1), "{off_bounds:?}");
+
+    let (hard_full, hard_partial, hard_low) = counts(&on);
+    let (soft_full, soft_partial, soft_low) = counts(&off);
+    assert!(soft_partial > hard_partial, "partly selected: {hard_partial} hard, {soft_partial} soft");
+    assert!(soft_partial - soft_low > hard_partial - hard_low, "the soft edge gains partial pixels at or above half coverage");
+    assert!(soft_partial.abs_diff(1570) < hard_partial.abs_diff(1570), "soft partial count: {soft_partial}");
+    assert!(soft_full.abs_diff(17298) < hard_full.abs_diff(17298), "soft full count: {soft_full}");
+}
+
+#[test]
+fn soften_edge_keeps_a_hole_open_on_curved_objects_clipped_to_the_canvas() {
+    let canvas = Rect::new(0, 0, 32, 28);
+    for (centre_x, hole_x, border_x) in [(3, 7, 0), (28, 24, 31)] {
+        let mut mask = Vec::new();
+        for y in 0i32..28 {
+            for x in 0i32..32 {
+                let in_ellipse = (x - centre_x).pow(2) * 11i32.pow(2) + (y - 14).pow(2) * 12i32.pow(2) <= (11 * 12i32).pow(2);
+                let in_hole = (x - hole_x).pow(2) + (y - 14).pow(2) <= 4i32.pow(2);
+                mask.push(if in_ellipse && !in_hole { 255 } else { 0 });
+            }
+        }
+        photocraft_algo::segment::antialias_u8(&mut mask, 32, 28);
+        let hard = photocraft_algo::segment::trim_region(Region { bbox: canvas, mask }).unwrap();
+        let soft = soften_edge(&hard, canvas);
+
+        assert_eq!(soft.bbox.intersect(&canvas), soft.bbox);
+        assert_eq!(soft.at(border_x, 9), 1.0, "a fully selected canvas border stays selected");
+        assert_eq!(soft.at(hole_x, 14), 0.0, "the background in the hole stays clear");
+        assert!(partial(&soft.mask) > partial(&hard.mask), "the clipped shape still gains a soft rim");
+    }
+}
+
+#[test]
+fn soften_edge_preserves_the_profile_at_a_square_hole_corner() {
+    let canvas = Rect::new(0, 0, 20, 20);
+    let hole = Rect::new(7, 7, 13, 13);
+    let mask = (0..20).flat_map(|y| (0..20).map(move |x| if hole.contains(x, y) { 0 } else { 255 })).collect();
+    let soft = soften_edge(&Region { bbox: canvas, mask }, canvas);
+
+    let corner = (soft.at(7, 7) * 255.0).round() as u8;
+    assert_eq!(corner, 99, "the existing straight-edge ramp still applies at the concave corner");
+    assert_eq!(soft.at(9, 9), 0.0);
 }
 
 /// Hard Edge on is left as it is (#12855): the tool is driven by a segmentation model, so the
