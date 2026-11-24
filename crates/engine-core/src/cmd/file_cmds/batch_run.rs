@@ -296,7 +296,8 @@ fn process_outputs<'a>(
         f(scratch, out).map_err(FileFailure::from)
     };
     for (path, out) in outputs {
-        let options = ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique, rename: None, check_as: None };
+        let options =
+            ProcessOptions { format: None, written: (!unique).then_some(&written), ctx: None, input: None, unique, rename: None, check_before_open: true };
         let r = process_one(raw_ppi, path, &out, save, options, &run);
         match r {
             Ok(Some(PublishedOutput { path: out, warning })) => {
@@ -358,8 +359,15 @@ pub(super) fn process_document_copies(
         let notices = std::cell::RefCell::new(Vec::new());
         let input = InputPolicy { prepare: &prepare, notices: &notices };
         let run = |scratch: &mut Session, out: &str| f(scratch, out).map_err(FileFailure::from);
-        let options =
-            ProcessOptions { format: Some(&ext), written: Some(&written), ctx: None, input: Some(&input), unique: false, rename: None, check_as: None };
+        let options = ProcessOptions {
+            format: Some(&ext),
+            written: Some(&written),
+            ctx: None,
+            input: Some(&input),
+            unique: false,
+            rename: None,
+            check_before_open: true,
+        };
         match process_one(s.prefs().raw_defaults.resolution, &path, &out, save, options, &run) {
             Ok(_) => {
                 written.record(&out, &path);
@@ -385,9 +393,10 @@ struct ProcessOptions<'a> {
     /// The output to use instead of `out`, or `None` to keep it, asked once the input has opened
     /// so an input that does not open fails as such; an error fails the input.
     rename: Option<&'a dyn Fn() -> Result<Option<String>>>,
-    /// The name `written` checks before the input opens instead of `out`: the one a renumbered
-    /// input will take, since an earlier output may have moved into `out`.
-    check_as: Option<String>,
+    /// Whether `written` checks `out` before the input opens. A renumbered input's name is
+    /// checked once it has opened instead: an earlier output may have moved into `out`, and an
+    /// input that fails to open must count as such before its new name is refused.
+    check_before_open: bool,
 }
 
 /// Open and process one scratch input, collecting opening diagnostics even on failure.
@@ -400,8 +409,8 @@ fn process_one(
     options: ProcessOptions<'_>,
     f: &dyn Fn(&mut Session, &str) -> std::result::Result<bool, FileFailure>,
 ) -> std::result::Result<Option<PublishedOutput>, FileFailure> {
-    if let Some(written) = options.written {
-        written.check(options.check_as.as_deref().unwrap_or(out)).map_err(EngineError::Other)?;
+    if let Some(written) = options.written.filter(|_| options.check_before_open) {
+        written.check(out).map_err(EngineError::Other)?;
     }
     let mut scratch = Session::new();
     let result = (|| -> std::result::Result<Option<PublishedOutput>, FileFailure> {
@@ -641,8 +650,8 @@ struct BatchRun<'a> {
     /// The output for the input at an index when it differs from the planned one, asked once
     /// that input has opened; an error fails that input.
     rename: Option<&'a dyn Fn(usize) -> Result<Option<String>>>,
-    /// The name the input at an index takes when it differs from the planned one, unchecked:
-    /// what is already written is checked against it before that input opens.
+    /// The name the input at an index takes when it differs from the planned one, unchecked: such
+    /// an input is checked against what is already written once it has opened.
     shifted: Option<&'a dyn Fn(usize) -> Result<Option<String>>>,
 }
 
@@ -688,7 +697,7 @@ fn process_batch_outputs_with(
             unique: false,
             rename: rename.is_some().then_some(&resolve as &dyn Fn() -> Result<Option<String>>),
             // A name that can't be made is reported once the input has opened.
-            check_as: shifted.and_then(|shifted| shifted(index).ok().flatten()),
+            check_before_open: shifted.is_none_or(|shifted| matches!(shifted(index), Ok(None))),
         };
         let result = process_one(raw_ppi, path, out, save, options, f);
         let out = renamed.take().unwrap_or_else(|| out.clone());

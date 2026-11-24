@@ -207,6 +207,38 @@ fn an_output_renumbered_into_a_later_inputs_planned_name_does_not_skip_that_inpu
 }
 
 #[test]
+fn a_corrupt_input_renumbered_onto_an_earlier_output_gives_its_number_to_the_next() {
+    // `c0.png` is corrupt, so every later name moves down one. `p1.png` (serial 10) writes `p19`,
+    // and after nine more inputs corrupt `sub/p.png` (serial 20) would move onto `p19` too. It is
+    // opened first: it fails as corrupt, not as a repeat, so `sub/q.png` (serial 21) moves down
+    // two and writes `q19`.
+    let dir = tmp("corrupt-shift-onto-written");
+    let input = join(&dir, "in");
+    std::fs::create_dir_all(join(&input, "sub")).unwrap();
+    let valid: Vec<String> = ["p1.png".to_string()].into_iter().chain((0..9).map(|i| format!("q{i}.png"))).chain(["sub/q.png".to_string()]).collect();
+    for name in &valid {
+        write_png(&join(&input, name));
+    }
+    for name in ["c0.png", "sub/p.png"] {
+        std::fs::write(join(&input, name), b"not an image").unwrap();
+    }
+    let output = join(&dir, "out");
+    let p = json!({
+        "input": input, "output": output, "steps": [], "format": "same", "startingSerial": 9,
+        "includeSubfolders": true, "flatOutput": true, "namingComponents": [{"component":"name"}, {"component":"serial1"}]
+    });
+    let result = crate::session().execute("file.automate.batch", p).unwrap();
+    let files: Vec<String> = result["files"].as_array().unwrap().iter().map(|f| file_name(f.as_str().unwrap()).to_string()).collect();
+    let errors = result["errors"].as_array().unwrap();
+    assert_eq!(files.first().map(String::as_str), Some("p19"), "{result}");
+    assert_eq!(files.last().map(String::as_str), Some("q19"), "{result}");
+    assert_eq!(files.len(), valid.len(), "{result}");
+    let failed: Vec<String> = errors.iter().map(|e| file_name(e["file"].as_str().unwrap())).collect();
+    assert_eq!(failed, ["c0.png", "p.png"], "{result}");
+    assert!(!errors[1]["error"].as_str().unwrap().contains("already holds"), "sub/p.png fails to open, not as a repeat: {result}");
+}
+
+#[test]
 fn the_error_log_may_take_a_refused_inputs_name() {
     // `d.txt` takes no number, so its name `d_003.png` is never written and the log can use it.
     let dir = tmp("log-name");
