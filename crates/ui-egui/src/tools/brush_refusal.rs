@@ -37,12 +37,12 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// The tool's name in the alerts, for the tools whose wording was measured: the Brush, the
-/// Sharpen tool (#12952), the Sponge (#13030), the Smudge tool (#12965), the Art History Brush
-/// (#12638) and the Classic gradient (the live Gradient makes a fill layer and isn't measured, #12017).
+/// The name used in layer alerts for the Brush, Blur (#12653), Sharpen (#12952), Sponge (#13030),
+/// Smudge (#12965), Art History Brush (#12638) and Classic gradient (#12017).
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
+        Tool::Blur => Some(tl!("blur tool")),
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
@@ -81,9 +81,9 @@ pub fn alert(app: &PhotocraftApp, tool: Tool, hidden: bool) -> Option<String> {
         return (!hidden && pixel_layer && layer_refusal(app, tool) == Some(LOCKED)).then(|| tl!(REMOVE_LOCKED).to_string());
     }
     let name = tool_name(app, tool)?;
-    // The Art History Brush's hidden alert was measured on a layer's pixels only (#12638): a
-    // hidden mask or channel target keeps the status bar.
-    if hidden && tool == Tool::ArtHistoryBrush && !pixels_target(&crate::canvas::paint_target(app)) {
+    // Blur and Art History Brush layer alerts cover the pixel target. A hidden mask keeps the
+    // status-bar refusal.
+    if hidden && matches!(tool, Tool::Blur | Tool::ArtHistoryBrush) && !pixels_target(&crate::canvas::paint_target(app)) {
         return None;
     }
     let template = if hidden { HIDDEN } else { layer_refusal(app, tool)? };
@@ -117,11 +117,10 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     }
 }
 
-/// Whether `locks` refuse `tool`: Lock All, and for the Sharpen, Sponge and Smudge tools and the
-/// Art History Brush Lock Image Pixels as well (measured for them; the Brush keeps today's
-/// behaviour there).
+/// Whether `locks` refuse `tool`: Lock All, plus Lock Image Pixels for the Blur, Sharpen, Sponge
+/// and Smudge tools and the Art History Brush.
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush) && locks.pixels)
+    locks.all || (matches!(tool, Tool::Blur | Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush) && locks.pixels)
 }
 
 #[cfg(test)]
@@ -131,6 +130,10 @@ pub(super) mod brush_refusal_alert_tests;
 #[cfg(test)]
 #[path = "../retouch_mode_refusal_alert_tests.rs"]
 mod retouch_mode_refusal_alert_tests;
+
+#[cfg(test)]
+#[path = "../blur_refusal_alert_tests.rs"]
+mod blur_refusal_alert_tests;
 
 #[cfg(test)]
 #[path = "../smudge_refusal_alert_tests.rs"]

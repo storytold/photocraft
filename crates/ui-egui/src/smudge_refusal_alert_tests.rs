@@ -72,13 +72,12 @@ fn the_brush_and_the_other_tools_keep_todays_behaviour() {
     app.run("layer.lockLayers", json!({"pixels": true})).unwrap();
     stroke(&mut app);
     assert!(alerts(&app).is_empty());
-    // The Blur tool, the Smudge tool's neighbour in the toolbar, has no layer alerts yet: the
-    // status bar says a hidden target.
-    let mut app = self::app(Tool::Blur);
+    // The History Brush uses the status bar for a hidden target.
+    let mut app = self::app(Tool::HistoryBrush);
     let id = active(&app);
     app.run("layer.setProps", json!({"layer": id, "visible": false})).unwrap();
     stroke(&mut app);
     assert!(alerts(&app).is_empty());
     assert_eq!(app.ui.status, photocraft_engine::hidden_target::HIDDEN);
-    assert_eq!(tool_name(&app, Tool::Blur), None);
+    assert_eq!(tool_name(&app, Tool::HistoryBrush), None);
 }
