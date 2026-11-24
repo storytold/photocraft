@@ -113,6 +113,14 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
         rows.push(Param::new("set", tl!("Set"), ParamKind::choice(names(&set_names), Some(set))));
     }
     rows.push(Param::new("action", tl!("Action"), ParamKind::choice(names(&action_names), Some(name))));
+    // The Play group (#13709): four checkboxes under the Set and Action choices, all off. The droplet saves them and
+    // hands them to each run.
+    rows.extend([
+        Param::new("overrideOpen", tl!("Override Action \"Open\" Commands"), ParamKind::bool(false)),
+        Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),
+        Param::new("suppressOpenOptions", tl!("Suppress File Open Options Dialogs"), ParamKind::bool(false)),
+        Param::new("suppressWarnings", tl!("Suppress Color Profile Warnings"), ParamKind::bool(false)),
+    ]);
     // Destination (#13711), worded as the reference application words its three choices, opening on
     // None; the values stay the command's own words (`none`, `saveAndClose`, `folder`). Only a
     // folder run names a folder and its Override "Save As" tick, so both rows take input only with
