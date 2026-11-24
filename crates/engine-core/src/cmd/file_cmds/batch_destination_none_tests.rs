@@ -21,7 +21,7 @@ fn destination_dir(name: &str) -> String {
 
 /// A solid-colour PNG written to `dir`, and its path.
 fn source_png(dir: &str, name: &str, color: &str) -> String {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 2, "height": 1, "background": color})).unwrap();
     let path = join(dir, name);
     save_doc(&s.active().unwrap().doc, &path, None).unwrap();
@@ -41,7 +41,7 @@ fn batch_destination_none_opens_every_folder_file_and_writes_nothing() {
     let b = source_png(&dir, "b.png", "#00ff00");
     let bytes_a = std::fs::read(&a).unwrap();
     let bytes_b = std::fs::read(&b).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     let result =
         s.execute("file.automate.batch", json!({"input": [a.clone(), b.clone()], "destination": "none", "steps": [["image.adjustments.invert", {}]]})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
@@ -64,7 +64,7 @@ fn batch_destination_none_leaves_each_opened_file_changed_with_the_step_in_its_h
     let dir = destination_dir("none-changed");
     let a = source_png(&dir, "a.png", "#ff0000");
     let bytes = std::fs::read(&a).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.automate.batch", json!({"input": [a.clone()], "destination": "none", "steps": [["image.adjustments.invert", {}]]})).unwrap();
     {
         let st = s.active().unwrap();
@@ -87,7 +87,7 @@ fn batch_destination_none_with_an_action_save_step_writes_no_file() {
     let dir = destination_dir("none-save-step");
     let a = source_png(&dir, "a.png", "#ff0000");
     let bytes = std::fs::read(&a).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     let result = s
         .execute("file.automate.batch", json!({"input": [a.clone()], "destination": "none", "steps": [["image.adjustments.invert", {}], ["file.saveAs", {}]]}))
         .unwrap();
@@ -105,7 +105,7 @@ fn batch_destination_none_with_an_action_save_step_writes_no_file() {
 fn batch_destination_none_on_opened_files_writes_nothing_and_leaves_them_changed() {
     let dir = destination_dir("none-open-source");
     let a = source_png(&dir, "a.png", "#ff0000");
-    let mut s = Session::new();
+    let mut s = crate::session();
     open_bytes_as(&mut s, "a.png", &std::fs::read(&a).unwrap(), None, Some(a.clone())).unwrap();
     let bytes = std::fs::read(&a).unwrap();
     let result = s
@@ -125,7 +125,7 @@ fn batch_destination_none_on_opened_files_writes_nothing_and_leaves_them_changed
 fn batch_destination_none_refuses_the_recorded_folder_open_options() {
     let dir = destination_dir("none-recorded-options");
     let a = source_png(&dir, "a.png", "#ff0000");
-    let mut s = Session::new();
+    let mut s = crate::session();
     for extra in [json!({"overrideOpen": true}), json!({"suppressOpenOptions": true}), json!({"suppressWarnings": true}), json!({"includeNonImages": true})] {
         let mut p = json!({"input": [a.clone()], "destination": "none", "steps": []});
         for (key, value) in extra.as_object().unwrap() {
@@ -145,7 +145,7 @@ fn batch_destination_none_refuses_an_output_folder() {
     let dir = destination_dir("none-output");
     let a = source_png(&dir, "a.png", "#ff0000");
     let out = join(&dir, "out");
-    let mut s = Session::new();
+    let mut s = crate::session();
     let error = s.execute("file.automate.batch", json!({"input": [a.clone()], "destination": "none", "output": out, "steps": []})).unwrap_err().to_string();
     assert!(error.contains("output"), "{error}");
     assert_eq!(s.documents().len(), 0, "a refused run opens nothing");
@@ -160,7 +160,7 @@ fn batch_destination_null_keeps_the_folder_default() {
     let a = source_png(&dir, "a.png", "#ff0000");
     let out = join(&dir, "out");
     std::fs::create_dir_all(&out).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     let result = s.execute("file.automate.batch", json!({"input": [a], "destination": null, "output": out, "steps": []})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
     assert_eq!(result["files"], json!([join(&out, "a.png")]), "{result}");
@@ -175,7 +175,7 @@ fn batch_without_a_destination_still_requires_an_output_folder() {
     let a = source_png(&dir, "a.png", "#ff0000");
     let out = join(&dir, "out");
     std::fs::create_dir_all(&out).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     let written = s.execute("file.automate.batch", json!({"input": [a.clone()], "output": out.clone(), "steps": []})).unwrap();
     assert_eq!(written["files"], json!([join(&out, "a.png")]), "{written}");
     assert_eq!(s.documents().len(), 0, "the copy run opened nothing");
@@ -193,7 +193,7 @@ fn batch_destination_folder_copies_and_opens_no_documents() {
     let bytes = std::fs::read(&a).unwrap();
     let out = join(&dir, "out");
     std::fs::create_dir_all(&out).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     let result = s
         .execute("file.automate.batch", json!({"input": [a.clone()], "destination": "folder", "output": out, "steps": [["image.adjustments.invert", {}]]}))
         .unwrap();
@@ -211,7 +211,7 @@ fn batch_destination_save_and_close_still_overwrites_the_source() {
     let dir = destination_dir("save-and-close");
     let a = source_png(&dir, "a.png", "#ff0000");
     let bytes = std::fs::read(&a).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     let result =
         s.execute("file.automate.batch", json!({"input": [a.clone()], "destination": "saveAndClose", "steps": [["image.adjustments.invert", {}]]})).unwrap();
     assert_eq!(result["files"], json!([a]), "{result}");
@@ -226,7 +226,7 @@ fn batch_destination_save_and_close_still_overwrites_the_source() {
 fn batch_rejects_a_destination_that_is_not_none_folder_or_save_and_close() {
     let dir = destination_dir("bad-destination");
     let a = source_png(&dir, "a.png", "#ff0000");
-    let mut s = Session::new();
+    let mut s = crate::session();
     for bad in ["open", "None", "saveAndClose ", "inPlace"] {
         let error = s.execute("file.automate.batch", json!({"input": [a.clone()], "destination": bad, "steps": []})).unwrap_err().to_string();
         assert!(error.contains("destination"), "{bad}: {error}");
@@ -243,7 +243,7 @@ fn batch_destination_none_lists_an_unreadable_input_in_its_error_log() {
     let corrupt = join(&dir, "corrupt.png");
     std::fs::write(&corrupt, b"not a PNG").unwrap();
     let log = join(&dir, "batch.log");
-    let mut s = Session::new();
+    let mut s = crate::session();
     let result = s
         .execute(
             "file.automate.batch",
@@ -276,7 +276,7 @@ fn batch_destination_none_on_an_empty_folder_runs_nothing_on_the_open_tabs() {
     std::fs::create_dir_all(&empty).unwrap();
     let a = source_png(&dir, "a.png", "#ff0000");
     let bytes = std::fs::read(&a).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     open_bytes_as(&mut s, "a.png", &bytes, None, Some(a.clone())).unwrap();
     let result = s.execute("file.automate.batch", json!({"input": empty, "destination": "none", "steps": [["image.adjustments.invert", {}]]})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
@@ -295,7 +295,7 @@ fn batch_destination_none_refuses_an_error_log_that_names_one_of_the_inputs() {
     let corrupt = join(&dir, "corrupt.png");
     std::fs::write(&corrupt, b"not a PNG").unwrap();
     let good = source_png(&dir, "good.png", "#ff0000");
-    let mut s = Session::new();
+    let mut s = crate::session();
     // The log names the input that will not open: writing it would replace that file.
     let error = s
         .execute("file.automate.batch", json!({"input": [corrupt.clone(), good.clone()], "destination": "none", "errorLog": corrupt.clone(), "steps": []}))
@@ -320,7 +320,7 @@ fn batch_destination_save_and_close_still_refuses_an_opened_files_source() {
     let dir = destination_dir("save-close-open-source");
     let a = source_png(&dir, "a.png", "#ff0000");
     let bytes = std::fs::read(&a).unwrap();
-    let mut s = Session::new();
+    let mut s = crate::session();
     open_bytes_as(&mut s, "a.png", &bytes, None, Some(a.clone())).unwrap();
     let error = s.execute("file.automate.batch", json!({"source": "open", "destination": "saveAndClose", "steps": []})).unwrap_err().to_string();
     assert!(error.contains("require a folder source"), "{error}");
