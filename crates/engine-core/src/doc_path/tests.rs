@@ -104,12 +104,21 @@ fn linked_smart_objects_follow_only_local_files() {
     assert!(s.link_scan.is_some(), "a followed link is looked at");
 }
 
+/// Writes the active document to the file [`document`] gave it: Package needs it on disk (#14073).
+fn save_document(s: &Session) {
+    let d = s.active().unwrap();
+    crate::file_cmds::save_doc(&d.doc, d.path.as_deref().unwrap(), None).unwrap();
+}
+
+/// Package follows only followed links: one to another computer stops it like a missing file
+/// (#14076), before anything is written; the followed relative link alone is copied.
 #[test]
 fn package_copies_only_followed_links() {
     let d = dir("package");
     png(&d.join("red.png"), |_| [255, 0, 0]);
     let (mut s, id) = document(&d, &d.join("red.png"));
     relink(&mut s, id, "red.png");
+    save_document(&s);
     #[allow(unused_mut)]
     let mut remote = vec![REMOTE.to_string()];
     #[cfg(unix)]
@@ -118,12 +127,12 @@ fn package_copies_only_followed_links() {
         s.execute("file.placeLinked", json!({"path": d.join("red.png").to_string_lossy()})).unwrap();
         let other = s.active().unwrap().active_layer.unwrap();
         relink(&mut s, other, path);
+        let e = s.execute("file.package", json!({"dir": d.join("pkg").to_string_lossy()})).unwrap_err();
+        assert_eq!(e.to_string(), crate::print_cmds::PACKAGE_MISSING_LINK, "{path}");
+        assert!(!d.join("pkg").exists(), "{path}");
+        s.execute("layer.delete", json!({})).unwrap();
     }
     let r = s.execute("file.package", json!({"dir": d.join("pkg").to_string_lossy()})).unwrap();
-    let mut missing: Vec<String> = serde_json::from_value(r["missing"].clone()).unwrap();
-    missing.sort();
-    remote.sort();
-    assert_eq!(missing, remote);
     let links = r["links"].as_array().unwrap();
     assert_eq!(links.len(), 1);
     assert!(links[0].as_str().unwrap().ends_with("red.png"), "{links:?}");
@@ -142,9 +151,11 @@ fn psd_saves_embed_only_followed_links() {
     let saved = warnings(s.execute("file.saveACopy", json!({"path": d.join("copy.psd").to_string_lossy()})).unwrap());
     assert!(saved.iter().any(|w| w.contains("red.png was embedded")), "{saved:?}");
     assert!(saved.iter().any(|w| w.contains("is not opened: the path is on another computer")), "{saved:?}");
-    // Package as PSD writes the copy of the document, whose remote link stays as it was.
-    let packaged = warnings(s.execute("file.package", json!({"dir": d.join("pkg").to_string_lossy(), "format": "psd"})).unwrap());
-    assert!(packaged.iter().any(|w| w.contains("is not opened: the path is on another computer")), "{packaged:?}");
+    // Package doesn't follow the remote link either: it stops on it (#14076) and writes nothing.
+    save_document(&s);
+    let e = s.execute("file.package", json!({"dir": d.join("pkg").to_string_lossy(), "format": "psd"})).unwrap_err();
+    assert_eq!(e.to_string(), crate::print_cmds::PACKAGE_MISSING_LINK);
+    assert!(!d.join("pkg").exists());
 }
 
 /// The pixels of the active document after its smart object `id` re-renders with its first smart
@@ -321,8 +332,8 @@ photocraft-shared-marker
     }
 }
 
-/// Package copies only linked files PhotoCraft can open: a link to a text file is listed as
-/// missing and no copy of it is written into the package's Links folder.
+/// Package copies only linked files PhotoCraft can open: a link to a text file stops it like a
+/// missing file (#14076), and no copy of it is written.
 #[test]
 fn package_copies_only_links_to_images() {
     const TEXT: &[u8] = b"plain text, not an image
@@ -333,12 +344,13 @@ photocraft-package-marker
     png(&d.join("red.png"), |_| [255, 0, 0]);
     let (mut s, id) = document(&d, &d.join("red.png"));
     relink(&mut s, id, "readme");
+    save_document(&s);
     let pkg = d.join("pkg");
     let r = s.execute("file.package", json!({"dir": pkg.to_string_lossy()}));
     let copies: Vec<_> = walkdir(&pkg).into_iter().filter(|f| std::fs::read(f).is_ok_and(|b| b == TEXT)).collect();
     assert!(copies.is_empty(), "copied into the package: {copies:?} ({r:?})");
-    let r = r.unwrap();
-    assert_eq!(r["missing"], json!(["readme"]), "{r}");
+    assert_eq!(r.unwrap_err().to_string(), crate::print_cmds::PACKAGE_MISSING_LINK);
+    assert!(!pkg.exists());
 }
 
 fn walkdir(d: &Path) -> Vec<PathBuf> {

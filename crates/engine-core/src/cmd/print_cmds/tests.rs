@@ -536,6 +536,7 @@ fn package_copies_links_and_relinks() {
     crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
     let mut s = session("rgb", 8);
     s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    save_package_source(&mut s, &dir);
     let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
     let copied = format!("{dir}/pkg/Print Me/Links/art.png");
     assert_eq!(r["links"], json!([copied]));
@@ -586,6 +587,7 @@ fn package_never_overwrites_one_link_copy_with_another() {
         s.execute("file.placeLinked", json!({"path": link})).unwrap();
         links.push(std::fs::read(&link).unwrap());
     }
+    save_package_source(&mut s, &dir);
     let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
     let copies: Vec<&str> = r["links"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
     assert_eq!(copies.len(), 3);
@@ -607,6 +609,7 @@ fn package_keeps_files_already_in_links() {
     crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
     let mut s = session("rgb", 8);
     s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    save_package_source(&mut s, &dir);
     let first = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
     let first = first["links"][0].as_str().unwrap().to_string();
     let kept = std::fs::read(&first).unwrap();
@@ -619,21 +622,10 @@ fn package_keeps_files_already_in_links() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A missing link placed twice is reported once.
-#[test]
-fn package_lists_a_missing_link_once() {
-    let dir = tmp("package-missing-once");
-    let link = format!("{dir}/gone.png");
-    let mut src = crate::session();
-    src.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
-    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
-    let mut s = session("rgb", 8);
-    s.execute("file.placeLinked", json!({"path": link})).unwrap();
-    s.execute("file.placeLinked", json!({"path": link})).unwrap();
-    std::fs::remove_file(&link).unwrap();
-    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
-    assert_eq!(r["missing"], json!([link]));
-    let _ = std::fs::remove_dir_all(&dir);
+/// Package needs the document on disk (#14073): saves it as `<dir>/Print Me.pcraft`, the name
+/// the package folder is given.
+fn save_package_source(s: &mut Session, dir: &str) {
+    super::package_enabled_tests::save_at(s, &format!("{dir}/Print Me.pcraft"));
 }
 
 #[test]
@@ -1487,7 +1479,9 @@ fn package_of_a_document_named_after_a_windows_device_is_written() {
     let dir = tmp("package-device-name");
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "nul.psd"})).unwrap();
-    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    // Run directly: the menu item needs a saved document with a link (#14073), and no file can be
+    // saved under that name on Windows.
+    let r = package(&mut s, &json!({"dir": format!("{dir}/pkg")})).unwrap();
     assert_eq!(r["folder"].as_str().unwrap(), format!("{dir}/pkg/nul_"));
     let document = r["document"].as_str().unwrap();
     assert!(document.ends_with("pkg/nul_/nul_.pcraft"), "{document}");

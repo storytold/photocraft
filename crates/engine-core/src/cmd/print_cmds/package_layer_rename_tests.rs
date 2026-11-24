@@ -46,6 +46,8 @@ fn package_the_document(tag: &str) -> (String, Session, serde_json::Value) {
         s.execute("file.placeLinked", json!({"path": link})).unwrap();
         s.execute("layer.renameLayer", json!({"name": name})).unwrap();
     }
+    // Package needs the document on disk (#14073).
+    super::package_enabled_tests::save_at(&mut s, &format!("{dir}/Print Me.psd"));
     let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
     (dir, s, r)
 }

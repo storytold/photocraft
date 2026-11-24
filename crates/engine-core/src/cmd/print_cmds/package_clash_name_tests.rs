@@ -34,8 +34,15 @@ fn place(s: &mut Session, path: &str) {
     s.execute("file.placeLinked", json!({"path": path})).unwrap();
 }
 
+/// Saves the document as `<dir>/Clash.pcraft` (Package needs a document on disk, #14073) and
+/// packages it into `<dir>/pkg`.
+fn try_package(s: &mut Session, dir: &str) -> Result<Value> {
+    super::package_enabled_tests::save_at(s, &format!("{dir}/Clash.pcraft"));
+    s.execute("file.package", json!({"dir": format!("{dir}/pkg")}))
+}
+
 fn package(s: &mut Session, dir: &str) -> Value {
-    s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap()
+    try_package(s, dir).unwrap()
 }
 
 fn links(r: &Value) -> Vec<String> {
@@ -113,20 +120,13 @@ fn a_multi_dot_name_keeps_its_last_extension() {
 fn a_name_without_an_extension_gets_the_suffix_at_the_end() {
     let dir = tmp("noext");
     let mut s = open_session();
-    let mut copied = Vec::new();
     for (sub, colour) in [("a", "#ff0000"), ("b", "#00c800")] {
-        let p = write_link(&dir, sub, "logo", colour);
-        place(&mut s, &p);
-        copied.push(p);
+        place(&mut s, &write_link(&dir, sub, "logo", colour));
     }
-    let r = package(&mut s, &dir);
-    let names = tails(&r);
-    // The files can't be imported without an extension on every build; when both are copied the
+    // Both files placed (`place` unwraps), so Package checks and copies both: no refusal, the
     // names are `logo` and `logo_1`, and a copy is never given a form with a dash prefix.
-    assert!(names.iter().all(|n| !n.contains('-')), "{names:?}");
-    if names.len() == 2 {
-        assert_eq!(names, vec!["logo", "logo_1"]);
-    }
+    let r = package(&mut s, &dir);
+    assert_eq!(tails(&r), vec!["logo", "logo_1"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

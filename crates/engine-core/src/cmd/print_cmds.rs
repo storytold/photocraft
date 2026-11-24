@@ -19,11 +19,12 @@
 //! compound paths), following the public PostScript Language Reference and the AI3 format notes.
 
 use std::io::Write as _;
+use std::ops::ControlFlow;
 
 mod windows_marks;
 
 use photocraft_color::ColorMode;
-use photocraft_doc::{Document, LayerContent, SmartSource};
+use photocraft_doc::{Document, LayerContent, SmartObject, SmartSource};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -1538,8 +1539,146 @@ fn print_one_copy(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- Package ----------
 
+/// What Package stops with when a linked file is missing (#14076), as the reference application
+/// words it.
+pub const PACKAGE_MISSING_LINK: &str = "Could not package the document because a linked smart object file is missing.";
+
+/// Levels of embedded smart objects Package opens to look for linked files; contents nested
+/// deeper are not opened.
+const PACKAGE_NESTING: usize = 8;
+
+/// The linked file of smart object `so` in `doc`: its `Linked` path, unless that is the uuid of a
+/// file a PSD keeps embedded in `doc` (PSD import stores placed files that way), which is no link.
+fn package_link<'a>(doc: &Document, so: &'a SmartObject) -> Option<&'a String> {
+    match &so.source {
+        SmartSource::Linked { path } if photocraft_io::linked::embedded_payload(&doc.metadata, path).is_none() => Some(path),
+        _ => None,
+    }
+}
+
+/// The smart objects among `doc`'s layers, groups included.
+fn smart_objects(doc: &Document) -> impl Iterator<Item = &SmartObject> {
+    doc.walk().into_iter().filter_map(|(_, _, l)| match &l.content {
+        LayerContent::Smart(so) => Some(so),
+        _ => None,
+    })
+}
+
+/// The contents of embedded smart objects a walk has opened: by hash, the least depth each was
+/// opened at.
+type Opened = std::collections::HashMap<[u8; 32], usize>;
+
+/// Calls `f` with every linked file of `doc`, `depth` levels down already, until it breaks: its own
+/// links in layer order, then those in its embedded smart objects' contents.
+fn visit_package_links(doc: &Document, depth: usize, opened: &mut Opened, f: &mut dyn FnMut(&String) -> ControlFlow<()>) -> ControlFlow<()> {
+    for path in smart_objects(doc).filter_map(|so| package_link(doc, so)) {
+        f(path)?;
+    }
+    for so in smart_objects(doc) {
+        visit_contents_links(so, depth, opened, f)?;
+    }
+    ControlFlow::Continue(())
+}
+
+/// [`visit_package_links`] for the embedded contents of smart object `so` in a document `depth`
+/// levels down, up to [`PACKAGE_NESTING`] levels.
+///
+/// Only native contents are opened: they keep links as file paths, while PSD contents keep their
+/// placed files by uuid (see [`package_link`]). Contents that do not decode are skipped. Each
+/// contents is opened once, unless it turns up again higher up, so smart objects sharing one (or
+/// a crafted file repeating one at every level) cost one decode, not one per use.
+fn visit_contents_links(so: &SmartObject, depth: usize, opened: &mut Opened, f: &mut dyn FnMut(&String) -> ControlFlow<()>) -> ControlFlow<()> {
+    let SmartSource::Embedded { bytes, .. } = &so.source else { return ControlFlow::Continue(()) };
+    if depth >= PACKAGE_NESTING || !photocraft_format::is_pcraft(bytes) {
+        return ControlFlow::Continue(());
+    }
+    let at = opened.entry(*blake3::hash(bytes).as_bytes()).or_insert(usize::MAX);
+    if *at <= depth {
+        return ControlFlow::Continue(());
+    }
+    *at = depth;
+    match photocraft_format::load_from_bytes(bytes) {
+        Ok(inner) => visit_package_links(&inner, depth + 1, opened, f),
+        Err(_) => ControlFlow::Continue(()),
+    }
+}
+
+/// Every linked file of `doc` at any depth, each once.
+fn package_links(doc: &Document) -> Vec<String> {
+    let mut links: Vec<String> = Vec::new();
+    let _ = visit_package_links(doc, 0, &mut Opened::new(), &mut |path| {
+        if !links.contains(path) {
+            links.push(path.clone());
+        }
+        ControlFlow::Continue(())
+    });
+    links
+}
+
+/// Whether `doc` has a linked smart object at any depth. Its own layers are looked at first, so
+/// embedded contents are decoded only when they have none.
+///
+/// The menu asks at every repaint, so the answer for each embedded smart object's contents is
+/// remembered for their allocation. A document never changes contents in place, only replaces
+/// them, and the weak reference kept here stops the allocation from being reused for other
+/// contents while it is remembered.
+fn has_package_link(doc: &Document) -> bool {
+    type Seen = Vec<(std::sync::Weak<Vec<u8>>, bool)>;
+    static SEEN: std::sync::Mutex<Seen> = std::sync::Mutex::new(Vec::new());
+    const MAX_REMEMBERED: usize = 4096;
+    let lock = || SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if smart_objects(doc).any(|so| package_link(doc, so).is_some()) {
+        return true;
+    }
+    smart_objects(doc).any(|so| {
+        let SmartSource::Embedded { bytes, .. } = &so.source else { return false };
+        if let Some((_, has)) = lock().iter().find(|(w, _)| std::ptr::eq(w.as_ptr(), std::sync::Arc::as_ptr(bytes))) {
+            return *has;
+        }
+        // Decoded without the lock held.
+        let has = visit_contents_links(so, 0, &mut Opened::new(), &mut |_| ControlFlow::Break(())).is_break();
+        let mut seen = lock();
+        seen.retain(|(w, _)| w.strong_count() > 0);
+        if seen.len() >= MAX_REMEMBERED {
+            seen.remove(0);
+        }
+        seen.push((std::sync::Arc::downgrade(bytes), has));
+        has
+    })
+}
+
+/// File › Package… is enabled for a document saved to disk that has a linked smart object at any
+/// depth, one whose file is missing included (#14073).
+fn can_package(s: &Session) -> std::result::Result<(), String> {
+    native_doc(s)?;
+    let d = s.active().ok_or("no document open")?;
+    if !d.path.as_deref().is_some_and(|p| std::path::Path::new(p).exists()) {
+        return Err("the document is not saved to disk".into());
+    }
+    if !has_package_link(&d.doc) {
+        return Err("the document has no linked smart object".into());
+    }
+    Ok(())
+}
+
+/// Whether Package would stop with [`PACKAGE_MISSING_LINK`]: a linked file of the active
+/// document, at any depth, is missing, not followed, or not a file PhotoCraft can place (#14076).
+/// The desktop app asks before it asks for the destination.
+pub fn package_link_missing(s: &Session) -> bool {
+    let Some(d) = s.active() else { return false };
+    let document = d.path.as_deref().map(std::path::Path::new);
+    package_links(&d.doc).iter().any(|path| {
+        let bytes = crate::doc_path::resolve_in(path, document).ok().and_then(|file| read_file(&file.to_string_lossy()).ok());
+        !bytes.is_some_and(|bytes| crate::file_cmds::import(&file_name(path), &bytes).is_ok())
+    })
+}
+
 fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.package";
+    // Before the destination is looked at and anything is written (#14076).
+    if package_link_missing(s) {
+        return Err(other(PACKAGE_MISSING_LINK));
+    }
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"dir\" (where to create the package folder)"))?;
     // The copies are relinked by absolute path: a relative one would be resolved against the
     // package document's folder, not the working directory `dir` is relative to.
@@ -1565,13 +1704,9 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let mut relinks: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
     // (layer, the link's old base name, the base name its copy got), for copies renamed by a clash.
     let mut renames: Vec<(photocraft_doc::LayerId, String, String)> = Vec::new();
-    let mut missing = Vec::new();
     for (_, _, l) in doc.walk() {
         let LayerContent::Smart(so) = &l.content else { continue };
-        let SmartSource::Linked { path } = &so.source else { continue };
-        if missing.contains(path) {
-            continue;
-        }
+        let Some(path) = package_link(&doc, so) else { continue };
         let target = match copied.iter().find(|(src, _)| src == path) {
             Some((_, t)) => t.clone(),
             None => {
@@ -1601,23 +1736,13 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
                     n += 1;
                 }
                 let t = join(&links_dir, &fname);
-                // A path that is not followed is packaged as missing, like a file that is gone.
-                let Ok(file) = crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)) else {
-                    missing.push(path.clone());
-                    continue;
-                };
-                // Only a file PhotoCraft can place is copied; anything else is packaged as missing.
-                match read_file(&file.to_string_lossy()).ok().filter(|bytes| crate::file_cmds::import(&fname, bytes).is_ok()) {
-                    Some(bytes) => {
-                        write_file(&t, &bytes)?;
-                        copied.push((path.clone(), t.clone()));
-                        t
-                    }
-                    None => {
-                        missing.push(path.clone());
-                        continue;
-                    }
-                }
+                // Every link was found and checked before anything was written; a file gone since
+                // is the same error.
+                let file = crate::doc_path::resolve_in(path, document.as_deref().map(std::path::Path::new)).map_err(|_| other(PACKAGE_MISSING_LINK))?;
+                let bytes = read_file(&file.to_string_lossy()).map_err(|_| other(PACKAGE_MISSING_LINK))?;
+                write_file(&t, &bytes)?;
+                copied.push((path.clone(), t.clone()));
+                t
             }
         };
         if file_name(path) != file_name(&target) {
@@ -1642,7 +1767,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let out = join(&folder, &format!("{}.{ext}", crate::file_cmds::sanitize(&name)));
     let pdoc = t.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let warnings = crate::file_cmds::save_doc(&pdoc, &out, None)?;
-    Ok(json!({"folder": folder, "document": out, "links": copied.iter().map(|(_, t)| t).collect::<Vec<_>>(), "missing": missing, "warnings": warnings}))
+    Ok(json!({"folder": folder, "document": out, "links": copied.iter().map(|(_, t)| t).collect::<Vec<_>>(), "warnings": warnings}))
 }
 
 // ---------- Paths to Illustrator ----------
@@ -1811,8 +1936,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "Package…",
             &["File"],
             None,
-            r##"{"dir":folder,"format":"pcraft|psd|psb"="pcraft"} → {folder, document, links, missing} (copies the document and its linked files into <dir>/<name>/, relinked to Links/)"##,
-            native_doc,
+            r##"{"dir":folder,"format":"pcraft|psd|psb"="pcraft"} → {folder, document, links} (copies the document and its linked files into <dir>/<name>/, relinked to Links/; a missing linked file is an error and nothing is written)"##,
+            can_package,
             package
         ),
         spec!(
@@ -1830,6 +1955,14 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "print_cmds/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "print_cmds/package_enabled_tests.rs"]
+mod package_enabled_tests;
+
+#[cfg(test)]
+#[path = "print_cmds/package_missing_link_tests.rs"]
+mod package_missing_link_tests;
 
 #[cfg(test)]
 #[path = "print_cmds/paths_export_document_bounds_tests.rs"]

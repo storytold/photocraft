@@ -67,6 +67,10 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             }));
         }
         "file.scripts.scriptEventsManager" => Ok(opened(crate::dialogs::file_forms::open_script_events(app))),
+        // A missing linked file is the answer before the destination is asked for (#14076).
+        "file.package" if photocraft_engine::print_cmds::package_link_missing(&app.session) => {
+            Ok(opened(crate::dialogs::alerts::alert(app, tl!(photocraft_engine::print_cmds::PACKAGE_MISSING_LINK))))
+        }
         "file.package" => Ok(opened(crate::dialogs::file_forms::open_package(app))),
         "file.export.pathsToIllustrator" => Ok(opened(crate::dialogs::file_forms::open_paths_to_file(app))),
         _ => return None,
@@ -96,6 +100,9 @@ mod custom_paper_tests;
 
 #[cfg(test)]
 mod contact_sheet_subfolders_tests;
+
+#[cfg(test)]
+mod package_missing_link_tests;
 
 #[cfg(test)]
 mod web_playback_tests {
