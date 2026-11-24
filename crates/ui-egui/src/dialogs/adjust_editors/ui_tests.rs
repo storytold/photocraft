@@ -492,3 +492,95 @@ fn black_white_auto_button_sets_the_weights() {
     assert_ne!(after, before, "the red and blue are told apart");
     assert_eq!(history_len(&h), steps + 1);
 }
+
+fn assert_black_white_preset(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) {
+    assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Preset").accesskit_node().value().as_deref(), Some(name));
+}
+
+#[test]
+fn black_white_presets_apply_through_properties_and_undo() {
+    let mut h = app_harness("blackWhite", "rgb", 8);
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "tint": true, "tintColor": "#336699"})).unwrap();
+    h.run_steps(4);
+    let (_, before) = layer(&h);
+    let Adjustment::BlackWhite { weights: original, tint: original_tint } = &before else { panic!("{before:?}") };
+    let history = history_len(&h);
+    let pixel = h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap();
+    assert_black_white_preset(&h, "Default");
+
+    h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::ListBoxOption, "Darker").click();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Darker");
+    let (_, after) = layer(&h);
+    let Adjustment::BlackWhite { weights, tint } = &after else { panic!("{after:?}") };
+    assert!(weights.iter().zip(original).all(|(weight, original)| weight < original));
+    assert_eq!(tint, original_tint);
+    assert_ne!(h.state_mut().run("document.pixel", json!({"x": 10, "y": 10})).unwrap(), pixel);
+    assert_eq!(history_len(&h), history + 1);
+    assert!(h.state().live_adjust.is_none());
+
+    let ctx = h.ctx.clone();
+    let picker = open_picker(&mut h, "Tint Color");
+    show_in_picker(&mut h, picker, "#ad632a");
+    h.state_mut().framework.dialogs.cancel_by_id(&ctx, picker);
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Darker");
+    assert_eq!(layer(&h).1, after);
+    assert_eq!(history_len(&h), history + 1);
+
+    let picker = open_picker(&mut h, "Tint Color");
+    show_in_picker(&mut h, picker, "#ad632a");
+    crate::dialogs::confirm(h.state_mut(), &ctx, picker).expect("OK is enabled");
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Custom");
+    assert_eq!(history_len(&h), history + 2);
+
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, after);
+    assert_black_white_preset(&h, "Darker");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, before);
+    assert_black_white_preset(&h, "Default");
+}
+
+#[test]
+fn black_white_presets_distinguish_manual_edits_from_named_choices() {
+    let mut h = app_harness("blackWhite", "rgb", 8);
+    let (id, defaults) = layer(&h);
+    let Adjustment::BlackWhite { weights, .. } = &defaults else { panic!("{defaults:?}") };
+    let red = weights[0];
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "reds": red + 7.0})).unwrap();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Custom");
+
+    h.get_by_role_and_label(Role::SpinButton, "Reds").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text(red.to_string()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(4);
+    assert_eq!(layer(&h).1, defaults);
+    assert_black_white_preset(&h, "Custom");
+
+    h.state_mut().run("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Default");
+    h.state_mut().run("layer.select", json!({"layer": id.0})).unwrap();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Custom");
+
+    let history = history_len(&h);
+    h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::ListBoxOption, "Default").click();
+    h.run_steps(4);
+    assert_black_white_preset(&h, "Default");
+    assert_eq!(layer(&h).1, defaults);
+    assert_eq!(history_len(&h), history);
+}
