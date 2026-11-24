@@ -1,12 +1,18 @@
 use super::{
-    DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking,
-    smart_svg_ui, state, transform_tool, type_transform, vector_ui,
+    DocId, PhotocraftApp, Value, actions, canvas, delete_layer_prompt, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking, smart_svg_ui,
+    state, transform_tool, type_transform, vector_ui,
 };
 
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
+        let library_change = matches!(id, "actions.clearAll" | "actions.reset" | "actions.replace" | "actions.undoLibrary");
+        if library_change && let Err(error) = actions::library::idle(self, id) {
+            self.ui.status = error.clone();
+            self.ui.status_error = true;
+            return Err(error);
+        }
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -21,6 +27,9 @@ impl PhotocraftApp {
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
+        }
+        if library_change && result.is_ok() {
+            actions::library_changed(self);
         }
         // An explicit channel target (⌘2, ⌘\, ⌘3…) decides what the Layers panel targets too:
         // ⌘2 after the mask was targeted goes back to the layer's pixels.
@@ -50,6 +59,9 @@ impl PhotocraftApp {
     }
 
     fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Commands never see Apply Data Set's Preview: it is not the document (a Save would write
+        // it). The dialog shows it again on the next frame.
+        crate::panels::apply_data_set_ui::end_preview(self);
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }
@@ -93,11 +105,21 @@ impl PhotocraftApp {
         if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
         }
+        // Document exports read committed pixels, not the pending Free Transform preview.
+        // Check on execution (also dialog OK and automation), leaving Folder processing usable.
+        if id == crate::dialogs::image_processor_ui::COMMAND
+            && crate::dialogs::image_processor_ui::waits_for_transform(self, params.get("source").and_then(Value::as_str))
+        {
+            return Err(tl!("Commit or cancel the transform first").into());
+        }
         if let Some(r) = transform_tool::intercept(self, id) {
             return r;
         }
         if let Some(r) = crate::crop_ui::intercept(self, id) {
             return r;
+        }
+        if id == "edit.undo" && actions::library::edit_undo_label(self).is_some() {
+            return actions::library::undo(self);
         }
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
@@ -172,7 +194,7 @@ impl PhotocraftApp {
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
-            actions::run_view(self, id, params)
+            actions::runner::run_view(self, id, params)
         } else {
             jobs_ui::run(self, id, params)
         };
@@ -199,8 +221,21 @@ impl PhotocraftApp {
                 }
             }
             Err(e) => {
+                if id == "file.scripts.imageProcessor" && e == "There were no source files that could be opened by PhotoCraft." {
+                    crate::dialogs::alerts::alert(self, e.clone());
+                }
                 self.ui.status = e.clone();
                 self.ui.status_error = true;
+                // The reference application refuses a locked type layer (#14499) and a missing
+                // replacement file (#14500) with an alert; the alert names no layer or file.
+                let alert = [photocraft_engine::DATA_SET_LAYER_LOCKED, photocraft_engine::DATA_SET_FILE_MISSING]
+                    .into_iter()
+                    .find(|a| e == *a || e.strip_prefix(a).is_some_and(|rest| rest.starts_with(" (")));
+                if id == "image.applyDataSet"
+                    && let Some(alert) = alert
+                {
+                    let _ = crate::dialogs::alerts::alert(self, tl!(alert));
+                }
             }
         }
         if suppress_events {
@@ -211,12 +246,23 @@ impl PhotocraftApp {
 
     /// Keep one view per document, in tab order: a view and its windows stay with their document
     /// when tabs move (`document.move`) or close.
-    /// The tool pointer events go to: a held temporary tool when there is one (⌘ is the Move
-    /// tool, `hold_keys::cmd_moves`), else the selected tool.
-    pub fn active_tool(&self) -> state::Tool {
-        self.tool_override.unwrap_or(self.ui.tool)
+    /// Selects the newly attached type path on composite channel target so the path becomes immediately editable.
+    fn select_attached_type_path(&mut self, command: &str, result: &Result<Value, String>) {
+        if command != "type.attachToPath" {
+            return;
+        }
+        let attached = result.as_ref().ok().and_then(|value| value.get("layer")).and_then(Value::as_u64);
+        let active = self.session.active().and_then(|state| state.active_layer).map(|layer| layer.0);
+        if attached.is_some() && attached == active {
+            // New path text becomes the editable target; its source work path stays intact.
+            let _ = self.session.execute("channel.target.composite", json!({}));
+            self.ui.selected_path = Some("layer".into());
+            self.ui.vector_mask_target = false;
+            self.ui.mask_target = false;
+        }
     }
 
+    /// Updates secondary UI state following command execution.
     fn sync_command_side_effects(
         &mut self,
         id: &str,
@@ -248,12 +294,7 @@ impl PhotocraftApp {
         if result.is_ok() && creates_adjustment_or_fill {
             // Properties comes to the front, shown and expanded, so the new layer's settings can
             // be edited at once, as in Photoshop (#4028). The layer is made whatever happens here.
-            if self.ui.docking.is_some() {
-                let _ = panel_docking::command(self, "window.panel.activate", &json!({"panel": "properties"}));
-            } else {
-                self.ui.dock_tabs.properties = 0;
-                dock::reveal(self, dock::Group::Properties);
-            }
+            let _ = panel_docking::show_panel(self, "properties", Some(true));
         }
         // Making a new selection reveals its outline after View > Extras was hidden (#5597).
         // These interactive selection commands complete inline; a failed command, deselection,
@@ -278,6 +319,7 @@ impl PhotocraftApp {
         {
             self.ui.view.extras = true;
         }
+        self.select_attached_type_path(id, result);
         if result.is_ok() && id == "select.toWorkPath" {
             // Make Work Path selects the new work path in the Paths panel, as in Photoshop.
             self.ui.selected_path = Some("work".into());
@@ -308,10 +350,11 @@ impl PhotocraftApp {
         }
     }
 
+    /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
-        // The Paths panel selection belongs to the active document. Ordinary edits replace the
-        // snapshot and advance its revision; a replaced snapshot without a newer revision is a
-        // reopened document, even with the same ID.
+        // The Paths panel selection and canvas context menu belong to the active document.
+        // Ordinary edits replace the snapshot and advance its revision; a replaced snapshot
+        // without a newer revision is a reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
         // Crop's Fill goes back to its default entry when another document that was already open
         // becomes active (a tab switch, or closing the active one), as in the reference
@@ -321,7 +364,7 @@ impl PhotocraftApp {
             && id != old_id
             && self.view_docs.contains(id)
         {
-            self.ui.tool_options.crop_content_aware = false;
+            self.ui.tool_options.crop.fill = craft::draw::ui::crop::CropFill::Background;
         }
         let same_document = match (&self.path_document, &document) {
             (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
@@ -330,27 +373,14 @@ impl PhotocraftApp {
         };
         if !same_document {
             self.ui.selected_path = None;
+            self.ui.canvas_tool_menu = None;
         }
         self.path_document = document;
-        // A shape box handle drag belongs to its document, revision and tool.
-        crate::shape_bounds_box::cancel_stale(self);
         vector_ui::cancel_stale_pen(self);
         crate::direct_select::cancel_stale(self);
-        canvas::cancel_stale_vector_drag(self);
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
-        crate::lasso_ui::cancel_stale(self);
-        crate::retouch_ui::cancel_stale(self);
-        // A polygon under construction belongs to the Polygonal Lasso tool, not the next tool.
-        if self.ui.tool != Tool::PolygonLasso {
-            self.ui.polygon.clear();
-            self.ui.polygon_mode.clear();
-        }
-        // ... and to the document it was started on.
-        crate::canvas::polygon_cancel_stale(self);
-        crate::crop_ui::cancel_stale(self);
         crate::distort_ui::cancel_stale(self);
-        crate::perspective_crop_ui::cancel_stale(self);
         // A pen path under construction belongs to the document it was started on too.
         vector_ui::cancel_stale(self);
         let ids: Vec<DocId> = self.session.documents().iter().map(|d| d.doc.id).collect();
@@ -366,28 +396,30 @@ impl PhotocraftApp {
             }
         }
         self.ui.views = views.into_iter().map(Option::unwrap_or_default).collect();
-        self.ui.windows.retain_mut(|w| now(w.document).map(|d| w.document = d).is_some());
+        canvas::document_windows::sync_documents(self, &ids);
         if !self.session.prefs().workspace.open_documents_as_tabs {
-            let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
-            for &idx in &new_docs {
-                if !self.ui.windows.iter().any(|w| w.document == idx) {
-                    crate::view_cmds::float_window(self, idx, idx, false);
+            let new_docs: Vec<DocId> = ids.iter().filter(|id| !self.view_docs.contains(id)).copied().collect();
+            let ctx = self.ctx().clone();
+            for id in new_docs {
+                // A document already in a floating window keeps it.
+                if !crate::view_cmds::document_is_floating(self, id) {
+                    crate::view_cmds::invoke(self, &ctx, "window.arrange.floatInWindow", &json!({"document": id.0}));
                 }
             }
         }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
+        self.raster_logs.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
-        self.snapshot_thumbs.retain(|(doc, _), _| ids.contains(doc));
         // Closing a document cancels its page work; its GPU pages go with `retain_gpu_documents`.
         self.streams.retain(|doc, _| ids.contains(doc));
-        self.view_docs = ids;
-        self.prune_thumbs();
-        self.sync_mask_targets();
-        // Channel-view textures outlive a hidden view (cheap re-show), not their document.
-        if !self.channel_views.is_empty() {
-            let docs = self.session.documents();
-            self.channel_views.retain(|id, _| docs.iter().any(|d| d.doc.id.0 == *id));
+        // A parameter dialog holds a target in a document that has left the session: it closes with it.
+        let closed: Vec<DocId> = self.view_docs.iter().filter(|d| !ids.contains(d)).cloned().collect();
+        if !closed.is_empty() {
+            let ctx = self.ctx().clone();
+            crate::dialogs::cancel_for_closed(self, &ctx, &closed);
         }
+        self.view_docs = ids;
+        self.sync_mask_targets();
         // With no document left, no canvas paints the Levels clipping display to drop its cache.
         if self.session.documents().is_empty() {
             self.levels_clipping = None;
@@ -405,3 +437,26 @@ const ADDS_LAYER_MASK: [&str; 5] = [
     "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency",
 ];
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod image_processor_empty_source_tests {
+    use super::*;
+
+    #[test]
+    fn confirming_image_processor_with_no_source_replaces_the_form_with_an_alert() {
+        let input = tempfile::tempdir().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = app.ctx().clone();
+        crate::menus::invoke(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+        let id = app.framework.dialogs.stack().top().unwrap();
+        let output = input.path().join("processed");
+        app.framework.dialogs.set_json_field(&ctx, id, "input", json!(input.path())).unwrap();
+        app.framework.dialogs.set_json_field(&ctx, id, "output", json!(output)).unwrap();
+
+        crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+        assert!(app.framework.dialogs.get_dyn(id).is_none());
+        assert_eq!(crate::dialogs::alerts::alerts(&app).len(), 1);
+        assert_eq!(app.ui.status, "There were no source files that could be opened by PhotoCraft.");
+        assert!(!output.exists());
+    }
+}

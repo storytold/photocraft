@@ -1,933 +1,434 @@
-use super::*;
-use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+//! The panel commands, the saved workspace and the legacy `ui.set` words, over the framework workspace.
+//! Drags are the `DockArea`'s and its trials' own: these tests change the workspace through the
+//! automation ids and `apply`, and assert layout membership, the front tab, minimized flags and
+//! saved JSON keys, never sizes.
 
-fn app() -> PhotocraftApp {
+use super::*;
+use craft::behavior::dock::{Action, Column, DockEdge, DockPlacement, Layout, Node, PanelPlace};
+use craft::ui::docking::DockSizes;
+use serde_json::{Value, json};
+
+use crate::panels::registry;
+
+fn app() -> Box<PhotocraftApp> {
     PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
 }
 
-fn lay(app: &PhotocraftApp) -> &Layout<String> {
-    &app.ui.docking.as_ref().expect("a customized workspace").layout
+/// Runs `id` as the menus and the control protocol do.
+fn invoke(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(app, &app_ctx, id, params)
 }
 
-fn hidden(app: &PhotocraftApp, panel: &str) -> bool {
-    app.ui.docking.as_ref().is_some_and(|workspace| workspace.hidden.iter().any(|(id, _)| id == panel))
+/// The workspace as saved JSON: equal values mean an unchanged workspace.
+fn saved(app: &PhotocraftApp) -> Value {
+    serde_json::to_value(&app.ui.docking).unwrap()
 }
 
-fn hit_rect(h: &Harness<'static, PhotocraftApp>, hit: craft_ui::docking::Hit<String>) -> egui::Rect {
-    let hits = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id());
-    hits.iter().find(|(drawn, _)| *drawn == hit).map(|(_, rect)| *rect).unwrap_or_else(|| panic!("{hit:?} is not drawn"))
+fn floating(app: &PhotocraftApp, panel: &str) -> bool {
+    app.ui.docking.layout().floating.iter().any(|window| window.contains(panel))
 }
 
-fn tab_rect(h: &Harness<'static, PhotocraftApp>, panel: &str) -> egui::Rect {
-    hit_rect(h, craft_ui::docking::Hit::Tab(panel.to_owned()))
+/// The panel's group is minimized.
+fn minimized(app: &PhotocraftApp, panel: &str) -> bool {
+    let layout = app.ui.docking.layout();
+    layout.place(&panel.to_owned()).is_some_and(|place| layout.group(&place).is_some_and(|group| group.minimized))
 }
 
-fn floating_rect(h: &Harness<'static, PhotocraftApp>, panel: &str) -> egui::Rect {
-    let window = lay(h.state()).floating.iter().find(|window| window.contains(&panel.to_owned())).unwrap();
-    let layer = craft_ui::docking::DockArea::<String>::floating_layer(area_id(), window).unwrap();
-    h.ctx.memory(|memory| memory.area_rect(layer.id)).unwrap()
+/// The panel's column is collapsed to icons.
+fn iconic(app: &PhotocraftApp, panel: &str) -> bool {
+    let layout = app.ui.docking.layout();
+    layout.place(&panel.to_owned()).and_then(|place| layout.column(&place)).is_some_and(|column| column.iconic)
 }
 
-#[test]
-fn panel_commands_group_split_reorder_float_and_restore_without_duplicate_ownership() {
-    let mut app = app();
-    app.run("window.panel.move", json!({"panel":"swatches", "anchor":"layers", "zone":"top"})).unwrap();
-    app.run("window.panel.move", json!({"panel":"properties", "anchor":"swatches", "before":"swatches"})).unwrap();
-    let before_float = lay(&app).clone();
-    app.run("window.panel.float", json!({"panel":"properties", "x":50,"y":70,"width":330,"height":410})).unwrap();
-    assert!(lay(&app).floating.iter().any(|g| g.panels().map(String::as_str).eq(["properties"])));
-    app.run("window.panel.dock", json!({"panel":"properties"})).unwrap();
-    assert_eq!(lay(&app), &before_float);
-    app.run("window.panel.close", json!({"panel":"properties"})).unwrap();
-    assert!(!lay(&app).contains(&"properties".into()));
-    app.run("window.panel.activate", json!({"panel":"properties"})).unwrap();
-    assert_eq!(lay(&app), &before_float);
-    let layout = lay(&app);
-    assert!(valid(layout));
-    let unique: std::collections::HashSet<_> = layout.panels().into_iter().collect();
-    assert_eq!(unique.len(), layout.panels().len());
-    let saved = serde_json::to_value(&app.ui).unwrap();
-    let restored: crate::state::UiState = serde_json::from_value(saved).unwrap();
-    assert_eq!(restored.docking, app.ui.docking);
-    assert_eq!(restored.docking_returns, app.ui.docking_returns);
-}
-
-#[test]
-fn docking_a_floating_group_docks_all_of_its_panels() {
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"paths"})).unwrap();
-    app.run("window.panel.move", json!({"panel":"history", "anchor":"paths"})).unwrap();
-    assert!(lay(&app).floating.iter().any(|w| w.contains("paths") && w.contains("history")));
-    app.run("window.panel.dock", json!({"panel":"paths", "group": true})).unwrap();
-    assert!(lay(&app).floating.iter().all(|w| !w.contains("paths") && !w.contains("history")), "{:?}", lay(&app).floating);
-    assert!(lay(&app).contains(&"paths".into()) && lay(&app).contains(&"history".into()));
-}
-
-#[test]
-fn floating_panel_rail_toggle_closes_the_float_window() {
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"properties","x":50,"y":70,"width":330,"height":410})).unwrap();
-    assert!(lay(&app).floating.iter().any(|g| g.contains("properties")));
-
-    rail_click(&mut app, Group::Properties);
-
-    assert!(lay(&app).floating.iter().all(|g| !g.contains("properties")));
-    assert!(lay(&app).contains(&"adjustments".into()));
-    assert!(app.ui.panels.properties, "the docked Adjustments tab keeps the group visible");
-}
-
-#[test]
-fn brushes_menu_action_uses_the_shared_docking_layout() {
-    let mut app = app();
-    let before = app.ui.docking.clone();
-    assert!(crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.brushes", json!({})).is_ok());
-    let layout = app.ui.docking.as_ref().map(|w| &w.layout).expect("brushes panel must be registered in docking");
-    assert!(layout.contains(&"brushes".to_string()));
-    assert!(app.ui.panels.brushes);
-    assert_ne!(app.ui.docking, before);
-
-    app.run("window.panel.float", json!({"panel":"brushes"})).unwrap();
-    assert!(lay(&app).floating.iter().any(|group| group.contains("brushes")));
-    app.run("window.panel.dock", json!({"panel":"brushes"})).unwrap();
-    assert!(!lay(&app).floating.iter().any(|group| group.contains("brushes")));
-}
-
-#[test]
-fn invalid_panel_requests_are_atomic_and_do_not_enter_a_custom_workspace() {
-    let mut app = app();
-    for (id, params) in [
-        ("window.panel.move", json!({"panel":"layers","anchor":"unknown"})),
-        ("window.panel.move", json!({"panel":"layers","anchor":"properties","before":"unknown"})),
-        ("window.panel.move", json!({"panel":"layers","anchor":"properties","zone":42})),
-        ("window.panel.float", json!({"panel":"layers","width":-10})),
-        ("window.panel.float", json!({"panel":"unknown"})),
-        ("window.panel.float", json!({"panel":"layers","x":"invalid"})),
-    ] {
-        let old = app.ui.docking.clone();
-        let hidden = app.ui.docking_returns.clone();
-        assert!(app.run(id, params).is_err(), "{id}");
-        assert_eq!(app.ui.docking, old);
-        assert_eq!(app.ui.docking_returns, hidden);
-    }
-}
-
-fn harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
-    let mut ready = false;
-    let mut harness = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
-            if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
-                ready = true;
-                return;
-            }
-            crate::panels::dock_area(app, ui);
-            egui::CentralPanel::default().show(ui, |_| {});
-        },
-        app,
-    );
-    harness.run_steps(4);
-    harness
-}
-
-fn drag(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2) {
-    h.event(Event::PointerMoved(from));
-    h.run_steps(1);
-    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    for step in 1..=8 {
-        h.event(Event::PointerMoved(from + (to - from) * (step as f32 / 8.0)));
-        h.run_steps(1);
-    }
-    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(3);
-}
-
-/// The canvas's rect: from the area's start to the dock column's inner edge.
-fn canvas_rect(h: &Harness<'static, PhotocraftApp>) -> egui::Rect {
-    let hits = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id());
-    let divider = hits
-        .iter()
-        .find(|(hit, _)| matches!(hit, craft_ui::docking::Hit::Divider(craft_ui::docking::Divider::Column(_))))
-        .map(|(_, rect)| *rect)
-        .expect("the dock column's edge is drawn");
-    egui::Rect::from_min_max(egui::pos2(0.0, divider.top()), egui::pos2(divider.left(), divider.bottom()))
-}
-
-/// The panels of the root split's canvas side, which a drop beside the canvas splits.
-fn canvas_side(layout: &Layout<String>) -> Layout<String> {
-    let Some(Node::Split { first, .. }) = &layout.root else { panic!("the canvas is beside the dock: {layout:?}") };
-    Layout { root: Some(first.as_ref().clone()), floating: Vec::new() }
-}
-
-#[test]
-fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
-    let mut h = harness(app(), vec2(1280.0, 800.0));
-    assert!(h.state().ui.docking.is_none(), "drawing the default does not customize the workspace");
-    let layout = legacy(h.state());
-    assert!(valid(&layout));
-    assert_eq!(
-        root_groups(&layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["layers", "channels", "paths"]]
-    );
-    assert!(in_dock_column(&layout, "layers"), "the groups are a dock column: {layout:?}");
-    let canvas = canvas_rect(&h);
-    let tops: Vec<f32> = ["color", "properties", "layers"].iter().map(|panel| tab_rect(&h, panel).top()).collect();
-    assert!(tops.windows(2).all(|pair| pair[0] < pair[1]), "top to bottom: {tops:?}");
-    assert!(tab_rect(&h, "color").left() > canvas.right(), "the dock is at the end edge");
-    let hits = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id());
-    assert!(!hits.iter().any(|(hit, _)| *hit == craft_ui::docking::Hit::Tab(CANVAS.into())), "the canvas has no tab");
-    for command in ["window.panel.close", "window.panel.float"] {
-        assert!(h.state_mut().run(command, json!({"panel": CANVAS})).is_err(), "{command}");
-    }
-    h.state_mut().run("window.panel.move", json!({"panel":"layers","anchor":CANVAS,"zone":"center"})).unwrap_err();
-    assert!(h.state().ui.docking.is_none(), "a refused command leaves the default");
-
-    let mut studio = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    studio.ui.theme = crate::theme::ThemeKind::Studio;
-    let layout = legacy(&studio);
-    let window = layout.floating.first().expect("Studio floats Properties");
-    assert_eq!((window.id, window.panels().cloned().collect::<Vec<_>>()), (PROPERTIES_WINDOW, vec!["properties".to_string(), "adjustments".into()]));
-    assert_eq!(legacy(&studio).floating, layout.floating, "the same window every frame");
-
-    h.state_mut().ui.dock.set_collapsed(Group::Color, true);
-    h.run_steps(2);
-    assert!(collapsed_members(h.state(), &legacy(h.state())).contains("swatches"));
-    let color = tab_rect(&h, "color");
-    assert!(tab_rect(&h, "properties").top() - color.bottom() < 12.0, "a collapsed group shows only its tabs");
-}
-
-/// A panel no saved workspace has placed opens in its native group, or as that group in its
-/// native place in the dock column, not as a tab of whichever group comes first.
-#[test]
-fn a_panel_never_laid_out_opens_in_its_default_group_and_side() {
-    let mut app = app();
-    app.ui.docking = Some(Workspace::new(legacy(&app)));
-    app.run("window.panel.activate", json!({"panel":"navigator"})).unwrap();
-    let layout = lay(&app);
-    assert!(in_dock_column(layout, "navigator"), "{layout:?}");
-    assert_eq!(
-        root_groups(layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["navigator"], vec!["layers", "channels", "paths"]]
-    );
-    app.run("window.panel.activate", json!({"panel":"info"})).unwrap();
-    app.run("window.panel.activate", json!({"panel":"histogram"})).unwrap();
-    assert_eq!(group_members(lay(&app), "info"), ["navigator", "histogram", "info"]);
-    app.run("window.panel.activate", json!({"panel":"brushes"})).unwrap();
-    assert_eq!(root_groups(lay(&app)).last().unwrap(), &["brushes"]);
-}
-
-#[test]
-fn a_tab_dropped_on_the_canvas_floats_there_and_redocks() {
-    let mut h = harness(app(), vec2(1280.0, 800.0));
-    let canvas = canvas_rect(&h);
-    let source = tab_rect(&h, "layers").center();
-    let target = egui::pos2(canvas.left() + canvas.width() / 6.0, canvas.center().y);
-    drag(&mut h, source, target);
-    let layout = lay(h.state());
-    assert!(valid(layout));
-    assert!(!canvas_side(layout).contains(&"layers".to_string()) && !in_dock_column(layout, "layers"), "{layout:?}");
-    assert!(layout.floating.iter().any(|window| window.panels().eq(["layers".to_string()].iter())), "{layout:?}");
-    assert!(tab_rect(&h, "layers").expand(4.0).contains(target), "the tab stays under the pointer");
-
-    let source = tab_rect(&h, "layers").center();
-    let destination = tab_rect(&h, "properties").center();
-    drag(&mut h, source, destination);
-    let layout = lay(h.state());
-    let mut members = group_members(layout, "layers");
-    members.sort();
-    assert_eq!(members, ["adjustments", "layers", "properties"]);
-    assert!(in_dock_column(layout, "layers") && valid(layout));
-}
-
-#[test]
-fn brushes_tab_drag_opens_above_the_canvas_and_can_redock_into_another_tab_group() {
-    let mut app = app();
-    crate::menus::invoke(&mut app, &egui::Context::default(), "window.panel.brushes", json!({})).unwrap();
-    let mut h = harness(app, vec2(1280.0, 800.0));
-    let canvas = canvas_rect(&h);
-    let source = tab_rect(&h, "brushes").center();
-    // The outer edge band along the canvas column's top.
-    drag(&mut h, source, egui::pos2(canvas.center().x, canvas.top() + 6.0));
-    let layout = lay(h.state());
-    assert!(canvas_side(layout).contains(&"brushes".to_string()), "{layout:?}");
-    assert!(!layout.floating.iter().any(|window| window.contains("brushes")));
-    let canvas_body = last_bodies(&h.ctx).into_iter().find(|(id, _)| id == CANVAS).expect("the canvas is drawn").1;
-    assert!(tab_rect(&h, "brushes").bottom() <= canvas_body.top(), "brushes is above the canvas");
-
-    let source = tab_rect(&h, "brushes").center();
-    let destination = tab_rect(&h, "layers").center();
-    drag(&mut h, source, destination);
-    let layout = lay(h.state());
-    assert!(in_dock_column(layout, "brushes"));
-    assert!(valid(layout));
-}
-
-#[test]
-fn saved_workspace_restores_the_custom_tree_and_hidden_panel_placement() {
-    let mut app = app();
-    let ctx = egui::Context::default();
-    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers","zone":"top"})).unwrap();
-    app.run("window.panel.float", json!({"panel":"properties","x":50,"y":80})).unwrap();
-    app.run("window.panel.close", json!({"panel":"swatches"})).unwrap();
-    let layout = app.ui.docking.clone();
-    let hidden = app.ui.docking_returns.clone();
-    crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name":"Custom docking"})).unwrap();
-    crate::menus::invoke(&mut app, &ctx, "window.workspace.essentials", json!({})).unwrap();
-    assert!(app.ui.docking.is_none());
-    crate::menus::invoke(&mut app, &ctx, "window.workspace.select", json!({"name":"Custom docking"})).unwrap();
-    assert_eq!(app.ui.docking, layout);
-    assert_eq!(app.ui.docking_returns, hidden);
-}
-
-#[test]
-fn shared_layout_keeps_panel_identity_across_themes_and_respects_workspace_lock() {
-    let mut app = app();
-    app.run("window.panel.move", json!({"panel":"color","anchor":"layers"})).unwrap();
-    let layout = app.ui.docking.clone();
-    app.ui.theme = crate::theme::ThemeKind::Studio;
-    assert_eq!(app.ui.docking, layout);
-    app.session.prefs.edit(|prefs| prefs.workspace_locked = true);
-    assert!(app.run("window.panel.float", json!({"panel":"color"})).is_err());
-    assert_eq!(app.ui.docking, layout);
-    assert!(app.run("window.panel.activate", json!({"panel":"color"})).is_ok());
-    assert!(!crate::menus::is_enabled(&app, "window.panel.window"));
-    assert!(crate::menus::is_enabled(&app, "window.panel.activate"));
-}
-
-/// Explicit offscreen evidence; this creates no native windows.
-#[test]
-fn capture_custom_panel_docking_visual_fixtures() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let Some(directory) = std::env::var_os("CRAFT_UI_DOCKING_FIXTURES").map(std::path::PathBuf::from) else { return };
-    std::fs::create_dir_all(&directory).unwrap();
-    for theme in crate::theme::ThemeKind::ALL {
-        for width in [800.0, 1280.0] {
-            for scale in [1.0, 1.5, 2.0] {
-                let mut app = app();
-                app.run("file.new", json!({})).unwrap();
-                app.run("window.panel.move", json!({"panel":"swatches", "anchor":"layers", "zone":"top"})).unwrap();
-                app.run("window.panel.float", json!({"panel":"properties","x":30,"y":90,"width":300,"height":440})).unwrap();
-                let mut ready = false;
-                let mut harness = Harness::builder().with_size(vec2(width, 800.0)).with_pixels_per_point(scale).wgpu().build_ui_state(
-                    move |ui, app: &mut PhotocraftApp| {
-                        if !ready {
-                            PhotocraftApp::setup_context(ui.ctx(), theme);
-                            app.ui.theme = theme;
-                            ready = true;
-                            return;
-                        }
-                        crate::panels::dock_area(app, ui);
-                        egui::CentralPanel::default().show(ui, |ui| {
-                            ui.label("Custom panel workspace");
-                        });
-                    },
-                    app,
-                );
-                harness.input_mut().max_texture_side = Some(8192);
-                harness.run_steps(5);
-                assert!(valid(lay(harness.state())));
-                harness.render().unwrap().save(directory.join(format!("photocraft-shared-docking-{}-{width}-{scale}x.png", theme.id()))).unwrap();
-            }
-        }
-    }
-}
-
-#[test]
-fn floating_group_titles_are_opaque_in_studio_themes() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    // Studio's tab strip is transparent over the dock's card; a floating group must not show the canvas (#4509).
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"swatches","x":40,"y":60,"width":300,"height":300})).unwrap();
-    let mut ready = false;
-    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).wgpu().build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
-            if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::Studio);
-                app.ui.theme = crate::theme::ThemeKind::Studio;
-                ready = true;
-                return;
-            }
-            crate::panels::dock_area(app, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(255, 0, 255))).show(ui, |_| {});
-        },
-        app,
-    );
-    h.run_steps(5);
-    let area = floating_rect(&h, "swatches");
-    let image = h.render().unwrap();
-    let ppp = image.width() as f32 / 1280.0;
-    let strip = egui::Rect::from_min_size(area.min, vec2(area.width(), 40.0)).shrink(2.0);
-    let magenta = (strip.left() as u32..strip.right() as u32)
-        .flat_map(|x| (strip.top() as u32..strip.bottom() as u32).map(move |y| (x, y)))
-        .filter(|&(x, y)| image.get_pixel((x as f32 * ppp) as u32, (y as f32 * ppp) as u32).0[..3] == [255, 0, 255])
-        .count();
-    assert_eq!(magenta, 0, "canvas shows through the floating group's title strip {strip:?}");
-}
-
-#[test]
-fn escape_cancels_the_first_drag_without_replacing_the_legacy_workspace() {
-    let mut h = harness(app(), vec2(1280.0, 800.0));
-    let source = h.query_all_by_label("Layers").find(|node| node.rect().height() <= 45.0).unwrap().rect().center();
-    h.event(Event::PointerMoved(source));
-    h.run_steps(1);
-    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    h.event(Event::PointerMoved(source - vec2(90.0, 0.0)));
-    h.run_steps(2);
-    assert!(h.state().ui.docking.is_none(), "a drag changes nothing before its drop");
-    h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    assert!(h.state().ui.docking.is_none());
-    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
-    assert!(h.state().ui.docking.is_none());
-}
-
-#[test]
-fn serialized_layout_actions_cover_geometry_reorder_accordion_and_atomic_rejection() {
-    let mut app = app();
-    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers","zone":"top"})).unwrap();
-    app.run("window.panel.layout", json!({"action":{"ResizeSplit":{"path":[],"size":{"Ratio":0.35}}}})).unwrap();
-    assert!(matches!(lay(&app).root, Some(Node::Split { size: craft_ui::layout::SplitSize::Ratio(value), .. }) if (value - 0.35).abs() < 0.001));
-    app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
-    app.run("window.panel.layout", json!({"action":{"MoveFloating":{"panel":"properties","rect":[44,66,360,450]}}})).unwrap();
-    assert_eq!(lay(&app).floating.iter().find(|group| group.contains(&"properties".to_string())).unwrap().rect, [44.0, 66.0, 360.0, 450.0]);
-    app.run("window.panel.layout", json!({"action":{"Move":{"panel":"properties","anchor":"swatches","placement":{"Tab":{"before":"swatches"}}}}})).unwrap();
-    assert_eq!(group_members(lay(&app), "swatches"), ["properties", "swatches"]);
-    let before = app.ui.docking.clone();
-    let hidden = app.ui.docking_returns.clone();
-    for action in [
-        json!({"MoveFloating":{"panel":"properties","rect":[0,0,-5,30]}}),
-        json!({"ResizeSplit":{"path":[true,true,true],"size":{"Ratio":0.2}}}),
-        json!({"Open":{"panel":"unknown","anchor":null}}),
-        json!({"Move":{"panel":"properties","anchor":"swatches","placement":{"Tab":{"before":"unknown"}}}}),
-    ] {
-        assert!(app.run("window.panel.layout", json!({"action":action})).is_err());
-        assert_eq!(app.ui.docking, before);
-        assert_eq!(app.ui.docking_returns, hidden);
-    }
-    let stack = Node::Stack { entries: vec![craft_ui::docking::StackEntry { panel: "layers".into(), open: true, height: Some(100.0) }] };
-    app.ui.docking = Some(Workspace::new(Layout { root: Some(with_canvas(stack, 300.0)), floating: Vec::new() }));
-    app.run("window.panel.layout", json!({"action":{"SetStackOpen":{"panel":"layers","open":false}}})).unwrap();
-    app.run("window.panel.layout", json!({"action":{"ResizeStack":{"panel":"layers","height":150}}})).unwrap();
-    let Some(Node::Split { second, .. }) = &lay(&app).root else { panic!("expected the canvas split") };
-    let Node::Stack { entries } = second.as_ref() else { panic!("expected stack") };
-    assert!(!entries[0].open);
-    assert_eq!(entries[0].height, Some(150.0));
-}
-
-#[test]
-fn customization_retains_native_collapsed_groups_until_their_tab_is_activated() {
-    let mut app = app();
-    app.ui.dock.set_collapsed(Group::Color, true);
-    app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
-    let layout = lay(&app);
-    assert!(collapsed_members(&app, layout).contains("swatches"));
-    let saved = serde_json::to_value(&app.ui).unwrap();
-    let restored: crate::state::UiState = serde_json::from_value(saved).unwrap();
-    assert!(restored.dock.is_collapsed(Group::Color));
-    app.run("window.panel.layout", json!({"action":{"Activate":{"panel":"swatches"}}})).unwrap();
-    assert!(!app.ui.dock.is_collapsed(Group::Color));
-}
-
-#[test]
-fn splitting_a_short_column_keeps_the_layers_footer_visible_and_usable() {
-    let mut app = app();
-    app.run("file.new", json!({"width":480,"height":360})).unwrap();
-    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers","zone":"top"})).unwrap();
-    app.run("window.panel.float", json!({"panel":"properties","x":30,"y":90,"width":300,"height":440})).unwrap();
-    let mut h = harness(app, vec2(800.0, 800.0));
-    let button = h.get_by_label("Create a new layer").rect();
-    assert!(button.bottom() <= 800.0, "Layers footer is clipped below the viewport: {button:?}");
-    let before = h.state().session.active().unwrap().doc.layers.len();
-    let at = button.center();
-    h.hover_at(at);
-    h.run_steps(1);
-    for pressed in [true, false] {
-        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
-        h.run_steps(1);
-    }
-    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before + 1);
-}
-
-#[test]
-fn populated_canvas_keeps_a_real_opacity_edit_after_floating_and_redocking() {
-    let _gpu = photocraft_testkit::gpu_lock();
-    let mut app = app();
-    app.ui.theme = crate::theme::ThemeKind::Studio;
-    app.run("file.new", json!({"width":480,"height":360})).unwrap();
-    app.run("layer.new.layer", json!({"name":"Docking sample"})).unwrap();
-    app.run("select.rect", json!({"x":80,"y":70,"width":250,"height":160})).unwrap();
-    app.run("edit.fill", json!({"color":"#5297bb"})).unwrap();
-    app.run("select.deselect", json!({})).unwrap();
-    let layer = app.session.active().unwrap().active_layer.unwrap();
-    app.run("window.panel.float", json!({"panel":"properties","x":40,"y":140,"width":310,"height":490})).unwrap();
-    let directory = std::env::var_os("CRAFT_UI_DOCKING_FIXTURES").map(std::path::PathBuf::from);
-    let builder = Harness::builder().with_size(vec2(1280.0, 800.0));
-    let builder = if directory.is_some() { builder.wgpu() } else { builder };
-    let mut ready = false;
-    let mut h = builder.build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
-            if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::Studio);
-                ready = true;
-                return;
-            }
-            crate::panels::title_bar(app, ui);
-            crate::panels::options_bar(app, ui);
-            crate::panels::toolbar(app, ui);
-            crate::panels::dock_area(app, ui);
-            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-        },
-        app,
-    );
-    h.input_mut().max_texture_side = Some(8192);
-    h.run_steps(5);
-    let floating = floating_rect(&h, "properties");
-    let mut sliders: Vec<_> = h.ctx.viewport(|vp| {
-        vp.prev_pass
-            .widgets
-            .layers()
-            .flat_map(|(_, widgets)| widgets.iter())
-            .filter(|widget| widget.sense.senses_drag() && widget.rect.height() == 18.0 && floating.contains_rect(widget.rect))
-            .map(|widget| widget.rect)
-            .collect()
-    });
-    sliders.sort_by(|a, b| a.top().total_cmp(&b.top()));
-    let at = sliders.first().expect("Properties opacity slider").center();
-    h.hover_at(at);
-    h.run_steps(1);
-    for pressed in [true, false] {
-        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
-        h.run_steps(1);
-    }
-    h.run_steps(2);
-    let opacity = h.state().session.active().unwrap().doc.layer(layer).unwrap().opacity;
-    assert!((opacity - 0.5).abs() < 0.03, "actual opacity {opacity}");
-    if let Some(directory) = &directory {
-        std::fs::create_dir_all(directory).unwrap();
-        h.render().unwrap().save(directory.join("photocraft-populated-opacity-floating.png")).unwrap();
-    }
-    let from = tab_rect(&h, "properties").center();
-    let to = tab_rect(&h, "layers").center();
-    drag(&mut h, from, to);
-    assert!(lay(h.state()).floating.iter().all(|group| !group.contains(&"properties".to_string())));
-    assert_eq!(h.state().session.active().unwrap().doc.layer(layer).unwrap().opacity, opacity);
-    if let Some(directory) = &directory {
-        h.render().unwrap().save(directory.join("photocraft-populated-opacity-redocked.png")).unwrap();
-    }
-}
-
-#[test]
-fn changing_workspace_during_a_drag_cancels_the_stale_gesture() {
-    let mut app = app();
-    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers","zone":"top"})).unwrap();
-    let destination = app.ui.docking.clone();
-    let ctx = egui::Context::default();
-    crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name":"Destination"})).unwrap();
-    crate::menus::invoke(&mut app, &ctx, "window.workspace.essentials", json!({})).unwrap();
-    let mut h = harness(app, vec2(1280.0, 800.0));
-    let source = h.query_all_by_label("Layers").find(|node| node.rect().height() <= 45.0).unwrap().rect().center();
-    h.event(Event::PointerMoved(source));
-    h.run_steps(1);
-    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    h.event(Event::PointerMoved(source - vec2(90.0, 0.0)));
-    h.run_steps(2);
-    let ctx = h.ctx.clone();
-    crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name":"Destination"})).unwrap();
-    h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
-    h.run_steps(1);
-    assert_eq!(h.state().ui.docking, destination);
-    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
-    assert_eq!(h.state().ui.docking, destination);
+/// The selected tab of the group holding `panel`.
+fn active_tab(app: &PhotocraftApp, panel: &str) -> Option<String> {
+    let layout = app.ui.docking.layout();
+    let place = layout.place(&panel.to_owned())?;
+    layout.group(&place)?.active_panel().cloned()
 }
 
 fn control_set(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Value {
     let (request, _) = crate::control::ControlRequest::new("ui.set", params);
     match crate::control::handle(app, ctx, &request) {
-        crate::control::Outcome::Done(value) => value,
+        crate::control::Reply::Done(value) => value,
         _ => panic!("ui.set must reply synchronously"),
     }
 }
 
-#[test]
-fn current_main_hidden_tabs_migrate_by_name_and_selected_identity() {
-    for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Studio] {
-        let mut app = app();
-        app.ui.theme = theme;
-        let pro = matches!(theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
-        let color = Group::Color.tabs(pro).iter().position(|name| *name == "Color").unwrap();
-        let swatches = Group::Color.tabs(pro).iter().position(|name| *name == "Swatches").unwrap();
-        app.ui.dock.hide_tab(Group::Color, swatches, pro);
-        app.ui.dock.hide_tab(Group::Layers, 2, pro);
-        app.ui.dock_tabs.color = color;
-        let saved = json!({"panels":app.ui.panels,"dock":app.ui.dock,"dockTabs":app.ui.dock_tabs});
-        assert_eq!(saved["dock"]["hidden_tabs"]["layers"], json!(["Paths"]));
-        let mut restored = self::app();
-        restored.ui.theme = theme;
-        crate::dock::apply(&mut restored, &saved);
-        restored.run("window.panel.float", json!({"panel":"properties"})).unwrap();
-        let layout = lay(&restored);
-        assert!(!layout.contains(&"swatches".into()) && !layout.contains(&"paths".into()));
-        assert!(panel_active(layout, "color"));
-        assert!(hidden(&restored, "swatches") && hidden(&restored, "paths"));
-        restored.run("window.panel.swatches", json!({"show":true})).unwrap();
-        assert!(panel_active(lay(&restored), "swatches"));
+/// The columns of the end dock.
+fn end_columns(layout: &Layout<String>) -> Option<&Vec<Column<String>>> {
+    fn find(node: &Node<String>) -> Option<&Vec<Column<String>>> {
+        match node {
+            Node::Dock { side: DockEdge::End, columns, .. } => Some(columns),
+            Node::Split { first, second, .. } => find(second).or_else(|| find(first)),
+            _ => None,
+        }
     }
+    find(layout.root.as_ref()?)
 }
 
+type Check = fn(&PhotocraftApp) -> bool;
+
+/// The `window.panel.*`, `window.toggle.*`, `type.panels.*` and `ui.dock` ids are the automation
+/// contract (`docs/control-protocol.md`): each family changes the workspace as documented, and a
+/// refused request leaves it equal.
 #[test]
-fn legacy_control_updates_authoritative_custom_visibility_and_selection_atomically() {
+fn window_panel_ids_drive_the_workspace() {
     let mut app = app();
-    app.ui.theme = crate::theme::ThemeKind::ProMedium;
-    app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
-    let ctx = egui::Context::default();
-    assert_eq!(control_set(&mut app, &ctx, json!({"dockTabs":{"layers":1}}))["ok"], true);
-    assert!(panel_active(lay(&app), "channels"));
-    assert_eq!(control_set(&mut app, &ctx, json!({"panels":{"layers":false}}))["ok"], true);
-    assert!(PANELS.iter().filter(|p| p.2 == Group::Layers).all(|p| !lay(&app).contains(&p.0.into())));
-    assert!(!app.ui.panels.layers);
-    assert_eq!(control_set(&mut app, &ctx, json!({"panels":{"layers":true},"dockTabs":{"layers":2}}))["ok"], true);
-    assert!(panel_active(lay(&app), "paths"));
-    let before = serde_json::to_value(&app.ui).unwrap();
-    for request in [
-        json!({"panels":{"color":false},"dockTabs":{"layers":999}}),
-        json!({"tool":"brush","dock":{"order":["layers","color"]}}),
-        json!({"panels":{"layers":false},"dockTabs":{"layers":1}}),
-    ] {
-        assert_eq!(control_set(&mut app, &ctx, request)["ok"], false);
-        assert_eq!(serde_json::to_value(&app.ui).unwrap(), before);
+    assert!(!is_shown(&app, "character"), "Character starts closed in the default workspace");
+    assert!(is_shown(&app, "navigator") && iconic(&app, "navigator") && !is_front(&app, "navigator"), "Navigator starts as an icon");
+
+    // One row per request: id, params, and what holds afterwards. `row` makes each closure a `Check`.
+    let row = |id: &'static str, params: Value, holds: Check| (id, params, holds);
+    let rows = vec![
+        // Without `show`: a hidden panel comes to the front, a front one closes (both id families).
+        row("window.panel.character", json!({}), |a| is_front(a, "character")),
+        row("window.panel.character", json!({}), |a| !is_shown(a, "character")),
+        row("window.toggle.character", json!({}), |a| is_front(a, "character")),
+        row("window.toggle.character", json!({}), |a| !is_shown(a, "character")),
+        // With `show`: true never hides, even on the second call.
+        row("window.toggle.character", json!({"show": true}), |a| is_front(a, "character")),
+        row("window.toggle.character", json!({"show": true}), |a| is_front(a, "character")),
+        row("window.toggle.character", json!({"show": false}), |a| !is_shown(a, "character")),
+        // A panel in a column of icons opens its flyout and, toggled again, closes it; it stays in the layout.
+        row("window.panel.navigator", json!({}), |a| is_front(a, "navigator") && iconic(a, "navigator")),
+        row("window.panel.navigator", json!({}), |a| is_shown(a, "navigator") && !is_front(a, "navigator")),
+        row("window.panel.brushes", json!({}), |a| is_front(a, "brushes")),
+        row("window.panel.brushes", json!({"show": false}), |a| is_shown(a, "brushes") && !is_front(a, "brushes")),
+        // A tab behind another one comes to the front.
+        row("window.panel.channels", json!({}), |a| is_front(a, "channels") && !is_front(a, "layers")),
+        row("window.toggle.layers", json!({"show": true}), |a| is_front(a, "layers")),
+        // A minimized group opens again.
+        row("window.panel.layout", json!({"action": {"SetMinimized": {"panel": "layers", "minimized": true}}}), |a| {
+            minimized(a, "layers") && !is_front(a, "layers")
+        }),
+        row("window.panel.layers", json!({}), |a| is_front(a, "layers") && !minimized(a, "layers")),
+        // The Type panels' ids: the style panels and Glyphs toggle; Character and Paragraph only show.
+        row("type.panels.characterStyles", json!({}), |a| is_front(a, "characterStyles")),
+        row("type.panels.characterStyles", json!({}), |a| !is_shown(a, "characterStyles")),
+        row("type.panels.paragraphStyles", json!({}), |a| is_front(a, "paragraphStyles")),
+        row("type.panels.paragraphStyles", json!({}), |a| !is_shown(a, "paragraphStyles")),
+        row("type.panels.glyphs", json!({}), |a| is_front(a, "glyphs")),
+        row("type.panels.glyphs", json!({}), |a| !is_shown(a, "glyphs")),
+        row("type.panels.character", json!({}), |a| is_front(a, "character")),
+        row("type.panels.character", json!({}), |a| is_front(a, "character")),
+        row("type.panels.paragraph", json!({}), |a| is_front(a, "paragraph")),
+        row("type.panels.paragraph", json!({}), |a| is_front(a, "paragraph")),
+        // Windows: float, minimize and restore the window, the shared action form, and `ui.dock`.
+        row("window.panel.float", json!({"panel": "properties", "x": 50, "y": 70, "width": 330, "height": 410}), |a| floating(a, "properties")),
+        row("window.panel.minimize", json!({"panel": "properties", "minimized": true}), |a| minimized(a, "properties")),
+        row("window.panel.minimize", json!({"panel": "properties", "minimized": false}), |a| !minimized(a, "properties")),
+        // A column collapses to icons and expands again; a floating column does too, and keeps its icons floating.
+        row("window.panel.iconic", json!({"panel": "properties"}), |a| iconic(a, "properties") && floating(a, "properties")),
+        row("window.panel.iconic", json!({"panel": "properties", "iconic": false}), |a| !iconic(a, "properties")),
+        row("window.panel.history", json!({"show": true}), |a| is_front(a, "history")),
+        row("window.panel.layout", json!({"action": {"Float": {"panel": "history", "rect": [40, 60, 300, 300]}}}), |a| floating(a, "history")),
+        row("ui.dock", json!({"action": {"Close": {"panel": "history"}}}), |a| !is_shown(a, "history")),
+        // Moves: a tab joins another panel's group and goes before it.
+        row("window.panel.move", json!({"panel": "swatches", "anchor": "layers"}), |a| probe::group_of(a, "layers").contains(&"swatches".to_owned())),
+        row("window.panel.move", json!({"panel": "gradients", "anchor": "layers", "before": "layers"}), |a| {
+            probe::group_of(a, "layers").first().map(String::as_str) == Some("gradients")
+        }),
+    ];
+    for (id, params, holds) in rows {
+        invoke(&mut app, id, params.clone()).unwrap_or_else(|e| panic!("{id} {params}: {e}"));
+        assert!(holds(&app), "{id} {params}");
     }
-}
 
-#[test]
-fn legacy_dock_width_is_consumed_by_custom_renderer_and_clamped_to_existing_range() {
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
-    let mut h = harness(app, vec2(1280.0, 800.0));
-    let ctx = h.ctx.clone();
-    // A 1280-point window: the dock may take all but 400 points (#7896), so 700 is no longer
-    // cut to 520.
-    for (requested, expected) in [(410.0, 410.0), (700.0, 700.0), (900.0, 880.0), (20.0, 250.0)] {
-        assert_eq!(control_set(h.state_mut(), &ctx, json!({"dockWidth":requested}))["ok"], true);
-        h.run_steps(2);
-        let Some(Node::Split { second, .. }) = &lay(h.state()).root else { panic!("expected the canvas split") };
-        let Node::Dock { columns, .. } = second.as_ref() else { panic!("expected the dock") };
-        assert!((columns[0].width - expected).abs() < 1.0, "{} / {expected}", columns[0].width);
-        assert!(h.ctx.data(|data| data.get_temp::<f32>(crate::panels::dock_width_id())).is_none());
-    }
-}
+    // Closing a group closes every panel of it.
+    let members = probe::group_of(&app, "layers");
+    assert!(members.len() > 1);
+    invoke(&mut app, "window.panel.closeGroup", json!({"panel": "layers"})).unwrap();
+    assert!(members.iter().all(|panel| !is_shown(&app, panel)), "{members:?}");
+    invoke(&mut app, "window.panel.layers", json!({"show": true})).unwrap();
+    assert!(is_front(&app, "layers"));
+    assert!(invoke(&mut app, "window.panel.iconic", json!({"panel": "toolbar"})).is_err(), "the toolbar never collapses to icons");
 
-#[test]
-fn explicit_reveal_activates_existing_tab_and_expands_custom_group() {
-    let mut app = app();
-    app.run("window.panel.move", json!({"panel":"properties","anchor":"layers"})).unwrap();
-    app.run("window.panel.group", json!({"panel":"layers","operation":"collapse"})).unwrap();
-    app.run("window.panel.layers", json!({"show":true})).unwrap();
-    assert!(panel_active(lay(&app), "layers"));
-    assert!(!collapsed_members(&app, lay(&app)).contains("layers"));
-    app.run("window.panel.layers", json!({"show":true})).unwrap();
-    assert!(lay(&app).contains(&"layers".into()));
-    let before = app.ui.docking.clone();
-    assert!(app.run("window.panel.layers", json!({"show":"yes"})).is_err());
-    assert_eq!(app.ui.docking, before);
-}
-
-// #2455 in a custom workspace: the pro Color field fills a tall floating group, not 120 pt.
-#[test]
-fn pro_color_field_fills_a_tall_custom_group() {
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"color","x":40,"y":60,"width":320,"height":560})).unwrap();
-    assert!(app.ui.docking.is_some());
-    let h = harness(app, vec2(1280.0, 800.0));
-    // The SV field and the 14 pt hue strip beside it are draggable, equally tall and 8 pt apart.
-    let drags: Vec<egui::Rect> =
-        h.ctx.viewport(|v| v.this_pass.widgets.layers().flat_map(|(_, w)| w).filter(|w| w.sense.senses_drag()).map(|w| w.rect).collect());
-    let field = drags
-        .iter()
-        .find(|f| drags.iter().any(|s| s.width() == 14.0 && s.top() == f.top() && s.height() == f.height() && (s.left() - f.right() - 8.0).abs() < 0.5))
-        .expect("Color field with its hue strip");
-    assert!(field.height() > 300.0, "field stays short in a 560 pt group: {field:?}");
-}
-
-// #4028: in a custom workspace too, a new adjustment layer brings Properties to the front.
-#[test]
-fn a_new_adjustment_layer_activates_properties_in_a_custom_workspace() {
-    let mut app = app();
-    app.run("window.panel.activate", json!({"panel":"adjustments"})).unwrap();
-    assert!(panel_active(lay(&app), "adjustments"));
-    app.run("file.new", json!({"width":64,"height":64})).unwrap();
-    app.run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
-    assert!(panel_active(lay(&app), "properties"));
-}
-
-#[test]
-fn custom_group_commands_preserve_members_and_workspace_timeline() {
-    let mut app = app();
-    app.run("window.panel.move", json!({"panel":"properties","anchor":"layers"})).unwrap();
-    let members = group_members(lay(&app), "layers");
-    app.run("window.panel.group", json!({"panel":"layers","operation":"up"})).unwrap();
-    assert_eq!(group_members(lay(&app), "layers"), members);
-    app.ui.timeline.open = true;
-    app.run("window.panel.group", json!({"panel":"layers","operation":"collapse"})).unwrap();
-    let saved = json!({"panels":app.ui.panels,"dock":app.ui.dock,"dockTabs":app.ui.dock_tabs,"docking":app.ui.docking,"dockingReturns":app.ui.docking_returns,"dockingCollapsed":app.ui.docking_collapsed,"timelineOpen":true});
-    let mut restored = self::app();
-    crate::dock::apply(&mut restored, &saved);
-    assert_eq!(restored.ui.docking, app.ui.docking);
-    assert!(restored.ui.timeline.open);
-    assert!(collapsed_members(&restored, lay(&restored)).contains("layers"));
-    app.run("window.panel.group", json!({"panel":"layers","operation":"close"})).unwrap();
-    assert!(members.iter().all(|id| !lay(&app).contains(id)));
-    assert!(members.iter().all(|id| hidden(&app, id)));
-    app.session.prefs.edit(|p| p.workspace_locked = true);
-    let before = serde_json::to_value(&app.ui).unwrap();
-    assert!(app.run("window.panel.group", json!({"panel":"color","operation":"close"})).is_err());
-    assert_eq!(serde_json::to_value(&app.ui).unwrap(), before);
-    restored.ui.timeline.playing = true;
-    crate::dock::apply(&mut restored, &json!({"dock":{}}));
-    assert!(!restored.ui.timeline.open && !restored.ui.timeline.playing);
-}
-
-#[test]
-fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"swatches","x":20,"y":40})).unwrap();
-    let mut h = harness(app, vec2(1280.0, 800.0));
-    assert!(h.query_all_by_label("Panel menu").count() > 0);
-    assert!(h.query_all_by_label("Color & Swatches").count() > 0);
-    let floating = floating_rect(&h, "swatches");
-    let first = h.query_all_by_label("Panel menu").find(|node| floating.contains_rect(node.rect())).unwrap().rect().center();
-    h.hover_at(first);
-    for pressed in [true, false] {
-        h.event(Event::PointerButton { pos: first, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
-        h.run_steps(1);
-    }
-    h.run_steps(2);
-    assert!(h.query_all_by_label("Close Tab Group").count() > 0);
-    assert!(h.query_all_by_label("New Swatch…").count() > 0);
-    // Panel-specific menu body is shared by both its context and group menu seams.
-    let mut ready = false;
-    let mut menu = Harness::builder().build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
-            if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
-                ready = true;
-            }
-            panel_menu(app, ui, "swatches");
-        },
-        self::app(),
-    );
-    menu.run_steps(2);
-    assert!(menu.query_all_by_label("New Swatch…").count() > 0);
-}
-
-/// A floated Color panel's menu still picks its mode (#6000): the shared docking renderer has
-/// its own panel menu, separate from the legacy dock's.
-#[test]
-fn floated_color_panel_menu_picks_the_mode() {
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"color","x":20,"y":40})).unwrap();
-    let mut h = harness(app, vec2(1280.0, 800.0));
-    let floating = floating_rect(&h, "color");
-    let button = h.query_all_by_label("Panel menu").find(|node| floating.contains_rect(node.rect())).unwrap().rect().center();
-    h.hover_at(button);
-    for pressed in [true, false] {
-        h.event(Event::PointerButton { pos: button, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
-        h.run_steps(1);
-    }
-    h.run_steps(2);
-    h.get_by_label("   RGB Sliders").click();
-    h.run_steps(2);
-    assert_eq!(h.state().ui.color_panel.mode, crate::state::ColorPanelMode::RgbSliders);
-}
-
-#[test]
-fn actions_panel_menu_includes_load_and_save_actions() {
-    let mut ready = false;
-    let mut menu = Harness::builder().build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
-            if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
-                ready = true;
-            }
-            panel_menu(app, ui, "actions");
-        },
-        self::app(),
-    );
-    menu.run_steps(2);
-    assert!(menu.query_all_by_label("Load Actions…").count() > 0);
-    assert!(menu.query_all_by_label("Save Actions…").count() > 0);
-    assert!(menu.query_all_by_label("New Action…").count() > 0);
-}
-
-/// The Channels panel menu (☰) has the channel items, not only the rows' context menu (#11451):
-/// New Spot Channel… and New Channel… open their dialogs, and OK in New Channel adds a channel.
-#[test]
-fn channels_panel_menu_opens_new_spot_and_adds_a_channel() {
-    use egui_kittest::kittest::NodeT;
+    // A floated panel docks back to where it floated from; a floating group docks all of its panels.
     let mut app = self::app();
-    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
-    let mut ready = false;
-    let mut menu = Harness::builder().with_size(vec2(260.0, 420.0)).build_ui_state(
-        move |ui, app: &mut PhotocraftApp| {
-            if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
-                ready = true;
-            }
-            panel_menu(app, ui, "channels");
+    let before = app.ui.docking.layout().clone();
+    invoke(&mut app, "window.panel.float", json!({"panel": "properties", "x": 50, "y": 70, "width": 330, "height": 410})).unwrap();
+    assert!(floating(&app, "properties"));
+    assert!(app.ui.docking.floated().iter().any(|(panel, _)| panel == "properties"), "the workspace records where it floated from");
+    invoke(&mut app, "window.panel.dock", json!({"panel": "properties"})).unwrap();
+    assert_eq!(*app.ui.docking.layout(), before, "the panel is back where it was");
+
+    invoke(&mut app, "window.panel.float", json!({"panel": "paths"})).unwrap();
+    invoke(&mut app, "window.panel.move", json!({"panel": "history", "anchor": "paths"})).unwrap();
+    assert!(app.ui.docking.layout().floating.iter().any(|w| w.contains("paths") && w.contains("history")));
+    invoke(&mut app, "window.panel.dock", json!({"panel": "paths", "group": true})).unwrap();
+    assert!(!floating(&app, "paths") && !floating(&app, "history"), "{:?}", app.ui.docking.layout().floating);
+    assert!(is_shown(&app, "paths") && is_shown(&app, "history"));
+
+    // A panel no workspace has placed opens in its own group, and the panels of that group meet there.
+    let mut app = self::app();
+    for panel in ["navigator", "info", "histogram"] {
+        invoke(&mut app, &format!("window.panel.{panel}"), json!({"show": true})).unwrap();
+    }
+    let mut group = probe::group_of(&app, "info");
+    group.sort();
+    assert_eq!(group, ["histogram", "info", "navigator"]);
+
+    // A refused request changes nothing, and Lock Workspace refuses moves but still opens panels.
+    let mut app = self::app();
+    for (id, params) in [
+        ("window.panel.move", json!({"panel": "layers", "anchor": "unknown"})),
+        ("window.panel.move", json!({"panel": "layers", "anchor": "properties", "before": "unknown"})),
+        ("window.panel.move", json!({"panel": "layers", "anchor": "properties", "zone": 42})),
+        ("window.panel.float", json!({"panel": "layers", "width": -10})),
+        ("window.panel.float", json!({"panel": "unknown"})),
+        ("window.panel.float", json!({"panel": "layers", "x": "invalid"})),
+        ("window.panel.layers", json!({"show": "yes"})),
+        ("window.panel.layout", json!({"action": {"Open": {"panel": "unknown", "anchor": null}}})),
+    ] {
+        let before = saved(&app);
+        assert!(invoke(&mut app, id, params.clone()).is_err(), "{id} {params}");
+        assert_eq!(saved(&app), before, "{id} {params}");
+    }
+
+    invoke(&mut app, "workspace.lock", json!({})).unwrap();
+    let before = saved(&app);
+    assert!(invoke(&mut app, "window.panel.float", json!({"panel": "layers"})).is_err());
+    assert_eq!(saved(&app), before, "a locked workspace refuses the move");
+    invoke(&mut app, "window.panel.channels", json!({"show": true})).unwrap();
+    assert!(is_front(&app, "channels"), "opening a panel stays available");
+}
+
+/// A saved workspace keeps its custom tree and where a closed panel was; the save carries the
+/// layout and the chrome flags.
+#[test]
+fn saved_workspace_restores_the_custom_tree_and_hidden_panel_placement() {
+    let mut app = app();
+    invoke(&mut app, "window.panel.move", json!({"panel": "swatches", "anchor": "layers", "zone": "top"})).unwrap();
+    invoke(&mut app, "window.panel.float", json!({"panel": "properties", "x": 50, "y": 80})).unwrap();
+    invoke(&mut app, "window.panel.close", json!({"panel": "swatches"})).unwrap();
+    assert!(app.ui.docking.hidden().iter().any(|(panel, _)| panel == "swatches"));
+
+    let written = crate::dock::snapshot(&app);
+    let mut reloaded = self::app();
+    crate::dock::apply(&mut reloaded, &written);
+    assert_eq!(reloaded.ui.docking.layout(), app.ui.docking.layout());
+    assert_eq!(reloaded.ui.docking.hidden(), app.ui.docking.hidden());
+    invoke(&mut reloaded, "window.panel.swatches", json!({"show": true})).unwrap();
+    assert!(is_front(&reloaded, "swatches"), "the closed panel reopens");
+    assert!(!probe::group_of(&reloaded, "layers").contains(&"swatches".to_owned()), "at its own place, in a group above Layers");
+}
+
+/// A theme switch keeps the customised workspace: there is one arrangement in every theme.
+#[test]
+fn a_theme_switch_keeps_a_customised_workspace() {
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    apply(&mut app, vec![Action::move_beside("color".to_owned(), "layers".to_owned(), DockPlacement::tab(None))]).unwrap();
+    let before = saved(&app);
+    app.set_theme(&ctx, crate::theme::AppTheme::studio());
+    assert_eq!(saved(&app), before);
+    app.set_theme(&ctx, crate::theme::AppTheme::pro_medium());
+    assert_eq!(saved(&app), before);
+}
+
+/// A save written before the dock was a workspace (group flags, tab picks, collapsed groups and
+/// hidden tabs) loads once into the default workspace, and what it writes back loads unchanged.
+#[test]
+fn a_pre_docking_save_migrates_once() {
+    let old = json!({
+        "panels": {
+            "layers": true, "history": true, "properties": true, "color": true, "navigator": false,
+            "toolbar": true, "options_bar": true, "status_bar": true, "brush_settings": false, "brushes": false,
+            "character": false, "toolbar_double": false, "dock": true, "rail": true, "menu_bar": true
         },
-        app,
-    );
-    menu.run_steps(2);
-    let disabled = |menu: &Harness<'static, PhotocraftApp>, label: &str| menu.get_by_label(label).accesskit_node().is_disabled();
-    // The composite is targeted: nothing to duplicate, delete or give options to.
-    for label in ["Duplicate Channel", "Delete Channel", "Merge Spot Channel", "Channel Options…"] {
-        assert!(disabled(&menu, label), "{label} waits for a targeted channel");
-    }
-    menu.get_by_label("New Spot Channel…").click();
-    menu.run_steps(2);
-    let dialogs = &menu.state().ui.dialogs;
-    assert!(dialogs.iter().any(|d| crate::channel_options_ui::owns_new_spot(&d.fields)), "New Spot Channel… opens its dialog");
-    menu.state_mut().ui.dialogs.clear();
-    menu.get_by_label("New Channel…").click();
-    menu.run_steps(2);
-    assert!(menu.state().session.active().unwrap().doc.channels.is_empty(), "New Channel… asks first");
-    let dialog = menu.state().ui.dialogs.last().expect("the New Channel dialog");
-    assert_eq!(dialog.fields["__label"], json!("New Channel…"));
-    let id = dialog.id;
-    crate::dialogs::confirm(menu.state_mut(), id).unwrap();
-    assert_eq!(menu.state().session.active().unwrap().doc.channels.len(), 1, "OK adds an alpha channel");
-    assert!(!menu.state().ui.status_error, "{}", menu.state().ui.status);
+        "dockTabs": {"properties": 0, "color": 2, "layers": 0, "navigator": 0, "history": 1, "character": 0, "brushes": 0},
+        "dock": {
+            "order": [], "heights": {}, "collapsed": ["properties"],
+            "hidden_tabs": {"color": ["Swatches"], "layers": ["Paths"], "history": ["Layer Comps"]},
+            "tabOrder": {}
+        },
+        "timelineOpen": false
+    });
+    let mut app = app();
+    crate::dock::apply(&mut app, &old);
+    assert!(!is_shown(&app, "swatches") && !is_shown(&app, "paths") && !is_shown(&app, "layerComps"), "hidden tabs are closed");
+    assert!(is_shown(&app, "history") && active_tab(&app, "history").as_deref() == Some("actions"), "the history group opens on its picked tab");
+    assert!(is_front(&app, "gradients"), "the color group's picked tab is in front");
+    assert!(minimized(&app, "properties"), "the collapsed group is minimized");
+
+    let written = crate::dock::snapshot(&app);
+    assert!(written["docking"].is_object());
+    assert!(written.get("dockTabs").is_none() && written.get("dock").is_none(), "the old keys are not written back");
+    let mut again = self::app();
+    crate::dock::apply(&mut again, &written);
+    assert_eq!((again.ui.docking.layout(), again.ui.docking.hidden()), (app.ui.docking.layout(), app.ui.docking.hidden()), "a second load changes nothing");
 }
 
+/// `ui.set` maps the old panel and dock words onto workspace changes, all fields or none.
 #[test]
-fn custom_workspace_saves_shared_layout_and_timeline_without_embedding_flags() {
+fn ui_set_dock_fields_map_onto_the_workspace_atomically() {
     let mut app = app();
-    app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
-    app.ui.timeline.open = true;
-    app.ui.panels.rail = false;
+    let ctx = app.ctx().clone();
+    let ok = |app: &mut PhotocraftApp, params: Value| control_set(app, &ctx, params)["ok"] == true;
+
+    assert!(ok(&mut app, json!({"dockTabs": {"layers": 1}})));
+    assert!(is_front(&app, "channels"), "a tab index picks the panel of the group's one tab order");
+    assert!(ok(&mut app, json!({"panels": {"layers": false}})));
+    assert!(["layers", "channels", "paths"].iter().all(|panel| !is_shown(&app, panel)));
+    assert!(ok(&mut app, json!({"panels": {"layers": true}, "dockTabs": {"layers": 2}})), "a group opens and picks a tab in one request");
+    assert!(is_front(&app, "paths"));
+    assert!(ok(&mut app, json!({"dock": {"collapsed": ["color"]}})));
+    assert!(minimized(&app, "color") && !minimized(&app, "properties"));
+    assert!(ok(&mut app, json!({"dock": {"hiddenTabs": {"color": ["Swatches"]}}})));
+    assert!(!is_shown(&app, "swatches"));
+    assert!(ok(&mut app, json!({"panels": {"layers": false}})) && ok(&mut app, json!({"panels": {"layers": true}})));
+    assert!(is_front(&app, "layers"), "a group the old words open shows its first tab");
+
+    // The end dock's total after a `dockWidth` request.
+    assert!(ok(&mut app, json!({"dockWidth": 400.0})));
+    let sizes = DockSizes::of(&ctx);
+    let total: f32 = end_columns(app.ui.docking.layout())
+        .expect("the end dock")
+        .iter()
+        .map(|column| sizes.width(column, &|panel: &String| spec(&DockSpecs::of(&app), panel)))
+        .sum();
+    assert!((total - 400.0).abs() < 1.0, "{total}");
+
+    // One bad field applies nothing, whatever the good fields say.
+    let before = saved(&app);
+    for request in [
+        json!({"panels": {"color": false}, "dockTabs": {"layers": 999}}),
+        json!({"tool": "brush", "panels": {"navigator": true}, "dock": {"order": ["layers", "color"]}}),
+        json!({"panels": {"navigator": true}, "dock": {"collapsed": ["nowhere"]}}),
+        json!({"panels": {"navigator": true}, "dockWidth": "wide"}),
+    ] {
+        assert!(!ok(&mut app, request.clone()), "{request}");
+        assert_eq!(saved(&app), before, "{request}");
+    }
+}
+
+/// A save carries the Timeline as a panel of the layout and leaves the host's chrome flag to the host.
+#[test]
+fn a_saved_workspace_keeps_the_timeline_and_leaves_out_host_chrome() {
+    let mut app = app();
+    show_panel(&mut app, "timeline", Some(true)).unwrap();
     app.ui.panels.menu_bar = false;
-    let ctx = egui::Context::default();
-    crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name":"Docked Motion"})).unwrap();
-    let saved = app.session.prefs().workspaces.get("Docked Motion").unwrap().clone();
-    assert!(saved["docking"].is_object() && saved["timelineOpen"] == true);
-    assert!(saved["panels"].get("rail").is_none() && saved["panels"].get("menu_bar").is_none());
-    let layout = app.ui.docking.clone();
-    app.ui.workspace = "Motion".into();
-    crate::menus::apply_workspace(&mut app);
-    assert!(app.ui.docking.is_none() && app.ui.timeline.open);
-    crate::dock::apply(&mut app, &saved);
-    assert_eq!(app.ui.docking, layout);
-    assert!(app.ui.timeline.open);
+    apply(&mut app, vec![Action::set_minimized("layers".to_owned(), true)]).unwrap();
+    let written = crate::dock::snapshot(&app);
+
+    let mut restored = self::app();
+    assert!(restored.ui.panels.menu_bar);
+    crate::dock::apply(&mut restored, &written);
+    assert!(is_shown(&restored, "timeline"), "the Timeline's open state is in the layout");
+    assert!(!restored.ui.timeline.playing());
+    assert!(minimized(&restored, "layers"));
+    assert!(restored.ui.panels.menu_bar, "the host keeps its own chrome flag");
+
+    // A layout without the Timeline closes it.
+    crate::dock::apply(&mut restored, &crate::dock::snapshot(&self::app()));
+    assert!(!is_shown(&restored, "timeline"));
 }
 
-#[test]
-fn closing_and_reopening_a_whole_group_retains_its_return_position_and_tab_order() {
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
-    let before = lay(&app).clone();
-    let members = group_members(&before, "layers");
-    app.run("window.panel.group", json!({"panel":"layers","operation":"close"})).unwrap();
-    for panel in &members {
-        app.run("window.panel.activate", json!({"panel":panel})).unwrap();
-    }
-    let after = lay(&app);
-    assert_eq!(group_members(after, "layers"), members);
-    assert_eq!(root_groups(after), root_groups(&before));
-    assert!(valid(after));
-}
-
-#[test]
-fn floating_group_grip_redocks_all_tabs_as_one_atomic_move() {
-    let mut app = app();
-    app.run("window.panel.float", json!({"panel":"swatches","x":30,"y":60})).unwrap();
-    app.run("window.panel.move", json!({"panel":"patterns","anchor":"swatches"})).unwrap();
-    let mut h = harness(app, vec2(1280.0, 800.0));
-    let from = hit_rect(&h, craft_ui::docking::Hit::DragBar("swatches".into())).center();
-    let to = tab_rect(&h, "layers").center();
-    drag(&mut h, from, to);
-    let layout = lay(h.state());
-    assert!(layout.floating.iter().all(|group| !group.contains(&"swatches".to_string()) && !group.contains(&"patterns".to_string())));
-    let members = group_members(layout, "layers");
-    let swatches = members.iter().position(|id| id == "swatches").unwrap();
-    assert_eq!(members.get(swatches + 1).map(String::as_str), Some("patterns"));
-    assert!(valid(layout));
-    let before = h.state().ui.docking.clone();
-    assert!(h.state_mut().run("window.panel.group", json!({"panel":"swatches","operation":"move","anchor":"patterns"})).is_err());
-    assert_eq!(h.state().ui.docking, before);
-}
-
-#[test]
-fn mixed_theme_and_legacy_selection_projects_the_selected_panel_in_the_new_theme() {
-    let mut app = app();
-    app.ui.theme = crate::theme::ThemeKind::ProMedium;
-    app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
-    let ctx = egui::Context::default();
-    assert_eq!(control_set(&mut app, &ctx, json!({"theme":"studio","dockTabs":{"color":0}}))["ok"], true);
-    assert!(panel_active(lay(&app), "swatches"));
-    assert_eq!(app.ui.dock_tabs.color, 0);
-    assert_eq!(control_set(&mut app, &ctx, json!({"theme":"proMedium","dockTabs":{"color":0}}))["ok"], true);
-    assert!(panel_active(lay(&app), "color"));
-    assert_eq!(app.ui.dock_tabs.color, 0);
-}
-
-/// #7896: the dock's widest is the window less what the toolbar and the canvas keep, never
-/// below the old 520 points, so a wide window allows a two-column dock.
-#[test]
-fn the_dock_can_be_as_wide_as_the_window_allows() {
-    for (window, max) in [(2560.0, 2160.0), (1280.0, 880.0), (800.0, 520.0), (f32::NAN, 520.0)] {
-        let range = crate::panels::dock_width_range(window);
-        assert_eq!((*range.start(), *range.end()), (crate::panels::DOCK_MIN_WIDTH, max), "{window}");
-    }
-}
-
-/// A workspace file written by main: a bare `docking` layout with `dockingHidden` and
-/// `dockingCollapsed` beside the native keys. It loads as the default built from the native
-/// keys, and the first change saves a versioned workspace.
+/// A craft-ui v2 save written by main must keep loading: every panel is shown or closed with a place, the toolbar it
+/// predates docks at the start, and a change writes the versioned workspace.
 #[test]
 fn main_workspace_file_loads_as_the_default_and_saves_as_a_workspace() {
     let saved: Value = serde_json::from_str(include_str!("../../../tests/fixtures/main-docking-workspace.json")).unwrap();
     let mut app = app();
-    app.ui.theme = crate::theme::ThemeKind::ProMedium;
     crate::dock::apply(&mut app, &saved);
-    assert!(app.ui.docking.is_none() && app.ui.docking_returns.is_empty() && app.ui.docking_collapsed.is_empty());
-    let workspace = legacy_workspace(&app);
-    let layout = &workspace.layout;
-    assert_eq!(
-        root_groups(layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["history", "actions"], vec!["layers", "channels"]]
-    );
-    assert!(in_dock_column(layout, "layers") && panel_active(layout, "actions"));
-    for (panel, _, _) in PANELS {
-        let panel = panel.to_string();
-        assert!(layout.contains(&panel) || workspace.hidden.iter().any(|(id, _)| *id == panel), "{panel} is shown or can be reopened");
+    app.ui.docking.validate().expect("the loaded workspace is valid");
+    for entry in registry::PANELS {
+        assert!(is_shown(&app, entry.id) || app.ui.docking.hidden().iter().any(|(panel, _)| panel == entry.id), "{} is shown or can be reopened", entry.id);
     }
+    assert!(is_shown(&app, "layers"));
+    // The save predates the toolbar panel and has no start dock: the toolbar comes back docked at the start.
+    assert_eq!(toolbar_edge(&app), Some(DockEdge::Start), "the toolbar is docked at the start: {:?}", app.ui.docking.layout());
 
-    app.run("window.panel.float", json!({"panel":"properties"})).unwrap();
+    invoke(&mut app, "window.panel.float", json!({"panel": "properties"})).unwrap();
     let written = crate::dock::snapshot(&app);
     assert!(written.get("dockingHidden").is_none());
-    assert_eq!(written["docking"]["version"], 2);
-    let mut reloaded = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    assert_eq!(written["docking"]["version"], json!(craft::behavior::dock::Workspace::<String>::VERSION));
+    let mut reloaded = self::app();
     crate::dock::apply(&mut reloaded, &written);
-    let again = reloaded.ui.docking.as_ref().expect("the workspace loads as saved");
-    let now = app.ui.docking.as_ref().unwrap();
-    assert_eq!((&again.layout, &again.hidden), (&now.layout, &now.hidden));
-    assert_eq!(reloaded.ui.docking_returns, app.ui.docking_returns);
+    assert_eq!((reloaded.ui.docking.layout(), reloaded.ui.docking.hidden()), (app.ui.docking.layout(), app.ui.docking.hidden()));
 }
 
-/// The width a user gave the native dock, kept in egui's memory, sizes the default column once.
+/// The dock edge the toolbar's column is docked on.
+fn toolbar_edge(app: &PhotocraftApp) -> Option<DockEdge> {
+    let layout = app.ui.docking.layout();
+    let Some(PanelPlace::Dock { path, .. }) = layout.place(&registry::TOOLBAR.to_owned()) else { return None };
+    [DockEdge::Start, DockEdge::End].into_iter().find(|edge| layout.dock_path(*edge).as_ref() == Some(&path))
+}
+
+/// Essentials shows Color, Properties and Layers in front, and Navigator, History and Brushes as the icons of a collapsed
+/// column beside the canvas.
 #[test]
-fn the_native_dock_width_sizes_the_default_column() {
-    let mut h = harness(app(), vec2(1280.0, 800.0));
-    let state = egui::PanelState { outer_rect: egui::Rect::from_min_size(egui::pos2(900.0, 0.0), vec2(380.0, 700.0)) };
-    let key = crate::panels::panel_state_id(&h.ctx, "dock");
-    h.ctx.data_mut(|data| data.insert_persisted(key, state));
-    h.run_steps(2);
-    let Some(Node::Split { second, .. }) = &lay(h.state()).root else { panic!("expected the canvas split") };
-    let Node::Dock { columns, .. } = second.as_ref() else { panic!("expected the dock") };
-    assert_eq!(columns[0].width, 380.0);
-    assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
+fn essentials_keeps_navigator_history_and_brushes_as_icons() {
+    let app = app();
+    for panel in ["color", "properties", "layers"] {
+        assert!(is_front(&app, panel) && !iconic(&app, panel), "{panel} shows in the expanded column");
+    }
+    for panel in ["navigator", "history", "brushes"] {
+        assert!(iconic(&app, panel), "{panel} is an icon");
+        assert_eq!(app.ui.docking.layout().panel_state(&panel.to_owned()), PanelState::Open, "{panel} is open but not showing");
+    }
+    assert_eq!(toolbar_edge(&app), Some(DockEdge::Start), "the toolbar has the start dock to itself");
+}
+
+/// The Window menu's row of a panel in a collapsed column opens its flyout and, picked again, closes it: the layout does
+/// not change either time, and the row is checked while the flyout is open.
+#[test]
+fn the_window_menu_opens_and_closes_the_flyout_of_an_icon_panel() {
+    let mut app = app();
+    let before = saved(&app);
+    let checked =
+        |app: &PhotocraftApp| crate::menus::menu_rows(app).iter().find(|row| row.command.id == "window.panel.navigator").and_then(|row| row.kind.checked());
+    assert_eq!(checked(&app), Some(false));
+    invoke(&mut app, "window.panel.navigator", json!({})).unwrap();
+    assert_eq!(checked(&app), Some(true), "the flyout is open");
+    assert_eq!(app.ui.flyout.as_deref(), Some("navigator"));
+    invoke(&mut app, "window.panel.navigator", json!({})).unwrap();
+    assert_eq!(checked(&app), Some(false), "the flyout is closed");
+    assert_eq!(saved(&app), before, "the layout never changed");
+}
+
+/// The toolbar takes no tab, group or column of icons, floats as its own column, and docks at either edge.
+#[test]
+fn the_toolbar_shares_nothing_floats_and_docks_at_either_edge() {
+    let mut app = app();
+    let before = saved(&app);
+    for (id, params) in [
+        ("window.panel.move", json!({"panel": "toolbar", "anchor": "layers"})),
+        ("window.panel.move", json!({"panel": "toolbar", "anchor": "layers", "zone": "top"})),
+        ("window.panel.move", json!({"panel": "layers", "anchor": "toolbar"})),
+        ("window.panel.move", json!({"panel": "layers", "anchor": "toolbar", "zone": "bottom"})),
+        ("window.panel.iconic", json!({"panel": "toolbar"})),
+    ] {
+        assert!(invoke(&mut app, id, params.clone()).is_err(), "{id} {params}");
+        assert_eq!(saved(&app), before, "{id} {params}");
+    }
+
+    invoke(&mut app, "window.panel.float", json!({"panel": "toolbar", "column": true, "x": 80, "y": 90})).unwrap();
+    assert!(floating(&app, "toolbar") && toolbar_edge(&app).is_none());
+    invoke(&mut app, "window.panel.dock", json!({"panel": "toolbar", "column": true, "side": "end"})).unwrap();
+    assert_eq!(toolbar_edge(&app), Some(DockEdge::End));
+    invoke(&mut app, "window.panel.dock", json!({"panel": "toolbar", "column": true, "side": "start"})).unwrap();
+    assert_eq!(toolbar_edge(&app), Some(DockEdge::Start));
+}
+
+/// `ui.set toolbarColumns` sets the toolbar column's width in tool columns, from one to the toolbar's cells.
+#[test]
+fn ui_set_toolbar_columns_sets_the_toolbar_columns_steps() {
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    let steps = |app: &PhotocraftApp| {
+        let layout = app.ui.docking.layout();
+        layout.place(&registry::TOOLBAR.to_owned()).and_then(|place| layout.column(&place)).and_then(|column| column.steps)
+    };
+    assert!(control_set(&mut app, &ctx, json!({"toolbarColumns": 3}))["ok"] == true);
+    assert_eq!(steps(&app), Some(3));
+    assert!(control_set(&mut app, &ctx, json!({"toolbarColumns": 1}))["ok"] == true);
+    assert_eq!(steps(&app), Some(1));
+    for bad in [json!(0), json!(10_000), json!("two")] {
+        let before = saved(&app);
+        assert!(control_set(&mut app, &ctx, json!({"toolbarColumns": bad.clone()}))["ok"] != true, "{bad}");
+        assert_eq!(saved(&app), before, "{bad}");
+    }
 }

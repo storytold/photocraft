@@ -1,5 +1,6 @@
-//! Smart objects and smart filters through PSD export, over every corpus file that has them
-//! (feature `corpus`; run with `cargo xtask test-corpus`).
+//! Smart objects and smart filters through PSD export, over the corpus files of the run that have
+//! them (the samples of `photocraft_testkit::corpus`, every file with `PHOTOCRAFT_FULL_SWEEP=1`;
+//! feature `corpus`; run with `cargo xtask test-corpus`).
 //!
 //! For each file: import → export → import must give back, layer for layer, a live smart object
 //! (not pixels) with the same embedded file (byte-identical), transform, filter list, filter
@@ -12,22 +13,9 @@
 
 use crate::common;
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use photocraft_doc::{Document, LayerContent, SmartObject, SmartSource};
-
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect(&p, out);
-        } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("psd") || e.eq_ignore_ascii_case("psb")) {
-            out.push(p);
-        }
-    }
-}
 
 fn smarts(doc: &Document) -> Vec<(String, SmartObject)> {
     doc.walk()
@@ -141,20 +129,22 @@ fn re_embed(doc: &mut Document) -> bool {
     any
 }
 
+/// Files with smart objects in the corpus samples.
+const SAMPLE_SMART_FILES: usize = 5;
+
 #[test]
 fn smart_objects_round_trip_through_psd() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus");
-    assert!(root.join("photoshop").is_dir(), "{} is missing: run `cargo xtask corpus --all`", root.display());
-    let mut files = Vec::new();
-    for d in ["psd", "psd-tools", "photoshop"] {
-        collect(&root.join(d), &mut files);
-    }
-    files.sort();
+    let root = photocraft_testkit::corpus::root();
+    let files: Vec<_> = ["psd", "psd-tools", "photoshop"].into_iter().flat_map(photocraft_testkit::corpus::psd_files).collect();
     let (mut checked, mut objects, mut with_filters, mut edited, mut embedded) = (0, 0, 0, 0, 0);
     let mut failures = Vec::new();
     for p in &files {
         let name = p.strip_prefix(&root).unwrap_or(p).display().to_string();
         let bytes = std::fs::read(p).unwrap_or_default();
+        // A smart object needs a placed-layer block: files without one are not imported.
+        if !bytes.windows(4).any(|w| matches!(w, b"SoLd" | b"SoLE" | b"PlLd")) {
+            continue;
+        }
         let Ok(imp) = photocraft_io::import(&name, &bytes) else { continue };
         let doc = imp.document;
         let n = smarts(&doc).len();
@@ -184,7 +174,7 @@ fn smart_objects_round_trip_through_psd() {
                 Ok((back, out)) => {
                     compare(&em, &back, true).into_iter().for_each(|e| fail("re-embedded", e));
                     // The old files are gone: one lnk2 item per distinct source.
-                    let f = photocraft_psd::PsdFile::from_bytes(&out).unwrap();
+                    let f = craft_psd::PsdFile::from_bytes(&out).unwrap();
                     let items: Vec<String> = f
                         .global_blocks
                         .iter()
@@ -218,6 +208,7 @@ fn smart_objects_round_trip_through_psd() {
     for f in &failures {
         eprintln!("  FAIL {f}");
     }
-    assert!(checked >= 30, "only {checked} corpus files with smart objects");
+    let floor = if photocraft_testkit::full_sweep() { 30 } else { SAMPLE_SMART_FILES };
+    assert!(checked >= floor, "only {checked} corpus files with smart objects");
     assert!(failures.is_empty(), "{} failures", failures.len());
 }

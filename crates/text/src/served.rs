@@ -11,7 +11,7 @@
 //!
 //! Script fallback: the manifest's `scripts` field says which scripts a font is for. The first
 //! served family listed for a script the bundled fonts don't cover (Arabic, Hebrew, Devanagari,
-//! Thai, Khmer, Lao, Burmese, Japanese, Chinese, Korean) is that script's fallback: text in that script asks for it
+//! Thai, Khmer, Lao, Burmese, Georgian, Japanese, Chinese, Korean) is that script's fallback: text in that script asks for it
 //! ([`request_for_text`], from layout), the font database puts it in the fallback stack once it
 //! arrives, and the web shell asks up front for the scripts of the browser's languages
 //! ([`request_for_languages`]). The manifest's SHA-256 becomes the fetch's Subresource Integrity
@@ -98,7 +98,7 @@ pub fn is_relative_path(p: &str) -> bool {
 
 /// The scripts a served font can be the fallback for: those the bundled fonts (Inter, which covers
 /// Latin, Greek and Cyrillic) lack, as ISO 15924 codes.
-const FALLBACK_SCRIPTS: &[&str] = &["Arab", "Hebr", "Deva", "Thai", "Khmr", "Laoo", "Mymr", "Jpan", "Hans", "Hant", "Kore"];
+const FALLBACK_SCRIPTS: &[&str] = &["Arab", "Hebr", "Deva", "Thai", "Khmr", "Laoo", "Mymr", "Geor", "Jpan", "Hans", "Hant", "Kore"];
 
 /// The script fallbacks in `fonts`: for each script in [`FALLBACK_SCRIPTS`], the first family in
 /// manifest order that lists it, as `(script, family)` in order of first appearance.
@@ -134,6 +134,7 @@ pub fn script_of(c: char, order: &[crate::cjk::CjkScript; 4]) -> Option<&'static
         0x1780..=0x17FF | 0x19E0..=0x19FF => "Khmr",
         0x0E80..=0x0EFF => "Laoo",
         0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F => "Mymr",
+        0x10A0..=0x10FF | 0x1C90..=0x1CBF | 0x2D00..=0x2D2F => "Geor",
         _ => return None,
     })
 }
@@ -143,7 +144,8 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
     let tag = tag.trim().to_ascii_lowercase().replace('_', "-");
     let mut parts = tag.split('-');
     let lang = parts.next()?;
-    let rest: Vec<&str> = parts.collect();
+    // RFC 5646: a singleton starts extensions/private use; their values do not choose the script.
+    let rest: Vec<&str> = parts.take_while(|part| part.len() != 1).collect();
     Some(match lang {
         "ar" | "fa" | "ur" | "ps" | "ckb" | "sd" | "ug" => "Arab",
         "he" | "iw" | "yi" => "Hebr",
@@ -152,8 +154,11 @@ pub fn language_script(tag: &str) -> Option<&'static str> {
         "km" => "Khmr",
         "lo" => "Laoo",
         "my" => "Mymr",
+        "ka" => "Geor",
         "ja" => "Jpan",
         "ko" => "Kore",
+        // An explicit script takes precedence over regional defaults.
+        "zh" if rest.contains(&"hans") => "Hans",
         "zh" if rest.iter().any(|r| matches!(*r, "hant" | "tw" | "hk" | "mo")) => "Hant",
         "zh" => "Hans",
         _ => return None,
@@ -166,22 +171,7 @@ fn sri(hex: &str) -> Option<String> {
         return None;
     }
     let bytes: Option<Vec<u8>> = (0..32).map(|i| hex.get(2 * i..2 * i + 2).and_then(|h| u8::from_str_radix(h, 16).ok())).collect();
-    Some(format!("sha256-{}", base64(&bytes?)))
-}
-
-/// Standard base64 (RFC 4648, with padding).
-fn base64(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut s = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = |i: usize| u32::from(chunk.get(i).copied().unwrap_or(0));
-        let n = (b(0) << 16) | (b(1) << 8) | b(2);
-        for k in 0..4 {
-            let six = ((n >> (18 - 6 * k)) & 63) as usize;
-            s.push(if k <= chunk.len() { TABLE.get(six).map_or('=', |&c| char::from(c)) } else { '=' });
-        }
-    }
-    s
+    Some(format!("sha256-{}", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes?)))
 }
 
 struct State {
@@ -474,6 +464,7 @@ mod tests {
             ('ລ', Some("Laoo")),
             ('မ', Some("Mymr")),
             ('ၡ', Some("Mymr")),
+            ('ა', Some("Geor")),
             ('あ', Some("Jpan")),
             ('한', Some("Kore")),
         ] {
@@ -496,10 +487,23 @@ mod tests {
             ("km-KH", Some("Khmr")),
             ("lo", Some("Laoo")),
             ("my-MM", Some("Mymr")),
+            ("ka-GE", Some("Geor")),
             ("ja-JP", Some("Jpan")),
             ("zh-CN", Some("Hans")),
             ("zh-TW", Some("Hant")),
+            ("zh-HK", Some("Hant")),
+            ("zh-MO", Some("Hant")),
+            ("zh-Hans-TW", Some("Hans")),
+            ("zh-Hans-HK", Some("Hans")),
+            ("zh-Hans-MO", Some("Hans")),
+            ("zh-Hant-CN", Some("Hant")),
             ("zh-Hant-HK", Some("Hant")),
+            ("zh-Hant-TW-u-nu-hans", Some("Hant")),
+            ("zh-TW-u-nu-hans", Some("Hant")),
+            ("zh-CN-u-nu-hant", Some("Hans")),
+            ("zh-cmn-Hans-TW", Some("Hans")),
+            ("zh-cmn-Hant-CN", Some("Hant")),
+            ("zh-TW-x-hans", Some("Hant")),
             ("ko", Some("Kore")),
             ("en-US", None),
             ("ru", None),

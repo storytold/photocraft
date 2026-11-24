@@ -5,11 +5,12 @@ use photocraft_doc::{LayerContent, Path};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, tool_event};
+use crate::canvas::{ToolEvent, testing, tool_event};
 use crate::state::Tool;
 use crate::vector_ui;
+use craft::draw::ui::VectorMode;
 
-fn app(tool: Tool) -> PhotocraftApp {
+fn app(tool: Tool) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.ui.tool = tool;
@@ -93,11 +94,11 @@ fn captured_path_and_shape_mode_do_not_follow_later_ui_selection() {
         seed(&mut app, "work", 20.0);
         seed(&mut app, "Saved drawing", 40.0);
         app.ui.selected_path = Some("Saved drawing".into());
-        app.ui.tool_options.vector_mode = if shape { "shape" } else { "path" }.into();
+        app.ui.tool_options.vector_mode = if shape { VectorMode::Shape } else { VectorMode::Path };
         let (work, saved, n) = (path(&app, "work"), path(&app, "Saved drawing"), steps(&app));
         click(&mut app, 30.0, 60.0);
         app.ui.selected_path = Some("work".into());
-        app.ui.tool_options.vector_mode = if shape { "path" } else { "shape" }.into();
+        app.ui.tool_options.vector_mode = if shape { VectorMode::Path } else { VectorMode::Shape };
         app.ui.vector_mask_target = true;
         click(&mut app, 130.0, 60.0);
         vector_ui::pen_commit(&mut app, false);
@@ -111,7 +112,8 @@ fn captured_path_and_shape_mode_do_not_follow_later_ui_selection() {
             assert_eq!(path(&app, "Saved drawing").subpaths.len(), 2);
             assert_eq!(app.ui.selected_path.as_deref(), Some("Saved drawing"));
         }
-        assert_eq!(steps(&app), n + 1);
+        // A Shape draft made its layer on the first anchor and edited it for the second (#12909).
+        assert_eq!(steps(&app), n + if shape { 2 } else { 1 });
     }
 }
 
@@ -119,7 +121,7 @@ fn captured_path_and_shape_mode_do_not_follow_later_ui_selection() {
 fn captured_pen_paint_preserves_float_colour_and_alpha_after_toolbar_changes() {
     for closed in [false, true] {
         let mut app = app(Tool::Pen);
-        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.vector_mode = VectorMode::Shape;
         app.ui.tool_options.shape_fill = true;
         app.ui.tool_options.stroke_width = 3.0;
         let foreground = [0.12345, 0.34567, 0.56789, 0.375];
@@ -137,8 +139,10 @@ fn captured_pen_paint_preserves_float_colour_and_alpha_after_toolbar_changes() {
         let st = app.session.active().unwrap();
         let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("expected Pen shape") };
         let paint = |c: [f32; 4]| photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]));
-        assert_eq!(shape.fill, closed.then(|| paint(foreground)));
-        assert_eq!(shape.stroke.as_ref().unwrap().paint, paint(if closed { background } else { foreground }));
+        // The layer is made on the first click with the fill, open or not (#12909).
+        assert_eq!(shape.fill, Some(paint(foreground)));
+        // Open and closed shapes both take the captured stroke paint.
+        assert_eq!(shape.stroke.as_ref().unwrap().paint, paint(background));
     }
 }
 
@@ -169,12 +173,11 @@ fn stale_drafts_are_cancelled_before_tool_switch_or_pointer_input() {
             }
             let (current, n) = (app.session.active().unwrap().doc.clone(), steps(&app));
             app.ui.tool = Tool::Brush;
-            vector_ui::finish_pen_if_left(&mut app);
+            testing::frame(&mut app);
             assert!(app.ui.pen.is_none(), "{tool:?}: {change}");
-            vector_ui::pen_move(&mut app, 160.0, 80.0, false);
-            vector_ui::curvature_move(&mut app, 160.0, 80.0);
-            vector_ui::pen_up(&mut app);
-            vector_ui::curvature_up(&mut app);
+            app.ui.tool = tool;
+            testing::move_to(&mut app, [160.0, 80.0], Modifiers::NONE);
+            testing::release(&mut app, [160.0, 80.0], Modifiers::NONE);
             vector_ui::pen_commit(&mut app, false);
             assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &current));
             assert_eq!(steps(&app), n);
@@ -185,35 +188,33 @@ fn stale_drafts_are_cancelled_before_tool_switch_or_pointer_input() {
 
 #[test]
 fn sync_views_and_input_apis_discard_unowned_or_closed_document_drafts() {
-    for entry in ["sync", "move", "up", "commit", "undo", "toggle", "down"] {
-        let mut app = app(Tool::CurvaturePen);
-        draft(&mut app);
-        app.session.close(0).unwrap();
-        match entry {
-            "sync" => app.sync_views(),
-            "move" => vector_ui::curvature_move(&mut app, 160.0, 80.0),
-            "up" => vector_ui::curvature_up(&mut app),
-            "commit" => {
-                vector_ui::pen_commit(&mut app, false);
+    for tool in [Tool::Pen, Tool::CurvaturePen] {
+        for entry in ["sync", "press", "commit", "undo"] {
+            let mut app = app(tool);
+            draft(&mut app);
+            // Another document stays open, so the canvas still has a view to take input from.
+            app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+            app.session.close(0).unwrap();
+            match entry {
+                "sync" => app.sync_views(),
+                "press" => {
+                    testing::press(&mut app, [160.0, 80.0], Modifiers::NONE);
+                    testing::release(&mut app, [160.0, 80.0], Modifiers::NONE);
+                }
+                "commit" => {
+                    vector_ui::pen_commit(&mut app, false);
+                }
+                "undo" => {
+                    assert!(!vector_ui::remove_last(&mut app), "a closed document has no current draft point to undo");
+                }
+                _ => panic!("unknown stale-draft entry fixture: {entry}"),
             }
-            "undo" => {
-                assert!(!vector_ui::pen_undo_last_point(&mut app), "a closed document has no current draft point to undo");
-            }
-            "toggle" => vector_ui::curvature_toggle(&mut app, 30.0, 60.0),
-            "down" => vector_ui::curvature_down(&mut app, 160.0, 80.0),
-            _ => panic!("unknown stale-draft entry fixture: {entry}"),
+            // The press may start a new draft in the open document, never carry on the closed one's two anchors.
+            let anchors = app.ui.pen.as_ref().map_or(0, |p| p.draft.knots.len());
+            assert!(anchors <= 1, "{tool:?}: {entry}");
+            assert!(app.session.active().unwrap().doc.work_path.is_none(), "{tool:?}: {entry}");
         }
-        assert!(app.ui.pen.is_none(), "{entry}");
     }
-    let mut app = app(Tool::Pen);
-    draft(&mut app);
-    let restored = serde_json::from_value(serde_json::to_value(app.ui.pen.as_ref().unwrap()).unwrap()).unwrap();
-    app.ui.pen = Some(restored);
-    let n = steps(&app);
-    vector_ui::pen_commit(&mut app, false);
-    assert!(app.ui.pen.is_none());
-    assert!(app.session.active().unwrap().doc.work_path.is_none());
-    assert_eq!(steps(&app), n);
 }
 
 #[test]
@@ -299,22 +300,30 @@ fn failed_pen_and_curvature_commits_keep_the_exact_draft_and_do_not_retry_each_f
     for tool in [Tool::Pen, Tool::CurvaturePen] {
         let mut app = app(tool);
         click(&mut app, 30.0, 60.0);
-        click(&mut app, 1e40, 60.0);
+        click(&mut app, 130.0, 60.0);
+        // A point no path can hold: the canvas never delivers one, so the draft is edited as Direct Selection would.
+        let knot = &mut app.ui.pen.as_mut().unwrap().draft.knots[1];
+        knot.anchor.x = 1e40;
+        knot.in_ctrl.x = 1e40;
+        knot.out_ctrl.x = 1e40;
+        vector_ui::host::release_draft(&mut app);
         let (before, original, n) = (app.session.active().unwrap().doc.clone(), app.ui.pen.clone().unwrap(), steps(&app));
         vector_ui::pen_commit(&mut app, false);
         let failed = app.ui.pen.as_ref().expect("invalid geometry leaves an editable draft");
-        assert_eq!(failed.knots, original.knots);
-        assert_eq!(failed.unlinked, original.unlinked);
+        assert_eq!(failed.draft, original.draft);
         assert_eq!(failed.owner, original.owner);
         assert!(failed.commit_failed && app.ui.status_error);
         assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
         assert_eq!(steps(&app), n);
         app.ui.tool = Tool::Brush;
         let journal = app.session.journal.len();
-        vector_ui::finish_pen_if_left(&mut app);
+        testing::frame(&mut app);
         assert_eq!(app.session.journal.len(), journal, "tool switch must not continually retry a failing commit");
         assert!(vector_ui::path_to_selection(&mut app, Value::Null).is_err(), "a failed draft cannot select an unrelated path");
-        app.ui.pen.as_mut().unwrap().knots[1] = [[130.0, 60.0]; 3];
+        let knot = &mut app.ui.pen.as_mut().unwrap().draft.knots[1];
+        knot.anchor.x = 130.0;
+        knot.in_ctrl.x = 130.0;
+        knot.out_ctrl.x = 130.0;
         vector_ui::pen_commit(&mut app, false);
         assert!(app.ui.pen.is_none());
         assert_eq!(path(&app, "work").subpaths[0].knots[1].anchor.x, 130.0);
@@ -329,8 +338,8 @@ fn ordinary_tool_switch_commits_the_owned_draft_once() {
         draft(&mut app);
         let n = steps(&app);
         app.ui.tool = Tool::Brush;
-        vector_ui::finish_pen_if_left(&mut app);
-        vector_ui::finish_pen_if_left(&mut app);
+        testing::frame(&mut app);
+        testing::frame(&mut app);
         assert_eq!(path(&app, "work").subpaths[0].knots.len(), 2);
         assert_eq!(steps(&app), n + 1);
         assert!(app.ui.pen.is_none());
@@ -424,13 +433,13 @@ fn freeform_finish_uses_its_captured_saved_path_and_rejects_foreign_documents() 
     let points = [[30.0, 60.0, 1.0], [80.0, 60.0, 1.0], [130.0, 60.0, 1.0]];
     let (original, work, n) = (path(&app, "Saved drawing"), path(&app, "work"), steps(&app));
     app.ui.selected_path = Some("work".into());
-    app.ui.tool_options.vector_mode = "shape".into();
+    app.ui.tool_options.vector_mode = VectorMode::Shape;
     vector_ui::freeform_finish_owned(&mut app, &points, &[], owner);
     assert_eq!(path(&app, "Saved drawing").subpaths.len(), 2);
     assert_eq!(path(&app, "Saved drawing").subpaths[0], original.subpaths[0]);
     assert_eq!(path(&app, "work"), work);
     assert_eq!(steps(&app), n + 1);
-    app.ui.tool_options.vector_mode = "path".into();
+    app.ui.tool_options.vector_mode = VectorMode::Path;
     let owner = vector_ui::capture_pen_owner(&app).unwrap();
     app.session.execute("file.new", json!({"width":200,"height":200})).unwrap();
     let (source, n) = (app.session.active().unwrap().doc.clone(), steps(&app));

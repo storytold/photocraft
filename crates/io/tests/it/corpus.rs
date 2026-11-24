@@ -1,6 +1,8 @@
 //! Real-file corpora (feature `corpus`; run with `cargo xtask test-corpus`). The corpora are
 //! gitignored, never committed, and fetched at pinned commits and sha256-verified by
 //! `cargo xtask corpus --all` (pins: `xtask/src/corpus_pins.rs`). A missing corpus fails.
+//! Each test walks its directory's fixed sample (`photocraft_testkit::corpus`), and every file with
+//! `PHOTOCRAFT_FULL_SWEEP=1` (the nightly CI run); the floors below exist for both.
 //!
 //! - `corpus/psd/**/*.{psd,psb}`: a hand-picked mix of small ag-psd and psd-tools samples
 //!   (manifest `xtask/psd-corpus.sha256`).
@@ -40,30 +42,18 @@
 //! Every exported file must also pass `common::strict_block_errors` (#200): each tagged block
 //! re-parses strictly, with the padding Photoshop writes, so other readers (psd-tools) stay aligned.
 //!
-//! `*_mutations_never_panic` truncates and corrupts every corpus file and
+//! `*_mutations_never_panic` truncates and corrupts each file and
 //! asserts import + flatten return (Ok or Err) without panicking.
 #![cfg(feature = "corpus")]
 
 use crate::common;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
+use craft_psd::PsdFile;
 use photocraft_io::*;
-use photocraft_psd::PsdFile;
-
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect(&p, out);
-        } else if p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("psd") || e.eq_ignore_ascii_case("psb")) {
-            out.push(p);
-        }
-    }
-}
 
 const PASS_TOL: f32 = 2.0 / 255.0;
 /// Export → re-import must render within one 8-bit step of the imported document.
@@ -134,10 +124,11 @@ thread_local! {
 /// Files known to be invalid upstream: their parse error is expected.
 const KNOWN_BAD: &[(&str, &str)] = &[("group-divider-blend-mode.psd", "malformed merged image data; recovery is tested in psd_damaged_merged.rs (#6152)")];
 
-/// One corpus directory with its own floors.
+/// One corpus directory with its own floors: for every file (a full sweep) and for the
+/// directory's sample in `photocraft_testkit::corpus` (every other run).
 struct Source {
     label: &'static str,
-    /// Location, relative to the workspace root.
+    /// Directory under `corpus/`.
     dir: &'static str,
     /// Path components naming a feature group for the per-group totals (0: no groups).
     group_depth: usize,
@@ -145,24 +136,50 @@ struct Source {
     pass_floor: usize,
     /// Files whose export → re-import renders the same as the import.
     roundtrip_floor: usize,
+    /// `pass_floor` over the sample.
+    sample_pass_floor: usize,
+    /// `roundtrip_floor` over the sample.
+    sample_roundtrip_floor: usize,
+}
+
+impl Source {
+    /// The pass and round-trip floors of this run.
+    fn floors(&self) -> (usize, usize) {
+        if photocraft_testkit::full_sweep() { (self.pass_floor, self.roundtrip_floor) } else { (self.sample_pass_floor, self.sample_roundtrip_floor) }
+    }
 }
 
 /// Hand-picked mix in `corpus/psd` (170 files: 134 vs the merged image + 12 vs the thumbnail).
-const MIXED: Source = Source { label: "io corpus", dir: "corpus/psd", group_depth: 0, pass_floor: 148, roundtrip_floor: 169 };
+const MIXED: Source =
+    Source { label: "io corpus", dir: "psd", group_depth: 0, pass_floor: 148, roundtrip_floor: 169, sample_pass_floor: 9, sample_roundtrip_floor: 9 };
 
 /// The full psd-tools test set (309 files at the pinned commit; see `xtask/psd-tools-corpus.sha256`):
 /// 226 vs the merged image + 10 vs the thumbnail (Advanced Blending knockouts: +7).
-const PSD_TOOLS: Source = Source { label: "psd-tools corpus", dir: "corpus/psd-tools", group_depth: 0, pass_floor: 249, roundtrip_floor: 308 };
+const PSD_TOOLS: Source = Source {
+    label: "psd-tools corpus",
+    dir: "psd-tools",
+    group_depth: 0,
+    pass_floor: 249,
+    roundtrip_floor: 308,
+    sample_pass_floor: 18,
+    sample_roundtrip_floor: 23,
+};
 
 /// Our Photoshop-authored oracles (258 files; https://github.com/storytold/photocraft-corpus),
 /// grouped by feature (`smart-filters`, `effects`, `text`, `adjustments/<mode><bits>`).
-const PHOTOSHOP: Source = Source { label: "photoshop oracles", dir: "corpus/photoshop", group_depth: 2, pass_floor: 190, roundtrip_floor: 258 };
+const PHOTOSHOP: Source = Source {
+    label: "photoshop oracles",
+    dir: "photoshop",
+    group_depth: 2,
+    pass_floor: 190,
+    roundtrip_floor: 258,
+    sample_pass_floor: 14,
+    sample_roundtrip_floor: 15,
+};
 
-/// The corpus directory; a missing corpus fails the test.
-fn locate(src: &Source) -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(src.dir);
-    assert!(root.is_dir(), "{}: {} is missing: run `cargo xtask corpus --all`", src.label, root.display());
-    root
+/// The files of `src` this run takes, and the directory their names are relative to.
+fn files_of(src: &Source) -> (PathBuf, Vec<PathBuf>) {
+    (photocraft_testkit::corpus::root().join(src.dir), photocraft_testkit::corpus::psd_files(src.dir))
 }
 
 /// Feature group of a corpus-relative path: its first `depth` directories.
@@ -170,13 +187,6 @@ fn group_of(name: &str, depth: usize) -> String {
     let parts: Vec<&str> = name.split(['/', '\\']).collect();
     let n = depth.min(parts.len().saturating_sub(1));
     if n == 0 { ".".into() } else { parts[..n].join("/") }
-}
-
-fn files_in(root: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    collect(root, &mut files);
-    files.sort();
-    files
 }
 
 fn panic_message(e: &(dyn std::any::Any + Send)) -> String {
@@ -191,7 +201,7 @@ const THUMB_BAD_FRAC: f32 = 0.02;
 
 /// Photoshop's embedded thumbnail (resource 1036: a 28-byte header, then JFIF) as RGB floats.
 fn thumbnail(file: &PsdFile) -> Option<(u32, u32, Vec<[f32; 3]>)> {
-    let r = file.resource(photocraft_psd::resources::ids::THUMBNAIL)?;
+    let r = file.resource(craft_psd::resources::ids::THUMBNAIL)?;
     let format = u32::from_be_bytes(r.data.get(..4)?.try_into().ok()?);
     if format != 1 {
         return None;
@@ -325,7 +335,7 @@ fn check_file(name: &str, bytes: &[u8]) -> (Outcome, Option<f32>) {
     // whole image, decoded independently by the psd crate). When Photoshop wrote no real merged
     // image (Maximize Compatibility off) or it decodes through our own model code (Multichannel),
     // its embedded thumbnail is the oracle at thumbnail size.
-    let use_thumb = file.has_real_merged_data() == Some(false) || file.header.color_mode == photocraft_psd::ColorMode::Multichannel;
+    let use_thumb = file.has_real_merged_data() == Some(false) || file.header.color_mode == craft_psd::ColorMode::Multichannel;
     let merged = if use_thumb { None } else { merged_composite(&file).ok() };
     let Some(merged) = merged else {
         let notes: Vec<&str> = imp.warnings.iter().map(String::as_str).take(2).collect();
@@ -374,8 +384,7 @@ fn check_file(name: &str, bytes: &[u8]) -> (Outcome, Option<f32>) {
 }
 
 fn run_oracle(src: &Source) {
-    let root = locate(src);
-    let files = files_in(&root);
+    let (root, files) = files_of(src);
     BLOCK_ERRORS.with(|b| b.borrow_mut().clear());
     let mut groups: std::collections::BTreeMap<String, (usize, usize)> = Default::default();
     let (mut pass, mut thumb_pass, mut diff, mut skipped, mut errors) = (0, 0, 0, 0, 0);
@@ -432,8 +441,9 @@ fn run_oracle(src: &Source) {
     }
     assert!(crashes.is_empty(), "{label}: panics (Rule 9): {crashes:?}");
     assert!(block_errors.is_empty(), "{label}: exported tagged blocks fail the strict re-parse (#200): {block_errors:?}");
-    assert!(pass >= src.pass_floor, "{label}: oracle pass count {pass} fell below the floor {}", src.pass_floor);
-    assert!(rt_same >= src.roundtrip_floor, "{label}: export round trip {rt_same} fell below the floor {}: {rt_diff:?}", src.roundtrip_floor);
+    let (pass_floor, roundtrip_floor) = src.floors();
+    assert!(pass >= pass_floor, "{label}: oracle pass count {pass} fell below the floor {pass_floor}");
+    assert!(rt_same >= roundtrip_floor, "{label}: export round trip {rt_same} fell below the floor {roundtrip_floor}: {rt_diff:?}");
 }
 
 /// Deterministic xorshift for the mutation sweep.
@@ -444,12 +454,14 @@ fn next(state: &mut u64) -> u64 {
     *state
 }
 
-/// Truncations and byte corruptions of every corpus file: import (and flatten when the document
+/// Truncations and byte corruptions of each file: import (and flatten when the document
 /// is small) must return without panicking. Files are mutated in their first 64 KB, where the
-/// header, resources and layer records live.
+/// header, resources and layer records live. A full sweep cuts each file at every eighth and
+/// corrupts it 24 times; other runs cut at every other eighth and keep the first 8 corruptions
+/// (the same seeds).
 fn run_mutations(src: &Source) {
-    let root = locate(src);
-    let files = files_in(&root);
+    let (root, files) = files_of(src);
+    let (cut_step, corruptions) = if photocraft_testkit::full_sweep() { (1, 24) } else { (2, 8) };
     let (mut runs, mut panics, mut slow) = (0usize, Vec::new(), Vec::new());
     for p in &files {
         let name = p.strip_prefix(&root).unwrap_or(p).display().to_string();
@@ -457,11 +469,11 @@ fn run_mutations(src: &Source) {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64 ^ bytes.len() as u64;
         let span = bytes.len().clamp(1, 64 * 1024);
         let mut variants: Vec<(String, Vec<u8>)> = Vec::new();
-        for k in 1..8 {
+        for k in (1..8).step_by(cut_step) {
             let cut = bytes.len() * k / 8;
             variants.push((format!("truncate@{cut}"), bytes[..cut].to_vec()));
         }
-        for _ in 0..24 {
+        for _ in 0..corruptions {
             let mut m = bytes.clone();
             let flips = 1 + (next(&mut seed) % 4) as usize;
             for _ in 0..flips {
