@@ -60,6 +60,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ml", Class::Layer(4)),
     ("plugins", Class::Layer(4)),
     ("engine-core", Class::Layer(5)),
+    ("engine-paint", Class::Layer(5)),
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("automation", Class::Layer(6)),
@@ -79,7 +80,7 @@ pub const TABLE: &[(&str, Class)] = &[
 /// `geom`, which the §3 diagram draws on one line. The GPU backend (`gpu`)
 /// reuses the CPU reference (`compose`) for LUTs and parity tests. The engine's crates form one
 /// chain per leaf crate, from `engine-core` to the top crate `engine` (photocraft#15710).
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["geom", "color", "raster"], &["compose", "gpu"], &["engine-core", "engine"]];
+pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["geom", "color", "raster"], &["compose", "gpu"], &["engine-core", "engine-paint", "engine"]];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));

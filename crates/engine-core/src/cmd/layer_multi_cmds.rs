@@ -21,7 +21,7 @@ mod structure;
 pub use crate::damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
 use align::{align, distribute};
 use moves::link_groups;
-pub(crate) use moves::shift_surface;
+pub use moves::shift_surface;
 #[cfg(test)]
 pub(crate) use moves::with_links;
 pub(crate) use moves::{bounded_move_selection, wrap_path, wrap_surface, wraps_linked_masks};
@@ -29,8 +29,9 @@ pub use moves::{
     move_targets, move_to, moved, moved_target, moved_wrapping, moves_mask_alone, preview_move, translate, viewed_mask_is_target, wrapped_delta,
     wrapped_selection,
 };
+pub use selection::top_level;
 use selection::{doc_state, find_layers, select_all_layers, select_linked};
-pub(crate) use selection::{mask_targets, recorded_step, reselect, targets, top_level};
+pub(crate) use selection::{mask_targets, recorded_step, reselect, targets};
 pub use selection::{select, selected, set_selection};
 pub(crate) use structure::{check_group_depth, deletion_neighbours, relink_copies};
 pub use structure::{delete_selected, duplicate_selected, group_layers, set_visible_selected};

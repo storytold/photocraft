@@ -157,8 +157,7 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
     let d = &app.session.active()?.doc;
     let size = PixelSize::new(d.size.width, d.size.height);
     let dpi = f64::from(d.resolution_dpi);
-    let bytes_per_pixel = d.layers.first().and_then(|l| l.surface()).map_or(4, |s| s.format().bytes_per_pixel()) as f64;
-    let image_bytes_per_pixel = flat_bytes_per_pixel(d);
+    let bytes_per_pixel = flat_bytes_per_pixel(d);
     let id = if command == IMAGE_COMMAND {
         // Indexed Color resamples with Nearest Neighbor only, as the command does (#6019).
         let indexed = d.mode == photocraft_color::ColorMode::Indexed;
@@ -169,7 +168,7 @@ pub(crate) fn open_with(app: &mut PhotocraftApp, command: &str, params: &Value) 
         let methods = if indexed { vec![Resample::Automatic, Resample::NearestNeighbor] } else { Vec::new() };
         let values = ImageSizeValues::new(size).pixels_per_inch(dpi).points_per_inch(points).unit(unit).method(method).column_size(columns);
         app.framework.dialogs.open(HostedImageSize::new(values, move |values: Bind<'_, ImageSizeValues>| {
-            ImageSize::new(values).methods(methods.clone()).bytes_per_pixel(image_bytes_per_pixel)
+            ImageSize::new(values).methods(methods.clone()).bytes_per_pixel(bytes_per_pixel)
         }))
     } else {
         let values =
@@ -304,5 +303,7 @@ fn finish(app: &mut PhotocraftApp, id: DialogId, command: &str, params: Option<V
     }
 }
 
+#[cfg(test)]
+mod canvas_size_readout_tests;
 #[cfg(test)]
 mod tests;

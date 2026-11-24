@@ -207,7 +207,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
         if fmt.alpha
             && tr == tc.rect()
             && let Some(tile) = src.tile(tc)
-            && sel.is_none_or(|m| crate::fill_cmds::Mask::of(m, tc).full(tr))
+            && sel.is_none_or(|m| crate::pixel_fill::Mask::of(m, tc).full(tr))
         {
             // Reading and writing it back would give the same bytes.
             shared.push((tc, tile.clone()));
@@ -451,7 +451,7 @@ pub(crate) fn clear_mask(doc: &mut Document, id: LayerId, background: [f32; 4], 
     let canvas = doc.bounds();
     let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
     let mask = crate::commands::paint_surface(doc, id, params)?;
-    crate::fill_cmds::fill_color(mask, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
+    crate::pixel_fill::fill_color(mask, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
 }
 
 /// Cut / Clear on a layer: makes the selected pixels transparent. The Background can't hold
@@ -652,7 +652,7 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
         if spot {
             crate::channel_cmds::invert_region(surf, area)?;
         }
-        crate::fill_cmds::composite_over(surf, &src, area, limit)?;
+        crate::pixel_fill::composite_over(surf, &src, area, limit)?;
         if spot {
             crate::channel_cmds::invert_region(surf, area)?;
         }

@@ -213,39 +213,6 @@ fn invalid_targets_allocation_failure_and_locks_leave_pixels_unchanged() {
 }
 
 #[test]
-fn interactive_guard_blocks_retargeting_but_all_eyes_remain_available() {
-    let mut s = session(ColorMode::Rgb, SampleType::U8);
-    s.execute("channel.target", json!({"channel":"red"})).unwrap();
-    let st = s.active_mut().unwrap();
-    st.channel_transform = Some(Guard { layer: st.active_layer, target: json!({"color":0}) });
-    let before = st.doc.clone();
-    let history = st.history.past_len();
-    let view = st.channel_view.clone();
-    for (cmd, p) in [
-        ("channel.target", json!({"channel":"blue"})),
-        ("channel.target.slot4", json!({})),
-        ("channel.new", json!({})),
-        ("edit.fill", json!({"color":"#000000"})),
-        ("timeline.create", json!({"duration":3})),
-        ("timeline.setFrame", json!({"frame":1})),
-    ] {
-        assert!(s.execute(cmd, p).unwrap_err().to_string().contains(LOCKED));
-        let st = s.active().unwrap();
-        assert!(Arc::ptr_eq(&before, &st.doc), "{cmd}");
-        assert_eq!(st.history.past_len(), history, "{cmd}");
-        assert_eq!(st.channel_view, view, "{cmd}");
-    }
-    assert!(s.edit::<()>("direct edit", |_, _| panic!("locked edit closure must never run")).unwrap_err().to_string().contains(LOCKED));
-    s.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
-    assert_eq!(s.active().unwrap().channel_view.visible_colors(3), 0);
-    assert!(!visible(&s, &json!({"target":{"color":0}})).unwrap());
-    s.execute("channel.setVisible", json!({"channel":"green","visible":true})).unwrap();
-    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Color(0));
-    s.clear_channel_transforms();
-    s.execute("channel.target", json!({"channel":"blue"})).unwrap();
-}
-
-#[test]
 fn history_edit_paths_preserve_a_captured_channel_transform() {
     for undoable_visibility in [false, true] {
         for non_linear in [false, true] {
@@ -389,7 +356,7 @@ fn check_background_job(depth: SampleType, cancel: bool) {
 fn interactive_guard_preserves_document_and_history_for_every_undo_entry_point() {
     for redo in [false, true] {
         let mut s = session(ColorMode::Rgb, SampleType::U8);
-        s.execute("edit.fill", json!({"color":"#123456"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
         if redo {
             assert!(s.undo());
         }

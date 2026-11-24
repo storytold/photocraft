@@ -1,4 +1,6 @@
 use photocraft_color::SampleType;
+use photocraft_engine::brush_cmds::LiveStrokeExt;
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
 use photocraft_engine::{Session, brush_cmds::LiveStroke, channel_cmds::ChannelTarget, color_channels};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -1842,4 +1844,40 @@ fn stroke_materializes_an_implicit_filter_mask_without_a_selection() {
         s.undo();
         assert_eq!(mask(&s), before, "Undo restores the original mask representation");
     }
+}
+
+#[test]
+fn interactive_guard_blocks_retargeting_but_all_eyes_remain_available() {
+    use photocraft_engine::channel_transform::{Guard, LOCKED, visible};
+    use std::sync::Arc;
+
+    let mut s = setup("rgb", 8);
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    let st = s.active_mut().unwrap();
+    st.channel_transform = Some(Guard { layer: st.active_layer, target: json!({"color":0}) });
+    let before = st.doc.clone();
+    let history = st.history.past_len();
+    let view = st.channel_view.clone();
+    for (cmd, p) in [
+        ("channel.target", json!({"channel":"blue"})),
+        ("channel.target.slot4", json!({})),
+        ("channel.new", json!({})),
+        ("edit.fill", json!({"color":"#000000"})),
+        ("timeline.create", json!({"duration":3})),
+        ("timeline.setFrame", json!({"frame":1})),
+    ] {
+        assert!(s.execute(cmd, p).unwrap_err().to_string().contains(LOCKED));
+        let st = s.active().unwrap();
+        assert!(Arc::ptr_eq(&before, &st.doc), "{cmd}");
+        assert_eq!(st.history.past_len(), history, "{cmd}");
+        assert_eq!(st.channel_view, view, "{cmd}");
+    }
+    assert!(s.edit::<()>("direct edit", |_, _| panic!("locked edit closure must never run")).unwrap_err().to_string().contains(LOCKED));
+    s.execute("channel.setVisible", json!({"channel":"composite","visible":false})).unwrap();
+    assert_eq!(s.active().unwrap().channel_view.visible_colors(3), 0);
+    assert!(!visible(&s, &json!({"target":{"color":0}})).unwrap());
+    s.execute("channel.setVisible", json!({"channel":"green","visible":true})).unwrap();
+    assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Color(0));
+    s.clear_channel_transforms();
+    s.execute("channel.target", json!({"channel":"blue"})).unwrap();
 }

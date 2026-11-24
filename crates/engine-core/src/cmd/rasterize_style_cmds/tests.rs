@@ -127,23 +127,6 @@ fn rasterize_layer_turns_a_vector_mask_into_a_pixel_mask_and_keeps_effects() {
 }
 
 #[test]
-fn several_selected_layers_bake_in_one_step() {
-    let (mut s, a) = scene(8);
-    let b = s.execute("layer.new.layer", json!({"name": "b"})).unwrap()["layer"].as_u64().unwrap();
-    s.execute("select.rect", json!({"x": 2, "y": 34, "width": 10, "height": 8})).unwrap();
-    s.execute("edit.fill", json!({"contents": "color", "color": "#00ff00"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
-    s.execute("layer.layerStyle.stroke", json!({"size": 2})).unwrap();
-    let plain = s.execute("layer.new.layer", json!({"name": "plain"})).unwrap()["layer"].as_u64().unwrap();
-    *s.active_mut().unwrap().selection_mut() = vec![LayerId(a), LayerId(b), LayerId(plain)];
-    let steps = s.active().unwrap().history.past_len();
-    let r = s.execute(ID, json!({})).unwrap();
-    assert_eq!(r["layers"], json!([a, b]));
-    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
-    assert!(layer(&s, a).effects.items.is_empty() && layer(&s, b).effects.items.is_empty());
-}
-
-#[test]
 fn disabled_and_bad_params_fail_gracefully() {
     let mut empty = crate::session();
     assert!(empty.execute(ID, json!({})).is_err(), "no document");

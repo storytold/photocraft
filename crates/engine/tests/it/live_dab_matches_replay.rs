@@ -1,3 +1,4 @@
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
 use photocraft_engine::{Session, retouch_cmds::LiveDab};
 use photocraft_paint::StrokePoint;
 use serde_json::json;

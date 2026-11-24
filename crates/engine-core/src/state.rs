@@ -14,7 +14,7 @@ use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::{EngineError, Result};
+use crate::{EngineError, Result, Session};
 
 // ---------------------------------------------------------------------------------------------
 // File › Automate › Batch (`file_cmds`)
@@ -247,7 +247,7 @@ pub struct ColorChannels(u64);
 
 /// The colour channels the running command may change, on one layer.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Restriction {
+pub struct Restriction {
     pub colors: ColorChannels,
     pub layer: photocraft_doc::LayerId,
 }
@@ -286,23 +286,47 @@ impl ColorChannels {
 // ---------------------------------------------------------------------------------------------
 // Live strokes (`brush_cmds`)
 
-/// A finished live stroke offered to its own commit ([`Session::offer_live_stroke`](crate::Session::offer_live_stroke),
-/// [`Session::offer_live_retouch`](crate::Session::offer_live_retouch)): when the committing command matches it (same command,
+/// A finished live stroke offered to its own commit (the paint crate's `offer_live_stroke` and
+/// `offer_live_retouch`): when the committing command matches it (same command,
 /// document revision, params, seed and points), it takes these pixels instead of rendering the
 /// stroke again.
 pub struct LiveCommit {
     /// Mixer load before and after the stroke; transient, never serialized into the journal.
-    pub(crate) mixer: Option<(MixerState, MixerState)>,
-    pub(crate) cmd: String,
-    pub(crate) base: (photocraft_doc::DocId, u64),
-    pub(crate) params: Value,
+    pub mixer: Option<(MixerState, MixerState)>,
+    pub cmd: String,
+    pub base: (photocraft_doc::DocId, u64),
+    pub params: Value,
     /// The Brush's and Pencil's seed; the retouching tools have none.
-    pub(crate) seed: Option<u64>,
-    pub(crate) points: Vec<StrokePoint>,
-    pub(crate) surface: Surface,
-    pub(crate) bounds: Rect,
-    pub(crate) layer: Option<LayerId>,
-    pub(crate) colors: Option<ColorChannels>,
+    pub seed: Option<u64>,
+    pub points: Vec<StrokePoint>,
+    pub surface: Surface,
+    pub bounds: Rect,
+    pub layer: Option<LayerId>,
+    pub colors: Option<ColorChannels>,
+}
+
+impl LiveCommit {
+    /// The params that decide the pixels, without the points and seed (compared separately).
+    fn settings(p: &Value) -> Value {
+        let mut p = p.clone();
+        if let Some(o) = p.as_object_mut() {
+            o.remove("points");
+            o.remove("seed");
+        }
+        p
+    }
+
+    /// Whether a commit of `cmd` with `p` and `pts` on the session's active document takes these pixels.
+    pub fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
+        let base = s.active().map(|st| (st.doc.id, st.revision));
+        self.cmd == cmd
+            && self.colors == crate::channel_cmds::color_restriction(s, cmd, p).map(|r| r.colors)
+            && self.layer == if crate::channel_cmds::is_channel_target(p) { None } else { crate::commands::layer_param(s, p).ok() }
+            && base == Some(self.base)
+            && p.get("seed").and_then(Value::as_u64) == self.seed
+            && self.points == pts
+            && Self::settings(p) == Self::settings(&self.params)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
