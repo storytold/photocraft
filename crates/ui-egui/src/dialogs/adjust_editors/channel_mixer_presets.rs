@@ -29,7 +29,7 @@ fn mixes() -> [(&'static str, [f64; 4]); 6] {
 const MANUAL_PRESET: &str = "channel-mixer-manual-preset";
 
 fn dialog_id() -> egui::Id {
-    egui::Id::new(("adjustment-dialog", MANUAL_PRESET))
+    egui::Id::unique(("adjustment-dialog", MANUAL_PRESET))
 }
 
 pub(crate) fn clear_dialog_status(ctx: &egui::Context) {
