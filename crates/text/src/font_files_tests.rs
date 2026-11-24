@@ -142,6 +142,30 @@ fn limits_on_file_size_file_count_and_total_size() {
     assert!(matches!(db.register_font_files("mem", Vec::new(), DEFAULT), Err(FontFileError::NoFontFiles(_))));
     let r = db.register_font_files("mem", vec![("one.ttf".into(), Ok(one.clone())), ("gone.ttf".into(), Err("access denied".into()))], DEFAULT).unwrap();
     assert_eq!((r.families, r.skipped), (vec!["PC3393 Limits One".to_string()], vec![("gone.ttf".to_string(), "access denied".to_string())]));
+
+    // A buffer over the per-file limit is skipped, and doesn't count against the total either:
+    // one oversized file must not stop a good one from registering.
+    let tight = FontFileLimits { max_file_bytes: one.len() as u64, max_total_bytes: one.len() as u64, ..DEFAULT };
+    let mut over = one.clone();
+    over.push(0);
+    let r = db.register_font_files("mem", vec![("big.ttf".into(), Ok(over)), ("one.ttf".into(), Ok(two.clone()))], tight).unwrap();
+    assert_eq!(r.families, ["PC3393 Limits Two"]);
+    assert_eq!(r.skipped, [("big.ttf".to_string(), too_large(one.len() as u64))]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A directory link back to the folder above it must not count the same files again at every
+/// depth: the walk follows the link once and then stops.
+#[cfg(unix)]
+#[test]
+fn a_directory_link_cycle_counts_each_file_once() {
+    let dir = temp_dir("cycle");
+    write(&dir.join("a.ttf"), &font("PC3393 Cycle A"));
+    write(&dir.join("sub/b.ttf"), &font("PC3393 Cycle B"));
+    std::os::unix::fs::symlink(&dir, dir.join("sub/back")).unwrap();
+    let mut db = FontDb::new();
+    let r = db.register_font_path(&dir, DEFAULT).unwrap();
+    assert_eq!((r.files, r.skipped.len()), (2, 0), "{r:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

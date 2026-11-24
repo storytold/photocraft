@@ -562,24 +562,37 @@ impl FontDb {
             return Err(FontFileError::Io { path: shown, error: "not a file or folder".into() });
         }
         let mut paths = Vec::new();
-        collect_font_files(path, 0, limits.max_files.saturating_add(1), &mut paths);
+        let mut unreadable = Vec::new();
+        collect_font_files_reporting(path, 0, limits.max_files.saturating_add(1), &mut paths, &mut unreadable);
         if paths.len() > limits.max_files {
             return Err(FontFileError::TooManyFiles { path: shown, max: limits.max_files });
         }
         // Deterministic registration order: a directory listing's isn't.
         paths.sort();
         let mut total = 0u64;
-        let mut files = Vec::with_capacity(paths.len());
+        let mut files = Vec::with_capacity(paths.len() + unreadable.len());
         for p in &paths {
-            // Stop before reading past the total; an oversized file is skipped unread.
+            let remaining = limits.max_total_bytes.saturating_sub(total);
+            // An oversized file is skipped unread, and one that no longer fits the total is an
+            // error before it is read.
             let size = std::fs::metadata(p).map_or(0, |m| m.len());
-            if size <= limits.max_file_bytes {
-                total = total.saturating_add(size);
-                if total > limits.max_total_bytes {
-                    return Err(FontFileError::TooLarge { path: shown, max_bytes: limits.max_total_bytes });
-                }
+            if size > limits.max_file_bytes {
+                files.push((relative_name(path, p), Err(too_large(limits.max_file_bytes))));
+                continue;
             }
-            files.push((relative_name(path, p), read_font_file(p, limits.max_file_bytes)));
+            if size > remaining {
+                return Err(FontFileError::TooLarge { path: shown, max_bytes: limits.max_total_bytes });
+            }
+            // Bounded by what is left of the total too: the file can grow between the two.
+            let bytes = read_font_file(p, limits.max_file_bytes.min(remaining));
+            if let Ok(b) = &bytes {
+                total = total.saturating_add(b.len() as u64);
+            }
+            files.push((relative_name(path, p), bytes));
+        }
+        for (dir, why) in unreadable {
+            let name = if dir == path { shown.clone() } else { relative_name(path, &dir) };
+            files.push((name, Err(format!("cannot read folder: {why}"))));
         }
         self.register_font_files(&shown, files, limits)
     }
@@ -599,7 +612,13 @@ impl FontDb {
         if files.len() > limits.max_files {
             return Err(FontFileError::TooManyFiles { path: source.into(), max: limits.max_files });
         }
-        let total = files.iter().filter_map(|(_, b)| b.as_ref().ok()).fold(0u64, |t, b| t.saturating_add(b.len() as u64));
+        // A buffer over the per-file limit is skipped below, so it doesn't count against the
+        // total either: one oversized file must not stop the good ones from registering.
+        let total = files
+            .iter()
+            .filter_map(|(_, b)| b.as_ref().ok())
+            .filter(|b| b.len() as u64 <= limits.max_file_bytes)
+            .fold(0u64, |t, b| t.saturating_add(b.len() as u64));
         if total > limits.max_total_bytes {
             return Err(FontFileError::TooLarge { path: source.into(), max_bytes: limits.max_total_bytes });
         }
@@ -1235,19 +1254,67 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
 }
 
 /// Font files below `dir` ([`FONT_DIR_DEPTH`] deep), stopping once `out` holds `limit` paths.
-#[cfg(not(target_arch = "wasm32"))]
+/// Folders that can't be listed are left out; use [`collect_font_files_reporting`] to name them.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn collect_font_files(dir: &std::path::Path, depth: u32, limit: usize, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
+    let mut unreadable = Vec::new();
+    collect_font_files_reporting(dir, depth, limit, out, &mut unreadable);
+}
+
+/// [`collect_font_files`] that also names each folder it couldn't list, as `(folder, why)`.
+/// Directory links are followed once: a link back to a folder already walked would otherwise
+/// count its files again at every depth.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn collect_font_files_reporting(
+    dir: &std::path::Path,
+    depth: u32,
+    limit: usize,
+    out: &mut Vec<std::path::PathBuf>,
+    unreadable: &mut Vec<(std::path::PathBuf, String)>,
+) {
+    let mut walked = HashSet::new();
+    collect_font_files_inner(dir, depth, limit, out, unreadable, &mut walked);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn collect_font_files_inner(
+    dir: &std::path::Path,
+    depth: u32,
+    limit: usize,
+    out: &mut Vec<std::path::PathBuf>,
+    unreadable: &mut Vec<(std::path::PathBuf, String)>,
+    walked: &mut HashSet<std::path::PathBuf>,
+) {
+    if out.len() >= limit {
         return;
+    }
+    // A link can spell a folder already walked; the files below it are already counted.
+    let key = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if !walked.insert(key) {
+        return;
+    }
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            unreadable.push((dir.to_path_buf(), e.to_string()));
+            return;
+        }
     };
-    for e in rd.flatten() {
+    for e in rd {
         if out.len() >= limit {
             return;
         }
+        let e = match e {
+            Ok(e) => e,
+            Err(err) => {
+                unreadable.push((dir.to_path_buf(), err.to_string()));
+                continue;
+            }
+        };
         let p = e.path();
         if p.is_dir() {
             if depth < FONT_DIR_DEPTH {
-                collect_font_files(&p, depth + 1, limit, out);
+                collect_font_files_inner(&p, depth + 1, limit, out, unreadable, walked);
             }
         } else if p.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(is_font_extension) {
             out.push(p);

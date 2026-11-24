@@ -76,9 +76,19 @@ pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
     if a.bridge.is_some() && !a.fonts.font_dirs.is_empty() {
         return Err(CliError::Other("--font-dir is not available with mcp --bridge: the open app's engine loads its own fonts".into()));
     }
-    crate::fonts::load(&a.fonts, err)?;
+    // The live route serves the call in the open app too, which loads its own fonts: refuse the
+    // flag rather than load fonts here and have window-routed calls ignore them.
+    let live = a.bridge.is_none() && !a.headless && craft::automation::agents::mcp_flag();
+    if live && !a.fonts.font_dirs.is_empty() {
+        return Err(CliError::Other(
+            "--font-dir is not available when mcp runs in the open PhotoCraft window: pass --headless to run a headless engine that loads these fonts".into(),
+        ));
+    }
+    if !live {
+        crate::fonts::load(&a.fonts, err)?;
+    }
     let server = match &a.bridge {
-        None if !a.headless && craft::automation::agents::mcp_flag() => PhotocraftMcp::live(live_config(a)?),
+        None if live => PhotocraftMcp::live(live_config(a)?),
         Some(addr) => {
             if a.bridge_from_env {
                 // Name the mode switch, as `serve` does: the way back to headless is to unset it.

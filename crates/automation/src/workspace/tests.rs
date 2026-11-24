@@ -1728,3 +1728,14 @@ fn font_folders_cannot_follow_windows_links_out_of_the_root_when_supported() {
     std::os::windows::fs::symlink_file(outside.join("secret.ttf"), inside.join("fonts/escape.ttf")).unwrap();
     assert_font_links_refused(inside.parent().unwrap(), &workspace);
 }
+
+/// #3393: a link to another folder inside the read root is not walked as a folder, so its files
+/// are not counted twice and a link back to the root cannot make the walk repeat itself.
+#[cfg(unix)]
+#[test]
+fn font_folder_links_inside_the_root_are_not_walked() {
+    let (inside, _, workspace) = roots("font-alias");
+    write_file(&inside.join("fonts/a.ttf"), b"a");
+    std::os::unix::fs::symlink(inside.join("fonts"), inside.join("fonts/alias")).unwrap();
+    assert_eq!(workspace.read_font_files("fonts").unwrap(), [read_ok("a.ttf", b"a")]);
+}

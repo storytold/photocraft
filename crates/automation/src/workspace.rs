@@ -201,24 +201,35 @@ impl AuthorizedWorkspace {
             }
             let folder = root.dir.open_dir(&relative).map_err(|e| file_error("read", path, e))?;
             let mut found = Vec::new();
-            collect_font_files(&folder, Path::new(""), 0, limits.max_files.saturating_add(1), &mut found);
+            let mut unreadable = Vec::new();
+            collect_font_files(&folder, Path::new(""), 0, limits.max_files.saturating_add(1), &mut found, &mut unreadable);
             if found.len() > limits.max_files {
                 return Err(font_error(FontFileError::TooManyFiles { path: path.into(), max: limits.max_files }));
             }
             found.sort();
             let mut total = 0u64;
-            let mut files = Vec::with_capacity(found.len());
+            let mut files = Vec::with_capacity(found.len() + unreadable.len());
             for name in found {
-                // A running total, checked before each read; an oversized file is skipped unread.
+                let remaining = limits.max_total_bytes.saturating_sub(total);
+                // An oversized file is skipped unread; one that no longer fits the total is an
+                // error before it is read.
                 let size = folder.metadata(&name).map_or(0, |m| m.len());
-                if size <= limits.max_file_bytes {
-                    total = total.saturating_add(size);
-                    if total > limits.max_total_bytes {
-                        return Err(font_error(FontFileError::TooLarge { path: path.into(), max_bytes: limits.max_total_bytes }));
-                    }
+                if size > limits.max_file_bytes {
+                    files.push((slash_name(&name), read_font(&folder, &name, limits.max_file_bytes)));
+                    continue;
                 }
-                let bytes = read_font(&folder, &name, limits.max_file_bytes);
+                if size > remaining {
+                    return Err(font_error(FontFileError::TooLarge { path: path.into(), max_bytes: limits.max_total_bytes }));
+                }
+                // Bounded by what is left of the total too: the file can grow between the two.
+                let bytes = read_font(&folder, &name, limits.max_file_bytes.min(remaining));
+                if let Ok(b) = &bytes {
+                    total = total.saturating_add(b.len() as u64);
+                }
                 files.push((slash_name(&name), bytes));
+            }
+            for (dir, why) in unreadable {
+                files.push((slash_name(&dir), Err(format!("cannot read folder: {why}"))));
             }
             return Ok(files);
         }
@@ -681,20 +692,35 @@ fn is_windows_device_name(component: &str) -> bool {
 
 /// Font files below `dir` ([`FONT_DIR_DEPTH`] deep) as paths relative to it, stopping once `out`
 /// holds `limit`. Everything resolves through the capability, so links can't lead outside it.
-fn collect_font_files(dir: &Dir, prefix: &Path, depth: u32, limit: usize, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = dir.entries() else { return };
-    for entry in entries.flatten() {
+/// Folders that can't be listed are named in `unreadable`; a directory link is not followed, so
+/// a link back to a folder above can't count its files again.
+fn collect_font_files(dir: &Dir, prefix: &Path, depth: u32, limit: usize, out: &mut Vec<PathBuf>, unreadable: &mut Vec<(PathBuf, String)>) {
+    let entries = match dir.entries() {
+        Ok(entries) => entries,
+        Err(e) => {
+            unreadable.push((prefix.to_path_buf(), e.to_string()));
+            return;
+        }
+    };
+    for entry in entries {
         if out.len() >= limit {
             return;
         }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                unreadable.push((prefix.to_path_buf(), e.to_string()));
+                continue;
+            }
+        };
         let name = entry.file_name();
-        // `file_type` doesn't follow links; a link to a folder inside the capability is a folder.
-        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && dir.metadata(&name).is_ok_and(|m| m.is_dir())));
-        if is_dir {
+        // `file_type` doesn't follow links: a link is never walked as a folder, so a cycle can't
+        // repeat the same files at every depth.
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
             if depth < FONT_DIR_DEPTH
                 && let Ok(sub) = dir.open_dir(&name)
             {
-                collect_font_files(&sub, &prefix.join(&name), depth + 1, limit, out);
+                collect_font_files(&sub, &prefix.join(&name), depth + 1, limit, out, unreadable);
             }
         } else if entry.file_type().is_ok_and(|t| t.is_file() || (t.is_symlink() && dir.metadata(&name).is_ok_and(|m| m.is_file())))
             && Path::new(&name).extension().and_then(|x| x.to_str()).is_some_and(is_font_extension)
