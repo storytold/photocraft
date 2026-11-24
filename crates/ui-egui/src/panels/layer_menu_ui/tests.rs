@@ -278,7 +278,13 @@ fn every_entry_is_a_known_command() {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
     let l = s.active().unwrap().doc.layers[0].clone();
-    for (_, id) in entries(&l, false, true, false).into_iter().chain(entries(&l, false, false, false)).chain(entries(&l, true, false, true)).chain(effects_entries()).flatten() {
+    for (_, id) in entries(&l, false, true, false)
+        .into_iter()
+        .chain(entries(&l, false, false, false))
+        .chain(entries(&l, true, false, true))
+        .chain(effects_entries())
+        .flatten()
+    {
         assert!(crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) || photocraft_engine::commands::find(id).is_some(), "{id}");
     }
 }
