@@ -538,7 +538,7 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
         let name = doc.next_layer_name(std::path::Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("Video"));
         let mut l = Layer::raster(name, fmt);
         let mut v = VideoData::new(frames, fps);
-        v.original_frames = Some(v.frames.clone());
+        v.original_frames = Some(v.frames.to_vec());
         v.source = photocraft_doc::VideoSource::File { path: path.clone() };
         // The first frame is the layer's content before it is placed: an active artboard takes
         // the layer only when its content is on the board, as `frames_to_layers` does.
@@ -564,7 +564,7 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
     let Footage { frames, warnings, .. } = load_frames(&path, fmt, &footage_import_options(s))?;
     let mut out = edit_video(s, "Replace Footage", move |v, _| {
         v.original_frames = Some(frames.clone());
-        v.frames = frames;
+        v.frames = std::sync::Arc::new(frames);
         // The new frames are held: nothing of them is linked footage any more.
         v.footage = None;
         v.shown = None;
@@ -607,7 +607,7 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     let Footage { frames, warnings, .. } = load_frames(&file.to_string_lossy(), fmt, &footage_import_options(s))?;
     let mut out = edit_video(s, "Reload Frame", move |v, _| {
         v.original_frames = Some(frames.clone());
-        v.frames = frames;
+        v.frames = std::sync::Arc::new(frames);
         v.footage = None;
         v.shown = None;
         Ok(())
@@ -689,7 +689,8 @@ pub fn render_video_with(
     let mut base = (*st.doc).clone();
     store(&mut base);
     // A frame of footage that can't be decoded would render empty: refuse rather than write it.
-    check_footage(&base.layers)?;
+    let duration = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
+    check_footage(&base.layers, 0..duration)?;
     let frames = base.timeline.as_ref().map_or(1, |t| t.duration).max(1);
     // Loaded timelines bypass the duration validation used by timeline.create/setProps.
     if frames > crate::timeline_cmds::MAX_DURATION {
@@ -764,20 +765,21 @@ pub fn render_video_with(
 /// Refuse when a video layer (inside groups too) links footage that can't be read, naming the file
 /// and why.
 /// Only visible layers are checked: a hidden layer, or one in a hidden group, adds nothing to the
-/// output, so its footage needn't be readable.
-pub(crate) fn check_footage(layers: &[Layer]) -> Result<()> {
+/// output, so its footage needn't be readable. Only the playhead positions in `visited` are
+/// rendered, so only the frames shown at those need the file.
+pub(crate) fn check_footage(layers: &[Layer], visited: std::ops::Range<usize>) -> Result<()> {
     for l in layers.iter().filter(|l| l.visible) {
         if let Some(v) = &l.video
             && let Some(f) = &v.footage
         {
             // Only frames the output reads need the file: painted ones are the layer's own.
-            let needed = v.footage_frames_shown();
+            let needed = v.footage_frames_shown_at(visited.clone());
             if needed > 0 {
                 crate::footage::status(&f.link, needed).map_err(|e| EngineError::Other(format!("the video layer `{}`: {e}", l.name)))?;
             }
         }
         if let Some(ch) = l.children() {
-            check_footage(ch)?;
+            check_footage(ch, visited.clone())?;
         }
     }
     Ok(())

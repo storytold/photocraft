@@ -317,7 +317,7 @@ fn a_saved_frame_past_the_footage_is_refused() {
     let (s, id, _) = linked("past-the-end", 2);
     let mut doc = (*s.active().unwrap().doc).clone();
     if let Some(f) = doc.layer_mut(id).and_then(|l| l.video.as_mut()).and_then(|v| v.footage.as_mut()) {
-        f.origin[0] = Some(usize::MAX);
+        std::sync::Arc::make_mut(&mut f.origin)[0] = Some(usize::MAX);
     }
     let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
     let err = photocraft_format::load_from_bytes(&bytes).unwrap_err().to_string();
@@ -453,4 +453,34 @@ fn replacing_linked_footage_with_images_drops_the_link() {
     assert!(v.footage.is_none() && v.shown.is_none());
     assert_eq!(v.len(), 1);
     let _ = std::fs::remove_file(&png);
+}
+
+/// Moving the playhead copies the document but not a linked layer's frame tables: they stay
+/// shared until a frame is painted, and the history state before the paint keeps its own.
+#[test]
+fn moving_the_playhead_shares_the_frame_tables() {
+    let (mut s, id, _) = linked("shared-tables", 500);
+    let before = video(&s, id).clone();
+    goto(&mut s, 7);
+    let after = video(&s, id).clone();
+    assert!(std::sync::Arc::ptr_eq(&before.frames, &after.frames), "the frames table is shared");
+    let (fb, fa) = (before.footage.as_ref().unwrap(), after.footage.as_ref().unwrap());
+    assert!(std::sync::Arc::ptr_eq(&fb.origin, &fa.origin) && std::sync::Arc::ptr_eq(&fb.altered, &fa.altered));
+    paint(&mut s, id);
+    goto(&mut s, 8);
+    let painted = video(&s, id).clone();
+    assert!(!std::sync::Arc::ptr_eq(&after.frames, &painted.frames), "painting copies the table");
+    assert!(after.frames[7].tile_count() == 0 && painted.frames[7].tile_count() > 0, "and the earlier copy keeps its own");
+}
+
+/// Render Video only visits the timeline's frames: footage frames of the layer past the end of
+/// the timeline don't need the file.
+#[test]
+fn only_frames_the_render_visits_need_the_file() {
+    let (mut s, id, _) = linked("visited", 4);
+    paint(&mut s, id);
+    s.execute("timeline.setProps", json!({"duration": 1})).unwrap();
+    let file = video(&s, id).footage.as_ref().unwrap().link.path.clone();
+    crate::footage::forget(&file);
+    assert!(render_video_with(&s, &json!({"format": "png"}), |_, _| Ok(()), |_, _| true).is_ok(), "frame 0 is painted, and frames 1-3 aren't rendered");
 }

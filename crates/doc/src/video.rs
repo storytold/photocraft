@@ -2,6 +2,8 @@
 //! Video layers (Layer › Video Layers) show their content for the current frame; this type is the
 //! shared clock. Frame-animation and video-timeline modes both reduce to "which frame is current".
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use photocraft_raster::Surface;
@@ -54,13 +56,17 @@ impl FootageLink {
 /// footage frame it shows (`None` for a frame inserted blank) and whether it has been painted on.
 /// A painted frame's pixels are the layer's own (`VideoData::frames`); an unpainted one's are
 /// decoded from the file, and its `frames` entry is an empty placeholder.
+///
+/// The tables are shared between copies of the document (history states, the copy each playhead
+/// move makes) and copied only when one of them changes, so a long clip's tables cost nothing to
+/// carry until a frame is painted or the stack changes.
 #[derive(Clone, Debug, PartialEq, craft_ui_macros::PlainData)]
 pub struct FootageFrames {
     pub link: FootageLink,
     /// Same length as `VideoData::frames`.
-    pub origin: Vec<Option<usize>>,
+    pub origin: Arc<Vec<Option<usize>>>,
     /// Same length as `VideoData::frames`.
-    pub altered: Vec<bool>,
+    pub altered: Arc<Vec<bool>>,
 }
 
 /// What a video layer shows for one of its frames.
@@ -84,7 +90,9 @@ pub enum FrameView<'a> {
 /// shown; only the painted ones are held and saved.
 #[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub struct VideoData {
-    pub frames: Vec<Surface>,
+    /// Shared between copies of the document and copied on the first change (see
+    /// [`FootageFrames`]); change it through [`Arc::make_mut`].
+    pub frames: Arc<Vec<Surface>>,
     /// Immutable original footage of a file-backed sequence. COW surfaces share unchanged
     /// pixel tiles with edited frames; blank video layers have no original source.
     pub original_frames: Option<Vec<Surface>>,
@@ -101,7 +109,7 @@ pub struct VideoData {
 
 impl VideoData {
     pub fn new(frames: Vec<Surface>, fps: f32) -> Self {
-        VideoData { frames, original_frames: None, source: VideoSource::Blank, fps, show_altered: true, footage: None, shown: None }
+        VideoData { frames: Arc::new(frames), original_frames: None, source: VideoSource::Blank, fps, show_altered: true, footage: None, shown: None }
     }
 
     /// A layer that shows the frames of a linked movie, one layer frame per footage frame, none
@@ -110,9 +118,9 @@ impl VideoData {
         let n = link.info.frames;
         let fps = link.info.fps;
         let path = link.path.clone();
-        let footage = FootageFrames { link, origin: (0..n).map(Some).collect(), altered: vec![false; n] };
+        let footage = FootageFrames { link, origin: Arc::new((0..n).map(Some).collect()), altered: Arc::new(vec![false; n]) };
         VideoData {
-            frames: (0..n).map(|_| Surface::new(format)).collect(),
+            frames: Arc::new((0..n).map(|_| Surface::new(format)).collect()),
             original_frames: None,
             source: VideoSource::File { path },
             fps,
@@ -160,11 +168,11 @@ impl VideoData {
             if !altered && self.shown.is_some_and(|g| g == content.generation()) {
                 return;
             }
-            if let Some(a) = f.altered.get_mut(at) {
+            if let Some(a) = Arc::make_mut(&mut f.altered).get_mut(at) {
                 *a = true;
             }
         }
-        self.frames[at] = content.clone();
+        Arc::make_mut(&mut self.frames)[at] = content.clone();
     }
 
     /// After loading a document: the layer's saved content stands for the frame at `at` as it was
@@ -181,15 +189,17 @@ impl VideoData {
     /// Insert a blank frame at `at` (clamped to the end). A blank frame has no footage behind it.
     pub fn insert_blank(&mut self, at: usize, format: photocraft_color::PixelFormat) {
         let at = at.min(self.frames.len());
-        self.frames.insert(at, Surface::new(format));
+        Arc::make_mut(&mut self.frames).insert(at, Surface::new(format));
         if let Some(original) = &mut self.original_frames {
             // The stacks stay aligned, but never index past a shorter one.
             original.insert(at.min(original.len()), Surface::new(format));
         }
         if let Some(f) = &mut self.footage {
-            f.origin.insert(at.min(f.origin.len()), None);
+            let at_origin = at.min(f.origin.len());
+            Arc::make_mut(&mut f.origin).insert(at_origin, None);
             // Its own (empty) pixels are what it shows.
-            f.altered.insert(at.min(f.altered.len()), true);
+            let at_altered = at.min(f.altered.len());
+            Arc::make_mut(&mut f.altered).insert(at_altered, true);
         }
     }
 
@@ -203,10 +213,11 @@ impl VideoData {
         if let Some(f) = &mut self.footage {
             let origin = f.origin.get(at).copied().flatten();
             let altered = f.altered.get(at).copied().unwrap_or(true);
-            f.origin.insert((at + 1).min(f.origin.len()), origin);
-            f.altered.insert((at + 1).min(f.altered.len()), altered);
+            let (o, a) = ((at + 1).min(f.origin.len()), (at + 1).min(f.altered.len()));
+            Arc::make_mut(&mut f.origin).insert(o, origin);
+            Arc::make_mut(&mut f.altered).insert(a, altered);
         }
-        self.frames.insert(at + 1, frame);
+        Arc::make_mut(&mut self.frames).insert(at + 1, frame);
     }
 
     /// Remove frame `at`, keeping at least one frame.
@@ -214,7 +225,7 @@ impl VideoData {
         if self.frames.len() <= 1 || at >= self.frames.len() {
             return;
         }
-        self.frames.remove(at);
+        Arc::make_mut(&mut self.frames).remove(at);
         if let Some(original) = &mut self.original_frames
             && at < original.len()
         {
@@ -222,10 +233,10 @@ impl VideoData {
         }
         if let Some(f) = &mut self.footage {
             if at < f.origin.len() {
-                f.origin.remove(at);
+                Arc::make_mut(&mut f.origin).remove(at);
             }
             if at < f.altered.len() {
-                f.altered.remove(at);
+                Arc::make_mut(&mut f.altered).remove(at);
             }
         }
     }
@@ -237,22 +248,28 @@ impl VideoData {
         }
         if let Some(f) = &mut self.footage {
             let has_origin = f.origin.get(at).copied().flatten().is_some();
-            if let Some(a) = f.altered.get_mut(at) {
+            if let Some(a) = Arc::make_mut(&mut f.altered).get_mut(at) {
                 // A blank frame shows its own (now empty) pixels again.
                 *a = !has_origin;
             }
-            self.frames[at] = Surface::new(format);
+            Arc::make_mut(&mut self.frames)[at] = Surface::new(format);
             return;
         }
         let original = self.original_frames.as_ref().and_then(|frames| frames.get(at)).cloned();
-        self.frames[at] = original.unwrap_or_else(|| Surface::new(format));
+        Arc::make_mut(&mut self.frames)[at] = original.unwrap_or_else(|| Surface::new(format));
     }
 
     /// The footage frame count the layer as displayed reads from its file: one more than the
     /// highest footage frame shown (painted frames read none while Show Altered Video is on);
     /// 0 when nothing shown comes from the file.
     pub fn footage_frames_shown(&self) -> usize {
-        (0..self.frames.len())
+        self.footage_frames_shown_at(0..self.frames.len())
+    }
+
+    /// [`Self::footage_frames_shown`] over the playhead positions `at` only (each clamped to the
+    /// last frame, as the display is), for output that visits only those.
+    pub fn footage_frames_shown_at(&self, at: impl IntoIterator<Item = usize>) -> usize {
+        at.into_iter()
             .filter_map(|i| match self.view(i, !self.show_altered) {
                 Some(FrameView::Footage(n)) => Some(n.saturating_add(1)),
                 _ => None,

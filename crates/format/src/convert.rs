@@ -123,7 +123,7 @@ fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifes
         source: v.source.clone(),
         fps: v.fps,
         show_altered: v.show_altered,
-        footage: v.footage.as_ref().map(|f| crate::manifest::FootageFramesM { link: f.link.clone(), origin: f.origin.clone(), altered: f.altered.clone() }),
+        footage: v.footage.as_ref().map(|f| crate::manifest::FootageFramesM { link: f.link.clone(), origin: f.origin.to_vec(), altered: f.altered.to_vec() }),
     }
 }
 
@@ -377,10 +377,22 @@ impl Loader<'_> {
             Some(f) if f.link.clip.as_ref().is_some_and(|c| c.len() > MAX_CLIP_CORNERS || !c.iter().flatten().all(|v| v.is_finite())) => {
                 return Err(FormatError::corrupt("a video layer's footage crop is not a usable polygon"));
             }
-            Some(f) => Some(photocraft_doc::FootageFrames { link: f.link.clone(), origin: f.origin.clone(), altered: f.altered.clone() }),
+            Some(f) => Some(photocraft_doc::FootageFrames {
+                link: f.link.clone(),
+                origin: std::sync::Arc::new(f.origin.clone()),
+                altered: std::sync::Arc::new(f.altered.clone()),
+            }),
             None => None,
         };
-        Ok(photocraft_doc::VideoData { frames, original_frames, source: m.source.clone(), fps: m.fps, show_altered: m.show_altered, footage, shown: None })
+        Ok(photocraft_doc::VideoData {
+            frames: std::sync::Arc::new(frames),
+            original_frames,
+            source: m.source.clone(),
+            fps: m.fps,
+            show_altered: m.show_altered,
+            footage,
+            shown: None,
+        })
     }
 
     fn surface(&mut self, m: &SurfaceM) -> Result<Surface> {

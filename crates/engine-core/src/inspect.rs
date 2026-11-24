@@ -230,7 +230,7 @@ fn layer_sel(
                 "height": f.link.info.height,
                 "frames": f.link.info.frames,
                 "fps": f.link.info.fps,
-                "paintedFrames": f.altered.iter().zip(&f.origin).filter(|(a, o)| **a && o.is_some()).count(),
+                "paintedFrames": f.altered.iter().zip(f.origin.iter()).filter(|(a, o)| **a && o.is_some()).count(),
                 "online": status.as_ref().map(Result::is_ok),
                 "offline": status.and_then(Result::err),
             });
