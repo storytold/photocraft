@@ -7,7 +7,7 @@
 //! whole path transforms as it does today.
 
 use craft::behavior::geometry::quad::BoxState;
-use craft::behavior::kurbo::Point;
+use craft::behavior::kurbo::{Point, Vec2};
 use egui::Modifiers;
 use photocraft_doc::vector::Path;
 use serde_json::json;
@@ -50,6 +50,16 @@ fn work_path_app() -> Box<PhotocraftApp> {
     app
 }
 
+/// A live rectangle shape layer "Rectangle 1" at 550,50 to 750,200, Direct Selection on.
+fn shape_app() -> Box<PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 800, "height": 600, "background": "white"})).unwrap();
+    app.sync_views();
+    app.run("shape.create", json!({"kind": "rect", "rect": [550, 50, 200, 150]})).unwrap();
+    app.ui.tool = Tool::DirectSelection;
+    app
+}
+
 fn click(app: &mut PhotocraftApp, at: [f64; 2], mods: Modifiers) {
     testing::click(app, at, mods);
 }
@@ -81,6 +91,11 @@ fn box_params(app: &PhotocraftApp) -> serde_json::Value {
 /// Puts the box on `quad`, as the transform controls do.
 fn set_box(app: &mut PhotocraftApp, quad: [[f64; 2]; 4]) {
     app.ui.transform.as_mut().unwrap().edit_box(|b| *b = BoxState::new(quad.map(|[x, y]| Point::new(x, y)), b.pivot));
+}
+
+/// Moves the box and its reference point, as a drag inside the box does.
+fn move_box(app: &mut PhotocraftApp, dx: f64, dy: f64) {
+    app.ui.transform.as_mut().unwrap().edit_box(|b| *b = b.moved(Vec2::new(dx, dy)));
 }
 
 /// OK: commit the open box.
@@ -176,6 +191,13 @@ fn a_selected_anchor_moves_its_own_handles() {
     assert_eq!(anchors(&p, 0), vec![[40.0, 40.0], [120.0, 40.0], [120.0, 120.0], [40.0, 120.0]], "the unselected anchors stayed");
     let (corner, corner_in, corner_out) = knot(&p, 0, 0);
     assert_eq!([(corner.x, corner.y), (corner_in.x, corner_in.y), (corner_out.x, corner_out.y)], [(40.0, 40.0), (40.0, 40.0), (40.0, 40.0)]);
+    assert!(app.session.undo(), "one Undo takes the point transform back");
+    let (anchor, handle_in, handle_out) = knot(&work_path(&app), 0, 1);
+    assert_eq!(
+        [(anchor.x, anchor.y), (handle_in.x, handle_in.y), (handle_out.x, handle_out.y)],
+        [(120.0, 40.0), (100.0, 40.0), (140.0, 40.0)],
+        "Undo restores the anchor and both handles"
+    );
 }
 
 /// Neighbour: with nothing selected, ⌘T keeps today's whole-path transform and today's step name.
@@ -294,4 +316,99 @@ fn anchors_off_the_path_are_an_error() {
     }
     assert_eq!(path1(&app), before, "nothing moved");
     assert_eq!(steps(&app), n, "and no step was added");
+}
+
+/// The box needs an area to work in: one straight anchor spans none, so that selection keeps today's
+/// whole-path transform. The reference application was not measured with a frame-less selection.
+#[test]
+fn one_anchor_selected_keeps_the_whole_path() {
+    let mut app = saved_path_app();
+    click(&mut app, [300.0, 300.0], Modifiers::NONE);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1]], "one straight anchor is selected");
+    let before = steps(&app);
+    open_box(&mut app);
+    assert_eq!(box_rect(&app), [100.0, 300.0, 700.0, 500.0], "the box frames the whole path");
+    assert_eq!(box_params(&app), json!({"name": "Path 1"}), "no anchors are named");
+    // Drag the box 20 right and 20 down, OK: every anchor of Path 1 follows.
+    move_box(&mut app, 20.0, 20.0);
+    commit_box(&mut app);
+    assert_eq!((steps(&app), last_step(&app).as_deref()), (before + 1, Some("Transform Path")));
+    assert_eq!(anchors(&path1(&app), 0), vec![[120.0, 320.0], [320.0, 320.0], [320.0, 520.0], [120.0, 520.0]]);
+    assert_eq!(anchors(&path1(&app), 1), vec![[420.0, 320.0], [720.0, 320.0]], "the line moved with it");
+}
+
+/// Two anchors on one line span an area of nothing either: the same whole-path transform.
+#[test]
+fn collinear_anchors_keep_the_whole_path() {
+    let mut app = saved_path_app();
+    click(&mut app, [100.0, 300.0], Modifiers::NONE);
+    click(&mut app, [300.0, 300.0], Modifiers::SHIFT);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 0], [0, 1]], "both top corners");
+    open_box(&mut app);
+    assert_eq!(box_rect(&app), [100.0, 300.0, 700.0, 500.0], "the box frames the whole path");
+    assert_eq!(box_params(&app), json!({"name": "Path 1"}), "no anchors are named");
+    set_box(&mut app, [[250.0, 300.0], [550.0, 300.0], [550.0, 500.0], [250.0, 500.0]]);
+    commit_box(&mut app);
+    assert_eq!(last_step(&app).as_deref(), Some("Transform Path"));
+    assert_eq!(anchors(&path1(&app), 0), vec![[250.0, 300.0], [350.0, 300.0], [350.0, 500.0], [250.0, 500.0]]);
+    assert_eq!(anchors(&path1(&app), 1), vec![[400.0, 300.0], [550.0, 300.0]]);
+}
+
+/// Path Selection's component pick fills the same anchor list; the tool is checked first, so Ctrl+T
+/// keeps the whole-path transform.
+#[test]
+fn a_path_selection_component_pick_keeps_the_whole_path() {
+    let mut app = saved_path_app();
+    app.ui.tool = Tool::PathSelection;
+    click(&mut app, [200.0, 400.0], Modifiers::NONE);
+    assert!(!app.ui.direct_selection.anchors.is_empty(), "the component pick writes the anchors it covers");
+    open_box(&mut app);
+    assert_eq!(box_rect(&app), [100.0, 300.0, 700.0, 500.0], "the box frames the whole path");
+    assert_eq!(box_params(&app), json!({"name": "Path 1"}), "no anchors are named");
+    move_box(&mut app, 20.0, 20.0);
+    commit_box(&mut app);
+    assert_eq!(last_step(&app).as_deref(), Some("Transform Path"));
+    assert_eq!(anchors(&path1(&app), 0), vec![[120.0, 320.0], [320.0, 320.0], [320.0, 520.0], [120.0, 520.0]]);
+    assert_eq!(anchors(&path1(&app), 1), vec![[420.0, 320.0], [720.0, 320.0]]);
+}
+
+/// #13284 makes Path Selection with Ctrl held act as Direct Selection, and the anchor it presses ends
+/// up in that same list. The free-transform entry reads the tool in hand, so this keeps today's
+/// whole-path transform; asked on the issue whether the held tool should decide instead.
+#[test]
+fn path_selection_with_ctrl_held_keeps_the_whole_path() {
+    let mut app = saved_path_app();
+    app.ui.tool = Tool::PathSelection;
+    click(&mut app, [300.0, 300.0], Modifiers::COMMAND);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 1]], "the Ctrl press selected the anchor");
+    open_box(&mut app);
+    assert_eq!(box_rect(&app), [100.0, 300.0, 700.0, 500.0], "today: the box frames the whole path");
+    assert_eq!(box_params(&app), json!({"name": "Path 1"}), "today: no anchors are named");
+}
+
+/// Neighbour the ticket leaves unmeasured: anchors selected on a shape layer's path keep today's
+/// whole-path box, params and step name.
+#[test]
+fn anchors_on_a_shape_layer_keep_the_whole_path() {
+    let mut app = shape_app();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    click(&mut app, [750.0, 50.0], Modifiers::NONE);
+    assert_eq!(app.ui.direct_selection.target, Some(crate::direct_select::PathRef::Layer(layer.0)), "the shape path is targeted");
+    let selected = app.ui.direct_selection.anchors.clone();
+    assert_eq!(selected.len(), 1, "the corner anchor is selected");
+    let before = steps(&app);
+    open_box(&mut app);
+    assert_eq!(box_rect(&app), [550.0, 50.0, 750.0, 200.0], "the box frames the whole shape path");
+    assert_eq!(box_params(&app), json!({"name": "layer", "layer": layer.0}), "no anchors are named");
+    move_box(&mut app, 20.0, 20.0);
+    commit_box(&mut app);
+    assert_eq!((steps(&app), last_step(&app).as_deref()), (before + 1, Some("Transform Path")), "{}", app.ui.status);
+    let shape = app.session.active().unwrap().doc.layer(layer).and_then(|l| match &l.content {
+        photocraft_doc::LayerContent::Shape(sh) => Some(sh.path.clone()),
+        _ => None,
+    });
+    let p = shape.expect("the layer is still a shape");
+    let mut moved: Vec<[f64; 2]> = p.subpaths[0].knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
+    moved.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap().then(a[1].partial_cmp(&b[1]).unwrap()));
+    assert_eq!(moved, vec![[570.0, 70.0], [570.0, 220.0], [770.0, 70.0], [770.0, 220.0]], "the whole rect moved");
 }
