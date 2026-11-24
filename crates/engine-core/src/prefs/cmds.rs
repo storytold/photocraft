@@ -165,8 +165,11 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
             let toolbar =
                 toolbar.clone().unwrap_or_else(|| current.toolbar.iter().map(|g| g.iter().filter(|t| !named.contains(t)).cloned().collect()).collect());
             let extras = extras.clone().unwrap_or(current.extras);
-            // The new layout holds the hidden tools now; keep it as it was given.
-            let layout = ToolbarCustomization { toolbar: Some(toolbar), extras: Some(extras), ..Default::default() }.layout();
+            // The new layout holds the hidden tools now: a `hidden` list given too moves its tools
+            // to the extras, after the lists (and a preset's) are taken; without one the layout is
+            // kept as it was given.
+            let hidden = ids("hidden").unwrap_or_default();
+            let layout = ToolbarCustomization { toolbar: Some(toolbar), extras: Some(extras), hidden, ..Default::default() }.layout();
             pr.toolbar.hidden.clear();
             pr.toolbar.toolbar = Some(layout.toolbar);
             pr.toolbar.extras = Some(layout.extras);

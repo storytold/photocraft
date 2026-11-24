@@ -172,3 +172,17 @@ fn presets_are_read_and_written_by_path() {
     assert!(t.execute("edit.toolbar", json!({"loadPreset": "mine.tbr"})).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_hidden_list_given_with_a_preset_applies_after_it() {
+    let bytes = save(&mut crate::session());
+    let mut s = crate::session();
+    s.execute("edit.toolbar", json!({"loadPreset": {"data": b64_encode(&bytes)}, "hidden": ["Zoom"]})).unwrap();
+    let layout = s.prefs().toolbar.layout();
+    assert!(layout.toolbar.iter().flatten().all(|t| t != "Zoom"), "the explicit hidden list wins over the preset's toolbar");
+    assert!(layout.extras.iter().flatten().any(|t| t == "Zoom"));
+
+    let mut t = crate::session();
+    load(&mut t, &bytes).unwrap();
+    assert!(t.prefs().toolbar.layout().toolbar.iter().flatten().any(|t| t == "Zoom"), "without `hidden` the preset's layout is kept");
+}
