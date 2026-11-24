@@ -187,11 +187,14 @@ pub(super) fn sections(fields: &DialogFields) -> Vec<PrintSection> {
 
     // The rows are shown in the section's Units menu; stored values keep their units (paper in points, position in
     // inches). A typed zero reaches the value, and the engine refuses a paper that small.
+    // Points are 1/72 in and picas 12 points, as the reference application's Units menu takes them (#14136).
     let lengths = |per_unit: f64| {
         vec![
+            NumberUnit::new("in", UnitKind::Inches, tl!("Inches"), per_unit),
             NumberUnit::new("cm", UnitKind::Centimetres, tl!("Centimeters"), per_unit / 2.54),
             NumberUnit::new("mm", UnitKind::Millimetres, tl!("Millimeters"), per_unit / 25.4),
-            NumberUnit::new("in", UnitKind::Inches, tl!("Inches"), per_unit),
+            NumberUnit::new("pt", UnitKind::Points, tl!("Points"), per_unit / 72.0),
+            NumberUnit::new("pica", UnitKind::Picas, tl!("Picas"), per_unit / 6.0),
         ]
     };
     let pt = |key: &str, label: &'static str| {
@@ -244,7 +247,15 @@ pub(super) fn sections(fields: &DialogFields) -> Vec<PrintSection> {
         PrintSection::new(
             tl!("Position and Size"),
             vec![
-                Param::new("units", tl!("Units"), choice(&[("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("in", tl!("Inches"))], "cm")),
+                // The reference application's order (#14136); Centimeters stays the default.
+                Param::new(
+                    "units",
+                    tl!("Units"),
+                    choice(
+                        &[("in", tl!("Inches")), ("cm", tl!("Centimeters")), ("mm", tl!("Millimeters")), ("pt", tl!("Points")), ("pica", tl!("Picas"))],
+                        "cm",
+                    ),
+                ),
                 Param::new("paper", tl!("Paper"), ParamKind::choice(papers, Some("letter".into()))),
                 pt("paperWidth", tl!("Paper Width")),
                 pt("paperHeight", tl!("Paper Height")),
