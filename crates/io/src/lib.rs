@@ -1325,9 +1325,9 @@ pub fn import_smart_object_source(name: &str, bytes: &[u8], max_decoded_pixels: 
 pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<Option<ImportResult>, IoError> {
     if craft_svg::sniff::is_svgz(bytes) {
         use craft_xcf::transport::{Limits, PrefixProbe, Wrapper, probe_prefix};
-        // Affinity and gzip-XCF have their own admission and decode budgets.
-        // Check the shared XCF signature before using the smaller SVGZ limit, even for renamed files.
-        if route(name, &[]) == Route::Affinity
+        // Only the explicit .af alias precedes SVGZ sniffing in the shared registry.
+        // Gzip-XCF has its own decode limit, including when the source was renamed.
+        if name.as_bytes().last_chunk::<3>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".af"))
             || Wrapper::from_name(name) == Some(Wrapper::Gzip)
             || matches!(probe_prefix(bytes, None, Limits::default(), &|| true), Ok(PrefixProbe::Xcf(_)))
         {

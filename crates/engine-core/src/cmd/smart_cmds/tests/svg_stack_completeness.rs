@@ -114,7 +114,9 @@ fn gzipped_svg_stack_retains_ordinary_import_for_misnamed_sources() {
 #[test]
 fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
     let bytes = gzip(&incomplete_svg());
-    for name in ["contents.svgz", "contents.gz", "contents.psd", "without-extension"] {
+    for name in
+        ["contents.svgz", "contents.gz", "contents.psd", "contents.afphoto", "contents.afdesign", "contents.afpub", "contents.AfPhOtO", "without-extension"]
+    {
         let opened = photocraft_io::import(name, &bytes).unwrap();
         assert!(opened.warnings.iter().any(|warning| warning.contains("embedded image was omitted")), "{name}");
         assert_eq!(photocraft_compose::flatten(&opened.document).get(1, 1), [1., 0., 0., 1.]);
@@ -145,7 +147,9 @@ fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
 fn complete_svgz_replacement_keeps_encoded_bytes_and_accepts_supported_utf16() {
     let xml = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="red"/></svg>"#;
     let bytes = gzip(xml.as_bytes());
-    for source_name in ["complete.svgz", "complete.gz", "complete.psd", "without-extension"] {
+    for source_name in
+        ["complete.svgz", "complete.gz", "complete.psd", "complete.afphoto", "complete.afdesign", "complete.afpub", "complete.AfPhOtO", "without-extension"]
+    {
         let mut s = session(8);
         paint(&mut s);
         let id = LayerId(convert(&mut s));
@@ -161,7 +165,9 @@ fn complete_svgz_replacement_keeps_encoded_bytes_and_accepts_supported_utf16() {
         assert_eq!(decoded.size, Size::new(2, 2));
         assert_eq!(photocraft_compose::flatten(&decoded).get(1, 1), [1., 0., 0., 1.]);
     }
-    assert!(decode_source("explicit.af", &bytes).is_err(), "the explicit Affinity route must retain priority");
+    for name in ["explicit.af", "explicit.AF", ".af"] {
+        assert!(decode_source(name, &bytes).is_err(), "{name}: the explicit Affinity route must retain priority");
+    }
     // BOM-marked UTF-16 is now an intentional ordinary and strict SVG input.
     // Replacement must keep its encoded source, not silently rewrite it to UTF-8.
     for little in [true, false] {
