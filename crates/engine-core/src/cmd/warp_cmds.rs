@@ -560,17 +560,20 @@ fn split_warp_inner(w: &Warp, at: Option<[f64; 2]>, how: Split, picked_anchor: O
 }
 
 fn remove_split(mesh: &mut BezierMesh, s: f64, t: f64, picked: Option<usize>) -> bool {
-    // Use the anchor's knot directly. Inverting a deformed mesh can land in a different patch,
-    // and an anchor at a crossing does not identify a single line.
+    // Use the anchor's knot directly. Inverting a deformed mesh can land in a different patch.
     if let Some(index) = picked.filter(|&i| i < mesh.points.len()) {
         let (nx, ny) = (mesh.nx(), mesh.ny());
         let (x, y) = (index % nx, index / nx);
         if x.is_multiple_of(3) && y.is_multiple_of(3) {
-            let (u, v) = (x > 0 && x < nx - 1, y > 0 && y < ny - 1);
-            match (u, v) {
-                (true, false) => return mesh.remove_split_u(x / 3),
-                (false, true) => return mesh.remove_split_v(y / 3),
-                _ => {}
+            let vertical = x > 0 && x < nx - 1;
+            let horizontal = y > 0 && y < ny - 1;
+            // A one-way split on the Default grid materializes the perpendicular thirds.
+            // Its inner anchors still identify only the added line.
+            if vertical && (!horizontal || mesh.us.len() == 3 && is_default_thirds(&mesh.vs)) {
+                return mesh.remove_split_u(x / 3);
+            }
+            if horizontal && (!vertical || mesh.vs.len() == 3 && is_default_thirds(&mesh.us)) {
+                return mesh.remove_split_v(y / 3);
             }
         }
     }
@@ -587,6 +590,11 @@ fn remove_split(mesh: &mut BezierMesh, s: f64, t: f64, picked: Option<usize>) ->
     }
 }
 
+fn is_default_thirds(knots: &[f64]) -> bool {
+    const THIRDS: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
+    knots.len() == THIRDS.len() && knots.iter().zip(THIRDS).all(|(a, b)| (a - b).abs() < 1e-9)
+}
+
 /// After a split is removed: when what is left is the Default grid's thirds that a one-way split
 /// made real (`commit_default_sections`) and nothing else, merge them back into the Default grid's
 /// one patch, which draws them as guides again (#12912). Only when that loses nothing: splitting
@@ -595,10 +603,8 @@ fn remove_split(mesh: &mut BezierMesh, s: f64, t: f64, picked: Option<usize>) ->
 /// sections came from, so a straight 3 x 1 (or 1 x 3) grid at exactly the thirds made another way
 /// merges too; nothing is lost, as the Default grid draws the same lines as guides.
 fn restore_default_grid(mesh: &mut BezierMesh) {
-    const THIRDS: [f64; 4] = [0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0];
-    let is = |k: &[f64], want: &[f64]| k.len() == want.len() && k.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9);
-    let columns = is(&mesh.us, &THIRDS) && is(&mesh.vs, &[0.0, 1.0]);
-    let rows = is(&mesh.vs, &THIRDS) && is(&mesh.us, &[0.0, 1.0]);
+    let columns = is_default_thirds(&mesh.us) && mesh.vs == [0.0, 1.0];
+    let rows = is_default_thirds(&mesh.vs) && mesh.us == [0.0, 1.0];
     if !(columns || rows) {
         return;
     }

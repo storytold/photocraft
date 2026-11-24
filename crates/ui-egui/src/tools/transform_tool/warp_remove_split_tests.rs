@@ -90,6 +90,30 @@ fn picking_the_only_added_split_restores_the_default_grid() {
     }
 }
 
+fn assert_inner_anchors_restore_default(command: &str, anchors: [(usize, usize); 2]) {
+    for (column, row) in anchors {
+        let mut h = warp_harness();
+        invoke(&mut h, command, json!({"at": [320, 320]}));
+        h.run_steps(3);
+
+        pick(&mut h, column, row);
+        invoke(&mut h, REMOVE, json!({}));
+        let warp = session_warp(h.state());
+        assert_eq!((warp.mesh.columns(), warp.mesh.rows()), (1, 1), "{command} at ({column}, {row}) restores the Default grid");
+        assert!(warp.warp.is_identity());
+    }
+}
+
+#[test]
+fn inner_anchors_remove_the_only_horizontal_split() {
+    assert_inner_anchors_restore_default("edit.transform.splitWarpHorizontally", [(1, 1), (2, 1)]);
+}
+
+#[test]
+fn inner_anchors_remove_the_only_vertical_split() {
+    assert_inner_anchors_restore_default("edit.transform.splitWarpVertically", [(1, 1), (1, 2)]);
+}
+
 #[test]
 fn an_explicit_control_channel_point_takes_precedence_over_the_pick() {
     let mut h = warp_harness();
@@ -122,6 +146,17 @@ fn a_crossing_or_an_unpicked_grid_uses_the_center() {
 
     invoke(&mut h, "edit.undo", json!({}));
     h.run_steps(2);
+    assert_uses_center(&mut h);
+}
+
+#[test]
+fn a_crossing_of_two_added_splits_uses_the_center() {
+    let mut h = warp_harness();
+    invoke(&mut h, "edit.transform.splitWarpHorizontally", json!({"at": [320, 320]}));
+    invoke(&mut h, "edit.transform.splitWarpVertically", json!({"at": [344, 320]}));
+    h.run_steps(3);
+
+    pick(&mut h, 2, 1);
     assert_uses_center(&mut h);
 }
 
