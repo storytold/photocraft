@@ -55,6 +55,7 @@ fn row(side: Side, label: &'static str, default: i64) -> Param {
     })
     .opens_with(default)
     .companions(SIDES.iter().flat_map(|side| [side.accepted, side.invalid, side.notice, side.reset]))
+    .not_remembered()
 }
 
 fn number(fields: &DialogFields, key: &str) -> Option<f64> {

@@ -77,6 +77,18 @@ fn a_run_without_the_dialog_stores_its_values_too() {
 }
 
 #[test]
+fn a_later_script_run_takes_precedence_over_previous_dialog_values() {
+    let mut app = app(400, 300);
+    let ctx = app.ctx().clone();
+    let id = open(&mut app);
+    set(&mut app, id, 250, 180, false);
+    crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+    app.run(FIT_IMAGE, json!({"width": 160, "height": 100, "dontEnlarge": true})).unwrap();
+    let id = open(&mut app);
+    assert_eq!(shown(&app, id), (json!(160), json!(100), json!(true)));
+}
+
+#[test]
 fn kept_across_a_restart_and_corrupt_values_fall_back_to_the_document_size() {
     let mut app = app(400, 300);
     app.run(FIT_IMAGE, json!({"width": 250, "height": 180, "dontEnlarge": true})).unwrap();

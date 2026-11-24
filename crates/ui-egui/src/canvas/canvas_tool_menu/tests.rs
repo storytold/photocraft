@@ -887,3 +887,33 @@ fn zoom_menu_steps_respect_the_clicked_point_preference() {
         }
     }
 }
+
+#[test]
+fn a_repeated_animated_zoom_starts_from_the_view_on_screen() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    app.run("prefs.set", json!({"values": {"general.animatedZoom": true, "tools.zoomClickedPointToCenter": true, "tools.overscroll": true}})).unwrap();
+    let mut h = harness(app);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "view.actualPixels", json!({})).unwrap();
+    h.run_steps(4);
+    h.input_mut().time = Some(ctx.input(|i| i.time) + 0.5);
+    h.step();
+
+    let target = [300.0, 100.0];
+    let press = |app: &mut PhotocraftApp| {
+        let at = screen_of(app, [target[0] as f32, target[1] as f32]);
+        assert!(open(app, Tool::Zoom, MenuKind::View, at, target, None));
+        pick(app, "view.zoomIn");
+    };
+    press(h.state_mut());
+    let (center, zoom) = view_of(h.state()).unwrap();
+    let displayed = ((zoom * f64::from(h.state().canvas_ppp())) as f32, [center.x as f32, center.y as f32]);
+    let first_target = h.state().ui.views[0].zoom;
+    assert!(displayed.0 < first_target, "the first target has not been drawn");
+    press(h.state_mut());
+    let view = &h.state().ui.views[0];
+    assert_eq!(view.zoom_from, Some(displayed));
+    assert!(view.zoom > first_target);
+}

@@ -1626,6 +1626,9 @@ fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, co
         let screen = if center { next.rect.center() } else { screen };
         craft::behavior::canvas::zoom::anchor(&mut next, screen, doc, zoom, ppp);
         view.request_zoom_animation(animated);
+        if animated {
+            view.zoom_from = Some(((shown.zoom * f64::from(ppp)) as f32, [shown.center.x as f32, shown.center.y as f32]));
+        }
         view.zoom_anchor = (animated && !center).then_some((point, [screen.x, screen.y]));
         view.set_from(&next, ppp);
     }
