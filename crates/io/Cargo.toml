@@ -19,6 +19,9 @@ testgen = []
 # Editable PDF import (experimental): painted paths and embedded-font text become editable
 # layers; unsupported constructs keep the raster page.
 pdf-editable = ["dep:kurbo"]
+# H.264 MP4 movie output (movie_out.rs). Off until a maintainer decides whether PhotoCraft may
+# ship the encoder (#14165).
+h264 = ["craft-video/h264-encode"]
 
 [dependencies]
 photocraft-geom = { workspace = true }
@@ -58,6 +61,10 @@ flate2 = { workspace = true }
 # craft-image-codecs already links; naming it adds no crate to the graph.
 png = "0.18"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Render Video's movie files (movie_out.rs).
+craft-media = { workspace = true }
+craft-video = { workspace = true }
+craft-color = { workspace = true }
 # The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
 ttf-parser = { version = "0.25", default-features = false }
 # PDF import (pdf_import.rs): craft-pdf rasterizes pages in pure Rust; no shared library ships.
@@ -79,3 +86,7 @@ proptest = { workspace = true }
 # Lossless JPEG XL encoder for the JPEG XL DNG preview test (tests only), as in photocraft-raw.
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
 zune-core = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Decodes the H.264 movies movie_out.rs writes, in its tests.
+craft-video = { workspace = true, features = ["h264-decode"] }

@@ -724,6 +724,18 @@ pub fn render_video_with(
         return Ok(json!({"frames": frames, "file": path}));
     }
 
+    // A movie: one file, every frame encoded in turn.
+    if is_movie_format(format) {
+        // As in the reference application, a document without a timeline has only image sequences.
+        if base.timeline.is_none() {
+            return Err(EngineError::BadParams {
+                cmd: "file.export.renderVideo".into(),
+                msg: "A movie needs a video timeline; render an image sequence instead.".into(),
+            });
+        }
+        return render_movie(p, format, &base, &plan, write, progress);
+    }
+
     // Image sequence.
     // PSD / PSB frames would embed the files linked smart objects name: not for a restricted session.
     let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
@@ -748,6 +760,105 @@ pub fn render_video_with(
         }
     }
     Ok(json!({"frames": files.len(), "dir": dir}))
+}
+
+/// Whether Render Video's `format` names a movie file (one file for every frame) rather than an
+/// image format.
+fn is_movie_format(format: &str) -> bool {
+    format.eq_ignore_ascii_case("mov") || format.eq_ignore_ascii_case("mp4")
+}
+
+/// The movie codec Render Video's `preset` (default the format's first) asks for in `format`.
+#[cfg(not(target_arch = "wasm32"))]
+fn movie_codec(p: &Value, format: &str) -> Result<photocraft_io::movie_out::MovieCodec> {
+    use photocraft_io::movie_out::MovieCodec;
+    let bad = |msg: String| EngineError::BadParams { cmd: "file.export.renderVideo".into(), msg };
+    let preset = match p.get("preset").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(v.as_str().ok_or_else(|| bad("`preset`: A preset name is required.".into()))?),
+    };
+    let codec = if format.eq_ignore_ascii_case("mov") {
+        // The reference application's MOV codec wasn't measured (#14165): the Animation presets
+        // write ProRes, which keeps the picture near-losslessly at any size.
+        match preset.unwrap_or("animationHigh") {
+            "animationHigh" => MovieCodec::ProRes4444,
+            "animationMedium" => MovieCodec::ProRes422Hq,
+            "uncompressed" => MovieCodec::Uncompressed,
+            other => return Err(bad(format!("`preset`: `{other}` isn't a MOV preset (animationHigh, animationMedium or uncompressed)."))),
+        }
+    } else {
+        match preset.unwrap_or("highQuality") {
+            "highQuality" => MovieCodec::H264,
+            // Their bit rates weren't measured (#14165).
+            "mediumQuality" | "lowQuality" => {
+                return Err(EngineError::Other(format!("the H.264 preset `{}` isn't available yet; use highQuality", preset.unwrap_or_default())));
+            }
+            other => return Err(bad(format!("`preset`: `{other}` isn't an H.264 preset (highQuality)."))),
+        }
+    };
+    if !codec.available() {
+        return Err(EngineError::Other(format!(
+            "{} movies can't be written by this build (whether PhotoCraft ships the encoder is still open, #14165); render a MOV or an image sequence instead",
+            codec.name()
+        )));
+    }
+    Ok(codec)
+}
+
+/// Render Video's movie output: every frame of `plan`, encoded in turn into one file named after
+/// the document.
+#[cfg(not(target_arch = "wasm32"))]
+fn render_movie(
+    p: &Value,
+    format: &str,
+    base: &Document,
+    plan: &RenderPlan,
+    mut write: impl FnMut(&str, &[u8]) -> Result<()>,
+    mut progress: impl FnMut(usize, usize) -> bool,
+) -> Result<Value> {
+    let codec = movie_codec(p, format)?;
+    let frames = plan.frames.len();
+    let fmt = base.pixel_format();
+    let bounds = base.bounds();
+    let out = Rect::from_xywh(0, 0, plan.size.0, plan.size.1);
+    let failed = |e: photocraft_io::movie_out::MovieError| EngineError::Other(format!("render the movie: {e}"));
+    let cancelled = || EngineError::Other("render cancelled".into());
+    let mut movie = photocraft_io::movie_out::MovieWriter::new(codec, plan.size.0, plan.size.1, plan.fps).map_err(failed)?;
+    let mut px = vec![[0.0f32; 4]; out.width() as usize * out.height() as usize];
+    for (i, &f) in plan.frames.iter().enumerate() {
+        let mut doc = base.clone();
+        if let Some(t) = &mut doc.timeline {
+            t.current = f;
+        }
+        sync(&mut doc);
+        plan.scaled(crate::file_cmds::flattened(&doc, fmt), bounds).read_rgba_into(out, &mut px);
+        movie.push(&px).map_err(|e| EngineError::Other(format!("render frame {f}: {e}")))?;
+        // The final report follows writing, so total means the file exists.
+        if !progress((i + 1).min(frames.saturating_sub(1)), frames) {
+            return Err(cancelled());
+        }
+    }
+    let bytes = movie.finish().map_err(failed)?;
+    let name = format!("{}.{}", safe_stem(&base.name), codec.extension());
+    write(&name, &bytes)?;
+    if !progress(frames, frames) {
+        return Err(cancelled());
+    }
+    let dir = p.get("dir").and_then(Value::as_str).unwrap_or("");
+    Ok(json!({"frames": frames, "file": format!("{dir}/{name}"), "codec": codec.name()}))
+}
+
+/// The web build writes no movie files: its workspace has no movie encoder.
+#[cfg(target_arch = "wasm32")]
+fn render_movie(
+    _: &Value,
+    _: &str,
+    _: &Document,
+    _: &RenderPlan,
+    _: impl FnMut(&str, &[u8]) -> Result<()>,
+    _: impl FnMut(usize, usize) -> bool,
+) -> Result<Value> {
+    Err(EngineError::Other("movie files can't be written in the web build; render an image sequence instead".into()))
 }
 
 /// Most pixels a side Render Video's `width` and `height` take, and most frames a second its
@@ -908,6 +1019,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+mod render_video_movie_tests;
 #[cfg(test)]
 mod render_video_range_tests;
 #[cfg(test)]

@@ -58,6 +58,8 @@ mod duotone_map;
 mod kra;
 pub mod linked;
 pub mod memory;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod movie_out;
 mod multichannel_map;
 mod ora;
 mod palette_map;
