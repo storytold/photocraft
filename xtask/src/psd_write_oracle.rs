@@ -81,7 +81,13 @@ fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
 
 /// Accept a case identifier that can safely name one output subdirectory.
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    if id.is_empty() || id.len() > 100 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return false;
+    }
+    // These names resolve to devices on Windows, so the case cannot hold its output files.
+    let name = id.to_ascii_uppercase();
+    let port = name.strip_prefix("COM").or_else(|| name.strip_prefix("LPT")).is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']));
+    !matches!(name.as_str(), "CON" | "PRN" | "AUX" | "NUL") && !port
 }
 
 /// Reject unsupported recipes, unsafe paths, duplicate IDs, and incomplete checks.
@@ -351,7 +357,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     validate(&recipes)?;
     let corpus = Path::new(corpus).canonicalize().map_err(|e| format!("corpus: {e}"))?;
     let cli = Path::new(cli).canonicalize().map_err(|e| format!("CLI: {e}"))?;
-    let cli_sha = crate::sha256::hex(&read_limited_to(&cli, 512 * 1024 * 1024)?);
+    let cli_sha = crate::sha256::hex(&read_limited_to(&cli, 2048 * 1024 * 1024)?);
     let output = Path::new(output);
     fs::create_dir(output).map_err(|e| format!("output directory must be new: {e}"))?;
     let revision = git(root, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
@@ -648,5 +654,26 @@ exit 1
         assert_eq!(verify(&[Check::Unchanged { path: "/n".into() }], &before, &after)[0]["status"], "pass");
         assert_eq!(verify(&[Check::ChangedTo { path: "/n".into(), value: json!(17) }], &json!({}), &after)[0]["status"], "pass");
         assert_eq!(verify(&[Check::Equals { path: "/m".into(), value: json!(1) }], &before, &after)[0]["status"], "fail");
+    }
+
+    #[test]
+    fn schema_rejects_windows_device_ids_but_allows_near_matches() {
+        let recipe = json!({"version":1,"corpus_revision":"pin","cases":[{"id":"case","base":"x.psd","base_sha256":"a".repeat(64),
+            "target":{"kind":"Text"},"checks":[{"op":"unchanged","path":"/name"}]}]});
+        let mut recipes: Recipes = serde_json::from_value(recipe).unwrap();
+        let mut reserved = vec!["CON".to_string(), "PRN".to_string(), "AUX".to_string(), "NUL".to_string()];
+        for n in 1..=9 {
+            reserved.extend([format!("COM{n}"), format!("LPT{n}")]);
+        }
+        for id in reserved {
+            for variant in [id.clone(), id.to_ascii_lowercase(), format!("{}{}", &id[..1], id[1..].to_ascii_lowercase())] {
+                recipes.cases[0].id = variant.clone();
+                assert_eq!(validate(&recipes), Err(format!("invalid or duplicate case id: {variant}")), "{variant}");
+            }
+        }
+        for id in ["console", "PRN-1", "auxiliary", "NUL_", "COM0", "COM10", "LPT0", "LPT10", "case-1"] {
+            recipes.cases[0].id = id.to_string();
+            assert!(validate(&recipes).is_ok(), "{id}");
+        }
     }
 }
