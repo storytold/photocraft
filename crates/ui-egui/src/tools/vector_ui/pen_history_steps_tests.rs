@@ -294,9 +294,10 @@ fn another_tool_keeps_its_own_step_names_over_the_pen_steps() {
 
 /// The options bar replays its last render while its version holds (`panels::region_versions::options_bar`), so each
 /// thing that row works from has to move the version on its own. A Pen path drawn click by click (#12890) changes
-/// them with no History step, so nothing else redraws the bar; the draft being drawn is pinned by
-/// `pen_enter_deselects_tests::enter_deselects_the_work_path_and_the_next_path_replaces_it`, and here the other two
-/// ingredients move alone, with no document command between the passes.
+/// those with no History step, so nothing else would redraw the bar. Here every ingredient moves alone, with no
+/// document command between the passes: the Paths panel's selection (the version every region shares already holds it),
+/// the Work Path the app hides (#12892) and the draft being drawn - which
+/// `pen_enter_deselects_tests::enter_deselects_the_work_path_and_the_next_path_replaces_it` pins as well.
 #[test]
 fn the_options_bar_row_follows_each_path_ingredient_on_its_own() {
     let mut app = app();
