@@ -1567,6 +1567,11 @@ impl Surface {
         } else {
             self.tiles.keys().filter(|c| !c.rect().intersect(&r).is_empty() && !out.tiles.contains_key(c)).copied().collect()
         };
+        if coords.is_empty() {
+            return;
+        }
+        // Adding tiles changes what `out` reads, so it is a new pixel state.
+        out.note_mutation();
         if out.format == self.format {
             for c in coords {
                 if let Some(t) = self.tiles.get(&c) {

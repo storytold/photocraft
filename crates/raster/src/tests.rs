@@ -1449,3 +1449,18 @@ fn convert_region_to_the_same_format_shares_tiles() {
     let (a, b) = (part.tile(TileCoord::new(0, 0)).unwrap(), src.tile(TileCoord::new(0, 0)).unwrap());
     assert!(Arc::ptr_eq(a, b));
 }
+
+/// Extending a region conversion with new tiles gives it a new generation; covering nothing new
+/// keeps the old one.
+#[test]
+fn convert_region_into_advances_the_generation_only_when_it_adds_tiles() {
+    for to in [PixelFormat::RGBA8, PixelFormat::new(ColorMode::Grayscale, SampleType::U16, true)] {
+        let src = region_convert_source(PixelFormat::RGBA8);
+        let mut part = src.convert_region(to, Rect::new(10, 10, 20, 20));
+        let before = part.generation();
+        src.convert_region_into(&mut part, Rect::new(12, 12, 18, 18));
+        assert_eq!(part.generation(), before, "{to:?}: nothing new");
+        src.convert_region_into(&mut part, Rect::new(TILE_SIZE + 1, 1, TILE_SIZE + 5, 5));
+        assert_ne!(part.generation(), before, "{to:?}: new tile");
+    }
+}
