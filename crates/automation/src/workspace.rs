@@ -770,17 +770,40 @@ fn read_font(dir: &Dir, name: &Path, max_bytes: u64) -> Result<Vec<u8>, String> 
     read_font_data(file, max_bytes)
 }
 
+/// How many links a font path may follow before it is refused.
+#[cfg(unix)]
+const FONT_LINK_DEPTH: u32 = 8;
+
 /// Opens a font file without blocking on a special file: the pathname can be replaced by a FIFO
-/// between the walk and this open, and a blocking open would never reach the limits.
+/// between the walk and this open, and a blocking open would never reach the limits. Parent
+/// folders resolve through cap-std, so a link swapped in among them cannot leave the read root;
+/// a link as the last name is followed here, refusing one that points outside.
 #[cfg(unix)]
 fn open_font(dir: &Dir, name: &Path) -> std::io::Result<std::fs::File> {
+    open_font_within(dir, name, 0)
+}
+
+#[cfg(unix)]
+fn open_font_within(dir: &Dir, name: &Path, depth: u32) -> std::io::Result<std::fs::File> {
     use std::os::fd::AsFd as _;
 
     use rustix::fs::{Mode, OFlags, openat};
-    match openat(dir.as_fd(), name, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK | OFlags::NOFOLLOW, Mode::empty()) {
+    if depth > FONT_LINK_DEPTH {
+        return Err(std::io::Error::other("too many font links"));
+    }
+    let (folder, last) = match name.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(parent) => (dir.open_dir(parent)?, name.file_name().ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?),
+        None => (dir.try_clone()?, name.file_name().ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?),
+    };
+    match openat(folder.as_fd(), last, OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK | OFlags::NOFOLLOW, Mode::empty()) {
         Ok(fd) => Ok(std::fs::File::from(fd)),
-        // A link this walk kept: cap-std resolves it inside the capability, as before.
-        Err(rustix::io::Errno::LOOP) => dir.open(name).map(cap_std::fs::File::into_std),
+        Err(rustix::io::Errno::LOOP) => {
+            let target = folder.read_link(last)?;
+            if target.is_absolute() {
+                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "font link points outside the read root"));
+            }
+            open_font_within(&folder, &target, depth + 1)
+        }
         Err(e) => Err(e.into()),
     }
 }

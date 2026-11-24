@@ -1739,3 +1739,16 @@ fn font_folder_links_inside_the_root_are_not_walked() {
     std::os::unix::fs::symlink(".", inside.join("fonts/alias")).unwrap();
     assert_eq!(workspace.read_font_files("fonts").unwrap(), [read_ok("a.ttf", b"a")]);
 }
+
+/// #3393: a link to a font file inside the read root still reads, through the non-blocking open
+/// that resolves the link itself instead of letting the kernel follow it. A target that climbs
+/// out of the folder stays refused, as cap-std resolves it.
+#[cfg(unix)]
+#[test]
+fn a_font_file_link_inside_the_root_is_read() {
+    let (inside, _, workspace) = roots("font-file-link");
+    write_file(&inside.join("real/a.ttf"), b"a");
+    std::os::unix::fs::symlink("a.ttf", inside.join("real/b.ttf")).unwrap();
+    let files = workspace.read_font_files("real").unwrap();
+    assert_eq!(files, [read_ok("a.ttf", b"a"), read_ok("b.ttf", b"a")], "{files:?}");
+}
