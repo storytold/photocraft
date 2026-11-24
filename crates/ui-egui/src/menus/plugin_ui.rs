@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use craft::menu::Row;
+use craft::ui::dialog::DialogId;
 
 /// Menu ids of installed plug-ins: `plugin.filter.<plug-in id>`.
 const PREFIX: &str = "plugin.filter.";
@@ -73,6 +74,25 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
     fixed.insert("id".into(), json!(pid));
     let d = crate::filter_dialog::open_with_spec(app, "plugin.run", &m.name, &m.params_notation(), fixed);
     Some(Ok(json!({"dialog": d.value().to_string()})))
+}
+
+/// Re-opens the dialog of the plug-in a smart filter recorded (`plugin.run`, stored as
+/// `{id, params}`) on its recorded settings, to edit the filter at the smart-filter `target`.
+/// `None` for a plug-in without parameters (nothing to edit, as for built-in filters); an error
+/// when the plug-in is no longer installed.
+pub fn open_smart_edit(app: &mut PhotocraftApp, recorded: &Value, target: Value) -> Result<Option<DialogId>, String> {
+    let pid = recorded.get("id").and_then(Value::as_str).unwrap_or_default();
+    let Some(plugin) = photocraft_plugins::registry::get(pid) else {
+        return Err(crate::i18n::fmt(tl!("The plug-in {id} that made this smart filter isn't installed."), &[("id", pid)]));
+    };
+    let m = plugin.manifest();
+    if m.params.is_empty() {
+        return Ok(None);
+    }
+    let mut fixed = Map::new();
+    fixed.insert("id".into(), json!(pid));
+    let settings = recorded.get("params").and_then(Value::as_object).cloned().unwrap_or_default();
+    Ok(Some(crate::filter_dialog::open_smart_edit_with_spec(app, "plugin.run", &m.name, &m.params_notation(), &fixed, &settings, target)))
 }
 
 #[cfg(test)]

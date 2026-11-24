@@ -7015,6 +7015,7 @@ dependencies = [
  "sys-locale",
  "tempfile",
  "toml",
+ "wat",
  "web-time",
  "winsafe",
 ]

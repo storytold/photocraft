@@ -110,6 +110,13 @@ pub(crate) fn params_command(app: &PhotocraftApp, target: &Value, command: &str,
     // replaces them: merged, a removed one stays stored and can override the edit (a stale
     // Channel Mixer `gray` is read over `red`, a stale Color Lookup `data` over `lut`).
     let replace = command.starts_with("image.adjustments.");
+    // A plug-in run is stored as `{id, params}` and re-rendered from `params` only; its dialog
+    // holds the plug-in's own keys beside `id`, so they go back under `params`, all of them.
+    let (params, replace) = if command == photocraft_engine::plugin_cmds::RUN {
+        (json!({"id": params.get("id"), "params": photocraft_engine::plugin_cmds::plugin_params(&params)}), true)
+    } else {
+        (params, replace)
+    };
     Ok(("layer.smartFilter.setParams".into(), json!({"layer": layer.0, "index": index, "params": params, "replace": replace})))
 }
 

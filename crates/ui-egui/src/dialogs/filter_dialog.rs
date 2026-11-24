@@ -656,6 +656,26 @@ pub fn open_smart_edit(app: &mut PhotocraftApp, command: &str, recorded: &Map<St
     Ok(crate::dialogs::params::open_param_unsaved(app, command, opening, target, build))
 }
 
+/// [`open_smart_edit`] for a dialog whose parameters follow `spec` (as [`open_with_spec`]): the
+/// `fixed` params (a plug-in id) stay through Alt+Reset, the `recorded` ones overlay the schema defaults.
+pub fn open_smart_edit_with_spec(
+    app: &mut PhotocraftApp,
+    command: &str,
+    label: &str,
+    spec: &str,
+    fixed: &Map<String, Value>,
+    recorded: &Map<String, Value>,
+    target: Value,
+) -> DialogId {
+    let params = params(app, command, spec);
+    let mut opening = DialogFields::new();
+    overlay(&params, fixed, &mut opening);
+    let reset = reset_values(&params, &opening);
+    overlay(&params, recorded, &mut opening);
+    let build = builder(app, command, title_of(label), params, reset, previews(command));
+    crate::dialogs::params::open_param_unsaved(app, command, opening, target, build)
+}
+
 /// The command parameters of the dialog values `fields`: the plain map, colours as `#rrggbb`,
 /// document choices as indices, and Radial Blur's centre as `centerX` / `centerY`. The preview and
 /// OK both build their parameters here, so they cannot differ.
