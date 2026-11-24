@@ -1114,11 +1114,12 @@ fn check_picker_parts(app: &PhotocraftApp, parts: [Option<bool>; 3]) -> std::res
     if on.iter().any(|b| *b) { Ok(()) } else { Err("brushPickerName, brushPickerStroke and brushPickerTip: at least one must stay on".into()) }
 }
 
-/// The picker footer slider: the preset cards' size scale (1 standard; 0.30 and
-/// below the tips drop their size numbers).
+/// The picker footer slider: the preset cards' size scale (1 standard), within the picker's range; below
+/// `GRID_BELOW` the presets show as the grid of tips.
 fn picker_scale_param(p: &Value) -> std::result::Result<Option<f32>, String> {
+    let range = craft::draw::ui::brush_presets::BrushPickerSettings::SCALE_RANGE;
     match num_field(p, "brushPickerScale")? {
-        Some(s) if !(0.15..=2.0).contains(&s) => Err("brushPickerScale must be between 0.15 and 2".into()),
+        Some(s) if !range.contains(&(s as f32)) => Err(format!("brushPickerScale must be between {} and {}", range.start(), range.end())),
         Some(s) => Ok(Some(s as f32)),
         None => Ok(None),
     }

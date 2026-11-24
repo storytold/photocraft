@@ -200,7 +200,7 @@ fn canvas_view(props: &mut CanvasProps<'_>, ui: &mut egui::Ui) {
         let brush = (**brush).clone();
         EraserRows { before: brush.clone(), brush, tolerance: tolerance.clone(), key: None }
     });
-    let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.parts);
+    let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.shown_parts());
     let picker = input.picker(bind_tracked!(props.state)).open_at(egui::pos2(props.at[0], props.at[1]), Bind::bound(&mut open));
     let picker = match eraser.as_mut() {
         Some(rows) => picker.compact(true).rows(|ui| rows.key = crate::bg_eraser_popup::rows(ui, &mut rows.brush, &mut rows.tolerance)),
@@ -253,7 +253,7 @@ pub(crate) fn show_field(ui: &mut egui::Ui, app: &mut PhotocraftApp, enabled: bo
 
 /// The picker field's view.
 fn field_view(props: &mut FieldProps<'_>, ui: &mut egui::Ui) {
-    let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.parts);
+    let mut input = PickerInput::new(props.presets, props.tip, props.face, props.current.clone(), props.state.shown_parts());
     let out = input.picker(bind_tracked!(props.state)).enabled(props.enabled).show(ui);
     let keys = if out.picks.is_empty() { Vec::new() } else { input.keys(ui) };
     props.out.send(FieldEvent(out, keys));

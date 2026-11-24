@@ -56,6 +56,10 @@ const PATTERNS: [(PatternStyle, &str); 4] =
 
 /// The largest dual brush tip, in pixels.
 const MAX_DUAL_SIZE: f64 = 2500.0;
+/// The tip grid's thumbnail size, as a factor of the grid's large thumbnail (48 pt): 32 pt, so the pane shows
+/// several tips across.
+const TIP_GRID_ZOOM: f64 = 2.0 / 3.0;
+
 /// The tip grids' height before they scroll.
 const GRID_HEIGHT: f32 = 104.0;
 /// The longest side of a tile made from a library pattern.
@@ -196,6 +200,7 @@ impl Pane<'_> {
         let parts = BrushCardParts::ALL.set(BrushCardPart::Name, false).set(BrushCardPart::Stroke, false);
         let source = brush_source(&self.app.session.tools.presets, parts);
         let mut state = PresetState::<BrushKey>::new();
+        state.zoom = TIP_GRID_ZOOM;
         let mut browser = PresetBrowser::new(tl!("Brush tips"), Bind::bound(&mut state), &source)
             .browser_id(egui::Id::unique(id))
             .view_lock(PresetView::Grid)
