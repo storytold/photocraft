@@ -463,6 +463,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let was_linked = app.ui.arrow_default == Some(target);
     let mut linked = was_linked;
     let recent_colors: Vec<Srgba> = crate::paint_picker::recent_colors(&app.session).into_iter().map(|c| Srgba::new(c[0], c[1], c[2], 1.0)).collect();
+    let sampled =
+        [fw::ShapePaint::Fill, fw::ShapePaint::Stroke].into_iter().find_map(|p| crate::screen_picker::take(app, ("shape-properties", p)).map(|c| (p, c)));
     let groups = crate::shape_gradient_ui::ShapeGradients::groups_of(&app.session.presets().gradients, fg, bg);
     let gradients = crate::shape_gradient_ui::ShapeGradients { groups, current: &app.session.presets().gradient, recent: &mut app.ui.recent_gradients, fg, bg };
     let current = [sh.fill.clone(), sh.stroke.as_ref().map(|s| s.paint.clone())];
@@ -476,12 +478,13 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     );
     let output = ShapePanel::new(label(tl!("Shape properties")), &shown, &appearance, ppi)
         .sections(true, sh.live.is_some())
+        .sampled(sampled)
         .stroke_open(Bind::bound(&mut app.ui.shape_stroke_open))
         .chips(|which, chip, chip_ui| crate::shape_paint_ui::decorate_chip(chip, which, &mut library, chip_ui))
         .fallbacks(Srgba::new(fg[0], fg[1], fg[2], fg[3]), Srgba::new(bg[0], bg[1], bg[2], bg[3]))
         .arrow_default(Bind::bound(&mut linked))
         .show(ui);
-    let fw::ShapePanelOutput { events, pick_color, out_of_range, .. } = output;
+    let fw::ShapePanelOutput { events, pick_color, screen_pick, out_of_range, .. } = output;
     let paint_gradients = [library.gradient(fw::ShapePaint::Fill), library.gradient(fw::ShapePaint::Stroke)];
 
     let mut applied = false;
@@ -533,6 +536,9 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
             _ => crate::shape_fill_ui::Paint::Stroke,
         };
         let _ = crate::shape_fill_ui::open_paint(app, which, Some(id), false, fg);
+    }
+    if let Some((which, gesture)) = screen_pick {
+        crate::screen_picker::hold(app, ui.ctx(), ("shape-properties", which), gesture);
     }
     // A Concavity typed past -50..50 % raises the reference's alert (#13258).
     if let Some(alert) = out_of_range {

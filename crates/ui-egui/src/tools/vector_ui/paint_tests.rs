@@ -707,3 +707,18 @@ fn path_mode_radius_leaves_the_active_shape_layer_alone() {
     assert_eq!(radii(h.state()), [10.0; 4], "the shape layer keeps its radius");
     assert_eq!(history(h.state()), before, "no edit");
 }
+
+/// The Properties panel's Fill popover eyedropper samples the screen and applies the colour to the layer's fill.
+#[test]
+fn properties_fill_eyedropper_applies_the_sampled_colour() {
+    let mut app = app("rgb", 8);
+    app.run("shape.create", json!({"rect": [20,20,80,60], "fill": "#2244aa", "stroke": null})).unwrap();
+    app.services.screen_capture = Some(std::sync::Arc::new(|| Box::new(craft::color_ui::ui::StillCapture::color(Srgba::rgb(1.0, 136.0 / 255.0, 0.0)))));
+    let mut h = harness(app, true);
+    chip(&h, "Fill").click();
+    h.run_steps(3);
+    h.get_by_label("Sample color from the screen").click();
+    h.run_steps(6);
+    let [r, g, b, _] = shape(h.state()).fill.as_ref().and_then(color_of).expect("a solid fill");
+    assert!((r - 1.0).abs() < 0.01 && (g - 136.0 / 255.0).abs() < 0.01 && b < 0.01, "the sampled orange is the fill, got {r} {g} {b}");
+}
