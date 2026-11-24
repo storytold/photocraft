@@ -5,6 +5,7 @@ use craft::imaging::ui::layer_style::HostedLayerStyle;
 use craft::ui::dialog::DialogId;
 use photocraft_doc::Effect;
 use photocraft_doc::effects::{FxPaint, Gradient, GradientStyle};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Map, Value, json};
 
 use super::{fx_of, gradient_field, specs, values_of};
