@@ -5,6 +5,15 @@ fn prepare_text(raw: &str) -> Result<Plan> {
 }
 
 #[test]
+fn empty_and_comment_only_graphs_leave_the_source_as_output() {
+    for raw in ["", " \r\n\t", "# pass through\n# keep the source"] {
+        let plan = prepare_text(raw).unwrap();
+        assert!(plan.steps.is_empty());
+        assert_eq!(plan.output, 0);
+    }
+}
+
+#[test]
 fn ordered_branch_and_reused_labels_lower_to_backward_native_inputs() {
     let plan =
         prepare_text("id=original invert-linear id=changed over aux=[ref=original gegl:invert-linear] ref=changed over aux=[ref=original invert-linear]")
