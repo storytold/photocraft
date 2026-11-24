@@ -154,8 +154,8 @@ pub struct ToolOptions {
     pub shape_stroke_gradient: Option<photocraft_doc::Fill>,
     pub corner_radius: f32,
     /// Shape tools' Align Edges: snap the drawn shape's box to whole pixels. On by default; the
-    /// Triangle (#13370) and Rectangle (#13346) tools show it, enabled in Shape mode only; the other
-    /// shape tools always snap.
+    /// Triangle (#13370), Rectangle (#13346) and Custom Shape (#13470) tools show it, enabled in
+    /// Shape mode only; the other shape tools always snap.
     pub align_edges: bool,
     pub polygon_sides: u32,
     /// The Polygon tool's corner radius in px for the next polygon (#13302): its own, not the
