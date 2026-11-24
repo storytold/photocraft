@@ -910,6 +910,9 @@ mod star_tool_tests;
 mod new_doc_bitmap_mode_tests;
 
 #[cfg(test)]
+mod new_doc_recent_items_tests;
+
+#[cfg(test)]
 mod transform_several_tests;
 
 #[cfg(test)]
