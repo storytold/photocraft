@@ -118,7 +118,9 @@ fn field_text(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> String {
 }
 
 /// The number the view field labelled `label` shows, as a `f64` for the cases whose size comes
-/// back through the document's screen mapping and is not a round integer.
+/// back through the document's screen mapping and is not a round integer. The parse is deliberately
+/// dot-based: the harness runs with the built-in (en) locale, so the field shows `0.5`; a locale
+/// switch in the framework would show `0,5` and this would need a locale pin, not a new parser.
 fn field_number(h: &Harness<'static, Box<PhotocraftApp>>, label: &str) -> f64 {
     let shown = field_text(h, label);
     shown.parse().unwrap_or_else(|e| panic!("the {label} field shows a number, not {shown:?} ({e})"))
