@@ -5,6 +5,7 @@ mod actions_panel_menu;
 mod actions_record_again;
 mod actions_single_history;
 mod affinity;
+mod align_edges;
 mod artboard_export_names;
 mod artboard_move_overflow;
 mod atn_adjustment_make_props;

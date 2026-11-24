@@ -98,6 +98,9 @@ mod custom_paper_tests;
 mod contact_sheet_subfolders_tests;
 
 #[cfg(test)]
+mod droplet_play_options_tests;
+
+#[cfg(test)]
 mod web_playback_tests {
     use std::sync::Arc;
 
