@@ -3,7 +3,8 @@
 //! order of the tones for every Radius and Strength.
 
 use super::*;
-use crate::hdr::{ToneMethod, tone_map};
+use crate::hdr::{MergeOptions, ToneMethod, merge, tone_map};
+use crate::photo_util::{linear_to_srgb, srgb_to_linear};
 
 /// The reference application's factory Radius and Strength, passed explicitly so the samples
 /// don't depend on the defaults (#14720).
@@ -138,12 +139,20 @@ fn strip(values: [f32; 4]) -> Vec<[f32; 4]> {
 }
 
 #[test]
-fn merge_to_hdr_local_adaptation_reaches_the_reference_from_the_reference_radiance() {
+fn this_tone_map_reaches_the_reference_merge_from_the_reference_radiance() {
     // The reference application's own 32-bit merge of #14023's scene (#14021): grey 128, ramp 26,
     // ramp 246 and the white patch. Its 16-bit Local Adaptation result of that merge (#14023):
-    // 35725, 14858 and 63103.
+    // 35725, 14858 and 63103. Merge to HDR Pro keys the scene to middle grey, tones it and encodes
+    // it (`hdr::tone_map`); here with this tone map, which #14023 will move the merge to.
     let mut px = strip([0.0531, 0.00074, 1.130, 1.341]);
-    tone_map(&mut px, 256, 64, &ToneMethod::LocalAdaptation(reference(6.0, 0.53)));
+    let log_mean = (px.iter().map(|q| f64::from(luma([q[0], q[1], q[2]]).max(1e-6)).ln()).sum::<f64>() / px.len() as f64).exp() as f32;
+    for q in &mut px {
+        q[..3].iter_mut().for_each(|v| *v *= 0.18 / log_mean);
+    }
+    hdr_toning(&mut px, 256, 64, &reference(6.0, 0.53));
+    for q in &mut px {
+        q[..3].iter_mut().for_each(|v| *v = linear_to_srgb(v.clamp(0.0, 1.0)));
+    }
     for (i, name, want) in [(0, "grey 128", 35725.0), (1, "ramp 26", 14858.0), (2, "ramp 246", 63103.0)] {
         let got = px[32 * 256 + i * 64 + 32][1] * 65535.0;
         assert!((got - want).abs() <= 0.08 * 65535.0, "{name}: {got:.0}, the reference gives {want}");
@@ -173,4 +182,52 @@ fn a_strong_local_contrast_at_a_low_gamma_stays_finite() {
     let mut checked = input;
     checked_hdr::process_with(&mut checked, 3, 1, &p, &photocraft_raster::Interrupt::NONE).unwrap();
     assert!(px.iter().flatten().zip(checked.iter().flatten()).all(|(a, b)| (a - b).abs() < 1e-6), "{px:?} vs {checked:?}");
+}
+
+/// #14023's scene: 300 x 200, a grey ramp in 10 px steps (rows 0-99, level round(x0 / 290 * 255)),
+/// a grey 128 band (rows 100-119) and red, green, blue, white and black 60 px patches (rows
+/// 120-179), shot at `ev` stops in 8 bits.
+fn hdr_scene_shot(ev: f32) -> Vec<[f32; 4]> {
+    let (w, h) = (300, 200);
+    (0..w * h)
+        .map(|i| {
+            let (x, y) = (i % w, i / w);
+            let level = |v: f32| v / 255.0;
+            let c = match y {
+                0..100 => [level((((x / 10 * 10) as f32) / 290.0 * 255.0).round()); 3],
+                100..120 => [level(128.0); 3],
+                120..180 => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]][x / 60],
+                _ => [0.0; 3],
+            };
+            let shot = c.map(|v| (linear_to_srgb((srgb_to_linear(v) * 2f32.powf(ev)).clamp(0.0, 1.0)) * 255.0).round() / 255.0);
+            [shot[0], shot[1], shot[2], 1.0]
+        })
+        .collect()
+}
+
+#[test]
+fn merge_to_hdr_local_adaptation_gets_no_worse_on_todays_merge() {
+    // Merge to HDR Pro keeps the mean-anchored tone map until #14023 moves it to the reference's
+    // radiance (#14723): on today's merge of #14023's scene its worst sample stays within main's
+    // 11530 levels of the reference at 16 bits (11435 here); the white-anchored map's is 17001.
+    let (w, h) = (300, 200);
+    let shots: Vec<Vec<[f32; 4]>> = [-2.0, 0.0, 2.0].map(hdr_scene_shot).into();
+    let refs: Vec<&[[f32; 4]]> = shots.iter().map(Vec::as_slice).collect();
+    let options = MergeOptions { exposures: vec![0.25, 1.0, 4.0], remove_ghosts: false, ghost_base: None, response: None };
+    let mut px = merge(w, h, &refs, &options).px;
+    let p = HdrToning { radius: 6.0, strength: 0.53, ..Default::default() };
+    tone_map(&mut px, w, h, &ToneMethod::LocalAdaptation(p));
+    // (x, y, the reference's 16-bit green) for ramp 0, 26, 62, 123, 185, 246, grey 128 and black.
+    let samples = [
+        (5, 50, 1538.0),
+        (35, 50, 14858.0),
+        (75, 50, 21840.0),
+        (145, 50, 33663.0),
+        (215, 50, 48003.0),
+        (285, 50, 63103.0),
+        (150, 110, 35725.0),
+        (270, 150, 1538.0),
+    ];
+    let worst = samples.iter().map(|&(x, y, want)| (px[y * w + x][1] * 65535.0 - want).abs()).fold(0.0, f32::max);
+    assert!(worst <= 11530.0, "the worst sample is {worst:.0} levels off the reference");
 }
