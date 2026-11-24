@@ -501,7 +501,7 @@ pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
             crate::frame_cmds::put_content(doc, frame_id, layer)?;
             *active = Some(frame_id);
         } else {
-            crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
+            crate::layer_place::insert_new(doc, *active, layer, place_slot(doc, *active));
             *active = Some(id);
         }
         if deselect {
@@ -510,6 +510,17 @@ pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"layer": id.0, "frame": frame.map(|f| f.0), "scale": scale * 100.0, "bounds": bounds, "smartObject": smart, "warnings": warnings}))
+}
+
+/// Where a placed layer goes: as a new layer that is edited right away
+/// ([`Place::AutoEditable`](crate::layer_place::Place::AutoEditable)), except that with an open
+/// group active it goes directly above the group, not inside it, as in the reference application
+/// (#14108). A closed group and documents with artboards (not measured) keep that rule.
+fn place_slot(doc: &Document, active: Option<LayerId>) -> crate::layer_place::Place {
+    let open_group = active
+        .and_then(|id| doc.layer(id))
+        .is_some_and(|l| l.frame.is_none() && matches!(&l.content, LayerContent::Group(g) if g.expanded && g.artboard.is_none()));
+    if open_group && !doc.layers.iter().any(|l| l.artboard().is_some()) { crate::layer_place::Place::Above } else { crate::layer_place::Place::AutoEditable }
 }
 
 pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {

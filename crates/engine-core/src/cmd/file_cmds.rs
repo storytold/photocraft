@@ -478,6 +478,10 @@ mod batch_log_format_tests;
 mod export_clut_cube_header_tests;
 
 #[cfg(test)]
+#[path = "file_cmds/place_group_stacking_tests.rs"]
+mod place_group_stacking_tests;
+
+#[cfg(test)]
 #[path = "file_cmds/layers_to_files_png_names_tests.rs"]
 mod layers_to_files_png_names_tests;
 
