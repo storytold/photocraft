@@ -128,7 +128,7 @@ pub(super) fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Forget PSD placed-layer data that no longer describes the smart object (its source changed):
 /// PSD export then writes fresh placed-layer blocks and embeds the new source.
-pub(crate) fn detach_psd(l: &mut Layer) {
+pub fn detach_psd(l: &mut Layer) {
     if let LayerContent::Smart(sm) = &mut l.content {
         sm.psd_raw = None;
     }

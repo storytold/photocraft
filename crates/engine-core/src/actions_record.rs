@@ -23,6 +23,36 @@ use serde_json::{Value, json};
 
 use crate::Session;
 
+/// Action recording and playback state ([`Session::recording`]): what the pipeline reads to
+/// journal steps into a recording, and the depth and step counters that bound playback, batches
+/// and scripts.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ActionRecording {
+    /// Journal length when recording started, and the action index being recorded into.
+    pub target: Option<(usize, usize)>,
+    /// Painting-tool strokes are recorded only when the user enables them for this session.
+    pub record_tools: bool,
+    /// Bumped by each `actions.record`, so a background job knows whether the recording it was
+    /// started in is still the one running when its result lands.
+    pub take: u64,
+    /// Nesting depth of `actions.play`, bounded by the playback stack limit.
+    pub playing: u8,
+    /// Active action names, for cycle detection in engine and desktop playback.
+    pub playback_stack: Vec<String>,
+    /// Number of steps executed by the current top-level playback tree.
+    pub playback_steps: u64,
+    /// Set for a batch nested in a played action or another batch: the playback counter it carries
+    /// is shared by every input, so a played action inside it does not restart the count.
+    pub budget_shared: bool,
+    /// How many batches (`file.automate.batch`, and droplets through it) are running inside one
+    /// another: each runs its steps in a scratch session that carries this on, plus one.
+    pub batch_depth: u8,
+    /// How many scripts (`file.scripts.browse`) are running inside one another.
+    pub script_depth: u8,
+    /// Steps run by the current top-level script and everything it calls.
+    pub script_steps: u64,
+}
+
 /// The active document as it was before a command ran, captured by the dispatcher.
 #[derive(Clone, Default)]
 pub(crate) struct Before {
@@ -56,7 +86,7 @@ pub(crate) fn portable(s: &Session, id: &str, mut params: Value, before: &Before
         return serde_json::json!({"offset": offset});
     }
     let Some(doc) = before.doc.as_deref() else { return params };
-    if id == "type.create" && s.actions.recording.is_some() && params.get("box").is_none() && doc.size.width > 0 && doc.size.height > 0 {
+    if id == "type.create" && s.recording.target.is_some() && params.get("box").is_none() && doc.size.width > 0 && doc.size.height > 0 {
         let x = params.get("x").and_then(Value::as_f64).unwrap_or(0.0);
         let y = params.get("y").and_then(Value::as_f64).unwrap_or(0.0);
         let x_percent = x / f64::from(doc.size.width) * 100.0;
@@ -153,7 +183,7 @@ pub(crate) fn fold_keystroke(s: &mut Session, id: &str, params: &Value, previous
     }
     // A new recording starts at a journal boundary. Its first edit cannot change an entry
     // before that boundary, or actions.stop would miss the edit altogether.
-    if s.actions.recording.is_some_and(|(start, _)| s.journal.len() <= start) {
+    if s.recording.target.is_some_and(|(start, _)| s.journal.len() <= start) {
         return Keystroke::None;
     }
     let Some((last, lp)) = s.journal.last_mut() else { return Keystroke::None };
@@ -222,7 +252,7 @@ pub(crate) fn tool_stroke(id: &str) -> bool {
 
 /// Visibility gestures name a layer for replay, since document-local ids change on another image.
 pub(crate) fn recorded_params(s: &Session, id: &str, mut p: Value) -> Value {
-    if s.actions.recording.is_none() || id != "layer.setProps" || p.get("visible").is_none() {
+    if s.recording.target.is_none() || id != "layer.setProps" || p.get("visible").is_none() {
         return p;
     }
     let Some(st) = s.active() else { return p };
