@@ -21,7 +21,7 @@ fn missing_name_app() -> Box<PhotocraftApp> {
 /// `On B`: Prefix, a Select of the absent layer B, Suffix.
 fn named_select_action(app: &mut PhotocraftApp) {
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(Action::new(
             "On B",
@@ -84,7 +84,7 @@ fn stop_on_the_message_ends_the_playback_with_nothing_undone() {
 fn continue_carries_the_rest_of_a_set_play() {
     let mut app = missing_name_app();
     named_select_action(&mut app);
-    app.session.actions.list.push(Action::new("Next", vec![ActionStep::new("layer.new.layer", json!({"name": "Next layer"}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Next", vec![ActionStep::new("layer.new.layer", json!({"name": "Next layer"}))])).unwrap();
     let v = play_targets(&mut app, &[0, 1], 0, 0).unwrap().unwrap();
     assert_eq!(v["failed"]["step"], 1, "{v}");
     assert_eq!(prompts_open(&app), 1);
@@ -102,12 +102,12 @@ fn continue_carries_the_rest_of_a_set_play() {
 fn a_called_actions_missing_layer_step_asks_and_continues_into_its_caller() {
     let mut app = missing_name_app();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(Action::new("Child B", vec![ActionStep::new("layer.select", json!({"name": "B"})), ActionStep::new("layer.new.layer", json!({"name": "Tail"}))]))
         .unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(Action::new(
             "Caller",
@@ -189,7 +189,7 @@ fn a_failure_that_names_no_layer_keeps_the_plain_report() {
         assert_eq!(runner::missing_layer_prompt(&app, &plain, &json!({"step": step, "id": plain.steps[step].command, "error": "x"})), None, "step {step}");
     }
     assert_eq!(runner::missing_layer_prompt(&app, &plain, &json!({"step": 9, "id": "layer.select", "error": "x"})), None, "no such step");
-    app.session.actions.list.push(plain).unwrap();
+    app.session.actions_mut().list.push(plain).unwrap();
     let v = play(&mut app, &json!({"action": "Plain"})).unwrap();
     report_play(&mut app, &v);
     assert_eq!(v["failed"]["step"], 1, "{v}");
@@ -212,7 +212,7 @@ fn a_name_the_document_has_in_another_case_is_not_missing() {
         None,
         "the engine finds Background for `background`, so the ask would skip a step that can never pass"
     );
-    app.session.actions.list.push(action).unwrap();
+    app.session.actions_mut().list.push(action).unwrap();
     let v = play(&mut app, &json!({"action": "Pass Through"})).unwrap();
     report_play(&mut app, &v);
     assert_eq!(v["failed"]["step"], 0, "{v}");
@@ -243,14 +243,14 @@ fn an_exact_case_name_on_a_lowercase_layer_is_not_missing() {
 fn a_refusal_report_at_a_layer_naming_start_step_is_not_the_ask() {
     let mut app = missing_name_app();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(Action::new(
             "Starts on B",
             vec![ActionStep::new("layer.select", json!({"name": "B"})), ActionStep::new("layer.new.layer", json!({"name": "Suffix"}))],
         ))
         .unwrap();
-    let action = app.session.actions.list.action(0).unwrap().clone();
+    let action = app.session.actions().list.action(0).unwrap().clone();
     let refused = json!({"step": 0, "id": "actions.play", "error": "action nesting exceeds 16 levels"});
     assert_eq!(
         runner::missing_layer_prompt(&app, &action, &refused),
