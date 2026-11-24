@@ -575,6 +575,8 @@ fn black_white_presets_distinguish_manual_edits_from_named_choices() {
     h.run_steps(4);
     assert_black_white_preset(&h, "Default");
     h.state_mut().run("layer.select", json!({"layer": id.0})).unwrap();
+    // Layer selection can keep the mask targeted. Return to the adjustment's controls.
+    h.state_mut().run("channel.target.composite", json!({})).unwrap();
     h.run_steps(4);
     assert_black_white_preset(&h, "Custom");
 
