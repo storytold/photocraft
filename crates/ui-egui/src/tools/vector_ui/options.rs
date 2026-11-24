@@ -221,11 +221,6 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
             .id_salt("pen-h")
             .side(SideLabel::new().scrub(false))
             .show(ui, |ui, _| NumberField::new(label(tl!("H:")), Bind::given(Some(h))).unit_kind(UnitKind::Pixels).show(ui));
-        // Align Edges (#12907): on by default and shown only in Shape mode; Path mode shows no
-        // paint row at all (the issue allows absent or greyed). The checkbox writes the option the
-        // Triangle's checkbox writes (#13370); Pen drawing keeps today's snapping until the
-        // wider-stroke rendering settles (#11756, #12688).
-        Checkbox::new(Bind::bound(&mut app.ui.tool_options.align_edges)).label(label(tl!("Align Edges"))).show(ui);
     }
     // Align Edges, enabled in Shape mode only (greyed in Path mode).
     super::alignment::pen_option(app, ui);

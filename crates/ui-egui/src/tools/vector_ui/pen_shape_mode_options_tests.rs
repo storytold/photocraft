@@ -27,7 +27,7 @@ fn bar(tool: Tool) -> Harness<'static, Box<PhotocraftApp>> {
     app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
     app.ui.tool = tool;
     let ctx = app.ctx().clone();
-    let mut h = Harness::builder().with_size(vec2(1800.0, 400.0)).with_step_dt(0.25).with_context(ctx).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(1800.0, 700.0)).with_step_dt(0.25).with_context(ctx).build_ui_state(
         move |ui, app: &mut Box<PhotocraftApp>| {
             crate::screen_picker::tick(app, ui.ctx());
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -190,7 +190,7 @@ fn a_fill_picked_in_the_pen_bar_paints_the_next_pen_shape() {
     h.state_mut().run("tools.setColors", json!({"foreground": [0.2, 0.4, 0.8, 1.0]})).unwrap();
     h.run_steps(2);
     chip(&h, "Fill:").click();
-    h.run_steps(3);
+    h.run_steps(4);
     click_swatch(&mut h, "RGB Green");
     square(&mut h);
     let sh = the_shape(&h);
@@ -222,7 +222,7 @@ fn a_pen_bar_pick_leaves_the_active_shape_layer_alone() {
     h.run_steps(2);
     let before = h.state().session.active().unwrap().history.past_len();
     chip(&h, "Fill:").click();
-    h.run_steps(3);
+    h.run_steps(4);
     click_swatch(&mut h, "RGB Green");
     let app = h.state();
     assert_eq!(color_of(the_shape(&h).fill.as_ref().expect("a fill")), [0.2, 0.4, 0.6, 1.0], "the active layer keeps its own fill");
@@ -310,19 +310,20 @@ fn typing_into_w_and_h_changes_nothing() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Done when 3: Align Edges on in Shape mode, absent in Path mode
+// Done when 3: Align Edges on in Shape mode, greyed in Path mode
 
-/// The checkbox is on and toggles in Shape mode; Path mode has no Fill / Stroke swatch, no W / H
-/// and no Align Edges.
+/// The checkbox is on and toggles in Shape mode; Path mode has no Fill / Stroke swatch, no W / H,
+/// and its Align Edges is greyed rather than hidden (main's #11756 model; the issue allows
+/// "absent or greyed").
 #[test]
-fn align_edges_is_on_in_shape_mode_and_absent_in_path_mode() {
+fn align_edges_is_on_in_shape_mode_and_greyed_in_path_mode() {
     let mut h = shape_bar();
     h.get_by_label("Align Edges").click();
     h.run_steps(3);
     assert!(!h.state().ui.tool_options.align_edges, "clicking toggles the option");
     assert_eq!(h.get_by_label("Align Edges").accesskit_node().toggled(), Some(Toggled::False));
     pick_mode(&mut h, "Path");
-    assert!(h.query_by_label("Align Edges").is_none(), "Path mode: no Align Edges");
+    assert!(h.query_by_label("Align Edges").is_some_and(|n| n.accesskit_node().is_disabled()), "Path mode: Align Edges greyed");
     assert!(h.query_by_role_and_label(Role::ColorWell, "Fill:").is_none(), "Path mode: no Fill swatch");
     assert!(h.query_by_role_and_label(Role::ColorWell, "Stroke:").is_none(), "Path mode: no Stroke swatch");
     assert!(h.query_by_label("W:").is_none(), "Path mode: no W");
@@ -353,8 +354,9 @@ fn the_stroke_width_and_type_stay_as_they_are_today() {
 // ---------------------------------------------------------------------------------------------
 // Neighbour cases: the shape tools' bar and the Pen's other modes
 
-/// The Shape tools' bar is unchanged: Rectangle has Fill and Stroke chips but no W / H and no
-/// Align Edges of its own (#13370 keeps that for the Triangle); the Triangle keeps its checkbox.
+/// The Shape tools' bar is unchanged: Rectangle has Fill and Stroke chips and, since main merged
+/// #11756, its one Align Edges (not a second one from this PR); no W / H fields (#2496); the
+/// Triangle keeps its checkbox.
 #[test]
 fn the_shape_tools_keep_their_own_bars() {
     let h = bar(Tool::Rectangle);
@@ -362,7 +364,7 @@ fn the_shape_tools_keep_their_own_bars() {
     assert!(h.query_by_role_and_label(Role::ColorWell, "Stroke").is_some(), "the Rectangle bar keeps its Stroke swatch");
     assert!(h.query_by_label("W:").is_none(), "the Rectangle bar still has no W field (#2496)");
     assert!(h.query_by_label("H:").is_none(), "the Rectangle bar still has no H field (#2496)");
-    assert!(h.query_by_label("Align Edges").is_none(), "the Rectangle bar still has no Align Edges (#11756)");
+    let _ = h.get_by_label("Align Edges"); // exactly one, main's #11756 checkbox, not a duplicate of ours
     let h = bar(Tool::Triangle);
     assert!(h.query_by_label("Align Edges").is_some(), "the Triangle keeps its Align Edges (#13370)");
 }
@@ -380,7 +382,9 @@ fn the_freeform_pen_shape_bar_gains_the_same_row() {
         assert!(h.query_by_label("H:").is_some(), "{tool:?} Shape mode: H");
         assert!(h.query_by_label("Align Edges").is_some(), "{tool:?} Shape mode: Align Edges");
         pick_mode(&mut h, "Path");
-        assert!(h.query_by_label("Align Edges").is_none(), "{tool:?} Path mode: no Align Edges");
+        let align = h.query_by_label("Align Edges");
+        assert!(align.is_none() || align.unwrap().accesskit_node().is_disabled(), "{tool:?} Path mode: Align Edges greyed or absent");
         assert!(h.query_by_role_and_label(Role::Button, "Shape").is_some(), "{tool:?} Path mode: Make: Shape stays");
     }
 }
+
