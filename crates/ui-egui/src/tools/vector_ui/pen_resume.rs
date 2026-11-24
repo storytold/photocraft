@@ -72,7 +72,7 @@ pub(super) fn remember_finish(app: &mut PhotocraftApp, draft: PenPath, before: &
 /// The draft given back belongs to the document state Undo went back to: its owner moves to that
 /// state (same target, options and colours), or `cancel_stale_pen` would take it for another
 /// document's and finish it on the next frame.
-fn rebind_owner(app: &PhotocraftApp, draft: &mut PenPath) {
+pub(super) fn rebind_owner(app: &PhotocraftApp, draft: &mut PenPath) {
     let Some(st) = app.session.active() else { return };
     match draft.owner.as_mut() {
         Some(owner) if owner.document == st.doc.id => {

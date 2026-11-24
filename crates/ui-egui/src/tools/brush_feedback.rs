@@ -36,7 +36,7 @@ pub(crate) fn show(ui: &mut egui::Ui, app: &mut PhotocraftApp, rect: egui::Rect,
         let tool = app.ui.tool;
         crate::stroke_constraint::show_line_preview(ui, app, at, tool, shift);
     }
-    app.brush_resize.show_preview(ui, app);
+    app.brush_resize.show_preview(ui, app, rect);
 }
 
 /// The Clone Source crosshair, while a Clone Stamp or Healing Brush stroke paints.

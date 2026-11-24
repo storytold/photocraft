@@ -227,7 +227,7 @@ fn a_refused_handle_press_over_the_control_channel_reaches_no_move_tool() {
     app.ui.tool_options.move_auto_select = true;
     accepted(&mut app, "ui.set", json!({"tool": "Move", "moveShowTransform": true, "zoom": 1.0, "center": [100, 100]}));
     let before = app.session.active().unwrap().doc.clone();
-    let selected = app.session.active().unwrap().selected_layers();
+    let selected = app.session.active().unwrap().selected_layers().to_vec();
     accepted(
         &mut app,
         "ui.pointer",
