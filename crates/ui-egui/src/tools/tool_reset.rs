@@ -287,7 +287,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             rect_ratio_height,
             rect_from_center,
         ),
-        Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
+        Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star => {
             reset!(
                 shape_mode,
                 shape_path_op,
@@ -301,6 +301,27 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
                 polygon_sides,
                 polygon_corner_radius,
                 line_weight
+            )
+        }
+        // The Custom Shape tool's gear settings are its own (#13465): Reset Tool gives Unconstrained
+        // with From Center off and W and H empty again.
+        Tool::CustomShape => {
+            reset!(
+                shape_mode,
+                shape_path_op,
+                shape_fill,
+                stroke_width,
+                shape_stroke,
+                shape_fill_gradient,
+                shape_stroke_gradient,
+                corner_radius,
+                align_edges,
+                polygon_sides,
+                line_weight,
+                custom_constraint,
+                custom_fixed_width,
+                custom_fixed_height,
+                custom_from_center,
             )
         }
         Tool::MixerBrush => reset!(mixer_combination),

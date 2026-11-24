@@ -1,8 +1,9 @@
 use craft::behavior::CanvasView;
 use craft::behavior::kurbo::{Point, Rect};
 use craft::draw::geometry::shape::ShapeGeometry;
-use craft::draw::ui::shape_drag::{BoxConstraints, ShapeKind};
+use craft::draw::ui::shape_drag::{BoxConstraint, BoxConstraints, ShapeKind};
 use craft::keymap::Mods;
+use photocraft_engine::presets::PresetsExt;
 
 use super::options::{draws_path, solid_paint};
 use super::{Color32, PhotocraftApp, Tool, Value, json, paint_param};
@@ -178,6 +179,64 @@ pub(super) fn store_constraints(o: &mut ToolOptions, constraints: &BoxConstraint
     o.rect_ratio_width = field(constraints.ratio.0);
     o.rect_ratio_height = field(constraints.ratio.1);
     o.rect_from_center = constraints.from_center;
+}
+
+/// The Custom Shape tool's gear (#13465) as the framework's [`BoxConstraints`], read from the
+/// preset the tool places: Defined Proportions takes the preset's own ratio, Defined Size its own
+/// size (both from its path bounds), Fixed Size the typed W and H, and From Center mirrors the box
+/// about the press. The one mapping the drag reads (`host::configure`).
+pub(super) fn custom_constraints_of(app: &PhotocraftApp) -> BoxConstraints {
+    let o = &app.ui.tool_options;
+    // Only the two preset-driven options read the preset; an ordinary drag looks nothing up.
+    let native = match o.custom_constraint.as_str() {
+        "definedProportions" | "definedSize" => preset_size(app),
+        _ => None,
+    };
+    custom_constraints(o, native)
+}
+
+/// The picked custom shape preset's size `[w, h]` from its path bounds, the same bounds `fit` maps:
+/// `None` when nothing is picked, the preset is gone, or its path has no usable bounds. The two
+/// preset-driven options then have nothing to hold the drag to, so it draws the dragged box.
+fn preset_size(app: &PhotocraftApp) -> Option<(f64, f64)> {
+    let name = app.ui.presets_ui.shape();
+    let path = app
+        .session
+        .presets()
+        .shapes
+        .iter()
+        .flat_map(|g| &g.items)
+        .find(|s| s.name == name)
+        .map(|s| &s.path)
+        .or_else(|| app.session.edit_state.custom_shapes.iter().find(|c| c.name == name).map(|c| &c.path))?;
+    let (x0, y0, x1, y1) = path.control_bounds()?;
+    let usable = x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite() && x1 > x0 && y1 > y0;
+    usable.then_some((x1 - x0, y1 - y0))
+}
+
+/// `o`'s gear over a preset of `native` size, the mapping [`custom_constraints_of`] applies.
+/// A 0 in a Fixed Size field is an empty field, as it starts, and a non-finite one is no size: the
+/// framework's `box_drag` treats a pair with an empty part as no constraint.
+fn custom_constraints(o: &ToolOptions, native: Option<(f64, f64)>) -> BoxConstraints {
+    let field = |v: f32| (v.is_finite() && v > 0.0).then_some(f64::from(v));
+    let mut c = BoxConstraints::default();
+    c.from_center = o.custom_from_center;
+    let preset = native.map(|(w, h)| (Some(w), Some(h)));
+    match o.custom_constraint.as_str() {
+        "definedProportions" => {
+            if let Some(ratio) = preset {
+                (c.constraint, c.ratio) = (BoxConstraint::Proportional, ratio);
+            }
+        }
+        "definedSize" => {
+            if let Some(size) = preset {
+                (c.constraint, c.fixed) = (BoxConstraint::FixedSize, size);
+            }
+        }
+        "fixedSize" => (c.constraint, c.fixed) = (BoxConstraint::FixedSize, (field(o.custom_fixed_width), field(o.custom_fixed_height))),
+        _ => {}
+    }
+    c
 }
 
 fn box_of(rect: &Rect) -> [f64; 4] {

@@ -183,6 +183,15 @@ pub struct ToolOptions {
     pub rect_ratio_height: f32,
     /// Rectangle tool › gear › From Center: every drag draws from its centre. Off to start.
     pub rect_from_center: bool,
+    /// Custom Shape tool › gear (#13465): how a drag sizes the placed shape: "unconstrained" (the
+    /// default), "definedProportions" (the picked preset's own ratio), "definedSize" (its own size)
+    /// or "fixedSize" (the W and H below).
+    pub custom_constraint: String,
+    /// Custom Shape tool › gear › Fixed Size W and H in px; 0 is an empty field, as they start.
+    pub custom_fixed_width: f32,
+    pub custom_fixed_height: f32,
+    /// Custom Shape tool › gear › From Center: every drag draws from its centre. Off to start.
+    pub custom_from_center: bool,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -521,6 +530,10 @@ impl Default for ToolOptions {
             rect_ratio_width: 1.0,
             rect_ratio_height: 1.0,
             rect_from_center: false,
+            custom_constraint: "unconstrained".into(),
+            custom_fixed_width: 0.0,
+            custom_fixed_height: 0.0,
+            custom_from_center: false,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
             path_options: PathOptionsSettings::default(),

@@ -68,9 +68,12 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
             .star_ratio(ratio)
             .line_weight(f64::from(o.line_weight))
             .mode(o.shape_mode);
-        // The gear belongs to the Rectangle tool alone.
+        // Each tool's own gear: the Rectangle's from its options, the Custom Shape's from its
+        // options and the preset it places (#13343, #13465).
         if tool == Tool::Rectangle {
             options = options.constraints(super::shapes::constraints_of(o));
+        } else if tool == Tool::CustomShape {
+            options = options.constraints(super::shapes::custom_constraints_of(app));
         }
         state.shapes.options(options).preview(true);
         return Which::Shapes;
