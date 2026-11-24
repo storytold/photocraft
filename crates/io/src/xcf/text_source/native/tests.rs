@@ -356,3 +356,81 @@ fn owned_legacy_latin1_fields_keep_editable_text_font_request_and_saved_pixels()
     assert_eq!(text.paragraphs[0].style.direction, TextDirection::Auto);
     assert_eq!(text.cache.as_ref().unwrap().pixel(5, 6), before);
 }
+
+fn mapped_alpha_markup(markup: &str, sample: SampleType) -> TextLayer {
+    let colors = NativeColors::new(&craft_cms::Builtin::Srgb.profile().to_bytes(), ColorMode::Rgb).unwrap();
+    let raw = format!(r#"(markup "{markup}") (font-size 12) (box-mode fixed) (box-width 80) (box-height 20) (color (color-rgba 0 0 1 0.25))"#);
+    let mut layer = saved(PixelFormat::new(ColorMode::Rgb, sample, true));
+    let pixels = layer.surface().unwrap().pixel(5, 6);
+    let generation = layer.surface().unwrap().generation();
+    let mapped = map_layer(
+        &mut layer,
+        &source(&raw),
+        NativeOptions { resolution: (72., 72.), offset: (5, 6), colors: Some(&colors) },
+        &mut NativeBudget::default(),
+        &mut Budget::default(),
+        &Interrupt::NONE,
+    )
+    .unwrap();
+    assert!(matches!(mapped, Mapping::Converted { .. }));
+    let LayerContent::Text(text) = layer.content else { panic!("editable markup") };
+    assert_eq!(text.cache.as_ref().unwrap().pixel(5, 6), pixels);
+    assert_eq!(text.cache.as_ref().unwrap().generation(), generation);
+    assert!(text.cache_uses_raster_blending);
+    text
+}
+
+fn run_color_at(text: &TextLayer, byte: usize) -> photocraft_color::Color {
+    let mut end = 0;
+    text.runs
+        .iter()
+        .find_map(|run| {
+            end += run.len;
+            (byte < end).then_some(run.style.color)
+        })
+        .unwrap()
+}
+
+#[test]
+fn rgb_markup_foregrounds_preserve_inherited_alpha_and_sibling_scopes_at_all_depths() {
+    // Pango's foreground/alpha attributes are independent for RGB; RGBA supplies both.
+    // Public reference: https://docs.gtk.org/Pango/pango_markup.html
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for foreground in ["red", "#f00", "#ff0000", "#fff000000", "#ffff00000000"] {
+            let markup = format!("<markup><span alpha='50%'>A<span foreground='{foreground}'>B</span>C</span>D</markup>");
+            let text = mapped_alpha_markup(&markup, sample);
+            assert_eq!(text.text, "ABCD");
+            for (index, alpha) in [(0, 0.5), (1, 0.5), (2, 0.5), (3, 0.25)] {
+                assert_eq!(run_color_at(&text, index).alpha, alpha, "{foreground}, byte {index}");
+            }
+            assert_eq!(&run_color_at(&text, 1).c[..3], &[1., 0., 0.]);
+            assert_eq!(&run_color_at(&text, 2).c[..3], &[0., 0., 1.]);
+            // Native saves retain these editable run attributes as well as the saved pixels.
+            let mut doc = photocraft_doc::Document::new("Markup alpha", photocraft_geom::Size::new(80, 20), ColorMode::Rgb, sample);
+            doc.layers.push(Layer::new("Editable", LayerContent::Text(text.clone())));
+            let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+            let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+            let LayerContent::Text(saved) = &reopened.layers[0].content else { panic!("native text") };
+            assert_eq!(saved.runs, text.runs);
+        }
+    }
+}
+
+#[test]
+fn rgba_and_explicit_markup_alpha_override_while_nested_rgb_only_changes_color() {
+    for (foreground, alpha) in [("#f008", 8. / 15.), ("#ff000080", 128. / 255.), ("#ffff000000008000", 32768. / 65535.)] {
+        let markup = format!("<markup><span alpha='50%'><span foreground='{foreground}'>A<span foreground='blue'>B</span></span>C</span></markup>");
+        let text = mapped_alpha_markup(&markup, SampleType::F32);
+        assert_eq!(text.text, "ABC");
+        assert!((run_color_at(&text, 0).alpha - alpha).abs() < 1e-6);
+        assert!((run_color_at(&text, 1).alpha - alpha).abs() < 1e-6);
+        assert_eq!(&run_color_at(&text, 1).c[..3], &[0., 0., 1.]);
+        assert_eq!(run_color_at(&text, 2).alpha, 0.5);
+    }
+    for attributes in ["alpha='75%' foreground='red'", "foreground='red' alpha='75%'"] {
+        let markup = format!("<markup><span alpha='50%'><span {attributes}>A</span>B</span></markup>");
+        let text = mapped_alpha_markup(&markup, SampleType::F32);
+        assert_eq!(run_color_at(&text, 0).alpha, 0.75);
+        assert_eq!(run_color_at(&text, 1).alpha, 0.5);
+    }
+}

@@ -63,7 +63,7 @@ fn size(value: &str, points: &mut f64, scale: &mut f64, explicit: &mut bool) -> 
     Ok(())
 }
 
-fn source_color(value: &str) -> Result<Color> {
+fn source_color(value: &str, inherited_alpha: f32) -> Result<Color> {
     if let Some(hex) = value.strip_prefix('#') {
         let (width, channels) = match hex.len() {
             3 => (1, 3),
@@ -75,7 +75,9 @@ fn source_color(value: &str) -> Result<Color> {
             16 => (4, 4),
             _ => return Err(unsupported("unmapped source markup color width")),
         };
-        let mut rgba = [1.; 4];
+        // RGB foreground changes no alpha attribute in Pango markup. Only an RGBA
+        // spelling supplies a replacement; a descendant can otherwise inherit opacity.
+        let mut rgba = [1., 1., 1., inherited_alpha];
         let denominator = ((1u32 << (width * 4)) - 1) as f32;
         for (index, sample) in rgba.iter_mut().take(channels).enumerate() {
             let value = hex.get(index * width..(index + 1) * width).ok_or_else(|| unsupported("source markup color is not ASCII hexadecimal"))?;
@@ -98,7 +100,7 @@ fn source_color(value: &str) -> Result<Color> {
         "gray" | "grey" => [128, 128, 128],
         _ => return Err(unsupported("source markup color name requires a native mapping")),
     };
-    Ok(Color::rgb(rgb[0] as f32 / 255., rgb[1] as f32 / 255., rgb[2] as f32 / 255.))
+    Ok(Color::rgba(rgb[0] as f32 / 255., rgb[1] as f32 / 255., rgb[2] as f32 / 255., inherited_alpha))
 }
 
 fn font_resource(config: &Config<'_>, name: &str, style: &mut CharStyle, budget: &mut NativeBudget) -> Result<bool> {
@@ -277,7 +279,7 @@ pub(super) fn runs(
                             _ => return Err(unsupported("invalid source strike-through setting")),
                         }
                     }
-                    AttributeKind::Foreground => style.color = source_color(value)?,
+                    AttributeKind::Foreground => style.color = source_color(value, style.color.alpha)?,
                     AttributeKind::Alpha => {
                         let (number, max) = value.strip_suffix('%').map_or((value, 65535.), |number| (number, 100.));
                         let value = number.parse::<f32>().map_err(|_| unsupported("invalid source markup alpha"))?;
