@@ -11,8 +11,7 @@ fn pixel(s: &mut crate::Session) -> [f32; 3] {
 
 fn filled(depth: u32, color: [f32; 3]) -> crate::Session {
     let mut s = crate::session();
-    s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
-    s.execute("edit.fill", json!({"color": color})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth, "background": "backgroundColor", "backgroundColor": color})).unwrap();
     s
 }
 
@@ -178,8 +177,7 @@ fn adjustment_layer_pickers_use_the_target_colors() {
 fn grayscale_pickers_map_to_the_targets_gray_level() {
     for kind in ["curves", "levels"] {
         let mut s = crate::session();
-        s.execute("file.new", json!({"width": 8, "height": 8, "mode": "grayscale"})).unwrap();
-        s.execute("edit.fill", json!({"color": [0.3, 0.3, 0.3]})).unwrap();
+        s.execute("file.new", json!({"width": 8, "height": 8, "mode": "grayscale", "background": "backgroundColor", "backgroundColor": [0.3, 0.3, 0.3]})).unwrap();
         set_target(&mut s, "shadows", "#404040");
         s.execute(&format!("image.adjustments.{kind}"), json!({"eyedropper": {"point": "black", "at": [2, 2]}})).unwrap();
         let got = pixel(&mut s);
