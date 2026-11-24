@@ -2,6 +2,7 @@
 //! after a restart for what the preferences keep. Cancel and a failed run store nothing.
 
 use craft::ui::dialog::DialogId;
+use photocraft_engine::prefs::SavedPrefsExt;
 use serde_json::{Value, json};
 
 use super::contact_sheet_layout_tests::{H, field, harness, image_folder, set};
