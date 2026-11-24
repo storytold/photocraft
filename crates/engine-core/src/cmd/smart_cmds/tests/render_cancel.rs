@@ -1,6 +1,6 @@
 use super::*;
 use crate::cmd::smart_cmds::rendering::{place_in, refresh_or_fail_in, render_with_warnings_in};
-use crate::cmd::smart_cmds::source::{flattened_source, flattened_source_with, source_decode_count, source_image, source_surface_from_buffer};
+use crate::cmd::smart_cmds::source::{cache_get, flattened_source, flattened_source_with, source_cache_key, source_decode_count, source_surface_from_buffer};
 use photocraft_doc::StackMode;
 use photocraft_raster::Interrupt;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -111,8 +111,11 @@ fn a_cancel_at_any_check_stops_the_placement_of_every_source_type() {
             }
             assert!(matches!(result, Err(EngineError::Cancelled)), "{label}: a cancel at check {n} gave {:?}", result.err());
             // A cancel after the source was decoded may keep the decoded source, never a part of it.
-            if source_decode_count(&bytes, fmt) > 0 {
-                let cached = source_image(&name, &bytes, fmt).unwrap();
+            // Read the entry the placement wrote, under its own key, without decoding on a miss.
+            let key = source_cache_key(&name, &bytes, fmt, Some(photocraft_io::svg::is_svg(&bytes)));
+            let entry = cache_get(&key);
+            assert_eq!(entry.is_some(), source_decode_count(&bytes, fmt) > 0, "{label}: a cancel at check {n} cached the source under another key");
+            if let Some(cached) = entry {
                 let full = flattened_source(&decode_source(&name, &bytes).unwrap(), fmt).unwrap();
                 assert_eq!(
                     cached.surface.read_region(cached.bounds),
