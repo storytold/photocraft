@@ -10,6 +10,7 @@ pub struct DocState {
     /// Anchor of range selection (the last plainly or command-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
+    pub(crate) open_generation: u64,
     /// An import-only document must not acquire its source as its Save path.
     pub source_read_only: bool,
     /// Runtime-only source writeback protection, not persisted document data or resource permission.
@@ -141,6 +142,7 @@ impl DocState {
             history,
             layer_anchor: active_layer,
             path,
+            open_generation: 0,
             source_read_only: false,
             protected_import_source: None,
             revision: 1,
@@ -169,6 +171,11 @@ impl DocState {
             pixel_revision: 0,
         }
     }
+    /// Identifies this opening even when a native file reuses its persisted document ID.
+    pub fn open_generation(&self) -> u64 {
+        self.open_generation
+    }
+
     /// The History panel snapshots, oldest first.
     pub fn snapshots(&self) -> &[history_cmds::Snapshot] {
         &self.snapshots

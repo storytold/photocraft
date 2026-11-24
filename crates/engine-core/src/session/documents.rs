@@ -221,6 +221,7 @@ impl Session {
         }
         self.open_document_order.push(doc.id);
         let mut st = DocState::new(doc, path);
+        st.open_generation = self.documents_generation.wrapping_add(1);
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
         st.history.max_bytes = self.prefs.get().performance.history_cap_bytes();
         st.history.non_linear = self.prefs.get().history_options.allow_non_linear_history;
@@ -230,8 +231,8 @@ impl Session {
             st.snapshots_mut().clear();
         }
         self.pcraft_caches.insert(st.doc.id, Default::default());
+        self.documents_generation = st.open_generation;
         self.docs.push(craft_tracked::Tracked::new(st));
-        self.documents_generation = self.documents_generation.wrapping_add(1);
         let i = self.docs.len() - 1;
         self.active = Some(i);
         self.note_active_change();
