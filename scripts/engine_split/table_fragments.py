@@ -14,7 +14,8 @@ for the old table dropped). `--head` is the branch commit from before the rebase
   changed  the entry in its fragment is replaced by HEAD's text (if the fragment still has
            BASE's text; otherwise it is reported as a CONFLICT and left alone);
   added    the entry goes after its predecessor's entry, in the predecessor's fragment, and its id
-           goes after the predecessor's id in command_ids.txt;
+           goes after the predecessor's id in command_ids.txt (UNPLACED when its handler is in a
+           crate the predecessor's fragment can't reach);
   removed  the entry and its id are deleted (if the fragment still has BASE's text).
 The adjustment table and its loop (`ADJ`, between the `vec![...]` and the `v.extend(...)` list) are
 three-way merged into table/image/adjustments.rs. Any other change inside `build()` (the module
@@ -235,6 +236,25 @@ ADJ_START = "    let mut v = Vec::new();\n"
 ADJ_END = "\n    v\n}"
 
 
+def fragment_crate(path):
+    """The crate whose source holds a fragment (`crates/engine-<crate>/src/...`)."""
+    m = re.match(r"crates/engine-([a-z]+)/", path)
+    return m.group(1) if m else "core"
+
+
+def handler_crates(entry):
+    """The cut crates (not core) whose modules the entry names as `<module>::`."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from engine_cut import units
+
+    named = set(re.findall(r"\b([a-z_][a-z0-9_]*)::", norm(entry)))
+    out = set()
+    for c in {line.rstrip("\n").split("\t")[-1] for line in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "crates.tsv")) if "\t" in line} - {"core"}:
+        if os.path.isdir(f"crates/engine-{c}/src") and named & {u.split("/")[-1] for u in units(c)}:
+            out.add(c)
+    return out
+
+
 def add_imports(fr, path, entry, known):
     """Add names the entry uses from cmd.rs to the fragment's `use crate::cmd::{..}` list."""
     t = fr.files[path]
@@ -297,6 +317,10 @@ def main():
             report.append(f"UNPLACED {cid}: no predecessor in the fragments")
             continue
         path, pe = fr.find(pred)
+        owners = handler_crates(text) - {fragment_crate(path)}
+        if owners:
+            report.append(f"UNPLACED {cid}: its handler is in photocraft-engine-{', '.join(sorted(owners))}, which {path} can't reach; place it by hand")
+            continue
         comma = "" if pe.rstrip().endswith(",") else ","
         fr.replace(path, pe, pe.rstrip() + comma + pe[len(pe.rstrip()) :] + "\n" + text)
         ids.insert(ids.index(pred) + 1, cid)

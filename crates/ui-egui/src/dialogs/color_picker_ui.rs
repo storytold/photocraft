@@ -12,6 +12,7 @@ use craft::cms::convert::CmykConverter;
 use craft::color_ui::ui::{ColorPickerDialog, ColorPickerResult, PickedColor};
 use craft::theme::{ModelValues, Srgba};
 use craft::ui::dialog::{DialogId, DialogResult};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog};
 use craft::ui::runtime::requests::ColorRequest;
 use photocraft_doc::{DocId, LayerId};
 use photocraft_engine::color_cmds::ColorExt;
@@ -191,7 +192,7 @@ pub fn open(app: &mut PhotocraftApp, target: &str) -> DialogId {
     let color = Srgba::from_rgb_array(rgb);
     let mut dialog = if background { ColorPickerDialog::background(color) } else { ColorPickerDialog::foreground(color) };
     // A colour that was picked as CMYK shows the inks it was picked as, not what its sRGB stand-in converts to (#4196).
-    if let Some(inks) = app.session.tools.picked_cmyk(rgb) {
+    if let Some(inks) = app.session.tools.picked_role_cmyk(usize::from(background)) {
         dialog = dialog.kept(inks_model(inks));
     }
     launch(app, dialog, None, if background { PickTarget::Background } else { PickTarget::Foreground })
@@ -237,10 +238,32 @@ fn titled(request: ColorRequest) -> ColorRequest {
     }
 }
 
+/// Ink metadata lives beside its swatch so Reset restores both as one selection.
+pub(crate) fn ink_field(key: &str) -> String {
+    format!("{key}Cmyk")
+}
+
+pub(crate) fn ink_value(color: Srgba, inks: Option<[f32; 4]>) -> FieldValue {
+    FieldValue::Text(inks.map(|inks| json!([rgb_hex(color), inks]).to_string()).unwrap_or_default())
+}
+
+pub(crate) fn request_inks(fields: &DialogFields, key: &str, color: Srgba) -> Option<[f32; 4]> {
+    let (rgb, inks): (String, [f32; 4]) = serde_json::from_str(fields.text(&ink_field(key))?).ok()?;
+    (rgb == rgb_hex(color) && inks.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))).then_some(inks)
+}
+
 /// Opens the colour child of `parent`'s `request`; its OK waits for [`answer_for`].
 pub(crate) fn open_for_request(app: &mut PhotocraftApp, parent: DialogId, request: ColorRequest) -> DialogId {
     let target = PickTarget::Request { parent, key: request.key.clone() };
-    launch(app, ColorPickerDialog::from_request(titled(request)), Some(parent), target)
+    let inks = request.color.and_then(|color| {
+        let dialog = app.framework.dialogs.get_by_id::<HostedParamDialog>(parent)?;
+        request_inks(dialog.fields(), &request.key, color)
+    });
+    let mut dialog = ColorPickerDialog::from_request(titled(request));
+    if let Some(inks) = inks {
+        dialog = dialog.kept(inks_model(inks));
+    }
+    launch(app, dialog, Some(parent), target)
 }
 
 /// The confirmed colour of the child opened for `parent`, once, with the request's key. The first answer
@@ -377,7 +400,7 @@ fn close(app: &mut PhotocraftApp, id: DialogId, picked: Option<PickedColor>) {
 }
 
 fn set_tool_color(app: &mut PhotocraftApp, which: &str, picked: &PickedColor) -> Result<Value, String> {
-    let mut params = json!({ which: rgb_hex(picked.color) });
+    let mut params = json!({ which: picked.color.to_rgb_array() });
     // The CMYK values the person entered stay the colour's inks: a CMYK document is filled with them (#4196).
     if let Some(inks) = inks_of(picked) {
         params[format!("{which}Cmyk")] = json!(inks);
@@ -410,6 +433,9 @@ fn commit(app: &mut PhotocraftApp, _id: DialogId, target: PickTarget, picked: &P
         PickTarget::SolidFill { document, layer } => crate::solid_fill_ui::confirm(app, *document, *layer, picked),
         PickTarget::NewSolidFill { document } => crate::solid_fill_ui::confirm_new(app, *document, picked),
         PickTarget::Request { parent, key } => {
+            if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(*parent) {
+                dialog.set_field(ink_field(key), ink_value(picked.color, inks_of(picked)));
+            }
             app.color_answers.push((*parent, key.clone(), picked.color));
             Ok(json!({ "color": color }))
         }

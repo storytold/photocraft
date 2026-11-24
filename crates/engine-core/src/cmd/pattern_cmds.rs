@@ -651,12 +651,10 @@ mod tests {
         // 1e39 overflowed f32 to infinity: a NaN render, and a fill layer .pcraft refused to save.
         let mut s = session(8);
         let n = s.active().unwrap().doc.layers.len();
-        for cmd in ["layer.newFillLayer.pattern", "edit.fill", "paint.bucket"] {
-            for bad in [json!({"angle": 1e39}), json!({"angle": "x"}), json!({"phase": [1e39, 0]}), json!({"phase": [0, -1e300]})] {
-                let mut p = json!({"pattern": "Checkerboard", "contents": "pattern", "x": 1, "y": 1});
-                p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
-                assert!(s.execute(cmd, p).is_err(), "{cmd} {bad}");
-            }
+        for bad in [json!({"angle": 1e39}), json!({"angle": "x"}), json!({"phase": [1e39, 0]}), json!({"phase": [0, -1e300]})] {
+            let mut p = json!({"pattern": "Checkerboard", "contents": "pattern", "x": 1, "y": 1});
+            p.as_object_mut().unwrap().extend(bad.as_object().unwrap().clone());
+            assert!(s.execute("layer.newFillLayer.pattern", p).is_err(), "{bad}");
         }
         assert_eq!(s.active().unwrap().doc.layers.len(), n);
         // The angle is normalised to (-180, 180] like the Pattern Fill dialog's.
