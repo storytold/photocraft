@@ -5,6 +5,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 const RECORD: &str = "nightly-session.json";
 const LEASE: &str = "nightly-session.lock";
@@ -23,6 +24,22 @@ fn regular_or_missing(path: &Path) -> io::Result<bool> {
         Ok(_) => Err(io::Error::other("Nightly session state must be a regular file, not an alias or directory")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
+    }
+}
+
+/// The owner's session, shared by the app's exit hook (macOS) and the code after the event loop.
+/// On macOS every quit ends the process inside AppKit's terminate, after eframe's `on_exit` and
+/// before `eframe::run_native` could return, so the exit hook finishes it there; the return path
+/// still runs for a start that created no window.
+pub type Shared = Arc<Mutex<Option<Session>>>;
+
+/// The controlled return ([`Session::finish`]) by whichever path comes first; later calls do nothing.
+pub fn finish_once(shared: &Shared, unclean_notice_shown: bool) {
+    let watch = shared.lock().unwrap_or_else(PoisonError::into_inner).take();
+    if let Some(watch) = watch
+        && let Err(error) = watch.finish(unclean_notice_shown)
+    {
+        log::warn!("Nightly session state was left intact: {error}");
     }
 }
 
@@ -174,6 +191,23 @@ mod tests {
         assert!(!clean.previous_unclean());
         clean.finish(false).unwrap();
         assert!(!fixture.0.join(RECORD).exists());
+    }
+
+    #[test]
+    fn the_exit_hook_and_the_return_path_finish_the_session_once() {
+        let _no_spawns = crate::no_child_spawns();
+        let fixture = Fixture::new();
+        let shared: Shared = Arc::new(Mutex::new(Session::begin(Some(&fixture.0), "quitting", None).unwrap()));
+        // The exit hook (macOS quit: the only path that runs there).
+        finish_once(&shared, false);
+        assert!(!fixture.0.join(RECORD).exists(), "a quit that ran the exit hook is a clean exit");
+        // Elsewhere the return path runs too, by then possibly after a successor took the profile.
+        let successor = Session::begin(Some(&fixture.0), "successor", None).unwrap().unwrap();
+        assert!(!successor.previous_unclean());
+        let record = std::fs::read(fixture.0.join(RECORD)).unwrap();
+        finish_once(&shared, false);
+        assert_eq!(std::fs::read(fixture.0.join(RECORD)).unwrap(), record, "the second finish must not touch a successor's record");
+        successor.complete().unwrap();
     }
 
     #[test]

@@ -140,7 +140,7 @@ impl EngineError {
 
 /// Maps an io open/import failure to the engine's typed errors, preserving the memory fields the
 /// UI, control channel and agents need to answer or explain it.
-pub(crate) fn io_open_error(name: &str, error: photocraft_io::IoError) -> EngineError {
+pub fn io_open_error(name: &str, error: photocraft_io::IoError) -> EngineError {
     use photocraft_io::IoError;
     match error {
         IoError::PsdApprovalRequired { required, soft_limit, hard_limit, available_ram } => {

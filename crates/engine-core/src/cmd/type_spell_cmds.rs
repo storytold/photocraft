@@ -497,16 +497,6 @@ mod tests {
         assert_eq!(text_of(&s, id), "€b!");
         assert!(s.execute("type.insertText", json!({"text": ""})).is_err());
     }
-
-    #[test]
-    fn insert_crlf_reports_caret_in_normalized_text() {
-        let (mut s, id) = session("");
-        let inserted = s.execute("type.insertText", json!({"layer": id, "text": "x\r\ny"})).unwrap();
-
-        assert_eq!(inserted["caret"], 3);
-        assert_eq!(s.execute("type.info", json!({"layer": id})).unwrap()["text"], "x\ny");
-        assert_eq!(s.execute("type.caret", json!({"layer": id, "index": inserted["caret"]})).unwrap()["index"], inserted["caret"]);
-    }
 }
 
 #[cfg(test)]

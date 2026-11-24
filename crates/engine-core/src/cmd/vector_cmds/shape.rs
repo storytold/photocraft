@@ -397,7 +397,7 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
     }))
 }
 
-pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
+pub fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
     if let Some(st) = s.active() {
         let locks = st.doc.effective_locks(id);
         if locks.all || locks.pixels {
@@ -699,7 +699,7 @@ fn bake_components(sh: &mut ShapeLayer, tol: f64) -> Result<()> {
 /// inverted path (a vector mask's) stays inverted around the merged area. An open subpath is
 /// refused: tracing its fill would close it, or drop a straight one or a lone anchor (a dot under
 /// a round or square cap), losing the stroked geometry.
-pub(crate) fn bake_path(path: &Path, tol: f64) -> Result<Path> {
+pub fn bake_path(path: &Path, tol: f64) -> Result<Path> {
     if path.subpaths.iter().any(|sp| !sp.closed && !sp.knots.is_empty()) {
         return Err(EngineError::Other("Merge Shape Components needs closed paths: close or delete the open subpaths first".into()));
     }

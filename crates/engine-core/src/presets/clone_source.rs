@@ -25,7 +25,7 @@ use crate::{Result, Session};
 pub const SLOTS: usize = 5;
 
 /// A stroke from a slot whose source document was closed.
-pub(crate) const SOURCE_CLOSED: &str = "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)";
+pub const SOURCE_CLOSED: &str = "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct CloneSource {
@@ -214,7 +214,7 @@ pub fn transform_matrix(scale: [f64; 2], rotation_deg: f64, flip_h: bool, flip_v
 
 /// Null optional coordinates are omitted. Geometry, sampling and commit metadata must agree
 /// on this decision so an empty optional field cannot switch the source document.
-pub(crate) fn uses_slot(p: &Value) -> bool {
+pub fn uses_slot(p: &Value) -> bool {
     ["source", "offset"].into_iter().all(|key| p.get(key).is_none_or(Value::is_null))
 }
 
