@@ -13,7 +13,7 @@ use photocraft_color::Color;
 use serde::{Deserialize, Serialize};
 
 /// Kerning mode (Photoshop: Metrics, Optical, 0).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum Kerning {
     /// Font kerning (`kern` feature).
     #[default]
@@ -24,7 +24,7 @@ pub enum Kerning {
     Off,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum Caps {
     #[default]
     Normal,
@@ -34,7 +34,7 @@ pub enum Caps {
 
 /// Superscript / subscript (Photoshop's `FontBaseline`). The run is drawn smaller and raised or
 /// lowered; `size_pt` and `baseline_shift_pt` keep their own values.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum FontBaseline {
     #[default]
     Normal,
@@ -43,21 +43,21 @@ pub enum FontBaseline {
 }
 
 /// An OpenType feature setting, e.g. `{ tag: "ss01", value: 1 }`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct FontFeature {
     pub tag: String,
     pub value: u16,
 }
 
 /// A variable-font axis setting, e.g. `{ axis: "wght", value: 650.0 }`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct FontVariation {
     pub axis: String,
     pub value: f32,
 }
 
 /// Character style (Photoshop's Character panel).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct CharStyle {
     /// Family name ("Inter"). Empty = the default family.
@@ -147,13 +147,13 @@ impl Default for CharStyle {
 }
 
 /// A character style applied to `len` UTF-8 bytes.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct TextRun {
     pub len: usize,
     pub style: CharStyle,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum TextAlign {
     #[default]
     Left,
@@ -175,7 +175,7 @@ impl TextAlign {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum TextDirection {
     /// From the first strong character (Unicode bidi rules).
     #[default]
@@ -185,7 +185,7 @@ pub enum TextDirection {
 }
 
 /// Paragraph style (Photoshop's Paragraph panel).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 #[serde(default)]
 pub struct ParagraphStyle {
     pub align: TextAlign,
@@ -221,7 +221,7 @@ impl Default for ParagraphStyle {
 }
 
 /// A paragraph style applied to `len` UTF-8 bytes (whole paragraphs, including the break).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct ParagraphRun {
     pub len: usize,
     pub style: ParagraphStyle,
@@ -230,7 +230,7 @@ pub struct ParagraphRun {
 /// Point text grows from its anchor (text-space origin = first baseline at the anchor);
 /// paragraph (box) text wraps inside a rectangle; path text runs along a curve; area text
 /// wraps inside a closed path.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum TextShape {
     #[default]
     Point,
@@ -258,7 +258,7 @@ pub enum TextShape {
     Area { path: super::vector::Path },
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum Orientation {
     #[default]
     Horizontal,
@@ -266,7 +266,7 @@ pub enum Orientation {
     Vertical,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub enum AntiAlias {
     None,
     Sharp,
@@ -283,7 +283,7 @@ pub enum AntiAlias {
 
 /// Warp text settings (Photoshop `warp` descriptor), applied to the glyph outlines by
 /// `photocraft-text` (see its `warp` module) and round-tripped through PSD.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
 pub struct TextWarp {
     /// `warpNone`, `warpArc`, `warpFlag`, …
     pub style: String,

@@ -221,11 +221,20 @@ impl PhotocraftApp {
                 }
             }
             Err(e) => {
+                if id == "file.scripts.imageProcessor" && e == "There were no source files that could be opened by PhotoCraft." {
+                    crate::dialogs::alerts::alert(self, e.clone());
+                }
                 self.ui.status = e.clone();
                 self.ui.status_error = true;
-                if id == "image.applyDataSet" && e == photocraft_engine::DATA_SET_LAYER_LOCKED {
-                    // The reference application refuses a locked type layer with an alert (#14499).
-                    let _ = crate::dialogs::alerts::alert(self, tl!(photocraft_engine::DATA_SET_LAYER_LOCKED));
+                // The reference application refuses a locked type layer (#14499) and a missing
+                // replacement file (#14500) with an alert; the alert names no layer or file.
+                let alert = [photocraft_engine::DATA_SET_LAYER_LOCKED, photocraft_engine::DATA_SET_FILE_MISSING]
+                    .into_iter()
+                    .find(|a| e == *a || e.strip_prefix(a).is_some_and(|rest| rest.starts_with(" (")));
+                if id == "image.applyDataSet"
+                    && let Some(alert) = alert
+                {
+                    let _ = crate::dialogs::alerts::alert(self, tl!(alert));
                 }
             }
         }
@@ -343,9 +352,9 @@ impl PhotocraftApp {
 
     /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
-        // The Paths panel selection belongs to the active document. Ordinary edits replace the
-        // snapshot and advance its revision; a replaced snapshot without a newer revision is a
-        // reopened document, even with the same ID.
+        // The Paths panel selection and canvas context menu belong to the active document.
+        // Ordinary edits replace the snapshot and advance its revision; a replaced snapshot
+        // without a newer revision is a reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
         // Crop's Fill goes back to its default entry when another document that was already open
         // becomes active (a tab switch, or closing the active one), as in the reference
@@ -364,6 +373,7 @@ impl PhotocraftApp {
         };
         if !same_document {
             self.ui.selected_path = None;
+            self.ui.canvas_tool_menu = None;
         }
         self.path_document = document;
         vector_ui::cancel_stale_pen(self);
@@ -427,3 +437,26 @@ const ADDS_LAYER_MASK: [&str; 5] = [
     "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency",
 ];
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod image_processor_empty_source_tests {
+    use super::*;
+
+    #[test]
+    fn confirming_image_processor_with_no_source_replaces_the_form_with_an_alert() {
+        let input = tempfile::tempdir().unwrap();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = app.ctx().clone();
+        crate::menus::invoke(&mut app, &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+        let id = app.framework.dialogs.stack().top().unwrap();
+        let output = input.path().join("processed");
+        app.framework.dialogs.set_json_field(&ctx, id, "input", json!(input.path())).unwrap();
+        app.framework.dialogs.set_json_field(&ctx, id, "output", json!(output)).unwrap();
+
+        crate::dialogs::confirm(&mut app, &ctx, id).unwrap();
+        assert!(app.framework.dialogs.get_dyn(id).is_none());
+        assert_eq!(crate::dialogs::alerts::alerts(&app).len(), 1);
+        assert_eq!(app.ui.status, "There were no source files that could be opened by PhotoCraft.");
+        assert!(!output.exists());
+    }
+}

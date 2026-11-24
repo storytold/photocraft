@@ -739,7 +739,7 @@ mod tests {
         propose(&mut app, Some(range(30.0, 100.0)));
         assert!(display_doc(&mut app, 0).is_some());
         let st = app.session.active_mut().unwrap();
-        st.doc = Arc::new((*st.doc).clone());
+        *st.doc_mut() = Arc::new((*st.doc).clone());
         assert!(display_doc(&mut app, 0).is_none());
     }
 
@@ -749,7 +749,7 @@ mod tests {
         let mut app = app(Tool::PathSelection);
         let st = app.session.active_mut().unwrap();
         let id = st.active_layer.unwrap();
-        let layer = Arc::make_mut(&mut st.doc).layer_mut(id).unwrap();
+        let layer = Arc::make_mut(st.doc_mut()).layer_mut(id).unwrap();
         let LayerContent::Text(text) = &mut layer.content else { panic!("expected text") };
         text.shape = TextShape::Path {
             path: photocraft_doc::vector::Subpath::polygon(&[(20.0, 20.0), (180.0, 20.0), (180.0, 180.0), (20.0, 180.0)]),
@@ -812,7 +812,7 @@ mod tests {
         let layer_id = st.active_layer.unwrap();
         let LayerContent::Text(t) = &mut modified.layer_mut(layer_id).unwrap().content else { panic!("expected text") };
         t.text = "A very long sentence on a path that is guaranteed to overflow the assigned span".into();
-        st.doc = Arc::new(modified);
+        *st.doc_mut() = Arc::new(modified);
         assert_eq!(st.doc.id, doc_id);
         assert_eq!(st.revision, revision);
         assert!(!Arc::ptr_eq(&st.doc, &original_arc));
@@ -829,7 +829,7 @@ mod tests {
         t.text = "ABC".into();
         let TextShape::Path { end, .. } = &mut t.shape else { panic!("expected path") };
         *end = Some(21.0);
-        st.doc = Arc::new(modified);
+        *st.doc_mut() = Arc::new(modified);
         assert_eq!(st.doc.id, doc_id);
         assert_eq!(st.revision, revision);
         assert!(!Arc::ptr_eq(&st.doc, &prev_arc));
@@ -845,7 +845,7 @@ mod tests {
         let LayerContent::Text(t) = &mut modified.layer_mut(layer_id).unwrap().content else { panic!("expected text") };
         let TextShape::Path { end, .. } = &mut t.shape else { panic!("expected path") };
         *end = Some(180.0);
-        st.doc = Arc::new(modified);
+        *st.doc_mut() = Arc::new(modified);
         assert_eq!(st.doc.id, doc_id);
         assert_eq!(st.revision, revision);
 
@@ -911,7 +911,7 @@ mod tests {
 
         let st = app.session.active_mut().unwrap();
         let cloned_doc = (*st.doc).clone();
-        st.doc = Arc::new(cloned_doc);
+        *st.doc_mut() = Arc::new(cloned_doc);
         let geom_doc_replaced = active_path_geometry(&app, &text).expect("recomputed geometry");
         assert!(!Arc::ptr_eq(&geom1, &geom_doc_replaced));
 

@@ -305,92 +305,106 @@ fn assert_tone_preview_is_non_neutral(app: &mut PhotocraftApp, ctx: &egui::Conte
     crate::canvas::ensure_filter_preview(app, idx, ctx).unwrap();
 }
 
+/// Each-choice set: every mode x kind and every view appears. View 2 (`Color(1)`) runs with all six
+/// mode x kind pairs because its forbidden channel name (Green, Magenta, a) depends on the mode; the
+/// other views run once, spread over modes and kinds, since `target_context` returns early for any
+/// Smart Filter, so every view reaches the same guard.
+const TONE_FILTER_CASES: [(&str, &str, usize); 11] = [
+    ("rgb", "levels", 2),
+    ("rgb", "curves", 2),
+    ("lab", "levels", 2),
+    ("lab", "curves", 2),
+    ("cmyk", "levels", 2),
+    ("cmyk", "curves", 2),
+    ("rgb", "curves", 0),
+    ("lab", "levels", 1),
+    ("cmyk", "curves", 3),
+    ("rgb", "levels", 4),
+    ("lab", "curves", 5),
+];
+
+/// One case: `view` 0..5 is the alpha channel, layer mask target, colour component `Color(1)`, smart-object mask UI target, Quick Mask, filter mask UI target.
+fn tone_filter_case(mode: &str, kind: &str, view: usize) {
+    use photocraft_engine::{adjust_params, channel_cmds::ChannelTarget};
+    let (mut app, layer) = app(8, mode);
+    let command = format!("image.adjustments.{kind}");
+    let color_mode = app.session.active().unwrap().doc.mode;
+    let mut recorded = adjust_params::to_params(&adjust_params::default_for(kind, color_mode).unwrap());
+    let key = if mode == "lab" {
+        "lightness"
+    } else if kind == "curves" {
+        "points"
+    } else {
+        ""
+    };
+    if kind == "levels" {
+        if key.is_empty() {
+            recorded["gamma"] = json!(1.4);
+        } else {
+            recorded[key]["gamma"] = json!(1.4);
+        }
+    } else {
+        recorded[key] = json!([[0, 0], [128, 180], [255, 255]]);
+    }
+    app.run(&command, recorded.clone()).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.run("channel.new", json!({"name":"Saved sky", "fill":"white"})).unwrap();
+    if view == 4 {
+        app.run("select.editInQuickMaskMode", json!({})).unwrap();
+    }
+    app.session.active_mut().unwrap().channel_view.target = match view {
+        0 => ChannelTarget::Alpha(0),
+        1 => ChannelTarget::LayerMask,
+        2 => ChannelTarget::Color(1),
+        _ => ChannelTarget::Composite,
+    };
+    app.ui.mask_target = view == 3;
+    app.ui.filter_mask_target = (view == 5).then_some(layer.0);
+    let before = app.session.active().unwrap().doc.clone();
+    let filters = smart(&app, layer).clone();
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1200.0, 900.0)).build_app(|ui, app| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    super::open_editor(h.state_mut(), &ctx, layer.0, &filters, 2);
+    h.run_steps(2);
+    let values = fields(h.state());
+    assert_eq!(values.get("target"), None, "{mode} {kind} view={view}: no channel target is added to a Smart Filter");
+    let read = |p: &serde_json::Value| adjust_params::from_params(kind, p, None, color_mode).unwrap();
+    assert_eq!(read(&values), read(&recorded), "{mode} {kind} view={view}: recorded colour settings survive reopening");
+    h.run_steps(3);
+    let names: Vec<_> = h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value()).collect();
+    let expected = match mode {
+        "lab" => "Lightness",
+        "cmyk" => "CMYK",
+        _ => "RGB",
+    };
+    assert!(names.iter().any(|n| n == expected), "{mode} {kind} view={view}: {names:?}");
+    assert!(
+        !names.iter().any(|n| n == "Saved sky" || n == "Quick Mask" || n == "Smart Object Mask" || n == "Green" || n == "Magenta" || n == "a"),
+        "{names:?}"
+    );
+    let ctx = h.ctx.clone();
+    let idx = h.state().session.active_index().unwrap();
+    assert!(crate::canvas::ensure_filter_preview(h.state_mut(), idx, &ctx).is_some());
+    assert_tone_preview_is_non_neutral(h.state_mut(), &ctx, kind);
+    assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &before), "preview never writes to the selected plane");
+    let shown = photocraft_compose::flatten(h.state().filter_preview.as_ref().unwrap().result.as_ref().unwrap()).px.clone();
+    confirm(h.state_mut());
+    assert_eq!(shown, photocraft_compose::flatten(&h.state().session.active().unwrap().doc).px, "{mode} {kind} view={view}: preview matches commit");
+    assert_eq!(smart(h.state(), layer).smart_filters.len(), 3);
+    assert_eq!(read(&smart(h.state(), layer).smart_filters[2].params), read(&recorded));
+    let after = &h.state().session.active().unwrap().doc;
+    assert_eq!(after.channels, before.channels);
+    assert_eq!(after.quick_mask, before.quick_mask);
+    assert_eq!(after.layer(layer).unwrap().mask, before.layer(layer).unwrap().mask);
+}
+
 /// Re-editing a whole-image tone Smart Filter keeps its colour controls and stored records,
 /// even when a colour component, alpha, Quick Mask or either layer-mask UI target is selected.
 #[test]
 fn tone_filter_editor_ignores_current_channel_target() {
-    use photocraft_engine::{adjust_params, channel_cmds::ChannelTarget};
-    for mode in ["rgb", "lab", "cmyk"] {
-        for kind in ["levels", "curves"] {
-            for view in 0..6 {
-                let (mut app, layer) = app(8, mode);
-                let command = format!("image.adjustments.{kind}");
-                let color_mode = app.session.active().unwrap().doc.mode;
-                let mut recorded = adjust_params::to_params(&adjust_params::default_for(kind, color_mode).unwrap());
-                let key = if mode == "lab" {
-                    "lightness"
-                } else if kind == "curves" {
-                    "points"
-                } else {
-                    ""
-                };
-                if kind == "levels" {
-                    if key.is_empty() {
-                        recorded["gamma"] = json!(1.4);
-                    } else {
-                        recorded[key]["gamma"] = json!(1.4);
-                    }
-                } else {
-                    recorded[key] = json!([[0, 0], [128, 180], [255, 255]]);
-                }
-                app.run(&command, recorded.clone()).unwrap();
-                app.run("layer.layerMask.revealAll", json!({})).unwrap();
-                app.run("channel.new", json!({"name":"Saved sky", "fill":"white"})).unwrap();
-                if view == 4 {
-                    app.run("select.editInQuickMaskMode", json!({})).unwrap();
-                }
-                app.session.active_mut().unwrap().channel_view.target = match view {
-                    0 => ChannelTarget::Alpha(0),
-                    1 => ChannelTarget::LayerMask,
-                    2 => ChannelTarget::Color(1),
-                    _ => ChannelTarget::Composite,
-                };
-                app.ui.mask_target = view == 3;
-                app.ui.filter_mask_target = (view == 5).then_some(layer.0);
-                let before = app.session.active().unwrap().doc.clone();
-                let filters = smart(&app, layer).clone();
-                let mut h =
-                    Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1200.0, 900.0)).build_app(|ui, app| crate::dialogs::run(app, ui), app);
-                PhotocraftApp::setup_context(&h.ctx, Default::default());
-                let ctx = h.ctx.clone();
-                super::open_editor(h.state_mut(), &ctx, layer.0, &filters, 2);
-                h.run_steps(2);
-                let values = fields(h.state());
-                assert_eq!(values.get("target"), None, "{mode} {kind} view={view}: no channel target is added to a Smart Filter");
-                let read = |p: &serde_json::Value| adjust_params::from_params(kind, p, None, color_mode).unwrap();
-                assert_eq!(read(&values), read(&recorded), "{mode} {kind} view={view}: recorded colour settings survive reopening");
-                h.run_steps(3);
-                let names: Vec<_> = h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value()).collect();
-                let expected = match mode {
-                    "lab" => "Lightness",
-                    "cmyk" => "CMYK",
-                    _ => "RGB",
-                };
-                assert!(names.iter().any(|n| n == expected), "{mode} {kind} view={view}: {names:?}");
-                assert!(
-                    !names.iter().any(|n| n == "Saved sky" || n == "Quick Mask" || n == "Smart Object Mask" || n == "Green" || n == "Magenta" || n == "a"),
-                    "{names:?}"
-                );
-                let ctx = h.ctx.clone();
-                let idx = h.state().session.active_index().unwrap();
-                assert!(crate::canvas::ensure_filter_preview(h.state_mut(), idx, &ctx).is_some());
-                assert_tone_preview_is_non_neutral(h.state_mut(), &ctx, kind);
-                assert!(std::sync::Arc::ptr_eq(&h.state().session.active().unwrap().doc, &before), "preview never writes to the selected plane");
-                let shown = photocraft_compose::flatten(h.state().filter_preview.as_ref().unwrap().result.as_ref().unwrap()).px.clone();
-                confirm(h.state_mut());
-                assert_eq!(
-                    shown,
-                    photocraft_compose::flatten(&h.state().session.active().unwrap().doc).px,
-                    "{mode} {kind} view={view}: preview matches commit"
-                );
-                assert_eq!(smart(h.state(), layer).smart_filters.len(), 3);
-                assert_eq!(read(&smart(h.state(), layer).smart_filters[2].params), read(&recorded));
-                let after = &h.state().session.active().unwrap().doc;
-                assert_eq!(after.channels, before.channels);
-                assert_eq!(after.quick_mask, before.quick_mask);
-                assert_eq!(after.layer(layer).unwrap().mask, before.layer(layer).unwrap().mask);
-            }
-        }
+    for (mode, kind, view) in TONE_FILTER_CASES {
+        tone_filter_case(mode, kind, view);
     }
 }
 
@@ -573,9 +587,25 @@ fn a_channel_mixer_smart_filter_turned_off_monochrome_keeps_its_red_row() {
     let sm = recorded(h.state(), id);
     assert_eq!(sm.smart_filters.len(), 1, "no filter was stacked");
     let adjustment = photocraft_engine::adjust_params::from_params("channelMixer", &sm.smart_filters[0].params, None, photocraft_doc::ColorMode::Rgb).unwrap();
-    let photocraft_doc::Adjustment::ChannelMixer { matrix, monochrome } = adjustment else { panic!("Channel Mixer params") };
+    let photocraft_doc::Adjustment::ChannelMixer { matrix, monochrome, .. } = adjustment else { panic!("Channel Mixer params") };
     assert!(!monochrome);
     assert!(matrix[0].iter().zip([0.7, 0.3, 0.0, 0.0]).all(|(a, b)| (a - b).abs() < 1e-5), "the edited Red row renders: {:?}", matrix[0]);
+}
+
+/// #8047: the framework Channel Mixer editor has red, green and blue outputs only. A Channel Mixer
+/// smart filter with ink outputs (`cyan`..`black` keys, accepted in any document mode) reopened in
+/// an RGB document must not open it over RGB defaults, whose edits the engine would drop beside the
+/// ink keys: nothing opens, the reason is shown, and the filter keeps its params.
+#[test]
+fn a_cmyk_channel_mixer_smart_filter_is_not_opened_in_the_rgb_editor() {
+    let (app, id) = adjustment_filter("rgb", "image.adjustments.channelMixer", json!({"cyan": [80, 0, 0, 0, 0]}));
+    let before = recorded(&app, id).smart_filters[0].params.clone();
+    assert!(photocraft_engine::adjust_params::MIXER_INKS.iter().any(|k| before.get(*k).is_some()), "an ink-output filter: {before}");
+    let h = edit_first_filter(app, id);
+    assert!(h.state().adjust_open.is_none(), "no Channel Mixer editor opened");
+    assert_eq!(h.state().ui.status, crate::adjust_editors::values::CMYK_MIXER_UNAVAILABLE, "the reason is shown");
+    assert!(h.state().ui.status_error);
+    assert_eq!(recorded(h.state(), id).smart_filters[0].params, before, "the filter is kept as it is");
 }
 
 /// In Lab, top-level `points` aliases Lightness and the editor writes both on an edit. A stored

@@ -429,6 +429,9 @@ pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>)
             Ok(opened.map(|doc| (name, doc)))
         }) as photocraft_ui_egui::AutomationOpenPcraftFn
     });
+    let locate = workspace.clone().map(|workspace| {
+        Box::new(move |path: &str| workspace.location(path).map(|location| location.to_string_lossy().into_owned())) as photocraft_ui_egui::AutomationLocateFn
+    });
     let save = workspace.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
             save_through(doc, path, settings, ctl, |p, encoded, _| workspace.write_stream(p, &mut |w| encoded.write_to(w)).map_err(|e| e.to_string()))
@@ -441,7 +444,7 @@ pub fn automation(workspace: Option<photocraft_automation::AuthorizedWorkspace>)
             photocraft_automation::workspace::authorize_desktop_engine_command(id, params).map_err(|error| error.to_string())
         }) as photocraft_ui_egui::AutomationCommandFn
     });
-    photocraft_ui_egui::AutomationServices { read, write, open_pcraft, save, command, authorize }
+    photocraft_ui_egui::AutomationServices { read, write, open_pcraft, locate, save, command, authorize }
 }
 
 /// What agent requests may read, write and run with the agent settings' folders
@@ -486,6 +489,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>, wa
         automation_read: automation.read,
         automation_write: automation.write,
         automation_open_pcraft: automation.open_pcraft,
+        automation_locate: automation.locate,
         automation_save: automation.save,
         automation_command: automation.command,
         automation_authorize: automation.authorize,
