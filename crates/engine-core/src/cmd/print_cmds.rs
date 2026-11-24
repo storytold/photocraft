@@ -826,12 +826,11 @@ fn marks_ops(m: Marks, (x, y, w, h): (f64, f64, f64, f64)) -> String {
     s
 }
 
-/// Rotate interleaved print samples for the native PDF print path.
+/// Rotate interleaved print samples counterclockwise in raster order.
 ///
 /// Native PDF viewers do not all agree on the orientation of an image XObject's
 /// rows when a page-level matrix is used. Baking the rotation into the samples
-/// keeps the OS print dialog on the intended side of that ambiguity. PDF image
-/// rows use the opposite vertical origin from the preview/RGB buffers here.
+/// keeps the PDF and the OS print dialog on the same side of that ambiguity.
 fn rotated_print_image(image: &PrintImage) -> Option<PrintImage> {
     let width = usize::try_from(image.width).ok()?;
     let height = usize::try_from(image.height).ok()?;
@@ -848,7 +847,7 @@ fn rotated_print_image(image: &PrintImage) -> Option<PrintImage> {
     for y in 0..height {
         for x in 0..width {
             let source_pixel = y.checked_mul(width)?.checked_add(x)?;
-            let target_pixel = x.checked_mul(height)?.checked_add(height.checked_sub(1)?.checked_sub(y)?)?;
+            let target_pixel = (width.checked_sub(1)?.checked_sub(x)?).checked_mul(height)?.checked_add(y)?;
             let source = source_pixel.checked_mul(channels)?;
             let target = target_pixel.checked_mul(channels)?;
             let source_samples = image.data.get(source..source.checked_add(channels)?)?;
