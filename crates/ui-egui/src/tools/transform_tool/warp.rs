@@ -132,7 +132,7 @@ pub fn split(app: &mut PhotocraftApp, id: &str, at: Option<[f64; 2]>) -> Result<
         && let (Some(pv), Some(warp)) = (&app.transform_preview, app.ui.transform.as_ref().and_then(|t| t.session.warp()))
         && let Some(picked) = pv.warp_grid.picked(warp)
     {
-        p["pickedAnchor"] = json!(picked);
+        p["_pickedAnchor"] = json!(picked);
     }
     edit_session_warp(app, id, &p)
 }

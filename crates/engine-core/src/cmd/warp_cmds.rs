@@ -638,7 +638,7 @@ fn split(s: &mut Session, p: &Value, cmd: &str, how: Split) -> Result<Value> {
     if let Some(w) = inline_warp(cmd, p)? {
         // Only the canvas's inline warp uses a grid pick. Commands on a stored smart object
         // continue to take document coordinates.
-        let picked = p.get("pickedAnchor").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
+        let picked = p.get("_pickedAnchor").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
         let out = split_warp_inner(&w, at, how, picked).ok_or_else(|| bad(cmd, "nothing to split or remove there"))?;
         return Ok(json!({"warp": out}));
     }
