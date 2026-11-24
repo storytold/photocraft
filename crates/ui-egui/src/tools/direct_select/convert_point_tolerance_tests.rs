@@ -20,6 +20,8 @@ fn app(tool: Tool, zoom: f32, ppp: f32) -> Box<PhotocraftApp> {
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
     app.ui.views[0].zoom = zoom;
+    // The new view's fit-on-screen request would replace the zoom on the first pass.
+    app.ui.views[0].clear_pending();
     app.ui.tool = tool;
     let path = json!({"subpaths": [{"closed": true, "knots": [[100, 300], [300, 300], [300, 500], [100, 500]]}]});
     app.run("path.set", json!({"name": "work", "path": path})).unwrap();
