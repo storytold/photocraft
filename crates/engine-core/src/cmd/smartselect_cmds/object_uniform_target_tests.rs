@@ -15,7 +15,7 @@ const H: i32 = 600;
 
 /// The issue's document: Background, Shapes, Green; Green (the newest layer) is active.
 fn issue_document() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Shapes"})).unwrap();
     paint_new_layer(&mut s, |x, y| {
@@ -273,7 +273,7 @@ fn a_point_outside_the_canvas_still_errors_on_a_pixel_layer() {
 
 /// An 800x600 document whose Background is painted flat `color`, Background active.
 fn flat_background_document(color: &str) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("select.all", json!({})).unwrap();
     s.execute("edit.fill", json!({"color": color})).unwrap();
@@ -324,7 +324,7 @@ fn hard_edge_off_keeps_area_answers_partly_selected() {
 /// hides on the canvas but does not gate the answer.
 #[test]
 fn a_hide_all_layer_mask_does_not_gate_the_area_answer() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Flat"})).unwrap();
     s.execute("select.all", json!({})).unwrap();
@@ -342,7 +342,7 @@ fn a_hide_all_layer_mask_does_not_gate_the_area_answer() {
 /// disc's rule), not the uncut whole canvas at 254.
 #[test]
 fn a_solid_rectangle_on_a_transparent_layer_is_cut_from_the_area_answer() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Card"})).unwrap();
     paint_new_layer(&mut s, |x, y| {
@@ -365,7 +365,7 @@ fn a_solid_rectangle_on_a_transparent_layer_is_cut_from_the_area_answer() {
 /// interior cut (the disc test above) still keeps the whole canvas.
 #[test]
 fn a_full_height_cut_trims_the_area_answer_bounds_to_the_selected_pixels() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Stripe"})).unwrap();
     paint_new_layer(&mut s, |x, _y| {
@@ -460,7 +460,7 @@ fn a_targeted_layer_mask_takes_no_area_answer() {
 /// the documented answer is the canvas with the card's own pixels cut out, the hole at 254.
 #[test]
 fn a_one_pixel_hole_in_a_card_is_a_transparent_spot_not_the_opaque_part() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Card"})).unwrap();
     paint_new_layer(&mut s, |x, y| {
@@ -483,7 +483,7 @@ fn a_one_pixel_hole_in_a_card_is_a_transparent_spot_not_the_opaque_part() {
 /// keeps the silent nothing-found it had before #12863, and the predicate says the same.
 #[test]
 fn an_out_of_canvas_point_over_pixels_past_the_edge_promises_no_error() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": W, "height": H, "depth": 8})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Overhang"})).unwrap();
     paint_rect(&mut s, Rect::new(W - 10, 100, W + 90, 120), |_, _| [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0, 1.0]);
