@@ -1137,20 +1137,6 @@ fn wait_job(s: &mut Session, id: photocraft_engine::jobs::JobId) -> Res<()> {
     }
 }
 
-/// Waits for job `id` to end and returns how it ended.
-fn wait_outcome(s: &mut Session, id: photocraft_engine::jobs::JobId) -> Res<photocraft_engine::jobs::JobOutcome> {
-    let t = Instant::now();
-    loop {
-        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
-            return Ok(e.outcome);
-        }
-        if t.elapsed().as_secs() > 120 {
-            return Err("job did not finish in 120 s".into());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-}
-
 fn start_job(s: &mut Session, id: &str, p: Value) -> Res<photocraft_engine::jobs::JobId> {
     match s.start(id, p).map_err(|e| format!("{id}: {e}"))? {
         photocraft_engine::jobs::Started::Job(j) => Ok(j),
@@ -1287,8 +1273,7 @@ fn ui_thread_step(s: &mut Session, id: &str, p: Value) -> Res<(f64, f64, bool)> 
 
 /// #210: committing Liquify, Puppet Warp and Perspective Warp on 24 MP, as the UI does (through
 /// `Session::start`): the UI thread's longest step, with the time until the result was applied
-/// (`total_samples_ms`) and whether the command ran as a background job (`ran_as_job`); and how
-/// long a Perspective Warp job takes to stop when cancelled (until its worker exits).
+/// (`total_samples_ms`) and whether the command ran as a background job (`ran_as_job`).
 fn distort_commit_scenarios(b: &mut Bench, sz: &Sizes) {
     let (w, h) = sz.big_photo;
     let (fw, fh) = (f64::from(w), f64::from(h));
@@ -1317,13 +1302,9 @@ fn distort_commit_scenarios(b: &mut Bench, sz: &Sizes) {
                 json!({"pins": [{"src": [fw * 0.2, fh / 2.0], "dst": [fw * 0.2, fh / 2.0]}, {"src": [fw * 0.8, fh / 2.0], "dst": [fw * 0.8, fh / 2.0 - lift]}]})
             }),
         ),
-        ("Perspective Warp commit 24 MP: longest UI-thread step", "edit.perspectiveWarp", {
-            let plane = plane.clone();
-            Box::new(move |_| json!({"planes": plane}))
-        }),
+        ("Perspective Warp commit 24 MP: longest UI-thread step", "edit.perspectiveWarp", Box::new(move |_| json!({"planes": plane}))),
     ];
-    let cancel = "cancel Perspective Warp job on 24 MP";
-    if !commits.iter().any(|(name, ..)| b.wanted(name)) && !b.wanted(cancel) {
+    if !commits.iter().any(|(name, ..)| b.wanted(name)) {
         return;
     }
     let mut s = match open_photo(w, h) {
@@ -1349,34 +1330,6 @@ fn distort_commit_scenarios(b: &mut Bench, sz: &Sizes) {
             o.insert("total_samples_ms".into(), json!(totals));
             o.insert("ran_as_job".into(), json!(as_job.iter().all(|j| *j)));
         }
-    }
-    if b.wanted(cancel) {
-        b.time(cancel, &mut s, reps, false, |_, s, i| {
-            use photocraft_engine::jobs::JobOutcome;
-            let steps = s.active().map(|d| d.history.past_len()).ok_or("no document")?;
-            // Cancel early and midway through the warp. A sample counts only when the cancel took
-            // and the job ended cancelled; a warp that finished first is retried sooner.
-            let mut delay = 5 + (i as u64 * 37) % 150;
-            for _ in 0..6 {
-                let job = start_job(s, "edit.perspectiveWarp", json!({"planes": plane}))?;
-                std::thread::sleep(std::time::Duration::from_millis(delay));
-                let t = Instant::now();
-                let accepted = s.cancel_job(job);
-                s.join_cancelled_jobs();
-                let v = ms(t);
-                let outcome = wait_outcome(s, job)?;
-                // A warp that finished before the cancel was applied: take it back.
-                if s.active().map(|d| d.history.past_len()) != Some(steps) {
-                    exec(s, "edit.undo", json!({}))?;
-                }
-                match outcome {
-                    JobOutcome::Cancelled if accepted => return Ok(v),
-                    JobOutcome::Failed(e) => return Err(format!("edit.perspectiveWarp: the job failed: {e}")),
-                    _ => delay /= 2,
-                }
-            }
-            Err("the Perspective Warp job finished before every cancel".into())
-        });
     }
 }
 

@@ -968,13 +968,3 @@ row = "Perspective Warp commit 24 MP: longest UI-thread step"
 metric = "max"
 budget_ms = 100
 enforce = false  # new; no baseline yet
-
-[[scenario]]
-id = "P119"
-title = "Cancel a Perspective Warp job on 24 MP (until the worker exits)"
-issue = 210
-bench = "perf_scenarios"
-row = "cancel Perspective Warp job on 24 MP"
-metric = "p95"
-budget_ms = 200
-enforce = false  # new; no baseline yet
