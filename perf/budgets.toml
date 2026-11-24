@@ -955,10 +955,10 @@ enforce = false  # new; no baseline yet
 
 [[scenario]]
 id = "P114"
-title = "Move tool drag frame of a 36 MP photo layer"
+title = "Simulated live-move copy + canvas refresh, 36 MP photo layer (not UI drag latency)"
 issue = 9332
 bench = "perf_scenarios"
-row = "move tool drag frame, 36 MP photo layer"
+row = "simulated live-move copy + canvas refresh, 36 MP photo layer"
 budget_ms = 16
 enforce = false  # new; no baseline yet
 

@@ -116,7 +116,7 @@ Baseline: 2026-10-05, 1 run, commit `f5d2bcb54a`, Apple M4 Pro (48 GB), GPU Appl
 | P93 | Pen native cursor movement at 125% pixel density | ≤ 0.25 ms p95 | – | – | – | – | – | not run | [#15465](https://github.com/storytold/photocraft/issues/15465) |
 | P94 | Pen painted cursor movement at 125% pixel density | ≤ 0.25 ms p95 | – | – | – | – | – | not run | [#15465](https://github.com/storytold/photocraft/issues/15465) |
 | P113 | Move a 36 MP photo layer + refresh | ≤ 80 ms p95 | – | – | – | – | – | not run | [#9332](https://github.com/storytold/photocraft/issues/9332) |
-| P114 | Move tool drag frame of a 36 MP photo layer | ≤ 16 ms p95 | – | – | – | – | – | not run | [#9332](https://github.com/storytold/photocraft/issues/9332) |
+| P114 | Simulated live-move copy + canvas refresh, 36 MP photo layer (not UI drag latency) | ≤ 16 ms p95 | – | – | – | – | – | not run | [#9332](https://github.com/storytold/photocraft/issues/9332) |
 | P115 | Paste a 36 MP photo into a layer mask + refresh | track only | – | – | – | – | – | not run | [#9332](https://github.com/storytold/photocraft/issues/9332) |
 
 **Not measurable yet** (the code can't do it yet; no number is recorded):

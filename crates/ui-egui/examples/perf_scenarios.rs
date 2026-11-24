@@ -1853,10 +1853,12 @@ const MOVE_LIVE_LIMIT: u64 = 512 << 20;
 /// #9332: a layer of photo pixels (every tile its own, unlike the solid fills P14 and the
 /// full-canvas drag rows move, which `Surface::translated` shares as one tile), copied from the
 /// Background of a 36 MP photo (Layer via Copy) in a two-layer document: moved by a command,
-/// one Move tool drag frame of it, and the photo pasted into its layer mask.
+/// a simulated live-move copy of it plus canvas refresh (the engine move and refresh `drag_frame`
+/// calls directly, not the Move tool's input routing or a full UI frame), and the photo pasted
+/// into its layer mask.
 fn photo_layer_scenarios(b: &mut Bench, sz: &Sizes) {
     let mv = "move photo layer 36 MP + refresh";
-    let drag = "move tool drag frame, 36 MP photo layer";
+    let drag = "simulated live-move copy + canvas refresh, 36 MP photo layer";
     let paste = "paste 36 MP into a layer mask + refresh";
     if !b.wanted(mv) && !b.wanted(drag) && !b.wanted(paste) {
         return;
