@@ -405,6 +405,55 @@ fn hue_saturation_and_color_balance_keep_a_cmyk_layers_black() {
     }
 }
 
+/// Layer › New Adjustment Layer › Channel Mixer in a CMYK document makes a mixer with cyan,
+/// magenta, yellow and black outputs (#8047); its identity leaves the inks alone, the destructive
+/// command mixes the ink amounts as Photoshop does, and a mix changes only the ink it targets.
+#[test]
+fn channel_mixer_in_a_cmyk_document_mixes_the_inks() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "background": "white"})).unwrap();
+    s.execute("layer.newAdjustmentLayer.channelMixer", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let adj = doc
+        .layers
+        .iter()
+        .find_map(|l| match &l.content {
+            photocraft_doc::LayerContent::Adjustment(a) => Some(a.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        matches!(adj, Adjustment::ChannelMixer { cmyk: Some(rows), monochrome: false, .. } if rows == photocraft_doc::adjust::CMYK_MIXER_IDENTITY),
+        "{adj:?}"
+    );
+    let params = crate::adjust_params::to_params(&adj);
+    assert!(params.get("cyan").is_some() && params.get("red").is_none(), "{params}");
+
+    let cmyk = PixelFormat::new(ColorMode::Cmyk, SampleType::U16, true);
+    let ink = [0.2, 0.4, 0.6, 0.1, 1.0];
+    let same = adjusted_pixel(cmyk, &ink, &adj, None);
+    assert!(same.iter().zip(&ink).all(|(g, w)| (g - w).abs() < 1e-4), "identity: {same:?}");
+    // Magenta from itself plus a 20 % constant: 20 % more magenta ink, the rest untouched.
+    let more_magenta = crate::adjust_params::from_params("channelMixer", &json!({"magenta": [0, 100, 0, 0, 20]}), None, ColorMode::Cmyk).unwrap();
+    let got = adjusted_pixel(cmyk, &ink, &more_magenta, None);
+    let want = [0.2, 0.6, 0.6, 0.1, 1.0];
+    assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "magenta: {got:?}");
+    // Black from cyan: the black ink becomes cyan's 20 %.
+    let black_from_cyan = crate::adjust_params::from_params("channelMixer", &json!({"black": [100, 0, 0, 0, 0]}), None, ColorMode::Cmyk).unwrap();
+    let got = adjusted_pixel(cmyk, &ink, &black_from_cyan, None);
+    let want = [0.2, 0.4, 0.6, 0.2, 1.0];
+    assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "black: {got:?}");
+    // An imported monochrome mixer (the command refuses to make one): the mix goes to the black
+    // ink alone.
+    let mut rows = photocraft_doc::adjust::CMYK_MIXER_IDENTITY;
+    rows[0] = [0.0, 0.0, 0.0, 1.0, 0.0];
+    let Adjustment::ChannelMixer { matrix, .. } = &adj else { panic!("{adj:?}") };
+    let mono = Adjustment::ChannelMixer { matrix: *matrix, monochrome: true, cmyk: Some(rows) };
+    let got = adjusted_pixel(cmyk, &ink, &mono, None);
+    let want = [0.0, 0.0, 0.0, 0.1, 1.0];
+    assert!(got.iter().zip(&want).all(|(g, w)| (g - w).abs() < 1e-4), "monochrome: {got:?}");
+}
+
 /// Two small blocks two billion pixels apart: the content bounds are a grid of 6·10¹³ tiles
 /// that holds nothing, which no adjustment may materialize.
 fn distant_blocks(fmt: PixelFormat, default: f32) -> Surface {
@@ -467,6 +516,18 @@ fn full_coverage_keeps_the_edit_over_huge_hdr_values() {
         let out = mix_through_selection(&fmt, Rect::new(0, 0, 1, 1), &[[o, o, o, 1.0]], &[[a, a, a, 1.0]], None);
         assert_eq!(out[..3], [a, a, a], "{a} over {o}");
     }
+}
+
+/// The same for an edit of a CMYK layer's own channels: a result of 0.5 over a stored cyan of
+/// 2^26 came out as 0, the difference rounding the stored value away.
+#[test]
+fn full_coverage_keeps_a_stored_channel_edit_over_huge_hdr_values() {
+    let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true);
+    let mut s = Surface::new(fmt);
+    let big = 67_108_864.0_f32;
+    s.write_pixel(0, 0, &[big, 0.25, 0.25, 0.25, 1.0]);
+    let out = adjusted_channels(&s, Rect::new(0, 0, 1, 1), None, |ch| ch.iter_mut().for_each(|v| *v = 0.5));
+    assert_eq!(out[..4], [0.5, 0.5, 0.5, 0.5]);
 }
 
 /// Remapping walks the stored tiles, not the dense rectangle around them: two pixels a million
