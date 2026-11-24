@@ -112,100 +112,104 @@ fn saved_view_xcf(target: NativeImportTarget) -> Vec<u8> {
 fn later_xcf_waiting_on_an_earlier_prompt_keeps_view_and_source_policy() {
     for damage in [false, true] {
         for target in [NativeImportTarget::Composite, NativeImportTarget::LayerMask, NativeImportTarget::AlphaChannel(0)] {
-            let mut app = super::identity_app();
-            let unchanged = super::IdentityControl::capture(&app);
-            app.session.execute("edit.colorSettings", json!({"askOnMismatch":true,"askOnMissing":false,"policyRgb":"preserve"})).unwrap();
-            if damage {
-                let imported = photocraft_io::import("earlier.png", &super::identity_png(None)).unwrap();
-                crate::open_prompt::arrive(
-                    &mut app,
-                    crate::open_prompt::Held {
-                        doc: imported.document,
-                        read_only: false,
-                        initial_view: None,
-                        protected_import_source: None,
-                        damage_pending: true,
-                        name: "earlier.psd".into(),
-                        path: None,
-                        warnings: vec![],
-                        bytes: None,
-                        slot: None,
-                        order: None,
-                        question: None,
-                        policy_applied: false,
-                        smart_object: false,
-                    },
-                );
-            } else {
-                let earlier = super::completed_identity_open(&mut app, "earlier.png", super::identity_png(craft::cms::Builtin::from_id("adobe-rgb-compat")));
-                assert!(earlier["held"].is_number());
-                finish_open(&mut app, "earlier.png", None, &earlier, None, None).unwrap();
-            }
-            let bytes = saved_view_xcf(target);
-            let decoded = photocraft_io::import("later.xcf", &bytes).unwrap();
-            let expected = decoded.initial_view.unwrap();
-            assert_eq!(expected.target, target);
-            assert!(expected.show_layer_mask);
-            assert_eq!(expected.visible_alpha_channels, [0]);
-            assert_eq!(expected.samplers, [[1., 1.]]);
-            assert_eq!(expected.selected_layers.len(), 2);
-            // Complete the actual background engine decode/apply before the UI
-            // event is delivered, while the first file still owns its question.
-            let folder = tempfile::tempdir().unwrap();
-            let source = folder.path().join("later.xcf");
-            std::fs::write(&source, &bytes).unwrap();
-            let source = source.to_str().unwrap().to_owned();
-            let later = match app.session.start_open_for_user_with_background("later.xcf", OpenSource::Path(source.clone()), true).unwrap() {
-                Started::Job(job) => app.session.wait_job(job).unwrap(),
-                Started::Done(_) => panic!("native path Open must use the background worker"),
-            };
-            assert!(later.get("held").is_none(), "the later file has no question of its own");
-            let id = DocId(later["docId"].as_u64().unwrap());
-            let before = app.session.documents().iter().find(|state| state.doc.id == id).unwrap();
-            let selected = before.selection().to_vec();
-            let active = before.active_layer();
-            let pixels = before.doc.clone();
-            assert_eq!(selected.len(), 2);
-            finish_open(&mut app, "later.xcf", Some(&source), &later, None, None).unwrap();
-            assert!(!app.session.documents().iter().any(|state| state.doc.id == id));
-            assert_eq!(app.held_opens.len(), 2);
-            let queued = app.held_opens.back().unwrap();
-            assert_eq!(queued.initial_view.as_ref().unwrap().target, target);
-            assert!(queued.read_only);
-            assert_eq!(queued.protected_import_source.as_deref(), Some(source.as_str()));
-            unchanged.assert_untouched(&app);
-            // Drive the actual first dialog; its result pump admits the queued file.
-            let inspected = control(&mut app, "ui.inspect", json!({}));
-            let prompts = inspected["result"]["dialogs"].as_array().unwrap();
-            assert_eq!(prompts.len(), 1);
-            let prompt = prompts[0]["id"].clone();
-            assert_eq!(control(&mut app, "ui.dialog.confirm", json!({"dialog":prompt}))["ok"], true);
-            assert!(app.held_opens.is_empty());
-            let state = app.session.documents().iter().find(|state| state.doc.id == id).unwrap();
-            assert_eq!(state.selection(), selected);
-            assert_eq!(state.active_layer(), active);
-            assert_eq!(state.color_samplers, [[1., 1.]]);
-            assert!(state.channel_view.alpha_shown(0));
-            let mask = state.channel_view.layer_mask.unwrap();
-            assert_eq!(mask.mode, photocraft_engine::mask_view_cmds::MaskViewMode::Gray);
-            assert_eq!(mask.layer, active.unwrap());
-            assert!(photocraft_engine::mask_view_cmds::editing(state).is_none(), "source preview must not become mask-edit authority");
-            let want = match target {
-                NativeImportTarget::Composite => photocraft_engine::channel_cmds::ChannelTarget::Composite,
-                NativeImportTarget::LayerMask => photocraft_engine::channel_cmds::ChannelTarget::LayerMask,
-                NativeImportTarget::AlphaChannel(index) => photocraft_engine::channel_cmds::ChannelTarget::Alpha(index),
-            };
-            assert_eq!(state.channel_view.target, want);
-            assert_eq!(state.doc.layers, pixels.layers);
-            assert!(state.source_read_only && state.path.is_none());
-            assert_eq!(state.protected_import_source.as_deref(), Some(source.as_str()));
-            assert!(photocraft_engine::file_cmds::check_import_destination(state, &source).is_err());
-            assert_eq!(state.history.past_len(), 0);
-            assert!(!state.is_dirty());
-            unchanged.assert_untouched(&app);
-            assert_eq!(std::fs::read(&source).unwrap(), bytes);
+            assert_pending_open_preserves_view(damage, target);
         }
     }
+}
+
+fn assert_pending_open_preserves_view(damage: bool, target: NativeImportTarget) {
+    let mut app = super::identity_app();
+    let unchanged = super::IdentityControl::capture(&app);
+    app.session.execute("edit.colorSettings", json!({"askOnMismatch":true,"askOnMissing":false,"policyRgb":"preserve"})).unwrap();
+    if damage {
+        let imported = photocraft_io::import("earlier.png", &super::identity_png(None)).unwrap();
+        crate::open_prompt::arrive(
+            &mut app,
+            crate::open_prompt::Held {
+                doc: imported.document,
+                read_only: false,
+                initial_view: None,
+                protected_import_source: None,
+                damage_pending: true,
+                name: "earlier.psd".into(),
+                path: None,
+                warnings: vec![],
+                bytes: None,
+                slot: None,
+                order: None,
+                question: None,
+                policy_applied: false,
+                smart_object: false,
+            },
+        );
+    } else {
+        let earlier = super::completed_identity_open(&mut app, "earlier.png", super::identity_png(craft::cms::Builtin::from_id("adobe-rgb-compat")));
+        assert!(earlier["held"].is_number());
+        finish_open(&mut app, "earlier.png", None, &earlier, None, None).unwrap();
+    }
+    let bytes = saved_view_xcf(target);
+    let decoded = photocraft_io::import("later.xcf", &bytes).unwrap();
+    let expected = decoded.initial_view.unwrap();
+    assert_eq!(expected.target, target);
+    assert!(expected.show_layer_mask);
+    assert_eq!(expected.visible_alpha_channels, [0]);
+    assert_eq!(expected.samplers, [[1., 1.]]);
+    assert_eq!(expected.selected_layers.len(), 2);
+    // Complete the actual background engine decode/apply before the UI
+    // event is delivered, while the first file still owns its question.
+    let folder = tempfile::tempdir().unwrap();
+    let source = folder.path().join("later.xcf");
+    std::fs::write(&source, &bytes).unwrap();
+    let source = source.to_str().unwrap().to_owned();
+    let later = match app.session.start_open_for_user_with_background("later.xcf", OpenSource::Path(source.clone()), true).unwrap() {
+        Started::Job(job) => app.session.wait_job(job).unwrap(),
+        Started::Done(_) => panic!("native path Open must use the background worker"),
+    };
+    assert!(later.get("held").is_none(), "the later file has no question of its own");
+    let id = DocId(later["docId"].as_u64().unwrap());
+    let before = app.session.documents().iter().find(|state| state.doc.id == id).unwrap();
+    let selected = before.selection().to_vec();
+    let active = before.active_layer();
+    let pixels = before.doc.clone();
+    assert_eq!(selected.len(), 2);
+    finish_open(&mut app, "later.xcf", Some(&source), &later, None, None).unwrap();
+    assert!(!app.session.documents().iter().any(|state| state.doc.id == id));
+    assert_eq!(app.held_opens.len(), 2);
+    let queued = app.held_opens.back().unwrap();
+    assert_eq!(queued.initial_view.as_ref().unwrap().target, target);
+    assert!(queued.read_only);
+    assert_eq!(queued.protected_import_source.as_deref(), Some(source.as_str()));
+    unchanged.assert_untouched(&app);
+    // Drive the actual first dialog; its result pump admits the queued file.
+    let inspected = control(&mut app, "ui.inspect", json!({}));
+    let prompts = inspected["result"]["dialogs"].as_array().unwrap();
+    assert_eq!(prompts.len(), 1);
+    let prompt = prompts[0]["id"].clone();
+    assert_eq!(control(&mut app, "ui.dialog.confirm", json!({"dialog":prompt}))["ok"], true);
+    assert!(app.held_opens.is_empty());
+    let state = app.session.documents().iter().find(|state| state.doc.id == id).unwrap();
+    assert_eq!(state.selection(), selected);
+    assert_eq!(state.active_layer(), active);
+    assert_eq!(state.color_samplers, [[1., 1.]]);
+    assert!(state.channel_view.alpha_shown(0));
+    let mask = state.channel_view.layer_mask.unwrap();
+    assert_eq!(mask.mode, photocraft_engine::mask_view_cmds::MaskViewMode::Gray);
+    assert_eq!(mask.layer, active.unwrap());
+    assert!(photocraft_engine::mask_view_cmds::editing(state).is_none(), "source preview must not become mask-edit authority");
+    let want = match target {
+        NativeImportTarget::Composite => photocraft_engine::channel_cmds::ChannelTarget::Composite,
+        NativeImportTarget::LayerMask => photocraft_engine::channel_cmds::ChannelTarget::LayerMask,
+        NativeImportTarget::AlphaChannel(index) => photocraft_engine::channel_cmds::ChannelTarget::Alpha(index),
+    };
+    assert_eq!(state.channel_view.target, want);
+    assert_eq!(state.doc.layers, pixels.layers);
+    assert!(state.source_read_only && state.path.is_none());
+    assert_eq!(state.protected_import_source.as_deref(), Some(source.as_str()));
+    assert!(photocraft_engine::file_cmds::check_import_destination(state, &source).is_err());
+    assert_eq!(state.history.past_len(), 0);
+    assert!(!state.is_dirty());
+    unchanged.assert_untouched(&app);
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
 }
 
 fn control(app: &mut PhotocraftApp, method: &str, params: Value) -> Value {
