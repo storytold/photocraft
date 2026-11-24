@@ -174,8 +174,9 @@ fn source(path: &str) -> Result<Arc<Source>, String> {
         r.generation(&key)
     };
     // Opened outside the lock: reading a file's index can take a while.
+    // The opener gets the file the key names, resolved from the document, not the stored text.
     let opened = match OPENER.get() {
-        Some(open) => open(path).map(|decoder| {
+        Some(open) => open(&key).map(|decoder| {
             let info = decoder.info();
             Arc::new(Source { decoder: Mutex::new(decoder), info })
         }),

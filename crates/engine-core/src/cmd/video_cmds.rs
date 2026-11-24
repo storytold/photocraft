@@ -565,6 +565,9 @@ fn replace_footage(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = edit_video(s, "Replace Footage", move |v, _| {
         v.original_frames = Some(frames.clone());
         v.frames = frames;
+        // The new frames are held: nothing of them is linked footage any more.
+        v.footage = None;
+        v.shown = None;
         v.source = photocraft_doc::VideoSource::File { path: path.clone() };
         Ok(())
     })?;
@@ -605,6 +608,8 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut out = edit_video(s, "Reload Frame", move |v, _| {
         v.original_frames = Some(frames.clone());
         v.frames = frames;
+        v.footage = None;
+        v.shown = None;
         Ok(())
     })?;
     if !warnings.is_empty() {
@@ -765,7 +770,11 @@ pub(crate) fn check_footage(layers: &[Layer]) -> Result<()> {
         if let Some(v) = &l.video
             && let Some(f) = &v.footage
         {
-            crate::footage::status(&f.link, v.footage_frames_used()).map_err(|e| EngineError::Other(format!("the video layer `{}`: {e}", l.name)))?;
+            // Only frames the output reads need the file: painted ones are the layer's own.
+            let needed = v.footage_frames_shown();
+            if needed > 0 {
+                crate::footage::status(&f.link, needed).map_err(|e| EngineError::Other(format!("the video layer `{}`: {e}", l.name)))?;
+            }
         }
         if let Some(ch) = l.children() {
             check_footage(ch)?;

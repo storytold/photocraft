@@ -248,6 +248,19 @@ impl VideoData {
         self.frames[at] = original.unwrap_or_else(|| Surface::new(format));
     }
 
+    /// The footage frame count the layer as displayed reads from its file: one more than the
+    /// highest footage frame shown (painted frames read none while Show Altered Video is on);
+    /// 0 when nothing shown comes from the file.
+    pub fn footage_frames_shown(&self) -> usize {
+        (0..self.frames.len())
+            .filter_map(|i| match self.view(i, !self.show_altered) {
+                Some(FrameView::Footage(n)) => Some(n.saturating_add(1)),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// The footage frame count this layer needs from its file: one more than the highest footage
     /// frame any of its frames shows (0 without linked footage).
     pub fn footage_frames_used(&self) -> usize {

@@ -277,12 +277,22 @@ fn a_deleting_crop_stays_exact_on_slanted_footage() {
 /// Render Video stops at a frame the decoder fails on instead of writing an empty frame.
 #[test]
 fn render_video_fails_on_a_frame_that_cant_be_decoded() {
-    let (mut s, id, _) = linked_with("damaged", Synthetic { fail_at: Some(1), ..Synthetic::new(W, H, 4, 24.0) });
+    let (s, id, _) = linked_with("damaged", Synthetic { fail_at: Some(1), ..Synthetic::new(W, H, 4, 24.0) });
     let file = video(&s, id).footage.as_ref().unwrap().link.path.clone();
-    let dir = std::env::temp_dir().join(format!("pc-footage-damaged-{}", std::process::id()));
-    let err = s.execute("file.export.renderVideo", json!({"dir": dir.to_string_lossy(), "format": "png"})).unwrap_err().to_string();
+    let mut written = Vec::new();
+    let err = render_video_with(
+        &s,
+        &json!({"format": "png"}),
+        |name, _| {
+            written.push(name.to_owned());
+            Ok(())
+        },
+        |_, _| true,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(err.contains("frame 2") && err.contains("damaged") && err.contains(&file), "the error names the frame, the file and why: {err}");
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(written.iter().all(|n| !n.contains("_0001")), "the damaged frame isn't written: {written:?}");
 }
 
 /// A frame decoded while its file was closed (Reload Frame, a relink) isn't cached for the file
@@ -409,4 +419,38 @@ fn a_reopened_document_keeps_its_footage_frame_unpainted() {
     let v = again.active().unwrap().doc.layer(id).unwrap().video.clone().unwrap();
     assert!(v.footage.as_ref().unwrap().altered.iter().all(|a| !a), "no frame became painted");
     assert!(v.frames.iter().all(|f| f.tile_count() == 0));
+}
+
+/// Render Video reads the file only for frames that show it: a layer whose every frame is
+/// painted renders while its file is missing.
+#[test]
+fn painted_frames_render_without_their_file() {
+    let (mut s, id, _) = linked("painted-offline", 2);
+    for frame in [0, 1] {
+        goto(&mut s, frame);
+        paint(&mut s, id);
+    }
+    goto(&mut s, 0);
+    let file = video(&s, id).footage.as_ref().unwrap().link.path.clone();
+    crate::footage::forget(&file);
+    assert!(render_video_with(&s, &json!({"format": "png"}), |_, _| Ok(()), |_, _| true).is_ok());
+    // With Show Altered Video off the footage shows again, and the missing file stops the render.
+    s.execute("layer.videoLayers.showAlteredVideo", json!({})).unwrap();
+    assert!(render_video_with(&s, &json!({"format": "png"}), |_, _| Ok(()), |_, _| true).is_err());
+}
+
+/// Replacing a linked movie with image footage leaves no link behind: the layer holds the new
+/// frames, and nothing is decoded from the old file.
+#[test]
+fn replacing_linked_footage_with_images_drops_the_link() {
+    let (mut s, id, _) = linked("replaced", 4);
+    let mut img = crate::session();
+    img.execute("file.new", json!({"width": W, "height": H, "background": "white"})).unwrap();
+    let png = std::env::temp_dir().join(format!("pc-footage-replaced-{}.png", std::process::id()));
+    std::fs::write(&png, photocraft_io::export(&img.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes).unwrap();
+    s.execute("layer.videoLayers.replaceFootage", json!({"path": png.to_string_lossy()})).unwrap();
+    let v = video(&s, id);
+    assert!(v.footage.is_none() && v.shown.is_none());
+    assert_eq!(v.len(), 1);
+    let _ = std::fs::remove_file(&png);
 }
