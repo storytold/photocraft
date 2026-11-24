@@ -1,11 +1,11 @@
 use super::{
     PhotocraftApp, canvas, discard_ui, gpu_canvas, gpu_status, i18n, jobs_ui, last_brush, monitor_status, native_menu, notices, paint_mouse, panels, prefs_ui,
-    screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds, work_area,
+    screen_picker, shortcuts, smart_svg_ui, tool_memory, transform_tool, type_tool, updates_ui, view_cmds,
 };
 use craft::ui::contract::Bind;
 use craft::ui::runtime::env::WindowKey;
 use craft::ui::runtime::windows::WindowHost;
-use craft::ui::shell::{AppShell, slots};
+use craft::ui::shell::AppShell;
 
 impl PhotocraftApp {
     /// Close this frame's stage record (`frame_stages`): keep it if it was slow, and hand it to
@@ -44,7 +44,7 @@ impl PhotocraftApp {
     /// Canvas drops still waiting to be placed. A running transform pauses the queue, so the
     /// browser admission lease has to outlive the inbox drain.
     pub fn has_pending_drop_places(&self) -> bool {
-        !self.drop_places.is_empty()
+        !self.drop_places.is_empty() || self.jobs.place.is_some()
     }
 
     /// Whether the Home screen is what the canvas area shows this frame. Files opening in the
@@ -96,12 +96,11 @@ impl PhotocraftApp {
         transform_tool::end_if_left(self);
         prefs_ui::tick(self, ctx, std::time::Instant::now());
         updates_ui::tick(self);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::text::installed_fonts::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
-        // A window bigger than its display (1440 × 900 on 1366 × 768) runs under the taskbar:
-        // maximize it into the work area once (#315).
-        work_area::fit_window(ctx);
         // The runtime's close path, which asks PhotoCraft when the window was asked to close.
         craft::ui::shell::embed::logic(ctx, || discard_ui::close_decision(self));
         // A component refused its input (a zoom field turning a Tab or Alt away, a dialog field):
@@ -230,7 +229,6 @@ impl PhotocraftApp {
         let panels_on = &self.ui.panels;
         let (menu_bar, options_bar, status_bar) = (panels_on.menu_bar, panels_on.options_bar, panels_on.status_bar);
         let window_title = panels::title_bar::window_title(self);
-        let versions = (panels::region_versions::options_bar(self), panels::region_versions::status_bar(self));
         // The shell binds a copy of the mode, since `show` takes the app too; the copy goes back
         // to the view after the pass.
         let mut mode = self.ui.view.screen_mode;
@@ -238,11 +236,9 @@ impl PhotocraftApp {
         AppShell::new(WindowKey::main())
             .window_title(window_title)
             .screen_mode(Bind::bound(&mut mode))
-            .title_bar_if(menu_bar, |ui, _cx, app| panels::title_bar(app, ui))
-            .options_bar(options_bar && !home, |ui, _cx, app| panels::options_bar(app, ui))
-            .content(slots::OPTIONS, versions.0)
+            .title_bar_if(menu_bar, |ui, _cx, app| panels::region_versions::show_title_bar(app, ui))
+            .options_bar(options_bar && !home, |ui, _cx, app| panels::region_versions::show_options_bar(app, ui))
             .status(status_bar && !home, |ui, _cx, app| panels::status_bar(app, ui))
-            .content(slots::STATUS, versions.1)
             .body(|ui, cx, app| {
                 if home {
                     canvas::document_area(app, ui);
@@ -256,6 +252,11 @@ impl PhotocraftApp {
             })
             .show(ui, self);
         self.ui.view.screen_mode = mode;
+        // The Properties Reset session starts anew once the panel was not shown (`properties_hidden`).
+        // Home shows no dock, so no Properties panel either.
+        if home || !crate::panel_docking::is_front(self, "properties") {
+            self.properties_hidden = self.properties_hidden.saturating_add(2);
+        }
         // Over the window: the background job and update dialogs before the host runs, then every
         // hosted dialog, then the other OS windows' contents.
         jobs_ui::dialog(self, ui);

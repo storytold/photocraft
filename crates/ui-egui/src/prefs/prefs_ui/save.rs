@@ -1,3 +1,5 @@
+use photocraft_engine::link_watch::LinkWatchExt;
+use photocraft_engine::prefs::SavedPrefsExt;
 use std::time::Instant;
 
 use craft::platform::autosave::{AutosaveDoc, interval_for_minutes};
@@ -212,6 +214,11 @@ fn autosave(app: &mut PhotocraftApp, now: Instant) {
                 autosave_failed(app, failed);
             }
         }
+    }
+    // Apply Data Set's Preview is not the document: autosave waits until the preview ends, and
+    // the timer keeps what is due for the next tick.
+    if crate::panels::apply_data_set_ui::previewing(app) {
+        return;
     }
     let docs: Vec<AutosaveDoc> = app.session.documents().iter().map(|d| AutosaveDoc { id: d.doc.id.0, revision: d.revision, dirty: d.is_dirty() }).collect();
     let due = app.autosave.due(now, docs);

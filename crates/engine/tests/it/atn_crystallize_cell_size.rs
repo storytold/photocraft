@@ -1,5 +1,6 @@
 //! #7669: strict ATN export must not replace a native fractional Crystallize cell size.
 use craft_psd::{atn, descriptor::Value as D};
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::{Value, json};
@@ -39,7 +40,7 @@ fn fractional_cell_sizes_remain_native_and_are_refused_by_strict_export() {
             direct.execute(CRYSTALLIZE, params).unwrap();
             let expected = pixels(&direct);
             let mut native = fixture(depth);
-            native.actions.list.push(action.clone()).unwrap();
+            native.actions_mut().list.push(action.clone()).unwrap();
             native.execute("actions.play", json!({"action": "Fractional Crystallize"})).unwrap();
             assert_eq!(pixels(&native), expected);
 
@@ -53,7 +54,7 @@ fn fractional_cell_sizes_remain_native_and_are_refused_by_strict_export() {
                 assert!(skipped.is_empty() && imported.unsupported.is_empty() && imported.warnings.is_empty());
                 let exported = imported.actions[0].steps[0].params["cellSize"].clone();
                 let mut replay = fixture(depth);
-                replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+                replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
                 replay.execute("actions.play", json!({"action": "Fractional Crystallize"})).unwrap();
                 let changed = pixels(&replay) != expected;
                 if cell_size == 5.4 {
@@ -77,7 +78,7 @@ fn integer_cell_sizes_and_defaults_preserve_playback() {
             let mut direct = fixture(depth);
             direct.execute(CRYSTALLIZE, params.clone()).unwrap();
             let mut native = fixture(depth);
-            native.actions.list.push(action.clone()).unwrap();
+            native.actions_mut().list.push(action.clone()).unwrap();
             native.execute("actions.play", json!({"action": "Integer Crystallize"})).unwrap();
             assert_eq!(pixels(&native), pixels(&direct));
 
@@ -94,7 +95,7 @@ fn integer_cell_sizes_and_defaults_preserve_playback() {
             assert_eq!(imported.actions[0].steps.len(), 1);
             assert_eq!(imported.actions[0].steps[0].command, CRYSTALLIZE);
             let mut replay = fixture(depth);
-            replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+            replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             replay.execute("actions.play", json!({"action": "Integer Crystallize"})).unwrap();
             assert_eq!(pixels(&replay), pixels(&direct), "depth {depth}: {params}");
         }

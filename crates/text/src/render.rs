@@ -396,6 +396,7 @@ fn paint_color_glyphs(
     acc: &mut [f32],
     (w, h): (usize, usize),
     mut limits: Limits,
+    dirty_rows: &mut [bool],
 ) -> Option<()> {
     let n = format.mode.color_channels();
     let stride = n + 1;
@@ -447,6 +448,9 @@ fn paint_color_glyphs(
             let a = s[3] * opacity;
             let o = ((wy0 + i / ww) * w + wx0 + i % ww) * stride;
             let (true, Some(px)) = (a > 0.0, acc.get_mut(o..o + stride)) else { continue };
+            if let Some(row) = dirty_rows.get_mut(wy0 + i / ww) {
+                *row = true;
+            }
             let straight = [s[0] / s[3], s[1] / s[3], s[2] / s[3]];
             let rgb = straight.map(keep_range);
             let comps = match &native {
@@ -614,7 +618,8 @@ pub(crate) fn rasterize_passes(
     let Some(acc_bytes) = (w as u64).checked_mul(h as u64).and_then(|n| n.checked_mul((stride * size_of::<f32>()) as u64)) else {
         return nothing(format);
     };
-    if !fits_raster_budget(w, h, stride, format.sample, any_bold, MAX_RASTER_BYTES) || !fits_tile_budget(rect, format, acc_bytes, MAX_RASTER_BYTES) {
+    let budget = MAX_RASTER_BYTES.saturating_sub(h as u64);
+    if !fits_raster_budget(w, h, stride, format.sample, any_bold, budget) || !fits_tile_budget(rect, format, acc_bytes, budget) {
         return nothing(format);
     }
     // Premultiplied accumulation.
@@ -624,6 +629,11 @@ pub(crate) fn rasterize_passes(
     let xf = Xform([1.0, 0.0, 0.0, 1.0, -rect.x0 as f64, -rect.y0 as f64]).mul(&Xform(transform.m));
     let whole = Rect::new(0, 0, w as i32, h as i32);
     let mut pass_pixels = 0u64;
+    let mut dirty_rows = Vec::new();
+    if dirty_rows.try_reserve_exact(h).is_err() {
+        return nothing(format);
+    }
+    dirty_rows.resize(h, false);
     for (c, _, pass) in &colors {
         // Rasterise each colour only over its own glyphs (faux bold's thickened outlines included):
         // a full-size pass per colour made text with many coloured runs cost colours x area
@@ -657,17 +667,24 @@ pub(crate) fn rasterize_passes(
         };
         let comps = color_in(&format, c);
         let a = c.alpha.clamp(0.0, 1.0);
+        for (y, row) in cov.chunks(sw).enumerate() {
+            if row.iter().any(|&coverage| coverage != 0.0)
+                && let Some(dirty) = dirty_rows.get_mut(sub.y0 as usize + y)
+            {
+                *dirty = true;
+            }
+        }
         composite(&mut acc, w, sub, &cov, stride, &comps, a, antialias);
     }
     // Colour glyphs get what the plain passes left of both budgets: the bytes beside the
     // accumulator and the output surface ([`fits_raster_budget`]), and the pixel work.
     let deep = (w as u64).saturating_mul(h as u64).saturating_mul(stride as u64).saturating_mul(size_of::<f32>() as u64 + format.sample.bytes() as u64);
-    let limits = Limits { bytes: MAX_RASTER_BYTES.saturating_sub(deep), work: MAX_PASS_PIXELS.saturating_sub(pass_pixels) };
-    if paint_color_glyphs(layout, &xf, warp, &format, antialias, &mut acc, (w, h), limits).is_none() {
+    let limits = Limits { bytes: budget.saturating_sub(deep), work: MAX_PASS_PIXELS.saturating_sub(pass_pixels) };
+    if paint_color_glyphs(layout, &xf, warp, &format, antialias, &mut acc, (w, h), limits, &mut dirty_rows).is_none() {
         return nothing(format);
     }
     // Unpremultiply.
-    unpremultiply(&mut acc, n, stride, format.sample);
+    unpremultiply(&mut acc, w, n, stride, format.sample, &dirty_rows);
     surface.write_region_par(rect, &acc);
     surface.prune();
     Rendered { surface, rect }
@@ -685,6 +702,9 @@ fn composite(acc: &mut [f32], width: usize, sub: Rect, cov: &[f32], stride: usiz
         return;
     }
     let row = |acc: &mut [f32], cov: &[f32]| {
+        if cov.iter().all(|&v| v == 0.0) {
+            return;
+        }
         let Some(acc) = acc.get_mut(x0..x1) else { return };
         for (cv, px) in cov.iter().zip(acc.chunks_exact_mut(stride)) {
             let cv = shape_antialias_coverage(*cv, antialias);
@@ -706,7 +726,7 @@ fn composite(acc: &mut [f32], width: usize, sub: Rect, cov: &[f32], stride: usiz
 }
 
 /// Divides the premultiplied accumulator back to straight colour. Each pixel stands alone.
-fn unpremultiply(acc: &mut [f32], n: usize, stride: usize, sample: SampleType) {
+fn unpremultiply(acc: &mut [f32], width: usize, n: usize, stride: usize, sample: SampleType, dirty_rows: &[bool]) {
     let one = |px: &mut [f32]| {
         let a = px[n];
         if a > 0.0 {
@@ -719,9 +739,9 @@ fn unpremultiply(acc: &mut [f32], n: usize, stride: usize, sample: SampleType) {
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
-    acc.par_chunks_exact_mut(stride).for_each(one);
+    acc.par_chunks_mut(width * stride).zip(dirty_rows.par_iter()).filter(|(_, dirty)| **dirty).for_each(|(row, _)| row.chunks_exact_mut(stride).for_each(one));
     #[cfg(target_arch = "wasm32")]
-    acc.chunks_exact_mut(stride).for_each(one);
+    acc.chunks_mut(width * stride).zip(dirty_rows).filter(|(_, dirty)| **dirty).for_each(|(row, _)| row.chunks_exact_mut(stride).for_each(one));
 }
 
 /// One element of a glyph outline in document space (see [`outlines`]).

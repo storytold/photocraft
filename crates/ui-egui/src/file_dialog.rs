@@ -123,7 +123,7 @@ fn path_string(path: &Path) -> String {
 fn path_strings(picked: &Picked) -> Vec<String> {
     match picked {
         Picked::Paths(paths) => paths.iter().map(|p| path_string(p)).collect(),
-        Picked::Contents(_) | Picked::Cancelled | Picked::Unavailable(_) => Vec::new(),
+        Picked::Contents(_) | Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Vec::new(),
     }
 }
 
@@ -149,8 +149,8 @@ impl PhotocraftApp {
         };
         let saving = request.kind == PickKind::Save;
         let then: Then = Box::new(move |app, picked| match picked {
-            Picked::Cancelled => Err(CANCELLED.into()),
-            Picked::Unavailable(why) => Err(why),
+            Picked::Cancelled | Picked::Downloaded(_) => Err(CANCELLED.into()),
+            Picked::Unavailable(why) | Picked::Failed(why) => Err(why),
             Picked::Paths(paths) => {
                 // A lossy copy of a name that isn't valid Unicode would name another file (#6601).
                 for path in &paths {
@@ -311,6 +311,21 @@ impl PhotocraftApp {
         })
     }
 
+    /// [`Self::pick_file_bytes`] letting the user choose several files (File › Place Embedded):
+    /// `then` gets every chosen file, in the order the dialog returns them. A desktop file is
+    /// handed over by path and read only when [`PickedFile::read`] is called, so files waiting
+    /// their turn hold no contents; the web hands over each file's contents.
+    pub(crate) fn pick_files_bytes(&mut self, then: impl FnOnce(&mut Self, Vec<PickedFile>) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        let mut request = open_filters(PickRequest::open_many("file"), &[]);
+        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
+            request = request.directory(dir);
+        }
+        self.ask_file(request, move |app, picked| {
+            let files = picked_files(picked)?;
+            then(app, files)
+        })
+    }
+
     /// File › Open: opens every chosen file in the order the dialog returns them, reporting each
     /// failure (see [`Self::open_paths_in_order`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
@@ -322,7 +337,7 @@ impl PhotocraftApp {
                     app.open_paths_in_order(&path_strings(&picked));
                 }
                 Picked::Contents(files) => app.open_contents(files),
-                Picked::Cancelled | Picked::Unavailable(_) => return Err(UNEXPECTED.into()),
+                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
             }
             Ok(Value::Null)
         })
@@ -430,8 +445,14 @@ impl PhotocraftApp {
         #[cfg(not(target_arch = "wasm32"))]
         let Some(picked) = self.take_picked() else { return };
         #[cfg(target_arch = "wasm32")]
-        let Some((picked, _guard)) = self.take_picked() else { return };
+        let Some((picked, guard)) = self.take_picked() else { return };
+        #[cfg(target_arch = "wasm32")]
+        let previous = self.jobs.place.as_ref().map(|p| p.job);
         let _ = self.finish_file_dialog(picked);
+        #[cfg(target_arch = "wasm32")]
+        if self.jobs.place.as_ref().is_some_and(|p| Some(p.job) != previous) {
+            self.jobs.place_input_guard = Some(guard);
+        }
     }
 
     /// Ends the file dialog in progress: its action continues with `picked`, and its errors go to
@@ -509,13 +530,48 @@ pub(crate) fn last_used_dir(recent: &[String]) -> Option<String> {
 fn read_picked(picked: Picked) -> Result<(String, Vec<u8>), String> {
     match picked {
         Picked::Contents(files) => files.into_iter().next().ok_or_else(|| CANCELLED.into()),
-        Picked::Paths(paths) => {
-            let path = path_string(paths.first().ok_or(CANCELLED)?);
-            let bytes = photocraft_format::read_file(Path::new(&path)).map_err(|e| format!("{}: {e}", display_name(&path)))?;
-            Ok((path, bytes))
-        }
-        Picked::Cancelled | Picked::Unavailable(_) => Err(UNEXPECTED.into()),
+        Picked::Paths(paths) => read_path(path_string(paths.first().ok_or(CANCELLED)?)),
+        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => Err(UNEXPECTED.into()),
     }
+}
+
+/// The file at `path` with its contents; one that can't be read fails with "<file name>: <why>".
+fn read_path(path: String) -> Result<(String, Vec<u8>), String> {
+    let bytes = photocraft_format::read_file(Path::new(&path)).map_err(|e| format!("{}: {e}", display_name(&path)))?;
+    Ok((path, bytes))
+}
+
+/// One file chosen in the several-file picker ([`PhotocraftApp::pick_files_bytes`]).
+#[derive(Debug)]
+pub(crate) enum PickedFile {
+    /// A file on disk (desktop), by its full path: read when its turn comes.
+    Path(String),
+    /// A file's name and contents (the web, where the page gets contents rather than paths).
+    Contents(String, Vec<u8>),
+}
+
+impl PickedFile {
+    /// Its name (the full path on the desktop) and contents, reading a desktop file now; one that
+    /// can't be read fails with "<file name>: <why>", as in [`PhotocraftApp::pick_file_bytes`].
+    pub(crate) fn read(self) -> Result<(String, Vec<u8>), String> {
+        match self {
+            Self::Path(path) => read_path(path),
+            Self::Contents(name, bytes) => Ok((name, bytes)),
+        }
+    }
+}
+
+/// The files chosen in a several-file picker, in the order the dialog returns them (none: Cancel).
+fn picked_files(picked: Picked) -> Result<Vec<PickedFile>, String> {
+    let files: Vec<PickedFile> = match picked {
+        Picked::Paths(paths) => paths.iter().map(|p| PickedFile::Path(path_string(p))).collect(),
+        Picked::Contents(files) => files.into_iter().map(|(name, bytes)| PickedFile::Contents(name, bytes)).collect(),
+        Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
+    };
+    if files.is_empty() {
+        return Err(CANCELLED.into());
+    }
+    Ok(files)
 }
 
 #[cfg(test)]
