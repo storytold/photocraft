@@ -2,8 +2,8 @@
 """Move a branch's edits of the old inline command table into the table fragments.
 
 Before the table was split, `crates/engine/src/cmd.rs` held every core command in one `vec![...]`
-inside `fn build()`. The entries now live in `crates/engine/src/cmd/table/<owner>/<menu>.rs`, and
-`install/command_ids.txt` pins the registry order. A branch that edited the old table carries its
+inside `fn build()`. The entries now live in `crates/engine-core/src/cmd/table/<owner>/<menu>.rs`, and
+`crates/engine/src/install/command_ids.txt` sets the registry order. A branch that edited the old table carries its
 edits in `cmd.rs`. This script applies them to the fragments:
 
     python3 scripts/engine_split/table_fragments.py --base <merge-base> --head <branch>
@@ -29,7 +29,9 @@ Edits outside `build()` (imports in cmd.rs, helper fns, test modules) are not to
 import argparse, os, re, subprocess, sys, tempfile
 
 CMD = "crates/engine/src/cmd.rs"
-TABLE = "crates/engine/src/cmd/table"
+TABLE = "crates/engine-core/src/cmd/table"
+# The fragment directories of every engine crate (`cmd/table/<owner>/`, in core until its crate is cut out).
+TABLES = sorted(f"{d}/src/cmd/table" for d in (os.path.join("crates", c) for c in os.listdir("crates")) if os.path.basename(d).startswith("engine-") and os.path.isdir(f"{d}/src/cmd/table")) if os.path.isdir("crates") else [TABLE]
 IDS = "crates/engine/src/install/command_ids.txt"
 ID_RE = re.compile(r'"([a-zA-Z]+\.[A-Za-z0-9.]+)"')
 
@@ -92,9 +94,10 @@ class Fragments:
 
     def __init__(self):
         self.files = {}
-        for d, _, names in os.walk(TABLE):
+        walks = [(root, d, names) for root in TABLES for d, _, names in os.walk(root)]
+        for root, d, names in walks:
             for n in names:
-                if n.endswith(".rs") and os.path.dirname(os.path.join(d, n)) != TABLE:
+                if n.endswith(".rs") and os.path.dirname(os.path.join(d, n)) != root:
                     p = os.path.join(d, n)
                     if "vec![" in open(p).read():
                         self.files[p] = open(p).read()
