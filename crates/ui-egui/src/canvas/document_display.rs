@@ -316,6 +316,21 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, 
     let mut overlay_context = None;
     let shown = canvas.show_at(ui, rect, |ui, body| {
         let Some(space) = canvas_space(&body.env) else { return };
+        if !measuring && app.session.active_index() == Some(idx) {
+            let hovered = ui
+                .input(|i| i.pointer.hover_pos())
+                .filter(|pos| space.view.rect.contains(*pos) && ui.ctx().layer_id_at(*pos).is_none_or(|layer| layer == ui.layer_id()))
+                .map(|pos| {
+                    let at = space.view.to_doc(pos);
+                    [at.x, at.y]
+                });
+            let next = if primary { hovered } else { hovered.or(app.hover_doc) };
+            if app.hover_doc != next {
+                app.hover_doc = next;
+                // The Info panel may have already drawn earlier in this frame.
+                ctx.request_repaint();
+            }
+        }
         pasteboards(app, ui, body.rect, idx, border, label.clone());
         guides = super::rulers::show(app, ui, host, ruler_guide(&body.env));
         selection_controls(app, ui, body.rect, idx, &label);
