@@ -160,13 +160,19 @@ fn known(key: u64, refs: &[PathRef]) -> Option<PathRef> {
 /// The overlay's selection replaces this one and its owner; a running gesture stays.
 fn select(app: &mut PhotocraftApp, selection: &PathSelection) {
     let owner = Owner::current(app);
+    let target = selection.path.and_then(PathRef::from_key);
+    let anchors = ids(&selection.anchors);
+    // Other anchors selected end a run of nudges (`nudge`), also when the first ones come back.
+    if app.ui.direct_selection.target != target || app.ui.direct_selection.anchors != anchors {
+        app.nudge_bundle.reset();
+    }
     let ds = &mut app.ui.direct_selection;
     let editing = ds.editing.take();
     let editing_mods = ds.editing_mods;
     let editing_overlay = ds.editing_overlay;
     *ds = DirectSelection {
-        target: selection.path.and_then(PathRef::from_key),
-        anchors: selection.anchors.iter().map(|k| [k.subpath, k.knot]).collect(),
+        target,
+        anchors,
         segment: selection.segment.map(|k| [k.subpath, k.knot]),
         shown: selection.shown.clone(),
         owner,

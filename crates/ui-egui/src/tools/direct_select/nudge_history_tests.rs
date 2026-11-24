@@ -57,8 +57,14 @@ fn another_selection_or_edit_starts_a_new_step() {
     let mut app = app();
     click(&mut app, [40.0, 120.0], Modifiers::NONE);
     nudge(&mut app, Modifiers::NONE);
+    // Another anchor selected and then the first one again: its next nudge is a step of its own.
+    let first = anchor(&app, 3);
     click(&mut app, [120.0, 120.0], Modifiers::NONE);
     assert_eq!(app.ui.direct_selection.anchors, vec![[0, 2]]);
+    click(&mut app, [first.x, first.y], Modifiers::NONE);
+    assert_eq!(app.ui.direct_selection.anchors, vec![[0, 3]]);
+    assert_eq!(added(&mut app, |a| nudge(a, Modifiers::NONE)), ["Nudge Path"], "the first anchor again");
+    click(&mut app, [120.0, 120.0], Modifiers::NONE);
     assert_eq!(added(&mut app, |a| nudge(a, Modifiers::NONE)), ["Nudge Path"], "another anchor");
     let at = anchor(&app, 2);
     let steps = added(&mut app, |a| {
