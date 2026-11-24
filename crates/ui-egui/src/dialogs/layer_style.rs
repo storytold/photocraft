@@ -44,6 +44,9 @@ mod contour;
 mod gradient_field;
 #[cfg(test)]
 mod gradient_method_tests;
+mod stroke_fill;
+#[cfg(test)]
+mod stroke_fill_tests;
 
 /// The Styles preset gallery page id.
 pub const STYLES_PAGE: &str = "styles";
@@ -74,6 +77,8 @@ fn defaults(kind: &str) -> Value {
     let mut p = photocraft_engine::layer_style::effect_defaults(kind);
     if kind == "gradientOverlay" {
         drop_from_to(&mut p);
+    } else if kind == "stroke" {
+        stroke_fill::defaults(&mut p);
     }
     p
 }
@@ -100,6 +105,11 @@ fn with_defaults(kind: &str, params: &Value) -> Value {
 /// defaults (#9477), with the shared light angle filled in.
 fn fresh_params(kind: &str, light: f32, user: Option<&Value>) -> Value {
     let mut p = user.map_or_else(|| defaults(kind), |u| with_defaults(kind, u));
+    if kind == "stroke"
+        && let Some(user) = user
+    {
+        stroke_fill::load_default(&mut p, user);
+    }
     if p.get("useGlobalLight").and_then(Value::as_bool) == Some(true) {
         p["angle"] = json!(light);
     }
@@ -112,8 +122,7 @@ fn hex(c: &photocraft_doc::Color) -> String {
 }
 
 /// Current values of an existing effect, in the command's parameter units —
-/// only the keys this dialog models. Everything else (gradient strokes, multi-stop
-/// gradients, imported contours) is left out so the apply overlay can't clobber it.
+/// only the keys this dialog models. Other properties are kept in the effect snapshot.
 /// `light` is the document's global light angle: an effect that uses it shows that angle.
 fn values_of(e: &Effect, light: f32) -> Value {
     let mut v = defaults(kind_of(e));
@@ -177,13 +186,7 @@ fn values_of(e: &Effect, light: f32) -> Value {
                 }),
             );
             set(&mut v, "overprint", json!(s.overprint));
-            if let FxPaint::Color(c) = &s.paint {
-                set(&mut v, "color", json!(hex(c)));
-            } else {
-                // A gradient/pattern stroke: the dialog's colour field doesn't model
-                // the paint, so the key is left out and the snapshot carries it.
-                drop_keys(&mut v, &["color"]);
-            }
+            stroke_fill::paint_values(&mut v, &s.paint);
         }
         Effect::ColorOverlay { common, color } => {
             set(&mut v, "blend", json!(common.blend.label()));
@@ -318,6 +321,7 @@ fn style_params(kind: EffectKind, values: &Value, fx: Option<&Value>) -> StylePa
             Some(FieldKind::Color) => v.as_str().and_then(color_picker_ui::parse_hex).map(|rgb| StyleValue::Color(Srgba::from_rgb_array(rgb))),
             Some(FieldKind::Contour { .. }) => contour::from_param(v).map(StyleValue::Contour),
             Some(FieldKind::Gradient) => gradient_field::stops_from_json(values).map(StyleValue::Gradient),
+            _ if kind == EffectKind::Stroke && key == gradient_field::KEY => gradient_field::stops_from_json(values).map(StyleValue::Gradient),
             _ if key == "offset" => point(v).map(StyleValue::Point),
             _ => None,
         };
@@ -485,7 +489,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
     let (light, mode, doc) = (st.doc.global_light.angle, st.doc.mode, st.doc.id);
     let user: Map<String, Value> = app.session.presets().layer_defaults.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let keys = blend_keys();
-    let specs = specs(&keys, &user, light);
+    let mut specs = specs(&keys, &user, light);
     let mut draft = LayerStyleDraft::new(draft_of(&layer, light, mode));
     match select {
         None => {
@@ -506,6 +510,8 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
             }
         }
     }
+    let stroke_fields = stroke_fill::Fields::of(&draft).unwrap_or_default();
+    stroke_fill::configure(&mut specs, stroke_fields);
     let channels = channel_names(mode).into_iter().map(String::from).collect();
     let hosted = HostedLayerStyle::new(tl!("Layer Style").to_string(), draft, channels)
         .specs(specs)
@@ -519,6 +525,7 @@ pub fn open(app: &mut PhotocraftApp, select: Option<&str>) -> Option<DialogId> {
         .preview_thumb(preview_thumb(app))
         .canvas(crate::canvas::document_display::CanvasHost::primary(app, idx).canvas_id());
     let id = app.framework.dialogs.open(hosted);
+    stroke_fill::remember(app.ctx(), id, stroke_fields);
     app.layer_style_target = Some((id, doc, layer_id));
     Some(id)
 }
@@ -667,6 +674,16 @@ fn preview_thumb(app: &PhotocraftApp) -> impl Fn(&ContentPainterCx, Rect, &Layer
 // ------------------------------------------------------------------ applying
 
 fn effect_entry(fx: Option<&Value>, kind: &str, mut params: Value, initial_light_angle: Option<f64>) -> Value {
+    if kind == "stroke" {
+        if fx.is_none() {
+            params = with_defaults(kind, &params);
+        }
+        stroke_fill::apply_params(&mut params, fx);
+        return match fx {
+            Some(fx) => json!({"kind": kind, "fx": fx, "params": params}),
+            None => json!({"kind": kind, "params": params}),
+        };
+    }
     match fx {
         Some(fx) => {
             if kind == "bevelEmboss"
@@ -853,7 +870,12 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
             LayerStyleAsk::NewStyle => save_new_style(app, id, layer),
             LayerStyleAsk::MakeDefault(kind, params) => {
                 // The stored defaults reach new instances from the next open and, through `set_defaults`, the open dialog.
-                match app.run("layer.layerStyle.makeDefault", json!({"kind": kind.key(), "params": style_params_json(&params)})) {
+                let values = style_params_json(&params);
+                if kind == EffectKind::Stroke && stroke_fill::is_imported_pattern(&values) {
+                    app.ui.status = tl!("Choose Color or Gradient before making this stroke a default.").to_string();
+                    continue;
+                }
+                match app.run("layer.layerStyle.makeDefault", json!({"kind": kind.key(), "params": values})) {
                     Ok(_) => {
                         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedLayerStyle>(id) {
                             dialog.set_defaults(kind, params);
@@ -870,6 +892,7 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     color_picker::answered(app, id);
     contour::answered(app, id);
+    stroke_fill::refresh(app, ctx, id);
 }
 
 /// OK: replaces the layer's effects with the style's, as one history step.
@@ -906,8 +929,21 @@ fn apply_style_preset(app: &mut PhotocraftApp, dialog: DialogId, name: &str) {
 /// Saves the draft's enabled instances and blending page as a style preset.
 fn save_new_style(app: &mut PhotocraftApp, dialog: DialogId, layer: LayerId) {
     let Some(style) = app.framework.dialogs.get_by_id::<HostedLayerStyle>(dialog).map(|d| d.draft().style.clone()) else { return };
-    let entries: Vec<Value> =
-        style.effects.iter().filter(|e| e.on).map(|e| json!([e.kind.key(), with_defaults(e.kind.key(), &style_params_json(&e.params))])).collect();
+    let entries: Vec<Value> = style
+        .effects
+        .iter()
+        .filter(|e| e.on)
+        .map(|e| {
+            let kind = e.kind.key();
+            let mut params = style_params_json(&e.params);
+            if e.kind == EffectKind::Stroke {
+                params["enabled"] = json!(true);
+                effect_entry(fx_of(&e.params).as_ref(), kind, params, None)
+            } else {
+                json!([kind, with_defaults(kind, &params)])
+            }
+        })
+        .collect();
     let b = &style.blending;
     let params = json!({"layer": layer.0, "effects": entries, "blend": b.blend, "fillOpacity": b.fill_opacity, "opacity": b.opacity});
     if let Ok(v) = app.run("style.presets.new", params) {
@@ -929,7 +965,7 @@ fn reset_to_default(app: &mut PhotocraftApp, dialog: DialogId, instance: EffectI
         return;
     };
     let Ok(v) = app.run("layer.layerStyle.defaultFor", json!({"kind": kind.key()})) else { return };
-    let mut values = v["params"].clone();
+    let mut values = if kind == EffectKind::Stroke { fresh_params(kind.key(), light as f32, v.get("params")) } else { v["params"].clone() };
     drop_from_to(&mut values);
     if values.get("useGlobalLight").and_then(Value::as_bool) == Some(true)
         && let Some(o) = values.as_object_mut()

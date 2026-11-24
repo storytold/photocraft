@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use super::{Group, Named, always, bad, edit_groups, find, group_index, has_layer, req_str, str_param, unique_name};
 use crate::commands::CommandSpec;
-use crate::layer_style::effect_from_params;
+use crate::layer_style::{effect_from_entry, effect_from_params};
 use crate::{EngineError, Result, Session};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, craft_ui_macros::PlainData)]
@@ -256,14 +256,18 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     if !with_fx && !with_blend {
         return Err(bad(CMD, "include effects and/or blending options"));
     }
-    // An explicit effect list (the Layer Style dialog's pending state, in
-    // `layer.layerStyle.<kind>` param form) replaces the layer's own effects.
+    // An explicit effect list replaces the layer's own effects. The Layer Style dialog can
+    // include the same snapshots as `layer.layerStyle.replace` to save pending edits losslessly.
     let listed = p
         .get("effects")
         .and_then(Value::as_array)
         .map(|list| -> Result<Vec<Effect>> {
             list.iter()
                 .map(|e| {
+                    if e.is_object() {
+                        crate::commands::check_f32_values(CMD, e)?;
+                        return effect_from_entry(e, CMD);
+                    }
                     let kind = e.get(0).and_then(Value::as_str).ok_or_else(|| bad(CMD, "each effect is [kind, params]"))?;
                     effect_from_params(kind, e.get(1).unwrap_or(&Value::Null)).ok_or_else(|| bad(CMD, format!("unknown effect {kind}")))
                 })
@@ -385,7 +389,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Style…",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str="Style","group":name?,"layer":id?,"includeEffects":bool=true,"includeBlending":bool=true,"effects":[[kind, params]]? (explicit list, e.g. the Layer Style dialog's pending state; overrides includeEffects),"blend":str?,"fillOpacity":0..100?,"opacity":0..100? (override the layer's blending options)}"##,
+            params: r##"{"name":str="Style","group":name?,"layer":id?,"includeEffects":bool=true,"includeBlending":bool=true,"effects":[[kind, params]|{kind, params, fx?}]? (explicit list overrides includeEffects),"blend":str?,"fillOpacity":0..100?,"opacity":0..100? (override the layer's blending options)}"##,
             enabled: has_layer,
             run: new_preset,
             journal: true,

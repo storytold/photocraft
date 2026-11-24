@@ -811,7 +811,14 @@ fn overlay_stroke(s: &mut StrokeFx, p: &Value) {
         };
     }
     overlay_bool(p, "overprint", &mut s.overprint);
-    if p.get("from").is_some() || p.get("stops").is_some() {
+    if p.get("fillType").and_then(Value::as_str) == Some("gradient") {
+        if !matches!(s.paint, FxPaint::Gradient(_)) {
+            s.paint = FxPaint::Gradient(Gradient::default());
+        }
+        if let FxPaint::Gradient(g) = &mut s.paint {
+            overlay_gradient(g, p);
+        }
+    } else if p.get("from").is_some() || p.get("stops").is_some() {
         s.paint = FxPaint::Gradient(gradient(p));
     } else if let Some(c) = color_of(p, "color") {
         s.paint = FxPaint::Color(c);
@@ -1002,6 +1009,44 @@ fn same_kind(a: &Effect, b: &Effect) -> bool {
 /// automation mistake can't ask for an unbounded document change.
 const MAX_EFFECTS: usize = 256;
 
+/// Builds or overlays one effect entry from the Layer Style draft.
+pub(crate) fn effect_from_entry(e: &Value, cmd: &str) -> Result<Effect> {
+    let kind = e.get("kind").and_then(Value::as_str).ok_or_else(|| bad(cmd, "each effect needs a `kind` string"))?;
+    let mut params = match e.get("params") {
+        None | Some(Value::Null) => json!({}),
+        Some(Value::Object(_)) => e.get("params").cloned().unwrap_or_default(),
+        Some(_) => return Err(bad(cmd, "`params` must be an object")),
+    };
+    match e.get("fx") {
+        Some(fx_json) => {
+            let mut fx: Effect = serde_json::from_value(fx_json.clone()).map_err(|err| bad(cmd, format!("bad effect snapshot: {err}")))?;
+            if kind_of(&fx) != kind {
+                return Err(bad(cmd, format!("effect snapshot is a {}, not `{kind}`", kind_of(&fx))));
+            }
+            if let Effect::GradientOverlay { gradient, interpolation, .. } = &fx {
+                let stops = interpolation.as_ref().map_or(&gradient.stops, |s| &s.stops);
+                if exact_stops(&params).as_ref() == Some(stops)
+                    && let Some(o) = params.as_object_mut()
+                {
+                    o.remove("stops");
+                }
+                if opacity_stops_param(&params, cmd).ok().flatten().as_ref() == Some(&gradient.opacity_stops)
+                    && let Some(o) = params.as_object_mut()
+                {
+                    o.remove("opacityStops");
+                }
+            }
+            check_gradient_params(&params, cmd)?;
+            overlay_effect(&mut fx, &params);
+            Ok(fx)
+        }
+        None => {
+            check_gradient_params(&params, cmd)?;
+            effect_from_params(kind, &params).ok_or_else(|| bad(cmd, format!("unknown effect {kind}")))
+        }
+    }
+}
+
 /// Replaces a layer's whole effect list in one history step: the Layer Style dialog's
 /// apply. Each entry builds an effect from `params`, or edits the snapshot it carried
 /// (`fx`: the effect JSON as the dialog loaded it, kept verbatim for everything the
@@ -1018,40 +1063,7 @@ fn replace_effects(s: &mut Session, p: &Value) -> Result<Value> {
     let mut list = Vec::with_capacity(entries.len());
     let mut pats = Vec::new();
     for e in entries {
-        let kind = e.get("kind").and_then(Value::as_str).ok_or_else(|| bad(CMD, "each effect needs a `kind` string"))?;
-        let mut params = match e.get("params") {
-            None | Some(Value::Null) => json!({}),
-            Some(Value::Object(_)) => e.get("params").cloned().unwrap_or_default(),
-            Some(_) => return Err(bad(CMD, "`params` must be an object")),
-        };
-        let fx = match e.get("fx") {
-            Some(fx_json) => {
-                let mut fx: Effect = serde_json::from_value(fx_json.clone()).map_err(|err| bad(CMD, format!("bad effect snapshot: {err}")))?;
-                if kind_of(&fx) != kind {
-                    return Err(bad(CMD, format!("effect snapshot is a {}, not `{kind}`", kind_of(&fx))));
-                }
-                if let Effect::GradientOverlay { gradient, interpolation, .. } = &fx {
-                    let stops = interpolation.as_ref().map_or(&gradient.stops, |s| &s.stops);
-                    if exact_stops(&params).as_ref() == Some(stops)
-                        && let Some(o) = params.as_object_mut()
-                    {
-                        o.remove("stops");
-                    }
-                    if opacity_stops_param(&params, CMD).ok().flatten().as_ref() == Some(&gradient.opacity_stops)
-                        && let Some(o) = params.as_object_mut()
-                    {
-                        o.remove("opacityStops");
-                    }
-                }
-                check_gradient_params(&params, CMD)?;
-                overlay_effect(&mut fx, &params);
-                fx
-            }
-            None => {
-                check_gradient_params(&params, CMD)?;
-                effect_from_params(kind, &params).ok_or_else(|| bad(CMD, format!("unknown effect {kind}")))?
-            }
-        };
+        let fx = effect_from_entry(e, CMD)?;
         let (fx, pat) = crate::pattern_cmds::resolve_effect(s, fx)?;
         if let Some(pat) = pat {
             pats.push(pat);
@@ -1183,7 +1195,7 @@ pub fn specs() -> Vec<CommandSpec> {
         style_cmd!(
             "stroke",
             "Stroke…",
-            r##"{"size":px=1,"position":"inside|outside|center","color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":str,"angle":deg,"opacity":0..100,"blend":str,"overprint":bool,"add":bool}"##
+            r##"{"size":px=1,"position":"inside|outside|center","fillType":"gradient"?,"color":"#rrggbb","from":"#rrggbb","to":"#rrggbb","stops":[[0..1,"#rrggbb"],.]?,"opacityStops":[[0..1,0..100],.]?,"method":"classic|perceptual|linear|smooth"?,"smoothness":0..100=100,"style":"linear|radial|angle|reflected|diamond","angle":deg,"scale":10..150=100,"reverse":bool,"opacity":0..100,"blend":str,"overprint":bool,"add":bool}"##
         ),
         style_cmd!("colorOverlay", "Color Overlay…", r##"{"color":"#rrggbb","opacity":0..100=100,"blend":str,"add":bool}"##),
         style_cmd!(

@@ -3,13 +3,13 @@
 //! a gradient).
 
 use craft::color_ui::ui::{ColorPickerDialog, ColorPickerResult};
-use craft::imaging::layer_style::{EffectId, EffectSpec, FieldKind, LayerStyle, LayerStyleDraft, StyleValue};
+use craft::imaging::layer_style::{EffectId, EffectKind, EffectSpec, FieldKind, LayerStyle, LayerStyleDraft, StyleValue};
 use craft::imaging::ui::layer_style::{HostedLayerStyle, LayerStyleDialog};
 use craft::theme::Srgba;
 use craft::ui::dialog::{DialogId, DialogResult};
 use craft::ui::runtime::requests::ColorRequest;
 
-use super::{Child, child_of, take_child};
+use super::{Child, child_of, stroke_fill, take_child};
 use crate::PhotocraftApp;
 
 /// The effect, field and colour stop a request key names.
@@ -30,7 +30,9 @@ fn color_at(app: &PhotocraftApp, parent: DialogId, key: &str) -> Result<Srgba, S
     let dialog = app.framework.dialogs.get_by_id::<HostedLayerStyle>(parent).ok_or("no Layer Style dialog")?;
     let id = EffectId::from_key(effect).ok_or("Layer Style effect no longer exists")?;
     let instance = dialog.draft().style.effect(id).ok_or("Layer Style effect no longer exists")?;
-    let spec = EffectSpec::photoshop(instance.kind);
+    let kind =
+        if instance.kind == EffectKind::Stroke { stroke_fill::picker_kind(&instance.params, field).ok_or("unknown Layer Style field")? } else { instance.kind };
+    let spec = EffectSpec::photoshop(kind);
     let kind = &spec.field(field).ok_or("unknown Layer Style field")?.kind;
     let shown = instance.params.over(&spec.defaults);
     match (stop, kind, shown.get(field)) {
