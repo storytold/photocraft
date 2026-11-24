@@ -391,6 +391,15 @@ fn run_color_at(text: &TextLayer, byte: usize) -> photocraft_color::Color {
         .unwrap()
 }
 
+fn assert_run_rgb_at(text: &TextLayer, byte: usize, expected: [f32; 3]) {
+    let color = run_color_at(text, byte);
+    let actual = &color.c[..3];
+    // ICC transforms can leave sub-ULP residuals in otherwise zero components.
+    for (actual_component, expected_component) in actual.iter().zip(expected) {
+        assert!((actual_component - expected_component).abs() < 1e-6, "byte {byte}: {actual:?} vs {expected:?}");
+    }
+}
+
 #[test]
 fn rgb_markup_foregrounds_preserve_inherited_alpha_and_sibling_scopes_at_all_depths() {
     // Pango's foreground/alpha attributes are independent for RGB; RGBA supplies both.
@@ -403,8 +412,8 @@ fn rgb_markup_foregrounds_preserve_inherited_alpha_and_sibling_scopes_at_all_dep
             for (index, alpha) in [(0, 0.5), (1, 0.5), (2, 0.5), (3, 0.25)] {
                 assert_eq!(run_color_at(&text, index).alpha, alpha, "{foreground}, byte {index}");
             }
-            assert_eq!(&run_color_at(&text, 1).c[..3], &[1., 0., 0.]);
-            assert_eq!(&run_color_at(&text, 2).c[..3], &[0., 0., 1.]);
+            assert_run_rgb_at(&text, 1, [1., 0., 0.]);
+            assert_run_rgb_at(&text, 2, [0., 0., 1.]);
             // Native saves retain these editable run attributes as well as the saved pixels.
             let mut doc = photocraft_doc::Document::new("Markup alpha", photocraft_geom::Size::new(80, 20), ColorMode::Rgb, sample);
             doc.layers.push(Layer::new("Editable", LayerContent::Text(text.clone())));
@@ -424,7 +433,7 @@ fn rgba_and_explicit_markup_alpha_override_while_nested_rgb_only_changes_color()
         assert_eq!(text.text, "ABC");
         assert!((run_color_at(&text, 0).alpha - alpha).abs() < 1e-6);
         assert!((run_color_at(&text, 1).alpha - alpha).abs() < 1e-6);
-        assert_eq!(&run_color_at(&text, 1).c[..3], &[0., 0., 1.]);
+        assert_run_rgb_at(&text, 1, [0., 0., 1.]);
         assert_eq!(run_color_at(&text, 2).alpha, 0.5);
     }
     for attributes in ["alpha='75%' foreground='red'", "foreground='red' alpha='75%'"] {
