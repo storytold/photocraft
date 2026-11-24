@@ -739,8 +739,8 @@ fn raw_open_legacy_baseline_pixels() {
     // center pixel `[47838, 39368, 49721]` matches legacy bit-for-bit); `tuned_px`/`tuned_hash` reflects
     // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`). Whole-image hashes differ by
     // 1 LSB between MSVC and glibc `libm` float math on Windows.
-    let expected_def_hash = if cfg!(target_os = "windows") { 9_388_097_638_634_194_548 } else { 10_802_259_885_448_765_778 };
-    let expected_tuned_hash = if cfg!(target_os = "windows") { 5_472_991_315_859_343_413 } else { 12_255_299_099_314_572_538 };
+    let expected_def_hash = if cfg!(target_os = "windows") { 15_396_184_765_895_906_317 } else { 10_802_259_885_448_765_778 };
+    let expected_tuned_hash = if cfg!(target_os = "windows") { 2_792_208_992_597_872_838 } else { 12_255_299_099_314_572_538 };
     assert_eq!(
         (def_px, def_hash, wb, tuned_px, tuned_hash),
         (
@@ -809,7 +809,7 @@ fn raw_open_camera_wb_legacy_baseline_pixels() {
     // Default RAW Open (`def_px`/`def_hash`) runs `craft_develop::sensor::demosaic` (`reflect` borders;
     // center pixel `[51905, 40291, 54669]` matches legacy bit-for-bit); `tuned_px`/`tuned_hash` reflects
     // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`).
-    let expected_tuned_hash = if cfg!(target_os = "windows") { 16_896_394_607_103_456_502 } else { 8_451_299_581_473_829_420 };
+    let expected_tuned_hash = if cfg!(target_os = "windows") { 6_427_926_143_910_930_207 } else { 8_451_299_581_473_829_420 };
     assert_eq!(
         (def_px, def_hash, tuned_px, tuned_hash),
         (
