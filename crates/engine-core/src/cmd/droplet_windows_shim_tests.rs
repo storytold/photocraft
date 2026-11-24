@@ -19,7 +19,7 @@ fn create(dir: &str, path: String, shim: Option<bool>) -> Value {
     if let Some(shim) = shim {
         p["shim"] = json!(shim);
     }
-    Session::new().execute("file.automate.createDroplet", p).unwrap()
+    crate::session().execute("file.automate.createDroplet", p).unwrap()
 }
 
 #[cfg(windows)]
@@ -172,11 +172,11 @@ fn windows_create_droplet_default_writes_a_runnable_cmd_launcher() {
     let in_dir = format!(r"{dir}\in");
     std::fs::create_dir_all(&in_dir).unwrap();
     {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 4, "height": 2, "background": "#808080"})).unwrap();
         crate::file_cmds::save_doc(&s.active().unwrap().doc, &format!(r"{in_dir}\a.png"), None).unwrap();
     }
-    let run = Session::new().execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [in_dir]})).unwrap();
+    let run = crate::session().execute("file.automate.runDroplet", json!({"droplet": droplet, "input": [in_dir]})).unwrap();
     assert_eq!(run["errors"], json!([]), "{run}");
     assert_eq!(run["files"].as_array().unwrap().len(), 1, "{run}");
 }
