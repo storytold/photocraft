@@ -343,7 +343,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"centerOnSelection":bool=false (as File > Place Embedded: centre on a hard-edged rectangular selection, over center, and remove the selection in the same step),"approveHighMemory":bool=false (explicitly approve high memory usage),"frame":id|false? (default: selected frame)}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),
@@ -455,6 +455,10 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.clearCanvasGuides", "Clear Canvas Guides", &["View"], None, "{}", has_doc, |s, _| clear_canvas_guides(s)),
     ]
 }
+
+#[cfg(test)]
+#[path = "file_cmds/place_selection_centre_tests.rs"]
+mod place_selection_centre_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]

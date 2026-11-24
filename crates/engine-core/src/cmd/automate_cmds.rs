@@ -649,7 +649,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.scripts.statistics",
             "Statistics…",
             &["File", "Scripts"],
-            r##"{"mode":"mean|median|maximum|minimum|range|summation|variance|standardDeviation|skewness|kurtosis|entropy"="median","input":folder|[paths],"align":bool=false (Auto-Align first)} → new document with one stack-mode smart object"##,
+            r##"{"mode":"mean|median|maximum|minimum|range|summation|variance|standardDeviation|skewness|kurtosis|entropy"="median","input":folder|[paths],"paths":folder|[paths]? (older name for input),"align":bool=false (Auto-Align first)} → new document with one stack-mode smart object"##,
             native,
             statistics
         ),

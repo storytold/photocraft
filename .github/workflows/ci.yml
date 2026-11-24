@@ -192,6 +192,8 @@ jobs:
       # The tests build with the optional craft-fonts input (crates/text/build.rs), so the
       # Japanese font tests that skip without it run. Same commit as release.yml.
       craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
+      # Every .rs file is reached by a mod, #[path] or include!; a new unreached file fails the lint leg.
+      unreached-rs-mode: strict
       # CI test binaries carry no debuginfo and no symbols (CARGO_PROFILE_TEST_STRIP below): a
       # test build drops from ~19 to ~6.5 GB. A panic still names its file and line; only
       # backtrace frames lose names and lines. Local builds keep Cargo.toml's line tables.

@@ -1744,7 +1744,7 @@ impl Session {
         result
     }
 
-    fn dispatch_with_commit(&mut self, id: &str, params: Value, background: bool, live_commit: Option<crate::brush_cmds::LiveCommit>) -> Result<Started> {
+    fn dispatch_with_commit(&mut self, id: &str, params: Value, background: bool, live_commit: Option<crate::state::LiveCommit>) -> Result<Started> {
         let spec = crate::registry::spec(id)?;
         let hooks = crate::registry::hooks();
         // Params are named fields: anything but an object (or null, meaning none) is a caller
