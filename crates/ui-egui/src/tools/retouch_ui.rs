@@ -209,7 +209,9 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing})),
         Tool::Remove => {
             if !o.remove_after_each_stroke {
-                remove_pending_add(app, points);
+                // The bar's Subtract from brushed area, or Alt held during the drag (#12543), takes
+                // the stroke's footprint out of the pending area instead of adding to it.
+                remove_pending_stroke(app, points, o.remove_subtract || mods.alt);
                 return true;
             }
             ("paint.remove", remove_params(&o, crate::canvas::paint_target(app).as_str() == Some("pixels")))
@@ -319,9 +321,19 @@ fn remove_target(app: &PhotocraftApp) -> Option<RemoveTarget> {
     Some(RemoveTarget { doc: st.doc.id, layer: st.active_layer, channel: st.channel_view.target, paint: crate::canvas::paint_target(app) })
 }
 
+/// [`remove_pending_stroke`] with the stroke adding its footprint: the bar's Add to brushed area.
+pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
+    remove_pending_stroke(app, points, false);
+}
+
 /// Remove after each stroke off: a finished stroke waits with the others, tinted on the canvas,
 /// until ↩ or the options bar's ✓ applies them all as one removal (Esc or ⊘ drops them).
-pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
+///
+/// `subtract` is the bar's Subtract from brushed area, or an Alt held through the drag (#12543):
+/// the stroke waits as a `paint.remove` subtract entry, so ↩ leaves its pixels as they were. Its
+/// own footprint is no part of what the tint shows; with nothing waiting the stroke changes nothing
+/// and adds no History state.
+pub fn remove_pending_stroke(app: &mut PhotocraftApp, points: &[[f64; 3]], subtract: bool) {
     let Some(target) = remove_target(app) else { return };
     let Some(st) = app.session.active() else { return };
     let size = [st.doc.size.width, st.doc.size.height];
@@ -330,12 +342,22 @@ pub fn remove_pending_add(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
         app.remove_trail = None;
         app.remove_pending_target = Some(target);
     }
+    if subtract && app.remove_pending.is_empty() {
+        // Nothing waiting to take a footprint out of: the stroke is dropped as the no-op the issue
+        // pins, and no subtract-only removal ever reaches the command.
+        return;
+    }
     // The brush it was drawn with goes with it: the tint shows it, the removal uses it, however
     // the brush changes before ↩.
     let b = &app.session.tools.brush;
-    let entry = json!({"points": points, "size": b.size, "hardness": b.hardness * 100.0, "spacing": b.spacing * 100.0});
-    let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &entry);
-    app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(&mut app.texture_serials, size)).feed_stroke_reach(points, brush);
+    let mut entry = json!({"points": points, "size": b.size, "hardness": b.hardness * 100.0, "spacing": b.spacing * 100.0});
+    if subtract {
+        entry["subtract"] = json!(true);
+    }
+    if !subtract {
+        let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &entry);
+        app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(&mut app.texture_serials, size)).feed_stroke_reach(points, brush);
+    }
     app.remove_pending.push(entry);
     app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
     app.ui.status_error = false;
@@ -728,3 +750,7 @@ mod clone_stamp_no_source_alert_tests;
 #[cfg(test)]
 #[path = "remove_options_bar_labels_tests.rs"]
 mod remove_options_bar_labels_tests;
+
+#[cfg(test)]
+#[path = "remove_subtract_mode_tests.rs"]
+mod remove_subtract_mode_tests;

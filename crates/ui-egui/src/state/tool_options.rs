@@ -39,6 +39,11 @@ pub struct ToolOptions {
     /// Remove tool: each stroke is filled when released (Photoshop's default). Off, the strokes
     /// collect as a tint on the canvas and ↩ applies them together (Esc drops them).
     pub remove_after_each_stroke: bool,
+    /// Remove tool (#12543): the options bar's Subtract from brushed area is picked instead of Add to
+    /// brushed area. Off (the default, and what Reset Tool restores) a waiting stroke adds its
+    /// footprint to the pending area; on, or with Alt held during the drag, it takes its footprint out.
+    #[serde(default)]
+    pub remove_subtract: bool,
     /// Adjustment Brush: the Adjustment dropdown's entry (`photocraft_engine::adjustment_brush_cmds::ENTRIES`).
     pub adjustment_brush_kind: String,
     /// Adjustment Brush: Subtract (paints black into the mask) instead of Add.
@@ -445,6 +450,7 @@ impl Default for ToolOptions {
             object_hard_edge: true,
             remove_new_layer: false,
             remove_after_each_stroke: true,
+            remove_subtract: false,
             adjustment_brush_kind: photocraft_engine::adjustment_brush_cmds::DEFAULT_KIND.into(),
             adjustment_brush_subtract: false,
             adjustment_brush_overlay: false,
