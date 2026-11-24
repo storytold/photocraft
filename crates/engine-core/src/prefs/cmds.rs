@@ -169,7 +169,7 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
             // to the extras, after the lists (and a preset's) are taken; without one the layout is
             // kept as it was given.
             let hidden = ids("hidden").unwrap_or_default();
-            let layout = ToolbarCustomization { toolbar: Some(toolbar), extras: Some(extras), hidden, ..Default::default() }.layout();
+            let layout = ToolbarCustomization { toolbar: Some(toolbar), extras: Some(extras), hidden }.layout();
             pr.toolbar.hidden.clear();
             pr.toolbar.toolbar = Some(layout.toolbar);
             pr.toolbar.extras = Some(layout.extras);
