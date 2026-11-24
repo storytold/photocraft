@@ -4,6 +4,7 @@ use egui::accesskit::{Role, Toggled};
 use egui::{Key, Modifiers, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use photocraft_engine::actions_cmds::ActionsExt as _;
 use serde_json::json;
 
 use crate::{PhotocraftApp, Tool};
@@ -79,7 +80,8 @@ pub(super) fn check_bar_edits(tool: Tool, other: Tool) {
     assert_controls(&h, -45.0, true);
     let app = h.state_mut();
     app.run("actions.stop", json!({})).unwrap();
-    let steps = &app.session.actions().list.actions()[0].steps;
+    let recorded = app.session.actions().list.actions().iter().find(|action| action.name == "Set brush options").expect("the recorded brush action");
+    let steps = &recorded.steps;
     assert_eq!(steps.len(), 2, "one recorded step per edit");
     assert!(steps.iter().all(|step| step.command == "tools.setBrush"));
     assert_eq!(steps[0].params["brush"]["angle"], json!(-45.0));
