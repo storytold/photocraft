@@ -14,7 +14,7 @@ fn tmp(name: &str) -> String {
 }
 
 fn small_png(path: &str) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 4, "height": 3, "background": "#808080"})).unwrap();
     crate::file_cmds::save_doc(&s.active().unwrap().doc, path, None).unwrap();
 }
@@ -38,7 +38,7 @@ fn failing_droplet(dir: &str, extra: Value) -> String {
     if let (Some(object), Some(add)) = (p.as_object_mut(), extra.as_object()) {
         object.extend(add.clone());
     }
-    Session::new().execute("file.automate.createDroplet", p).unwrap()["path"].as_str().unwrap().to_string()
+    crate::session().execute("file.automate.createDroplet", p).unwrap()["path"].as_str().unwrap().to_string()
 }
 
 /// Writes `dir/Rotate.pcdroplet`, a step that succeeds on every image.
@@ -48,7 +48,7 @@ fn working_droplet(dir: &str, extra: Value) -> String {
     if let (Some(object), Some(add)) = (p.as_object_mut(), extra.as_object()) {
         object.extend(add.clone());
     }
-    Session::new().execute("file.automate.createDroplet", p).unwrap()["path"].as_str().unwrap().to_string()
+    crate::session().execute("file.automate.createDroplet", p).unwrap()["path"].as_str().unwrap().to_string()
 }
 
 fn utf16_be(text: &str) -> Vec<u8> {
@@ -101,7 +101,7 @@ fn a_droplet_saved_without_the_choice_stores_neither_key() {
 #[test]
 fn the_errors_choice_is_only_stop_or_log() {
     let dir = tmp("store-bad");
-    let error = Session::new()
+    let error = crate::session()
         .execute(
             "file.automate.createDroplet",
             json!({"path": format!("{dir}/Bad"), "steps": failing_steps(), "output": format!("{dir}/out"), "shim": false, "errors": "quiet"}),
@@ -116,7 +116,7 @@ fn the_errors_choice_is_only_stop_or_log() {
 #[test]
 fn a_log_path_that_is_not_a_string_is_refused() {
     let dir = tmp("store-log-type");
-    let error = Session::new()
+    let error = crate::session()
         .execute(
             "file.automate.createDroplet",
             json!({"path": format!("{dir}/Typed"), "steps": failing_steps(), "output": format!("{dir}/out"), "shim": false, "errors": "log", "errorLog": 42}),
@@ -141,7 +141,7 @@ fn stop_for_errors_ends_the_run_at_the_first_failing_file() {
     small_png(&a);
     small_png(&b);
     let dp = failing_droplet(&dir, json!({"errors": "stop"}));
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
     assert_eq!(r["errors"].as_array().map(Vec::len), Some(1), "{r}");
     assert_eq!(r["skipped"], json!([format!("{dir}/b.jpg")]), "{r}");
     assert_eq!(r["files"], json!([]), "{r}");
@@ -156,7 +156,7 @@ fn a_droplet_without_the_new_keys_goes_on_after_a_failure() {
     let (a, b) = inputs(&dir);
     let dp = failing_droplet(&dir, json!({}));
     let log = format!("{dir}/droplog.txt");
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
     assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "{r}");
     assert!(r.get("skipped").is_none(), "{r}");
     assert!(!std::path::Path::new(&log).exists(), "a droplet saved without the choice writes no log");
@@ -169,7 +169,7 @@ fn log_errors_to_file_runs_every_file() {
     let (a, b) = inputs(&dir);
     let log = format!("{dir}/droplog.txt");
     let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": log}));
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
     assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "{r}");
     let text = decode_be(&std::fs::read(&log).unwrap());
     assert!(text.starts_with("Start Droplet\r\n\r\n"), "{text:?}");
@@ -190,7 +190,7 @@ fn an_error_free_run_writes_exactly_62_bytes() {
     let log = format!("{dir}/droplog.txt");
     let dp = working_droplet(&dir, json!({"errors": "log", "errorLog": log}));
     let (a, b) = inputs(&dir);
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
     assert_eq!(r["errors"], json!([]), "{r}");
     let bytes = std::fs::read(&log).unwrap();
     assert_eq!(bytes.len(), 62, "{:?}", decode_be(&bytes));
@@ -205,8 +205,8 @@ fn the_droplet_log_says_droplet_where_the_batch_log_says_batch() {
     let (a, _) = inputs(&dir);
     let droplet_log = format!("{dir}/droplet.txt");
     let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": droplet_log}));
-    Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a.clone()]})).unwrap();
-    Session::new()
+    crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a.clone()]})).unwrap();
+    crate::session()
         .execute(
             "file.automate.batch",
             json!({"steps": failing_steps(), "input": [a], "output": format!("{dir}/batch-out"), "format": "png", "errorLog": format!("{dir}/batch.txt")}),
@@ -222,7 +222,7 @@ fn a_batch_run_still_writes_batch_frame_lines() {
     let dir = tmp("batch-neighbour");
     let log = format!("{dir}/batchlog.txt");
     let missing = format!("{dir}/in/missing.png");
-    let r = Session::new().execute("file.automate.batch", json!({"steps": [], "input": [missing], "output": format!("{dir}/out"), "errorLog": log})).unwrap();
+    let r = crate::session().execute("file.automate.batch", json!({"steps": [], "input": [missing], "output": format!("{dir}/out"), "errorLog": log})).unwrap();
     assert_eq!(r["errors"].as_array().map(Vec::len), Some(1), "{r}");
     let text = decode_be(&std::fs::read(&log).unwrap());
     assert!(text.starts_with("Start Batch\r\n\r\n"), "{text:?}");
@@ -242,7 +242,7 @@ fn a_dropped_text_file_stays_silent_in_both_modes() {
     for choice in ["log", "stop"] {
         let _ = std::fs::remove_file(&log);
         let dp = working_droplet(&dir, json!({"errors": choice, "errorLog": log}));
-        let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [txt.clone(), png.clone()]})).unwrap();
+        let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [txt.clone(), png.clone()]})).unwrap();
         assert_eq!(r["errors"], json!([]), "{choice}: {r}");
         assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{choice}: {r}");
         if choice == "log" {
@@ -265,25 +265,26 @@ fn an_error_log_naming_an_input_or_a_planned_output_never_replaces_it() {
     // Aimed at a dropped input: the run goes on over the failing step, and a.png keeps its PNG bytes.
     let dropped = std::fs::read(&a).unwrap();
     let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": a.clone()}));
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a.clone(), b.clone()]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a.clone(), b.clone()]})).unwrap();
     assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "the run went on to both files: {r}");
     assert_eq!(std::fs::read(&a).unwrap(), dropped, "{a} still holds the dropped image, not the log");
     let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
     assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
     // Aimed at a planned output: run once without a log to learn the names Batch writes, then aim there.
     let plain = working_droplet(&dir, json!({}));
-    let planned: Vec<String> = Session::new().execute("file.automate.runDroplet", json!({"droplet": plain, "input": [a.clone(), b.clone()]})).unwrap()["files"]
-        .as_array()
-        .expect("the run's results")
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect();
+    let planned: Vec<String> =
+        crate::session().execute("file.automate.runDroplet", json!({"droplet": plain, "input": [a.clone(), b.clone()]})).unwrap()["files"]
+            .as_array()
+            .expect("the run's results")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
     assert_eq!(planned.len(), 2, "{planned:?}");
     let out = planned.first().expect("one planned output").clone();
     let result = std::fs::read(&out).unwrap();
     let dp = working_droplet(&dir, json!({"errors": "log", "errorLog": out.clone()}));
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
     assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "the run still wrote its results: {r}");
     assert_eq!(std::fs::read(&out).unwrap(), result, "{out} still holds the result, not the log");
     let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
@@ -301,10 +302,10 @@ fn an_error_log_naming_the_droplet_file_itself_never_replaces_it() {
     let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": format!("{dir}/Fails.pcdroplet")}));
     let definition = std::fs::read(&dp).unwrap();
     assert_eq!(dp, format!("{dir}/Fails.pcdroplet"), "the log was aimed at the droplet's own path");
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a, b]})).unwrap();
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a, b]})).unwrap();
     assert_eq!(std::fs::read(&dp).unwrap(), definition, "{dp} still holds the droplet definition, not the log");
     let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
     assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
-    let again = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a]})).unwrap();
+    let again = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a]})).unwrap();
     assert_eq!(again["errors"].as_array().map(Vec::len), Some(1), "the droplet is still runnable: {again}");
 }
