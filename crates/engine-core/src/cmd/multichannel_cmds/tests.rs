@@ -335,7 +335,7 @@ fn deleting_a_process_channel_requires_an_explicit_in_range_index() {
 
 #[test]
 fn deleting_a_process_channel_refuses_an_over_budget_canvas_atomically() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     let area = photocraft_geom::Size::new(100_000, 100_000);
     s.add_document(Document::new("Sparse canvas", area, ColorMode::Rgb, SampleType::U8), None);
     let st = s.active().unwrap();
