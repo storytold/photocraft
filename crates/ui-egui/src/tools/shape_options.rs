@@ -389,11 +389,11 @@ pub(crate) fn pen_paint_swatches(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let sampled = [ShapePaint::Fill, ShapePaint::Stroke].into_iter().find_map(|p| crate::screen_picker::take(app, ("pen-bar", p)).map(|c| (p, c)));
     let recent_colors: Vec<craft::theme::Srgba> =
         crate::paint_picker::recent_colors(&app.session).into_iter().map(|c| srgba([c[0], c[1], c[2], 1.0])).collect();
-    let groups = ShapeGradients::groups_of(&app.session.presets.gradients, fg, bg);
-    let gradients = ShapeGradients { groups, current: &app.session.presets.gradient, recent: &mut app.ui.recent_gradients, fg, bg };
+    let groups = ShapeGradients::groups_of(&app.session.presets().gradients, fg, bg);
+    let gradients = ShapeGradients { groups, current: &app.session.presets().gradient, recent: &mut app.ui.recent_gradients, fg, bg };
     let current = [fill.clone(), stroke.as_ref().map(|s| s.paint.clone())];
     let mut library =
-        ChipLibrary::new(&recent_colors, &app.session.presets.swatches, &mut app.ui.paint_folders, gradients, &mut app.ui.shape_gradient_state, current);
+        ChipLibrary::new(&recent_colors, &app.session.presets().swatches, &mut app.ui.paint_folders, gradients, &mut app.ui.shape_gradient_state, current);
     let words = Env::of(ui).words::<ShapeWords>();
     // The Field's label is the control's accessible name, so the swatches answer to the
     // reference's "Fill:" and "Stroke:"; inside, the chips keep the shape tools' names and tips.
