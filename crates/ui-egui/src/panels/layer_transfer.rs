@@ -6,8 +6,8 @@
 //! Where the copies land: a Move-tool drag puts the pixel that was grabbed under the pointer, and
 //! a Layers panel drag centres the layers on it. With ⇧, or when released on the tab itself, they
 //! keep their place when both documents have the same pixel size and are centred otherwise
-//! (Photoshop's ⇧-drag). With Window › Arrange tiling several documents, releasing over another
-//! document's tile drops there.
+//! (Photoshop's ⇧-drag). Dropping onto a floating window's frame centres the layers. With Window › Arrange
+//! tiling several documents, releasing over another document's tile drops there.
 //!
 //! A Move drag with a pixel selection copies only those pixels into a new layer.
 
@@ -184,7 +184,7 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
     }
     app.jobs.focus = None;
     if ctx.input(|i| i.pointer.any_released()) {
-        drop(app, ctx, index, None);
+        drop(app, ctx, index, DropTarget::Tab);
     }
 }
 
@@ -213,7 +213,7 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     if let Some((dest, at)) = target {
-        drop(app, ctx, dest, at);
+        drop(app, ctx, dest, at.map_or(DropTarget::Frame, DropTarget::Canvas));
     }
     clear(ctx);
 }
@@ -295,14 +295,25 @@ fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 
     }
 }
 
-/// Copy the dragged layers into document `dest`, at document point `at` (see the module docs).
-fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f64; 2]>) {
+/// Where a layer drag was released.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum DropTarget {
+    /// Dropped on the canvas at document-space coordinate `[x, y]`.
+    Canvas([f64; 2]),
+    /// Dropped on the window chrome/frame of a floating document.
+    Frame,
+    /// Dropped on a document tab.
+    Tab,
+}
+
+/// Copy the dragged layers into document `dest`, at target `target` (see the module docs).
+pub(crate) fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, target: DropTarget) {
     let Some(t) = transfer(app, ctx) else { return };
     clear(ctx);
     let docs = app.session.documents();
     let Some(src) = docs.iter().position(|d| d.doc.id == t.source) else { return };
     if dest == src
-        && let Some(at) = at
+        && let DropTarget::Canvas(at) = target
     {
         if app.session.active_index() != Some(dest) {
             app.session.set_active(dest);
@@ -323,12 +334,13 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     let same_size = to.doc.size == docs[src].doc.size;
     let mut p = json!({"document": dest, "source": src, "layers": t.layers});
     p["selectionOnly"] = json!(t.selection_only);
-    match at.filter(|_| !ctx.input(|i| i.modifiers.shift)) {
-        Some(at) => match t.grab {
+    match target {
+        DropTarget::Canvas(at) if !ctx.input(|i| i.modifiers.shift) => match t.grab {
             Some(g) => p["offset"] = json!([(at[0] - g[0]).round(), (at[1] - g[1]).round()]),
             None => p["at"] = json!(at),
         },
-        None => p["center"] = json!(!same_size),
+        DropTarget::Frame => p["center"] = json!(true),
+        DropTarget::Tab | DropTarget::Canvas(_) => p["center"] = json!(!same_size),
     }
     if let Err(e) = app.run("layer.copyToDocument", p) {
         app.ui.status = e;

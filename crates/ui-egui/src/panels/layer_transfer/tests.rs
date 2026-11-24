@@ -595,7 +595,7 @@ fn drop_clears_jobs_focus_when_destination_already_active() {
     };
     ctx.data_mut(|d| d.insert_temp(super::key(), t));
 
-    super::drop(h.state_mut(), &ctx, 1, None);
+    super::drop(h.state_mut(), &ctx, 1, super::DropTarget::Tab);
     assert_eq!(h.state().jobs.focus, None, "jobs.focus should be cleared after cross-doc drop even when dest is already active");
 
     // 2. Same-document drop with dest already active:
@@ -612,7 +612,7 @@ fn drop_clears_jobs_focus_when_destination_already_active() {
     };
     ctx.data_mut(|d| d.insert_temp(super::key(), t_same));
 
-    super::drop(h.state_mut(), &ctx, 0, Some([10.0, 10.0]));
+    super::drop(h.state_mut(), &ctx, 0, super::DropTarget::Canvas([10.0, 10.0]));
     assert_eq!(h.state().jobs.focus, None, "jobs.focus should be cleared after same-doc drop when dest is already active");
 }
 
@@ -684,4 +684,111 @@ fn drop_target_at_uses_root_pointer_for_embedded_floating_windows() {
 
     let target = super::target_at(h.state(), p);
     assert_eq!(target.map(|(d, _)| d), Some(1), "drop hits embedded floating window using root-local coordinates");
+}
+
+fn same_size_harness() -> (Harness<'static, Box<PhotocraftApp>>, LayerId) {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30, "name": "source-doc"})).unwrap();
+    let paint = LayerId(s.execute("layer.new.layer", json!({"name": "paint"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 4, "y": 6, "width": 10, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 40, "height": 30, "name": "dest-doc"})).unwrap();
+    s.set_active(0);
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::with_context(cc.egui_ctx.clone(), s, crate::Services::default())
+    });
+    h.run_steps(8);
+    (h, paint)
+}
+
+#[test]
+fn frame_drop_always_centres_layer_even_on_same_size_documents() {
+    let (mut h, paint) = same_size_harness();
+    let ctx = h.ctx.clone();
+    let t = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t));
+
+    super::drop(h.state_mut(), &ctx, 1, super::DropTarget::Frame);
+
+    let (name, r) = copy(&h);
+    assert_eq!(name, "paint");
+    // Dest doc is 40×30, layer is 10×10. Centering puts it at min=(15, 10), max=(25, 20).
+    assert_eq!(r, Rect::from_min_max(egui::pos2(15.0, 10.0), egui::pos2(25.0, 20.0)));
+}
+
+#[test]
+fn tab_drop_preserves_position_on_same_size_documents() {
+    let (mut h, paint) = same_size_harness();
+    let ctx = h.ctx.clone();
+    let t = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t));
+
+    super::drop(h.state_mut(), &ctx, 1, super::DropTarget::Tab);
+
+    let (name, r) = copy(&h);
+    assert_eq!(name, "paint");
+    // Source was at (4, 6) to (14, 16); same-size tab drop keeps position.
+    assert_eq!(r, Rect::from_min_max(egui::pos2(4.0, 6.0), egui::pos2(14.0, 16.0)));
+}
+
+#[test]
+fn shift_canvas_drop_preserves_position_on_same_size_documents() {
+    let (mut h, paint) = same_size_harness();
+    h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+    h.run_steps(1);
+    let ctx = h.ctx.clone();
+    let t = super::Transfer {
+        source: h.state().session.documents()[0].doc.id,
+        layers: vec![paint.0],
+        grab: None,
+        label: "paint".to_string(),
+        selection_only: false,
+    };
+    ctx.data_mut(|d| d.insert_temp(super::key(), t));
+
+    super::drop(h.state_mut(), &ctx, 1, super::DropTarget::Canvas([30.0, 20.0]));
+
+    let (name, r) = copy(&h);
+    assert_eq!(name, "paint");
+    // Shift-drop on same size keeps original position.
+    assert_eq!(r, Rect::from_min_max(egui::pos2(4.0, 6.0), egui::pos2(14.0, 16.0)));
+}
+
+#[test]
+fn floating_window_frame_drop_centres_on_same_size_document() {
+    let (mut h, _) = same_size_harness();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.document_windows.floating.len(), 2);
+
+    let dest_rect = Rect::from_min_size(egui::pos2(500.0, 80.0), vec2(400.0, 300.0));
+    h.state_mut().ui.document_windows.floating[1].1 = dest_rect;
+    h.run_steps(2);
+
+    // Verify target_at returns (1, None) for frame point outside canvas
+    let frame_point = dest_rect.min + vec2(50.0, 5.0);
+    let target = super::target_at(h.state(), frame_point);
+    assert_eq!(target, Some((1, None)), "frame point hits floating window frame chrome without canvas point");
+
+    let row = crate::layers_panel_nodes::row(&h, "paint").center();
+    drag_along(&mut h, &[row, frame_point], Modifiers::NONE);
+
+    let (name, r) = copy(&h);
+    assert_eq!(name, "paint");
+    assert_eq!(r, Rect::from_min_max(egui::pos2(15.0, 10.0), egui::pos2(25.0, 20.0)));
 }
