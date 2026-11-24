@@ -181,8 +181,8 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
     }
     if app.session.active_index() != Some(index) {
         app.session.set_active(index);
-        app.jobs.focus = None;
     }
+    app.jobs.focus = None;
     if ctx.input(|i| i.pointer.any_released()) {
         drop(app, ctx, index, None);
     }
@@ -232,8 +232,10 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(pos) = pointer_if_armed(app, ctx) else { return };
     let Some((dest, _)) = target_at(app, pos) else { return };
-    if app.session.active_index() != Some(dest) && arm_move_transfer(app, ctx, dest) {
-        app.session.set_active(dest);
+    if arm_move_transfer(app, ctx, dest) {
+        if app.session.active_index() != Some(dest) {
+            app.session.set_active(dest);
+        }
         app.jobs.focus = None;
     }
 }
