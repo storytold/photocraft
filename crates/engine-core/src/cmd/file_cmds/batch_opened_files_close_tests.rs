@@ -19,7 +19,7 @@ fn tmp(name: &str) -> (String, tempfile::TempDir) {
 
 /// Writes a solid-colour PNG of `w` x `h` and returns its path.
 fn png(dir: &str, name: &str, w: u32, h: u32, color: &str) -> String {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": w, "height": h, "background": color})).unwrap();
     let path = join(dir, name);
     save_doc(&s.active().unwrap().doc, &path, None).unwrap();
@@ -28,7 +28,7 @@ fn png(dir: &str, name: &str, w: u32, h: u32, color: &str) -> String {
 
 /// Opens `paths` as live documents, in the given order.
 fn open_as_documents(paths: &[String]) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     for path in paths {
         s.execute("file.openAs", json!({"path": path})).unwrap();
     }
@@ -110,7 +110,7 @@ fn two_dirty_documents_are_both_written_to_the_folder_and_both_close() {
 fn a_never_saved_document_is_written_as_its_name_psd_and_stays_open() {
     let (dir, _workspace) = tmp("never-saved-headless");
     let output = join(&dir, "results");
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"name": "oracle", "width": 8, "height": 6})).unwrap();
     let result = s.execute("file.automate.batch", json!({"source": "open", "steps": [], "output": output, "format": "same"})).unwrap();
     assert_eq!(result["errors"], json!([]), "headless does not ask for a path");
@@ -202,7 +202,7 @@ fn a_written_copy_never_rewrites_the_file_the_document_was_opened_from() {
 
 #[test]
 fn opened_files_without_a_destination_stay_open_and_changed() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"name": "First", "width": 8, "height": 6})).unwrap();
     s.execute("file.new", json!({"name": "Second", "width": 12, "height": 5})).unwrap();
     let result = s.execute("file.automate.batch", json!({"source": "open", "steps": [["image.adjustments.invert", {}]]})).unwrap();
@@ -219,7 +219,7 @@ fn a_folder_source_batch_still_leaves_the_sessions_open_documents() {
     let input = png(&dir, "in.png", 8, 6, "#ff0000");
     let untouched = png(&dir, "keep.png", 6, 6, "#00ff00");
     let output = join(&dir, "out");
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.openAs", json!({"path": &untouched})).unwrap();
     let result =
         s.execute("file.automate.batch", json!({"input": [input], "output": output, "steps": [["image.adjustments.invert", {}]], "format": "png"})).unwrap();
