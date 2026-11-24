@@ -570,6 +570,12 @@ fn channel_mixer_preset_dialog_previews_and_resets() {
     let steps = h.state().session.active().unwrap().history.past_len();
     let initial = params(h.state_mut(), id);
     let shown = |h: &Harness<'_, Box<PhotocraftApp>>| h.get_by_role_and_label(Role::ComboBox, "Preset").accesskit_node().value();
+    let choose = |h: &mut Harness<'_, Box<PhotocraftApp>>, name| {
+        h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+        h.run_steps(4);
+        h.get_by_label(name).click();
+        h.run_steps(4);
+    };
     assert_eq!(shown(&h).as_deref(), Some("Default"));
 
     h.get_by_role_and_label(Role::CheckBox, "Monochrome").click();
@@ -581,13 +587,12 @@ fn channel_mixer_preset_dialog_previews_and_resets() {
     h.run_steps(4);
     assert_eq!(params(h.state_mut(), id), initial, "the manual toggle returns to the same coefficients");
     assert_eq!(shown(&h).as_deref(), Some("Custom"));
-    press_reset(&mut h);
+    // The dialog enables Reset when its values differ from the opening values. At the opening
+    // values, choosing Default clears the manual selection.
+    choose(&mut h, "Default");
     assert_eq!(shown(&h).as_deref(), Some("Default"));
 
-    h.get_by_role_and_label(Role::ComboBox, "Preset").click();
-    h.run_steps(4);
-    h.get_by_label("Infrared Mix").click();
-    h.run_steps(4);
+    choose(&mut h, "Infrared Mix");
     assert_eq!(shown(&h).as_deref(), Some("Infrared Mix"));
     let mixed = params(h.state_mut(), id);
     let gray: Vec<f64> = serde_json::from_value(mixed["gray"].clone()).unwrap();
