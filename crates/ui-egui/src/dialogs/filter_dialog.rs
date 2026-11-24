@@ -657,20 +657,11 @@ pub fn open_smart_edit(app: &mut PhotocraftApp, command: &str, recorded: &Map<St
 }
 
 /// [`open_smart_edit`] for a dialog whose parameters follow `spec` (as [`open_with_spec`]): the
-/// `fixed` params (a plug-in id) stay through Alt+Reset, the `recorded` ones overlay the schema defaults.
-pub fn open_smart_edit_with_spec(
-    app: &mut PhotocraftApp,
-    command: &str,
-    label: &str,
-    spec: &str,
-    fixed: &Map<String, Value>,
-    recorded: &Map<String, Value>,
-    target: Value,
-) -> DialogId {
+/// `recorded` params overlay the schema defaults.
+pub fn open_smart_edit_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec: &str, recorded: &Map<String, Value>, target: Value) -> DialogId {
     let params = params(app, command, spec);
+    let reset = reset_values(&params, &DialogFields::new());
     let mut opening = DialogFields::new();
-    overlay(&params, fixed, &mut opening);
-    let reset = reset_values(&params, &opening);
     overlay(&params, recorded, &mut opening);
     // A smart filter edit previews on the canvas, whatever `previews` says of `command` (`plugin.run` isn't listed).
     let build = builder(app, command, title_of(label), params, reset, true);

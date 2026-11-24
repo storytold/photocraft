@@ -54,7 +54,7 @@ fn plugin_params(p: &Value) -> Value {
 
 /// A top-level `plugin.run` key the command itself uses (or a dialog's private `__` key), not a
 /// plug-in parameter.
-pub fn command_key(k: &str) -> bool {
+fn command_key(k: &str) -> bool {
     matches!(k, "id" | "layer" | "target" | "channel") || k.starts_with("__")
 }
 

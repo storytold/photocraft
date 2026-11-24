@@ -44,9 +44,19 @@ fn assert_stored(stored: &serde_json::Value, amount: f64) {
     assert!(stored.get("amount").is_none(), "no plug-in key beside `params`: {stored}");
 }
 
+/// Double-clicks the last smart filter of `layer`: the plug-in dialog it opens and the values shown.
+fn open_last(app: &mut crate::PhotocraftApp, layer: photocraft_doc::LayerId) -> (craft::ui::dialog::DialogId, serde_json::Value) {
+    let sm = smart(app, layer).clone();
+    let ctx = app.ctx().clone();
+    super::open_editor(app, &ctx, layer.0, &sm, sm.smart_filters.len() - 1);
+    crate::dialogs::testing::show(app);
+    let open = app.framework.dialogs.open_dialogs().pop().expect("the plug-in's dialog opens");
+    (open.id, open.fields.expect("a dialog with fields"))
+}
+
 /// Double-clicking a plug-in's smart filter opens the plug-in's dialog on the recorded settings,
 /// previews the edit on the canvas, and OK updates that filter in one step, stored the way
-/// `plugin.run` records it, so the re-render reads the edit.
+/// `plugin.run` records it, so the re-render reads the edit and the dialog re-opens on it.
 #[test]
 fn a_plugin_smart_filter_reopens_its_dialog_and_ok_updates_it() {
     let _registry = crate::plugin_ui::registry_guard();
@@ -58,12 +68,9 @@ fn a_plugin_smart_filter_reopens_its_dialog_and_ok_updates_it() {
     assert_eq!(sm.smart_filters[index].command, "plugin.run");
 
     let ctx = app.ctx().clone();
-    super::open_editor(&mut app, &ctx, layer.0, &sm, index);
-    crate::dialogs::testing::show(&mut app);
-    let open = app.framework.dialogs.open_dialogs().pop().expect("the plug-in's dialog opens");
-    let shown = open.fields.expect("a dialog with fields");
+    let (dialog, shown) = open_last(&mut app, layer);
     assert_eq!(shown["amount"].as_f64(), Some(7.0), "the recorded value, not the default 5");
-    app.framework.dialogs.set_json_field(&ctx, open.id, "amount", json!(3)).unwrap();
+    app.framework.dialogs.set_json_field(&ctx, dialog, "amount", json!(3)).unwrap();
 
     let idx = app.session.active_index().unwrap();
     crate::canvas::ensure_filter_preview(&mut app, idx, &ctx).expect("the edit previews");
@@ -76,11 +83,37 @@ fn a_plugin_smart_filter_reopens_its_dialog_and_ok_updates_it() {
     assert_stored(&previewed, 3.0);
 
     let steps = app.session.active().unwrap().history.past_len();
-    crate::dialogs::testing::confirm(&mut app, open.id).unwrap();
+    crate::dialogs::testing::confirm(&mut app, dialog).unwrap();
     let after = smart(&app, layer);
     assert_eq!(after.smart_filters.len(), sm.smart_filters.len(), "the filter is edited, not added again");
     assert_stored(&after.smart_filters[index].params, 3.0);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+
+    let (_, reopened) = open_last(&mut app, layer);
+    assert_eq!(reopened["amount"].as_f64(), Some(3.0), "the edit, re-opened");
+    assert_eq!(reopened["params"].as_f64(), Some(1.0), "the plug-in's `params` setting, re-opened");
+    registry::remove(ID);
+}
+
+/// The edit stays on the plug-in the filter recorded: a stored setting that names another plug-in
+/// (`layer.smartFilter.setParams` stores what it is given) is not read as the filter's plug-in.
+#[test]
+fn a_setting_called_id_does_not_change_the_plugin_an_edit_stores() {
+    let _registry = crate::plugin_ui::registry_guard();
+    install();
+    let (mut app, layer) = app(8, "rgb");
+    app.run("plugin.run", json!({"id": ID, "params": {"amount": 7, "params": 1}})).unwrap();
+    let planted = json!({"id": ID, "params": {"amount": 7, "params": 1, "id": "another.plugin"}});
+    app.run("layer.smartFilter.setParams", json!({"layer": layer.0, "params": planted, "replace": true})).unwrap();
+
+    let ctx = app.ctx().clone();
+    let (dialog, _) = open_last(&mut app, layer);
+    app.framework.dialogs.set_json_field(&ctx, dialog, "amount", json!(3)).unwrap();
+    crate::dialogs::testing::confirm(&mut app, dialog).unwrap();
+    let after = smart(&app, layer);
+    let stored = &after.smart_filters[after.smart_filters.len() - 1].params;
+    assert_stored(stored, 3.0);
+    assert!(stored["params"].get("id").is_none(), "only the plug-in's own settings are stored: {stored}");
     registry::remove(ID);
 }
 
