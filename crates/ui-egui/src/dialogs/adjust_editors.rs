@@ -35,9 +35,11 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 
+mod exposure_presets;
 mod session;
 pub mod values;
 
+pub(crate) use exposure_presets::clear_custom as clear_exposure_preset;
 pub(crate) use session::PropertiesAdjust;
 pub use session::{layer_editor, layer_reset};
 
@@ -279,11 +281,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             }
             AdjustOut { ask: None, edit }
         }
-        ("exposure", AdjustValue::Exposure { values }) => {
-            let fields = AdjustField::exposure(&Env::of(ui).words::<AdjustWords>());
-            let out = AdjustSliders::new("Exposure", &fields, Bind::bound(values)).context(context).show(ui);
-            lifted(out.events, |values| AdjustValue::Exposure { values })
-        }
+        ("exposure", AdjustValue::Exposure { values }) => lifted(exposure_presets::show(ui, values, context), |values| AdjustValue::Exposure { values }),
         ("vibrance", AdjustValue::Vibrance { values }) => {
             let fields = AdjustField::vibrance(&Env::of(ui).words::<AdjustWords>());
             let out = AdjustSliders::new("Vibrance", &fields, Bind::bound(values)).context(context).show(ui);

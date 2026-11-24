@@ -208,6 +208,37 @@ fn dialogs_preview_cancel_and_commit() {
     }
 }
 
+#[test]
+fn exposure_presets_in_the_dialog_respect_preview_cancel_and_ok() {
+    let (mut h, id) = open_in_harness(app_with_image(), "image.adjustments.exposure");
+    let ctx = h.ctx.clone();
+    let history = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
+    let before = history(h.state());
+
+    let choose = |h: &mut Harness<'_, Box<PhotocraftApp>>, preset| {
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Preset").click();
+        h.run_steps(3);
+        h.get_by_label(preset).click();
+        h.run_steps(4);
+    };
+    choose(&mut h, "−2 EV");
+    assert_eq!(field(h.state_mut(), id, "exposure"), json!(-2.0));
+    assert!(crate::adjust_preview::display_doc(h.state_mut(), 0).is_some());
+    assert_eq!(history(h.state()), before);
+    cancel(h.state_mut(), &ctx, id);
+    assert_eq!(history(h.state()), before);
+
+    let id = open(h.state_mut(), "image.adjustments.exposure").unwrap();
+    h.run_steps(4);
+    choose(&mut h, "+1 EV");
+    assert_eq!(field(h.state_mut(), id, "exposure"), json!(1.0));
+    ok(h.state_mut(), &ctx, id).unwrap();
+    assert_eq!(history(h.state()), before + 1);
+    let (command, params) = h.state().session.journal.last().unwrap();
+    assert_eq!(command, "image.adjustments.exposure");
+    assert_eq!(params["exposure"], json!(1.0));
+}
+
 /// A pencil curve (a 256-entry map) set on the value reaches the engine as that map with `pencil` when OK is pressed.
 #[test]
 fn a_pencil_map_reaches_the_journal_on_ok() {

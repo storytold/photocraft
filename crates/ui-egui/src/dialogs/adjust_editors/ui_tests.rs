@@ -132,6 +132,57 @@ fn sliders(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<Rect> {
     rects
 }
 
+#[test]
+fn exposure_presets_are_undoable_and_manual_entries_are_custom() {
+    fn shown(h: &Harness<'_, Box<PhotocraftApp>>) -> Option<String> {
+        h.get_by_role_and_label(Role::ComboBox, "Preset").value()
+    }
+
+    fn set_exposure(h: &mut Harness<'_, Box<PhotocraftApp>>, text: &str) {
+        h.get_by_role_and_label(Role::SpinButton, "Exposure").click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text(text.to_owned()));
+        h.run_steps(1);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(4);
+    }
+
+    let mut h = app_harness("exposure", "rgb", 16);
+    assert_eq!(shown(&h).as_deref(), Some("Default"));
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "offset": 0.125, "gamma": 2.0})).unwrap();
+    h.run_steps(4);
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+    let steps = history_len(&h);
+
+    for (index, (preset, exposure)) in [("−2 EV", -2.0), ("−1 EV", -1.0), ("+1 EV", 1.0), ("+2 EV", 2.0)].into_iter().enumerate() {
+        h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+        h.run_steps(3);
+        h.get_by_label(preset).click();
+        h.run_steps(4);
+        assert_eq!(shown(&h).as_deref(), Some(preset));
+        assert_eq!(layer(&h).1, Adjustment::Exposure { exposure, offset: 0.0, gamma: 1.0 });
+        assert_eq!(history_len(&h), steps + index + 1, "a preset commits one step");
+    }
+
+    set_exposure(&mut h, "1");
+    assert_eq!(layer(&h).1, Adjustment::Exposure { exposure: 1.0, offset: 0.0, gamma: 1.0 });
+    assert_eq!(shown(&h).as_deref(), Some("Custom"), "typing a named preset's value is a manual edit");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(shown(&h).as_deref(), Some("+2 EV"));
+    h.state_mut().run("edit.redo", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+
+    set_exposure(&mut h, "0");
+    assert_eq!(shown(&h).as_deref(), Some("Custom"));
+    let reset = h.get_by_label("Reset to defaults").rect().center();
+    click(&mut h, reset);
+    assert_eq!(shown(&h).as_deref(), Some("Default"), "Reset also clears the manual label at neutral values");
+}
+
 /// Issue #12: every adjustment kind, on a new document at 8/16/32 bits and in RGB, Grayscale,
 /// CMYK and Lab, opens its Properties editor and takes an edit through real input without
 /// panicking; slider kinds commit exactly one history step per gesture and end the preview with it.

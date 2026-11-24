@@ -152,6 +152,9 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
     }
     ui.add_space(6.0);
     if clicked(&Button::new(tl!("Reset to defaults")).sizing(Sizing::FillWidth).show(ui)) {
+        if matches!(adj, photocraft_doc::Adjustment::Exposure { .. }) {
+            crate::adjust_editors::clear_exposure_preset(ui);
+        }
         // Photoshop's two-step Reset where measured (Color Balance), else the defaults.
         let params = crate::adjust_editors::layer_reset(app, id, adj);
         let _ = app.run("layer.setAdjustment", params);
