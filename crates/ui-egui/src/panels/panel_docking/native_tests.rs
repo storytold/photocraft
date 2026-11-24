@@ -3,6 +3,7 @@
 //! the whole app's frame.
 
 use super::*;
+use craft::behavior::monitor::Monitor;
 use craft::menu::{Backend, Chord, Dispatch, Event as MenuEvent, MenuBar};
 use craft::ui::patterns::presets::PresetBrowser;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, ViewportId, pos2, vec2};
@@ -21,6 +22,8 @@ struct Window {
     hidden: bool,
     /// The window's access tree nodes, as of its last pass.
     nodes: HashMap<egui::accesskit::NodeId, egui::accesskit::Node>,
+    /// Physical pixels per point of the monitor the window is on.
+    scale: f32,
 }
 
 #[derive(Default)]
@@ -34,15 +37,15 @@ struct Host {
 
 impl Host {
     fn infos(&self) -> egui::ViewportIdMap<egui::ViewportInfo> {
-        let info = |rect: Rect, focused: bool| egui::ViewportInfo {
+        let info = |rect: Rect, focused: bool, scale: f32| egui::ViewportInfo {
             inner_rect: Some(rect),
             outer_rect: Some(rect),
             focused: Some(focused),
-            native_pixels_per_point: Some(1.0),
+            native_pixels_per_point: Some(scale),
             ..Default::default()
         };
-        std::iter::once((ViewportId::ROOT, info(Rect::from_min_size(ORIGIN, self.size), self.focus.is_none())))
-            .chain(self.windows.iter().map(|(id, window)| (*id, info(window.rect, self.focus == Some(*id)))))
+        std::iter::once((ViewportId::ROOT, info(Rect::from_min_size(ORIGIN, self.size), self.focus.is_none(), 1.0)))
+            .chain(self.windows.iter().map(|(id, window)| (*id, info(window.rect, self.focus == Some(*id), window.scale))))
             .collect()
     }
 
@@ -52,7 +55,7 @@ impl Host {
             let mut host = host.borrow_mut();
             let builder = &viewport.builder;
             let rect = Rect::from_min_size(builder.position.unwrap_or_default(), builder.inner_size.unwrap_or(vec2(300.0, 200.0)));
-            host.windows.entry(id).or_insert(Window { rect, events: Vec::new(), paste_requested: false, hidden: false, nodes: HashMap::new() });
+            host.windows.entry(id).or_insert(Window { rect, events: Vec::new(), paste_requested: false, hidden: false, nodes: HashMap::new(), scale: 1.0 });
             let (viewports, focused, time) = (host.infos(), host.focus == Some(id), host.time);
             let window = host.windows.get_mut(&id).expect("just added");
             egui::RawInput {
@@ -91,6 +94,12 @@ struct Desktop {
 impl Desktop {
     /// The whole app in an eframe harness whose floated panels open OS windows on the stand-in host.
     fn new(app: Box<PhotocraftApp>) -> Self {
+        Self::with_monitors(app, Vec::new())
+    }
+
+    /// [`Desktop::new`] on a desktop whose window system lists `monitors` from the app's first frame,
+    /// as winit lists them to the app (`framework::windows::refresh`).
+    fn with_monitors(app: Box<PhotocraftApp>, monitors: Vec<Monitor>) -> Self {
         let size = vec2(1400.0, 900.0);
         let host = Rc::new(RefCell::new(Host { size, ..Default::default() }));
         let shared = host.clone();
@@ -98,6 +107,7 @@ impl Desktop {
         let app = std::cell::Cell::new(Some(app));
         let h = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            crate::app::framework::windows::of(&cc.egui_ctx).expect("the runtime's window system").set_monitors(monitors.clone());
             cc.egui_ctx.set_embed_viewports(false);
             app.take().expect("one app")
         });
@@ -287,4 +297,79 @@ fn a_floated_toolbar_stays_in_the_main_window_while_other_panels_get_os_windows(
     assert!(floating(TOOLBAR) && floating("layers"), "both panels float");
     assert!(desktop.window(TOOLBAR).is_none(), "the toolbar floats in the main window");
     assert!(desktop.window("layers").is_some(), "the Layers panel floats in its own OS window");
+}
+
+/// A monitor of the desktop, in physical pixels, as winit reports it.
+fn monitor(name: &str, position: [i32; 2], size: [u32; 2], scale: f64) -> Monitor {
+    crate::app::framework::windows::monitor(Some(name.into()), position, size, scale).expect("a monitor")
+}
+
+/// The 100% monitor the main window (at `ORIGIN`, 1400 × 900) is on.
+fn main_monitor() -> Monitor {
+    monitor(r"\\.\DISPLAY1", [0, 0], [1920, 1080], 1.0)
+}
+
+/// Floats Info into its own OS window on a desktop of `left_on` monitors, leaves that window at `at`
+/// (desktop points of a monitor of `scale`), and quits with Remember Workspace Changes on; then
+/// starts again with the remembered workspace on a desktop of `connected` monitors. Returns where
+/// Info's window opens, and the size it had.
+fn reopened_at(left_on: Vec<Monitor>, at: Pos2, scale: f32, connected: Vec<Monitor>) -> (Rect, egui::Vec2) {
+    let mut desktop = Desktop::with_monitors(app_with_document(), left_on);
+    desktop.h.state_mut().run("window.panel.window", json!({"panel": "info"})).unwrap();
+    desktop.steps(3);
+    let viewport = desktop.window("info").expect("Info floats in its own OS window");
+    // The user drags the window to `at`; the window system reports it there, at its monitor's scale.
+    let size = {
+        let mut host = desktop.host.borrow_mut();
+        let window = host.windows.get_mut(&viewport).expect("Info's window");
+        window.rect = Rect::from_min_size(at, window.rect.size());
+        window.scale = scale;
+        window.rect.size()
+    };
+    desktop.steps(10);
+    let saved = crate::dock::snapshot(desktop.h.state());
+    drop(desktop);
+
+    let mut app = app_with_document();
+    app.session.prefs.edit(|prefs| {
+        prefs.workspace.remember_workspace_changes = true;
+        prefs.panel_layout = saved;
+    });
+    crate::dock::restore(&mut app);
+    let mut desktop = Desktop::with_monitors(app, connected);
+    desktop.steps(3);
+    let viewport = desktop.window("info").expect("Info opens in its own OS window again");
+    let reopened = desktop.host.borrow().windows[&viewport].rect;
+    (reopened, size)
+}
+
+/// #13599: a floating panel left on another monitor reopens there after a restart while that monitor is
+/// connected, also on a mixed-DPI desktop with a monitor left of and above the main one.
+#[test]
+fn a_floating_panel_reopens_on_the_monitor_it_was_left_on() {
+    let right = vec![main_monitor(), monitor(r"\\.\DISPLAY2", [1920, 0], [2560, 1440], 1.0)];
+    let (reopened, size) = reopened_at(right.clone(), pos2(2400.0, 300.0), 1.0, right);
+    assert_eq!(reopened, Rect::from_min_size(pos2(2400.0, 300.0), size), "on the right monitor, where it was left");
+
+    // At 150%: (-2000, -100) points are (-3000, -150) pixels, on the left monitor.
+    let left = vec![main_monitor(), monitor(r"\\.\DISPLAY2", [-3840, -300], [3840, 2160], 1.5)];
+    let (reopened, size) = reopened_at(left.clone(), pos2(-2000.0, -100.0), 1.5, left);
+    assert_eq!(reopened, Rect::from_min_size(pos2(-2000.0, -100.0), size), "on the 150% monitor, where it was left");
+}
+
+/// A floating panel left on a monitor that is no longer connected reopens on the main window's monitor,
+/// moved the least that puts it wholly there, instead of off every screen.
+#[test]
+fn a_floating_panel_on_a_monitor_that_is_gone_reopens_on_the_main_one() {
+    let main = Rect::from_min_size(Pos2::ZERO, vec2(1920.0, 1080.0));
+    let right = vec![main_monitor(), monitor(r"\\.\DISPLAY2", [1920, 0], [2560, 1440], 1.0)];
+    let (reopened, size) = reopened_at(right.clone(), pos2(2400.0, 300.0), 1.0, vec![main_monitor()]);
+    assert_eq!(reopened, Rect::from_min_size(pos2(1920.0 - size.x, 300.0), size), "against the main monitor's right edge");
+    assert!(main.contains_rect(reopened), "{reopened:?}");
+
+    // Left past the gone monitor's bottom-right corner, below the main monitor's bottom: against the main
+    // monitor's right edge and up onto it, wholly on it.
+    let (reopened, _) = reopened_at(right, pos2(4300.0, 1300.0), 1.0, vec![main_monitor()]);
+    assert_eq!(reopened.max.x, main.max.x, "{reopened:?}");
+    assert!(main.contains_rect(reopened), "{reopened:?}");
 }
