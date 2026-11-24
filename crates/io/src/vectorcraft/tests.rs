@@ -168,10 +168,22 @@ fn a_fractional_page_keeps_its_opened_size_at_every_scale() {
 }
 
 #[test]
-fn a_canceled_open_stops_drawing() {
+fn a_canceled_import_returns_cancelled() {
     let cancel = || true;
     let e = crate::import_with("Logo.vectorcraft", &file(Some(&pdf(80, 40, 1))), &Interrupt::cancel_only(&cancel)).unwrap_err();
     assert!(matches!(e, IoError::Cancelled), "{e:?}");
+}
+
+#[test]
+fn a_draw_canceled_before_it_starts_returns_cancelled() {
+    let pdf = carried_pdf(&file(Some(&pdf(80, 40, 1))), None).unwrap();
+    let pages = pdf.pages();
+    let (page, _, _) = first_page(pages).unwrap();
+    let options = Options { scale: [1.0; 2], size: Some([80, 40]), ..Options::default() };
+    let mut buffer = vec![0; 80 * 40 * 4];
+    let cancel = || true;
+    let result = render(page, &options, &Interrupt::cancel_only(&cancel), &mut buffer);
+    assert!(matches!(result, Err(raster::Error::Cancelled)), "{:?}", result.err());
 }
 
 #[test]
