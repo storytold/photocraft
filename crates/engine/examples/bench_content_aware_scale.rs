@@ -2,6 +2,7 @@
 //! synthetic 24 MP RGB photo opened from JPEG like `perf_scenarios`' (gradients, soft blobs, fine
 //! noise and a high-contrast disc), scaled to 90 % width, undone between runs.
 //! `cargo run --release -p photocraft-engine --example bench_content_aware_scale [reps] [width height]`
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::Instant;
 
 use photocraft_engine::Session;

@@ -340,6 +340,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, canvas: egui::Rec
         // The press ended without a drag (a click), or a key moved the box: the capture ends with it.
         finish(app);
     }
+    // The editor is not shown while the box holds the pointer, so its focus scope gives the keyboard back to the
+    // canvas. The type session goes on after the box, and so does typing: the editor takes the keyboard again.
+    if app.ui.type_transform.is_none() && app.ui.text_edit.is_some() {
+        crate::tools::type_tool::focus_editor(&ctx);
+    }
 }
 
 /// The `typeTransform` of the control protocol: the open transform's document, revision, frame and reference point,

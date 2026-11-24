@@ -16,8 +16,11 @@
 //!
 //! The dialog is a hosted parameter dialog with a key of its own, so `ui.inspect`, `ui.dialog.set`
 //! and `ui.dialog.confirm` drive it like the other parameter dialogs. The drag's anchor — the
-//! top-left, or the centre for [`open_centred`] — and the document it was made in are not fields:
-//! they are the family's captured value, read by [`run`].
+//! top-left, or the centre for [`open_centred`] —, the document it was made in and the tool, type
+//! options and placeholder preference the new layer is built from are not fields: they are the
+//! family's captured value, read by [`run`]. The last of those is taken when the dialog opens rather
+//! than at OK, because the reference application's dialog is modal — the layer keeps what was active
+//! at the drag (#12044).
 
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamResult};
@@ -48,9 +51,15 @@ fn build(w: f64, h: f64) -> impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog
 }
 
 /// Open the dialog on the box an Alt+drag drew: top-left `(x, y)`, size `w` × `h`, in document
-/// pixels and exactly as dragged (the fields keep the decimals). The top-left and the document the
-/// drag was made in are captured for [`run`]: OK creates the text only while that document is
-/// still the active one.
+/// pixels and exactly as dragged (the fields keep the decimals). The top-left, the document the drag
+/// was made in and the settings the new layer is built from are captured for [`run`]: OK creates the
+/// text only while that document is still the active one, and with the tool and options that were
+/// active at the drag.
+///
+/// The settings are snapshotted here rather than read at OK because the reference application's
+/// dialog is modal: nothing can change the tool (horizontal or vertical) or its options between the
+/// Alt+drag and OK, so the box always uses what was active at the drag. A control that changes them
+/// while the dialog happens to be open therefore cannot leak into the new layer (#12044).
 pub fn open(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64) -> DialogId {
     open_with(app, at, w, h, false)
 }
@@ -68,6 +77,7 @@ fn open_with(app: &mut PhotocraftApp, at: [f64; 2], w: f64, h: f64, centred: boo
         "at": [at[0], at[1]],
         "centred": centred,
         "document": app.session.active().map(|st| json!(st.doc.id)).unwrap_or(Value::Null),
+        "settings": crate::type_tool::TypeSnapshot::live(app),
     });
     let fields = DialogFields::from_pairs([(WIDTH, FieldValue::Number(w)), (HEIGHT, FieldValue::Number(h))]);
     params::open_param_unsaved(app, KEY, fields, captured, build(w, h))
@@ -96,10 +106,17 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context, result: ParamResult) {
     // #12090: a centred drag places the box by its centre on the captured point, so fields
     // edited in the dialog keep it centred there; the plain rule puts the top-left at it.
     let (x, y) = if centred { (x - w / 2.0, y - h / 2.0) } else { (x, y) };
-    let mut p = crate::type_tool::create_params(app);
+    // The settings are the ones the drag had, not the ones the app has now: the reference dialog is
+    // modal, so a control that switched the tool or edited the options while it was open has no say
+    // in this layer (#12044).
+    let Ok(settings) = serde_json::from_value(captured.get("settings").cloned().unwrap_or(Value::Null)) else {
+        crate::dialogs::alerts::report_error(app, "the Paragraph Text Size dialog has no settings snapshot");
+        return;
+    };
+    let mut p = crate::type_tool::create_params(app, true, &settings);
     p["box"] = json!([x, y, w, h]);
     // A refused create already said why in the status bar, as the gesture's own create does.
-    if crate::type_tool::create_layer(app, p, None).is_ok() {
+    if crate::type_tool::create_layer(app, p, None, &settings).is_ok() {
         crate::type_tool::focus_editor(ctx);
     }
 }

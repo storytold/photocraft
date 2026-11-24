@@ -4,6 +4,7 @@ use craft::ui::contract::Bind;
 use craft::ui::dialog::DialogId;
 use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -35,7 +36,7 @@ pub(super) fn open(app: &mut PhotocraftApp, action: usize, at: Option<usize>) ->
         return Err(tl!("Confirm or cancel the pending menu item first.").to_string());
     }
     app.held_insert_menu = None;
-    if app.session.actions.list.action(action).is_none() {
+    if app.session.actions().list.action(action).is_none() {
         return Err(tl!("Select an action first.").to_string());
     }
     let target = json!({"action": action, "at": at});
@@ -50,7 +51,7 @@ pub(super) fn open(app: &mut PhotocraftApp, action: usize, at: Option<usize>) ->
         let rows = vec![Param::new("id", tl!("Command"), ParamKind::choice(options.clone(), Some("image.imageSize".into()))).searchable()];
         ParamDialog::command(KEY, tl!("Insert Menu Item"), rows).values(Bind::bound(fields))
     });
-    app.held_insert_menu = Some(Held { dialog, revision: app.session.actions.list.revision(), target, gate, automated });
+    app.held_insert_menu = Some(Held { dialog, revision: app.session.actions().list.revision(), target, gate, automated });
     Ok(json!({"dialog": dialog.value()}))
 }
 
@@ -63,7 +64,7 @@ fn vet(app: &PhotocraftApp, result: &ParamResult) -> Result<Value, String> {
         .as_ref()
         .filter(|held| held.dialog == result.id && result.key == KEY)
         .ok_or_else(|| tl!("No menu item belongs to this chooser.").to_string())?;
-    if held.revision != app.session.actions.list.revision() {
+    if held.revision != app.session.actions().list.revision() {
         return Err(tl!("The action or insertion command changed. Request Insert Menu Item again.").to_string());
     }
     let mut params = held.target.clone();
