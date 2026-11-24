@@ -103,9 +103,11 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
 /// Color Lookup from params: `"lut"` (a built-in look id or `"none"`), `"file"` (a .cube / .3dl /
 /// .look path, native only) or `"data"` (file text, or base64 with `"dataEncoding":"base64"`).
 /// `"lutFormat":"cube|3dl|look"` (`"auto"`: detect) can supply the format when the file name doesn't identify it.
-/// `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`. The table is embedded in the
-/// layer, as Photoshop does. Unspecified fields keep `base`'s values; a key of the wrong type is an
-/// error.
+/// `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`. `"dataOrder":"rgb|bgr"` (default
+/// `rgb`) and `"tableOrder":"rgb|bgr"` (default `bgr`, the standard layout) say how a 3D `.cube`
+/// loaded in the same call is read (#14423); [`cube_in_order`] bakes them into the table. The
+/// table is embedded in the layer, as Photoshop does. Unspecified fields keep `base`'s values; a
+/// key of the wrong type is an error.
 pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjustment> {
     const CMD: &str = "colorLookup";
     let (mut name, mut lut, mut size, mut tetrahedral, mut dither, mut source) = match base {
@@ -118,6 +120,15 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
     if !matches!(encoding, "text" | "base64") {
         return Err(bad(CMD, "`dataEncoding` must be \"text\" or \"base64\""));
     }
+    let order = |key: &str| match opt_str(CMD, p, key)? {
+        None => Ok(None),
+        Some("rgb") => Ok(Some(false)),
+        Some("bgr") => Ok(Some(true)),
+        Some(o) => Err(bad(CMD, format!("`{key}` must be \"rgb\" or \"bgr\", not `{o}`"))),
+    };
+    // Data Order BGR reverses each table line; Table Order RGB (not the standard BGR) makes red the slowest index.
+    let swap_out = order("dataOrder")?.unwrap_or(false);
+    let swap_in = !order("tableOrder")?.unwrap_or(true);
     let format = match opt_str(CMD, p, "lutFormat")? {
         None | Some("auto") => None,
         Some("cube") => Some(craft_cms::lutfile::Format::Cube),
@@ -169,7 +180,8 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         }
         name = label;
         size = f.size as u32;
-        lut = Some(std::sync::Arc::new(f.data));
+        let reorder = (swap_in || swap_out) && src.as_ref().is_some_and(|s| s.format == LutFormat::Cube && is_3d_cube(&s.bytes));
+        lut = Some(std::sync::Arc::new(if reorder { cube_in_order(&f.data, f.size, swap_in, swap_out) } else { f.data }));
         source = src;
     }
     match opt_str(CMD, p, "interpolation")? {
@@ -185,6 +197,41 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         dither = b;
     }
     Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source })
+}
+
+/// Whether a `.cube` file's text declares a 3D table (`LUT_3D_SIZE`, which wins over `LUT_1D_SIZE` as in the
+/// parser). Data Order and Table Order were measured on 3D tables only; a 1D `.cube` keeps its result.
+fn is_3d_cube(bytes: &[u8]) -> bool {
+    let utf16 = |rest: &[u8], from: fn([u8; 2]) -> u16| String::from_utf16_lossy(&rest.as_chunks::<2>().0.iter().map(|&c| from(c)).collect::<Vec<_>>());
+    let text = match bytes {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    };
+    text.lines().any(|line| line.split('#').next().unwrap_or("").split_whitespace().next() == Some("LUT_3D_SIZE"))
+}
+
+/// A standard `n`³ table (red index fastest, lines R G B) re-read in the reference application's other orders:
+/// `swap_in` (Table Order RGB) reads the file with the red index slowest, `swap_out` (Data Order BGR) reads each
+/// line as B G R. Both are red/blue swaps, of the input axes and of the outputs. The same rule PR #9218 applies to a
+/// PSD's stored `tableOrder` / `dataOrder`. A short table reads its missing nodes as black (the parser has
+/// already checked the length).
+fn cube_in_order(data: &[f32], n: usize, swap_in: bool, swap_out: bool) -> Vec<f32> {
+    let mut out = Vec::with_capacity(data.len());
+    for b in 0..n {
+        for g in 0..n {
+            for r in 0..n {
+                let node = if swap_in { (r * n + g) * n + b } else { (b * n + g) * n + r };
+                let mut c: [f32; 3] = node.checked_mul(3).and_then(|at| data.get(at..at + 3)).and_then(|s| s.try_into().ok()).unwrap_or_default();
+                if swap_out {
+                    c.reverse();
+                }
+                out.extend(c);
+            }
+        }
+    }
+    out
 }
 
 /// A loaded LUT file, tagged with the format [`craft_cms::lutfile::parse`] read it as.
@@ -853,3 +900,7 @@ fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "color_lookup_order_tests.rs"]
+mod color_lookup_order_tests;

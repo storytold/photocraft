@@ -57,7 +57,7 @@ pub fn specs() -> Vec<CommandSpec> {
         (
             "colorLookup",
             "Color Lookup…",
-            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":text,"dataEncoding":"text|base64"="text","fileName":text,"lutFormat":"auto|cube|3dl|look"="auto"} (file: LUT path; data: file text or encoded bytes; lutFormat overrides format detection, auto detects it)"##,
+            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"dataOrder":"rgb|bgr"="rgb","tableOrder":"rgb|bgr"="bgr","interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":text,"dataEncoding":"text|base64"="text","fileName":text,"lutFormat":"auto|cube|3dl|look"="auto"} (file: LUT path; data: file text or encoded bytes; lutFormat overrides format detection, auto detects it; dataOrder/tableOrder: how a 3D .cube's lines and nodes are ordered, ignored for other files)"##,
         ),
     ];
     /// Composed layer options (`path`, `opacity`, `name`, `mode`, `clipToPrevious`) belong immediately

@@ -6,7 +6,7 @@
 //! blur row.
 //!
 //! These rows keep values under keys no command parameter has (`matteColor`, `sampleTool`, `resultPicked`,
-//! `lutSize`, `lutError`) and Lens Blur's `channel:N` sources and Match Color's textual
+//! `lutSize`, `lutError`, `lutCube`) and Lens Blur's `channel:N` sources and Match Color's textual
 //! `source`; the family's `command_params` (dialogs-w24) maps them back and leaves the private ones out.
 
 use photocraft_engine::color_cmds::ColorExt;
@@ -55,6 +55,8 @@ const RESULT_PICKED: &str = "resultPicked";
 /// The size and name of the LUT Load 3D LUT… embedded, and why one could not be read.
 const LUT_SIZE: &str = "lutSize";
 const LUT_ERROR: &str = "lutError";
+/// Whether the chosen LUT is a `.cube` table: Data Order and Table Order show only then (#14423).
+const LUT_CUBE: &str = "lutCube";
 
 /// Builds the rows `command`'s dialog shows from the rows `params` the spec parser made.
 pub(crate) fn custom_rows(app: &mut PhotocraftApp, command: &str, params: &mut Vec<Param>) {
@@ -295,6 +297,31 @@ fn lut_choice(fields: &DialogFields) -> LutChoice {
     photocraft_engine::adjust_cmds::LOOKS.iter().find(|(known, _)| *known == look).map_or(LutChoice::None, |(known, _)| LutChoice::Builtin(known))
 }
 
+/// Whether the chosen LUT is a `.cube` file, which Data Order and Table Order apply to: a LUT folder file named
+/// `.cube`, or a loaded LUT the row holds as `.cube` text. Built-in looks are no files and have no orders.
+fn lut_is_cube(fields: &DialogFields) -> bool {
+    match lut_choice(fields) {
+        LutChoice::Loaded { .. } => fields.text("fileName").is_some_and(|name| name.to_ascii_lowercase().ends_with(".cube")),
+        LutChoice::Folder(path) => path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cube")),
+        _ => false,
+    }
+}
+
+/// Keeps [`LUT_CUBE`] in step with the chosen LUT; written only when it changes.
+fn sync_lut_cube(fields: &mut DialogFields) {
+    let cube = lut_is_cube(fields);
+    if fields.bool(LUT_CUBE) != Some(cube) {
+        fields.set(LUT_CUBE, cube);
+    }
+}
+
+/// Data Order and Table Order (#14423): a pair of radio buttons each, shown only while a `.cube` is the LUT, as
+/// the reference application does. Not remembered, so every opening starts at its defaults (RGB, BGR).
+fn order_row(key: &str, label: Label, default: &str) -> Param {
+    let options = vec![("rgb".to_owned(), Label::from(tl!("RGB"))), ("bgr".to_owned(), Label::from(tl!("BGR")))];
+    Param::new(key, label, ParamKind::radio(options, Some(default.to_owned()))).visible_when(LUT_CUBE, true).not_remembered()
+}
+
 /// Writes a picked choice as the command's `lut` / `file` parameters; the loaded LUT already held is no pick.
 fn set_lut_choice(fields: &mut DialogFields, choice: &LutChoice) {
     let clear = |fields: &mut DialogFields, keys: &[&str]| keys.iter().for_each(|key| drop(fields.remove(key)));
@@ -351,6 +378,7 @@ fn color_lookup(app: &PhotocraftApp, params: &mut Vec<Param>) {
             Some(Err(error)) => fields.set(LUT_ERROR, error.0),
             None => {}
         }
+        sync_lut_cube(fields);
         if let Some(error) = fields.text(LUT_ERROR) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
@@ -358,6 +386,11 @@ fn color_lookup(app: &PhotocraftApp, params: &mut Vec<Param>) {
     })
     .companions(["file", "data", "fileName"]);
     params.insert(at.min(params.len()), row);
+    for (key, label, default) in [("dataOrder", Label::from(tl!("Data Order")), "rgb"), ("tableOrder", Label::from(tl!("Table Order")), "bgr")] {
+        if let Some(p) = params.iter_mut().find(|p| p.key == key) {
+            *p = order_row(key, label, default);
+        }
+    }
 }
 
 // --- Match Color -----------------------------------------------------------------------------------------------
