@@ -331,7 +331,8 @@ fn failure(step: usize, id: &str, error: &str, result: Option<Value>) -> Value {
 /// deleted from the original document: the test is against the playing document as it stands, not
 /// against names it never had. `None` keeps today's plain failure: steps naming no layer (target
 /// steps, numeric ids kept for ambiguous names, a rename's new name), names the playing document
-/// can resolve, exact or by case as the engine does (the step failed for another reason), failures
+/// can resolve for that step's own selector kind, as the engine's lookup for that form does (the
+/// step failed for another reason), failures
 /// reported for a step other than the one named in them (a player refusal), and step indexes the
 /// action does not have.
 pub(super) fn missing_layer_prompt(app: &PhotocraftApp, action: &Action, failed: &Value) -> Option<(String, usize)> {
@@ -342,13 +343,18 @@ pub(super) fn missing_layer_prompt(app: &PhotocraftApp, action: &Action, failed:
     if failed.get("id").and_then(Value::as_str) != Some(step.command.as_str()) {
         return None;
     }
-    let name = named_step_layer(&step.command, &step.params)?;
+    let selector = named_step_layer(&step.command, &step.params)?;
+    let name = selector.name();
     let doc = &app.session.active()?.doc;
-    // As the engine resolves a `layer` name (`explicit_layer`): exact, else the same name whatever
-    // its case. A step naming "background" finds a "Background" layer, so its failure is unrelated
-    // to a missing layer and keeps the plain report.
-    let resolved = |want: &str| doc.walk().into_iter().any(|(_, _, layer)| layer.name == want);
-    if resolved(name) || doc.walk().into_iter().any(|(_, _, layer)| layer.name.to_lowercase() == name.to_lowercase()) {
+    // The presence test follows the lookup THIS kind uses in the engine. A `layer` param goes
+    // through `explicit_layer`: the exact name, else the same name whatever its case, so a step
+    // naming "background" finds a "Background" layer and its failure is unrelated to a missing
+    // layer. A Select step's `name` (`selection_target`) and a recorded visibility step's
+    // `_actionLayer` (`playback_params`) are matched exactly, so over a document holding "b" the
+    // step naming "B" is a layer that document does not have and the ask follows the failure.
+    let exact = |want: &str| doc.walk().into_iter().any(|(_, _, layer)| layer.name == want);
+    let resolved = exact(name) || selector.folds_case() && doc.walk().into_iter().any(|(_, _, layer)| layer.name.to_lowercase() == name.to_lowercase());
+    if resolved {
         return None;
     }
     let message = if step.command == "layer.select" {
@@ -359,19 +365,48 @@ pub(super) fn missing_layer_prompt(app: &PhotocraftApp, action: &Action, failed:
     Some((message, index.saturating_add(1)))
 }
 
-/// The layer a recorded step names: a `layer` the recorder made into a name or a source layer's
-/// `{"name": …}` object, a Select step's `name`, and a visibility step's recorded target. A
-/// numeric `layer` names no layer: the recorder kept that id for an ambiguous name.
-fn named_step_layer<'a>(id: &str, params: &'a Value) -> Option<&'a str> {
+/// The layer a recorded step names, as the kind of selector it is: a `layer` the recorder made
+/// into a name or a source layer's `{"name": …}` object, a Select step's `name`, and a visibility
+/// step's recorded target. A numeric `layer` names no layer: the recorder kept that id for an
+/// ambiguous name.
+fn named_step_layer<'a>(id: &str, params: &'a Value) -> Option<StepLayer<'a>> {
     if let Some(layer) = params.get("layer")
         && let Some(name) = layer.as_str().or_else(|| layer.get("name").and_then(Value::as_str))
     {
-        return Some(name);
+        return Some(StepLayer::Param(name));
     }
     if id == "layer.select" {
-        return params.get("name").and_then(Value::as_str);
+        return params.get("name").and_then(Value::as_str).map(StepLayer::SelectName);
     }
-    params.get("_actionLayer").and_then(|target| target.get("name")).and_then(Value::as_str)
+    params.get("_actionLayer").and_then(|target| target.get("name")).and_then(Value::as_str).map(StepLayer::Recorded)
+}
+
+/// The kind of layer selector a recorded step carries. Each form is resolved by its own engine
+/// lookup, and only some of those lookups fall back to a case-insensitive name match, so the
+/// missing-layer ask tests presence per kind rather than with one rule for every name.
+enum StepLayer<'a> {
+    /// A `layer` param: a name string or a source layer's `{"name": …}` object, resolved by
+    /// `explicit_layer` (the exact name, else the same name whatever its case).
+    Param(&'a str),
+    /// A Select step's `name`, resolved by `selection_target`: the exact name, at `occurrence`.
+    SelectName(&'a str),
+    /// A recorded visibility step's `_actionLayer`, resolved by `playback_params`: the exact name,
+    /// at the recorded ordinal.
+    Recorded(&'a str),
+}
+
+impl<'a> StepLayer<'a> {
+    /// The name the step gives its layer, whatever its kind.
+    fn name(&self) -> &'a str {
+        match self {
+            Self::Param(name) | Self::SelectName(name) | Self::Recorded(name) => name,
+        }
+    }
+
+    /// Whether this kind's engine lookup also accepts the name in another case.
+    fn folds_case(&self) -> bool {
+        matches!(self, Self::Param(_))
+    }
 }
 
 /// How long Step by Step or Pause For waits after step `i` of `action`, or `None` when it goes on at

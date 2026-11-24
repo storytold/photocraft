@@ -233,6 +233,69 @@ fn an_exact_case_name_on_a_lowercase_layer_is_not_missing() {
     assert_eq!(runner::missing_layer_prompt(&app, &action, &failed), None, "the engine finds `ink` for `Ink` by case");
 }
 
+/// The other two forms a recorded step can name its layer by are matched EXACTLY by the engine, so
+/// a name differing only in case is a layer the playing document does not have: the visibility
+/// step's `_actionLayer` goes through `playback_params`, at the recorded ordinal. Over a document
+/// with layer `b` the step naming `B` stops there, and the person is asked rather than getting
+/// today's plain failure (#10769 review).
+#[test]
+fn a_recorded_visibility_step_naming_the_layer_in_another_case_still_asks() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 6, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "b"})).unwrap();
+    let hide = ActionStep::new("layer.setProps", json!({"visible": false, "_actionLayer": {"name": "B", "ordinal": 0}}));
+    let suffix = ActionStep::new("layer.new.layer", json!({"name": "Suffix"}));
+    app.session.actions_mut().list.push(Action::new("Hide B", vec![hide, suffix])).unwrap();
+    let v = play(&mut app, &json!({"action": "Hide B"})).unwrap();
+    assert_eq!(v["failed"]["step"], 0, "{v}");
+    assert!(v["failed"]["error"].as_str().is_some_and(|error| error.contains("recorded layer `B`")), "the engine's exact lookup is what fails: {v}");
+    assert_eq!(prompts_open(&app), 1, "the name is missing for this step's kind, so the play asks");
+    let dialog = stop_prompt(&app);
+    answer(&mut app, dialog, true).unwrap();
+    assert_eq!(count(&app, "Suffix"), 1, "Continue skips the step and finishes the action");
+    let doc = app.session.active().unwrap().doc.clone();
+    assert!(doc.walk().into_iter().any(|(_, _, layer)| layer.name == "b" && layer.visible), "the step never hid the differently cased layer");
+    assert_idle(&app);
+}
+
+/// The same for a Select step: its `name` goes through `selection_target`, which matches the exact
+/// name at `occurrence`, so over a document with `b` the step naming `B` asks with the Select
+/// message instead of keeping a plain failure.
+#[test]
+fn a_select_step_naming_the_layer_in_another_case_still_asks() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 6, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "b"})).unwrap();
+    let select = ActionStep::new("layer.select", json!({"name": "B"}));
+    let suffix = ActionStep::new("layer.new.layer", json!({"name": "Suffix"}));
+    app.session.actions_mut().list.push(Action::new("On B", vec![select, suffix])).unwrap();
+    let v = play(&mut app, &json!({"action": "On B"})).unwrap();
+    assert_eq!(v["failed"]["step"], 0, "{v}");
+    assert_eq!(prompts_open(&app), 1, "the engine finds no `B` in this document, so the play asks");
+    let dialog = stop_prompt(&app);
+    answer(&mut app, dialog, true).unwrap();
+    assert_eq!(count(&app, "Suffix"), 1, "Continue skips the Select and finishes the action");
+    assert_idle(&app);
+}
+
+/// The ask stays a test of the NAME and its case, not of the recorded occurrence: a visibility step
+/// naming a name the document has, at an ordinal past its last layer of that name, still fails in
+/// the engine and keeps today's plain report. A pin, green before and after this change.
+#[test]
+fn a_name_the_document_has_at_another_occurrence_keeps_the_plain_report() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 6, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "B"})).unwrap();
+    let action = Action::new("Hide second B", vec![ActionStep::new("layer.setProps", json!({"visible": false, "_actionLayer": {"name": "B", "ordinal": 1}}))]);
+    let failed = json!({"step": 0, "id": "layer.setProps", "error": "recorded layer `B` does not exist"});
+    assert_eq!(runner::missing_layer_prompt(&app, &action, &failed), None, "the document has the name, only the recorded occurrence is missing");
+    app.session.actions_mut().list.push(action).unwrap();
+    let v = play(&mut app, &json!({"action": "Hide second B"})).unwrap();
+    assert_eq!(v["failed"]["step"], 0, "{v}");
+    assert_eq!(prompts_open(&app), 0, "an ordinal past the last layer of that name keeps today's plain failure");
+    assert_idle(&app);
+}
+
 /// A player refusal is reported at the step Play starts at, under the Play label — not under the
 /// refused step's own command. When that starting step is one that names a layer, the report must
 /// not be read as a missing layer: the ask only follows a failure whose id is the step's command,
