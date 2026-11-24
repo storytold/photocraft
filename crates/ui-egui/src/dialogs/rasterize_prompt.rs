@@ -225,6 +225,12 @@ fn rasterize(app: &mut PhotocraftApp, kind: Kind, layer: u64) -> Result<Value, S
 /// A patch that fails afterwards leaves the layer rasterized and reports the error in the status bar.
 fn rasterize_then_patch(app: &mut PhotocraftApp, kind: Kind, layer: u64, params: Value) -> Result<Value, String> {
     let rasterized = rasterize(app, kind, layer)?;
+    // The patch params name no layer: run as they stand, its pixels go to whatever is active when OK
+    // comes. The rasterize above settled the layer the question was about, so a different active
+    // layer now refuses the patch instead of painting somewhere else (#12121).
+    if app.session.active().and_then(|st| st.active_layer).map(|id| id.0) != Some(layer) {
+        return Err("the layer this question was about is no longer the active layer, so the patch was not applied".into());
+    }
     let patch = app.run("paint.patch", params)?;
     Ok(json!({ "rasterized": rasterized, "patched": patch }))
 }

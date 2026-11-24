@@ -216,6 +216,69 @@ fn the_other_layer_kinds_still_refuse() {
     }
 }
 
+/// Review round: a Type layer that is hidden, or sits in a hidden group, keeps today's refusal. The
+/// engine never writes there, so a prompt would only let OK destroy the text for no patch.
+#[test]
+fn a_hidden_type_layer_is_refused_without_a_prompt() {
+    for group in [false, true] {
+        let mut app = app("Type");
+        let text = app.session.active().unwrap().active_layer.unwrap();
+        if group {
+            let wrapped = app.run("layer.new.group", json!({"name": "Wrapped"})).unwrap()["layer"].as_u64().unwrap();
+            app.run("layer.moveTo", json!({"layer": text.0, "target": wrapped, "position": "into"})).unwrap();
+            app.run("layer.hideLayers", json!({"layer": wrapped})).unwrap();
+        } else {
+            app.run("layer.hideLayers", json!({"layer": text.0})).unwrap();
+        }
+        let what = if group { "type layer in a hidden group" } else { "hidden type layer" };
+        assert_eq!(app.session.active().unwrap().active_layer, Some(text), "{what}: the type layer is the active one");
+        let before = (past(&app), app.session.active().unwrap().doc.clone());
+        drag_patch(&mut app);
+        assert!(prompt(&app).is_none(), "{what}: no prompt, the patch could never land there");
+        assert!(app.ui.status_error, "{what}: the refusal stands: {}", app.ui.status);
+        assert!(patch_params(&app).is_empty(), "{what}");
+        assert_eq!(past(&app), before.0, "{what}");
+        assert_eq!(*app.session.active().unwrap().doc, *before.1, "{what}: the document is untouched");
+        assert_eq!(active_content(&app), "Type", "{what} stays editable");
+    }
+}
+
+/// Review round: OK applies the patch to the layer the question was about. The params name no layer,
+/// so a different layer that is active when OK comes must not take the pixels.
+#[test]
+fn ok_after_the_active_layer_changed_refuses_the_patch() {
+    let mut app = app("Type");
+    let text = app.session.active().unwrap().active_layer.unwrap();
+    drag_patch(&mut app);
+    let id = prompt(&app).expect("the prompt");
+    // Another layer becomes the active one while the question is up.
+    let elsewhere = app.run("layer.new.layer", json!({"name": "Elsewhere"})).unwrap()["layer"].as_u64().unwrap();
+    let before = past(&app);
+    answer(&mut app, id);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(photocraft_doc::LayerId(elsewhere)), "the new layer is the active one");
+    assert!(app.ui.status_error, "OK says why the patch did not run: {}", app.ui.status);
+    assert!(patch_params(&app).is_empty(), "the patch did not run on the layer that is active now");
+    assert_eq!(past(&app), before + 1, "the layer the question was about is still rasterized");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(text).unwrap().content.kind_name(), "Pixel", "the stored layer took the rasterize");
+}
+
+/// Pin, passes before and after the change: a locked Type layer cannot be rasterized either, so the
+/// drag keeps today's refusal and no prompt opens.
+#[test]
+fn a_locked_type_layer_still_refuses() {
+    let mut app = app("Type");
+    app.run("layer.lockLayers", json!({"pixels": true})).unwrap();
+    let before = (past(&app), app.session.active().unwrap().doc.clone());
+    drag_patch(&mut app);
+    assert!(prompt(&app).is_none(), "a locked layer gets no prompt");
+    assert!(app.ui.status_error, "the refusal stands: {}", app.ui.status);
+    assert!(patch_params(&app).is_empty());
+    assert_eq!(past(&app), before.0);
+    assert_eq!(*app.session.active().unwrap().doc, *before.1, "the document is untouched");
+    assert_eq!(active_content(&app), "Type");
+}
+
 /// A pixel layer is unaffected: the patch applies with no question asked.
 #[test]
 fn a_pixel_layer_patch_still_applies_without_asking() {
