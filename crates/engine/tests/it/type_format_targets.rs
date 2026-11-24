@@ -69,12 +69,12 @@ fn selected_type_properties_preserve_each_layers_other_attributes_and_one_histor
         let mut selected: Vec<_> = indices.iter().map(|i| ids[*i]).collect();
         selected.push(raster); // The primary layer need not be Type.
         select(&mut s, &selected);
-        let target = (s.active().unwrap().active_layer, s.active().unwrap().selected_layers());
+        let target = (s.active().unwrap().active_layer, s.active().unwrap().selected_layers().to_vec());
         let before: Vec<_> = ids.iter().map(|id| text(&s, *id)).collect();
         let steps = s.active().unwrap().history.entries().len();
         s.execute("type.setStyle", params).unwrap();
         assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
-        assert_eq!((s.active().unwrap().active_layer, s.active().unwrap().selected_layers()), target);
+        assert_eq!((s.active().unwrap().active_layer, s.active().unwrap().selected_layers().to_vec()), target);
         for (i, id) in ids.iter().enumerate() {
             let mut expected = before[i].clone();
             if indices.contains(&i) {
@@ -100,7 +100,7 @@ fn selected_type_properties_preserve_each_layers_other_attributes_and_one_histor
             assert_styles(&text(&s, *id), old);
         }
         assert!(s.redo());
-        assert_eq!((s.active().unwrap().active_layer, s.active().unwrap().selected_layers()), target);
+        assert_eq!((s.active().unwrap().active_layer, s.active().unwrap().selected_layers().to_vec()), target);
     }
 }
 

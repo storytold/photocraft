@@ -3,6 +3,7 @@ use crate::canvas_tool_menu::MenuKind;
 use craft::automation::actions::{Action, ActionList, ActionStep};
 use craft::color_ui::ui::{SampleSize, SampleSource};
 use craft::keymap::CommandRef;
+use photocraft_engine::actions_cmds::ActionsExt;
 
 /// An action named `name` whose steps run the given commands.
 // PLAN: assumed `app.session.actions.list` is craft-automation's `ActionList`
@@ -113,7 +114,7 @@ fn perf_output_includes_slow_frames() {
     }
     // A nested run (`actions.play` → its view steps through `App::run`) is inside the outer
     // call's time: the frame counts the outer command once, not the steps again.
-    app.session.actions.list.push(action("Zoom", vec![("view.zoomIn", json!({})), ("view.zoomOut", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Zoom", vec![("view.zoomIn", json!({})), ("view.zoomOut", json!({}))])).unwrap();
     let played = app.run("actions.play", json!({"action": "Zoom"})).unwrap();
     assert_eq!(played["ran"], 2, "{played}");
     let outer_ms = app.perf.command_ms;
@@ -551,7 +552,13 @@ fn agent_can_inspect_and_choose_pen_make_selection_from_full_context_menu() {
     let inspected = call(&mut app, &ctx, "ui.inspect", json!({}));
     assert_eq!(app.ui.canvas_tool_menu.as_ref().unwrap().pos, screen_point(&app, 8.0, 8.0));
     let entries = inspected.pointer("/result/canvasToolMenu/entries").and_then(Value::as_array).unwrap();
-    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 9);
+    // #12915: (8,8) lies on the closed work path's diagonal, so the menu now leads with the
+    // segment's Add Anchor Point entry above one more separator.
+    assert_eq!(entries.iter().filter(|row| row.get("separator") == Some(&json!(true))).count(), 10);
+    assert!(
+        entries.iter().any(|row| row.get("id") == Some(&json!("path.addAnchor")) && row.get("enabled") == Some(&json!(true))),
+        "the segment entry heads the menu"
+    );
     assert!(entries.iter().any(|row| row.get("id") == Some(&json!("path.toSelection")) && row.get("enabled") == Some(&json!(true))));
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id":"file.new"}))["ok"], false);
     let chosen = call(&mut app, &ctx, "ui.context.choose", json!({"id":"path.toSelection"}));
@@ -986,11 +993,11 @@ fn preferences_apply_is_available_over_control_without_closing() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = app.ctx().clone();
     let r = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "edit.preferences.interface"}));
-    // The Preferences window is held by the app; control addresses it by the id `ui.inspect` lists
-    // and the reply names it by its key.
+    // The Preferences window is held by the app; control addresses it by the id `ui.inspect` lists,
+    // and the reply names it by that id (#15544).
     let listed = dialogs(&mut app, &ctx);
     let window = listed.iter().find(|d| d["key"] == "preferences").expect("the Preferences window is listed");
-    assert_eq!(r["result"]["dialog"], window["key"], "{r}");
+    assert_eq!(r["result"]["dialog"], window["id"], "{r}");
     let id = window["id"].clone();
     let mut values = window["fields"]["values"].clone();
     values["interface"]["uiScale"] = json!("200");
@@ -1199,6 +1206,34 @@ fn automation_save_passes_dds_options_without_asking() {
 }
 
 #[test]
+fn an_automation_open_without_a_location_is_not_listed_in_open_recent() {
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::Document;
+    use photocraft_geom::Size;
+
+    let services = crate::Services {
+        import: Some(Box::new(|name: &str, _b: &[u8], _opts: &photocraft_io::ImportOptions| {
+            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), Vec::new()))
+        })),
+        automation_read: Some(Box::new(|path: &str| {
+            Ok(crate::AutomationReadResult {
+                name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                bytes: b"x".to_vec(),
+                save_path: Some(path.to_string()),
+            })
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = app.ctx().clone();
+    let r = call(&mut app, &ctx, "app.open", json!({"path": "shots/gk_25.png"}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some("shots/gk_25.png"), "the save-back target stays the root-relative path");
+    // A root-relative path names no file for Open Recent or Home, so nothing is listed.
+    assert!(app.ui.recent_files.is_empty(), "{:?}", app.ui.recent_files);
+}
+
+#[test]
 fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::Document;
@@ -1234,6 +1269,7 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
                 save_path: Some(path.to_string()),
             })
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/work/{path}")))),
         automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
             w.borrow_mut().push(path.to_string());
             Ok(())
@@ -1245,7 +1281,8 @@ fn automation_open_and_save_use_the_roots_and_reply_with_warnings() {
     assert_eq!(r["result"]["warnings"], json!(["Adjustment layer flattened"]), "{r}");
     assert_eq!(r["result"]["name"], "warn.psd");
     assert_eq!(app.session.active().unwrap().path.as_deref(), Some("in/warn.psd"));
-    assert_eq!(app.ui.recent_files, vec!["in/warn.psd".to_string()]);
+    // Open Recent lists where the file is, not the root-relative request path, which names nothing outside automation.
+    assert_eq!(*app.ui.recent_files, vec!["/work/in/warn.psd".to_string()]);
     let r = call(&mut app, &ctx, "app.save", json!({"path": "out.png"}));
     assert_eq!(r["result"], json!({"path": "out.png", "warnings": ["Layers were flattened"]}), "{r}");
     assert_eq!(*written.borrow(), vec!["out.png".to_string()]);
@@ -1354,7 +1391,8 @@ fn dirty_close_prompted() -> (Box<PhotocraftApp>, egui::Context, std::rc::Rc<std
 fn answer_save(app: &mut PhotocraftApp, ctx: &egui::Context, synthetic: bool) -> Result<(), String> {
     let prompt = top_dialog(app, ctx)["id"].clone();
     if synthetic {
-        let id = craft::automation::dialogs::dialog_id(&app.framework.dialogs, &json!({"dialog": prompt})).expect("the prompt is listed");
+        assert_eq!(prompt, crate::discard_ui::CONTROL_ID, "the prompt is listed as discard");
+        let id = crate::discard_ui::host_id(app).expect("the prompt is open");
         app.automation_input = true;
         let r = crate::dialogs::confirm(app, ctx, id);
         app.automation_input = false;
@@ -1456,6 +1494,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
                 Err(format!("no such path: {path}"))
             }
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/work/{path}")))),
         ..Default::default()
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -1464,7 +1503,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
     let r = call(&mut app, &ctx, "app.open", json!({"path": "native.pcraft"}));
     assert_eq!(r["result"], json!({"path": "native.pcraft", "name": "native.pcraft", "warnings": []}), "{r}");
     assert_eq!(app.session.active().unwrap().doc.name, "Native");
-    assert_eq!(app.ui.recent_files, vec!["native.pcraft".to_string()], "the open is recorded in recent files");
+    assert_eq!(*app.ui.recent_files, vec!["/work/native.pcraft".to_string()], "the open is recorded in recent files, where it is on disk");
     assert_eq!(app.session.active().unwrap().path, None, "no save-back target: the automation writer replaces files, never directories");
     let r = call(&mut app, &ctx, "app.save", json!({}));
     assert!(r["error"].as_str().unwrap().contains("pass `path`"), "an in-place save is refused up front: {r}");
@@ -1715,8 +1754,8 @@ fn control_refuses_linked_smart_objects_in_commands_and_actions_but_local_editin
         let r = call(&mut app, &ctx, "engine.execute", json!({"command": command, "params": {"layer": smart.0}}));
         assert_eq!(r["ok"], false, "{r}");
         assert!(r["error"].as_str().unwrap().contains("ambient smart-object path denied"), "{r}");
-        app.session.actions.list = ActionList::new();
-        app.session.actions.list.push(action("Linked contents", vec![(command, json!({"layer": smart.0}))])).unwrap();
+        app.session.actions_mut().list = ActionList::new();
+        app.session.actions_mut().list.push(action("Linked contents", vec![(command, json!({"layer": smart.0}))])).unwrap();
         let r = call(&mut app, &ctx, "engine.execute", json!({"command": "actions.play", "params": {"action": "Linked contents"}}));
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(r["result"]["ran"], 0, "{r}");
@@ -1742,7 +1781,7 @@ fn control_refuses_linked_smart_objects_in_commands_and_actions_but_local_editin
 fn actions_play_checks_each_step_over_control() {
     let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.session.actions.list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
     let ctx = app.ctx().clone();
     let r = call(&mut app, &ctx, "engine.execute", json!({"command": "actions.play", "params": {"action": "Open"}}));
     assert_eq!(r["ok"], true, "{r}");
@@ -1757,7 +1796,7 @@ fn actions_play_checks_each_step_over_control() {
 fn actions_play_checks_each_step_for_synthetic_input() {
     let services = crate::Services { automation_authorize: Some(deny_ambient_file), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.session.actions.list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
+    app.session.actions_mut().list.push(action("Open", vec![("file.open", json!({"path": "/etc/passwd"})), ("layer.new.layer", json!({}))])).unwrap();
     app.automation_input = true;
     let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
     assert_eq!(r["ran"], 0, "{r}");
@@ -1766,7 +1805,7 @@ fn actions_play_checks_each_step_for_synthetic_input() {
 
     // A local play (no automation input) still runs recorded steps.
     app.automation_input = false;
-    app.session.actions.list.delete_step(0, 0).unwrap();
+    app.session.actions_mut().list.delete_step(0, 0).unwrap();
     app.session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
     let r = app.run("actions.play", json!({"action": "Open"})).unwrap();
     assert_eq!(r["ran"], 1, "{r}");
@@ -2119,6 +2158,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
                 save_path: path.starts_with("work/").then(|| path.to_owned()),
             })
         })),
+        automation_locate: Some(Box::new(|path: &str| Some(format!("/roots/{path}")))),
         automation_write: Some(Box::new(move |path: &str, _: &[u8]| {
             if path == "failed.psd" {
                 return Err("test write failure".into());
@@ -2134,7 +2174,7 @@ fn automation_library_open_requires_explicit_save_as_before_implicit_save() {
     let opened = call(&mut app, &ctx, "app.open", json!({"path": "library/same.psd"}));
     assert_eq!(opened["ok"], true, "{opened}");
     assert_eq!(app.session.active().unwrap().path, None);
-    assert_eq!(app.ui.recent_files, vec!["library/same.psd"]);
+    assert_eq!(*app.ui.recent_files, vec!["/roots/library/same.psd"]);
     app.run("layer.new.layer", json!({"name": "edit"})).unwrap();
     assert!(app.session.active().unwrap().is_dirty());
     let refused = call(&mut app, &ctx, "app.save", json!({}));
@@ -2222,4 +2262,120 @@ fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
     // Magic Eraser has no menu.
     shift_right(&mut app, "magicEraser");
     assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
+}
+
+#[test]
+fn ui_set_align_edges_uses_scripted_tool_option_name() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": true}))["ok"], true);
+    assert!(app.ui.tool_options.align_edges);
+    assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"]["useAlignedRendering"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"useAlignedRendering": "true"}))["ok"], false);
+    assert!(app.ui.tool_options.align_edges);
+}
+
+/// A fresh app with a document, as a control client finds it, and the context the control channel runs on.
+fn app_with_document() -> (Box<PhotocraftApp>, egui::Context) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.sync_views();
+    let ctx = app.ctx().clone();
+    (app, ctx)
+}
+
+/// The id `ui.menu.invoke {id, wait: false}` replied for the dialog it opened.
+fn invoked_dialog(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) -> Value {
+    let reply = call(app, ctx, "ui.menu.invoke", json!({"id": id, "wait": false}));
+    assert_eq!(reply["ok"], true, "{id}: {reply}");
+    crate::canvas::testing::frame(app);
+    reply["result"]["dialog"].clone()
+}
+
+/// #15544: Keyboard Shortcuts and Menus is listed under the id its menu items reply with, and
+/// `ui.dialog.cancel` with that id closes it, so a control client is never stuck behind it.
+#[test]
+fn keyboard_shortcuts_is_listed_and_cancelled_by_the_id_invoke_replies() {
+    for command in ["edit.keyboardShortcuts", "edit.menus"] {
+        let (mut app, ctx) = app_with_document();
+        let id = invoked_dialog(&mut app, &ctx, command);
+        assert!(id.is_string(), "{command}: the reply names the dialog: {id}");
+        let listed = dialogs(&mut app, &ctx);
+        assert!(listed.iter().any(|d| d["id"] == id), "{command}: {id} is listed in {listed:?}");
+        assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "select.all"}))["ok"], false, "{command}: the dialog is modal");
+        let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}));
+        assert_eq!(cancelled["ok"], true, "{command}: {cancelled}");
+        assert!(!crate::prefs_ui::shortcuts_open(&app), "{command}: Cancel closed it");
+        assert!(dialogs(&mut app, &ctx).is_empty());
+        assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}))["ok"], false, "{command}: nothing left to cancel");
+        let next = call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "select.all"}));
+        assert_eq!(next["ok"], true, "{command}: commands run again: {next}");
+    }
+}
+
+/// #15544: Preferences replies with the id `ui.inspect` lists it under, and cancelling that id closes it.
+#[test]
+fn preferences_replies_with_the_id_it_is_listed_under() {
+    let (mut app, ctx) = app_with_document();
+    let id = invoked_dialog(&mut app, &ctx, "edit.preferences.interface");
+    let listed = dialogs(&mut app, &ctx);
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0]["id"], id, "the reply is the listed id");
+    assert_eq!(listed[0]["key"], "preferences");
+    let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}));
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    crate::canvas::testing::frame(&mut app);
+    assert!(dialogs(&mut app, &ctx).is_empty());
+    assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "select.all"}))["ok"], true);
+}
+
+/// #15544: Select › Color Range… replies with the bare id, as every other dialog does, not a `Result` around it.
+#[test]
+fn color_range_replies_with_the_bare_dialog_id() {
+    let (mut app, ctx) = app_with_document();
+    let id = invoked_dialog(&mut app, &ctx, "select.colorRange");
+    assert!(id.is_string(), "a bare id, not a wrapper: {id}");
+    assert_eq!(top_dialog(&mut app, &ctx)["id"], id);
+    assert_eq!(top_dialog(&mut app, &ctx)["key"], "select.colorRange");
+    let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": id}));
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    assert!(dialogs(&mut app, &ctx).is_empty());
+}
+
+/// #15544: the unsaved-changes prompt is listed as `"discard"` with the command it holds back, the document it
+/// asks about, how many are left and the choices, and `ui.dialog.confirm` / `ui.dialog.cancel` take that id
+/// (docs/control-protocol.md).
+#[test]
+fn the_unsaved_changes_prompt_is_listed_as_discard_and_answered_by_that_id() {
+    let (mut app, ctx) = app_with_document();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let prompt = |app: &mut PhotocraftApp| dialogs(app, &ctx).into_iter().find(|d| d["id"] == "discard");
+    assert!(prompt(&mut app).is_none());
+    // Close the changed document: the prompt is listed; Cancel keeps the document.
+    assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "file.close"}))["ok"], true);
+    crate::canvas::testing::frame(&mut app);
+    let listed = prompt(&mut app).unwrap_or_else(|| panic!("listed as discard: {:?}", dialogs(&mut app, &ctx)));
+    let name = app.session.active().unwrap().doc.name.clone();
+    assert_eq!(listed["fields"]["command"], "file.close");
+    assert_eq!(listed["fields"]["document"], name.as_str());
+    assert_eq!(listed["fields"]["remaining"], 1);
+    assert_eq!(listed["fields"]["choices"], json!(["save", "dontSave", "cancel"]));
+    // Its rect is keyed by that id too, as `rects` keys every hosted dialog by its `dialogs` id; others keep theirs.
+    let host = crate::discard_ui::host_id(&app).expect("the prompt is open");
+    assert_eq!(super::inspect::dialog_key(&app, host), "discard");
+    let other = egui::Id::unique("another dialog");
+    assert_eq!(super::inspect::dialog_key(&app, other), other.value().to_string());
+    let cancelled = call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "discard"}));
+    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    crate::canvas::testing::frame(&mut app);
+    assert!(prompt(&mut app).is_none());
+    assert_eq!(app.session.documents().len(), 1, "Cancel keeps the document");
+    assert_eq!(call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": "discard"}))["ok"], false, "nothing left to answer");
+    // Don't Save by that id closes it.
+    assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id": "file.close"}))["ok"], true);
+    crate::canvas::testing::frame(&mut app);
+    let answered = call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": "discard", "choice": "dontSave"}));
+    assert_eq!(answered["ok"], true, "{answered}");
+    crate::canvas::testing::frame(&mut app);
+    assert!(app.session.documents().is_empty(), "Don't Save closed the document");
 }

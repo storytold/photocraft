@@ -34,6 +34,7 @@ impl BandRenderer for QueuedDiagnosticsRenderer {
 
 #[test]
 fn native_save_refuses_previews_rendered_from_unreadable_scratch() {
+    photocraft_raster::spill::use_test_volume_space();
     let dir = std::env::temp_dir().join(format!("photocraft-automation-scratch-save-{}", std::process::id()));
     spill::configure(Some(&dir), 1).unwrap();
     let mut doc = Document::new("Scratch", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
