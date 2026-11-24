@@ -155,18 +155,21 @@ const ADJUSTMENT_COMMAND: &str = "layer.newAdjustmentLayer.brightnessContrast";
 const ADJUSTMENT_ACTION: &str = "Make adjustment";
 
 fn adjustment_session() -> Session {
-    let mut session = Session::new();
+    let mut session = crate::session();
     session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
     session
 }
 
+/// Builds the action through commands, as a user would, so the native step keeps its exact opacity.
 fn set_adjustment_action(session: &mut Session, opacity: Option<f64>) {
     let mut params = json!({"brightness": 100});
     if let Some(opacity) = opacity {
         params["opacity"] = json!(opacity);
     }
-    let actions = vec![Action::new(ADJUSTMENT_ACTION, vec![ActionStep::new(ADJUSTMENT_COMMAND, params)])];
-    session.actions.list = ActionList::from_file(ActionsFile::new(actions, Vec::new()));
+    session.execute("actions.record", json!({"name": ADJUSTMENT_ACTION})).unwrap();
+    session.execute("actions.stop", json!({})).unwrap();
+    let step = json!({"action": ADJUSTMENT_ACTION, "id": ADJUSTMENT_COMMAND, "params": params});
+    session.execute("actions.insert", step).unwrap();
 }
 
 fn play_adjustment_opacity(session: &mut Session) -> f32 {
