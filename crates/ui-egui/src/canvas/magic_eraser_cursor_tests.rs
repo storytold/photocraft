@@ -2,7 +2,7 @@
 //! also with Shift held; Precise Other Cursors and Caps Lock give the crosshair. Driven through real egui input on
 //! the real canvas; the assertions read the cursor the tool asked the tool host for.
 
-use craft::behavior::{Cursor, PaintedCursor};
+use craft::behavior::{Cursor, PaintedCursor, PointerGlyph};
 use craft::ui::runtime::windows::WindowHost;
 use egui::Modifiers;
 use egui_kittest::Harness;
@@ -21,14 +21,13 @@ fn cursor_with(h: &mut Harness<'static, Box<PhotocraftApp>>, mods: Modifiers) ->
 }
 
 #[test]
-fn the_standard_cursor_is_the_magic_eraser_icon_with_its_tip_at_the_lower_left() {
+fn the_standard_cursor_is_the_crosshair_with_the_magic_eraser_icon() {
     let mut h = harness(Tool::MagicEraser);
-    let Some(Cursor::Painted(PaintedCursor::Tool { icon, hotspot, badge, .. })) = cursor_with(&mut h, Modifiers::NONE) else {
-        panic!("an icon cursor, not the crosshair");
+    let Some(Cursor::Painted(PaintedCursor::PointerTool { pointer, icon, badge, .. })) = cursor_with(&mut h, Modifiers::NONE) else {
+        panic!("the crosshair with the tool's icon, not the plain crosshair");
     };
+    assert_eq!(pointer, PointerGlyph::Crosshair, "the crosshair marks the exact point");
     assert_eq!(icon, crate::icons::tool_icon(Tool::MagicEraser), "the toolbar's own icon");
-    // The eraser end of the glyph, at the lower left of its 24-unit box: pinned by value so a moved constant fails.
-    assert_eq!(hotspot, egui::vec2(4.6, 18.4), "the eraser tip");
     assert!(badge.is_none());
     assert_eq!(cursor_with(&mut h, Modifiers::SHIFT), cursor_with(&mut h, Modifiers::NONE), "Shift keeps it");
 }

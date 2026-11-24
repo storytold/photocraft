@@ -15,6 +15,7 @@ use super::pen::pen_path_op;
 use super::{PenOwner, PhotocraftApp};
 use crate::direct_select::{PathRef, still_valid};
 use crate::state::Tool;
+use craft::behavior::PointerGlyph;
 
 /// Whether a primary press may begin a trace this pass, decided by the host from the app's state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -279,7 +280,7 @@ impl CanvasTool for FreeformPenTool {
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         if cx.pointer.as_ref().and_then(|pointer| self.end_at(pointer, cx)).is_some_and(|end| end.selected) {
             // The nib is at the lower left of the same 24-point icon box the Pen uses.
-            return Cursor::Painted(PaintedCursor::tool(crate::icons::tool_icon(Tool::FreeformPen), Vec2::Y * 24.0, Some(CursorBadge::Continue)));
+            return Cursor::Painted(PaintedCursor::pointer_tool_badged(PointerGlyph::Crosshair, crate::icons::tool_icon(Tool::FreeformPen), Some(CursorBadge::Continue)));
         }
         Cursor::System(CursorIcon::Default)
     }

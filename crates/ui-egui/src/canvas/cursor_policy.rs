@@ -48,23 +48,17 @@ pub(crate) fn sample_target() -> Cursor {
     Cursor::Painted(PaintedCursor::circle(5.0).marked(true, None))
 }
 
-/// The pointer of a painting tool that acts on a click and has no brush tip: the Paint Bucket's
-/// arrow with the bucket below right of it, the hotspot on the arrow's tip, so a click fills the
-/// pixel under the tip (#12539), and the Magic Eraser's own icon with the hotspot on the eraser's
-/// end at the lower left (#12001). Precise Other Cursors (or Caps Lock, `precise`) gives both the
-/// crosshair (#3968). `None` for a tool that strokes with the brush.
+/// The pointer of a painting tool that acts on a click and has no brush tip: the crosshair on the exact pixel a click
+/// takes, with the tool's icon (the Paint Bucket's bucket, the Magic Eraser's eraser) below right of it. Precise Other
+/// Cursors (or Caps Lock, `precise`) gives the plain crosshair (#3968). `None` for a tool that strokes with the brush.
 pub(crate) fn click_tool_cursor(tool: Tool, precise: bool) -> Option<Cursor> {
     match tool {
-        Tool::PaintBucket if !precise => Some(Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Arrow, crate::icons::tool_icon(tool)))),
-        Tool::MagicEraser if !precise => Some(Cursor::Painted(PaintedCursor::tool(crate::icons::tool_icon(tool), MAGIC_ERASER_HOTSPOT, None))),
+        Tool::PaintBucket if !precise => Some(Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Crosshair, crate::icons::tool_icon(tool)))),
+        Tool::MagicEraser if !precise => Some(Cursor::Painted(PaintedCursor::pointer_tool_badged(PointerGlyph::Crosshair, crate::icons::tool_icon(tool), None))),
         Tool::PaintBucket | Tool::MagicEraser => Some(Cursor::Painted(PaintedCursor::Crosshair)),
         _ => None,
     }
 }
-
-/// The Magic Eraser icon's point that sits on the pointer, in its 24-unit box: the middle of the eraser's end, which
-/// lies at the lower left of the `eraser_magic` glyph (#12001).
-pub(crate) const MAGIC_ERASER_HOTSPOT: egui::Vec2 = egui::vec2(4.6, 18.4);
 
 /// Path Selection's own pointer (#13295): the light arrow, and the solid one with ⌥ (without ⌘)
 /// where a press would land on a component (`path_components::over_component`). ⌘ keeps the light

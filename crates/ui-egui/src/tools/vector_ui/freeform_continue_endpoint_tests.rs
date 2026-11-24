@@ -27,7 +27,7 @@ fn shows_continue(app: &mut PhotocraftApp, point: [f64; 2]) -> bool {
     testing::move_to(app, point, Modifiers::NONE);
     matches!(
         app.canvas_tools.last_response.as_ref().and_then(|response| response.cursor.as_ref()),
-        Some(Cursor::Painted(PaintedCursor::Tool { badge: Some(CursorBadge::Continue), .. }))
+        Some(Cursor::Painted(PaintedCursor::PointerTool { badge: Some(CursorBadge::Continue), .. }))
     )
 }
 

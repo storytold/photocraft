@@ -22,6 +22,7 @@ use craft::ui::dialog::{DialogId, StackDialog as _};
 use craft::ui::patterns::form_dialogs::HostedParamDialog;
 
 use crate::PhotocraftApp;
+use craft::behavior::PointerGlyph;
 
 /// A pick a hosted dialog (or the Properties panel) arms on the canvas.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -45,9 +46,6 @@ pub(crate) enum DialogPick {
     /// A click on the image moves a filter preview's view to the point.
     Locator,
 }
-
-/// The pipette's tip, at the bottom left of its 24-unit icon box.
-const PIPETTE_HOTSPOT: egui::Vec2 = egui::vec2(2.0, 22.0);
 
 /// The pick the stack's top dialog arms now, or the Properties panel's armed picker when no dialog is open.
 ///
@@ -236,7 +234,7 @@ fn held(app: &PhotocraftApp) -> Mods {
 /// The cursor over the image while `pick` is armed: the pipette for the samplers (Color Range's with the badge of the
 /// tool the held modifiers select), the move cursor for the drags, the locator mark for the locator.
 pub(crate) fn cursor(app: &PhotocraftApp, pick: DialogPick) -> Cursor {
-    let pipette = |badge| Cursor::Painted(PaintedCursor::tool(IconId::new("eyedropper"), PIPETTE_HOTSPOT, badge));
+    let pipette = |badge| Cursor::Painted(PaintedCursor::pointer_tool_badged(PointerGlyph::Crosshair, IconId::new("eyedropper"), badge));
     match pick {
         DialogPick::TonePicker(_) | DialogPick::Color | DialogPick::ParamDropper => pipette(None),
         DialogPick::ColorRange => {

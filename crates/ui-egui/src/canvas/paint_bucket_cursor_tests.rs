@@ -1,5 +1,5 @@
-//! The Paint Bucket cursor (#12539): with Standard Other Cursors it is the arrow with the bucket
-//! below right of it, the hotspot on the arrow tip, and a click fills the pixel under that tip.
+//! The Paint Bucket cursor (#12539): with Standard Other Cursors it is the crosshair with the bucket
+//! below right of it, the hotspot on the crosshair's centre, and a click fills the pixel under it.
 //! Precise Other Cursors and Caps Lock keep the crosshair; ⌥ and ⌘ keep the Eyedropper and Move
 //! cursors. Driven through real egui input on the real canvas; the assertions read the cursor the
 //! tool (or its stand-in) asked the tool host for.
@@ -30,14 +30,14 @@ fn pixel(app: &PhotocraftApp, x: i32, y: i32) -> [u8; 3] {
 }
 
 #[test]
-fn the_standard_cursor_is_the_arrow_with_the_bucket() {
+fn the_standard_cursor_is_the_crosshair_with_the_bucket() {
     let mut h = harness(Tool::PaintBucket);
-    let bucket = Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Arrow, crate::icons::tool_icon(Tool::PaintBucket)));
+    let bucket = Cursor::Painted(PaintedCursor::pointer_tool(PointerGlyph::Crosshair, crate::icons::tool_icon(Tool::PaintBucket)));
     assert_eq!(cursor_with(&mut h, Modifiers::NONE), Some(bucket));
 }
 
 #[test]
-fn a_click_fills_the_pixel_under_the_arrow_tip() {
+fn a_click_fills_the_pixel_under_the_crosshair() {
     let mut h = harness(Tool::PaintBucket);
     let (x, y) = (AT[0] as i32, AT[1] as i32);
     // Black left of and above the pointer's pixel: a fill there stops at the edges, a fill one
@@ -50,7 +50,7 @@ fn a_click_fills_the_pixel_under_the_arrow_tip() {
     app.run("select.deselect", json!({})).unwrap();
     app.run("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     h.run_steps(2);
-    // The pixel's centre, as the pointer sits on the arrow tip.
+    // The pixel's centre, as the pointer sits on the crosshair's centre.
     let p = screen(&h, AT[0] + 0.5, AT[1] + 0.5);
     for pressed in [true, false] {
         h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
