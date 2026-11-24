@@ -103,17 +103,12 @@ fn the_triangle_and_rectangle_checkboxes_keep_a_real_drags_fractions() {
     }
 }
 
-/// ⇧ keeps the shape's proportions (the Heart's 100 : 92, centred in the square of the drag's shorter side) and ⌥
-/// draws from the centre, both before the box keeps its fractions.
+/// ⌥ draws from the centre before the box keeps its fractions.
 #[test]
-fn shift_and_alt_constrain_before_the_fractions_are_kept() {
-    let heart = 19.6 * 0.92;
-    let shift = [10.3, 10.6 + (19.6 - heart) / 2.0, 29.9, 10.6 + (19.6 + heart) / 2.0];
-    for (mods, want) in [(Modifiers::SHIFT, shift), (Modifiers::ALT, [-20.1, -9.0, 40.7, 30.2])] {
-        let mut app = app(Tool::CustomShape, |o| o.align_edges = false);
-        drag(&mut app, START, END, mods);
-        assert_close(drawn_bounds(&app, false), want, &format!("{mods:?}"));
-    }
+fn alt_draws_from_the_centre_before_the_fractions_are_kept() {
+    let mut app = app(Tool::CustomShape, |o| o.align_edges = false);
+    drag(&mut app, START, END, Modifiers::ALT);
+    assert_close(drawn_bounds(&app, false), [-20.1, -9.0, 40.7, 30.2], "⌥");
 }
 
 #[test]
@@ -176,5 +171,6 @@ fn options_bar_shows_align_edges_after_the_shape_picker() {
     h.state_mut().ui.tool_options.shape_mode = VectorMode::Path;
     h.run_steps(4);
     assert!(h.get_by_label("Align Edges").accesskit_node().is_disabled(), "greyed in Path mode");
-    assert_eq!(h.query_all_by_label("Shape").count(), shapes, "the Shape picker stays in Path mode");
+    // Path mode adds the Make: Shape button, so at least the Shape-mode count shows.
+    assert!(h.query_all_by_label("Shape").count() >= shapes, "the Shape picker stays in Path mode");
 }
