@@ -498,6 +498,51 @@ fn assert_black_white_preset(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) {
 }
 
 #[test]
+fn black_white_presets_each_set_a_distinct_mix_and_keep_tint() {
+    let mut h = app_harness("blackWhite", "rgb", 8);
+    // Leave enough vertical space for the complete dropdown to be visible at once.
+    h.set_size(vec2(1440.0, 1350.0));
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "tint": true, "tintColor": "#336699"})).unwrap();
+    h.run_steps(4);
+    let (_, original) = layer(&h);
+    let Adjustment::BlackWhite { tint: original_tint, .. } = &original else { panic!("{original:?}") };
+
+    let mut seen = Vec::new();
+    for name in [
+        "Darker",
+        "Lighter",
+        "Deep Shadows",
+        "Bright Highlights",
+        "Even Color Weights",
+        "Red Filter",
+        "Yellow Filter",
+        "Green Filter",
+        "Blue Filter",
+        "Strong Red Filter",
+        "Strong Blue Filter",
+        "Infrared Foliage",
+        "Default",
+    ] {
+        let history = history_len(&h);
+        h.get_by_role_and_label(Role::ComboBox, "Preset").click();
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::ListBoxOption, name).click();
+        h.run_steps(4);
+
+        let (_, applied) = layer(&h);
+        let Adjustment::BlackWhite { weights, tint } = applied else { panic!("{applied:?}") };
+        assert!(!seen.contains(&weights), "{name} must set a distinct mix");
+        seen.push(weights);
+        assert_black_white_preset(&h, name);
+        assert_eq!(&tint, original_tint, "{name} preserves Tint");
+        assert_eq!(history_len(&h), history + 1, "{name} is one history step");
+        assert!(h.state().live_adjust.is_none(), "{name} finishes the preview");
+    }
+    assert_eq!(layer(&h).1, original, "Default restores the original mix");
+}
+
+#[test]
 fn black_white_presets_apply_through_properties_and_undo() {
     let mut h = app_harness("blackWhite", "rgb", 8);
     let (id, _) = layer(&h);

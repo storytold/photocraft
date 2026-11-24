@@ -15,9 +15,10 @@ use super::{AdjustAsk, AdjustOut, AdjustValue};
 type Mix = [f64; 6];
 
 /// The presets change the grayscale mix and keep the layer's tint settings.
-fn entries() -> [Entry<Option<Mix>>; 14] {
+fn entries() -> [Entry<Option<Mix>>; 16] {
     [
         Entry::new(Some(BlackWhite::DEFAULT_WEIGHTS), tl!("Default")),
+        Entry::separator(),
         Entry::new(Some([22.0, 38.0, 25.0, 36.0, 10.0, 50.0]), tl!("Darker")),
         Entry::new(Some([60.0, 77.0, 64.0, 78.0, 47.0, 92.0]), tl!("Lighter")),
         Entry::new(Some([8.0; 6]), tl!("Deep Shadows")),
@@ -30,6 +31,7 @@ fn entries() -> [Entry<Option<Mix>>; 14] {
         Entry::new(Some([100.0, 73.0, 24.0, 7.0, 5.0, 64.0]), tl!("Strong Red Filter")),
         Entry::new(Some([4.0, 12.0, 27.0, 71.0, 100.0, 44.0]), tl!("Strong Blue Filter")),
         Entry::new(Some([58.0, 89.0, 97.0, 38.0, 8.0, 33.0]), tl!("Infrared Foliage")),
+        Entry::separator(),
         Entry::new(None, tl!("Custom")),
     ]
 }
