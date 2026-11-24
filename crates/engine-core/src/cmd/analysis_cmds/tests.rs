@@ -146,6 +146,42 @@ fn features_area_perimeter_circularity() {
 }
 
 #[test]
+fn a_hole_adds_nothing_to_the_perimeter_and_an_island_in_it_counts_its_own() {
+    // #16523: a 6 × 6 ring around a 2 × 2 hole and a solid 8 × 4 rectangle both read 24 px and
+    // circularity 0.698132 in the reference application.
+    let (w, h) = (32usize, 24usize);
+    let rect = |x: usize, y: usize, x0: usize, y0: usize, rw: usize, rh: usize| (x0..x0 + rw).contains(&x) && (y0..y0 + rh).contains(&y);
+    let mask: Vec<bool> =
+        (0..w * h).map(|i| (i % w, i / w)).map(|(x, y)| (rect(x, y, 4, 4, 6, 6) && !rect(x, y, 6, 6, 2, 2)) || rect(x, y, 16, 4, 8, 4)).collect();
+    let f = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    assert_eq!(f.len(), 2);
+    for f in &f {
+        assert_eq!(f.area, 32.0);
+        assert!((f.perimeter - 24.0).abs() < 1e-9, "{}", f.perimeter);
+        assert!((f.circularity() - 0.698132).abs() < 1e-6, "{}", f.circularity());
+    }
+    // A 2 × 2 island in the middle of a 10 × 10 ring's 6 × 6 hole is a feature of its own, and
+    // its outline faces the hole; the ring still counts only its outer edge.
+    let (w, h) = (12usize, 12usize);
+    let mask: Vec<bool> =
+        (0..w * h).map(|i| (i % w, i / w)).map(|(x, y)| (rect(x, y, 1, 1, 10, 10) && !rect(x, y, 3, 3, 6, 6)) || rect(x, y, 5, 5, 2, 2)).collect();
+    let f = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    assert_eq!(f.len(), 2);
+    assert!((f[0].perimeter - 40.0).abs() < 1e-9, "{}", f[0].perimeter);
+    assert!((f[1].perimeter - 8.0).abs() < 1e-9, "{}", f[1].perimeter);
+    // A one-pixel hole whose diagonal neighbours are outside: filling it leaves the outer outline,
+    // and so the perimeter, as it was.
+    let rows = [".......", "...##..", "...#...", "...#.#.", "...##.#", ".....#."];
+    let (w, h) = (7usize, 6usize);
+    let mut mask: Vec<bool> = rows.iter().flat_map(|r| r.bytes().map(|b| b == b'#')).collect();
+    let holed = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    mask[4 * w + 5] = true;
+    let filled = measure_features(&mask, &vec![0.5; w * h], w, h, (0, 0), 255.0);
+    assert_eq!((holed.len(), filled.len()), (1, 1));
+    assert!((holed[0].perimeter - filled[0].perimeter).abs() < 1e-9, "{} vs {}", holed[0].perimeter, filled[0].perimeter);
+}
+
+#[test]
 fn rectangle_perimeter_keeps_its_corners_and_a_staircase_its_diagonal() {
     // #16495: a 24 × 16 selection at (16, 16) on 160 × 120 reads 80 px and circularity 0.753982
     // in the reference application.
