@@ -1,12 +1,23 @@
 use super::{EngineError, ID, json};
 
+fn fill_pixel_layer(session: &mut crate::Session) {
+    session
+        .edit("seed dim pixels", |doc, active| {
+            let area = doc.bounds();
+            let surface = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            surface.fill_rect(area, &[0.33, 0.28, 0.26, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+}
+
 #[test]
 fn estimates_are_available_at_each_document_depth_without_editing_pixels() {
     for bits in [8, 16, 32] {
         let mut session = crate::session();
         session.execute("file.new", json!({"width": 96, "height": 96, "depth": bits})).unwrap();
         session.execute("layer.new.layer", json!({})).unwrap();
-        session.execute("edit.fill", json!({"color": "#534743"})).unwrap();
+        fill_pixel_layer(&mut session);
         let rev = session.active().unwrap().revision;
         let result = session.execute(ID, json!({"panel": "light"})).unwrap();
         assert!(result["settings"]["exposure"].as_f64().is_some_and(|v| v > 0.0));
@@ -53,7 +64,7 @@ fn estimate_can_name_a_pixel_layer_while_a_group_is_active() {
     let mut session = crate::session();
     session.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
     session.execute("layer.new.layer", json!({})).unwrap();
-    session.execute("edit.fill", json!({"color": "#544743"})).unwrap();
+    fill_pixel_layer(&mut session);
     let layer = session.active().unwrap().active_layer.unwrap();
     session.execute("layer.new.group", json!({})).unwrap();
     let group = session.active().unwrap().active_layer.unwrap();
