@@ -10,9 +10,12 @@
 //!
 //! Several strokes can go in one removal (`strokes`): Photoshop's *Remove after each stroke*
 //! off, where the strokes collect and are applied together, so the fill sees every hole at once
-//! instead of sampling from an area the next stroke is about to remove. With `newLayer` the fill
-//! lands on a new layer above the target, only where the hole is, and the target stays as it was
-//! (Photoshop's *Create a new layer*; with Sample All Layers it fills from the composite).
+//! instead of sampling from an area the next stroke is about to remove. An entry can carry
+//! `"subtract": true` (Photoshop's *Subtract from brushed area*, and what an Alt-drag of the Remove
+//! tool sends, #12543): its footprint comes back out of the hole, so those pixels stay as they were.
+//! With `newLayer` the fill lands on a new layer above the target, only where the hole is, and the
+//! target stays as it was (Photoshop's *Create a new layer*; with Sample All Layers it fills from the
+//! composite).
 
 use super::content_aware_move::{Target, replace};
 use super::patch::coverage;
@@ -54,6 +57,9 @@ struct Plan {
     id: Option<LayerId>,
     /// One stroke (`points`), or several applied together (`strokes`).
     strokes: Vec<Stroke>,
+    /// The `strokes` entries marked `"subtract": true` (#12543): their footprints come out of the
+    /// hole the ones above built, so those pixels stay as they were.
+    subtracts: Vec<Stroke>,
     /// Where the fill samples from: the strokes plus a margin, on the canvas.
     window: Rect,
     close_loops: bool,
@@ -74,24 +80,27 @@ fn stroke_bounds(stroke: &Stroke) -> Rect {
 }
 
 /// The strokes of the request: `strokes` (several, each a list of points, sharing the brush
-/// and the target) or the one in `points`.
-fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Option<LayerId>)> {
+/// and the target) or the one in `points`. An entry may carry `"subtract": true`; its stroke goes
+/// in the second list, whose footprints come out of the hole again (#12543).
+fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Vec<Stroke>, Option<LayerId>)> {
     let Some(list) = p.get("strokes") else {
         let (stroke, id) = parse_brush(s, p, CMD)?;
         reject_huge_stroke(CMD, &stroke)?;
-        return Ok((vec![stroke], id));
+        return Ok((vec![stroke], Vec::new(), id));
     };
-    const ENTRY: &str = "each `strokes` entry is a point list or {\"points\", \"size\"?, \"hardness\"?, \"spacing\"?}";
+    const ENTRY: &str = "each `strokes` entry is a point list or {\"points\", \"size\"?, \"hardness\"?, \"spacing\"?, \"subtract\"?}";
     let list = list.as_array().ok_or_else(|| bad(CMD, ENTRY))?;
     if list.is_empty() {
         return Err(bad(CMD, "`strokes` is empty"));
     }
     let mut strokes = Vec::with_capacity(list.len());
+    let mut subtracts = Vec::new();
     let mut id = None;
     for entry in list {
         let mut one = p.clone();
         let Some(o) = one.as_object_mut() else { return Err(bad(CMD, "params must be an object")) };
         o.remove("strokes");
+        let mut subtract = false;
         match entry {
             // A stroke drawn with another brush than the rest (the waiting strokes of Remove after
             // each stroke off keep the size, hardness and spacing each was drawn with).
@@ -103,6 +112,12 @@ fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Option<LayerId>
                         o.insert(k.into(), v.clone());
                     }
                 }
+                // A `subtract` that is no boolean is a malformed entry: an error, never a guess.
+                subtract = match e.get("subtract") {
+                    None => false,
+                    Some(Value::Bool(on)) => *on,
+                    Some(v) => return Err(bad(CMD, format!("\"subtract\" must be true or false, not {v}"))),
+                };
             }
             points => {
                 o.insert("points".into(), points.clone());
@@ -110,17 +125,21 @@ fn parse_strokes(s: &Session, p: &Value) -> Result<(Vec<Stroke>, Option<LayerId>
         }
         let (stroke, layer) = parse_brush(s, &one, CMD)?;
         reject_huge_stroke(CMD, &stroke)?;
-        strokes.push(stroke);
+        if subtract {
+            subtracts.push(stroke);
+        } else {
+            strokes.push(stroke);
+        }
         id = layer;
     }
-    Ok((strokes, id))
+    Ok((strokes, subtracts, id))
 }
 
 fn plan(s: &Session, p: &Value) -> Result<Plan> {
-    let (strokes, id) = parse_strokes(s, p)?;
+    let (strokes, subtracts, id) = parse_strokes(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
-    let bounds = strokes.iter().map(stroke_bounds).reduce(|a, b| a.union(&b)).ok_or_else(|| bad(CMD, "`strokes` is empty"))?;
+    let bounds = strokes.iter().chain(subtracts.iter()).map(stroke_bounds).reduce(|a, b| a.union(&b)).ok_or_else(|| bad(CMD, "`strokes` is empty"))?;
     let pixels = u64::from(bounds.width()) * u64::from(bounds.height());
     if pixels > MAX_PIXELS {
         return Err(bad(CMD, format!("the stroke is too large to remove ({pixels} pixels, at most {MAX_PIXELS})")));
@@ -134,16 +153,13 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
     let all_layers = flag(p, "sampleAllLayers", false) && targets_pixels(p);
     // A mask or channel has no "above": the fill goes where the stroke went.
     let new_layer = flag(p, "newLayer", false) && targets_pixels(p);
-    Ok(Plan { id, strokes, window, close_loops, all_layers, new_layer })
+    Ok(Plan { id, strokes, subtracts, window, close_loops, all_layers, new_layer })
 }
 
-/// The hole over the plan's window: the strokes' footprints, their enclosed areas and a margin,
-/// limited to the selection. Empty when nothing would change.
-fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
-    let win = plan.window;
-    let (w, h) = (win.width() as usize, win.height() as usize);
-    let mut m = vec![false; w * h];
-    for stroke in &plan.strokes {
+/// The footprints of `strokes` over `win`, in `m` (the window's rows are `w` pixels wide): every
+/// pixel a dab of the stroke covers.
+fn stamp_footprints(win: &Rect, w: usize, strokes: &[Stroke], m: &mut [bool]) -> Result<()> {
+    for stroke in strokes {
         let (bounds, cov) = super::coverage(CMD, stroke)?;
         let bw = bounds.width() as usize;
         for (i, c) in cov.iter().enumerate() {
@@ -156,8 +172,26 @@ fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
             }
         }
     }
+    Ok(())
+}
+
+/// The hole over the plan's window: the Add strokes' footprints and their enclosed areas, less the
+/// Subtract strokes' footprints (#12543) and a margin, limited to the selection. Empty when nothing
+/// would change.
+fn hole(plan: &Plan, sel: Option<&Surface>) -> Result<Vec<bool>> {
+    let win = plan.window;
+    let (w, h) = (win.width() as usize, win.height() as usize);
+    let mut m = vec![false; w * h];
+    stamp_footprints(&win, w, &plan.strokes, &mut m)?;
     if plan.close_loops {
         m = photocraft_algo::remove::close_loops(w, h, &m);
+    }
+    if !plan.subtracts.is_empty() {
+        let mut cut = vec![false; w * h];
+        stamp_footprints(&win, w, &plan.subtracts, &mut cut)?;
+        for (keep, gone) in m.iter_mut().zip(&cut) {
+            *keep &= !gone;
+        }
     }
     m = photocraft_algo::remove::dilate(w, h, &m, GROW);
     if let Some(sel) = sel {
