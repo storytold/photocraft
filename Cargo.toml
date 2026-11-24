@@ -40,6 +40,7 @@ photocraft-plugins = { path = "crates/plugins" }
 photocraft-engine = { path = "crates/engine" }
 photocraft-engine-core = { path = "crates/engine-core" }
 photocraft-engine-paint = { path = "crates/engine-paint" }
+photocraft-engine-vector = { path = "crates/engine-vector" }
 photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
@@ -69,8 +70,8 @@ craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c
 # Camera-field EXIF reader/writer, shared prerequisite craft-libs#1563.
 craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362" }
 craft-crs = { git = "https://github.com/storytold/craft-libs", rev = "5c5e0d52c387c0a4ae2908a07e476d7584f60362" }
-craft-develop = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39" }
-craft-develop-model = { git = "https://github.com/storytold/craft-libs", rev = "b2d2a1e948c43d95aa769d4f0a06fe6b869edc39" }
+craft-develop = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
+craft-develop-model = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
 # Interface translations: lookup, fallback, CLDR plurals and language names over the craft-i18n
 # catalogs that `crates/ui-egui/build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, at
 # the commit in `craft-i18n.rev`). Already in the tree through craft.
@@ -122,7 +123,7 @@ todo = "warn"
 # Every cl command selects these packages: each brings features the others lack, so a command that drops one
 # builds a second copy of egui, photocraft-io or craft-affinity and of everything above them.
 selection = [
-    "photocraft-ui-egui", "photocraft-engine", "photocraft-engine-core", "photocraft-engine-paint", "photocraft", "photocraft-algo", "photocraft-automation",
+    "photocraft-ui-egui", "photocraft-engine", "photocraft-engine-core", "photocraft-engine-paint", "photocraft-engine-vector", "photocraft", "photocraft-algo", "photocraft-automation",
     "photocraft-text", "photocraft-tablet", "photocraft-cli", "photocraft-paint", "photocraft-io", "photocraft-gpu",
 ]
 # Crates whose new builds cl names after a command, besides the framework's.
@@ -153,6 +154,7 @@ craft-imaging = ["default", "screen-testing", "ui"]
 "photocraft-ui-egui/it" = 221.0
 "photocraft-engine-core/photocraft_engine_core" = 62.0
 "photocraft-engine-paint/photocraft_engine_paint" = 35.0
+"photocraft-engine-vector/photocraft_engine_vector" = 6.0
 
 # Dependencies carry no debug info: their frames in a backtrace lose file:line, and the target dir
 # and link times shrink. The test profile inherits both settings.
@@ -185,6 +187,8 @@ opt-level = 0
 [profile.test.package.photocraft-engine-core]
 opt-level = 0
 [profile.test.package.photocraft-engine-paint]
+opt-level = 0
+[profile.test.package.photocraft-engine-vector]
 opt-level = 0
 
 # Only the exhaustive rounding proof needs maximum optimization; algo stays at its usual level.
@@ -371,5 +375,3 @@ eframe = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19
 egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "f5025284445ea19c35f746d96fc0b75468b3f560" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
-
-
