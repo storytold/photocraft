@@ -64,7 +64,7 @@ pub(crate) fn style_targets(s: &Session, p: &Value, fits: impl Fn(&Layer) -> boo
 }
 
 /// A key that makes the sub-commands of one command share a single history step.
-pub(crate) fn step_key(s: &Session, what: &str) -> String {
+pub fn step_key(s: &Session, what: &str) -> String {
     format!("{what}#{}", s.active().map_or(0, |d| d.revision))
 }
 
@@ -224,7 +224,7 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
         let (surf, lock) = crate::channel_cmds::target_surface(doc, Some(id), target)?;
         let area = band.content_bounds().intersect(&canvas);
         if !area.is_empty() {
-            crate::fill_cmds::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;
+            crate::pixel_fill::blend_color_mask(surf, area, color, picked, &band, mode, opacity, preserve || lock)?;
             surf.prune();
         }
         Ok(())
@@ -531,14 +531,14 @@ pub(crate) fn unlock_background(l: &mut Layer) {
 
 /// Before `id` gets a layer mask: the Background can't have one, so it becomes a normal layer
 /// first ("Layer 0"), as when adding a mask to it in Photoshop. Other layers are left alone.
-pub(crate) fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
+pub fn background_to_layer_for_mask(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
     background_to_layer(doc, id);
 }
 
 /// If `id` is the Background ([`photocraft_doc::Document::background`], whatever its name), turns
 /// it into a normal layer ("Layer 0"), as Photoshop does before an edit the Background can't
 /// take (moving, transforming, exposing transparency, a style). Other layers are left alone.
-pub(crate) fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
+pub fn background_to_layer(doc: &mut photocraft_doc::Document, id: photocraft_doc::LayerId) {
     if let Some(l) = doc.background_mut().filter(|l| l.id == id) {
         unlock_background(l);
     }
@@ -757,7 +757,7 @@ fn content_pixels(doc: &Document, l: &Layer) -> photocraft_raster::Surface {
     s
 }
 
-pub(crate) fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
+pub fn kind_of(s: &Session, id: LayerId) -> Option<&'static str> {
     let d = s.active()?;
     Some(match &d.doc.layer(id)?.content {
         LayerContent::Text(_) => "type",
@@ -780,7 +780,7 @@ fn has_rasterize_work(s: &Session, id: LayerId, only: Option<&str>) -> bool {
 /// Rasterize one layer; `only` restricts it to one kind. Without `only` (Rasterize › Layer / All
 /// Layers: "all vector data") a vector mask becomes a pixel mask too; layer effects stay live, as
 /// in Photoshop (Rasterize › Layer Style bakes them). Returns false when there was nothing to do.
-pub(crate) fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
+pub fn rasterize_one(s: &mut Session, id: LayerId, only: Option<&str>, key: &str) -> Result<bool> {
     let vector_mask = has_vector_mask(s, id, only);
     let content = rasterize_content(s, id, only, key)?;
     if vector_mask {

@@ -239,7 +239,7 @@ pub fn content_aware_plan_with(doc: &Document, id: LayerId, p: &Value, cmd: &str
     use photocraft_algo::content_aware::{auto_sampling_with, grow_mask, paint_strokes, polygon_mask};
     use rayon::prelude::*;
 
-    use crate::fill_cmds::{read_window, read_window_mask};
+    use crate::content_sampling::{read_window, read_window_mask};
     let CafParams { sel, sb, edits, strokes, sampling, custom_mask, custom_rect, opts, output, surf } = caf_params(doc, id, p, cmd)?;
     let canvas = doc.bounds();
     let cancel = || ctl.cancelled();
@@ -253,7 +253,7 @@ pub fn content_aware_plan_with(doc: &Document, id: LayerId, p: &Value, cmd: &str
         FillEdit::Grow(_) => r,
     });
     let er = reach.inflate(grow.saturating_add(1)).intersect(&canvas);
-    let (ew, eh) = crate::fill_cmds::window_size(er)?;
+    let (ew, eh) = crate::content_sampling::window_size(er)?;
     let ecover = read_window_mask(sel, er, &cancel).ok_or(EngineError::Cancelled)?;
     let mut ehole: Vec<bool> = ecover.par_iter().map(|c| *c > 0.0).collect();
     for e in &edits {
@@ -283,7 +283,7 @@ pub fn content_aware_plan_with(doc: &Document, id: LayerId, p: &Value, cmd: &str
     let window = match sampling.as_str() {
         "rectangular" => match int(p, "margin") {
             Some(m) => hb.inflate(m.clamp(0, 100_000) as i32),
-            None => crate::fill_cmds::sampling_window(hb, canvas),
+            None => crate::content_sampling::sampling_window(hb, canvas),
         },
         "custom" => match (custom_rect, custom_mask) {
             (Some(r), _) => r,
@@ -292,7 +292,7 @@ pub fn content_aware_plan_with(doc: &Document, id: LayerId, p: &Value, cmd: &str
         }
         .union(&hb)
         .inflate(4),
-        _ => crate::fill_cmds::sampling_window(hb, canvas),
+        _ => crate::content_sampling::sampling_window(hb, canvas),
     }
     .intersect(&canvas);
     // Strokes that add to the sampling area may reach past the window.
@@ -307,11 +307,11 @@ pub fn content_aware_plan_with(doc: &Document, id: LayerId, p: &Value, cmd: &str
     };
     let n = fmt.channels();
     // Refuse a window too large to read before allocating for it, whatever the sampling (#963).
-    let (w, h) = crate::fill_cmds::window_size(rect)?;
+    let (w, h) = crate::content_sampling::window_size(rect)?;
     let pixels = read_window(surf, rect, &cancel).ok_or(EngineError::Cancelled)?;
     let (img, layer_px) = if sample_all {
         stop()?;
-        (crate::retouch_cmds::composite_region(doc, Some(id), crate::retouch_cmds::SampleLayers::All, rect, fmt).data, Some(pixels))
+        (crate::content_sampling::composite_region(doc, Some(id), crate::content_sampling::SampleLayers::All, rect, fmt).data, Some(pixels))
     } else {
         (pixels, None)
     };

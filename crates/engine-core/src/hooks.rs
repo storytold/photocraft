@@ -18,6 +18,8 @@ pub type RequestParams = fn(&Session, &str, &Value) -> Option<Value>;
 pub type Redirect = fn(&Session, &str, &Value) -> Option<(String, Value)>;
 /// Refuses params the command can't take.
 pub type CheckParams = fn(&Session, &str, &Value) -> Result<()>;
+/// Refuses a command the session can't run now, after core's own admission checks.
+pub type Admit = fn(&Session, &str, &Value) -> Result<()>;
 /// Runs once the params are valid, before the command: `Some` is the command's result, and the
 /// command itself doesn't run.
 pub type BeforeCommand = fn(&mut Session, &str, &CommandSpec, &Value) -> Result<Option<Value>>;
@@ -55,6 +57,9 @@ pub struct Hooks {
     pub redirect: Vec<Redirect>,
     /// After the documented-keys check, in `dispatch` and `precheck`; the first error refuses.
     pub check_params: Vec<CheckParams>,
+    /// At the end of `admit` (in `precheck`, and in `dispatch` before and after a floating
+    /// selection drops); the first error refuses.
+    pub admit: Vec<Admit>,
     /// Before the command runs; the first `Some` finishes it.
     pub before_command: Vec<BeforeCommand>,
     /// After a successful run, each in turn.
