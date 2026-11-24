@@ -158,17 +158,22 @@ fn tool_settings(o: &crate::state::ToolOptions, live: Option<&photocraft_doc::Li
     settings
 }
 
+/// The Triangle and Custom Shape tools' Align Edges checkbox (#13370, #13470). Only a shape layer
+/// has pixel edges to align, so it is greyed in Path mode.
+fn align_edges_checkbox(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    Divider::vertical().show(ui);
+    let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
+    let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
+    if let Some(next) = on.value().copied() {
+        app.ui.tool_options.align_edges = next;
+    }
+}
+
 /// What the bar shows after the framework's cells for one tool: the Triangle's Align Edges and the
 /// Polygon's own corner radius.
 fn tool_extras(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) {
     if tool == Tool::Triangle {
-        Divider::vertical().show(ui);
-        // Only a shape layer has pixel edges to align: greyed in Path mode (#13370).
-        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
-        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
-        if let Some(next) = on.value().copied() {
-            app.ui.tool_options.align_edges = next;
-        }
+        align_edges_checkbox(app, ui);
     }
     if tool == Tool::Polygon {
         // The tool's own corner radius for the next polygon, after Sides (#13302); the active shape is not touched.
@@ -365,6 +370,8 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     }
     if tool == Tool::CustomShape {
         crate::preset_panels::shape_picker(app, ui);
+        // At the bar's right end, after the Shape picker (#13470).
+        align_edges_checkbox(app, ui);
     }
 }
 

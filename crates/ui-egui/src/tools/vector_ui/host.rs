@@ -62,12 +62,15 @@ fn configure(app: &PhotocraftApp, state: &mut VectorTools) -> Which {
             Tool::Star => (5, 0.5),
             _ => (o.polygon_sides, 1.0),
         };
-        let mut options = ShapeDragOptions::new(super::kind_of(tool))
+        let kind = super::kind_of(tool);
+        // Align Edges off keeps the drag's fractions in the preview as in the commit.
+        let mut options = ShapeDragOptions::new(kind)
             .corner_radius(f64::from(o.corner_radius))
             .sides(sides)
             .star_ratio(ratio)
             .line_weight(f64::from(o.line_weight))
-            .mode(o.shape_mode);
+            .mode(o.shape_mode)
+            .whole_pixels(super::shapes::snaps_to_pixels(app, kind));
         // The gear belongs to the Rectangle tool alone.
         if tool == Tool::Rectangle {
             options = options.constraints(super::shapes::constraints_of(o));
