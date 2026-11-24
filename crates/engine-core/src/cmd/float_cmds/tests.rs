@@ -473,7 +473,7 @@ fn nudging_away_and_back_keeps_the_moved_pixels_selection() {
 /// same result as reading its whole area into one buffer first.
 #[test]
 fn floating_mask_drag_frame_matches_the_area_buffer() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 700, "height": 520, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();

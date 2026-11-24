@@ -349,7 +349,7 @@ fn noise(fmt: photocraft_color::PixelFormat, r: Rect, seed: u32) -> Surface {
 #[test]
 fn history_fill_per_tile_matches_the_area_buffer() {
     for depth in [8, 16, 32] {
-        let mut s = Session::new();
+        let mut s = crate::session();
         s.execute("file.new", json!({"width": 700, "height": 520, "depth": depth, "background": "white"})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         let id = s.active().unwrap().active_layer.unwrap();
