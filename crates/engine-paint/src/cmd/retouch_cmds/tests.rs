@@ -2161,6 +2161,7 @@ fn pattern_stamp_rejects_hostile_input() {
         name: "EmptyTile".into(),
         width: 0,
         height: 0,
+        source_mode: None,
         surface: photocraft_raster::Surface::new(fmt),
     });
     assert!(s.execute("paint.patternStamp", json!({"points": [[8, 8]], "pattern": "EmptyTile", "size": 8})).is_err());

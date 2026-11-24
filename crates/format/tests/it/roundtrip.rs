@@ -169,6 +169,34 @@ fn older_bundles_without_import_conversion_still_load() {
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
 }
 
+/// The mode a pattern was defined from (#13071) comes back with its pixels, and a bundle written
+/// before that member existed still loads, with no source recorded.
+#[test]
+fn a_pattern_source_mode_round_trips_and_an_older_bundle_loads_without_it() {
+    let mut doc = Document::new("Indexed pattern", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    surface.fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[1.0, 0.0, 0.0, 1.0]);
+    let mut pattern = photocraft_doc::Pattern::new("From an Indexed image", surface, 4, 4);
+    pattern.source_mode = Some(ColorMode::Indexed);
+    doc.patterns.push(pattern);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&bytes).unwrap(), doc, "the mode comes back with the pixels");
+
+    let zip = zip::ZipReader::new(&bytes).unwrap();
+    let mut z = zip::ZipWriter::new();
+    for e in &zip.entries {
+        let data = zip.read(e, usize::MAX).unwrap();
+        if e.name == "manifest.json" {
+            let mut manifest: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            assert!(manifest["document"]["patterns"][0].as_object_mut().unwrap().remove("source_mode").is_some(), "the writer names the member");
+            z.add(&e.name, &serde_json::to_vec(&manifest).unwrap()).unwrap();
+        } else {
+            z.add(&e.name, &data).unwrap();
+        }
+    }
+    assert_eq!(load_from_bytes(&z.finish().unwrap()).unwrap().patterns[0].source_mode, None, "an older bundle records no source");
+}
+
 /// Rewrite only the fixture's report manifest to exercise corrupt framing and missing-blob validation.
 fn edit_import_manifest(bytes: &[u8], edit: impl Fn(&mut serde_json::Value)) -> Vec<u8> {
     edit_import_bundle(bytes, None, edit)

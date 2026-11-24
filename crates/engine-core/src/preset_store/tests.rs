@@ -551,6 +551,9 @@ fn patterns_survive_a_restart() {
     let paper = t.patterns.items.iter().find(|p| p.name == "Paper").unwrap();
     let px = paper.surface.pixel(3, 3);
     assert!((px[0] - 240.0 / 255.0).abs() < 0.01, "{px:?}");
+    // So does the mode it was defined from: the `.pat` file names its pixels, and the index
+    // (#13071) names the source, so a tool that cares about one still sees it after a restart.
+    assert_eq!(paper.source_mode, Some(photocraft_color::ColorMode::Rgb), "defined from an RGB document");
 
     let before = std::fs::metadata(dir.0.join(&pattern_files(&dir)[0])).unwrap().modified().unwrap();
     t.execute("pattern.rename", json!({"pattern": "Grit", "name": "Toner"})).unwrap();
