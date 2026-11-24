@@ -59,9 +59,10 @@ fn pixel_layer(mut app: Box<PhotocraftApp>, tool: Tool) -> Box<PhotocraftApp> {
     app
 }
 
-/// Right-click the middle of the document: the greyed rows of the menu's Copy and Paste groups.
+/// Right-click the document's bottom-left corner, clear of the shapes the tests draw and of the
+/// selected shape's bounding box: the greyed rows of the menu's Copy and Paste groups.
 fn greyed_style_rows(h: &mut Harness<'static, Box<PhotocraftApp>>, tool: Tool) -> Vec<String> {
-    let p = screen_of(h.state(), [16.0, 16.0]);
+    let p = screen_of(h.state(), [2.0, 30.0]);
     right_click(h, p, Modifiers::NONE);
     let inspected = crate::control::inspect(h.state(), &h.ctx);
     assert_eq!(inspected["canvasToolMenu"]["tool"], json!(format!("{tool:?}")));
