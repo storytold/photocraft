@@ -94,7 +94,7 @@ struct LayersFacts<'a> {
     #[memo_props(hash = "a plain model id")]
     hovered: Option<LayerId>,
     working_text: Option<u64>,
-    /// The missing linked files of the open documents (the Smart Object filter).
+    /// The missing linked files of the open documents (the Smart Object filter and the link badges).
     missing: craft::ui::contract::Revision,
     foreign_drag: bool,
     picked: Option<crate::smart_ui::FilterDrag>,
@@ -183,7 +183,7 @@ pub(crate) struct PhotoLayers {
     working_text: Option<u64>,
     /// The empty layers, while the filter is Attribute Empty or Not Empty.
     empty: Option<Arc<HashSet<LayerId>>>,
-    /// The missing linked files, while the filter is Smart Object.
+    /// The missing linked files: the Smart Object filter's Missing and the link badges read them.
     missing: HashSet<String>,
     /// A layer drag from another document (a transfer) is under way: rows take no drop.
     foreign_drag: bool,
@@ -197,7 +197,8 @@ impl PhotoLayers {
             (FilterBy::Attribute, LayerAttribute::Empty | LayerAttribute::NotEmpty) => crate::layer_filter_ui::attribute::empty_layers(app),
             _ => None,
         };
-        let missing = if filter.by == FilterBy::SmartObject { app.session.missing_links() } else { HashSet::new() };
+        // Every row reads it for its link badge (#14118), not only the Smart Object filter.
+        let missing = app.session.missing_links();
         let ui = &app.ui;
         let target = edit_target(app, st);
         Self {
@@ -277,6 +278,37 @@ pub(crate) fn filter_index(doc: &Document, id: &LayerId, row: usize) -> Option<u
     smart_filter_count(doc, id).checked_sub(1)?.checked_sub(row)
 }
 
+/// The badge on the thumbnail of `l`, a layer of `doc`. Smart objects and shape layers show their pixels as any layer
+/// does; only the badge tells them apart (#4584). A linked smart object carries a chain link, broken and red while its
+/// file, as stored, is in `missing` (#14118). A PSD's placed layer is not one: its path is the uuid of an entry in the
+/// PSD's own file table (it keeps `psd_raw` until Relink to File or Convert to Linked gives it a file), so it keeps the
+/// smart object badge, as do the cases #14118 did not measure ([`link_badge_measured`]).
+pub(crate) fn thumb_badge(doc: &Document, l: &Layer, missing: &HashSet<String>) -> Option<ThumbBadge> {
+    match &l.content {
+        LayerContent::Smart(sm) => match &sm.source {
+            photocraft_doc::SmartSource::Linked { path } if sm.psd_raw.is_none() && link_badge_measured(doc, l, path) => {
+                Some(if missing.contains(path) { ThumbBadge::LinkMissing } else { ThumbBadge::Linked })
+            }
+            _ => Some(ThumbBadge::SmartObject),
+        },
+        LayerContent::Shape(_) => Some(ThumbBadge::Shape),
+        _ => None,
+    }
+}
+
+/// Whether the reference measurements in #14118 cover linked smart object `l` of `doc`, linking `path`. They don't for
+/// Indexed, Bitmap and 32-bit documents, for layers in an artboard, or for a link to a network share; those keep the
+/// smart object badge. A link to a file that is there but can't be read is not measured either; it is linked and
+/// present, so it gets the plain chain link.
+fn link_badge_measured(doc: &Document, l: &Layer, path: &str) -> bool {
+    use photocraft_doc::{ColorMode, SampleType};
+    use photocraft_io::doc_path::{NotFollowed, Refused, resolve};
+    !matches!(doc.mode, ColorMode::Indexed | ColorMode::Bitmap)
+        && doc.depth != SampleType::F32
+        && doc.artboard_of(l.id).is_none()
+        && resolve(path, None) != Err(NotFollowed::Refused(Refused::Network))
+}
+
 impl LayerTree for PhotoLayers {
     type Id = LayerId;
 
@@ -351,12 +383,7 @@ impl LayerTree for PhotoLayers {
             info.has_smart_filters = !sm.smart_filters.is_empty();
             info.smart_filters_enabled = sm.filters_enabled;
         }
-        // Smart objects and shape layers show their pixels as any layer does; only the badge tells them apart (#4584).
-        info.thumb_badge = match l.content {
-            LayerContent::Smart(_) => Some(ThumbBadge::SmartObject),
-            LayerContent::Shape(_) => Some(ThumbBadge::Shape),
-            _ => None,
-        };
+        info.thumb_badge = thumb_badge(doc, l, &self.missing);
         if let Some(m) = &l.mask {
             info.masks.push(MaskInfo::new(LayerPart::LayerMask, m.enabled, m.linked));
         }
@@ -806,3 +833,7 @@ impl ThumbSource<LayerThumb<LayerId>> for PhotoThumbs<'_> {
 pub(crate) fn select_pixels(layer: LayerId) -> Value {
     json!({"channel": "transparency", "layer": layer.0, "operation": "new"})
 }
+
+#[cfg(test)]
+#[path = "linked_badge_tests.rs"]
+mod linked_badge_tests;

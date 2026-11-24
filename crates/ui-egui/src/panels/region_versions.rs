@@ -11,6 +11,7 @@
 use std::hash::{Hash, Hasher};
 
 use craft::ui::contract::{MemoProps, MemoView};
+use photocraft_engine::link_watch::LinkWatchExt as _;
 
 use super::PhotocraftApp;
 use crate::color_picker_ui::PickWindow;
@@ -109,7 +110,10 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         "layers" => {
             let filter_pick = app.session.active().and_then(|st| app.smart_filter_picks.get(&st.doc.id).copied());
             let requests = (app.layers_rename, app.find_layers_focus, app.pending_reveal.as_ref().map(|(layer, _)| *layer), app.move_pick, filter_pick);
-            version(app, (app.canvas_hover_layer, app.session.active_tracked().map(|st| st.revision().count), requests))
+            // The link watcher's look runs no counted command: a linked file going missing or coming back moves the
+            // version, so the rows' link badges and the Smart Object filter's Missing show it (#14118).
+            let links = app.session.missing_links_revision();
+            version(app, (app.canvas_hover_layer, app.session.active_tracked().map(|st| st.revision().count), requests, links))
         }
         "info" => {
             let crop = crate::crop_ui::info_size(app).map(|size| size.map(f64::to_bits));
