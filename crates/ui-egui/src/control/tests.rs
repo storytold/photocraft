@@ -668,6 +668,38 @@ fn ui_set_rejects_unknown_fields_before_changing_anything() {
     assert_eq!(call(&mut app, &ctx, "ui.set", Value::Null)["ok"], true);
 }
 
+/// #9713: Path Options › Color and Thickness over the control channel, one display setting reported by
+/// `ui.inspect` under `view.path_options`; `null` is Default. The Pen's Rubber Band stays a tool option.
+#[test]
+fn ui_set_drives_the_path_options() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let good = call(&mut app, &ctx, "ui.set", json!({"pathColor": "#ff2a2a", "pathThickness": 2.5}));
+    assert_eq!(good["ok"], true, "{good}");
+    let shown = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"];
+    assert_eq!(shown["view"]["path_options"], json!({"color": [255, 42, 42], "thickness": 2.5}));
+    assert_eq!(shown["toolOptions"]["path_options"], json!({"rubberBand": false, "color": null, "thickness": null}), "not a tool option");
+    let drawn = crate::vector_ui::path_options(&app);
+    assert_eq!((drawn.color, drawn.thickness), (Some([255, 42, 42]), Some(2.5)), "what the paths are drawn with");
+    for bad in [
+        json!({"pathColor": "plaid"}),
+        json!({"pathColor": [255, 0, 0]}),
+        json!({"pathThickness": 0.1}),
+        json!({"pathThickness": 9}),
+        json!({"pathThickness": "thin"}),
+    ] {
+        let r = call(&mut app, &ctx, "ui.set", bad.clone());
+        assert_eq!(r["ok"], false, "{bad}: {r}");
+    }
+    // A rejected call applies none of its fields.
+    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": "#000000", "pathThickness": 99}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(app.ui.view.path_options, crate::view_cmds::PathOptions { color: Some([255, 42, 42]), thickness: Some(2.5) });
+    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": null, "pathThickness": null}));
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(app.ui.view.path_options, crate::view_cmds::PathOptions::default(), "null is Default");
+}
+
 #[test]
 fn ui_set_drives_the_eyedropper_options() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

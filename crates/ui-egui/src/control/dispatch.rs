@@ -416,6 +416,8 @@ struct ToolSet {
     layer_filter: Option<craft::layers::ui::filter::LayerFilter>,
     pen_mode: Option<craft::draw::ui::shape::VectorMode>,
     pen_path_op: Option<String>,
+    path_color: Option<Option<[u8; 3]>>,
+    path_thickness: Option<Option<f32>>,
     marquee_style: Option<String>,
     marquee_size: Option<[f32; 2]>,
 }
@@ -445,6 +447,9 @@ impl ToolSet {
             layer_filter: p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui.layer_filter, v)).transpose()?,
             pen_mode: pen_mode_param(p)?,
             pen_path_op: pen_path_op_param(p)?,
+            // The Path Options' Color and Thickness, one display setting for every path tool (#9713).
+            path_color: path_color_param(p)?,
+            path_thickness: path_thickness_param(p)?,
             marquee_style,
             marquee_size,
         })
@@ -503,6 +508,12 @@ impl ToolSet {
         }
         if let Some(on) = self.tile_grid {
             app.ui.view.tile_grid = on;
+        }
+        if let Some(color) = self.path_color {
+            app.ui.view.path_options.color = color;
+        }
+        if let Some(px) = self.path_thickness {
+            app.ui.view.path_options.thickness = px;
         }
         if let Some(f) = self.layer_filter {
             crate::layer_filter_ui::apply(app, f);
@@ -574,6 +585,29 @@ fn pen_mode_param(p: &Value) -> std::result::Result<Option<craft::draw::ui::shap
         Some("shape") => Ok(Some(VectorMode::Shape)),
         _ => Err("penMode must be \"path\" or \"shape\"".to_string()),
     }
+}
+
+/// `pathColor`: `"#rrggbb"`, or `null` for Default (the theme's line colour).
+fn path_color_param(p: &Value) -> std::result::Result<Option<Option<[u8; 3]>>, String> {
+    let Some(v) = p.get("pathColor") else { return Ok(None) };
+    if v.is_null() {
+        return Ok(Some(None));
+    }
+    let rgb = v.as_str().and_then(crate::color_picker_ui::parse_hex).ok_or_else(|| "pathColor must be \"#rrggbb\" or null".to_string())?;
+    Ok(Some(Some(rgb.map(|c| (c * 255.0).round() as u8))))
+}
+
+/// `pathThickness`: points within the gear's range, or `null` for the theme's line.
+fn path_thickness_param(p: &Value) -> std::result::Result<Option<Option<f32>>, String> {
+    if p.get("pathThickness").is_some_and(Value::is_null) {
+        return Ok(Some(None));
+    }
+    let Some(px) = num_field(p, "pathThickness")? else { return Ok(None) };
+    let range = craft::draw::ui::PathOptionsSettings::THICKNESS_RANGE;
+    let px = px as f32;
+    crate::vector_ui::thickness_in_range(px)
+        .then_some(Some(Some(px)))
+        .ok_or_else(|| format!("pathThickness must be {}..={} px or null", range.start(), range.end()))
 }
 
 /// The Pen tools' Path Operation.

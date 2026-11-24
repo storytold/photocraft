@@ -205,14 +205,13 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     }
     Divider::vertical().show(ui);
     path_operations_menu(app, ui);
-    let o = &mut app.ui.tool_options;
     if tool == Tool::Pen {
         Divider::vertical().show(ui);
         // The gear's popover replaces the Rubber Band item (tools-03 D3).
-        // PLAN: `PathOptionsOutput::pick_color` (key PATH_OPTIONS_COLOR_KEY) is answered by the owner of the colour picker dialog.
-        let _ = PathOptionsPopover::new(label(tl!("Set additional pen and path options")), Bind::bound(&mut o.path_options)).show(ui, &mut open.path_options);
-        Checkbox::new(Bind::bound(&mut o.pen_auto_add_delete)).label(label(tl!("Auto Add/Delete"))).show(ui);
+        path_options_gear(app, ui, &mut open.path_options);
+        Checkbox::new(Bind::bound(&mut app.ui.tool_options.pen_auto_add_delete)).label(label(tl!("Auto Add/Delete"))).show(ui);
     }
+    let o = &mut app.ui.tool_options;
     let enter = crate::shortcuts::pretty("Enter");
     match tool {
         Tool::FreeformPen => {
@@ -249,6 +248,31 @@ fn pen_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut Ba
     if app.ui.tool_options.vector_mode == VectorMode::Path {
         Divider::vertical().show(ui);
         make_buttons(app, ui);
+    }
+}
+
+/// The Pen's gear, Photoshop's "Set additional pen and path options": Thickness and Color, the
+/// display setting every path tool shares (#9713), and the Pen's own Rubber Band (#12900). The
+/// colour swatch opens the Color Picker, whose OK sets the shared colour.
+fn path_options_gear(app: &mut PhotocraftApp, ui: &mut egui::Ui, open: &mut bool) {
+    let mut shown = super::path_options(app);
+    let out = PathOptionsPopover::new(label(tl!("Set additional pen and path options")), Bind::bound(&mut shown)).show(ui, open);
+    // The framework's popover hangs from its gear with a manual opener and leaves the click to the host, as the
+    // Rectangle gear's does: without this the gear never opens it. storytold/craft-libs#2228 moves the toggle into
+    // the popover; take this out with that pin bump.
+    if clicked(&out.response) {
+        *open = !*open;
+    }
+    if out.edit.is_some() {
+        super::store_path_options(app, &shown);
+    }
+    if let Some(request) = out.pick_color {
+        let title = request.title.as_ref().map_or_else(|| crate::color_picker_ui::title_for(tl!("Color")), |t| t.as_str().to_string());
+        let rgb = request.color.map_or([1.0; 3], Srgba::to_rgb_array);
+        if let Err(e) = crate::color_picker_ui::open_for_target(app, "pathColor", &title, rgb) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
     }
 }
 
