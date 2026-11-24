@@ -341,8 +341,14 @@ fn command_of(app: &PhotocraftApp, id: DialogId, choice: &str) -> Option<(String
 /// engine command or a shell one such as `file.save`). Automation is judged for it when the dialog is confirmed.
 pub(crate) fn hosted_command(app: &PhotocraftApp, id: DialogId) -> Option<(String, Value)> {
     let key = key_of(app, id)?;
-    (host(app).get_by_id::<craft::ui::patterns::form_dialogs::HostedParamDialog>(id).is_some() && crate::menus::is_live(&key))
-        .then(|| (key, fields_of(app, id)))
+    let dialog = host(app).get_by_id::<craft::ui::patterns::form_dialogs::HostedParamDialog>(id)?;
+    // Save and Load Selection hold the chosen document and channel by id and index: the command takes what OK sends.
+    if crate::selection_channel_ui::owns(&key)
+        && let Ok((command, params)) = crate::selection_channel_ui::command(app, &key, dialog.fields())
+    {
+        return Some((command.to_owned(), params));
+    }
+    crate::menus::is_live(&key).then(|| (key, fields_of(app, id)))
 }
 
 // ---- ui.dialog.* ----

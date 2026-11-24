@@ -83,6 +83,10 @@ First match wins:
 | anything else | a bare command form that the generic filter family runs |
 
 Other dedicated families open from their menu, tool or panel code with their own `open`.
+A family whose choices follow the open documents keeps them in a private value its builder reads, and
+refreshes that value in `dialogs::run` before the host shows the dialog: Match Color's sources
+(`filter_dialog::reconcile_match_color`), and Save and Load Selection's Document and Channel lists
+(`selection_channel_ui::reconcile`), which the menu opens through `view_cmds::dialogs::front`.
 
 ## Parallel modal systems
 
