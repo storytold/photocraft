@@ -305,8 +305,8 @@ fn modern(
             Direction::Auto => TextDirection::Auto,
             Direction::Ltr => TextDirection::Ltr,
             Direction::Rtl => TextDirection::Rtl,
-            // Column progression is qualified separately below from the source
-            // spelling, even when base-dir-auto makes inline direction Auto.
+            // Column progression is qualified separately below from the saved
+            // typed base direction, even when automatic inline direction is Auto.
             Direction::TtbRtl | Direction::TtbRtlUpright => TextDirection::Auto,
             Direction::TtbLtr | Direction::TtbLtrUpright => {
                 return Err(unsupported("left-to-right vertical source columns require saved pixels"));
@@ -320,13 +320,15 @@ fn modern(
         antialias: if config.scalar("antialias").map_err(field_error)?.unwrap_or("yes") == "no" { AntiAlias::None } else { AntiAlias::Smooth },
         ..Default::default()
     };
-    let direction = config.scalar("base-direction").map_err(field_error)?.unwrap_or("ltr");
-    if matches!(direction, "ttb-ltr" | "ttb-ltr-upright") {
-        return Err(unsupported("left-to-right vertical source columns require saved pixels"));
-    }
-    if matches!(direction, "ttb-rtl" | "ttb-rtl-upright") {
-        layer.orientation = Orientation::Vertical;
-        style.rotate_roman = direction == "ttb-rtl";
+    match record.base_direction {
+        Some(Direction::TtbLtr | Direction::TtbLtrUpright) => {
+            return Err(unsupported("left-to-right vertical source columns require saved pixels"));
+        }
+        Some(direction @ (Direction::TtbRtl | Direction::TtbRtlUpright)) => {
+            layer.orientation = Orientation::Vertical;
+            style.rotate_roman = direction == Direction::TtbRtl;
+        }
+        _ => {}
     }
     match config.scalar("box-mode").map_err(field_error)?.unwrap_or("dynamic") {
         "dynamic" => {}

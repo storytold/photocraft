@@ -288,14 +288,25 @@ fn inherited_spacing_is_bounded_after_relative_markup_size_for_both_signs() {
 #[test]
 fn source_vertical_columns_preserve_qualified_orientation_and_roman_rotation_with_auto_bidi() {
     let colors = NativeColors::new(&craft_cms::Builtin::Srgb.profile().to_bytes(), ColorMode::Rgb).unwrap();
-    for direction in ["ttb-rtl", "ttb-rtl-upright", "ttb-ltr", "ttb-ltr-upright"] {
+    for (direction, base) in [
+        ("ttb-rtl", Direction::TtbRtl),
+        ("ttb-rtl-upright", Direction::TtbRtlUpright),
+        ("ttb-ltr", Direction::TtbLtr),
+        ("ttb-ltr-upright", Direction::TtbLtrUpright),
+    ] {
         for auto in ["no", "yes"] {
             let raw = format!("(text \"Vertical ABC אב\") (box-mode fixed) (box-width 40) (box-height 20) (base-direction {direction}) (base-dir-auto {auto})");
+            let evidence = source(&raw);
+            let TextSource::Configuration(record) = &evidence else { panic!("typed source text") };
+            // Auto paragraph direction must not erase the independent writing mode.
+            assert_eq!(record.base_direction, Some(base));
+            assert_eq!(record.automatic_direction, Some(auto == "yes"));
+            assert_eq!(record.direction, if auto == "yes" { Direction::Auto } else { base });
             let mut layer = saved(PixelFormat::RGBA8);
             let before = layer.clone();
             let mapped = map_layer(
                 &mut layer,
-                &source(&raw),
+                &evidence,
                 NativeOptions { resolution: (72., 72.), offset: (5, 6), colors: Some(&colors) },
                 &mut NativeBudget::default(),
                 &mut Budget::default(),
