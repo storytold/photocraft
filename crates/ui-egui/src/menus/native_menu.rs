@@ -1,17 +1,18 @@
 //! The macOS menu bar: the same menus as the in-window bar ([`crate::menus::items::model`]), laid
-//! out the way a Mac app's are by craft-menu's [`mac_layout`] and handed to craft-menu's platform
+//! out the way a Mac app's are by craft-menu and handed to its platform
 //! backend.
 //!
 //! craft-menu owns the layout, the clash rules, the key equivalents and the driver. This module
 //! supplies what is PhotoCraft's: the app name, the translated labels, the shortcuts bound outside
-//! the menus and the gate and modal rules ([`crate::menus::menu_gate`]). The menus are laid out again
-//! only when the model's bar or the keymap changed.
+//! the menus and the gate and modal rules ([`crate::menus::menu_gate`]).
 //!
 //! A menu click is a fired command ([`poll`] fires it with `FireSource::Menu`); the runtime's
 //! drain runs it like any other fired command, so the menu has no command path of its own.
 
-use craft::menu::{Layout, LayoutOptions, NativeMenu, mac_layout};
-use craft::ui::runtime::commands::{FireSource, fire, holder};
+#[cfg(any(target_os = "macos", test))]
+use craft::menu::Layout;
+use craft::menu::{NativeMenu, Target};
+use craft::ui::runtime::commands::{FireSource, fire};
 use craft::ui::runtime::windows::WindowHost;
 
 use crate::PhotocraftApp;
@@ -20,17 +21,17 @@ use crate::menus::items;
 /// The name the app menu, About, Hide and Quit show.
 pub const APP_NAME: &str = "PhotoCraft";
 
-/// [`items::model`]'s menus laid out as a Mac menu bar, in the UI language.
-///
-/// The one place that lays the model out for macOS: the first install, every re-sync and the tests
-/// use it. The model itself is the one menu definition both bars read.
+fn model<'a>(app: &'a mut PhotocraftApp, ctx: &egui::Context) -> &'a items::MenuModel {
+    // Installation and sync can run before the drawing language catches up.
+    let lang = crate::i18n::Lang::from_pref(&app.session.prefs().interface.language);
+    let _language = crate::i18n::language_scope(lang);
+    items::model_for(app, ctx, Target::Mac)
+}
+
+/// The Mac menu layout in the saved interface language.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn laid_out(app: &mut PhotocraftApp, ctx: &egui::Context) -> Layout {
-    let lang = crate::i18n::current();
-    let label = |english: &'static str| crate::i18n::tr(lang, english).to_string();
-    // The system items give way to the command the keymap gives a key to, in a menu or not (tool keys, canvas keys).
-    let keys = |chord: &craft::keymap::Chord| holder(ctx, chord);
-    let options = LayoutOptions::new(APP_NAME).label(&label).keys(&keys);
-    mac_layout(&items::model(app, ctx).bar, &options)
+    model(app, ctx).layout().clone()
 }
 
 /// Installs the macOS menu bar; `None` where there is none (every other platform).
@@ -65,8 +66,10 @@ pub fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (gate, rules) = crate::menus::menu_gate(app);
     native.set_gate(gate.text_editing(WindowHost::of(ctx).typing()));
     native.set_modal_rules(rules);
-    let shown = (items::model(app, ctx).bar.revision(), app.framework.keymap_inputs());
-    for c in native.sync_with(&shown, || laid_out(app, ctx)) {
+    let keymap = app.framework.keymap_inputs();
+    let model = model(app, ctx);
+    let shown = (model.bar.revision(), keymap);
+    for c in native.sync_with(&shown, || model.layout().clone()) {
         log::info!("menu: {} is {} on macOS and {} in PhotoCraft; {}", c.shortcut.portable(), c.system, c.command.id, c.resolution);
     }
     app.services.native_menu = Some(native);

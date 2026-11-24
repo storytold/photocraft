@@ -65,6 +65,45 @@ fn laid(app: &mut PhotocraftApp) -> Layout {
     laid_out(app, &ctx)
 }
 
+/// Native sync uses the committed preference even if the current pass built an English menu model.
+#[test]
+fn native_menu_sync_uses_the_selected_language() {
+    let Some(lang) = crate::i18n::Lang::from_code("zh-hans") else { return };
+    let (mut h, synced, _) = harness(true);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.run("prefs.set", json!({"values": {"interface.language": "en"}})).unwrap();
+    sync(app, &ctx);
+    app.run("prefs.set", json!({"values": {"interface.language": "zh-hans"}})).unwrap();
+    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        assert_eq!(items::model_for(app, &ctx, Target::Mac).bar.menu(MenuRole::Window).unwrap().title, "Window");
+        sync(app, &ctx);
+        assert_eq!(crate::i18n::current(), crate::i18n::Lang::EN);
+    });
+
+    let bars = synced.borrow();
+    let bar = bars.last().unwrap();
+    assert_eq!(bar.menu(MenuRole::Window).unwrap().title, "窗口");
+    let menu = bar.menu(MenuRole::App).unwrap();
+    let labels: Vec<&str> = menu
+        .children
+        .iter()
+        .filter_map(|node| match node {
+            Node::Item(item) => Some(item.label.as_str()),
+            Node::Submenu { label, .. } | Node::Standard { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect();
+    for (source, translated) in [("Settings", "设置"), ("Services", "服务"), ("Hide Others", "隐藏其他"), ("Show All", "全部显示")] {
+        assert_eq!(labels.iter().filter(|&&label| label == translated).count(), 1, "{translated}: {labels:?}");
+        assert!(!labels.contains(&source), "stale English label {source}: {labels:?}");
+    }
+    for template in ["About {app}", "Hide {app}", "Quit {app}"] {
+        let expected = crate::i18n::fmt(crate::i18n::tr(lang, template), &[("app", APP_NAME)]);
+        assert_eq!(labels.iter().filter(|&&label| label == expected).count(), 1, "{expected}: {labels:?}");
+    }
+}
+
 /// The ThemeMenu submenu lands in the app menu's Appearance, the current theme checked.
 #[test]
 fn themes_move_to_the_app_menus_appearance() {

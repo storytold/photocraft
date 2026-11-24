@@ -1,8 +1,8 @@
 use craft::i18n::Words;
 use craft::keymap::{Chord, CommandRef, Mods};
 use craft::menu::{
-    Alternate, Customization, ItemKind, ItemRole, LanguageChoice, LanguageLabels, LanguageMenu, LayoutOptions, MenuBar, MenuRole, Node, Platforms, Row, Target,
-    ThemeLabels, from_items, layout,
+    Alternate, Customization, ItemKind, ItemRole, LanguageChoice, LanguageLabels, LanguageMenu, Layout, LayoutOptions, MenuBar, MenuRole, Node, Platforms, Row,
+    Target, ThemeLabels, from_items, layout,
 };
 use std::sync::Arc;
 
@@ -64,12 +64,16 @@ impl MenuModel {
     pub fn rows(&self) -> &[Row] {
         &self.built.rows
     }
+
+    pub(super) fn layout(&self) -> &Layout {
+        &self.built.layout
+    }
 }
 
 /// One build of the model: the rows and the bar laid out from them.
 struct Built {
     rows: Vec<Row>,
-    bar: MenuBar,
+    layout: Layout,
 }
 
 /// `shown` with the English name of each item and submenu whose label `english`, the same node built in English,
@@ -103,14 +107,19 @@ pub(crate) fn model_id() -> egui::Id {
 /// The model for the app's current state: derived from its [`MenuFacts`], so it is built again only when one of them
 /// changed. The held bar is replaced only when the new build lays out different menus.
 pub fn model<'a>(app: &'a mut PhotocraftApp, ctx: &egui::Context) -> &'a MenuModel {
+    model_for(app, ctx, Target::current())
+}
+
+pub(super) fn model_for<'a>(app: &'a mut PhotocraftApp, ctx: &egui::Context, target: Target) -> &'a MenuModel {
+    let id = if target == Target::current() { model_id() } else { model_id().with(target) };
     let built = {
         let app = &*app;
-        derived(ctx, model_id(), &MenuFacts::of(app), || build(app))
+        derived(ctx, id, &MenuFacts::of(app), || build(app, target))
     };
-    let held = app.menu_model.get_or_insert_with(|| MenuModel { bar: Tracked::new(built.bar.clone()), built: Arc::clone(&built) });
+    let held = app.menu_model.get_or_insert_with(|| MenuModel { bar: Tracked::new(built.layout.bar.clone()), built: Arc::clone(&built) });
     if !Arc::ptr_eq(&held.built, &built) {
-        if *held.bar != built.bar {
-            *held.bar = built.bar.clone();
+        if *held.bar != built.layout.bar {
+            *held.bar = built.layout.bar.clone();
         }
         held.built = built;
     }
@@ -396,10 +405,10 @@ fn put_in_window(bar: &mut MenuBar, node: Node) {
 /// The bar a build from `app`'s state lays out now, for trials that check the held model is never stale.
 #[cfg(test)]
 pub(crate) fn fresh_bar(app: &PhotocraftApp) -> MenuBar {
-    build(app).bar
+    build(app, Target::current()).layout.bar
 }
 
-fn build(app: &PhotocraftApp) -> Built {
+fn build(app: &PhotocraftApp, target: Target) -> Built {
     let lang = crate::i18n::current();
     let mut rows = menu_rows(app);
     for row in &mut rows {
@@ -435,7 +444,7 @@ fn build(app: &PhotocraftApp) -> Built {
     let label = |s: &'static str| crate::i18n::tr(lang, s).to_string();
     let keys = |chord: &Chord| craft::ui::runtime::commands::holder(app.ctx(), chord);
     let options = LayoutOptions::new(crate::native_menu::APP_NAME).label(&label).keys(&keys);
-    let mut bar = layout(&bar, Target::current(), &options).bar;
-    translate_titles(&mut bar, lang);
-    Built { rows, bar }
+    let mut layout = layout(&bar, target, &options);
+    translate_titles(&mut layout.bar, lang);
+    Built { rows, layout }
 }
