@@ -1327,7 +1327,7 @@ pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels:
         use craft_xcf::transport::{Limits, PrefixProbe, Wrapper, probe_prefix};
         // Only the explicit .af alias precedes SVGZ sniffing in the shared registry.
         // Gzip-XCF has its own decode limit, including when the source was renamed.
-        if name.as_bytes().last_chunk::<3>().is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".af"))
+        if !allow_compressed_svg(name)
             || Wrapper::from_name(name) == Some(Wrapper::Gzip)
             || matches!(probe_prefix(bytes, None, Limits::default(), &|| true), Ok(PrefixProbe::Xcf(_)))
         {
