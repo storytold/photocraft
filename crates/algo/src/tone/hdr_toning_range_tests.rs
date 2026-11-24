@@ -228,6 +228,11 @@ fn merge_to_hdr_local_adaptation_gets_no_worse_on_todays_merge() {
         (150, 110, 35725.0),
         (270, 150, 1538.0),
     ];
-    let worst = samples.iter().map(|&(x, y, want)| (px[y * w + x][1] * 65535.0 - want).abs()).fold(0.0, f32::max);
+    let error = |&(x, y, want): &(usize, usize, f32)| {
+        let error = (px[y * w + x][1] * 65535.0 - want).abs();
+        assert!(error.is_finite(), "({x}, {y}) is not a colour: {:?}", px[y * w + x]);
+        error
+    };
+    let worst = samples.iter().map(error).fold(0.0, f32::max);
     assert!(worst <= 11530.0, "the worst sample is {worst:.0} levels off the reference");
 }
