@@ -244,14 +244,19 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let dpi = wdoc.resolution_dpi;
     let mut warnings = web_warnings(&st, exif, dpi);
     warnings.extend(slices::overflow_warning(&doc));
-    let all = slices::resolve(&doc);
+    let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
+    // A `path` names the generated slice files too: `banner.png` gives `banner_01.png`,
+    // `banner_02.png`… whatever the document is called (#16662).
+    let all = match single.map(stem).filter(|base| !base.is_empty()) {
+        Some(base) => slices::resolve_named(&doc, &base),
+        None => slices::resolve(&doc),
+    };
     let picked = |r: &ResolvedSlice| match &pick {
         SlicePick::Numbers(n) => n.contains(&(r.number as u64)),
         SlicePick::User => r.origin != photocraft_doc::SliceOrigin::Auto,
         SlicePick::All => true,
     };
     let chosen: Vec<&ResolvedSlice> = all.iter().filter(|r| picked(r)).collect();
-    let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
     // `folder` (with no `path` or `dir`): the whole image into that folder under the document's
     // own name, so an action recorded with the suggested name saves each document it is played

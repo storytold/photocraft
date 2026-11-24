@@ -92,6 +92,9 @@ pub(crate) fn take(app: &mut PhotocraftApp, ctx: &egui::Context) {
 mod tests;
 
 #[cfg(test)]
+mod web_slice_name_tests;
+
+#[cfg(test)]
 mod custom_paper_tests;
 
 #[cfg(test)]

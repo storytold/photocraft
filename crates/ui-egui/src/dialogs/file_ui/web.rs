@@ -414,13 +414,18 @@ fn finish(app: &mut PhotocraftApp, ctx: &egui::Context, result: SaveForWebResult
     let slices = has_slices(app);
     let outcome = web_params(&result.options, slices).and_then(|mut p| {
         let path = result.path.to_string_lossy().into_owned();
+        let base = app.session.active().map(|st| photocraft_doc::slices::base_name(&st.doc)).ok_or("no document")?;
         if slices {
             p["dir"] = json!(result.path.parent().map(|d| d.to_string_lossy().into_owned()).filter(|d| !d.is_empty()).unwrap_or_else(|| ".".into()));
+            // A name of the user's own names the generated slice files and the HTML page (#16662). The suggested one
+            // keeps the folder alone, so a recorded action names each document's slices after that document.
+            if result.path.file_stem().is_some_and(|stem| stem.to_string_lossy() != base) {
+                p["path"] = json!(path);
+            }
         } else {
             // The suggested name kept: only the folder, so a recorded action saves each document under its own
             // name, as in Photoshop (#5305). A document renamed since the picker opened no longer matches the
             // picked name, so the whole path is used.
-            let base = app.session.active().map(|st| photocraft_doc::slices::base_name(&st.doc)).ok_or("no document")?;
             match kept_name_folder(&path, &base, &engine_ext(&result.options)) {
                 Some(folder) => p["folder"] = json!(folder),
                 None => p["path"] = json!(path),
