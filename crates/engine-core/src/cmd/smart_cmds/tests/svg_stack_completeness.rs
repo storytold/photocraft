@@ -50,6 +50,7 @@ fn svgz_fallback_rejects_preview_only_affinity_without_changing_smart_contents()
     }
     // A complete non-SVG source still reaches its normal engine decoder.
     assert_eq!(decode_source("complete.png", &png).unwrap().size, Size::new(2, 1));
+    assert_eq!(decode_source("misnamed.svg", &png).unwrap().size, Size::new(2, 1));
 }
 
 #[test]
@@ -112,12 +113,16 @@ fn gzipped_svg_stack_retains_ordinary_import_for_misnamed_sources() {
 }
 
 #[test]
-fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
-    let bytes = gzip(&incomplete_svg());
-    for name in
-        ["contents.svgz", "contents.gz", "contents.psd", "contents.afphoto", "contents.afdesign", "contents.afpub", "contents.AfPhOtO", "without-extension"]
-    {
-        let opened = photocraft_io::import(name, &bytes).unwrap();
+fn svg_contents_replacement_rejects_omissions_without_changing_target() {
+    let svg = incomplete_svg();
+    let wrapped = gzip(&svg);
+    let mut padded_svg = vec![b' '; 4096];
+    padded_svg.extend_from_slice(&svg);
+    let wrapped_names =
+        ["contents.svgz", "contents.gz", "contents.psd", "contents.afphoto", "contents.afdesign", "contents.afpub", "contents.AfPhOtO", "without-extension"];
+    let cases = wrapped_names.into_iter().map(|name| (name, wrapped.as_slice())).chain(std::iter::once(("contents.svg", padded_svg.as_slice())));
+    for (name, bytes) in cases {
+        let opened = photocraft_io::import(name, bytes).unwrap();
         assert!(opened.warnings.iter().any(|warning| warning.contains("embedded image was omitted")), "{name}");
         assert_eq!(photocraft_compose::flatten(&opened.document).get(1, 1), [1., 0., 0., 1.]);
         let mut s = session(8);
@@ -127,7 +132,7 @@ fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
         let before = s.active().unwrap().clone();
         let pixels = flat(&s);
         let (old_name, old_bytes) = contents_of(&before.doc, id).unwrap();
-        let error = replace_contents_bytes(&mut s, id, name, bytes.clone()).unwrap_err().to_string();
+        let error = replace_contents_bytes(&mut s, id, name, bytes.to_vec()).unwrap_err().to_string();
         assert!(error.contains("incomplete smart object contents"), "{name}: {error}");
         let after = s.active().unwrap();
         assert!(Arc::ptr_eq(&before.doc, &after.doc), "{name}");
@@ -270,5 +275,80 @@ fn complete_svg_stack_keeps_mean_pixels_across_source_stage_and_warning_render_c
         assert_eq!(reported.unwrap(), strict);
         assert!(warnings.is_empty());
         assert_eq!(source_box(&doc, &smart), Some([0., 0., 2., 2.]));
+    }
+}
+
+/// Original uncompressed RGB DICOM control. PS3.10 section 7.1 permits implementation-defined
+/// preamble bytes; the Explicit VR Little Endian data set contains only synthetic image data.
+fn dicom_with_gzip_like_preamble() -> Vec<u8> {
+    fn element(bytes: &mut Vec<u8>, group: u16, tag: u16, vr: &[u8; 2], value: &[u8]) {
+        bytes.extend_from_slice(&group.to_le_bytes());
+        bytes.extend_from_slice(&tag.to_le_bytes());
+        bytes.extend_from_slice(vr);
+        if vr == b"OB" {
+            bytes.extend_from_slice(&[0, 0]);
+            bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        } else {
+            bytes.extend_from_slice(&(value.len() as u16).to_le_bytes());
+        }
+        bytes.extend_from_slice(value);
+    }
+    let mut bytes = vec![0; 128];
+    bytes[..3].copy_from_slice(&[0x1f, 0x8b, 0]);
+    bytes.extend_from_slice(b"DICM");
+    let mut meta = Vec::new();
+    element(&mut meta, 2, 1, b"OB", &[0, 1]);
+    element(&mut meta, 2, 2, b"UI", b"1.2.840.10008.5.1.4.1.1.7\0");
+    element(&mut meta, 2, 3, b"UI", b"2.25.1");
+    element(&mut meta, 2, 0x10, b"UI", b"1.2.840.10008.1.2.1\0");
+    element(&mut meta, 2, 0x12, b"UI", b"2.25.2");
+    element(&mut bytes, 2, 0, b"UL", &(meta.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&meta);
+    element(&mut bytes, 8, 0x16, b"UI", b"1.2.840.10008.5.1.4.1.1.7\0");
+    element(&mut bytes, 8, 0x18, b"UI", b"2.25.1");
+    element(&mut bytes, 0x28, 2, b"US", &3_u16.to_le_bytes());
+    element(&mut bytes, 0x28, 4, b"CS", b"RGB ");
+    for (tag, value) in [(6, 0_u16), (0x10, 1), (0x11, 2), (0x100, 8), (0x101, 8), (0x102, 7), (0x103, 0)] {
+        element(&mut bytes, 0x28, tag, b"US", &value.to_le_bytes());
+    }
+    element(&mut bytes, 0x7fe0, 0x10, b"OB", &[255, 0, 0, 0, 255, 0]);
+    bytes
+}
+
+#[test]
+fn speculative_svgz_failure_preserves_non_svg_dicom_admission() {
+    use std::io::Read as _;
+    let bytes = dicom_with_gzip_like_preamble();
+    assert!(bytes.starts_with(&[0x1f, 0x8b]));
+    assert!(flate2::read::GzDecoder::new(bytes.as_slice()).read_to_end(&mut Vec::new()).is_err());
+    for name in ["synthetic.dcm", "renamed.bin", "without-extension"] {
+        assert!(!photocraft_io::is_svg_input(name, &bytes));
+        assert!(photocraft_io::try_import_smart_object_svg(name, &bytes, 24_000_000).unwrap().is_none());
+        let ordinary = photocraft_io::import(name, &bytes).unwrap();
+        let decoded = decode_source(name, &bytes).unwrap();
+        for doc in [&ordinary.document, &decoded] {
+            assert_eq!(doc.size, Size::new(2, 1));
+            let pixels = photocraft_compose::flatten(doc);
+            assert_eq!(pixels.get(0, 0), [1., 0., 0., 1.]);
+            assert_eq!(pixels.get(1, 0), [0., 1., 0., 1.]);
+        }
+    }
+    // Also preserve the fallback when the preamble is a valid gzip member whose decoded
+    // payload is not text. The actual DICOM image and pixel metadata are unchanged.
+    let mut nontext = bytes.clone();
+    nontext[..128].fill(0);
+    let preamble = gzip(&[0xff]);
+    nontext[..preamble.len()].copy_from_slice(&preamble);
+    assert!(photocraft_io::try_import_smart_object_svg("nontext.dcm", &nontext, 24_000_000).unwrap().is_none());
+    let decoded = decode_source("nontext.dcm", &nontext).unwrap();
+    assert_eq!(photocraft_compose::flatten(&decoded).get(0, 0), [1., 0., 0., 1.]);
+    assert_eq!(photocraft_compose::flatten(&decoded).get(1, 0), [0., 1., 0., 1.]);
+    let valid = gzip(br#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>"#);
+    for damaged in [valid[..valid.len() - 8].to_vec(), vec![0x1f, 0x8b, 0]] {
+        for name in ["broken.svgz", "broken.svg"] {
+            assert!(photocraft_io::is_svg_input(name, &damaged));
+            assert!(photocraft_io::try_import_smart_object_svg(name, &damaged, 24_000_000).is_err());
+            assert!(decode_source(name, &damaged).is_err());
+        }
     }
 }

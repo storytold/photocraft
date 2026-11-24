@@ -1323,6 +1323,10 @@ pub fn import_smart_object_source(name: &str, bytes: &[u8], max_decoded_pixels: 
 /// importing another format. Hosts with stronger generic-source admission can
 /// retain their existing fallback (preview-only rejection, typed budgets, etc.).
 pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels: u64) -> Result<Option<ImportResult>, IoError> {
+    let named_svg = matches!(
+        name.rsplit(['/', '\\']).next().and_then(|base| base.rsplit_once('.')).and_then(|(_, ext)| photocraft_formats::from_extension(ext)),
+        Some(photocraft_formats::Format::Svg | photocraft_formats::Format::Svgz)
+    );
     if craft_svg::sniff::is_svgz(bytes) {
         use craft_xcf::transport::{Limits, PrefixProbe, Wrapper, probe_prefix};
         // Only the explicit .af alias precedes SVGZ sniffing in the shared registry.
@@ -1333,16 +1337,22 @@ pub fn try_import_smart_object_svg(name: &str, bytes: &[u8], max_decoded_pixels:
         {
             return Ok(None);
         }
-        let plain = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).map_err(|error| IoError::Svg(error.to_string()))?;
-        let text = craft_svg::svgz::decode(&plain).map_err(|error| IoError::Svg(error.to_string()))?;
-        if is_svg_input(name, text.as_bytes()) {
+        let decoded = craft_svg::svgz::inflate(bytes, 64 * 1024 * 1024).and_then(|plain| {
+            let text = craft_svg::svgz::decode(&plain)?;
+            Ok(is_svg_input(name, text.as_bytes()).then_some(plain))
+        });
+        return match decoded {
             // Preserve the encoding bytes for strict validation after bounded inflation.
-            return svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some);
-        }
-    } else if svg::is_svg(bytes) {
-        return svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels).map(Some);
+            Ok(Some(plain)) => svg::import_svg_bounded_images_strict(name, &plain, max_decoded_pixels).map(Some),
+            Err(error) if named_svg => Err(IoError::Svg(error.to_string())),
+            Ok(None) | Err(_) => Ok(None),
+        };
     }
-    Ok(None)
+    if svg::is_svg(bytes) || (named_svg && is_svg_input(name, bytes)) {
+        svg::import_svg_bounded_images_strict(name, bytes, max_decoded_pixels).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
