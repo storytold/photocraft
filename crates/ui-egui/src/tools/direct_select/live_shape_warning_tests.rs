@@ -117,6 +117,7 @@ fn a_drag_of_a_live_shapes_anchor_asks_with_yes_no_and_an_unticked_box() {
 fn yes_moves_the_anchor_in_one_history_step_and_the_shape_is_no_longer_live() {
     let (mut app, shape) = live(Tool::DirectSelection);
     let n = steps(&app);
+    let at = anchors(&mut app, shape).iter().position(|a| (a[0] - CORNER[0]).abs() < 1e-3 && (a[1] - CORNER[1]).abs() < 1e-3).expect("the corner is an anchor");
     drag_corner(&mut app);
     let id = question(&app).expect("the question");
     answer_yes(&mut app, id, false);
@@ -126,6 +127,13 @@ fn yes_moves_the_anchor_in_one_history_step_and_the_shape_is_no_longer_live() {
     assert_eq!((&info["live"], &info["kind"]), (&Value::Null, &json!("path")), "the shape became a work path");
     assert_eq!(steps(&app), n + 1, "one History step for the answered drag");
     assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Drag Anchor Point"));
+    // Yes leaves the drag's own anchor selection behind, bound to the step it made, as a
+    // question-free drag does.
+    assert_eq!(
+        (app.ui.direct_selection.target, app.ui.direct_selection.anchors.clone()),
+        (Some(crate::direct_select::PathRef::Layer(shape)), vec![[0, at]]),
+        "the dragged anchor stays selected after Yes"
+    );
     assert!(app.session.undo(), "Undo takes the answered drag back");
     assert!(!has_anchor(&mut app, shape, MOVED));
 }
@@ -198,6 +206,23 @@ fn an_alt_segment_drag_of_a_live_shape_asks_and_yes_copies_in_one_step() {
     answer_yes(&mut app, id, false);
     assert_eq!(&info(&mut app, shape)["live"], &Value::Null);
     assert_eq!(steps(&app), n + 1, "one History step for the answered copy");
+}
+
+/// The Insert key edits the path through `edits::insert`, not through `change_path` (the issue's
+/// "Where"). The Done-when list does not name it, so it keeps today's route: the anchor is added
+/// and the shape converts at once, without a question (guard test: it passes before and after
+/// this change). Asked on #13216 alongside the ⌘/Ctrl question.
+#[test]
+fn the_insert_key_still_adds_an_anchor_to_a_live_shape_without_asking() {
+    let (mut app, shape) = live(Tool::DirectSelection);
+    testing::click(&mut app, CORNER, Modifiers::NONE);
+    assert_eq!(app.ui.direct_selection.anchors.len(), 1, "an anchor is focused");
+    let n = steps(&app);
+    testing::key(&mut app, egui::Key::Insert, Modifiers::NONE);
+    assert!(question(&app).is_none(), "the Insert key asks nothing, as today");
+    assert_eq!(&info(&mut app, shape)["live"], &Value::Null, "and converts at once, as today");
+    assert_eq!(anchors(&mut app, shape).len(), 5, "the anchor was added");
+    assert_eq!(steps(&app), n + 1);
 }
 
 #[test]
