@@ -404,7 +404,7 @@ mod tests {
         let u = hover(&mut app, [100.0, 80.0]);
         assert!(u.shown.is_none(), "the group's click commits the whole canvas - hover names no composite object");
         assert!(u.hint.is_none(), "and the click gives no #5246 error - hover hints nothing");
-        assert_eq!(app.session.object_finder.len(), 0, "the composite fallback never enters the cache");
+        assert_eq!(app.session.object_finder().len(), 0, "the composite fallback never enters the cache");
     }
 
     /// #15472 review round 2 (retouch_ui.rs:612): the "no pixels" hint belongs where the click
