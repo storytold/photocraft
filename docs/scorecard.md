@@ -264,7 +264,7 @@ Unread: `general.color_picker`, `workspace.auto_show_hidden_panels`, `workspace.
 
 ## Automation
 
-Menu wiring (`docs/parity-checklist.md`): 664 of 664 menu items live (100.0%). This counts dispatch, not behaviour.
+Menu wiring (`docs/parity-checklist.md`): 665 of 665 menu items live (100.0%). This counts dispatch, not behaviour.
 
 | Id | Target | Status | Issue | Note |
 |---|---|---|---|---|

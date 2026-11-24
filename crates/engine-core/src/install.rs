@@ -158,6 +158,14 @@ pub fn register(install: &mut Install) {
 
     // model
     hooks.after_command.push(crate::mask_view_cmds::after_command);
+    // A selection built from layers' transparency forgets them once it changes (Paste Into Each).
+    hooks.after_command.push(|s, _, _| {
+        if s.active().is_some_and(crate::DocState::selection_layers_stale)
+            && let Some(st) = s.active_mut()
+        {
+            st.drop_stale_selection_layers();
+        }
+    });
     hooks.recorded_steps.push(("layer.duplicate", |s, id, p, pre_selected| {
         Some(crate::artboard_cmds::recorded_duplicate(s, crate::layer_multi_cmds::recorded_step(s, id, p.clone(), pre_selected)))
     }));
