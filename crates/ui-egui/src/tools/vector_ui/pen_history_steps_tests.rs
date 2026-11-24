@@ -7,6 +7,7 @@ use super::*;
 use crate::canvas::testing;
 use craft::draw::ui::VectorMode;
 use egui::{Key, Modifiers};
+use egui_kittest::kittest::{NodeT, Queryable};
 
 /// A 200 by 200 document with the Pen in Path mode: the issue's measured configuration.
 fn app() -> Box<PhotocraftApp> {
@@ -289,4 +290,46 @@ fn another_tool_keeps_its_own_step_names_over_the_pen_steps() {
     testing::frame(&mut app);
     drag(&mut app, [40.0, 140.0], [100.0, 180.0], Modifiers::NONE);
     assert_eq!(added(&app, before), ["New Shape Layer"], "the Rectangle tool is unaffected");
+}
+
+/// The options bar replays its last render while its version holds (`panels::region_versions::options_bar`), so each
+/// thing that row works from has to move the version on its own. A Pen path drawn click by click (#12890) changes
+/// them with no History step, so nothing else redraws the bar; the draft being drawn is pinned by
+/// `pen_enter_deselects_tests::enter_deselects_the_work_path_and_the_next_path_replaces_it`, and here the other two
+/// ingredients move alone, with no document command between the passes.
+#[test]
+fn the_options_bar_row_follows_each_path_ingredient_on_its_own() {
+    let mut app = app();
+    let two = |name: &str, at: [f64; 2]| json!({"name": name, "path": {"subpaths": [{"closed": false, "knots": [at, [at[0] + 60.0, at[1]]]}]}});
+    app.run("path.set", two("Side", [10.0, 90.0])).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    let enabled =
+        |h: &egui_kittest::Harness<'_, Box<PhotocraftApp>>| ["Selection…", "Shape"].map(|label| !h.get_by_label(label).accesskit_node().is_disabled());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1600.0, 300.0))
+        .with_context(app.ctx().clone())
+        .build_ui_state(|ui, app| crate::panels::region_versions::show_options_bar(app, ui), app);
+    h.run();
+    assert_eq!(enabled(&h), [false, false], "nothing selected, no Work Path, no draft");
+
+    // The Paths panel's selection, with no command of its own.
+    h.state_mut().ui.selected_path = Some("Side".into());
+    h.run();
+    assert_eq!(enabled(&h), [true, true], "the selected saved path is the active path");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "selecting it is no step");
+
+    // The Work Path's hide, with a path in the document and no draft: as Make Selection and ↩ leave it (#12892).
+    h.state_mut().ui.selected_path = None;
+    h.state_mut().run("path.set", two("work", [30.0, 30.0])).unwrap();
+    h.run();
+    assert_eq!(enabled(&h), [true, true], "a shown Work Path is the active path");
+    super::super::path_ops::deselect_loaded_path(h.state_mut(), "work");
+    h.run();
+    assert_eq!(enabled(&h), [false, false], "hiding it moves no step and no draft: the bar follows the hide");
+
+    // The draft on its own again, over the hidden Work Path.
+    let owner = crate::vector_ui::capture_pen_owner(h.state());
+    h.state_mut().ui.pen = Some(PenPath::corners(&[[30.0, 60.0], [90.0, 60.0]], owner));
+    h.run();
+    assert_eq!(enabled(&h), [true, true], "the path being drawn is the one the row works from");
 }
