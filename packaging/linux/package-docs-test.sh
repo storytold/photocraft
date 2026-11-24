@@ -154,4 +154,22 @@ for index, arg in enumerate(args[:-1]):
     assert launch_out == ["--launch-profile", "nightly-v1", "--profile-root", str(temp / "xdg-data/photocraft-nightly"), "--", "sample.psd"], launch_out
     assert_docs(nightly_appdir / "usr/share/doc/photocraft")
     print("PASS: Nightly package.sh namespaces AppImage to ai.storyteller.photocraft.nightly-v1 and bootstraps nightly-v1 profile")
+
+    # The stable AM/AppMan launcher must not suppress or replace the nightly launcher.
+    appimage = temp / "PhotoCraft Nightly.AppImage"
+    appimage.touch()
+    data_home = temp / "nightly-desktop-data"
+    launchers = data_home / "applications"
+    launchers.mkdir(parents=True)
+    stable_am = launchers / "photocraft-AM.desktop"
+    stable_entry = "[Desktop Entry]\nType=Application\nName=PhotoCraft\nExec=photocraft %F\n"
+    stable_am.write_text(stable_entry)
+    integration_env = {**nightly_env, "APPIMAGE": str(appimage), "HOME": str(temp), "XDG_DATA_HOME": str(data_home)}
+    integration_env.pop("PHOTOCRAFT_NO_DESKTOP_INTEGRATION", None)
+    for _ in range(2):
+        subprocess.run([str(nightly_appdir / "AppRun")], env=integration_env, text=True, capture_output=True, check=True)
+        nightly_desktop = launchers / "ai.storyteller.photocraft.nightly-v1.desktop"
+        assert f'Exec="{appimage.resolve()}" %F' in nightly_desktop.read_text().splitlines()
+        assert stable_am.read_text() == stable_entry
+    print("PASS: Nightly AppImage keeps its own launcher alongside stable AM/AppMan")
 PY
