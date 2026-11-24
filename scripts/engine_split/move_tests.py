@@ -6,19 +6,25 @@ After a cut, core's test binary installs only core's commands, so a core test th
 cut crate's ids fails at run time with `UnknownCommand`, and one that names the crate's items no
 longer compiles. Both move, against the top crate's public API.
 
-    python3 scripts/engine_split/move_tests.py list <crate> [--previous <tsv>] > list.tsv
-        The tests to move: every `#[test]` in core whose body, or a test helper it calls, holds one
-        of the crate's command ids as a string or names one of the crate's modules by path. With
-        `--previous` (a run's list of failing tests: name<TAB>file), its rows that still exist and
-        still hold such a reference are kept too, and the rows the scan alone did not find are
-        printed to stderr (an id reached through a fixture file or a built string).
+    python3 scripts/engine_split/move_tests.py list <crate> [--previous <tsv> --old-ref <commit>] > list.tsv
+        The tests to move: every `#[test]` in core (test modules, and test functions at the top of
+        production files) whose body, or a test helper it calls, runs one of the crate's command
+        ids or names one of the crate's modules by path. An id run as `execute("id", ..)` whose
+        result is dropped (`.ok()`, `let _ =`) doesn't count. With `--previous` (a run's list of
+        failing tests: name<TAB>file) and `--old-ref` (the commit that run was made on), its rows
+        whose test and helpers are unchanged since are kept too, and the rows the scan alone did
+        not find are printed to stderr (an id reached through a fixture file or a built string).
 
     python3 scripts/engine_split/move_tests.py move <crate> <list.tsv> [--dry]
         Moves each listed test, with the test helpers it needs, to one `<crate>_in_<area>.rs` module
         per core source area (nested `mod`s when an area has several test files), declares them in
-        `tests/it/main.rs`, cuts the tests and the helpers nothing else uses from core, drops test
-        modules left without a test, and prunes imports. Paths become `photocraft_engine::...` and
-        `crate::session()` becomes `Session::new()`.
+        `tests/it/main.rs`, cuts the tests and the helpers nothing else uses from core, drops the
+        test modules it left without a test (unless other code names them), and prunes imports.
+        A module that already exists (an earlier move in the area) gets the new tests appended, in
+        a module of their own when a name would clash. Helpers are copied as written, and only
+        those the moved tests use. Paths in code become `photocraft_engine::...` and
+        `crate::session()` becomes `Session::new()`; string literals stay as written.
+        `.config/ci-test-times.tsv` follows the moved tests.
 
 What it cannot do: a moved test that uses a private core item (not a test helper) stays a compile
 error in `tests/it`; it needs the item's public equivalent, or stays in core with a setup that
@@ -27,7 +33,7 @@ doesn't run the crate's commands.
 import os, re, sys, collections
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rust_source import mask, block_end, test_regions, CFG_TEST, MOD_DECL, module_file, git_show
+from rust_source import mask, block_end, test_regions, CFG_TEST, MOD_DECL, module_file, git_show, inline_mods
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 SRC = ROOT + "/crates/engine-core/src"
@@ -123,6 +129,7 @@ class Node:
         self.a, self.b = a, b
         self.items = parse(src, m, a, b)
         self.by_name = collections.defaultdict(list)
+        self.mixed = False
         for it in self.items:
             if it.name and not it.is_test and it.kind in ("fn", "const", "static", "struct", "enum", "union", "type", "trait", "macro"):
                 self.by_name[it.name].append(it)
@@ -130,9 +137,21 @@ class Node:
         self.children = {}
         self.moved = set()
 
+    def only_test_items(self):
+        """A production file's top level as a unit of its test functions: only `#[cfg(test)]`
+        items can be copied or cut as their helpers; production items stay where they are."""
+        self.mixed = True
+        self.by_name = collections.defaultdict(list, {k: [it for it in v if it.cfg_test] for k, v in self.by_name.items()})
+        self.by_name = collections.defaultdict(list, {k: v for k, v in self.by_name.items() if v})
+
+
+QUALIFIED = re.compile(r"(?:\.|(?<!\bsuper)(?<!\bself)::)\s*$")
+
 
 def words(text):
-    return set(IDENT.findall(text))
+    """The names `text` uses unqualified: not a method or field after `.`, and not a path segment
+    after `::` (except after `super::` or `self::`, which name items of a module the copy keeps)."""
+    return {m.group(0) for m in IDENT.finditer(text) if not QUALIFIED.search(text, max(0, m.start() - 40), m.start())}
 
 
 def item_text(node, it):
@@ -192,6 +211,14 @@ def build_units():
                     node.item = it
                     units.append(node)
                     collect_tests(node, tests)
+            if any(it.is_test for it in top):
+                node = Node(f, src, m, header_end(src), len(src), None, None, fs_modpath(f))
+                node.whole = False
+                node.only_test_items()
+                units.append(node)
+                for it in node.items:
+                    if it.is_test:
+                        tests[tuple(node.modpath + [it.name])] = (node, it)
     return units, tests
 
 
@@ -243,7 +270,7 @@ def emission(node, ctx, indent="", helpers_only=False):
         if helpers_only and it.is_test:
             continue
         t = item_text(node, it)
-        if it.kind == "inner" and node.parent is None:
+        if it.kind == "inner" and node.parent is None and not node.mixed:
             parts.append(t)
         elif it.kind == "use":
             uses.append(it)
@@ -258,6 +285,7 @@ def emission(node, ctx, indent="", helpers_only=False):
             used |= cused
     use_text = []
     STRIP[0] = True
+    METHODS[0] = method_calls(mask("\n".join(parts)))
     for it in uses:
         orig = item_text(node, it)
         t = rewrite(orig, ctx, node)
@@ -271,13 +299,38 @@ def emission(node, ctx, indent="", helpers_only=False):
 
 
 def rewrite(text, ctx, node):
-    t = text.replace("crate::session()", "Session::new()")
-    t = re.sub(r"(?<![A-Za-z0-9_])crate::", "photocraft_engine::", t)
-    if not re.match(r"\s*(?:#\[[^\]]*\]\s*)*(?:pub\s+)?use\b", t.lstrip()):
-        t = re.sub(r"(?<![A-Za-z0-9_:])(?:photocraft_engine::file_cmds::)?flattened\(((?:[^()]|\([^()]*\))*)\)", r"photocraft_compose::flatten_to_surface(\1, None)", t)
+    """Paths for the top crate, edited in code only (string literals and comments stay as written).
+    A call of core's private `file_cmds::flattened` becomes its public equivalent unless the moved
+    code has a `flattened` of its own (helpers are copied as written)."""
+    t = sub_code(text, r"\bcrate::session\(\)", lambda t, x: "Session::new()")
+    t = sub_code(t, r"(?<![A-Za-z0-9_])crate::", lambda t, x: "photocraft_engine::")
+    if "flattened" not in ctx.get("defined", ()) and not re.match(r"\s*(?:#\[[^\]]*\]\s*)*(?:pub\s+)?use\b", t.lstrip()):
+        t = sub_code(
+            t,
+            r"(?<![A-Za-z0-9_:.])(?:photocraft_engine::file_cmds::)?flattened\(((?:[^()]|\([^()]*\))*)\)",
+            lambda t, x: f"photocraft_compose::flatten_to_surface({t[x.start(1) : x.end(1)]}, None)",
+        )
     if node.parent is None:
-        t = re.sub(r"(?<![A-Za-z0-9_:])super::", ctx["parent"], t)
+        t = sub_code(t, r"(?<![A-Za-z0-9_:])super::", lambda t, x: ctx["parent"])
     return t
+
+
+def sub_code(text, pattern, repl):
+    """`re.sub` over the code of `text`: matches are found on its masked form and replaced in the
+    original at the same offsets; `repl(text, match)` gives the replacement."""
+    out, last = [], 0
+    for x in re.finditer(pattern, mask(text)):
+        out += [text[last : x.start()], repl(text, x)]
+        last = x.end()
+    return "".join(out) + text[last:]
+
+
+def defined_names(node):
+    """Names a unit's nodes define, nested modules included."""
+    out = set(node.by_name)
+    for ch in node.children.values():
+        out |= defined_names(ch)
+    return out
 
 
 # ---- use-tree pruning -------------------------------------------------------------------------
@@ -322,15 +375,27 @@ EXCL = [set()]
 
 
 def _traits():
-    out = set()
+    """The engine workspace's traits: name -> the method names they declare."""
+    out = collections.defaultdict(set)
     for dp, _, fs in os.walk(ROOT + "/crates"):
         for f in fs:
             if f.endswith(".rs"):
                 try:
-                    out |= set(re.findall(r"\btrait\s+([A-Za-z0-9_]+)", open(os.path.join(dp, f)).read()))
+                    src = mask(open(os.path.join(dp, f)).read())
                 except Exception:
-                    pass
+                    continue
+                for t in re.finditer(r"\btrait\s+([A-Za-z0-9_]+)[^{;]*\{", src):
+                    out[t.group(1)] |= set(re.findall(r"\bfn\s+([A-Za-z0-9_]+)", src[t.end() : block_end(src, t.start())]))
     return out
+
+
+def method_calls(masked):
+    """The method names `masked` calls (`.name(` or `.name::<..>(`)."""
+    return set(re.findall(r"\.\s*([A-Za-z_]\w*)\s*(?:::\s*<[^>]*>\s*)?\(", masked))
+
+
+# Method names the text being pruned calls: a trait import stays when one of its methods is called.
+METHODS = [set()]
 
 
 TRAITS = _traits()
@@ -348,7 +413,7 @@ def prune_tree(t, used, parent=""):
             name = alias or parent.rstrip(":").split("::")[-1]
         if name in EXCL[0]:
             return None
-        if name == "_" or name in used or name in TRAITS:
+        if name == "_" or name in used or TRAITS.get(name, set()) & METHODS[0]:
             return t
         return None
     nk = [x for x in (prune_tree(k, used, seg) for k in kids) if x]
@@ -458,8 +523,11 @@ def resolve_super_use(t, node, ctx, used):
             return t
         rest = path[len(parent):]
         if rest == "*":
+            # A glob of a public module becomes the names the moved text uses from it, and the
+            # traits it re-exports whose methods the moved text calls.
             if module_public(parent):
-                return t  # a glob of a public module keeps what the top crate can reach
+                names += sorted(visible & used)
+                names += sorted(n for n in visible if TRAITS.get(n, set()) & METHODS[0])
             continue
         elif "::" in rest or rest not in private:
             names.append(rest + (" as " + alias if alias else ""))
@@ -528,26 +596,45 @@ def move(tsv):
     areas = collections.OrderedDict()
     for _, (u, lst) in by_unit.items():
         areas.setdefault(area_of(u.modpath), []).append(u)
-    outputs = {}
+    outputs, unit_mod = {}, {}
     for area, us in areas.items():
         ctexts = []
         for u in us:
-            ctx = {"parent": parent_path(u)}
-            text, used = emission(u, ctx)
             pu = parent_unit(u)
+            ctx = {"parent": parent_path(u), "defined": defined_names(u) | (defined_names(pu) if pu else set())}
+            text, used = emission(u, ctx)
             if pu:
                 text = parent_helpers(pu, text, used) + text
             ctexts.append((u, text))
-        ctexts = [(u, inject(parent_uses(u, t) + t)) for u, t in ctexts]
-        if len(ctexts) == 1:
+        ctexts = [(u, inject((own_items_use(u, t) if u.mixed else parent_uses(u, t)) + t)) for u, t in ctexts]
+        # An existing module (an earlier move in this area) keeps its tests: the new ones are
+        # appended, in a module of their own when a name would clash or the file already holds
+        # one module per source file.
+        target = f"{IT}/{CRATE[0]}_in_{area}.rs"
+        existing = open(target).read() if os.path.exists(target) else None
+        taken = top_names(existing) if existing else set()
+        nested = existing is not None and bool(re.search(r"(?m)^mod \w+ \{", existing))
+        n = sum(len(lst) for u, lst in [by_unit[id(x)] for x in us])
+        # A unit with inner attributes (`#![..]`) keeps them at the start of its own module.
+        inner = existing is not None and bool(re.search(r"(?m)^\s*#!\[", ctexts[0][1]))
+        if len(ctexts) == 1 and not nested and not inner and not (top_names(ctexts[0][1]) & taken):
             body = ctexts[0][1]
+            unit_mod[id(ctexts[0][0])] = None
         else:
             body = ""
             for u, t in ctexts:
-                body += f"\nmod {u.modpath[-1]} {{\n{t}\n}}\n"
-        n = sum(len(lst) for u, lst in [by_unit[id(x)] for x in us])
-        head = f"//! Tests that run {CRATE[0]} commands, moved from the engine-core `{area}` tests: {n} test(s).\n\n"
-        outputs[area] = head + body
+                name = u.modpath[-1]
+                while name in taken:
+                    name += "_2"
+                taken.add(name)
+                unit_mod[id(u)] = name
+                body += f"\nmod {name} {{\n{t}\n}}\n"
+        if existing is None:
+            outputs[area] = f"//! Tests that run {CRATE[0]} commands, moved from the engine-core `{area}` tests: {n} test(s).\n\n" + body
+        else:
+            head = re.compile(r"(?m)^(//! Tests that run \w+ commands, moved from the engine-core `[^`]*` tests: )(\d+)( test\(s\)\.)$")
+            existing = head.sub(lambda m: m.group(1) + str(int(m.group(2)) + n) + m.group(3), existing, count=1)
+            outputs[area] = existing.rstrip("\n") + "\n" + body
 
     # removal from core
     edits = collections.defaultdict(list)  # file -> [(a, b)]
@@ -559,9 +646,9 @@ def move(tsv):
     for a in sorted(stats):
         print(f"  {a}: {stats[a]}")
     if DRY:
-        return
+        return []
     for area, text in outputs.items():
-        open(f"{IT}/{CRATE[0]}_in_{area}.rs", "w").write(text)
+        open(f"{IT}/{CRATE[0]}_in_{area}.rs", "w").write(text.rstrip("\n") + "\n")
     # main.rs: sorted block
     mp = IT + "/main.rs"
     lines = open(mp).read().split("\n")
@@ -579,16 +666,51 @@ def move(tsv):
     for area, us in areas.items():
         for u in us:
             for node, it in by_unit[id(u)][1]:
-                path = [f"{CRATE[0]}_in_{area}"] + ([u.modpath[-1]] if len(us) > 1 else []) + node.modpath[len(u.modpath) :] + [it.name]
+                path = [f"{CRATE[0]}_in_{area}"] + ([unit_mod[id(u)]] if unit_mod[id(u)] else []) + node.modpath[len(u.modpath) :] + [it.name]
                 renamed["::".join(node.modpath + [it.name])] = "::".join(path)
     remap_times(CRATE[0], renamed)
+    return [u for u, _ in by_unit.values()]
+
+
+def top_names(text):
+    """Names a module's text defines or imports at its top level."""
+    out = set()
+    for it in parse(text, mask(text), 0, len(text)):
+        if it.kind == "use":
+            m = re.search(r"\buse\s+([^;]*);", text[it.hdr : it.end], re.S)
+            if m:
+                tree, _ = parse_use_tree(m.group(1).strip() + ";")
+                out |= use_leaves(tree)
+        elif it.name:
+            out.add(it.name)
+    return out
+
+
+def use_leaves(tree, parent=""):
+    seg, alias, kids = tree
+    if kids is None:
+        name = alias or seg.split("::")[-1]
+        return {parent.rstrip(":").split("::")[-1] if name == "self" else name} - {"*"}
+    return set().union(*(use_leaves(k, seg) for k in kids)) if kids else set()
+
+
+def own_items_use(u, text):
+    """For test functions moved from the top of a production file: the import of the file's own
+    items they name (a private item stays a compile error, as any private core item)."""
+    defined = set(re.findall(r"\b(?:fn|struct|enum|const|static|type|trait)\s+([A-Za-z_]\w*)", text))
+    own = {it.name for it in u.items if it.name and not it.is_test and not it.cfg_test and it.kind not in ("use", "mod", "impl")}
+    names = sorted((own & words(mask(text))) - defined)
+    if not names:
+        return ""
+    p = u.modpath[1:] if u.modpath[0] == "cmd" and len(u.modpath) > 1 else u.modpath
+    return "use photocraft_engine::" + "::".join(p) + "::{" + ", ".join(names) + "};\n"
 
 
 def parent_helpers(pu, text, used):
     """The test-module parent's helpers (and imports) that the moved unit's text uses, not defined in it."""
     defined = set(re.findall(r"\b(?:fn|struct|enum|const|static|type|trait)\s+([A-Za-z_]\w*)", text))
-    need(pu, (used | words(text)) - defined)
-    ctx = {"parent": parent_path(pu), "extra_used": used | words(text)}
+    need(pu, (used | words(mask(text))) - defined)
+    ctx = {"parent": parent_path(pu), "extra_used": used | words(mask(text)), "defined": defined_names(pu) | set(re.findall(r"\bfn\s+([A-Za-z_]\w*)", text))}
     htext, hused = emission(pu, ctx, helpers_only=True)
     gtext = parent_uses(pu, htext + text)
     return gtext + htext + "\n"
@@ -609,7 +731,8 @@ def parent_file(u):
         gs = open(g).read()
         gm = mask(gs)
         for d in MOD_DECL.finditer(gm):
-            if module_file(g, d.group(2), gs[d.start(1):d.end(1)], root=os.path.dirname(g) == SRC and os.path.basename(g) == "lib.rs") == u.f:
+            inline = [dir_ for dir_, _ in inline_mods(gs, gm, d.start())]
+            if module_file(g, d.group(2), gs[d.start(1) : d.end(1)], inline, root=os.path.dirname(g) == SRC and os.path.basename(g) == "lib.rs") == u.f:
                 return g
     return None
 
@@ -629,8 +752,9 @@ def parent_uses(u, body):
             have.add(w)
     for mm in re.finditer(r"\b(?:fn|struct|enum|const|static|type|trait)\s+([A-Za-z_]\w*)", body):
         have.add(mm.group(1))
-    used = words(re.sub(r"(?<![.])\.\s*[A-Za-z_]\w*", ".", body)) - have  # method names are not imports
+    used = words(mask(body)) - have
     EXCL[0] = have
+    METHODS[0] = method_calls(mask(body))
     out = []
     for it in items:
         if it.kind != "use" or ("cfg(" in it.attrs and not it.cfg_test) or "pub" in gs[it.hdr:it.hdr + 4]:
@@ -780,6 +904,7 @@ def prune_file(f, us):
         items = parse(src, m, a, b)
         rest = " ".join(m[it.hdr:it.end] for it in items if it.kind != "use")
         uw = words(rest)
+        METHODS[0] = method_calls(rest)
         for it in items:
             if it.kind == "use":
                 t = src[it.start:it.end]
@@ -795,49 +920,108 @@ def prune_file(f, us):
     open(f, "w").write(src)
 
 
-def cleanup():
-    """Drops test units left with no `#[test]`: whole-file test modules (the file and its `mod`
-    line) and inline `#[cfg(test)] mod x { .. }` blocks."""
-    regions = test_regions(SRC + "/lib.rs")
-    for f, rg in sorted(regions.items()):
-        if not f.startswith(SRC) or not os.path.exists(f):
+def cleanup(units):
+    """Drops the test units this move touched that it left with no `#[test]`: a whole-file test
+    module (the file and its `mod` line) or an inline `#[cfg(test)] mod x { .. }`, unless other
+    code still names the module (shared fixtures) or it declares child modules."""
+    for u in units:
+        if not os.path.exists(u.f):
             continue
-        src = open(f).read()
-        if rg is None:
-            if "#[test]" in src:
+        src = open(u.f).read()
+        if u.whole:
+            name = fs_modpath(u.f)[-1]
+            if "#[test]" in src or MOD_DECL.search(mask(src)) or named_elsewhere(name, u.f):
                 continue
-            for g in list(regions):
-                if g == f or not os.path.exists(g):
-                    continue
+            g = parent_file(u)
+            if g:
                 gs = open(g).read()
                 gm = mask(gs)
-                root = os.path.dirname(g) == SRC and os.path.basename(g) == "lib.rs"
                 for d in MOD_DECL.finditer(gm):
-                    if module_file(g, d.group(2), gs[d.start(1) : d.end(1)], root=root) == f:
-                        gs = gs[: d.start()] + gs[d.end() :]
-                        open(g, "w").write(gs)
+                    inline = [dir_ for dir_, _ in inline_mods(gs, gm, d.start())]
+                    if module_file(g, d.group(2), gs[d.start(1) : d.end(1)], inline, root=g == SRC + "/lib.rs") == u.f:
+                        open(g, "w").write(gs[: d.start()] + gs[d.end() :])
                         break
-            os.remove(f)
-            print("removed", os.path.relpath(f, ROOT))
+            os.remove(u.f)
+            print("removed", os.path.relpath(u.f, ROOT))
         else:
             m = mask(src)
-            # Only `tests` modules: another test-only module can hold helpers its siblings use.
-            cuts = [(it.start, it.end) for it in parse(src, m, 0, len(src)) if it.kind == "mod" and it.body and it.cfg_test and re.search(r"tests?$", it.name) and "#[test]" not in src[it.body[0] : it.body[1]]]
+            cuts = [
+                (it.start, it.end)
+                for it in parse(src, m, 0, len(src))
+                if it.kind == "mod" and it.body and it.cfg_test and it.name == u.name and "#[test]" not in src[it.body[0] : it.body[1]]
+                and not re.search(r"\b" + it.name + r"::", m[: it.start] + m[it.end :])
+                and not inline_named_elsewhere(it.name, u.f)
+            ]
             for a, b in reversed(cuts):
                 src = src[:a] + src[b:]
             if cuts:
-                open(f, "w").write(src)
-                print("emptied test modules dropped in", os.path.relpath(f, ROOT))
+                open(u.f, "w").write(src)
+                print("emptied test module dropped in", os.path.relpath(u.f, ROOT))
+
+
+def inline_named_elsewhere(name, f):
+    """Whether a core file other than `f` names the inline module `name` of `f` in a path
+    (`<module of f>::name::x`, or `super::name::x` from a child file of `f`)."""
+    mp = fs_modpath(f)
+    pat = re.compile(r"\b" + re.escape(mp[-1]) + r"\s*::\s*" + re.escape(name) + r"\s*::")
+    child = re.compile(r"\bsuper\s*::\s*" + re.escape(name) + r"\s*::")
+    for dp, _, fs in os.walk(SRC):
+        for n in fs:
+            g = os.path.join(dp, n)
+            if not n.endswith(".rs") or g == f:
+                continue
+            gm = mask(open(g).read())
+            gp = fs_modpath(g)
+            if pat.search(gm) or (gp[:-1] == mp and child.search(gm)):
+                return True
+    return False
+
+
+def named_elsewhere(name, f):
+    """Whether a core file other than `f` names the module of `f` in a path (`super::name::x`,
+    `<parent>::name`, `crate::name` for one of lib.rs)."""
+    mp = fs_modpath(f)
+    parent = mp[-2] if len(mp) > 1 else "crate"
+    pat = re.compile(r"\b(?:super|" + parent + r")\s*::\s*" + name + r"\b")
+    for dp, _, fs in os.walk(SRC):
+        for n in fs:
+            g = os.path.join(dp, n)
+            if n.endswith(".rs") and g != f and pat.search(mask(open(g).read())):
+                return True
+    return False
 
 
 def crate_ids(crate):
-    """The command ids the crate's tables define."""
+    """The command ids the crate's tables define: the strings of its `fn specs` bodies (literals,
+    the `const` strings they name, and `concat!($prefix, ".x")` macro ids), plus `id: "x"` and
+    `macro!("x"` anywhere, kept when `command_ids.txt` lists them."""
+    known = set(open(f"{ROOT}/crates/engine/src/install/command_ids.txt").read().split())
     ids = set()
     for dp, _, fs in os.walk(f"{ROOT}/crates/engine-{crate}/src"):
         for n in fs:
-            if n.endswith(".rs"):
-                ids |= set(re.findall(r'(?:\b\w+!\(\s*|\bid:\s*)"([a-z][A-Za-z0-9_]*\.[A-Za-z0-9_.]+)"', open(os.path.join(dp, n)).read()))
+            if not n.endswith(".rs"):
+                continue
+            src = open(os.path.join(dp, n)).read()
+            m = mask(src)
+            found = set(re.findall(r'(?:\b\w+!\(\s*|\bid:\s*)"([a-z][A-Za-z0-9_]*\.[A-Za-z0-9_.]+)"', src))
+            consts = dict(re.findall(r'\bconst\s+([A-Z_][A-Z0-9_]*)\s*:\s*&(?:\'static\s+)?str\s*=\s*"([^"]*)"', src))
+            suffixes = re.findall(r'concat!\(\s*\$\w+\s*,\s*"(\.[^"]*)"\s*\)', src)
+            for f in re.finditer(r"\bfn\s+\w*specs\w*\s*\(", m):
+                a, b = m.find("{", f.end()), block_end(m, f.start())
+                strings = string_literals(src, m, a, b) + [consts[w] for w in re.findall(r"\b[A-Z_][A-Z0-9_]*\b", m[a:b]) if w in consts]
+                found |= set(strings) | {x + sfx for x in strings for sfx in suffixes}
+            ids |= found & known
     return ids
+
+
+def string_literals(src, m, a, b):
+    """The plain `"..."` literals between a and b (not raw strings or text inside one)."""
+    out = []
+    for x in re.finditer(r'"((?:[^"\\]|\\.)*)"', src[a:b]):
+        p = a + x.start()
+        if m[p] == " " and (p == 0 or m[p - 1] != " " or src[p - 1] in " \t\n(,["):
+            out.append(x.group(1))
+    return out
 
 
 def crate_modules(crate):
@@ -868,6 +1052,38 @@ def closure(node, it):
     return out
 
 
+def ids_run(text, id_re):
+    """The crate ids `text` holds, except those only run as `execute("id", ..)` whose result is
+    dropped (`.ok();` after the call, or `let _ = ..;`): such a test doesn't depend on the id."""
+    m = mask(text)
+    out = []
+    for x in id_re.finditer(text):
+        call = re.search(r"\bexecute\s*\(\s*$", m[: x.start()])
+        if call:
+            end = paren_end(m, call.end() - 1)
+            stmt = m[max(m.rfind(";", 0, call.start()), m.rfind("{", 0, call.start()), m.rfind("}", 0, call.start())) + 1 : call.start()]
+            # `.ok();` drops the result only in an expression statement: not after `let x =`, an
+            # assignment or `return`.
+            dropped_ok = re.match(r"\s*\.\s*ok\s*\(\s*\)\s*;", m[end:]) and "=" not in stmt and not re.match(r"\s*return\b", stmt)
+            if dropped_ok or re.match(r"\s*let\s+_\s*=", stmt):
+                continue
+        out.append(x.group(1))
+    return out
+
+
+def paren_end(m, i):
+    """Index after the `)` matching the `(` at i in masked text."""
+    depth = 0
+    for j in range(i, len(m)):
+        if m[j] == "(":
+            depth += 1
+        elif m[j] == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+    return len(m)
+
+
 def list_tests(crate, previous, old_ref):
     ids = crate_ids(crate)
     id_re = re.compile(r'"(' + "|".join(re.escape(i) for i in sorted(ids)) + r')"')
@@ -883,7 +1099,8 @@ def list_tests(crate, previous, old_ref):
         items = closure(node, it)
         texts = [n.src[x.start : x.end] for n, x in items]
         hit_mod = any(mod_re.search(n.m[x.hdr : x.end]) for n, x in items)
-        hit_id = any(id_re.search(tx) for tx in texts)
+        run = [x for tx in texts for x in ids_run(tx, id_re)]
+        hit_id = bool(run)
         if old_ref and rel not in old:
             old[rel] = git_show(old_ref, rel) or ""
         unchanged = bool(old_ref) and all(tx in old[rel] for tx in texts)
@@ -895,7 +1112,7 @@ def list_tests(crate, previous, old_ref):
             if in_prev and not hit_id:
                 prev_only.append("::".join(key))
         else:
-            why = "runs " + ", ".join(sorted(set(m.group(1) for tx in texts for m in id_re.finditer(tx)))) if hit_id else None
+            why = "runs " + ", ".join(sorted(set(run))) if hit_id else None
         if why:
             rows.append(f"{'::'.join(key)}\t{rel}\t{why}")
     print(f"# Core tests that run {crate} commands or name its modules (scripts/engine_split/move_tests.py list {crate}): test<TAB>file<TAB>why")
@@ -906,68 +1123,82 @@ def list_tests(crate, previous, old_ref):
 
 
 def remap_times(crate, moved):
-    """`.config/ci-test-times.tsv`: rows of tests now in the crate's lib name its binary, rows of
-    moved tests name `photocraft-engine::it` and their new path, and the `bin` rows move the tests'
-    count and seconds with them (timed rows exactly, the rest at core's average untimed time)."""
+    """`.config/ci-test-times.tsv`, for this run's changes only: rows of core tests whose module is
+    now the crate's name its binary, rows of the tests moved by this run name `photocraft-engine::it`
+    and their new path, and the `bin` rows move those tests' count and seconds (timed rows exactly,
+    the rest at core's average untimed time). The crate's whole test count moves only on the first
+    run after its cut (when it has no `bin` row yet). Running it again changes nothing."""
     path = f"{ROOT}/.config/ci-test-times.tsv"
-    src = f"{ROOT}/crates/engine-{crate}/src"
-    names = set()
-    for dp, _, fs in os.walk(src):
-        for n in fs:
-            if n.endswith(".rs"):
-                names |= set(re.findall(r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*fn\s+([a-z0-9_]+)", open(os.path.join(dp, n)).read()))
-    counts = {f"photocraft-engine-{crate}": len(names), "photocraft-engine::it": len(moved)}
-    core, top = "photocraft-engine-core", f"photocraft-engine-{crate}"
+    core, top, it = "photocraft-engine-core", f"photocraft-engine-{crate}", "photocraft-engine::it"
+    prefixes = tuple(u.replace("/", "::") + "::" for u in crate_units(crate))
     lines = open(path).read().split("\n")
+    bins = {(l.split("\t")[1], l.split("\t")[2]): l.split("\t") for l in lines if l.startswith("bin\t")}
     timed = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0.0]))  # os -> binary -> [n, s]
+    core_timed = collections.defaultdict(lambda: [0, 0.0])
     out = []
     for line in lines:
         parts = line.split("\t")
         if len(parts) == 5 and parts[0] == "test" and parts[2] == core:
+            core_timed[parts[1]][0] += 1
+            core_timed[parts[1]][1] += float(parts[3])
             if parts[4] in moved:
-                parts[2], parts[4] = "photocraft-engine::it", moved[parts[4]]
-            elif parts[4].split("::")[-1] in names:
+                parts[2], parts[4] = it, moved[parts[4]]
+            elif parts[4].startswith(prefixes):
                 parts[2] = top
             if parts[2] != core:
                 timed[parts[1]][parts[2]][0] += 1
                 timed[parts[1]][parts[2]][1] += float(parts[3])
             line = "\t".join(parts)
         out.append(line)
-    core_timed = collections.defaultdict(lambda: [0, 0.0])
-    for line in lines:
-        parts = line.split("\t")
-        if len(parts) == 5 and parts[0] == "test" and parts[2] == core:
-            core_timed[parts[1]][0] += 1
-            core_timed[parts[1]][1] += float(parts[3])
-    bins = {(l.split("\t")[1], l.split("\t")[2]): l.split("\t") for l in out if l.startswith("bin\t")}
+    crate_tests = 0
+    for dp, _, fs in os.walk(f"{ROOT}/crates/engine-{crate}/src"):
+        for n in fs:
+            if n.endswith(".rs"):
+                crate_tests += len(re.findall(r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*fn\s+[a-z0-9_]+", open(os.path.join(dp, n)).read()))
+    new_keys = []
     for (os_, b), parts in list(bins.items()):
         if b != core:
             continue
         n, s = int(parts[3]), float(parts[4])
         avg = (s - core_timed[os_][1]) / max(1, n - core_timed[os_][0])
-        for dest in (top, "photocraft-engine::it"):
+        for dest, share in ((top, crate_tests if (os_, top) not in bins else timed[os_][top][0]), (it, len(moved))):
             tn, ts = timed[os_][dest]
-            share = counts[dest]
             secs = ts + max(0, share - tn) * avg
+            if not share:
+                continue
             n, s = n - share, s - secs
             row = bins.get((os_, dest))
             if row:
                 row[3], row[4] = str(int(row[3]) + share), f"{float(row[4]) + secs:.2f}"
             else:
                 bins[(os_, dest)] = ["bin", os_, dest, str(share), f"{secs:.2f}"]
+                new_keys.append((os_, dest))
         parts[3], parts[4] = str(n), f"{s:.2f}"
     res, done = [], set()
     for line in out:
         if line.startswith("bin\t"):
             key = tuple(line.split("\t")[1:3])
+            if key in done:
+                continue
             res.append("\t".join(bins[key]))
             done.add(key)
-            if key[1] == core and (key[0], top) not in done:
-                res.append("\t".join(bins[(key[0], top)]))
-                done.add((key[0], top))
+            for k in new_keys:
+                if key[1] == core and k[0] == key[0] and k not in done:
+                    res.append("\t".join(bins[k]))
+                    done.add(k)
             continue
         res.append(line)
     open(path, "w").write("\n".join(res))
+
+
+def crate_units(crate):
+    """The crate's units in crates.tsv (`cmd/brush_cmds`, `brush_clear_background_tests`, ..)."""
+    out = []
+    for line in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "crates.tsv")):
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) == 2 and parts[1] == crate:
+            out.append(parts[0])
+    return out
 
 
 def main():
@@ -985,11 +1216,13 @@ def main():
     a = ap.parse_args()
     CRATE[0] = a.crate
     if a.mode == "list":
+        if a.previous and not a.old_ref:
+            ap.error("--previous needs --old-ref: the previous run's rows count only for tests unchanged since that commit")
         list_tests(a.crate, a.previous, a.old_ref)
     else:
-        move(a.tsv)
+        touched = move(a.tsv)
         if not a.dry:
-            cleanup()
+            cleanup(touched)
 
 
 if __name__ == "__main__":
