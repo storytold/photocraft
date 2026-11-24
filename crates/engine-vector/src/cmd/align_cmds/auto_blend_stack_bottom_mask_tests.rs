@@ -120,7 +120,7 @@ type Setup = fn(&mut Session, &[LayerId]) -> Value;
 /// the bottom layer stays hidden where the layer above takes over.
 #[test]
 fn other_runs_keep_the_bottom_layer_masked() {
-    let cases: [(&str, Setup); 6] = [
+    let cases: [(&str, Setup); 7] = [
         ("panorama", |s, ids| {
             // A panorama pair: FocusL over x 0..240, FocusR over x 160..400.
             let (l, r) = (ids[0], ids[1]);
@@ -162,6 +162,18 @@ fn other_runs_keep_the_bottom_layer_masked() {
             select(s, ids);
             json!({"method": "stack", "seamlessTones": false})
         }),
+        ("stack under a top that Blend If hides", |s, ids| {
+            // This Layer's white point at 0 hides every top pixel, so the complementary masks
+            // leave its winning half empty; revealing the bottom would fill it.
+            let top = ids[1];
+            s.edit("blend if", |doc, _| {
+                let hide = photocraft_doc::BlendRange { black: [0, 0], white: [0, 0] };
+                doc.layer_mut(top).unwrap().blend_if.set(0, [hide, photocraft_doc::BlendRange::FULL]);
+                Ok(())
+            })
+            .unwrap();
+            json!({"method": "stack", "seamlessTones": false})
+        }),
         ("stack over an existing mask", |s, ids| {
             let top = ids[1];
             s.edit("mask", |doc, _| {
@@ -179,4 +191,73 @@ fn other_runs_keep_the_bottom_layer_masked() {
         let ml = s.active().unwrap().doc.layer(l).unwrap().mask.clone().expect("FocusL gets a mask");
         assert!(pixels().any(|(x, y)| ml.value(x, y) < 0.5), "{name}: FocusL is hidden where another layer takes over");
     }
+}
+
+/// The middle of the canvas, where the patch pairs keep their pixels.
+fn patch() -> Rect {
+    Rect::new(100, 50, 300, 250)
+}
+
+/// Keeps `id`'s pixels inside `patch()` only; everywhere else the surface holds `default`.
+fn keep_to_patch(s: &mut Session, id: LayerId, default: [f32; 4]) {
+    s.edit("patch", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        let mut kept = Surface::with_default(surf.format(), &default[..surf.format().channels()]);
+        kept.write_region(patch(), &surf.read_region(patch()));
+        kept.prune();
+        *surf = kept;
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// A bottom layer whose default pixel is opaque white (as an imported layer can have) shows that
+/// white past its changed pixels. The old mask hides it outside the blended area, so revealing
+/// the bottom would paint the rest of the canvas white; the old masks are kept.
+#[test]
+fn an_opaque_default_pixel_keeps_the_bottom_masked() {
+    let (mut s, l, r) = focus_pair();
+    keep_to_patch(&mut s, l, [1.0; 4]);
+    keep_to_patch(&mut s, r, [0.0; 4]);
+    s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let outside = (10, 10);
+    assert!(doc.layer(l).unwrap().mask.as_ref().unwrap().value(outside.0, outside.1) < 0.5, "FocusL stays hidden past the patch");
+    let img = photocraft_compose::render(doc, doc.bounds());
+    let a = img.px[(outside.1 * W + outside.0) as usize][3];
+    assert!(a < 0.02, "the canvas past the patch stays empty, alpha {a}");
+}
+
+/// A bottom layer with a deep knockout and Transparency Shapes Layer off knocks out wherever its
+/// mask shows, not only under its pixels. Revealing it would clear the layer beneath past the
+/// patch, where the old mask kept the knockout away; the old masks are kept.
+#[test]
+fn a_shapeless_knockout_keeps_the_bottom_masked() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": W, "height": H, "depth": 8, "background": "transparent"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Under"})).unwrap();
+    s.edit("red", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, W, H), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let l = focus_layer(&mut s, "FocusL", 0..W / 2);
+    let r = focus_layer(&mut s, "FocusR", W / 2..W);
+    keep_to_patch(&mut s, l, [0.0; 4]);
+    keep_to_patch(&mut s, r, [0.0; 4]);
+    s.edit("knockout", |doc, _| {
+        let advanced = &mut doc.layer_mut(l).unwrap().advanced;
+        advanced.knockout = photocraft_doc::Knockout::Deep;
+        advanced.transparency_shapes = false;
+        Ok(())
+    })
+    .unwrap();
+    select(&mut s, &[l, r]);
+    s.execute("edit.autoBlendLayers", json!({"method": "stack", "seamlessTones": false})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let outside = (10, 10);
+    assert!(doc.layer(l).unwrap().mask.as_ref().unwrap().value(outside.0, outside.1) < 0.5, "FocusL stays hidden past the patch");
+    let img = photocraft_compose::render(doc, doc.bounds());
+    let px = img.px[(outside.1 * W + outside.0) as usize];
+    assert!(px[3] > 0.98 && px[0] > 0.98, "the red layer beneath shows past the patch: {px:?}");
 }

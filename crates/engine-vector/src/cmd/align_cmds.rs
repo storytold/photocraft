@@ -390,8 +390,11 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
 /// each one must sit under an opaque, fully weighted pixel of the top layer, drawn normally at
 /// full opacity and not clipped, since a clipped top takes its coverage from the bottom's mask.
 /// Both must sit in the same group: a group holding only the top (its opacity, fill, blend or
-/// mask) would thin the top's coverage over the bottom. The bottom must have no effects, which
-/// would trace the wider mask, and no pixels outside `area`, which its old mask hid.
+/// mask) would thin the top's coverage over the bottom, and so would Blend If on the top. The
+/// bottom must have no effects, which would trace the wider mask, no Advanced Blending that acts
+/// (a knockout or blend that ignores its transparency covers all the mask reveals), and no pixels
+/// outside `area`, which its old mask hid: neither content nor an opaque default pixel, which
+/// `content_bounds` leaves out.
 fn revealing_the_bottom_keeps_the_composite(doc: &Document, ids: &[LayerId], area: Rect, alpha: &[Vec<f32>], weights: &[Vec<f32>]) -> bool {
     let (Some(bottom), Some(top)) = (doc.layer(ids[0]), doc.layer(ids[1])) else { return false };
     let index = doc.layers.index();
@@ -400,7 +403,7 @@ fn revealing_the_bottom_keeps_the_composite(doc: &Document, ids: &[LayerId], are
     }
     let bottom_inside = bottom.surface().is_some_and(|s| {
         let b = s.content_bounds();
-        b.is_empty() || b.intersect(&area) == b
+        to_rgba(&s.format(), &s.default_pixel())[3] <= 0.0 && (b.is_empty() || b.intersect(&area) == b)
     });
     let no_effects = |l: &Layer| !l.effects.enabled || l.effects.items.iter().all(|e| !e.enabled());
     let top_plain = top.visible
@@ -410,8 +413,9 @@ fn revealing_the_bottom_keeps_the_composite(doc: &Document, ids: &[LayerId], are
         && !top.clipped
         && top.vector_mask.is_none()
         && top.excluded_channels == 0
+        && !photocraft_compose::blend_if_active(top, doc.mode)
         && no_effects(top);
-    if !bottom_inside || !no_effects(bottom) || !top_plain {
+    if !bottom_inside || !no_effects(bottom) || photocraft_compose::advanced_active(bottom, &[]) || !top_plain {
         return false;
     }
     // Masks are 8-bit: a weight that rounds to 255 shows the pixel in full. Pixel alpha keeps the
