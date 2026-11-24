@@ -162,12 +162,15 @@ pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(),
         return Ok(());
     }
     // An absent value counts as empty: the engine's own `create_droplet` reads the same fields and
-    // treats a missing or empty `path` the same way.
+    // treats a missing or empty `path` the same way. The log row goes one step further and counts
+    // spaces as missing, because that is what the run does with it: `run_droplet` reads the saved
+    // `errorLog` through `filter(|path| !path.trim().is_empty())`, so a blank path is stored and then
+    // ignored and the droplet silently writes no log at all (#15869 review).
     let missing = if result.fields.text("path").is_none_or(str::is_empty) {
         NO_DROPLET_FILE
     } else if result.fields.text("output").is_none_or(str::is_empty) {
         NO_DESTINATION_FOLDER
-    } else if result.fields.text("errors") == Some("log") && result.fields.text("errorLog").is_none_or(str::is_empty) {
+    } else if result.fields.text("errors") == Some("log") && result.fields.text("errorLog").is_none_or(|path| path.trim().is_empty()) {
         NO_ERROR_LOG
     } else {
         return Ok(());

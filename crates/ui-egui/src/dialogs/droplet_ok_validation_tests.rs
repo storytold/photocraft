@@ -157,6 +157,47 @@ fn ok_with_log_errors_to_file_and_no_log_file_alerts() {
     assert!(written(dir.path()).is_empty(), "nothing was written: {:?}", written(dir.path()));
 }
 
+/// #15869 review: spaces are not a log file. The run reads the saved `errorLog` with
+/// `filter(|path| !path.trim().is_empty())`, so a whitespace-only path is stored, then ignored, and the
+/// droplet silently writes no log - the very thing the Errors row was set to do. OK asks for a real
+/// file, with the same words and the same held-OK refusal.
+#[test]
+fn ok_with_a_whitespace_only_log_path_alerts() {
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    let dir = tempfile::tempdir().unwrap();
+    let id = open(&mut app);
+    set(&mut app, &ctx, id, "path", json!(dir.path().join("Invert.pcdroplet").to_string_lossy()));
+    set(&mut app, &ctx, id, "output", json!(dir.path().join("out").to_string_lossy()));
+    set(&mut app, &ctx, id, "errors", json!("log"));
+    set(&mut app, &ctx, id, "errorLog", json!("   "));
+    assert_eq!(crate::dialogs::confirm(&mut app, &ctx, id), Err(NO_ERROR_LOG.to_string()), "spaces are no log file");
+    assert_eq!(alerts(&app), [NO_ERROR_LOG]);
+    assert_eq!(value(&app, id, "errorLog").as_deref(), Some("   "), "the typed spaces stay as typed");
+    assert!(written(dir.path()).is_empty(), "nothing was written: {:?}", written(dir.path()));
+}
+
+/// The blank check refuses nothing else: a name with a space in it, and a name padded with spaces, are
+/// log paths the engine keeps verbatim, so OK still accepts them and the value rides into the droplet
+/// exactly as typed.
+#[test]
+fn a_spaced_or_padded_log_path_is_still_accepted() {
+    let mut app = app();
+    let ctx = app.ctx().clone();
+    let dir = tempfile::tempdir().unwrap();
+    let droplet = dir.path().join("Invert.pcdroplet").to_string_lossy().into_owned();
+    let log = format!("{} ", dir.path().join("drop log.txt").to_string_lossy());
+    let id = open(&mut app);
+    set(&mut app, &ctx, id, "path", json!(droplet.clone()));
+    set(&mut app, &ctx, id, "output", json!(dir.path().join("out").to_string_lossy()));
+    set(&mut app, &ctx, id, "errors", json!("log"));
+    set(&mut app, &ctx, id, "errorLog", json!(log.clone()));
+    crate::dialogs::confirm(&mut app, &ctx, id).expect("a path with spaces in it is a chosen file");
+    assert!(alerts(&app).is_empty(), "{:?}", alerts(&app));
+    let saved: Value = serde_json::from_slice(&std::fs::read(&droplet).expect("the droplet was written")).unwrap();
+    assert_eq!(saved["options"]["errorLog"], json!(log), "stored as typed, not trimmed away");
+}
+
 /// The log check belongs to Log Errors to File alone: the form's own Stop for Errors leaves the log
 /// field empty as a normal state, and OK writes the droplet.
 #[test]
