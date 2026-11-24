@@ -91,20 +91,37 @@ fn paint_of(b: &BrushSettings) -> BrushRowPaint {
     let stroke_sig = brush_preview::preview_sig(b);
     BrushRowPaint::new(tip_paint(&b.tip, (b.hardness, b.angle, b.roundness)), move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
-        let size = [rect.width().round().clamp(1.0, 1024.0) as usize, rect.height().round().clamp(1.0, 1024.0) as usize];
+        let size = stroke_band(rect);
         picture(cx, rect, ("brushes-stroke", stroke_sig, size, color), || brush_preview::stroke_image(&brush, size, color));
     })
 }
 
+/// The pixel size a stroke preview for `rect` is drawn at: its width and height each rounded up to a step of
+/// [`STROKE_STEP`]. A slider, a panel or window resize that changes the rect by a few points reuses the drawn
+/// picture, scaled, instead of drawing every stroke again each frame.
+pub(super) fn stroke_band(rect: Rect) -> [usize; 2] {
+    let step = |side: f32| ((side.max(1.0) / STROKE_STEP).ceil() * STROKE_STEP).clamp(1.0, 1024.0) as usize;
+    [step(rect.width()), step(rect.height())]
+}
+
+/// The step of the stroke previews' drawn sizes ([`stroke_band`]).
+const STROKE_STEP: f32 = 16.0;
+
 /// How the engine draws `tip` with the falloff, angle and roundness `shape` (a sampled tip's shape) in the theme's text
-/// colour: a preset's thumbnail and the Brush Preset chip's current tip.
+/// colour: a preset's thumbnail and the Brush Preset chip's current tip. The tip keeps its proportions: it fills the
+/// largest square centred in the rect it is given ([`tip_square`]), so a round tip stays round in a wide cell.
 pub(crate) fn tip_paint(tip: &TipShape, shape: (f32, f32, f32)) -> impl Fn(&ContentPainterCx, Rect) + Send + Sync + 'static {
     let tip = tip.clone();
     let tip_key = brush_preview::tip_sig(&tip, shape.0, shape.1, shape.2, (false, false));
     move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
-        picture(cx, rect, ("brushes-tip", tip_key, color), || brush_preview::tip_image(&tip, shape, 36, color));
+        picture(cx, tip_square(rect), ("brushes-tip", tip_key, color), || brush_preview::tip_image(&tip, shape, 36, color));
     }
+}
+
+/// The largest square centred in `rect`: where a tip thumbnail, a square picture, is drawn without being stretched.
+pub(crate) fn tip_square(rect: Rect) -> Rect {
+    Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height())))
 }
 
 /// The presets of the brush lists: every preset of `presets` in the engine's panel order, each row showing the card

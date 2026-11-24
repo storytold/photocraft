@@ -11,7 +11,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use photocraft_engine::paint::{Control, GrayTile, MaskMode, Pattern, PatternStyle, TipShape};
 
-use super::brushes::{BrushKey, apply_events, parts_of, preset_rows, run_picks};
+use super::brushes::{BrushKey, apply_events, parts_of, preset_rows, run_picks, stroke_band, tip_square};
 use super::*;
 
 fn app() -> Box<PhotocraftApp> {
@@ -917,4 +917,26 @@ fn panel_events_map_to_their_commands() {
     brush.locks.texture = true;
     apply_action(&mut app, &mut brush, BrushPanelAction::Reset);
     assert_eq!((brush.size, brush.locks.texture, brush.smoothing.amount), (BrushSettings::default().size, true, 0.65));
+}
+
+/// A tip thumbnail keeps its proportions in a cell that is not square: a round tip drawn into a wide or a tall cell
+/// fills the square centred in it rather than stretching into an oval.
+#[test]
+fn a_tip_thumbnail_is_drawn_square_in_a_wide_or_tall_cell() {
+    let wide = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), vec2(50.0, 30.0));
+    let square = tip_square(wide);
+    assert_eq!(square.size(), vec2(30.0, 30.0), "a wide cell: the tip is as wide as the cell is tall");
+    assert_eq!(square.center(), wide.center(), "centred in the cell");
+    let tall = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(24.0, 40.0));
+    assert_eq!(tip_square(tall).size(), vec2(24.0, 24.0), "a tall cell: the tip is as tall as the cell is wide");
+    let even = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(36.0, 36.0));
+    assert_eq!(tip_square(even), even, "a square cell is used as it is");
+}
+
+#[test]
+fn a_stroke_preview_is_not_drawn_again_for_a_few_points_of_resize() {
+    let rect = |w: f32, h: f32| egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(w, h));
+    assert_eq!(stroke_band(rect(201.0, 30.0)), stroke_band(rect(207.0, 31.5)), "a panel a few points wider draws no new stroke");
+    assert_eq!(stroke_band(rect(201.0, 30.0)), [208, 32], "each side rounds up to the step");
+    assert_ne!(stroke_band(rect(201.0, 30.0)), stroke_band(rect(260.0, 30.0)), "a real resize draws a sharper stroke");
 }
