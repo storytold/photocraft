@@ -191,10 +191,14 @@ pub(crate) fn open_recorded_editor(app: &mut PhotocraftApp, id: &str, params: &V
         // Private keys belong to the dialog, not the recorded Action step.
         object.retain(|key, _| !key.starts_with("__"));
     }
-    if let Some(dialog) = crate::adjust_dialog::open_with_params(app, id, &values) {
+    match crate::adjust_dialog::open_with_params_checked(app, id, &values) {
         // Adjustment dialogs normalized their effective target already. Raw parameters here
         // would restore discarded Lab/CMYK records or override the normalized tone controls.
-        return Ok(dialog);
+        Ok(dialog) => return Ok(dialog),
+        // The editor refuses these parameters (a CMYK Channel Mixer, #8047): say why instead of
+        // opening the generic step editor over them.
+        Err(Some(reason)) => return Err(reason),
+        Err(None) => {}
     }
     let dialog = open_step_editor(app, id, &values)?;
     if !crate::sizing::is_sizing(id) {

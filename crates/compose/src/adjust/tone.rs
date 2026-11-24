@@ -38,6 +38,12 @@ pub fn tone_luts(adj: &Adjustment) -> [Vec<f32>; 4] {
 /// [`tone_luts`] for samples with `quantum` steps per unit (Levels works on whole levels; see
 /// [`levels_q`]).
 pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
+    tone_luts_qc(adj, quantum, true)
+}
+
+/// [`tone_luts_q`]; `curve_levels` false leaves an 8-bit RGB Curves channel's output where the
+/// spline put it instead of on a whole level (see [`tone_luts_depth_in`]).
+fn tone_luts_qc(adj: &Adjustment, quantum: Option<f32>, curve_levels: bool) -> [Vec<f32>; 4] {
     let x = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
     match adj {
         Adjustment::Levels { master, per_channel, space, black } => {
@@ -48,8 +54,37 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
         }
         Adjustment::Curves { master, per_channel, space, black, pencil } => {
             let m = if *space == ToneSpace::Lab { curve_lut(&[]) } else { curve_lut_mode(master, *pencil) };
-            let row = |c: &[CurvePoint]| curve_lut_mode(c, *pencil).iter().map(|&v| lut(&m, v)).collect();
-            [row(&per_channel[0]), row(&per_channel[1]), row(&per_channel[2]), row(if *space == ToneSpace::Cmyk { black } else { &[] })]
+            // In an 8-bit document the channel curve's output sits on a whole level before the
+            // composite curve is applied to it, as every Levels step is above (#14446, measured:
+            // Red 0,0 128,64 255,255 with composite 0,0 128,200 255,255 gives gray 192 as 217,
+            // 128 as 114 and 64 as 37). The channel's input is snapped to its level as well, so
+            // the row is flat across a level and the table cannot blend two levels' results at a
+            // document sample - the way [`levels_q`] is exact at every level. 16-bit and float
+            // documents were not measured, nor CMYK and Lab curves, so only the 8-bit quantum.
+            let level = (curve_levels && *space == ToneSpace::Rgb && quantum == Some(EIGHT_BIT_LEVELS)).then_some(EIGHT_BIT_LEVELS);
+            // Both curves are evaluated at the 256 exact levels, not read between two entries of
+            // the 4096-entry table: a pencil step between levels 128 and 129 would otherwise give
+            // level 128 a small fraction that rounds up to level 4 and wakes a composite step there.
+            let master_levels = if *space == ToneSpace::Lab { curve_samples::<LEVELS>(&[]) } else { curve_samples_mode::<LEVELS>(master, *pencil) };
+            let row = |c: &[CurvePoint], level: Option<f32>| match level {
+                Some(q) => {
+                    let channel = curve_samples_mode::<LEVELS>(c, *pencil);
+                    let index = |v: f32| (whole_levels(v, Some(q)) * q).round().clamp(0.0, q) as usize;
+                    (0..LUT_SIZE)
+                        .map(|k| {
+                            let ch = channel.get(index(x(k))).copied().unwrap_or(0.0);
+                            master_levels.get(index(ch)).copied().unwrap_or(0.0)
+                        })
+                        .collect()
+                }
+                None => curve_lut_mode(c, *pencil).iter().map(|&v| lut(&m, v)).collect(),
+            };
+            [
+                row(&per_channel[0], level),
+                row(&per_channel[1], level),
+                row(&per_channel[2], level),
+                row(if *space == ToneSpace::Cmyk { black } else { &[] }, None),
+            ]
         }
         _ => std::array::from_fn(|_| (0..LUT_SIZE).map(x).collect()),
     }
@@ -59,13 +94,34 @@ pub fn tone_luts_q(adj: &Adjustment, quantum: Option<f32>) -> [Vec<f32>; 4] {
 /// [`levels_float`], sampled on 0..1 and kept in 0..1 for LUT consumers. Float RGB rendering
 /// evaluates the formula directly instead, so samples and results outside that domain survive.
 pub fn tone_luts_depth(adj: &Adjustment, depth: Option<SampleType>) -> [Vec<f32>; 4] {
+    tone_luts_depth_in(adj, depth, true)
+}
+
+/// [`tone_luts_depth`]; `curve_levels` false for the RGB Curves that stand in for a CMYK
+/// document's ink curves on the split route (`cmyk_split`): the exact ink path doesn't put CMYK
+/// curves on whole levels, so neither may their stand-ins, or the two routes part by a level.
+pub fn tone_luts_depth_in(adj: &Adjustment, depth: Option<SampleType>, curve_levels: bool) -> [Vec<f32>; 4] {
     match (adj, depth) {
         (Adjustment::Levels { master, per_channel, space: ToneSpace::Rgb, .. }, Some(SampleType::F32)) => {
             let x = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
             let row = |c: &LevelsChannel| (0..LUT_SIZE).map(|k| levels_float(master, levels_float(c, x(k))).clamp(0.0, 1.0)).collect();
             [row(&per_channel[0]), row(&per_channel[1]), row(&per_channel[2]), (0..LUT_SIZE).map(x).collect()]
         }
-        _ => tone_luts_q(adj, depth.and_then(crate::adjustment_quantum)),
+        _ => tone_luts_qc(adj, depth.and_then(crate::adjustment_quantum), curve_levels),
+    }
+}
+
+/// A document's quantum in whole 8-bit levels: [`crate::adjustment_quantum`]'s 8-bit step (see
+/// [`levels_q`], which rounds each of its three steps to these).
+const EIGHT_BIT_LEVELS: f32 = 255.0;
+
+/// [`levels_q`]'s round-half-up to a whole level, for a Curves channel's output; `None` (any other
+/// depth) leaves the sample where the spline put it.
+#[inline]
+fn whole_levels(v: f32, quantum: Option<f32>) -> f32 {
+    match quantum {
+        Some(q) => (v * q + 0.5).floor() / q,
+        None => v,
     }
 }
 
@@ -373,13 +429,26 @@ pub fn curve_lut_mode(points: &[CurvePoint], pencil: bool) -> Vec<f32> {
 /// A pencil-drawn Curves map (see [`photocraft_doc::adjust::curve_map`]): straight segments
 /// between its entries, constant outside the first/last, clamped to 0..=1, sampled into a LUT.
 pub fn curve_map_lut(points: &[CurvePoint]) -> Vec<f32> {
+    curve_map_samples::<LUT_SIZE>(points)
+}
+
+/// Whole 8-bit levels: the sample count [`tone_luts_qc`] evaluates an 8-bit RGB Curves at.
+const LEVELS: usize = 256;
+
+/// [`curve_lut_mode`] sampled at `N` evenly spaced inputs including both end points.
+fn curve_samples_mode<const N: usize>(points: &[CurvePoint], pencil: bool) -> Vec<f32> {
+    if pencil { curve_map_samples::<N>(points) } else { curve_samples::<N>(points) }
+}
+
+/// [`curve_map_lut`] sampled at `N` evenly spaced inputs including both end points.
+fn curve_map_samples<const N: usize>(points: &[CurvePoint]) -> Vec<f32> {
     let mut pts: Vec<(f32, f32)> = points.iter().filter(|p| p.input.is_finite() && p.output.is_finite()).map(|p| (p.input, p.output)).collect();
     pts.sort_by(|a, b| a.0.total_cmp(&b.0));
     pts.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-6);
-    let ident = |k: usize| k as f32 / (LUT_SIZE - 1) as f32;
-    let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { return (0..LUT_SIZE).map(ident).collect() };
+    let ident = |k: usize| k as f32 / N.saturating_sub(1).max(1) as f32;
+    let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { return (0..N).map(ident).collect() };
     let mut seg = 0;
-    (0..LUT_SIZE)
+    (0..N)
         .map(|k| {
             let xv = ident(k);
             if xv <= first.0 {

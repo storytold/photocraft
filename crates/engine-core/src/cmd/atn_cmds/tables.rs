@@ -126,7 +126,7 @@ pub(super) const OFFSET_FILL: &[(&str, &str)] = &[("Wrp ", "wrap"), ("Rpt ", "re
 pub(super) const TRIM: &[(&str, &str)] = &[("Trns", "transparent"), ("topLeftPixelColor", "topLeft"), ("bottomRightPixelColor", "bottomRight")];
 
 pub(super) const EXTENSION: &[(&str, &str)] =
-    &[("Bckg", "background"), ("FrgC", "foreground"), ("Frgd", "foreground"), ("Wht ", "white"), ("Blck", "black"), ("Trns", "transparent")];
+    &[("Bckg", "background"), ("FrgC", "foreground"), ("Frgd", "foreground"), ("Wht ", "white"), ("Blck", "black"), ("Gry ", "gray"), ("Trns", "transparent")];
 
 pub(super) const FILL_CONTENTS: &[(&str, &str)] = &[
     ("FrgC", "foreground"),
