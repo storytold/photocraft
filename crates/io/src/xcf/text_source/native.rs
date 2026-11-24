@@ -305,6 +305,12 @@ fn modern(
             Direction::Auto => TextDirection::Auto,
             Direction::Ltr => TextDirection::Ltr,
             Direction::Rtl => TextDirection::Rtl,
+            // Column progression is qualified separately below from the source
+            // spelling, even when base-dir-auto makes inline direction Auto.
+            Direction::TtbRtl | Direction::TtbRtlUpright => TextDirection::Auto,
+            Direction::TtbLtr | Direction::TtbLtrUpright => {
+                return Err(unsupported("left-to-right vertical source columns require saved pixels"));
+            }
         },
         first_line_indent_pt: (number(config, "indent", 0., -8192., 8192.)? * unit_scale(unit, x)? * x / y) as f32,
         ..Default::default()
@@ -318,7 +324,7 @@ fn modern(
     if matches!(direction, "ttb-ltr" | "ttb-ltr-upright") {
         return Err(unsupported("left-to-right vertical source columns require saved pixels"));
     }
-    if direction.starts_with("ttb") {
+    if matches!(direction, "ttb-rtl" | "ttb-rtl-upright") {
         layer.orientation = Orientation::Vertical;
         style.rotate_roman = direction == "ttb-rtl";
     }

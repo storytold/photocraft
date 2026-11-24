@@ -284,3 +284,62 @@ fn inherited_spacing_is_bounded_after_relative_markup_size_for_both_signs() {
         }
     }
 }
+
+#[test]
+fn source_vertical_columns_preserve_qualified_orientation_and_roman_rotation_with_auto_bidi() {
+    let colors = NativeColors::new(&craft_cms::Builtin::Srgb.profile().to_bytes(), ColorMode::Rgb).unwrap();
+    for direction in ["ttb-rtl", "ttb-rtl-upright", "ttb-ltr", "ttb-ltr-upright"] {
+        for auto in ["no", "yes"] {
+            let raw = format!("(text \"Vertical ABC אב\") (box-mode fixed) (box-width 40) (box-height 20) (base-direction {direction}) (base-dir-auto {auto})");
+            let mut layer = saved(PixelFormat::RGBA8);
+            let before = layer.clone();
+            let mapped = map_layer(
+                &mut layer,
+                &source(&raw),
+                NativeOptions { resolution: (72., 72.), offset: (5, 6), colors: Some(&colors) },
+                &mut NativeBudget::default(),
+                &mut Budget::default(),
+                &Interrupt::NONE,
+            )
+            .unwrap();
+            if direction.starts_with("ttb-ltr") {
+                assert!(matches!(mapped, Mapping::Preserved { reason, .. } if reason.contains("left-to-right vertical source columns")));
+                assert_eq!(layer, before);
+            } else {
+                assert!(matches!(mapped, Mapping::Converted { .. }));
+                let LayerContent::Text(text) = &layer.content else { panic!("qualified vertical native text") };
+                assert_eq!(text.orientation, Orientation::Vertical);
+                assert_eq!(text.paragraphs[0].style.direction, TextDirection::Auto);
+                assert!(text.runs.iter().all(|run| run.style.rotate_roman == (direction == "ttb-rtl")));
+                assert_eq!(text.cache.as_ref().unwrap().pixel(5, 6), before.surface().unwrap().pixel(5, 6));
+            }
+        }
+    }
+}
+
+#[test]
+fn owned_legacy_latin1_fields_keep_editable_text_font_request_and_saved_pixels() {
+    let raw = br"GDT10{caf\351}{1}{0}{0}{0}{0xff00aa}{0}{-source-example-medium-r-normal--12-120-75-75-p-60-iso8859-1}";
+    let mut scan = craft_xcf::records::text::gdyntext(raw, 0, Default::default(), &mut Budget::default(), &|| true).unwrap();
+    assert!(scan.stopped.is_none());
+    let record = scan.records.remove(0);
+    assert_eq!(record.raw, raw);
+    let colors = NativeColors::new(&craft_cms::Builtin::Srgb.profile().to_bytes(), ColorMode::Rgb).unwrap();
+    let mut layer = saved(PixelFormat::RGBA8);
+    let before = layer.surface().unwrap().pixel(5, 6);
+    let mapped = map_layer(
+        &mut layer,
+        &TextSource::Configuration(record),
+        NativeOptions { resolution: (72., 72.), offset: (5, 6), colors: Some(&colors) },
+        &mut NativeBudget::default(),
+        &mut Budget::default(),
+        &Interrupt::NONE,
+    )
+    .unwrap();
+    assert!(matches!(mapped, Mapping::Converted { .. }));
+    let LayerContent::Text(text) = &layer.content else { panic!("editable legacy text") };
+    assert_eq!(text.text, "café");
+    assert_eq!(text.font_family, "example");
+    assert_eq!(text.paragraphs[0].style.direction, TextDirection::Ltr);
+    assert_eq!(text.cache.as_ref().unwrap().pixel(5, 6), before);
+}

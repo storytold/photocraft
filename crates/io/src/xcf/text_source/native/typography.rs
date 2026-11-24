@@ -259,7 +259,7 @@ pub(super) fn legacy(
     budget: &mut NativeBudget,
     notes: &mut Vec<&'static str>,
 ) -> Result<(TextLayer, CharStyle, ParagraphStyle, f64, f64)> {
-    let field = |index: usize| source.fields.get(index).copied().ok_or_else(|| unsupported("missing legacy text field"));
+    let field = |index: usize| source.fields.get(index).map(|field| field.as_ref()).ok_or_else(|| unsupported("missing legacy text field"));
     let font = |index: usize| source.font_fields.get(index).copied().ok_or_else(|| unsupported("missing legacy XLFD field"));
     let dpi = f64::from(options.resolution.1);
     let pixels = font(6)?.parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.);
@@ -305,6 +305,12 @@ pub(super) fn legacy(
             craft_xcf::records::text::Direction::Auto => TextDirection::Auto,
             craft_xcf::records::text::Direction::Ltr => TextDirection::Ltr,
             craft_xcf::records::text::Direction::Rtl => TextDirection::Rtl,
+            craft_xcf::records::text::Direction::TtbRtl
+            | craft_xcf::records::text::Direction::TtbRtlUpright
+            | craft_xcf::records::text::Direction::TtbLtr
+            | craft_xcf::records::text::Direction::TtbLtrUpright => {
+                return Err(unsupported("vertical legacy source layout requires saved pixels"));
+            }
         },
         ..Default::default()
     };
