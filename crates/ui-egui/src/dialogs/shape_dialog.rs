@@ -64,6 +64,11 @@ pub(crate) fn take(app: &mut PhotocraftApp, _ctx: &egui::Context) {
         let _ = super::alerts::show(app, alert);
     }
     let Some(DialogResult::Ok(shape)) = app.framework.dialogs.take::<CreateShapeDialog>() else { return };
+    // Create Triangle's OK with From Center checked turns the Triangle gear's From Center on; unchecked leaves it as it
+    // is (#13361: only the checked box was measured).
+    if shape.kind == ShapeKind::Triangle && shape.from_center {
+        app.ui.tool_options.triangle_from_center = true;
+    }
 
     if let Err(e) = crate::vector_ui::create_geometry(app, &shape.geometry, shape.kind, crate::vector_ui::tool_history_name(shape.kind)) {
         app.ui.status = e;
