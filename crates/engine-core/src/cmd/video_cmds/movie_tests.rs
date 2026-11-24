@@ -159,3 +159,18 @@ fn a_movie_whose_first_frame_fails_does_not_open() {
     assert!(err.contains("damaged"), "{err}");
     crate::footage::forget(&path);
 }
+
+/// Reload Frame on a movie that is gone says so and leaves the frame as it was, rather than
+/// showing an empty frame as if it were the file's.
+#[test]
+fn reload_frame_reports_a_movie_that_is_gone() {
+    let path = movie("reload-gone", Container::Mp4, 6);
+    let mut s = session();
+    let r = s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    s.execute("timeline.setFrame", json!({"frame": 3})).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let err = s.execute("layer.videoLayers.reloadFrame", json!({})).unwrap_err().to_string();
+    assert!(err.contains("reload-gone"), "the error names the file: {err}");
+    assert!(close(grey_of(&s, id), level(3)), "the frame still shows what it showed");
+}

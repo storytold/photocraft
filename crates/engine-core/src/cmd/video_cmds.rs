@@ -667,11 +667,25 @@ fn reload_frame(s: &mut Session, _p: &Value) -> Result<Value> {
             .layer(id)
             .and_then(|l| l.video.as_ref())
             .ok_or_else(|| EngineError::BadParams { cmd: "layer.videoLayers.reloadFrame".into(), msg: "not a video layer".into() })?;
-        let linked = v.footage.as_ref().map(|f| f.link.path.clone());
-        if let Some(path) = linked {
-            // Linked footage: drop the open file and its decoded frames, so the next frame
-            // shown is read from the file as it is now.
-            crate::footage::forget(&path);
+        if let Some(f) = &v.footage {
+            // Linked footage: drop the open file and its decoded frames, so frames are read from
+            // the file as it is now. The frame at the playhead is read here, under this session's
+            // gate and from the document's folder: a file that is gone or now unreadable is an
+            // error before the document changes, not an empty frame.
+            let link = f.link.clone();
+            let cur = st.doc.timeline.as_ref().map_or(0, |t| t.current);
+            let shown = match v.view(cur, !v.show_altered) {
+                Some(photocraft_doc::FrameView::Footage(n)) => Some(n),
+                _ => None,
+            };
+            let fmt = st.doc.pixel_format();
+            let document = st.path.clone();
+            let _authorization = crate::jobs::render_authorization_scope(s.authorize);
+            let _document = crate::doc_path::scope(document.as_deref().map(std::path::Path::new));
+            crate::footage::forget(&link.path);
+            if let Some(n) = shown {
+                crate::footage::frame(&link, n, fmt).map_err(EngineError::Other)?;
+            }
             return edit_video(s, "Reload Frame", |_, _| Ok(()));
         }
         (v.source.clone(), st.doc.pixel_format())
