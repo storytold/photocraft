@@ -156,6 +156,16 @@ fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool, open: &mut BarOpe
             crate::option_cells::range_alert(app, ui, &alert);
         }
     }
+    // The Rectangle tool's Align Edges, at the bar's right end after the gear (#13346). Only a
+    // shape layer has pixel edges to align: greyed in Path mode (and in a pixels mode).
+    if tool == Tool::Rectangle {
+        Divider::vertical().show(ui);
+        let shape_mode = app.ui.tool_options.shape_mode == VectorMode::Shape;
+        let on = Checkbox::new(Bind::given(app.ui.tool_options.align_edges)).label(tl!("Align Edges").to_owned()).enabled(shape_mode).show(ui);
+        if let Some(next) = on.value().copied() {
+            app.ui.tool_options.align_edges = next;
+        }
+    }
 }
 
 /// The Pen, Freeform Pen and Curvature Pen bar.
