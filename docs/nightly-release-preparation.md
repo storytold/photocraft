@@ -137,13 +137,13 @@ without `platform`, `unsigned_artifact_name` and `windows_publisher_subject`, pl
 | `producer_tooling_revision`, `producer_workflow_ref` | Approved shared unsigned producer/attester commit and exact reusable path at that commit |
 | `signer_workflow_path`, `signer_tooling_revision` | `.github/workflows/nightly-sign.yml` and reviewed public shared signer commit |
 | `release_branch`, `platforms` keys | `release`; exactly the producer's `platforms` list and the targets admitted in the shared registry (`windows-x86_64`, `linux-x86_64`, `macos-aarch64`) |
-| `manual_actors` | Empty by default; reviewed manual producer/signer and rerun authority only |
-| `automatic_signer_actors` | Empty by default; separate reviewed automatic-only authority for signer attempt 1 after authenticating a scheduled producer attempt 1; no manual producer or rerun grant |
+| `manual_actors` | Reviewed manual producer/signer and rerun authority only: the five release managers, the same list as the producer's `manual-actors` |
+| `automatic_signer_actors` | Empty while there is no schedule; separate reviewed automatic-only authority for signer attempt 1 after authenticating a scheduled producer attempt 1; no manual producer or rerun grant |
 | `max_age_seconds`, `max_artifact_bytes`, `platforms.<platform>.unsigned_artifact_name` | Reviewed bounded age/size and each platform's fixed unsigned artifact kind/prefix; actual upload/discovery name is that prefix + `-` + authenticated producer run ID + `-` + authenticated producer attempt, never a caller pattern or substitution |
 | `candidate_policy` | Full reviewed `craft-nightly-candidate-policy/v3` with real required workflow/job/check/app IDs, Sonar organization/project/issue types/conditions and exact approved debt fingerprints; provider configuration is trusted as resolved, not a pinned scan inventory |
 | `platforms.linux-x86_64.trust.fingerprint` | Full primary fingerprint of the stable Linux release key, independently reviewed; the release checkout must also hold exactly that one public key at `.github/nightly-linux-signing-key.asc`, and the existing `LINUX_SIGNING_KEY` must be in the `release` environment only |
 | `platforms.macos-aarch64.trust.apple_team_id` | Stable's ten-character Developer ID team `DJ6XS33FX8`, read from the stable v0.23.1 macOS code signature, whose leaf is `CN=Developer ID Application: Learning Machines LLC (DJ6XS33FX8), OU=DJ6XS33FX8, O=Learning Machines LLC`. The Windows certificate names a different entity, `Learning Machines Inc`; only the team ID `DJ6XS33FX8` is enforced on macOS. Never a repository variable. The six stable `APPLE_*`/`KEYCHAIN_PASSWORD` names must be in the `release` environment only |
-| `platforms.windows-x86_64.trust.publisher_subject` | Exact independently reviewed protected policy string used by both signer and fresh credentialless Windows publisher; nonempty, at most 2048 characters, no CR/LF/NUL; verified native subject must match exactly, never an artifact/caller input |
+| `platforms.windows-x86_64.trust.publisher_subject` | Exact independently reviewed protected policy string used by both signer and fresh credentialless Windows publisher; nonempty, at most 1024 characters (the native signer's bound, checked at policy validation since #339), no CR/LF/NUL; verified native subject must match exactly, never an artifact/caller input |
 
 Live admission requires explicit policy v3 once the shared parser lands it; v2 is single-platform
 Windows only and is not silently migrated. Historical v1 retains its exact old fields and
@@ -155,8 +155,9 @@ authority. Those requests require the independently reviewed `manual_actors` lis
 
 Before future automatic dispatch is activated, its identity needs explicit review for
 `automatic_signer_actors`; no bot is implicitly trusted or installed here. Never union that
-list into `manual_actors` or the unsigned caller's `manual-actors` input. Both example lists
-and the caller input remain empty; this preparation does not populate or authorize policy.
+list into `manual_actors` or the unsigned caller's `manual-actors` input. The producer's
+`manual-actors` and the installed policy's `manual_actors` both list the five release managers;
+`automatic_signer_actors` stays empty, and the example's lists stay empty.
 
 ### Post-publication recovery limitation
 
@@ -191,8 +192,9 @@ were audited by this source change; no secret values were read.
 
 1. The callers reference the same reviewed public commit in `uses` and `tooling-revision`.
    The producer and signer are enabled only for the reviewed manual actors; the dispatcher stays
-   literally off until a schedule is separately approved. Future shared pin updates require review of the exact
-   public immutable source and interface. Do not claim dormant source as a working pipeline.
+   literally off until a schedule is separately approved. Future shared pin updates require
+   review of the exact public immutable source and interface. Do not claim the enabled callers
+   as a qualified pipeline before the first supervised runs pass.
    Do not temporarily call old same-run signing or use mutable `@main`/`@release` tooling.
    Keep compiler permissions contents and Actions read only, with no OIDC, attestation write,
    release environment or platform secrets. Only the isolated unsigned attester receives
@@ -254,8 +256,10 @@ fixed artifact kind and stable identity, that `.github/nightly-linux-signing-key
 one public primary key whose fingerprint is the policy's, and that both callers share one pin in
 `uses` and `tooling-revision`.
 The same suite covers all three callers for the no-cache/no-platform-secret boundary,
-requires every nightly job to stay explicitly off (a top-level OR cannot override false),
-and refuses any registered nightly schedule. It also rejects changed root serialization: the fixed PhotoCraft nightly group, `queue: max`,
+requires `nightly-dispatch.yml`'s jobs to stay explicitly off (a top-level OR cannot override
+false), checks the enabled producer and signer for their exact context guards (every `if:` form
+and continuation line is read), requires the manual actors to be exactly the release managers in
+both the caller and the policy, and refuses any registered nightly schedule. It also rejects changed root serialization: the fixed PhotoCraft nightly group, `queue: max`,
 and `cancel-in-progress: false` must remain literal. Mutation regressions reject invalid queue
 values, cancellation and request-dependent groups. Packaging lint runs this suite in its
 independent contents-read-only `nightly-source-contract` job, including config-only changes;
@@ -266,6 +270,6 @@ unsupported-queue message for `.github/workflows/nightly-sign.yml`. This operato
 compatibility exception is not a blanket syntax waiver: other files/messages still fail,
 and the mandatory source guard supplies the missing queue-value/serialization checks.
 No tool fork or shared lint change is needed. This same-PR nonprivileged CI hook is the
-narrow correction requested for the dormant source; stable/release execution is unchanged.
+narrow correction requested for the nightly source; stable/release execution is unchanged.
 Run through the normal task allocator; report actionlint/PowerShell/native/hosted checks
 separately and never treat a missing runtime as a pass.
