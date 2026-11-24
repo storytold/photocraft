@@ -372,6 +372,7 @@ impl PhotocraftApp {
             _ => false,
         };
         if !same_document {
+            self.reset_mask_targets_for_document();
             self.ui.selected_path = None;
             self.ui.canvas_tool_menu = None;
         }

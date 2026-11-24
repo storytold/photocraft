@@ -144,6 +144,15 @@ impl PhotocraftApp {
         }
     }
 
+    /// Thumbnail targets belong to the document that was active when selected.
+    /// On a document identity change, let the new authoritative channel/view
+    /// restore a target instead of inheriting the previous document's UI flags.
+    pub(crate) fn reset_mask_targets_for_document(&mut self) {
+        self.ui.mask_target = false;
+        self.ui.vector_mask_target = false;
+        self.ui.filter_mask_target = None;
+    }
+
     /// Viewing a layer mask (#196) targets it; a vector-mask target needs a vector mask on the
     /// active layer (a shape layer's path is its content, not a mask). Targeting a mask or the
     /// pixels brings back that target's foreground/background pair, as in Photoshop (#2166).
@@ -206,3 +215,6 @@ impl PhotocraftApp {
         self.session.tools.target_mask(mask);
     }
 }
+
+#[cfg(test)]
+mod tests;
