@@ -405,7 +405,8 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             let period = if cfa.width % 2 == 0 { cfa.width.max(2) } else { cfa.width * 2 };
             // One normalized CFA row (image row `iy` of the crop), scaled by `gains` and limited to
             // `0..=top`. `fill_row` is the balanced row clipped at white.
-            let fill_with = |iy: usize, row: &mut [f32], gains: [f32; 3], top: f32| {
+            // Normalized sensor values × `gains`, before lens shading.
+            let fill_raw = |iy: usize, row: &mut [f32], gains: [f32; 3], top: f32| {
                 let y = c.y + iy;
                 let fill_scalar = |row: &mut [f32]| {
                     for (i, v) in row.iter_mut().enumerate() {
@@ -460,13 +461,19 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 } else {
                     fill_scalar(row);
                 }
-                // Lens-shading gain maps, after the white-balance clip so clipped
-                // highlights stay neutral.
-                if let Some(g) = gain_row(s, y, c.x, w, 0) {
+            };
+            // Lens-shading gain maps for crop row `iy`, clamped to `top`.
+            let shade = |iy: usize, row: &mut [f32], top: f32| {
+                if let Some(g) = gain_row(s, c.y + iy, c.x, w, 0) {
                     for (v, g) in row.iter_mut().zip(g) {
                         *v = (*v * g).clamp(0.0, top);
                     }
                 }
+            };
+            // Lens-shading gain maps after the white-balance clip, so clipped highlights stay neutral.
+            let fill_with = |iy: usize, row: &mut [f32], gains: [f32; 3], top: f32| {
+                fill_raw(iy, row, gains, top);
+                shade(iy, row, top);
             };
             let fill_row = |iy: usize, row: &mut [f32]| fill_with(iy, row, mult, 1.0);
             // The shared demosaics see the balanced mosaic unclipped: a red or blue sample the
@@ -480,7 +487,8 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
                 Demosaic::Ahd | Demosaic::Mhc => craft_develop::sensor::Method::Ahd,
             };
             let shared = matches!(opts.demosaic, Demosaic::Bilinear | Demosaic::Ahd);
-            let clipped = shared && sensor_clipped(w, h, band, &|iy, row| fill_with(iy, row, [1.0; 3], f32::INFINITY));
+            // Whether the sensor clipped is told from the measured sample, before lens shading lifts or lowers it.
+            let clipped = shared && sensor_clipped(w, h, band, &|iy, row| fill_raw(iy, row, [1.0; 3], f32::INFINITY));
             let rebuild = if clipped {
                 let method = if bayer { shared_method } else { craft_develop::sensor::Method::Bilinear };
                 if rebuild_fits(w, h, method, orient_copy, &opts.limits, par::workers()) {
@@ -497,7 +505,9 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
             let cfa_at = |p: Vec<u8>, cw: usize, ch: usize| craft_develop::sensor::Cfa { width: cw, height: ch, pattern: p, origin_x: 0, origin_y: 0 };
             let white = rebuild_white(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz));
             let rebuilt = |method, cw, ch, p: Vec<u8>| {
-                develop_rebuilt((w, h), band, cfa_at(p, cw, ch), method, mult, white, &|iy, row| fill_with(iy, row, [1.0; 3], f32::INFINITY))
+                develop_rebuilt((w, h), band, cfa_at(p, cw, ch), method, (mult, white), &|iy, row| fill_raw(iy, row, [1.0; 3], f32::INFINITY), &|iy, row| {
+                    shade(iy, row, f32::INFINITY)
+                })
             };
             let names = |p: &[u8]| p.iter().map(|c| ['R', 'G', 'B'][usize::from(*c).min(2)]).collect::<String>();
             if bayer && fused && shared {
@@ -727,9 +737,9 @@ fn develop_rebuilt(
     band: usize,
     cfa: craft_develop::sensor::Cfa,
     method: craft_develop::sensor::Method,
-    mult: [f32; 3],
-    white: [f32; 3],
+    (mult, white): ([f32; 3], [f32; 3]),
     sensor_row: &(impl Fn(usize, &mut [f32]) + Sync),
+    shade_row: &(impl Fn(usize, &mut [f32]) + Sync),
 ) -> Vec<f32> {
     use craft_develop::sensor::{self, highlight};
     let mut data = vec![0.0f32; w * h];
@@ -739,11 +749,13 @@ fn develop_rebuilt(
         }
     });
     let mut n = sensor::Normalized { width: w, height: h, cpp: 1, data, cfa: Some(cfa) };
+    // Clipping is told from the measured samples; lens shading then scales them.
     let mask = sensor::clip_mask(&n, sensor::Rect::new(0, 0, w, h), method, SENSOR_CLIP);
     if let Some(cfa) = &n.cfa {
         let cfa = cfa.clone();
         par::chunks_mut(&mut n.data, band * w, |b, chunk| {
             for (r, row) in chunk.chunks_exact_mut(w).enumerate() {
+                shade_row(b * band + r, row);
                 for (x, v) in row.iter_mut().enumerate() {
                     *v *= mult[usize::from(cfa.color_at(x, b * band + r)).min(2)];
                 }
@@ -1264,6 +1276,40 @@ mod tests {
         with_threads(threads, || develop(&s, &opts, false).unwrap()).warnings
     }
 
+    #[test]
+    fn a_sensor_clipped_highlight_is_rebuilt_even_where_lens_shading_lowers_it() {
+        // Green clipped by the sensor in a disc, under a 0.8 gain map: after shading the disc's
+        // green is 0.8, below the clip level. Clipping is told from the measured sample, so the
+        // disc is still rebuilt neutral instead of keeping its balanced magenta (1.2, 1, 1.2).
+        use crate::testgen::{DngSpec, gain_map_opcode_list};
+        let (w, h) = (48usize, 48usize);
+        let disc = |x: usize, y: usize| (x as f32 - 24.0).powi(2) + (y as f32 - 24.0).powi(2) < 100.0;
+        let data = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let green = x.is_multiple_of(2) != y.is_multiple_of(2);
+                let level = match (disc(x, y), green) {
+                    (true, true) => 1.0,
+                    (true, false) => 0.6,
+                    (false, true) => 0.4,
+                    (false, false) => 0.2,
+                };
+                (level * 65535.0f64).round() as u16
+            })
+            .collect();
+        let mut spec = DngSpec::cfa(w, h, data);
+        spec.opcode_list2 = Some(gain_map_opcode_list([0, 0, h as u32, w as u32], 1, [[0.8, 0.8], [0.8, 0.8]]));
+        let opts = DevelopOptions { white_balance: WhiteBalance::Multipliers([2.0, 1.0, 2.0]), exposure: -2.0, ..Default::default() };
+        let sensor = crate::decode(&spec.build(), &opts.limits).unwrap();
+        assert_eq!(sensor.gain_maps.len(), 1);
+        for method in [Demosaic::Ahd, Demosaic::Bilinear] {
+            let p = centre(&develop(&sensor, &DevelopOptions { demosaic: method, ..opts.clone() }, false).unwrap());
+            assert!(spread(p) < 0.03, "{method:?}: sensor-clipped disc under lens shading {p:?} is not neutral");
+        }
+    }
+
+    // `with_threads` cannot size a pool on wasm32.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn the_rebuild_budget_counts_the_ahd_tiles_of_every_worker() {
         // Enough for the rebuild when one worker runs the AHD tiles; 16 workers each hold a tile's
