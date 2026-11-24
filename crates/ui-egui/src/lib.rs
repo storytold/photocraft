@@ -737,7 +737,11 @@ mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
+mod burn_bar_angle_pressure_tests;
+#[cfg(test)]
 mod cam_no_pixels_alert_tests;
+#[cfg(test)]
+mod dodge_bar_angle_pressure_tests;
 #[cfg(test)]
 mod eyedropper_context_menu_tests;
 #[cfg(test)]

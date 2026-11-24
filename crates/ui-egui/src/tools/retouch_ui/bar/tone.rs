@@ -1,8 +1,9 @@
 //! The Retouch options bar's toning family: Dodge and Burn, Sponge, Blur, Sharpen and Smudge, Color Replacement.
 
 use craft::behavior::IconId;
+use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::Segmented;
-use craft::ui::contract::{Bind, Entry, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::primitives::IconSpec;
 use craft::ui::text::RangeAlert;
@@ -37,8 +38,29 @@ pub(super) fn dodge_burn(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<R
     // Whole numbers 1..100 with the range alert and a slider arrow; Dodge shares the field (#12669).
     let exposure =
         number(tl!("Exposure"), &mut o.exposure, 1.0..=100.0).whole().unit("%").popup_slider().tooltip(tl!("Set exposure for stroke")).show(ui).out_of_range;
+    let before = (*app.session.tools.brush).clone();
+    let mut brush = before.clone();
+    let angle = number(tl!("Angle"), &mut brush.angle, -180.0..=180.0)
+        .whole()
+        .unit("°")
+        .icon(IconSpec::svg(IconId::new("rotate_cw")))
+        .tooltip(tl!("Set the brush angle"))
+        .show(ui);
+    let mut key = angle.events.iter().find_map(|event| crate::history_keys::coalesce("brush", event));
+
     check(ui, tl!("Protect Tones"), &mut o.protect_tones, true, Some(tl!("Minimizes clipping in shadows and highlights, and keeps colors from shifting hue")));
-    exposure
+
+    let pressure = ToggleButton::new(tl!("Always use pressure for size"), Bind::given(brush.pressure_size))
+        .icon(IconId::new("target"))
+        .icon_only()
+        .tooltip(tl!("Always use Pressure for Size. When off, Brush Preset controls pressure"))
+        .show(ui);
+    if let Some(on) = pressure.value().copied() {
+        brush.pressure_size = on;
+        key = pressure.events.iter().find_map(|event| crate::history_keys::coalesce("brush", event)).or(key);
+    }
+    crate::brush_panel::commit_keyed(app, &before, &brush, key);
+    exposure.or(angle.out_of_range)
 }
 
 /// The options of Sponge.
