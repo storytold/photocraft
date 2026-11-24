@@ -698,7 +698,11 @@ fn mask_shown_key(index: usize) -> String {
 pub(crate) fn apply_image_documents(app: &PhotocraftApp) -> Vec<(usize, &photocraft_doc::Document)> {
     let Some(target) = app.session.active() else { return Vec::new() };
     let (size, depth) = (target.doc.size, target.doc.depth);
-    app.session.documents().iter().enumerate().filter(|(_, st)| st.doc.size == size && st.doc.depth == depth).map(|(i, st)| (i, &*st.doc)).collect()
+    let mut documents: Vec<(usize, &photocraft_doc::Document)> =
+        app.session.documents().iter().enumerate().filter(|(_, st)| st.doc.size == size && st.doc.depth == depth).map(|(i, st)| (i, &*st.doc)).collect();
+    // Document ids are handed out as documents open, so they keep the opening order when tabs are dragged.
+    documents.sort_by_key(|(_, d)| d.id.0);
+    documents
 }
 
 /// The Layer list of a source document and its default: Merged, then its pixel layers top to bottom (the engine takes
