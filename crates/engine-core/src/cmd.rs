@@ -26,7 +26,6 @@ pub mod actions_cmds;
 pub mod actions_edit_cmds;
 pub mod adjust_cmds;
 mod adjust_params;
-pub mod align_cmds;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
 pub mod atn_cmds;
@@ -36,7 +35,6 @@ pub mod brush_preset_cmds;
 pub mod channel_cmds;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
-pub mod comps_cmds;
 pub mod contour_lib_cmds;
 #[cfg(test)]
 mod count_delete_group_tests;
@@ -71,7 +69,6 @@ pub mod history_select_cmds;
 pub mod history_source_cmds;
 pub mod image_cmds;
 pub mod layer_copy_cmds;
-pub mod layer_css_cmds;
 #[cfg(test)]
 mod layer_duplicate_new_document_history_tests;
 #[cfg(test)]
@@ -84,7 +81,6 @@ pub mod layer_multi_cmds;
 pub mod layer_nav_cmds;
 mod layer_params;
 mod layer_references;
-pub mod layer_xmp_cmds;
 pub mod lens_cmds;
 pub mod magnetic_cmds;
 pub mod mask_view_cmds;
@@ -93,12 +89,8 @@ pub mod mode_cmds;
 pub mod multichannel_cmds;
 #[cfg(test)]
 mod new_document_history_name_tests;
-pub mod notes_cmds;
-#[cfg(test)]
-mod notes_stored_values_tests;
 mod ops;
 mod params;
-pub mod path_edit_cmds;
 pub mod pattern_cmds;
 pub mod pattern_fill_cmds;
 pub mod perspective_crop_cmds;
@@ -108,7 +100,6 @@ pub mod photo_cmds;
 pub mod plugin_cmds;
 pub mod preset_import_cmds;
 pub mod print_cmds;
-pub mod rasterize_style_cmds;
 pub mod render_cmds;
 #[cfg(test)]
 mod rotate_canvas_bitmap_tests;
@@ -121,7 +112,6 @@ pub mod select_extra_cmds;
 pub mod selection_cmds;
 pub mod slice_cmds;
 pub mod smart_cmds;
-pub mod smart_svg_cmds;
 pub mod smartselect_cmds;
 pub mod solid_fill_cmds;
 pub mod style_asl_cmds;
@@ -130,16 +120,11 @@ pub mod symmetry_cmds;
 pub mod table;
 pub mod timeline_cmds;
 pub mod transform_cmds;
-pub mod trap_cmds;
-pub mod type_area_cmds;
-pub mod type_caret_cmds;
 pub mod type_cmds;
 pub mod type_extra_cmds;
 #[cfg(test)]
 mod type_indexed_mode_tests;
-pub mod type_mask_cmds;
 pub mod type_spell_cmds;
-pub mod type_styles_cmds;
 pub mod variables_cmds;
 mod vector_clipboard;
 pub mod vector_cmds;
