@@ -672,7 +672,8 @@ pub fn open_smart_edit_with_spec(
     overlay(&params, fixed, &mut opening);
     let reset = reset_values(&params, &opening);
     overlay(&params, recorded, &mut opening);
-    let build = builder(app, command, title_of(label), params, reset, previews(command));
+    // A smart filter edit previews on the canvas, whatever `previews` says of `command` (`plugin.run` isn't listed).
+    let build = builder(app, command, title_of(label), params, reset, true);
     crate::dialogs::params::open_param_unsaved(app, command, opening, target, build)
 }
 

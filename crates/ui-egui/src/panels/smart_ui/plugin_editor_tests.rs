@@ -7,11 +7,12 @@ use crate::smart_filter_dialog::tests::{app, smart};
 
 const ID: &str = "test.smartfilter.edit";
 
-/// Installs a plug-in with one parameter, `amount` (0..10, default 5), that leaves the pixels as
-/// they are.
+/// Installs a plug-in with two parameters, `amount` (0..10, default 5) and one that is itself
+/// called `params` (0..1, default 0), that leaves the pixels as they are.
 fn install() {
-    let manifest =
-        format!(r#"{{"id":"{ID}","name":"Amount Test","version":"1","kind":"filter","params":{{"amount":{{"type":"number","min":0,"max":10,"default":5}}}}}}"#);
+    let manifest = format!(
+        r#"{{"id":"{ID}","name":"Amount Test","version":"1","kind":"filter","params":{{"amount":{{"type":"number","min":0,"max":10,"default":5}},"params":{{"type":"number","min":0,"max":1,"default":0}}}}}}"#
+    );
     let src = format!(
         r#"(module
   (memory (export "memory") 1)
@@ -34,35 +35,51 @@ fn install() {
     registry::install(Plugin::load(&bytes, Limits::default()).unwrap());
 }
 
+/// The settings a plug-in smart filter stores, as `plugin.run` records them: `{id, params}`, the
+/// re-render reading only `params`. `amount` and the plug-in's own `params` key sit inside it.
+fn assert_stored(stored: &serde_json::Value, amount: f64) {
+    assert_eq!(stored["id"], ID);
+    assert_eq!(stored["params"]["amount"].as_f64(), Some(amount), "the edit is where the re-render reads it: {stored}");
+    assert_eq!(stored["params"]["params"].as_f64(), Some(1.0), "a plug-in key called `params` is kept: {stored}");
+    assert!(stored.get("amount").is_none(), "no plug-in key beside `params`: {stored}");
+}
+
 /// Double-clicking a plug-in's smart filter opens the plug-in's dialog on the recorded settings,
-/// and OK updates that filter in one step, stored the way `plugin.run` records it, so the
-/// re-render reads the edit.
+/// previews the edit on the canvas, and OK updates that filter in one step, stored the way
+/// `plugin.run` records it, so the re-render reads the edit.
 #[test]
 fn a_plugin_smart_filter_reopens_its_dialog_and_ok_updates_it() {
     let _registry = crate::plugin_ui::registry_guard();
     install();
     let (mut app, layer) = app(8, "rgb");
-    app.run("plugin.run", json!({"id": ID, "amount": 7})).unwrap();
+    app.run("plugin.run", json!({"id": ID, "params": {"amount": 7, "params": 1}})).unwrap();
     let sm = smart(&app, layer).clone();
     let index = sm.smart_filters.len() - 1;
     assert_eq!(sm.smart_filters[index].command, "plugin.run");
 
-    let ctx = egui::Context::default();
+    let ctx = app.ctx().clone();
     super::open_editor(&mut app, &ctx, layer.0, &sm, index);
     crate::dialogs::testing::show(&mut app);
     let open = app.framework.dialogs.open_dialogs().pop().expect("the plug-in's dialog opens");
     let shown = open.fields.expect("a dialog with fields");
     assert_eq!(shown["amount"].as_f64(), Some(7.0), "the recorded value, not the default 5");
-
     app.framework.dialogs.set_json_field(&ctx, open.id, "amount", json!(3)).unwrap();
+
+    let idx = app.session.active_index().unwrap();
+    crate::canvas::ensure_filter_preview(&mut app, idx, &ctx).expect("the edit previews");
+    let preview = app.filter_preview.as_ref().unwrap();
+    assert_eq!(preview.key.command, "layer.smartFilter.setParams");
+    let previewed = match &preview.result.as_ref().expect("the preview's document").layer(layer).unwrap().content {
+        photocraft_doc::LayerContent::Smart(sm) => sm.smart_filters[index].params.clone(),
+        other => panic!("expected a smart object, got {}", other.kind_name()),
+    };
+    assert_stored(&previewed, 3.0);
+
     let steps = app.session.active().unwrap().history.past_len();
     crate::dialogs::testing::confirm(&mut app, open.id).unwrap();
     let after = smart(&app, layer);
     assert_eq!(after.smart_filters.len(), sm.smart_filters.len(), "the filter is edited, not added again");
-    let stored = &after.smart_filters[index].params;
-    assert_eq!(stored["id"], ID);
-    assert_eq!(stored["params"]["amount"].as_f64(), Some(3.0), "the edit is where the re-render reads it: {stored}");
-    assert!(stored.get("amount").is_none(), "no plug-in key beside `params`: {stored}");
+    assert_stored(&after.smart_filters[index].params, 3.0);
     assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
     registry::remove(ID);
 }

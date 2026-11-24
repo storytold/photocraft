@@ -42,7 +42,7 @@ pub fn describe(p: &Plugin) -> Value {
 
 /// The plug-in's own parameters from command params: `params` if given, else the top-level keys
 /// minus the ones the command itself uses.
-pub fn plugin_params(p: &Value) -> Value {
+fn plugin_params(p: &Value) -> Value {
     if let Some(v) = p.get("params") {
         return v.clone();
     }
@@ -54,7 +54,7 @@ pub fn plugin_params(p: &Value) -> Value {
 
 /// A top-level `plugin.run` key the command itself uses (or a dialog's private `__` key), not a
 /// plug-in parameter.
-fn command_key(k: &str) -> bool {
+pub fn command_key(k: &str) -> bool {
     matches!(k, "id" | "layer" | "target" | "channel") || k.starts_with("__")
 }
 

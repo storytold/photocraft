@@ -111,9 +111,17 @@ pub(crate) fn params_command(app: &PhotocraftApp, target: &Value, command: &str,
     // Channel Mixer `gray` is read over `red`, a stale Color Lookup `data` over `lut`).
     let replace = command.starts_with("image.adjustments.");
     // A plug-in run is stored as `{id, params}` and re-rendered from `params` only; its dialog
-    // holds the plug-in's own keys beside `id`, so they go back under `params`, all of them.
+    // holds the plug-in's own keys beside `id`, so they go back under `params`, all of them (a
+    // plug-in parameter that is itself called `params` included).
     let (params, replace) = if command == photocraft_engine::plugin_cmds::RUN {
-        (json!({"id": params.get("id"), "params": photocraft_engine::plugin_cmds::plugin_params(&params)}), true)
+        let own: serde_json::Map<String, Value> = params
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| !photocraft_engine::plugin_cmds::command_key(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        (json!({"id": params.get("id"), "params": own}), true)
     } else {
         (params, replace)
     };
