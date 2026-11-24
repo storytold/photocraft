@@ -1686,3 +1686,21 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An open approved for one file refuses a movie found at its path: the approval was for a
+/// PSD/PSB estimate of another file.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_approved_open_refuses_a_movie_at_the_path() {
+    let p = std::env::temp_dir().join(format!("pc-approved-{}.mp4", std::process::id()));
+    std::fs::write(&p, b"whatever is here now").unwrap();
+    let path = p.to_string_lossy().into_owned();
+    let handle = std::fs::File::open(&p).unwrap();
+    let identity = photocraft_io::FileIdentity::of_handle(&handle).unwrap();
+    let expected = SourceFingerprint::path(path.clone(), identity);
+    let mut opened = None;
+    let r = import_path("approved.mp4", &path, &photocraft_io::ImportOptions::default(), Some(&expected), &photocraft_raster::Interrupt::NONE, &mut opened);
+    assert!(matches!(r, Err(photocraft_io::IoError::SourceChanged)), "{:?}", r.map(|_| ()));
+    drop(handle);
+    let _ = std::fs::remove_file(&p);
+}

@@ -15,7 +15,7 @@ corpus = []
 # HEIC/HEIF decode (forwarded to photocraft-codecs; see its `heif` feature).
 heif = ["photocraft-codecs/heif", "photocraft-formats/heif"]
 # Test support for synthetic memory injection, estimate charges and verification across crates.
-testgen = ["craft-video/h264-encode"]
+testgen = ["craft-video/h264-encode", "craft-video/vp8-encode"]
 # Editable PDF import (experimental): painted paths and embedded-font text become editable
 # layers; unsupported constructs keep the raster page.
 pdf-editable = ["dep:kurbo"]
@@ -86,4 +86,4 @@ zune-core = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 # Synthetic H.264 movies for the movie reader's tests (movie.rs `testgen`).
-craft-video = { workspace = true, features = ["h264-encode"] }
+craft-video = { workspace = true, features = ["h264-encode", "vp8-encode"] }

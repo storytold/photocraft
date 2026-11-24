@@ -716,6 +716,11 @@ fn import_path(
     // A movie opens as a video-layer document whose frames are decoded from the file as they
     // are shown: only its index is read here, never the whole file.
     if crate::footage::is_movie(path) {
+        // An approval names the file a PSD/PSB estimate was made for; a movie at that path now is
+        // another file, which the approved open must not accept.
+        if expected.is_some() {
+            return Err(photocraft_io::IoError::SourceChanged);
+        }
         ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
         let document = crate::footage::movie_document(path).map_err(photocraft_io::IoError::Unsupported)?;
         return Ok((photocraft_io::ImportResult { document, warnings: Vec::new(), source_read_only: true, preview_only: false }, false));

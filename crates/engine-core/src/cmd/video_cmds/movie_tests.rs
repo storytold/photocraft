@@ -50,7 +50,7 @@ fn a_movie_becomes_a_video_layer_that_decodes_as_it_plays() {
         assert!(v.frames.iter().all(|f| f.tile_count() == 0), "{container:?}: no frame is held");
         for frame in [0, 13, 7, 19] {
             s.execute("timeline.setFrame", json!({"frame": frame})).unwrap();
-            assert!(close(grey_of(&s, id), level(frame)), "{container:?}: frame {frame}");
+            assert!(close(grey_of(&s, id), level(frame)), "{container:?}: frame {frame}: {} vs {}", grey_of(&s, id), level(frame));
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -128,4 +128,20 @@ fn replace_footage_and_reload_frame_read_the_new_file() {
     for p in [a, b, junk] {
         let _ = std::fs::remove_file(p);
     }
+}
+
+/// Taking frames out of a movie isn't held to the length a video layer may have: a movie longer
+/// than a timeline may be still gives its first frame as a layer, while a video layer of it is
+/// refused.
+#[test]
+fn frames_can_be_taken_from_a_movie_longer_than_a_video_layer_may_be() {
+    let path = std::env::temp_dir().join(format!("pc-movie-cmds-{}-endless.mp4", std::process::id())).to_string_lossy().into_owned();
+    let frames = crate::timeline_cmds::MAX_DURATION + 1;
+    crate::footage::register(&path, Box::new(crate::footage::testing::Synthetic::new(W, H, frames, 25.0)));
+    let mut s = session();
+    let r = s.execute("file.import.videoFramesToLayers", json!({"path": path, "from": 0, "to": 0})).unwrap();
+    assert_eq!(r["layers"], 1);
+    let err = s.execute("layer.videoLayers.newVideoLayerFromFile", json!({"path": path})).unwrap_err().to_string();
+    assert!(err.contains("limited to"), "{err}");
+    crate::footage::forget(&path);
 }

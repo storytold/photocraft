@@ -557,15 +557,27 @@ fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"layer": id.0, "frames": n, "warnings": warnings}))
 }
 
-/// The movie at `path`, opened as linked footage: what it holds, or why it can't be read.
-fn link_movie(cmd: &str, path: &str) -> Result<photocraft_doc::FootageLink> {
-    // A command naming the file tries it again, even after an earlier failure.
-    crate::footage::forget(path);
+/// The movie at `path`, opened: what it holds, or why it can't be read.
+fn probe_movie(cmd: &str, path: &str) -> Result<photocraft_doc::FootageLink> {
+    // A command naming the file tries it again after an earlier failure.
+    crate::footage::retry(path);
     let info = crate::footage::probe(path).map_err(|e| EngineError::BadParams { cmd: cmd.into(), msg: e })?;
-    if info.frames > crate::timeline_cmds::MAX_DURATION {
-        return Err(EngineError::Other(format!("`{path}` has {} frames; a video layer is limited to {}", info.frames, crate::timeline_cmds::MAX_DURATION)));
-    }
     Ok(photocraft_doc::FootageLink::new(path.to_string(), info))
+}
+
+/// [`probe_movie`] for a video layer, which holds a frame for each of the movie's frames: a
+/// movie longer than a timeline may be is refused. Taking frames out of a movie has no such
+/// limit; its range and the 500-layer cap bound it.
+fn link_movie(cmd: &str, path: &str) -> Result<photocraft_doc::FootageLink> {
+    let link = probe_movie(cmd, path)?;
+    if link.info.frames > crate::timeline_cmds::MAX_DURATION {
+        return Err(EngineError::Other(format!(
+            "`{path}` has {} frames; a video layer is limited to {}",
+            link.info.frames,
+            crate::timeline_cmds::MAX_DURATION
+        )));
+    }
+    Ok(link)
 }
 
 /// New Video Layer from File with a movie: a layer linked to the file, its frames decoded when
@@ -748,7 +760,7 @@ fn frames_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let fmt = s.active().ok_or(EngineError::NoDocument)?.doc.pixel_format();
     let cmd = "file.import.videoFramesToLayers";
     let (frames, warnings): (Vec<Surface>, Vec<String>) = if crate::footage::is_movie(&path) {
-        let link = link_movie(cmd, &path)?;
+        let link = probe_movie(cmd, &path)?;
         let (picked, capped) = frame_selection(cmd, p, link.info.frames)?;
         let mut frames = Vec::with_capacity(picked.len());
         let mut kept = 0u64;

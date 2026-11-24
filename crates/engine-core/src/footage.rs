@@ -186,6 +186,16 @@ pub fn forget(path: &str) {
     lock(registry()).invalidate(&key_of(path));
 }
 
+/// Forget a failure to read the file at `path`, so the next use tries it again; a file that is
+/// open stays open. For commands that name the file themselves.
+pub fn retry(path: &str) {
+    let key = key_of(path);
+    let mut r = lock(registry());
+    if r.sources.get(&key).is_some_and(Result::is_err) {
+        r.invalidate(&key);
+    }
+}
+
 /// The limit on decoded frames kept in memory, in bytes (0 = the default, 1 GiB).
 pub fn set_cache_limit(bytes: u64) {
     lock(registry()).cache.limit = bytes;
@@ -260,6 +270,9 @@ pub fn is_movie(path: &str) -> bool {
 /// the first frame.
 pub fn movie_document(path: &str) -> Result<Document, String> {
     let info = probe(path)?;
+    if info.frames > crate::timeline_cmds::MAX_DURATION {
+        return Err(format!("`{path}` has {} frames; a video layer is limited to {}", info.frames, crate::timeline_cmds::MAX_DURATION));
+    }
     let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("Video").to_string();
     let file = std::path::Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or(path).to_string();
     let mut doc = Document::new(file, photocraft_doc::Size::new(info.width, info.height), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
