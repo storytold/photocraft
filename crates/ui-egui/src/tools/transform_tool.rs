@@ -42,6 +42,7 @@ pub use commit::{apply_click, auto_commit, cancel, commit, end_if_left, follow_e
 pub(crate) use draw::styled_composite;
 pub use draw::{SessionShown, show_in_canvas};
 pub(crate) use draw::{moves_selection, selection_map};
+pub(crate) use options_bar::bar_key;
 pub use options_bar::{options_bar, reset_warp};
 pub(crate) use preview::read_surface;
 pub(crate) use preview::solo_layer;
@@ -212,10 +213,10 @@ impl Several {
     }
 
     /// Composite the moving layers over their frame and their styles' reach.
-    fn render(&mut self) -> PreviewTextures {
+    fn render(&mut self, serials: &mut craft::ui::primitives::Serials) -> PreviewTextures {
         self.rect = self.frame.inflate(style_reach(&self.moving, &self.ids));
         let (image, uv) = composite_image(&self.moving, self.rect, self.max_side);
-        PreviewTextures::new(self.name.clone(), PreviewPixels::new(image, uv))
+        PreviewTextures::new(serials, self.name.clone(), PreviewPixels::new(image, uv))
     }
 }
 
