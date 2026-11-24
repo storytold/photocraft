@@ -538,25 +538,23 @@ impl Loader<'_> {
                 triangle_live,
                 density,
                 feather,
-            } => {
-                LayerContent::Shape(ShapeLayer {
-                    path: path.clone(),
-                    fill: fill.clone(),
-                    stroke: stroke.clone(),
-                    use_aligned_rendering: *use_aligned_rendering,
-                    live: arrow_live
-                        .as_ref()
-                        .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
-                        .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
-                        .cloned()
-                        .or_else(|| live.clone()),
-                    cache: self.opt_surface(cache)?,
-                    cache_preserves_appearance: *cache_preserves_appearance,
-                    psd_raw: self.opt_blob(psd_raw)?,
-                    density: *density,
-                    feather: *feather,
-                })
-            }
+            } => LayerContent::Shape(ShapeLayer {
+                path: path.clone(),
+                fill: fill.clone(),
+                stroke: stroke.clone(),
+                use_aligned_rendering: *use_aligned_rendering,
+                live: arrow_live
+                    .as_ref()
+                    .filter(|shape| matches!(shape, photocraft_doc::LiveShape::ArrowLine { .. }))
+                    .or_else(|| triangle_live.as_ref().filter(|shape| matches!(shape, photocraft_doc::LiveShape::Triangle { .. })))
+                    .cloned()
+                    .or_else(|| live.clone()),
+                cache: self.opt_surface(cache)?,
+                cache_preserves_appearance: *cache_preserves_appearance,
+                psd_raw: self.opt_blob(psd_raw)?,
+                density: *density,
+                feather: *feather,
+            }),
             ContentM::Smart {
                 contents_id,
                 source,
