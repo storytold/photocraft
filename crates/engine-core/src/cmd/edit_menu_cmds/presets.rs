@@ -116,7 +116,7 @@ pub(super) fn preset_manager(s: &mut Session, p: &Value) -> Result<Value> {
         "delete" => match kind.as_str() {
             "brushes" => {
                 let gone = std::sync::Arc::make_mut(&mut *s.tools.presets).remove(i);
-                crate::brush_cmds::forget_deleted_preset(s, &gone.name);
+                crate::preset_store::forget_deleted_preset(s, &gone.name);
             }
             "patterns" => drop(s.patterns.items.remove(i)),
             _ => drop(s.edit_state.custom_shapes.remove(i)),
