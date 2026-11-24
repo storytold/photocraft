@@ -340,3 +340,30 @@ fn an_empty_layer_shows_the_image_and_stamps_from_it_like_ok() {
         assert!(close(*p, done.rgba(x, y)), "({x}, {y}): {p:?} vs {:?}", done.rgba(x, y));
     }
 }
+
+#[test]
+fn a_half_opaque_empty_layer_previews_the_stamp_as_ok_paints_it() {
+    let mut app = app_with_layer();
+    app.session
+        .edit("stripe", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(50, 70, 70, 90), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("half", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().opacity = 0.5;
+            Ok(())
+        })
+        .unwrap();
+    app.sync_views();
+    let mut h = open(app);
+    set(&mut h, json!({"planes": [full_plane()]}));
+    set(&mut h, json!({"clone": [{"source": [60, 80], "points": [[120, 80], [126, 80]], "size": 12}]}));
+    let preview = shown(&h, 120, 80);
+    ok(&mut h);
+    let done = visible_image(&h.state().session.active().unwrap().doc);
+    assert!(done.rgba(120, 80)[0] < 0.9, "the layer's opacity lets the image below show through");
+    assert!(close(preview, done.rgba(120, 80)), "{preview:?} vs {:?}", done.rgba(120, 80));
+}

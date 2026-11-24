@@ -177,7 +177,7 @@ struct StampState {
     source: Option<(usize, Surface)>,
     /// The target layer's pixels as painted so far.
     out: Surface,
-    /// Without `work`: the document with `out` in the target layer's place, which the picture shows.
+    /// On an existing layer: the document with `out` in the target layer's place, which the picture shows.
     doc: Option<Document>,
     /// The strokes painted, the last one possibly in part.
     painted: Vec<StampStroke>,
@@ -266,7 +266,7 @@ impl Preview {
                 over(&mut w, &out);
                 w
             });
-            let doc = work.is_none().then(|| {
+            let doc = (!context.new_layer).then(|| {
                 let mut doc = (*self.inputs.base).clone();
                 if let Some(surface) = doc.layer_mut(self.inputs.layer).and_then(Layer::surface_mut) {
                     *surface = out.clone();
@@ -318,9 +318,10 @@ impl Preview {
         }
         let st = &*st;
         // The picture shows the document with the strokes in the layer's place, not the layer alone.
-        let shown = |r: Rect| match (&st.work, &st.doc) {
-            (Some(work), _) => surface_image(work, r, usize::MAX),
-            (None, Some(doc)) => surface_image(&composite_to_surface(doc, r, doc.pixel_format(), None), r, usize::MAX),
+        // An empty layer too: its opacity and the layers above it apply.
+        let shown = |r: Rect| match (&st.doc, &st.work) {
+            (Some(doc), _) => surface_image(&composite_to_surface(doc, r, doc.pixel_format(), None), r, usize::MAX),
+            (None, Some(work)) => surface_image(work, r, usize::MAX),
             (None, None) => surface_image(&st.out, r, usize::MAX),
         };
         let changed = if stale {
