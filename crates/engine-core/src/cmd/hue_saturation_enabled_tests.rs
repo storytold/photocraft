@@ -1,7 +1,7 @@
 //! #14749: Image › Adjustments › Hue/Saturation is unavailable where the reference application
 //! refuses it (a hidden pixel layer, a targeted layer mask, Grayscale at 8 and 16 bit and
 //! Multichannel documents), stops with the empty-layer alert on an empty layer, and keeps working
-//! everywhere else it worked. The other adjustments keep today's behaviour.
+//! everywhere else it worked (32-bit Grayscale included: not measured). The other adjustments keep today's behaviour.
 
 use serde_json::{Value, json};
 
@@ -77,6 +77,19 @@ fn grayscale_and_multichannel_documents_refuse_hue_saturation() {
     s.execute("image.mode.multichannel", json!({})).unwrap();
     assert!(!s.is_enabled(HS), "Multichannel: Hue/Saturation is greyed");
     assert!(s.execute(HS, params()).is_err(), "Multichannel: refused");
+}
+
+/// Grayscale was measured at 8 and 16 bit only: a 32-bit Grayscale document keeps Hue/Saturation,
+/// Colorize included.
+#[test]
+fn a_32_bit_grayscale_document_keeps_hue_saturation() {
+    let mut s = doc_at(32);
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.depth, photocraft_color::SampleType::F32);
+    assert_works(&mut s, "Grayscale 32 bit");
+    let before = steps(&s);
+    s.execute(HS, json!({"colorize": true, "hue": 30, "saturation": 25})).unwrap_or_else(|e| panic!("Grayscale 32 bit with Colorize: {e}"));
+    assert_eq!(steps(&s), before + 1, "Grayscale 32 bit with Colorize: one history state");
 }
 
 #[test]

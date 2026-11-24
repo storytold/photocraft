@@ -165,8 +165,9 @@ pub(crate) fn max_diff(a: &Document, b: &Document) -> f32 {
 /// Kinds that make colour from gray: grayscale documents preview them on the CPU proxy.
 const GRAY_COLOUR: [&str; 7] = ["vibrance", "colorBalance", "blackWhite", "photoFilter", "channelMixer", "gradientMap", "selectiveColor"];
 
-/// Kinds the command itself refuses in a Grayscale document (Hue/Saturation is greyed there,
-/// #14749): their dialog never opens, so there is no preview to compare.
+/// Kinds the command itself refuses in an 8- or 16-bit Grayscale document (Hue/Saturation is greyed
+/// there, #14749; 32 bit was not measured and keeps it): their dialog never opens, so there is no
+/// preview to compare.
 pub(crate) const GRAY_REFUSED: [&str; 1] = ["hueSaturation"];
 
 #[test]
@@ -182,7 +183,7 @@ fn preview_composite_matches_the_destructive_command() {
                     for params in [sample(kind), json!({})] {
                         let what = format!("{kind} {mode:?} {depth:?} selection {selection} {params}");
                         let want = destructive(&doc, target, kind, &params);
-                        if mode == ColorMode::Grayscale && GRAY_REFUSED.contains(&kind) {
+                        if mode == ColorMode::Grayscale && depth != SampleType::F32 && GRAY_REFUSED.contains(&kind) {
                             assert!(want.is_none(), "{what}: the command should refuse it");
                             continue;
                         }
@@ -225,7 +226,7 @@ fn a_clipped_target_previews_like_the_destructive_command() {
                     for params in [sample(kind), json!({})] {
                         let what = format!("{kind} {mode:?} {depth:?} selection {selection} {params}");
                         let want = destructive(&doc, target, kind, &params);
-                        if mode == ColorMode::Grayscale && GRAY_REFUSED.contains(&kind) {
+                        if mode == ColorMode::Grayscale && depth != SampleType::F32 && GRAY_REFUSED.contains(&kind) {
                             assert!(want.is_none(), "{what}: the command should refuse it");
                             continue;
                         }

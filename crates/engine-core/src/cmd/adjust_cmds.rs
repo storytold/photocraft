@@ -350,22 +350,23 @@ pub(crate) fn hue_saturation_target_enabled(s: &Session) -> std::result::Result<
 }
 
 /// Hue/Saturation's precondition for a call with `p`, its target filled in from the Channels
-/// panel, as the reference application has it (#14749): greyed on a layer mask, in Grayscale and
-/// Multichannel documents and on a hidden pixel layer; otherwise [`has_adjustable`]'s (which
+/// panel, as the reference application has it (#14749): greyed on a layer mask, in 8- and 16-bit
+/// Grayscale and in Multichannel documents and on a hidden pixel layer; otherwise [`has_adjustable`]'s (which
 /// already refuses type layers, groups and locked pixels, and the session refuses Bitmap). An
 /// alpha channel or Quick Mask target keeps [`has_adjustable`] alone, as before; `None` for a smart
-/// object's filter mask, which keeps its own check. A layer inside a hidden group and a hidden
-/// smart object keep today's behaviour (not measured).
+/// object's filter mask, which keeps its own check. A layer inside a hidden group, a hidden smart
+/// object and a 32-bit Grayscale document keep today's behaviour (not measured).
 pub(crate) fn hue_saturation_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
     use crate::channel_cmds::Target;
-    use photocraft_color::ColorMode;
+    use photocraft_color::{ColorMode, SampleType};
     let d = s.active()?;
     match crate::channel_cmds::target_of(p) {
         Target::Mask => Some(Err(HUE_SATURATION_UNAVAILABLE.into())),
         Target::FilterMask => None,
         Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
         Target::Pixels => {
-            if matches!(d.doc.mode, ColorMode::Grayscale | ColorMode::Multichannel) {
+            let gray = d.doc.mode == ColorMode::Grayscale && d.doc.depth != SampleType::F32;
+            if gray || d.doc.mode == ColorMode::Multichannel {
                 return Some(Err(HUE_SATURATION_UNAVAILABLE.into()));
             }
             let layer = crate::commands::layer_param(s, p).ok().and_then(|id| d.doc.layer(id));
