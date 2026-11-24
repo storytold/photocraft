@@ -110,6 +110,37 @@ fn gzipped_svg_stack_retains_ordinary_import_for_misnamed_sources() {
 }
 
 #[test]
+fn reset_transform_keeps_existing_svgz_with_an_omitted_image() {
+    let bytes = Arc::new(gzip(&incomplete_svg()));
+    for name in ["existing.svgz", "existing.gz", "without-extension"] {
+        let mut s = session(8);
+        paint(&mut s);
+        let id = LayerId(convert(&mut s));
+        let transform = Affine { m: [2., 0., 0., 2., 0., 0.] };
+        let smart = SmartObject::new(SmartSource::Embedded { file_name: name.into(), bytes: bytes.clone() }, transform, None);
+        s.edit("restore embedded Smart Object", |doc, _| {
+            doc.layer_mut(id).unwrap().content = LayerContent::Smart(smart);
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(decode_source(name, &bytes).is_err());
+        let ordinary = photocraft_io::import(name, &bytes).unwrap();
+        assert!(ordinary.warnings.iter().any(|warning| warning.contains("embedded image was omitted")));
+        let existing = render(&s.active().unwrap().doc, &active_smart(&s)).unwrap().unwrap();
+        assert_eq!(existing.rgba(1, 1), [1., 0., 0., 1.]);
+
+        s.execute("layer.smartObjects.resetTransform", json!({"layer": id.0})).unwrap();
+        let reset = active_smart(&s);
+        assert_eq!(reset.transform.m, [1., 0., 0., 1., 1., 1.]);
+        assert_eq!(reset.cache.unwrap().rgba(1, 1), [1., 0., 0., 1.]);
+        let (retained_name, retained_bytes) = contents_of(&s.active().unwrap().doc, id).unwrap();
+        assert_eq!(retained_name, name);
+        assert!(Arc::ptr_eq(&bytes, &retained_bytes));
+    }
+}
+
+#[test]
 fn svgz_contents_replacement_rejects_omissions_without_changing_target() {
     let bytes = gzip(&incomplete_svg());
     for name in
