@@ -83,7 +83,7 @@ fn create_droplet_uses_the_action_selected_in_the_form() {
 /// A selected Rotate action, as the Actions panel keeps one.
 fn push_rotate(app: &mut PhotocraftApp) {
     app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
-    app.session.actions.list.push(Action::new("Rotate", vec![ActionStep::new("image.imageRotation.90cw", json!({}))])).unwrap();
+    app.session.actions().list.push(Action::new("Rotate", vec![ActionStep::new("image.imageRotation.90cw", json!({}))])).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
 }
 
