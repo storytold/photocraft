@@ -222,6 +222,8 @@ mod line_shift_snap_tests;
 mod ellipse_shift_circle_tests;
 
 #[cfg(test)]
+mod polygon_align_edges_tests;
+#[cfg(test)]
 mod rectangle_align_edges_tests;
 
 #[cfg(test)]

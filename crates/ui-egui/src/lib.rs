@@ -731,6 +731,8 @@ struct InputTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod artboards_to_files_background_tests;
+#[cfg(test)]
 mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;

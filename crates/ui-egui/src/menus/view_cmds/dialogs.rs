@@ -325,6 +325,9 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                         Some("overlapping".to_owned()),
                     ),
                 ),
+                // Include Background in Export, ticked, the last control before the file type (#13631). Unticked, each board's
+                // white fill is left out of PNG, TIFF and WebP files.
+                Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
                 // The reference application's list, PSD chosen when the dialog opens (#13635).
                 choice("format", tl!("File Type"), artboard_formats(), "psd"),
             ];
@@ -880,7 +883,7 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let has_file = app.session.active().is_some_and(|d| d.path.is_some());
     let suggested = suggested_copy_name(&doc.name, has_file, app.session.prefs().file_handling.copy_suffix());
     // The copy is of the document as it was when asked.
-    app.pick_save(&suggested, move |app, path| {
+    app.pick_save_copy(&suggested, doc.mode, doc.depth, move |app, path| {
         // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, a
         // JPEG for its JPEG Options and a TIFF for its TIFF Options; the copy is written from the
         // prompt.
