@@ -19,8 +19,9 @@ pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
 
 /// The command ids whose dialog is a hosted parameter form built by [`params_for`] (Open EXR Parts included).
 /// The dialogs area's `PARAM_FAMILIES` row owns exactly these.
-const FORM_COMMANDS: [&str; 21] = [
+const FORM_COMMANDS: [&str; 22] = [
     "file.openExrParts",
+    "file.import.videoFramesToLayers",
     "layer.videoLayers.interpretFootage",
     "file.fileInfo",
     "file.automate.fitImage",
@@ -46,6 +47,33 @@ const FORM_COMMANDS: [&str; 21] = [
 /// Whether `key` is the command id of a form this file opens.
 pub(crate) fn is_form(key: &str) -> bool {
     FORM_COMMANDS.contains(&key)
+}
+
+/// File › Import › Video Frames to Layers… for a movie: which frames become layers, as the
+/// reference application's Import Video to Layers asks (all of them, or a range, optionally only
+/// every Nth). The movie is opened here only to read its length.
+pub(crate) fn open_video_frames_form(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
+    const ID: &str = "file.import.videoFramesToLayers";
+    let info = photocraft_engine::footage::probe(path)?;
+    let last = i64::try_from(info.frames.saturating_sub(1)).unwrap_or(i64::MAX);
+    let rows = vec![
+        Param::read_only_text("file", tl!("File"), crate::file_open::display_name(path)),
+        Param::new(
+            "range",
+            tl!("Range to Import"),
+            ParamKind::radio(opts(&[("all", tl!("From Beginning to End")), ("selected", tl!("Selected Range Only"))]), Some("all".to_owned())),
+        )
+        .not_remembered(),
+        Param::new("from", tl!("From Frame"), ParamKind::int(Some(0), Some(last), 0)).visible_when("range", "selected").not_remembered(),
+        Param::new("to", tl!("To Frame"), ParamKind::int(Some(0), Some(last), last)).visible_when("range", "selected").not_remembered(),
+        Param::new("limit", tl!("Limit to Every"), ParamKind::bool(false)),
+        Param::new("every", tl!("Frames"), ParamKind::int(Some(2), Some(i64::from(u32::MAX)), 2)).enabled_when("limit", true),
+    ];
+    let title = crate::i18n::fmt(tl!("Import {name} to Layers"), &[("name", &crate::file_open::display_name(path))]);
+    // The command reads the movie itself: its path rides with the dialog's values to OK.
+    let mut fields = DialogFields::new();
+    fields.set("path", FieldValue::Json(json!(path)));
+    Ok(opened(open_form(app, ID, &title, rows, fields, Value::Null)))
 }
 
 /// The reply of a command that opened a dialog.
@@ -848,7 +876,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 Err(e) => return Some(Err(e)),
             };
             let cmd = id.to_string();
-            Some(app.pick_file_bytes(move |app, path, _bytes| {
+            // The command reads the file itself: a movie is linked, not read into memory here.
+            Some(app.pick_file_path_filtered(&[], move |app, path| {
                 app.with_document(doc, |app| {
                     let r = app.run(&cmd, json!({"path": path}));
                     if let Ok(v) = &r {

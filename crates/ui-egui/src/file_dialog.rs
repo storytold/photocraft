@@ -317,6 +317,28 @@ impl PhotocraftApp {
         })
     }
 
+    /// Ask for a file a command reads from disk itself (footage, which may be far larger than
+    /// memory): `then` gets its path, and nothing is read here. `extensions` narrows the picker as
+    /// in [`Self::pick_file_bytes_filtered`]. The web hands over contents, not files: there the
+    /// command can't run, and says so.
+    pub(crate) fn pick_file_path_filtered(
+        &mut self,
+        extensions: &[&str],
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let mut request = open_filters(PickRequest::open("file"), extensions);
+        if let Some(dir) = last_used_dir(&self.ui.recent_files) {
+            request = request.directory(dir);
+        }
+        self.ask_file(request, move |app, picked| match picked {
+            Picked::Contents(_) => Err(tl!("This file can only be read from disk, in the desktop app").to_string()),
+            picked => match path_strings(&picked).into_iter().next() {
+                Some(path) => then(app, path),
+                None => Err(UNEXPECTED.into()),
+            },
+        })
+    }
+
     /// [`Self::pick_file_bytes`] letting the user choose several files (File › Place Embedded):
     /// `then` gets every chosen file, in the order the dialog returns them. A desktop file is
     /// handed over by path and read only when [`PickedFile::read`] is called, so files waiting

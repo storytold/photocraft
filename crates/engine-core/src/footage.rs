@@ -38,6 +38,35 @@ pub fn set_opener(opener: Opener) {
     let _ = OPENER.set(opener);
 }
 
+/// A movie file read by `photocraft_io::movie` (MP4, MOV, MKV, WebM).
+#[cfg(not(target_arch = "wasm32"))]
+struct MovieDecoder(photocraft_io::movie::Movie);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FootageDecoder for MovieDecoder {
+    fn info(&self) -> FootageInfo {
+        let i = self.0.info();
+        FootageInfo { width: i.width, height: i.height, frames: i.frames, fps: i.fps }
+    }
+
+    fn decode(&mut self, n: usize) -> Result<Document, String> {
+        self.0.frame_document(n)
+    }
+}
+
+/// The opener used when none is installed: movie files on native builds.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_movie(path: &str) -> Result<Box<dyn FootageDecoder>, String> {
+    let resolved = crate::doc_path::resolve(path).map_err(|why| format!("{why}"))?;
+    let movie = photocraft_io::movie::Movie::open(&resolved).map_err(|e| e.to_string())?;
+    Ok(Box::new(MovieDecoder(movie)))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_movie(_: &str) -> Result<Box<dyn FootageDecoder>, String> {
+    Err("movie files can't be read in the web version of PhotoCraft".to_string())
+}
+
 /// Decoded frames kept across every file: past this, the least recently shown frames are dropped
 /// and decoded again when shown.
 const DEFAULT_CACHE_BYTES: u64 = 1 << 30;
@@ -175,13 +204,11 @@ fn source(path: &str) -> Result<Arc<Source>, String> {
     };
     // Opened outside the lock: reading a file's index can take a while.
     // The opener gets the file the key names, resolved from the document, not the stored text.
-    let opened = match OPENER.get() {
-        Some(open) => open(&key).map(|decoder| {
-            let info = decoder.info();
-            Arc::new(Source { decoder: Mutex::new(decoder), info })
-        }),
-        None => Err("this build of PhotoCraft can't read movie files".to_string()),
-    };
+    let open = OPENER.get().copied().unwrap_or(open_movie);
+    let opened = open(&key).map(|decoder| {
+        let info = decoder.info();
+        Arc::new(Source { decoder: Mutex::new(decoder), info })
+    });
     keep_opened(&key, seen, opened)
 }
 
@@ -221,6 +248,28 @@ pub fn known_status(link: &FootageLink, frames_used: usize) -> Option<Result<(),
 pub fn probe(path: &str) -> Result<FootageInfo, String> {
     authorized(path)?;
     source(path).map(|s| s.info)
+}
+
+/// Whether `path` names a movie file the footage reader opens (by its extension).
+pub fn is_movie(path: &str) -> bool {
+    photocraft_io::is_movie_name(path)
+}
+
+/// A new document showing the movie at `path`, as File › Open makes one: the movie's picture
+/// size, a timeline at its rate and length, and one video layer named after the file, showing
+/// the first frame.
+pub fn movie_document(path: &str) -> Result<Document, String> {
+    let info = probe(path)?;
+    let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("Video").to_string();
+    let file = std::path::Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or(path).to_string();
+    let mut doc = Document::new(file, photocraft_doc::Size::new(info.width, info.height), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let fmt = doc.pixel_format();
+    doc.timeline = Some(photocraft_doc::Timeline::new(info.frames, info.fps));
+    let mut layer = photocraft_doc::Layer::raster(stem, fmt);
+    layer.video = Some(photocraft_doc::VideoData::from_footage(FootageLink::new(path.to_string(), info), fmt));
+    doc.layers.push(layer);
+    crate::video_cmds::sync(&mut doc);
+    Ok(doc)
 }
 
 /// Whether the file a layer links to can be read: `Err` says why not (missing, unreadable, or

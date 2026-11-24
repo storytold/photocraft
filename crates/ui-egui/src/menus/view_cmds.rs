@@ -210,6 +210,9 @@ mod tests;
 #[cfg(test)]
 #[path = "view_cmds/fit_image_sticky_tests.rs"]
 mod fit_image_sticky_tests;
+#[cfg(test)]
+#[path = "view_cmds/video_frames_form_tests.rs"]
+mod video_frames_form_tests;
 
 #[cfg(test)]
 #[path = "view_cmds/save_a_copy_name_tests.rs"]

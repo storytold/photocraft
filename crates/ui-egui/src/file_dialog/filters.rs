@@ -13,7 +13,7 @@ pub(super) const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
     "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
     "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
-    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub", "mp4", "m4v", "mov", "qt", "mkv", "webm",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -38,6 +38,8 @@ pub(super) const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("ICO", &["ico"]),
     ("JPEG", &["jpg", "jpeg"]),
     ("Krita", &["kra", "krz"]),
+    // Opened as a video layer, its frames read from the file as they are shown.
+    ("Movies", photocraft_io::MOVIE_EXTENSIONS),
     ("OpenEXR", &["exr"]),
     ("OpenRaster", &["ora"]),
     ("Paint.NET", &["pdn"]),

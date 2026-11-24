@@ -287,7 +287,13 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             }
         }
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
-            app.ask_folder(|app, path| {
+            // A video file, as the reference application asks for; a movie then asks which frames
+            // (a range and a step), an animated image or a TIFF imports every frame. The command
+            // still takes a folder of images (an image sequence) from scripts.
+            app.pick_file_path_filtered(&[], |app, path| {
+                if photocraft_io::is_movie_name(&path) {
+                    return crate::menus::view_cmds::dialogs::open_video_frames_form(app, &path);
+                }
                 let r = app.run("file.import.videoFramesToLayers", json!({"path": &path}));
                 if let Ok(v) = &r {
                     // #11113: a truncated GIF or WebP in the folder salvages its early frames;
