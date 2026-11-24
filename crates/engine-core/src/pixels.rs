@@ -227,7 +227,8 @@ fn adjusted_with_transfer(
     transfer: adjust::Transfer,
 ) -> Vec<f32> {
     let fmt = s.format();
-    if fmt.mode == mode && matches!(mode, photocraft_color::ColorMode::Lab | photocraft_color::ColorMode::Cmyk) && adjust::stored_channel_adjustment(adj) {
+    let own_channels = adjust::stored_channel_adjustment(adj) || (mode == photocraft_color::ColorMode::Cmyk && adjust::cmyk_mixer(adj));
+    if fmt.mode == mode && matches!(mode, photocraft_color::ColorMode::Lab | photocraft_color::ColorMode::Cmyk) && own_channels {
         return adjusted_channels(s, r, selection, |ch| adjust::stored_channels(adj, fmt.mode, Some(fmt.sample), ch));
     }
     if fmt.mode == mode && mode == photocraft_color::ColorMode::Cmyk && adjust::cmy_adjustment(adj) {
@@ -282,8 +283,10 @@ fn adjusted_channels(s: &Surface, r: Rect, selection: Option<&Surface>, op: impl
             let Some(out) = out.get_mut(..colors) else { continue };
             out.copy_from_slice(ch);
             op(out);
+            // `v·(1−k) + o·k`, as in [`mix_through_selection`]: exact at full coverage, even over
+            // huge 32-bit values whose difference from the result would round it away (#9483).
             for (v, o) in ch.iter_mut().zip(out.iter()) {
-                *v += (o - *v) * k;
+                *v = *v * (1.0 - k) + o * k;
             }
         }
     }
@@ -475,7 +478,7 @@ fn edit_tiles(
         .into_par_iter()
         .map(|tc| -> crate::Result<Option<(photocraft_geom::TileCoord, Option<Arc<Tile>>)>> {
             let tr = tc.rect().intersect(&area);
-            let mask = selection.map(|m| crate::fill_cmds::Mask::of(m, tc));
+            let mask = selection.map(|m| crate::pixel_fill::Mask::of(m, tc));
             let full = tr == tc.rect() && mask.as_ref().is_none_or(|m| m.full(tr));
             let current = surf.tile(tc);
             match whole(full) {

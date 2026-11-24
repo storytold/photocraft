@@ -3,7 +3,7 @@
 
 Before the table was split, `crates/engine/src/cmd.rs` held every core command in one `vec![...]`
 inside `fn build()`. The entries now live in `crates/engine-core/src/cmd/table/<owner>/<menu>.rs`, and
-`install/command_ids.txt` pins the registry order. A branch that edited the old table carries its
+`crates/engine/src/install/command_ids.txt` sets the registry order. A branch that edited the old table carries its
 edits in `cmd.rs`. This script applies them to the fragments:
 
     python3 scripts/engine_split/table_fragments.py --base <merge-base> --head <branch>
@@ -14,7 +14,8 @@ for the old table dropped). `--head` is the branch commit from before the rebase
   changed  the entry in its fragment is replaced by HEAD's text (if the fragment still has
            BASE's text; otherwise it is reported as a CONFLICT and left alone);
   added    the entry goes after its predecessor's entry, in the predecessor's fragment, and its id
-           goes after the predecessor's id in command_ids.txt;
+           goes after the predecessor's id in command_ids.txt (UNPLACED when its handler is in a
+           crate the predecessor's fragment can't reach);
   removed  the entry and its id are deleted (if the fragment still has BASE's text).
 The adjustment table and its loop (`ADJ`, between the `vec![...]` and the `v.extend(...)` list) are
 three-way merged into table/image/adjustments.rs. Any other change inside `build()` (the module
@@ -30,7 +31,9 @@ import argparse, os, re, subprocess, sys, tempfile
 
 CMD = "crates/engine/src/cmd.rs"
 TABLE = "crates/engine-core/src/cmd/table"
-IDS = "crates/engine-core/src/install/command_ids.txt"
+# The fragment directories of every engine crate (`cmd/table/<owner>/`, in core until its crate is cut out).
+TABLES = sorted(f"{d}/src/cmd/table" for d in (os.path.join("crates", c) for c in os.listdir("crates")) if os.path.basename(d).startswith("engine-") and os.path.isdir(f"{d}/src/cmd/table")) if os.path.isdir("crates") else [TABLE]
+IDS = "crates/engine/src/install/command_ids.txt"
 ID_RE = re.compile(r'"([a-zA-Z]+\.[A-Za-z0-9.]+)"')
 
 
@@ -92,9 +95,10 @@ class Fragments:
 
     def __init__(self):
         self.files = {}
-        for d, _, names in os.walk(TABLE):
+        walks = [(root, d, names) for root in TABLES for d, _, names in os.walk(root)]
+        for root, d, names in walks:
             for n in names:
-                if n.endswith(".rs") and os.path.dirname(os.path.join(d, n)) != TABLE:
+                if n.endswith(".rs") and os.path.dirname(os.path.join(d, n)) != root:
                     p = os.path.join(d, n)
                     if "vec![" in open(p).read():
                         self.files[p] = open(p).read()
@@ -232,6 +236,25 @@ ADJ_START = "    let mut v = Vec::new();\n"
 ADJ_END = "\n    v\n}"
 
 
+def fragment_crate(path):
+    """The crate whose source holds a fragment (`crates/engine-<crate>/src/...`)."""
+    m = re.match(r"crates/engine-([a-z]+)/", path)
+    return m.group(1) if m else "core"
+
+
+def handler_crates(entry):
+    """The cut crates (not core) whose modules the entry names as `<module>::`."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from engine_cut import units
+
+    named = set(re.findall(r"\b([a-z_][a-z0-9_]*)::", norm(entry)))
+    out = set()
+    for c in {line.rstrip("\n").split("\t")[-1] for line in open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "crates.tsv")) if "\t" in line} - {"core"}:
+        if os.path.isdir(f"crates/engine-{c}/src") and named & {u.split("/")[-1] for u in units(c)}:
+            out.add(c)
+    return out
+
+
 def add_imports(fr, path, entry, known):
     """Add names the entry uses from cmd.rs to the fragment's `use crate::cmd::{..}` list."""
     t = fr.files[path]
@@ -294,6 +317,10 @@ def main():
             report.append(f"UNPLACED {cid}: no predecessor in the fragments")
             continue
         path, pe = fr.find(pred)
+        owners = handler_crates(text) - {fragment_crate(path)}
+        if owners:
+            report.append(f"UNPLACED {cid}: its handler is in photocraft-engine-{', '.join(sorted(owners))}, which {path} can't reach; place it by hand")
+            continue
         comma = "" if pe.rstrip().endswith(",") else ","
         fr.replace(path, pe, pe.rstrip() + comma + pe[len(pe.rstrip()) :] + "\n" + text)
         ids.insert(ids.index(pred) + 1, cid)
