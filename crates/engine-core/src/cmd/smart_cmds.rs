@@ -197,9 +197,8 @@ use placing::{convert, reset_transform, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
 use rendering::refresh_or_fail;
 #[cfg(test)]
-pub(crate) use rendering::{DISPLAY_NATIVE_HASH_BYTES, WARNING_SOURCE_DECODES, WARNING_SOURCE_LIMIT};
-#[cfg(test)]
 use rendering::{NativeDigests, blend_surfaces, place, render_in};
+pub use rendering::{SourceCacheStatistics, source_cache_statistics};
 pub(crate) use rendering::{WarningRenderSources, render_with_warnings, render_with_warnings_using, source_box};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
