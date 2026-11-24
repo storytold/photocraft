@@ -10,7 +10,7 @@ use photocraft_doc::{Document, Layer, LayerId};
 use photocraft_engine::cmd::web_cmds::generate_assets;
 use photocraft_geom::{Rect, Size, TileCoord};
 use photocraft_raster::spill;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 /// Spills every tile, then zeroes the scratch file. Returns its handle and the bytes to restore.
@@ -39,11 +39,9 @@ fn restore_scratch(mut file: std::fs::File, good: &[u8], doc: &Document, id: Lay
     assert!(doc.scratch_health().is_ok());
 }
 
-/// The file names in `dir` (none when it does not exist), sorted.
-fn listing(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir).map(|r| r.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
-    names.sort();
-    names
+/// Whether nothing is at `path`: a failed lookup for any other reason is not taken as absence.
+fn absent(path: &Path) -> bool {
+    matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == ErrorKind::NotFound)
 }
 
 #[test]
@@ -85,14 +83,15 @@ fn image_assets_refuse_unreadable_scratch_tiles() {
 
     // The optimizer branch (PNG, JPEG, GIF): the first asset's reads fail while it is built, so it
     // is refused before writing; the second finds the tiles already unreadable and is refused
-    // before building.
+    // before building. The output folder is made only for a file about to be written, so a run
+    // that writes nothing leaves none.
     doc.layer_mut(id).unwrap().name = "asset.png, second.jpg".into();
     let (file, good) = damage_with_readable_layer(&mut doc);
     let (files, errors) = generate_assets(&doc, &dir);
     assert!(files.is_empty(), "{files:?}");
     assert_eq!(errors.iter().map(|e| e["asset"].as_str().unwrap()).collect::<Vec<_>>(), ["asset.png", "second.jpg"]);
     assert!(doc.scratch_health().is_err());
-    assert_eq!(listing(&out), Vec::<String>::new(), "no asset file is written");
+    assert!(absent(&out), "no asset file or folder is written");
     remove_readable_layer(&mut doc);
     restore_scratch(file, &good, &doc, pixels);
 
@@ -103,7 +102,7 @@ fn image_assets_refuse_unreadable_scratch_tiles() {
     assert!(files.is_empty(), "{files:?}");
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0]["asset"], "asset.webp");
-    assert_eq!(listing(&out), Vec::<String>::new(), "no asset file is written");
+    assert!(absent(&out), "no asset file or folder is written");
     remove_readable_layer(&mut doc);
     restore_scratch(file, &good, &doc, pixels);
 
