@@ -16,7 +16,7 @@ use crate::state::Tool;
 /// `zoom` (device pixels per document pixel) on a display of `ppp` device pixels per point.
 fn app(tool: Tool, zoom: f32, ppp: f32) -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.ctx().set_pixels_per_point(ppp);
+    crate::canvas::testing::pixels_per_point(&mut app, ppp);
     app.session.execute("file.new", json!({"width": 800, "height": 600})).unwrap();
     app.sync_views();
     // The corner (100, 300) in the middle of the canvas, at `zoom`; the new view's fit-on-screen request would replace
