@@ -3,7 +3,8 @@
 //! 200x100 px RGB, red Background, layer "Top" with a blue 50x50 square.
 
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::Document;
+use photocraft_doc::{Document, LayerId};
+use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -13,10 +14,14 @@ const CMD: &str = "file.automate.conditionalModeChange";
 fn measured(depth: u32) -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 200, "height": 100, "depth": depth, "background": "#ff0000"})).unwrap();
-    s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
-    s.execute("select.rect", json!({"x": 20, "y": 20, "width": 50, "height": 50})).unwrap();
-    s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
+    let top = LayerId(s.execute("layer.new.layer", json!({"name": "Top"})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("paint", |doc, _| {
+        let fmt = doc.pixel_format();
+        let blue = photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 1.0, 1.0]);
+        doc.layer_mut(top).unwrap().surface_mut().unwrap().fill_rect(Rect::new(20, 20, 70, 70), &blue);
+        Ok(())
+    })
+    .unwrap();
     s
 }
 
