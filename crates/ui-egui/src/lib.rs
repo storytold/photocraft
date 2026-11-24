@@ -578,6 +578,8 @@ pub struct PhotocraftApp {
     pub(crate) color_picker_live: Vec<color_picker_ui::live_preview::Live>,
     /// A command clicked while Free Transform commits in the background, run when it lands.
     pub(crate) after_transform_commit: Option<(String, serde_json::Value)>,
+    /// The placed layer targeted by the image Quick Actions contextual task bar.
+    pub(crate) place_action_bar: Option<crate::tools::place_action_bar::PlaceActionBar>,
     /// Last mirrored or imported OS image; this can predate the current internal copy.
     os_clip_sig: Option<u64>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.

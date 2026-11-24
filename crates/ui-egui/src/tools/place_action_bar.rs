@@ -2,20 +2,25 @@
 //! or whenever a placed/raster layer is active, a floating bar appears below the layer with quick
 //! action buttons matching Photoshop's Contextual Task Bar:
 //!
-//! 1. the grip (widgets::task_bar);
-//! 2. Select subject (quick selection);
-//! 3. Remove background (scissors / mask cutout);
-//! 4. Adjust colors (Hue/Saturation adjustment layer);
-//! 5. Free Transform (vector-shape / quad with handles);
-//! 6. Create new fill or adjustment layer (adjustment-layer popup menu);
-//! 7. Place Embedded… / Add image (image);
-//! 8. the ⋯ menu (widgets::task_bar::MoreMenu).
+//! 1. Select subject (quick selection);
+//! 2. Remove background (scissors / mask cutout);
+//! 3. Adjust colors (Hue/Saturation adjustment layer);
+//! 4. Free Transform (vector-shape / quad with handles);
+//! 5. Create new fill or adjustment layer (adjustment-layer popup menu);
+//! 6. Place Embedded… / Add image (image);
+//! 7. the ⋯ menu (MoreMenu).
 
+use craft::behavior::IconId;
+use craft::behavior::kurbo::Point;
+use craft::ui::buttons::{Button, IconButton};
+use craft::ui::canvas_controls::{TaskBar, TaskBarCx};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, Trigger};
+use craft::ui::menu::Menu;
+use craft::ui::primitives::IconSpec;
+use craft::ui::runtime::access::PopupKind;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::ViewXform;
-use crate::widgets::task_bar;
 
 /// The placed layer that just had its Free Transform committed or is targeted by the bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,13 +62,13 @@ fn wanted(app: &PhotocraftApp) -> bool {
     if !app.ui.panels.context_task_bar {
         return false;
     }
-    if !app.ui.dialogs.is_empty() {
+    if app.dialog_open() {
         return false;
     }
     if app.ui.transform.is_some() {
         return false;
     }
-    if app.ui.tool == crate::state::Tool::Crop && app.ui.crop_rect.is_some() {
+    if app.ui.tool == crate::state::Tool::Crop && app.canvas_tools.crop.tool.frame().is_some() {
         return false;
     }
     if app.ui.tool.is_type() && app.ui.text_edit.is_some() {
@@ -96,82 +101,60 @@ fn bounds(doc: &photocraft_doc::Document, l: &photocraft_doc::Layer) -> photocra
     if let Some(a) = l.artboard() {
         return a.rect;
     }
-    let content = |s| photocraft_compose::bounds::content_bounds(s);
     match &l.content {
         photocraft_doc::LayerContent::Group(_) | photocraft_doc::LayerContent::Adjustment(_) => photocraft_geom::Rect::EMPTY,
-        photocraft_doc::LayerContent::Fill(_) => l.mask.as_ref().filter(|m| m.enabled).map_or(doc.bounds(), |m| content(&m.surface)),
-        _ => l.surface().map_or(photocraft_geom::Rect::EMPTY, content),
+        photocraft_doc::LayerContent::Fill(_) => l.mask.as_ref().filter(|m| m.enabled).map_or(doc.bounds(), |m| m.surface.content_bounds()),
+        _ => l.surface().map_or(photocraft_geom::Rect::EMPTY, |s| s.content_bounds()),
     }
 }
 
-/// The screen-space bounding box to anchor the bar below: the layer's visible bounds
-/// mapped through the view transform. Falls back to a horizontal strip centred in the canvas
-/// when the layer has no content bounds (an empty or brand-new layer).
-fn anchor(app: &PhotocraftApp, xf: &ViewXform) -> Option<egui::Rect> {
-    let st = app.session.active()?;
-    let active_id = st.active_layer?;
-    let layer = st.doc.layer(active_id)?;
+// ── show ─────────────────────────────────────────────────────────────────────
 
-    let doc_rect = bounds(&st.doc, layer);
-    let doc_rect = if doc_rect.is_empty() { st.doc.bounds() } else { doc_rect };
-
-    if doc_rect.is_empty() {
-        let d = st.doc.bounds();
-        let cx = (d.x0 + d.x1) as f32 / 2.0;
-        let cy = (d.y0 + d.y1) as f32 / 2.0;
-        let p = xf.to_screen(cx, cy);
-        return Some(egui::Rect::from_center_size(p, egui::vec2(1.0, 1.0)));
-    }
-
-    Some(xf.doc_rect(doc_rect))
-}
-
-// ── draw ─────────────────────────────────────────────────────────────────────
-
-/// Draws the bar under the placed or active layer's screen bounding box.
-/// Called from the canvas overlay pass for the active document's tile
-/// (canvas.rs, alongside crop_task_bar and type_tool::draw_task_bar).
-pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
+/// Draws the image Quick Actions contextual task bar below the active image layer.
+/// Called from the active-document canvas overlay (`canvas::document_display`).
+pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
     if !wanted(app) {
         return;
     }
+    let Some(st) = app.session.active() else { return };
+    let Some(active_id) = st.active_layer else { return };
+    let Some(layer) = st.doc.layer(active_id) else { return };
 
-    let Some(anchor_rect) = anchor(app, xf) else { return };
+    let mut b = bounds(&st.doc, layer);
+    if b.is_empty() {
+        b = st.doc.bounds();
+    }
+    let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
+    let corners = [Point::new(x0, y0), Point::new(x1, y0), Point::new(x1, y1), Point::new(x0, y1)];
 
     let ctx = ui.ctx().clone();
     let mut place = app.ui.panels.task_bar;
-    let shown = task_bar::show(&ctx, &mut place, anchor_rect, xf.rect, |ui, more| {
-        contents(app, ui, more);
+    let shown = TaskBar::new(tl!("Contextual Task Bar"), &corners, Bind::bound(&mut place)).show(ui, area, |ui, cx| {
+        contents(app, ui, cx, &ctx);
     });
     app.ui.panels.task_bar = place;
 
-    let Some(shown) = shown else { return };
-    if shown.hide {
+    if shown.output.hide {
         app.place_action_bar = None;
         app.ui.panels.context_task_bar = false;
         return;
     }
-    let r = shown.rect;
+    let r = shown.output.rect;
     app.ui.task_bar_shown = Some([r.min.x, r.min.y, r.max.x, r.max.y]);
 }
 
-// ── contents ─────────────────────────────────────────────────────────────────
 
-fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
-    let t = crate::theme::Tokens::get(ui.ctx());
-    let mut atoms = egui::Atoms::default();
-    atoms.push_right(crate::icons::image(icon, 14.0, t.icon));
-    atoms.push_right(label.to_owned());
-    ui.add(egui::Button::new(atoms).min_size(egui::vec2(0.0, task_bar::BUTTON)))
-}
+// ── contents ─────────────────────────────────────────────────────────────────
 
 /// The controls inside the bar:
 /// - Select subject
 /// - Remove background
 /// - Adjust colors
 /// - Free Transform
+/// - Create new fill or adjustment layer
+/// - Place Embedded…
 /// - More options (⋯)
-fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::MoreMenu) {
+fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, cx: &mut TaskBarCx<'_>, ctx: &egui::Context) {
     let target_layer = app.session.active().and_then(|s| s.active_layer);
     let layer_param = if let Some(id) = target_layer {
         json!({"layer": id.0})
@@ -180,15 +163,17 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::Mor
     };
 
     let set_active = |app: &mut PhotocraftApp| {
-        if let Some(id) = target_layer
-            && let Some(st) = app.session.active_mut()
-        {
-            st.active_layer = Some(id);
+        if let Some(id) = target_layer {
+            app.session.set_active_layer(Some(id));
         }
     };
 
     // 1. Select subject
-    if action_button(ui, "quick-selection", tl!("Select subject")).clicked() {
+    if Button::new(tl!("Select subject"))
+        .icon(IconSpec::svg(IconId::new("quick-selection")))
+        .show(ui)
+        .clicked()
+    {
         set_active(app);
         if let Err(e) = app.run("select.subject", json!({})) {
             crate::notices::error(app, e);
@@ -196,15 +181,23 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::Mor
     }
 
     // 2. Remove background
-    if action_button(ui, "scissors", tl!("Remove background")).clicked() {
+    if Button::new(tl!("Remove background"))
+        .icon(IconSpec::svg(IconId::new("scissors")))
+        .show(ui)
+        .clicked()
+    {
         set_active(app);
-        if let Err(e) = app.run("layer.removeBackground", layer_param.clone()) {
+        if let Err(e) = app.run("layer.removeBackground", layer_param) {
             crate::notices::error(app, e);
         }
     }
 
     // 3. Adjust colors
-    if action_button(ui, "sliders-horizontal", tl!("Adjust colors")).clicked() {
+    if Button::new(tl!("Adjust colors"))
+        .icon(IconSpec::svg(IconId::new("sliders-horizontal")))
+        .show(ui)
+        .clicked()
+    {
         set_active(app);
         if let Err(e) = app.run("layer.newAdjustmentLayer.hueSaturation", json!({})) {
             crate::notices::error(app, e);
@@ -212,71 +205,55 @@ fn contents(app: &mut PhotocraftApp, ui: &mut egui::Ui, more: &mut task_bar::Mor
     }
 
     // 4. Free Transform
-    if crate::icons::button_with_icon_size_tip(ui, "vector-shape", task_bar::BUTTON, 14.0, false, tl!("Free Transform"), false).clicked() {
+    if IconButton::new(IconId::new("vector-shape"))
+        .label(tl!("Free Transform"))
+        .tooltip(tl!("Free Transform"))
+        .show(ui)
+        .clicked()
+    {
         set_active(app);
-        let ctx = ui.ctx().clone();
-        if let Err(e) = crate::menus::invoke(app, &ctx, "edit.freeTransform", json!({})) {
+        if let Err(e) = crate::menus::invoke(app, ctx, "edit.freeTransform", json!({})) {
             crate::notices::error(app, e);
         }
     }
 
     // 5. Create new fill or adjustment layer
-    let adj = crate::icons::button_with_icon_size_tip(
-        ui,
-        "adjustment-layer",
-        task_bar::BUTTON,
-        14.0,
-        false,
-        tl!("Create new fill or adjustment layer"),
-        false,
-    );
-    let mut actions: Vec<(&str, serde_json::Value)> = Vec::new();
-    crate::press_menu::show(&adj, |ui, menu| {
-        ui.set_min_width(190.0);
-        for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
-            if menu.item(ui, tl!(c.label).trim_end_matches('…')) {
-                actions.push((c.id, json!({})));
-            }
-        }
-        ui.separator();
-        if menu.item(ui, tl!("Solid Color…")) {
-            actions.push(("layer.newFillLayer.solidColor", json!({})));
-        }
-        if menu.item(ui, tl!("Gradient…")) {
-            actions.push(("layer.newFillLayer.gradient", json!({})));
-        }
-        if menu.item(ui, tl!("Pattern…")) {
-            actions.push(("layer.newFillLayer.pattern", json!({})));
-        }
-    });
-    for (cmd, params) in actions {
+    let adj_btn = IconButton::new(IconId::new("adjustment_layer"))
+        .label(tl!("Create new fill or adjustment layer"))
+        .tooltip(tl!("Create new fill or adjustment layer"))
+        .popup(PopupKind::Menu)
+        .show(ui);
+
+    let mut entries = Vec::new();
+    for c in photocraft_engine::command_specs().iter().filter(|c| c.id.starts_with("layer.newAdjustmentLayer.")) {
+        entries.push(Entry::new(c.id, tl!(c.label).trim_end_matches('…').to_string()));
+    }
+    entries.push(Entry::new("layer.newFillLayer.solidColor", tl!("Solid Color…").to_string()));
+    entries.push(Entry::new("layer.newFillLayer.gradient", tl!("Gradient…").to_string()));
+    entries.push(Entry::new("layer.newFillLayer.pattern", tl!("Pattern…").to_string()));
+
+    if let Some(cmd) = Menu::new(tl!("Create new fill or adjustment layer")).opened_by(&adj_btn, Trigger::Press).pick(ui, &entries).picked {
         set_active(app);
-        if let Err(e) = app.run(cmd, params) {
+        if let Err(e) = app.run(cmd, json!({})) {
             crate::notices::error(app, e);
         }
     }
 
     // 6. Place Embedded…
-    if crate::icons::button_with_icon_size_tip(
-        ui,
-        "image",
-        task_bar::BUTTON,
-        14.0,
-        false,
-        tl!("Place Embedded…"),
-        false,
-    )
-    .clicked()
+    if IconButton::new(IconId::new("image"))
+        .label(tl!("Place Embedded…"))
+        .tooltip(tl!("Place Embedded…"))
+        .show(ui)
+        .clicked()
     {
         set_active(app);
-        let ctx = ui.ctx().clone();
-        if let Err(e) = crate::menus::invoke(app, &ctx, "file.placeEmbedded", json!({})) {
+        if let Err(e) = crate::menus::invoke(app, ctx, "file.placeEmbedded", json!({})) {
             crate::notices::error(app, e);
         }
     }
 
-    // 7. More options (⋯: Hide bar, Reset bar position, Pin bar position)
-    more.show(ui);
+    // 7. More options (⋯)
+    cx.more_menu(ui);
 }
 
 #[cfg(test)]
@@ -284,14 +261,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn app_with_doc() -> PhotocraftApp {
+    fn app_with_doc() -> Box<PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
         app.sync_views();
         app
     }
 
-    fn app_with_image() -> PhotocraftApp {
+    fn app_with_image() -> Box<PhotocraftApp> {
         let mut app = app_with_doc();
         app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
         app.sync_views();
@@ -323,23 +300,9 @@ mod tests {
     fn eligible_false_while_transforming() {
         let mut app = app_with_image();
         app.ui.panels.context_task_bar = true;
-        app.ui.transform = Some(crate::state::TransformSession {
-            session: 1,
-            layer: 0,
-            rect: [0.0, 0.0, 100.0, 100.0],
-            quad: [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]],
-            pivot: [50.0, 50.0],
-            interpolation: "nearest".into(),
-            warp: None,
-            selection: false,
-            target: None,
-            path: None,
-            made: None,
-            mode: Default::default(),
-            content_aware: None,
-            skew_v: 0.0,
-            layers: Vec::new(),
-        });
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        assert!(app.ui.transform.is_some());
         assert!(!eligible(&app));
     }
 
@@ -351,7 +314,8 @@ mod tests {
         assert!(!crate::tools::transform_task_bar::eligible(&app));
 
         // Invoke Free Transform as the button does
-        crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
         assert!(app.ui.transform.is_some());
         assert!(!eligible(&app));
         assert!(crate::tools::transform_task_bar::eligible(&app));
