@@ -23,7 +23,7 @@ fn blur_bar() -> Harness<'static, Box<PhotocraftApp>> {
     h
 }
 
-fn angle(h: &Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<'_> {
+fn angle<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<'a> {
     h.get_by_role_and_label(Role::SpinButton, "Angle")
 }
 
