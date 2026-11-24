@@ -165,9 +165,11 @@ impl PhotocraftApp {
             let channel = st.channel_view.target;
             match photocraft_engine::mask_view_cmds::current(st) {
                 Some(_) if photocraft_engine::mask_view_cmds::editing(st).is_none() => {
-                    // Saved display state does not grant the mask edit ownership.
-                    // Clear a previous document's UI target and follow the public channel target.
-                    self.ui.mask_target = channel == ChannelTarget::LayerMask;
+                    // Saved display state does not grant mask edit ownership. An
+                    // explicit thumbnail click in this document may still select
+                    // the mask while the imported view targets Composite. Document
+                    // switches already clear those flags before synchronization.
+                    self.ui.mask_target = channel == ChannelTarget::LayerMask || (channel == ChannelTarget::Composite && self.ui.mask_target);
                     self.ui.vector_mask_target = channel == ChannelTarget::VectorMask;
                     self.ui.filter_mask_target = None;
                 }
