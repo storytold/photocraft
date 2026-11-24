@@ -167,7 +167,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             path_set
         ),
-        spec!("path.delete", "Delete Path", [], r##"{"name":str|"work"="work"}"##, has_doc, path_delete),
+        spec!(
+            "path.delete",
+            "Delete Path",
+            [],
+            r##"{"name":str|"work"="work" (with "layer": the layer's vector mask),"layer":id? (with "name":"layer")}"##,
+            has_doc,
+            path_delete
+        ),
         spec!(
             "path.transform",
             "Free Transform Path",

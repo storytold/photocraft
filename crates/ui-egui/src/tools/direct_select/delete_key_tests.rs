@@ -1,6 +1,7 @@
-//! #13203: with Direct Selection, Delete / Backspace edits the targeted path, never the active
-//! layer. A selected anchor goes with its two segments, a selected segment on its own (History:
-//! Delete Anchor Point), and with nothing selected the targeted path is deleted (Delete Path).
+//! #13203, #13291: with Direct Selection, Delete / Backspace edits the targeted path, never the
+//! active layer. A selected anchor goes with its two segments, a selected segment on its own
+//! (History: Delete Anchor Point), and with nothing selected the targeted path, saved path, Work
+//! Path or vector mask, is deleted (Delete Path).
 
 use egui::Modifiers;
 use photocraft_doc::vector::Path;
@@ -155,18 +156,57 @@ fn delete_with_nothing_selected_deletes_the_targeted_work_path() {
     assert_eq!(last_step(&app).as_deref(), Some("Delete Path"));
 }
 
+/// #13291: the targeted vector mask goes in one "Delete Path" step, as a saved path does.
 #[test]
 fn delete_with_nothing_selected_deletes_the_targeted_vector_mask() {
-    let mut app = app();
-    app.run("layer.vectorMask.fromPath", json!({"name": "Path 1"})).unwrap();
-    app.ui.selected_path = None;
-    app.ui.vector_mask_target = true;
-    let (count, red) = (layers(&app), app.session.active().unwrap().active_layer.unwrap());
-    press(&mut app, egui::Key::Delete);
-    let st = app.session.active().unwrap();
-    assert_eq!(layers(&app), count, "every layer is still there");
-    assert!(st.doc.layer(red).unwrap().vector_mask.is_none(), "the vector mask is deleted");
-    assert!(path1(&app).is_some(), "the saved path stays");
+    for key in [egui::Key::Delete, egui::Key::Backspace] {
+        let mut app = app();
+        app.run("layer.vectorMask.fromPath", json!({"name": "Path 1"})).unwrap();
+        app.ui.selected_path = None;
+        app.ui.vector_mask_target = true;
+        let (count, red, n) = (layers(&app), app.session.active().unwrap().active_layer.unwrap(), steps(&app));
+        press(&mut app, key);
+        let st = app.session.active().unwrap();
+        assert_eq!(layers(&app), count, "{key:?}: every layer is still there");
+        assert!(st.doc.layer(red).unwrap().vector_mask.is_none(), "{key:?}: the vector mask is deleted");
+        assert!(path1(&app).is_some(), "{key:?}: the saved path stays");
+        assert_eq!((steps(&app), last_step(&app).as_deref()), (n + 1, Some("Delete Path")), "{key:?}");
+        app.run("edit.undo", json!({})).unwrap();
+        assert!(app.session.active().unwrap().doc.layer(red).unwrap().vector_mask.is_some(), "{key:?}: Undo brings the mask back");
+    }
+}
+
+/// #13291, measured 2026-11-23 in the reference application: with Direct Selection, a shape layer's
+/// path targeted and nothing selected, Delete and Backspace delete the whole shape layer in one
+/// "Delete Layer" step. True for a live shape and for a shape made from a drawn path.
+#[test]
+fn delete_with_nothing_selected_deletes_the_targeted_shape_layer() {
+    for from_path in [false, true] {
+        for key in [egui::Key::Delete, egui::Key::Backspace] {
+            let mut app = app();
+            let red = app.session.active().unwrap().active_layer.unwrap();
+            let info = if from_path {
+                app.run("path.toShape", json!({"name": "Path 1", "layerName": "Shape", "fill": "#cc3333"})).unwrap()
+            } else {
+                app.run("shape.create", json!({"kind": "rect", "rect": [500, 400, 100, 100], "fill": "#cc3333", "name": "Shape"})).unwrap()
+            };
+            let shape = photocraft_doc::LayerId(info["layer"].as_u64().unwrap());
+            app.ui.selected_path = None;
+            app.ui.vector_mask_target = false;
+            let tag = format!("{key:?}, from a drawn path: {from_path}");
+            assert_eq!(app.session.active().unwrap().active_layer, Some(shape), "{tag}: the shape layer is active");
+            let (count, n) = (layers(&app), steps(&app));
+            press(&mut app, key);
+            let st = app.session.active().unwrap();
+            assert_eq!(layers(&app), count - 1, "{tag}: one layer less");
+            assert!(st.doc.layer(shape).is_none(), "{tag}: the shape layer is deleted");
+            assert!(st.doc.layer(red).is_some(), "{tag}: the Red layer stays");
+            assert!(path1(&app).is_some(), "{tag}: the saved path stays");
+            assert_eq!((steps(&app), last_step(&app).as_deref()), (n + 1, Some("Delete Layer")), "{tag}");
+            app.run("edit.undo", json!({})).unwrap();
+            assert!(app.session.active().unwrap().doc.layer(shape).is_some(), "{tag}: Undo brings the shape layer back");
+        }
+    }
 }
 
 #[test]
