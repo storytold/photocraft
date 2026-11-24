@@ -6,7 +6,8 @@
 //! The prompt is a `StandardPrompt` on the dialog host (`ui.inspect` shows it, `ui.dialog.confirm`
 //! and `ui.dialog.cancel` answer it). OK runs the matching `layer.rasterize.*` command and nothing
 //! else: the click that opened the prompt is not replayed, as in Photoshop (#8806), so the next
-//! click paints. Cancel does nothing.
+//! click paints. Cancel does nothing. The Patch tool's prompt is the exception (#12121): its drag is
+//! over when that prompt opens, so OK also applies the `paint.patch` the drag worked out.
 //!
 //! A filter on a type layer asks the same question (#4303), with Photoshop's Convert to Smart
 //! Object / Rasterize / Cancel: the layer is converted or rasterized, then the filter is chosen
@@ -30,12 +31,13 @@ pub enum Kind {
 }
 
 /// What the prompt asked about: rasterize `layer` (a `kind` layer); with `filter`, then run that
-/// filter and its params on it.
+/// filter and its params on it; with `patch`, then run `paint.patch` with those params (#12121).
 // Whether Convert is offered is fixed when the prompt opens (the button exists or not), so the tag does not carry it.
 pub(crate) struct Rasterize {
     kind: Kind,
     layer: u64,
     filter: Option<(String, Value)>,
+    patch: Option<Value>,
 }
 
 impl Kind {
@@ -113,6 +115,18 @@ pub fn intercept(app: &mut PhotocraftApp, tool: Tool, x: f64, y: f64, pressure: 
     true
 }
 
+/// Opens the same question for a Patch drag on a `layer` that must be rasterized first: OK rasterizes
+/// it and then runs `paint.patch` with `params`, the params the finished drag had worked out, so the
+/// patch lands on the rasterized layer (#12121). Cancel does nothing.
+pub fn open_patch(app: &mut PhotocraftApp, kind: Kind, layer: photocraft_doc::LayerId, params: Value) -> DialogId {
+    let prompt = StandardPrompt::custom(tl!(kind.message()).to_owned())
+        .title(tl!("PhotoCraft").to_owned())
+        .button(PromptChoice::Proceed, tl!("OK").to_owned())
+        .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
+        .tag(Rasterize { kind, layer: layer.0, filter: None, patch: Some(params) });
+    alerts::open_prompt(app, prompt).unwrap_or_else(|open| open)
+}
+
 /// Opens the prompt for `layer`; OK rasterizes it, and the id of the prompt already open comes back
 /// when there is one. `tool` and `at` (x, y, pressure) name the press that opened it; the press is
 /// never replayed, so they change nothing.
@@ -121,7 +135,7 @@ pub fn open(app: &mut PhotocraftApp, kind: Kind, layer: photocraft_doc::LayerId,
         .title(tl!("PhotoCraft").to_owned())
         .button(PromptChoice::Proceed, tl!("OK").to_owned())
         .button(PromptChoice::Cancel, tl!("Cancel").to_owned())
-        .tag(Rasterize { kind, layer: layer.0, filter: None });
+        .tag(Rasterize { kind, layer: layer.0, filter: None, patch: None });
     alerts::open_prompt(app, prompt).unwrap_or_else(|open| open)
 }
 
@@ -166,6 +180,7 @@ pub fn intercept_filter(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
         kind: Kind::Type,
         layer: layer.0,
         filter: Some((id.to_owned(), params.clone())),
+        patch: None,
     });
     let dialog = alerts::open_prompt(app, prompt).unwrap_or_else(|open| open);
     Some(Ok(json!({"dialog": dialog.value()})))
@@ -173,12 +188,15 @@ pub fn intercept_filter(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
 
 /// The `PROMPTS` entry: Proceed rasterizes, Alternate converts to a Smart Object (the filter prompt
 /// only), Cancel does nothing. The filter of a filter prompt runs at once, as the menu would, now
-/// that the layer can take it. `false` for another family's answer.
+/// that the layer can take it. A patch prompt's Proceed runs `paint.patch` on the layer it just
+/// rasterized (#12121). `false` for another family's answer.
 pub(crate) fn answer(app: &mut PhotocraftApp, ctx: &egui::Context, answer: &mut PromptAnswer) -> bool {
-    let Some(Rasterize { kind, layer, filter }) = answer.take_tag::<Rasterize>() else { return false };
-    let result = match (answer.choice, filter) {
-        (PromptChoice::Proceed, None) => rasterize(app, kind, layer),
-        (PromptChoice::Proceed | PromptChoice::Alternate, Some((filter, params))) => {
+    let Some(Rasterize { kind, layer, filter, patch }) = answer.take_tag::<Rasterize>() else { return false };
+    let result = match (answer.choice, filter, patch) {
+        (PromptChoice::Proceed, None, None) => rasterize(app, kind, layer),
+        // The Patch drag had already ended when this prompt opened, so its params re-run here.
+        (PromptChoice::Proceed, None, Some(params)) => rasterize_then_patch(app, kind, layer, params),
+        (PromptChoice::Proceed | PromptChoice::Alternate, Some((filter, params)), None) => {
             convert_for_filter(app, ctx, answer.choice == PromptChoice::Alternate, &filter, params, layer)
         }
         _ => return true,
@@ -201,6 +219,14 @@ fn rasterize(app: &mut PhotocraftApp, kind: Kind, layer: u64) -> Result<Value, S
     // The press that opened the prompt is not replayed: Photoshop only converts the layer, the
     // next click paints (#8806).
     Ok(json!({ "rasterized": r }))
+}
+
+/// OK on the Patch tool's prompt: rasterize the layer, then apply the patch the drag had worked out.
+/// A patch that fails afterwards leaves the layer rasterized and reports the error in the status bar.
+fn rasterize_then_patch(app: &mut PhotocraftApp, kind: Kind, layer: u64, params: Value) -> Result<Value, String> {
+    let rasterized = rasterize(app, kind, layer)?;
+    let patch = app.run("paint.patch", params)?;
+    Ok(json!({ "rasterized": rasterized, "patched": patch }))
 }
 
 /// The filter prompt's answer: convert (`smart`) or rasterize the layer, then run the filter.

@@ -476,6 +476,15 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         return;
     }
     let p = json!({"offset": off, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
+    // #12121: on a Type layer the reference asks its rasterize question instead of refusing, and OK
+    // applies this very patch on the layer it just rasterized. Only the measured case asks: the
+    // layer's own pixels in plain mode. Every other target and layer kind keeps the engine's refusal.
+    if let Some((kind, layer)) = crate::rasterize_prompt::needed(app)
+        && kind == crate::rasterize_prompt::Kind::Type
+    {
+        crate::rasterize_prompt::open_patch(app, kind, layer, p);
+        return;
+    }
     match app.run("paint.patch", p) {
         Ok(_) => crate::patch_preview::committed(app, preview, off),
         Err(e) => {
