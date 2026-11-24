@@ -330,7 +330,7 @@ fn page_of(channels: usize, data: Vec<u8>, emulsion_down: bool) -> PrintPage {
 }
 
 #[test]
-fn printed_pdf_bakes_counterclockwise_rotation_into_image_samples() {
+fn printed_pdf_bakes_native_counterclockwise_rotation_into_image_samples() {
     let page = PrintPage {
         paper: (600.0, 800.0),
         image: PrintImage { width: 2, height: 3, channels: 1, data: vec![0, 64, 128, 192, 224, 255], icc: None },
@@ -342,7 +342,7 @@ fn printed_pdf_bakes_counterclockwise_rotation_into_image_samples() {
         emulsion_down: false,
     };
     let pdf = print_pdf(&page);
-    assert_eq!(pdf_image(&pdf), (3, 2, "/DeviceGray".into(), vec![64, 192, 255, 0, 128, 224]));
+    assert_eq!(pdf_image(&pdf), (3, 2, "/DeviceGray".into(), vec![224, 128, 0, 255, 192, 64]));
     assert!(pdf_content(&pdf).contains("q 72.000 0 0 108.000 100.000 200.000 cm /Im0 Do Q"));
 }
 
