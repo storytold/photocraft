@@ -1,0 +1,8 @@
+# The Rust release CI and contributors build with. One release means a new Rust release does not
+# start a cold build in every cache key (they hold `rustc -vV`). The nightly CI run warns when
+# a newer stable exists (scripts/ci-toolchain-bump.py); a bump is a pull request that changes `channel`.
+# `rust-version` in Cargo.toml is the oldest release the sources support.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

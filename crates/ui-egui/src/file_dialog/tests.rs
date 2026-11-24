@@ -238,7 +238,7 @@ fn a_layer_without_alpha_is_opaque() {
 #[test]
 fn transparent_png_keeps_its_format_until_its_lone_layer_becomes_smart() {
     let (mut app, files, written) = app();
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
+    std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "transparent.PNG", &Default::default()).unwrap().bytes;
     let doc = photocraft_io::import("transparent.PNG", &bytes).unwrap().document;
     assert_eq!(doc.layers.len(), 1);
@@ -504,7 +504,7 @@ fn menu_place_preserves_an_unfinished_transform() {
 fn open_starts_in_the_last_used_folder() {
     let (mut app, files, _) = app();
     let ctx = egui::Context::default();
-    app.ui.recent_files = vec!["/pics/cat.psd".into(), "/old/dog.png".into()];
+    *app.ui.recent_files = vec!["/pics/cat.psd".into(), "/old/dog.png".into()];
     menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
     let asked = last_request(&files);
     assert_eq!(asked.kind, PickKind::OpenMany);
@@ -515,7 +515,7 @@ fn open_starts_in_the_last_used_folder() {
 #[test]
 fn ask_folder_uses_the_async_dialog_and_returns_the_selected_path() {
     let (mut app, files, _) = app();
-    app.ui.recent_files = vec!["/pics/cat.psd".into()];
+    *app.ui.recent_files = vec!["/pics/cat.psd".into()];
     let selected = Rc::new(RefCell::new(None));
     let result = selected.clone();
 
@@ -911,7 +911,7 @@ fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     app.run("layer.new.layer", json!({"name": "Same/name"})).unwrap();
     app.run("paint.bucket", json!({"x": 0, "y": 0, "color": "#00ff00"})).unwrap();
     app.run("select.allLayers", json!({})).unwrap();
-    let selected = app.session.active().unwrap().selected_layers();
+    let selected = app.session.active().unwrap().selected_layers().to_vec();
     let before = app.session.active().unwrap().doc.clone();
     let sources = Rc::new(RefCell::new(Vec::new()));
     let capture = sources.clone();
