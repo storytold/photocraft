@@ -79,6 +79,7 @@ fn derive(id: &str, fields: &mut DialogFields) {
         artboard_name_options::derive(fields);
     }
     if id == "image.applyImage" {
+        apply_image_source_derive(fields);
         apply_image_mask_derive(fields);
     }
 }
@@ -629,25 +630,25 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             ]
         }
         "image.applyImage" => {
-            // Source layer: Merged, then the pixel layers top to bottom (the engine takes
-            // the topmost layer of a name), shown by their own names.
-            let mut layers = vec!["merged".to_string()];
-            for (_, _, l) in d.walk().into_iter().rev() {
-                if l.surface().is_some() && !layers.contains(&l.name) {
-                    layers.push(l.name.clone());
-                }
-            }
+            // The target's own Layer and Channel rows; another source document has its own pair (#14480).
+            let (layers, layer) = apply_image_layers(d);
+            let on_target = |row: Param| row.visible_when(SOURCE_IS_TARGET, true);
+            let mut rows = apply_image_source_rows(app);
             // Scale and Offset only affect Add and Subtract.
-            let mut rows = vec![
-                choice("sourceLayer", tl!("Layer"), channels(&layers), "merged"),
-                choice("sourceChannel", tl!("Source Channel"), channels(&load), &chans[0]),
+            rows.extend([
+                on_target(choice("sourceLayer", tl!("Layer"), channels(&layers), &layer)),
+                on_target(choice("sourceChannel", tl!("Source Channel"), channels(&load), &chans[0])),
+            ]);
+            rows.extend(apply_image_other_source_rows(app));
+            rows.extend([
                 Param::new("sourceInvert", tl!("Invert"), ParamKind::bool(false)),
+                Param::read_only_text("__target", tl!("Target"), d.name.clone()),
                 choice("blending", tl!("Blending"), blend_modes(), "multiply"),
                 Param::new("opacity", tl!("Opacity"), ParamKind::number(Some(0.0), Some(100.0), 100.0, 1.0, 0)),
                 Param::new("scale", tl!("Scale"), ParamKind::number(Some(0.001), Some(2.0), 1.0, 0.1, 3)),
                 Param::new("offset", tl!("Offset"), ParamKind::int(Some(-255), Some(255), 0)),
                 Param::new("preserveTransparency", tl!("Preserve Transparency"), ParamKind::bool(false)),
-            ];
+            ]);
             rows.extend(apply_image_mask_rows(app));
             rows
         }
@@ -668,6 +669,78 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
     };
     Some((rows, DialogFields::new()))
 }
+
+/// Apply Image's Source (#14480): the index of one of [`apply_image_documents`], the target by default.
+const SOURCE_DOCUMENT: &str = "__sourceDocument";
+/// Shows the target's own Layer and Channel rows (`sourceLayer`, `sourceChannel`): the target is the chosen Source.
+const SOURCE_IS_TARGET: &str = "__sourceIsTarget";
+
+/// The Layer row of source document `index` when it is not the target.
+fn source_layer_key(index: usize) -> String {
+    format!("__sourceLayer/{index}")
+}
+
+/// The Channel row of source document `index` when it is not the target.
+fn source_channel_key(index: usize) -> String {
+    format!("__sourceChannel/{index}")
+}
+
+/// Shows the Layer and Channel rows of source document `index`.
+fn source_shown_key(index: usize) -> String {
+    format!("__sourceShown/{index}")
+}
+
+/// Apply Image's Source row (#14480): the documents of [`apply_image_documents`], the target first chosen.
+fn apply_image_source_rows(app: &PhotocraftApp) -> Vec<Param> {
+    let names: Vec<(String, Label)> = apply_image_documents(app).iter().map(|(i, d)| (i.to_string(), Label::from(d.name.clone()))).collect();
+    let target = app.session.active_index().map(|i| i.to_string()).unwrap_or_default();
+    vec![choice(SOURCE_DOCUMENT, tl!("Source"), names, &target)]
+}
+
+/// The Layer and Channel rows of each source document other than the target (#14480): its Layer list (as the
+/// target's) and its channels (the composite, the colour channels of a colour document, the alpha channels).
+fn apply_image_other_source_rows(app: &PhotocraftApp) -> Vec<Param> {
+    let target = app.session.active_index();
+    let mut rows = Vec::new();
+    for (i, doc) in apply_image_documents(app).into_iter().filter(|(i, _)| Some(*i) != target) {
+        let (layers, layer) = apply_image_layers(doc);
+        let mode = doc.pixel_format().mode;
+        let mut list = vec![photocraft_engine::channel_cmds::composite_name(mode).to_string()];
+        if mode.color_channels() > 1 {
+            list.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
+        }
+        list.extend(doc.channels.iter().map(|c| c.name.clone()));
+        let composite = list.first().cloned().unwrap_or_default();
+        rows.push(choice(&source_layer_key(i), tl!("Layer"), channels(&layers), &layer).visible_when(source_shown_key(i), true));
+        rows.push(choice(&source_channel_key(i), tl!("Channel"), channels(&list), &composite).visible_when(source_shown_key(i), true));
+    }
+    rows
+}
+
+/// Brings the Source group's shell keys and the source parameter up to date: the target as Source shows its own
+/// Layer and Channel rows, which send the flat `sourceLayer` / `sourceChannel` / `sourceInvert` as before; another
+/// document shows its own pair and sends `source: {document, layer, channel, invert}`, which the command reads before
+/// the flat keys.
+fn apply_image_source_derive(fields: &mut DialogFields) {
+    let chosen = fields.text(SOURCE_DOCUMENT).and_then(|s| s.parse::<usize>().ok());
+    let others: Vec<usize> = fields.iter().filter_map(|(k, _)| k.strip_prefix("__sourceLayer/").and_then(|i| i.parse().ok())).collect();
+    for &i in &others {
+        fields.set(source_shown_key(i), chosen == Some(i));
+    }
+    fields.remove("source");
+    let other = chosen.filter(|i| others.contains(i));
+    fields.set(SOURCE_IS_TARGET, other.is_none());
+    let Some(i) = other else { return };
+    let (Some(layer), Some(channel)) = (fields.text(&source_layer_key(i)).map(str::to_owned), fields.text(&source_channel_key(i)).map(str::to_owned)) else {
+        return;
+    };
+    let invert = fields.bool("sourceInvert") == Some(true);
+    fields.set("source", FieldValue::Json(json!({"document": i, "layer": layer, "channel": channel, "invert": invert})));
+}
+
+#[cfg(test)]
+#[path = "../../dialogs/apply_image_source_document_tests.rs"]
+mod apply_image_source_document_tests;
 
 /// Apply Image's Mask... checkbox (#14489): off by default; ticked, it shows the mask group below it.
 const MASK_ON: &str = "__mask";
@@ -698,7 +771,11 @@ fn mask_shown_key(index: usize) -> String {
 pub(crate) fn apply_image_documents(app: &PhotocraftApp) -> Vec<(usize, &photocraft_doc::Document)> {
     let Some(target) = app.session.active() else { return Vec::new() };
     let (size, depth) = (target.doc.size, target.doc.depth);
-    app.session.documents().iter().enumerate().filter(|(_, st)| st.doc.size == size && st.doc.depth == depth).map(|(i, st)| (i, &*st.doc)).collect()
+    let mut documents: Vec<(usize, &photocraft_doc::Document)> =
+        app.session.documents().iter().enumerate().filter(|(_, st)| st.doc.size == size && st.doc.depth == depth).map(|(i, st)| (i, &*st.doc)).collect();
+    // Document ids are handed out as documents open, so they keep the opening order when tabs are dragged.
+    documents.sort_by_key(|(_, d)| d.id.0);
+    documents
 }
 
 /// The Layer list of a source document and its default: Merged, then its pixel layers top to bottom (the engine takes
