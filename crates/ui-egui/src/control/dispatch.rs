@@ -399,6 +399,7 @@ fn theme_param(app: &PhotocraftApp, p: &Value) -> std::result::Result<Option<(cr
 // -- tools: stroke, tool, gradient, eyedropper, Content-Aware Move, tile grid, layer filter, marquee --
 
 struct ToolSet {
+    use_aligned_rendering: Option<bool>,
     gradient_blend: Option<photocraft_color::BlendMode>,
     shape_stroke: Option<Option<photocraft_doc::ShapeStroke>>,
     frame_shape: Option<String>,
@@ -425,6 +426,7 @@ impl ToolSet {
     fn parse(app: &PhotocraftApp, p: &Value) -> std::result::Result<Self, String> {
         let (marquee_style, marquee_size) = marquee_params(app, p)?;
         Ok(Self {
+            use_aligned_rendering: bool_field(p, "useAlignedRendering")?,
             gradient_blend: gradient_blend_param(p)?,
             shape_stroke: shape_stroke_param(app, p)?,
             frame_shape: frame_shape_param(p)?,
@@ -483,6 +485,9 @@ impl ToolSet {
             // Each tool keeps its own brush (#218), so switch it in before `brushSize`
             // sets the new tool's size.
             crate::paint_mouse::sync_tool_brush(app);
+        }
+        if let Some(value) = self.use_aligned_rendering {
+            app.ui.tool_options.align_edges = value;
         }
         self.apply_gradient_and_trace(app);
         let eyedropper = &mut app.ui.tool_options.eyedropper;

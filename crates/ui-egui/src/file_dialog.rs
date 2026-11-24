@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use craft::host::PickId;
 use craft::host::{PickKind, PickRequest, Picked};
+use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::DocId;
 use serde_json::{Value, json};
 
@@ -24,7 +25,7 @@ use crate::PhotocraftApp;
 use crate::file_open::{display_name, path_text};
 
 mod filters;
-use filters::{open_filters, save_request};
+use filters::{SaveCopyFormats, open_filters, save_request};
 
 /// What a file or folder dialog asks the user for, on the web build, which keeps its own dialog
 /// path until the framework's web `Files` replaces it (FW-264).
@@ -214,20 +215,32 @@ impl PhotocraftApp {
     /// (#1826, #1866). A caller's explicit directory is kept. The chosen folder is remembered for
     /// the document the dialog was asked for.
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.pick_save_in(suggested, false, then)
+        self.pick_save_in(suggested, false, None, then)
+    }
+
+    /// Save a Copy filters the picker by the copied document's mode and depth.
+    pub(crate) fn pick_save_copy(
+        &mut self,
+        suggested: &str,
+        mode: ColorMode,
+        depth: SampleType,
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        self.pick_save_in(suggested, false, SaveCopyFormats::for_document(mode, depth), then)
     }
 
     /// [`Self::pick_save`] for the export flows (Export As, Quick Export, Save for Web, ...): starts in
     /// the folder [`export_start_dir`] picks (#10192), and once `then` has exported, remembers the
     /// chosen file's folder in `export.lastFolder`; a failed or cancelled export leaves it alone.
     pub(crate) fn pick_export(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.pick_save_in(suggested, true, then)
+        self.pick_save_in(suggested, true, None, then)
     }
 
     fn pick_save_in(
         &mut self,
         suggested: &str,
         export: bool,
+        copy: Option<SaveCopyFormats>,
         then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
         let mut suggested = PathBuf::from(suggested);
@@ -246,9 +259,13 @@ impl PhotocraftApp {
                 suggested = dir.join(suggested);
             }
         }
-        let request = save_request(if export { "export" } else { "document" }, &suggested.to_string_lossy());
+        let request = save_request(if export { "export" } else { "document" }, &suggested.to_string_lossy(), copy);
         self.ask_file(request, move |app, picked| {
             let Some(path) = path_strings(&picked).into_iter().next() else { return Err(UNEXPECTED.into()) };
+            // Some pickers accept a typed extension outside their filter list.
+            if copy.is_some_and(|formats| !formats.allows_path(Path::new(&path))) {
+                return Err(tl!("Choose a file type that supports this document's colour mode and bit depth.").to_string());
+            }
             // The web answers a download name, which has no folder to remember.
             let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
             // An export's folder only once it has exported: a failed one doesn't move where
