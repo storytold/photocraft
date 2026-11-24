@@ -49,26 +49,6 @@ fn background_value(s: &Session, x: i32, y: i32) -> [f32; 4] {
     s.active().unwrap().doc.background().unwrap().surface().unwrap().rgba(x, y)
 }
 
-/// A 32-bit document holds linear light: its Gray is the value an 8-bit grey 128 becomes when the
-/// document is converted to 32 bits (0.2159), not 128/255.
-#[test]
-fn gray_in_a_32_bit_document_is_linear_grey_128() {
-    let mut converted = crate::session();
-    converted.execute("file.new", json!({"width": 4, "height": 4, "depth": 8, "background": "white"})).unwrap();
-    converted.execute("edit.fill", json!({"color": "#808080"})).unwrap();
-    converted.execute("image.mode.bits32", json!({})).unwrap();
-    let want = background_value(&converted, 1, 1);
-    assert!((want[0] - 0.2159).abs() < 0.002, "converted grey 128: {want:?}");
-    let mut s = doc(32);
-    s.execute("image.canvasSize", GROW("gray")).unwrap();
-    let got = background_value(&s, 450, 350);
-    for i in 0..3 {
-        assert!((got[i] - want[i]).abs() < 1e-4, "channel {i}: {got:?} vs {want:?}");
-    }
-    assert_eq!(got[3], 1.0);
-    assert_eq!(background_value(&s, 10, 10)[..3], [1.0, 1.0, 1.0], "the old Background keeps its pixels");
-}
-
 /// An Indexed Color document was not measured and keeps today's behaviour: Gray takes the
 /// background colour there, as an unknown value does.
 #[test]

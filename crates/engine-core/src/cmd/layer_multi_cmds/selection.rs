@@ -14,7 +14,7 @@ pub fn selected(s: &Session) -> Vec<LayerId> {
 
 /// The layers a layer command acts on: the `layer` param when given, else every selected layer
 /// (bottom-to-top), else the active layer. A single layer behaves exactly as before.
-pub(crate) fn targets(s: &Session, p: &serde_json::Value) -> Result<Vec<LayerId>> {
+pub fn targets(s: &Session, p: &serde_json::Value) -> Result<Vec<LayerId>> {
     if p.get("layer").is_some() {
         return Ok(vec![crate::commands::layer_param(s, p)?]);
     }
@@ -41,7 +41,7 @@ pub(crate) fn mask_targets(s: &Session, p: &serde_json::Value) -> Result<Vec<Lay
 
 /// Ids in `ids` that have no ancestor also in `ids` (a selected group already carries its
 /// selected children), bottom-to-top.
-pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
+pub fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
     doc.layers.index().roots(ids)
 }
 
