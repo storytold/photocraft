@@ -181,6 +181,11 @@ pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut VectorTools, _response:
         } else {
             pen::freeform_finish_owned(app, &points, &straight, owner);
         }
+        if app.ui.pen.as_ref().is_some_and(|pen| pen.freeform_origin && pen.commit_failed) {
+            // Alt release and the next press can share a pass. The trace begun by that press
+            // must leave the failed draft alone, as any press after a separate Alt release would.
+            state.freeform.draft.cancel();
+        }
     }
     // PLAN: assumed `PathSelectionTool::owned_by(&mut self, owner: Option<VectorOwner>)` (tools-w35, R94).
     for event in state.path_selection.take_events() {

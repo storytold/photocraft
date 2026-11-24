@@ -109,6 +109,11 @@ fn held(mods: Modifiers) -> Mods {
 /// commands the last pass fired, and the window's Escape before the canvas or a dialog can take it), then draws the
 /// document area and the hosted dialogs.
 fn run_frame(app: &mut PhotocraftApp) {
+    frame_with_events(app, Vec::new());
+}
+
+/// One frame with all the given raw window events in its input batch.
+pub(crate) fn frame_with_events(app: &mut PhotocraftApp, events: Vec<egui::Event>) {
     // The app's frame reconciles the views with the open documents before anything draws.
     app.sync_views();
     let ctx = ctx(app);
@@ -117,7 +122,8 @@ fn run_frame(app: &mut PhotocraftApp) {
     app.framework_before_input(&ctx);
     // The platform completes an IME reset the framework asked for in the pass before; without it the engine drops
     // every composition event after an interrupted composition.
-    let os_input = ctx.data_mut(|d| d.remove_temp::<Vec<egui::Event>>(egui::Id::unique(OS_IME_RESETS))).unwrap_or_default();
+    let mut os_input = ctx.data_mut(|d| d.remove_temp::<Vec<egui::Event>>(egui::Id::unique(OS_IME_RESETS))).unwrap_or_default();
+    os_input.extend(events);
     frames.frame_without_input(os_input, |ui| {
         crate::shortcut_dispatch::record_view_commands(app);
         crate::shortcuts::handle(app, &ui.ctx().clone());
