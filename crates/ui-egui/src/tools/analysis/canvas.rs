@@ -29,6 +29,8 @@ const MOVED: f64 = 0.5;
 /// The family's state between passes, kept in `CanvasTools::analysis`.
 pub(crate) struct AnalysisTools {
     ruler: RulerTool,
+    /// The live Ruler line while a drag is in progress (`RulerTool` does not store it between passes).
+    ruler_draft: Option<Option<RulerLine>>,
     sampler: ColorSamplerTool,
     /// The document's points as the framework's collection, which the sampler pass borrows. It is rebuilt from the
     /// document at every pass (`tool`); it is storage for that borrow, not state.
@@ -41,6 +43,7 @@ impl Default for AnalysisTools {
     fn default() -> Self {
         Self {
             ruler: RulerTool::new(),
+            ruler_draft: None,
             sampler: ColorSamplerTool::new(),
             samplers: ColorSamplers::new(),
             count: CountTool::default(),
@@ -70,13 +73,23 @@ fn ruler_line(app: &PhotocraftApp) -> Option<RulerLine> {
     })
 }
 
+/// The active document's Ruler line, or the live draft while a Ruler drag is in progress.
+pub(crate) fn live_ruler(app: &PhotocraftApp) -> Option<photocraft_doc::Ruler> {
+    if app.ui.tool == Tool::Ruler
+        && let Some(draft) = app.canvas_tools.analysis.ruler_draft
+    {
+        return draft.map(|l| photocraft_doc::Ruler { start: [l.start.x, l.start.y], end: [l.end.x, l.end.y], protractor: l.protractor.map(|p| [p.x, p.y]) });
+    }
+    app.session.active()?.doc.measurement.ruler
+}
+
 /// The tool of `Tool::{Ruler, ColorSampler, Count, Note}` for one pass.
 pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut AnalysisTools, _host: CanvasHost) -> FamilyTool<'a> {
     let tool = scope.with_app(|app| app.ui.tool);
-    let AnalysisTools { ruler, sampler, samplers, count, note } = state;
+    let AnalysisTools { ruler, ruler_draft, sampler, samplers, count, note } = state;
     match tool {
         Tool::Ruler => {
-            let line = scope.with_app(|app| ruler_line(app));
+            let line = ruler_draft.unwrap_or_else(|| scope.with_app(|app| ruler_line(app)));
             Box::new(ruler.pass(line))
         }
         // PLAN: with no document the old tool said "No document open" in the status line on a press; the host runs no
@@ -100,14 +113,27 @@ pub(crate) fn tool<'a>(scope: &'a ToolScope<'a>, state: &'a mut AnalysisTools, _
 
 /// Turns the events the tools reported into engine commands, in order.
 pub(crate) fn drain(app: &mut PhotocraftApp, state: &mut AnalysisTools, _response: &ToolHostResponse) {
+    if app.ui.tool != Tool::Ruler {
+        state.ruler_draft = None;
+    }
     for event in state.ruler.take_events() {
         match event {
-            // A drag's updates are not applied: the pass shows the running line from the tool's own proposal, and the
-            // document takes the line once, at the commit.
-            EditEvent::Commit { after, .. } => set_ruler(app, after),
-            EditEvent::Set { after, .. } => set_ruler(app, after),
-            // Escape: the line from before the press comes back.
-            EditEvent::Cancel { before: Some(Mixed::Same(line)), .. } => set_ruler(app, line),
+            // `RulerTool` does not store the running line between passes; keep the drag's proposal
+            // here so subsequent frames can drag and paint it, and commit to the document once.
+            EditEvent::Update { value, .. } => state.ruler_draft = Some(value),
+            EditEvent::Commit { after, .. } | EditEvent::Set { after, .. } => {
+                state.ruler_draft = None;
+                set_ruler(app, after);
+            }
+            // Escape: drop the draft and restore the line from before the press if needed.
+            EditEvent::Cancel { before, .. } => {
+                state.ruler_draft = None;
+                if let Some(Mixed::Same(line)) = before
+                    && line != ruler_line(app)
+                {
+                    set_ruler(app, line);
+                }
+            }
             _ => {}
         }
     }
@@ -220,7 +246,8 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
 pub(crate) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: Rect) {
     let view = &app.ui.view;
     let (show_count, show_notes, extras) = (view.shows(view.show.count), view.shows(view.show.notes), view.extras);
-    let line = ruler_line(app).filter(|_| extras);
+    let line =
+        if app.ui.tool == Tool::Ruler { app.canvas_tools.analysis.ruler_draft.unwrap_or_else(|| ruler_line(app)) } else { ruler_line(app) }.filter(|_| extras);
     let samplers = samplers_of(app).map(|(s, _)| s).filter(|_| extras);
     let groups: Vec<CountGroupMarks> = if show_count {
         app.session.active().map_or_else(Vec::new, |d| {
