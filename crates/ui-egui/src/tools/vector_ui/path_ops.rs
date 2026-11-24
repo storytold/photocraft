@@ -102,7 +102,11 @@ pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let name =
         shape_source_path(app).ok_or_else(|| tl!("No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
-    let r = app.run("path.toShape", json!({"name": name, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app)}))?;
+    let r = app.run(
+        "path.toShape",
+        json!({"name": name, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app),
+        "useAlignedRendering": app.ui.tool_options.align_edges}),
+    )?;
     if name == "work" && app.ui.selected_path.as_deref() == Some("work") {
         app.ui.selected_path = None;
     }
@@ -230,11 +234,32 @@ pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
 /// anchor, the segment goes on its own: its anchors stay and the subpath opens there, as in
 /// Photoshop (#13203). With nothing selected, the path Direct Selection targets is deleted: a
 /// saved path, the work path or a vector mask. The work path with the Pen, Freeform Pen,
-/// Curvature Pen or Path Selection is [`delete_key_deletes_work_path`]. A shape layer's path
-/// wasn't measured: the key keeps deleting the layer.
+/// Curvature Pen or Path Selection is [`delete_key_deletes_work_path`]. With Path Selection on a
+/// shape layer, a saved path or a vector mask, the selected components go
+/// (`path.deleteComponents`), or with none selected the targeted saved path (#13269); the layer
+/// stays. Direct Selection's shape layer path isn't measured: the key keeps deleting the layer.
 pub(crate) fn delete_key_edits_path(app: &PhotocraftApp) -> Option<(&'static str, Value)> {
     if delete_key_deletes_work_path(app) {
         return Some(("path.delete", json!({"name": "work"})));
+    }
+    if app.ui.tool == Tool::PathSelection
+        && app.ui.pen.is_none()
+        && app.ui.transform.is_none()
+        && app.ui.direct_selection.editing.is_none()
+        && app.ui.view.shows(app.ui.view.show.target_path)
+    {
+        return match crate::path_components::selected(app) {
+            Some((target @ (PathRef::Layer(_) | PathRef::Saved(_)), _, heads)) => {
+                let mut params = target.params(app);
+                params["subpaths"] = json!(heads);
+                Some(("path.deleteComponents", params))
+            }
+            Some(_) => None,
+            None => {
+                let (i, _) = selected_saved_path_index(app)?;
+                Some(("path.delete", PathRef::Saved(i).params(app)))
+            }
+        };
     }
     let ds = &app.ui.direct_selection;
     let usable = app.ui.tool == Tool::DirectSelection

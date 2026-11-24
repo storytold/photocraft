@@ -42,8 +42,9 @@ pub(super) fn copy_shape_fill(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 pub(super) fn copy_shape_stroke(s: &mut Session, _p: &Value) -> Result<Value> {
-    let stroke = active_shape(s).map_err(EngineError::Other)?.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
-    s.path_stroke_clipboard = Some(stroke);
+    let shape = active_shape(s).map_err(EngineError::Other)?;
+    let stroke = shape.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
+    s.path_stroke_clipboard = Some((stroke, shape.use_aligned_rendering));
     Ok(Value::Null)
 }
 
@@ -58,10 +59,11 @@ pub(super) fn paste_shape_fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn paste_shape_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    let stroke = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
+    let (stroke, use_aligned_rendering) = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
     let id = layer_id(s, p)?;
     with_shape(s, id, "Paste Complete Stroke", |shape, _| {
         shape.stroke = Some(stroke);
+        shape.use_aligned_rendering = use_aligned_rendering;
         Ok(())
     })?;
     shape_info(s, id)
@@ -391,13 +393,14 @@ pub(super) fn shape_info(s: &Session, id: LayerId) -> Result<Value> {
         "path": path_json(&sh.path),
         "fill": sh.fill.as_ref().map(fill_json),
         "stroke": sh.stroke.as_ref().map(stroke_json),
+        "useAlignedRendering": sh.use_aligned_rendering,
         "live": sh.live.as_ref().map(live_json),
         "kind": sh.live.as_ref().map_or("path", live_kind),
         "bounds": bounds,
     }))
 }
 
-pub(crate) fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
+pub fn with_shape<R>(s: &mut Session, id: LayerId, label: &str, f: impl FnOnce(&mut ShapeLayer, &mut Layer) -> Result<R>) -> Result<R> {
     if let Some(st) = s.active() {
         let locks = st.doc.effective_locks(id);
         if locks.all || locks.pixels {
@@ -437,6 +440,15 @@ fn default_name(kind: &str) -> &'static str {
 
 /// Creates a shape layer, or adds path components to the shape identified by `addTo`.
 /// Line Tool additions keep the tool's History name. Other shape additions use Add Shape.
+/// The optional `useAlignedRendering` param (a shape layer's Align Edges): `None` when omitted.
+fn aligned_param(cmd: &str, p: &Value) -> Result<Option<bool>> {
+    match p.get("useAlignedRendering") {
+        None => Ok(None),
+        Some(Value::Bool(enabled)) => Ok(Some(*enabled)),
+        Some(_) => Err(bad(cmd, "`useAlignedRendering` must be a boolean")),
+    }
+}
+
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let add_to = p.get("addTo").and_then(Value::as_u64);
@@ -452,12 +464,17 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
+    let use_aligned_rendering = aligned_param(CMD, p)?;
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
     if let Some(target) = add_to {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
         let label = if kind == "line" && label == "Line Tool" { label } else { "Add Shape" };
         with_shape(s, id, label, |sh, _| {
+            // An addition keeps the target layer's Align Edges unless the param says otherwise.
+            if let Some(enabled) = use_aligned_rendering {
+                sh.use_aligned_rendering = enabled;
+            }
             for mut sp in path.subpaths {
                 // A joined subpath (a hole) belongs to the component before it, which takes `op`.
                 if sp.op != PathOp::Join {
@@ -473,7 +490,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         return shape_info(s, id);
     }
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let mut sh = ShapeLayer { path, fill, stroke, live, ..Default::default() };
+    let mut sh = ShapeLayer { path, fill, stroke, live, use_aligned_rendering: use_aligned_rendering.unwrap_or(false), ..Default::default() };
     let id = s.edit(label, |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));
@@ -507,6 +524,7 @@ fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, O
 /// that would duplicate the selected shape or vector mask.
 pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.toShape";
+    let use_aligned_rendering = aligned_param(CMD, p)?.unwrap_or(false);
     let name = match p.get("name") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) => Some(n.as_str()),
@@ -536,7 +554,7 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.clone()),
         Some(_) => return Err(bad(CMD, "`layerName` must be a name that isn't empty")),
     };
-    let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
+    let mut sh = ShapeLayer { path, fill, stroke, use_aligned_rendering, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));
@@ -645,6 +663,9 @@ pub(super) fn shape_edit(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(v) = p.get("stroke") {
             sh.stroke = parse_stroke(v, sh.stroke.clone(), fgc).map_err(|e| bad(CMD, e))?;
         }
+        if let Some(enabled) = aligned_param(CMD, p)? {
+            sh.use_aligned_rendering = enabled;
+        }
         if let Some(n) = name {
             layer.name = n;
         }
@@ -699,7 +720,7 @@ fn bake_components(sh: &mut ShapeLayer, tol: f64) -> Result<()> {
 /// inverted path (a vector mask's) stays inverted around the merged area. An open subpath is
 /// refused: tracing its fill would close it, or drop a straight one or a lone anchor (a dot under
 /// a round or square cap), losing the stroked geometry.
-pub(crate) fn bake_path(path: &Path, tol: f64) -> Result<Path> {
+pub fn bake_path(path: &Path, tol: f64) -> Result<Path> {
     if path.subpaths.iter().any(|sp| !sp.closed && !sp.knots.is_empty()) {
         return Err(EngineError::Other("Merge Shape Components needs closed paths: close or delete the open subpaths first".into()));
     }

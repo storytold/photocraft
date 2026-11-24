@@ -183,6 +183,61 @@ fn a_stale_prompt_fails_gracefully() {
     assert_eq!(past(&app), before);
 }
 
+/// Review round: the prompt names its layer by number, and a document read back from a file keeps the
+/// layer ids stored in it, so two open documents can hold the same number. A brush press in one
+/// document whose question is answered while another document is active writes in neither of them.
+#[test]
+fn a_document_switch_while_the_prompt_is_up_rasterizes_nothing() {
+    let mut app = app_with(Kind::Type);
+    app.ui.tool = Tool::Brush;
+    let mine = app.session.active_index().unwrap();
+    let text = app.session.active().unwrap().active_layer.unwrap();
+    click(&mut app, 30.0, 20.0);
+    let id = prompt(&app).expect("the press opened the prompt");
+    // A second document made from the bytes of the first: its layers keep the ids stored in the file,
+    // so the same number names a Type layer there too, and that layer is active there.
+    let bytes = photocraft_format::save_to_bytes(&app.session.active().unwrap().doc, &Default::default()).unwrap();
+    let twin = photocraft_format::load_from_bytes(&bytes).unwrap();
+    assert_eq!(twin.layer(text).map(|l| l.content.kind_name()), Some("Type"), "both documents hold a Type layer {}", text.0);
+    app.session.add_document(twin, None);
+    let other = app.session.active_index().unwrap();
+    assert_ne!(other, mine, "the second document is the active one now");
+    assert_eq!(app.session.documents()[other].active_layer, Some(text), "the other document's active layer carries the same id");
+    let (before_other, before_mine) = (app.session.documents()[other].revision, app.session.documents()[mine].revision);
+    answer(&mut app, id);
+    assert!(app.ui.status_error, "OK says why nothing ran: {}", app.ui.status);
+    // Both documents are read live, after the answer.
+    assert_eq!(app.session.documents()[other].revision, before_other, "no history step in the document that is active now");
+    assert_eq!(app.session.documents()[other].doc.layer(text).unwrap().content.kind_name(), "Type", "its Type layer stays editable");
+    assert_eq!(app.session.documents()[mine].revision, before_mine, "the document the question was about is untouched");
+    assert_eq!(app.session.documents()[mine].doc.layer(text).unwrap().content.kind_name(), "Type", "and keeps its text");
+}
+
+/// The Filter menu's prompt keeps its question inside the document it was opened for for the same
+/// reason: OK would otherwise rasterize or convert a same-id layer of another open document and run
+/// the filter on that one.
+#[test]
+fn the_filter_prompt_refuses_a_document_that_is_no_longer_active() {
+    let mut app = app_with(Kind::Type);
+    let mine = app.session.active_index().unwrap();
+    let text = app.session.active().unwrap().active_layer.unwrap();
+    menu(&mut app, BLUR).unwrap();
+    let id = prompt(&app).expect("the filter asks first");
+    let bytes = photocraft_format::save_to_bytes(&app.session.active().unwrap().doc, &Default::default()).unwrap();
+    let twin = photocraft_format::load_from_bytes(&bytes).unwrap();
+    assert_eq!(twin.layer(text).map(|l| l.content.kind_name()), Some("Type"), "both documents hold a Type layer {}", text.0);
+    app.session.add_document(twin, None);
+    let other = app.session.active_index().unwrap();
+    let (before_other, before_mine) = (app.session.documents()[other].revision, app.session.documents()[mine].revision);
+    answer(&mut app, id);
+    assert!(app.ui.status_error, "OK says why nothing ran: {}", app.ui.status);
+    assert_eq!(app.session.documents()[other].revision, before_other, "no history step in the document that is active now");
+    assert_eq!(app.session.documents()[other].doc.layer(text).unwrap().content.kind_name(), "Type", "its Type layer stays editable");
+    assert!(filter_dialog(&app, BLUR).is_none(), "Gaussian Blur did not open on the other document");
+    assert_eq!(app.session.documents()[mine].revision, before_mine, "the document the question was about is untouched");
+    assert_eq!(app.session.documents()[mine].doc.layer(text).unwrap().content.kind_name(), "Type", "and keeps its text");
+}
+
 #[test]
 fn the_control_channel_sees_and_confirms_the_prompt() {
     let mut app = app_with(Kind::Shape);
