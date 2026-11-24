@@ -1,14 +1,10 @@
 //! Tests that run vector commands, moved from the engine-core `count_resize` tests: 4 test(s).
 
-
 use serde_json::{Value, json};
-
 
 use photocraft_engine::Session;
 
-
 const POINT: [f64; 2] = [99.3, 99.7];
-
 
 fn doc() -> Session {
     let mut s = Session::new();
@@ -18,16 +14,13 @@ fn doc() -> Session {
     s
 }
 
-
 fn count_point(s: &Session) -> [f64; 2] {
     s.active().unwrap().doc.measurement.count_groups[0].points[0]
 }
 
-
 fn note(s: &Session) -> [f64; 2] {
     s.active().unwrap().doc.notes[0].position
 }
-
 
 #[test]
 fn count_points_keep_their_coordinates() {
@@ -54,7 +47,6 @@ fn count_points_keep_their_coordinates() {
     }
 }
 
-
 #[test]
 fn all_three_in_a_row_leave_the_point_where_it_was() {
     let mut s = doc();
@@ -64,14 +56,12 @@ fn all_three_in_a_row_leave_the_point_where_it_was() {
     assert_eq!(count_point(&s), POINT);
 }
 
-
 #[test]
 fn crop_still_moves_count_points() {
     let mut s = doc();
     s.execute("image.crop", json!({"x": 50, "y": 50, "width": 300, "height": 200})).unwrap();
     assert_ne!(count_point(&s), POINT, "not measured: Crop keeps today's behaviour");
 }
-
 
 #[test]
 fn ruler_straighten_with_crop_moves_count_points_with_the_image() {

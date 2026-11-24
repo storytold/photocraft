@@ -8,7 +8,6 @@ use photocraft_doc::{Layer, LayerContent};
 
 use serde_json::json;
 
-
 /// Two textured PNGs named a_base.png and b_shift.png (texture, so Auto-Align finds features).
 fn two_files(dir: &std::path::Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let mut s = Session::new();
@@ -30,7 +29,6 @@ fn two_files(dir: &std::path::Path) -> Result<Vec<String>, Box<dyn std::error::E
     }
     Ok(paths)
 }
-
 
 /// The smart object keeps the first file's name with and without aligning; only the document's
 /// name changes.

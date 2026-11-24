@@ -1,25 +1,20 @@
 //! Tests that run vector commands, moved from the engine-core `layer_copy_cmds` tests: 5 test(s).
 
-
-use photocraft_color::{ColorMode};
+use photocraft_color::ColorMode;
 
 use photocraft_doc::{Document, LayerContent, LayerId};
 
 use serde_json::{Value, json};
 
-
 use photocraft_engine::Session;
-
 
 fn doc(s: &Session, i: usize) -> &Document {
     &s.documents()[i].doc
 }
 
-
 fn copied(r: &Value) -> LayerId {
     LayerId(r["layers"][0].as_u64().unwrap())
 }
-
 
 /// The type layer `id` of document `i`.
 fn text(s: &Session, i: usize, id: LayerId) -> &photocraft_doc::TextLayer {
@@ -29,11 +24,9 @@ fn text(s: &Session, i: usize, id: LayerId) -> &photocraft_doc::TextLayer {
     }
 }
 
-
 fn close(a: f32, b: f32) -> bool {
     (a - b).abs() <= 1e-4 * b.abs().max(1.0)
 }
-
 
 /// Document 0 at 72 ppi with "Hello" in Paragraph Style 1 (24 pt) and "He" also in Character
 /// Style 1 (24 pt, underlined); document 1 at 300 ppi, its own styles made by `dest`.
@@ -51,7 +44,6 @@ fn styled_type_docs(dest: impl FnOnce(&mut Session)) -> (Session, LayerId) {
     (s, LayerId(t))
 }
 
-
 /// The styles panel state of `range` in layer `id` of document 1.
 fn styles_of(s: &mut Session, id: LayerId, range: [usize; 2]) -> (Value, Value) {
     s.set_active(1);
@@ -59,7 +51,6 @@ fn styles_of(s: &mut Session, id: LayerId, range: [usize; 2]) -> (Value, Value) 
     let p = s.execute("type.paragraphStyle.list", json!({"layer": id.0, "range": range})).unwrap();
     (c, p)
 }
-
 
 /// #10500: type copied to a document of another resolution brings the styles it uses, as in
 /// the reference application (measured with Duplicate Layer from 72 to 300 ppi): a style the
@@ -94,7 +85,6 @@ fn copied_type_brings_its_styles_scaled() {
     }
 }
 
-
 /// A destination that already has a style of the same name keeps its definition (24 pt), and
 /// the copy, at 5.76 pt, shows a local override ("+"), as in the reference application.
 #[test]
@@ -112,7 +102,6 @@ fn copied_type_uses_the_destinations_same_named_style() {
     assert!(close(text(&s, 1, id).runs[0].style.size_pt, 5.76));
 }
 
-
 /// Duplicate Layer › New Document brings the styles the type uses (at the same size).
 #[test]
 fn type_duplicated_to_a_new_document_keeps_its_styles() {
@@ -129,7 +118,6 @@ fn type_duplicated_to_a_new_document_keeps_its_styles() {
     assert_eq!(text(&s, i, id).runs, text(&s, 0, t).runs);
 }
 
-
 /// Document 0 (RGB, 72 ppi) with "Hello" whose "He" is in Character Style 1 (red); document 1
 /// (CMYK, 72 ppi). The type layer is selected in document 0.
 fn red_styled_type_docs() -> (Session, LayerId) {
@@ -143,7 +131,6 @@ fn red_styled_type_docs() -> (Session, LayerId) {
     (s, LayerId(t))
 }
 
-
 /// The colour Character Style 1 of document `i` sets, and whether "He" of `id` overrides it.
 fn style_color(s: &mut Session, i: usize, id: LayerId) -> (photocraft_color::Color, bool) {
     s.set_active(i);
@@ -151,7 +138,6 @@ fn style_color(s: &mut Session, i: usize, id: LayerId) -> (photocraft_color::Col
     let style = c["styles"].as_array().unwrap().iter().find(|x| x["name"] == "Character Style 1").unwrap();
     (serde_json::from_value(style["attrs"]["color"].clone()).unwrap(), c["current"]["characterOverride"].as_bool().unwrap())
 }
-
 
 /// Type copied to a document of another colour mode converts its run colours, and the style it
 /// brings converts with the same transform: the run matches its style (no override), so a later
@@ -181,7 +167,6 @@ fn copied_type_styles_convert_their_colours_with_the_type() {
         assert!(!over, "{cmd} {p}: no false override");
     }
 }
-
 
 /// Duplicate Layer › New Document keeps the source's Basic Paragraph: type that inherits its
 /// size from it has no override there, and Clear Override leaves it as it was.

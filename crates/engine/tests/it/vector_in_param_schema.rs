@@ -1,15 +1,11 @@
 //! Tests that run vector commands, moved from the engine-core `param_schema` tests: 1 test(s).
 
-
-
-use photocraft_engine::param_schema::{Params};
-
+use photocraft_engine::param_schema::Params;
 
 fn specs() -> &'static [photocraft_engine::commands::CommandSpec] {
     photocraft_engine::install().unwrap();
     photocraft_engine::commands::command_specs()
 }
-
 
 /// The registry docs written in another notation (unquoted keys): not checked for unknown keys
 /// until rewritten in the grammar. The list may only shrink.
@@ -25,7 +21,6 @@ const UNPARSED: &[&str] = &[
     "timeline.setFrame",
     "timeline.setProps",
 ];
-
 
 #[test]
 fn every_registry_doc_parses_and_renders_back_byte_for_byte() {

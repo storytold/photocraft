@@ -1,11 +1,10 @@
 //! Tests that run vector commands, moved from the engine-core `type_extra_cmds` tests: 2 test(s).
 
-use photocraft_doc::text::{TextShape};
+use photocraft_doc::text::TextShape;
 use photocraft_doc::vector::{Path, Subpath};
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
-use serde_json::{json};
-use photocraft_engine::{Session};
-
+use photocraft_engine::Session;
+use serde_json::json;
 
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
@@ -13,12 +12,10 @@ fn session(depth: u32) -> Session {
     s
 }
 
-
 fn text_layer(s: &mut Session, text: &str) -> LayerId {
     let r = s.execute("type.create", json!({"x": 20, "y": 70, "text": text, "size": 36, "color": "#000000"})).unwrap();
     LayerId(r["layer"].as_u64().unwrap())
 }
-
 
 fn text(s: &Session, id: LayerId) -> &TextLayer {
     match &s.active().unwrap().doc.layer(id).unwrap().content {
@@ -27,11 +24,9 @@ fn text(s: &Session, id: LayerId) -> &TextLayer {
     }
 }
 
-
 fn ink(s: &Session, id: LayerId) -> photocraft_geom::Rect {
     s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().content_bounds()
 }
-
 
 /// #9114: type on a path follows its own path when the path is edited (Direct Selection's
 /// `path.*` commands with `"name": "layer"`), as Photoshop's Type Path does; the Paths list names
@@ -67,7 +62,6 @@ fn type_follows_its_path_when_the_path_is_edited() {
     assert!(s.execute("path.deleteAnchor", json!({"name": "layer", "layer": id.0, "subpath": 0, "knot": 0})).is_err());
     assert_eq!(ink(&s, id), before);
 }
-
 
 /// #9114: a type-on-a-path layer's vector mask is still what `"name": "layer"` edits, as on main
 /// and as `path.info` reads it; `"typePath": true` edits the Type Path; `path.list` reports both.

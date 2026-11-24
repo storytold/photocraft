@@ -2,7 +2,7 @@
 //! Rotation (right angles, flips and arbitrary), also off the new canvas; other marks still follow
 //! the image, and Crop keeps today's behaviour.
 
-use serde_json::{json};
+use serde_json::json;
 
 #[test]
 fn ruler_straighten_with_crop_asks_the_gate_for_its_rotation() {

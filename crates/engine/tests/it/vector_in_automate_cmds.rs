@@ -1,10 +1,8 @@
 //! Tests that run vector commands, moved from the engine-core `automate_cmds` tests: 2 test(s).
 
 use photocraft_doc::{Layer, LayerContent};
-use serde_json::{json};
 use photocraft_engine::{EngineError, Session};
-
-
+use serde_json::json;
 
 pub(super) fn tmp(name: &str) -> String {
     let d = std::env::temp_dir().join(format!("photocraft-automate-{}-{name}", std::process::id()));
@@ -12,7 +10,6 @@ pub(super) fn tmp(name: &str) -> String {
     std::fs::create_dir_all(&d).unwrap();
     d.to_string_lossy().into_owned()
 }
-
 
 #[test]
 fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
@@ -50,7 +47,6 @@ fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
         assert_eq!(photocraft_compose::flatten(d).px, source.px, "align {align}");
     }
 }
-
 
 /// #4671: Load Files into Stack's Attempt to Automatically Align Source Images runs Auto-Align
 /// Layers on the loaded layers, then (with Create Smart Object) puts them in one smart object;

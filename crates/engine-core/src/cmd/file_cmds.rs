@@ -55,20 +55,20 @@ pub(crate) use open::{batch_open_notice, batch_open_params, remember_batch_open}
 pub use open_as_smart_object::admit_as_smart_object;
 use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
+pub use paths::join;
 pub(crate) use paths::openable_name;
+pub use paths::sanitize;
+pub use paths::stem;
 pub use paths::{
     extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, portable_device_name, same_destination, same_file, saves_in_place,
     template_name, untitled_name,
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, read_file, read_file_limited, write_file};
-pub use paths::join;
-pub use paths::sanitize;
-pub use paths::stem;
 pub(crate) use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
-use save::save_a_copy;
-pub(crate) use save::{encode};
 pub use save::SaveOpts;
+pub(crate) use save::encode;
+use save::save_a_copy;
 pub use save::save_doc;
 pub use save::{
     dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, maximize_compatibility_param, pcraft_full_composite_param, pdf_spot_plates_param,

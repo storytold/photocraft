@@ -1,12 +1,10 @@
 //! Tests that run vector commands, moved from the engine-core `actions_record` tests: 1 test(s).
 
-
 use photocraft_doc::LayerId;
 
-use serde_json::{json};
+use serde_json::json;
 
-use photocraft_engine::{Session};
-
+use photocraft_engine::Session;
 
 fn session() -> Session {
     let mut s = Session::new();
@@ -14,11 +12,9 @@ fn session() -> Session {
     s
 }
 
-
 fn new_layer(s: &mut Session, name: &str) -> u64 {
     s.execute("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap()
 }
-
 
 #[test]
 fn selection_actions_keep_the_active_layer_as_their_source() {

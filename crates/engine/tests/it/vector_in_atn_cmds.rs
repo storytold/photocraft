@@ -1,9 +1,9 @@
 //! Tests that run vector commands, moved from the engine-core `atn_cmds` tests: 2 test(s).
 
-use craft_psd::atn::{self};
 use crate::atn_fixtures::*;
-use photocraft_engine::{Session};
-use photocraft_engine::atn_cmds::{PHOTOSHOP_STEP};
+use craft_psd::atn::{self};
+use photocraft_engine::Session;
+use photocraft_engine::atn_cmds::PHOTOSHOP_STEP;
 
 use photocraft_engine::actions_cmds::ActionStep;
 
@@ -15,7 +15,6 @@ use craft_psd::descriptor::{Descriptor, ReferenceItem, UnicodeString, Value as D
 
 use serde_json::json;
 
-
 fn item(event: &str, label: &str, d: Option<Descriptor>) -> AtnItem {
     let event = match event.as_bytes() {
         [a, b, c, dd] => AtnEvent::Code([*a, *b, *c, *dd]),
@@ -24,11 +23,9 @@ fn item(event: &str, label: &str, d: Option<Descriptor>) -> AtnItem {
     AtnItem { event, dictionary: label.as_bytes().to_vec(), descriptor: d, ..Default::default() }
 }
 
-
 fn b64(bytes: &[u8]) -> String {
     photocraft_paint::tile::b64_encode(bytes)
 }
-
 
 #[test]
 fn layer_comp_apply_imports_plays_and_undoes() {
@@ -63,7 +60,6 @@ fn layer_comp_apply_imports_plays_and_undoes() {
         assert!(s.active().unwrap().doc.layer(layer).unwrap().visible);
     }
 }
-
 
 #[test]
 fn layer_comp_apply_unknown_references_are_kept_and_stop_playback() {
@@ -104,7 +100,6 @@ fn layer_comp_apply_unknown_references_are_kept_and_stop_playback() {
         assert_eq!(saved.descriptor, original.descriptor);
     }
 }
-
 
 fn set_of(name: &str, actions: Vec<(&str, Vec<AtnItem>)>) -> String {
     let file = AtnFile {

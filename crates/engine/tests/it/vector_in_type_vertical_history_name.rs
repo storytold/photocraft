@@ -1,11 +1,8 @@
 //! Tests that run vector commands, moved from the engine-core `type_vertical_history_name` tests: 1 test(s).
 
-
-use serde_json::{json};
-
+use serde_json::json;
 
 use photocraft_engine::Session;
-
 
 fn session() -> Session {
     let mut s = Session::new();
@@ -13,11 +10,9 @@ fn session() -> Session {
     s
 }
 
-
 fn entries(s: &Session) -> Vec<String> {
     s.active().unwrap().history.entries()
 }
-
 
 /// The Type Mask tools' commands: a hidden working layer from `type.create`, then
 /// `type.createSelection` removing it, all coalesced into the session's one step.

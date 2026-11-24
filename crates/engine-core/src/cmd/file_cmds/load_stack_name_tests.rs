@@ -2,7 +2,7 @@
 //! document, not one named after the first file.
 
 use crate::EngineError;
-use photocraft_doc::{Layer};
+use photocraft_doc::Layer;
 use serde_json::json;
 
 /// Two textured PNGs named a_base.png and b_shift.png (texture, so Auto-Align finds features).

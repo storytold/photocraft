@@ -1,15 +1,13 @@
 //! Tests that run vector commands, moved from the engine-core `type_indexed_mode` tests: 3 test(s).
 
-use photocraft_color::{ColorMode};
-use photocraft_doc::{LayerContent};
+use photocraft_color::ColorMode;
+use photocraft_doc::LayerContent;
+use photocraft_engine::Session;
+use photocraft_engine::cmd::type_cmds::name_selection_commit;
 use serde_json::{Value, json};
-use photocraft_engine::{Session};
-use photocraft_engine::cmd::{type_cmds::name_selection_commit};
-
 
 /// The typing session's coalesce key, as `ui-egui`'s `session_key` gives one.
 const SESSION: &str = "type-session-12041";
-
 
 /// The text the tool commits, at a baseline inside every document used here. `coalesce` for the
 /// tool's own calls (one step for the session), without it for a script's or the pin's.
@@ -21,7 +19,6 @@ fn typed(coalesce: bool) -> Value {
     p
 }
 
-
 /// A blank RGB document, to be converted to the mode under test.
 fn blank() -> Session {
     let mut s = Session::new();
@@ -29,14 +26,12 @@ fn blank() -> Session {
     s
 }
 
-
 fn indexed() -> Session {
     let mut s = blank();
     s.execute("image.mode.indexedColor", json!({"palette": "exact", "dither": "none", "forced": "none"})).unwrap();
     assert_eq!(mode(&s), ColorMode::Indexed, "the setup made an Indexed Color document");
     s
 }
-
 
 fn bitmap() -> Session {
     let mut s = blank();
@@ -46,11 +41,9 @@ fn bitmap() -> Session {
     s
 }
 
-
 fn mode(s: &Session) -> ColorMode {
     s.active().unwrap().doc.mode
 }
-
 
 /// The Type tool's commit of the session's working layer in a document [`commits_as_selection`]
 /// names: the Type Mask tools' conversion, in the session's one step, which keeps the name the step
@@ -60,16 +53,13 @@ fn commit(s: &mut Session, layer: u64) {
     name_selection_commit(s);
 }
 
-
 fn text_layers(s: &Session) -> usize {
     s.active().unwrap().doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Text(_))).count()
 }
 
-
 fn layers(s: &Session) -> usize {
     s.active().unwrap().doc.walk().len()
 }
-
 
 /// The selection's coverage over the whole canvas, in document pixels.
 fn coverage(s: &Session) -> Vec<f32> {
@@ -84,12 +74,10 @@ fn coverage(s: &Session) -> Vec<f32> {
     out
 }
 
-
 /// The selection's bounds, as its corners.
 fn selection_corners(s: &Session) -> Option<[i32; 4]> {
     s.active().unwrap().doc.selection.as_ref().map(|m| m.content_bounds()).map(|r| [r.x0, r.y0, r.x1, r.y1])
 }
-
 
 /// Every layer's pixels, quantised: what the commit must leave exactly as it was.
 fn pixels(s: &Session) -> Vec<u8> {
@@ -107,11 +95,9 @@ fn pixels(s: &Session) -> Vec<u8> {
     out
 }
 
-
 fn history(s: &Session) -> Vec<String> {
     s.active().unwrap().history.entries()
 }
-
 
 #[test]
 fn committing_in_indexed_color_or_bitmap_leaves_the_glyphs_selected_and_no_layer() {
@@ -146,7 +132,6 @@ fn committing_in_indexed_color_or_bitmap_leaves_the_glyphs_selected_and_no_layer
     }
 }
 
-
 #[test]
 fn the_selection_is_the_glyph_shape_the_type_mask_of_the_same_text_makes() {
     for (name, make) in [("Indexed Color", indexed as fn() -> Session), ("Bitmap", bitmap as fn() -> Session)] {
@@ -162,7 +147,6 @@ fn the_selection_is_the_glyph_shape_the_type_mask_of_the_same_text_makes() {
         assert_eq!(got, coverage(&pin), "{name}: same selection coverage");
     }
 }
-
 
 /// An edit that does not carry the session's `coalesce` key ends its coalesce group - in the tool
 /// that is the deliberately per-press Alt+arrow kerning step. The commit then makes a state of its
