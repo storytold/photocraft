@@ -2,14 +2,14 @@
 //! (craft-libs docs/craft-framework.md 2.2, "Host the runtime from your own eframe `App`"):
 //! installed once with PhotoCraft's fonts, then given PhotoCraft's preferences before each frame.
 //!
-//! eframe's `ui` would also call `embed::before_ui`, which needs craft-ui-shell's `app` feature;
-//! that feature turns on egui's `default_fonts`, which PhotoCraft leaves out (it ships them
-//! deflated). Its two jobs are PhotoCraft's own here: `work_area::fit_window` fits the window to
-//! its monitor, and the Windows window comes from PhotoCraft's title bar code.
+//! eframe's `ui` calls `embed::before_ui` first, which hands the runtime the native window (on
+//! Windows the runtime answers its hit test: resize edges, the title bar's move area, snap
+//! layouts) and fits the window to its monitor once.
 //!
 //! The `craft` facade features PhotoCraft enables for this: `text`, `text-font-picker`,
 //! `font-manager`, `menu`, `timeline` and `print`, plus `dialogs` on native targets.
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -17,11 +17,12 @@ use craft::host::target::{Backend, ShellInfo};
 use craft::host::{AppInfo, Files, Host, SectionStore};
 use craft::i18n::Direction;
 use craft::keymap::Overrides;
-use craft::theme::{AppDefaults, AppSizes, ModeChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
+use craft::theme::{AppDefaults, AppSizes, ComponentSet, ModeChoice, Size, SuiteChoice, ThemeId, ThemePair, resolve_sized};
 use craft::theme_store::{SelectionChange, SuiteClient};
+use craft::ui::contract::{MemoProps, Tracked};
 use craft::ui::dialog::DialogHost;
 use craft::ui::fonts::UiFonts;
-use craft::ui::runtime::commands::{AppCatalog, CommandInput, CommandRef, CommandSet as _, CommandState, Fired, NavCommand};
+use craft::ui::runtime::commands::{AppCatalog, CommandInput, CommandRef, CommandSet as _, CommandState, CommandStates, Fired, NavCommand};
 use craft::ui::runtime::env::{PointSize, RootEnv, Scale, SystemReader};
 use craft::ui::runtime::focus::TabReach;
 use craft::ui::runtime::frame::{FrameInput, FrameOutput};
@@ -49,7 +50,7 @@ pub(crate) fn install(ctx: &egui::Context, fonts: &UiFonts<'_>, frame: Option<De
     let wake = ctx.clone();
     let mut spec = InstallSpec::new(ShellInfo::default().backend(Backend::from_env()), Arc::new(SystemWindows))
         .wheel(wheel)
-        .app_id(crate::os_window::APP_ID)
+        .app_id(crate::os_window::app_id())
         .system(SystemReader::start(move || wake.request_repaint()));
     if let Some(decision) = frame {
         spec = spec.frame(decision);
@@ -109,7 +110,7 @@ pub struct Framework {
     pub(crate) catalog_builds: usize,
     #[cfg(test)]
     pub(crate) overrides_builds: usize,
-    /// The states the keyed command sources last computed ([`command_states`]).
+    /// The command sources' states the runtime reads ([`command_states`]).
     pub(crate) held_states: HeldStates,
     /// The file services the host gives components (pickers, reads and writes); `None` keeps the
     /// host's own default.
@@ -211,13 +212,14 @@ const DEFAULT_DARK: &str = "craft.artcraft";
 const DEFAULT_LIGHT: &str = "craft.pro";
 
 /// What PhotoCraft shows for each suite field nobody has chosen: Pro (Medium Gray) in the dark
-/// mode, Pro in the light, and the dark mode.
+/// mode, Pro in the light, and the dark mode, with the Creative component set.
 fn defaults() -> AppDefaults {
     let theme = |id: &str| ThemeId::parse(id).unwrap_or_else(|_| ThemeId::suite_default());
     AppDefaults {
         theme: ThemePair { light: theme(DEFAULT_LIGHT), dark: theme(DEFAULT_DARK) },
         mode: ModeChoice::Dark,
         size: Size::default(),
+        set: ComponentSet::Creative,
         sizes: (**app_sizes()).clone(),
     }
 }
@@ -324,14 +326,13 @@ impl Framework {
         self.sections.sync(session);
     }
 
-    /// The input for the coming frame, from PhotoCraft's preferences: `states` of every command
+    /// The input for the coming frame, from PhotoCraft's preferences: the held states of every command
     /// source, the held catalog and overrides, and `gate` over the commands.
     fn frame_input(
         &mut self,
         session: &mut Session,
         ctx: &egui::Context,
         theme: &AppTheme,
-        states: Vec<(CommandRef, CommandState)>,
         gate: craft::ui::runtime::commands::CommandGate,
         latched: craft::keymap::Mods,
     ) -> FrameInput {
@@ -359,7 +360,7 @@ impl Framework {
             photocraft_engine::prefs::PointSize::PostScript => PointSize::PostScript,
             photocraft_engine::prefs::PointSize::Traditional => PointSize::Traditional,
         });
-        let mut commands = states.into_iter().fold(CommandInput::new(), |input, (command, state)| input.state(command, state));
+        let mut commands = CommandInput::new().states(&self.held_states.states);
         if let Some(catalog) = &self.catalog {
             commands = commands.catalog(catalog.clone());
         }
@@ -371,6 +372,10 @@ impl Framework {
     /// in-memory suite the app starts with.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn open_suite(&mut self, ctx: &egui::Context) {
+        // A nightly keeps its in-memory suite; never open the stable shared theme store.
+        if !crate::os_window::stable_services_allowed() {
+            return;
+        }
         use craft::theme_store::{StoreOptions, SuiteDir, SuiteWatch};
         let ctx = ctx.clone();
         let options = StoreOptions::new(concat!("photocraft ", env!("CARGO_PKG_VERSION")));
@@ -545,87 +550,110 @@ impl Framework {
     }
 }
 
+/// One source's command states.
+pub(crate) type SourceStates = Vec<(CommandRef, CommandState)>;
+
+/// The id a command source's states are derived under.
+pub(crate) fn states_id(source: &'static str) -> egui::Id {
+    egui::Id::unique(("photocraft-states", source))
+}
+
+/// `build`'s states for `source`, derived from `facts`: the kept `Arc` while the facts are unchanged, else a new build.
+/// The facts can hold only checked inputs, but nothing checks that they hold everything `build` reads: a read they
+/// leave out keeps stale states, which the held-equals-fresh trial catches.
+pub(crate) fn derived_states<K: MemoProps>(app: &PhotocraftApp, source: &'static str, facts: &K, build: impl FnOnce() -> SourceStates) -> Arc<SourceStates> {
+    craft::ui::runtime::derived::derived(app.ctx(), states_id(source), facts, build)
+}
+
+/// The states of a source that has no command states: one shared empty list, whatever the source's name.
+pub(crate) fn no_states(app: &PhotocraftApp, _name: &'static str) -> Arc<SourceStates> {
+    derived_states(app, "none", &(), Vec::new)
+}
+
+/// A source's states for the coming frame, derived under the source's name ([`states_id`]) from what they read.
+pub(crate) type StatesOf = fn(&PhotocraftApp, &'static str) -> Arc<SourceStates>;
+
 /// One user of the framework's command sets: the states its commands show and the runner of the
 /// ones it fires.
 pub(crate) struct CommandSource {
-    /// The states of the source's commands for the coming frame.
-    states: fn(&PhotocraftApp) -> Vec<(CommandRef, CommandState)>,
-    /// What `states` reads, for a source whose every input is a plain value or a revision that moves exactly when
-    /// the data changes: the states are computed again only when the key changes. `None`: computed every frame,
-    /// because what the source reads has no such revision yet.
-    key: Option<fn(&PhotocraftApp) -> StatesKey>,
+    /// The name the source's states are derived under.
+    pub(crate) name: &'static str,
+    /// The states of the source's commands.
+    pub(crate) states: StatesOf,
     /// Runs `command` when it is this source's; whether it was.
     run: fn(&mut PhotocraftApp, &egui::Context, &CommandRef) -> bool,
 }
 
-/// Every command source, in the order [`run_command`] tries them. The theme has no entry: it has
-/// no command state, and its picks run through `menus::invoke`.
+/// Every command source besides the panels' ([`crate::panels::registry::PANELS`], one source each), in the order
+/// [`run_command`] tries them after the panels. The theme has no entry: it has no command state, and its picks run
+/// through `menus::invoke`.
 pub(crate) const COMMAND_SOURCES: &[CommandSource] = &[
-    CommandSource { states: crate::panels::registry::states, key: None, run: crate::panels::registry::run_fired },
-    CommandSource { states: tool_states, key: Some(tool_states_key), run: run_tool },
-    CommandSource { states: crate::workspace_ui::states, key: None, run: crate::workspace_ui::run_fired },
-    CommandSource { states: crate::slice_ui::command_states, key: Some(crate::slice_ui::command_states_key), run: crate::slice_ui::run_fired },
-    CommandSource { states: crate::align_bar::command_states, key: None, run: crate::align_bar::run_fired },
-    CommandSource { states: crate::artboard_tool::command_states, key: Some(crate::artboard_tool::command_states_key), run: crate::artboard_tool::run_fired },
+    CommandSource { name: "tool", states: tool_states, run: run_tool },
+    CommandSource { name: "workspace", states: crate::workspace_ui::source_states, run: crate::workspace_ui::run_fired },
+    CommandSource { name: "slice", states: crate::slice_ui::source_states, run: crate::slice_ui::run_fired },
+    CommandSource { name: "align", states: crate::align_bar::source_states, run: crate::align_bar::run_fired },
+    CommandSource { name: "artboard", states: crate::artboard_tool::source_states, run: crate::artboard_tool::run_fired },
     // Space+F: the pasteboard colour keys of the held Hand.
-    CommandSource { states: |_| Vec::new(), key: Some(|_| StatesKey::default()), run: crate::canvas_tool_menu::run_canvas_color },
+    CommandSource { name: "canvasColor", states: no_states, run: crate::canvas_tool_menu::run_canvas_color },
     // The options bar's engine-command buttons: their commands run through `shortcuts::handle`.
-    CommandSource { states: crate::panels::options_bar::selection::command_states, key: None, run: |_, _, _| false },
+    CommandSource { name: "selection", states: crate::panels::options_bar::selection::source_states, run: |_, _, _| false },
 ];
 
-/// The key of a [`CommandSource`]'s states: the plain values and exact revisions they are computed from, so equal
-/// keys mean equal states.
-pub(crate) type StatesKey = [u64; 4];
-
-/// The states each keyed [`CommandSource`] last computed, by its place in [`COMMAND_SOURCES`], with their key.
-#[derive(Default)]
-pub(crate) struct HeldStates {
-    kept: Vec<Option<KeptStates>>,
-    /// How many times each source computed its states, for the count trials.
-    #[cfg(test)]
-    pub(crate) runs: Vec<usize>,
+/// Every source by its name, with its states: the command sources, then the panels, each under its panel id. A later
+/// source's state wins for a command two sources name.
+pub(crate) fn sources() -> impl Iterator<Item = (&'static str, StatesOf)> {
+    let panels = crate::panels::registry::PANELS.iter().map(|panel| (panel.id, panel.states));
+    COMMAND_SOURCES.iter().map(|source| (source.name, source.states)).chain(panels)
 }
 
-/// One keyed source's states and the key they were computed at.
-#[derive(Clone)]
-struct KeptStates {
-    key: StatesKey,
-    states: Vec<(CommandRef, CommandState)>,
+/// Every source's states, in [`sources`]' order.
+fn source_states(app: &PhotocraftApp) -> impl Iterator<Item = Arc<SourceStates>> + '_ {
+    sources().map(move |(name, states)| states(app, name))
+}
+
+/// The states each source last gave, in [`source_states`]' order, and the one list of all of them the runtime reads.
+#[derive(Default)]
+pub(crate) struct HeldStates {
+    kept: Vec<Arc<SourceStates>>,
+    /// Every source's states, written only when one source's list changes: the runtime reads them again only when
+    /// the revision moves.
+    pub(crate) states: Tracked<CommandStates>,
 }
 
 /// The tool commands: the current tool's row is checked.
-fn tool_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandState)> {
+fn build_tool_states(app: &PhotocraftApp) -> SourceStates {
     Tool::ALL.iter().map(|&tool| (CommandRef::from(crate::panels::tool_commands::command_of(tool)), CommandState::new().checked(app.ui.tool == tool))).collect()
 }
 
-/// What [`tool_states`] reads: the tool.
-fn tool_states_key(app: &PhotocraftApp) -> StatesKey {
-    [app.ui.tool as u64, 0, 0, 0]
+/// [`build_tool_states`], derived from the tool.
+fn tool_states(app: &PhotocraftApp, name: &'static str) -> Arc<SourceStates> {
+    derived_states(app, name, &(app.ui.tool as u64), || build_tool_states(app))
 }
 
-/// The states of every command source for the coming frame. A keyed source runs only when its key changed since it
-/// last ran.
-fn command_states(app: &PhotocraftApp, held: &mut HeldStates) -> Vec<(CommandRef, CommandState)> {
-    held.kept.resize(COMMAND_SOURCES.len(), None);
-    #[cfg(test)]
-    held.runs.resize(COMMAND_SOURCES.len(), 0);
-    let mut states = Vec::new();
-    for (at, source) in COMMAND_SOURCES.iter().enumerate() {
-        let key = source.key.map(|key| key(app));
-        match (&held.kept[at], key) {
-            (Some(kept), Some(key)) if kept.key == key => states.extend_from_slice(&kept.states),
-            _ => {
-                #[cfg(test)]
-                {
-                    held.runs[at] += 1;
-                }
-                let computed = (source.states)(app);
-                states.extend_from_slice(&computed);
-                held.kept[at] = key.map(|key| KeptStates { key, states: computed });
+/// Brings the held states up to date for the coming frame. A source whose states are the `Arc` it last gave costs a
+/// pointer compare; the held list is written only when a source's states differ by value from the ones it last gave.
+fn command_states(app: &PhotocraftApp, held: &mut HeldStates) {
+    let mut changed = false;
+    for (at, states) in source_states(app).enumerate() {
+        match held.kept.get_mut(at) {
+            Some(kept) if Arc::ptr_eq(kept, &states) => {}
+            Some(kept) => {
+                changed |= **kept != *states;
+                *kept = states;
+            }
+            None => {
+                held.kept.push(states);
+                changed = true;
             }
         }
     }
-    states
+    if changed {
+        let mut states = CommandStates::new();
+        for (command, state) in held.kept.iter().flat_map(|kept| kept.iter()) {
+            states.set(command.clone(), state.clone());
+        }
+        *held.states = states;
+    }
 }
 
 #[cfg(test)]
@@ -640,9 +668,9 @@ fn run_tool(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef)
     true
 }
 
-/// Runs `command` through the first source that owns it; whether one did.
+/// Runs `command` through the first source that owns it, the panels first; whether one did.
 pub(crate) fn run_command(app: &mut PhotocraftApp, ctx: &egui::Context, command: &CommandRef) -> bool {
-    COMMAND_SOURCES.iter().any(|source| (source.run)(app, ctx, command))
+    crate::panels::registry::run_fired(app, ctx, command) || COMMAND_SOURCES.iter().any(|source| (source.run)(app, ctx, command))
 }
 
 impl PhotocraftApp {
@@ -653,7 +681,7 @@ impl PhotocraftApp {
     pub(crate) fn framework_before_input(&mut self, ctx: &egui::Context) {
         // The catalog's rows change only with the action names; the bindings with the rows and the
         // shortcut preferences.
-        let list = &self.session.actions.list;
+        let list = &self.session.actions().list;
         let actions_rev = list.revision();
         if self.framework.catalog_rows_rev != Some(actions_rev) {
             let same = self.framework.catalog_rows_rev.is_some()
@@ -675,7 +703,7 @@ impl PhotocraftApp {
             crate::prefs_ui::show_selected_theme(self, ctx);
         }
         let mut held = std::mem::take(&mut self.framework.held_states);
-        let states = command_states(self, &mut held);
+        command_states(self, &mut held);
         self.framework.held_states = held;
         let gate = crate::menus::command_gate(self);
         let latched = self.ui.shell.latched;
@@ -684,7 +712,7 @@ impl PhotocraftApp {
             self.framework.fired.extend(output.fired);
             self.framework.delivered.extend(output.delivered);
             self.framework.refused |= output.refused;
-            self.framework.frame_input(&mut self.session, ctx, &self.ui.theme, states, gate, latched)
+            self.framework.frame_input(&mut self.session, ctx, &self.ui.theme, gate, latched)
         });
     }
 

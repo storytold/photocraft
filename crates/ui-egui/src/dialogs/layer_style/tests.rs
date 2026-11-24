@@ -2,6 +2,7 @@ use egui::vec2;
 use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_doc::effects::{BevelTechnique, FxPaint, GlowSource};
 use photocraft_doc::{BlendMode, BlendRange, Effect, Knockout, StrokeFx};
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use super::*;
@@ -681,7 +682,7 @@ fn new_style_saves_pending_state_and_a_swatch_apply_restores_it() {
     h.run_steps(3);
     // The preset is saved at once under the default name "Style".
     assert_eq!(h.state().framework.dialogs.stack().top(), Some(id), "New Style… opens no other dialog");
-    let preset = h.state().session.presets.styles.iter().flat_map(|g| g.items.iter()).find(|st| st.name == "Style").expect("the preset is created");
+    let preset = h.state().session.presets().styles.iter().flat_map(|g| g.items.iter()).find(|st| st.name == "Style").expect("the preset is created");
     assert_eq!(preset.effects.len(), 1, "only the enabled instance is saved");
     assert_eq!(preset.opacity, Some(0.4), "the pending opacity is saved");
 
@@ -715,6 +716,29 @@ fn style_click_does_not_mutate_document_until_confirm() {
     assert_eq!(draft(h.state(), id).style.effects.len(), 1, "the draft has the preset loaded");
     ok(h.state_mut(), id);
     assert_eq!(layer_effects(&h.state().session).len(), 1);
+}
+
+/// #14977: a Satin the dialog creates starts at the measured factory values. The page's rows and
+/// their default table now live in the UI framework, whose Satin defaults are still 19 / 11 / 14;
+/// `specs` lays the app's engine defaults OVER that table, so the instance the page adds starts at
+/// the engine's 90 / 50 / 80.
+#[test]
+fn a_new_satin_in_the_dialog_starts_at_the_factory_values() {
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, Some(EffectKind::Satin.key())).unwrap();
+    let satin = first_of(&app, id, EffectKind::Satin);
+    let style = &draft(&app, id).style;
+    assert_eq!(
+        (num(style, satin, "angle"), num(style, satin, "distance"), num(style, satin, "size")),
+        (Some(90.0), Some(50.0), Some(80.0)),
+        "the new Satin page starts at the measured values"
+    );
+    assert_eq!(text(style, satin, "blend").as_deref(), Some("Multiply"), "blend mode");
+    assert_eq!(num(style, satin, "opacity"), Some(50.0), "opacity");
+    assert_eq!(param(style, satin, "invert"), Some(StyleValue::Bool(true)), "invert");
+    assert_eq!(param(style, satin, "antiAlias"), Some(StyleValue::Bool(true)), "anti-aliased");
+    cancel(&mut app, id);
+    assert!(layer_effects(&app.session).is_empty(), "Cancel added no effect");
 }
 
 /// #14944: the Outer Glow page is grouped Photoshop-style - Noise right under Opacity, the rows of
@@ -789,4 +813,17 @@ fn an_existing_outer_glow_is_edited_with_its_own_values() {
     assert!((g.common.opacity * 100.0 - 75.0).abs() < 1e-4 && (g.size - 5.0).abs() < 1e-4, "OK kept {g:?}");
     let FxPaint::Color(c) = &g.paint else { panic!("{:?}", g.paint) };
     assert_eq!(hex(c), "#ffffbe", "OK kept the colour");
+}
+
+/// The preview swatch draws over the patterns' pixels: a tile that fails to read and recovers keeps the draft's render
+/// hash, and the swatch still keys a new picture, so it does not keep the zeros it read during the error.
+#[test]
+fn the_preview_swatch_follows_a_scratch_read_error_transition() {
+    let mut app = app_with_layer(32);
+    let id = open(&mut app, Some(EffectKind::PatternOverlay.key())).unwrap();
+    let key = swatch_key(draft(&app, id));
+    assert_eq!(swatch_key(draft(&app, id)), key, "nothing changed: the same picture");
+    crate::scratch_reads::tests::simulate_read_error_transition();
+    assert_eq!(draft(&app, id).render_hash(), key.1, "the draft is unchanged");
+    assert_ne!(swatch_key(draft(&app, id)), key, "the swatch draws again");
 }

@@ -456,3 +456,17 @@ fn bundled_catalogs_are_consistent() {
         }
     }
 }
+
+#[test]
+fn language_cache_separates_catalogs_and_keys() {
+    let cache = LangCache::<u8, String>::new();
+    let first = fixture_lang("de", "\tAll\tfirst\n");
+    let second = fixture_lang("de", "\tAll\tsecond\n");
+    with_language(first, || {
+        assert_eq!(cache.get_or_build(1, || t("All").to_owned()), "first");
+        assert_eq!(cache.get_or_build(1, || "unexpected rebuild".to_owned()), "first");
+        assert_eq!(cache.get_or_build(2, || "other key".to_owned()), "other key");
+    });
+    with_language(second, || assert_eq!(cache.get_or_build(1, || t("All").to_owned()), "second"));
+    with_language(first, || assert_eq!(cache.get_or_build(1, || "unexpected rebuild".to_owned()), "first"));
+}

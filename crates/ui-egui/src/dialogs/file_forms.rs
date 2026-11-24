@@ -112,6 +112,14 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
     if let Some(playback) = crate::actions::set_and_action_rows(app) {
         rows.extend(playback);
     }
+    // The Play group (#13709): four checkboxes under the Set and Action choices, all off. The droplet saves them and
+    // hands them to each run.
+    rows.extend([
+        Param::new("overrideOpen", tl!("Override Action \"Open\" Commands"), ParamKind::bool(false)),
+        Param::new("includeSubfolders", tl!("Include All Subfolders"), ParamKind::bool(false)),
+        Param::new("suppressOpenOptions", tl!("Suppress File Open Options Dialogs"), ParamKind::bool(false)),
+        Param::new("suppressWarnings", tl!("Suppress Color Profile Warnings"), ParamKind::bool(false)),
+    ]);
     rows.push(Param::new("output", tl!("Output"), ParamKind::text(format!("{dir}/droplet-output"))).browse(PathKind::Folder));
     rows.push(Param::new("format", tl!("Format"), ParamKind::choice(ids(&["same", "png", "jpg", "psd", "tiff"]), Some("same".into()))));
     Ok(open_form(app, CREATE_DROPLET, tl!("Create Droplet"), rows))

@@ -1,0 +1,43 @@
+name: PhotoCraft release-ref nightly signer
+
+# Dormant source registration. Main/release contents must match after reviewed promotion.
+# A reusable callee does not change context; this must be a real top-level release dispatch.
+on:
+  workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: Exact untrusted producer Actions run ID
+        required: true
+        type: string
+      producer_run_attempt:
+        description: Exact untrusted producer Actions run attempt
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: photocraft-nightly-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  release:
+    # Literal off until independent qualification. Actual context guards stay after activation.
+    if: >-
+      false && github.repository == 'storytold/photocraft' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/release' && github.ref_type == 'branch'
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+      attestations: write
+      id-token: write
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@a4f6fd51e854773de8b24b4f92e1ad7e770c08d7
+    with:
+      tooling-revision: a4f6fd51e854773de8b24b4f92e1ad7e770c08d7
+      producer_run_id: ${{ inputs.producer_run_id }}
+      producer_run_attempt: ${{ inputs.producer_run_attempt }}
+    # No secrets: inherit or raw platform values in this caller. Only the isolated native
+    # callee job may bind the existing release environment and export keys in its signing step.
