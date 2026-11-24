@@ -523,9 +523,11 @@ def resolve_super_use(t, node, ctx, used):
             return t
         rest = path[len(parent):]
         if rest == "*":
-            # A glob of a public module becomes the names the moved text uses from it.
+            # A glob of a public module becomes the names the moved text uses from it, and the
+            # traits it re-exports whose methods the moved text calls.
             if module_public(parent):
                 names += sorted(visible & used)
+                names += sorted(n for n in visible if TRAITS.get(n, set()) & METHODS[0])
             continue
         elif "::" in rest or rest not in private:
             names.append(rest + (" as " + alias if alias else ""))
@@ -613,7 +615,9 @@ def move(tsv):
         taken = top_names(existing) if existing else set()
         nested = existing is not None and bool(re.search(r"(?m)^mod \w+ \{", existing))
         n = sum(len(lst) for u, lst in [by_unit[id(x)] for x in us])
-        if len(ctexts) == 1 and not nested and not (top_names(ctexts[0][1]) & taken):
+        # A unit with inner attributes (`#![..]`) keeps them at the start of its own module.
+        inner = existing is not None and bool(re.search(r"(?m)^\s*#!\[", ctexts[0][1]))
+        if len(ctexts) == 1 and not nested and not inner and not (top_names(ctexts[0][1]) & taken):
             body = ctexts[0][1]
             unit_mod[id(ctexts[0][0])] = None
         else:
@@ -925,7 +929,7 @@ def cleanup(units):
             continue
         src = open(u.f).read()
         if u.whole:
-            name = os.path.basename(u.f)[:-3]
+            name = fs_modpath(u.f)[-1]
             if "#[test]" in src or MOD_DECL.search(mask(src)) or named_elsewhere(name, u.f):
                 continue
             g = parent_file(u)
@@ -946,12 +950,31 @@ def cleanup(units):
                 for it in parse(src, m, 0, len(src))
                 if it.kind == "mod" and it.body and it.cfg_test and it.name == u.name and "#[test]" not in src[it.body[0] : it.body[1]]
                 and not re.search(r"\b" + it.name + r"::", m[: it.start] + m[it.end :])
+                and not inline_named_elsewhere(it.name, u.f)
             ]
             for a, b in reversed(cuts):
                 src = src[:a] + src[b:]
             if cuts:
                 open(u.f, "w").write(src)
                 print("emptied test module dropped in", os.path.relpath(u.f, ROOT))
+
+
+def inline_named_elsewhere(name, f):
+    """Whether a core file other than `f` names the inline module `name` of `f` in a path
+    (`<module of f>::name::x`, or `super::name::x` from a child file of `f`)."""
+    mp = fs_modpath(f)
+    pat = re.compile(r"\b" + re.escape(mp[-1]) + r"\s*::\s*" + re.escape(name) + r"\s*::")
+    child = re.compile(r"\bsuper\s*::\s*" + re.escape(name) + r"\s*::")
+    for dp, _, fs in os.walk(SRC):
+        for n in fs:
+            g = os.path.join(dp, n)
+            if not n.endswith(".rs") or g == f:
+                continue
+            gm = mask(open(g).read())
+            gp = fs_modpath(g)
+            if pat.search(gm) or (gp[:-1] == mp and child.search(gm)):
+                return True
+    return False
 
 
 def named_elsewhere(name, f):
@@ -1039,7 +1062,10 @@ def ids_run(text, id_re):
         if call:
             end = paren_end(m, call.end() - 1)
             stmt = m[max(m.rfind(";", 0, call.start()), m.rfind("{", 0, call.start()), m.rfind("}", 0, call.start())) + 1 : call.start()]
-            if re.match(r"\s*\.\s*ok\s*\(\s*\)\s*;", m[end:]) or re.match(r"\s*let\s+_\s*=", stmt):
+            # `.ok();` drops the result only in an expression statement: not after `let x =`, an
+            # assignment or `return`.
+            dropped_ok = re.match(r"\s*\.\s*ok\s*\(\s*\)\s*;", m[end:]) and "=" not in stmt and not re.match(r"\s*return\b", stmt)
+            if dropped_ok or re.match(r"\s*let\s+_\s*=", stmt):
                 continue
         out.append(x.group(1))
     return out

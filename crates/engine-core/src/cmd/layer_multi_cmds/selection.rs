@@ -14,7 +14,7 @@ pub fn selected(s: &Session) -> Vec<LayerId> {
 
 /// The layers a layer command acts on: the `layer` param when given, else every selected layer
 /// (bottom-to-top), else the active layer. A single layer behaves exactly as before.
-pub(crate) fn targets(s: &Session, p: &serde_json::Value) -> Result<Vec<LayerId>> {
+pub fn targets(s: &Session, p: &serde_json::Value) -> Result<Vec<LayerId>> {
     if p.get("layer").is_some() {
         return Ok(vec![crate::commands::layer_param(s, p)?]);
     }

@@ -481,14 +481,26 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         let entries = crate::file_cmds::error_log_entries(r.get("errors").and_then(Value::as_array).unwrap_or(&none));
         let bytes = crate::file_cmds::encode_droplet_error_log(entries.iter().map(|(file, error)| (file.as_str(), error.as_str())));
         // The log may never replace a file of its own run: the same rule Batch applies to its log
-        // (#13665), checked here against the dropped inputs, the results the run just wrote, and the
-        // droplet being run. The droplet file is in neither of the first two lists: a dropped folder
+        // (#13665), checked here against the dropped inputs, every destination the run planned, and
+        // the droplet being run. The droplet file is in neither of the first two lists: a dropped folder
         // only contributes images and Batch never writes a result under the droplet's name, so a
         // droplet saved with its log aimed at its own file replaced its definition and the next run
-        // of it could no longer be read (#13713 review).
-        let written: Vec<String> =
-            r.get("files").and_then(Value::as_array).map(|files| files.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
-        let protected: Vec<&str> = inputs.iter().map(String::as_str).chain(written.iter().map(String::as_str)).chain(std::iter::once(path)).collect();
+        // of it could no longer be read (#13713 review). The results the run returned in `files` are
+        // not enough either: an entry that failed has a planned output Batch still protected its log
+        // against, and Batch reports that plan in `plannedOutputs` so the guard here can use it too
+        // (#13713 review).
+        let names = |key: &str| -> Vec<String> {
+            r.get(key).and_then(Value::as_array).map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+        };
+        let written: Vec<String> = names("files");
+        let planned: Vec<String> = names("plannedOutputs");
+        let protected: Vec<&str> = inputs
+            .iter()
+            .map(String::as_str)
+            .chain(written.iter().map(String::as_str))
+            .chain(planned.iter().map(String::as_str))
+            .chain(std::iter::once(path))
+            .collect();
         if protected.iter().any(|file| crate::file_cmds::same_destination(&log, file)) {
             result["errorLogError"] = json!(crate::file_cmds::ERROR_LOG_CONFLICT);
         } else if let Err(error) = write_file(&log, &bytes) {
@@ -694,7 +706,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (an input whose output name was already written in the run goes to errors; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet)"##,
+            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (an input whose output name was already written in the run goes to errors; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet, refused through errorLogError when the path names a dropped input, the droplet file or any output this run planned, including one whose entry failed)"##,
             native,
             run_droplet
         ),

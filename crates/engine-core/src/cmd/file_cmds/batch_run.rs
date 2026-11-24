@@ -1077,8 +1077,10 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     #[cfg(not(target_arch = "wasm32"))]
     validate_written_outputs(&outputs, &|index| inputs.get(index).is_none_or(counts))?;
     // Every input is protected; a refused input's name is never written, so the log may take it.
-    let written = outputs.iter().zip(&inputs).filter(|(_, input)| counts(input)).map(|((_, path), _)| path.clone());
-    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), written)?;
+    // The same plan is reported in `plannedOutputs`: the names belong to the run whether or not the
+    // entry wrote them, and a droplet guards its own log with them (#13713 review).
+    let planned: Vec<String> = outputs.iter().zip(&inputs).filter(|(_, input)| counts(input)).map(|((_, out), _)| out.clone()).collect();
+    validate_error_log(&policy, outputs.iter().map(|(path, _)| path.clone()), planned.iter().cloned())?;
     let was_playing = nested;
     #[cfg(test)]
     let history_observer = s.batch_history_observer;
@@ -1268,6 +1270,12 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                 ctx,
                 &run,
             )?;
+            // `files` only names the results that were written. The plan says which names the run
+            // took for itself, so a caller that writes its own log can protect the entries that
+            // failed before their write (#13713 review).
+            if !planned.is_empty() {
+                result["plannedOutputs"] = json!(planned);
+            }
             let notices = notices.into_inner();
             if !notices.is_empty() {
                 result["notices"] = json!(notices);
@@ -1425,6 +1433,10 @@ fn batch_open_documents(
     let mut result = batch_outcome(files, errors, stopped.map(|at| (at, skipped)), policy.error_log.as_deref().filter(|_| log_failure.is_none()));
     if let Some(error) = log_failure {
         result["errorLogError"] = json!(error);
+    }
+    // The same plan the log guard above was checked against, as a folder-source run reports it.
+    if let Some(paths) = &planned {
+        result["plannedOutputs"] = json!(paths);
     }
     result["documents"] = json!(originals.len());
     mark_script_limit(s, &mut result);

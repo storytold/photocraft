@@ -313,3 +313,26 @@ fn an_error_log_naming_the_droplet_file_itself_never_replaces_it() {
     let again = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a]})).unwrap();
     assert_eq!(again["errors"].as_array().map(Vec::len), Some(1), "the droplet is still runnable: {again}");
 }
+
+/// #13713 review: the guard above only saw the results the run returned in `files`. A failed entry
+/// is not in that list, yet Batch still planned its output name and refuses its own log there
+/// (#13665), so the droplet has to protect it too: the name belongs to the run whether or not this
+/// entry wrote it. A log aimed there replaced the result an earlier run left under that name.
+#[test]
+fn an_error_log_naming_the_planned_output_of_a_failed_entry_never_replaces_it() {
+    let dir = tmp("log-failed-planned");
+    let (a, b) = inputs(&dir);
+    // What the run plans to write for the two dropped images, left there by an earlier run.
+    std::fs::create_dir_all(format!("{dir}/out")).unwrap();
+    let (first, second) = (format!("{dir}/out/a.png"), format!("{dir}/out/b.png"));
+    std::fs::write(&first, b"earlier result for a").unwrap();
+    std::fs::write(&second, b"earlier result for b").unwrap();
+    let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": first.clone()}));
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "both entries failed: {r}");
+    assert_eq!(r["files"], json!([]), "the failed entries wrote nothing: {r}");
+    assert_eq!(std::fs::read(&first).unwrap(), b"earlier result for a", "{first} still holds the earlier result, not the log");
+    assert_eq!(std::fs::read(&second).unwrap(), b"earlier result for b", "{second} still holds the earlier result");
+    let refused = r["errorLogError"].as_str().unwrap_or_default().to_owned();
+    assert!(refused.contains("errorLog") && refused.contains("must not replace an input or batch output"), "{r}");
+}
