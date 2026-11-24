@@ -67,6 +67,7 @@ pub mod tool_feedback;
 pub(crate) mod tools;
 mod transform_controls;
 pub(crate) mod viewport_pages;
+mod window_drop;
 
 pub(crate) use cursor_policy::alt_samples;
 pub(crate) use display::GPU_OUTPUT;
@@ -240,6 +241,9 @@ mod tabs_tests;
 mod doc_window_dialog_tests;
 
 #[cfg(test)]
+mod document_window_title_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
@@ -259,12 +263,14 @@ mod art_history_shift_click_tests;
 mod rotation_preview_isolation_tests {
     use craft::ui::dialog::DialogId;
     use photocraft_engine::channel_cmds::ChannelTarget;
+    use photocraft_engine::color_cmds::ColorExt;
 
     use super::*;
 
-    /// Opens the filter dialog of `command` and returns its id.
+    /// Opens the filter dialog of `command` with its Preview box and returns its id. Rotate Canvas has no Preview
+    /// (#14462); its size-changing preview (#1436) is reached through `open_previewing`.
     fn open(app: &mut PhotocraftApp, command: &str) -> DialogId {
-        let id = crate::filter_dialog::open(app, command).expect("the dialog opens");
+        let id = crate::filter_dialog::open_previewing(app, command).expect("the dialog opens");
         // The Preview box is on from the dialog's first drawn pass.
         for _ in 0..2 {
             crate::smart_filter_dialog::tests::pass(app);
@@ -480,8 +486,8 @@ mod rotation_preview_isolation_tests {
     #[test]
     fn profile_dialogs_preview_through_the_profile_they_choose() {
         let mut session = photocraft_engine::Session::new();
-        session.color.settings.monitor_profile = "srgb".into();
-        session.color.settings.working_rgb = "display-p3".into();
+        session.color_mut().settings.monitor_profile = "srgb".into();
+        session.color_mut().settings.working_rgb = "display-p3".into();
         session.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
         session.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
         session

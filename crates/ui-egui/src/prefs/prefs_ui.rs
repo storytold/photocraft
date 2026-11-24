@@ -26,6 +26,8 @@ pub struct Runtime {
     log_len: usize,
     /// The preferences revision last handed to the settings writer.
     saved_rev: u64,
+    #[cfg(target_arch = "wasm32")]
+    pub(super) saved_colors: Option<Value>,
     /// The open Keyboard Shortcuts and Menus window.
     pub(crate) shortcuts: Option<shortcuts::ShortcutsSession>,
     /// Style last sent to the GPU canvas.
@@ -37,6 +39,7 @@ pub struct Runtime {
     pub(crate) selected_tool: Option<crate::state::Tool>,
     pub(crate) tool_colors: Option<[[[f32; 4]; 2]; 2]>,
     pub(crate) tool_cmyk_picks: crate::tool_memory::CmykPicks,
+    pub(crate) tool_cmyk_roles: Option<crate::tool_memory::CmykRoles>,
     pub(crate) group_tools: Option<Vec<crate::state::Tool>>,
     /// The tool owning the session brush and the other tools' brushes, as last remembered.
     pub(crate) tool_brushes: Option<crate::tool_memory::ToolBrushes>,

@@ -1,11 +1,19 @@
 use super::dispatch::no_params;
 use super::{PhotocraftApp, Value, json};
+use crate::dialogs::image_processor_ui;
 use craft::ui::choice::Checkbox;
 use craft::ui::contract::{Bind, Outcome as _, Props as _, Show as _};
 use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind};
+use craft::ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
+
+#[path = "artboard_export_options.rs"]
+mod artboard_export_options;
+pub(crate) use artboard_export_options::nest as nest_artboard_export_options;
+#[path = "artboard_name_options.rs"]
+mod artboard_name_options;
+pub(crate) use artboard_name_options::strip as strip_artboard_name_options;
 
 // ---------- dialogs and pickers in front of engine commands ----------
 
@@ -49,9 +57,27 @@ fn opened(id: DialogId) -> Value {
 fn open_form(app: &mut PhotocraftApp, id: &str, title: &str, params: Vec<Param>, fields: DialogFields, fixed: Value) -> DialogId {
     let title = crate::dialogs::filter_dialog::title_of(title);
     let key = id.to_owned();
+    let image_processor = id == image_processor_ui::COMMAND;
+    if image_processor {
+        image_processor_ui::settings_opened(app.ctx());
+    }
     crate::dialogs::params::open_param(app, id, fields, fixed, move |fields: &mut DialogFields| {
-        ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields))
+        derive(&key, fields);
+        let dialog = ParamDialog::command(key.clone(), title.clone(), params.clone()).values(Bind::bound(fields));
+        if image_processor { image_processor_ui::settings_footer(dialog) } else { dialog }
     })
+}
+
+/// Brings a form's shell keys up to date with the values they follow, before each pass, OK and automation write (the
+/// form's builder runs at each): a row takes one `visible_when` condition, so a row shown by two values is shown by a
+/// shell key that combines them.
+fn derive(id: &str, fields: &mut DialogFields) {
+    if id == artboard_export_options::COMMAND {
+        artboard_export_options::derive(fields);
+    }
+    if id == artboard_name_options::COMMAND {
+        artboard_name_options::derive(fields);
+    }
 }
 
 /// Choice options from `(id, label)` pairs whose labels are `tl!` literals at the call site.
@@ -88,6 +114,12 @@ fn choice(key: &str, label: &'static str, options: Vec<(String, Label)>, default
 /// The file formats the exports to files write.
 fn export_formats() -> Vec<(String, Label)> {
     opts(&[("png", tl!("PNG")), ("jpg", tl!("JPEG")), ("psd", tl!("PSD")), ("tiff", tl!("TIFF")), ("webp", tl!("WebP")), ("bmp", tl!("BMP"))])
+}
+
+/// The reference application's File Type list of Artboards to Files, in its order (#13635). Format names, not
+/// translated.
+fn artboard_formats() -> Vec<(String, Label)> {
+    opts(&[("bmp", "BMP"), ("jpg", "JPEG"), ("pdf", "PDF"), ("psd", "PSD"), ("tga", "Targa"), ("tiff", "TIFF"), ("png8", "PNG-8"), ("png24", "PNG-24")])
 }
 
 /// The blending modes of the channel dialogs.
@@ -281,7 +313,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
         }
         "file.export.artboardsToFiles" => {
             let (_, _, name) = doc?;
-            plain(vec![
+            let mut rows = vec![
                 folder("dir", tl!("Destination"), dir),
                 Param::new("prefix", tl!("File Name Prefix"), ParamKind::text(stem(&name))),
                 // Include Overlapping Areas / Artboard Content Only, right below the prefix, with no caption (#13629).
@@ -293,16 +325,51 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
                         Some("overlapping".to_owned()),
                     ),
                 ),
-                choice("format", tl!("File Type"), export_formats(), "png"),
-                export_quality(),
-            ])
+                // Include Background in Export, ticked, the last control before the file type (#13631). Unticked, each board's
+                // white fill is left out of PNG, TIFF and WebP files.
+                Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
+                // The reference application's list, PSD chosen when the dialog opens (#13635).
+                choice("format", tl!("File Type"), artboard_formats(), "psd"),
+            ];
+            // Export Options and each file type's settings (#13636; the JPEG quality is one of them), then Include Artboard
+            // Name and its Name Options (#13637). A section's body runs to the next section and hides with it, so both
+            // checkboxes come before the Options section: after it, Include Artboard Name would show only with Export Options.
+            let mut export = artboard_export_options::rows().into_iter();
+            let mut name = artboard_name_options::rows(&crate::type_tool::families()).into_iter();
+            rows.extend(export.next());
+            rows.extend(name.next());
+            rows.extend(export);
+            rows.extend(name);
+            plain(rows)
         }
         "file.export.artboardsToPdf" => {
             let (_, _, name) = doc?;
             plain(vec![
                 Param::new("path", tl!("File"), ParamKind::text(format!("{dir}/{}.pdf", stem(&name)))),
                 export_selected_artboards(selected_artboards(app)),
+                // Include Overlapping Areas / Artboard Content Only, below Export Selected Artboards, with no caption (#13646).
+                Param::new(
+                    "content",
+                    "",
+                    ParamKind::radio(
+                        opts(&[("overlapping", tl!("Include Overlapping Areas")), ("artboard", tl!("Artboard Content Only"))]),
+                        Some("overlapping".to_owned()),
+                    ),
+                ),
+                // Ticked on first open (#13648).
+                Param::new("includeBackground", tl!("Include Background in Export"), ParamKind::bool(true)),
                 Param::new("quality", tl!("Quality"), ParamKind::int(Some(0), Some(12), 10)),
+                // The page mode, a radio pair with no caption, Multi-Page Document first and selected (#13649).
+                Param::new(
+                    "mode",
+                    "",
+                    ParamKind::radio(
+                        opts(&[("multiPage", tl!("Multi-Page Document")), ("perArtboard", tl!("Document Per Artboard"))]),
+                        Some("multiPage".to_owned()),
+                    ),
+                ),
+                // Unticked on first open; the form remembers it as the last run left it (#13644).
+                Param::new("reversePageOrder", tl!("Reverse Page Order"), ParamKind::bool(false)),
             ])
         }
         "file.export.dataSetsAsFiles" => {
@@ -603,6 +670,52 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
     Some((rows, DialogFields::new()))
 }
 
+/// Batch's OK with Source: Folder and no source folder chosen (#13669).
+pub(crate) const NO_SOURCE_FOLDER: &str = "You must choose a source folder.";
+/// Batch's OK with a folder destination and no destination folder chosen (#13669).
+pub(crate) const NO_DESTINATION_FOLDER: &str = "You must choose a destination folder.";
+
+/// Does a Batch folder field name a folder? No value and an empty or blank path count as nothing chosen.
+fn batch_folder_chosen(path: Option<&str>) -> bool {
+    path.is_some_and(|path| !path.trim().is_empty())
+}
+
+/// The first of the reference's OK checks the Batch dialog's values fail, in its order: the source folder, then the
+/// destination folder. Only a folder source has either: Opened Files reads no folder, and without an output it leaves
+/// the documents open.
+fn batch_missing_choice(fields: &DialogFields) -> Option<&'static str> {
+    if fields.text("source").is_some_and(|source| source != "folder") {
+        return None;
+    }
+    if !batch_folder_chosen(fields.text("input")) {
+        return Some(NO_SOURCE_FOLDER);
+    }
+    let folder_destination = fields.text("destination").is_none_or(|destination| destination == "folder");
+    (folder_destination && !batch_folder_chosen(fields.text("output"))).then_some(NO_DESTINATION_FOLDER)
+}
+
+/// The `ParamFamily::check` of the Batch dialog (#13669): OK, from the button or a confirm through the control channel,
+/// is refused while a folder source or its destination names no folder. As in the reference, a one-button alert
+/// titled "Batch" shows the message; the dialog stays open with its values (the refusal also shows under its rows and
+/// answers a control-channel confirm), and nothing runs.
+pub(crate) fn batch_check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    let message = match batch_missing_choice(&result.fields) {
+        Some(NO_SOURCE_FOLDER) => tl!("You must choose a source folder."),
+        Some(_) => tl!("You must choose a destination folder."),
+        None => return Ok(()),
+    };
+    crate::dialogs::alerts::show(app, craft::ui::dialog::Alert::new(tl!("Batch"), message));
+    Err(Label::from(message))
+}
+
+#[cfg(test)]
+#[path = "batch_ok_validation_tests.rs"]
+mod batch_ok_validation_tests;
+
+#[cfg(test)]
+#[path = "layers_to_files_tests.rs"]
+mod layers_to_files_tests;
+
 /// Handle menu commands that need a shell action or a parameter dialog before execution.
 pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
@@ -638,6 +751,14 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
     if !no_params(params) {
         return None;
     }
+    if id == "file.export.layersToFiles"
+        && let Some(st) = app.session.active()
+        && photocraft_engine::file_cmds::layers_to_files_needs_more_layers(&st.doc)
+    {
+        let message = tl!("Layers to Files needs a document with multiple layers.");
+        crate::dialogs::alerts::alert(app, message);
+        return Some(Err(message.to_owned()));
+    }
     let label = photocraft_engine::commands::find(id).map_or(id, |c| c.label);
     match id {
         "file.openAs" => Some(app.open_dialog_file()),
@@ -652,8 +773,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 Err(e) => return Some(Err(e)),
             };
             let linked = id == "file.placeLinked";
-            let ctx = ctx.clone();
-            Some(app.pick_file_bytes(move |app, name, bytes| {
+            let (ctx, queue_ctx) = (ctx.clone(), ctx.clone());
+            let place = move |app: &mut PhotocraftApp, name: String, bytes: Vec<u8>| {
                 if app.ui.transform.is_some() {
                     return Err("Commit or cancel the transform first".into());
                 }
@@ -665,6 +786,25 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                     crate::transform_tool::begin_placed(app, &ctx)?;
                 }
                 Ok(result)
+            };
+            if linked {
+                return Some(app.pick_file_bytes(place));
+            }
+            // Place Embedded takes several files (#14107); one file is placed as before.
+            Some(app.pick_files_bytes(move |app, files| match <[crate::file_dialog::PickedFile; 1]>::try_from(files) {
+                Ok([file]) => {
+                    let (name, bytes) = file.read()?;
+                    place(app, name, bytes)
+                }
+                Err(files) => {
+                    if app.ui.transform.is_some() {
+                        return Err("Commit or cancel the transform first".into());
+                    }
+                    app.refocus(doc)?;
+                    let count = files.len();
+                    app.place_picked(&queue_ctx, doc, files);
+                    Ok(json!({ "files": count }))
+                }
             }))
         }
         "layer.smartObjects.replaceContents" => {
@@ -755,7 +895,7 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
     let has_file = app.session.active().is_some_and(|d| d.path.is_some());
     let suggested = suggested_copy_name(&doc.name, has_file, app.session.prefs().file_handling.copy_suffix());
     // The copy is of the document as it was when asked.
-    app.pick_save(&suggested, move |app, path| {
+    app.pick_save_copy(&suggested, doc.mode, doc.depth, move |app, path| {
         // An RGB Targa asks for its bits per pixel first, a DDS texture for its compression, a
         // JPEG for its JPEG Options and a TIFF for its TIFF Options; the copy is written from the
         // prompt.
@@ -824,6 +964,9 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
     })
 }
 
+#[cfg(test)]
+#[path = "artboards_to_pdf_mode_tests.rs"]
+mod artboards_to_pdf_mode_tests;
 #[cfg(test)]
 #[path = "../../artboards_to_pdf_selected_tests.rs"]
 mod artboards_to_pdf_selected_tests;

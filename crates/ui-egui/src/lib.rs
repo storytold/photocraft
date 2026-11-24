@@ -26,6 +26,7 @@ macro_rules! tl {
 }
 mod brush_mode_menu;
 pub mod canvas;
+mod channel_titles;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
 pub mod dialogs;
@@ -56,13 +57,13 @@ pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
+pub(crate) mod scratch_reads;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
 pub mod tone;
 pub(crate) mod tool_memory;
 pub mod updates_ui;
-pub mod work_area;
 
 use std::collections::HashMap;
 
@@ -159,6 +160,7 @@ pub use dialogs::new_guide_ui;
 pub use dialogs::new_layer_ui;
 pub use dialogs::open_prompt;
 pub use dialogs::palette;
+pub use dialogs::paragraph_text_size;
 pub(crate) use dialogs::pattern_fill_ui;
 pub use dialogs::preset_group_prompt;
 pub use dialogs::rasterize_prompt;
@@ -236,16 +238,18 @@ pub(crate) use services::SAVE_OPTIONS_OPEN;
 #[cfg(test)]
 pub(crate) use services::saved_revision_after_write;
 pub use services::{
-    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationServices, AutomationWriteFn,
-    AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn,
-    ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn,
-    Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, RecoverFn, Recoverable, RightButtonDownFn,
-    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    AdoptAutosaveFn, AppendTextFn, AutomationAuthorizeFn, AutomationCommandFn, AutomationLocateFn, AutomationOpenPcraftFn, AutomationReadFn,
+    AutomationServices, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn,
+    CursorPosFn, DiscardAutosaveFn, ExportFn, ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp,
+    FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox,
+    PrimaryDownFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn,
+    WriteFn,
 };
 pub(crate) use services::{opaque_layer, saves_flat_in_place};
 pub use text::cjk_fonts;
 pub use text::direction;
 pub use text::served_fonts;
+pub use tools::adjustment_brush;
 use tools::align_bar;
 pub use tools::analysis;
 pub use tools::artboard_tool;
@@ -300,7 +304,7 @@ use tools::type_transform;
 pub use tools::vector_ui;
 
 /// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
-type InfoSampleKey = (i32, i32, u64, u32, u32);
+type InfoSampleKey = (DocId, i32, i32, u64, u32, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -348,11 +352,20 @@ pub struct PhotocraftApp {
     pub(crate) remove_pending: Vec<serde_json::Value>,
     pub(crate) remove_pending_target: Option<retouch_ui::RemoveTarget>,
     pub(crate) remove_trail: Option<stroke_trail::Trail>,
+    /// The numbers that keep apart the textures the app makes for its canvas previews (transform previews, stroke
+    /// trails, Object Finder masks): a preview made again under the same name gets a number no earlier one had, so
+    /// the texture store never shows the old picture for it. One counter for the whole app, since previews of a
+    /// name are made in several places (a transform begins in one, re-renders in another).
+    pub(crate) texture_serials: craft::ui::primitives::Serials,
     /// The menu bar's rows and the English text of its titles, rebuilt when their inputs change
     /// (`menus::MenuModel`).
     pub(crate) menu_model: Option<menus::MenuModel>,
     /// The toolbar's slots for the stored layout (`tool_commands::ToolbarSlots`).
     pub(crate) toolbar_slots: panels::tool_commands::ToolbarSlots,
+    /// The dock's spec model and kept panels (`panel_docking::DockModel`).
+    pub(crate) dock_model: panels::panel_docking::DockModel,
+    /// The patterns and styles the preset views draw from, held while unchanged (`preset_browser::PresetArt`).
+    pub(crate) preset_art: panels::preset_browser::PresetArt,
     /// Move tool drag shown live (`move_ui`).
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
@@ -414,6 +427,9 @@ pub struct PhotocraftApp {
     /// The document area showing the active document's canvas last frame (not the tabs, the
     /// start screen or an opening file's card): files dropped here are placed as layers.
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
+    /// Where a floating document window's title bar dropped docks its document, in the main window's points, as of
+    /// the last frame: the document tab strip, or a band of its height at the top of the document area (#16415).
+    pub(crate) dock_drop_rect: Option<egui::Rect>,
     /// The window's one egui context, for code without one in hand: SAVED-tier reads and writes,
     /// the Frame tool's transforms from pointer events, and the mapping and panels that read the
     /// canvas's zoom ease (`document_display::shown_camera`). Read it through [`Self::ctx`].
@@ -445,6 +461,12 @@ pub struct PhotocraftApp {
     /// The Properties panel's adjustment edit in progress, with the tone editor's shown channel
     /// (`adjust_editors::PropertiesAdjust`).
     pub(crate) adjust_session: Option<adjust_editors::PropertiesAdjust>,
+    /// Twice the passes the Properties panel was not in front or ran without showing the Reset session's layer: the
+    /// session (`adjust_editors`) takes a layer's settings anew after the panel stopped showing it. A pass count would
+    /// also move while the panel replays its memoized body, which is still showing it.
+    pub(crate) properties_hidden: u64,
+    /// Whether the Properties panel's run showed the Reset session's layer (`properties_hidden`).
+    pub(crate) properties_tracked: bool,
     /// The Color Picker dialog asking for a screen sample: the dialog and the field that took it.
     pub(crate) dialog_dropper: Option<(craft::ui::dialog::DialogId, String)>,
     /// The child dialog (colour picker or contour editor) the open Layer Style dialog has, with that dialog's id.
@@ -577,7 +599,7 @@ pub struct PhotocraftApp {
     /// Layer hovered in the Layers panel, outlined on the canvas.
     pub(crate) hover_layer: Option<photocraft_doc::LayerId>,
     /// The commands run from any source (`menus::invoke`, the commands keys and surfaces fire, the control channel). Every
-    /// settling region's version holds it (`panels::region_versions`): a command may change anything a region shows.
+    /// bar's and panel's version holds it (`panels::region_versions`): a command may change anything a slot shows.
     pub(crate) commands_run: u64,
     /// A layer whose row the Layers panel opens for renaming in its next pass (Layer › Rename
     /// Layer, the row menu's Rename Layer…).
@@ -591,6 +613,7 @@ pub struct PhotocraftApp {
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
     /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
+    info_cmyk_sample: Option<(InfoSampleKey, Option<[f32; 4]>)>,
     /// Move tool marquee selecting layers (`move_box`).
     pub(crate) layer_box: Option<move_box::LayerBox>,
     /// Pen paths finished, which Undo back to their finish gives back to the Pen
@@ -617,7 +640,7 @@ pub struct PhotocraftApp {
     /// What the chrome derives from each open document, kept per document revision (`app::doc_queries`).
     pub(crate) doc_queries: app::doc_queries::DocQueries,
     /// The saved workspaces and the one shown (`workspace_ui`).
-    pub workspaces: workspace_ui::Workspaces,
+    pub workspaces: craft::ui::contract::Tracked<workspace_ui::Workspaces>,
     /// Autosave timing and its retry state (`prefs_ui`).
     pub(crate) autosave: craft::platform::autosave::Autosave,
     /// GPU canvas renderer, when running on the wgpu backend (see [`Self::set_wgpu`]). Dropped
@@ -708,6 +731,8 @@ struct InputTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod artboards_to_files_background_tests;
+#[cfg(test)]
 mod background_eraser_tolerance_field_tests;
 #[cfg(test)]
 mod brush_picker_escape_tests;
@@ -717,6 +742,8 @@ mod cam_no_pixels_alert_tests;
 mod eyedropper_context_menu_tests;
 #[cfg(test)]
 mod menu_automate_groups_tests;
+#[cfg(test)]
+mod patch_rasterize_prompt_tests;
 #[cfg(test)]
 mod patch_shift_constrain_tests;
 #[cfg(test)]
@@ -938,9 +965,17 @@ mod move_outline_tests;
 mod move_bar_distribute_gear_tests;
 
 #[cfg(test)]
+mod brush_picker_memo_trials;
+#[cfg(test)]
+mod brush_settle_trials;
+#[cfg(test)]
 mod chrome_settle_trials;
 #[cfg(test)]
+mod command_state_trials;
+#[cfg(test)]
 mod doc_revision_trials;
+#[cfg(test)]
+mod doc_tracked_trials;
 #[cfg(test)]
 mod drag_settle_trials;
 #[cfg(test)]
@@ -948,7 +983,9 @@ mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
 #[cfg(test)]
-mod region_version_trials;
+mod menu_floor_trials;
+#[cfg(test)]
+mod scratch_read_keys_tests;
 
 #[cfg(test)]
 mod new_doc_remember_tests;
@@ -1012,7 +1049,13 @@ mod polygon_lasso_tests;
 mod window_frame_tests;
 
 #[cfg(test)]
+mod artboards_export_options_dialog_tests;
+#[cfg(test)]
 mod artboards_overlap_dialog_tests;
+#[cfg(test)]
+mod artboards_to_files_types_tests;
+#[cfg(test)]
+mod artboards_to_pdf_reverse_tests;
 #[cfg(test)]
 mod browse_field_tests;
 #[cfg(test)]
@@ -1030,6 +1073,8 @@ mod pen_path_ownership_tests;
 
 #[cfg(test)]
 mod artboard_options_bar_tests;
+#[cfg(test)]
+mod artboards_include_name_dialog_tests;
 
 #[cfg(test)]
 mod doc_tab_menu_tests;
@@ -1054,3 +1099,6 @@ mod red_eye_context_menu_tests;
 
 #[cfg(test)]
 mod clone_stamp_indexed_bar_tests;
+
+#[cfg(test)]
+mod place_visible_centre_tests;
