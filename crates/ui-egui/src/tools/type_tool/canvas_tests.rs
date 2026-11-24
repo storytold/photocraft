@@ -13,6 +13,7 @@ use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
+use photocraft_engine::color_cmds::ColorExt;
 use photocraft_geom::{Affine, Point};
 use serde_json::json;
 
@@ -217,10 +218,16 @@ fn panel_harness_without_frame_logic(app: Box<PhotocraftApp>) -> Harness<'static
     h
 }
 
+/// Frames the options bar may take to settle. Opening the font list loads the rows' sample faces on
+/// worker threads, and each pass that runs before a face has loaded is one more frame. The rows are
+/// the fixed test catalog's (`photocraft_text::fonts::catalog`), so the count is bounded, but on a
+/// busy runner the threads can miss many passes.
+const BAR_SETTLE_STEPS: u64 = 64;
+
 fn bar_harness(app: Box<PhotocraftApp>) -> Harness<'static, Box<PhotocraftApp>> {
     let _ = photocraft_text::shared();
     // As tall as a window, so the bar's popup lists open in full below it.
-    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(16).build_app(
+    let mut h = Harness::builder().with_context(app.ctx().clone()).with_size(vec2(1100.0, 600.0)).with_max_steps(BAR_SETTLE_STEPS).build_app(
         |ui, app: &mut PhotocraftApp| {
             ui.horizontal(|ui| show_bar(app, ui));
         },
@@ -410,7 +417,7 @@ mod panel_defaults {
         let mut app = new_app();
         app.ui.tool_options.type_style_defaults =
             json!({"tracking": 20, "text": "Injected", "box": [0, 0, 2, 2], "coalesce": "unrelated"}).as_object().unwrap().clone();
-        let p = super::super::default_style_params(&app);
+        let p = super::super::default_style_params(&app, &app.ui.tool_options);
         assert_eq!(p["tracking"], 20);
         assert!(p.get("text").is_none() && p.get("box").is_none() && p.get("coalesce").is_none());
         app.ui.tool_options.type_style_defaults = json!({
@@ -420,7 +427,7 @@ mod panel_defaults {
         .as_object()
         .unwrap()
         .clone();
-        let p = super::super::default_style_params(&app);
+        let p = super::super::default_style_params(&app, &app.ui.tool_options);
         for key in ["tracking", "leading", "spaceAfter", "variations", "features"] {
             assert!(p.get(key).is_none(), "hostile {key} is ignored");
         }
