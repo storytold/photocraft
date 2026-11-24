@@ -132,6 +132,28 @@ fn report(app: &mut PhotocraftApp, e: &str) {
 /// The settings an empty recorded Content-Aware Fill step plays with (#14254).
 const RECORDED_SETTINGS: [&str; 7] = ["sampling", "sampleAllLayers", "colorAdaptation", "rotationAdaptation", "scale", "mirror", "output"];
 
+/// The workspace's own memory names Rotation Adaptation `rotation`; an empty recorded step reads `rotationAdaptation`.
+const WORKSPACE_ROTATION: &str = "rotation";
+
+/// The settings an empty recorded step plays with, from what the workspace remembers (#14254).
+pub(crate) fn recorded_from_workspace(memory: Value) -> Value {
+    let Value::Object(mut settings) = memory else { return json!({}) };
+    if let Some(rotation) = settings.remove(WORKSPACE_ROTATION) {
+        settings.insert("rotationAdaptation".into(), rotation);
+    }
+    settings.retain(|key, _| RECORDED_SETTINGS.contains(&key.as_str()));
+    Value::Object(settings)
+}
+
+/// The settings an empty recorded step plays with, in the form the workspace remembers them.
+pub(crate) fn recorded_to_workspace(settings: &mut Value) {
+    if let Some(settings) = settings.as_object_mut()
+        && let Some(rotation) = settings.remove("rotationAdaptation")
+    {
+        settings.insert(WORKSPACE_ROTATION.into(), rotation);
+    }
+}
+
 /// `command`'s settings that an empty recorded step plays with.
 fn recorded(command: &FillCommand) -> Option<Value> {
     let Ok(Value::Object(mut settings)) = serde_json::to_value(command) else { return None };

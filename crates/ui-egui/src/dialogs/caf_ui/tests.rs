@@ -258,7 +258,7 @@ fn apply_fills_and_stays_open_ok_closes_cancel_keeps_what_was_applied() {
 fn apply_and_ok_keep_the_settings_for_an_empty_recorded_step() {
     let mut app = app_with_selection();
     let saved = |app: &PhotocraftApp| app.session.prefs().dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS).cloned();
-    assert_eq!(saved(&app), None);
+    assert_eq!(saved(&app), Some(json!({})), "a new profile has no settings yet");
     open(&mut app).unwrap();
     ui(&mut app, json!({"output": "current", "colorAdaptation": "high", "rotation": "medium", "mirror": true})).unwrap();
     ui(&mut app, json!({"apply": true})).unwrap();
@@ -337,18 +337,57 @@ fn a_background_fill_remembers_its_settings_only_when_its_job_is_applied() {
 /// memories leaves the engine's copy in the preferences (#14254).
 #[test]
 fn an_empty_recorded_step_plays_with_the_last_settings_after_a_restart() {
-    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
-    use craft_psd::descriptor::{Descriptor, UnicodeString};
     let mut app = app_with_selection();
     open(&mut app).unwrap();
     ui(&mut app, json!({"output": "current", "commit": true})).unwrap();
     close_all(&mut app);
-    let prefs = app.session.prefs().clone();
+    let mut restarted = restart(app.session.prefs().clone());
+    assert_eq!(play_empty_recorded_step(&mut restarted), 0, "Current Layer, not a new layer");
+}
 
-    // A new app over the saved preferences, moved as startup does.
+/// A profile from an earlier version, which kept the Content-Aware Fill settings only in the workspace's own memory,
+/// carries them forward for an empty recorded step on its first start (#14254).
+#[test]
+fn an_earlier_versions_workspace_settings_carry_forward_to_an_empty_recorded_step() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"output": "current", "rotation": "medium"})).unwrap();
+    ui(&mut app, json!({"cancel": true})).unwrap();
+    close_all(&mut app);
+    // That version moved the engine's copy into the workspace's memory and kept none.
+    let mut prefs = app.session.prefs().clone();
+    prefs.dialogs.remove(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS);
+    let mut restarted = restart(prefs);
+    let carried = restarted.session.prefs().dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS).cloned().unwrap();
+    assert_eq!((&carried["output"], &carried["rotationAdaptation"]), (&json!("current"), &json!("medium")), "{carried}");
+    assert_eq!(play_empty_recorded_step(&mut restarted), 0, "Current Layer, as the workspace remembers");
+}
+
+/// Settings the workspace closed with but never filled are not carried to an empty recorded step: only a fill that ran
+/// sets what it plays with (#14254).
+#[test]
+fn settings_closed_without_a_fill_are_not_carried_forward() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"output": "current"})).unwrap();
+    ui(&mut app, json!({"cancel": true})).unwrap();
+    close_all(&mut app);
+    let mut restarted = restart(app.session.prefs().clone());
+    assert_eq!(play_empty_recorded_step(&mut restarted), 1, "New Layer: no fill has run");
+}
+
+/// A new app over the saved preferences `prefs`, moved as startup does.
+fn restart(prefs: photocraft_engine::prefs::Preferences) -> Box<PhotocraftApp> {
     let mut restarted = app_with_selection();
     restarted.session.edit_prefs(|p| *p = prefs);
     restarted.framework.move_memories(&mut restarted.session);
+    restarted
+}
+
+/// Plays an action of one empty recorded Content-Aware Fill step and returns how many layers it added.
+fn play_empty_recorded_step(app: &mut PhotocraftApp) -> usize {
+    use craft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
+    use craft_psd::descriptor::{Descriptor, UnicodeString};
     let item = AtnItem {
         event: AtnEvent::name("cafWorkspace"),
         dictionary: b"Content-Aware Fill".to_vec(),
@@ -361,11 +400,11 @@ fn an_empty_recorded_step_plays_with_the_last_settings_after_a_restart() {
         ..Default::default()
     };
     let imported = photocraft_engine::atn_cmds::import(&craft_psd::atn::write(&file).unwrap()).unwrap();
-    restarted.session.actions_mut().list.push(imported.actions.into_iter().next().unwrap()).unwrap();
-    let layers = restarted.session.active().unwrap().doc.layers.len();
-    let result = restarted.session.execute("actions.play", json!({"action": 0})).unwrap();
+    app.session.actions_mut().list.push(imported.actions.into_iter().next().unwrap()).unwrap();
+    let layers = app.session.active().unwrap().doc.layers.len();
+    let result = app.session.execute("actions.play", json!({"action": 0})).unwrap();
     assert_eq!(result["ran"], 1, "{result}");
-    assert_eq!(restarted.session.active().unwrap().doc.layers.len(), layers, "Current Layer, not a new layer");
+    app.session.active().unwrap().doc.layers.len() - layers
 }
 
 /// The engine's sampling area over the plan's rectangle (what the fill samples) and its fill area.

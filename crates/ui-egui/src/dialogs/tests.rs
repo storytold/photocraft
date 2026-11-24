@@ -148,9 +148,12 @@ fn the_one_time_move_stores_owned_dialog_values_once_and_leaves_engine_read_keys
     assert_eq!(table("photocraft.edit.fill").unwrap().get("mode"), Some(&toml::Value::String(photocraft_color::BlendMode::ColorBurn.key().to_string())));
     let mut left: Vec<&str> = prefs.dialogs.keys().map(String::as_str).collect();
     left.sort_unstable();
-    let mut kept = vec!["file.print", "ui.layersPanelOptions", "file.export.saveForWebLegacy", live_shape_prompt::PREF];
+    // The Content-Aware Fill entry an empty recorded step reads is given to every profile, empty here (#14254).
+    let mut kept =
+        vec!["file.print", "ui.layersPanelOptions", "file.export.saveForWebLegacy", live_shape_prompt::PREF, photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS];
     kept.sort_unstable();
     assert_eq!(left, kept, "only the kept entries stay in the preferences");
+    assert_eq!(prefs.dialogs.get(photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS), Some(&json!({})));
 
     // A second run finds nothing to move: a value changed since is not overwritten.
     Remembered::<toml::Table>::new("photocraft.filter.gaussianBlur").store(&host, &toml::Table::new());

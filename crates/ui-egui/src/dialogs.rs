@@ -677,7 +677,8 @@ fn convert_blend_mode(key: &str, value: &mut Value) {
 /// Moves the dialogs' last-used values out of `Preferences.dialogs` into the remembered section of `host`, once, before
 /// the first frame. Entries the engine reads and the don't-show-again entries stay; a second run finds nothing to move
 /// because every moved entry left `Preferences.dialogs`. An entry that has no table form stays too, and a shared entry
-/// ([`ENGINE_READ_SHARED`]) never replaces what the framework already remembers.
+/// ([`ENGINE_READ_SHARED`]) never replaces what the framework already remembers; a profile without one gets it from
+/// what the framework remembers ([`carry_forward_shared`]).
 pub(crate) fn move_memories(prefs: &mut Preferences, host: &Host) {
     let keys: Vec<String> = prefs.dialogs.keys().cloned().collect();
     for key in keys {
@@ -685,16 +686,37 @@ pub(crate) fn move_memories(prefs: &mut Preferences, host: &Host) {
         let Some(old) = prefs.dialogs.get(&key) else { continue };
         let mut value = without_nulls(old.clone());
         convert_blend_mode(&key, &mut value);
+        if key == photocraft_engine::atn_cmds::CAF_WORKSPACE_PREFS {
+            crate::caf_ui::recorded_to_workspace(&mut value);
+        }
         let Ok(table) = toml::Table::try_from(&value) else { continue };
         let remembered = Remembered::<toml::Table>::new(scope);
         if ENGINE_READ_SHARED.contains(&key.as_str()) {
-            if remembered.recall(host).is_none() {
+            // An empty entry holds no settings yet (see `carry_forward_shared`).
+            if !table.is_empty() && remembered.recall(host).is_none() {
                 remembered.store(host, &table);
             }
             continue;
         }
         remembered.store(host, &table);
         prefs.dialogs.remove(&key);
+    }
+    carry_forward_shared(prefs, host);
+}
+
+/// Gives a profile without the engine's copy of a shared entry one, once (#14254). An earlier version moved the
+/// Content-Aware Fill settings into the workspace's own memory and kept no copy, so that memory is carried forward:
+/// it is all such a profile has, although it also holds settings the workspace closed with and never filled. With no
+/// memory the copy starts empty. From then on only a fill that ran sets the copy, so settings closed without a fill
+/// are never carried forward.
+fn carry_forward_shared(prefs: &mut Preferences, host: &Host) {
+    for key in ENGINE_READ_SHARED {
+        if prefs.dialogs.contains_key(*key) {
+            continue;
+        }
+        let Some(scope) = memory_destination(key) else { continue };
+        let memory = Remembered::<toml::Table>::new(scope).recall(host).and_then(|table| serde_json::to_value(table).ok());
+        prefs.dialogs.insert((*key).into(), memory.map_or_else(|| serde_json::json!({}), crate::caf_ui::recorded_from_workspace));
     }
 }
 
