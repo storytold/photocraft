@@ -226,3 +226,21 @@ fn copy_css_puts_the_layers_css_on_the_clipboard() {
     assert!(css.starts_with(".Box {\n  background-image: url(\"Box.png\");\n"), "{css}");
     assert_eq!(out.platform_output.commands, [egui::OutputCommand::CopyText(css)]);
 }
+
+/// Every Window item that names a panel is enabled, with or without a document: Clone Source,
+/// Timeline and the preset panels were greyed because only some panel ids were listed.
+#[test]
+fn every_window_panel_item_is_enabled() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let panels: Vec<&str> =
+        crate::menu_catalog::CATALOG.iter().map(|row| row.3).filter(|id| crate::panel_docking::toggle_panel(id).is_some()).collect();
+    assert!(panels.contains(&"window.panel.cloneSource") && panels.contains(&"window.panel.timeline"), "{panels:?}");
+    for with_document in [false, true] {
+        if with_document {
+            new_doc(&mut app);
+        }
+        for id in &panels {
+            assert!(is_enabled(&app, id), "{id} (document open: {with_document})");
+        }
+    }
+}

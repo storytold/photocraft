@@ -84,7 +84,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "window.togglePanels" => true,
         // With one document open the key stays quiet, as in Photoshop, rather than reporting why.
         "window.nextDocument" | "window.previousDocument" => app.session.active().is_some(),
-        i if panel_alias(i).is_some() || workspace_id(i).is_some() => true,
+        // Every Window › <panel> item opens or closes its panel, with or without a document.
+        i if panel_alias(i).is_some() || workspace_id(i).is_some() || crate::panel_docking::toggle_panel(i).is_some() => true,
         i if proof_preset(i).is_some() => app.session.active().is_some(),
         // "Custom…" is the full Proof Setup dialog.
         "view.proofSetup.custom" => app.session.active().is_some(),
