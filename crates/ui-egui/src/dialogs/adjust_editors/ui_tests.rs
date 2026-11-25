@@ -493,6 +493,7 @@ fn black_white_auto_button_sets_the_weights() {
     assert_eq!(history_len(&h), steps + 1);
 }
 
+#[track_caller]
 fn assert_black_white_preset(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) {
     assert_eq!(h.get_by_role_and_label(Role::ComboBox, "Preset").accesskit_node().value().as_deref(), Some(name));
 }
@@ -594,6 +595,8 @@ fn black_white_presets_apply_through_properties_and_undo() {
 #[test]
 fn black_white_presets_distinguish_manual_edits_from_named_choices() {
     let mut h = app_harness("blackWhite", "rgb", 8);
+    // Opening the dropdown on Custom reveals the last row, so leave room for Default too.
+    h.set_size(vec2(1440.0, 1350.0));
     let (id, defaults) = layer(&h);
     let Adjustment::BlackWhite { weights, .. } = &defaults else { panic!("{defaults:?}") };
     let red = weights[0];
