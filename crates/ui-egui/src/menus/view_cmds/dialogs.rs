@@ -690,11 +690,12 @@ fn source_shown_key(index: usize) -> String {
     format!("__sourceShown/{index}")
 }
 
-/// Apply Image's Source row (#14480): the documents of [`apply_image_documents`], the target first chosen.
+/// Apply Image's Source row (#14480): the documents of [`apply_image_documents`], the target first chosen at every
+/// opening (the row is not remembered).
 fn apply_image_source_rows(app: &PhotocraftApp) -> Vec<Param> {
     let names: Vec<(String, Label)> = apply_image_documents(app).iter().map(|(i, d)| (i.to_string(), Label::from(d.name.clone()))).collect();
     let target = app.session.active_index().map(|i| i.to_string()).unwrap_or_default();
-    vec![choice(SOURCE_DOCUMENT, tl!("Source"), names, &target)]
+    vec![choice(SOURCE_DOCUMENT, tl!("Source"), names, &target).not_remembered()]
 }
 
 /// The target's own Channel options: `load` (the Load Selection list: its first `chans` entries the composite, the

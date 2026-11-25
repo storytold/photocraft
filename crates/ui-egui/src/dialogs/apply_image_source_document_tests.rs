@@ -197,8 +197,9 @@ fn ok_applies_the_chosen_source_document() {
     assert_eq!(rgb(&app, 50, 50), [128, 128, 128]);
     assert_eq!(rgb(&app, 300, 50), [255, 255, 255]);
     run(&mut app, "edit.undo", json!({}));
-    // Its Background alone (128 everywhere), inverted.
+    // Its Background alone (128 everywhere), inverted. The dialog opens on the target again: choose "source".
     let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, SOURCE, json!(source.to_string()));
     set(&mut app, &ctx, d, &layer_key(source), json!("Background"));
     set(&mut app, &ctx, d, "sourceInvert", json!(true));
     crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
@@ -345,4 +346,39 @@ fn the_targets_own_rows_keep_an_alpha_named_red_and_a_layer_named_merged() {
     let source = |layer: Value| json!({"blending": "normal", "source": {"layer": layer, "channel": "RGB"}});
     assert_eq!(applied(&mut app, source(json!({"name": "merged"}))), through_dialog);
     assert_ne!(applied(&mut app, source(json!("merged"))), through_dialog, "the composite applies differently");
+}
+
+#[test]
+fn source_defaults_to_the_target_again_after_a_run_with_another() {
+    let (mut app, ctx) = five_documents();
+    let (source, target) = (index_of(&app, "source"), index_of(&app, "target"));
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, SOURCE, json!(source.to_string()));
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    let d = open(&mut app, &ctx);
+    assert_eq!(fields(&app, d)[SOURCE], target.to_string(), "the same target again");
+    crate::dialogs::cancel(&mut app, &ctx, d).unwrap();
+    // Another target opens on itself.
+    let gray = index_of(&app, "gray");
+    run(&mut app, "document.activate", json!({"document": gray}));
+    app.sync_views();
+    let d = open(&mut app, &ctx);
+    assert_eq!(fields(&app, d)[SOURCE], gray.to_string(), "another target");
+}
+
+#[test]
+fn the_targets_own_alpha_with_no_name_reads_the_alpha() {
+    let (mut app, ctx, clash) = names_like_the_built_in_choices();
+    run(&mut app, "document.activate", json!({"document": clash}));
+    // The commands refuse an empty name; a file can still bring one.
+    std::sync::Arc::make_mut(app.session.active_mut().unwrap().doc_mut()).channels[0].name = String::new();
+    app.sync_views();
+    let alpha = option_at(&mut app, "sourceChannel", None, 4);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, "sourceChannel", json!(alpha));
+    assert_eq!(fields(&app, d)["source"]["channel"], json!({"alpha": 0}), "an explicit alpha selector");
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    assert_eq!([rgb(&app, 50, 50), rgb(&app, 300, 50)], [[255, 255, 255], [0, 0, 0]], "the alpha, not the composite");
 }
