@@ -969,7 +969,7 @@ pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_c
         let live = crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", p, stroke, Some(id), 0, |pre| {
             Box::new(color_replacement_effect(pre.clone(), rs))
         })?;
-        Ok(if keep_mods { live.with_footprint_mods() } else { live })
+        Ok::<_, EngineError>(if keep_mods { live.with_footprint_mods() } else { live })
     })?
     .with_tail_preview()
 }
