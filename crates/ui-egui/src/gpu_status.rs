@@ -225,9 +225,19 @@ impl BudgetInputs {
     }
 }
 
-/// The budget inputs and results, one per line (System Info, the log and Preferences ›
-/// Performance), in the current UI language.
+/// The budget inputs and results, one per line (System Info and the log), in the current UI
+/// language.
 pub fn budget_lines(b: &BudgetInputs) -> Vec<String> {
+    budget_lines_with(b, true)
+}
+
+/// [`budget_lines`] without the Memory Usage and GPU Memory preferences, for Preferences ›
+/// Performance, whose own rows show them.
+pub fn budget_lines_beside_prefs(b: &BudgetInputs) -> Vec<String> {
+    budget_lines_with(b, false)
+}
+
+fn budget_lines_with(b: &BudgetInputs, prefs: bool) -> Vec<String> {
     let size = crate::chrome_ui::fmt_bytes;
     let mut v = vec![match b.ram {
         Some(ram) => crate::i18n::fmt(tl!("System memory: {size}"), &[("size", &size(ram))]),
@@ -244,12 +254,14 @@ pub fn budget_lines(b: &BudgetInputs) -> Vec<String> {
             .to_string(),
         );
     }
-    v.push(crate::i18n::fmt(tl!("Memory Usage: {size}"), &[("size", &size(b.memory_usage))]));
-    v.push(if b.gpu_memory > 0 {
-        crate::i18n::fmt(tl!("GPU Memory: {size}"), &[("size", &size(b.gpu_memory))])
-    } else {
-        tl!("GPU Memory: automatic (from Memory Usage)").to_string()
-    });
+    if prefs {
+        v.push(crate::i18n::fmt(tl!("Memory Usage: {size}"), &[("size", &size(b.memory_usage))]));
+        v.push(if b.gpu_memory > 0 {
+            crate::i18n::fmt(tl!("GPU Memory: {size}"), &[("size", &size(b.gpu_memory))])
+        } else {
+            tl!("GPU Memory: automatic (from Memory Usage)").to_string()
+        });
+    }
     if b.gpu_budget > 0 {
         v.push(crate::i18n::fmt(tl!("GPU memory budget: {budget}"), &[("budget", &size(b.gpu_budget))]));
     }
@@ -534,6 +546,8 @@ mod tests {
         // computed yet, and no GPU canvas.
         let card = BudgetInputs { ram: None, vram: Some(8 * G), discrete: true, memory_usage: 4 * G, gpu_memory: G, gpu_budget: 0, canvas_budget: None };
         assert_eq!(en(|| budget_lines(&card)), ["System memory: unknown (16 GB assumed)", "Memory Usage: 4.0G", "GPU Memory: 1.0G"]);
+        // Preferences › Performance shows Memory Usage and GPU Memory as rows: not again.
+        assert_eq!(en(|| budget_lines_beside_prefs(&card)), ["System memory: unknown (16 GB assumed)"]);
         // A discrete card the platform doesn't report (NVIDIA on Linux) doesn't share system
         // memory: its budgets are only taken from it.
         let unreported = BudgetInputs { vram: None, ..card };
