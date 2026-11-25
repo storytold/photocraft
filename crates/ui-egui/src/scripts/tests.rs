@@ -478,7 +478,7 @@ fn a_script_step_is_refused_where_playback_must_finish_before_it_answers() {
     app.programmatic_playback = true;
     let played = app.run("actions.play", json!({"action": "Scripted"}));
     app.programmatic_playback = false;
-    let played = played.map_or_else(|e| json!({"error": e}), |v| v);
+    let played = played.unwrap_or_else(|e| json!({"error": e}));
     assert!(played.get("paused").is_none(), "{played}");
     assert!(played.to_string().contains("script"), "the reply says why: {played}");
     assert!(log.starts.borrow().is_empty(), "no script started");
