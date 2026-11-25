@@ -683,7 +683,6 @@ fn layer_parent(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<Js
 
 fn layer_id(this: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue> {
     let (_, id) = layer_ref(this)?;
-    #[allow(clippy::cast_precision_loss)]
     Ok(JsValue::from(id as f64))
 }
 

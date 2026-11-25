@@ -552,20 +552,21 @@ const LATE_MARKER_HOST: &str = "PHOTOCRAFT_TEST_LATE_MARKER_HOST";
 /// gone and only then writes the memory marker to the host's standard error.
 #[cfg(unix)]
 #[test]
-// The writer must outlive this process (it is the point); init reaps it.
-#[allow(clippy::zombie_processes)]
 fn late_marker_writer() {
     use std::os::unix::process::CommandExt;
     let (Some(ready), Some(host)) = (std::env::var_os(LATE_MARKER), std::env::var_os(LATE_MARKER_HOST)) else { return };
+    // The writer must outlive this process (it is the point): the `sh` started here puts it in
+    // the background and exits at once, so it is reaped here and init adopts the writer.
     // Bounded waits (10 s): a host that never goes leaves no writer behind for long.
-    let script = r#"touch "$1"; i=0; while kill -0 "$2" 2>/dev/null && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; echo 'memory allocation of 5 bytes failed' >&2"#;
-    std::process::Command::new("sh")
+    let script = r#"( touch "$1"; i=0; while kill -0 "$2" 2>/dev/null && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; echo 'memory allocation of 5 bytes failed' >&2 ) &"#;
+    let started = std::process::Command::new("sh")
         .args([std::ffi::OsStr::new("-c"), std::ffi::OsStr::new(script), std::ffi::OsStr::new("writer"), &ready, &host])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .process_group(0)
-        .spawn()
+        .status()
         .unwrap();
+    assert!(started.success());
 }
 
 /// A host that dies of a failed allocation writes the marker to its standard error and aborts.

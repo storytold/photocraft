@@ -192,7 +192,6 @@ fn get_string(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
 
 fn get_integer(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     match get(this, id(args.first(), ctx)?)? {
-        #[allow(clippy::cast_precision_loss)]
         Item::Integer(i) => Ok(JsValue::from(i as f64)),
         _ => Err(mismatch()),
     }
@@ -201,7 +200,6 @@ fn get_integer(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<
 fn get_double(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     match get(this, id(args.first(), ctx)?)? {
         Item::Double(d) => Ok(JsValue::from(d)),
-        #[allow(clippy::cast_precision_loss)]
         Item::Integer(i) => Ok(JsValue::from(i as f64)),
         _ => Err(mismatch()),
     }

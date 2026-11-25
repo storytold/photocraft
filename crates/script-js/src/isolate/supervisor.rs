@@ -622,7 +622,7 @@ impl IsolatedJob {
         let cancel = Arc::new(AtomicBool::new(false));
         let (to_host, host_rx) = mpsc::channel();
         let (events_tx, events) = mpsc::sync_channel(QUEUE);
-        let started = start_threads(&shared, &cancel, input, output, errors, host_rx, events_tx, options.coalesce.clone(), pid);
+        let started = start_threads(&shared, &cancel, HostPipes { input, output, errors, pid }, host_rx, events_tx, options.coalesce.clone());
         if let Err(e) = started {
             shared.kill(Verdict::Cancelled);
             // No watchdog may be there to reap it: reap it here, so it leaves no zombie, and as
@@ -736,18 +736,23 @@ impl Drop for IsolatedJob {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn start_threads(
-    shared: &Arc<Shared>,
-    cancel: &Arc<AtomicBool>,
+/// The host's three pipes and its pid, as the threads that serve it take them.
+struct HostPipes {
     input: ChildStdin,
     output: ChildStdout,
     errors: ChildStderr,
+    pid: u32,
+}
+
+fn start_threads(
+    shared: &Arc<Shared>,
+    cancel: &Arc<AtomicBool>,
+    host: HostPipes,
     host_rx: Receiver<ToHost>,
     events: SyncSender<Event>,
     coalesce: String,
-    pid: u32,
 ) -> io::Result<()> {
+    let HostPipes { input, output, errors, pid } = host;
     let s = shared.clone();
     std::thread::Builder::new().name("script-stderr".into()).spawn(move || read_stderr(errors, &s))?;
     let s = shared.clone();

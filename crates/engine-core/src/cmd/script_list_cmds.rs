@@ -266,7 +266,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.scripts.load",
             "Load Script",
             &[],
-            r#"{"path": .js|.jsx file} | {"name": str, "source": str (at most 256 KiB; 512 KiB for all texts kept)}, "tags": [str] | "a, b"? → {scripts, index} (a file already listed keeps its place)"#,
+            r#"{"path":str? (a .js or .jsx file),"name":str? (with source, instead of path),"source":str? (at most 256 KiB; 512 KiB for all texts kept),"tags":[str]|str? ("a, b")} → {scripts, index} (a file already listed keeps its place)"#,
             false,
             load
         ),
@@ -283,7 +283,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.scripts.run",
             "Run Script",
             &[],
-            r#"{"index": int} | {"path": .js|.jsx file} | {"name": str, "source": str} → {name, source} (the app runs it, with app.name from the first tag when run from the Scripts Manager; headless this only resolves it)"#,
+            r#"{"index":int? (a listed script),"path":str? (a .js or .jsx file),"name":str? (with source),"source":str?} (one of index, path, or name with source) → {name, source} (the app runs it, with app.name from the first tag when run from the Scripts Manager; headless this only resolves it)"#,
             true,
             run
         ),

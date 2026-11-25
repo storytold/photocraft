@@ -850,8 +850,9 @@ fn dialog(ctx: &egui::Context, open: &mut Open) -> Option<Value> {
                 let title = arg(2);
                 ui.heading(if title.is_empty() { tl!("Script Prompt").to_string() } else { title });
                 ui.add_space(4.0);
-                ui.label(arg(0));
-                let r = ui.add(egui::TextEdit::singleline(&mut open.text).desired_width(320.0));
+                // The field is named by the prompt's text, for a screen reader.
+                let label = ui.label(arg(0));
+                let r = ui.add(egui::TextEdit::singleline(&mut open.text).desired_width(320.0)).labelled_by(label.id);
                 if !r.has_focus() && !r.lost_focus() && ui.memory(|m| m.focused().is_none()) {
                     r.request_focus();
                 }
@@ -1172,9 +1173,9 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         {
             ui.separator();
             ui.horizontal(|ui| {
-                ui.label(tl!("Tags:"));
+                let label = ui.label(tl!("Tags:"));
                 let mut text = app.ui.scripts.tags.clone().unwrap_or_else(|| tags.join(", "));
-                let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(280.0).hint_text(tl!("comma-separated")));
+                let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(280.0).hint_text(tl!("comma-separated"))).labelled_by(label.id);
                 if r.changed() {
                     app.ui.scripts.tags = Some(text.clone());
                 }

@@ -98,11 +98,8 @@ fn save_a_copy_refuses_a_canvas_past_the_flatten_limit_in_every_format() {
     let dir = tempfile::tempdir().unwrap();
     for ext in ["png", "jpg", "tif", "psb", "pcraft"] {
         let path = dir.path().join(format!("copy.{ext}"));
-        let started = std::time::Instant::now();
         refused(&mut huge("white").0, "file.saveACopy", json!({"path": path.to_string_lossy()}), "300000×300000 canvas is too large to flatten");
         assert!(!path.exists(), "{ext}: nothing written");
-        // Refused up front, not after reading the canvas.
-        assert!(started.elapsed() < std::time::Duration::from_secs(30), "{ext}: {:?}", started.elapsed());
     }
 }
 

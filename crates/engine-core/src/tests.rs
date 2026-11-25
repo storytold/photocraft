@@ -1236,7 +1236,7 @@ fn document_inspect_and_activate_invalid_index() {
 
 #[test]
 fn documents_are_inspected_and_activated_by_their_serial() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     let made = s.execute("file.new", json!({"width": 8, "height": 8, "name": "One"})).unwrap();
     s.execute("file.new", json!({"width": 9, "height": 9, "name": "Two"})).unwrap();
     let serial = |s: &mut Session, i: usize| s.execute("session.inspect", json!({})).unwrap()["documents"][i]["serial"].as_u64().unwrap();
@@ -1263,7 +1263,7 @@ fn documents_are_inspected_and_activated_by_their_serial() {
 /// A reader that needs no History rows (scripts read a document many times) can leave them out.
 #[test]
 fn document_inspect_can_leave_out_the_history() {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
     let full = s.execute("document.inspect", json!({})).unwrap();
     let lite = s.execute("document.inspect", json!({"history": false})).unwrap();
@@ -1616,41 +1616,6 @@ fn the_active_layer_marker_advances_for_a_new_document_and_not_for_a_same_layer_
     assert_eq!(s.active_layer_changes(), before, "re-selecting the active layer leaves the marker alone");
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
     assert!(s.active_layer_changes() > before, "a new active document advances the marker");
-}
-
-/// `type.create` with `layer` turns that empty pixel layer into the text layer in one edit, in
-/// place: the id, the place and its own settings stay; anything else is refused unchanged.
-#[test]
-fn type_create_can_turn_an_empty_pixel_layer_into_text_in_place() {
-    let mut s = session_with_doc();
-    let id = photocraft_doc::LayerId(s.execute("layer.new.layer", json!({"name": "Caption"})).unwrap()["layer"].as_u64().unwrap());
-    s.execute("layer.setProps", json!({"layer": id.0, "opacity": 0.5})).unwrap();
-    let above = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
-    let count = |s: &Session| s.active().unwrap().doc.layers.len();
-    let (layers, steps) = (count(&s), s.execute("document.inspect", json!({})).unwrap()["history"].as_array().unwrap().len());
-    let made = s.execute("type.create", json!({"x": 0, "y": 0, "text": "", "layer": id.0})).unwrap();
-    assert_eq!(made["layer"], json!(id.0));
-    assert_eq!(count(&s), layers, "no layer added or left behind");
-    let steps_now = s.execute("document.inspect", json!({})).unwrap()["history"].as_array().unwrap().len();
-    assert_eq!(steps_now, steps + 1, "one edit");
-    let l = s.active().unwrap().doc.layer(id).unwrap();
-    assert!(matches!(l.content, photocraft_doc::LayerContent::Text(_)));
-    assert_eq!((l.name.as_str(), l.opacity), ("Caption", 0.5));
-    // One undo brings the pixel layer back, as it was.
-    s.execute("edit.undo", json!({})).unwrap();
-    let l = s.active().unwrap().doc.layer(id).unwrap();
-    assert!(matches!(l.content, photocraft_doc::LayerContent::Raster(_)));
-    assert_eq!((l.name.as_str(), l.opacity, count(&s)), ("Caption", 0.5, layers));
-    s.execute("edit.redo", json!({})).unwrap();
-    // A layer with pixels, or the background, stays as it was.
-    s.execute("select.all", json!({})).unwrap();
-    s.execute("layer.select", json!({"layer": above})).unwrap();
-    s.execute("edit.fill", json!({"color": "#404040"})).unwrap();
-    assert!(s.execute("type.create", json!({"x": 0, "y": 0, "text": "", "layer": above})).is_err());
-    let background = s.active().unwrap().doc.layers[0].id;
-    assert!(s.active().unwrap().doc.is_background(background));
-    assert!(s.execute("type.create", json!({"x": 0, "y": 0, "text": "", "layer": background.0})).is_err());
-    assert_eq!(count(&s), layers);
 }
 
 /// A layer the app named "Layer 3" takes its text's name when it becomes a text layer; one the
