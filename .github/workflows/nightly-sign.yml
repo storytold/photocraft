@@ -35,9 +35,10 @@ jobs:
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@605d58766e8f536564da8fc81d3676ac86816dea
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@00ad6b9b691ff642feabde191c4fab678ebbddde
     with:
-      tooling-revision: 605d58766e8f536564da8fc81d3676ac86816dea
+      tooling-revision: 00ad6b9b691ff642feabde191c4fab678ebbddde
+      app-name: photocraft
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}
     # No secrets: inherit or raw platform values in this caller. Only the isolated native

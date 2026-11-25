@@ -746,6 +746,7 @@ class NightlySignerBranchTrustClosure(unittest.TestCase):
         (_, guard), = job_conditions(sign.split("\njobs:\n", 1)[1])
         self.assertIn("github.ref == 'refs/heads/" + SIGNER_BRANCH + "'", guard)
         self.assertNotIn("refs/heads/release", sign, "the signer no longer runs on the stable branch")
+        self.assertEqual(re.findall(r"(?m)^      app-name: (\S+)$", sign), ["photocraft"], "the shared signer needs the reviewed registry app")
         dispatch = inline_scripts(DISPATCHER)[0]
         self.assertEqual(re.findall(r"'ref': '([^']+)'", dispatch), ["refs/heads/" + SIGNER_BRANCH])
         self.assertEqual(json.loads(INSTALLED_POLICY.read_text())["release_branch"], SIGNER_BRANCH)
