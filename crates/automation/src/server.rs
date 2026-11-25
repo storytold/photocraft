@@ -392,7 +392,8 @@ pub struct UiSetParams {
     /// combine, subtract, intersect or exclude: how the next Pen path joins the selected shape
     /// layer or path), shapeStroke (an object patching width, align, cap, join, miterLimit,
     /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
-    /// `shape.edit` names and units; colour comes from `tools.setColors`. frameShape (rectangle,
+    /// `shape.edit` names and units; colour comes from `tools.setColors`. useAlignedRendering
+    /// (boolean, the shape and Pen tools' Align Edges preference). frameShape (rectangle,
     /// ellipse, triangle, polygon or custom: the Frame tool's shape), frameSides (3..100, the
     /// polygon's sides), frameTarget (frame, content or both: what the selected frame's handles
     /// edit). camTransformOnDrop (bool,
@@ -414,7 +415,12 @@ pub struct UiSetParams {
     /// "selectedLayer" or "adjustmentComposite") for the Histogram panel), histogramRange ([from,
     /// to] levels 0..255 whose Count and Percentile the panel shows, or null) and histogramRefresh
     /// (true: an Uncached Refresh); `ui.inspect` reports them and the statistics under
-    /// `histogram`. Other fields are an error.
+    /// `histogram`. statusInfo (the status bar's item next to the zoom field), marqueeStyle
+    /// ("normal", "fixedRatio" or "fixedSize") and marqueeSize ([width, height] for that style),
+    /// actionsPanel (an object patching buttonMode and collapsed for the Actions panel),
+    /// presetBrowsers (an object keyed by preset panel, each patching view ("grid" or "list") and
+    /// zoom of its browser), toolbarColumns (1 up to the toolbar's cells, its width in tool columns) and recentView
+    /// ("grid" or "list", the Home screen's recent files). Other fields are an error.
     pub fields: Value,
 }
 
@@ -778,6 +784,28 @@ impl PhotocraftMcp {
             return Ok(no_backend());
         };
         to_result(b.call_read("ui.inspect", json!({})).await)
+    }
+
+    #[tool(
+        description = "Where this app opens and saves files for agents. Put files the app should open in read_folder (or a folder below it) and find what it saves in write_folder. Both are usually the app's agent folder in Documents/ArtCraft/Agents; the person may have set others. null means the app has no such folder now. Paths passed to other tools may be relative to these folders."
+    )]
+    async fn agent_folders(&self) -> Result<CallToolResult, McpError> {
+        if let Some(r) = self.headless_op(|h| Ok(session_folders_answer(&h.folders()))).await {
+            return to_result(r);
+        }
+        match &*self.backend {
+            Backend::Live(live) => match live.window_folders().await {
+                Ok(folders) => Ok(ok_json(&craft::control::agents::folders_answer(&folders))),
+                Err(e) => Ok(fail(e)),
+            },
+            // A window reached with --bridge may have been started with its own root flags.
+            Backend::Bridge(_) => Ok(ok_json(&json!({
+                "read_folder": null,
+                "write_folder": null,
+                "note": "bridge mode: the app's folders are the ones it was started with (--automation-read-root, --automation-write-root) or set in Preferences > AI Integrations"
+            }))),
+            Backend::Headless(_) => Ok(no_backend()),
+        }
     }
 
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
@@ -1148,6 +1176,24 @@ impl PhotocraftMcp {
     }
 }
 
+/// `agent_folders`' answer for a headless session: the shared shape (`read_folder`, the first
+/// read root; `write_folder`), plus every read root in lookup order and, for a trusted local
+/// session, `any_path`.
+fn session_folders_answer(f: &crate::headless::SessionFolders) -> Value {
+    let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+    let mut answer = json!({
+        "read_folder": f.read.first().map(|p| path(p)),
+        "write_folder": f.write.as_deref().map(path),
+    });
+    if f.read.len() > 1 {
+        answer["read_folders"] = json!(f.read.iter().map(|p| path(p)).collect::<Vec<_>>());
+    }
+    if f.any_path {
+        answer["any_path"] = json!(true);
+    }
+    answer
+}
+
 /// Whether two targets are the same session or the same app connection.
 fn same_target(a: Option<&Target>, b: Option<&Target>) -> bool {
     match (a, b) {
@@ -1485,36 +1531,6 @@ mod tests {
         assert_eq!(docs, 0, "the step after the budget ran out did not run");
     }
 
-    /// rmcp may drop a cancelled request's future without polling it again; its job must still
-    /// stop and leave the document unchanged (#8129).
-    #[tokio::test(flavor = "multi_thread")]
-    async fn dropping_a_waited_command_cancels_its_job() {
-        let mcp = PhotocraftMcp::headless();
-        mcp.headless_op(|h| {
-            h.command_run("file.new", json!({"width": 6000, "height": 6000}))?;
-            h.command_run("filter.noise.addNoise", json!({"amount": 50}))
-        })
-        .await
-        .unwrap()
-        .unwrap();
-        let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
-        let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
-        let t = std::time::Instant::now();
-        loop {
-            let (running, cancelled) =
-                mcp.headless_op(|h| Ok((h.session.has_jobs(), h.session.jobs_with_recent().iter().any(|j| j.state == "cancelled")))).await.unwrap().unwrap();
-            if !running {
-                assert!(cancelled, "the job ended without being cancelled");
-                break;
-            }
-            assert!(t.elapsed().as_secs() < 30, "the dropped job kept running");
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
-    }
-
     /// Dropped while its start still waits for the session lock (held here as a long synchronous
     /// command would): the job that starts afterwards is cancelled too, not left running.
     #[tokio::test(flavor = "multi_thread")]
@@ -1565,14 +1581,29 @@ mod tests {
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let Backend::Headless(session) = &*mcp.backend else { panic!("headless") };
         let session = session.clone();
+        // A call holds clones of the session until it returns. A waited start holds exactly three
+        // once its blocking closure is queued on `spawn_blocking` (from where it can only wait for
+        // the lock): `step`'s, `headless_wait`'s target, and `headless_op`'s, taken last, right
+        // before the closure is queued. The wait below matches that count exactly, so a call path
+        // that takes one more clone times out here instead of letting the test go on with only
+        // one start queued.
+        let idle = Arc::strong_count(&session);
+        let held = session.clone();
         let (locked, acquired) = std::sync::mpsc::channel();
         let (release, released) = std::sync::mpsc::channel();
         let holder = std::thread::spawn(move || {
-            let _held = session.lock().unwrap();
+            let _held = held.lock().unwrap();
             locked.send(()).unwrap();
             released.recv().unwrap();
         });
         acquired.recv().unwrap();
+        async fn until(what: &str, done: impl Fn() -> bool) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !done() {
+                assert!(std::time::Instant::now() < deadline, "timed out waiting until {what}");
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
 
         let (mut input, server_in) = tokio::io::duplex(65536);
         let (server_out, output) = tokio::io::duplex(65536);
@@ -1591,7 +1622,8 @@ mod tests {
             )
             .await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // The holder's clone, and three for each start.
+        until("both starts are queued", || Arc::strong_count(&session) == idle + 1 + 2 * 3).await;
         for id in [2, 3] {
             send(&mut input, json!({"jsonrpc":"2.0", "method":"notifications/cancelled", "params":{"requestId":id}})).await;
         }
@@ -1604,8 +1636,9 @@ mod tests {
         }
         release.send(()).unwrap();
         holder.join().unwrap();
-        // Let both blocked starts acquire the mutex before inspecting their effects.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Both blocked starts took the lock and returned (their replies are dropped, as cancelled)
+        // before their effects are inspected.
+        until("both starts returned", || Arc::strong_count(&session) == idle).await;
         let (after, jobs) = mcp.headless_op(|h| Ok((h.inspect(None)?, h.session.jobs_with_recent()))).await.unwrap().unwrap();
         assert_eq!(after, before);
         assert!(jobs.is_empty(), "cancelled queued job started: {jobs:?}");

@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod align_edges;
 pub mod edit;
 pub mod feather;
 pub mod flatten;
@@ -257,6 +258,8 @@ pub enum Paint {
     None,
     /// Straight RGBA.
     Solid([f32; 4]),
+    /// Straight CMYK and a separate alpha.
+    Cmyk([f32; 4], f32),
     Gradient {
         /// Colour stops sorted by location (straight RGBA).
         stops: Vec<(f32, [f32; 4])>,
@@ -289,6 +292,7 @@ impl Paint {
             [v[0], v[1], v[2], c.alpha]
         };
         match f {
+            Fill::Solid(c) if c.mode == ColorMode::Cmyk => Paint::Cmyk(c.c, c.alpha),
             Fill::Solid(c) => Paint::Solid(rgba(c)),
             // No `..` here on purpose: a new gradient field must fail to compile until the
             // shape renderer honours it (the same sentinel the document/compositor pair uses).
@@ -318,6 +322,10 @@ impl Paint {
         match self {
             Paint::None => [0.0; 4],
             Paint::Solid(c) => *c,
+            Paint::Cmyk(inks, alpha) => {
+                let [r, g, b] = photocraft_color::convert::cmyk_to_rgb(*inks);
+                [r, g, b, *alpha]
+            }
             Paint::Gradient { stops, midpoints, opacity_stops, style, layout, reverse, dither: dith, frame } => {
                 let t = gradient_t(*style, layout.0, layout.1, *reverse, layout.2, *frame, x, y);
                 let mut c = sample_stops(stops, midpoints, opacity_stops, t);
@@ -327,6 +335,14 @@ impl Paint {
                 c
             }
         }
+    }
+    fn cmyka_at(&self, x: f64, y: f64) -> [f32; 5] {
+        if let Self::Cmyk([c, m, y, k], alpha) = *self {
+            return [c, m, y, k, alpha];
+        }
+        let [r, g, b, alpha] = self.at(x, y);
+        let [c, m, y, k] = photocraft_color::convert::rgb_to_cmyk([r, g, b]);
+        [c, m, y, k, alpha]
     }
 }
 
@@ -587,7 +603,13 @@ impl CompiledShape {
 
     /// [`CompiledShape::new`] with the feather computed over `coverage` while gradients still lay
     /// out in `gradient_frame`: measuring a shape beyond the canvas it is drawn in.
+    ///
+    /// A shape with Align Edges on (`use_aligned_rendering`) renders [`align_edges::aligned_path`]
+    /// instead of its stored path: every renderer (layer caches, the compositor's fill/stroke
+    /// split, previews, extents) compiles shapes here, so they all agree.
     pub fn with_frames(shape: &ShapeLayer, tol: f64, coverage: Rect, gradient_frame: Rect) -> Self {
+        let aligned = align_edges::aligned_shape(shape, tol);
+        let shape = aligned.as_ref().unwrap_or(shape);
         let pb = shape.path.control_bounds().unwrap_or((0.0, 0.0, 0.0, 0.0));
         let g = gradient_frame;
         let cb = (f64::from(g.x0), f64::from(g.y0), f64::from(g.x1), f64::from(g.y1));
@@ -628,16 +650,21 @@ impl CompiledShape {
 
     /// Straight RGBA for every pixel of `rect`.
     pub fn render_rgba(&self, rect: Rect) -> Vec<[f32; 4]> {
+        self.render_components(rect, Paint::at)
+    }
+
+    fn render_components<const N: usize>(&self, rect: Rect, at: impl Fn(&Paint, f64, f64) -> [f32; N]) -> Vec<[f32; N]> {
         let n = rect.width() as usize * rect.height() as usize;
-        let mut out = vec![[0.0f32; 4]; n];
+        let mut out = vec![[0.0; N]; n];
+        let alpha = N - 1;
         let w = rect.width() as usize;
         if let Some((r, paint)) = &self.fill {
             let cov = r.render(rect);
             for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
                 if *c > 0.0 {
                     let (x, y) = ((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5);
-                    let mut p = paint.at(x, y);
-                    p[3] *= c;
+                    let mut p = at(paint, x, y);
+                    p[alpha] *= c;
                     *o = p;
                 }
             }
@@ -655,16 +682,16 @@ impl CompiledShape {
                     continue;
                 }
                 let (x, y) = ((rect.x0 + (i % w) as i32) as f64 + 0.5, (rect.y0 + (i / w) as i32) as f64 + 0.5);
-                let s = paint.at(x, y);
-                let sa = s[3] * c * opacity;
-                let da = o[3];
+                let s = at(paint, x, y);
+                let sa = s[alpha] * c * opacity;
+                let da = o[alpha];
                 let a = sa + da * (1.0 - sa);
                 if a > 0.0 {
-                    for k in 0..3 {
+                    for k in 0..alpha {
                         o[k] = (s[k] * sa + o[k] * da * (1.0 - sa)) / a;
                     }
                 }
-                o[3] = a;
+                o[alpha] = a;
             }
         }
         out
@@ -677,7 +704,20 @@ impl CompiledShape {
         let Some(b) = self.bounds else { return s };
         let area = b.intersect(&clip);
         let ch = format.channels();
+        let native_cmyk = format.mode == ColorMode::Cmyk
+            && (self.fill.as_ref().is_some_and(|(_, paint)| matches!(paint, Paint::Cmyk(..)))
+                || self.stroke.as_ref().is_some_and(|(_, paint, _)| matches!(paint, Paint::Cmyk(..))));
         render_bands(&mut s, area, &|band| {
+            if native_cmyk {
+                let mut cmyka = self.render_components(band, Paint::cmyka_at);
+                for pixel in &mut cmyka {
+                    if pixel[4] <= 0.0 {
+                        *pixel = [0.0; 5];
+                    }
+                }
+                let vals: Vec<_> = cmyka.iter().flat_map(|p| p[..ch].iter().copied()).collect();
+                return band_tiles(band, &vals, ch, |px| if format.alpha { px[4] > 0.0 } else { px.iter().any(|v| *v != 0.0) });
+            }
             let rgba = self.render_rgba(band);
             let mut vals = vec![0.0f32; rgba.len() * ch];
             for (p, o) in rgba.iter().zip(vals.chunks_exact_mut(ch)) {

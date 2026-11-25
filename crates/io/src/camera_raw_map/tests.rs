@@ -166,6 +166,105 @@ fn active_unimplemented_controls_and_malformed_curves_stay_opaque() {
 }
 
 #[test]
+fn psd_reopen_keeps_editable_camera_raw_and_preserves_active_unsupported_optics() {
+    use std::sync::Arc;
+
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::{Document, Layer, LayerContent, SmartObject, SmartSource};
+    use photocraft_geom::{Affine, Size};
+    use photocraft_raster::Surface;
+
+    let size = Size::new(2, 2);
+    let mut source = Document::new("contents", size, ColorMode::Rgb, SampleType::U8);
+    let mut pixels = Surface::new(source.pixel_format());
+    pixels.fill_rect(source.bounds(), &[0.25, 0.50, 0.75, 1.0]);
+    source.layers.push(Layer::new("synthetic pixels", LayerContent::Raster(pixels.clone())));
+    let bytes = Arc::new(photocraft_format::save_to_bytes(&source, &Default::default()).unwrap());
+
+    // Use the existing generated descriptor, not the optional external PSD. Nonzero MDis cannot
+    // be rendered by the editable Camera Raw filter and must survive even when the layer is saved.
+    for optics in [false, true] {
+        let mut item = source_item();
+        if optics {
+            let mut settings = get_desc(&item, "Fltr").unwrap().clone();
+            set(&mut settings, "MDis", Value::Integer(17));
+            set(&mut item, "Fltr", Value::Descriptor(settings));
+        }
+        let mut smart =
+            SmartObject::new(SmartSource::Embedded { file_name: "contents.pcraft".into(), bytes: bytes.clone() }, Affine::IDENTITY, Some(pixels.clone()));
+        smart.smart_filters.push(filter_from_item(&item));
+        let mut doc = Document::new("camera raw compatibility", size, ColorMode::Rgb, SampleType::U8);
+        doc.layers.push(Layer::new("edited", LayerContent::Smart(smart)));
+
+        let saved = crate::export(&doc, "psd", &Default::default()).unwrap();
+        let reopened = crate::import("saved.psd", &saved.bytes).unwrap().document;
+        let layer = reopened.layers.iter().find(|layer| layer.name == "edited").unwrap();
+        let LayerContent::Smart(smart) = &layer.content else { panic!("the Camera Raw layer must reopen as a smart object") };
+        let [filter] = smart.smart_filters.as_slice() else { panic!("expected the saved Camera Raw filter") };
+        if optics {
+            assert_eq!(filter.command, UNSUPPORTED_FILTER);
+        } else {
+            assert_eq!(filter.command, COMMAND);
+            let settings: CameraRaw = serde_json::from_value(filter.params.clone()).unwrap();
+            assert!((settings.exposure - 1.15).abs() < 1e-6);
+        }
+        let roundtripped = item_for_filter(filter).unwrap();
+        assert_eq!(get_desc(&roundtripped, "Fltr"), get_desc(&item, "Fltr"));
+    }
+}
+
+#[test]
+fn psd_reopen_preserves_missing_vs_explicit_zero_camera_raw_exposure() {
+    use std::sync::Arc;
+
+    use photocraft_color::{ColorMode, SampleType};
+    use photocraft_doc::{Document, Layer, LayerContent, SmartObject, SmartSource};
+    use photocraft_geom::{Affine, Size};
+    use photocraft_raster::Surface;
+
+    // Original in-code fixture: synthetic pixels and the existing generated Camera Raw
+    // descriptor, with only the presence of the on-wire exposure changed.
+    let size = Size::new(2, 2);
+    let mut source = Document::new("contents", size, ColorMode::Rgb, SampleType::U8);
+    let mut pixels = Surface::new(source.pixel_format());
+    pixels.fill_rect(source.bounds(), &[0.25, 0.50, 0.75, 1.0]);
+    source.layers.push(Layer::new("synthetic pixels", LayerContent::Raster(pixels.clone())));
+    let bytes = Arc::new(photocraft_format::save_to_bytes(&source, &Default::default()).unwrap());
+
+    let cases = [("omitted exposure", None), ("explicit zero exposure", Some(Value::Double(0.0)))];
+    let mut doc = Document::new("Camera Raw exposure presence", size, ColorMode::Rgb, SampleType::U8);
+    for (name, exposure) in &cases {
+        let mut item = source_item();
+        let mut settings = get_desc(&item, "Fltr").unwrap().clone();
+        settings.items.retain(|(key, _)| !key.is("Ex12"));
+        if let Some(exposure) = exposure {
+            set(&mut settings, "Ex12", exposure.clone());
+        }
+        set(&mut item, "Fltr", Value::Descriptor(settings));
+        let mut smart =
+            SmartObject::new(SmartSource::Embedded { file_name: "contents.pcraft".into(), bytes: bytes.clone() }, Affine::IDENTITY, Some(pixels.clone()));
+        smart.smart_filters.push(filter_from_item(&item));
+        doc.layers.push(Layer::new(*name, LayerContent::Smart(smart)));
+    }
+
+    let saved = crate::export(&doc, "psd", &Default::default()).unwrap();
+    let reopened = crate::import("exposure-presence.psd", &saved.bytes).unwrap().document;
+    for (name, exposure) in &cases {
+        let layer = reopened.layers.iter().find(|layer| layer.name == *name).unwrap();
+        let LayerContent::Smart(smart) = &layer.content else { panic!("the Camera Raw layer must reopen as a smart object") };
+        let [filter] = smart.smart_filters.as_slice() else { panic!("expected the saved Camera Raw filter") };
+        assert_eq!(filter.command, COMMAND, "{name}");
+        let settings: CameraRaw = serde_json::from_value(filter.params.clone()).unwrap();
+        assert_eq!(settings.exposure, 0.0, "{name}");
+
+        // The same editable value must not erase whether exposure was explicitly stored.
+        let untouched = item_for_filter(filter).unwrap();
+        let descriptor = get_desc(&untouched, "Fltr").unwrap();
+        assert_eq!(descriptor.get("Ex12"), exposure.as_ref(), "{name}");
+    }
+}
+
+#[test]
 #[ignore = "requires a user-supplied Camera Raw PSD"]
 fn all_sliders_fixture() {
     let path = std::env::var("PHOTOCRAFT_CAMERA_RAW_PSD").expect("set PHOTOCRAFT_CAMERA_RAW_PSD");
@@ -233,7 +332,6 @@ fn light_curve_and_hsl_are_editable_without_rewriting_unchanged_settings() {
 #[test]
 fn new_filters_write_every_verified_control_and_accept_explicit_defaults() {
     let mut params = default_params().unwrap();
-    params["seed"] = json!(0);
     for (param, key) in SCALARS {
         let number = match *key {
             "Ex12" => 0.75,

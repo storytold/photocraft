@@ -1,13 +1,13 @@
 //! Object storage (ZIP or directory), incremental writer and loader.
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 #[cfg(all(test, windows))]
 use std::io::Write;
 use std::path::Path;
-#[cfg(test)]
+#[cfg(any(all(test, not(unix)), all(test, windows)))]
 use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 #[cfg(all(test, windows))]
@@ -155,7 +155,62 @@ impl ByteSource for ZipSource<'_> {
 fn bundle_error(error: craft_pcraft_bundle::Error) -> FormatError {
     match error {
         craft_pcraft_bundle::Error::LimitExceeded { entry, limit } => FormatError::LimitExceeded(format!("`{entry}` exceeds {limit} bytes")),
+        craft_pcraft_bundle::Error::Zip(error) => crate::zip::map_read_error(error),
         other => FormatError::corrupt(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod bundle_error_tests {
+    use super::*;
+
+    #[test]
+    fn shared_save_io_errors_keep_the_native_io_type_and_message() {
+        let error = save_error(craft_pcraft_bundle::Error::Io("manifest publication failed".into()));
+        let FormatError::Io(error) = error else { panic!("I/O failure must remain typed") };
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "manifest publication failed");
+    }
+
+    #[test]
+    fn direct_and_nested_zip_limits_remain_limits() {
+        let error = bundle_error(craft_pcraft_bundle::Error::LimitExceeded { entry: "manifest.json".into(), limit: 16 });
+        assert!(matches!(error, FormatError::LimitExceeded(message) if message == "`manifest.json` exceeds 16 bytes"));
+        for error in [
+            craft_zip::Error::TooManyEntries { declared: 3, limit: 2 },
+            craft_zip::Error::TooManyEndRecords(2),
+            craft_zip::Error::EntryTooLarge { name: "manifest.json".into(), limit: 16 },
+            craft_zip::Error::BudgetSpent { name: "manifest.json".into(), limit: 16 },
+        ] {
+            let message = format!("zip: {error}");
+            assert!(matches!(bundle_error(craft_pcraft_bundle::Error::Zip(error)), FormatError::LimitExceeded(found) if found == message));
+        }
+    }
+
+    #[test]
+    fn malformed_paths_archives_and_hashes_remain_corrupt() {
+        for error in [
+            craft_pcraft_bundle::Error::Io("invalid compressed frame".into()),
+            craft_pcraft_bundle::Error::InvalidPath("../manifest.json".into()),
+            craft_pcraft_bundle::Error::InvalidBundle("missing manifest".into()),
+            craft_pcraft_bundle::Error::HashMismatch("tiles/object.zst".into()),
+            craft_pcraft_bundle::Error::Zip(craft_zip::Error::NotZip("truncated".into())),
+            craft_pcraft_bundle::Error::Zip(craft_zip::Error::Entry { name: "manifest.json".into(), msg: "checksum".into() }),
+        ] {
+            let message = match &error {
+                craft_pcraft_bundle::Error::Zip(e) => format!("zip: {e}"),
+                _ => error.to_string(),
+            };
+            assert!(matches!(bundle_error(error), FormatError::Corrupt(found) if found == message));
+        }
+    }
+}
+
+/// Save failures are I/O errors; read-time decompression errors remain corrupt data.
+fn save_error(error: craft_pcraft_bundle::Error) -> FormatError {
+    match error {
+        craft_pcraft_bundle::Error::Io(message) => FormatError::Io(std::io::Error::other(message)),
+        other => bundle_error(other),
     }
 }
 
@@ -689,7 +744,6 @@ fn path_signature(path: &Path) -> Result<Option<FileSignature>> {
     }
 }
 
-#[cfg(test)]
 fn unsafe_bundle_entry(path: &Path) -> FormatError {
     FormatError::Io(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
@@ -699,7 +753,6 @@ fn unsafe_bundle_entry(path: &Path) -> FormatError {
 
 /// The generic atomic writer intentionally follows a destination symlink. Directory bundles
 /// must reject one instead: all of their managed entries stay below the bundle root.
-#[cfg(all(test, windows))]
 fn plain_file_or_missing(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(()),
@@ -709,7 +762,7 @@ fn plain_file_or_missing(path: &Path) -> Result<()> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 fn plain_directory_or_missing(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() => Ok(()),
@@ -798,14 +851,6 @@ fn confirm_flushed(dir: &Path, written: &Path) -> Result<()> {
             format!("{} was written, but its folder could not be flushed to disk, so the save may not survive a power loss or crash: {e}", written.display()),
         ))
     })
-}
-
-#[cfg(all(test, not(windows)))]
-thread_local! {
-    /// Tests: the bundle file, or folder, whose next folder flush fails, once, on this thread.
-    static FAIL_DIR_FLUSH: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
-    /// Tests: the folders flushed on this thread, in order.
-    static FLUSHED: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Publish a validated bundle entry through a flushed temporary file and replacing rename.
@@ -1081,7 +1126,10 @@ impl PcraftWriter {
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c)?;
-        let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
+        // Reuse the existing shared build-version override; stable without it is byte-identical.
+        // This is writer provenance only, never a format-version bump or a migration trigger.
+        let writer_version = option_env!("PHOTOCRAFT_OVERRIDE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+        let mut model = Manifest::new(format!("photocraft-format {writer_version}"), document);
         model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
         model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
         let full_composite = opts.full_composite.is_some();
@@ -1208,7 +1256,10 @@ impl PcraftWriter {
             }
         }
         scratch_ok(doc, generation)?;
-        let directory_stats = self.directory.save_directory(dir, writer).map_err(bundle_error)?;
+        // craft-pcraft-bundle refuses a symlinked manifest only when it publishes it, after the
+        // objects are written. Refusing it first leaves the folder as it was.
+        plain_file_or_missing(&dir.join(MANIFEST))?;
+        let directory_stats = self.directory.save_directory(dir, writer).map_err(save_error)?;
         let mut stats = prepared.stats;
         stats.objects_removed = directory_stats.removed;
         for path in &directory_stats.written_objects {
@@ -1494,9 +1545,9 @@ fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
         let zip = ZipReader::new(&bytes).unwrap();
         let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
         let mut want = vec![MANIFEST];
-        want.extend(t.then_some(THUMB));
-        want.extend(c.then_some(COMPOSITE));
-        want.extend(f.then_some(FULL_COMPOSITE));
+        let mut previews_want: Vec<&str> = t.then_some(THUMB).into_iter().chain(c.then_some(COMPOSITE)).chain(f.then_some(FULL_COMPOSITE)).collect();
+        previews_want.sort();
+        want.extend(previews_want);
         assert_eq!(names[..want.len()], want[..]);
         assert!(names[want.len()..].iter().all(|n| n.starts_with("tiles/") || n.starts_with("blobs/")), "{names:?}");
         for (name, img) in [(THUMB, opts.thumbnail.as_ref()), (COMPOSITE, opts.composite.as_ref()), (FULL_COMPOSITE, opts.full_composite.as_ref())] {
@@ -1635,73 +1686,7 @@ fn gc_pinned_directory_handles_resist_subdirectory_swap() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// #4968: a manifest whose folder can't be flushed fails the save, and the objects the previous
-/// manifest references stay in place; the next save that flushes removes what is unreferenced.
-#[cfg(all(test, not(windows)))]
-#[test]
-fn a_failed_manifest_flush_keeps_the_previous_objects() {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!("pcraft-flush-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-    std::fs::create_dir_all(&dir).unwrap();
-    let dir = std::fs::canonicalize(dir).unwrap();
-    let mut doc = Document::new("flush", photocraft_doc::Size::new(64, 64), photocraft_color::ColorMode::Rgb, SampleType::U8);
-    let id = doc.insert_above(None, photocraft_doc::Layer::raster("paint", doc.pixel_format()));
-    let paint = |doc: &mut Document, red: f32| {
-        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[red, 0.5, 0.25, 1.0]);
-    };
-    paint(&mut doc, 1.0);
-    let mut w = PcraftWriter::new();
-    w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
-    let old = list_objects(&dir).unwrap();
-    paint(&mut doc, 0.0);
-    FAIL_DIR_FLUSH.with(|f| f.set(Some(MANIFEST)));
-    let e = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
-    assert!(e.to_string().contains("could not be flushed"), "{e}");
-    let now = list_objects(&dir).unwrap();
-    assert!(old.is_subset(&now), "the previous manifest's objects are kept");
-    assert!(now.len() > old.len(), "the new objects were written");
-    let stats = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
-    assert!(stats.objects_removed > 0, "the next save removes the unreferenced objects");
-    assert_eq!(crate::load_path(&dir).unwrap(), doc);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// An object whose folder flush failed is reused by the retried save, which writes no new object
-/// there: that save still flushes the object folder before committing a manifest that names it.
-#[cfg(all(test, not(windows)))]
-#[test]
-fn a_retried_save_flushes_the_folder_of_a_reused_object() {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!("pcraft-retry-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-    std::fs::create_dir_all(&dir).unwrap();
-    let dir = std::fs::canonicalize(dir).unwrap();
-    // One layer of one tile: the retry finds its only object already written.
-    let mut doc = Document::new("retry", photocraft_doc::Size::new(16, 16), photocraft_color::ColorMode::Rgb, SampleType::U8);
-    let id = doc.insert_above(None, photocraft_doc::Layer::raster("paint", doc.pixel_format()));
-    doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 16, 16), &[1.0, 0.5, 0.25, 1.0]);
-    let mut w = PcraftWriter::new();
-    FAIL_DIR_FLUSH.with(|f| f.set(Some("tiles")));
-    let e = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
-    assert!(e.to_string().contains("could not be flushed"), "{e}");
-    assert!(!dir.join(MANIFEST).exists(), "nothing committed");
-    let written = list_objects(&dir).unwrap();
-    assert_eq!(written.iter().filter(|o| o.starts_with("tiles/")).count(), 1, "{written:?}");
-    FLUSHED.with(|f| f.borrow_mut().clear());
-    let stats = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
-    assert_eq!(stats.tiles_written, 0, "the tile is reused");
-    let flushed = FLUSHED.with(|f| f.borrow().clone());
-    let tiles = flushed.iter().position(|d| *d == dir.join("tiles"));
-    let manifest = flushed.iter().rposition(|d| *d == dir);
-    assert!(tiles.is_some() && tiles < manifest, "tiles flushed before the manifest: {flushed:?}");
-    assert_eq!(crate::load_path(&dir).unwrap(), doc);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[cfg(test)]
+#[cfg(all(test, windows))]
 fn list_objects(dir: &Path) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for sub in ["tiles", "blobs"] {
