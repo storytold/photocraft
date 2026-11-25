@@ -389,6 +389,35 @@ fn a_log_named_like_a_launcher_writes_when_no_launcher_was_generated() {
     assert_eq!(twice.matches("File: \"").count(), 2, "{twice:?}");
 }
 
+/// One step further, where the droplet's own record DOES promise a launcher: `"shim": true`, and the
+/// launcher deleted afterwards. A launcher is a file a user can remove, and the `.command` name is one
+/// of the destinations the Errors row offers, so the log of a droplet that lost its launcher lands
+/// there. Run one finds nothing at the name and writes its log. Run two finds a FILE there - and
+/// `launcher_of_droplet` stopped at `is_file` - so the droplet read its own log as its launcher,
+/// answered that the log must not replace an input or batch output, and never updated it again
+/// (#15869 review, third round). A launcher announces itself with the first line `write_shim` writes;
+/// a droplet log, UTF-16 with a BOM, never does.
+#[test]
+fn a_droplet_that_lost_its_launcher_still_updates_its_own_log() {
+    let dir = tmp("log-launcher-deleted");
+    let (a, b) = inputs(&dir);
+    let log = format!("{dir}/Fails.command");
+    let dp = failing_droplet(&dir, json!({"errors": "log", "errorLog": log.clone(), "shim": true}));
+    assert!(std::path::Path::new(&log).is_file(), "`\"shim\": true` writes a launcher to delete");
+    std::fs::remove_file(&log).unwrap();
+    let first = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp.clone(), "input": [a.clone()]})).unwrap();
+    assert!(first.get("errorLogError").is_none(), "with the launcher deleted the log name is free: {first}");
+    let once = decode_be(&std::fs::read(&log).unwrap());
+    assert!(once.starts_with("Start Droplet\r\n\r\n") && once.ends_with("\r\nEnd Droplet\r\n"), "{once:?}");
+    assert_eq!(once.matches("File: \"").count(), 1, "one entry after the first run: {once:?}");
+    // Run two sees a file at the launcher path: this droplet's own log from run one, not a launcher.
+    let second = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap();
+    assert!(second.get("errorLogError").is_none(), "a droplet's own log is not its launcher: {second}");
+    let twice = decode_be(&std::fs::read(&log).unwrap());
+    assert_ne!(twice, once, "the second run updated its own log instead of refusing");
+    assert_eq!(twice.matches("File: \"").count(), 2, "{twice:?}");
+}
+
 /// The default, saved with no `shim` key at all, so the droplet carries no record and the run takes
 /// `create_droplet`'s own default on the platform it runs on: on Unix that default writes a launcher,
 /// which the log aimed at it may not replace; elsewhere it writes none, and the very same droplet

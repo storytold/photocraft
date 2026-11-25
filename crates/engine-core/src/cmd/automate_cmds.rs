@@ -424,16 +424,39 @@ fn launcher_expected(options: &Value) -> bool {
     options.get("shim").and_then(Value::as_bool).unwrap_or(cfg!(unix))
 }
 
-/// The launcher of a droplet that is about to run, when the droplet's record says it has one and the
-/// file is really there. A droplet that was told not to generate a launcher keeps the `.command` name
-/// free for the log its Errors row chose, and a droplet whose launcher was deleted can log there too:
-/// the protection is for the launcher, not for whatever file happens to carry the name.
+/// The launcher of a droplet that is about to run, when the droplet's record says it has one AND the
+/// file at the launcher name really is a launcher (see [`is_a_launcher`]). A droplet that was told not
+/// to generate a launcher keeps the `.command` name free for the log its Errors row chose, and a
+/// droplet whose launcher was deleted can log there too: the protection is for the launcher, not for
+/// whatever file happens to carry the name - once a run has logged there, the next run of the same
+/// droplet has to update that log rather than read it as a launcher (#15869 review, third round).
 fn launcher_of_droplet(droplet: &str, options: &Value) -> Option<String> {
     if !launcher_expected(options) {
         return None;
     }
     let launcher = launcher_for(&canonical_droplet(droplet));
-    std::path::Path::new(&launcher).is_file().then_some(launcher)
+    is_a_launcher(&launcher).then_some(launcher)
+}
+
+/// What `write_shim` puts on the second line of every launcher it writes, and what a run looks for
+/// before it protects a `.command` name. The writer and the reader name the same line so they cannot
+/// drift apart.
+const SHIM_MARKER: &str = "# PhotoCraft droplet: runs the action on the files given (or dropped).";
+
+/// Is the file at this path a launcher? A launcher announces itself: `write_shim`'s marker line, or the
+/// `#!` first line that a launcher from an earlier build, or one a person wrote by hand, always
+/// carries. A droplet's own log at that name announces nothing of the kind - it is UTF-16 big-endian
+/// with a `FE FF` BOM (see `file_cmds::encode_droplet_error_log`) - so a run reading its own earlier
+/// log updates it instead of protecting it. A missing file, or one that cannot be read, is no launcher
+/// either.
+fn is_a_launcher(path: &str) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else { return false };
+    // Only the head of the file matters: a launcher announces itself on its first two lines, and a
+    // log of an earlier run can be long.
+    let mut head = [0u8; 512];
+    let Ok(kept) = std::io::Read::read(&mut file, &mut head) else { return false };
+    let head = String::from_utf8_lossy(&head[..kept]);
+    head.contains(SHIM_MARKER) || head.lines().next().is_some_and(|line| line.starts_with("#!"))
 }
 
 /// A tiny shell script next to the droplet: drop files on it (or pass them) to run the droplet.
@@ -446,7 +469,7 @@ fn write_shim(droplet: &str) -> Result<String> {
     let quoted_abs = format!("'{}'", abs.replace('\'', "'\\''"));
     let body = format!(
         r#"#!/bin/sh
-# PhotoCraft droplet: runs the action on the files given (or dropped).
+{SHIM_MARKER}
 if [ -n "${{PHOTOCRAFT_CLI:-}}" ]; then
   cli="$PHOTOCRAFT_CLI"
 elif [ -x /Applications/PhotoCraft.app/Contents/MacOS/photocraft-cli ]; then
