@@ -14,11 +14,11 @@ gh api repos/storytold/photocraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `00ad6b9b691ff642feabde191c4fab678ebbddde`, the craft-common-actions commit that lets the
-signer run on the policy's signer branch (`release` or `nightly-signer`), stacked on
+Shared tooling is pinned to `88148a57ef09ef407d73c0f385e04cc7f4c2720a`, the craft-common-actions
+main commit that merged [#364](https://github.com/storytold/craft-common-actions/pull/364), which
+lets the signer run on the policy's signer branch (`release` or `nightly-signer`). It includes
 [#363](https://github.com/storytold/craft-common-actions/pull/363) (the multi-app pipeline, which
-makes the signer's `app-name` input required). It is not merged yet; re-pin both callers and the
-policy to its merge commit before this lands. It builds on #339 (`605d5876`) and #342 (`a4f6fd51`).
+makes the signer's `app-name` input required), #339 (`605d5876`) and #342 (`a4f6fd51`).
 Both callers name it in `uses` and `tooling-revision`. A pin is reviewed
 source availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
@@ -80,7 +80,7 @@ Read on 2026-11-23, with the Sonar gate and debt re-read on 2026-11-24; re-read 
 |---|---|---|
 | `repository_id` | `1398080271` | `gh api repos/storytold/photocraft --jq .id` |
 | `producer_workflow_id` | `428462603` | `gh api repos/storytold/photocraft/actions/workflows/nightly.yml` after `nightly.yml` reached main (path `.github/workflows/nightly.yml`, state `active`) |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `00ad6b9b…` (craft-common-actions signer-branch change, on #363) | The callers' pin |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `88148a57…` (craft-common-actions signer-branch change, on #363) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members who can push (4 admin, FredApps write); equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist (Linux tarball is about 126 MB) |
 | `platforms` | three rows | v0.23.1 stable identities, as in the example; the Windows publisher subject was confirmed by reading the stable v0.23.1 `photocraft.exe` Authenticode signature on Windows |

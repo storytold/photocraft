@@ -35,9 +35,9 @@ jobs:
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@00ad6b9b691ff642feabde191c4fab678ebbddde
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
     with:
-      tooling-revision: 00ad6b9b691ff642feabde191c4fab678ebbddde
+      tooling-revision: 88148a57ef09ef407d73c0f385e04cc7f4c2720a
       app-name: photocraft
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}

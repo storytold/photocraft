@@ -22,12 +22,12 @@ jobs:
       actions: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@00ad6b9b691ff642feabde191c4fab678ebbddde
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@88148a57ef09ef407d73c0f385e04cc7f4c2720a
     with:
-      tooling-revision: 00ad6b9b691ff642feabde191c4fab678ebbddde
+      tooling-revision: 88148a57ef09ef407d73c0f385e04cc7f4c2720a
       app-name: photocraft
       manual-actors: '["bflatastic","dylanmtaylor","echelon","FredApps","skylartaylor"]'
       craft-fonts-ref: cc9269cd8d8258785dac603fba3122e5d2556795
       # One producer run builds every listed platform for one all-or-nothing release. The pin is the
-      # craft-common-actions signer-branch change (on #363); re-pin to its merge commit once merged.
+      # craft-common-actions main commit that merged the signer-branch change (#364, after #363).
       platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'
