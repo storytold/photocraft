@@ -115,7 +115,8 @@ fn preferences_section(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Edit › Toolbar: the toolbar's group layout (`toolbar` slots and `extras`, each a list of tool
-/// groups), and the older flat `hidden` list. Returns the resulting layout.
+/// groups), the older flat `hidden` list, and the four Show flags. Returns the resulting layout and
+/// the flags in force.
 fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = |k: &str| -> Option<Vec<String>> { p.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()) };
     // A list of groups; a bare name is a group of one.
@@ -137,6 +138,18 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(h) = ids("hidden") {
             pr.toolbar.hidden = h;
         }
+        // The four Show flags (#14622): each one given is stored as given, after `reset` has put
+        // every one back on.
+        for (key, shown) in [
+            ("showMore", &mut pr.toolbar.show_more),
+            ("showColors", &mut pr.toolbar.show_colors),
+            ("showQuickMask", &mut pr.toolbar.show_quick_mask),
+            ("showScreenMode", &mut pr.toolbar.show_screen_mode),
+        ] {
+            if let Some(on) = p.get(key).and_then(Value::as_bool) {
+                *shown = on;
+            }
+        }
         if toolbar.is_some() || extras.is_some() {
             let current = pr.toolbar.layout();
             // Tools a new extras list names leave the current toolbar for it.
@@ -151,8 +164,16 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
             pr.toolbar.extras = Some(layout.extras);
         }
     });
-    let layout = s.prefs().toolbar.layout();
-    Ok(json!({"toolbar": layout.toolbar, "extras": layout.extras}))
+    let custom = s.prefs().toolbar.clone();
+    let layout = custom.layout();
+    Ok(json!({
+        "toolbar": layout.toolbar,
+        "extras": layout.extras,
+        "showMore": custom.show_more,
+        "showColors": custom.show_colors,
+        "showQuickMask": custom.show_quick_mask,
+        "showScreenMode": custom.show_screen_mode,
+    }))
 }
 
 macro_rules! spec {
@@ -238,7 +259,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Toolbar…",
             ["Edit"],
             None,
-            r##"{"toolbar":[["<tool>",…],…]?,"extras":[["<tool>",…],…]?,"hidden":["<tool>",…]?,"reset":bool=false}"##,
+            r##"{"toolbar":[["<tool>",…],…]?,"extras":[["<tool>",…],…]?,"hidden":["<tool>",…]?,"showMore":bool?,"showColors":bool?,"showQuickMask":bool?,"showScreenMode":bool?,"reset":bool=false}"##,
             toolbar,
             true
         ),
