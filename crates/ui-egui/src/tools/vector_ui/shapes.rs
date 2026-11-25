@@ -250,10 +250,19 @@ fn report(app: &mut PhotocraftApp, e: String) {
     app.ui.status_error = true;
 }
 
+/// `finish_drag_with_press` for the tests that drag without asking what the press held: no press
+/// modifier, so the options bar's Path operations decide as before.
+#[cfg(test)]
+pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) {
+    finish_drag_with_press(app, kind, geometry, mods, Mods::default());
+}
+
 /// Finish a Shape-tool drag with the geometry the framework tool committed (⇧ and ⌥ are already in
 /// it): Path mode adds the outline to the Work Path, Custom Shape places the preset, the others
-/// make a shape layer. A geometry too small to draw changes nothing.
-pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods) {
+/// make a shape layer. A geometry too small to draw changes nothing. `press_mods`, the modifiers held
+/// when the button went down, choose the path operation of a shape-layer drag (#13366); a caller that
+/// has none passes `Mods::default()`.
+pub fn finish_drag_with_press(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods, press_mods: Mods) {
     let Some(geometry) = snapped(geometry, mods.shift, snaps_to_pixels(app, kind)) else { return };
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
@@ -270,8 +279,9 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
         let first_new = path.subpaths.len();
         path.subpaths.extend(outline.subpaths);
         // The first component of a path always combines; the later ones take the drag's operation.
+        // Path mode keeps the options bar's operation: the press modifiers are not measured there (#13366).
         if first_new > 0
-            && let Some(op) = drag_path_op(app)
+            && let Some(op) = drag_path_op(app, Mods::default())
             && let Some(sp) = path.subpaths.get_mut(first_new)
         {
             sp.op = path_op_of(op);
@@ -285,8 +295,9 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
     }
     if let ShapeGeometry::Custom { rect, keep_proportions } = &geometry {
         // With an operation other than New Layer the shape joins the active shape layer as one
-        // component, its holes joined to it as in Path mode.
-        if let Some(op) = drag_path_op(app)
+        // component, its holes joined to it as in Path mode. The Custom Shape tool's press modifiers
+        // are not measured, so the options bar's operation decides as before (#13366).
+        if let Some(op) = drag_path_op(app, Mods::default())
             && let Some(id) = super::options::selected_shape(&app.session)
             && let Some(outline) = outline_of(app, kind, &geometry)
         {
@@ -319,8 +330,11 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
         Err(e) => return report(app, e),
     };
     p["historyName"] = json!(tool_history_name(kind));
-    // With an operation other than New Layer the drag joins the active shape layer.
-    if let Some(op) = drag_path_op(app)
+    // With an operation other than New Layer the drag joins the active shape layer; the modifiers held
+    // at the press ask for the operation (#13366). Shape mode only: the other modes keep the options
+    // bar's rule, and the options bar offers the Shape tools Shape and Path only.
+    let at_press = if app.ui.tool_options.shape_mode == super::VectorMode::Shape { press_mods } else { Mods::default() };
+    if let Some(op) = drag_path_op(app, at_press)
         && let Some(id) = super::options::selected_shape(&app.session)
     {
         p["addTo"] = json!(id.0);
@@ -333,8 +347,21 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
 
 /// The operation the next Shape-tool drag is added with (the options bar's Path operations);
 /// None for a new shape layer. The one place press modifiers can override it (#13227).
-fn drag_path_op(app: &PhotocraftApp) -> Option<&'static str> {
-    super::pen::shape_path_op(&app.ui.tool_options)
+/// `press_mods` are the modifiers held when the button went down: Shift asks for Combine Shapes, Alt for
+/// Subtract Front Shape, both for Intersect Shape Areas (#13366). A press that held neither keeps the
+/// options bar's rule, and so does one that also held Ctrl or Cmd (not measured).
+fn drag_path_op(app: &PhotocraftApp, press_mods: Mods) -> Option<&'static str> {
+    let pressed = if press_mods.ctrl || press_mods.cmd {
+        None
+    } else {
+        match (press_mods.shift, press_mods.alt) {
+            (true, true) => Some("intersect"),
+            (true, false) => Some("combine"),
+            (false, true) => Some("subtract"),
+            (false, false) => None,
+        }
+    };
+    pressed.or_else(|| super::pen::shape_path_op(&app.ui.tool_options))
 }
 
 fn path_op_of(op: &str) -> photocraft_doc::vector::PathOp {
