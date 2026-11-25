@@ -256,9 +256,11 @@ impl std::fmt::Display for Unsupported {
 impl std::error::Error for Unsupported {}
 
 /// A layer whose effects the plan renders: its maps are built (or reused) before the chunks run.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct FxLayer<'a> {
-    pub layer: &'a Layer,
+    /// The layer the maps are built from: the plan's layer, or (when a mask hides its effects) a
+    /// copy without that mask (`compose::advanced::effects_source`).
+    pub layer: std::borrow::Cow<'a, Layer>,
     /// Region the maps cover (`compose::effect_maps`).
     pub region: Rect,
     /// Layer bounds (gradients and linked patterns are laid out in them).

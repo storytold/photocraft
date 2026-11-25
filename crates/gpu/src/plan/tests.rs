@@ -472,10 +472,30 @@ fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     d.layers[2].advanced.knockout = Knockout::Shallow;
     assert!(plan(&d).is_ok(), "clipped knockout");
     d.layers.truncate(1);
+    let hiding_src = l.clone();
     let mut inner = l;
     inner.advanced.knockout = Knockout::Shallow;
     d.layers.push(Layer::group("g", vec![inner]));
     assert!(plan(&d).is_ok(), "knockout inside a group");
+    // Masks that hide the layer's effects run on the GPU, also on a layer clipped to a base; only
+    // Blend Interior Effects as Group with effects stays on the CPU.
+    let mut h = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut hiding = hiding_src;
+    hiding.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    hiding.mask = Some(photocraft_doc::LayerMask::reveal_all());
+    hiding.advanced.layer_mask_hides_effects = true;
+    h.layers.push(hiding.clone());
+    let p = plan(&h).expect("a layer mask hiding the effects");
+    assert!(p.fx[0].layer.mask.is_none(), "the effect maps are built without the hiding mask");
+    assert!(p.passes.iter().any(|p| p.kernel == Kernel::Lerp && p.flags & F_MIX_C != 0 && p.params[0][2] > 0.5), "a pass mixes the result back by the mask");
+    hiding.clipped = true;
+    h.layers.push(hiding);
+    assert!(plan(&h).is_ok(), "a clipped layer whose mask hides its effects");
+    h.layers[2].advanced.layer_mask_hides_effects = false;
+    h.layers[2].advanced.vector_mask_hides_effects = true;
+    assert!(plan(&h).is_ok(), "a mask whose setting does not hide the effects");
+    h.layers[1].advanced.blend_interior = true;
+    assert!(plan(&h).unwrap_err().0.contains("Blend Interior Effects as Group"), "interior effects as a group");
 }
 
 /// A knockout builds its deep target fresh and keeps nothing live across stack units, so the

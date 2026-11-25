@@ -1,10 +1,11 @@
 //! Advanced Blending on the GPU: shallow and deep knockouts (top level, isolated and pass-through
-//! groups, clipping groups) and Blend Clipped Layers as Group off (below the knockout tests) must
-//! match the CPU compositor within the parity tolerance, and the document must render on the GPU
-//! (a refusal fails the check).
+//! groups, clipping groups), Blend Clipped Layers as Group off, Transparency Shapes Layer off and
+//! Layer / Vector Mask Hides Effects (below the knockout tests) must match the CPU compositor
+//! within the parity tolerance, and the document must render on the GPU (a refusal fails the
+//! check).
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{Adjustment, BlendRange, Document, Effect, Fill, Knockout, Layer, LayerContent, LayerMask};
+use photocraft_doc::{Adjustment, BlendRange, Document, Effect, Fill, Knockout, Layer, LayerContent, LayerMask, Path, Subpath, VectorMask};
 use photocraft_geom::{Rect, Size};
 use photocraft_raster::Surface;
 
@@ -373,12 +374,11 @@ fn the_remaining_advanced_blending_options_are_refused() {
     let mut d = base_doc(48, 40);
     let mut l = ko_layer(&d, 3, Knockout::Deep);
     l.effects.items.push(Effect::default_drop_shadow());
-    l.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
-    l.advanced.layer_mask_hides_effects = true;
+    l.advanced.blend_interior = true;
     d.layers.push(l);
     let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
-        .expect_err("the GPU must refuse a mask that hides the layer's effects");
-    assert!(e.to_string().contains("Layer / Vector Mask Hides Effects"), "{e}");
+        .expect_err("the GPU must refuse Blend Interior Effects as Group on a layer with effects");
+    assert!(e.to_string().contains("Blend Interior Effects as Group"), "{e}");
 
     // Transparency Shapes Layer off on a layer clipped to a base stays on the CPU (its behaviour
     // there is changing separately), for effects and for the special eight.
@@ -884,5 +884,255 @@ fn individually_clipped_layers_in_groups_and_depths_match_the_cpu() {
         let layers = clipped_pair(&d, clip_base(&d), 0.6);
         d.layers.extend(layers);
         check(&mut g, &d, &format!("{depth:?}"));
+    }
+}
+
+/// How a layer's two masks hide its effects: the one that doesn't still shapes the layer.
+#[derive(Clone, Copy, Debug)]
+enum Hides {
+    LayerMask,
+    VectorMask,
+    Both,
+}
+
+const HIDES: [Hides; 3] = [Hides::LayerMask, Hides::VectorMask, Hides::Both];
+
+fn tri_mask() -> VectorMask {
+    VectorMask::new(Path::new(vec![Subpath::polygon(&[(6.5, 5.2), (40.3, 9.1), (30.2, 36.4), (9.7, 30.8)])]))
+}
+
+/// `l` with a layer mask and a vector mask, `hides` of which hide its effects.
+fn hide_with(l: &mut Layer, hides: Hides) {
+    l.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+    l.vector_mask = Some(tri_mask());
+    l.advanced.layer_mask_hides_effects = matches!(hides, Hides::LayerMask | Hides::Both);
+    l.advanced.vector_mask_hides_effects = matches!(hides, Hides::VectorMask | Hides::Both);
+}
+
+/// Effects that reach outside the layer, inside it and across it.
+fn hidden_effects() -> Vec<(&'static str, Effect)> {
+    use photocraft_doc::{FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
+    let Effect::DropShadow(mut shadow) = Effect::default_drop_shadow() else { unreachable!() };
+    shadow.distance = 4.0;
+    shadow.size = 3.0;
+    let glow = Glow {
+        common: FxCommon::new(BlendMode::Screen, 0.8),
+        paint: FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)),
+        technique: GlowTechnique::Softer,
+        spread: 0.1,
+        size: 5.0,
+        contour: photocraft_doc::Contour::Linear,
+        anti_alias: false,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source: GlowSource::Edge,
+    };
+    let stroke = |position| {
+        Effect::Stroke(StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 0.9),
+            size: 3.0,
+            position,
+            paint: FxPaint::Color(Color::rgb(0.1, 0.7, 0.3)),
+            overprint: false,
+        })
+    };
+    vec![
+        ("drop shadow", Effect::DropShadow(shadow)),
+        ("outer glow", Effect::OuterGlow(glow)),
+        ("outside stroke", stroke(StrokePosition::Outside)),
+        ("inside stroke", stroke(StrokePosition::Inside)),
+        ("color overlay", Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.7), color: Color::rgb(0.9, 0.2, 0.3) }),
+    ]
+}
+
+/// Layer / Vector Mask Hides Effects: the layer and its effects are built without the hiding
+/// mask(s), which then mix the finished result back towards the backdrop.
+#[test]
+fn masks_hiding_effects_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for (name, effect) in hidden_effects() {
+        for hides in HIDES {
+            for (opacity, fill) in [(1.0, 1.0), (0.6, 0.4)] {
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                let mut l = noise_layer("fx", d.pixel_format(), Rect::new(8, 7, 40, 33), 3, 0.3);
+                l.effects.items.push(effect.clone());
+                l.opacity = opacity;
+                l.fill_opacity = fill;
+                hide_with(&mut l, hides);
+                d.layers.push(l);
+                check(&mut g, &d, &format!("{name}, {hides:?} hiding, opacity {opacity}, fill {fill}"));
+            }
+        }
+    }
+    // Several effects, a single mask, a mask that is switched off, and a hiding setting without
+    // a mask to act on.
+    let items: Vec<Effect> = hidden_effects().into_iter().map(|(_, e)| e).collect();
+    for what in ["several effects and only a layer mask", "a disabled hiding mask", "a hiding setting without its mask"] {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut l = noise_layer("fx", d.pixel_format(), Rect::new(8, 7, 40, 33), 3, 0.3);
+        l.effects.items.extend(items.iter().cloned());
+        l.opacity = 0.8;
+        match what {
+            "several effects and only a layer mask" => {
+                l.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+                l.advanced.layer_mask_hides_effects = true;
+            }
+            "a disabled hiding mask" => {
+                hide_with(&mut l, Hides::Both);
+                l.mask.as_mut().unwrap().enabled = false;
+                l.advanced.vector_mask_hides_effects = false;
+            }
+            _ => {
+                l.vector_mask = Some(tri_mask());
+                l.advanced.layer_mask_hides_effects = true;
+            }
+        }
+        d.layers.push(l);
+        check(&mut g, &d, what);
+    }
+}
+
+#[test]
+fn masks_hiding_effects_in_every_depth() {
+    let Some(mut g) = gpu() else { return };
+    let effects = hidden_effects();
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for hides in HIDES {
+            let mut d = doc(depth, true);
+            d.layers.push(underlay(&d, 2));
+            let mut l = noise_layer("fx", d.pixel_format(), Rect::new(8, 7, 40, 33), 3, 0.3);
+            l.effects.items.extend([effects[0].1.clone(), effects[3].1.clone()]);
+            l.opacity = 0.9;
+            l.fill_opacity = 0.7;
+            hide_with(&mut l, hides);
+            d.layers.push(l);
+            check(&mut g, &d, &format!("{depth:?}, {hides:?} hiding"));
+        }
+    }
+}
+
+/// With a knockout the hiding mask mixes towards the knocked-out backdrop (the layer's own
+/// `before`), not the one beneath the knockout.
+#[test]
+fn masks_hiding_effects_with_a_knockout_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let effect = hidden_effects().remove(0).1;
+    for knockout in KNOCKOUTS {
+        for opacity in [1.0, 0.6] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let mut l = ko_layer(&d, 3, knockout);
+            l.effects.items.push(effect.clone());
+            l.opacity = opacity;
+            hide_with(&mut l, Hides::Both);
+            d.layers.push(l);
+            run(&mut g, &d, &format!("hiding mask, opacity {opacity}"), knockout);
+        }
+    }
+}
+
+#[test]
+fn masks_hiding_effects_in_groups_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let effects = hidden_effects();
+    for pass in [false, true] {
+        for hides in HIDES {
+            for (opacity, fill) in [(1.0, 1.0), (0.6, 0.4)] {
+                // A layer with hiding masks inside the group.
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                let below = noise_layer("below", d.pixel_format(), Rect::new(0, 0, 30, 30), 6, 0.5);
+                let mut inner = noise_layer("inner", d.pixel_format(), Rect::new(8, 7, 40, 33), 5, 0.3);
+                inner.effects.items.push(effects[0].1.clone());
+                inner.opacity = opacity;
+                inner.fill_opacity = fill;
+                hide_with(&mut inner, hides);
+                d.layers.push(group("group", pass, vec![below, inner]));
+                check(&mut g, &d, &format!("inside a group, pass-through {pass}, {hides:?} hiding, opacity {opacity}, fill {fill}"));
+
+                // A group whose masks hide its effects.
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                let a = noise_layer("a", d.pixel_format(), Rect::new(8, 7, 30, 30), 5, 0.3);
+                let b = noise_layer("b", d.pixel_format(), Rect::new(16, 12, 40, 33), 6, 0.5);
+                let mut grp = group("group", pass, vec![a, b]);
+                grp.effects.items.extend([effects[0].1.clone(), effects[2].1.clone()]);
+                grp.opacity = opacity;
+                grp.fill_opacity = fill;
+                hide_with(&mut grp, hides);
+                d.layers.push(grp);
+                check(&mut g, &d, &format!("group hiding its effects, pass-through {pass}, {hides:?} hiding, opacity {opacity}, fill {fill}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn masks_hiding_effects_with_clipped_layers_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let effects = hidden_effects();
+    for hides in HIDES {
+        for (opacity, fill) in [(1.0, 1.0), (0.6, 0.4)] {
+            // A base whose masks hide its effects, with layers clipped to it (grouped and
+            // blended individually).
+            for individually in [false, true] {
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                let mut base = noise_layer("base", d.pixel_format(), Rect::new(6, 6, 42, 34), 3, 0.4);
+                base.effects.items.extend([effects[0].1.clone(), effects[2].1.clone()]);
+                base.opacity = opacity;
+                base.fill_opacity = fill;
+                hide_with(&mut base, hides);
+                let mut layers = clipped_pair(&d, base, opacity);
+                layers[0].advanced.blend_clipped = !individually;
+                d.layers.extend(layers);
+                check(&mut g, &d, &format!("hiding base with clips, individually {individually}, {hides:?} hiding, opacity {opacity}, fill {fill}"));
+            }
+            // A clipped layer whose masks hide its effects.
+            for effect in [&effects[0].1, &effects[3].1, &effects[4].1] {
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                d.layers.push(clip_base(&d));
+                let mut c = noise_layer("clipped", d.pixel_format(), Rect::new(8, 8, 40, 32), 4, 0.5);
+                c.clipped = true;
+                c.effects.items.push(effect.clone());
+                c.opacity = opacity;
+                c.fill_opacity = fill;
+                hide_with(&mut c, hides);
+                d.layers.push(c);
+                check(&mut g, &d, &format!("clipped layer hiding its effects, {hides:?} hiding, opacity {opacity}, fill {fill}"));
+            }
+        }
+    }
+}
+
+/// Where the hiding mask lets everything through the result is the layer with its effects
+/// untouched (the CPU only mixes where the mask is below 1), so 32-bit values above 1 survive
+/// there; elsewhere the mix clamps them.
+#[test]
+fn masks_hiding_effects_keep_hdr_values_where_they_let_everything_through() {
+    let Some(mut g) = gpu() else { return };
+    for effect in [hidden_effects().remove(0).1, hidden_effects().remove(4).1] {
+        let mut d = doc(SampleType::F32, false);
+        let mut bottom = Layer::raster("hdr", d.pixel_format());
+        let patterns = [[2.0, 1.5, 0.25, 1.0], [1.25, 3.0, 0.5, 1.0], [0.4, 0.6, 0.8, 1.0]];
+        let px: Vec<f32> = (0..48 * 40).flat_map(|i| patterns[i % patterns.len()]).collect();
+        bottom.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 48, 40), &px);
+        d.layers.push(bottom);
+        let mut l = noise_layer("fx", d.pixel_format(), Rect::new(6, 5, 42, 35), 3, 0.2);
+        l.effects.items.push(effect);
+        l.opacity = 0.5;
+        let mut m = LayerMask::reveal_all();
+        m.surface.fill_rect(Rect::new(24, 0, 48, 40), &[0.5]);
+        l.mask = Some(m);
+        l.advanced.layer_mask_hides_effects = true;
+        d.layers.push(l);
+        let cpu = photocraft_compose::render(&d, d.bounds());
+        let open = |x: i32, y: i32| cpu.px[(y * 48 + x) as usize][..3].iter().any(|&v| v > 1.0);
+        assert!((5..35).any(|y| (6..24).any(|x| open(x, y))), "the CPU keeps a value above 1 where the mask lets everything through");
+        check(&mut g, &d, "HDR under a fully open hiding mask");
     }
 }

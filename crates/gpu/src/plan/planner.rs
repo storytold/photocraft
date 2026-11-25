@@ -22,6 +22,25 @@ pub(super) struct Planner<'a> {
     luts: std::cell::Cell<usize>,
     /// Where the stack being planned sits, for knockouts (`compose::advanced::Scope`).
     scope: Scope,
+    /// The layer whose content and effects are being planned without the masks that hide its
+    /// effects (`effects_hiding`, `compose::advanced::effects_source`): `mask_use` leaves those
+    /// masks out for this layer only (by identity; its children and clipped layers are others).
+    unhid: Option<&'a Layer>,
+}
+
+/// Set on the id of a layer's hiding masks (`Masks::Hiding`) and of its other masks alone
+/// (`Masks::Visible`): a mask texture is cached by layer id and role, and each set is another
+/// surface than all of the layer's masks, which one plan may also use (its knockout shape).
+const HIDING_MASK_ID: u64 = 1 << 63;
+const VISIBLE_MASK_ID: u64 = 1 << 62;
+
+/// Which of a layer's masks a `MaskUse` combines: all of them, or the ones that hide its effects
+/// (`AdvancedBlending::layer_mask_hides_effects`, `vector_mask_hides_effects`) or the others.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Masks {
+    All,
+    Visible,
+    Hiding,
 }
 
 /// Most gradient lookup tables one plan keeps (64 MiB): a nested clipped pass-through group
@@ -113,10 +132,11 @@ pub const F_ADD_DIFF: u32 = 16384;
 
 /// `Lerp`: A mixed towards B by C's alpha × `opacity` (`compose::advanced::knockout_with`: the
 /// backdrop becomes the knockout target B inside the layer's shape C); `p0.y` set keeps A's alpha
-/// from growing (clipped layers); `p0.z` set is `compose::advanced::composite_clipped_individually_with`:
-/// B is kept where C's coverage reaches 1 (values above 1 survive) and elsewhere the clamped mix
-/// applies, also at coverage 0. `p0.x` set: C is an `F_COVER` record, whose R says whether the
-/// coverage is full.
+/// from growing (clipped layers). `p0.z` set is `compose::advanced::composite_clipped_individually_with`
+/// (A the base's result so far, B the clipped layer composited onto it, C the base's coverage) and
+/// `compose::advanced::apply_hiding_mask` (A the backdrop, B the layer with its effects, C the
+/// masks that hide the effects): B unchanged where C is 1 or more, else the mix, which clamps even
+/// where C is 0. `p0.x` set: C is an `F_COVER` record, whose R says whether the coverage is full.
 pub const F_MIX_C: u32 = 4_194_304;
 
 /// `Content`: the pass writes a coverage record instead of pixels. A is alpha × mask; R is 1
@@ -234,6 +254,7 @@ impl<'a> Planner<'a> {
             visits: 0,
             luts: std::cell::Cell::new(0),
             scope: Scope::ROOT,
+            unhid: None,
         }
     }
 
@@ -430,16 +451,55 @@ impl<'a> Planner<'a> {
     }
 
     fn mask_use(&self, layer: &'a Layer) -> Option<MaskUse<'a>> {
-        if let Some(c) = photocraft_compose::masks::combined_mask(layer, self.cx.canvas) {
-            let default = c.default_pixel().first().copied().unwrap_or(1.0);
-            return Some(MaskUse { layer: layer.id, surface: SurfaceRef::Derived(std::sync::Arc::new(c)), density: 1.0, default });
+        let which = if self.unhid.is_some_and(|u| std::ptr::eq(u, layer)) { Masks::Visible } else { Masks::All };
+        self.mask_use_of(layer, which)
+    }
+
+    /// Whether `layer` has masks to apply to its content (`mask_use` may still find them disabled).
+    fn has_masks(&self, layer: &Layer) -> bool {
+        if self.unhid.is_some_and(|u| std::ptr::eq(u, layer)) {
+            let a = &layer.advanced;
+            (layer.mask.is_some() && !a.layer_mask_hides_effects) || (layer.vector_mask.is_some() && !a.vector_mask_hides_effects)
+        } else {
+            layer.mask.is_some() || layer.vector_mask.is_some()
         }
-        let m = layer.mask.as_ref()?;
+    }
+
+    /// The masks `which` of `layer` as one mask, as `compose::mask_vals` combines them.
+    fn mask_use_of(&self, layer: &'a Layer, which: Masks) -> Option<MaskUse<'a>> {
+        let a = &layer.advanced;
+        let (layer_mask, vector_mask) = match which {
+            Masks::All => (true, true),
+            Masks::Visible => (!a.layer_mask_hides_effects, !a.vector_mask_hides_effects),
+            Masks::Hiding => (a.layer_mask_hides_effects, a.vector_mask_hides_effects),
+        };
+        let id = match which {
+            Masks::All => layer.id,
+            Masks::Visible => LayerId(layer.id.0 | VISIBLE_MASK_ID),
+            Masks::Hiding => LayerId(layer.id.0 | HIDING_MASK_ID),
+        };
+        let pixel = layer.mask.as_ref().filter(|_| layer_mask);
+        let only;
+        let source = if which == Masks::All {
+            layer
+        } else {
+            let mut o = Layer::new(layer.name.clone(), LayerContent::Raster(Surface::new(photocraft_color::PixelFormat::RGBA32F)));
+            o.id = layer.id;
+            o.mask = pixel.cloned();
+            o.vector_mask = layer.vector_mask.clone().filter(|_| vector_mask);
+            only = o;
+            &only
+        };
+        if let Some(c) = photocraft_compose::masks::combined_mask(source, self.cx.canvas) {
+            let default = c.default_pixel().first().copied().unwrap_or(1.0);
+            return Some(MaskUse { layer: id, surface: SurfaceRef::Derived(std::sync::Arc::new(c)), density: 1.0, default });
+        }
+        let m = pixel?;
         if !m.enabled {
             return None;
         }
         Some(MaskUse {
-            layer: layer.id,
+            layer: id,
             surface: SurfaceRef::Doc(&m.surface),
             density: m.density,
             default: m.surface.default_pixel().first().copied().unwrap_or(1.0),
@@ -495,10 +555,10 @@ impl<'a> Planner<'a> {
     /// Blending Options › Advanced Blending: knockout (shallow and deep, also of clipped layers),
     /// Transparency Shapes Layer off (`F_SHAPELESS`, and the whole-layer effect shape in
     /// `effects`) and clipped layers blended individually (`clipped_individually`) run on the
-    /// GPU. Blend Interior Effects as Group with effects and masks hiding effects have no GPU
-    /// pass: documents using them are composited on the CPU (`photocraft_compose::advanced`), as
-    /// are Hard Mix layers with Transparency Shapes Layer off in 16/32-bit documents.
-    /// Layers at the reference editor's defaults pass this check for free.
+    /// GPU, and so do masks hiding effects (`effects_hiding`). Blend Interior Effects as Group
+    /// with effects has no GPU pass: documents using it are composited on the CPU
+    /// (`photocraft_compose::advanced`), as are Hard Mix layers with Transparency Shapes Layer off
+    /// in 16/32-bit documents. Layers at the reference editor's defaults pass this check for free.
     fn check_advanced(&self, layer: &Layer) -> Result<(), Unsupported> {
         if let Some(option) = advanced_on_cpu(layer, self.cx.depth) {
             return Err(Unsupported(format!("Advanced Blending on `{}`: {option} (composited on the CPU)", layer.name)));
@@ -714,7 +774,7 @@ impl<'a> Planner<'a> {
         }
 
         if has_effects(layer) {
-            return self.effects(layer, &visible_clipped, backdrop, false);
+            return self.effects_hiding(layer, &visible_clipped, backdrop, false);
         }
 
         if let LayerContent::Shape(sh) = &layer.content
@@ -851,7 +911,7 @@ impl<'a> Planner<'a> {
             LayerContent::Group(g) => {
                 let empty = self.clear();
                 let mut s = self.in_scope(Scope::ISOLATED, |s| s.stack(&g.children, empty))?;
-                if layer.mask.is_some() || layer.vector_mask.is_some() {
+                if self.has_masks(layer) {
                     let mut p = Pass::new(Kernel::Mask, 0);
                     p.a = Some(s);
                     p.mask = self.mask_use(layer);
@@ -879,7 +939,7 @@ impl<'a> Planner<'a> {
                 let paint = Paint::Pattern(pat, placement(anchor, *link, *phase, *scale, *angle));
                 let canvas = self.cx.canvas;
                 let s = self.paint(empty, empty, Cov::One, &paint, BlendMode::Normal, 1.0, 0, canvas, canvas);
-                if layer.mask.is_some() || layer.vector_mask.is_some() {
+                if self.has_masks(layer) {
                     let mut p = Pass::new(Kernel::Mask, 0);
                     p.a = Some(s);
                     p.mask = self.mask_use(layer);
@@ -986,7 +1046,7 @@ impl<'a> Planner<'a> {
             return Ok(self.emit(p));
         }
         if has_effects(layer) {
-            return self.effects(layer, &[], base, true);
+            return self.effects_hiding(layer, &[], base, true);
         }
         let content = self.content(layer)?;
         let mut p = Pass::new(Kernel::Atop, 0);
@@ -1021,6 +1081,39 @@ impl<'a> Planner<'a> {
         p.adjust_kind = kind;
         p.params = params;
         p.lut = lut;
+        Ok(self.emit(p))
+    }
+
+    /// `effects`, for a layer whose masks may hide its effects (`compose::advanced::hides_effects`):
+    /// the layer's content and effects are planned without those masks (`unhid`; the effect maps
+    /// are built from `effects_source`), then the finished result is mixed back towards the
+    /// backdrop by them (`advanced::apply_hiding_mask`: `mix(before, after, k)`, B untouched where
+    /// `k >= 1`, `p0.z`). Drawn atop a clipping base the same mix works on the base's own alpha, which
+    /// both sides share: the CPU's opaque copies of the base give the same colours. Consumes `backdrop`.
+    fn effects_hiding(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
+        if !photocraft_compose::advanced::hides_effects(layer) {
+            return self.effects(layer, clipped, backdrop, atop);
+        }
+        let before = self.retain(backdrop);
+        let outer = self.unhid.replace(layer);
+        let after = self.effects(layer, clipped, backdrop, atop);
+        self.unhid = outer;
+        let after = after?;
+        let Some(hide) = self.mask_use_of(layer, Masks::Hiding) else {
+            self.release(before);
+            return Ok(after);
+        };
+        let mut p = Pass::new(Kernel::Content, 0);
+        p.color = [1.0; 4];
+        p.mask = Some(hide);
+        let shape = self.emit(p);
+        let mut p = Pass::new(Kernel::Lerp, 0);
+        p.a = Some(before);
+        p.b = Some(after);
+        p.c = Some(shape);
+        p.flags = F_MIX_C;
+        p.params[0] = [0.0, 0.0, 1.0, 0.0];
+        p.opacity = 1.0;
         Ok(self.emit(p))
     }
 
@@ -1061,7 +1154,9 @@ impl<'a> Planner<'a> {
             return Err(Unsupported(format!("Stroke Emboss on `{}` (composited on the CPU)", layer.name)));
         }
         let fx = self.fx.len();
-        self.fx.push(FxLayer { layer, region, bounds: sb });
+        // Maps are built from the layer without the masks that hide its effects, and cache under
+        // their own key (`effects_source`; a layer whose masks don't hide them is borrowed).
+        self.fx.push(FxLayer { layer: photocraft_compose::advanced::effects_source(layer), region, bounds: sb });
         let outline = photocraft_compose::effect_outline(layer).is_some();
         // Without Transparency Shapes Layer the content's transparency also acts like fill
         // opacity within the shape (`effects::relative`).
@@ -1350,7 +1445,7 @@ impl<'a> Planner<'a> {
                         st.common.opacity,
                         if st.common.blend == BlendMode::Normal { F_GATE | F_REPLACE } else { F_GATE },
                         clip,
-                        photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
+                        photocraft_compose::stroke_frame(self.cx.doc, &photocraft_compose::advanced::effects_source(layer), st).unwrap_or(sb),
                     );
                 }
             }
@@ -1442,7 +1537,7 @@ impl<'a> Planner<'a> {
                     st.common.opacity,
                     flags,
                     clip,
-                    photocraft_compose::stroke_frame(self.cx.doc, layer, st).unwrap_or(sb),
+                    photocraft_compose::stroke_frame(self.cx.doc, &photocraft_compose::advanced::effects_source(layer), st).unwrap_or(sb),
                 );
                 if matches!(paint, Paint::None) {
                     // A missing pattern paints nothing: the stroke's share keeps the result as is.
