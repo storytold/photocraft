@@ -258,7 +258,7 @@ fn resolve_source(s: &Session, p: &Value, cmd: &str, source: Option<crate::prese
 /// The document `slot` samples as it shows its source frame, when the slot's frame offset or held
 /// frame names a frame of `doc`'s timeline other than the one on screen (`painting` is the
 /// painted document's playhead). A frame outside the timeline is refused, never clamped.
-fn source_frame(slot: &crate::presets::clone_source::CloneSource, doc: &Document, painting: usize, cmd: &str) -> Result<Option<(Arc<Document>, usize)>> {
+fn source_frame(slot: &crate::presets::clone_source::CloneSource, doc: &Arc<Document>, painting: usize, cmd: &str) -> Result<Option<(Arc<Document>, usize)>> {
     let Some(t) = &doc.timeline else { return Ok(None) };
     let want = slot.source_frame(painting);
     let frame = usize::try_from(want).ok().filter(|&f| f < t.duration).ok_or_else(|| {
@@ -267,8 +267,35 @@ fn source_frame(slot: &crate::presets::clone_source::CloneSource, doc: &Document
     if frame == t.current {
         return Ok(None);
     }
-    let at = photocraft_engine_core::video_cmds::at_frame(doc, frame).map_err(|why| bad(cmd, format!("the clone source frame {} can't be read: {why}", frame + 1)))?;
-    Ok(Some((Arc::new(at), frame)))
+    if let Some(kept) = FrameMemo::get(doc, frame) {
+        return Ok(Some((kept, frame)));
+    }
+    let at = Arc::new(photocraft_engine_core::video_cmds::at_frame(doc, frame).map_err(|why| bad(cmd, format!("the clone source frame {} can't be read: {why}", frame + 1)))?);
+    FrameMemo::keep(doc, frame, &at);
+    Ok(Some((at, frame)))
+}
+
+/// The last source frame built, so the overlay redrawn at every hover point and the strokes that
+/// follow don't rebuild the same frame each time. Keyed by the document itself (any edit makes a
+/// new `Arc`, and the `Weak` keeps the old allocation from being reused while it is held) and the
+/// frame.
+struct FrameMemo;
+
+type FrameEntry = (std::sync::Weak<Document>, usize, Arc<Document>);
+static FRAME_MEMO: std::sync::Mutex<Option<FrameEntry>> = std::sync::Mutex::new(None);
+
+impl FrameMemo {
+    fn lock() -> std::sync::MutexGuard<'static, Option<FrameEntry>> {
+        FRAME_MEMO.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn get(doc: &Arc<Document>, frame: usize) -> Option<Arc<Document>> {
+        Self::lock().as_ref().filter(|(of, at, _)| *at == frame && std::ptr::eq(of.as_ptr(), Arc::as_ptr(doc))).map(|(.., kept)| Arc::clone(kept))
+    }
+
+    fn keep(doc: &Arc<Document>, frame: usize, built: &Arc<Document>) {
+        *Self::lock() = Some((Arc::downgrade(doc), frame, Arc::clone(built)));
+    }
 }
 
 /// Choose the sampled pixel/composite profile and cache its conversion to the destination profile.

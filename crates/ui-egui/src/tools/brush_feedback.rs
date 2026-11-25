@@ -47,17 +47,19 @@ fn show_source_marker(ui: &mut egui::Ui, app: &PhotocraftApp, rect: egui::Rect) 
 }
 
 /// The Clone Source overlay under the brush: the source's pixels at the hover point, shown through
-/// a mapped raster display. It hides while the brush is being resized and while Alt is held (Alt
-/// picks a new source).
+/// a mapped raster display. It hides while the brush is being resized and while Alt alone is held
+/// (Alt picks a new source); Shift+Alt shows it, with Show Overlay off too, to line the source up.
 fn show_clone_overlay(ui: &mut egui::Ui, app: &mut PhotocraftApp, at: Option<Point>, rect: egui::Rect) {
     let Some(at) = at else { return };
     if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
         return;
     }
-    if app.brush_resize.active() || craft::ui::runtime::pointer::frame(ui.ctx()).mods.alt {
+    let mods = craft::ui::runtime::pointer::frame(ui.ctx()).mods;
+    let held = mods.alt && mods.shift;
+    if app.brush_resize.active() || (mods.alt && !held) {
         return;
     }
-    let Some(source) = crate::canvas::strokes::clone_source(app, [at.x, at.y]) else { return };
+    let Some(source) = crate::canvas::strokes::clone_source(app, [at.x, at.y], held) else { return };
     let corners = source.corners.map(|c| Point::new(c[0], c[1]));
     let Some(frame) = Homography::unit_to_quad(corners) else { return };
     RasterDisplay::new(tl!("Clone source overlay"), &source).mapped(frame, 1).show_at(ui, rect);

@@ -141,11 +141,13 @@ fn clone_dab_coverage(
 ///
 /// PLAN: the contract's `(app, at)` has no display argument, so the overlay is drawn for the main
 /// display's colour management; a second window on another monitor shows it through the main one's.
-pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<CloneSource> {
+///
+/// `held` (Shift+Alt is down) shows it with Show Overlay off too.
+pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2], held: bool) -> Option<CloneSource> {
     use photocraft_engine::presets::clone_source::overlay_blend;
     let overlay = app.session.presets().clone.overlay.clone();
     let tool = app.ui.tool;
-    if !matches!(tool, Tool::CloneStamp | Tool::Healing) || !overlay.show || (overlay.auto_hide && super::paint_tool::stroking(app).is_some()) {
+    if !matches!(tool, Tool::CloneStamp | Tool::Healing) || !(overlay.show || held) || (overlay.auto_hide && super::paint_tool::stroking(app).is_some()) {
         return None;
     }
     let slot = app.session.presets().clone.active().clone();
@@ -172,8 +174,10 @@ pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<Clon
     } else {
         1.0
     };
+    // The frame the source samples: its offset or held frame, against the playhead.
+    let frame = (slot.frame_offset, slot.hold_frame, slot.frame, st.doc.timeline.as_ref().map(|t| t.current));
     let key = format!(
-        "{tool:?}:{source_revision:?}:{:?}:{}:{:?}:{:?}:{map:?}:{:?}:{}:{}:{}:{}:{wrap}:{}:{}:{}:{}",
+        "{tool:?}:{source_revision:?}:{frame:?}:{:?}:{}:{:?}:{:?}:{map:?}:{:?}:{}:{}:{}:{}:{wrap}:{}:{}:{}:{}",
         st.doc.id,
         st.revision,
         st.active_layer,

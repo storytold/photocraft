@@ -150,7 +150,7 @@ fn clone_overlay_app(size: f32) -> Box<PhotocraftApp> {
 /// The Clone Source image for the brush at (32, 32) as a function from a document pixel to its colour
 /// (transparent outside the image); `None` when no image shows.
 fn clone_source_image(app: &mut PhotocraftApp) -> Option<impl Fn(i32, i32) -> Color32 + use<>> {
-    let source = super::strokes::clone_source(app, [32.0, 32.0])?;
+    let source = super::strokes::clone_source(app, [32.0, 32.0], false)?;
     let size = source.size();
     let mut image = egui::ColorImage::filled([size.width as usize, size.height as usize], Color32::TRANSPARENT);
     source.read(PixelRect::of_size(source.size()), 1, &mut image);
@@ -396,7 +396,7 @@ fn clone_overlay_of_a_scaled_source_stays_within_the_sampling_budget() {
     for (size, scale) in [(600.0, 200), (1000.0, 300), (1000.0, 50)] {
         let mut app = clone_overlay_app(size);
         app.run("cloneSource.set", json!({"width": scale, "height": scale})).unwrap();
-        let source = super::strokes::clone_source(&mut app, [32.0, 32.0]).unwrap_or_else(|| panic!("{size} px at {scale} %: the image shows"));
+        let source = super::strokes::clone_source(&mut app, [32.0, 32.0], false).unwrap_or_else(|| panic!("{size} px at {scale} %: the image shows"));
         let side = source.size();
         let budget = super::strokes::CLONE_PREVIEW_MAX_SIDE;
         assert!(side.width <= budget && side.height <= budget, "{size} px at {scale} %: the image stays within the sampling budget: {side:?}");
@@ -1189,4 +1189,21 @@ mod gpu_tests {
         // The shared texture's key is the same for both displays.
         assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
     }
+}
+
+/// Shift+Alt shows the Clone Source overlay with Show Overlay off; on a timeline, a new frame
+/// offset rebuilds it, as the frame it samples changed.
+#[test]
+fn shift_alt_shows_the_overlay_and_a_new_frame_offset_rebuilds_it() {
+    let mut app = clone_overlay_app(10.0);
+    app.run("timeline.create", json!({"duration": 10, "fps": 24.0})).unwrap();
+    app.run("timeline.setFrame", json!({"frame": 4})).unwrap();
+    app.run("cloneSource.set", json!({"source": [16, 16]})).unwrap();
+    app.run("cloneSource.overlay", json!({"show": false})).unwrap();
+    assert!(super::strokes::clone_source(&mut app, [32.0, 32.0], false).is_none(), "Show Overlay off hides it");
+    assert!(super::strokes::clone_source(&mut app, [32.0, 32.0], true).is_some(), "Shift+Alt shows it");
+    let before = app.clone_preview.as_ref().map(|c| c.revision);
+    app.run("cloneSource.set", json!({"frameOffset": -1})).unwrap();
+    assert!(super::strokes::clone_source(&mut app, [32.0, 32.0], true).is_some(), "the previous frame shows");
+    assert_ne!(app.clone_preview.as_ref().map(|c| c.revision), before, "the overlay was rebuilt for the other frame");
 }
