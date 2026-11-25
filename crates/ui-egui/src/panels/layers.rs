@@ -2,6 +2,7 @@ use craft::theme::variant::Tone;
 use craft::ui::contract::Show as _;
 use craft::ui::menu::MenuRow;
 use craft::ui::notices::{Notice, NoticeLayout};
+use craft::ui::runtime::env::with_env;
 
 use super::{BlendMode, LayerId, PhotocraftApp};
 
@@ -61,7 +62,12 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(id) = app.layers_rename {
         panel = panel.start_rename(id);
     }
-    let out = panel.show(ui);
+    // Waiting Remove strokes hold the tool in their own state: the panel takes no pick of the
+    // active layer and says so in its control states until the bar's Apply or Reset all strokes
+    // answers them (#12545). craft-layers' `LayersPanel` paints its rows in its own colours and
+    // does not read a disabled scope, so the greyed drawing of the same state is missing there.
+    let waiting = crate::retouch_ui::bar::strokes_wait(app);
+    let out = with_env(ui, |set| set.enabled = Some(!waiting), |ui| panel.show(ui));
     app.find_layers_focus = false;
     app.layers_rename = None;
     if filter != before {
