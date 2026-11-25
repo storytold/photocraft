@@ -123,12 +123,12 @@ fn whole_box(rect: &Rect, whole: bool) -> Option<Rect> {
     (w >= 1.0 && h >= 1.0).then(|| Rect::new(x0, y0, x0 + w, y0 + h))
 }
 
-/// Whether a drag of `kind` lands on whole pixels. Align Edges (#13370) is the Triangle tool's
-/// option, and only in Shape mode, where its checkbox is enabled; the other Shape tools, and a
-/// greyed checkbox, still snap.
+/// Whether a drag of `kind` lands on whole pixels. The Triangle (#13370), Rectangle (#13346) and
+/// Polygon (#13326) drags keep their fractions with Align Edges off in Shape mode; the other Shape
+/// tools' drags (the framework's drag lands them on pixels), and a greyed checkbox, still snap.
 pub(super) fn snaps_to_pixels(app: &PhotocraftApp, kind: ShapeKind) -> bool {
     let o = &app.ui.tool_options;
-    !(kind == ShapeKind::Triangle && o.shape_mode == super::VectorMode::Shape && !o.align_edges)
+    !(matches!(kind, ShapeKind::Triangle | ShapeKind::Rectangle | ShapeKind::Polygon) && o.shape_mode == super::VectorMode::Shape && !o.align_edges)
 }
 
 /// `geometry` as a drag commits it: boxes on whole pixels, a line aligned to pixel edges
@@ -213,9 +213,20 @@ fn geometry_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKin
     })
 }
 
+/// `p` (a drag's `shape.create` geometry of `kind`) with the Polygon tool's own corner radius, which
+/// rounds every vertex of the next polygon it drags (#13302). The Create Polygon dialog keeps its own.
+fn with_tool_radius(app: &PhotocraftApp, kind: ShapeKind, mut p: Value) -> Value {
+    let r = app.ui.tool_options.polygon_corner_radius;
+    if kind == ShapeKind::Polygon && r > 0.0 {
+        p["cornerRadius"] = json!(r);
+    }
+    p
+}
+
 /// `shape.create` params with the options bar's fill and stroke.
 fn create_params(app: &PhotocraftApp, geometry: &ShapeGeometry, kind: ShapeKind) -> Result<Value, String> {
     let mut p = geometry_params(app, geometry, kind)?;
+    p["useAlignedRendering"] = json!(app.ui.tool_options.align_edges);
     p["fill"] = fill_param(app);
     p["stroke"] = stroke_param(app);
     Ok(p)
@@ -277,7 +288,9 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
                 }
             };
             let path = photocraft_engine::vector_cmds::path_json(&outline);
-            if let Err(e) = app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id.0, "op": op})) {
+            if let Err(e) =
+                app.run("shape.create", json!({"kind": "path", "path": path, "addTo": id.0, "op": op, "useAlignedRendering": app.ui.tool_options.align_edges}))
+            {
                 report(app, e);
             }
             return;
@@ -289,7 +302,7 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
         return;
     }
     let mut p = match create_params(app, &geometry, kind) {
-        Ok(p) => p,
+        Ok(p) => with_tool_radius(app, kind, p),
         Err(e) => return report(app, e),
     };
     p["historyName"] = json!(tool_history_name(kind));
@@ -395,7 +408,7 @@ fn outline_of(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry) ->
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
         Some(photocraft_engine::presets::shapes::fit(&shape.path, box_of(rect), *keep_proportions))
     } else {
-        photocraft_engine::vector_cmds::shape_path(&geometry_params(app, geometry, kind).ok()?).ok()
+        photocraft_engine::vector_cmds::shape_path(&with_tool_radius(app, kind, geometry_params(app, geometry, kind).ok()?)).ok()
     }
 }
 
@@ -412,6 +425,7 @@ fn preview_layer(app: &PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry,
     let paint = !draws_path(o);
     Some(photocraft_doc::ShapeLayer {
         path,
+        use_aligned_rendering: paint && o.align_edges,
         fill: (paint && o.shape_fill).then(|| tool_paint(app, false)),
         stroke: (paint && o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
         ..Default::default()
@@ -444,6 +458,12 @@ pub fn show_preview(app: &PhotocraftApp, ui: &egui::Ui, at: egui::Rect, view: &C
     let Some((kind, geometry)) = super::host::shape_preview(app) else { return };
     let shift = craft::ui::runtime::pointer::frame(ui.ctx()).mods.shift;
     let Some(mut shape) = preview_layer(app, kind, geometry, shift) else { return };
+    // Align Edges fits the shape to document pixels, so it is applied here, in document space:
+    // the preview then shows the committed layer's geometry at any zoom.
+    if let Some(aligned) = photocraft_vector::align_edges::aligned_shape(&shape, photocraft_vector::DEFAULT_TOLERANCE) {
+        shape = aligned;
+    }
+    shape.use_aligned_rendering = false;
     shape.path = path_on_screen(&shape.path, view);
     if let Some(stroke) = &mut shape.stroke {
         // `view.zoom` is screen points per document unit.

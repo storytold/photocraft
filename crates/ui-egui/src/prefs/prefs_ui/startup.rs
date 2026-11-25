@@ -32,6 +32,10 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     app.prefs_rt.loaded = true;
     let reset = adopt_stored(app);
+    #[cfg(target_arch = "wasm32")]
+    {
+        app.prefs_rt.saved_colors = Some(app.session.prefs().tool_colors.0.clone());
+    }
     // Applies Memory Usage and the scratch disks even when the stored preferences were reset.
     app.session.apply_prefs();
     crate::dock::restore(app);

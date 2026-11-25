@@ -15,7 +15,7 @@ use crate::pinned::{PinnedCorpus, USER_AGENT};
 use crate::{cargo, root, run};
 
 /// Crates with corpus tests (behind their `corpus` feature).
-pub const CORPUS_CRATES: &[&str] = &["photocraft-io", "photocraft-engine-core", "photocraft-engine"];
+pub const CORPUS_CRATES: &[&str] = &["photocraft-io", "photocraft-engine-vector", "photocraft-engine"];
 /// Opt-in corpus crates: fetched and tested only with `test-corpus --pixls`.
 pub const PIXLS_CRATES: &[&str] = &["photocraft-raw"];
 

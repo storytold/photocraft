@@ -25,7 +25,9 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 
+mod color_settings_presets;
 mod rows;
+pub(crate) use color_settings_presets::reconcile as reconcile_color_settings;
 pub(crate) use rows::{REPLACE_COLOR, replace_color_sample};
 
 const MATCH_COLOR: &str = "image.adjustments.matchColor";
@@ -64,11 +66,17 @@ fn is_pixel_param(key: &str) -> bool {
 
 /// [`is_pixel_param`] for `key` of `command`. Some commands use those names for relative values:
 /// Tree's and Picture Frame's `size` (a fraction of the canvas, an ornament scale) and Lens
-/// Correction's perspective `horizontal` / `vertical` (-100..100). Scaled by the proxy factor,
+/// Correction's perspective `horizontal` / `vertical` (-100..100), and Lighting Effects' light
+/// `radius` (a fraction of the canvas). Scaled by the proxy factor,
 /// their preview drew a quarter-size tree and a quarter of the perspective (#2063).
 fn is_pixel_param_of(command: &str, key: &str) -> bool {
     is_pixel_param(key)
-        && !matches!((command, key), ("filter.render.tree" | "filter.render.pictureFrame", "size") | ("filter.lensCorrection", "horizontal" | "vertical"))
+        && !matches!(
+            (command, key),
+            ("filter.render.tree" | "filter.render.pictureFrame", "size")
+                | ("filter.lensCorrection", "horizontal" | "vertical")
+                | ("filter.render.lightingEffects", "radius")
+        )
 }
 
 /// Filters whose features have a fixed size in document pixels that no dialog parameter scales:
@@ -366,7 +374,11 @@ pub(crate) fn params(app: &mut PhotocraftApp, command: &str, spec: &str) -> Vec<
         list = super::rotate_canvas_ui::params();
     }
     rows::custom_rows(app, command, &mut list);
-    if command == "edit.colorSettings" {
+    if command == color_settings_presets::COMMAND {
+        // The Settings menu: Custom, a greyed group label and the named setups in groups (#14229).
+        if let Some(p) = list.iter_mut().find(|p| p.key == "preset") {
+            *p = color_settings_presets::row(Label::from(tl!("Settings")));
+        }
         // The monitor line under the rows: the cell holds the text each frame refreshes, which the build closure cannot read from the app.
         let note = crate::monitor_status::note_cell(app);
         list.push(craft::ui::patterns::form_dialogs::Param::custom("monitorNote", craft::ui::runtime::env::Label::Empty, move |ui, _, _| {
@@ -708,6 +720,18 @@ pub(crate) fn command_params(command: &str, fields: &DialogFields) -> Value {
     }
     if command == super::rotate_canvas_ui::COMMAND {
         super::rotate_canvas_ui::command_params(&mut map);
+    }
+    // After dialog keys have been reshaped into command keys (Image Processor's jpeg/width
+    // becomes jpeg.width, and so on). Doing this earlier dropped those rows.
+    // Drop display-only and other keys a closed schema does not take (Bitmap's Input row is
+    // `inputResolution`; dispatch would reject it and OK would leave the document unchanged).
+    if let Some(spec) = photocraft_engine::commands::find(command)
+        && let Some(schema) = photocraft_engine::param_schema::of(spec)
+        && !schema.open()
+        && !photocraft_engine::is_incomplete(command)
+    {
+        const KEEP: &[&str] = &["coalesce", "target", "layer", "channel", "targetChannel", "document"];
+        map.retain(|key, _| key.starts_with('_') || KEEP.contains(&key.as_str()) || schema.has_key(key));
     }
     params_of(&map)
 }

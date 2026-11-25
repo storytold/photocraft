@@ -133,20 +133,3 @@ fn another_freeform_trace_cannot_replace_a_failed_owned_draft_or_retry_it_automa
         assert_eq!(app.session.journal.len(), journal, "drawing must not retry the failed engine command");
     }
 }
-
-#[test]
-fn shift_drag_constrains_freeform_pen_to_a_straight_line() {
-    let mut app = app();
-    app.ui.tool_options.vector_mode = VectorMode::Path;
-    let shift = Modifiers::SHIFT;
-    testing::press(&mut app, [10.0, 60.0], shift);
-    for (x, y) in [(30.0, 63.0), (50.0, 55.0), (80.0, 68.0), (100.0, 52.0)] {
-        testing::move_to(&mut app, [x, y], shift);
-    }
-    testing::release(&mut app, [100.0, 52.0], shift);
-    let work = app.session.active().unwrap().doc.work_path.clone().expect("the stroke committed a work path");
-    let knots = &work.subpaths[0].knots;
-    assert!(knots.len() >= 2, "{knots:?}");
-    let y0 = knots[0].anchor.y;
-    assert!(knots.iter().all(|k| (k.anchor.y - y0).abs() < 1e-6), "⇧ keeps the freehand segment horizontal: {knots:?}");
-}

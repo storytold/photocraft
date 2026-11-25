@@ -206,7 +206,7 @@ pub(crate) fn restore_target(st: &mut DocState, layers: LayerTarget) {
 
 /// Keep the layer selection valid after the document or the active layer changed: drop deleted
 /// layers, and collapse to the active layer when a command made a non-member active.
-pub(crate) fn fix_selection(st: &mut DocState) {
+pub fn fix_selection(st: &mut DocState) {
     let Some(active) = st.active_layer else {
         st.selection_mut().clear();
         return;
