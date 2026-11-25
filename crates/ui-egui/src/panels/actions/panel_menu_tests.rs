@@ -1,6 +1,7 @@
 //! Real panel controls compose the menu-item commands with consent and retained selection. These trials read the
 //! dialog host (`app.framework`), so they live in the crate; the ones that use only the public API stay in
 //! `tests/it/actions_panel_menu.rs`.
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use craft::automation::ui::actions::{ActionSelection, ActionsPanelCommands};
@@ -16,13 +17,13 @@ use crate::PhotocraftApp;
 use crate::control::{ControlRequest, Reply, handle};
 
 /// A real dialog host over one selected action in a set.
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.background_jobs = false;
     app.run("file.new", json!({"width":16,"height":12})).unwrap();
     let mut a = Action::new("A", vec![]);
     a.set = Some("S".into());
-    app.session.actions.list.push(a).unwrap();
+    app.session.actions_mut().list.push(a).unwrap();
     app.ui.actions.panel.selected = Some(ActionSelection::Action(0));
     app.ui.actions.panel.expanded.insert("A".into());
     let mut h =
@@ -42,7 +43,7 @@ fn control(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: V
 }
 
 /// Fire the panel menu row of `command` as a click on it would.
-fn fire(h: &mut Harness<'static, PhotocraftApp>, command: ActionsPanelCommands) -> Value {
+fn fire(h: &mut Harness<'static, Box<PhotocraftApp>>, command: ActionsPanelCommands) -> Value {
     let ctx = h.ctx.clone();
     let reply = control(h.state_mut(), &ctx, "ui.menu.invoke", json!({"id": CommandRef::from(command).id}));
     h.run_steps(3);
@@ -55,7 +56,7 @@ fn top_dialog(app: &PhotocraftApp) -> DialogId {
 }
 
 /// Fire the row of `command` and return the dialog it opened.
-fn open(h: &mut Harness<'static, PhotocraftApp>, command: ActionsPanelCommands) -> DialogId {
+fn open(h: &mut Harness<'static, Box<PhotocraftApp>>, command: ActionsPanelCommands) -> DialogId {
     fire(h, command);
     top_dialog(h.state())
 }
@@ -71,13 +72,13 @@ fn dialog_key(app: &PhotocraftApp, id: DialogId) -> Option<String> {
 }
 
 /// Sets one field of dialog `id` as an agent would.
-fn set_field(h: &mut Harness<'static, PhotocraftApp>, id: DialogId, field: &str, value: Value) -> Value {
+fn set_field(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId, field: &str, value: Value) -> Value {
     let ctx = h.ctx.clone();
     control(h.state_mut(), &ctx, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}))
 }
 
 /// Answers OK on dialog `id`; the error is the reason the dialog refused.
-fn confirm(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) -> Result<(), String> {
+fn confirm(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) -> Result<(), String> {
     let ctx = h.ctx.clone();
     let reply = control(h.state_mut(), &ctx, "ui.dialog.confirm", json!({"dialog": id}));
     h.run_steps(3);
@@ -85,7 +86,7 @@ fn confirm(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) -> Result<(), 
 }
 
 /// Cancels dialog `id`.
-fn cancel(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) {
+fn cancel(h: &mut Harness<'static, Box<PhotocraftApp>>, id: DialogId) {
     let ctx = h.ctx.clone();
     control(h.state_mut(), &ctx, "ui.dialog.cancel", json!({"dialog": id}));
     h.run_steps(3);
@@ -93,7 +94,7 @@ fn cancel(h: &mut Harness<'static, PhotocraftApp>, id: DialogId) {
 
 /// The steps of action `A`.
 fn steps(app: &PhotocraftApp) -> Vec<ActionStep> {
-    app.session.actions.list.action(0).unwrap().steps.clone()
+    app.session.actions().list.action(0).unwrap().steps.clone()
 }
 
 /// Menu insertion uses an actual chooser and never samples or executes current command settings.
@@ -121,7 +122,7 @@ fn insert_menu_item_chooser_cancels_or_records_descriptor_free_filter_event() {
     expected.execute("filter.blur.gaussianBlur", json!({"radius":2})).unwrap();
     let expected = photocraft_compose::flatten(&expected.active().unwrap().doc).into_px();
     assert_ne!(expected, original, "the Gaussian fixture has a visible effect");
-    h.state_mut().session.actions.list.insert_step(0, 1, ActionStep::new("select.all", json!({}))).unwrap();
+    h.state_mut().session.actions_mut().list.insert_step(0, 1, ActionStep::new("select.all", json!({}))).unwrap();
     let paused = h.state_mut().run("actions.play", json!({"action":"A"})).unwrap();
     let dialog = paused_dialog(&paused);
     assert_eq!(set_field(&mut h, dialog, "radius", json!(2))["ok"], true);
@@ -137,8 +138,8 @@ fn control_playback_opens_menu_settings_only_for_menu_invocation() {
     let ctx = h.ctx.clone();
     let app = h.state_mut();
     app.run("actions.insertMenuItem", json!({"action":"A","id":"filter.blur.gaussianBlur"})).unwrap();
-    app.session.actions.list.insert_step(0, 0, ActionStep::new("select.all", json!({}))).unwrap();
-    app.session.actions.list.insert_step(0, 2, ActionStep::new("select.deselect", json!({}))).unwrap();
+    app.session.actions_mut().list.insert_step(0, 0, ActionStep::new("select.all", json!({}))).unwrap();
+    app.session.actions_mut().list.insert_step(0, 2, ActionStep::new("select.deselect", json!({}))).unwrap();
     app.session.edit_prefs(|prefs| prefs.actions.performance = PlaybackPerformance::StepByStep);
 
     // Starting at the menu step checks the original dialog bug. Starting one step earlier
@@ -214,7 +215,7 @@ fn paused_menu_preview_keeps_the_requesting_gate_and_rejects_retargeting() {
     // The stored step now names another command than the editor opened for.
     h.state_mut()
         .session
-        .actions
+        .actions_mut()
         .list
         .replace_step(0, 0, ActionStep::new(atn_cmds::MENU_ITEM, json!({"id":"filter.distort.displace","eventKind":"name"})))
         .unwrap();

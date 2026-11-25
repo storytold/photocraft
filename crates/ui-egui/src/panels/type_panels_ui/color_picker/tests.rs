@@ -2,7 +2,7 @@ use super::*;
 use crate::canvas;
 use craft::color_ui::ui::PickedColor;
 
-fn fixture(kind: Kind, depth: u32) -> (PhotocraftApp, u32) {
+fn fixture(kind: Kind, depth: u32) -> (Box<PhotocraftApp>, u32) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("prefs.set", json!({"path":"interface.language","value":"en"})).unwrap();
     app.run("file.new", json!({"width":320,"height":160,"depth":depth,"background":"transparent"})).unwrap();

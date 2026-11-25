@@ -18,11 +18,11 @@ fn right_to_left_scripts_by_language_code() {
     }
 }
 
-fn harness() -> Harness<'static, PhotocraftApp> {
+fn harness() -> Harness<'static, Box<PhotocraftApp>> {
     harness_with(Harness::builder())
 }
 
-fn harness_with(builder: egui_kittest::HarnessBuilder<PhotocraftApp>) -> Harness<'static, PhotocraftApp> {
+fn harness_with(builder: egui_kittest::HarnessBuilder<Box<PhotocraftApp>>) -> Harness<'static, Box<PhotocraftApp>> {
     let mut h = builder.with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro_medium());
         let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), crate::Services::default());
@@ -34,7 +34,7 @@ fn harness_with(builder: egui_kittest::HarnessBuilder<PhotocraftApp>) -> Harness
 }
 
 /// The middle of the Layers group across the window.
-fn dock_x(h: &Harness<'static, PhotocraftApp>) -> f32 {
+fn dock_x(h: &Harness<'static, Box<PhotocraftApp>>) -> f32 {
     crate::panel_docking::probe::group_rect(h, "layers").expect("Layers docked").center().x
 }
 

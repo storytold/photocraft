@@ -7,8 +7,9 @@
 use craft::behavior::IconId;
 use craft::ui::buttons::ToggleButton;
 use craft::ui::choice::{Checkbox, Segmented};
-use craft::ui::contract::{Bind, Entry, Props as _, Show as _};
+use craft::ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 use craft::ui::display::Divider;
+use craft::ui::form::Field;
 use craft::ui::pickers::Select;
 use craft::ui::primitives::IconSpec;
 use photocraft_engine::eraser_cmds::{MAGIC_ERASER_BITMAP_ERROR, MAGIC_ERASER_INDEXED_ERROR};
@@ -197,12 +198,18 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
             Entry::new("contiguous".to_string(), tl!("Contiguous")),
             Entry::new("findEdges".to_string(), tl!("Find Edges")),
         ];
-        let picked = Select::new(tl!("Limits:"), Bind::given(o.bg_limits.clone()), &limits)
-            .tooltip(tl!("How far to let the erasing spread").to_owned())
-            .show(ui)
-            .events
-            .committed()
-            .cloned();
+        // In a `Field`, as Color Replacement's Limits: a bare control's label only names it (#16338).
+        let picked = Field::new(tl!("Limits:"))
+            .show(ui, |ui, _| {
+                Select::new(tl!("Limits:"), Bind::given(o.bg_limits.clone()), &limits)
+                    .tooltip(tl!("How far to let the erasing spread").to_owned())
+                    .show(ui)
+                    .events
+                    .committed()
+                    .cloned()
+            })
+            .inner
+            .flatten();
         if let Some(limits) = picked {
             o.bg_limits = limits;
         }
@@ -223,7 +230,7 @@ fn background_eraser_members(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     }
 
     // Angle and Pressure for Size edit the tool's own brush (the shell swaps one in per tool).
-    let before = app.session.tools.brush.clone();
+    let before = (*app.session.tools.brush).clone();
     let mut brush = before.clone();
     let mut angle = brush.angle;
     let angle_out = option_cells::number(tl!("Angle"), &mut angle, -180.0..=180.0)
@@ -274,7 +281,7 @@ mod tests {
 
     /// The app with a white 64x48 document in `mode` open and the Magic Eraser picked: a click on
     /// it would wipe the flat canvas out.
-    fn app_in(mode: ColorMode) -> PhotocraftApp {
+    fn app_in(mode: ColorMode) -> Box<PhotocraftApp> {
         let mut s = photocraft_engine::Session::new();
         s.add_document(Document::with_background("p", Size::new(64, 48), mode, SampleType::U8, Color::WHITE), None);
         let mut app = PhotocraftApp::new(s, crate::Services::default());

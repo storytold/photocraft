@@ -146,21 +146,21 @@ fn visible(app: &PhotocraftApp, id: LayerId) -> bool {
 }
 fn content_layer(app: &PhotocraftApp, r: [i64; 4]) -> Option<u64> {
     let st = app.session.active()?;
-    let l = st.doc.layer(st.active_layer?)?;
-    if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_)) || st.doc.is_background(l.id) {
-        return None;
-    }
-    let locks = st.doc.effective_locks(l.id);
-    if locks.position || locks.all {
-        return None;
-    }
-    // Another frame's image stays in its frame; the drag draws an empty frame instead.
-    if photocraft_engine::frame_cmds::frame_of(&st.doc, l.id).is_some() {
-        return None;
-    }
-    let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, l);
-    (!b.is_empty() && i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)).then_some(l.id.0)
+    st.doc.walk().into_iter().rev().find_map(|(path, _, l)| {
+        if !matches!(l.content, LayerContent::Raster(_) | LayerContent::Smart(_)) || st.doc.is_background(l.id) || !path_visible(&st.doc, &path) {
+            return None;
+        }
+        let locks = st.doc.effective_locks(l.id);
+        if locks.position || locks.all || photocraft_engine::frame_cmds::frame_of(&st.doc, l.id).is_some() {
+            return None;
+        }
+        let b = photocraft_engine::transform_cmds::transform_bounds(&st.doc, l);
+        (!b.is_empty() && i64::from(b.x0) < r[2] && r[0] < i64::from(b.x1) && i64::from(b.y0) < r[3] && r[1] < i64::from(b.y1)).then_some(l.id.0)
+    })
 }
+#[cfg(test)]
+mod content_pick_tests;
+
 fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
     if let Err(e) = r {
         app.ui.status = e;
@@ -441,6 +441,39 @@ fn content_part(state: &BoxState, at: KPoint, reach: f64, reference_point: bool)
     }
 }
 
+/// The cursor icon over document point `p`, with `reach` document units of handle slop (#13883):
+/// a selected Frame-target frame's handles resize, the frame itself is the arrow, and empty canvas
+/// has no icon (the tool's crosshair).
+fn cursor_icon(app: &PhotocraftApp, p: [f64; 2], reach: f64) -> Option<CursorIcon> {
+    if let Some(l) = selected(app)
+        && visible(app, l.id)
+        && let Some(f) = &l.frame
+        && target(app, l) == Target::Frame
+        && !app.session.active().is_some_and(|st| {
+            let locks = st.doc.effective_locks(l.id);
+            locks.all || locks.position
+        })
+    {
+        let state = frame_box(&f.transform);
+        match content_part(&state, KPoint::new(p[0], p[1]), reach, false) {
+            BoxPart::Corner(i) => {
+                // The corner's diagonal on screen, not its index: a turned frame swaps them.
+                let (a, b) = (state.quad[usize::from(i)], state.quad[(usize::from(i) + 2) % 4]);
+                let same = (b.x - a.x) * (b.y - a.y) >= 0.0;
+                return Some(if same { CursorIcon::ResizeNwSe } else { CursorIcon::ResizeNeSw });
+            }
+            BoxPart::Edge(i) => {
+                // The edge's on-screen direction, not its index: a turned frame swaps them.
+                let (a, b) = (state.quad[usize::from(i)], state.quad[(usize::from(i) + 1) % 4]);
+                let horizontal = (b.x - a.x).abs() >= (b.y - a.y).abs();
+                return Some(if horizontal { CursorIcon::ResizeVertical } else { CursorIcon::ResizeHorizontal });
+            }
+            _ => {}
+        }
+    }
+    frame_at(app, p).map(|_| CursorIcon::Default)
+}
+
 /// A drag of the open Free Transform's box, as the box's own gesture: Begin at the first move, then Updates.
 fn drag_content(app: &mut PhotocraftApp, c: &mut ContentPress, to: KPoint, mods: Mods, time: f64) {
     let Some(t) = app.ui.transform.as_mut() else { return };
@@ -649,13 +682,13 @@ impl CanvasTool for FramePass<'_> {
     }
 
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
-        let over = cx
-            .pointer
-            .as_ref()
-            .zip(cx.space())
-            .map(|(p, space)| space.view.to_doc(p.pos))
-            .is_some_and(|at| self.scope.with_app(|app| frame_at(app, [at.x, at.y]).is_some()));
-        if over { Cursor::System(CursorIcon::Move) } else { self.state.draw.cursor(cx) }
+        let Some((p, space)) = cx.pointer.as_ref().zip(cx.space()) else { return self.state.draw.cursor(cx) };
+        let at = space.view.to_doc(p.pos);
+        let reach = space.view.doc_len(cx.reach());
+        match self.scope.with_app(|app| cursor_icon(app, [at.x, at.y], reach)) {
+            Some(icon) => Cursor::System(icon),
+            None => self.state.draw.cursor(cx),
+        }
     }
 
     fn command_form(&self) -> ToolPath {
@@ -689,17 +722,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, rect: egui::Rect)
     let t = Tokens::get(ui.ctx());
     let painter = ui.painter().clone();
     if let Some(st) = app.session.active() {
-        for (path, _, l) in st.doc.walk() {
-            if !path_visible(&st.doc, &path) {
-                continue;
-            }
-            let Some(f) = &l.frame else { continue };
-            if l.children().is_some_and(|c| c.is_empty()) {
-                let q = f.corners().map(|p| view.to_screen(KPoint::new(p.x, p.y)));
-                paint_path(&painter, &view, &f.outline(), Stroke::new(1., t.text_faint));
-                painter.line_segment([q[0], q[2]], Stroke::new(1., t.text_faint));
-                painter.line_segment([q[1], q[3]], Stroke::new(1., t.text_faint));
-            }
+        for id in app.doc_queries.empty_frames(&app.session, st).iter() {
+            let Some(f) = st.doc.layer(*id).and_then(|l| l.frame.as_ref()) else { continue };
+            let q = f.corners().map(|p| view.to_screen(KPoint::new(p.x, p.y)));
+            paint_path(&painter, &view, &f.outline(), Stroke::new(1., t.text_faint));
+            painter.line_segment([q[0], q[2]], Stroke::new(1., t.text_faint));
+            painter.line_segment([q[1], q[3]], Stroke::new(1., t.text_faint));
         }
     }
     if app.ui.tool != Tool::Frame || app.ui.transform.is_some() {
@@ -811,6 +839,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     true
 }
 
+#[cfg(test)]
+mod cursor_tests;
 #[cfg(test)]
 mod escape_commit_tests;
 #[cfg(test)]

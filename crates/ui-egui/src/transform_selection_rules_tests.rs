@@ -13,7 +13,7 @@ use crate::transform_tool::LOCKED;
 
 /// A 200 × 200 document on a white Background: "A" with a red block at x 10..50, y 10..30, and
 /// "B" with a blue one at x 100..140, y 100..120. Only B is selected.
-fn app() -> (PhotocraftApp, LayerId, LayerId, LayerId) {
+fn app() -> (Box<PhotocraftApp>, LayerId, LayerId, LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
     app.sync_views();
@@ -227,7 +227,7 @@ fn a_refused_handle_press_over_the_control_channel_reaches_no_move_tool() {
     app.ui.tool_options.move_auto_select = true;
     accepted(&mut app, "ui.set", json!({"tool": "Move", "moveShowTransform": true, "zoom": 1.0, "center": [100, 100]}));
     let before = app.session.active().unwrap().doc.clone();
-    let selected = app.session.active().unwrap().selected_layers();
+    let selected = app.session.active().unwrap().selected_layers().to_vec();
     accepted(
         &mut app,
         "ui.pointer",

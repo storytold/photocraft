@@ -1,6 +1,7 @@
 //! #13205: a Direct Selection drag of one anchor is one History step "Drag Anchor Point", of two
 //! or more "Drag Anchor Points"; a handle drag (with or without ⌥) is "Drag Control Point" and a
-//! segment drag "Drag Segment". An arrow-key nudge of one anchor keeps today's name.
+//! segment drag "Drag Segment". An arrow-key nudge is "Nudge Path" (#13204,
+//! `nudge_history_tests`).
 
 use egui::Modifiers;
 use serde_json::json;
@@ -10,7 +11,7 @@ use crate::PhotocraftApp;
 use crate::state::Tool;
 
 /// A square work path; knot 1 at (120, 40) is smooth with handles at (100, 40) and (140, 40).
-fn app() -> PhotocraftApp {
+fn app() -> Box<PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
     app.sync_views();
