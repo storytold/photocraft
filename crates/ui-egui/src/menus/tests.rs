@@ -1,6 +1,7 @@
 use super::items::row;
 use super::*;
 use craft::menu::{THEME_COMMAND, ThemeChoice};
+use photocraft_engine::color_cmds::ColorExt;
 
 #[test]
 fn live_lookup_finds_engine_and_shell_commands() {
@@ -69,7 +70,7 @@ fn proofed(app: &mut PhotocraftApp) {
     invoke(app, &ctx, "view.proofSetup.workingCmyk", Value::Null).unwrap();
     invoke(app, &ctx, "view.gamutWarning", json!({"on": true})).unwrap();
     let doc = app.session.active().unwrap().doc.clone();
-    let lut = app.session.color.canvas_lut(&doc, 9).unwrap().unwrap();
+    let lut = app.session.color().canvas_lut(&doc, 9).unwrap().unwrap();
     // Pure sRGB green is outside coated CMYK; mid grey is inside.
     let at = |r: usize, g: usize, b: usize| lut[(r + g * 9 + b * 81) * 4 + 3];
     assert_eq!((at(0, 8, 0), at(4, 4, 4)), (255, 0));

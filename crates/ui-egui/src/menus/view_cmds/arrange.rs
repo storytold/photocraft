@@ -50,10 +50,10 @@ fn screen_position(v: &Value) -> Option<[f32; 2]> {
     Some([n(0)?, n(1)?])
 }
 
-/// The area and sizes the framework's arrangements work in. New windows take half the document area; a window that
-/// follows its document's size is resized by `DocumentWindow` afterwards.
-fn space(app: &PhotocraftApp) -> ArrangeSpace<DocId> {
-    let area = app.ctx().content_rect();
+/// The area and sizes the framework's arrangements work in: the document area, not the app's whole content. New
+/// windows take half of it; a window that follows its document's size is resized by `DocumentWindow` afterwards.
+pub(super) fn space(app: &PhotocraftApp) -> ArrangeSpace<DocId> {
+    let area = app.last_canvas_rect;
     let step = craft::ui::style::StyleCx::with_root(app.ctx(), |cx| cx.tokens.size.window.cascade);
     ArrangeSpace::new(area, area.size() * 0.5, step, app.session.active().map(|st| st.doc.id))
 }

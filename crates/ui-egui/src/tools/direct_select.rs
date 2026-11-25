@@ -515,6 +515,9 @@ mod convert_point_drag_segment_tests;
 mod delete_key_tests;
 
 #[cfg(test)]
+mod live_shape_warning_tests;
+
+#[cfg(test)]
 mod history_names_tests;
 
 #[cfg(test)]
