@@ -17,8 +17,8 @@ use crate::control::{ControlRequest, Reply, handle};
 const BATCH: &str = "file.automate.batch";
 
 /// The Batch dialog, opened from its menu over a 2 × 1 document with the action Invert selected
-/// in the Actions panel, after the frame that loads its defaults; `input` and `output` set to the
-/// given paths.
+/// in the Actions panel, after the frame that loads its defaults; Destination set to Folder
+/// (#13659), then `input` and `output` set to the given paths.
 fn batch(input: &str, output: &str) -> (Box<PhotocraftApp>, egui::Context, DialogId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
@@ -35,6 +35,9 @@ fn batch(input: &str, output: &str) -> (Box<PhotocraftApp>, egui::Context, Dialo
     });
     output_frame.textures_delta.clear();
     set(&mut app, &ctx, id, "input", json!(input));
+    // The form opens on Destination None (#13659), which greys the Output row; every test here is
+    // about a folder run's missing source or destination, so pick Folder before typing the path.
+    set(&mut app, &ctx, id, "destination", json!("folder"));
     set(&mut app, &ctx, id, "output", json!(output));
     (app, ctx, id)
 }
