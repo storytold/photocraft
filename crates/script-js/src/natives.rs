@@ -378,8 +378,6 @@ fn this_doc(this: &JsValue, ctx: &mut Context) -> JsResult<Value> {
     query_document(id, json!({ "serial": id.serial, "history": false, "layers": false }), ctx)
 }
 
-/// `document.inspect` of document `id`, by its serial: one call, so a tab closed or moved in the
-/// meantime can't make it read another document.
 /// The last full inspection of each document this attempt read, by serial and whether it holds
 /// the History rows, with the `stateRevision` it had. Bounded by [`MAX_KEPT_INSPECTIONS`].
 #[derive(Default, Trace, Finalize, JsData)]
@@ -390,10 +388,11 @@ struct Inspections(HashMap<(u64, bool), Value>);
 /// Most inspections kept: past it they are dropped and read whole again.
 const MAX_KEPT_INSPECTIONS: usize = 128;
 
-/// The document, read from the host. Every property read of the document model inspects it, so a
-/// script reading a large document's layers one by one would record the whole tree each time:
-/// the last answer is kept, and asked for again only by its revision, which the host answers
-/// briefly while the document is unchanged.
+/// `document.inspect` of document `id`, by its serial: one call, so a tab closed or moved in the
+/// meantime can't make it read another document. Every property read of the document model
+/// inspects it, so a script reading a large document's layers one by one would record the whole
+/// tree each time: the last answer is kept, and asked for again only by its revision, which the
+/// host answers briefly while the document is unchanged.
 pub(crate) fn inspect_document(id: DocKey, history: bool, ctx: &mut Context) -> JsResult<Value> {
     let kept = ctx.realm().host_defined().get::<Inspections>().and_then(|k| k.0.get(&(id.serial, history)).cloned());
     let mut params = json!({ "serial": id.serial, "history": history });
@@ -401,11 +400,12 @@ pub(crate) fn inspect_document(id: DocKey, history: bool, ctx: &mut Context) -> 
         params["unlessRevision"] = revision.clone();
     }
     let d = query_document(id, params, ctx)?;
-    if d.get("unchanged").and_then(Value::as_bool) == Some(true)
-        && let Some(kept) = kept
-        && kept.get("stateRevision") == d.get("stateRevision")
-    {
-        return Ok(kept);
+    if d.get("unchanged").and_then(Value::as_bool) == Some(true) {
+        // Only for the revision it was asked about; anything else is a host that answers wrong.
+        return match kept {
+            Some(kept) if kept.get("stateRevision") == d.get("stateRevision") => Ok(kept),
+            _ => Err(error("the document was reported unchanged since a reading this run does not have")),
+        };
     }
     let realm = ctx.realm().clone();
     let mut data = realm.host_defined_mut();

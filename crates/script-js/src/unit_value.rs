@@ -183,6 +183,9 @@ pub(crate) fn length_of(v: &JsValue, default_typ: &str, ctx: &mut Context) -> Js
     match v.as_object().and_then(|o| o.downcast_ref::<UnitValueData>().map(|d| d.clone())) {
         // A percentage is of the value's base: resolved to inches here, or refused when that base
         // is itself relative. It is never a count of pixels.
+        // Without a base of its own a percentage has nothing here to be a share of (the class
+        // default, 1/72 in, would make 50 % half a point): refused rather than guessed.
+        Some(d) if d.typ == "%" && d.base.is_none() => Err(typ_err(format!("{} % is not a length here: give the UnitValue a baseUnit", d.value))),
         Some(d) if d.typ == "%" => {
             let base = effective_base(&d, ctx);
             to_inches(d.value, "%", &base)

@@ -660,9 +660,10 @@ fn a_percentage_length_is_a_share_of_its_base() {
          d.resizeCanvas(q, undefined, AnchorPosition.TOPLEFT);
          $.writeln(d.width.as('px'));
          var r = new UnitValue(25, '%'); r.baseUnit = new UnitValue(10, 'px');
-         try { d.resizeCanvas(r, undefined, AnchorPosition.TOPLEFT); $.writeln('resized'); } catch (e) { $.writeln(e.name); }",
+         try { d.resizeCanvas(r, undefined, AnchorPosition.TOPLEFT); $.writeln('resized'); } catch (e) { $.writeln(e.name); }
+         try { d.resizeImage(new UnitValue(50, '%')); $.writeln('resized'); } catch (e) { $.writeln(e.name, ' ', d.width.as('px')); }",
     );
-    assert_eq!(lines, ["100", "TypeError"]);
+    assert_eq!(lines, ["100", "TypeError", "TypeError 100"]);
 }
 
 /// A type size is taken in the engine's range, and in pixels at the resolution read after the
