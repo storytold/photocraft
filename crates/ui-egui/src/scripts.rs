@@ -226,7 +226,9 @@ impl ScriptCommands for AppCommands<'_> {
         self.budget.charge(id, &params, copies)?;
         let started = web_time::Instant::now();
         let was = std::mem::replace(&mut self.app.automation_input, self.automation);
-        let result = (|| {
+        // A command that panics leaves the app's input provenance as it was, too: the panic goes
+        // on to the run's guard once it is put back.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if let Some(serial) = target
                 && !self.app.session.active().is_some_and(|d| d.serial == serial)
             {
@@ -237,8 +239,12 @@ impl ScriptCommands for AppCommands<'_> {
                 self.app.run("document.activate", json!({ "serial": serial }))?;
             }
             self.app.run(id, params)
-        })();
+        }));
         self.app.automation_input = was;
+        let result = match result {
+            Ok(result) => result,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
         self.budget.app_time += started.elapsed();
         result
     }
@@ -264,9 +270,15 @@ const STOP_AFTER_MS: f64 = 500.0;
 pub struct ManagerUi {
     pub open: bool,
     pub selected: Option<usize>,
-    /// The tags field of the selected script while it is being typed in.
+    /// The tags field of the selected script while it is being typed in, with the script it was
+    /// started on ([`entry_key`]): a list that changed meanwhile does not get it on another one.
     #[serde(skip)]
-    pub tags: Option<String>,
+    pub tags: Option<(String, String)>,
+}
+
+/// What names a listed script for a tags draft: its name and file.
+fn entry_key(name: &str, path: Option<&str>) -> String {
+    format!("{name}\u{0}{}", path.unwrap_or(""))
 }
 
 /// Runs and their output (not saved).
@@ -276,7 +288,7 @@ pub(crate) struct Runtime {
     /// The id of the last run started: a late file-picker answer finds its run by it.
     last_id: u64,
     /// Output of recent runs, oldest first.
-    pub(crate) log: Vec<String>,
+    pub(crate) log: std::collections::VecDeque<String>,
     /// The run is taken out to pump its commands through the app: it is still running.
     pumping: bool,
 }
@@ -325,11 +337,11 @@ impl Runtime {
 
     fn log_line(&mut self, line: &str) {
         let line: String = line.chars().take(LOG_LINE_CHARS).collect();
-        self.log.push(line);
-        if self.log.len() > LOG_LINES {
-            let extra = self.log.len() - LOG_LINES;
-            self.log.drain(..extra);
+        // The oldest line goes as each new one comes once the log is full: no shifting.
+        if self.log.len() >= LOG_LINES {
+            self.log.pop_front();
         }
+        self.log.push_back(line);
     }
 }
 
@@ -697,8 +709,16 @@ fn picker_request(kind: ScriptDialog, args: &Value) -> PickRequest {
         ScriptDialog::OpenFile if multiple => PickRequest::open_many("script"),
         ScriptDialog::OpenFile => PickRequest::open("script"),
         ScriptDialog::SaveFile => PickRequest::save("script").file_name("Untitled"),
-        _ => return PickRequest::folder("script"),
+        _ => PickRequest::folder("script"),
     };
+    // The script's prompt is the picker's title, where the platform shows one.
+    let request = match args.get("prompt").and_then(Value::as_str).filter(|p| !p.is_empty()) {
+        Some(prompt) => request.title(prompt),
+        None => request,
+    };
+    if !matches!(kind, ScriptDialog::OpenFile | ScriptDialog::SaveFile) {
+        return request;
+    }
     match filter_extensions(args.get("filter").and_then(Value::as_str)) {
         Some(exts) => request.filter("Files", &exts.iter().map(String::as_str).collect::<Vec<_>>()),
         None => request,
@@ -1161,7 +1181,7 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let can_run = can_run(app);
     let mut action: Option<ManagerAction> = None;
     // Leaving the tags field and clicking a button are one click: both happen.
-    let mut tags_commit: Option<(usize, String)> = None;
+    let mut tags_commit: Option<(usize, String, String)> = None;
     egui::Window::new(tl!("Scripts Manager")).id(Id::unique("scripts-manager")).open(&mut open).default_width(460.0).collapsible(false).show(ctx, |ui| {
         ui.horizontal(|ui| {
             if ui.button(tl!("Load…")).clicked() {
@@ -1199,18 +1219,23 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         });
         if let Some(i) = selected
-            && let Some((_, _, tags)) = entries.get(i)
+            && let Some((name, path, tags)) = entries.get(i)
         {
+            let key = entry_key(name, path.as_deref());
+            // A draft started on another script (the list changed under it) is dropped.
+            if app.ui.scripts.tags.as_ref().is_some_and(|(k, _)| *k != key) {
+                app.ui.scripts.tags = None;
+            }
             ui.separator();
             ui.horizontal(|ui| {
                 let label = ui.label(tl!("Tags:"));
-                let mut text = app.ui.scripts.tags.clone().unwrap_or_else(|| tags.join(", "));
+                let mut text = app.ui.scripts.tags.as_ref().map_or_else(|| tags.join(", "), |(_, t)| t.clone());
                 let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(280.0).hint_text(tl!("comma-separated"))).labelled_by(label.id);
                 if r.changed() {
-                    app.ui.scripts.tags = Some(text.clone());
+                    app.ui.scripts.tags = Some((key.clone(), text.clone()));
                 }
                 if r.lost_focus() && app.ui.scripts.tags.is_some() {
-                    tags_commit = Some((i, text));
+                    tags_commit = Some((i, key.clone(), text));
                 }
             });
             ui.weak(tl!("The first tag is what scripts see as app.name when run from this list."));
@@ -1224,7 +1249,7 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             row,
             app.scripts.log.len(),
             |ui, rows| {
-                for line in app.scripts.log.get(rows).unwrap_or_default() {
+                for line in app.scripts.log.range(rows.start.min(app.scripts.log.len())..rows.end.min(app.scripts.log.len())) {
                     ui.add(egui::Label::new(RichText::new(line).monospace()).truncate());
                 }
             },
@@ -1236,8 +1261,13 @@ fn manager_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !open {
         app.ui.scripts.open = false;
     }
-    if let Some((i, text)) = tags_commit {
+    if let Some((i, key, text)) = tags_commit {
         app.ui.scripts.tags = None;
+        // Only onto the script it was typed for, at the index it has now.
+        let now = app.session.prefs().scripts.entries.get(i).map(|e| entry_key(&e.name, e.path.as_deref()));
+        if now.as_deref() != Some(key.as_str()) {
+            return;
+        }
         if let Err(e) = app.run("file.scripts.setTags", json!({ "index": i, "tags": text })) {
             app.ui.status = e;
             app.ui.status_error = true;

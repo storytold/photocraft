@@ -134,6 +134,7 @@ fn settle(app: &mut PhotocraftApp) {
             return;
         }
     }
+    panic!("the run neither ended nor waited at a dialog");
 }
 
 fn layer_names(app: &PhotocraftApp) -> Vec<String> {
@@ -286,6 +287,10 @@ fn open_and_save_pickers_offer_the_scripts_filter() {
         let filtered = picker_request(kind, &json!({"prompt": null, "filter": "*.png"}));
         assert_eq!(filtered.filters.iter().map(|f| f.extensions.clone()).collect::<Vec<_>>(), [vec!["png".to_string()]], "{kind:?}");
         assert!(picker_request(kind, &json!({"prompt": null, "filter": null})).filters.is_empty(), "{kind:?}");
+    }
+    // The prompt titles every kind of picker.
+    for kind in [ScriptDialog::OpenFile, ScriptDialog::SaveFile, ScriptDialog::SelectFolder] {
+        assert_eq!(picker_request(kind, &json!({"prompt": "Pick a file"})).title.as_deref(), Some("Pick a file"), "{kind:?}");
     }
 }
 

@@ -177,6 +177,11 @@ impl PhotocraftApp {
                 Ok(()) => then(app, Picked::Paths(paths)),
                 Err(why) => then(app, Picked::Unavailable(why)),
             },
+            // A save's path is held to the same rule: a lossy copy of it would name another file.
+            Picked::Saved { path, file_type } => match path_text(&path, saving) {
+                Ok(_) => then(app, Picked::Saved { path, file_type }),
+                Err(why) => then(app, Picked::Unavailable(why)),
+            },
             other => then(app, other),
         });
         self.file_dialog = Some(self.start_pick(request, then)?);
