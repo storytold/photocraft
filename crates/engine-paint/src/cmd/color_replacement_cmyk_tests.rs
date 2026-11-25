@@ -108,17 +108,20 @@ fn click(s: &mut Session, x: i32, y: i32, mode: &str) {
     s.execute("paint.colorReplacement", json!({"points": [[x, y]], "size": 40, "hardness": 100, "mode": mode})).unwrap();
 }
 
-/// The ink-channel rule of ISO 32000-1 11.3.5.3 for Color: `backdrop` and the `fg_rgb` foreground
-/// both mean the profile `space` is active for (the foreground's inks come from it, the backdrop
-/// keeps its channel values), and K comes from the backdrop.
+/// The ink-channel rule of ISO 32000-1 11.3.5.3 for Color, on ink values that already mean the
+/// document's channels: complement C, M and Y, blend them like RGB (SetLum / ClipColor), complement
+/// back, K from the backdrop.
+fn ink_rule_on(backdrop: [f32; 4], fg: [f32; 4]) -> [f32; 4] {
+    let cb = [1.0 - backdrop[0], 1.0 - backdrop[1], 1.0 - backdrop[2]];
+    let cs = [1.0 - fg[0], 1.0 - fg[1], 1.0 - fg[2]];
+    let r = blend_rgb(BlendMode::Color, cb, cs);
+    [1.0 - r[0], 1.0 - r[1], 1.0 - r[2], backdrop[3]]
+}
+
+/// The same rule where the `fg_rgb` foreground still has to become the document's inks: that
+/// conversion goes through the profile `space` is active, the backdrop keeps its channel values.
 fn ink_rule(space: Option<&std::sync::Arc<CmykSpace>>, backdrop: [f32; 4], fg_rgb: [f32; 3]) -> [f32; 4] {
-    with_cmyk_space(space, || {
-        let fg = rgb_to_cmyk(fg_rgb);
-        let cb = [1.0 - backdrop[0], 1.0 - backdrop[1], 1.0 - backdrop[2]];
-        let cs = [1.0 - fg[0], 1.0 - fg[1], 1.0 - fg[2]];
-        let r = blend_rgb(BlendMode::Color, cb, cs);
-        [1.0 - r[0], 1.0 - r[1], 1.0 - r[2], backdrop[3]]
-    })
+    with_cmyk_space(space, || ink_rule_on(backdrop, rgb_to_cmyk(fg_rgb)))
 }
 
 /// The luminosity the rule of 11.3.5.3 keeps: that of the C, M and Y channels complemented.
@@ -151,6 +154,22 @@ fn the_four_clicks_land_on_the_issue_s_ink_table_in_the_space_it_was_measured_in
         click(&mut s, x, y, "color");
         let got = inks(&s, x, y);
         assert_inks_within(&format!("click at ({x}, {y})"), &got, want);
+    }
+}
+
+/// The same four clicks in the working CMYK space (the built-in coated one `image.mode.cmyk` uses
+/// unless the item asks for another profile). The rule runs there too and keeps the pixel's
+/// lightness; the inks it stores are not the table's, because that space renders the pure blue
+/// foreground as C96.9 M100 Y0 K0, and a Color blend takes its hue from the foreground. Measured
+/// with this change, one click per row.
+#[test]
+fn the_four_clicks_in_the_working_colour_space_store_that_space_s_inks() {
+    let mut s = issue_document(None);
+    let want: [[f32; 4]; 4] =
+        [[0.749_019_6, 0.772_549, 0.0, 0.0], [0.345_098, 0.356_862_7, 0.0, 0.0], [0.411_764_7, 0.427_451, 0.0, 0.0], [0.768_627_5, 0.792_156_9, 0.0, 0.0]];
+    for (i, ((x, y, _), want)) in REFERENCE_ROWS.into_iter().zip(want).enumerate() {
+        click(&mut s, x, y, "color");
+        assert_inks_pinned(&format!("working-space click {i} at ({x}, {y})"), &inks(&s, x, y), want, 0.5 / 255.0);
     }
 }
 
@@ -194,14 +213,17 @@ fn the_color_blend_follows_the_ink_rule_without_a_profile() {
         fill_inks(&mut s, (x - 30) as i64, (y - 30) as i64, 60, 60, backdrop, &stand_in);
     }
     s.execute("tools.setColors", json!({"foreground": "#0000ff", "foregroundCmyk": REFERENCE_FG})).unwrap();
-    let space = CmykSpace::for_profile(s.active().unwrap().doc.icc_profile.as_ref());
+    assert!(
+        CmykSpace::for_profile(s.active().unwrap().doc.icc_profile.as_ref()).is_none(),
+        "the fixture carries no CMYK profile of its own: the four clicks test the rule, not a profile"
+    );
     for (i, (x, y, want)) in REFERENCE_ROWS.into_iter().enumerate() {
         // The backdrop really holds the table's inks: a 60 x 60 field, and the click lands inside it.
         assert_close_inks(&format!("the {i}th backdrop"), &inks(&s, x, y), &REFERENCE_BACKDROPS[i]);
         click(&mut s, x, y, "color");
         assert_inks_within(&format!("click at ({x}, {y})"), &inks(&s, x, y), want);
-        // And the stored inks are what the rule of 11.3.5.3 computes from them.
-        let want_rule = ink_rule(space.as_ref(), REFERENCE_BACKDROPS[i], [0.0, 0.0, 1.0]);
+        // And the stored inks are what the rule of 11.3.5.3 computes from those ink values.
+        let want_rule = ink_rule_on(REFERENCE_BACKDROPS[i], REFERENCE_FG);
         assert_close_inks(&format!("the rule for {i}"), &inks(&s, x, y), &want_rule);
     }
 }

@@ -920,6 +920,10 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
         tolerance: pct(p, "tolerance", 30.0).max(0.01),
         anti_alias: flag(p, "antiAlias", true),
         color: brush.color,
+        // The inks the foreground was picked as, when it was picked as CMYK (the same pair a Brush
+        // stroke carries, `BrushSettings::color_cmyk`): in a CMYK document the Color blend works on
+        // those channels (#11918).
+        color_inks: brush.color_cmyk.map(|(_, inks)| inks),
         background: s.tools.background,
     };
     let id = layer_id(s, p)?;
