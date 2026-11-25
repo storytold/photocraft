@@ -354,13 +354,36 @@ pub fn remove_pending_stroke(app: &mut PhotocraftApp, points: &[[f64; 3]], subtr
     if subtract {
         entry["subtract"] = json!(true);
     }
-    if !subtract {
-        let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &entry);
-        app.remove_trail.get_or_insert_with(|| crate::stroke_trail::Trail::new(&mut app.texture_serials, size)).feed_stroke_reach(points, brush);
-    }
     app.remove_pending.push(entry);
+    // What the canvas tints is what Enter removes, so the tint is rebuilt from everything that waits
+    // instead of only growing. A coverage mask cannot forget what an Add stroke stamped into it, so an
+    // Add stroke's tint would otherwise still stand where a Subtract stroke has taken the pixels out of
+    // the removal, and an Add drawn after a Subtract would show as if it removed again (#16613 review).
+    // Each waiting stroke brings the brush it was drawn with, as the removal uses them.
+    let waiting: Vec<_> = app
+        .remove_pending
+        .iter()
+        .map(|e| (pending_points(e), photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, e), e["subtract"].as_bool().unwrap_or(false)))
+        .collect();
+    let mut trail = crate::stroke_trail::Trail::new(&mut app.texture_serials, size);
+    trail.restamp_waiting(&waiting);
+    app.remove_trail = Some(trail);
     app.ui.status = crate::i18n::fmt(tl!("Strokes to remove: {n} (Enter applies, Esc cancels)"), &[("n", &app.remove_pending.len().to_string())]);
     app.ui.status_error = false;
+}
+
+/// The points a waiting stroke was drawn with, as its footprint needs them.
+fn pending_points(entry: &Value) -> Vec<[f64; 3]> {
+    entry["points"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|p| {
+                    p.as_array().filter(|v| v.len() == 3).map(|v| [v[0].as_f64().unwrap_or(0.0), v[1].as_f64().unwrap_or(0.0), v[2].as_f64().unwrap_or(1.0)])
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Apply the waiting strokes as one removal (one job, one undo step). False when none wait.

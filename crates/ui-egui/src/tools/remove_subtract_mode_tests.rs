@@ -247,23 +247,31 @@ fn a_subtract_stroke_with_nothing_pending_changes_nothing() {
     }
 }
 
-/// What waits on the canvas: an Alt-drag tints nothing of its own, and the strokes that wait keep
-/// their tint. Where a Subtract cuts into an area an earlier Add already tinted the tint stays,
-/// because the framework's coverage mask can only grow; `paint.remove` still leaves those pixels
-/// alone, which the measured test above checks.
+/// What waits on the canvas is what Enter will cut: an Alt-drag tints nothing of its own, and where it
+/// cuts into an area an earlier Add had tinted, that part of the tint goes away with it. The mask is
+/// rebuilt from the strokes that wait rather than fed stroke by stroke, because a coverage mask only
+/// ever grows - and the tint has to match the hole `paint.remove` makes, which the measured test above
+/// checks (#16613 review).
 #[test]
-fn the_waiting_tint_leaves_the_subtract_stroke_out() {
+fn a_subtract_stroke_takes_its_reach_out_of_the_waiting_tint() {
     let mut app = measured();
     stroke_the_square(&mut app);
     let tinted = |app: &PhotocraftApp| {
         let trail = app.remove_trail.as_ref().expect("the waiting strokes are tinted");
         (230..330).flat_map(|y| (260..450).map(move |x| (x, y))).filter(|(x, y)| trail.coverage(*x, *y) > 0).count()
     };
+    let covered = |app: &PhotocraftApp, x: i32, y: i32| app.remove_trail.as_ref().is_some_and(|t| t.coverage(x as usize, y as usize) > 0);
     let before = tinted(&app);
     assert!(before > 0, "the Add strokes tint what they cover");
+    assert!(covered(&app, 360, 280) && covered(&app, 300, 280) && covered(&app, 300, 250), "the middle and the top stroke are tinted before the cut");
     drag(&mut app, &[[345.0, 280.0], [410.0, 280.0]], egui::Modifiers::ALT);
     assert_eq!(app.remove_pending.len(), 4, "the Alt-drag joins what waits");
-    assert_eq!(tinted(&app), before, "its footprint adds nothing to the tint");
+    let after = tinted(&app);
+    assert!(after < before, "the Subtract stroke takes its reach out of the tint: {before} tinted pixels before, {after} after");
+    assert!(!covered(&app, 360, 280), "inside the cut, where an Add stroke had tinted, nothing is tinted now");
+    assert!(covered(&app, 300, 280), "the middle stroke outside the cut stays tinted");
+    assert!(covered(&app, 300, 250), "and so does the stroke the cut never reaches");
+    assert!(covered(&app, 350, 310), "the bottom stroke, 30 px below the cut, stays tinted");
 }
 
 /// Not measured: Subtract with Remove after each stroke on keeps today's per-stroke removal.
