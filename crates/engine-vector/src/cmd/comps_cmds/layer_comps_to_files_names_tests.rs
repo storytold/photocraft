@@ -78,3 +78,13 @@ fn a_long_comment_is_shortened_and_the_export_goes_on() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// When the comp name has to be cut, a short comment doesn't take the bytes the cut leaves free:
+/// the comment goes before the name does.
+#[test]
+fn a_cut_comp_name_leaves_out_the_comment() {
+    let prefix = "p".repeat(243);
+    let name = comp_file_name(&prefix, 0, "界", "x", "png");
+    assert!(name.len() <= MAX_FILE_NAME_BYTES, "{} bytes", name.len());
+    assert!(name.ends_with("_0000_.png"), "{name}");
+}

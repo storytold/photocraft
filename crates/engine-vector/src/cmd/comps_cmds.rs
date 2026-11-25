@@ -513,15 +513,17 @@ const MAX_FILE_NAME_BYTES: usize = 255;
 
 /// `<prefix>_<index>_<name>[_<comment>].<ext>`, at most [`MAX_FILE_NAME_BYTES`] long. A name that
 /// doesn't fit loses the end of its comment first (the whole comment, with its `_`, when none of it
-/// fits), then of the comp name, then of the prefix; the index and extension always stay. Each
-/// cut falls between characters.
+/// fits), then of the comp name, then of the prefix, and a part that is cut leaves out the parts
+/// after it; the index and extension always stay. Each cut falls between characters.
 fn comp_file_name(prefix: &str, index: usize, name: &str, comment: &str, ext: &str) -> String {
     let index = format!("_{index:04}_");
     let room = MAX_FILE_NAME_BYTES.saturating_sub(index.len() + 1 + ext.len());
-    let prefix = clip_bytes(prefix, room);
-    let room = room - prefix.len();
-    let name = clip_bytes(name, room);
-    let comment = clip_bytes(comment, (room - name.len()).saturating_sub(1));
+    // Once a part is cut, the parts after it are left out, even where a few bytes are still free.
+    let kept_prefix = clip_bytes(prefix, room);
+    let room = if kept_prefix.len() < prefix.trim_end().len() { 0 } else { room - kept_prefix.len() };
+    let kept_name = clip_bytes(name, room);
+    let room = if kept_name.len() < name.trim_end().len() { 0 } else { room - kept_name.len() };
+    let (prefix, name, comment) = (kept_prefix, kept_name, clip_bytes(comment, room.saturating_sub(1)));
     let comment = if comment.is_empty() { String::new() } else { format!("_{comment}") };
     format!("{prefix}{index}{name}{comment}.{ext}")
 }
