@@ -86,7 +86,7 @@ Stable releases still come only from `refs/heads/release`. The nightly signer ru
 `refs/heads/nightly-signer` instead, so signer and policy
 updates never need a stable release sync or a release-branch push. That branch is created once at
 a reviewed main commit and later only fast-forwards to main commits, by a release manager running
-the nightly-signer settings script's `advance`: it refuses while a `nightly-sign` run is queued or
+`storytold/craft-common-actions scripts/nightly_signer_settings.py advance`: it refuses while a `nightly-sign` run is queued or
 running, scans the tree so only the pinned `nightly-sign.yml` caller can reach an environment, and
 prints the full diff of `.github/` and `packaging/` for review before `--apply`. That diff is the
 trust closure, including `packaging/env.sh`, which `import-cert.sh` sources with the Apple keys.
