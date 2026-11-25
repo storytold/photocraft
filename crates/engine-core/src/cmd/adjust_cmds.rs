@@ -335,6 +335,85 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Image › Adjustments › Channel Mixer's id.
+pub(crate) const CHANNEL_MIXER_ID: &str = "image.adjustments.channelMixer";
+/// The reference application's alert for Channel Mixer on a document or target it refuses.
+pub(crate) const CHANNEL_MIXER_UNAVAILABLE: &str = "The command \"Channel Mixer\" is not currently available.";
+/// The reference application's alert for Channel Mixer on an empty pixel layer.
+pub(crate) const CHANNEL_MIXER_EMPTY: &str = "Could not complete the Channel Mixer command because the active layer is empty.";
+
+/// Channel Mixer's precondition with no params: the Channels panel's target, as
+/// [`channel_mixer_enabled_with`] checks it, else [`has_adjustable`].
+pub(crate) fn channel_mixer_target_enabled(s: &Session) -> std::result::Result<(), String> {
+    let p = crate::channel_cmds::inject_target(s, CHANNEL_MIXER_ID, Value::Null);
+    channel_mixer_enabled_with(s, &p).unwrap_or_else(|| has_adjustable(s))
+}
+
+/// Channel Mixer's precondition for a call with `p`, its target filled in from the Channels panel,
+/// as the reference application has it (#14406): greyed in Grayscale, Lab, Indexed and
+/// Multichannel documents, on a layer mask (a pixel layer's or a fill layer's), on a hidden pixel
+/// layer and on a fill layer; otherwise [`has_adjustable`]'s. An alpha channel or Quick Mask target
+/// in an RGB or CMYK document keeps [`has_adjustable`] alone, as before. `None` for a smart
+/// object's filter mask, which keeps its own check. A layer inside a hidden group and a hidden
+/// smart object keep today's behaviour (not measured).
+pub(crate) fn channel_mixer_enabled_with(s: &Session, p: &Value) -> Option<std::result::Result<(), String>> {
+    use crate::channel_cmds::Target;
+    use photocraft_color::ColorMode;
+    let d = s.active()?;
+    if matches!(d.doc.mode, ColorMode::Grayscale | ColorMode::Lab | ColorMode::Indexed | ColorMode::Multichannel) {
+        return Some(Err(CHANNEL_MIXER_UNAVAILABLE.into()));
+    }
+    match crate::channel_cmds::target_of(p) {
+        Target::Mask => Some(Err(CHANNEL_MIXER_UNAVAILABLE.into())),
+        Target::FilterMask => None,
+        Target::Alpha(_) | Target::QuickMask => Some(has_adjustable(s)),
+        Target::Pixels => {
+            let layer = crate::commands::layer_param(s, p).ok().and_then(|id| d.doc.layer(id));
+            let refused = layer.is_some_and(|l| matches!(l.content, LayerContent::Fill(_)) || (!l.visible && matches!(l.content, LayerContent::Raster(_))));
+            Some(if refused { Err(CHANNEL_MIXER_UNAVAILABLE.into()) } else { has_adjustable(s) })
+        }
+    }
+}
+
+/// Why Channel Mixer with `p` (its target filled in) must stop before it edits anything (#14406):
+/// [`channel_mixer_enabled_with`]'s refusals, or an empty pixel layer. `Ok` for every target
+/// Channel Mixer works on.
+pub(crate) fn channel_mixer_refusal(s: &Session, p: &Value) -> Result<()> {
+    if let Some(Err(why)) = channel_mixer_enabled_with(s, p) {
+        return Err(EngineError::Disabled(CHANNEL_MIXER_ID.into(), why));
+    }
+    if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+        return Ok(());
+    }
+    let id = crate::commands::layer_param(s, p)?;
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    if let LayerContent::Raster(surface) = &layer.content
+        && !has_visible_pixels(surface)?
+    {
+        return Err(EngineError::Other(CHANNEL_MIXER_EMPTY.into()));
+    }
+    Ok(())
+}
+
+/// Whether `s` has a pixel the layer shows, as the reference application's "the active layer is
+/// empty" counts it: alpha above 0, so pixels the Eraser cleared (it keeps their colour bytes) are
+/// empty. A tile that can't be read from scratch storage is an error, not an empty layer.
+fn has_visible_pixels(s: &Surface) -> Result<bool> {
+    let fmt = s.format();
+    if !fmt.alpha || s.default_pixel().last().is_none_or(|a| *a > 0.0) {
+        return Ok(!s.content_bounds().is_empty());
+    }
+    let (alpha, bpp) = (fmt.channels() - 1, fmt.bytes_per_pixel());
+    for (_, tile) in s.tiles() {
+        let bytes = tile.try_bytes().map_err(photocraft_raster::AllocationError::ScratchRead)?;
+        if bytes.chunks_exact(bpp).any(|px| photocraft_color::read_sample(px, fmt.sample, alpha) > 0.0) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The smart object an adjustment's pixels would go to: the layer the params resolve to (the
 /// active one by default), when the command edits its pixels and that layer is a smart object.
 /// `None` for a mask or channel target, or a layer that is not a smart object.

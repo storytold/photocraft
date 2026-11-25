@@ -33,6 +33,8 @@ pub mod automate_cmds;
 pub mod background_cmds;
 pub mod brush_preset_cmds;
 pub mod channel_cmds;
+#[cfg(test)]
+mod channel_mixer_refusals_tests;
 pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod contour_lib_cmds;

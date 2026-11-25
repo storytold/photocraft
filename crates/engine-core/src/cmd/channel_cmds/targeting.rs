@@ -138,8 +138,14 @@ fn edits_mask(id: &str) -> bool {
 }
 
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
-/// layer needs a mask. None when another precondition applies.
+/// layer needs a mask. None when another precondition applies. Channel Mixer checks every target
+/// but the filter mask itself, a layer mask included (#14406).
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
+    if id == crate::adjust_cmds::CHANNEL_MIXER_ID
+        && let Some(r) = crate::adjust_cmds::channel_mixer_enabled_with(s, p)
+    {
+        return Some(r);
+    }
     match target_of(p) {
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
         // smart filters, not a pixel layer. Paste keeps its own check (something to paste).
