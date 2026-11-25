@@ -176,18 +176,23 @@ fn reset_click_drops_the_waiting_strokes_without_a_history_step() {
     assert!(greyed(&h, APPLY) && greyed(&h, RESET), "the cells go grey again");
 }
 
-/// Greyed cells answer nothing, by key or by pointer.
+/// Greyed cells answer nothing, by key or by pointer: neither the commit chord, the Delete key nor
+/// the cancel chord removes or drops anything while the pair stands there greyed.
 #[test]
 fn the_greyed_pair_answers_nothing_when_nothing_waits() {
     let mut h = remove_bar();
     let before = steps(h.state());
     h.key_press(egui::Key::Enter);
     h.key_press(egui::Key::Delete);
+    h.key_press(egui::Key::Escape);
     h.run_steps(2);
-    assert_eq!(steps(h.state()), before, "neither key removes anything");
+    assert_eq!(steps(h.state()), before, "none of Enter, Delete or Escape removes anything");
+    assert!(h.state().remove_pending.is_empty(), "and none of them queues or drops a stroke");
     button(&h, APPLY).click();
     h.run_steps(2);
-    assert_eq!(steps(h.state()), before, "and neither does a press on the greyed cell");
+    button(&h, RESET).click();
+    h.run_steps(2);
+    assert_eq!(steps(h.state()), before, "and neither does a press on either greyed cell");
     assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
 }
 
@@ -243,10 +248,15 @@ fn the_layers_panel_takes_no_pick_while_strokes_wait() {
     click(&mut h, at, Modifiers::NONE);
     h.run_steps(3);
     assert_eq!(active_layer(&h), Some(l1), "a pick on the shut panel changes nothing");
+    let before = steps(h.state());
 
-    button(&h, APPLY).click();
+    // Reset all strokes runs no command and leaves the document's revision alone: the panel body
+    // re-runs only because its version holds the waiting state.
+    button(&h, RESET).click();
     h.run_steps(3);
-    assert_eq!(h.state().remove_pending.len(), 0, "Apply answered the strokes");
+    assert_eq!(h.state().remove_pending.len(), 0, "Reset all strokes answered the strokes");
+    assert_eq!(steps(h.state()), before, "and ran no command");
+    assert!(!row_greyed(&h, "L0"), "and the panel says its rows are free again");
     click(&mut h, at, Modifiers::NONE);
     h.run_steps(3);
     assert_eq!(active_layer(&h), Some(l0), "and the panel takes the pick again");

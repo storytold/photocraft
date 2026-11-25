@@ -62,10 +62,10 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some(id) = app.layers_rename {
         panel = panel.start_rename(id);
     }
-    // Waiting Remove strokes hold the tool in their own state: the panel takes no pick of the
-    // active layer and says so in its control states until the bar's Apply or Reset all strokes
-    // answers them (#12545). craft-layers' `LayersPanel` paints its rows in its own colours and
-    // does not read a disabled scope, so the greyed drawing of the same state is missing there.
+    // Waiting Remove strokes hold the tool in their own state: the panel runs in a disabled scope,
+    // so it is drawn greyed and takes no pick of the active layer until the bar's Apply or Reset
+    // all strokes answers them (#12545). `panel`'s version in `region_versions` holds this state,
+    // or the memoized body would replay the other look.
     let waiting = crate::retouch_ui::bar::strokes_wait(app);
     let out = with_env(ui, |set| set.enabled = Some(!waiting), |ui| panel.show(ui));
     app.find_layers_focus = false;

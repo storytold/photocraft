@@ -98,7 +98,8 @@ pub(crate) fn title_bar(app: &PhotocraftApp) -> u64 {
 /// shows, the Layers panel the layer the Move tool's
 /// rollover outlines on the canvas, which effects lists and groups are open (view state off the document's revision,
 /// the active document's `Tracked` revision, #15709), the Smart Filter row picked on its own and what it is asked to do in its next
-/// pass (open a row for renaming, focus its Name filter, reveal a layer, follow the Move tool's pick), the Info panel the pointer's document pixel, the zoom and the Eyedropper's Sample
+/// pass (open a row for renaming, focus its Name filter, reveal a layer, follow the Move tool's pick) and whether Remove
+/// strokes wait, which shuts the panel (#12545), the Info panel the pointer's document pixel, the zoom and the Eyedropper's Sample
 /// Size it samples at and the Crop tool's frame size, the Clone Source panel the pairing at the last hover point, the
 /// Modifier Keys panel the latched keys, which their use releases, the Properties panel the colour its well's open
 /// Color Picker previews and the answer that picker left, the Histogram the adjustment preview it counts and the
@@ -114,7 +115,9 @@ pub(crate) fn panel(app: &PhotocraftApp, id: &str) -> u64 {
         "layers" => {
             let filter_pick = app.session.active().and_then(|st| app.smart_filter_picks.get(&st.doc.id).copied());
             let requests = (app.layers_rename, app.find_layers_focus, app.pending_reveal.as_ref().map(|(layer, _)| *layer), app.move_pick, filter_pick);
-            version(app, (app.canvas_hover_layer, app.session.active_tracked().map(|st| st.revision().count), requests))
+            // The panel is shut while Remove strokes wait, a state that runs no command (#12545).
+            let shut = crate::retouch_ui::bar::strokes_wait(app);
+            version(app, (app.canvas_hover_layer, app.session.active_tracked().map(|st| st.revision().count), requests, shut))
         }
         "info" => {
             let crop = crate::crop_ui::info_size(app).map(|size| size.map(f64::to_bits));
@@ -298,6 +301,28 @@ mod tests {
         let before = panel(&app, "layers");
         app.session.execute("layer.setEffectsExpanded", serde_json::json!({"layer": layer, "expanded": false})).unwrap();
         assert_ne!(panel(&app, "layers"), before, "closing the effects list moves the Layers version");
+    }
+
+    /// Waiting Remove strokes grey the options bar's answer cells and shut the Layers panel, and the
+    /// state runs no command of its own: both versions must move when a stroke starts waiting and
+    /// when the answer clears it, or the bar replays its greyed cells and the panel its last run
+    /// (#12545).
+    #[test]
+    fn a_waiting_remove_stroke_moves_the_layers_and_bar_version() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", serde_json::json!({"width": 100, "height": 100})).unwrap();
+        app.ui.tool = Tool::Remove;
+        app.ui.tool_options.remove_after_each_stroke = false;
+        let (free_layers, free_bar) = (panel(&app, "layers"), options_bar(&app));
+        crate::retouch_ui::remove_pending_add(&mut app, &[[30.0, 30.0, 1.0], [60.0, 60.0, 1.0]]);
+        assert!(!app.remove_pending.is_empty(), "the stroke waits");
+        let (waiting_layers, waiting_bar) = (panel(&app, "layers"), options_bar(&app));
+        assert_ne!(waiting_layers, free_layers, "a stroke waiting moves the Layers version");
+        assert_ne!(waiting_bar, free_bar, "and the options bar's, whose answer cells change");
+        crate::retouch_ui::remove_pending_cancel(&mut app);
+        assert!(app.remove_pending.is_empty(), "the answer cleared the strokes");
+        assert_ne!(panel(&app, "layers"), waiting_layers, "the Layers version moves back when nothing waits");
+        assert_ne!(options_bar(&app), waiting_bar, "and the options bar's");
     }
 
     /// What every slot may show moves every version: the tool, a targeted layer mask or a selected path (panels and the
