@@ -63,8 +63,11 @@ fn menu_titles_use_arrow_instead_of_tool_cursor() {
     let canvas = h.state().last_canvas_rect.center();
     for (at, expected) in [(canvas, CursorIcon::Move), (menu, CursorIcon::Default), (canvas, CursorIcon::Move)] {
         h.event(Event::PointerMoved(at));
-        cursor::request(&h.ctx, Cursor::System(CursorIcon::Move), CursorPriority::Hover);
-        h.run_steps(1);
+        // Hover can settle on the next pass, and cursor requests are consumed each pass.
+        for _ in 0..2 {
+            cursor::request(&h.ctx, Cursor::System(CursorIcon::Move), CursorPriority::Hover);
+            h.run_steps(1);
+        }
         assert_eq!(cursor::current(&h.ctx), Some(Cursor::System(expected)));
     }
 }
