@@ -60,6 +60,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) doc: Option<&'a Document>,
     /// Effect-map identities of this render's document layers (see [`LayerKeys`]).
     pub(crate) layer_keys: LayerKeys,
+    /// Whether 8-bit RGB Curves put each channel's output on a whole level
+    /// ([`adjust::tone_luts_depth_in`]); false for the split route's CMYK stand-ins.
+    pub(crate) curve_levels: bool,
 }
 
 /// Memo of [`layer_identity`] for the layers of the document being rendered. The identity depends
@@ -130,6 +133,7 @@ impl<'a> Ctx<'a> {
             fx_over_budget: fx_over_budget(&doc.layers, doc.bounds()),
             layer_keys: Default::default(),
             tone_luts: prepare_tones(&doc.layers, 0),
+            curve_levels: true,
         }
     }
 
@@ -143,16 +147,28 @@ impl<'a> Ctx<'a> {
     }
 
     pub(crate) fn apply_adjustment(&self, adj: &photocraft_doc::Adjustment, buf: &mut Buffer) {
+        let cached = self.tone_luts.iter().find(|(a, _)| std::ptr::eq(*a, adj));
+        // Without a cached table, only a stand-in's tables (unrounded Curves) are built here;
+        // other documents take `apply_in`, which builds the same tables as `for_doc` would.
         if let photocraft_doc::Adjustment::Levels { space, .. } | photocraft_doc::Adjustment::Curves { space, .. } = adj
             && !matches!(adj, photocraft_doc::Adjustment::Levels { space: photocraft_doc::adjust::ToneSpace::Rgb, .. } if self.depth == photocraft_color::SampleType::F32)
-            && let Some((_, luts)) = self.tone_luts.iter().find(|(a, _)| std::ptr::eq(*a, adj))
+            && (cached.is_some() || !self.curve_levels)
         {
             let identity = adjust::float_tone_identity(adj, Some(self.depth));
             if identity == [true; 3] {
                 return;
             }
             let extrapolate = adjust::float_tone_extrapolates(adj, Some(self.depth), self.mode);
-            adjust::apply_tone(buf, *space, luts.get_or_init(|| adjust::tone_luts_depth(adj, Some(self.depth))), identity, extrapolate);
+            let tables = || adjust::tone_luts_depth_in(adj, Some(self.depth), self.curve_levels);
+            let built;
+            let luts = match cached {
+                Some((_, luts)) => luts.get_or_init(tables),
+                None => {
+                    built = tables();
+                    &built
+                }
+            };
+            adjust::apply_tone(buf, *space, luts, identity, extrapolate);
         } else {
             adjust::apply_in(adj, buf, self.transfer, Some(self.depth), self.mode);
         }
