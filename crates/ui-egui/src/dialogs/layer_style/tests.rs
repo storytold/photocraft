@@ -321,8 +321,8 @@ fn gradient_strokes_survive_the_dialog() {
     let style = drafted(&s);
     let stroke = style.instances(EffectKind::Stroke).next().unwrap();
     let params = &style.effect(stroke).unwrap().params;
-    assert!(params.get("color").is_none(), "the dialog doesn't model the gradient, so no colour is stored for it");
-    assert!(params.0.values().any(|v| matches!(v, StyleValue::Other(_))), "the gradient travels as unmodelled data");
+    assert_eq!(params.get("fillType"), Some(&StyleValue::Text("gradient".into())));
+    assert!(matches!(params.get("stops"), Some(StyleValue::Gradient(g)) if g.color.len() == 2));
     reapply(&mut s);
     let strokes = strokes_of(&s);
     assert_eq!(strokes.len(), 1);
