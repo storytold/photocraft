@@ -80,7 +80,7 @@ const TOOL_HISTORY_NAMES: [&str; 4] = ["Freeform Pen", "Line Tool", "Triangle To
 /// The names the Pen's per-click path edits record themselves under (#12890): the Work Path is written anchor by
 /// anchor, and each click is the step the reference application names. They belong to the Pen's drawing, like the
 /// tool names above; any other `path.set` keeps the normal Work Path or Save Path label.
-const PEN_STEP_NAMES: [&str; 6] = ["New Work Path", "New Anchor Point", "Close Path", "New Path Component", "Pick-up Path", "Drag Anchor Point"];
+pub const PEN_STEP_NAMES: [&str; 6] = ["New Work Path", "New Anchor Point", "Close Path", "New Path Component", "Pick-up Path", "Drag Anchor Point"];
 
 /// Validate before editing so malformed automation input cannot change the document.
 pub(super) fn pen_history_name<'a>(p: &Value, cmd: &str, default: &'a str) -> Result<&'a str> {

@@ -214,6 +214,42 @@ fn enter_and_escape_add_no_step_and_name_the_next_click_as_measured() {
     assert_eq!(subpaths(work(&app).as_ref().unwrap()).len(), 2);
 }
 
+/// The path that replaces the one Enter finished (#12892 deselects it) is drawn the same live way as a fresh one: the
+/// replacing write leaves the drawn path the document's only one, so its subpath is the one at index zero and the
+/// clicks after the first are steps of their own. Pinning only the first click let the draft go live nowhere.
+#[test]
+fn the_path_that_replaces_the_one_enter_finished_is_live_from_its_first_click() {
+    let mut app = app();
+    let before = steps(&app).len();
+    triangle(&mut app);
+    key(&mut app, Key::Enter);
+    click(&mut app, [60.0, 140.0]);
+    click(&mut app, [140.0, 60.0]);
+    assert_eq!(added(&app, before + 3), ["New Work Path", "New Anchor Point"], "every click of the new path is its own step");
+    assert_eq!(subpaths(work(&app).as_ref().unwrap()), [(false, vec![[60.0, 140.0], [140.0, 60.0]])], "the first path is replaced, not added to");
+    assert_eq!(draft_len(&app), Some(2), "and the Pen is still drawing it");
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+}
+
+/// The reviewer's input: three anchors, Undo to two, Redo back to the tip. The state Redo brings back is one of the
+/// Pen's own clicks, so the draft follows the path forward too (as it does back) and drawing goes on in that path:
+/// otherwise the next click starts a new Work Path over the one that was being drawn.
+#[test]
+fn redoing_to_the_tip_of_a_live_path_puts_its_click_back_on_the_pen() {
+    let mut app = app();
+    let before = steps(&app).len();
+    triangle(&mut app);
+    menu(&mut app, "edit.undo");
+    assert_eq!(draft_len(&app), Some(2), "Undo takes one click back");
+    menu(&mut app, "edit.redo");
+    testing::move_to(&mut app, [180.0, 180.0], Modifiers::NONE);
+    assert_eq!(draft_len(&app), Some(3), "Redo to the tip puts that click back on the Pen");
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    click(&mut app, [180.0, 40.0]);
+    assert_eq!(added(&app, before + 3), ["New Anchor Point"], "and drawing goes on in the same path");
+    assert_eq!(subpaths(work(&app).as_ref().unwrap()), [(false, vec![[20.0, 20.0], [120.0, 20.0], [120.0, 120.0], [180.0, 40.0]])], "not a new path over it");
+}
+
 #[test]
 fn the_make_shape_button_names_its_step_make_shape_from_path() {
     let mut app = app();

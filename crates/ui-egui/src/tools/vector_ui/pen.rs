@@ -516,11 +516,17 @@ pub(super) fn sync_live_draft_from_layer(app: &mut PhotocraftApp) -> Option<Edit
     if pen.live_layer {
         return rebuild_live_draft(app);
     }
-    // A live Work Path draft follows its path when the document stepped back to an earlier state (Undo, Redo, the
-    // History panel: a state is waiting to be redone). A command that replaced its subpath left a new state behind
-    // instead: like any other draft that carried a path on (#6593) it is stale, and `cancel_stale_pen` drops it with
-    // the reason rather than quietly going on with the newer path's anchors.
-    if app.session.active().is_some_and(|st| st.history.can_redo()) { rebuild_live_draft(app) } else { None }
+    // A live Work Path draft follows its path when the document moved to a state the Pen's own clicks made: back to an
+    // earlier one (Undo, Step Backward, the History panel: a state is waiting to be redone) or forward to one of its
+    // clicks (Redo, Step Forward, the History panel at the tip). The six step names belong to those writes alone -
+    // `paths.rs` refuses them for any other `path.set` - so the step the document is on names who made it. A command
+    // from elsewhere left a newer state instead: like any other draft that carried a path on (#6593) it is stale, and
+    // `cancel_stale_pen` drops it with the reason rather than quietly going on with the newer path's anchors.
+    let pen_stepped_its_own_path = app
+        .session
+        .active()
+        .is_some_and(|st| st.history.can_redo() || photocraft_engine::vector_cmds::PEN_STEP_NAMES.iter().any(|n| st.history.undo_label() == Some(*n)));
+    if pen_stepped_its_own_path { rebuild_live_draft(app) } else { None }
 }
 
 /// Rebuilds a live draft from its layer's or path's open subpath and hands it to the Pen, or drops it when the subpath
@@ -584,8 +590,10 @@ fn starts_live_path(app: &PhotocraftApp, pen: &PenPath) -> bool {
 pub(super) fn start_live_path(app: &mut PhotocraftApp) {
     let Some(pen) = app.ui.pen.as_ref().filter(|p| starts_live_path(app, p)) else { return };
     let append = draft_target(app, pen).is_some();
-    // The subpath the write puts in place: the end of the path it joins, else the path's only one.
-    let index = app.session.active().map_or(0, |st| st.doc.work_path.as_ref().map_or(0, |p| p.subpaths.len()));
+    // The subpath the write puts in place: joining a path adds it at the end of what is there, so the count the path
+    // had is its index. A replacing write leaves the drawn path the document's only one (`paths.rs`: `path.set` without
+    // `op`), however many subpaths the replaced path had, so its subpath is the one at index zero.
+    let index = if append { app.session.active().map_or(0, |st| st.doc.work_path.as_ref().map_or(0, |p| p.subpaths.len())) } else { 0 };
     let mut params = json!({"name": "work", "path": path_json(&pen_path(pen)), "historyName": if append { "New Path Component" } else { "New Work Path" }});
     if append {
         params["op"] = json!("combine");
