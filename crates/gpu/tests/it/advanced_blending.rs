@@ -340,6 +340,34 @@ fn knockout_on_a_stroked_shape_with_a_clipped_layer_matches_the_cpu() {
     }
 }
 
+/// The CPU composites each individually blended clipped layer as an unclipped layer, so
+/// Transparency Shapes Layer off on it (the special eight's blend, the shape effects take) runs on
+/// the GPU too.
+#[test]
+fn individually_blended_clipped_layers_without_transparency_shapes_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for (blend, fill, fx) in [(BlendMode::ColorDodge, 0.6, false), (BlendMode::Normal, 1.0, true)] {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut layers = clipped_pair(&d, clip_base(&d), 1.0);
+        let mut c = layers.remove(1);
+        c.blend = blend;
+        c.fill_opacity = fill;
+        c.advanced.transparency_shapes = false;
+        if fx {
+            let Effect::DropShadow(mut shadow) = Effect::default_drop_shadow() else { unreachable!() };
+            shadow.distance = 4.0;
+            shadow.size = 3.0;
+            c.effects.items.push(Effect::DropShadow(shadow));
+        }
+        layers.insert(1, c);
+        d.layers.extend(layers);
+        let st = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds());
+        assert!(st.is_ok(), "planned on the GPU ({blend:?})");
+        check(&mut g, &d, &format!("individually clipped, Transparency Shapes Layer off, {blend:?}, fill {fill}, effects {fx}"));
+    }
+}
+
 /// The options that stay on the CPU still make the GPU refuse the document.
 #[test]
 fn the_remaining_advanced_blending_options_are_refused() {
