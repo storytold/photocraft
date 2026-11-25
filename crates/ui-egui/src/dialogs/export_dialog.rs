@@ -1170,7 +1170,7 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
 }
 
 /// Several layers, each exported with the dialog's settings `f`. `ids` are the rows in Layers
-/// panel order, top row first (#14803), and the files are written in that order. Empty, adjustment
+/// panel order, top row first (#14803). Empty, adjustment
 /// and off-canvas layers are skipped (#14806). With several files on the desktop `path` is the folder the dialog
 /// asked for, and each layer is written there as `<layer name>.<ext>`, replacing a file of that
 /// name (#14808). One file is written at `path`; the web downloads each file, the first under
@@ -1182,20 +1182,23 @@ fn export_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[LayerId
         return Err("no selected layers".into());
     }
     // `layer_file_names` numbers a shared layer name from the upper layer down over bottom-to-top
-    // input (#14808), so the documents are built in that order for the names and put back into
-    // Layers panel order for the writes.
+    // input (#14808), so the documents are built in that order for the names.
     let mut rows_bottom_up: Vec<LayerId> = ids.to_vec();
     rows_bottom_up.reverse();
     let mut docs = exportable_layers(&st.doc, &rows_bottom_up)?;
     let settings = settings(f);
     let folder = docs.len() > 1 && !cfg!(target_arch = "wasm32");
-    let mut paths: Vec<String> = if folder {
-        layer_file_names(&docs, &s_fmt(f)).into_iter().map(|name| std::path::Path::new(path).join(name).to_string_lossy().into_owned()).collect()
+    let paths: Vec<String> = if folder {
+        // A folder holds one file per layer by name, so its rows are written in the order they are
+        // listed: Layers panel order, top row first (#14803).
+        let names = layer_file_names(&docs, &s_fmt(f));
+        docs.reverse();
+        names.into_iter().rev().map(|name| std::path::Path::new(path).join(name).to_string_lossy().into_owned()).collect()
     } else {
+        // The web gives `path` to the first layer it downloads and numbers the rest after it; that
+        // stays the bottom-most layer, as before this item.
         batch_paths(path, &docs)
     };
-    docs.reverse();
-    paths.reverse();
     let mut exported = Vec::new();
     for (doc, path) in docs.iter().zip(paths) {
         // Only a folder was chosen, so a link where a file goes is removed rather than written through.
