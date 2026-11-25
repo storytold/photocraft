@@ -769,6 +769,15 @@ layer.layerContentOptions
 layer.quickExportAsPng
 layer.exportAs
 layer.setLabelColor
+design.start
+design.stop
+design.list
+design.suppress
+design.unsuppress
+design.delete
+design.rollTo
+design.editStep
+design.replay
 layer.copyCSS
 layer.xmpMetadata
 image.rotation.arbitrary

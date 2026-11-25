@@ -644,6 +644,8 @@ fn recorded_layer_selection_replays_by_name_on_another_document() {
         let saved = s.actions().list.to_file().to_json().unwrap();
         let mut replay = crate::session();
         replay.actions_mut().list = ActionList::from_file(ActionsFile::from_json(&saved).unwrap());
+        // Ids are step-keyed, so spend a step first to make the target's id differ.
+        replay.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
         replay.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
         replay.execute("layer.setProps", json!({"name": "Photo"})).unwrap();
         let target = replay.active().unwrap().active_layer.unwrap();

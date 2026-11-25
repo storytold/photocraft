@@ -5,9 +5,12 @@ use crate::FormatError;
 
 pub(crate) type Step = craft_pcraft_format::Step<FormatError>;
 
-/// `STEPS[i]` upgrades version `i + 1` to `i + 2`. Empty while version 1 is
-/// the only version. `craft_pcraft_format::read_manifest_with` runs them on load.
-pub(crate) const STEPS: &[Step] = &[];
+/// `STEPS[i]` upgrades version `i + 1` to `i + 2`.
+/// `craft_pcraft_format::read_manifest_with` runs them on load.
+pub(crate) const STEPS: &[Step] = &[
+    // 2 adds the optional `design_timeline`; a version 1 manifest just has none.
+    |_| Ok(()),
+];
 
 #[cfg(test)]
 mod tests {

@@ -148,7 +148,7 @@ pub use layer_params::explicit_layer;
 pub use layer_params::layer_param;
 pub use layer_params::mask_at_depth;
 pub use layer_params::selection_mask;
-pub(crate) use layer_params::{NEW_LAYER_PATH, layer_listing, layer_panel_option, mask_new_layer};
+pub(crate) use layer_params::{NEW_LAYER_PATH, layer_listing, layer_named, layer_panel_option, mask_new_layer};
 pub(crate) use layer_references::{recorded_drop, recorded_layer};
 pub use ops::translate_layer;
 use ops::{arrange, merge_group, move_mask, set_mask, set_mask_and_deselect};

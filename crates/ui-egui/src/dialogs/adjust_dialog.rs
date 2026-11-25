@@ -878,6 +878,10 @@ pub(crate) fn confirmed_command(app: &PhotocraftApp, open: &OpenAdjust, value: &
 fn run_confirmed(app: &mut PhotocraftApp, ctx: &egui::Context, open: &OpenAdjust, value: &DialogValue, edited: bool) -> Result<(), String> {
     let (command, run_params, params) = confirmed_command(app, open, value, edited)?;
     crate::actions::authorize_panel_preview(app, open.id, &open.command, &params)?;
+    // Edit Parameters replays its step with the new values instead of adjusting again.
+    if let Some(outcome) = crate::design_timeline_ui::confirm_edit(app, open.id, run_params.clone()) {
+        return outcome.map(drop);
+    }
     // The editor Record Again opened answers the step it was opened for, not a new run of the command.
     if crate::actions::record_again::owns_dialog(app, open.id) {
         crate::actions::record_again::confirm(app, open.id, &command, run_params)?;

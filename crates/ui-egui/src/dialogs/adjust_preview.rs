@@ -231,6 +231,9 @@ struct GpuProxy {
 /// previews through the filter machinery.
 fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     let open = crate::adjust_dialog::open_value(app).filter(|open| open.smart_filter.is_none())?;
+    if crate::design_timeline_ui::edits_other(app, open.id) {
+        return None;
+    }
     let hosted = crate::adjust_dialog::hosted(app, open.id)?;
     let params = hosted.value().params(hosted.edited());
     crate::actions::authorize_panel_preview(app, open.id, &open.command, &params).ok()?;

@@ -380,15 +380,21 @@ impl ColorState {
     /// The working profile of a mode from Color Settings (the built-in default when the
     /// setting does not resolve or cannot be both an RGB source and editing destination).
     pub fn working(&self, mode: ColorMode) -> Arc<Profile> {
+        self.working_setting(mode).map_or_else(|| working_profile(mode), |(_, p)| p)
+    }
+
+    /// The Color Settings working space [`Self::working`] uses for `mode`, as set and resolved;
+    /// `None` when it falls back to the built-in default.
+    pub(crate) fn working_setting(&self, mode: ColorMode) -> Option<(&str, Arc<Profile>)> {
         let space = mode_space(mode);
-        self.settings
-            .working_spec(space)
-            .and_then(|spec| resolve_profile(spec, None, Some(mode)).ok())
+        let spec = self.settings.working_spec(space)?;
+        resolve_profile(spec, None, Some(mode))
+            .ok()
             .filter(|p| {
                 p.color_space == space
                     && (space != ColorSpace::Rgb || (p.pcs_to_device(self.settings.intent()).is_ok() && p.device_to_pcs(self.settings.intent()).is_ok()))
             })
-            .unwrap_or_else(|| working_profile(mode))
+            .map(|p| (spec, p))
     }
 
     /// The working RGB "Monitor Color" sets, with Monitor Profile at `monitor_profile`: that
@@ -715,6 +721,12 @@ fn space_mode(cs: ColorSpace) -> Option<ColorMode> {
 /// Working (default) profile of a mode.
 pub fn working_profile(mode: ColorMode) -> Arc<Profile> {
     Arc::new(craft_cms::builtin::default_for(mode_space(mode)).unwrap_or(Builtin::Srgb.profile()).clone())
+}
+
+/// The id of the built-in profile [`working_profile`] gives `mode`, as a recorded step names it.
+pub(crate) fn working_fallback_id(mode: ColorMode) -> Option<&'static str> {
+    let fallback = craft_cms::builtin::default_for(mode_space(mode)).unwrap_or(Builtin::Srgb.profile());
+    Builtin::ALL.into_iter().find(|b| std::ptr::eq(b.profile(), fallback)).map(Builtin::id)
 }
 
 /// Parses ICC bytes, caching by allocation so repeated lookups for the same document are free.
@@ -1679,6 +1691,16 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use photocraft_geom::Rect;
+
+    /// Every mode's built-in fallback has an id, and that id names the very profile the fallback is.
+    #[test]
+    fn every_working_fallback_has_the_id_of_its_profile() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            let id = working_fallback_id(mode).unwrap_or_else(|| panic!("{mode:?} has no id"));
+            let named = Builtin::from_id(id).unwrap_or_else(|| panic!("{id} names no built-in"));
+            assert_eq!(*named.profile(), *working_profile(mode), "{mode:?}: {id}");
+        }
+    }
 
     /// Image › Mode to CMYK keeps a filled background's shared tile shared (#4531): one
     /// converted tile for the whole grid, the same colour everywhere.

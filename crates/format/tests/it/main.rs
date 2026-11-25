@@ -6,6 +6,7 @@ mod camera_raw_roundtrip;
 mod channel_mixer_cmyk;
 mod common;
 mod corruption;
+mod design_timeline;
 mod directory_symlinks;
 mod float_roundtrip;
 mod frame_stroke;

@@ -78,6 +78,7 @@ const TABLES: &[Table] = &[
     ("adjust_cmds", crate::adjust_cmds::specs),
     ("layer_menu_cmds", crate::layer_menu_cmds::specs),
     ("layer_label_cmds", crate::layer_label_cmds::specs),
+    ("design_cmds", crate::design_cmds::specs),
     ("mode_cmds", crate::mode_cmds::specs),
     ("multichannel_cmds", crate::multichannel_cmds::specs),
     ("pattern_cmds", crate::pattern_cmds::specs),

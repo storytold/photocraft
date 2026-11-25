@@ -92,6 +92,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         (id, cmd, params)
     };
     crate::actions::authorize_panel_preview(app, id, &cmd, &params).ok()?;
+    // Edit Parameters previews only on the document whose step it edits.
+    if crate::design_timeline_ui::edits_other(app, id) {
+        return None;
+    }
     let st = app.session.documents().get(idx)?;
     let bounds = st.doc.bounds();
     // Fade previews at full size: it blends one area, like OK does, and has no proxy (#8230).

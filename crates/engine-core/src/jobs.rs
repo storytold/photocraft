@@ -534,6 +534,9 @@ struct Running {
     rx: Option<std::sync::mpsc::Receiver<Result<Payload>>>,
     stepper: Option<Stepper>,
     apply: Option<Apply>,
+    /// Design timelines to record the step into once applied: (documents before, step, params,
+    /// force bake, whether the command dropped a floating selection as it started).
+    timeline: Option<(Vec<crate::timeline::Before>, u64, Value, bool, bool)>,
     #[cfg(not(target_arch = "wasm32"))]
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -768,6 +771,8 @@ pub fn run<T: Send + 'static>(
     }
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
     let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
+    // Ids the worker mints belong to the requesting command's design-timeline step.
+    let id_scope = photocraft_doc::IdScope::current();
     #[cfg(not(target_arch = "wasm32"))]
     {
         let wctx = job.ctx.clone();
@@ -777,6 +782,7 @@ pub fn run<T: Send + 'static>(
         let spawned = std::thread::Builder::new().name(format!("photocraft-job-{}", job.id.0)).spawn(move || {
             let _authorization = AuthorizationScope::enter(authorization);
             let _document = crate::doc_path::scope(document.as_deref());
+            let _id_scope = id_scope.as_ref().map(photocraft_doc::IdScope::enter);
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&wctx).map(|t| Box::new(t) as Payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))));
             wctx.finish_work();
@@ -788,7 +794,7 @@ pub fn run<T: Send + 'static>(
     #[cfg(target_arch = "wasm32")]
     {
         // Unreachable (wasm runs inline above); keep the types used.
-        drop((work, tx));
+        drop((work, tx, id_scope));
     }
     job.rx = Some(rx);
     let id = job.id;
@@ -815,10 +821,12 @@ pub fn run_stepped<T: Send + 'static>(
     let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
     let (label_w, mut work) = (label.to_string(), work);
-    // The slices run under the requesting session's authority and document, as a worker would.
+    let id_scope = photocraft_doc::IdScope::current();
+    // The slices run under the requesting session's authority, document and id scope, as a worker would.
     job.stepper = Some(Box::new(move |ctx, deadline| {
         let _authorization = AuthorizationScope::enter(authorization);
         let _document = crate::doc_path::scope(document.as_deref());
+        let _id_scope = id_scope.as_ref().map(photocraft_doc::IdScope::enter);
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.step(ctx, deadline)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))))
             .map(|done| done.map(|t| Box::new(t) as Payload))
@@ -855,9 +863,11 @@ fn new_job<T: Send + 'static>(
         (true, None) => return Err(EngineError::NoDocument),
         (false, _) => (None, None, None),
     };
+    let id_scope = photocraft_doc::IdScope::current();
     let erased: Apply = Box::new(move |s, any| {
         let _authorization = AuthorizationScope::enter(authorization);
         let _document = crate::doc_path::scope(document.as_deref());
+        let _id_scope = id_scope.as_ref().map(photocraft_doc::IdScope::enter);
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
@@ -884,6 +894,7 @@ fn new_job<T: Send + 'static>(
         rx: None,
         stepper: None,
         apply: Some(erased),
+        timeline: None,
         #[cfg(not(target_arch = "wasm32"))]
         handle: None,
     })
@@ -1241,7 +1252,10 @@ impl Session {
             return Err(EngineError::Other(conflict));
         }
         let work = crate::file_cmds::PlaceSteps::new(input, self.cooperative_jobs());
-        self.start_job_stepped(command, json!({"name": name}), &label, true, work, crate::file_cmds::apply_place)
+        // From a picker or a drop, outside any command: one step that keeps its result, as `place_bytes`.
+        self.run_step(command, json!({ "path": name }), true, |s, _| {
+            s.start_job_stepped(command, json!({"name": name}), &label, true, work, crate::file_cmds::apply_place)
+        })
     }
 
     /// Decodes a file in a job and optionally holds damaged PSD content for
@@ -1596,7 +1610,8 @@ impl Session {
         if !self.jobs.running[i].ctx.try_cancel() {
             return Err(CancelRefused::Committing);
         }
-        let job = self.jobs.running.remove(i);
+        let mut job = self.jobs.running.remove(i);
+        self.record_unlanded_drop(job.timeline.take());
         self.end_job(&job, JobOutcome::Cancelled);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(handle) = job.handle {
@@ -1716,8 +1731,90 @@ impl Session {
         report
     }
 
+    /// Run `f`, an edit made outside any command (a file placed from a picker's bytes), as one
+    /// design-timeline step `id` with `params`, keeping its result: a replay can't make it again.
+    /// Inside a command, that command's step records it instead.
+    pub fn record_outside<T>(&mut self, id: &str, params: Value, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if self.in_own_scope() {
+            return f(self);
+        }
+        let scope = photocraft_doc::IdScope::new(self.next_step).owned_by(self.scope_owner.0);
+        let before = crate::timeline::capture(self);
+        let timed = crate::timeline::tracks(&before);
+        let r = {
+            let _g = scope.enter();
+            f(self)
+        };
+        if r.is_ok() {
+            crate::timeline::record(self, before, scope.step(), id, &params, true);
+        }
+        if scope.used() || timed {
+            self.next_step = self.next_step.max(scope.step().saturating_add(1));
+        }
+        r
+    }
+
+    /// Whether this session's own command (or a replay of one into it) is running: a command it
+    /// runs now is part of that step. Another session's scope doesn't count.
+    pub(crate) fn in_own_scope(&self) -> bool {
+        photocraft_doc::IdScope::current().is_some_and(|sc| sc.owner() == self.scope_owner.0)
+    }
+
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
+    /// Ids a command mints are keyed to its step; a command run on another's behalf shares it.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        // Playing an action is no step: each command it runs is one, as History lists them, and
+        // replays as that command. Inside another command (a script) they join its step instead.
+        if matches!(id, "actions.play" | "actions.conditional") && !self.in_own_scope() {
+            return self.dispatch_scoped(id, params, background);
+        }
+        self.run_step(id, params, false, |s, p| s.dispatch_scoped(id, p, background))
+    }
+
+    /// Run `f` with `params` as design-timeline step `id`, recorded once it is done (a job's when
+    /// it applies). `force_bake` as in `timeline::record`.
+    fn run_step(&mut self, id: &str, params: Value, force_bake: bool, f: impl FnOnce(&mut Self, Value) -> Result<Started>) -> Result<Started> {
+        if self.in_own_scope() {
+            return f(self, params);
+        }
+        let scope = photocraft_doc::IdScope::new(self.next_step).owned_by(self.scope_owner.0);
+        let before = crate::timeline::capture(self);
+        // With the Channels panel's target filled in, as the command runs: a replay session has
+        // no panel, so a cleared mask would clear the layer's pixels instead.
+        // Patterns named by name are kept by id: a rename doesn't change the step.
+        let recorded =
+            crate::timeline::tracks(&before).then(|| crate::timeline::pin_patterns(self, id, crate::channel_cmds::inject_target(self, id, params.clone())));
+        let timed = recorded.is_some();
+        // A floating piece drops as the command starts, before any job it runs.
+        let drops = timed && crate::float_cmds::drops_for(self, id);
+        let r = {
+            let _g = scope.enter();
+            f(self, params)
+        };
+        match (&r, recorded) {
+            (Ok(Started::Done(_)), Some(p)) => crate::timeline::record(self, before, scope.step(), id, &p, force_bake),
+            (Ok(Started::Job(j)), Some(p)) => {
+                let mut before = before;
+                crate::timeline::job_started(self, &mut before);
+                if let Some(job) = self.jobs.running.iter_mut().find(|job| job.id == *j) {
+                    job.timeline = Some((before, scope.step(), p, force_bake, drops));
+                }
+            }
+            // Refused after the floating piece dropped (admitted again on the dropped pixels): the
+            // drop stays, so it is a step of its own, as for a job that doesn't land.
+            (Err(_), Some(_)) if drops => crate::timeline::record(self, before, scope.step(), "select.drop", &json!({}), true),
+            _ => {}
+        }
+        // A started job may still mint ids under this step, and a design-timeline step is named
+        // by it, so either spends it too.
+        if scope.used() || timed || matches!(r, Ok(Started::Job(_))) {
+            self.next_step = self.next_step.max(scope.step().saturating_add(1));
+        }
+        r
+    }
+
+    /// [`Session::dispatch`] inside the step's id scope: validate, run and journal the command.
+    fn dispatch_scoped(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
         // The offer belongs to this one dispatch. Early errors drop it locally, including
         // authorization, validation, floating-selection and admission failures.
         let live_commit = self.live_commit.take();
@@ -2012,8 +2109,22 @@ impl Session {
         self.note_layer_change(before);
     }
 
+    /// A job that ends without landing (cancelled, failed): the floating selection its command
+    /// dropped as it started stays dropped, so that drop is a design-timeline step of its own, kept
+    /// as it came out (a replay has no floating piece to drop).
+    fn record_unlanded_drop(&mut self, timeline: Option<(Vec<crate::timeline::Before>, u64, Value, bool, bool)>) {
+        if let Some((mut before, step, _, _, true)) = timeline {
+            crate::timeline::job_applying(self, &mut before);
+            crate::timeline::record(self, before, step, "select.drop", &json!({}), true);
+        }
+    }
+
     fn finish_job_step(&mut self, mut job: Running, r: Result<Payload>) {
         let apply = job.apply.take();
+        let mut timeline = job.timeline.take();
+        if let Some((before, ..)) = timeline.as_mut() {
+            crate::timeline::job_applying(self, before);
+        }
         // Keep the typed error beside its display text, so `wait_job` and `JobEvent` can still
         // report a hard budget's required/limit or an approval request's limits.
         let (outcome, error) = match r {
@@ -2036,6 +2147,12 @@ impl Session {
                 Err(e) => (JobOutcome::Failed(e.to_string()), Some(e)),
             },
         };
+        match (&outcome, timeline) {
+            (JobOutcome::Done(_), Some((before, step, params, force_bake, _))) => {
+                crate::timeline::record(self, before, step, &job.command, &params, force_bake)
+            }
+            (_, timeline) => self.record_unlanded_drop(timeline),
+        }
         self.end_job_with_error(&job, outcome, error);
     }
 

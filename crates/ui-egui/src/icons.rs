@@ -29,6 +29,23 @@ pub const FOOTER_NEW_GROUP: &str = "folder";
 /// The footer's "delete" glyph.
 pub const FOOTER_DELETE: &str = "trash";
 
+/// The icon of a design timeline step, from its label.
+pub fn step_icon(label: &str) -> &'static str {
+    match label {
+        // Content brought in from another document or a file (engine timeline::step_label), whose
+        // name may contain any of the words below.
+        s if s.starts_with("Copy from ") || s.starts_with("Place ") => "image",
+        s if s.contains("Brush") || s.contains("Eraser") => "brush",
+        // The Layers panel's controls (layer.setProps).
+        "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
+        s if s.contains("Layer") => "layers",
+        s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
+        s if s.contains("Fill") => "paint_bucket",
+        "Open" => "image",
+        _ => "adjustments",
+    }
+}
+
 /// The icon of tool `t`: the one its command names (`ToolCommand`'s `icon` attribute), which the tool rail also draws.
 pub fn tool_icon(t: Tool) -> IconId {
     static ICONS: OnceLock<HashMap<String, Cow<'static, str>>> = OnceLock::new();

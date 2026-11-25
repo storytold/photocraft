@@ -214,6 +214,9 @@ pub(crate) static PANELS: &[PanelEntry] = &[
     floating("glyphs", || tl!("Glyphs").to_string(), "text_cursor", [360.0, 320.0], super::type_panels_ui::glyphs::body),
     // The Timeline docks below the canvas; it lays out its own tracks.
     panel("timeline", || tl!("Timeline").to_string(), "split_horizontal", LEAST, super::timeline_ui::body),
+    // The design timeline: a strip below the canvas and a list tab in the History group.
+    panel("designTimeline", || tl!("Design Timeline").to_string(), "clock", LEAST, crate::design_timeline_ui::strip),
+    panel("designTimelineList", || tl!("Design Timeline").to_string(), "list_numbered", LEAST, |app, ui| scrolled(app, ui, crate::design_timeline_ui::list)),
     PanelEntry {
         rows: super::brush_panel::panel_rows,
         states: super::brush_panel::source_states,
@@ -306,13 +309,16 @@ pub(crate) const LEGACY_GROUPS: &[(&str, &[&str])] = &[
     ("properties", &["properties", "adjustments"]),
     ("character", &["character", "paragraph"]),
     ("navigator", &["navigator", "histogram", "info"]),
-    ("history", &["history", "actions", "layerComps"]),
+    ("history", &["history", "actions", "layerComps", "designTimelineList"]),
     ("layers", &["layers", "channels", "paths"]),
     ("brushes", &["brushes"]),
 ];
 
 /// The height of the Timeline's frame below the canvas.
 const TIMELINE_HEIGHT: f32 = 220.0;
+
+/// The height of the design timeline strip's frame below the canvas.
+const DESIGN_STRIP_HEIGHT: f32 = 76.0;
 
 /// The window width the floating panels' default places are laid out for: the Measurement Log and Notes keep their
 /// distance from the window's end edge in a window this wide.
@@ -350,8 +356,13 @@ fn full_layout() -> Layout<String> {
     let expanded = Column::new(EXPANDED_GROUPS.iter().map(|key| legacy_group(key)).collect());
     let icons =
         Column::new(LEGACY_GROUPS.iter().map(|(key, _)| *key).filter(|key| !EXPANDED_GROUPS.contains(key)).map(legacy_group).collect()).with_iconic(true);
-    let canvas =
-        Node::split(Axis::Y, SplitSize::FixedSecond(TIMELINE_HEIGHT), Node::tabs(vec![CANVAS.to_owned()], 0), Node::tabs(vec!["timeline".to_owned()], 0));
+    let canvas = Node::split(
+        Axis::Y,
+        SplitSize::FixedSecond(DESIGN_STRIP_HEIGHT),
+        Node::tabs(vec![CANVAS.to_owned()], 0),
+        Node::tabs(vec!["designTimeline".to_owned()], 0),
+    );
+    let canvas = Node::split(Axis::Y, SplitSize::FixedSecond(TIMELINE_HEIGHT), canvas, Node::tabs(vec!["timeline".to_owned()], 0));
     let beside = Node::split(Axis::X, SplitSize::Ratio(0.8), canvas, Node::dock(DockEdge::End, vec![expanded, icons]));
     let root = Node::split(Axis::X, SplitSize::FixedFirst(TOOLBAR_DOCK_WIDTH), Node::dock(DockEdge::Start, vec![toolbar]), beside);
     // Ids from the table order, so the built-in layout's windows are the same on every build of it.

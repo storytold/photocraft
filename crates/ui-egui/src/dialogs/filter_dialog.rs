@@ -1077,7 +1077,11 @@ fn finish(
             return Err(error);
         }
     };
-    let outcome = crate::actions::run_step_dialog(app, result.id, &cmd, params.clone());
+    // Edit Parameters replays its step with the new values instead of running the filter again.
+    let outcome = match crate::design_timeline_ui::confirm_edit(app, result.id, params.clone()) {
+        Some(outcome) => outcome,
+        None => crate::actions::run_step_dialog(app, result.id, &cmd, params.clone()),
+    };
     if let Ok(r) = &outcome {
         report_file_errors(app, command, r);
     }

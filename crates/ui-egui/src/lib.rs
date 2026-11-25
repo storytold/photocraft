@@ -29,6 +29,7 @@ pub mod canvas;
 mod channel_titles;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod control;
+mod design_timeline_ui;
 pub mod dialogs;
 pub mod dock;
 pub(crate) mod edit_session;
@@ -454,6 +455,8 @@ pub struct PhotocraftApp {
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) guide_edit: Option<guide_edit::Draft>,
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
+    /// The open Edit Parameters dialog of a design timeline step, with its edit (`design_timeline_ui`).
+    pub(crate) design_edit: Option<(craft::ui::dialog::DialogId, serde_json::Value)>,
     /// The live preview of the parameter dialogs' own filters, on the dialog lane.
     pub(crate) filter_live: craft::imaging::ui::LivePreview,
     /// The Image › Adjustments dialog that is open: its layer and values (`adjust_dialog`).

@@ -837,6 +837,7 @@ fn play(s: &mut Session, p: &Value) -> Result<Value> {
     if kept.is_some() {
         s.authorize = kept;
     }
+    // Each command it runs is a design-timeline step of its own (`Session::dispatch`).
     let (ran, failed) = run_recorded(s, &action, from);
     if kept.is_some() {
         s.authorize = None;

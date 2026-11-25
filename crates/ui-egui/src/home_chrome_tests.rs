@@ -74,3 +74,15 @@ fn tab_in_full_screen_does_not_bring_the_chrome_back_over_home() {
     assert!(!chrome_shown(&h, "Tab-revealed chrome on Home"), "no tool strip or dock");
     assert_eq!(bars_shown(&h), (false, false), "no options bar or status bar");
 }
+
+#[test]
+fn home_hides_the_design_timeline_strip_and_keeps_it_open() {
+    let mut h = app(AppTheme::pro(), true, true);
+    h.state_mut().run("window.panel.designTimeline", json!({})).unwrap();
+    h.run_steps(6);
+    let strip = |h: &Harness<'static, Box<PhotocraftApp>>| h.query_by_label("Start Design Timeline").is_some();
+    assert!(strip(&h), "the strip with a document");
+    click_home(&mut h);
+    assert!(!strip(&h), "not on Home");
+    assert!(crate::panel_docking::is_shown(h.state(), "designTimeline"), "still open, for when Home is dismissed");
+}

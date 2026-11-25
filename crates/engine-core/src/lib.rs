@@ -20,6 +20,7 @@ pub mod color_channels;
 pub mod content_sampling;
 mod crop_fill;
 mod damage;
+pub mod design_cmds;
 pub mod display_color;
 pub mod doc_path;
 pub mod filters;
@@ -55,6 +56,8 @@ pub mod shortcut_sets;
 mod slots;
 pub mod snap;
 mod state;
+mod timeline;
+pub mod untrusted;
 pub use variables_cmds::{DATA_SET_FILE_MISSING, DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
@@ -187,6 +190,16 @@ pub fn pixels_mut(l: &mut photocraft_doc::Layer) -> Result<&mut photocraft_raste
 pub fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_doc::Layer, String> {
     let d = s.active().ok_or("no document open")?;
     d.active_layer.and_then(|id| d.doc.layer(id)).ok_or_else(|| "no active layer".into())
+}
+
+/// A number unique to each session ([`Session::scope_owner`]).
+pub(crate) struct ScopeOwner(pub(crate) u64);
+
+impl Default for ScopeOwner {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        ScopeOwner(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 #[derive(Default)]
@@ -324,6 +337,14 @@ pub struct Session {
     /// Commands that left the whole document to redraw (`last_damage` None) while changing under
     /// 25 % of it ([`Session::dispatch`]). Counted in debug and test builds only; tests read it.
     pub whole_redraws: usize,
+    /// The step id the next command mints layer and smart-contents ids under. Session-wide, so
+    /// a layer copied into another document never collides with that document's ids.
+    pub(crate) next_step: u64,
+    /// This session as the owner of the id scopes it opens: one inside another session's command
+    /// (a batch input, a package) runs its commands as its own steps, not nested in that command.
+    pub(crate) scope_owner: ScopeOwner,
+    /// Tool-state commands since each timeline document's last step, replayed ahead of its next.
+    pub(crate) timeline_prelude: std::collections::HashMap<photocraft_doc::DocId, Vec<photocraft_doc::design::Prelude>>,
 }
 
 #[cfg(test)]

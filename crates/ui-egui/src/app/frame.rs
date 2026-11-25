@@ -259,6 +259,8 @@ impl PhotocraftApp {
         // The Keyboard Shortcuts dialog draws while its session is open.
         prefs_ui::show_shortcuts(self, ui);
         crate::dialogs::run(self, ui);
+        // An Edit Parameters dialog closed without OK puts its timeline marker back.
+        crate::design_timeline_ui::poll(self);
         canvas::extra_windows(self, ui);
         screen_picker::show(self, ui);
         smart_svg_ui::poll(self, &ctx);
