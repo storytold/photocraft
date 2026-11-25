@@ -624,10 +624,13 @@ fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
     let mut refused_write = Vec::new();
     // The two queues carry no order of their own, so they are resolved at OK. The writes are
     // resolved on what the draft ends with: a name whose set is gone - deleted, and not made again
-    // before the dialog closed - keeps its write skipped, since there is no set left to write. Each
-    // write the draft attempts records the path it lands in, and the queued deletes below step aside
-    // only for that very path.
-    let mut written_at: BTreeMap<&str, PathBuf> = BTreeMap::new();
+    // before the dialog closed - keeps its write skipped, since there is no set left to write. A
+    // write is recorded by what came back, not by what it was aimed at: a save that LANDED records
+    // the path it landed in, and a save that was refused - a name with no file to write to, or a
+    // path that refused the write - records only that that name's save failed. The queued deletes
+    // below step aside for a failed save of their name, and for the very path a landed save wrote.
+    let mut saved_at: BTreeMap<&str, PathBuf> = BTreeMap::new();
+    let mut save_refused: BTreeSet<&str> = BTreeSet::new();
     for name in menus.file_write.keys() {
         let Some(set) = menus.sets.get(name) else { continue };
         // Where the write goes: the set's own file, or - spelling out what `write_set` would do -
@@ -636,26 +639,42 @@ fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
             Some(path) => Ok(path),
             None => menu_sets::path_of(&dir, name),
         };
-        if let Ok(path) = &to {
-            written_at.insert(name.as_str(), path.clone());
-        }
-        let wrote = match &to {
-            Ok(path) => menu_sets::write_set_at(path, name, set),
-            Err(e) => Err(e.clone()),
-        };
-        if let Err(e) = wrote {
-            refused_write.push(e);
+        match &to {
+            // The result decides what is recorded: the path only for a file that really was written,
+            // the name alone when the write came back refused.
+            Ok(path) => match menu_sets::write_set_at(path, name, set) {
+                Ok(()) => {
+                    saved_at.insert(name.as_str(), path.clone());
+                }
+                Err(e) => {
+                    save_refused.insert(name.as_str());
+                    refused_write.push(e);
+                }
+            },
+            Err(e) => {
+                // The name has no file it could be written to, so there is nothing to land.
+                save_refused.insert(name.as_str());
+                refused_write.push(e.clone());
+            }
         }
     }
     set_lines(app, tl!("The menu set was not saved: {error}"), &refused_write);
     let mut refused_delete = Vec::new();
-    // A delete is skipped only when a later Save of that name wrote the very file the delete was
-    // made for - the file it stood in when the Delete question was answered, taken then and not
-    // here. Making the same name again at a different path sends the set there; the old file stays
-    // in the folder, and the next open reads the deleted set back from it (#14450). Writing every
-    // queued file and then deleting every queued file took away the file of a set the user had just
-    // made again; skipping by name spared a file the save never wrote.
+    // A queued delete steps aside in two cases, and only in those. A Save of that name that wrote the
+    // very file the delete was made for - the file it stood in when the Delete question was answered,
+    // taken then and not here - rewrote that file, so it is the set's file and not a leftover. A Save
+    // of that name that was refused leaves the file the delete was made for as the one copy of the set
+    // the disk holds: taking it away after a replacement that never landed would leave the set in the
+    // preferences with no file anywhere, and the user would have lost it. A Save that landed
+    // ELSEWHERE spares nothing, and the old file goes with the set that moved: a file left standing in
+    // the folder would offer the deleted set back at the next open (#14450).
     for (name, target) in &menus.file_delete {
+        if save_refused.contains(name.as_str()) {
+            // The set's replacement never reached the disk: the file this delete was made for is the
+            // only copy of it the folder holds, and it stays for the next open to read. Said by the
+            // refused-save line above, so this delete adds no line of its own.
+            continue;
+        }
         let path = match target {
             Some(path) => path.clone(),
             None => match menu_sets::path_of(&dir, name) {
@@ -666,7 +685,7 @@ fn write_set_files(app: &mut PhotocraftApp, menus: &MenusDraft) {
                 }
             },
         };
-        if written_at.get(name.as_str()).is_some_and(|written| *written == path) {
+        if saved_at.get(name.as_str()).is_some_and(|written| *written == path) {
             continue;
         }
         let taken = menu_sets::delete_set_at(&path);

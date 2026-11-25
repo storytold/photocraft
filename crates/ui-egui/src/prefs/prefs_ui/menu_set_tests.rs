@@ -1371,3 +1371,51 @@ fn a_set_recreated_under_a_deleted_name_elsewhere_takes_the_old_file_with_it() {
     assert_eq!(p.menu_sets.keys().collect::<Vec<_>>(), ["Painting"], "one set of that name, not a leftover");
     assert_eq!(p.menu_sets["Painting"].hidden, ["file.new"], "the reopened set is the one that was saved elsewhere");
 }
+
+/// A Save that cannot write must not cost the user the file of the set they deleted: only a write that
+/// LANDED answers for a path. The repro: the folder holds `menu-sets/Painting.MNU`, the row deletes
+/// Painting, and a Save sends the same name to `elsewhere/Painting.MNU` - a folder is standing there,
+/// so the atomic move is refused, as in `two_sets_whose_files_cannot_be_written_are_said_together`. OK
+/// says the refused write and leaves the original file standing with its set in it, so the next open
+/// reads the set back from the folder. The sibling
+/// `a_set_recreated_under_a_deleted_name_elsewhere_takes_the_old_file_with_it` pins the other half:
+/// when that write does land, the old file goes with the set.
+#[test]
+fn a_recreated_set_the_save_cannot_write_leaves_the_old_file_standing() {
+    let tmp = tempfile::tempdir().expect("a settings folder");
+    let text = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+        "<photocraft-menu-settings version=\"2\" filename=\"$$$/FileName/Presets/MenuCustomization/Painting=Painting\" modified=\"0\">\n",
+        "  <command kind=\"static\" id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\"/>\n",
+        "</photocraft-menu-settings>\n",
+    );
+    let old = write_set_file(tmp.path(), "Painting", text.as_bytes());
+    // The recreation answers the Save dialog with a path no write can take: a folder stands where the
+    // file would go, so the staged file cannot be moved in and `write_set_at` comes back refused.
+    let recreated = tmp.path().join("elsewhere").join("Painting.MNU");
+    std::fs::create_dir_all(&recreated).expect("a folder in the way of the Save");
+    let files = Arc::new(ScriptedFiles::answering([Picked::Paths(vec![recreated.clone()])]));
+    let mut h = file_harness(files, tmp.path());
+    open_menus(&mut h);
+    choose(&mut h, "Painting");
+    assert_eq!(row_value(&h), "Painting", "the folder's file is the set the row works on");
+    button(&h, DELETE).click();
+    h.run_steps(2);
+    answer(&mut h, YES);
+    assert_eq!(row_value(&h), format!("{DEFAULTS_NAME} (modified)"), "the Delete moved the row back to the built-in set and left its menus on screen");
+    button(&h, SAVE).click();
+    h.run_steps(4);
+    assert_eq!(row_value(&h), "Painting", "and the same name is a set again before OK");
+    ok(&mut h);
+    let kept = std::fs::read_to_string(&old).expect("a refused Save leaves the file the Delete was made for standing, or the set is gone from the disk");
+    assert!(kept.contains("id=\"10\" parentMenuID=\"2\" menuType=\"0\" hidden=\"1\" color=\"0\""), "and it still holds the set it was written with: {kept}");
+    let (found, unreadable) = menu_sets::read_sets(&menu_sets::folder(tmp.path()));
+    assert!(unreadable.is_empty(), "the folder still reads clean: {unreadable:?}");
+    let names: Vec<String> = found.iter().map(|file| file.name.clone()).collect();
+    assert!(names.iter().any(|name| name == "Painting"), "the next open reads the set back from the folder: {names:?}");
+    let line = h.state().ui.status.clone();
+    assert!(h.state().ui.status_error, "the refused Save is said as an error: {line}");
+    assert!(line.contains("elsewhere"), "and the line names the destination that refused it: {line}");
+    let p = h.state().session.prefs();
+    assert!(p.menu_sets.contains_key("Painting"), "the set is still a saved set in the preferences: {:?}", p.menu_sets.keys().collect::<Vec<_>>());
+}
