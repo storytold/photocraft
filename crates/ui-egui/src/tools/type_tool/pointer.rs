@@ -317,10 +317,23 @@ fn create_text(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2], alt_at_p
     let is_box = makes_box(app, start, end);
     // Photoshop (#12044): Alt+drag with the Type tool sizes the new paragraph box in the
     // Paragraph Text Size dialog instead of committing the drag, and its OK creates the text.
-    // Measured for the horizontal Type tool alone, so the vertical and Type Mask tools keep the
-    // plain drag; Alt+click (a drag too small for a box) stays point text.
+    // Measured for the horizontal Type tool, so the vertical Type tool and the Horizontal Type
+    // Mask tool keep the plain drag; Alt+click (a drag too small for a box) stays point text.
     if alt_at_press && is_box && app.ui.tool == crate::state::Tool::Type {
         crate::paragraph_text_size::open(app, [start[0].min(end[0]), start[1].min(end[1])], w, h);
+        return;
+    }
+    // Photoshop (#12090): Alt+drag with the Vertical Type Mask tool opens the same dialog. With
+    // no selection the box is drawn from the centre, as with the marquee: the dialog prefills
+    // twice the dragged size and OK centres the box on the drag start. With a selection it
+    // prefills the dragged size and OK puts the box's top-left at the drag start. A drag up or
+    // to the left of its start is not measured, so it keeps today's plain box.
+    if alt_at_press && is_box && app.ui.tool == crate::state::Tool::VerticalTypeMask && end[0] >= start[0] && end[1] >= start[1] {
+        if crate::canvas::tool_feedback::has_selection(app) {
+            crate::paragraph_text_size::open(app, [start[0], start[1]], w, h);
+        } else {
+            crate::paragraph_text_size::open_centred(app, [start[0], start[1]], 2.0 * w, 2.0 * h);
+        }
         return;
     }
     let mask = app.ui.tool.is_type_mask();

@@ -42,7 +42,7 @@ pub use batch_run::{BatchInput, OutputClaims, encode_batch_error_log, list_image
 #[cfg(test)]
 pub(crate) use batch_run::{MAX_SUBFOLDER_DEPTH, list_files_tree};
 pub(crate) use batch_run::{batch_action, batch_inputs, batch_keeps_step, batch_save_point, process_files};
-pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with};
+pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with, layers_to_files_needs_more_layers};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, copyright_marked, read_file_info, write_file_info};
@@ -476,6 +476,10 @@ mod batch_log_format_tests;
 #[cfg(test)]
 #[path = "file_cmds/export_clut_cube_header_tests.rs"]
 mod export_clut_cube_header_tests;
+
+#[cfg(test)]
+#[path = "file_cmds/layers_to_files_single_layer_tests.rs"]
+mod layers_to_files_single_layer_tests;
 
 #[cfg(test)]
 #[path = "file_cmds/layers_to_files_png_names_tests.rs"]

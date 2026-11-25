@@ -271,7 +271,7 @@ fn define_with_max_pixels(s: &mut Session, p: &Value, max_px: u64) -> Result<Val
         Some(n) if !n.trim().is_empty() => n.to_string(),
         _ => default_name(s),
     };
-    let pat = Pattern::new(name, surf, r.width(), r.height());
+    let pat = Pattern { source_mode: Some(doc.mode), ..Pattern::new(name, surf, r.width(), r.height()) };
     let id = pat.id.clone();
     let out = info(&pat, (pat.width, pat.height), false, true);
     if !s.patterns.items.iter().any(|q| q.id == id) {
@@ -668,7 +668,8 @@ mod tests {
     fn a_pattern_too_large_to_paint_is_refused_not_allocated() {
         // width × height overflows u32: this panicked (debug) or wrapped (release).
         let mut s = session(8);
-        let huge = Pattern { id: "huge".into(), name: "Huge".into(), width: 65_536, height: 65_536, surface: Surface::new(PixelFormat::RGBA8) };
+        let huge =
+            Pattern { id: "huge".into(), name: "Huge".into(), width: 65_536, height: 65_536, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         s.patterns.items.push(huge);
         let e = s.execute("brush.texturePattern", json!({"pattern": "huge"})).unwrap_err();
         assert!(e.to_string().contains("would paint nothing") && e.to_string().contains("65536 × 65536"), "{e}");

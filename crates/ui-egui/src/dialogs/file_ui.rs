@@ -19,9 +19,9 @@ pub use print::open_print;
 pub(crate) use print::print_status;
 #[cfg(test)]
 use print::{drag_print_position, print_params, printer_list};
-pub use web::open_web;
 #[cfg(test)]
 use web::{WEB_COMMAND, download_for_web, options_of, pane_key, web_frame_document, web_params};
+pub use web::{WebTable, open_web};
 
 fn no_params(p: &Value) -> bool {
     p.as_object().is_none_or(|o| o.is_empty())
@@ -93,6 +93,9 @@ mod tests;
 
 #[cfg(test)]
 mod custom_paper_tests;
+
+#[cfg(test)]
+mod print_units_tests;
 
 #[cfg(test)]
 mod contact_sheet_subfolders_tests;
@@ -183,20 +186,19 @@ mod web_playback_tests {
         let ctx = app.ctx().clone();
         take(&mut app, &ctx);
         let first = encoded(&app, 0);
-        set_option(&mut app, id, "palette_edits", json!({"0": [255, 255, 0]}));
+        let shifted = [(first.color_table[0], [255, 255, 0])];
+        app.ui.web_table.apply(id, [(craft::ui::patterns::form_dialogs::ColorTableEdit::Shift(shifted[0].1), vec![shifted[0].0])]);
         pass(&mut app);
         take(&mut app, &ctx);
         assert!(Arc::ptr_eq(&first, &encoded(&app, 0)), "palette edits reuse the current frame's indices");
-        let edits = app.framework.dialogs.get_by_id::<craft::ui::patterns::form_dialogs::HostedSaveForWeb>(id).unwrap().current().palette_edits.clone();
-        assert_eq!(edits.len(), 1);
+        assert_eq!(app.ui.web_table.of(id), &shifted);
         let mut previous = first;
         for (frame, rgba) in [(1, [0, 255, 0, 255]), (2, [0, 0, 255, 255]), (0, [255, 0, 0, 255])] {
             set_frame(&mut app, id, frame);
             let next = encoded(&app, 0);
             assert!(!Arc::ptr_eq(&previous, &next), "a changed frame needs fresh indexed pixels");
             assert_eq!(&next.preview[..4], &rgba);
-            let kept = app.framework.dialogs.get_by_id::<craft::ui::patterns::form_dialogs::HostedSaveForWeb>(id).unwrap().current().palette_edits.clone();
-            assert_eq!(kept, edits);
+            assert_eq!(app.ui.web_table.of(id), &shifted, "the shifts outlast a frame change");
             assert_eq!(app.session.active().unwrap().doc.timeline.as_ref().unwrap().current, 0);
             previous = next;
         }
