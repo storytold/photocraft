@@ -11,6 +11,7 @@
 //! [`super::PresetState::to_json`]). The default set is `default_swatches()`. The commands live in
 //! `crate::swatch_cmds`; the file formats are craft-color's.
 
+use crate::color_cmds::ColorExt;
 use std::sync::Arc;
 
 use craft_cms::{Builtin, Profile, Transform, TransformOptions};
@@ -19,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::Session;
 
-pub use craft::color_ui::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchKind};
+pub use craft::color_ui::palette::{SwatchColor, SwatchEntry, SwatchGroup, SwatchKind, SwatchPaint};
 
 /// Rewrites a saved `swatches` value from the shape before craft-color's model (groups holding
 /// `items`) to the current one (`entries`). Called once, where the preferences are read.
@@ -35,16 +36,18 @@ pub fn upgrade_saved(saved: &mut Value) {
     }
 }
 
-/// The id of a swatch kind (`process`, `global`, `spot`).
+/// The id of a swatch kind (`process`, `global`, `spot`, `registration`).
 pub fn kind_id(kind: SwatchKind) -> &'static str {
     match kind {
         SwatchKind::Process => "process",
         SwatchKind::Global => "global",
         SwatchKind::Spot => "spot",
+        SwatchKind::Registration => "registration",
     }
 }
 
-/// The swatch kind an id names (`normal` is a synonym of `process`).
+/// The swatch kind an id names (`normal` is a synonym of `process`). `registration` names none: the Registration
+/// swatch is built in, never made by a command.
 pub fn parse_kind(s: &str) -> Option<SwatchKind> {
     Some(match s {
         "process" | "normal" => SwatchKind::Process,
@@ -180,7 +183,7 @@ pub struct SwatchConv {
 
 fn working(s: Option<&Session>, mode: ColorMode) -> Arc<Profile> {
     let spec = s.map(|s| {
-        let c = &s.color.settings;
+        let c = &s.color().settings;
         match mode {
             ColorMode::Cmyk => c.working_cmyk.clone(),
             ColorMode::Grayscale => c.working_gray.clone(),
@@ -250,6 +253,7 @@ pub fn hex(c: [f32; 3]) -> String {
 mod tests {
     use super::*;
     use crate::presets::PresetState;
+    use crate::presets::PresetsExt;
 
     #[test]
     fn default_library_has_the_forty_six_colours() {
@@ -261,7 +265,7 @@ mod tests {
         uniq.dedup();
         assert_eq!(uniq.len(), 46, "names are unique: {names:?}");
         assert_eq!(b[3].name, "Pure");
-        assert_eq!(b[3].entries[0].color, SwatchColor::Rgb([230.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0]));
+        assert_eq!(b[3].entries[0].color(), Some(&SwatchColor::Rgb([230.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0])));
     }
 
     #[test]
@@ -271,7 +275,7 @@ mod tests {
         let g = &b[1];
         assert_eq!(g.name, "RGB");
         let conv = SwatchConv::builtin();
-        let hexes: Vec<String> = g.entries.iter().map(|s| hex(conv.rgb(&s.color))).collect();
+        let hexes: Vec<String> = g.entries.iter().map(|s| hex(conv.rgb(s.color().unwrap()))).collect();
         assert_eq!(hexes, ["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff"]);
     }
 
@@ -303,7 +307,7 @@ mod tests {
     #[test]
     fn a_wide_gamut_working_space_changes_cmyk_but_not_rgb() {
         let mut s = crate::session();
-        s.color.settings.working_rgb = "display-p3".into();
+        s.color_mut().settings.working_rgb = "display-p3".into();
         let p3 = SwatchConv::new(&s);
         let srgb = SwatchConv::builtin();
         let cmyk = SwatchColor::Cmyk([1.0, 0.0, 0.0, 0.0]);
@@ -346,15 +350,15 @@ mod tests {
         ]}]});
         let mut s = crate::session();
         s.load_presets_json(saved);
-        let groups = &s.presets.swatches;
+        let groups = &s.presets().swatches;
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].name, "Old");
         let e = &groups[0].entries;
-        assert_eq!((e[0].color, e[0].kind), (SwatchColor::Gray(0.5), SwatchKind::Process));
-        assert_eq!((e[1].color, e[1].kind), (SwatchColor::Lab([50.0, -1.5, 2.25]), SwatchKind::Spot));
-        assert_eq!(e[2].color, SwatchColor::Book { space: 3, values: [1, 2, 3, 4] });
+        assert_eq!((e[0].color(), e[0].kind), (Some(&SwatchColor::Gray(0.5)), SwatchKind::Process));
+        assert_eq!((e[1].color(), e[1].kind), (Some(&SwatchColor::Lab([50.0, -1.5, 2.25])), SwatchKind::Spot));
+        assert_eq!(e[2].color(), Some(&SwatchColor::Book { space: 3, values: [1, 2, 3, 4] }));
         let mut t = crate::session();
-        t.load_presets_json(s.presets.to_json(&s));
-        assert_eq!(t.presets.swatches, s.presets.swatches);
+        t.load_presets_json(s.presets().to_json(&s));
+        assert_eq!(t.presets().swatches, s.presets().swatches);
     }
 }

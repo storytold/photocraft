@@ -3,6 +3,7 @@
 //! document. Every shortcut's command is fired into the dispatcher directly; one shortcut of each kind
 //! of key and route is pressed from the places focus usually is (#15678).
 
+use photocraft_engine::actions_cmds::ActionsExt;
 use std::collections::HashSet;
 
 use craft::keymap::Chord;
@@ -115,7 +116,7 @@ fn active_name(h: &Harness<'_, Box<PhotocraftApp>>) -> String {
 /// Adds the action `name` with `steps` to the action list.
 fn add_action(h: &mut Harness<'_, Box<PhotocraftApp>>, name: &str, steps: &[(&str, serde_json::Value)]) {
     let steps = steps.iter().map(|(command, params)| photocraft_engine::actions_cmds::ActionStep::new(*command, params.clone())).collect();
-    h.state_mut().session.actions.list.push(photocraft_engine::actions_cmds::Action::new(name, steps)).unwrap();
+    h.state_mut().session.actions_mut().list.push(photocraft_engine::actions_cmds::Action::new(name, steps)).unwrap();
 }
 
 fn logged(h: &Harness<'_, Box<PhotocraftApp>>) -> Vec<String> {
@@ -740,7 +741,7 @@ fn fit_shortcut_records_and_f6_fits_the_resized_canvas() {
     press(&mut h, "Cmd+0");
     h.state_mut().run("actions.stop", json!({})).unwrap();
     assert_eq!(
-        h.state().session.actions.list.actions()[0].steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(),
+        h.state().session.actions().list.actions()[0].steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(),
         ["image.canvasSize", "view.fitOnScreen"]
     );
     let item = crate::menus::menu_rows(h.state()).into_iter().find(|i| i.command.id == "view.fitOnScreen").unwrap();
@@ -767,7 +768,7 @@ fn f6_while_recording_records_a_named_call_not_the_child_steps() {
     press(&mut h, "F6");
     assert_eq!(active_name(&h), "Nested overlay");
     h.state_mut().run("actions.stop", json!({})).unwrap();
-    let recorded: Vec<_> = h.state().session.actions.list.actions()[1].steps.iter().map(|s| (s.command.clone(), s.params.clone())).collect();
+    let recorded: Vec<_> = h.state().session.actions().list.actions()[1].steps.iter().map(|s| (s.command.clone(), s.params.clone())).collect();
     assert_eq!(recorded, [("actions.play".to_string(), json!({"action": "LivePrint 2R"}))]);
 }
 

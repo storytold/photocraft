@@ -5,6 +5,7 @@
 use super::*;
 use craft::ui::dialog::{DialogId, StandardPrompt};
 use photocraft_engine::actions_cmds::ActionStep;
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::atn_cmds::STOP_MESSAGE;
 
 const MESSAGE: &str = "Check the mask before continuing";
@@ -35,7 +36,7 @@ pub(super) fn stop_app(allow: bool, with_dialog: bool) -> Box<PhotocraftApp> {
     }
     let (bytes, _) = photocraft_engine::atn_cmds::export("Stops", &[&action], &[], false).unwrap();
     app.run("actions.load", json!({"data": photocraft_engine::paint::tile::b64_encode(&bytes)})).unwrap();
-    assert_eq!(app.session.actions.list.actions()[0].dialogs.contains(&1), with_dialog);
+    assert_eq!(app.session.actions().list.actions()[0].dialogs.contains(&1), with_dialog);
     app
 }
 
@@ -44,7 +45,7 @@ fn nested_app(allow: bool) -> Box<PhotocraftApp> {
     let mut app = stop_app(allow, true);
     for (name, child) in [("Parent", "Stop Test"), ("Grandparent", "Parent")] {
         app.session
-            .actions
+            .actions_mut()
             .list
             .push(Action::new(
                 name,
@@ -173,7 +174,7 @@ fn a_stop_restores_a_suspended_recording_once_for_every_exit() {
             }
             assert!(app.session.recording.target.is_some());
             app.run("actions.stop", json!({})).unwrap();
-            let owner = app.session.actions.list.actions().iter().find(|a| a.name == "Owner").unwrap();
+            let owner = app.session.actions().list.actions().iter().find(|a| a.name == "Owner").unwrap();
             assert_eq!(owner.steps, vec![ActionStep::new("actions.play", json!({"action": "Stop Test"}))]);
             assert_idle(&app);
         }
@@ -184,10 +185,10 @@ fn a_stop_restores_a_suspended_recording_once_for_every_exit() {
 fn continue_inside_a_called_action_finishes_every_caller_once() {
     let mut app = nested_app(true);
     // A second pause in Parent, after the call, keeps Grandparent's continuation too.
-    let parent = app.session.actions.list.actions().iter().position(|a| a.name == "Parent").unwrap();
+    let parent = app.session.actions().list.actions().iter().position(|a| a.name == "Parent").unwrap();
     let pause = ActionStep::new(STOP_MESSAGE, json!({"message": "Parent pause", "allowContinue": true}));
-    app.session.actions.list.insert_step(parent, 2, pause).unwrap();
-    app.session.actions.list.set_dialog(parent, 2, true).unwrap();
+    app.session.actions_mut().list.insert_step(parent, 2, pause).unwrap();
+    app.session.actions_mut().list.set_dialog(parent, 2, true).unwrap();
     let history = app.session.active().unwrap().history.past_len();
     app.run("actions.record", json!({"name": "Owner"})).unwrap();
     let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
@@ -210,7 +211,7 @@ fn continue_inside_a_called_action_finishes_every_caller_once() {
     assert_eq!(st.history.undo_label(), Some("Action: Grandparent"));
     assert!(app.session.recording.target.is_some());
     app.run("actions.stop", json!({})).unwrap();
-    let owner = app.session.actions.list.actions().iter().find(|a| a.name == "Owner").unwrap();
+    let owner = app.session.actions().list.actions().iter().find(|a| a.name == "Owner").unwrap();
     assert_eq!(owner.steps, vec![ActionStep::new("actions.play", json!({"action": "Grandparent"}))]);
 }
 
@@ -219,7 +220,7 @@ fn stop_a_hard_stop_or_a_failing_child_ends_every_caller() {
     for (allow, confirm, fail) in [(true, false, false), (false, true, false), (true, true, true)] {
         let mut app = nested_app(allow);
         if fail {
-            app.session.actions.list.replace_step(0, 2, ActionStep::new("layer.select", json!({"layer": 999_999}))).unwrap();
+            app.session.actions_mut().list.replace_step(0, 2, ActionStep::new("layer.select", json!({"layer": 999_999}))).unwrap();
         }
         let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
         assert_eq!(v["paused"]["step"], 1, "{v}");
@@ -236,7 +237,7 @@ fn stop_a_hard_stop_or_a_failing_child_ends_every_caller() {
 #[test]
 fn a_silent_stop_inside_a_called_action_ends_its_callers() {
     let mut app = nested_app(true);
-    app.session.actions.list.set_dialog(0, 1, false).unwrap();
+    app.session.actions_mut().list.set_dialog(0, 1, false).unwrap();
     let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
     assert!(v.get("failed").is_none(), "{v}");
     assert!(v["stopped"].is_object(), "{v}");
@@ -247,7 +248,7 @@ fn a_silent_stop_inside_a_called_action_ends_its_callers() {
 #[test]
 fn a_resumed_called_action_still_refuses_to_call_its_paused_callers() {
     let mut app = nested_app(true);
-    app.session.actions.list.replace_step(0, 2, ActionStep::new("actions.play", json!({"action": "Grandparent"}))).unwrap();
+    app.session.actions_mut().list.replace_step(0, 2, ActionStep::new("actions.play", json!({"action": "Grandparent"}))).unwrap();
     let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
     assert_eq!(v["paused"]["step"], 1, "{v}");
     {
@@ -264,7 +265,7 @@ fn a_resumed_called_action_still_refuses_to_call_its_paused_callers() {
 #[test]
 fn a_filter_dialog_inside_a_called_action_continues_its_callers_after_ok() {
     let mut app = nested_app(true);
-    app.session.actions.list.replace_step(0, 1, ActionStep::new("filter.blur.gaussianBlur", json!({"radius": 1.5}))).unwrap();
+    app.session.actions_mut().list.replace_step(0, 1, ActionStep::new("filter.blur.gaussianBlur", json!({"radius": 1.5}))).unwrap();
     app.background_jobs = true;
     let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
     answer(&mut app, paused_dialog(&v), true).unwrap();
@@ -276,9 +277,9 @@ fn a_filter_dialog_inside_a_called_action_continues_its_callers_after_ok() {
 /// `If` makes Before, runs `Stop Test` when `condition` holds (`Other` when not), then makes After.
 fn conditional_app(condition: &str) -> Box<PhotocraftApp> {
     let mut app = stop_app(true, true);
-    app.session.actions.list.push(Action::new("Other", vec![ActionStep::new("layer.new.layer", json!({"name": "Other"}))])).unwrap();
+    app.session.actions_mut().list.push(Action::new("Other", vec![ActionStep::new("layer.new.layer", json!({"name": "Other"}))])).unwrap();
     app.session
-        .actions
+        .actions_mut()
         .list
         .push(Action::new(
             "If",
@@ -317,7 +318,7 @@ fn a_conditional_branch_plays_through_the_panel_and_its_stop_shows_its_message()
     assert_eq!(names(&app), ["Before", "Other", "After"]);
     assert_idle(&app);
     let mut app = conditional_app("always");
-    app.session.actions.list.set_dialog(0, 1, false).unwrap();
+    app.session.actions_mut().list.set_dialog(0, 1, false).unwrap();
     let v = play(&mut app, &json!({"action": "If"})).unwrap();
     assert!(v["stopped"].is_object() && v.get("failed").is_none(), "{v}");
     assert_eq!(names(&app), ["Before", "Prefix"], "a Stop without its dialog ends the caller too");
@@ -337,10 +338,10 @@ fn a_paused_action_replaced_under_the_same_name_does_not_continue() {
         let v = play(&mut app, &json!({"action": "Grandparent"})).unwrap();
         assert_eq!(v["paused"]["step"], 1, "{v}");
         let id = stop_prompt(&app);
-        let i = app.session.actions.list.actions().iter().position(|a| a.name == replaced).unwrap();
+        let i = app.session.actions().list.actions().iter().position(|a| a.name == replaced).unwrap();
         let steps = (0..4).map(|n| ActionStep::new("layer.new.layer", json!({"name": format!("Replacement {n}")}))).collect();
-        app.session.actions.list.delete_action(i).unwrap();
-        app.session.actions.list.push(Action::new(replaced, steps)).unwrap();
+        app.session.actions_mut().list.delete_action(i).unwrap();
+        app.session.actions_mut().list.push(Action::new(replaced, steps)).unwrap();
         answer(&mut app, id, true).unwrap();
         assert_eq!(names(&app), ["Grandparent prefix", "Parent prefix", "Prefix"], "{replaced}: nothing of either action's tail runs");
         assert!(app.ui.status_error && app.ui.status.contains("changed"), "{}", app.ui.status);

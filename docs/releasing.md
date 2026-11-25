@@ -34,7 +34,24 @@ changes are required: publishing a newer stable GitHub Release makes it discover
    ```
 
    Commit the change (`Cargo.toml` + `Cargo.lock`) through the normal review flow.
-2. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
+2. **Review the release trust boundary, then merge `main` into `release`** (or fast-forward it)
+   and push. The stable workflow starts by itself. Compare the proposed tree with the
+   **previous trusted release**, not a manifest from main. Review and preserve:
+   - `.github/workflows/nightly-sign.yml`, `.github/nightly-signing-policy.json`, and
+     every transitive reusable workflow/action pin;
+   - `packaging/windows/sign.ps1`, its signing configuration, tool installers and imports;
+   - the macOS nightly signing scripts (`packaging/macos/nightly-sign.sh`, `nightly-verify.sh`,
+     `nightly-lib.sh`, `import-cert.sh`) and entitlements, and the Linux public key
+     `.github/nightly-linux-signing-key.asc`;
+   - **every other workflow that can reach the `release` environment**, including reusable
+     callees, dynamic environment selection and changed executable dependencies. A new
+     workflow outside the named nightly paths is not exempt.
+
+   Stop the sync if that closure is unreviewed. The intended signer-owned files are identical
+   on main and release after promotion; actual top-level repository/event/branch checks and
+   the existing environment restrictions provide authority, not permanent branch divergence.
+   Main CI changes do not need a separate blanket review gate. This procedure does not repair
+   the stable workflow's existing mutable dependencies, builds or caches.
 3. **Wait for the draft.** After about 30 to 45 minutes (notarization is the slow part), the
    Releases page has a draft `PhotoCraft v0.2.0`, tagged `v0.2.0` on the pushed commit, with
    every artifact and `SHA256SUMS.txt`. The notes are generated from the merged PRs.
@@ -57,6 +74,30 @@ After the draft is published, the workflow refuses to touch that version again, 
 it with `cargo xtask version set` before building, so the binaries report it too. The run still
 needs the `release` environment, which only the `release` branch can use, so pick that branch
 in the dialog.
+
+## Release-ref nightly preparation
+
+The Windows, Linux and macOS source preparation is documented in
+[`nightly-release-preparation.md`](nightly-release-preparation.md). It is not an activated
+signing or publication pipeline. Stable `release.yml`, its schedule, tags, concurrency,
+environment values and environment rules are unchanged.
+
+Initial installation **and later signer/policy updates** ride an already-intended reviewed
+stable release sync, with an appropriate version/build state. Every release-branch push may
+rebuild/update a stable draft or refuse an already-published version. An urgent change that
+cannot wait means pause/cancel nightlies using existing workflow controls, then request one
+bounded maintenance push with its exact stable consequences understood. Pausing must never
+require a release push. Do not bypass CI, overwrite a stable release or make a dummy version
+bump. Verify the actual environment permits only the release **branch**, excludes main and
+same-name tags, and introduces no per-run approval requirement before activation; unresolved
+protection or secret-scope collisions are blockers, not permission to change settings.
+
+Nightlies share the existing Windows signing identity with stable. A suspected key or signing
+service compromise therefore affects **both channels**: stop/cancel nightlies immediately,
+notify the release maintainers/security owner privately, and have the identity's authorized
+owner revoke/rotate it and assess already-signed stable and nightly packages. Stopping one
+workflow does not revoke signatures or make stable safe. No credentials or identity values
+are recorded in this procedure.
 
 ## What gets built
 

@@ -2,6 +2,8 @@
 //! with a preview and an estimated file size. The estimate encodes a small proxy and scales by
 //! pixel count, so the dialog stays instant on 36 MP documents.
 
+use photocraft_engine::color_cmds::ColorExt;
+use photocraft_engine::presets::PresetsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -244,7 +246,7 @@ const RESAMPLE_CHOICES: [Resample; 7] = [
 /// settings read with [`options_of`].
 fn preset_library(app: &PhotocraftApp) -> PresetLibrary<ExportOptions> {
     let mut library = PresetLibrary::new();
-    for preset in &app.session.presets.export_presets {
+    for preset in &app.session.presets().export_presets {
         if let Ok(Value::Object(settings)) = serde_json::to_value(&preset.settings) {
             // A name the library refuses (a duplicate ignoring case) is one the engine would not have kept.
             let _ = library.add(&GroupPath::root(), &preset.name, options_of(&settings));
@@ -484,7 +486,7 @@ fn effective_source_profile(app: &PhotocraftApp, doc: &Document) -> Arc<Profile>
         .as_ref()
         .and_then(|bytes| photocraft_engine::color_cmds::profile_from_bytes(bytes).ok())
         .filter(|profile| profile.color_space == photocraft_engine::color_cmds::mode_space(doc.mode))
-        .unwrap_or_else(|| app.session.color.working(doc.mode))
+        .unwrap_or_else(|| app.session.color().working(doc.mode))
 }
 
 fn s(f: &Map<String, Value>, k: &str) -> String {
@@ -909,7 +911,7 @@ fn layer_documents(app: &PhotocraftApp, layers: &[LayerId]) -> Vec<Document> {
 /// whose own profile decides. Tagged documents skip the profile lookup on every frame.
 fn working_profile_hash(app: &PhotocraftApp) -> Option<String> {
     let doc = &app.session.active()?.doc;
-    doc.icc_profile.is_none().then(|| app.session.color.working(doc.mode).content_hash().to_string())
+    doc.icc_profile.is_none().then(|| app.session.color().working(doc.mode).content_hash().to_string())
 }
 
 /// One preset edit of the dialog, stored through the engine's commands. `created` holds the values

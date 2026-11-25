@@ -92,7 +92,9 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
         "filter.blur.average" => FilterParams::Average,
         "filter.blur.gaussianBlur" => FilterParams::GaussianBlur { radius: f(p, "radius", 1.0).clamp(0.1, 1000.0) },
         "filter.blur.boxBlur" => FilterParams::BoxBlur { radius: f(p, "radius", 1.0).clamp(1.0, 2000.0) },
-        "filter.blur.motionBlur" => FilterParams::MotionBlur { angle: f(p, "angle", 0.0), distance: f(p, "distance", 10.0).clamp(1.0, 2000.0) },
+        "filter.blur.motionBlur" => {
+            FilterParams::MotionBlur { angle: f(p, "angle", 0.0).clamp(-360.0, 360.0), distance: f(p, "distance", 10.0).clamp(1.0, 2000.0) }
+        }
         "filter.blur.radialBlur" => FilterParams::RadialBlur {
             amount: f(p, "amount", 10.0).clamp(1.0, 100.0),
             method: if s(p, "method", "spin") == "zoom" { RadialMethod::Zoom } else { RadialMethod::Spin },
@@ -102,8 +104,8 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
                 "good" => RadialQuality::Good,
                 _ => RadialQuality::Good,
             },
-            center_x: f(p, "centerX", 0.5),
-            center_y: f(p, "centerY", 0.5),
+            center_x: f(p, "centerX", 0.5).clamp(0.0, 1.0),
+            center_y: f(p, "centerY", 0.5).clamp(0.0, 1.0),
         },
         "filter.blur.surfaceBlur" => {
             FilterParams::SurfaceBlur { radius: f(p, "radius", 5.0).clamp(1.0, 100.0), threshold: f(p, "threshold", 15.0).clamp(2.0, 255.0) }
@@ -133,9 +135,11 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
         "filter.other.maximum" => FilterParams::Maximum { radius: f(p, "radius", 1.0).clamp(0.2, 500.0), preserve: preserve(p) },
         "filter.other.offset" => FilterParams::Offset { horizontal: i(p, "horizontal", 0), vertical: i(p, "vertical", 0), undefined: undefined(p) },
         "filter.pixelate.mosaic" => FilterParams::Mosaic { cell_size: f(p, "cellSize", 10.0).clamp(2.0, 200.0) },
-        "filter.stylize.emboss" => {
-            FilterParams::Emboss { angle: f(p, "angle", 135.0), height: f(p, "height", 3.0).clamp(1.0, 100.0), amount: f(p, "amount", 100.0).clamp(1.0, 500.0) }
-        }
+        "filter.stylize.emboss" => FilterParams::Emboss {
+            angle: f(p, "angle", 135.0).clamp(-180.0, 180.0),
+            height: f(p, "height", 3.0).clamp(1.0, 100.0),
+            amount: f(p, "amount", 100.0).clamp(1.0, 500.0),
+        },
         "filter.stylize.findEdges" => FilterParams::FindEdges,
         "filter.stylize.solarize" => FilterParams::Solarize,
         "filter.distort.twirl" => FilterParams::Twirl { angle: f(p, "angle", 50.0).clamp(-999.0, 999.0) },

@@ -72,7 +72,7 @@ impl<'a> PickerInput<'a> {
             .import()
             .gear_rows(gear_rows)
             .resizable(SaveKey::new("photocraft.brush_picker"))
-            .tip(Arc::new(tip_paint(self.tip, (self.face.hardness, self.face.angle, self.face.roundness))))
+            .tip(tip_paint(self.tip, (self.face.hardness, self.face.angle, self.face.roundness)))
     }
 }
 

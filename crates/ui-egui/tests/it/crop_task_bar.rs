@@ -141,21 +141,24 @@ fn ui_set_changes_only_the_place_fields_it_names() {
     draw_frame(&mut h, [40.0, 30.0], [260.0, 200.0]);
     drag_grip(&mut h, vec2(-60.0, -120.0));
     let dropped = bar(&h).expect("bar");
-    let at = h.state().ui.panels.task_bar.at;
-    // Pinning keeps the dragged place: the bar doesn't jump back under the frame.
+    // Unpinned, the drop is an offset from the bar's place under the frame.
+    let place = h.state().ui.panels.task_bar;
+    assert!(place.at.is_none() && place.offset.is_some(), "{place:?}");
+    // Pinning keeps the dragged place: the bar doesn't jump back under the frame, and stays where it shows.
     control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": true}}}));
-    assert_eq!(h.state().ui.panels.task_bar.at, at);
     assert!(h.state().ui.panels.task_bar.pinned);
+    assert!(h.state().ui.panels.task_bar.at.is_some(), "a pinned bar holds its position");
     assert_eq!(bar(&h).expect("bar").left_top(), dropped.left_top());
     // Placing it keeps the pin.
     control(&mut h, "ui.set", json!({"panels": {"task_bar": {"at": [12.0, 34.0]}}}));
-    assert_eq!(h.state().ui.panels.task_bar, photocraft_ui_egui::state::TaskBarPlace::new(true, Some([12.0, 34.0])));
+    assert!(h.state().ui.panels.task_bar.pinned);
+    assert_eq!(h.state().ui.panels.task_bar.at, Some([12.0, 34.0]));
     // A field the bar doesn't have is refused, and nothing changes.
     let v = request(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "nope": 1}}}));
     assert_eq!(v["ok"], false, "{v}");
     assert!(h.state().ui.panels.task_bar.pinned);
     // Reset bar position over the control channel.
-    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "at": null}}}));
+    control(&mut h, "ui.set", json!({"panels": {"task_bar": {"pinned": false, "at": null, "offset": null}}}));
     assert_eq!(h.state().ui.panels.task_bar, Default::default());
     let v = request(&mut h, "ui.inspect", json!({}));
     assert_eq!(v["result"]["taskBar"]["at"], Value::Null, "after the reset the bar follows the frame again");

@@ -1,0 +1,45 @@
+[package]
+name = "photocraft-engine-vector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+# The vector-area commands of the engine (photocraft#15710): align, layer comps, layer CSS and XMP,
+# notes, path editing, rasterize style, smart-object SVG, traps and the type commands for areas,
+# carets, masks and styles. Built on photocraft-engine-core.
+[dependencies]
+photocraft-engine-core = { workspace = true }
+craft-cms = { workspace = true }
+craft-xml = { workspace = true }
+photocraft-algo = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-color = { workspace = true }
+photocraft-compose = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-format = { workspace = true }
+photocraft-geom = { workspace = true }
+photocraft-io = { workspace = true }
+photocraft-paint = { workspace = true }
+photocraft-raster = { workspace = true }
+photocraft-text = { workspace = true }
+photocraft-vector = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+chrono = { workspace = true }
+base64 = "0.22"
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
+flate2 = { workspace = true }
+
+# Core's allocation failpoints, which the notes import and Type Mask tests arm.
+[dev-dependencies]
+photocraft-engine-core = { workspace = true, features = ["failpoints"] }
+photocraft-io = { workspace = true, features = ["testgen"] }
+photocraft-testkit = { workspace = true }
+
+[features]
+# Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
+corpus = []

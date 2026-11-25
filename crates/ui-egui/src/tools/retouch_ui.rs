@@ -4,6 +4,7 @@
 //! and the clone-source marker point. The options bars are in [`bar`].
 
 use craft::keymap::Mods;
+use photocraft_engine::presets::PresetsExt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -17,6 +18,19 @@ pub(crate) fn alt_flipped(tool: Tool, alt: bool) -> Tool {
         (Tool::Blur, true) => Tool::Sharpen,
         (Tool::Sharpen, true) => Tool::Blur,
         _ => tool,
+    }
+}
+
+/// A Smudge stroke with ⌥ held at the press turns Finger Painting the other way for that one stroke, as in Photoshop
+/// (#12957): `p` is the stroke's `paint.smudge` params. The options bar keeps its value. Only measured at Strength
+/// 100 %, so a lower Strength keeps today's behaviour (the issue's "not measured" case).
+pub(crate) fn alt_finger_painting(tool: Tool, alt: bool, p: &mut Value) {
+    if tool == Tool::Smudge
+        && alt
+        && p.get("strength").and_then(Value::as_f64).is_some_and(|s| s >= 100.0)
+        && let Some(on) = p.get("fingerPainting").and_then(Value::as_bool)
+    {
+        p["fingerPainting"] = json!(!on);
     }
 }
 
@@ -42,7 +56,7 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to
     // paint, as with no source at all: `ui.clone_source` / `ui.clone_offset` carry no document,
     // so falling back to them would read another document's coordinates from this one's pixels.
-    app.session.presets.clone.active().source?;
+    app.session.presets().clone.active().source?;
     Some(p)
 }
 
@@ -266,6 +280,7 @@ pub(crate) fn finish_stroke_with(app: &mut PhotocraftApp, tool: Tool, points: &[
         }
         _ => return false,
     };
+    alt_finger_painting(tool, mods.alt, &mut p);
     p["points"] = pts;
     // The layer mask, an alpha channel or the Quick Mask when targeted, as the Brush paints.
     p["target"] = crate::canvas::paint_target(app);
@@ -475,6 +490,18 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         return;
     }
     let p = json!({"offset": off, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
+    // #12121: on a Type layer the reference asks its rasterize question instead of refusing, and OK
+    // applies this very patch on the layer it just rasterized. Only the measured case asks: the
+    // layer's own pixels in plain mode, and only on a layer that is actually shown: the engine never
+    // writes to a hidden one, so a prompt there would let OK destroy the text for no patch. Every
+    // other target, hidden layer and layer kind keeps the engine's refusal.
+    if let Some((kind, layer)) = crate::rasterize_prompt::needed(app)
+        && kind == crate::rasterize_prompt::Kind::Type
+        && photocraft_engine::hidden_target::refusal(&app.session, "paint.patch", &p).is_none()
+    {
+        crate::rasterize_prompt::open_patch(app, kind, layer, p);
+        return;
+    }
     match app.run("paint.patch", p) {
         Ok(_) => crate::patch_preview::committed(app, preview, off),
         Err(e) => {
@@ -704,7 +731,7 @@ pub fn source_marker_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<
     if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
         return None;
     }
-    let slot = app.session.presets.clone.active();
+    let slot = app.session.presets().clone.active();
     if slot.document_closed || slot.document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         return None;
     }
