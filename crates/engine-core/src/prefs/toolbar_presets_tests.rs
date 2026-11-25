@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::Session;
+use craft_psd::descriptor::{Descriptor, Id, UnicodeString, Value as D};
 use photocraft_paint::tile::{b64_decode, b64_encode};
 use serde_json::{Value, json};
 
@@ -21,31 +22,24 @@ fn key(s: &Session, id: &str) -> Option<String> {
     s.prefs().shortcut(id, default_letter(id)).map(str::to_string)
 }
 
-/// A tool entry as the reference application writes it.
-fn tool(code: &[u8; 4], letter: Option<&str>) -> D {
-    let d = object().with("toolKey", D::Integer(i32::from_be_bytes(*code)));
-    D::Descriptor(match letter {
-        Some(l) => d.with("keyboardShortcut", D::Text(UnicodeString::new_nul(l))),
-        None => d,
-    })
+/// A tool entry with a shortcut, or with none.
+fn tool(code: &[u8; 4], letter: Option<&str>) -> Tool {
+    Tool { key: *code, shortcut: letter.map_or(Shortcut::Absent, |l| Shortcut::Text(l.into())) }
 }
 
-/// The default preset's `tlst` groups.
-fn default_toolbar() -> Vec<Vec<D>> {
-    let d = Descriptor::from_bytes(&save(&mut crate::session())).unwrap();
-    let Some(D::List(groups)) = d.get("tlst") else { panic!("tlst is a list") };
-    groups.iter().map(|g| if let D::List(t) = g { t.clone() } else { panic!("a group is a list") }).collect()
+/// The default preset's toolbar groups.
+fn default_toolbar() -> Vec<Vec<Tool>> {
+    tbr::read(&save(&mut crate::session())).unwrap().toolbar
 }
 
-/// The default preset with its `tlst` replaced.
-fn with_toolbar(groups: Vec<Vec<D>>) -> Vec<u8> {
-    let mut d = Descriptor::from_bytes(&save(&mut crate::session())).unwrap();
-    for (k, v) in &mut d.items {
-        if k.is("tlst") {
-            *v = D::List(groups.iter().cloned().map(D::List).collect());
-        }
-    }
-    d.to_bytes()
+/// The default preset with its toolbar groups replaced.
+fn with_toolbar(groups: Vec<Vec<Tool>>) -> Vec<u8> {
+    tbr::write(&ToolbarPreset { toolbar: groups, ..tbr::read(&save(&mut crate::session())).unwrap() })
+}
+
+/// A descriptor as presets hold them, for files the shared reader refuses.
+fn object() -> Descriptor {
+    Descriptor { name: UnicodeString::new_nul(""), class_id: Id::new("null"), items: Vec::new() }
 }
 
 #[test]
@@ -60,24 +54,18 @@ fn every_tool_has_its_own_preset_key() {
     }
 }
 
+/// The file layout is `craft_psd::tbr`'s; this checks what PhotoCraft puts in it.
 #[test]
-fn a_saved_preset_has_the_reference_layout() {
-    let bytes = save(&mut crate::session());
-    // Name: one NUL; class `null`.
-    assert_eq!(bytes[..14], [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, b'n', b'u', b'l', b'l']);
-    let d = Descriptor::from_bytes(&bytes).unwrap();
-    let keys: Vec<String> = d.items.iter().map(|(k, _)| String::from_utf8_lossy(k.as_bytes()).into_owned()).collect();
-    assert_eq!(keys, ["tver", "tpad", "fgbg", "qkmm", "sImI", "scmd", "shov", "nana", "ddkb", "tlst", "oflt"]);
-    let Some(D::List(groups)) = d.get("tlst") else { panic!("tlst is a list") };
-    let D::List(first) = &groups[0] else { panic!("a group is a list") };
-    let D::Descriptor(mv) = &first[0] else { panic!("a tool is an object") };
-    assert_eq!(mv.get("toolKey"), Some(&D::Integer(i32::from_be_bytes(*b"arwT"))));
-    assert_eq!(mv.get_text("keyboardShortcut").as_deref(), Some("V"));
-    let blur = groups.iter().flat_map(|g| if let D::List(t) = g { t.clone() } else { vec![] }).find_map(|t| match t {
-        D::Descriptor(t) if t.get("toolKey") == Some(&D::Integer(i32::from_be_bytes(*b"blur"))) => Some(t),
-        _ => None,
-    });
-    assert!(blur.is_some_and(|b| b.get("keyboardShortcut").is_none()), "a tool without a letter has no keyboardShortcut");
+fn a_saved_preset_holds_the_tools_their_letters_and_the_default_toggles() {
+    let preset = tbr::read(&save(&mut crate::session())).unwrap();
+    assert_eq!(preset.toolbar[0][0], tool(b"arwT", Some("V")));
+    let blur = preset.toolbar.iter().flatten().find(|t| t.key == *b"blur");
+    assert_eq!(blur.map(|t| &t.shortcut), Some(&Shortcut::Absent), "a tool without a letter has no shortcut");
+    assert_eq!(
+        ToolbarPreset { toolbar: Vec::new(), extras: Vec::new(), ..preset },
+        ToolbarPreset::default(),
+        "settings PhotoCraft has none of yet keep their defaults"
+    );
 }
 
 #[test]

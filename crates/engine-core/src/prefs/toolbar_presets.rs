@@ -1,15 +1,13 @@
-//! Toolbar presets (`.tbr`, Edit › Toolbar › Save Preset… / Load Preset…): one action descriptor
-//! with no file header, in the layout the reference application reads and writes (#14624).
+//! Toolbar presets (`.tbr`, Edit › Toolbar › Save Preset… / Load Preset…): the toolbar's layout and
+//! tool letters as a preset that the reference application reads and writes too (#14624). The file
+//! format itself is `craft_psd::tbr`; this module maps its tool keys and shortcuts to PhotoCraft's.
 
-use craft_psd::descriptor::{Descriptor, Id, ParseLimits, UnicodeString, Value as D};
+use craft_psd::tbr::{self, Shortcut, Tool, ToolbarPreset};
 
 use super::Preferences;
 
 /// The largest preset read. A preset with every tool is about 3 KiB.
-pub(super) const MAX_BYTES: u64 = 64 * 1024;
-
-/// Per-container limits for a preset's descriptors and lists (hostile input).
-const LIMITS: ParseLimits = ParseLimits { max_descriptor_items: 64, max_list_items: 256 };
+pub(super) const MAX_BYTES: u64 = tbr::MAX_BYTES as u64;
 
 /// Each tool's four-char key in a preset, by its canonical name ([`ToolbarCustomization::tool_name`]).
 const TOOL_KEYS: &[(&str, &[u8; 4])] = &[
@@ -121,97 +119,66 @@ pub(super) struct Preset {
 /// their defaults: shown, off.
 pub(super) fn write(prefs: &Preferences) -> Vec<u8> {
     let layout = prefs.toolbar.layout();
-    let groups = |groups: &[Vec<String>]| -> D {
-        D::List(
-            groups
-                .iter()
-                .map(|group| {
-                    D::List(
-                        group
-                            .iter()
-                            .filter_map(|tool| {
-                                let (_, key) = TOOL_KEYS.iter().find(|(name, _)| *name == tool)?;
-                                let id = command_id(tool);
-                                let mut d = object().with("toolKey", D::Integer(i32::from_be_bytes(**key)));
-                                if let Some(c) = prefs.shortcut(&id, default_letter(&id)).and_then(letter) {
-                                    d = d.with("keyboardShortcut", D::Text(UnicodeString::new_nul(&c.to_string())));
-                                }
-                                Some(D::Descriptor(d))
-                            })
-                            .collect(),
-                    )
-                })
-                .collect(),
-        )
+    let groups = |groups: &[Vec<String>]| -> Vec<Vec<Tool>> {
+        groups
+            .iter()
+            .map(|group| {
+                group
+                    .iter()
+                    .filter_map(|tool| {
+                        let (_, key) = TOOL_KEYS.iter().find(|(name, _)| *name == tool)?;
+                        let id = command_id(tool);
+                        let shortcut = match prefs.shortcut(&id, default_letter(&id)).and_then(letter) {
+                            Some(c) => Shortcut::Text(c.to_string()),
+                            None => Shortcut::Absent,
+                        };
+                        Some(Tool { key: **key, shortcut })
+                    })
+                    .collect()
+            })
+            .collect()
     };
-    object()
-        .with("tver", D::Integer(1))
-        .with("tpad", D::Integer(0))
-        .with("fgbg", D::Boolean(true))
-        .with("qkmm", D::Boolean(true))
-        .with("sImI", D::Boolean(true))
-        .with("scmd", D::Boolean(true))
-        .with("shov", D::Boolean(true))
-        .with("nana", D::Boolean(false))
-        .with("ddkb", D::Boolean(false))
-        .with("tlst", groups(&layout.toolbar))
-        .with("oflt", groups(&layout.extras))
-        .to_bytes()
+    tbr::write(&ToolbarPreset { toolbar: groups(&layout.toolbar), extras: groups(&layout.extras), ..ToolbarPreset::default() })
 }
 
-/// A descriptor as the reference application writes them: the name is a lone NUL, the class `null`.
-fn object() -> Descriptor {
-    Descriptor { name: UnicodeString::new_nul(""), class_id: Id::new("null"), items: Vec::new() }
-}
-
-/// Read a preset. A file that isn't one whole descriptor with both lists is refused; inside the
-/// lists, entries that aren't a known tool are skipped and a tool listed twice keeps its first place.
+/// Read a preset. A file `craft_psd::tbr` refuses is refused; inside the lists, tools that aren't
+/// PhotoCraft's are skipped and a tool listed twice keeps its first place.
 pub(super) fn read(bytes: &[u8]) -> Result<Preset, String> {
-    const NOT_A_PRESET: &str = "could not read the toolbar preset";
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(format!("{NOT_A_PRESET}: the file is too large"));
-    }
-    let (d, used) = Descriptor::parse_prefix_with_limits(bytes, LIMITS).map_err(|e| format!("{NOT_A_PRESET}: {e}"))?;
-    if used != bytes.len() {
-        return Err(format!("{NOT_A_PRESET}: trailing bytes"));
-    }
+    let file = tbr::read(bytes).map_err(|e| format!("could not read the toolbar preset: {e}"))?;
     let mut preset = Preset::default();
     let mut seen: Vec<&str> = Vec::new();
-    let mut lists = Vec::new();
-    for key in ["tlst", "oflt"] {
-        let Some(D::List(groups)) = d.get(key) else { return Err(format!("{NOT_A_PRESET}: `{key}` is missing")) };
-        let mut out = Vec::new();
-        for group in groups {
-            let D::List(tools) = group else { return Err(format!("{NOT_A_PRESET}: `{key}` holds something other than a tool group")) };
-            let mut names = Vec::new();
-            for tool in tools {
-                let D::Descriptor(t) = tool else { continue };
-                let Some(D::Integer(code)) = t.get("toolKey") else { continue };
-                let code = code.to_be_bytes();
-                let Some((name, _)) = TOOL_KEYS.iter().find(|(_, key)| **key == code) else { continue };
-                if seen.contains(name) {
-                    continue;
+    let mut names = |groups: &[Vec<Tool>]| -> Vec<Vec<String>> {
+        groups
+            .iter()
+            .map(|group| {
+                let mut names = Vec::new();
+                for tool in group {
+                    let Some((name, _)) = TOOL_KEYS.iter().find(|(_, key)| **key == tool.key) else { continue };
+                    if seen.contains(name) {
+                        continue;
+                    }
+                    seen.push(*name);
+                    // No shortcut (or an empty one) is no letter; one that isn't a single letter
+                    // leaves the tool's letter as it is.
+                    let taken = match &tool.shortcut {
+                        Shortcut::Absent => Some(None),
+                        Shortcut::Text(s) if s.is_empty() => Some(None),
+                        Shortcut::Text(s) => letter(s).map(Some),
+                        Shortcut::NotText => None,
+                    };
+                    if let Some(taken) = taken {
+                        preset.letters.push(((*name).to_string(), taken));
+                    }
+                    names.push((*name).to_string());
                 }
-                seen.push(*name);
-                // No shortcut (or an empty one) is no letter; one that isn't a single letter
-                // leaves the tool's letter as it is.
-                let taken = match t.get("keyboardShortcut") {
-                    None => Some(None),
-                    Some(D::Text(s)) if s.to_string_lossy().is_empty() => Some(None),
-                    Some(D::Text(s)) => letter(&s.to_string_lossy()).map(Some),
-                    Some(_) => None,
-                };
-                if let Some(taken) = taken {
-                    preset.letters.push(((*name).to_string(), taken));
-                }
-                names.push((*name).to_string());
-            }
-            out.push(names);
-        }
-        lists.push(out);
-    }
-    preset.extras = lists.pop().unwrap_or_default();
-    preset.toolbar = lists.pop().unwrap_or_default();
+                names
+            })
+            .collect()
+    };
+    let toolbar = names(&file.toolbar);
+    let extras = names(&file.extras);
+    preset.toolbar = toolbar;
+    preset.extras = extras;
     Ok(preset)
 }
 
