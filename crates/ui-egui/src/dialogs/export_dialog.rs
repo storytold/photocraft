@@ -264,13 +264,13 @@ fn stem_of(name: &str) -> String {
 pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     let st = app.session.active().ok_or("no document")?;
     let (stem, size) = (stem_of(&st.doc.name), st.doc.size);
-    open_sized(app, stem, None, PixelSize::new(size.width, size.height), Vec::new())
+    open_sized(app, stem, PixelSize::new(size.width, size.height), Vec::new())
 }
 
 /// The dialog fitted to a `source`-sized document or layer. Fitting the document first would
 /// replace a remembered pixel size the document can't take with the percent, even when the layer
-/// can take it.
-fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, source: PixelSize, layers: Vec<LayerId>) -> Result<DialogId, String> {
+/// can take it. The dialog is titled "Export As" for a document, one layer and several (#14803).
+fn open_sized(app: &mut PhotocraftApp, stem: String, source: PixelSize, layers: Vec<LayerId>) -> Result<DialogId, String> {
     let prefs = app.session.prefs().export.clone();
     let mut options = ExportOptions::default();
     options.quality = u8::try_from(prefs.jpeg_quality.clamp(1, 100)).unwrap_or(85);
@@ -286,7 +286,7 @@ fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, sour
         [one] => layer_file_stem(&one.name),
         _ => stem,
     };
-    let mut dialog = HostedExportAs::new(stem, source, options)
+    let dialog = HostedExportAs::new(stem, source, options)
         .files(docs.len().max(1))
         .formats(dialog_formats())
         .defaults(defaults)
@@ -295,9 +295,6 @@ fn open_sized(app: &mut PhotocraftApp, stem: String, title: Option<String>, sour
         .remember(REMEMBER)
         // The browser build's file dialog answers no folder, so Scale All exports one size at a time there.
         .folder_export(!cfg!(target_arch = "wasm32"));
-    if let Some(title) = title {
-        dialog = dialog.title(title);
-    }
     let id = app.framework.dialogs.open(dialog);
     app.export_open = Some(ExportOpen {
         #[cfg(test)]
@@ -317,16 +314,16 @@ pub fn open_layer(app: &mut PhotocraftApp, layer: LayerId) -> Result<DialogId, S
     let st = app.session.active().ok_or("no document")?;
     let ldoc = photocraft_engine::layer_menu_cmds::layer_document(&st.doc, layer).map_err(|e| e.to_string())?;
     // The size fields follow the layer's trimmed size, so the dialog shows and edits the size
-    // the layer exports at.
-    let template = "Export As: {name}";
-    let title = crate::i18n::fmt(tl!(template), &[("name", &ldoc.name)]);
-    open_sized(app, stem_of(&ldoc.name), Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), vec![layer])
+    // the layer exports at. The title names no layer: it is "Export As" for one layer and for
+    // several (#14803).
+    open_sized(app, stem_of(&ldoc.name), PixelSize::new(ldoc.size.width, ldoc.size.height), vec![layer])
 }
 
 /// Layer › Export As… with several layers (artboards, say) selected: the same dialog, then one
-/// file per layer with its settings (#3629). The dialog opens on the first layer with pixels and
-/// its preview shows that layer: an empty, adjustment or off-canvas layer no longer stops it
-/// (#14806), while any other failure (an unknown id) is the answer.
+/// file per layer with its settings (#3629). `layers` are the selected layers in Layers panel
+/// order, top row first (#14803); the dialog opens on the first of them that has pixels and its
+/// preview shows that row: an empty, adjustment or off-canvas layer no longer stops it (#14806),
+/// while any other failure (an unknown id) is the answer.
 pub fn open_layers(app: &mut PhotocraftApp, layers: &[LayerId]) -> Result<DialogId, String> {
     match layers {
         [] => return Err("no selected layers".into()),
@@ -337,9 +334,7 @@ pub fn open_layers(app: &mut PhotocraftApp, layers: &[LayerId]) -> Result<Dialog
     let ldoc = exportable_layers(&st.doc, layers)?.swap_remove(0);
     // The batch is named after the document, as Quick Export names a selection's files.
     let stem = export_name(&stem_of(&st.doc.name));
-    let template = "Export As: {n} layers";
-    let title = crate::i18n::fmt(tl!(template), &[("n", &layers.len().to_string())]);
-    open_sized(app, stem, Some(title), PixelSize::new(ldoc.size.width, ldoc.size.height), layers.to_vec())
+    open_sized(app, stem, PixelSize::new(ldoc.size.width, ldoc.size.height), layers.to_vec())
 }
 
 /// What a several-layer export says when no selected layer has pixels, as in the reference
@@ -364,6 +359,8 @@ fn exportable_layers(doc: &Document, ids: &[LayerId]) -> Result<Vec<Document>, S
     Ok(docs)
 }
 
+#[cfg(test)]
+mod layer_asset_list_tests;
 #[cfg(test)]
 mod layer_empty_skip_tests;
 #[cfg(test)]
@@ -1172,8 +1169,9 @@ pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     write_export(app, &doc, &f, path, &source_profile)
 }
 
-/// Several layers, each exported with the dialog's settings `f`. Empty, adjustment and off-canvas
-/// layers are skipped (#14806). With several files on the desktop `path` is the folder the dialog
+/// Several layers, each exported with the dialog's settings `f`. `ids` are the rows in Layers
+/// panel order, top row first (#14803), and the files are written in that order. Empty, adjustment
+/// and off-canvas layers are skipped (#14806). With several files on the desktop `path` is the folder the dialog
 /// asked for, and each layer is written there as `<layer name>.<ext>`, replacing a file of that
 /// name (#14808). One file is written at `path`; the web downloads each file, the first under
 /// `path` and the others named as Quick Export names a selection's files.
@@ -1183,14 +1181,21 @@ fn export_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[LayerId
     if ids.is_empty() {
         return Err("no selected layers".into());
     }
-    let docs = exportable_layers(&st.doc, ids)?;
+    // `layer_file_names` numbers a shared layer name from the upper layer down over bottom-to-top
+    // input (#14808), so the documents are built in that order for the names and put back into
+    // Layers panel order for the writes.
+    let mut rows_bottom_up: Vec<LayerId> = ids.to_vec();
+    rows_bottom_up.reverse();
+    let mut docs = exportable_layers(&st.doc, &rows_bottom_up)?;
     let settings = settings(f);
     let folder = docs.len() > 1 && !cfg!(target_arch = "wasm32");
-    let paths: Vec<String> = if folder {
+    let mut paths: Vec<String> = if folder {
         layer_file_names(&docs, &s_fmt(f)).into_iter().map(|name| std::path::Path::new(path).join(name).to_string_lossy().into_owned()).collect()
     } else {
         batch_paths(path, &docs)
     };
+    docs.reverse();
+    paths.reverse();
     let mut exported = Vec::new();
     for (doc, path) in docs.iter().zip(paths) {
         // Only a folder was chosen, so a link where a file goes is removed rather than written through.

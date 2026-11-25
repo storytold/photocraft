@@ -629,10 +629,12 @@ fn invoke_export_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> R
         layer if matches!(layer, "layer.exportAs" | "layer.quickExportAsPng") && params.as_object().is_none_or(|object| object.is_empty()) => {
             let selected = app.session.active().and_then(|document| document.active_layer).ok_or("no active layer")?;
             if layer == "layer.exportAs" {
-                // Several layers (artboards, say) selected: one file each (#3629).
-                let layers = app.session.active().map(|document| document.selected_layers()).unwrap_or_default();
+                // Several layers (artboards, say) selected: one file each (#3629). The rows follow
+                // the Layers panel, top to bottom (#14803); the session keeps its selection bottom
+                // to top.
+                let layers: Vec<photocraft_doc::LayerId> =
+                    app.session.active().map(|document| document.selected_layers().iter().rev().copied().collect()).unwrap_or_default();
                 if layers.len() > 1 {
-                    let layers = layers.to_vec();
                     Some(Ok(json!({"dialog": crate::export_dialog::open_layers(app, &layers)?.value()})))
                 } else {
                     Some(Ok(json!({"dialog": crate::export_dialog::open_layer(app, selected)?.value()})))
