@@ -1077,9 +1077,17 @@ fn finish(
             return Err(error);
         }
     };
+    // Calculations keeps its values for the document it ran on, which a New Document result is not (#14531).
+    let opened_on = app.session.active().map(|st| st.doc.id);
     let outcome = crate::actions::run_step_dialog(app, result.id, &cmd, params.clone());
     if let Ok(r) = &outcome {
         report_file_errors(app, command, r);
+    }
+    if outcome.is_ok()
+        && cmd == "image.calculations"
+        && let Some(doc) = opened_on
+    {
+        crate::view_cmds::dialogs::calculations_confirmed(app, doc, &result.fields);
     }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
