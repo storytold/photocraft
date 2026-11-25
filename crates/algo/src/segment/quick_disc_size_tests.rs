@@ -243,3 +243,59 @@ fn quick_select_a_click_inside_a_rectangle_still_takes_the_whole_rectangle() {
         }
     }
 }
+
+/// The issue's document with a solid red disc of radius `rad` document pixels centred at `AT`:
+/// an object smaller than the footprint a 30 px brush grows to. Same red as the rectangle test above.
+fn red_disc(rad: f32) -> RgbImage {
+    RgbImage::from_fn(800, 600, |x, y| {
+        let (dx, dy) = (x as f32 + 0.5 - AT.0, y as f32 + 0.5 - AT.1);
+        if dx * dx + dy * dy <= rad * rad { [0.78, 0.23, 0.23] } else { [1.0, 1.0, 1.0] }
+    })
+}
+
+/// The click trim must not cut a ring off an object that fits inside the footprint growth. With a
+/// 30 px brush on the half-resolution grid the seeds reach 15 document pixels (7.5 working) and the
+/// growth (`grow + grow_frac * radius` = 2.47 working pixels) makes everything within 9.97 working
+/// pixels hard foreground. A 18 px radius disc therefore lies wholly inside that grown footprint:
+/// the cut labels the footprint and nothing past it, so the trim of #12922 answers with the brush
+/// disc, whose partly selected band ends at 16 document pixels - the object's own ring between 16
+/// and 18 px is dropped. The trim is only right where the footprint is one flat colour; what the
+/// object keeps is the whole disc. The size of what a click on a small object *should* select is
+/// not measured by the issue, so this pins the object's extent and nothing beyond the growth.
+#[test]
+fn quick_select_a_click_on_an_object_smaller_than_the_footprint_growth_keeps_the_whole_object() {
+    let img = red_disc(18.0);
+    let r = click(&img, AT, 30.0);
+    let (mut lost, mut inside) = (0, 0);
+    for y in (AT.1 as i32 - 18)..(AT.1 as i32 + 19) {
+        for x in (AT.0 as i32 - 18)..(AT.0 as i32 + 19) {
+            let (dx, dy) = (x as f32 + 0.5 - AT.0, y as f32 + 0.5 - AT.1);
+            if dx * dx + dy * dy <= 18.0 * 18.0 {
+                inside += 1;
+                if r.at(x, y) < 0.5 {
+                    lost += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        lost, 0,
+        "{lost} of the {inside} pixels of the 18 px disc are not selected: the ring outside the trimmed brush disc, which reaches 16 px, and inside the disc's own edge"
+    );
+    let (w, h) = (r.bbox.width(), r.bbox.height());
+    assert!(
+        (37..=44).contains(&w) && (37..=44).contains(&h),
+        "bbox {w} x {h}: the object plus at most the footprint growth of a 30 px brush, so the click did not run away"
+    );
+}
+
+/// The guard case of #12922 beside an object: a click whose grown footprint stays clear of the disc
+/// is a click on a flat area, and it still answers with the brush disc plus the constant margin -
+/// the same bounds and counts as on the plain white document. Guard test: passes before and after
+/// the object fix on purpose, so the fix does not switch the trim off near objects in general.
+#[test]
+fn quick_select_a_click_clear_of_an_object_still_stops_at_the_brush_disc() {
+    let img = red_disc(18.0);
+    let (w, h, full, part) = measure(&click(&img, (455.5, 100.5), 30.0));
+    assert_eq!((w, h, full, part), (33, 33, 657, 140), "click 37 px clear of the disc: the disc of the white document");
+}

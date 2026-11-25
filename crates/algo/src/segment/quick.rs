@@ -14,7 +14,7 @@
 //! - Colours elsewhere in the image make no difference (no global colour model).
 //! - It works on the whole document when it has at most 512 x 512 pixels and at exactly half
 //!   resolution above (any size, any brush), aligned to the document's corner; the mask is then
-//!   scaled up bilinearly (edges show a 25 % / 75 % step). A click that never grew past its own
+//!   scaled up bilinearly (edges show a 25 % / 75 % step). A click that never grew past its own flat
 //!   footprint is the exception: its disc is known exactly, and is drawn at document resolution
 //!   with the constant [`CLICK_MARGIN`] margin (#12922).
 //!
@@ -217,8 +217,8 @@ enum Attempt {
         lw: usize,
         lh: usize,
         /// The click point (document pixels) when this is a single click whose cut reached
-        /// nothing beyond the grown footprint: its mask is the brush footprint itself, drawn at
-        /// document resolution - see [`click_disc`].
+        /// nothing beyond the grown footprint of a flat area: its mask is the brush footprint
+        /// itself, drawn at document resolution - see [`click_disc`].
         trimmed: Option<(f32, f32)>,
     },
 }
@@ -281,13 +281,51 @@ fn select_working_using<const OPTIMIZED: bool>(
     // 3 px wider (#12922). Only single clicks: drags were not measured and keep today's result.
     // The trimmed click is then drawn at document resolution with a constant margin, which the
     // half-resolution mask and its bilinear upsample cannot give: see [`click_disc`].
-    if click && lab.iter().zip(d.iter()).all(|(v, &dist)| !*v || dist <= grow) {
+    // Geometry alone does not tell that click from one on an object that fits inside the grown
+    // footprint: the footprint is hard foreground, so the cut holds it whole either way and the
+    // trim would cut the outline off the object. [`footprint_holds_an_edge`] adds the colour half
+    // of the condition, so the trim only runs where the grown footprint is one flat colour.
+    if click && lab.iter().zip(d.iter()).all(|(v, &dist)| !*v || dist <= grow) && !footprint_holds_an_edge(img, seeds, &d, grow, sigma) {
         for (l, s) in lab.iter_mut().zip(seeds) {
             *l = *s;
         }
         return Some((lab, true));
     }
     Some((lab, false))
+}
+
+/// Does the grown footprint cross an image edge? The footprint growth makes `grow` working pixels
+/// of neighbourhood hard foreground whatever their colour is, so a cut that stopped at that
+/// footprint only came from a flat area when that neighbourhood is the footprint's own colour. When
+/// one of those pixels differs from the average colour of the footprint by more than
+/// [`Tuning::sigma`] - the step where the cut weight `floor + 1 / (1 + (D / sigma)^k)` halves, the
+/// step this model calls an edge - the click reached an object and the grown ring is that object's
+/// extent: trimming it would drop an object smaller than the growth (#12922).
+fn footprint_holds_an_edge(img: &RgbImage, seeds: &[bool], d: &[f32], grow: f32, sigma: f32) -> bool {
+    let mut mean = [0.0f32; 3];
+    let mut footprint = 0usize;
+    for (p, &seeded) in img.px.iter().zip(seeds) {
+        if seeded {
+            for (m, v) in mean.iter_mut().zip(p) {
+                *m += *v;
+            }
+            footprint += 1;
+        }
+    }
+    if footprint == 0 {
+        return false;
+    }
+    for m in mean.iter_mut() {
+        *m /= footprint as f32;
+    }
+    d.iter().enumerate().any(|(i, &dist)| {
+        dist <= grow
+            && !seeds.get(i).copied().unwrap_or(true)
+            && img.px.get(i).is_some_and(|q| {
+                let (a, b, c) = (q[0] - mean[0], q[1] - mean[1], q[2] - mean[2]);
+                a * a + b * b + c * c > sigma * sigma
+            })
+    })
 }
 
 /// The mask of a trimmed click at document resolution: the brush disc of radius `r` document
