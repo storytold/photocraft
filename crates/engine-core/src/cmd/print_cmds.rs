@@ -1551,12 +1551,21 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     let mut doc = (*d.doc).clone();
     let document = d.path.clone();
     let name = stem(&d.path.clone().unwrap_or_else(|| doc.name.clone()));
-    // The native format keeps external links; our PSD writer has no `lnkE` (external linked
-    // file) support yet, so a PSD package would embed or flatten them.
+    // The native format keeps external links. PSD/PSB currently cannot write the external-link
+    // resource (`lnkE`), so an inferred PSD/PSB package deliberately falls back to `.pcraft` and
+    // reports why. An explicit format remains an override, as it was before format inference.
+    let mut warnings = Vec::new();
     let ext = match p.get("format").and_then(Value::as_str) {
         Some(f @ ("psd" | "psb" | "pcraft")) => f.to_string(),
         Some(f) => return Err(bad(cmd, format!("unknown package format `{f}` (pcraft|psd|psb)"))),
-        None => "pcraft".into(),
+        None => match crate::file_cmds::extension(document.as_deref().unwrap_or_default()).as_deref() {
+            Some(f @ ("tif" | "tiff")) => f.to_string(),
+            Some("psd" | "psb") => {
+                warnings.push("The source PSD/PSB format cannot preserve external links yet; the package was written as .pcraft.".to_string());
+                "pcraft".into()
+            }
+            _ => "pcraft".into(),
+        },
     };
     let folder = join(&dir, &crate::file_cmds::sanitize(&name));
     let links_dir = join(&folder, "Links");
@@ -1646,7 +1655,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let out = join(&folder, &format!("{}.{ext}", crate::file_cmds::sanitize(&name)));
     let pdoc = t.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    let warnings = crate::file_cmds::save_doc(&pdoc, &out, None)?;
+    warnings.extend(crate::file_cmds::save_doc(&pdoc, &out, None)?);
     Ok(json!({"folder": folder, "document": out, "links": copied.iter().map(|(_, t)| t).collect::<Vec<_>>(), "missing": missing, "warnings": warnings}))
 }
 
@@ -1816,7 +1825,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Package…",
             &["File"],
             None,
-            r##"{"dir":folder,"format":"pcraft|psd|psb"="pcraft"} → {folder, document, links, missing} (copies the document and its linked files into <dir>/<name>/, relinked to Links/)"##,
+            r##"{"dir":folder,"format":"pcraft|psd|psb"? (omit to use the document's native format; PSD/PSB fall back to .pcraft with a warning until linked-resource writing is supported)} → {folder, document, links, missing, warnings} (copies the document and its linked files into <dir>/<name>/, relinked to Links/)"##,
             native_doc,
             package
         ),
@@ -1858,3 +1867,5 @@ mod package_layer_rename_tests;
 #[cfg(test)]
 #[path = "print_cmds/package_psd_embedded_tests.rs"]
 mod package_psd_embedded_tests;
+#[path = "print_cmds/package_format_tests.rs"]
+mod package_format_tests;
