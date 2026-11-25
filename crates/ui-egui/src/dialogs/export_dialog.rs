@@ -1374,6 +1374,8 @@ mod jpg_progressive_tests;
 #[cfg(test)]
 mod jpg_quality_tests;
 #[cfg(test)]
+mod jpg_quality_ui_tests;
+#[cfg(test)]
 mod layer_name_sanitise_tests;
 
 #[cfg(all(test, unix))]
