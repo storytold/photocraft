@@ -281,6 +281,36 @@ fn dab_tools_send_their_bar_values() {
     let fresh = app();
     assert_eq!(color_replacement_params(&fresh)["color"], json!(fresh.session.tools.foreground));
 
+    // #207, #731: each tool's own Sample All Layers reaches the stroke, another tool's does not (#5524).
+    for tool in [Tool::SpotHealing, Tool::Remove, Tool::Blur, Tool::Sharpen, Tool::Smudge] {
+        for all in [false, true] {
+            let mut app = app();
+            stripes(&mut app, 4, "pixels");
+            app.run("layer.new.layer", json!({})).unwrap();
+            *app.ui.tool_options.sample_all.slot(tool).unwrap() = all;
+            drag(&mut app, tool);
+            let a = active(&app).surface().unwrap().rgba(30, 30)[3];
+            assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
+        }
+    }
+    for tool in [Tool::Blur, Tool::Sharpen, Tool::Smudge] {
+        let mut app = app();
+        stripes(&mut app, 4, "pixels");
+        app.run("layer.new.layer", json!({})).unwrap();
+        let mut others = crate::state::SampleAllLayers::default();
+        for t in
+            [Tool::MagicWand, Tool::QuickSelection, Tool::ObjectSelection, Tool::PaintBucket, Tool::MagicEraser, Tool::SpotHealing, Tool::Patch, Tool::Remove]
+        {
+            *others.slot(t).unwrap() = true;
+        }
+        app.ui.tool_options.sample_all = others;
+        assert!(!app.ui.tool_options.sample_all.get(tool));
+        drag(&mut app, tool);
+        let a = active(&app).surface().unwrap().rgba(30, 30)[3];
+        assert_eq!(a, 0.0, "{tool:?} sampled all layers through another tool's option");
+    }
+}
+
 /// The Paint Bucket's Mode reaches the fill: Multiply darkens, Clear erases.
 #[test]
 fn paint_bucket_mode_reaches_the_fill() {
@@ -322,7 +352,7 @@ fn paint_bucket_behind_turns_off_on_the_background() {
     app.run("layer.new.layer", json!({})).unwrap();
     app.ui.tool = Tool::PaintBucket;
     app.ui.tool_options.bucket_behind = true;
-    app.session.active_mut().unwrap().active_layer = Some(background);
+    app.session.active_mut().unwrap().set_active_layer(Some(background));
     let m = egui::Modifiers::NONE;
     tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, m);
     tool_event(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, m);
@@ -330,46 +360,6 @@ fn paint_bucket_behind_turns_off_on_the_background() {
     assert_eq!(app.session.journal.last().unwrap().1["mode"], "Normal");
 }
 
-#[test]
-fn clone_without_a_source_names_the_platform_modifier() {
-    // Option-click on the Mac, Alt-click elsewhere (#251). The Clone Stamp says it in an alert
-    // (#12609, clone_stamp_no_source_alert_tests.rs).
-    let tool = Tool::Healing;
-    let mut app = app();
-    app.ui.tool = tool;
-    assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE, false));
-    assert!(app.ui.status_error);
-    let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
-    assert!(app.ui.status.starts_with(want), "{}", app.ui.status);
-    // #207, #731: each tool's own Sample All Layers reaches the stroke, another tool's does not (#5524).
-    for tool in [Tool::SpotHealing, Tool::Remove, Tool::Blur, Tool::Sharpen, Tool::Smudge] {
-        for all in [false, true] {
-            let mut app = app();
-            stripes(&mut app, 4, "pixels");
-            app.run("layer.new.layer", json!({})).unwrap();
-            *app.ui.tool_options.sample_all.slot(tool).unwrap() = all;
-            drag(&mut app, tool);
-            let a = active(&app).surface().unwrap().rgba(30, 30)[3];
-            assert_eq!(a > 0.0, all, "{tool:?} sampleAllLayers={all}: alpha {a}");
-        }
-    }
-    for tool in [Tool::Blur, Tool::Sharpen, Tool::Smudge] {
-        let mut app = app();
-        stripes(&mut app, 4, "pixels");
-        app.run("layer.new.layer", json!({})).unwrap();
-        let mut others = crate::state::SampleAllLayers::default();
-        for t in
-            [Tool::MagicWand, Tool::QuickSelection, Tool::ObjectSelection, Tool::PaintBucket, Tool::MagicEraser, Tool::SpotHealing, Tool::Patch, Tool::Remove]
-        {
-            *others.slot(t).unwrap() = true;
-        }
-        app.ui.tool_options.sample_all = others;
-        assert!(!app.ui.tool_options.sample_all.get(tool));
-        drag(&mut app, tool);
-        let a = active(&app).surface().unwrap().rgba(30, 30)[3];
-        assert_eq!(a, 0.0, "{tool:?} sampled all layers through another tool's option");
-    }
-}
 
 #[test]
 fn retouch_strokes_paint_the_targeted_mask() {

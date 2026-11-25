@@ -118,11 +118,11 @@ fn the_paint_bucket_mode_still_reads_behind_on_the_background_until_a_click() {
     h.state_mut().ui.tool_options.bucket_behind = true;
     h.run_steps(4);
     assert!(combo(&h, "Behind").is_some(), "Behind reads on a pixel layer");
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(background);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(background));
     h.run_steps(4);
     assert!(h.state().ui.tool_options.bucket_behind, "switching to the Background alone does not clear Behind");
     assert!(combo(&h, "Behind").is_some(), "Mode still reads Behind on the Background");
-    h.state_mut().session.active_mut().unwrap().active_layer = Some(pixel);
+    h.state_mut().session.active_mut().unwrap().set_active_layer(Some(pixel));
     h.run_steps(4);
     assert!(h.state().ui.tool_options.bucket_behind, "Behind survives the round trip to the Background");
     assert!(combo(&h, "Behind").is_some(), "and still reads Behind back on a pixel layer");
