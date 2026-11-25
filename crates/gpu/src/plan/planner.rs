@@ -113,7 +113,9 @@ pub const F_ADD_DIFF: u32 = 16384;
 
 /// `Lerp`: A mixed towards B by C's alpha × `opacity` (`compose::advanced::knockout_with`: the
 /// backdrop becomes the knockout target B inside the layer's shape C); `p0.y` set keeps A's alpha
-/// from growing (clipped layers).
+/// from growing (clipped layers); `p0.z` set is `compose::advanced::composite_clipped_individually_with`:
+/// B is kept where C's coverage reaches 1 (values above 1 survive) and elsewhere the clamped mix
+/// applies, also at coverage 0.
 pub const F_MIX_C: u32 = 4_194_304;
 
 /// `Lerp`: B mixed back towards A (the backdrop) by the layer's Blend If weight
@@ -524,7 +526,7 @@ impl<'a> Planner<'a> {
             p.b = Some(after);
             p.c = Some(self.retain(clip));
             p.flags = F_MIX_C;
-            p.params[0] = [0.0; 4];
+            p.params[0] = [0.0, 0.0, 1.0, 0.0];
             p.opacity = opacity;
             b = self.emit(p);
         }

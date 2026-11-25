@@ -429,6 +429,38 @@ fn individually_clipped_shallow_knockout_reaches_beneath_an_opaque_fill() {
     check(&mut g, &d, "shallow knockout under an opaque fill base");
 }
 
+/// Where the base covers a pixel fully an individually blended clipped layer keeps its 32-bit
+/// values above 1; where the base is partly transparent the clamped mix applies, as on the CPU.
+#[test]
+fn individually_clipped_hdr_values_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for base_alpha in [1.0, 0.4] {
+        for opacity in [1.0, 0.7] {
+            let mut d = doc(SampleType::F32, true);
+            d.layers.push(underlay(&d, 2));
+            let mut base = Layer::raster("base", d.pixel_format());
+            let rect = Rect::new(4, 4, 40, 34);
+            let px: Vec<f32> = (0..rect.width() * rect.height()).flat_map(|i| [0.3, 0.5, 0.2, if i % 3 == 0 { base_alpha } else { 1.0 }]).collect();
+            base.surface_mut().unwrap().write_region(rect, &px);
+            base.opacity = opacity;
+            base.advanced.blend_clipped = false;
+            let mut c = Layer::raster("hdr clip", d.pixel_format());
+            let crect = Rect::new(8, 8, 38, 30);
+            let cpx: Vec<f32> = (0..crect.width() * crect.height()).flat_map(|_| [2.0, 0.4, 0.6, 1.0]).collect();
+            c.surface_mut().unwrap().write_region(crect, &cpx);
+            c.clipped = true;
+            d.layers.extend([base, c]);
+            let cpu = photocraft_compose::render(&d, d.bounds());
+            // Where the base covers fully (opaque pixels at opacity 1) the CPU keeps the clipped
+            // value; below full coverage it mixes, which clamps.
+            if opacity >= 1.0 {
+                assert!(cpu.px.iter().any(|p| p[0] > 1.0), "the CPU keeps a value above 1 (base alpha {base_alpha})");
+            }
+            check(&mut g, &d, &format!("HDR clipped layer, base alpha {base_alpha}, opacity {opacity}"));
+        }
+    }
+}
+
 #[test]
 fn individually_clipped_layers_with_masks_restrictions_and_blend_if_match_the_cpu() {
     let Some(mut g) = gpu() else { return };

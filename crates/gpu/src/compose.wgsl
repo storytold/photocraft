@@ -58,7 +58,7 @@ const F_LAB: u32 = 65536u;      // Lab document: Normal mixes in CIELAB
 const F_HDR: u32 = 262144u;     // 32-bit float document: HDR blends and Exposure retain values above 1
 const F_QUANT: u32 = 32768u;    // lerp: A rounded to p0.x steps (adjustment results, integer docs)
 const F_ADD_DIFF: u32 = 16384u;  // lerp: A + opacity * (B - C) premultiplied (clips on pass-through groups, knockout); p0.x: gate on the shape in layer_tex (knockout)
-const F_MIX_C: u32 = 4194304u;   // lerp: A mixed towards B by C's alpha * opacity (knockout); p0.y: keep A's alpha at most
+const F_MIX_C: u32 = 4194304u;   // lerp: A mixed towards B by C's alpha * opacity (knockout); p0.y: keep A's alpha at most; p0.z: individually blended clipped layers (B where C >= 1, else the clamped mix even at 0)
 const F_BLEND_IF: u32 = 524288u; // lerp: B back towards A by the Blend If ranges in p0..p3
 const F_REPLACE: u32 = 2097152u; // effect paint: Normal inside/center stroke replaces A by its coverage
 const F_TEXT_GAMMA: u32 = 8192u; // blend / atop / fx merge: type layer, mix coverage at gamma p4.w
@@ -1043,8 +1043,16 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         // compose::advanced::knockout_with: where the shape C is present the backdrop A is mixed
         // towards the knockout target B (premultiplied, as `advanced::mix`); `p0.y` keeps the
         // alpha from growing (clipped layers stay inside their base).
-        let k = min(textureLoad(tex_c, p, 0).a * op.opacity, 1.0);
-        if (k <= 0.0) { return a; }
+        var k = min(textureLoad(tex_c, p, 0).a * op.opacity, 1.0);
+        if (op.p0.z > 0.5) {
+            // compose::advanced::composite_clipped_individually_with: B untouched where the base
+            // is fully covered (HDR values survive); elsewhere the clamped mix, also at 0 (which
+            // clamps A).
+            if (k >= 1.0) { return b; }
+            k = max(k, 0.0);
+        } else if (k <= 0.0) {
+            return a;
+        }
         let alpha = a.a + (b.a - a.a) * k;
         if (alpha <= 0.0) { return vec4(0.0); }
         let rgb = clamp((a.rgb * a.a + (b.rgb * b.a - a.rgb * a.a) * k) / alpha, vec3(0.0), vec3(1.0));

@@ -115,8 +115,8 @@ pub(crate) fn dissolve_noise(x: i32, y: i32) -> f32 {
 /// If, whose fill is opaque everywhere (a solid colour, or a gradient whose colour and opacity
 /// stops are all opaque). Normal blending at alpha 1 returns the layer's colour exactly, so the
 /// layers below can be skipped (the live Gradient tool's preview recomposites the whole canvas on
-/// every pointer move). A layer whose clipped layers blend individually never occludes: a clipped
-/// shallow knockout may reveal what is beneath it.
+/// every pointer move). The caller must still rule out clipped layers that blend individually
+/// (`advanced::clips_individually`): a clipped shallow knockout may reveal what is beneath the fill.
 pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool {
     let LayerContent::Fill(f) = &layer.content else { return false };
     let opaque = match f {
@@ -139,8 +139,6 @@ pub fn occludes_below(layer: &Layer, mode: photocraft_color::ColorMode) -> bool 
         && !layer.vector_mask.as_ref().is_some_and(|m| m.enabled)
         && !effects::has_effects(layer)
         && layer.excluded_channels == 0
-        // Clipped layers blended individually can knock out to the backdrop beneath the base.
-        && layer.advanced.blend_clipped
         && !blend_if_active(layer, mode)
 }
 
