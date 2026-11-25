@@ -12,7 +12,7 @@ use photocraft_geom::Rect;
 
 /// The shrunk test document at `depth`, with "Top" active.
 fn document(depth: u32) -> Session {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 80, "height": 60, "depth": depth, "background": "white"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
     s.edit("red square", |doc, active| {
