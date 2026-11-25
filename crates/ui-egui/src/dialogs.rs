@@ -91,7 +91,7 @@ pub(crate) mod params {
             cancel: Some(filter_dialog::cancel),
             ..ParamFamily::new(|key| key == "image.mode.colorTable", filter_dialog::run)
         },
-        ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(file_forms::owns, filter_dialog::run) },
+        ParamFamily { check: Some(file_forms::check), cancel: Some(filter_dialog::cancel), ..ParamFamily::new(file_forms::owns, filter_dialog::run) },
         ParamFamily { listing: Some(stack_dialog::listing), ..ParamFamily::new(stack_dialog::owns, stack_dialog::run) },
         ParamFamily {
             check: Some(crate::canvas_tool_menu::pen_dialogs::check),
@@ -733,6 +733,8 @@ pub mod delete_layer_prompt;
 pub mod discard_ui;
 pub mod disk_change_prompt;
 pub mod distort_ui;
+#[cfg(test)]
+mod droplet_ok_validation_tests;
 pub mod duplicate_layer_ui;
 pub mod equalize_ui;
 pub mod export_dialog;

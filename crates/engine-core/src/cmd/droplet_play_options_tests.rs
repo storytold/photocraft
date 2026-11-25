@@ -62,24 +62,28 @@ fn create_droplet_saves_the_play_options() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().to_string_lossy().into_owned();
     let out = join(&root, "out");
+    // Every droplet here is written with `"shim": false` (the helper's own param), and an explicit
+    // launcher choice is recorded with the droplet: a run needs the definition's answer to know
+    // whether the `.command` name next to the file is a launcher it must keep its error log off
+    // (#15869). So each expected map below carries `"shim": false` beside the Play options.
     let on = droplet(&root, json!({"overrideOpen": true, "includeSubfolders": true, "suppressOpenOptions": true, "suppressWarnings": true}));
     assert_eq!(
         saved_options(&on),
-        json!({"output": out, "overrideOpen": true, "includeSubfolders": true, "suppressOpenOptions": true, "suppressWarnings": true})
+        json!({"output": out, "shim": false, "overrideOpen": true, "includeSubfolders": true, "suppressOpenOptions": true, "suppressWarnings": true})
     );
     let off = droplet(&root, json!({"overrideOpen": false, "includeSubfolders": false, "suppressOpenOptions": false, "suppressWarnings": false}));
     assert_eq!(
         saved_options(&off),
-        json!({"output": out, "overrideOpen": false, "includeSubfolders": false, "suppressOpenOptions": false, "suppressWarnings": false})
+        json!({"output": out, "shim": false, "overrideOpen": false, "includeSubfolders": false, "suppressOpenOptions": false, "suppressWarnings": false})
     );
     // Each option on its own, so one key can't stand in for another.
     for key in ["overrideOpen", "includeSubfolders", "suppressOpenOptions", "suppressWarnings"] {
         let one = droplet(&root, json!({key: true}));
-        assert_eq!(saved_options(&one), json!({"output": out, key: true}), "{key}");
+        assert_eq!(saved_options(&one), json!({"output": out, "shim": false, key: true}), "{key}");
     }
     // Without the params (and with null) the droplet is written as before.
-    assert_eq!(saved_options(&droplet(&root, json!({}))), json!({"output": out}));
-    assert_eq!(saved_options(&droplet(&root, json!({"includeSubfolders": null}))), json!({"output": out}));
+    assert_eq!(saved_options(&droplet(&root, json!({}))), json!({"output": out, "shim": false}));
+    assert_eq!(saved_options(&droplet(&root, json!({"includeSubfolders": null}))), json!({"output": out, "shim": false}));
 }
 
 /// The issue's measurement: with Include All Subfolders, dropping `in` writes `a.png`, `b.jpg`,

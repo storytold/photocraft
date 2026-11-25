@@ -1361,6 +1361,8 @@ fn batch_open_source_save_step_leaves_an_unwritten_document_changed() {
     // No destination: nothing is written.
     let result = session.execute("file.automate.batch", json!({"source": "open", "steps": steps})).unwrap();
     assert_eq!(result["errors"], json!([]), "{result}");
+    // No destination, so no plan to report (#13713).
+    assert!(result.get("plannedOutputs").is_none(), "{result}");
     assert!(session.documents()[0].is_dirty(), "a document Batch did not write stays changed");
     // A destination that can't be written: the result's name is taken by a folder, so the path
     // resolves on every platform and the write itself fails.
@@ -1401,6 +1403,10 @@ fn batch_reports_file_failures_even_if_error_log_cannot_be_written() {
         .unwrap();
     assert_eq!(result["files"], json!([]));
     assert_eq!(result["errors"].as_array().map(Vec::len), Some(1), "{result}");
+    // The Opened Files source reports its plan too: the failing document's destination belongs to
+    // the run, so the log guard has it even though nothing was written (#13713 review).
+    let planned = join(&dir, &format!("{}.png", doc(&session).name));
+    assert_eq!(result["plannedOutputs"], json!([planned]), "{result}");
     assert!(result["errorLogError"].as_str().is_some(), "{result}");
 }
 

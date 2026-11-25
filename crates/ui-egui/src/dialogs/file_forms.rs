@@ -3,8 +3,8 @@
 //! the command through the `filter_dialog` family runner.
 
 use craft::ui::contract::Bind;
-use craft::ui::dialog::DialogId;
-use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind};
+use craft::ui::dialog::{Alert, DialogId};
+use craft::ui::patterns::form_dialogs::{DialogFields, Param, ParamDialog, ParamKind, ParamResult};
 use craft::ui::runtime::env::Label;
 use craft::ui::runtime::requests::PathKind;
 use serde_json::Value;
@@ -123,7 +123,60 @@ pub(crate) fn open_create_droplet(app: &mut PhotocraftApp) -> Result<DialogId, S
     ]);
     rows.push(Param::new("output", tl!("Output"), ParamKind::text(format!("{dir}/droplet-output"))).browse(PathKind::Folder));
     rows.push(Param::new("format", tl!("Format"), ParamKind::choice(ids(&["same", "png", "jpg", "psd", "tiff"]), Some("same".into()))));
+    // Errors (#13713), worded as the reference application words its two entries and in its order,
+    // opening on Stop for Errors. The ids are the words `create_droplet` turns into Batch's own
+    // `stopOnError` and `errorLog`, so a droplet saved without this key keeps today's behaviour.
+    rows.push(Param::new(
+        "errors",
+        tl!("Errors"),
+        ParamKind::choice(
+            vec![("stop".to_owned(), Label::from(tl!("Stop for Errors").to_string())), ("log".to_owned(), Label::from(tl!("Log Errors to File").to_string()))],
+            Some("stop".to_owned()),
+        ),
+    ));
+    // Save As… is greyed with Stop for Errors and opens the log's save dialog with Log Errors to
+    // File; the chosen path stays in its field.
+    rows.push(
+        Param::new("errorLog", tl!("Save As…"), ParamKind::text(""))
+            .browse(PathKind::SaveFile)
+            .enabled_when("errors", "log")
+            .tooltip(tl!("Specify name and choose location for error log file")),
+    );
     Ok(open_form(app, CREATE_DROPLET, tl!("Create Droplet"), rows))
+}
+
+/// What Create Droplet's OK asks for, in the reference application's order and words (#13715).
+const NO_DROPLET_FILE: &str = "You must choose a file to save the droplet in.";
+const NO_DESTINATION_FOLDER: &str = "You must choose a destination folder.";
+const NO_ERROR_LOG: &str = "You must specify a file to log errors to.";
+
+/// The `ParamFamily::check` of Create Droplet (#13715): OK asks for the droplet file, then the
+/// destination folder, then, with Errors on Log Errors to File, the log file, and stops at the first
+/// that is missing. The reference shows each as one alert titled "Create Droplet" with OK, and the
+/// dialog stays open with every value as typed: the `Err` is the framework's held-OK refusal, so OK
+/// never runs the command and nothing is written. Only Create Droplet is measured, so the other forms
+/// of this family answer `Ok` and close as they do today. The destination is read from the form's own
+/// Output folder row; when #13711's Destination dropdown lands, the same words cover its Folder choice.
+pub(crate) fn check(app: &mut PhotocraftApp, result: &ParamResult) -> Result<(), Label> {
+    if result.key != CREATE_DROPLET {
+        return Ok(());
+    }
+    // An absent value counts as empty: the engine's own `create_droplet` reads the same fields and
+    // treats a missing or empty `path` the same way. The log row goes one step further and counts
+    // spaces as missing, because that is what the run does with it: `run_droplet` reads the saved
+    // `errorLog` through `filter(|path| !path.trim().is_empty())`, so a blank path is stored and then
+    // ignored and the droplet silently writes no log at all (#15869 review).
+    let missing = if result.fields.text("path").is_none_or(str::is_empty) {
+        NO_DROPLET_FILE
+    } else if result.fields.text("output").is_none_or(str::is_empty) {
+        NO_DESTINATION_FOLDER
+    } else if result.fields.text("errors") == Some("log") && result.fields.text("errorLog").is_none_or(|path| path.trim().is_empty()) {
+        NO_ERROR_LOG
+    } else {
+        return Ok(());
+    };
+    let _ = crate::dialogs::alerts::show(app, Alert::new(tl!("Create Droplet"), tl!(missing)));
+    Err(Label::from(tl!(missing).to_owned()))
 }
 
 /// File › Scripts › Script Events Manager.

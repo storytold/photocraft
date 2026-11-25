@@ -350,6 +350,39 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
             options.insert(k.into(), v.clone());
         }
     }
+    // The launcher choice travels with the droplet. A run has to know whether the `.command` name
+    // next to this file belongs to the droplet before it may write its error log there, and the file
+    // itself cannot say: the droplet's own earlier log can be sitting at that very path (#15869
+    // review). Only a choice that was given is stored, so a droplet saved without the key keeps the
+    // options it had before and takes this command's own default.
+    if let Some(shim @ Value::Bool(_)) = p.get("shim") {
+        options.insert("shim".into(), shim.clone());
+    }
+    // The Errors dropdown (#13713): the choice becomes the policy Batch already reads, so a droplet
+    // saved without it keeps today's behaviour (go on after a failure, write no log).
+    match p.get("errors") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(mode)) => match mode.as_str() {
+            "stop" => {
+                options.insert("stopOnError".into(), json!(true));
+            }
+            "log" => {
+                options.insert("stopOnError".into(), json!(false));
+                // Type-checked where it is stored, the way Batch's own policy parse reads it: a run
+                // takes the saved value with `as_str`, so a number saved here would later write no
+                // log and report no error. `null` stays "not given", as elsewhere in this command.
+                match p.get("errorLog") {
+                    None | Some(Value::Null) => {}
+                    Some(path @ Value::String(_)) => {
+                        options.insert("errorLog".into(), path.clone());
+                    }
+                    Some(_) => return Err(bad(cmd, "\"errorLog\" must be a file path string")),
+                }
+            }
+            other => return Err(bad(cmd, format!("\"errors\" is \"stop\" or \"log\", not `{other}`"))),
+        },
+        Some(_) => return Err(bad(cmd, "\"errors\" must be \"stop\" or \"log\"")),
+    }
     // The dialog's Play checkboxes are saved with the droplet, which hands them to each run.
     for k in DROPLET_PLAY_OPTIONS {
         match p.get(k) {
@@ -371,18 +404,72 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path, "shim": shim_path, "steps": steps.len()}))
 }
 
+/// The droplet path as the launcher names it: canonicalised, so a droplet reached through two
+/// spellings gets one launcher.
+fn canonical_droplet(droplet: &str) -> String {
+    std::fs::canonicalize(droplet).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| droplet.to_string())
+}
+
+/// The launcher that belongs to a canonicalised droplet path: the `.command` script next to it.
+/// `create_droplet` writes it (`write_shim`); a run needs the same name to keep its error log off it.
+fn launcher_for(canonical_droplet: &str) -> String {
+    format!("{}.command", canonical_droplet.trim_end_matches(".pcdroplet").trim_end_matches(".json"))
+}
+
+/// Does this droplet have a launcher of its own, by its own record: the `"shim"` choice saved with it,
+/// or `create_droplet`'s default where the key is absent (written on Unix, not elsewhere). A file at
+/// the launcher path proves nothing - it may be the log an earlier run of this very droplet left there
+/// (#15869 review).
+fn launcher_expected(options: &Value) -> bool {
+    options.get("shim").and_then(Value::as_bool).unwrap_or(cfg!(unix))
+}
+
+/// The launcher of a droplet that is about to run, when the droplet's record says it has one AND the
+/// file at the launcher name really is a launcher (see [`is_a_launcher`]). A droplet that was told not
+/// to generate a launcher keeps the `.command` name free for the log its Errors row chose, and a
+/// droplet whose launcher was deleted can log there too: the protection is for the launcher, not for
+/// whatever file happens to carry the name - once a run has logged there, the next run of the same
+/// droplet has to update that log rather than read it as a launcher (#15869 review, third round).
+fn launcher_of_droplet(droplet: &str, options: &Value) -> Option<String> {
+    if !launcher_expected(options) {
+        return None;
+    }
+    let launcher = launcher_for(&canonical_droplet(droplet));
+    is_a_launcher(&launcher).then_some(launcher)
+}
+
+/// What `write_shim` puts on the second line of every launcher it writes, and what a run looks for
+/// before it protects a `.command` name. The writer and the reader name the same line so they cannot
+/// drift apart.
+const SHIM_MARKER: &str = "# PhotoCraft droplet: runs the action on the files given (or dropped).";
+
+/// Is the file at this path a launcher? A launcher announces itself: `write_shim`'s marker line, or the
+/// `#!` first line that a launcher from an earlier build, or one a person wrote by hand, always
+/// carries. A droplet's own log at that name announces nothing of the kind - it is UTF-16 big-endian
+/// with a `FE FF` BOM (see `file_cmds::encode_droplet_error_log`) - so a run reading its own earlier
+/// log updates it instead of protecting it. A missing file, or one that cannot be read, is no launcher
+/// either.
+fn is_a_launcher(path: &str) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else { return false };
+    // Only the head of the file matters: a launcher announces itself on its first two lines, and a
+    // log of an earlier run can be long.
+    let mut head = [0u8; 512];
+    let Ok(kept) = std::io::Read::read(&mut file, &mut head) else { return false };
+    let head = String::from_utf8_lossy(&head[..kept]);
+    head.contains(SHIM_MARKER) || head.lines().next().is_some_and(|line| line.starts_with("#!"))
+}
+
 /// A tiny shell script next to the droplet: drop files on it (or pass them) to run the droplet.
 #[cfg(not(target_arch = "wasm32"))]
 fn write_shim(droplet: &str) -> Result<String> {
-    let abs = std::fs::canonicalize(droplet).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| droplet.to_string());
-    let base = abs.trim_end_matches(".pcdroplet").trim_end_matches(".json");
-    let shim = format!("{base}.command");
+    let abs = canonical_droplet(droplet);
+    let shim = launcher_for(&abs);
     // Single quotes keep shell expansions inert; embedded quotes need to end the
     // quoted segment, emit a literal quote, then resume it.
     let quoted_abs = format!("'{}'", abs.replace('\'', "'\\''"));
     let body = format!(
         r#"#!/bin/sh
-# PhotoCraft droplet: runs the action on the files given (or dropped).
+{SHIM_MARKER}
 if [ -n "${{PHOTOCRAFT_CLI:-}}" ]; then
   cli="$PHOTOCRAFT_CLI"
 elif [ -x /Applications/PhotoCraft.app/Contents/MacOS/photocraft-cli ]; then
@@ -467,17 +554,66 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // The Play options are saved with the droplet: Override Open makes a recorded Open read each
     // dropped input, and the two Suppress options open the inputs as Batch does with them.
-    // Include All Subfolders was applied above, where the dropped folders became files.
-    for key in ["quality", "overrideOpen", "suppressOpenOptions", "suppressWarnings"] {
+    // Include All Subfolders was applied above, where the dropped folders became files. Stop for
+    // Errors (#13713) travels the same way, so Batch ends the run at the first failing file.
+    for key in ["quality", "overrideOpen", "suppressOpenOptions", "suppressWarnings", "stopOnError"] {
         if let Some(value) = opts.get(key) {
             bp[key] = value.clone();
         }
     }
+    // A droplet that logs errors writes the log itself, so its frame lines say Droplet (#13713).
+    // Batch is deliberately not given `errorLog`: its own log rules (#13665) stay untouched.
+    let error_log = opts.get("errorLog").and_then(Value::as_str).filter(|path| !path.trim().is_empty()).map(str::to_string);
     if let Some(called) = v.get("calledActions") {
         bp["calledActions"] = called.clone();
     }
     let r = s.execute("file.automate.batch", bp)?;
-    Ok(json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]}))
+    let mut result = json!({"droplet": path, "output": output, "files": r["files"], "errors": r["errors"]});
+    for key in ["stopped", "skipped"] {
+        if let Some(value) = r.get(key) {
+            result[key] = value.clone();
+        }
+    }
+    if let Some(log) = error_log {
+        let none = Vec::new();
+        let entries = crate::file_cmds::error_log_entries(r.get("errors").and_then(Value::as_array).unwrap_or(&none));
+        let bytes = crate::file_cmds::encode_droplet_error_log(entries.iter().map(|(file, error)| (file.as_str(), error.as_str())));
+        // The log may never replace a file of its own run: the same rule Batch applies to its log
+        // (#13665), checked here against the dropped inputs, every destination the run planned, the
+        // droplet being run and the `.command` launcher saved next to it. The droplet file is in
+        // neither of the first two lists: a dropped folder only contributes images and Batch never
+        // writes a result under the droplet's name, so a droplet saved with its log aimed at its own
+        // file replaced its definition and the next run of it could no longer be read (#13713 review).
+        // The results the run returned in `files` are not enough either: an entry that failed has a
+        // planned output Batch still protected its log against, and Batch reports that plan in
+        // `plannedOutputs` so the guard here can use it too (#13713 review). The launcher is missing
+        // from all three as well: it is not an image, not a result and not the definition, so a log
+        // aimed at it wrote UTF-16 log bytes over the shell script and the next launch had no script
+        // to run (#15869 review). Whether this droplet has a launcher comes from the droplet's own
+        // record of the `shim` choice, never from a file standing at that name: the log an earlier run
+        // of this same droplet left there is a log, and the next run has to update it like any other
+        // destination (#15869 review round two).
+        let names = |key: &str| -> Vec<String> {
+            r.get(key).and_then(Value::as_array).map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+        };
+        let written: Vec<String> = names("files");
+        let planned: Vec<String> = names("plannedOutputs");
+        let launcher: Option<String> = launcher_of_droplet(path, &opts);
+        let protected: Vec<&str> = inputs
+            .iter()
+            .map(String::as_str)
+            .chain(written.iter().map(String::as_str))
+            .chain(planned.iter().map(String::as_str))
+            .chain(launcher.iter().map(String::as_str))
+            .chain(std::iter::once(path))
+            .collect();
+        if protected.iter().any(|file| crate::file_cmds::same_destination(&log, file)) {
+            result["errorLogError"] = json!(crate::file_cmds::ERROR_LOG_CONFLICT);
+        } else if let Err(error) = write_file(&log, &bytes) {
+            result["errorLogError"] = json!(error.to_string());
+        }
+    }
+    Ok(result)
 }
 
 /// The images a dropped folder contributes: its own, sorted by name, or with Include All
@@ -679,7 +815,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"overrideOpen":bool?,"includeSubfolders":bool?,"suppressOpenOptions":bool?,"suppressWarnings":bool? (the Play options, saved in the droplet and used by each run),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"overrideOpen":bool?,"includeSubfolders":bool?,"suppressOpenOptions":bool?,"suppressWarnings":bool? (the Play options, saved in the droplet and used by each run),"errors":"stop|log"? (saved with the droplet as Batch's stopOnError and errorLog: stop ends a run at the first failing file, log goes on and writes the file),"errorLog":path? (with errors "log": the log the run writes; blank or absent writes none),"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`; a choice that was given is saved with the droplet, so a later run knows to keep its errorLog off that file)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
@@ -687,7 +823,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.runDroplet",
             "Run Droplet",
             &[],
-            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors} (a folder gives its own images, or with the droplet's includeSubfolders also its subfolders' depth first; results are written flat into output, a later one replacing an earlier one of the same name)"##,
+            r##"{"droplet":path,"input":[files or folders],"output":folder? (default: droplet's, else <input folder>/droplet-output)} → {files, errors, stopped?, skipped? (with the droplet's stopOnError), errorLogError?} (a folder gives its own images, or with the droplet's includeSubfolders also its subfolders' depth first; results are written flat into output, a later one replacing an earlier one of the same name; an input whose output name was already written in the run goes to errors; a droplet saved with errorLog writes its own log with Start Droplet / End Droplet, refused through errorLogError when the path names a dropped input, the droplet file, the .command launcher saved with it or any output this run planned, including one whose entry failed)"##,
             native,
             run_droplet
         ),
@@ -718,6 +854,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "droplet_errors_tests.rs"]
+mod droplet_errors_tests;
 #[cfg(test)]
 #[path = "droplet_play_options_tests.rs"]
 mod droplet_play_options_tests;
