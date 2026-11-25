@@ -450,10 +450,15 @@ fn members(d: &Value, c: &Coll) -> Vec<(u64, String)> {
 }
 
 fn collection(ctx: &mut Context, doc: DocKey, parent: Option<u64>, which: u8) -> JsResult<JsValue> {
-    let c = Coll { id: doc.id, serial: doc.serial, parent: parent.unwrap_or(u64::MAX), which };
     let d = inspect(ctx, doc)?;
+    collection_of(ctx, doc, parent, which, &d)
+}
+
+/// [`collection`] from the document's inspection `d`, already read.
+fn collection_of(ctx: &mut Context, doc: DocKey, parent: Option<u64>, which: u8, d: &Value) -> JsResult<JsValue> {
+    let c = Coll { id: doc.id, serial: doc.serial, parent: parent.unwrap_or(u64::MAX), which };
     let mut objs = Vec::new();
-    for (id, _) in members(&d, &c) {
+    for (id, _) in members(d, &c) {
         objs.push(JsValue::from(layer_object(ctx, doc, id)?));
     }
     let key = (COLLECTION + which, doc.id, doc.serial, c.parent);
@@ -688,11 +693,12 @@ fn layer_id(this: &JsValue, _: &[JsValue], _: &mut Context) -> JsResult<JsValue>
 }
 
 fn layer_children(this: &JsValue, ctx: &mut Context, which: u8) -> JsResult<JsValue> {
-    let (doc, id, n, _, _) = node(ctx, this)?;
+    let (doc, id, n, _, d) = node(ctx, this)?;
     if !is_set(&n) {
         return Ok(JsValue::undefined());
     }
-    collection(ctx, doc, Some(id), which)
+    // The inspection that found the group lists its members too: no second read.
+    collection_of(ctx, doc, Some(id), which, &d)
 }
 
 fn layer_layers(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {

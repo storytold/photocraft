@@ -865,12 +865,24 @@ fn a_dialog_inside_a_promise_job_pauses_and_replays() {
     assert_eq!(r.attempts(), 2);
 }
 
+/// Promise jobs are charged one by one: a chain that schedules one reaction at a time runs
+/// until its budget is spent and stops there, before its last reaction. The chain is finite, so
+/// jobs that went uncharged would finish it rather than hang the test.
 #[test]
-fn an_endless_promise_chain_hits_the_time_limit() {
-    let src = "function f() { Promise.resolve().then(f); } f();";
-    let mut r = Runner::new(src, Box::new(Probe::default()), Box::new(WallClock::new(Duration::from_millis(20))), RunOptions::default()).unwrap();
-    let Step::Failed(m) = r.step() else { panic!("stopped") };
+fn a_promise_chain_is_charged_job_by_job() {
+    let src = "var n = 0; function f() { n++; if (n == 5) $.writeln('early'); if (n < 5000) Promise.resolve().then(f); else $.writeln('last'); } f();";
+    let p = Probe::default();
+    let lines = p.lines.clone();
+    let mut r = Runner::new(src, Box::new(p), Box::new(Countdown(1000)), RunOptions::default()).unwrap();
+    let Step::Failed(m) = r.step() else { panic!("stopped, lines {:?}", lines.borrow()) };
     assert!(m.contains("time limit"), "{m}");
+    assert_eq!(*lines.borrow(), ["early"], "an early reaction ran, the last did not");
+    // With charges to spare, the same chain finishes.
+    let p = Probe::default();
+    let lines = p.lines.clone();
+    let mut r = Runner::new(src, Box::new(p), Box::new(Countdown(100_000)), RunOptions::default()).unwrap();
+    assert_eq!(r.step(), Step::Done);
+    assert_eq!(*lines.borrow(), ["early", "last"]);
 }
 
 #[test]

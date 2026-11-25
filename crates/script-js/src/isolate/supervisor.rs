@@ -734,6 +734,13 @@ impl IsolatedJob {
     pub fn host_id(&self) -> u32 {
         self.pid
     }
+
+    /// Whether the host's requests are void now: its output ended, it sent its result, it
+    /// exited, or the app is stopping it. A request [`Self::poll`] has not handed out by then
+    /// never is.
+    pub fn requests_void(&self) -> bool {
+        self.shared.dead()
+    }
 }
 
 impl Drop for IsolatedJob {
@@ -1137,6 +1144,18 @@ mod tests {
             dead: false,
             settled: false,
         }
+    }
+
+    /// A script or a text answer longer than the frame limit is known too large from its text
+    /// alone, before it is encoded (encoding a few hundred MiB takes long enough to run into
+    /// the time limit); shorter ones are left to the encoder.
+    #[test]
+    fn a_message_too_large_by_its_text_is_known_before_encoding() {
+        let start = |n: usize| ToHost::Start { source: "x".repeat(n), app_name: None, script_name: None, memory_limit: 0 };
+        assert!(known_too_large(&start(MAX_TO_HOST + 1)).is_some_and(|n| n > MAX_TO_HOST));
+        assert_eq!(known_too_large(&start(16)), None);
+        assert!(known_too_large(&ToHost::Dialog { answer: Value::String("x".repeat(MAX_TO_HOST + 1)) }).is_some());
+        assert!(known_too_large(&ToHost::Executed { result: Err("x".repeat(MAX_TO_HOST + 1)) }).is_some());
     }
 
     /// A stop after the host's result was taken does not replace that result; one before it

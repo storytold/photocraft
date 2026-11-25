@@ -35,6 +35,8 @@ mod value;
 
 pub use budget::{Budget, Now, SystemNow, Unlimited, WallClock};
 pub use host::{Host, HostError};
+/// Most promise reactions a script may have waiting at once.
+pub use jobs::MAX_QUEUED as MAX_QUEUED_REACTIONS;
 pub use runner::{Modal, ModalKind, RunOptions, Runner, Step};
 
 /// `app.name` when the run has no override.

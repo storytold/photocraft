@@ -357,9 +357,12 @@ fn custom_options_too_large_to_keep_say_so() {
         var d = new ActionDescriptor(), big = Array(30001).join('x');
         for (var i = 0; i < 3; i++) { d.putString(i + 1, big); }
         try { app.putCustomOptions('big', d); } catch (e) { $.writeln(e.name, ' ', e.message.indexOf('64 KiB') >= 0); }
+        // Texts past the limit on their own are refused the same way.
+        var huge = new ActionDescriptor(); huge.putString(1, Array(1 << 20).join('x'));
+        try { app.putCustomOptions('huge', huge); } catch (e) { $.writeln(e.name, ' ', e.message.indexOf('64 KiB') >= 0); }
         "#,
     );
-    assert_eq!(lines, ["RangeError true"]);
+    assert_eq!(lines, ["RangeError true", "RangeError true"]);
 }
 
 #[test]
@@ -443,18 +446,25 @@ fn a_layer_moves_to_the_beginning_or_the_end_of_a_group() {
     assert_eq!(lines[1].split(',').next(), Some("X"), "{lines:?}");
 }
 
+/// A stop that lands on a document read inside `try` is not caught: every budget that stops
+/// the loop stops it at such a read (nothing else in it is charged), and no `catch` runs.
 #[test]
 fn a_spent_time_limit_stays_uncatchable_at_a_document_read() {
-    let s = session(8, 8);
-    let host = SessionHost::new(s.clone(), "stop");
-    let src = "var doc = app.activeDocument; for (;;) { try { doc.name; } catch (e) {} }";
-    let budget = photocraft_script_js::WallClock::new(std::time::Duration::from_millis(50));
-    let mut r = Runner::new(src, Box::new(host), Box::new(budget), RunOptions::default()).unwrap();
-    let started = std::time::Instant::now();
-    let Step::Failed(m) = r.step() else { panic!("the run was stopped") };
-    assert!(m.contains("time limit"), "{m}");
-    // A caught stop would let the loop go on until something else ends it.
-    assert!(started.elapsed() < std::time::Duration::from_secs(10), "stopped only after {:?}", started.elapsed());
+    let mut reached = 0;
+    for charges in 2..16 {
+        let s = session(8, 8);
+        let host = SessionHost::new(s.clone(), "stop");
+        let out = host.output();
+        let src = "var doc = app.activeDocument; $.writeln('loop'); for (var i = 0; i < 100000; i++) { try { doc.name; } catch (e) { $.writeln('caught'); } }";
+        let mut r = Runner::new(src, Box::new(host), Box::new(crate::run::Countdown(charges)), RunOptions::default()).unwrap();
+        let Step::Failed(m) = r.step() else { panic!("{charges}: the run was stopped") };
+        assert!(m.contains("time limit"), "{charges}: {m}");
+        let out = out.borrow();
+        assert!(!out.iter().any(|l| l == "caught"), "{charges}: {out:?}");
+        // Past the line, the only charged calls left are the reads inside `try`.
+        reached += usize::from(out.iter().any(|l| l == "loop"));
+    }
+    assert!(reached > 5, "most budgets stop the loop at a read inside try ({reached})");
 }
 
 /// A fresh run can name the keys of custom options it reads before it uses those names itself.

@@ -2,7 +2,7 @@
 // Native only: the tests time runs with `std::time`, which has no clock on wasm32-unknown-unknown.
 #![cfg(not(target_arch = "wasm32"))]
 
-use photocraft_script_js::{Host, HostError, RunOptions, Runner, Step, Unlimited};
+use photocraft_script_js::{Host, HostError, MAX_QUEUED_REACTIONS, RunOptions, Runner, Step, Unlimited};
 use serde_json::{Value, json};
 
 struct Quiet;
@@ -21,11 +21,13 @@ fn step(src: &str) -> Step {
 
 #[test]
 fn queuing_too_many_promise_reactions_is_a_named_error() {
-    // Queued without a host call in between, and with one.
+    // One past the limit, queued without a host call after it, and with one.
+    let over = MAX_QUEUED_REACTIONS + 1;
     for src in [
-        "for (var i = 0; i < 200000; i++) Promise.resolve().then(function () {});",
-        "for (var i = 0; i < 200000; i++) { Promise.resolve().then(function () {}); } $.writeln('queued');",
+        format!("for (var i = 0; i < {over}; i++) Promise.resolve().then(function () {{}});"),
+        format!("for (var i = 0; i < {over}; i++) {{ Promise.resolve().then(function () {{}}); }} $.writeln('queued');"),
     ] {
+        let src = src.as_str();
         let Step::Failed(m) = step(src) else { panic!("{src}: not stopped") };
         assert!(m.contains("promise reactions"), "{m}");
     }
@@ -47,8 +49,10 @@ impl Host for Lines {
 #[test]
 fn many_reactions_within_the_limit_still_run() {
     let lines = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let src = "var n = 0; for (var i = 0; i < 50000; i++) Promise.resolve().then(function () { if (++n == 50000) $.writeln(n); });";
-    let step = Runner::new(src, Box::new(Lines(lines.clone())), Box::new(Unlimited), RunOptions::default()).unwrap().step();
+    // Exactly the limit, all waiting at once.
+    let n = MAX_QUEUED_REACTIONS;
+    let src = format!("var n = 0; for (var i = 0; i < {n}; i++) Promise.resolve().then(function () {{ if (++n == {n}) $.writeln(n); }});");
+    let step = Runner::new(&src, Box::new(Lines(lines.clone())), Box::new(Unlimited), RunOptions::default()).unwrap().step();
     assert_eq!(step, Step::Done);
-    assert_eq!(*lines.borrow(), ["50000"], "every reaction ran");
+    assert_eq!(*lines.borrow(), [n.to_string()], "every reaction ran");
 }

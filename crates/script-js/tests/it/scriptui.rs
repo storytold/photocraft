@@ -33,6 +33,8 @@ struct Ui {
     clock: Option<std::sync::Arc<crate::ManualClock>>,
     /// Window updates that took their time.
     delayed: Rc<std::cell::Cell<usize>>,
+    /// Output lines and window updates in the order they came: `out …`, `shown 0`, `hidden 0`.
+    order: Rc<RefCell<Vec<String>>>,
 }
 
 impl Ui {
@@ -53,6 +55,7 @@ impl Host for Ui {
 
     fn write_line(&mut self, line: &str) {
         self.lines.borrow_mut().push(line.to_owned());
+        self.order.borrow_mut().push(format!("out {line}"));
     }
 
     fn modal(&mut self, kind: ModalKind, args: &Value) -> Option<Result<Value, HostError>> {
@@ -77,6 +80,7 @@ impl Host for Ui {
             return Err(HostError("the window could not be shown: too large".into()));
         }
         self.windows.borrow_mut().push((id, window.cloned()));
+        self.order.borrow_mut().push(format!("{} {id}", if window.is_some() { "shown" } else { "hidden" }));
         Ok(())
     }
 }
@@ -707,6 +711,10 @@ fn a_handler_error_hides_the_dialog_before_show_throws() {
         assert_eq!(step, Step::Done);
         assert_eq!(*ui.lines.borrow(), ["caught bad click", "after"]);
         assert_eq!(ui.windows.borrow().last(), Some(&(0, None)), "hidden: {:?}", ui.windows.borrow());
+        // Hidden before the script's `catch` ran, not after.
+        let order = ui.order.borrow();
+        let at = |what: &str| order.iter().position(|e| e == what);
+        assert!(at("hidden 0").zip(at("out caught bad click")).is_some_and(|(hide, caught)| hide < caught), "{live}: {order:?}");
     }
 }
 

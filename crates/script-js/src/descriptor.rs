@@ -397,8 +397,24 @@ fn restore_names(names: &Value, ctx: &Context) -> Result<(), String> {
 
 fn put_custom(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let key = text(args.first(), ctx)?;
+    let too_much = || {
+        JsNativeError::range()
+            .with_message(format!("custom options can hold at most {} KiB; this descriptor holds more", crate::commands::MAX_JSON_BYTES >> 10))
+    };
+    // A descriptor's texts alone can be far past the limit (up to tens of MiB): refused before
+    // anything is copied or encoded, since each text takes at least its own bytes encoded.
     let items = match args.get(1).and_then(JsValue::as_object) {
-        Some(o) => o.downcast_ref::<Descriptor>().map(|d| d.0.borrow().clone()),
+        Some(o) => match o.downcast_ref::<Descriptor>() {
+            Some(d) => {
+                let d = d.0.borrow();
+                let texts = d.iter().map(|(_, v)| if let Item::Text(t) = v { t.len() } else { 0 }).fold(0usize, usize::saturating_add);
+                if texts > crate::commands::MAX_JSON_BYTES {
+                    return Err(too_much().into());
+                }
+                Some(d.clone())
+            }
+            None => None,
+        },
         None => None,
     }
     .ok_or_else(|| type_error("putCustomOptions takes a key and an ActionDescriptor"))?;
@@ -415,9 +431,7 @@ fn put_custom(_: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsVa
         }
     }
     if size(&value) > crate::commands::MAX_JSON_BYTES {
-        return Err(JsNativeError::range()
-            .with_message(format!("custom options can hold at most {} KiB; this descriptor holds more", crate::commands::MAX_JSON_BYTES >> 10))
-            .into());
+        return Err(too_much().into());
     }
     command(ctx, "scripts.customOptions.put", json!({ "key": key, "value": value, "persistent": persistent }))?;
     Ok(JsValue::undefined())

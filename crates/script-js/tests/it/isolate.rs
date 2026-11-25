@@ -489,11 +489,22 @@ fn sh(script: &str, paths: &[&std::path::Path]) -> HelperCommand {
     HelperCommand { program: "sh".into(), args, envs: Vec::new() }
 }
 
+/// What a [`stand_in`] run waits for before the interface polls it.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum Settle {
+    /// Nothing: the interface polls at once.
+    No,
+    /// Until the app holds the host's requests void (its output ended, its result came, it
+    /// exited), so a request it queued before can't be told from one still live.
+    Done,
+}
+
 /// A stand-in host that writes `frames`, then runs the shell commands `then` (which see `more`
-/// as `"$2"`, `"$3"`, …); the interface starts polling after `settle`. Only the run's end may
+/// as `"$2"`, `"$3"`, …); the interface starts polling as `settle` says. Only the run's end may
 /// reach the interface.
 #[cfg(unix)]
-fn stand_in(name: &str, frames: &[u8], then: &str, more: &[&std::path::Path], settle: Duration) -> Seen {
+fn stand_in(name: &str, frames: &[u8], then: &str, more: &[&std::path::Path], settle: Settle) -> Seen {
     let dir = std::env::temp_dir().join(format!("script-host-{name}-{}-{}", std::process::id(), frames.len()));
     std::fs::write(&dir, frames).unwrap();
     let mut opts = options(name);
@@ -501,7 +512,13 @@ fn stand_in(name: &str, frames: &[u8], then: &str, more: &[&std::path::Path], se
     paths.extend_from_slice(more);
     opts.helper = sh(&format!("cat \"$1\"; {then}"), &paths);
     let mut job = IsolatedJob::spawn("1".into(), opts).unwrap();
-    std::thread::sleep(settle);
+    if let Settle::Done = settle {
+        let start = Instant::now();
+        while !job.requests_void() {
+            assert!(start.elapsed() < Duration::from_secs(60), "{name}: the host's requests never became void");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     let seen = drive(&mut job, None, &[], |_, e| assert!(matches!(e, Event::Finished(_)), "{name}: a request reached the interface: {e:?}"));
     let _ = std::fs::remove_file(&dir);
     seen
@@ -510,7 +527,7 @@ fn stand_in(name: &str, frames: &[u8], then: &str, more: &[&std::path::Path], se
 /// A stand-in host that writes `frames` and then waits: the app must refuse what it sends.
 #[cfg(unix)]
 fn rogue(frames: &[u8]) -> Seen {
-    stand_in("rogue", frames, "sleep 30", &[], Duration::ZERO)
+    stand_in("rogue", frames, "sleep 30", &[], Settle::No)
 }
 
 #[cfg(unix)]
@@ -594,7 +611,7 @@ fn a_memory_marker_read_after_the_host_exited_still_counts() {
         "{LATE_MARKER}=\"$3\" {LATE_MARKER_HOST}=$$ \"$2\" --exact {} --quiet >/dev/null & i=0; while [ ! -e \"$3\" ] && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done; kill -ABRT $$",
         test_name("late_marker_writer")
     );
-    let seen = stand_in("late-stderr", &[], &script, &[&exe, &ready], Duration::ZERO);
+    let seen = stand_in("late-stderr", &[], &script, &[&exe, &ready], Settle::No);
     drop(std::fs::remove_file(&ready));
     report("late stderr", &seen);
     assert_eq!(failure(&seen).kind, FailureKind::MemoryLimit);
@@ -901,14 +918,15 @@ fn a_request_still_queued_when_the_host_is_done_is_dropped() {
     let command = frame(&json!({"type": "execute", "id": "document.activate", "params": {"document": 0}}));
     let finished = frame(&json!({"type": "finished", "error": null}));
     for (name, frames, then) in [
-        // Its output ended while the process lingers on.
-        ("output closed", command.clone(), "exec 1>&-; sleep 1"),
+        // Its output ended while the process lingers on: only the end of its output makes
+        // the request void, not the process ending.
+        ("output closed", command.clone(), "exec 1>&-; sleep 30"),
         // It exited without waiting for the answer.
         ("exited", command.clone(), "exit 0"),
         // It reported its result without waiting for the answer.
         ("finished", [command.clone(), finished].concat(), "sleep 30"),
     ] {
-        let seen = stand_in("done-host", &frames, then, &[], Duration::from_millis(300));
+        let seen = stand_in("done-host", &frames, then, &[], Settle::Done);
         report(name, &seen);
         if name == "finished" {
             assert_eq!(seen.result, Ok(()), "{name}");
@@ -921,7 +939,7 @@ fn a_request_still_queued_when_the_host_is_done_is_dropped() {
 #[cfg(unix)]
 #[test]
 fn a_host_that_lingers_after_closing_its_output_is_stopped_by_the_app() {
-    let seen = stand_in("lingering", &[], "exec 1>&-; exec sleep 30", &[], Duration::ZERO);
+    let seen = stand_in("lingering", &[], "exec 1>&-; exec sleep 30", &[], Settle::No);
     report("lingering", &seen);
     let f = failure(&seen);
     assert_eq!(f.kind, FailureKind::HostViolation, "{}", f.message);
@@ -933,10 +951,8 @@ fn a_host_that_lingers_after_closing_its_output_is_stopped_by_the_app() {
 fn a_script_over_the_message_limit_fails_by_name() {
     let limit = photocraft_script_js::isolate::protocol::MAX_TO_HOST;
     let src = format!("//{}", "x".repeat(limit));
-    // Refused before it is encoded: encoding 257 MiB would outlast this limit.
-    let mut opts = options("oversize script");
-    opts.time_limit = Duration::from_millis(50);
-    let mut job = IsolatedJob::spawn(src, opts).unwrap();
+    // That it is refused before it is encoded is checked in the supervisor's own tests.
+    let mut job = IsolatedJob::spawn(src, options("oversize script")).unwrap();
     let seen = drive(&mut job, None, &[], |_, _| {});
     report("oversize script", &seen);
     let f = failure(&seen);

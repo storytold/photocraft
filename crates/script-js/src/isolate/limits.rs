@@ -90,7 +90,10 @@ impl Containment {
         }
         // Without `waitid` the host is only known to have exited once it is reaped. What it
         // started is still in its group then, and a group id is not given to a new process while
-        // the group has members, so the group is stopped right after.
+        // the group has members, so the group is stopped right after. A group left empty is
+        // signalled once by an id that is free again: OpenBSD does not hand a freed pid out at
+        // once, but that is no guarantee. Watching the exit without reaping (a kqueue
+        // `EVFILT_PROC`) would close that; it is not done here, where it can't be built or tested.
         #[cfg(target_os = "openbsd")]
         if status.is_some() && !self.reaped.swap(true, std::sync::atomic::Ordering::SeqCst) {
             kill_group(child);
