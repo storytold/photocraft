@@ -1,6 +1,7 @@
 //! Explicit Paste modes preserve source kind instead of silently using the ordinary raster route.
 
 use photocraft_engine::Session;
+use photocraft_engine::actions_cmds::ActionsExt;
 use serde_json::json;
 
 /// This uses only the original public command API, so the pre-fix failure is executable.
@@ -27,7 +28,7 @@ use photocraft_doc::{Fill, Layer, LayerContent, Path, Subpath};
 use photocraft_engine::{
     actions_cmds::{Action, ActionList, ActionStep, ActionsFile},
     atn_cmds,
-    edit_cmds::Clip,
+    edit_cmds::clip_from_svg,
 };
 use photocraft_geom::{Point, Size};
 use serde_json::Value;
@@ -37,7 +38,7 @@ const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" heigh
 fn scene(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 20, "height": 16, "depth": depth, "background": "transparent"})).unwrap();
-    s.clipboard = Some(Clip::from_svg(SVG).unwrap());
+    *s.clipboard = Some(clip_from_svg(SVG).unwrap());
     s
 }
 
@@ -65,7 +66,7 @@ fn rejected(s: &mut Session, p: Value) -> String {
     let selection = state.selected_layers.clone();
     let active = state.active_layer;
     let history = (state.history.past_len(), state.history.redo_label().map(str::to_owned));
-    let clip = s.clipboard.clone().unwrap();
+    let clip = (*s.clipboard).clone().unwrap();
     let error = s.execute("edit.paste", p).unwrap_err().to_string();
     let state = s.active().unwrap();
     assert_eq!(state.doc, before);
@@ -134,7 +135,7 @@ fn original_svg_drives_pixels_curves_and_shape_paint_with_one_undo() {
     assert!(legacy[1] > 0.9 && legacy[0] < 0.1, "omission keeps the ordinary raster mirror route");
     s.execute("edit.undo", json!({})).unwrap();
     let replaced = String::from_utf8(SVG.to_vec()).unwrap().replace("C2 0", "C3 0");
-    s.clipboard = Some(Clip::from_svg(replaced.as_bytes()).unwrap());
+    *s.clipboard = Some(clip_from_svg(replaced.as_bytes()).unwrap());
     s.execute("edit.paste", json!({"as":"path"})).unwrap();
     assert!(s.active().unwrap().doc.paths.last().unwrap().path.subpaths.iter().flat_map(|p| &p.knots).any(|k| k.out_ctrl == Point::new(8.0, 4.0)));
     s.execute("edit.undo", json!({})).unwrap();
@@ -193,17 +194,17 @@ fn invalid_modes_targets_and_capabilities_preserve_source_and_history() {
         rejected(&mut s, p);
     }
     let multi = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="8"><rect width="3" height="3"/><rect x="5" width="3" height="3"/></svg>"##;
-    s.clipboard = Some(Clip::from_svg(multi).unwrap());
+    *s.clipboard = Some(clip_from_svg(multi).unwrap());
     rejected(&mut s, json!({"as":"shape"}));
     s.execute("edit.paste", json!({"as":"path"})).unwrap();
     assert_eq!(s.active().unwrap().doc.paths.last().unwrap().path.subpaths.len(), 2);
     let opacity = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="8"><g opacity=".5"><rect width="3" height="3"/></g></svg>"##;
-    s.clipboard = Some(Clip::from_svg(opacity).unwrap());
+    *s.clipboard = Some(clip_from_svg(opacity).unwrap());
     for mode in ["path", "shape"] {
         rejected(&mut s, json!({"as":mode}));
     }
     let mut empty = Session::new();
-    empty.clipboard = Some(Clip::from_svg(SVG).unwrap());
+    *empty.clipboard = Some(clip_from_svg(SVG).unwrap());
     assert!(empty.execute("edit.paste", json!({"as":"pixels"})).is_err());
     assert!(empty.active().is_none());
     let mut locked = scene(8);
@@ -227,16 +228,16 @@ fn invalid_modes_targets_and_capabilities_preserve_source_and_history() {
 /// Existing geometry and cache limits apply before publication, including intermediate caches.
 #[test]
 fn source_and_destination_work_limits_refuse_before_editing() {
-    assert!(Clip::from_svg(b"not svg").is_err());
-    assert!(Clip::from_svg(&vec![b' '; 16 * 1024 * 1024 + 1]).is_err());
-    assert!(Clip::from_svg(br##"<svg xmlns="http://www.w3.org/2000/svg" width="6000" height="6000"><rect width="6000" height="6000"/></svg>"##).is_err());
+    assert!(clip_from_svg(b"not svg").is_err());
+    assert!(clip_from_svg(&vec![b' '; 16 * 1024 * 1024 + 1]).is_err());
+    assert!(clip_from_svg(br##"<svg xmlns="http://www.w3.org/2000/svg" width="6000" height="6000"><rect width="6000" height="6000"/></svg>"##).is_err());
     let mut s = scene(8);
     let mut many = String::from("<svg xmlns='http://www.w3.org/2000/svg' width='10' height='8'>");
     for _ in 0..1025 {
         many.push_str("<rect width='1' height='1'/>");
     }
     many.push_str("</svg>");
-    s.clipboard = Some(Clip::from_svg(many.as_bytes()).unwrap());
+    *s.clipboard = Some(clip_from_svg(many.as_bytes()).unwrap());
     assert!(rejected(&mut s, json!({"as":"path"})).contains("4096"));
     // The original position covers 36MP in this destination; the final position covers zero.
     let oversized = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><path d="M0 0H6000V6000H0Z"/></svg>"##;
@@ -246,7 +247,7 @@ fn source_and_destination_work_limits_refuse_before_editing() {
     doc.layers.push(Layer::raster("Pixels", doc.pixel_format()));
     let mut large = Session::new();
     large.add_document(doc, None);
-    large.clipboard = Some(Clip::from_svg(oversized).unwrap());
+    *large.clipboard = Some(clip_from_svg(oversized).unwrap());
     assert!(rejected(&mut large, json!({"as":"shape","center":[-10000,-10000]})).contains("cache exceeds 24 megapixels"));
 }
 
@@ -286,15 +287,15 @@ fn atn_classes_roundtrip_and_play_real_modes() {
         assert_eq!(load(&mut s, &recorded(descriptor(class_id)))["unsupported"], json!([]));
         // `As Pxel` is what an ordinary Paste records: it keeps the ordinary route.
         let params = if mode == "pixels" { json!({}) } else { json!({"as":mode}) };
-        assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("edit.paste", params)]);
+        assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("edit.paste", params)]);
         let saved = save(&mut s);
         let file = atn::parse(&saved).unwrap();
         if mode != "pixels" {
             assert_eq!(file.actions[0].items[0].descriptor.as_ref().unwrap().get("As  "), descriptor(class_id).get("As  "));
         }
         let imported = atn_cmds::import(&saved).unwrap();
-        assert_eq!(imported.actions[0].steps, s.actions.list.actions()[0].steps);
-        s.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+        assert_eq!(imported.actions[0].steps, s.actions().list.actions()[0].steps);
+        s.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
         let result = s.execute("actions.play", json!({"action":"Paste"})).unwrap();
         assert_eq!(result["ran"], 1);
         assert!(result.get("failed").is_none(), "{result}");
@@ -316,7 +317,7 @@ fn atn_classes_roundtrip_and_play_real_modes() {
 fn atn_unknown_forms_are_kept_and_legacy_omission_stays_legacy() {
     let mut s = scene(8);
     assert_eq!(load(&mut s, &recorded(Descriptor::new("null")))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("edit.paste", json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("edit.paste", json!({}))]);
     for d in [
         descriptor("unknownClass"),
         Descriptor::new("null").with("As  ", D::Text(UnicodeString::new_nul("Path"))),
@@ -328,7 +329,7 @@ fn atn_unknown_forms_are_kept_and_legacy_omission_stays_legacy() {
         let file = atn::parse(&original).unwrap();
         let mut s = Session::new();
         assert_eq!(load(&mut s, &original)["unsupported"].as_array().unwrap().len(), 1);
-        assert_eq!(s.actions.list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
+        assert_eq!(s.actions().list.actions()[0].steps[0].command, atn_cmds::PHOTOSHOP_STEP);
         assert_eq!(atn::parse(&save(&mut s)).unwrap().actions[0].items[0].descriptor, file.actions[0].items[0].descriptor);
     }
     for p in [
@@ -354,11 +355,11 @@ fn recorded_pixels_paste(in_place: bool) -> Descriptor {
 fn recorded_pixels_paste_keeps_the_ordinary_route() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 20, "height": 16, "background": "transparent"})).unwrap();
-    s.clipboard = Some(Clip::from_svg(SVG).unwrap());
+    *s.clipboard = Some(clip_from_svg(SVG).unwrap());
     s.execute("edit.paste", json!({"as":"shape"})).unwrap();
     s.execute("edit.copy", json!({})).unwrap();
     assert_eq!(load(&mut s, &recorded(recorded_pixels_paste(false)))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("edit.paste", json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("edit.paste", json!({}))]);
     let layers = s.active().unwrap().doc.layers.len();
     let result = s.execute("actions.play", json!({"action":"Paste"})).unwrap();
     assert_eq!(result["ran"], 1);
@@ -372,5 +373,5 @@ fn recorded_pixels_paste_keeps_the_ordinary_route() {
 fn recorded_pixels_paste_in_place_maps() {
     let mut s = Session::new();
     assert_eq!(load(&mut s, &recorded(recorded_pixels_paste(true)))["unsupported"], json!([]));
-    assert_eq!(s.actions.list.actions()[0].steps, vec![ActionStep::new("edit.pasteSpecial.pasteInPlace", json!({}))]);
+    assert_eq!(s.actions().list.actions()[0].steps, vec![ActionStep::new("edit.pasteSpecial.pasteInPlace", json!({}))]);
 }
