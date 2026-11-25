@@ -636,8 +636,8 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             let mut rows = apply_image_source_rows(app);
             // Scale and Offset only affect Add and Subtract.
             rows.extend([
-                on_target(choice("sourceLayer", tl!("Layer"), channels(&layers), &layer)),
-                on_target(choice("sourceChannel", tl!("Channel"), channels(&load), &chans[0])),
+                on_target(choice("sourceLayer", tl!("Layer"), layers, &layer)),
+                on_target(choice("sourceChannel", tl!("Channel"), apply_image_target_channels(d, &load, chans.len()), &chans[0])),
             ]);
             rows.extend(apply_image_other_source_rows(app));
             rows.extend([
@@ -697,6 +697,17 @@ fn apply_image_source_rows(app: &PhotocraftApp) -> Vec<Param> {
     vec![choice(SOURCE_DOCUMENT, tl!("Source"), names, &target)]
 }
 
+/// The target's own Channel options: `load` (the Load Selection list: its first `chans` entries the composite, the
+/// colours and the alphas, then transparency, mask and selection) with the alpha channels as
+/// [`apply_image_alpha_options`], so an alpha named as a built-in channel keeps its own option.
+fn apply_image_target_channels(doc: &photocraft_doc::Document, load: &[String], chans: usize) -> Vec<(String, Label)> {
+    let builtins = chans.saturating_sub(doc.channels.len());
+    let mut list = channels(load.get(..builtins).unwrap_or_default());
+    list.extend(apply_image_alpha_options(doc));
+    list.extend(channels(load.get(chans..).unwrap_or_default()));
+    list
+}
+
 /// The Layer and Channel rows of each source document other than the target (#14480): its Layer list (as the
 /// target's) and its channels (the composite, the colour channels of a colour document, the alpha channels).
 fn apply_image_other_source_rows(app: &PhotocraftApp) -> Vec<Param> {
@@ -705,14 +716,15 @@ fn apply_image_other_source_rows(app: &PhotocraftApp) -> Vec<Param> {
     for (i, doc) in apply_image_documents(app).into_iter().filter(|(i, _)| Some(*i) != target) {
         let (layers, layer) = apply_image_layers(doc);
         let mode = doc.pixel_format().mode;
-        let mut list = vec![photocraft_engine::channel_cmds::composite_name(mode).to_string()];
+        let mut names = vec![photocraft_engine::channel_cmds::composite_name(mode).to_string()];
         if mode.color_channels() > 1 {
-            list.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
+            names.extend(photocraft_engine::channel_cmds::color_names(mode).iter().map(|n| n.to_string()));
         }
-        list.extend(doc.channels.iter().map(|c| c.name.clone()));
-        let composite = list.first().cloned().unwrap_or_default();
-        rows.push(choice(&source_layer_key(i), tl!("Layer"), channels(&layers), &layer).visible_when(source_shown_key(i), true));
-        rows.push(choice(&source_channel_key(i), tl!("Channel"), channels(&list), &composite).visible_when(source_shown_key(i), true));
+        let composite = names.first().cloned().unwrap_or_default();
+        let mut list = channels(&names);
+        list.extend(apply_image_alpha_options(doc));
+        rows.push(choice(&source_layer_key(i), tl!("Layer"), layers, &layer).visible_when(source_shown_key(i), true));
+        rows.push(choice(&source_channel_key(i), tl!("Channel"), list, &composite).visible_when(source_shown_key(i), true));
     }
     rows
 }
@@ -730,11 +742,26 @@ fn apply_image_source_derive(fields: &mut DialogFields) {
     fields.remove("source");
     let other = chosen.filter(|i| others.contains(i));
     fields.set(SOURCE_IS_TARGET, other.is_none());
-    let Some(i) = other else { return };
-    let (Some(layer), Some(channel)) = (fields.text(&source_layer_key(i)).map(str::to_owned), fields.text(&source_channel_key(i)).map(str::to_owned)) else {
+    let invert = fields.bool("sourceInvert") == Some(true);
+    let Some(i) = other else {
+        // The target's flat keys carry plain names; an alpha or layer the engine would read as something else by its
+        // name goes as an explicit selector in `source`, which the command reads before them.
+        let layer = apply_image_layer_selector(fields.text("sourceLayer").unwrap_or("merged"));
+        let channel = fields.text("sourceChannel").map(apply_image_channel_selector);
+        if layer.is_object() || channel.as_ref().is_some_and(Value::is_object) {
+            let mut source = json!({"layer": layer, "invert": invert});
+            if let (Some(channel), Some(map)) = (channel, source.as_object_mut()) {
+                map.insert("channel".into(), channel);
+            }
+            fields.set("source", FieldValue::Json(source));
+        }
         return;
     };
-    let invert = fields.bool("sourceInvert") == Some(true);
+    let (Some(layer), Some(channel)) =
+        (fields.text(&source_layer_key(i)).map(apply_image_layer_selector), fields.text(&source_channel_key(i)).map(apply_image_channel_selector))
+    else {
+        return;
+    };
     fields.set("source", FieldValue::Json(json!({"document": i, "layer": layer, "channel": channel, "invert": invert})));
 }
 

@@ -245,3 +245,104 @@ fn a_source_of_another_bit_depth_is_refused_and_changes_nothing() {
     app.session.execute(APPLY, json!({"source": {"document": gray}, "blending": "normal"})).unwrap();
     assert_eq!(rgb(&app, 300, 50), [255, 255, 255]);
 }
+
+/// "clash" (RGB 8 bit, 400 x 300, Background 128; an alpha channel named "Red" white on the left half; a pixel layer
+/// named "merged" white on the right half; its Background targeted), then "target" (RGB 8 bit, 400 x 300, Background
+/// 200/100/50), which is active.
+fn names_like_the_built_in_choices() -> (Box<PhotocraftApp>, egui::Context, usize) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    run(&mut app, "file.new", json!({"width": 400, "height": 300, "background": "#808080", "name": "clash"}));
+    run(&mut app, "select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 300}));
+    run(&mut app, "select.saveSelection", json!({"name": "Red"}));
+    run(&mut app, "select.deselect", json!({}));
+    run(&mut app, "layer.new.layer", json!({"name": "merged"}));
+    fill(&mut app, [200, 0, 200, 300], "#ffffff");
+    run(&mut app, "layer.select", json!({"name": "Background"}));
+    run(&mut app, "file.new", json!({"width": 400, "height": 300, "background": "#c86432", "name": "target"}));
+    app.sync_views();
+    let ctx = app.ctx().clone();
+    let clash = index_of(&app, "clash");
+    (app, ctx, clash)
+}
+
+/// The option id of row `key` at `position` of its list, after checking that no two options share an id (and the
+/// labels, when given).
+fn option_at(app: &mut PhotocraftApp, key: &str, labels: Option<&[&str]>, position: usize) -> String {
+    let list = options(app, key);
+    if let Some(labels) = labels {
+        assert_eq!(list.iter().map(|(_, label)| label.as_str()).collect::<Vec<_>>(), labels, "{key}");
+    }
+    let mut unique: Vec<&String> = list.iter().map(|(id, _)| id).collect();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), list.len(), "{key} options share an id: {list:?}");
+    list[position].0.clone()
+}
+
+/// Both pixels of the result of `params` run on the active layer, undone after.
+fn applied(app: &mut PhotocraftApp, params: Value) -> [[u8; 3]; 2] {
+    run(app, APPLY, params);
+    let out = [rgb(app, 50, 50), rgb(app, 300, 50)];
+    run(app, "edit.undo", json!({}));
+    out
+}
+
+#[test]
+fn a_source_alpha_named_like_a_colour_channel_reads_the_alpha() {
+    let (mut app, ctx, clash) = names_like_the_built_in_choices();
+    let alpha = option_at(&mut app, &channel_key(clash), Some(&["RGB", "Red", "Green", "Blue", "Red"]), 4);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, SOURCE, json!(clash.to_string()));
+    set(&mut app, &ctx, d, &channel_key(clash), json!(alpha));
+    assert_eq!(fields(&app, d)["source"]["channel"], json!({"alpha": 0}), "an explicit alpha selector");
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    // The alpha: white on the left, black on the right. The red plane would be 128 and 255.
+    assert_eq!(rgb(&app, 50, 50), [255, 255, 255]);
+    assert_eq!(rgb(&app, 300, 50), [0, 0, 0]);
+}
+
+#[test]
+fn a_source_layer_named_merged_is_that_layer_not_the_composite() {
+    let (mut app, ctx, clash) = names_like_the_built_in_choices();
+    let layer = option_at(&mut app, &layer_key(clash), Some(&["Merged", "merged", "Background"]), 1);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, SOURCE, json!(clash.to_string()));
+    set(&mut app, &ctx, d, &layer_key(clash), json!(layer));
+    assert_eq!(fields(&app, d)["source"]["layer"], json!({"name": "merged"}), "an explicit layer name selector");
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    let through_dialog = [rgb(&app, 50, 50), rgb(&app, 300, 50)];
+    run(&mut app, "edit.undo", json!({}));
+    let source = |layer: Value| json!({"blending": "normal", "source": {"document": clash, "layer": layer, "channel": "RGB"}});
+    assert_eq!(applied(&mut app, source(json!({"name": "merged"}))), through_dialog);
+    assert_ne!(applied(&mut app, source(json!("merged"))), through_dialog, "the composite applies differently");
+}
+
+#[test]
+fn the_targets_own_rows_keep_an_alpha_named_red_and_a_layer_named_merged() {
+    let (mut app, ctx, clash) = names_like_the_built_in_choices();
+    run(&mut app, "document.activate", json!({"document": clash}));
+    app.sync_views();
+    // Channel: the alpha "Red" after the colour channels, as an explicit selector.
+    let alpha = option_at(&mut app, "sourceChannel", None, 4);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, "sourceChannel", json!(alpha));
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    assert_eq!([rgb(&app, 50, 50), rgb(&app, 300, 50)], [[255, 255, 255], [0, 0, 0]], "the alpha, not the red plane");
+    run(&mut app, "edit.undo", json!({}));
+    // Layer: the layer "merged" beside Merged.
+    let layer = option_at(&mut app, "sourceLayer", Some(&["Merged", "merged", "Background"]), 1);
+    let d = open(&mut app, &ctx);
+    set(&mut app, &ctx, d, "blending", json!("normal"));
+    set(&mut app, &ctx, d, "sourceLayer", json!(layer));
+    // The dialog opens with the last Channel (the alpha): back to the composite.
+    set(&mut app, &ctx, d, "sourceChannel", json!("RGB"));
+    crate::dialogs::confirm(&mut app, &ctx, d).unwrap();
+    let through_dialog = [rgb(&app, 50, 50), rgb(&app, 300, 50)];
+    run(&mut app, "edit.undo", json!({}));
+    let source = |layer: Value| json!({"blending": "normal", "source": {"layer": layer, "channel": "RGB"}});
+    assert_eq!(applied(&mut app, source(json!({"name": "merged"}))), through_dialog);
+    assert_ne!(applied(&mut app, source(json!("merged"))), through_dialog, "the composite applies differently");
+}
