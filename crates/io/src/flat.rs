@@ -2642,7 +2642,10 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
     ctl.check().map_err(|_| IoError::Cancelled)?;
 
     let mut enc = if opts.tiff_ccitt_g4 {
-        let w_u16 = u16::try_from(w).map_err(|_| IoError::Unsupported("TIFF CCITT G4 bilevel export width exceeds 65535 pixels".into()))?;
+        // `fax` 0.2.7 performs unchecked `u16` addition (`a0 + a1`) and `i16` subtraction
+        // (`a1 as i16 - b1 as i16`) on run positions, which overflows above `i16::MAX` (32767).
+        let w_i16 = i16::try_from(w).map_err(|_| IoError::Unsupported(format!("TIFF CCITT G4 bilevel export width exceeds {} pixels", i16::MAX)))?;
+        let w_u16 = u16::try_from(w_i16).map_err(|_| IoError::Unsupported("cannot export an empty document".into()))?;
         Some((fax::encoder::Encoder::new(fax::VecWriter::new()), w_u16))
     } else {
         None
@@ -2663,10 +2666,19 @@ fn export_tiff_bilevel(doc: &Document, opts: &ExportOptions, ctl: &photocraft_ra
         for row_idx in 0..band_h {
             let row_start = row_idx * band_w;
             let row_pixels = &band.px[row_start..row_start + band_w];
-            if opts.preserve_alpha && row_pixels.iter().any(|p| p[3] < 1.0) {
-                return Err(IoError::Unsupported(
-                    "Save and Close cannot discard TIFF composite transparency; enable tiffTransparency or save to a separate output folder".into(),
-                ));
+            if row_pixels.iter().any(|p| p[3] < 1.0) {
+                if opts.tiff_transparency == Some(true) {
+                    return Err(IoError::Unsupported(
+                        "1-bit bilevel TIFF cannot store TIFF composite transparency; disable tiffTransparency or convert the document to Grayscale or RGB"
+                            .into(),
+                    ));
+                }
+                if opts.preserve_alpha {
+                    return Err(IoError::Unsupported(
+                        "Save and Close cannot discard TIFF composite transparency; save to a separate output folder or convert the document to Grayscale or RGB"
+                            .into(),
+                    ));
+                }
             }
             if let Some((encoder, w_u16)) = enc.as_mut() {
                 let pels = row_pixels.iter().map(|p| {
@@ -3791,5 +3803,67 @@ mod bilevel_tiff_tests {
         let opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
         let res = export_flat(&doc, Format::Tiff, &opts).unwrap();
         assert!(res.warnings.iter().any(|w| w.contains("extra channels were not written")));
+    }
+
+    #[test]
+    fn bilevel_tiff_refuses_explicit_tiff_transparency_on_transparent_bitmap() {
+        let mut doc = Document::new("trans", Size::new(2, 1), ColorMode::Bitmap, SampleType::U8);
+        let surface = Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, Rect::new(0, 0, 2, 1), &[0, 0, 0, 0, 0, 0, 0, 255]);
+        doc.layers.push(photocraft_doc::Layer::new("Layer 1", photocraft_doc::LayerContent::Raster(surface)));
+
+        for g4 in [true, false] {
+            let opts = ExportOptions { tiff_ccitt_g4: g4, tiff_transparency: Some(true), ..Default::default() };
+            let err = export_flat(&doc, Format::Tiff, &opts).unwrap_err();
+            assert!(matches!(err, IoError::Unsupported(_)), "g4={g4}: {err}");
+
+            // Explicit flattening remains allowed.
+            let flat_opts = ExportOptions { tiff_ccitt_g4: g4, tiff_transparency: Some(false), ..Default::default() };
+            assert!(export_flat(&doc, Format::Tiff, &flat_opts).is_ok(), "g4={g4}");
+        }
+
+        // Opaque Bitmap with explicit tiff_transparency=Some(true) still succeeds.
+        let opaque = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
+        let opts = ExportOptions { tiff_ccitt_g4: true, tiff_transparency: Some(true), ..Default::default() };
+        assert!(export_flat(&opaque, Format::Tiff, &opts).is_ok());
+    }
+
+    #[test]
+    fn g4_bilevel_tiff_rejects_width_above_i16_max_and_encodes_at_limit() {
+        let too_wide = Document::new("too_wide", Size::new(u32::from(i16::MAX as u16) + 1, 1), ColorMode::Bitmap, SampleType::U8);
+        let opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+        let err = export_flat(&too_wide, Format::Tiff, &opts).unwrap_err();
+        assert!(matches!(err, IoError::Unsupported(_)), "{err}");
+
+        // Right at i16::MAX (32767) with runs near the right edge succeeds without overflow.
+        let max_w = i16::MAX as u32;
+        let mut at_limit = Document::new("at_limit", Size::new(max_w, 1), ColorMode::Bitmap, SampleType::U8);
+        let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        surface.fill_rect(Rect::new(0, 0, max_w as i32, 1), &[1.0, 1.0, 1.0, 1.0]);
+        surface.fill_rect(Rect::new(max_w as i32 - 20, 0, max_w as i32 - 10, 1), &[0.0, 0.0, 0.0, 1.0]);
+        surface.fill_rect(Rect::new(max_w as i32 - 5, 0, max_w as i32, 1), &[0.0, 0.0, 0.0, 1.0]);
+        at_limit.layers.push(photocraft_doc::Layer::new("Background", photocraft_doc::LayerContent::Raster(surface)));
+        let res = export_flat(&at_limit, Format::Tiff, &opts).unwrap();
+        let reopened = import_flat("at_limit.tif", &res.bytes).unwrap().document;
+        assert_eq!(reopened.size, Size::new(max_w, 1));
+    }
+
+    #[test]
+    fn g4_compression_is_rejected_before_non_tiff_exports() {
+        let mut rgb = Document::new("rgb", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+        let mut surface = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        surface.fill_rect(Rect::new(0, 0, 2, 2), &[1.0, 0.0, 0.0, 1.0]);
+        rgb.layers.push(photocraft_doc::Layer::new("Background", photocraft_doc::LayerContent::Raster(surface)));
+
+        let bitmap = import_flat("bilevel.tif", &tiff(1, 1)).unwrap().document;
+        let opts = ExportOptions { tiff_ccitt_g4: true, ..Default::default() };
+
+        for doc in [&rgb, &bitmap] {
+            for name in ["out.psd", "out.psb", "out.ora", "out.pdf", "out.pcraft", "out.png"] {
+                let err = crate::export(doc, name, &opts).unwrap_err();
+                assert!(matches!(err, IoError::Unsupported(_)), "{name}: {err}");
+            }
+            let err = crate::export(doc, "out.unknownext", &opts).unwrap_err();
+            assert!(matches!(err, IoError::UnknownFormat(_)), "{err}");
+        }
     }
 }

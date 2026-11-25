@@ -1149,8 +1149,13 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         {
                             return Err(EngineError::Other("Save and Close cannot preserve this TIFF color mode".into()));
                         }
-                        if !save.tiff_layers && super::save::tiff_would_write_layers(doc) {
-                            return Err(EngineError::Other("Save and Close would flatten TIFF layer data; keep tiffLayers enabled".into()));
+                        if (!save.tiff_layers || save.tiff_ccitt_g4) && super::save::tiff_would_write_layers(doc) {
+                            let msg = if save.tiff_ccitt_g4 {
+                                "Save and Close would flatten TIFF layer data; CCITT Group 4 compression cannot preserve layers"
+                            } else {
+                                "Save and Close would flatten TIFF layer data; keep tiffLayers enabled"
+                            };
+                            return Err(EngineError::Other(msg.into()));
                         }
                     }
                     Ok(())

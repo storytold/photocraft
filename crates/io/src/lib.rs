@@ -1233,6 +1233,15 @@ fn export_stages_with_renderer(
             "XCF is GIMP's own format and PhotoCraft only opens it; save as .pcraft to keep the layers, or export a flat image".into(),
         ));
     }
+    if opts.tiff_ccitt_g4 && photocraft_formats::from_extension(&ext) != Some(photocraft_formats::Format::Tiff) {
+        let known = matches!(ext.as_str(), "ora" | "pdf" | "psd" | "psb")
+            || ext == photocraft_format::EXTENSION
+            || photocraft_formats::from_extension(&ext).and_then(photocraft_formats::Format::raster_codec).is_some();
+        if !known {
+            return Err(IoError::UnknownFormat(name_or_ext.to_string()));
+        }
+        return Err(IoError::Unsupported("CCITT Group 4 (G4) compression is only supported for bilevel (Bitmap mode) TIFF exports".into()));
+    }
     if ext == "ora" {
         let mut res = ora::export(doc)?;
         if let Some(r) = renderer {
