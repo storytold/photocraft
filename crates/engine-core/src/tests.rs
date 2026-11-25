@@ -1258,6 +1258,10 @@ fn documents_are_inspected_and_activated_by_their_serial() {
     // An index and a serial naming different documents is refused, not settled by the serial.
     assert!(s.execute("document.inspect", json!({"serial": one, "document": 1})).is_err());
     assert_eq!(s.execute("document.inspect", json!({"serial": one, "document": null})).unwrap()["name"], "One");
+    // A serial follows its document when the tabs move, where an index would not.
+    assert_eq!(s.move_document(0, 1), Some(1));
+    assert_eq!(s.execute("document.activate", json!({"serial": one})).unwrap(), json!({"document": 1}));
+    assert_eq!(s.execute("document.inspect", json!({"serial": one})).unwrap()["name"], "One");
 }
 
 /// A reader that needs no History rows (scripts read a document many times) can leave them out.

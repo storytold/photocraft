@@ -1669,6 +1669,8 @@ pub struct Preferences {
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: ScriptEvents,
     /// File › Scripts › Scripts Manager: the JavaScript files the user loaded, with their tags.
+    /// Read cut to the list's limits; [`Preferences::set`] refuses a list past them.
+    #[serde(deserialize_with = "crate::script_list_cmds::bounded")]
     pub scripts: crate::script_list_cmds::LoadedScripts,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
     pub layer_mask_overlay: LayerMaskOverlay,
@@ -1735,6 +1737,14 @@ impl Preferences {
         check_value(path, &value)?;
         let mut root = self.to_json();
         set_path(&mut root, path, value)?;
+        // The script list loads cut to its limits; a set past them is refused instead.
+        if path == "scripts" || path.starts_with("scripts.") {
+            let list: crate::script_list_cmds::LoadedScripts =
+                serde_json::from_value(root.get("scripts").cloned().unwrap_or_default()).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
+            if let Some(why) = list.over_limits() {
+                return Err(format!("invalid value for `{path}`: {why}"));
+            }
+        }
         let mut next: Preferences = serde_json::from_value(root).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
         if let Some(theme) = legacy_theme {
             next.interface.set_legacy_theme(&theme)?;

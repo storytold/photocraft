@@ -165,6 +165,7 @@ pub fn register(install: &mut Install) {
     }));
     hooks.recorded_step = Some(crate::layer_multi_cmds::recorded_step);
     hooks.before_command.push(crate::float_cmds::before_dispatch);
+    hooks.recorded_steps.push(("file.scripts.run", |s, _, p, _| crate::script_list_cmds::recorded_run(s, p)));
     hooks.recorded_steps.push(("edit.checkSpelling", |_, _, p, _| crate::type_spell_cmds::records(p).then(|| crate::type_spell_cmds::recorded_step(p))));
     hooks.prefs_applied.push(|s| crate::transform_cmds::set_budget(u64::from(s.prefs().performance.effective_memory_usage_mb()) << 20));
     // An edited Edit Contents document updates its parent as it closes.

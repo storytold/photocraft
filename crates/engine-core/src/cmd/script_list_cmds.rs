@@ -51,6 +51,45 @@ pub struct LoadedScripts {
     pub custom_options: crate::script_options_cmds::CustomOptions,
 }
 
+impl LoadedScripts {
+    /// Why the list is past the limits Load keeps it to ([`MAX_SCRIPTS`], [`MAX_STORED_SOURCE`],
+    /// [`MAX_STORED_TOTAL`]), for a preference set that would put it there.
+    pub fn over_limits(&self) -> Option<String> {
+        if self.entries.len() > MAX_SCRIPTS {
+            return Some(format!("the list can hold at most {MAX_SCRIPTS} scripts"));
+        }
+        let texts = || self.entries.iter().filter_map(|e| e.source.as_deref());
+        if texts().any(|t| t.len() > MAX_STORED_SOURCE) {
+            return Some(format!("a script kept in the list can be at most {} KiB", MAX_STORED_SOURCE >> 10));
+        }
+        if texts().map(str::len).sum::<usize>() > MAX_STORED_TOTAL {
+            return Some(format!("the list can keep at most {} KiB of script text", MAX_STORED_TOTAL >> 10));
+        }
+        None
+    }
+
+    /// The list cut to those limits, in order: a saved list past them (from another build, or
+    /// edited by hand) loads with the scripts that fit.
+    fn within_limits(mut self) -> Self {
+        let mut kept = 0;
+        self.entries.retain(|e| {
+            let text = e.source.as_deref().map_or(0, str::len);
+            let fits = text <= MAX_STORED_SOURCE && kept + text <= MAX_STORED_TOTAL;
+            if fits {
+                kept += text;
+            }
+            fits
+        });
+        self.entries.truncate(MAX_SCRIPTS);
+        self
+    }
+}
+
+/// Reads the preferences' list cut to the limits (see [`LoadedScripts::within_limits`]).
+pub(crate) fn bounded<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<LoadedScripts, D::Error> {
+    LoadedScripts::deserialize(d).map(LoadedScripts::within_limits)
+}
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -243,6 +282,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "name": name, "source": source }))
 }
 
+/// The step a recording keeps for a run of listed script `index`: its file, or its name and text,
+/// so a replay runs that script whatever the list holds by then. Tags stay out. `None` for a
+/// run by path or text, which already names its script.
+pub(crate) fn recorded_run(s: &Session, p: &Value) -> Option<Value> {
+    p.get("index")?;
+    let e = s.prefs().scripts.entries.get(index("file.scripts.run", s, p).ok()?)?;
+    match (&e.path, &e.source) {
+        (Some(path), _) => Some(json!({ "path": path })),
+        (None, Some(source)) => Some(json!({ "name": e.name, "source": source })),
+        (None, None) => None,
+    }
+}
+
 fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
@@ -381,6 +433,47 @@ mod tests {
         assert!(err.contains("512 KiB"), "{err}");
         s.execute("file.scripts.remove", json!({"index": 0})).unwrap();
         s.execute("file.scripts.load", json!({"name": "more.js", "source": "1"})).unwrap();
+    }
+
+    /// A recorded run of a listed script names the script, so the action runs it whatever the
+    /// list holds later; its tags stay out of the step.
+    #[test]
+    fn a_recorded_run_by_index_keeps_the_script_not_its_place_in_the_list() {
+        let mut s = session();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute("file.scripts.load", json!({"name": "first.js", "source": "1", "tags": "T"})).unwrap();
+        s.execute("file.scripts.load", json!({"name": "second.js", "source": "2"})).unwrap();
+        s.execute("actions.record", json!({"name": "Second"})).unwrap();
+        s.execute("file.scripts.run", json!({"index": 1})).unwrap();
+        s.execute("actions.stop", json!({})).unwrap();
+        let steps = s.execute("actions.get", json!({"action": "Second"})).unwrap()["steps"].clone();
+        assert_eq!(steps[0][0], "file.scripts.run");
+        assert_eq!(steps[0][1], json!({"name": "second.js", "source": "2"}), "the step names the script, not index 1");
+    }
+
+    /// The list's limits hold for every way into the preferences, not only for Load: setting
+    /// the list is refused past them, and a saved list past them loads cut to what fits.
+    #[test]
+    fn the_lists_limits_hold_where_the_preferences_take_it() {
+        let entry = |i: usize, source: &str| json!({"name": format!("{i}.js"), "source": source});
+        let too_long = vec![entry(0, &"x".repeat(MAX_STORED_SOURCE + 1))];
+        let too_much: Vec<Value> = (0..=MAX_STORED_TOTAL / MAX_STORED_SOURCE).map(|i| entry(i, &"x".repeat(MAX_STORED_SOURCE))).collect();
+        let too_many: Vec<Value> = (0..=MAX_SCRIPTS).map(|i| entry(i, "1")).collect();
+        for entries in [too_long, too_much, too_many] {
+            let mut prefs = crate::prefs::Preferences::default();
+            assert!(prefs.set("scripts.entries", json!(entries)).is_err(), "set past the limits");
+            assert!(prefs.set("scripts", json!({"entries": entries})).is_err(), "set past the limits");
+            assert!(prefs.scripts.entries.is_empty(), "a refused set keeps the list");
+            let saved: crate::prefs::Preferences = serde_json::from_value(json!({"scripts": {"entries": entries}})).unwrap();
+            let kept = &saved.scripts.entries;
+            assert!(kept.len() < entries.len(), "a saved list past the limits loads cut");
+            assert!(kept.len() <= MAX_SCRIPTS);
+            assert!(kept.iter().all(|e| e.source.as_ref().is_none_or(|t| t.len() <= MAX_STORED_SOURCE)));
+            assert!(kept.iter().filter_map(|e| e.source.as_ref()).map(String::len).sum::<usize>() <= MAX_STORED_TOTAL);
+        }
+        let mut prefs = crate::prefs::Preferences::default();
+        prefs.set("scripts.entries", json!([entry(0, "1")])).unwrap();
+        assert_eq!(prefs.scripts.entries.len(), 1, "a list within the limits is set");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
