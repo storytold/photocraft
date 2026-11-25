@@ -35,6 +35,7 @@ use photocraft_engine::presets::styles::StylePreset;
 use serde_json::{Map, Value, json};
 
 use crate::panels::preset_browser::StyleLibrary;
+use crate::state::Tool;
 use crate::{PhotocraftApp, color_picker_ui};
 
 #[cfg(test)]
@@ -540,6 +541,26 @@ pub(crate) fn open_layer(app: &PhotocraftApp) -> Option<LayerId> {
     (app.session.active()?.doc.id == doc).then_some(layer)
 }
 
+/// The option-bar hint while the active Layer Style page takes over canvas drags.
+pub(crate) fn canvas_drag_hint(app: &PhotocraftApp) -> Option<&'static str> {
+    let tool = app.ui.tool;
+    if app.ui.transform.is_some() || !matches!(tool, Tool::Hand | Tool::Move) {
+        return None;
+    }
+    let (id, doc, layer) = app.layer_style_target?;
+    let dialogs = &app.framework.dialogs;
+    if app.session.active()?.doc.id != doc || dialogs.stack().top() != Some(id) {
+        return None;
+    }
+    match dialogs.get_by_id::<HostedLayerStyle>(id)?.draft().selected_kind()? {
+        EffectKind::GradientOverlay if tool == Tool::Hand && gradient_layer_bounds(&app.session, layer).is_some() => {
+            Some(tl!("Click and drag to reposition the gradient."))
+        }
+        EffectKind::DropShadow => Some(tl!("Click and drag to reposition the effect.")),
+        _ => None,
+    }
+}
+
 /// The effect pages with the user's defaults (Make Default) over the factory ones.
 fn specs(keys: &HashMap<String, String>, user: &Map<String, Value>, light: f32) -> Vec<EffectSpec> {
     KINDS
@@ -1031,5 +1052,9 @@ pub(crate) fn gradient_layer_bounds(session: &Session, layer: LayerId) -> Option
     (w > 0.0 && h > 0.0).then_some([w, h])
 }
 
+#[cfg(test)]
+mod drop_shadow_hint_tests;
+#[cfg(test)]
+mod gradient_overlay_hint_tests;
 #[cfg(test)]
 mod tests;

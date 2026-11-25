@@ -75,7 +75,7 @@ pub(crate) fn options_bar(app: &PhotocraftApp) -> u64 {
     let shown = (serialized(&app.ui.tool_options), super::options_bar::edit_key(app), text_target(app));
     // A canvas gesture's start and end change what the bar enables (the symmetry menu's Transform entry).
     let gesture = crate::canvas::tools::in_gesture(app);
-    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture))
+    version(app, (view(app), sessions, shown, brush(app), colours(app), gesture, crate::layer_style::canvas_drag_hint(app)))
 }
 
 /// The version of the title bar: the title it shows (the active document's name and its unsaved mark), the language
