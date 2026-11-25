@@ -1,3 +1,6 @@
+use photocraft_engine::brush_cmds::LiveStrokeExt;
+use photocraft_engine::presets::PresetsExt;
+use photocraft_engine::retouch_cmds::LiveRetouchExt;
 use std::sync::Arc;
 
 use craft::behavior::PixelSize;
@@ -140,12 +143,12 @@ fn clone_dab_coverage(
 /// display's colour management; a second window on another monitor shows it through the main one's.
 pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<CloneSource> {
     use photocraft_engine::presets::clone_source::overlay_blend;
-    let overlay = app.session.presets.clone.overlay.clone();
+    let overlay = app.session.presets().clone.overlay.clone();
     let tool = app.ui.tool;
     if !matches!(tool, Tool::CloneStamp | Tool::Healing) || !overlay.show || (overlay.auto_hide && super::paint_tool::stroking(app).is_some()) {
         return None;
     }
-    let slot = app.session.presets.clone.active().clone();
+    let slot = app.session.presets().clone.active().clone();
     let map = crate::preset_panels::clone_mapping_at(app, Some(at))?;
     let radius = f64::from(app.session.tools.brush.size) / 2.0;
     if !radius.is_finite() || radius <= 0.0 || radius > 500.0 || !at.iter().all(|v| v.is_finite() && v.abs() < 1_000_000.0) {
@@ -185,7 +188,7 @@ pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<Clon
         radius.to_bits(),
         brush_alpha.to_bits()
     );
-    let brush = overlay.clipped.then_some(&app.session.tools.brush);
+    let brush = overlay.clipped.then_some(&*app.session.tools.brush);
     if app.clone_preview.as_ref().is_none_or(|c| {
         let same_source = match (&c.source_document, &source_document) {
             (Some(a), Some(b)) => std::sync::Weak::ptr_eq(a, b),
@@ -474,6 +477,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp, d: &PaintStroke) -> Option<
         EngineStroke::Dab(Box::new(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?))
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
+        crate::retouch_ui::alt_finger_painting(d.tool, d.modifiers.alt, &mut p);
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
         unsmoothed_line(&mut p, d.line);
@@ -704,7 +708,8 @@ pub(crate) fn finish(app: &mut PhotocraftApp, stroke: PaintStroke) {
     if live_retouch_command(d.tool).is_some() || crate::retouch_ui::dab_params(app, d.tool).is_some() || d.tool == Tool::ColorReplacement {
         app.live_stroke = None;
     }
-    let finished = crate::eraser_ui::finish_stroke(app, d.tool, &d.points, d.line)
+    let finished = crate::adjustment_brush::finish_stroke(app, d.tool, &d.points, d.line)
+        || crate::eraser_ui::finish_stroke(app, d.tool, &d.points, d.line)
         || crate::retouch_ui::finish_stroke_with(app, d.tool, &d.points, d.modifiers, d.line, d.history_params.clone());
     app.session.clear_live_stroke();
     if finished {

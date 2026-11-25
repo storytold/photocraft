@@ -686,3 +686,137 @@ fn a_kept_decode_gives_the_same_pixels_and_decodes_once() {
     assert_eq!(pixels(&got), pixels(&import_raw_tuned("a.nef", &nef, &RawTuning::default()).unwrap().0));
     assert_eq!((got.document.size.width, got.document.size.height), (w as u32, h as u32));
 }
+
+#[test]
+fn raw_open_legacy_baseline_pixels() {
+    use photocraft_io::raw::{RawTuning, import_raw_tuned};
+
+    fn fnv1a_u16(bytes: &[u8]) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h
+    }
+
+    fn sample_rgb16(bytes: &[u8], w: usize, x: usize, y: usize) -> [u16; 3] {
+        let off = (y * w + x) * 6;
+        [
+            u16::from_ne_bytes([bytes[off], bytes[off + 1]]),
+            u16::from_ne_bytes([bytes[off + 2], bytes[off + 3]]),
+            u16::from_ne_bytes([bytes[off + 4], bytes[off + 5]]),
+        ]
+    }
+
+    let (w, h) = (16, 16);
+    let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535));
+    spec.as_shot_neutral = Some([0.6, 1.0, 0.8]);
+    let bytes = spec.build();
+
+    let def = import("pin.dng", &bytes).unwrap();
+    let def_img = photocraft_io::document_to_image(&def.document, &mut Vec::new()).unwrap();
+    let def_px = [sample_rgb16(def_img.data(), w, 0, 0), sample_rgb16(def_img.data(), w, 7, 7), sample_rgb16(def_img.data(), w, 15, 15)];
+    let def_hash = fnv1a_u16(def_img.data());
+
+    let tuning = RawTuning {
+        exposure: 0.75,
+        temperature: 15.0,
+        tint: -10.0,
+        shadows: 25.0,
+        highlights: -20.0,
+        clarity: 15.0,
+        texture: 10.0,
+        dehaze: 5.0,
+        ..Default::default()
+    };
+    let (tuned, wb) = import_raw_tuned("pin.dng", &bytes, &tuning).unwrap();
+    let tuned_img = photocraft_io::document_to_image(&tuned.document, &mut Vec::new()).unwrap();
+    let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
+    let tuned_hash = fnv1a_u16(tuned_img.data());
+
+    // Default RAW Open (`def_px`/`def_hash`) runs `craft_develop::sensor::demosaic` (`reflect` borders;
+    // center pixel `[47838, 39368, 49721]` matches legacy bit-for-bit); `tuned_px`/`tuned_hash` reflects
+    // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`). Whole-image hashes differ by
+    // 1 LSB between MSVC and glibc `libm` float math on Windows.
+    let expected_def_hash = if cfg!(target_os = "windows") { 15_396_184_765_895_906_317 } else { 10_802_259_885_448_765_778 };
+    let expected_tuned_hash = if cfg!(target_os = "windows") { 2_792_208_992_597_872_838 } else { 12_255_299_099_314_572_538 };
+    assert_eq!(
+        (def_px, def_hash, wb, tuned_px, tuned_hash),
+        (
+            [[29689, 25226, 50514], [47838, 39368, 49721], [58598, 42281, 45071]],
+            expected_def_hash,
+            false,
+            [[39333, 33449, 65535], [63354, 52144, 65535], [65535, 55781, 59230]],
+            expected_tuned_hash,
+        )
+    );
+}
+
+#[test]
+fn raw_open_camera_wb_legacy_baseline_pixels() {
+    use photocraft_io::raw::{RawTuning, import_raw_tuned};
+
+    fn fnv1a_u16(bytes: &[u8]) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h
+    }
+
+    fn sample_rgb16(bytes: &[u8], w: usize, x: usize, y: usize) -> [u16; 3] {
+        let off = (y * w + x) * 6;
+        [
+            u16::from_ne_bytes([bytes[off], bytes[off + 1]]),
+            u16::from_ne_bytes([bytes[off + 2], bytes[off + 3]]),
+            u16::from_ne_bytes([bytes[off + 4], bytes[off + 5]]),
+        ]
+    }
+
+    let (w, h) = (16, 16);
+    let cam = scene(w, h);
+    let no_wb_bytes = nef_uncompressed(&cam, w, h, None);
+    let wb_bytes = nef_uncompressed_with_wb(&cam, w, h, None, Some([2048, 1536]));
+
+    let no_wb_def = import("no_wb.nef", &no_wb_bytes).unwrap();
+    let no_wb_img = photocraft_io::document_to_image(&no_wb_def.document, &mut Vec::new()).unwrap();
+
+    let def = import("wb.nef", &wb_bytes).unwrap();
+    let def_img = photocraft_io::document_to_image(&def.document, &mut Vec::new()).unwrap();
+    assert_ne!(def_img.data(), no_wb_img.data(), "camera WB must change developed pixels");
+    let def_px = [sample_rgb16(def_img.data(), w, 0, 0), sample_rgb16(def_img.data(), w, 7, 7), sample_rgb16(def_img.data(), w, 15, 15)];
+    let def_hash = fnv1a_u16(def_img.data());
+
+    let tuning = RawTuning {
+        exposure: 0.75,
+        temperature: 15.0,
+        tint: -10.0,
+        shadows: 25.0,
+        highlights: -20.0,
+        clarity: 15.0,
+        texture: 10.0,
+        dehaze: 5.0,
+        ..Default::default()
+    };
+    let (tuned, wb) = import_raw_tuned("wb.nef", &wb_bytes, &tuning).unwrap();
+    assert!(wb, "camera WB must be applied");
+    let tuned_img = photocraft_io::document_to_image(&tuned.document, &mut Vec::new()).unwrap();
+    let tuned_px = [sample_rgb16(tuned_img.data(), w, 0, 0), sample_rgb16(tuned_img.data(), w, 7, 7), sample_rgb16(tuned_img.data(), w, 15, 15)];
+    let tuned_hash = fnv1a_u16(tuned_img.data());
+
+    // Default RAW Open (`def_px`/`def_hash`) runs `craft_develop::sensor::demosaic` (`reflect` borders;
+    // center pixel `[51905, 40291, 54669]` matches legacy bit-for-bit); `tuned_px`/`tuned_hash` reflects
+    // the `craft_develop` cutover for `RawTuning` (`camera_raw::develop`).
+    let expected_tuned_hash = if cfg!(target_os = "windows") { 6_427_926_143_910_930_207 } else { 8_451_299_581_473_829_420 };
+    assert_eq!(
+        (def_px, def_hash, tuned_px, tuned_hash),
+        (
+            [[32235, 25796, 56002], [51905, 40291, 54669], [63986, 43623, 49478]],
+            6_651_437_429_964_055_359,
+            [[42154, 34080, 65535], [65535, 53404, 65535], [65535, 57910, 62593]],
+            expected_tuned_hash,
+        )
+    );
+}

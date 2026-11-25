@@ -12,6 +12,7 @@
 //! (every sampling and adaptation option), Edit › Fill Content-Aware, Delete and Fill, Spot
 //! Healing, Patch and Content-Aware Move at 8, 16 and 32 bits, and for the algorithms called
 //! directly on synthetic buffers (1, 3 and 4 channels).
+use photocraft_engine::color_cmds::ColorExt;
 use std::time::{Duration, Instant};
 
 use photocraft_algo::content_aware::{self, FillOptions};
