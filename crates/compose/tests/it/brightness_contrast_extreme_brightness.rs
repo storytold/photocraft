@@ -48,3 +48,31 @@ fn brightness_150_either_way_matches_the_reference_ramp() {
         assert_eq!((got[0], got[255]), (0, 255), "brightness {brightness} keeps black and white");
     }
 }
+
+/// The 8-bit gray ramp 0..=255 through modern Brightness at Contrast 0, as unrounded outputs.
+fn ramp_levels(brightness: f32) -> Vec<f32> {
+    let px = (0..=255u8).map(|x| f32::from(x) / 255.0).map(|v| [v, v, v, 1.0]).collect();
+    let mut b = Buffer { rect: Rect::new(0, 0, 256, 1), px };
+    apply(&Adjustment::BrightnessContrast { brightness, contrast: 0.0, legacy: false }, &mut b);
+    b.px.iter().map(|p| p[0] * 255.0).collect()
+}
+
+/// Over the top of the slider, where the curve eases into the +150 fit, no input gets darker as
+/// Brightness goes up (input 200 used to fall from 253.55 at +134 to 253.32 at +150), and none
+/// gets lighter as it goes down.
+#[test]
+fn each_input_follows_the_slider_up_to_150_either_way() {
+    for sign in [1.0f32, -1.0] {
+        let mut prev = ramp_levels(sign * 100.0);
+        for b in 101..=150u8 {
+            let brightness = sign * f32::from(b);
+            let got = ramp_levels(brightness);
+            let wrong: Vec<_> = (0..=255usize)
+                .filter_map(|x| Some((x, *prev.get(x)?, *got.get(x)?)))
+                .filter(|&(_, before, now)| if sign > 0.0 { now < before - 1e-4 } else { now > before + 1e-4 })
+                .collect();
+            assert!(wrong.is_empty(), "brightness {brightness}: (input, one step before, now) moved against the slider: {wrong:?}");
+            prev = got;
+        }
+    }
+}

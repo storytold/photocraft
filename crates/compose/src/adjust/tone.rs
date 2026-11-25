@@ -145,7 +145,7 @@ fn lut_extended(table: &[f32], v: f32) -> f32 {
 /// and `b = 0` is the identity. Raised, it is a line of slope `s = 1.375^(b/50)` from the origin
 /// up to a knee at output 126/255, then a cubic Hermite to (1, 1) whose end slope is
 /// `1 / (1 + 0.084 b)`; past about +110, where no such cubic stays below white, the roll-off is
-/// `1 - (1 - y0)(1 - u)^α` instead (continuous slope `α` at the knee, flat at white). From +110
+/// `1 - (1 - y0)(1 - u)^α` instead (continuous slope `α` at the knee, flat at white). From +109.5
 /// to +150 that curve eases into [`brightness_150`]. Lowered, it is the inverse of the curve
 /// raised by as much.
 ///
@@ -164,6 +164,14 @@ pub fn modern_brightness(v: f32, brightness: f32) -> f32 {
 /// [`modern_brightness`] for one slider value, its curve's constants worked out once.
 struct Brightness {
     raise: bool,
+    roll: Roll,
+    /// How far the curve has eased into [`brightness_150`]: 0 up to ±109.5, 1 at ±150.
+    toward_150: f32,
+}
+
+/// The raised curve's line and roll-off for one slider value.
+#[derive(Clone, Copy)]
+struct Roll {
     s: f32,
     e: f32,
     x0: f32,
@@ -171,27 +179,21 @@ struct Brightness {
     /// replaces the Hermite when α² + β² > 9.
     alpha: f32,
     hermite: bool,
-    /// How far the curve has eased into [`brightness_150`]: 0 up to ±110, 1 at ±150.
-    toward_150: f32,
 }
 
 /// Output level of the Brightness curve's knee.
 const BRIGHTNESS_KNEE: f32 = 126.0 / 255.0;
 
-/// The slider value where the curve starts to ease into [`brightness_150`], just past where the
-/// power roll-off takes over from the Hermite (about 109.7).
-const BRIGHTNESS_EASE_FROM: f32 = 110.0;
+/// The slider value where the curve starts to ease into [`brightness_150`]: the last Hermite
+/// roll-off before the power roll-off takes over (about 109.7). Every curve up to here stays at
+/// or below [`brightness_150`]; the power roll-offs come closer to white past input 220.
+const BRIGHTNESS_EASE_FROM: f32 = 109.5;
 
 impl Brightness {
     fn new(brightness: f32) -> Self {
         let b = brightness.abs();
-        let s = 1.375f32.powf(b / 50.0);
-        let e = 1.0 / (1.0 + 0.084 * b);
-        let x0 = (BRIGHTNESS_KNEE / s).min(1.0);
-        let secant = (1.0 - BRIGHTNESS_KNEE) / (1.0 - x0).max(1e-6);
-        let (alpha, beta) = (s / secant, e / secant);
         let toward_150 = ((b - BRIGHTNESS_EASE_FROM) / (150.0 - BRIGHTNESS_EASE_FROM)).clamp(0.0, 1.0);
-        Brightness { raise: brightness > 0.0, s, e, x0, alpha, hermite: alpha * alpha + beta * beta <= 9.0, toward_150 }
+        Brightness { raise: brightness > 0.0, roll: Roll::new(b), toward_150 }
     }
 
     fn eval(&self, v: f32) -> f32 {
@@ -215,19 +217,40 @@ impl Brightness {
         0.5 * (lo + hi)
     }
 
-    /// The curve raised: the line and its roll-off, eased into [`brightness_150`] past +110 (a mix
-    /// of two monotone curves that pin black and white, so it stays monotone and pinned).
+    /// The curve raised: the line and its roll-off, eased into [`brightness_150`] past +109.5.
+    ///
+    /// Each input must rise with the slider, not only the output with the input. The roll-off
+    /// alone rises with the slider, but past about input 220 the power roll-offs come closer to
+    /// white than [`brightness_150`], so a plain mix of the two fell there as the slider neared
+    /// +150 (input 200 gave 253.55 at +134 and 253.32 at +150). So the ease starts from the
+    /// roll-off held at or below [`brightness_150`]: in `held + t (target - held)` both `held`
+    /// and `t` rise with the slider, and `target - held` is never negative. It is a mix of two
+    /// monotone curves that pin black and white, so it stays monotone and pinned, and reaches
+    /// [`brightness_150`] itself at +150.
     fn raised(&self, x: f32) -> f32 {
-        let y = self.rolled(x);
+        let y = self.roll.eval(x);
         if self.toward_150 <= 0.0 {
             return y;
         }
-        (y + self.toward_150 * (brightness_150(x) - y)).clamp(0.0, 1.0)
+        let target = brightness_150(x);
+        let held = y.min(target);
+        (held + self.toward_150 * (target - held)).clamp(0.0, 1.0)
+    }
+}
+
+impl Roll {
+    fn new(b: f32) -> Self {
+        let s = 1.375f32.powf(b / 50.0);
+        let e = 1.0 / (1.0 + 0.084 * b);
+        let x0 = (BRIGHTNESS_KNEE / s).min(1.0);
+        let secant = (1.0 - BRIGHTNESS_KNEE) / (1.0 - x0).max(1e-6);
+        let (alpha, beta) = (s / secant, e / secant);
+        Roll { s, e, x0, alpha, hermite: alpha * alpha + beta * beta <= 9.0 }
     }
 
     /// The line, then a monotone roll-off to (1, 1).
-    fn rolled(&self, x: f32) -> f32 {
-        let Brightness { s, e, x0, alpha, hermite, .. } = *self;
+    fn eval(&self, x: f32) -> f32 {
+        let Roll { s, e, x0, alpha, hermite } = *self;
         let y0 = BRIGHTNESS_KNEE;
         if x <= x0 {
             return y0.min(s * x);
