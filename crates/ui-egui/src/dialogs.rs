@@ -111,6 +111,7 @@ pub(crate) mod params {
         },
         ParamFamily { cancel: Some(filter_dialog::cancel), ..ParamFamily::new(crate::view_cmds::dialogs::is_form, filter_dialog::run) },
         crate::prefs_ui::PRESETS_FAMILY,
+        crate::swatches_ui::SWATCH_NAME_FAMILY,
         ParamFamily { check: Some(crate::crop_presets::check), ..ParamFamily::new(crate::crop_presets::owns, crate::crop_presets::run) },
         crate::actions::dialogs::NEW_SET_FAMILY,
         crate::actions::dialogs::INSERT_STOP_FAMILY,

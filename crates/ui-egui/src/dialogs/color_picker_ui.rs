@@ -488,6 +488,10 @@ pub(crate) mod live_preview;
 mod tests;
 
 #[cfg(test)]
+#[path = "color_picker_swatch_name_tests.rs"]
+mod swatch_name_tests;
+
+#[cfg(test)]
 mod screen_integration_tests {
     use super::*;
     use craft::color_ui::ui::StillCapture;
