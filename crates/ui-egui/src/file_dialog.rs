@@ -354,6 +354,27 @@ impl PhotocraftApp {
         })
     }
 
+    /// File › Open As: one file only, as Photoshop's dialog allows (#14047). An answer with several paths or several
+    /// contents (names typed into the dialog's field) opens only the first one.
+    pub fn open_as_dialog_file(&mut self) -> Result<Value, String> {
+        let request = open_filters(PickRequest::open("document"), &[]);
+        let request = match last_used_dir(&self.ui.recent_files) {
+            Some(dir) => request.directory(dir),
+            None => request,
+        };
+        self.ask_file(request, |app, picked| {
+            match picked {
+                Picked::Paths(paths) => {
+                    let first: Vec<String> = paths.iter().take(1).map(|p| path_string(p)).collect();
+                    app.open_paths_in_order(&first);
+                }
+                Picked::Contents(files) => app.open_contents(files.into_iter().take(1).collect()),
+                Picked::Cancelled | Picked::Unavailable(_) | Picked::Failed(_) | Picked::Downloaded(_) => return Err(UNEXPECTED.into()),
+            }
+            Ok(Value::Null)
+        })
+    }
+
     /// File › Open as Smart Object…: the File › Open dialog (same filters, several files); each
     /// chosen file opens as its own document holding one embedded smart object, in name order,
     /// reporting each failure as File › Open does.
@@ -584,3 +605,7 @@ fn picked_files(picked: Picked) -> Result<Vec<PickedFile>, String> {
 #[cfg(test)]
 #[path = "file_dialog/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_dialog/open_as_single_file_tests.rs"]
+mod open_as_single_file_tests;
