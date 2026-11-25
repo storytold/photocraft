@@ -321,7 +321,7 @@ fn a_name_the_dialog_does_not_show_as_a_field_is_refused() {
     drag(&mut app, [10.0, 10.0], [109.5, 60.0], Modifiers::ALT, Modifiers::ALT);
     let (id, _) = only_dialog(&app);
     let ctx = app.ctx().clone();
-    for field in ["at", "document", "settings", "box", "text"] {
+    for field in ["at", "document", "settings", "centred", "box", "text"] {
         assert!(app.framework.dialogs.set_json_field(&ctx, id, field, json!(1.0)).is_err(), "`{field}` is not a field of this dialog");
     }
     assert_eq!(only_dialog(&app).1["width"].as_f64(), Some(99.5), "and the two real fields keep the dragged size");

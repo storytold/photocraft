@@ -70,7 +70,7 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = ["
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSGraphics", "NSResponder", "NSView", "NSWindow"] }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "=1.1.5", features = ["fs"] }
+rustix = { version = "=1.1.6", features = ["fs"] }
 # Reads CFBundleExecutable from a chosen macOS application bundle's Info.plist (XML or binary) for
 # external vector editing. Already in Cargo.lock (craft-update); built on every Unix so Linux CI
 # compiles and tests the bundle checks. The event-stream reader (behind plist's "unstable"

@@ -335,7 +335,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, panels_hidden: bo
     }
     // Files dropped on a floating panel's own window open as documents, and the main window comes forward.
     if !window_files.is_empty() {
-        app.open_dropped(&ctx, window_files, crate::file_open::DropTo::Window);
+        let files = window_files.into_iter().flat_map(|dropped| dropped.files).collect();
+        app.open_dropped(&ctx, files, crate::file_open::DropTo::Window);
     }
 }
 
