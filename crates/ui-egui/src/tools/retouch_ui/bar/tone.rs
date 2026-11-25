@@ -5,6 +5,7 @@ use craft::ui::choice::Segmented;
 use craft::ui::contract::{Bind, Entry, Show as _};
 use craft::ui::display::Divider;
 use craft::ui::primitives::IconSpec;
+use craft::ui::runtime::env::Env;
 use craft::ui::text::RangeAlert;
 use photocraft_color::BlendMode;
 
@@ -59,7 +60,9 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     }
     // The cell writes only on a commit, so a shared fraction is not rounded (#12650).
     let strength = number(tl!("Strength"), &mut o.strength, 1.0..=100.0).whole().unit("%").show(ui).out_of_range;
-    let angle = if tool == Tool::Blur { blur_angle(ui, app) } else { None };
+    if tool == Tool::Blur {
+        blur_angle(ui, app);
+    }
     let o = &mut app.ui.tool_options;
     if let Some(all) = o.sample_all.slot(tool) {
         check(ui, tl!("Sample All Layers"), all, true, None);
@@ -70,17 +73,25 @@ pub(super) fn blur_sharpen_smudge(ui: &mut egui::Ui, app: &mut PhotocraftApp, to
     if tool == Tool::Smudge {
         check(ui, tl!("Finger Painting"), &mut o.finger_painting, true, None);
     }
-    strength.or(angle)
+    strength
 }
 
 /// The Blur bar edits the active tool's brush, the same brush used by Brush Settings (#12647).
-fn blur_angle(ui: &mut egui::Ui, app: &mut PhotocraftApp) -> Option<RangeAlert> {
+fn blur_angle(ui: &mut egui::Ui, app: &mut PhotocraftApp) {
     let before = (*app.session.tools.brush).clone();
     let mut after = before.clone();
     let angle = crate::eraser_ui::brush_angle_field(&mut after.angle).show(ui);
     let key = angle.events.iter().find_map(|event| crate::history_keys::coalesce("brush", event));
     crate::brush_panel::commit_keyed(app, &before, &after, key);
-    angle.out_of_range
+    if let Some(alert) = angle.out_of_range {
+        let units = Env::of(ui).units();
+        let [low, high, kept] = [*alert.range.start(), *alert.range.end(), alert.kept].map(|value| units.degrees(value));
+        let message = crate::i18n::fmt(
+            tl!("Enter a whole brush angle from {low} to {high}. The angle is now {kept}."),
+            &[("low", low.as_str()), ("high", high.as_str()), ("kept", kept.as_str())],
+        );
+        crate::dialogs::alerts::tool_options_alert(app, message);
+    }
 }
 
 /// The options of Color Replacement.

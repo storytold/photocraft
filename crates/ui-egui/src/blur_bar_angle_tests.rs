@@ -27,8 +27,8 @@ fn angle<'a>(h: &'a Harness<'static, Box<PhotocraftApp>>) -> egui_kittest::Node<
     h.get_by_role_and_label(Role::SpinButton, "Angle")
 }
 
-fn type_angle(h: &mut Harness<'static, Box<PhotocraftApp>>, value: &str) {
-    angle(h).click();
+fn type_number(h: &mut Harness<'static, Box<PhotocraftApp>>, label: &str, value: &str) {
+    h.get_by_role_and_label(Role::SpinButton, label).click();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.event(egui::Event::Text(value.into()));
@@ -50,7 +50,7 @@ fn the_blur_bar_reads_and_edits_the_same_angle_as_brush_settings() {
     h.run_steps(2);
     assert_eq!(angle(&h).accesskit_node().numeric_value(), Some(35.0));
 
-    type_angle(&mut h, "-47");
+    type_number(&mut h, "Angle", "-47");
     assert_eq!(h.state().session.tools.brush.angle, -47.0);
     assert!(h.state().framework.dialogs.open_dialogs().is_empty());
 
@@ -68,18 +68,43 @@ fn the_blur_bar_reads_and_edits_the_same_angle_as_brush_settings() {
 #[test]
 fn entering_an_angle_past_either_limit_keeps_the_limit_and_shows_one_alert() {
     let mut h = blur_bar();
-    let bound = crate::i18n::framework_i18n().format().number_ungrouped(180.0, 0);
+    let format = crate::i18n::framework_i18n().format();
+    let degrees = |value| format!("{}°", format.number_ungrouped(value, 0));
+    let (low, high) = (degrees(-180.0), degrees(180.0));
     for (typed, expected) in [("200", 180.0), ("-200", -180.0)] {
-        type_angle(&mut h, typed);
+        type_number(&mut h, "Angle", typed);
         assert_eq!(h.state().session.tools.brush.angle, expected);
         let dialogs = h.state().framework.dialogs.open_dialogs();
         assert_eq!(dialogs.len(), 1);
         let message = dialogs[0].fields.as_ref().unwrap()["message"].as_str().unwrap();
-        assert!(message.contains(&bound) && message.contains("Closest value inserted"), "{message}");
+        assert_eq!(message, format!("Enter a whole brush angle from {low} to {high}. The angle is now {}.", degrees(f64::from(expected))));
+        assert_eq!(h.get_by_role(Role::AlertDialog).accesskit_node().description().as_deref(), Some(message));
 
         h.get_by_role_and_label(Role::Button, "OK").click();
         h.run_steps(4);
         assert!(h.state().framework.dialogs.open_dialogs().is_empty());
         assert_eq!(angle(&h).accesskit_node().numeric_value(), Some(f64::from(expected)));
     }
+}
+
+#[test]
+fn blur_strength_still_shows_the_standard_range_alert() {
+    let mut h = blur_bar();
+    type_number(&mut h, "Strength", "0");
+    assert_eq!(h.state().ui.tool_options.strength, 1.0);
+    let dialogs = h.state().framework.dialogs.open_dialogs();
+    assert_eq!(dialogs.len(), 1);
+    assert!(dialogs[0].fields.as_ref().unwrap()["message"].as_str().unwrap().contains("Closest value inserted"));
+}
+
+#[test]
+fn a_standard_alert_does_not_replace_the_angle_alert() {
+    let mut h = blur_bar();
+    type_number(&mut h, "Angle", "200");
+    let angle = h.state().framework.dialogs.open_dialogs()[0].id;
+
+    // Strength uses a regular hosted alert, which can open in the same options-bar pass.
+    let standard = crate::dialogs::alerts::alert(h.state_mut(), "A standard alert");
+    let ids: Vec<_> = h.state().framework.dialogs.open_dialogs().iter().map(|dialog| dialog.id).collect();
+    assert_eq!(ids, [angle, standard]);
 }
