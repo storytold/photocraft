@@ -21,7 +21,8 @@ use serde_json::Value;
 use web_time::{Duration, Instant};
 
 use super::protocol::{
-    FromHost, MAX_FRAME_VALUES, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_dialog_args, check_window, cut, parse_body, values_in,
+    FromHost, MAX_FRAME_DEPTH, MAX_FRAME_VALUES, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_dialog_args, check_window, cut, parse_body,
+    too_deep, values_in,
 };
 use crate::commands::check_command;
 use crate::tape::{MAX_ENTRIES, MAX_OUTPUT_BYTES, MAX_WINDOW_BYTES};
@@ -397,6 +398,8 @@ impl<T: Transport> WebJob<T> {
             Some(format!("{} MiB, over the limit of {} MiB", text.len().div_ceil(1 << 20), limit >> 20))
         } else if values_in(text.as_bytes()) > MAX_FRAME_VALUES {
             Some(format!("more than {MAX_FRAME_VALUES} values"))
+        } else if too_deep(text.as_bytes()) {
+            Some(format!("nested more than {MAX_FRAME_DEPTH} deep"))
         } else {
             None
         };
@@ -692,6 +695,19 @@ mod tests {
         j.reply_executed(Ok(Value::Array(vec![json!(0); MAX_FRAME_VALUES + 1]))).unwrap();
         let answer = &fake.answers.borrow()[0];
         assert!(answer["result"]["Err"].as_str().is_some_and(|e| e.contains("values")), "{answer}");
+        assert!(!j.is_finished());
+    }
+
+    /// So does a result nested deeper than the Worker parses.
+    #[test]
+    fn a_result_nested_too_deep_is_the_command_error() {
+        let fake = Fake::default();
+        let mut j = job(&fake, options());
+        fake.send(&FromHost::Execute { id: "session.inspect".into(), params: json!({}) });
+        assert!(matches!(j.poll(), Some(WebEvent::Execute { .. })));
+        j.reply_executed(Ok((0..200).fold(json!(0), |v, _| json!([v])))).unwrap();
+        let answer = &fake.answers.borrow()[0];
+        assert!(answer["result"]["Err"].as_str().is_some_and(|e| e.contains("nested")), "{answer}");
         assert!(!j.is_finished());
     }
 

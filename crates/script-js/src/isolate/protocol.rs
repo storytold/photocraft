@@ -118,6 +118,8 @@ pub enum FrameError {
     /// A message within the byte cap that holds more values than the reader takes
     /// ([`MAX_FRAME_VALUES`]).
     TooManyValues,
+    /// A message nested deeper than the reader parses ([`MAX_FRAME_DEPTH`]).
+    TooDeep,
     /// Not a message of the expected type.
     Malformed(String),
 }
@@ -129,6 +131,7 @@ impl std::fmt::Display for FrameError {
             Self::Truncated => f.write_str("the message was cut off"),
             Self::TooLarge(n) => write!(f, "a message of {n} bytes is over the limit"),
             Self::TooManyValues => write!(f, "a message holds more than {MAX_FRAME_VALUES} values"),
+            Self::TooDeep => write!(f, "a message is nested more than {MAX_FRAME_DEPTH} deep"),
             Self::Malformed(e) => write!(f, "a malformed message ({e})"),
         }
     }
@@ -138,7 +141,8 @@ impl std::fmt::Display for FrameError {
 ///
 /// # Errors
 /// [`FrameError::TooLarge`] over the cap, [`FrameError::TooManyValues`] with more values than
-/// the reader takes ([`MAX_FRAME_VALUES`]); the stream's error. Nothing is written then.
+/// the reader takes ([`MAX_FRAME_VALUES`]), [`FrameError::TooDeep`] nested deeper than it parses
+/// ([`MAX_FRAME_DEPTH`]); the stream's error. Nothing is written then.
 pub fn write_frame<W: Write, T: Serialize>(w: &mut W, msg: &T, cap: usize) -> Result<(), FrameError> {
     let body = serde_json::to_vec(msg).map_err(|e| FrameError::Malformed(e.to_string()))?;
     // The reader's limits, checked here: a frame it would refuse ends its side of the link.
@@ -147,6 +151,9 @@ pub fn write_frame<W: Write, T: Serialize>(w: &mut W, msg: &T, cap: usize) -> Re
     }
     if values_in(&body) > MAX_FRAME_VALUES {
         return Err(FrameError::TooManyValues);
+    }
+    if too_deep(&body) {
+        return Err(FrameError::TooDeep);
     }
     let len = u32::try_from(body.len()).map_err(|_| FrameError::TooLarge(body.len()))?;
     w.write_all(&len.to_le_bytes()).map_err(FrameError::Io)?;
@@ -232,6 +239,39 @@ pub(crate) fn values_in(body: &[u8]) -> usize {
     n
 }
 
+/// Deepest nesting of arrays and objects a message may have: the reader's JSON parser refuses
+/// deeper ones (its limit is 128 levels, and it counts the one it refuses).
+pub const MAX_FRAME_DEPTH: usize = 127;
+
+/// Whether `body` nests arrays and objects deeper than [`MAX_FRAME_DEPTH`], counting the
+/// brackets outside strings. Stops at the first level past it.
+pub(crate) fn too_deep(body: &[u8]) -> bool {
+    let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
+    for &b in body {
+        if in_string {
+            match (escaped, b) {
+                (true, _) => escaped = false,
+                (false, b'\\') => escaped = true,
+                (false, b'"') => in_string = false,
+                _ => {}
+            }
+        } else {
+            match b {
+                b'"' => in_string = true,
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth > MAX_FRAME_DEPTH {
+                        return true;
+                    }
+                }
+                b'}' | b']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 pub use crate::commands::{COMMANDS, Param, check_command};
 
 /// Check a host's dialog arguments. They must look exactly as the script globals build them in
@@ -304,8 +344,9 @@ pub fn check_window(window: &Value) -> Result<(), String> {
             return Err(format!("a window nested more than {} deep", crate::scriptui::MAX_DEPTH));
         }
         let Value::Object(m) = node else { return Err("a window control that is not an object".into()) };
-        if m.get("id").and_then(Value::as_u64).is_none() || !m.get("type").is_some_and(Value::is_string) {
-            return Err("a window control without an id or type".into());
+        // The interface draws a control only when its id fits in 32 bits, as the window's must.
+        if m.get("id").and_then(Value::as_u64).and_then(|i| u32::try_from(i).ok()).is_none() || !m.get("type").is_some_and(Value::is_string) {
+            return Err("a window control without a 32-bit id or a type".into());
         }
         if let Some(kids) = m.get("children") {
             let Value::Array(kids) = kids else { return Err("window children that are not a list".into()) };
@@ -482,6 +523,35 @@ mod tests {
         let w = json!({"id": 0, "type": "window", "children": []});
         assert!(check_dialog_args(DialogKind::Window, &json!({"id": u32::MAX, "window": w})).is_ok());
         assert!(check_dialog_args(DialogKind::Window, &json!({"id": u64::from(u32::MAX) + 1, "window": w})).is_err());
+        // So must its controls' ids: the interface draws no control whose id doesn't.
+        let control = |id: u64| json!({"id": 0, "window": {"id": 0, "type": "window", "children": [{"id": id, "type": "button"}]}});
+        assert!(check_dialog_args(DialogKind::Window, &control(u64::from(u32::MAX))).is_ok());
+        assert!(check_dialog_args(DialogKind::Window, &control(u64::from(u32::MAX) + 1)).is_err());
+    }
+
+    /// Whatever a writer sends, the reader takes: a reply nested past what the reader parses is
+    /// refused before any of it is written, as one with too many values is.
+    #[test]
+    fn a_frame_nested_past_the_readers_limit_is_not_written() {
+        let nested = |n: usize| (0..n).fold(json!(0), |v, _| json!([v]));
+        let mut written = 0;
+        for n in 0..200 {
+            let mut buf = Vec::new();
+            match write_frame(&mut buf, &ToHost::Executed { result: Ok(nested(n)) }, MAX_TO_HOST) {
+                Ok(()) => {
+                    written += 1;
+                    let read: Option<ToHost> =
+                        read_frame(&mut buf.as_slice(), MAX_TO_HOST).unwrap_or_else(|e| panic!("{n} deep was written but not read: {e}"));
+                    assert!(read.is_some());
+                }
+                Err(e) => {
+                    assert!(matches!(e, FrameError::TooDeep), "{n}: {e}");
+                    assert!(buf.is_empty(), "nothing is written");
+                }
+            }
+        }
+        assert!(written > 100, "shallow replies are still written");
+        assert!(written < 200, "the deepest are refused");
     }
 
     #[test]

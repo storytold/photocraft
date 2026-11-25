@@ -1690,3 +1690,13 @@ fn type_create_does_not_convert_a_layer_drawn_by_its_default_pixel() {
     assert!(s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": id.0})).is_err());
     assert!(matches!(s.active().unwrap().doc.layer(id).unwrap().content, photocraft_doc::LayerContent::Raster(_)), "the pixels stay");
 }
+
+/// Merge Down reports the layer it merged into, so a caller need not read the active layer
+/// afterwards (which the user may have changed by then).
+#[test]
+fn merge_down_reports_the_merged_layer() {
+    let mut s = session_with_doc();
+    let lower = s.execute("layer.new.layer", json!({"name": "Lower"})).unwrap()["layer"].as_u64().unwrap();
+    let upper = s.execute("layer.new.layer", json!({"name": "Upper"})).unwrap()["layer"].as_u64().unwrap();
+    assert_eq!(s.execute("layer.mergeDown", json!({"layer": upper})).unwrap(), json!({"layer": lower}));
+}

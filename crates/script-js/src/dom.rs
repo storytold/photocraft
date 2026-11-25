@@ -299,9 +299,10 @@ fn cached(ctx: &Context, key: (u8, u64, u64, u64)) -> Option<JsObject> {
     ctx.realm().host_defined().get::<Objects>().and_then(|c| c.0.get(&key).cloned())
 }
 
-/// Most objects kept for identity. Past it a new object is not kept: reading the same layer
-/// again then gives an equal but not identical object, and memory stays bounded.
-const MAX_OBJECTS: usize = 1 << 16;
+/// Most objects kept for identity, of each kind (layers and collections here, documents in
+/// `natives`). Past it a new object is not kept: reading the same layer or document again then
+/// gives an equal but not identical object, and memory stays bounded.
+pub(crate) const MAX_OBJECTS: usize = 1 << 16;
 
 fn cache(ctx: &Context, key: (u8, u64, u64, u64), obj: &JsObject) {
     let realm = ctx.realm().clone();
@@ -728,31 +729,13 @@ fn layer_remove(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<Js
 
 fn layer_duplicate(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let (doc, id) = layer_ref(this)?;
-    // Made where it goes in one command (`moveTo` with `copy`), so a copy that can't go there,
-    // or a run stopped meanwhile, leaves no copy behind; the destination is read first. A group
-    // copied into itself is the exception (see below).
+    // Made where it goes in one command (`moveTo` with `copy`), a group copied into itself too,
+    // so a copy that can't go there, or a run stopped meanwhile, leaves no copy behind; the
+    // destination is read first.
     let made = match arg(args, 0) {
         Some(rel) => {
             let (target, position) = destination(ctx, doc, rel, args.get(1))?;
-            // A copy of a group placed inside that group (`INSIDE` it, or at its end, beside its
-            // last layer) is not a move the app makes in one step: the copy is made first and
-            // then moved in, as a layer copied from the group would be.
-            let node = find(&inspect(ctx, doc)?["layers"], id).map(|(node, _)| node);
-            let inside_itself = node
-                .is_some_and(|node| node["children"].is_array() && (if target == id { position == "into" } else { find(&node["children"], target).is_some() }));
-            if inside_itself {
-                let made = edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?;
-                let new = made["layer"].as_u64().ok_or_else(|| error("the copy was not reported"))?;
-                if let Err(e) = edit(ctx, doc, "layer.moveTo", json!({ "layer": new, "target": target, "position": position })) {
-                    // A copy that can't go in is not left behind, as far as the run can still
-                    // ask for that (a stopped run can't: then the copy stays above the group).
-                    let _ = edit(ctx, doc, "layer.delete", json!({ "layer": new }));
-                    return Err(e);
-                }
-                made
-            } else {
-                edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position, "copy": true }))?
-            }
+            edit(ctx, doc, "layer.moveTo", json!({ "layer": id, "target": target, "position": position, "copy": true }))?
         }
         None => edit(ctx, doc, "layer.duplicate", json!({ "layer": id }))?,
     };
@@ -837,9 +820,9 @@ fn layer_move(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsResult<J
 
 fn layer_merge(this: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
     let (doc, id) = layer_ref(this)?;
-    edit(ctx, doc, "layer.mergeDown", json!({ "layer": id }))?;
-    let d = inspect(ctx, doc)?;
-    let merged = d["activeLayer"].as_u64().ok_or_else(|| error("the merged layer was not reported"))?;
+    // The layer the merge reports, not the active one read after it: the user may have
+    // selected another layer by then.
+    let merged = edit(ctx, doc, "layer.mergeDown", json!({ "layer": id }))?["layer"].as_u64().ok_or_else(|| error("the merged layer was not reported"))?;
     Ok(layer_object(ctx, doc, merged)?.into())
 }
 
@@ -1204,8 +1187,15 @@ fn doc_resize_image(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     let r = res.unwrap_or_else(|| dpi(&d));
     let w = arg(args, 0).map(|v| to_px(ctx, v, r)).transpose()?;
     let h = arg(args, 1).map(|v| to_px(ctx, v, r)).transpose()?;
-    // The proportions kept are the document's once the sizes are converted: their `valueOf`
-    // may itself have resized it.
+    let resample = match arg(args, 3) {
+        Some(m) => {
+            let m = text(m, ctx)?;
+            Some(RESAMPLES.iter().find(|(e, _)| *e == m).map(|(_, n)| *n).ok_or_else(|| error(format!("{m} is not a ResampleMethod PhotoCraft has")))?)
+        }
+        None => None,
+    };
+    // The proportions kept are the document's once every argument is converted: a `valueOf` or
+    // `toString` may itself have resized it.
     let d = if w.is_some() && h.is_some() { d } else { inspect(ctx, doc)? };
     let (w0, h0) = (d["width"].as_f64().unwrap_or(1.0), d["height"].as_f64().unwrap_or(1.0));
     let (w, h) = match (w, h) {
@@ -1218,9 +1208,7 @@ fn doc_resize_image(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsRe
     if let Some(res) = res {
         p["resolution"] = json!(res);
     }
-    if let Some(m) = arg(args, 3) {
-        let m = text(m, ctx)?;
-        let name = RESAMPLES.iter().find(|(e, _)| *e == m).map(|(_, n)| *n).ok_or_else(|| error(format!("{m} is not a ResampleMethod PhotoCraft has")))?;
+    if let Some(name) = resample {
         p["resample"] = json!(name);
     }
     edit(ctx, doc, "image.imageSize", p)?;
@@ -1245,10 +1233,6 @@ fn doc_resize_canvas(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
     let r = dpi(&d);
     let w = arg(args, 0).map(|v| to_px(ctx, v, r)).transpose()?;
     let h = arg(args, 1).map(|v| to_px(ctx, v, r)).transpose()?;
-    // A side left out stays as it is once the other is converted (its `valueOf` may resize).
-    let d = if w.is_some() && h.is_some() { d } else { inspect(ctx, doc)? };
-    let w = w.unwrap_or_else(|| d["width"].as_f64().unwrap_or(1.0));
-    let h = h.unwrap_or_else(|| d["height"].as_f64().unwrap_or(1.0));
     let anchor = match arg(args, 2) {
         Some(a) => {
             let a = text(a, ctx)?;
@@ -1256,6 +1240,11 @@ fn doc_resize_canvas(this: &JsValue, args: &[JsValue], ctx: &mut Context) -> JsR
         }
         None => "center",
     };
+    // A side left out stays as it is once every argument is converted (a `valueOf` or
+    // `toString` may resize).
+    let d = if w.is_some() && h.is_some() { d } else { inspect(ctx, doc)? };
+    let w = w.unwrap_or_else(|| d["width"].as_f64().unwrap_or(1.0));
+    let h = h.unwrap_or_else(|| d["height"].as_f64().unwrap_or(1.0));
     edit(ctx, doc, "image.canvasSize", json!({ "width": side(w)?, "height": side(h)?, "anchor": anchor }))?;
     Ok(JsValue::undefined())
 }

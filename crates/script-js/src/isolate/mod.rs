@@ -18,10 +18,11 @@
 //!   may only ask for the commands in [`protocol::COMMANDS`] with exactly their parameters;
 //!   anything else stops the run as a `FailureKind::HostViolation`. Its commands always carry
 //!   the run's own history key.
-//! - **Lifetime:** one host per run, kept across the replays that follow dialogs. A host that
-//!   ends without a result is classified from what the app knows (`FailureKind`): stopped for
-//!   time, for memory (stopped by the app, a failed allocation, or a peak near the limit), or
-//!   crashed with its exit status, stack overflows and access violations named as such. A request
+//! - **Lifetime:** one host per run, kept while the script waits for dialog replies (it does
+//!   not replay the script). A host that ends without a result is classified from what the app
+//!   knows (`FailureKind`): stopped for time, for memory (stopped by the app, a failed
+//!   allocation, or a peak near the limit), or crashed with its exit status, stack overflows and
+//!   access violations named as such. A request
 //!   still queued once the host's output has ended, it sent its result, it exited or the app
 //!   stopped it is dropped. A request the interface already took while the host was running is
 //!   one the run validly made, and the interface may still carry it out; nothing of the run

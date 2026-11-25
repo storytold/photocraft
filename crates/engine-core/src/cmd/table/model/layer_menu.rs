@@ -275,26 +275,34 @@ fn masks() -> Vec<CommandSpec> {
 /// Merge Down, Merge Group and Flatten Image.
 fn merging() -> Vec<CommandSpec> {
     vec![
-        cmd!("layer.mergeDown", "Merge Down", ["Layer"], None, r##"{"layer":id?}"##, has_layer, |s, p| {
-            let id = layer_param(s, p)?;
-            s.edit("Merge Down", |doc, active| {
-                let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
-                let Some((&idx, parent)) = path.split_last() else { return Err(EngineError::NoLayer(id)) };
-                if idx == 0 {
-                    return Err(EngineError::Other("no layer below to merge into".into()));
-                }
-                let mut below = parent.to_vec();
-                below.push(idx - 1);
-                let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
-                let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
-                let merged = pixels::merge_down(doc, &lower, &upper)?;
-                doc.remove(id);
-                *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
-                *active = Some(lower.id);
-                Ok(())
-            })?;
-            Ok(Value::Null)
-        }),
+        cmd!(
+            "layer.mergeDown",
+            "Merge Down",
+            ["Layer"],
+            None,
+            r##"{"layer":id?} → {layer} (the merged layer: the one below, which keeps its id)"##,
+            has_layer,
+            |s, p| {
+                let id = layer_param(s, p)?;
+                let merged = s.edit("Merge Down", |doc, active| {
+                    let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
+                    let Some((&idx, parent)) = path.split_last() else { return Err(EngineError::NoLayer(id)) };
+                    if idx == 0 {
+                        return Err(EngineError::Other("no layer below to merge into".into()));
+                    }
+                    let mut below = parent.to_vec();
+                    below.push(idx - 1);
+                    let lower = doc.layer_at(&below).ok_or(EngineError::NoLayer(id))?.clone();
+                    let upper = doc.layer(id).ok_or(EngineError::NoLayer(id))?.clone();
+                    let merged = pixels::merge_down(doc, &lower, &upper)?;
+                    doc.remove(id);
+                    *doc.layer_at_mut(&below).ok_or(EngineError::NoLayer(lower.id))? = merged;
+                    *active = Some(lower.id);
+                    Ok(lower.id)
+                })?;
+                Ok(json!({ "layer": merged.0 }))
+            }
+        ),
         cmd!("layer.mergeGroup", "Merge Group", ["Layer"], None, r##"{"layer":id?}"##, has_layer, |s, p| {
             let id = layer_param(s, p)?;
             if !s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| matches!(l.content, LayerContent::Group(_))) {

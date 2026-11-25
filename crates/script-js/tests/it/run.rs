@@ -553,6 +553,21 @@ fn math_random_is_charged_live_and_in_replay() {
     assert_eq!(r.step(), Step::Failed("The script was stopped: it ran longer than its time limit.".into()));
 }
 
+#[test]
+fn date_now_is_charged_live_and_in_replay() {
+    // Live: the attempt takes the only charge, so Date.now() must stop the run.
+    let mut r = Runner::new("Date.now();", Box::new(Probe::default()), Box::new(Countdown(1)), RunOptions::default()).unwrap();
+    assert_eq!(r.step(), Step::Failed("The script was stopped: it ran longer than its time limit.".into()));
+    // A clock-only loop under a spent budget stops at the first reading, with readings to spare.
+    let mut r = Runner::new("for (var i = 0; i < 100; i++) Date.now();", Box::new(Probe::default()), Box::new(Countdown(1)), RunOptions::default()).unwrap();
+    assert_eq!(r.step(), Step::Failed("The script was stopped: it ran longer than its time limit.".into()));
+    // Replay: attempt, Date.now, alert, then attempt; the replayed Date.now() takes the 5th.
+    let mut r = Runner::new("alert(Date.now());", Box::new(Probe::default()), Box::new(Countdown(4)), RunOptions::default()).unwrap();
+    assert!(matches!(r.step(), Step::Paused(_)));
+    r.answer(Value::Null).unwrap();
+    assert_eq!(r.step(), Step::Failed("The script was stopped: it ran longer than its time limit.".into()));
+}
+
 /// The first argument of the first dialog the script opens.
 fn first_dialog_text(src: &str) -> String {
     let (mut r, _, _) = probe_run(src, RunOptions::default());

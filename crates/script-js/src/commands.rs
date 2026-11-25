@@ -184,7 +184,11 @@ pub const COMMANDS: &[Spec] = &[
             ("layer", Id, Optional),
         ],
     ),
-    ("type.edit", &[("layer", Id, Required), ("text", Text(TEXT), Optional), ("runs", Runs, Optional), ("move", Param::Number(-SIDE, SIDE), Optional)]),
+    // A move goes from one supported position to another: up to twice the range's half.
+    (
+        "type.edit",
+        &[("layer", Id, Required), ("text", Text(TEXT), Optional), ("runs", Runs, Optional), ("move", Param::Number(-2.0 * SIDE, 2.0 * SIDE), Optional)],
+    ),
     ("history.selectState", &[("state", Index, Required)]),
     ("select.all", &[]),
     ("select.deselect", &[]),
@@ -290,7 +294,7 @@ fn param_ok(rule: Param, v: &Value) -> bool {
             let Some([run]) = v.as_array().map(Vec::as_slice) else { return false };
             let Some(run) = run.as_object() else { return false };
             let known = run.keys().all(|k| matches!(k.as_str(), "start" | "end" | "size" | "font" | "color"));
-            let span = ["start", "end"].iter().all(|k| run.get(*k).is_some_and(|v| param_ok(Int(0, 1 << 32), v)));
+            let span = ["start", "end"].iter().all(|k| run.get(*k).is_some_and(|v| param_ok(Int(0, i64::from(u32::MAX)), v)));
             let size = run.get("size").is_none_or(|s| param_ok(Number(0.01, 10_000.0), s));
             let font = run.get("font").is_none_or(|f| param_ok(Text(NAME), f));
             let col = run.get("color").is_none_or(color);
@@ -353,6 +357,9 @@ mod tests {
             ("layer.setProps", json!({"layer": 3, "opacity": 0.5, "blend": "Multiply"})),
             ("type.edit", json!({"layer": 3, "runs": [{"start": 0, "end": 4, "size": 24, "color": "#ff0000"}]})),
             ("type.edit", json!({"layer": 3, "move": [10.5, -20]})),
+            // From one supported position to the other end of the range.
+            ("type.edit", json!({"layer": 3, "move": [-600_000, 600_000]})),
+            ("type.edit", json!({"layer": 3, "runs": [{"start": 0, "end": u32::MAX}]})),
             ("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "cm"})),
             ("scripts.customOptions.put", json!({"key": "k", "value": {"a": [1, 2]}, "persistent": true})),
             ("file.saveACopy", json!({"path": "/tmp/a.png"})),
@@ -376,6 +383,9 @@ mod tests {
             ("type.edit", json!({"layer": 3, "runs": [{}]})),
             ("type.edit", json!({"layer": 3, "runs": [{"start": 0}]})),
             ("type.edit", json!({"layer": 3, "move": [1, 2, 3]})),
+            ("type.edit", json!({"layer": 3, "move": [600_001, 0]})),
+            // Past what a 32-bit engine can index: it would wrap to an empty run.
+            ("type.edit", json!({"layer": 3, "runs": [{"start": 0, "end": 1_u64 << 32}]})),
             ("file.saveACopy", json!({"path": "a\u{0}b"})),
             ("file.saveACopy", json!({"path": "/a.png", "overwrite": true})),
             ("scripts.customOptions.put", json!({"key": "k", "value": [1], "persistent": true})),

@@ -602,6 +602,22 @@ fn a_side_left_out_is_read_after_the_other_is_converted() {
     assert_eq!(lines, ["120 pxx80 px", "100 pxx25 px"]);
 }
 
+/// The resample method and the anchor are converted before the side left out is read: their
+/// `toString` may itself resize the document.
+#[test]
+fn a_side_left_out_is_read_after_the_method_or_anchor_is_converted() {
+    let s = session(100, 50);
+    let lines = run(
+        &s,
+        "var d = app.activeDocument;
+         d.resizeImage(120, undefined, undefined, { toString: function () { d.resizeCanvas(100, 80, AnchorPosition.TOPLEFT); return 'ResampleMethod.BICUBIC'; } });
+         $.writeln(d.width, 'x', d.height);
+         d.resizeCanvas(200, undefined, { toString: function () { d.resizeCanvas(120, 50, AnchorPosition.TOPLEFT); return 'AnchorPosition.TOPLEFT'; } });
+         $.writeln(d.width, 'x', d.height);",
+    );
+    assert_eq!(lines, ["120 pxx96 px", "200 pxx50 px"]);
+}
+
 /// Saved key names are checked all together before any is kept: a set refused at the run's
 /// count of names leaves none of them taking a place.
 #[test]
@@ -690,6 +706,25 @@ fn a_run_stopped_while_a_duplicate_is_placed_leaves_no_copy() {
     let Step::Failed(m) = r.step() else { panic!("the run was stopped") };
     assert!(m.contains("time limit"), "{m}");
     assert_eq!(layer_names(&s), before);
+}
+
+/// A group copied into itself is made where it goes in one edit: wherever the run is stopped,
+/// the copy is inside the group or not made, never left beside it.
+#[test]
+fn a_run_stopped_while_a_group_is_copied_into_itself_leaves_no_copy_beside_it() {
+    let mut landed = false;
+    for charges in 1..120 {
+        let s = session(32, 32);
+        run(&s, "var g = app.activeDocument.layerSets.add(); g.name = 'G';");
+        let before = layer_names(&s);
+        let host = SessionHost::new(s.clone(), "stop");
+        let src = "var g = app.activeDocument.layerSets[0]; g.duplicate(g, ElementPlacement.INSIDE); $.writeln('done');";
+        let mut r = Runner::new(src, Box::new(host), Box::new(crate::run::Countdown(charges)), RunOptions::default()).unwrap();
+        let step = r.step();
+        assert_eq!(layer_names(&s), before, "{charges} charges ({step:?}): nothing beside the group");
+        landed |= step == Step::Done;
+    }
+    assert!(landed, "with enough charges the copy is made");
 }
 
 /// A duplicate placed beside another layer, or inside a group, lands there.

@@ -255,6 +255,8 @@ fn random(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
 /// reads the same tape through the context clock, which can't stop the run itself; it stops at
 /// the next host call.)
 fn date_now(_: &JsValue, _: &[JsValue], ctx: &mut Context) -> JsResult<JsValue> {
+    // Charged like every other taped call, live and in replay.
+    checkpoint(ctx)?;
     let s = shared(ctx)?;
     let (v, overflow) = {
         let mut st = s.borrow_mut();
@@ -307,7 +309,10 @@ pub(crate) fn document_object(id: DocKey, ctx: &mut Context) -> JsObject {
     if data.get::<DocCache>().is_none() {
         data.insert(DocCache::default());
     }
-    if let Some(cache) = data.get_mut::<DocCache>() {
+    // Bounded as the layer objects are: past the limit a document object is not kept.
+    if let Some(cache) = data.get_mut::<DocCache>()
+        && (cache.0.len() < crate::dom::MAX_OBJECTS || cache.0.contains_key(&key))
+    {
         cache.0.insert(key, obj.clone());
     }
     obj

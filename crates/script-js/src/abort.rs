@@ -25,7 +25,7 @@ mod tests {
 
     use boa_engine::{Context, JsResult, JsValue, NativeFunction, Source, js_string};
 
-    use super::uncatchable;
+    use super::{EngineError, RuntimeLimitError, uncatchable};
 
     thread_local! {
         /// The handlers entered, recorded by the VM itself: no host and no stop checkpoint in
@@ -57,7 +57,9 @@ mod tests {
             let mut ctx = Context::default();
             ctx.register_global_callable(js_string!("stop"), 0, NativeFunction::from_fn_ptr(stop)).unwrap();
             ctx.register_global_callable(js_string!("mark"), 1, NativeFunction::from_fn_ptr(mark)).unwrap();
-            assert!(ctx.eval(Source::from_bytes(src.as_str())).is_err(), "{src}");
+            // The stop itself, not an error before it (a parse or setup error enters no handler either).
+            let error = ctx.eval(Source::from_bytes(src.as_str())).expect_err(&src);
+            assert_eq!(error.as_engine(), Some(&EngineError::RuntimeLimit(RuntimeLimitError::LoopIteration)), "{src}: {error}");
             ENTERED.with(|e| assert!(e.borrow().is_empty(), "{src}: entered {:?}", e.borrow()));
         }
         // A catchable error enters both, so the marks do record handlers.

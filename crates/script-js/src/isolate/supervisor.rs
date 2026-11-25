@@ -14,8 +14,8 @@ use serde_json::Value;
 
 use super::limits::{self, Containment, Exit, Meter, STATUS_ACCESS_VIOLATION, STATUS_STACK_BUFFER_OVERRUN, STATUS_STACK_OVERFLOW};
 use super::protocol::{
-    FrameError, FromHost, MAX_FRAME_VALUES, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_command, check_dialog_args, check_window, cut,
-    read_frame, write_frame,
+    FrameError, FromHost, MAX_FRAME_DEPTH, MAX_FRAME_VALUES, MAX_FROM_HOST, MAX_LINE, MAX_MESSAGE, MAX_TO_HOST, ToHost, check_command, check_dialog_args,
+    check_window, cut, read_frame, write_frame,
 };
 use super::{SCRIPT_HOST_FLAG, host};
 use crate::tape::{MAX_ENTRIES, MAX_OUTPUT_BYTES, MAX_WINDOW_BYTES};
@@ -247,6 +247,15 @@ impl Clock {
 }
 
 impl Watch {
+    /// Record why the run is stopped, unless it already has a reason, the host already exited
+    /// (it keeps its own exit status) or its result was taken.
+    fn stop(&mut self, why: Verdict) {
+        if self.verdict.is_none() && self.exit.is_none() && !self.settled {
+            self.verdict = Some(why);
+        }
+        self.dead = true;
+    }
+
     /// The answer on its way to the host is out: its time is charged past what is left of
     /// `delivery_free`, and the clock goes on unless the host waits again.
     fn delivered(&mut self) {
@@ -297,6 +306,8 @@ struct Watch {
     peak: u64,
     /// The host is gone or being stopped: its pending requests are void.
     dead: bool,
+    /// The host's own result was taken: a stop that comes after it does not replace it.
+    settled: bool,
 }
 
 #[derive(Default)]
@@ -357,10 +368,7 @@ impl Shared {
             if !still(&w) {
                 return false;
             }
-            if w.verdict.is_none() && w.exit.is_none() {
-                w.verdict = Some(why);
-            }
-            w.dead = true;
+            w.stop(why);
         }
         // Anything the host started too: one of them may hold its output open.
         self.containment.end(&mut lock(&self.child));
@@ -604,6 +612,7 @@ impl IsolatedJob {
                 exit: None,
                 peak: 0,
                 dead: false,
+                settled: false,
             }),
             child: Mutex::new(child),
             stderr: Mutex::default(),
@@ -876,6 +885,8 @@ fn read_stderr(mut errors: ChildStderr, shared: &Shared) {
     let mut carry = String::new();
     loop {
         let n = match errors.read(&mut buf) {
+            // A signal cut the read short: more can still come, such as the allocation message.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Ok(0) | Err(_) => {
                 lock(&shared.stderr).done = true;
                 return;
@@ -920,6 +931,7 @@ fn known_too_large(msg: &ToHost) -> Option<usize> {
 fn too_big(e: &FrameError) -> String {
     match e {
         FrameError::TooLarge(n) => format!("{} MiB, over the limit of {} MiB", n.div_ceil(1 << 20), MAX_TO_HOST >> 20),
+        FrameError::TooDeep => format!("nested more than {MAX_FRAME_DEPTH} deep"),
         _ => format!("more than {MAX_FRAME_VALUES} values"),
     }
 }
@@ -938,12 +950,12 @@ fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
                 shared.kill(Verdict::TooLarge(n));
                 return;
             }
-            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues)) if matches!(msg, ToHost::Dialog { .. }) => {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues | FrameError::TooDeep)) if matches!(msg, ToHost::Dialog { .. }) => {
                 // Nothing was sent: the host is still waiting, so the run ends here with the reason.
                 shared.kill(Verdict::Unsent(format!("a dialog's answer could not be sent to the script host: {}", too_big(&e))));
                 return;
             }
-            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues)) if matches!(msg, ToHost::Executed { .. }) => {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues | FrameError::TooDeep)) if matches!(msg, ToHost::Executed { .. }) => {
                 let result = Err(format!("the command's result is too large for a script: {}", too_big(&e)));
                 write_frame(&mut input, &ToHost::Executed { result }, MAX_TO_HOST)
             }
@@ -987,15 +999,19 @@ fn write_host(mut input: ChildStdin, rx: &Receiver<ToHost>, shared: &Shared) {
 fn read_host(mut output: ChildStdout, shared: &Shared, cancel: &AtomicBool, events: &SyncSender<Event>, coalesce: &str) {
     let reported = relay(&mut output, shared, events, coalesce);
     // The host sent its result or its output ended: whatever it still had queued is void, even
-    // before it has exited.
-    {
-        lock(&shared.watch).dead = true;
-    }
+    // before it has exited. Its result is taken in the same step, so a stop from now on does
+    // not replace it; one recorded before still wins.
+    let cancelled = {
+        let mut w = lock(&shared.watch);
+        w.dead = true;
+        w.settled = reported.is_some();
+        cancel.load(Ordering::SeqCst)
+    };
     let result = match (shared.stopped(), reported) {
         // The app stopped the run: that is how it ended, even if the host's result was queued.
         (Some(failure), _) => Err(failure),
         (None, Some(Ok(()))) => Ok(()),
-        (None, Some(Err(_))) if cancel.load(Ordering::SeqCst) => Err(Failure::new(FailureKind::Cancelled, CANCELLED)),
+        (None, Some(Err(_))) if cancelled => Err(Failure::new(FailureKind::Cancelled, CANCELLED)),
         (None, Some(Err(m))) => Err(Failure::new(FailureKind::Script, m)),
         (None, None) => {
             shared.wait_exit();
@@ -1018,7 +1034,7 @@ fn relay(output: &mut ChildStdout, shared: &Shared, events: &SyncSender<Event>, 
             Ok(Some(m)) => m,
             // The host ended, or died in the middle of a message.
             Ok(None) | Err(FrameError::Truncated | FrameError::Io(_)) => return None,
-            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues | FrameError::Malformed(_))) => {
+            Err(e @ (FrameError::TooLarge(_) | FrameError::TooManyValues | FrameError::TooDeep | FrameError::Malformed(_))) => {
                 shared.kill(Verdict::Violation(e.to_string()));
                 return None;
             }
@@ -1119,7 +1135,23 @@ mod tests {
             exit: None,
             peak: 0,
             dead: false,
+            settled: false,
         }
+    }
+
+    /// A stop after the host's result was taken does not replace that result; one before it
+    /// is how the run ended.
+    #[test]
+    fn a_stop_after_the_result_was_taken_keeps_the_result() {
+        let mut w = watch();
+        w.settled = true;
+        w.stop(Verdict::Cancelled);
+        assert!(w.verdict.is_none(), "the host's result stands");
+        assert!(w.dead);
+        let mut w = watch();
+        w.stop(Verdict::Cancelled);
+        w.settled = true;
+        assert!(matches!(w.verdict, Some(Verdict::Cancelled)), "an earlier stop wins");
     }
 
     /// The writer's report that answer 1 is out does not complete answer 2, which the app gave

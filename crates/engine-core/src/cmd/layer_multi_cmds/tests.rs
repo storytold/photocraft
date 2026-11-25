@@ -2269,3 +2269,21 @@ fn moves_toward_the_coordinate_limits_do_not_overflow() {
         s.execute("document.inspect", json!({})).unwrap();
     }
 }
+
+/// A copy moves nothing, so a group can be copied into itself, or into a group inside it, in
+/// one edit: the copy is of the group as it was. Moving a group into itself is still refused.
+#[test]
+fn a_group_can_be_copied_into_itself_in_one_edit() {
+    let mut s = session(8);
+    let outer = LayerId(s.execute("layer.new.group", json!({"name": "Outer"})).unwrap()["layer"].as_u64().unwrap());
+    let inner = LayerId(s.execute("layer.new.group", json!({"name": "Inner", "group": outer.0})).unwrap()["layer"].as_u64().unwrap());
+    let steps = s.active().unwrap().history.entries().len();
+    for (target, position) in [(outer, "into"), (inner, "into"), (inner, "above")] {
+        let r = s.execute("layer.moveTo", json!({"layer": outer.0, "target": target.0, "position": position, "copy": true})).unwrap();
+        let copy = LayerId(r["layer"].as_u64().unwrap());
+        let path = doc(&s).path_of(copy).unwrap();
+        assert!(path.starts_with(&doc(&s).path_of(outer).unwrap()), "{position} {target:?}: the copy is inside the group");
+    }
+    assert_eq!(s.active().unwrap().history.entries().len(), steps + 3, "one step each");
+    assert!(s.execute("layer.moveTo", json!({"layer": outer.0, "target": inner.0, "position": "into"})).is_err());
+}

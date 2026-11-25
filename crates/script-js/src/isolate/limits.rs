@@ -2,7 +2,7 @@
 //!
 //! | | memory | lifetime |
 //! |---|---|---|
-//! | every platform | the host's heap cap ([`HostAllocator`]): an allocation that would take the heap past the limit fails, and the host ends at once with a failed allocation | |
+//! | every platform | the host's heap cap ([`HostAllocator`]): an allocation that would take the heap past the limit fails. Where the engine can handle the failure the script gets an error; where it can't, the host ends at once with a failed allocation | |
 //! | Linux | also `RLIMIT_DATA`, set by the host on itself before the script runs | the host exits when its input ends |
 //! | macOS | the heap cap (the kernel enforces neither `RLIMIT_DATA` nor `RLIMIT_AS`) | the host exits when its input ends |
 //! | Windows | the heap cap | a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and the host exits when its input ends |
