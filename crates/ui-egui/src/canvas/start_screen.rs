@@ -4,6 +4,7 @@
 use craft::behavior::IconId;
 use craft::ui::contract::Bind;
 use craft::ui::runtime::env::Label;
+use craft::ui::runtime::overlay::{self, OpenFilter};
 use craft::ui::shell::{StartAction, StartLink, StartScreen};
 
 use super::PhotocraftApp;
@@ -53,6 +54,14 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::new_doc_ui::open(app);
         }
     }
+    if !app.session.documents().is_empty()
+        && !app.dialog_open()
+        && !ctx.any_popup_open()
+        && !overlay::any_open(&ctx, OpenFilter::Keys)
+        && crate::window_keys::take_escape(&ctx)
+    {
+        app.ui.chrome.home = None;
+    }
 }
 
 /// Shows a recent file selected in the system file manager; a failure goes to the status line, as the other open
@@ -101,3 +110,7 @@ pub(crate) fn toggle_home(app: &mut PhotocraftApp) {
 #[cfg(test)]
 #[path = "start_screen/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../home_screen_escape_tests.rs"]
+mod home_screen_escape_tests;
