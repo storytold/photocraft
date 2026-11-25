@@ -613,10 +613,16 @@ fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
     h.state_mut().ui.tool = crate::state::Tool::Move;
     h.state_mut().ui.tool_options.move_show_transform = false;
     let before = h.state().session.active().unwrap().doc.layers.len();
+    // Without ⌥ the Move tool asks for its painted arrow with the cross (#16819), which the window shows as an image.
+    let move_cursor = Some(craft::behavior::Cursor::Painted(craft::behavior::PaintedCursor::pointer_tool(
+        craft::behavior::PointerGlyph::Arrow,
+        crate::icons::tool_icon(crate::state::Tool::Move),
+    )));
+    let requested = |h: &Harness<'static, Box<PhotocraftApp>>| h.state().canvas_tools.last_response.as_ref().and_then(|r| r.cursor.clone());
     let p = h.state().last_canvas_rect.center();
     h.hover_at(p);
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    assert_eq!(requested(&h), move_cursor);
     h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy);
@@ -631,7 +637,7 @@ fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy, "releasing Alt does not undo an active copy");
     h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    assert_eq!(requested(&h), move_cursor, "back to the Move cursor");
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before + 1);
 }
 
