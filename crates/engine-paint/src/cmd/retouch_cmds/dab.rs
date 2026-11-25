@@ -612,15 +612,7 @@ impl LiveDab {
         let (tool, _) = DabTool::parse(s, cmd, p, &stroke)?;
         let (neighborhood, spacing, brush) = (tool.neighborhood(), stroke.brush.spacing, Box::new(stroke.brush.clone()));
         let effect = tool.clone();
-        let mut fault = DabFault::default();
-        let mut live = Self::with_neighborhood(s, cmd, p, stroke, id, neighborhood, |pre| {
-            let (effect, f) = effect.effect(pre.format(), spacing);
-            fault = f;
-            effect
-        })?;
-        // The first points ran before the stroke held its fault.
-        fault.check()?;
-        live.fault = fault;
+        let mut live = Self::with_neighborhood(s, cmd, p, stroke, id, neighborhood, |pre| effect.effect(pre.format(), spacing))?;
         live.tool = Some((tool, brush));
         Ok(live)
     }
@@ -636,7 +628,7 @@ impl LiveDab {
         halo: i32,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
-        Self::with_neighborhood(s, cmd, p, stroke, id, DabNeighborhood::Halo(halo), effect)
+        Self::with_neighborhood(s, cmd, p, stroke, id, DabNeighborhood::Halo(halo), |pre| (effect(pre), DabFault::default()))
     }
 
     fn with_neighborhood(
@@ -646,7 +638,7 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         neighborhood: DabNeighborhood,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface) -> (DabEffect, DabFault),
     ) -> Result<Self> {
         let captured = crate::channel_cmds::inject_target(s, cmd, p.clone());
         let p = &captured;
@@ -674,7 +666,7 @@ impl LiveDab {
         halo: i32,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
-        Self::with_neighborhood_on(doc, cmd, p, stroke, id, DabNeighborhood::Halo(halo), effect)
+        Self::with_neighborhood_on(doc, cmd, p, stroke, id, DabNeighborhood::Halo(halo), |pre| (effect(pre), DabFault::default()))
     }
 
     fn with_neighborhood_on(
@@ -684,13 +676,13 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         neighborhood: DabNeighborhood,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface) -> (DabEffect, DabFault),
     ) -> Result<Self> {
         let colors = crate::color_channels::explicit(p, crate::channel_cmds::color_count(&doc))?;
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
-        let effect = effect(&pre_surf);
+        let (effect, fault) = effect(&pre_surf);
         // Generate the same dabs as `apply_dab_stroke` (zoom 1), without a StrokeRenderer:
         // its accumulated coverage isn't used here, and each effect rasterizes its own footprint.
         let ctx = photocraft_paint::BrushContext::new(&stroke.brush);
@@ -704,7 +696,7 @@ impl LiveDab {
             dual_pending: Vec::new(),
             done: 0,
             effect,
-            fault: DabFault::default(),
+            fault,
             neighborhood,
             work: WorkTiles::new(pre_surf.channels()),
             pre_surf,
@@ -910,3 +902,7 @@ mod smudge_refuses_indexed_tests;
 #[cfg(test)]
 #[path = "smudge_mode_tests.rs"]
 mod smudge_mode_tests;
+
+#[cfg(test)]
+#[path = "live_fault_tests.rs"]
+mod live_fault_tests;
