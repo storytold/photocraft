@@ -41,6 +41,29 @@ use smart::{LINK_KEYS, SmartOut, Source, contents_uuid, effects_unchanged, embed
 /// A raster layer never writes them, nor adjustment blocks.
 const RASTER_STALE_KEYS: [&[u8; 4]; 8] = [b"SoCo", b"GdFl", b"PtFl", b"SoLd", b"PlLd", b"SoLE", b"TySh", b"vscg"];
 
+/// Photoshop uses this layer record bit to expose saved effects as editable styles (#16908).
+const LAYER_HAS_EFFECTS: u8 = 0x20;
+
+/// Photoshop counts four-byte alignment padding in the layer block's length.
+fn align_layer_block(block: &mut TaggedBlock) {
+    let size = block.data.len();
+    let aligned = size.next_multiple_of(4);
+    if size == aligned {
+        return;
+    }
+    // Metadata readers expect the declared items to fill `shmd`. Count the pad in
+    // the last item's length too, keeping every original byte outside that field.
+    if block.key == *b"shmd"
+        && let Ok(items) = craft_psd::metadata::parse_shmd(&block.data)
+        && let Some(last) = items.last()
+        && let Ok(length) = u32::try_from(last.data.len() + (aligned - size))
+    {
+        let data_start = size - last.data.len();
+        block.data[data_start - 4..data_start].copy_from_slice(&length.to_be_bytes());
+    }
+    block.data.resize(aligned, 0);
+}
+
 /// The largest file written as PSD: past it, the document is saved as PSB (Large Document Format),
 /// as Photoshop does.
 const PSD_MAX_FILE_SIZE: u64 = 2 * 1024 * 1024 * 1024;
@@ -384,18 +407,18 @@ impl Ex<'_> {
             Some(true) | None if fx.psd_raw.is_some() => fx.psd_raw.as_ref().map(|r| r.to_vec()),
             _ => (!fx.items.is_empty()).then(|| crate::effects_map::write_lfx2(fx.enabled, &fx.items)),
         };
+        let has_modern_effects = lfx2.is_some() || extra.iter().any(|b| &b.key == b"lmfx");
+        if has_modern_effects {
+            flags.0 |= LAYER_HAS_EFFECTS;
+        }
         if let Some(d) = lfx2 {
             let key = if l.is_group() { *b"lfxs" } else { *b"lfx2" };
             blocks.push(TaggedBlock::new(key, d));
         }
-        blocks.extend(extra);
-        // Layer-level blocks keep their pad byte inside the length, as Photoshop writes them:
-        // readers such as psd-tools do not skip a pad after an odd length, so a regenerated
-        // odd-length `lfx2` misaligned every block after it (#200).
-        for b in &mut blocks {
-            if b.data.len() % 2 == 1 && b.padding.is_none() {
-                b.data.push(0);
-            }
+        // A legacy effect can override the modern style in Photoshop (#16908).
+        blocks.extend(extra.into_iter().filter(|b| &b.key != b"lrFX" || !has_modern_effects));
+        for block in &mut blocks {
+            align_layer_block(block);
         }
         if !l.blend.has_psd_equivalent() {
             self.warnings.push(format!(
@@ -559,12 +582,7 @@ impl Ex<'_> {
             let keep = raw.iter().any(|(k, d)| matches!(k, b"SoCo" | b"GdFl" | b"PtFl") && blocks::parse_fill(k, d).as_ref() == Some(f));
             if !keep {
                 raw.retain(|(k, _)| !matches!(k, b"SoCo" | b"GdFl" | b"PtFl"));
-                // Photoshop pads layer-level blocks to a multiple of 4 inside the length (every
-                // one in its own files is). A fill descriptor of 2 mod 4 bytes, as a pattern
-                // name of the wrong length gives, left the record's extra data unaligned.
-                let (key, mut data) = blocks::write_fill(f);
-                data.resize(data.len().next_multiple_of(4), 0);
-                regenerated.push((key, data));
+                regenerated.push(blocks::write_fill(f));
             }
         };
         match &l.content {

@@ -460,6 +460,8 @@ impl Ctx<'_> {
         if let Some(fx) = rec.block(b"lmfx").or(single) {
             let (enabled, items) = crate::effects_map::parse_lfx2(&fx.data).unwrap_or_else(|| (blocks::effects_enabled(&fx.data), Vec::new()));
             l.effects = Effects { enabled, items, psd_raw: single.map(|b| Arc::new(b.data.clone())), reference: None };
+            // A legacy copy would come back on export if the modern style were cleared.
+            l.psd_blocks.retain(|(key, _)| key != b"lrFX");
         } else if let Some(fx) = rec.block(b"lrFX")
             && !rec.section_type().is_folder()
             && let Some((enabled, items)) = crate::effects_map::parse_lrfx(&fx.data)

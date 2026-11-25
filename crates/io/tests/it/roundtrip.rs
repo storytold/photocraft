@@ -167,10 +167,9 @@ fn raster_layer_blocks_preserved() {
     d.layers[1].advanced = photocraft_doc::AdvancedBlending { blend_clipped: false, ..Default::default() };
     d.layers[1].vector_mask = photocraft_io::vector_map::vector_mask_from_block(&[0; 12], d.size.width, d.size.height);
     let back = roundtrip(&d);
-    // An odd-length layer block comes back with its pad byte inside the length (as Photoshop
-    // lays layer blocks out, #200); everything else is verbatim.
+    // An unaligned layer block comes back with zero padding inside the length.
     let mut expected = blocks.clone();
-    expected[2].1 = std::sync::Arc::new(vec![1u8, 0]);
+    expected[2].1 = std::sync::Arc::new(vec![1u8, 0, 0, 0]);
     assert_eq!(back.layers[1].psd_blocks, expected);
     assert_eq!(roundtrip(&back).layers[1].psd_blocks, expected, "stable after the first save");
     assert_eq!(back.layers[1].vector_mask, d.layers[1].vector_mask);
@@ -273,8 +272,10 @@ fn effects_raw_roundtrip() {
     let (master, items) = photocraft_io::effects_map::parse_lfx2(&lfx).unwrap();
     d.layers[1].effects.enabled = master;
     d.layers[1].effects.items = items;
-    d.layers[1].effects.psd_raw = Some(std::sync::Arc::new(lfx));
+    d.layers[1].effects.psd_raw = Some(std::sync::Arc::new(lfx.clone()));
     let back = roundtrip(&d);
+    lfx.resize(lfx.len().next_multiple_of(4), 0);
+    d.layers[1].effects.psd_raw = Some(std::sync::Arc::new(lfx));
     assert_docs_eq(&d, &back);
 }
 

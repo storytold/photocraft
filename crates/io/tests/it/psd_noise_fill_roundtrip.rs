@@ -1,7 +1,7 @@
 //! #6272: a Photoshop noise `GdFl` gradient that is not provably constant-RGB still opens as
 //! a fill layer — the placeholder ramp stands in where the model has no stops, Photoshop's
-//! own pixels ride along as the fill cache — and its raw `GdFl` block survives a re-save byte
-//! for byte. Before the fix, `fill_from_desc` returned `None` for those gradients: the layer
+//! own pixels ride along as the fill cache — and its raw `GdFl` payload survives a re-save.
+//! Before the fix, `fill_from_desc` returned `None` for those gradients: the layer
 //! imported as pixels and the export dropped the `GdFl` (`RASTER_STALE_KEYS`), so opening and
 //! re-saving a file silently turned the fill layer into a plain pixel layer.
 
@@ -34,7 +34,7 @@ fn default_noise_gdfl() -> Vec<u8> {
 fn variable_noise_gradient_stays_a_fill_layer_and_keeps_its_gdfl() {
     let _ = UnicodeString::new_nul("x");
     let mut f = testgen::small(Version::Psd, Compression::Raw);
-    let gdfl = default_noise_gdfl();
+    let mut gdfl = default_noise_gdfl();
     f.layers_mut().push(LayerRecord {
         name: b"noise fill".to_vec(),
         blocks: vec![TaggedBlock::unicode_name("noise fill"), TaggedBlock::new(*b"GdFl", gdfl.clone())],
@@ -50,5 +50,6 @@ fn variable_noise_gradient_stays_a_fill_layer_and_keeps_its_gdfl() {
     let out = export(&imp.document, "out.psd", &ExportOptions::default()).unwrap().bytes;
     let back = PsdFile::from_bytes(&out).unwrap();
     let rec = back.layers().iter().find(|l| l.block(b"GdFl").is_some()).expect("the re-saved layer carries its GdFl");
-    assert_eq!(rec.block(b"GdFl").unwrap().data, gdfl, "the raw GdFl survives the round trip byte for byte");
+    gdfl.resize(gdfl.len().next_multiple_of(4), 0);
+    assert_eq!(rec.block(b"GdFl").unwrap().data, gdfl, "the GdFl payload survives with the required padding");
 }
