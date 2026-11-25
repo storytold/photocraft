@@ -78,7 +78,7 @@ fn mix(a: [f32; 4], b: [f32; 4], k: f32) -> [f32; 4] {
 /// clipped layers blended individually and Transparency Shapes Layer off itself and sends the
 /// rest (Blend Interior Effects as Group with effects, and masks hiding effects) to the CPU path,
 /// as it does Transparency Shapes Layer off on a clipped layer with effects or a special-eight
-/// blend; its own gates are `plan::lower::advanced_on_cpu` and `plan::lower::clipped_on_cpu`.
+/// blend and Hard Mix with it off in a 16/32-bit document; its own gates are `plan::lower::advanced_on_cpu` and `plan::lower::clipped_on_cpu`.
 pub fn advanced_active(layer: &Layer, clipped: &[Layer]) -> bool {
     let a = &layer.advanced;
     if a.is_default() {

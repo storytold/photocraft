@@ -26,11 +26,11 @@ Background composited onto it, even when occlusion left the Background out of th
 each use, so only the root stack's accumulated backdrop is live between units. The other options
 still return `Unsupported` from the GPU planner and use the CPU path: Blend Interior Effects as
 Group with effects, Layer / Vector Mask Hides Effects, and Transparency Shapes Layer off on a
-layer clipped to a base when it has effects or a special-eight blend mode. So does Blend Clipped
-Layers as Group off in a 32-bit float document when the base takes more than one pass (a group,
-or a pattern fill without cached pixels): its coverage would go through an accumulator slot,
-which may be half float. A later GPU implementation of any of them preserves the boundary
-invariant.
+layer clipped to a base when it has effects or a special-eight blend mode, and Hard Mix with
+Transparency Shapes Layer off in a 16/32-bit document. So does Blend Clipped Layers as Group off
+in a 32-bit float document when the base takes more than one pass (a group, or a pattern fill
+without cached pixels): its coverage would go through an accumulator slot, which may be half
+float. A later GPU implementation of any of them preserves the boundary invariant.
 
 ## Invalidation
 

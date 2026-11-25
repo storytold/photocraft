@@ -1,5 +1,6 @@
 use super::types::Unsupported;
 use super::{Adjustment, BlendMode, Fill, Gradient, Layer, LayerContent, Pattern, StrokePosition, ToneSpace, Transfer, adjust, lut3d_len};
+use photocraft_color::SampleType;
 
 /// Paint source of an effect.
 pub(super) enum Paint<'a> {
@@ -34,11 +35,15 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
 /// Clipped Layers as Group off (`Planner::clipped_individually`) and Transparency Shapes Layer
 /// off, which the GPU runs itself: the special-eight blends take the content's own alpha as Fill
 /// (`F_SHAPELESS`) and the effects take the whole layer as their shape (`Planner::effects`). A
-/// layer clipped to a base is still refused for the last one (`clipped_on_cpu`).
-pub(super) fn advanced_on_cpu(layer: &Layer) -> Option<&'static str> {
+/// layer clipped to a base is still refused for the last one (`clipped_on_cpu`), and Hard Mix with
+/// it off in a 16/32-bit document is refused too (`hard_mix_shapeless_on_cpu`).
+pub(super) fn advanced_on_cpu(layer: &Layer, depth: SampleType) -> Option<&'static str> {
     let a = &layer.advanced;
     if a.is_default() {
         return None;
+    }
+    if hard_mix_shapeless_on_cpu(layer, depth) {
+        return Some("Hard Mix with Transparency Shapes Layer off in a 16/32-bit document");
     }
     let fx = photocraft_compose::effects::has_effects(layer);
     if a.blend_interior && fx {
@@ -54,6 +59,13 @@ pub(super) fn advanced_on_cpu(layer: &Layer) -> Option<&'static str> {
 /// Shapes Layer off on a non-adjustment layer in one of those modes (`F_SHAPELESS`).
 pub(super) fn shapeless_blend(layer: &Layer) -> bool {
     !layer.advanced.transparency_shapes && photocraft_compose::psblend::fill_is_special(layer.blend) && !matches!(layer.content, LayerContent::Adjustment(_))
+}
+
+/// Hard Mix with Transparency Shapes Layer off in a 16/32-bit document. The GPU holds such content
+/// as half floats, where a near-opaque alpha (0.9999, 65534/65535) rounds to 1.0, and Hard Mix's
+/// Fill formula divides by `1 - fill`, so it would take the binary branch the CPU doesn't.
+pub(super) fn hard_mix_shapeless_on_cpu(layer: &Layer, depth: SampleType) -> bool {
+    depth != SampleType::U8 && layer.blend == BlendMode::HardMix && shapeless_blend(layer)
 }
 
 /// The Transparency Shapes Layer off case that keeps a layer clipped to a base on the CPU

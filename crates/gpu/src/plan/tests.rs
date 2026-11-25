@@ -431,6 +431,24 @@ fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     assert!(p.passes.iter().all(|p| p.flags & F_SHAPELESS == 0));
     t.layers[1].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
     assert!(plan(&t).is_ok(), "effects without Transparency Shapes Layer");
+    // Hard Mix takes the binary branch on a near-opaque alpha that 16/32-bit uploads round to 1.0:
+    // it stays on the CPU there, while 8 bits and the other special-eight modes plan.
+    t.layers[1].effects.items.clear();
+    t.layers[1].blend = BlendMode::HardMix;
+    assert!(plan(&t).is_ok(), "Hard Mix at 8 bits");
+    for depth in [SampleType::U16, SampleType::F32] {
+        let mut w = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, depth, Color::WHITE);
+        let mut hm = Layer::raster("hm", w.pixel_format());
+        hm.advanced.transparency_shapes = false;
+        hm.blend = BlendMode::HardMix;
+        w.layers.push(hm);
+        assert!(plan(&w).unwrap_err().0.contains("Hard Mix"), "Hard Mix without Transparency Shapes Layer at {depth:?}");
+        w.layers[1].advanced.transparency_shapes = true;
+        assert!(plan(&w).is_ok(), "Hard Mix with Transparency Shapes Layer at {depth:?}");
+        w.layers[1].advanced.transparency_shapes = false;
+        w.layers[1].blend = BlendMode::ColorDodge;
+        assert!(plan(&w).is_ok(), "Color Dodge without Transparency Shapes Layer at {depth:?}");
+    }
     // Clipped to a base, the same cases stay on the CPU.
     t.layers[1] = l.clone();
     let mut c = l.clone();
