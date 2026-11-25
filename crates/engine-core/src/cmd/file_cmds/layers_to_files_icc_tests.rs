@@ -9,6 +9,8 @@ fn session(mode: &str, depth: u32) -> Session {
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 6, "mode": mode, "depth": depth, "background": "backgroundColor", "backgroundColor": [0.8, 0.1, 0.1]}))
         .unwrap();
+    // One normal layer: Layers to Files refuses a Background-only document (#13968).
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
     s
 }
 
