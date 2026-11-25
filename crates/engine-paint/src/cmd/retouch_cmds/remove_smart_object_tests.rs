@@ -226,7 +226,7 @@ fn patch_over_red_session() -> Session {
         let b = doc.bounds();
         let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
         let fmt = surf.format();
-        let n = fmt.channels() as usize;
+        let n = fmt.channels();
         let mut data = Vec::with_capacity(usize::try_from(b.width()).unwrap() * usize::try_from(b.height()).unwrap() * n);
         for _ in b.y0..b.y1 {
             for _ in b.x0..b.x1 {
@@ -242,10 +242,10 @@ fn patch_over_red_session() -> Session {
         let r = Rect::new(40, 24, 52, 36);
         let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
         let fmt = surf.format();
-        let (w, h) = (usize::try_from(r.width()).unwrap(), usize::try_from(r.height()).unwrap());
-        let mut data = vec![0.5f32; w * h * fmt.channels() as usize];
+        let (w, h) = (r.width() as usize, r.height() as usize);
+        let mut data = vec![0.5f32; w * h * fmt.channels()];
         if let Some(a) = alpha_index(&fmt) {
-            for px in data.chunks_exact_mut(fmt.channels() as usize) {
+            for px in data.chunks_exact_mut(fmt.channels()) {
                 px[a] = 1.0;
             }
         }
