@@ -236,6 +236,8 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 let cb = [1.0 - px[0], 1.0 - px[1], 1.0 - px[2]];
                 let cs = [1.0 - fg_inks[0], 1.0 - fg_inks[1], 1.0 - fg_inks[2]];
                 let b = blend_rgb(BlendMode::Color, cb, cs);
+                // `cmyk_color` only holds for a CMYK format, whose pixels carry the four inks
+                // first, so channels 0..3 of `px` and `out` are C, M, Y and K.
                 for i in 0..3 {
                     let ink = (1.0 - b[i]).clamp(0.0, 1.0);
                     out[i] = px[i] + (ink - px[i]) * k;
