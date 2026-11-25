@@ -396,7 +396,7 @@ fn place(s: &mut Session, p: &Value) -> Result<Value> {
         None => d.doc.next_layer_name(&shape.name),
     };
     let mut q = json!({"kind": "path", "path": path_json(&path), "name": name});
-    for k in ["fill", "stroke", "addTo", "op"] {
+    for k in ["fill", "stroke", "useAlignedRendering", "addTo", "op"] {
         if let Some(v) = p.get(k) {
             q[k] = v.clone();
         }
@@ -498,7 +498,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Place Custom Shape",
             menu: &[],
             shortcut: None,
-            params: r##"{"preset":name,"group":name?,"rect":[x,y,w,h]? (default: centred, half the canvas),"keepAspect":bool=true,"fill":…?=foreground,"stroke":…?,"name":str? (default: the shape's name numbered, "Heart 1", "Heart 2"),"addTo":layerId?,"op":"combine|subtract|intersect|exclude"?} → shape.info (Custom Shape tool / Shapes panel; fill and stroke as in shape.create)"##,
+            params: r##"{"preset":name,"group":name?,"rect":[x,y,w,h]? (default: centred, half the canvas),"keepAspect":bool=true,"fill":…?=foreground,"stroke":…?,"useAlignedRendering":bool (new layer: false; addTo: preserve target when omitted),"name":str? (default: the shape's name numbered, "Heart 1", "Heart 2"),"addTo":layerId?,"op":"combine|subtract|intersect|exclude"?} → shape.info (Custom Shape tool / Shapes panel; fill and stroke as in shape.create)"##,
             enabled: has_doc,
             run: place,
             journal: true,
