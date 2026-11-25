@@ -151,9 +151,21 @@ pub fn auto_commit(app: &mut PhotocraftApp, edits: &[TransformEdit<SessionWarp>]
     true
 }
 
-/// Whether a document point is outside the document, on the pasteboard around the canvas.
+/// Whether a document point is outside the document, on the pasteboard around the canvas. In an
+/// artboard document everything outside the boards is pasteboard, also within the canvas size, as
+/// measured in the reference application (#17019).
 fn on_pasteboard(app: &PhotocraftApp, p: [f64; 2]) -> bool {
-    app.session.active().is_some_and(|st| p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(st.doc.size.width) || p[1] >= f64::from(st.doc.size.height))
+    let Some(st) = app.session.active() else { return false };
+    let doc = &st.doc;
+    if p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(doc.size.width) || p[1] >= f64::from(doc.size.height) {
+        return true;
+    }
+    if !p[0].is_finite() || !p[1].is_finite() {
+        return false;
+    }
+    // Inside the canvas size here, so the casts are in range.
+    let (x, y) = (p[0].floor() as i32, p[1].floor() as i32);
+    doc.has_artboards() && !doc.layers.iter().filter_map(|l| l.artboard()).any(|a| a.rect.contains(x, y))
 }
 
 /// Whether a document point lands on pixels of a layer the box doesn't move: the frontmost hit

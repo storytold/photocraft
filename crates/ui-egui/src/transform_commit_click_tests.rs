@@ -187,3 +187,69 @@ fn a_click_on_a_grouped_layer_covering_another_layer_keeps_the_box_open() {
     assert!(app.ui.transform.is_some(), "the box stays open");
     assert_eq!(steps(&app), before);
 }
+
+/// An 800 × 600 document with "A" (red, x 120..220, y 150..250) and "B" (blue, x 300..400) on one
+/// artboard, Free Transform open on A and its box moved 10 px right.
+fn on_artboard() -> (Box<PhotocraftApp>, LayerId) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 800, "height": 600, "background": "transparent"})).unwrap();
+    app.sync_views();
+    app.ui.extras.rulers = false;
+    app.ui.extras.snap = false;
+    let mut ids = Vec::new();
+    for (name, at, color) in [("B", 300, "#0000ff"), ("A", 120, "#ff0000")] {
+        let id = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        app.run("layer.select", json!({"layer": id})).unwrap();
+        app.run("select.rect", json!({"x": at, "y": 150, "width": 100, "height": 100})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        ids.push(id);
+    }
+    app.run("layer.select", json!({"layer": ids[0], "mode": "add"})).unwrap();
+    app.run("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap();
+    app.run("layer.select", json!({"layer": ids[1]})).unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    assert!(doc.layers.iter().all(|l| l.id.0 != ids[1]), "A is on the board");
+    let app_ctx = app.ctx().clone();
+    crate::menus::invoke(&mut app, &app_ctx, "edit.freeTransform", json!({})).unwrap();
+    shift_right(&mut app);
+    (app, LayerId(ids[1]))
+}
+
+/// The artboard's rect, in document pixels.
+fn board_rect(app: &PhotocraftApp) -> photocraft_geom::Rect {
+    app.session.active().unwrap().doc.layers.iter().find_map(|l| l.artboard()).expect("an artboard").rect
+}
+
+/// Measured in the reference application: in an artboard document the canvas outside the boards
+/// is pasteboard, also within the document's canvas size, so a click there commits one Free
+/// Transform step and the transformed layer stays selected.
+#[test]
+fn a_click_outside_the_artboards_commits() {
+    let (mut app, a) = on_artboard();
+    let board = board_rect(&app);
+    let p = [f64::from(board.x1) + 20.0, f64::from(board.y0) + 10.0];
+    let size = app.session.active().unwrap().doc.size;
+    assert!(p[0] < f64::from(size.width) && p[1] < f64::from(size.height), "the click is inside the canvas size: {p:?} {size:?}");
+    let before = steps(&app);
+    click(&mut app, p);
+    assert!(app.ui.transform.is_none(), "committed");
+    assert_eq!(steps(&app), before + 1);
+    assert_eq!(app.session.active().unwrap().history.entries().last().map(ToString::to_string).as_deref(), Some("Free Transform"));
+    assert_eq!(app.session.active().unwrap().selected_layers(), vec![a], "the selection doesn't change");
+}
+
+/// Measured in the reference application: inside an artboard a click on another layer's pixels or
+/// on an empty spot of the board keeps the box open.
+#[test]
+fn a_click_on_the_artboard_keeps_the_box_open() {
+    for p in [[350.0, 200.0], [150.0, 240.0]] {
+        let (mut app, _) = on_artboard();
+        assert!(board_rect(&app).contains(p[0] as i32, p[1] as i32), "{p:?} is on the board");
+        let (before, q) = (steps(&app), quad(&app));
+        click(&mut app, p);
+        assert!(app.ui.transform.is_some(), "the box stays open at {p:?}");
+        assert_eq!(quad(&app), q);
+        assert_eq!(steps(&app), before);
+    }
+}
