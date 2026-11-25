@@ -52,22 +52,40 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
         layer.blend = mode;
         layer.opacity = opacity;
         layer.label = label;
+        // Checked inside the edit as well as before it (see [`admit`]), so the group can't go away
+        // between the check and the insert; before the fill, which it would waste.
+        if let Some(g) = group {
+            crate::layer_place::check_into(doc, g, &layer).map_err(bad)?;
+        }
         if let Some(rgb) = neutral {
             let bounds = doc.bounds();
             let surface = layer.surface_mut().ok_or_else(|| bad("a new pixel layer has no pixels"))?;
             let px = photocraft_raster::from_rgba(&surface.format(), [rgb[0], rgb[1], rgb[2], 1.0]);
             surface.fill_rect(bounds, &px);
         }
-        // Checked inside the edit, so the group can't go away between the check and the insert.
-        if let Some(g) = group {
-            crate::layer_place::check_into(doc, g, &layer).map_err(bad)?;
-        }
         let id = crate::layer_place::insert_new(doc, group.or(*active), layer, place);
         crate::clip_group::settle(doc, &[id], &Default::default(), clip);
         *active = Some(id);
         Ok(id)
     })?;
+    // A name given here is the user's, as one given later is: the layer keeps it if it becomes text.
+    if let Some(name) = &name {
+        crate::type_cmds::note_typed_name(s, id, name);
+    }
     Ok(json!({ "layer": id.0 }))
+}
+
+/// Checks New Layer's and New Group's `group` before a floating selection drops (dispatch's
+/// admission), so a call into a layer that is no group refuses with nothing changed. The edit
+/// checks it again.
+pub(crate) fn admit(s: &Session, id: &str, p: &Value) -> Result<()> {
+    if !matches!(id, CMD | "layer.new.group") {
+        return Ok(());
+    }
+    let Some(group) = group_param(id, p)? else { return Ok(()) };
+    let Some(d) = s.active() else { return Ok(()) };
+    let layer = if id == CMD { Layer::raster(String::new(), d.doc.pixel_format()) } else { Layer::group(String::new(), vec![]) };
+    crate::layer_place::check_into(&d.doc, group, &layer).map_err(|msg| EngineError::BadParams { cmd: id.into(), msg })
 }
 
 /// Check a New Layer call's params without running it (Free Transform applies its box before a

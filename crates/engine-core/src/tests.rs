@@ -1638,3 +1638,51 @@ fn type_create_in_place_keeps_a_users_name_that_reads_like_the_apps() {
     s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": given.0, "name": "Title"})).unwrap();
     assert_eq!(name(&s, given), "Title");
 }
+
+/// New Layer and New Group refuse a `group` that is no group before a floating selection drops,
+/// as they refuse bad params: the pixels stay floating and History gains no step.
+#[test]
+fn a_new_layer_into_a_layer_that_is_no_group_leaves_a_floating_selection_floating() {
+    for cmd in ["layer.new.layer", "layer.new.group"] {
+        let mut s = session_with_doc();
+        let pixels = s.execute("layer.new.layer", json!({"name": "Pixels"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        s.execute("select.float", json!({"dx": 8})).unwrap();
+        let original = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.entries();
+        assert!(s.execute(cmd, json!({"group": pixels})).is_err(), "{cmd}");
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{cmd}: the selection still floats");
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &original), "{cmd}");
+        assert_eq!(s.active().unwrap().history.entries(), history, "{cmd}");
+        assert!(s.execute(cmd, json!({"group": 999_999})).is_err(), "{cmd}");
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some(), "{cmd}: a missing group leaves it floating too");
+    }
+}
+
+/// A name given to New Layer is the user's, as one given later is: the layer keeps it when it
+/// becomes text in place.
+#[test]
+fn type_create_in_place_keeps_a_name_given_to_new_layer() {
+    let mut s = session_with_doc();
+    let id = s.execute("layer.new.layer", json!({"name": "Layer 99"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": id})).unwrap();
+    assert_eq!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().name, "Layer 99");
+}
+
+/// A pixel layer whose pixels come from an opaque default pixel, with no tiles stored, shows
+/// those pixels: it is not empty, so it does not become text in place.
+#[test]
+fn type_create_does_not_convert_a_layer_drawn_by_its_default_pixel() {
+    let mut s = session_with_doc();
+    let id = photocraft_doc::LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("opaque default", |doc, _| {
+        let layer = doc.layer_mut(id).unwrap();
+        let format = layer.surface().unwrap().format();
+        let red = photocraft_raster::from_rgba(&format, [1.0, 0.0, 0.0, 1.0]);
+        layer.content = photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::with_default(format, &red));
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("type.create", json!({"x": 0, "y": 0, "text": "Caption", "layer": id.0})).is_err());
+    assert!(matches!(s.active().unwrap().doc.layer(id).unwrap().content, photocraft_doc::LayerContent::Raster(_)), "the pixels stay");
+}

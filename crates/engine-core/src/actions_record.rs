@@ -72,9 +72,11 @@ impl Before {
     }
 }
 
-/// Commands whose explicit `layer` names source content rather than a default target.
+/// Commands whose explicit `layer` names source content rather than a default target, and
+/// `type.create`, whose `layer` is the pixel layer it turns into text in place: without one it
+/// makes a new layer, so the selected layer's id is kept too.
 pub(crate) fn needs_source_layer(id: &str) -> bool {
-    matches!(id, "layer.new.frame" | "select.loadSelection" | "type.createSelection" | "edit.checkSpelling")
+    matches!(id, "layer.new.frame" | "select.loadSelection" | "type.createSelection" | "edit.checkSpelling" | "type.create")
 }
 
 /// `params` with its `layer` id made portable (see the module doc).

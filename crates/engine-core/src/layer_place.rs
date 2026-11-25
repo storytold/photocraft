@@ -100,15 +100,19 @@ pub fn insert_new(doc: &mut Document, anchor: Option<LayerId>, mut layer: Layer,
     id
 }
 
+/// Whether `surface` shows no pixels: none stored that differ from its default pixel, and that
+/// default transparent. Only the default pixel's alpha counts: a mode or profile conversion keeps
+/// it transparent but gives its colour channels other values (no ink in CMYK, a neutral a/b in Lab).
+pub(crate) fn shows_no_pixels(surface: &photocraft_raster::Surface) -> bool {
+    surface.content_bounds().is_empty() && surface.format().alpha && surface.default_pixel().last().is_some_and(|a| *a <= 0.0)
+}
+
 /// A plain, unlocked pixel layer with no pixels, mask, clipping or video: a layer Stamp Visible or a pattern fill fills instead of adding one.
 /// Pixels it has only through a visible default pixel (no tiles stored) count as pixels.
 pub fn is_empty_pixel_layer(doc: &Document, id: LayerId) -> bool {
     let Some(l) = doc.layer(id) else { return false };
     let locks = doc.effective_locks(id);
-    // Only the default pixel's alpha counts: a mode or profile conversion keeps it transparent but
-    // gives its colour channels other values (no ink in CMYK, a neutral a/b in Lab).
-    matches!(&l.content, LayerContent::Raster(s)
-        if s.content_bounds().is_empty() && s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0))
+    matches!(&l.content, LayerContent::Raster(s) if shows_no_pixels(s))
         && l.video.is_none()
         && l.visible
         && l.mask.is_none()

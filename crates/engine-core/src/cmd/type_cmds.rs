@@ -1019,16 +1019,18 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Type Layer",
             menu: &["Layer", "New"],
             shortcut: None,
-            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"layer":id? (an empty pixel layer that becomes this text layer in place, keeping its id and settings),"align":"left|center|right|justify…"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
+            params: r##"{"x":px,"y":px (baseline anchor of point text),"text":str,"box":[x,y,w,h]? (paragraph text),"name":str?,"layer":id? (an id or name: an empty pixel layer that becomes this text layer in place, keeping its id and settings),"align":"left|center|right|justify…"?,"orientation":"horizontal|vertical"="horizontal", …character keys: "font","size":pt=12,"color",…}"##,
             enabled: has_doc,
             journal: true,
             run: |s, p| {
                 let mut t = new_text_layer(s, p, "type.create")?;
                 let given = p.get("name").and_then(Value::as_str).map(str::to_string);
                 let name = given.clone().unwrap_or_else(|| layer_name(&t.text));
-                let into = match p.get("layer").filter(|v| !v.is_null()) {
-                    Some(v) => Some(v.as_u64().map(LayerId).ok_or_else(|| bad("type.create", "`layer` must be a layer id"))?),
-                    None => None,
+                // An id, or the name a recorded step keeps; one that names no layer fails rather
+                // than making a new layer.
+                let into = match p.get("layer") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(super::explicit_layer(s, p)?.ok_or_else(|| bad("type.create", "`layer` must name a layer"))?),
                 };
                 // A name the user gave the layer, even one that reads like "Layer 3", stays.
                 let typed = into.and_then(|id| typed_name(s, id));
@@ -1051,7 +1053,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         return Err(EngineError::Other(format!("Could not complete your request because the layer \"{name}\" is locked")));
                     }
                     let layer = doc.layer_mut(into).ok_or(EngineError::NoLayer(into))?;
-                    let empty = matches!(&layer.content, LayerContent::Raster(surface) if surface.content_bounds().is_empty());
+                    let empty = matches!(&layer.content, LayerContent::Raster(surface) if crate::layer_place::shows_no_pixels(surface));
                     if background || !empty {
                         return Err(bad("type.create", "only an empty pixel layer that is not the background can become a text layer"));
                     }
