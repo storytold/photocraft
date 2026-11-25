@@ -29,12 +29,6 @@ pub(super) struct Planner<'a> {
     unhid: Option<&'a Layer>,
 }
 
-/// Set on the id of a layer's hiding masks (`Masks::Hiding`) and of its other masks alone
-/// (`Masks::Visible`): a mask texture is cached by layer id and role, and each set is another
-/// surface than all of the layer's masks, which one plan may also use (its knockout shape).
-const HIDING_MASK_ID: u64 = 1 << 63;
-const VISIBLE_MASK_ID: u64 = 1 << 62;
-
 /// Which of a layer's masks a `MaskUse` combines: all of them, or the ones that hide its effects
 /// (`AdvancedBlending::layer_mask_hides_effects`, `vector_mask_hides_effects`) or the others.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -475,10 +469,12 @@ impl<'a> Planner<'a> {
             Masks::Visible => (!a.layer_mask_hides_effects, !a.vector_mask_hides_effects),
             Masks::Hiding => (a.layer_mask_hides_effects, a.vector_mask_hides_effects),
         };
-        let id = match which {
-            Masks::All => layer.id,
-            Masks::Visible => LayerId(layer.id.0 | VISIBLE_MASK_ID),
-            Masks::Hiding => LayerId(layer.id.0 | HIDING_MASK_ID),
+        // A mask texture is cached by layer id and role; each set of masks is another surface than
+        // all of the layer's masks, which one plan may also use (its knockout shape).
+        let role = match which {
+            Masks::All => Role::Mask,
+            Masks::Visible => Role::VisibleMask,
+            Masks::Hiding => Role::HidingMask,
         };
         let pixel = layer.mask.as_ref().filter(|_| layer_mask);
         let only;
@@ -494,14 +490,15 @@ impl<'a> Planner<'a> {
         };
         if let Some(c) = photocraft_compose::masks::combined_mask(source, self.cx.canvas) {
             let default = c.default_pixel().first().copied().unwrap_or(1.0);
-            return Some(MaskUse { layer: id, surface: SurfaceRef::Derived(std::sync::Arc::new(c)), density: 1.0, default });
+            return Some(MaskUse { layer: layer.id, role, surface: SurfaceRef::Derived(std::sync::Arc::new(c)), density: 1.0, default });
         }
         let m = pixel?;
         if !m.enabled {
             return None;
         }
         Some(MaskUse {
-            layer: id,
+            layer: layer.id,
+            role,
             surface: SurfaceRef::Doc(&m.surface),
             density: m.density,
             default: m.surface.default_pixel().first().copied().unwrap_or(1.0),
