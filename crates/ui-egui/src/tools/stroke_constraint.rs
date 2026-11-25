@@ -37,10 +37,10 @@ pub struct Axis {
     pub dir: Option<[f64; 2]>,
 }
 
-/// Tools whose drag ⇧ constrains: every painting tool, the Gradient tool, and the Freeform Pen
-/// (Photoshop's freehand path segment with ⇧, #7171).
+/// Tools whose drag ⇧ constrains: every painting tool and the Gradient tool. The Freeform Pen draws freehand with ⇧
+/// too (#12832).
 pub fn applies(tool: Tool) -> bool {
-    tool.is_brushlike() || tool == Tool::Gradient || tool == Tool::FreeformPen
+    tool.is_brushlike() || tool == Tool::Gradient
 }
 
 /// Tools that ⇧-click connects to the previous stroke with a straight line.
@@ -208,8 +208,8 @@ mod tests {
         // The Brush never locks to a diagonal: this slightly-more-vertical movement goes vertical.
         let mut axis = None;
         assert!(close(p([40.0, 43.0], &mut axis), [10.0, 43.0]), "the Brush's near-diagonal goes vertical");
-        // Every other ⇧-constrained drag keeps the 45° lock (#178, and #7304 for the Freeform Pen).
-        for tool in [Tool::Pencil, Tool::Eraser, Tool::FreeformPen] {
+        // Every other ⇧-constrained drag keeps the 45° lock (#178).
+        for tool in [Tool::Pencil, Tool::Eraser] {
             let mut axis = None;
             let q = constrain(tool, &mut axis, o, o, [40.0, 43.0], true, 1.0);
             assert!((q[0] - 10.0 - (q[1] - 10.0)).abs() < 1e-9, "{tool:?} should lock to 45°: {q:?}");
@@ -219,8 +219,9 @@ mod tests {
         let mut axis = None;
         assert!(close(p([100.0, 100.0], &mut axis), o), "exact tie stays on the start point");
         assert!(close(p([160.0, 140.0], &mut axis), [160.0, 10.0]), "a later point breaks the tie");
-        // Other tools pass through.
+        // Other tools pass through, the Freeform Pen too (#12832).
         assert!(close(constrain(Tool::Move, &mut None, o, o, [30.0, 12.0], true, 1.0), [30.0, 12.0]));
+        assert!(close(constrain(Tool::FreeformPen, &mut None, o, o, [40.0, 43.0], true, 1.0), [40.0, 43.0]));
     }
 
     #[test]
