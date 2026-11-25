@@ -50,10 +50,7 @@ fn brush_field(h: &H) -> Rect {
 
 /// The Brush Settings toggle the bar draws right after the field: a one-line, icon-only control.
 fn one_line_control(h: &H) -> Rect {
-    h.query_all_by_label("Toggle the Brush Settings panel")
-        .find(|node| node.accesskit_node().role() != Role::Label)
-        .expect("the Brush Settings toggle")
-        .rect()
+    h.query_all_by_label("Toggle the Brush Settings panel").find(|node| node.accesskit_node().role() != Role::Label).expect("the Brush Settings toggle").rect()
 }
 
 /// Every tool that shows the brush picker field keeps the whole field, size caption included, inside the bar.
