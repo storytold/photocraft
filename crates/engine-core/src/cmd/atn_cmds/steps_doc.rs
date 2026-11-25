@@ -326,10 +326,12 @@ pub(super) fn convert_mode_to(id: &str, p: &Value) -> Option<Descriptor> {
 pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     let mut units = None;
+    // A relative percentage is a change, so zero and below (a shrink) are valid there.
+    let relative = matches!(d.get("Rltv"), Some(D::Boolean(true)));
     for (k, param) in [("Wdth", "width"), ("Hght", "height")] {
         match d.get(k) {
             Some(D::UnitFloat { unit, value }) if (*unit == PX || *unit == PCT) && value.is_finite() => {
-                if units.is_some_and(|previous| previous != *unit) || (*unit == PCT && *value <= 0.0) {
+                if units.is_some_and(|previous| previous != *unit) || (*unit == PCT && !relative && *value <= 0.0) {
                     return Mapped::Unsupported { harmless: false };
                 }
                 units = Some(*unit);
@@ -340,7 +342,7 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
         }
     }
     if units == Some(PCT) {
-        if !matches!(d.get("Rltv"), None | Some(D::Boolean(false))) {
+        if !matches!(d.get("Rltv"), None | Some(D::Boolean(_))) {
             return Mapped::Unsupported { harmless: false };
         }
         p.insert("units".into(), "percent".into());
@@ -389,12 +391,14 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     let units = match p.get("units") {
         None => PX,
         Some(Value::String(unit)) if unit == "px" => PX,
-        Some(Value::String(unit)) if unit == "percent" && jbool(p, "relative") != Some(true) => PCT,
+        Some(Value::String(unit)) if unit == "percent" => PCT,
         _ => return None,
     };
+    // A relative percentage may be zero or negative (a shrink); an absolute one is a size.
+    let relative = jbool(p, "relative") == Some(true);
     if units == PCT {
         for key in ["width", "height"] {
-            if p.get(key).is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|number| !number.is_finite() || number <= 0.0)) {
+            if p.get(key).is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|number| !number.is_finite() || (!relative && number <= 0.0))) {
                 return None;
             }
         }
@@ -422,13 +426,13 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
         d = d.with("Rltv", D::Boolean(r));
     }
     if let Some(w) = jnum(p, "width") {
-        if units == PCT && w <= 0.0 {
+        if units == PCT && !relative && w <= 0.0 {
             return None;
         }
         d = d.with("Wdth", D::UnitFloat { unit: units, value: w });
     }
     if let Some(hh) = jnum(p, "height") {
-        if units == PCT && hh <= 0.0 {
+        if units == PCT && !relative && hh <= 0.0 {
             return None;
         }
         d = d.with("Hght", D::UnitFloat { unit: units, value: hh });

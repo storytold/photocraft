@@ -604,3 +604,7 @@ mod line_arrow_concavity_field_tests;
 #[cfg(test)]
 #[path = "pen_make_mask_tests.rs"]
 mod pen_make_mask_tests;
+
+#[cfg(test)]
+#[path = "triangle_path_make_tests.rs"]
+mod triangle_path_make_tests;

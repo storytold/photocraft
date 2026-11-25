@@ -1112,17 +1112,18 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files, "warnings": warnings}))
 }
 
-/// The scratch state an artboard export starts from. Building the boards copies their pixels
-/// (and the PNG-8 and PDF paths flatten them) before the encoder's own scratch check sees them,
-/// and a tile that fails to read gives placeholder pixels: [`ScratchGuard::check`] refuses them
-/// before a file is written, as the export pipeline does for a document it reads itself.
-struct ScratchGuard<'a> {
+/// The scratch state an export starts from. Building artboards copies their pixels (and the
+/// PNG-8 and PDF paths flatten them), as Render Video's PNG frames are flattened, before the
+/// encoder's own scratch check sees them, and a tile that fails to read gives placeholder pixels:
+/// [`ScratchGuard::check`] refuses them before a file is written, as the export pipeline does for
+/// a document it reads itself.
+pub(crate) struct ScratchGuard<'a> {
     doc: &'a Document,
     generation: u64,
 }
 
 impl<'a> ScratchGuard<'a> {
-    fn new(doc: &'a Document) -> Result<Self> {
+    pub(crate) fn new(doc: &'a Document) -> Result<Self> {
         photocraft_compose::discard_unreadable_pixel_caches();
         doc.scratch_health().map_err(EngineError::Other)?;
         Ok(Self { doc, generation: photocraft_raster::spill::read_error_generation() })
@@ -1130,7 +1131,7 @@ impl<'a> ScratchGuard<'a> {
 
     /// An error when a scratch read failed since [`ScratchGuard::new`], or the document's own
     /// pixels are unreadable.
-    fn check(&self) -> Result<()> {
+    pub(crate) fn check(&self) -> Result<()> {
         photocraft_raster::spill::check_since(self.generation).and_then(|()| self.doc.scratch_health()).map_err(EngineError::Other)
     }
 }
