@@ -43,7 +43,7 @@ pub fn specs() -> Vec<CommandSpec> {
         (
             "channelMixer",
             "Channel Mixer…",
-            r##"{"red":json,"green":json,"blue":json,"gray":json,"monochrome":bool=false} (per output channel [red %, green %, blue %, constant %] in -200..200; gray = the monochrome mix)"##,
+            r##"{"red":json,"green":json,"blue":json,"cyan":json,"magenta":json,"yellow":json,"black":json,"gray":json,"monochrome":bool=false} (per output channel [red %, green %, blue %, constant %] in -200..200; CMYK documents (or cyan/magenta/yellow/black keys): per ink output [cyan %, magenta %, yellow %, black %, constant %]; gray = the monochrome mix; monochrome is unsupported for CMYK outputs)"##,
         ),
         ("invert", "Invert", "{}"),
         ("posterize", "Posterize…", r##"{"levels":2..255=4}"##),
@@ -118,9 +118,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 "colorLookup" => Box::leak(params.replace(LOOKUP_LAYER_DEFAULTS, LOOKUP_IMAGE_DEFAULTS).into_boxed_str()),
                 _ => params,
             },
-            enabled: crate::adjust_cmds::has_adjustable,
+            // Brightness/Contrast also refuses a hidden pixel layer (#14359).
+            enabled: match kind {
+                "brightnessContrast" => crate::adjust_cmds::brightness_contrast_enabled,
+                _ => crate::adjust_cmds::has_adjustable,
+            },
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
+                if kind == "brightnessContrast" {
+                    crate::adjust_cmds::brightness_contrast_empty_refusal(s, p)?;
+                }
                 let filled;
                 let p = if kind == "colorLookup" {
                     filled = image_lookup_defaults(p);
