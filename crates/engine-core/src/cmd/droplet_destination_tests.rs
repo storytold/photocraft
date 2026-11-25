@@ -9,11 +9,14 @@ use super::*;
 use crate::actions_cmds::ActionsExt;
 use crate::preset_store::PresetStoreExt;
 
-fn tmp(name: &str) -> String {
-    let d = std::env::temp_dir().join(format!("photocraft-droplet-dest-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d.to_string_lossy().into_owned()
+/// The fixture folder for one test, like `droplet_play_options_tests.rs`: a `tempfile` folder that
+/// is taken away when the returned `TempDir` goes out of scope at the end of the test, even if the
+/// test panics. The caller keeps the pair: the `TempDir` only to hold, the `String` to name paths.
+fn tmp(name: &str) -> (tempfile::TempDir, String) {
+    let root = tempfile::tempdir().expect("a fixture folder");
+    let d = root.path().join(name);
+    std::fs::create_dir_all(&d).expect("the fixture folder");
+    (root, d.to_string_lossy().into_owned())
 }
 
 /// A 4x2 gray PNG at `path` (or a JPEG of it, by extension); the run's steps rotate it, so the
@@ -46,7 +49,7 @@ fn app_session() -> Session {
 /// Commands tick, in the droplet; a call that names neither keeps storing no such keys (as before).
 #[test]
 fn create_droplet_stores_destination_and_the_override_tick() {
-    let dir = tmp("store");
+    let (_tmp, dir) = tmp("store");
     let dp = droplet(&dir, json!({"destination": "saveAndClose", "overrideSaveAs": true, "output": format!("{dir}/out")}));
     let v: Value = serde_json::from_slice(&std::fs::read(&dp).unwrap()).unwrap();
     assert_eq!(v["options"]["destination"], json!("saveAndClose"), "the destination rides in the droplet");
@@ -79,7 +82,7 @@ fn create_droplet_stores_destination_and_the_override_tick() {
 /// as it stands at the base c337d6e4e). Guard test: passes before and after.
 #[test]
 fn a_droplet_without_a_destination_key_still_runs_as_folder() {
-    let dir = tmp("legacy");
+    let (_tmp, dir) = tmp("legacy");
     std::fs::create_dir_all(format!("{dir}/in")).unwrap();
     let input = format!("{dir}/in/a.png");
     input_picture(&input);
@@ -98,7 +101,7 @@ fn a_droplet_without_a_destination_key_still_runs_as_folder() {
 /// copy is written to the stored output folder, the input untouched.
 #[test]
 fn a_droplet_with_destination_folder_writes_its_copy_as_before() {
-    let dir = tmp("folder");
+    let (_tmp, dir) = tmp("folder");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -115,7 +118,7 @@ fn a_droplet_with_destination_folder_writes_its_copy_as_before() {
 /// Close, #13659): each input file itself becomes the rotated picture, and no output folder appears.
 #[test]
 fn destination_save_and_close_overwrites_each_input_in_its_own_format() {
-    let dir = tmp("save-close");
+    let (_tmp, dir) = tmp("save-close");
     let (a, b) = (format!("{dir}/a.png"), format!("{dir}/b.jpg"));
     input_picture(&a);
     input_picture(&b);
@@ -133,7 +136,7 @@ fn destination_save_and_close_overwrites_each_input_in_its_own_format() {
 /// Save and Close rule, before any file is written (the rule measured for #13659, passed on).
 #[test]
 fn destination_save_and_close_refuses_a_different_stored_format_without_writing() {
-    let dir = tmp("save-close-format");
+    let (_tmp, dir) = tmp("save-close-format");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -147,7 +150,7 @@ fn destination_save_and_close_refuses_a_different_stored_format_without_writing(
 /// changed, its last History state is the action's step, and nothing is written anywhere.
 #[test]
 fn destination_none_keeps_each_opened_document_changed_and_writes_nothing() {
-    let dir = tmp("none-app");
+    let (_tmp, dir) = tmp("none-app");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -172,7 +175,7 @@ fn destination_none_keeps_each_opened_document_changed_and_writes_nothing() {
 /// nothing, so they are skipped and the document stays changed (as Batch with no destination).
 #[test]
 fn destination_none_skips_the_recorded_save_and_still_writes_nothing() {
-    let dir = tmp("none-save");
+    let (_tmp, dir) = tmp("none-save");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -201,7 +204,7 @@ fn destination_none_skips_the_recorded_save_and_still_writes_nothing() {
 /// is None: the stored destination decides, the override cannot reintroduce a write.
 #[test]
 fn destination_none_ignores_a_call_output_override_and_writes_nothing() {
-    let dir = tmp("none-override");
+    let (_tmp, dir) = tmp("none-override");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let dp = droplet(&dir, json!({"destination": "none"}));
@@ -215,7 +218,7 @@ fn destination_none_ignores_a_call_output_override_and_writes_nothing() {
 /// the run returns an error saying None needs the app, instead of writing anything.
 #[test]
 fn destination_none_is_refused_when_no_app_is_involved() {
-    let dir = tmp("none-headless");
+    let (_tmp, dir) = tmp("none-headless");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -232,7 +235,7 @@ fn destination_none_is_refused_when_no_app_is_involved() {
 /// closed), and nothing is written.
 #[test]
 fn an_unknown_stored_destination_is_refused_without_writing() {
-    let dir = tmp("bad-dest");
+    let (_tmp, dir) = tmp("bad-dest");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -249,7 +252,7 @@ fn an_unknown_stored_destination_is_refused_without_writing() {
 /// today, exactly like the same droplet without the tick.
 #[test]
 fn a_stored_override_tick_does_not_change_the_run() {
-    let dir = tmp("override-run");
+    let (_tmp, dir) = tmp("override-run");
     let (ticked, plain) = (format!("{dir}/a.png"), format!("{dir}/b.png"));
     input_picture(&ticked);
     input_picture(&plain);
@@ -276,7 +279,7 @@ fn a_stored_override_tick_does_not_change_the_run() {
 /// `a_droplet_that_runs_itself_stops_at_the_nesting_limit` (file_cmds::tests, the folder path).
 #[test]
 fn a_none_droplet_that_runs_itself_stops_at_the_nesting_limit() {
-    let dir = tmp("none-recursion");
+    let (_tmp, dir) = tmp("none-recursion");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -299,7 +302,7 @@ fn a_none_droplet_that_runs_itself_stops_at_the_nesting_limit() {
 fn a_none_droplet_plays_the_action_it_captured_not_the_live_list() {
     use crate::actions_cmds::{Action, ActionStep};
 
-    let dir = tmp("captured");
+    let (_tmp, dir) = tmp("captured");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let mut maker = crate::session();
@@ -327,7 +330,7 @@ fn a_none_droplet_plays_the_action_it_captured_not_the_live_list() {
 fn a_none_droplet_with_unparsable_steps_leaves_the_caller_s_action_state_untouched() {
     use crate::actions_cmds::{Action, ActionStep};
 
-    let dir = tmp("none-unparsable-steps");
+    let (_tmp, dir) = tmp("none-unparsable-steps");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let dp = format!("{dir}/Broken.pcdroplet");
@@ -363,7 +366,7 @@ fn a_none_droplet_with_unparsable_steps_leaves_the_caller_s_action_state_untouch
 fn a_none_droplet_refuses_a_nested_recorded_save_and_writes_no_file() {
     use crate::actions_cmds::{Action, ActionStep};
 
-    let dir = tmp("none-nested-shell-save");
+    let (_tmp, dir) = tmp("none-nested-shell-save");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -413,7 +416,7 @@ fn a_none_droplet_treats_a_nested_engine_save_exactly_as_batch_does() {
     };
 
     // 1. The droplet's None run.
-    let dir = tmp("nested-copy-droplet");
+    let (_tmp, dir) = tmp("nested-copy-droplet");
     let input = format!("{dir}/a.png");
     input_picture(&input);
     let before = std::fs::read(&input).unwrap();
@@ -432,7 +435,7 @@ fn a_none_droplet_treats_a_nested_engine_save_exactly_as_batch_does() {
     let droplet_copy = std::path::Path::new(&format!("{dir}/copy.png")).exists();
 
     // 2. Batch with an output folder, and 3. Batch over open documents with no output folder.
-    let dir2 = tmp("nested-copy-batch");
+    let (_tmp2, dir2) = tmp("nested-copy-batch");
     std::fs::create_dir_all(format!("{dir2}/in")).unwrap();
     let input2 = format!("{dir2}/in/a.png");
     input_picture(&input2);
@@ -447,7 +450,7 @@ fn a_none_droplet_treats_a_nested_engine_save_exactly_as_batch_does() {
     assert_eq!(folder["errors"], json!([]), "{folder}");
     let batch_copy = std::path::Path::new(&format!("{dir2}/copy.png")).exists();
 
-    let dir3 = tmp("nested-copy-batch-open");
+    let (_tmp3, dir3) = tmp("nested-copy-batch-open");
     let input3 = format!("{dir3}/a.png");
     input_picture(&input3);
     let before3 = std::fs::read(&input3).unwrap();
@@ -477,7 +480,7 @@ fn a_none_droplet_treats_a_nested_engine_save_exactly_as_batch_does() {
 fn a_none_droplet_opens_a_raw_at_the_raw_defaults_resolution() {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
 
-    let dir = tmp("raw-ppi");
+    let (_tmp, dir) = tmp("raw-ppi");
     let input = format!("{dir}/IMG.dng");
     std::fs::write(&input, DngSpec::cfa(24, 16, mosaic(&scene(24, 16), 24, [0, 1, 1, 2], 0, 65535)).build()).unwrap();
     let dp = droplet(&dir, json!({"path": format!("{dir}/Invert"), "destination": "none", "steps": [["image.adjustments.invert", {}]]}));
@@ -496,7 +499,7 @@ fn a_none_droplet_opens_a_raw_at_the_raw_defaults_resolution() {
 /// the launcher could only ever fail. A folder droplet still gets the shim as today.
 #[test]
 fn a_none_droplet_gets_no_shim_even_when_one_is_asked_for() {
-    let dir = tmp("shim-none");
+    let (_tmp, dir) = tmp("shim-none");
     let r = crate::session()
         .execute(
             "file.automate.createDroplet",
