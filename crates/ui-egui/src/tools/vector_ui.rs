@@ -257,6 +257,7 @@ pub(crate) struct PenOwner {
     vector_mask: bool,
     foreground: [f32; 4],
     background: [f32; 4],
+    inks: [Option<[f32; 4]>; 2],
 }
 
 impl PartialEq for PenOwner {
@@ -315,6 +316,7 @@ pub(crate) fn capture_pen_owner(app: &PhotocraftApp) -> Option<PenOwner> {
         vector_mask: app.ui.vector_mask_target,
         foreground: app.session.tools.foreground,
         background: app.session.tools.background,
+        inks: std::array::from_fn(|role| app.session.tools.picked_role_cmyk(role)),
     })
 }
 

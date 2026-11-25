@@ -78,6 +78,32 @@ fn refuse_edits(app: &mut PhotocraftApp) {
 }
 
 #[test]
+fn pen_owner_keeps_cmyk_inks_when_tool_colors_change() {
+    use photocraft_color::{Color, ColorMode};
+
+    let mut app = app();
+    app.run("image.mode.cmyk", json!({})).unwrap();
+    let cyan = [1.0, 0.0, 0.0, 0.0];
+    let magenta = [0.0, 1.0, 0.0, 0.0];
+    let yellow = [0.0, 0.0, 1.0, 0.0];
+    let black = [0.0, 0.0, 0.0, 1.0];
+    let rgb = [0.2, 0.3, 0.4, 1.0];
+    app.run("tools.setColors", json!({"foreground": rgb, "background": rgb, "foregroundCmyk": cyan, "backgroundCmyk": magenta})).unwrap();
+    app.ui.tool_options.shape_fill = true;
+    app.ui.tool_options.stroke_width = 4.0;
+    let owner = capture_pen_owner(&app).unwrap();
+
+    // A swatch can acquire different native inks while retaining the same displayed RGB.
+    app.run("tools.setColors", json!({"foreground": rgb, "background": rgb, "foregroundCmyk": yellow, "backgroundCmyk": black})).unwrap();
+    let (fill, stroke) = as_owner(&mut app, &owner, |app| (fill_param(app), stroke_param(app)));
+    let color = |c| json!(Color { mode: ColorMode::Cmyk, c, alpha: 1.0 });
+    assert_eq!(fill, color(cyan));
+    assert_eq!(stroke["color"], color(magenta));
+    assert_eq!(app.session.tools.picked_role_cmyk(0), Some(yellow));
+    assert_eq!(app.session.tools.picked_role_cmyk(1), Some(black));
+}
+
+#[test]
 fn the_first_click_makes_the_shape_layer_right_away() {
     let mut app = app();
     let (before, below) = (steps(&app), app.session.active().unwrap().active_layer.unwrap());
