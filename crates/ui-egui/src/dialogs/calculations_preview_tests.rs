@@ -139,17 +139,17 @@ fn alt_p_toggles_the_preview_and_the_canvas_shows_the_document_without_it() {
     assert!(app.framework.dialogs.get_by_id::<HostedParamDialog>(id).is_some(), "the dialog stayed open across both toggles");
 }
 
-/// The automation channel reads and writes the box like any other row, so a script can turn the
-/// preview on and off without a keyboard.
+/// The automation channel writes the box like any other row, so a script can turn the preview on
+/// and off without a keyboard (`ui.dialog.set` with the `preview` field).
 #[test]
 fn automation_sets_the_preview_box() {
     let mut app = red_app();
-    let id = open_calculations(&mut app);
+    open_calculations(&mut app);
     assert!(hosted(&app).is_previewing(), "on while it opens");
-    set_field(&mut app, id, "preview", json!(false));
+    crate::canvas::testing::control(&mut app, "ui.dialog.set", json!({"dialog": "top", "field": "preview", "value": false}));
     assert!(!hosted(&app).is_previewing(), "the preview row reaches the box");
     assert!(previewed(&mut app).is_none(), "and the canvas shows the plain document");
-    set_field(&mut app, id, "preview", json!(true));
+    crate::canvas::testing::control(&mut app, "ui.dialog.set", json!({"dialog": "top", "field": "preview", "value": true}));
     assert!(previewed(&mut app).is_some(), "a script can turn it back on");
 }
 
