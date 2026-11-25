@@ -66,8 +66,8 @@ impl TextEditorHost for LayerHost<'_> {
     fn replace(&mut self, range: Range<usize>, text: &str, kind: EditKind) -> Option<usize> {
         // A free transform in progress commits before the text changes under it.
         crate::type_transform::finish(self.app);
-        // The engine inserts the whole text.
-        insertion_style::replace(self.app, range.start, range.end, text, kind).then(|| text.chars().count())
+        // The engine inserts the whole text, its line breaks as `\n`.
+        insertion_style::replace(self.app, range.start, range.end, text, kind).then(|| insertion_style::stored_chars(text))
     }
 
     fn hit(&mut self, at: Point) -> (usize, usize) {

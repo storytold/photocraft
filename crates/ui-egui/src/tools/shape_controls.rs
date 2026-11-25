@@ -79,10 +79,23 @@ fn box_shows(app: &PhotocraftApp) -> bool {
 /// The shape layers the box or a corner widget is editing: the selected shape layers while one of them holds a press.
 /// They are not snap targets, so a handle does not snap to the starting edges and centres of the shapes it scales.
 pub(crate) fn pressed_layers(app: &PhotocraftApp) -> Vec<LayerId> {
-    if !box_shows(app) || !editing(app) {
+    if !editing(app) {
         return Vec::new();
     }
-    selection(app, live_line(app).is_some()).map(|(layers, _)| layers.into_iter().map(LayerId).collect()).unwrap_or_default()
+    let mut layers: Vec<LayerId> = if box_shows(app) {
+        selection(app, live_line(app).is_some()).map(|(layers, _)| layers.into_iter().map(LayerId).collect()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    // The corner widgets show without the box (Target Path hidden, the Move tool) and beside other layers in a mixed
+    // selection: the shapes they round are not targets either.
+    for target in corner_targets(app) {
+        let id = LayerId(target.key);
+        if !layers.contains(&id) {
+            layers.push(id);
+        }
+    }
+    layers
 }
 
 /// The selected shape layers and the box round their paths `[x0, y0, x1, y1]`. `None` unless at least
