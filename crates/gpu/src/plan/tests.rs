@@ -406,17 +406,43 @@ fn advanced_blending_falls_back_to_the_cpu_only_for_the_remaining_options() {
     d.layers[1].advanced.blend_clipped = false;
     assert!(plan(&d).is_ok());
     // Knockout, deep or shallow, runs on the GPU; with Transparency Shapes Layer off its shape is
-    // the layer's masks, unless a special-eight blend takes the layer's own transparency as Fill.
+    // the layer's masks, and a special-eight blend takes the layer's own transparency as Fill.
     for knockout in [Knockout::Deep, Knockout::Shallow] {
         d.layers[1].advanced.knockout = knockout;
         assert!(plan(&d).is_ok(), "{knockout:?}");
         d.layers[1].advanced.transparency_shapes = false;
         assert!(plan(&d).is_ok(), "{knockout:?} without Transparency Shapes Layer");
         d.layers[1].blend = BlendMode::ColorDodge;
-        assert!(plan(&d).unwrap_err().0.contains("Advanced Blending"), "{knockout:?} with a special-eight blend");
+        assert!(plan(&d).is_ok(), "{knockout:?} with a special-eight blend");
         d.layers[1].blend = BlendMode::Normal;
         d.layers[1].advanced.transparency_shapes = true;
     }
+    // Transparency Shapes Layer off runs on the GPU for a layer that isn't clipped to a base: with
+    // a special-eight blend (the pass carries the shapeless flag) and with effects.
+    let mut t = Document::with_background("t", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut shapeless = l.clone();
+    shapeless.advanced.transparency_shapes = false;
+    shapeless.blend = BlendMode::ColorDodge;
+    t.layers.push(shapeless);
+    let p = plan(&t).expect("a special-eight blend without Transparency Shapes Layer");
+    assert!(p.passes.iter().any(|p| p.flags & F_SHAPELESS != 0), "a pass takes the layer's alpha as Fill");
+    t.layers[1].blend = BlendMode::Multiply;
+    let p = plan(&t).expect("a Normal-like mode without Transparency Shapes Layer");
+    assert!(p.passes.iter().all(|p| p.flags & F_SHAPELESS == 0));
+    t.layers[1].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    assert!(plan(&t).is_ok(), "effects without Transparency Shapes Layer");
+    // Clipped to a base, the same cases stay on the CPU.
+    t.layers[1] = l.clone();
+    let mut c = l.clone();
+    c.clipped = true;
+    c.advanced.transparency_shapes = false;
+    t.layers.push(c);
+    assert!(plan(&t).is_ok(), "a clipped Normal layer");
+    t.layers[2].blend = BlendMode::VividLight;
+    assert!(plan(&t).unwrap_err().0.contains("on a clipped layer"), "a clipped special-eight layer");
+    t.layers[2].blend = BlendMode::Normal;
+    t.layers[2].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+    assert!(plan(&t).unwrap_err().0.contains("Transparency Shapes Layer off with layer effects"), "a clipped layer with effects");
     // Inside groups and clipping groups.
     d.layers[1].advanced.knockout = Knockout::None;
     let mut c = l.clone();

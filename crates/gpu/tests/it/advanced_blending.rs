@@ -346,12 +346,226 @@ fn the_remaining_advanced_blending_options_are_refused() {
     let Some(mut g) = gpu() else { return };
     let mut d = base_doc(48, 40);
     let mut l = ko_layer(&d, 3, Knockout::Deep);
-    l.advanced.transparency_shapes = false;
-    l.blend = BlendMode::ColorDodge;
+    l.effects.items.push(Effect::default_drop_shadow());
+    l.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+    l.advanced.layer_mask_hides_effects = true;
     d.layers.push(l);
     let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
-        .expect_err("the GPU must refuse a special-eight blend without transparency shapes");
-    assert!(e.to_string().contains("Transparency Shapes Layer off with a Color Dodge"), "{e}");
+        .expect_err("the GPU must refuse a mask that hides the layer's effects");
+    assert!(e.to_string().contains("Layer / Vector Mask Hides Effects"), "{e}");
+
+    // Transparency Shapes Layer off on a layer clipped to a base stays on the CPU (its behaviour
+    // there is changing separately), for effects and for the special eight.
+    for (blend, fx, what) in [(BlendMode::ColorDodge, false, "Color Dodge"), (BlendMode::Normal, true, "layer effects")] {
+        let mut d = base_doc(48, 40);
+        d.layers.push(noise_layer("base", d.pixel_format(), Rect::new(4, 4, 44, 36), 3, 0.6));
+        let mut c = noise_layer("clipped", d.pixel_format(), Rect::new(8, 8, 40, 32), 4, 0.5);
+        c.clipped = true;
+        c.blend = blend;
+        c.advanced.transparency_shapes = false;
+        if fx {
+            c.effects.items.push(Effect::default_drop_shadow());
+        }
+        d.layers.push(c);
+        let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds())
+            .expect_err("the GPU must refuse a clipped layer without transparency shapes");
+        assert!(e.to_string().contains("Transparency Shapes Layer off") && e.to_string().contains("clipped layer"), "{what}: {e}");
+    }
+}
+
+/// The special eight with Transparency Shapes Layer off (the layer's own alpha joins Fill inside
+/// the blend, coverage is Opacity × masks), at every depth, with and without a mask.
+#[test]
+fn shapeless_special_blends_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let modes = [BlendMode::ColorDodge, BlendMode::LinearBurn, BlendMode::VividLight, BlendMode::HardMix];
+    let combos = [(1.0, 1.0), (0.5, 1.0), (1.0, 0.5), (0.6, 0.4)];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for mode in modes {
+            for (opacity, fill) in combos {
+                for masked in [false, true] {
+                    let mut d = doc(depth, true);
+                    d.layers.push(underlay(&d, 2));
+                    let mut l = noise_layer("shapeless", d.pixel_format(), Rect::new(6, 5, 42, 35), 3, 0.2);
+                    l.blend = mode;
+                    l.opacity = opacity;
+                    l.fill_opacity = fill;
+                    l.advanced.transparency_shapes = false;
+                    if mode == BlendMode::HardMix {
+                        // Hard Mix below 100 % Fill divides by 1 − alpha × Fill: an alpha just under
+                        // 1 turns rounding noise into visible differences on either compositor.
+                        let (r, ch) = (Rect::new(6, 5, 42, 35), d.pixel_format().channels());
+                        let surf = l.surface_mut().unwrap();
+                        let mut px = surf.read_region(r);
+                        px.iter_mut().skip(ch - 1).step_by(ch).for_each(|a| *a = a.min(0.85));
+                        surf.write_region(r, &px);
+                    }
+                    if masked {
+                        l.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+                    }
+                    d.layers.push(l);
+                    check(&mut g, &d, &format!("{mode:?} {depth:?} opacity {opacity} fill {fill} mask {masked}"));
+                }
+            }
+        }
+    }
+    // A mode outside the special eight looks the same either way.
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    let mut l = noise_layer("multiply", d.pixel_format(), Rect::new(6, 5, 42, 35), 3, 0.2);
+    l.blend = BlendMode::Multiply;
+    l.opacity = 0.7;
+    l.fill_opacity = 0.6;
+    l.advanced.transparency_shapes = false;
+    d.layers.push(l);
+    check(&mut g, &d, "Multiply without transparency shapes");
+}
+
+#[test]
+fn shapeless_special_blends_in_groups_and_clipping_groups_match_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for pass in [false, true] {
+        for (opacity, fill) in [(1.0, 1.0), (0.6, 0.4)] {
+            // A shapeless layer inside the group.
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let mut inner = noise_layer("inner", d.pixel_format(), Rect::new(4, 4, 44, 36), 5, 0.3);
+            inner.blend = BlendMode::VividLight;
+            inner.opacity = opacity;
+            inner.fill_opacity = fill;
+            inner.advanced.transparency_shapes = false;
+            let below = noise_layer("below", d.pixel_format(), Rect::new(0, 0, 30, 30), 6, 0.5);
+            d.layers.push(group("group", pass, vec![below, inner]));
+            check(&mut g, &d, &format!("inside a group, pass-through {pass}, opacity {opacity}, fill {fill}"));
+
+            // A shapeless group.
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let inner = noise_layer("inner", d.pixel_format(), Rect::new(4, 4, 44, 36), 5, 0.3);
+            let mut grp = group("group", pass, vec![inner]);
+            grp.blend = BlendMode::ColorDodge;
+            grp.opacity = opacity;
+            grp.fill_opacity = fill;
+            grp.advanced.transparency_shapes = false;
+            grp.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+            d.layers.push(grp);
+            check(&mut g, &d, &format!("shapeless group, pass-through {pass}, opacity {opacity}, fill {fill}"));
+        }
+    }
+    // A shapeless base with layers clipped to it: the clips composite onto the base's content,
+    // which the mask then splits.
+    for masked in [false, true] {
+        for (opacity, fill) in [(1.0, 1.0), (0.6, 0.4)] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let mut base = noise_layer("base", d.pixel_format(), Rect::new(4, 4, 44, 36), 3, 0.4);
+            base.blend = BlendMode::LinearBurn;
+            base.opacity = opacity;
+            base.fill_opacity = fill;
+            base.advanced.transparency_shapes = false;
+            if masked {
+                base.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+            }
+            let mut c1 = noise_layer("clipped 1", d.pixel_format(), Rect::new(8, 8, 44, 34), 7, 0.5);
+            c1.clipped = true;
+            c1.opacity = 0.7;
+            let mut c2 = noise_layer("clipped 2", d.pixel_format(), Rect::new(2, 10, 38, 30), 8, 0.4);
+            c2.clipped = true;
+            c2.blend = BlendMode::Multiply;
+            d.layers.extend([base, c1, c2]);
+            check(&mut g, &d, &format!("shapeless base with clips, mask {masked}, opacity {opacity}, fill {fill}"));
+        }
+    }
+    // With a knockout too.
+    for knockout in KNOCKOUTS {
+        let mut d = doc(SampleType::U8, true);
+        d.layers.push(underlay(&d, 2));
+        let mut l = ko_layer(&d, 3, knockout);
+        l.blend = BlendMode::ColorDodge;
+        l.opacity = 0.8;
+        l.fill_opacity = 0.5;
+        l.advanced.transparency_shapes = false;
+        d.layers.push(l);
+        run(&mut g, &d, "shapeless special blend with a knockout", knockout);
+    }
+}
+
+/// Transparency Shapes Layer off with effects: the effects take the whole layer as their shape
+/// and the layer's own transparency acts like fill opacity within it.
+#[test]
+fn shapeless_effects_match_the_cpu() {
+    use photocraft_doc::{FxCommon, FxPaint, Glow, GlowSource, GlowTechnique, StrokeFx, StrokePosition};
+    let Some(mut g) = gpu() else { return };
+    let glow = |source| Glow {
+        common: FxCommon::new(BlendMode::Screen, 0.8),
+        paint: FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)),
+        technique: GlowTechnique::Softer,
+        spread: 0.1,
+        size: 5.0,
+        contour: photocraft_doc::Contour::Linear,
+        anti_alias: false,
+        range: 0.5,
+        jitter: 0.0,
+        noise: 0.0,
+        source,
+    };
+    let Effect::DropShadow(mut shadow) = Effect::default_drop_shadow() else { unreachable!() };
+    shadow.distance = 4.0;
+    shadow.size = 3.0;
+    let stroke = |position| {
+        Effect::Stroke(StrokeFx {
+            common: FxCommon::new(BlendMode::Normal, 0.9),
+            size: 3.0,
+            position,
+            paint: FxPaint::Color(Color::rgb(0.1, 0.7, 0.3)),
+            overprint: false,
+        })
+    };
+    let cases: Vec<(&str, Vec<Effect>)> = vec![
+        ("drop shadow", vec![Effect::DropShadow(shadow)]),
+        ("outer glow", vec![Effect::OuterGlow(glow(GlowSource::Edge))]),
+        ("inner glow", vec![Effect::InnerGlow(glow(GlowSource::Edge))]),
+        ("outside stroke", vec![stroke(StrokePosition::Outside)]),
+        ("inside stroke", vec![stroke(StrokePosition::Inside)]),
+        ("color overlay", vec![Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.7), color: Color::rgb(0.9, 0.2, 0.3) }]),
+        (
+            "overlay and glow",
+            vec![
+                Effect::ColorOverlay { common: FxCommon::new(BlendMode::Multiply, 0.8), color: Color::rgb(0.9, 0.5, 0.3) },
+                Effect::OuterGlow(glow(GlowSource::Edge)),
+            ],
+        ),
+    ];
+    for (name, items) in cases {
+        for (opacity, fill, masked) in [(1.0, 1.0, false), (0.7, 0.5, false), (1.0, 0.4, true)] {
+            for blend in [BlendMode::Normal, BlendMode::Multiply] {
+                let mut d = doc(SampleType::U8, true);
+                d.layers.push(underlay(&d, 2));
+                let mut l = noise_layer("fx", d.pixel_format(), Rect::new(8, 7, 40, 33), 3, 0.3);
+                l.effects.items.clone_from(&items);
+                l.advanced.transparency_shapes = false;
+                l.blend = blend;
+                l.opacity = opacity;
+                l.fill_opacity = fill;
+                if masked {
+                    l.mask = Some(mask(Rect::new(0, 0, 48, 40), 9, 0.4));
+                }
+                d.layers.push(l);
+                check(&mut g, &d, &format!("{name}, {blend:?}, opacity {opacity}, fill {fill}, mask {masked}"));
+            }
+        }
+    }
+    // The layer's clipping group joins the content the effects take their colour from.
+    let mut d = doc(SampleType::U8, true);
+    d.layers.push(underlay(&d, 2));
+    let mut base = noise_layer("base", d.pixel_format(), Rect::new(8, 7, 40, 33), 3, 0.3);
+    base.effects.items.push(Effect::default_drop_shadow());
+    base.advanced.transparency_shapes = false;
+    base.fill_opacity = 0.6;
+    let mut c = noise_layer("clipped", d.pixel_format(), Rect::new(10, 9, 36, 30), 4, 0.5);
+    c.clipped = true;
+    d.layers.extend([base, c]);
+    check(&mut g, &d, "shapeless effects with a clipped layer");
 }
 
 #[test]

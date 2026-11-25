@@ -30,26 +30,41 @@ pub(super) fn placement(anchor: (f64, f64), link: bool, phase: (f32, f32), scale
 }
 
 /// The Advanced Blending option that keeps `layer` on the CPU compositor, if any. This is
-/// everything `compose::advanced_active` rejects except knockout (`Planner::knocked_out`) and
-/// Blend Clipped Layers as Group off (`Planner::clipped_individually`), which the GPU runs
-/// itself: Transparency Shapes Layer off is also supported while the layer has no effects and
-/// does not blend in the special eight, where its only effect is the knockout shape (the
-/// layer's masks alone).
+/// everything `compose::advanced_active` rejects except knockout (`Planner::knocked_out`), Blend
+/// Clipped Layers as Group off (`Planner::clipped_individually`) and Transparency Shapes Layer
+/// off, which the GPU runs itself: the special-eight blends take the content's own alpha as Fill
+/// (`F_SHAPELESS`) and the effects take the whole layer as their shape (`Planner::effects`). A
+/// layer clipped to a base is still refused for the last one (`clipped_on_cpu`).
 pub(super) fn advanced_on_cpu(layer: &Layer) -> Option<&'static str> {
     let a = &layer.advanced;
     if a.is_default() {
         return None;
     }
     let fx = photocraft_compose::effects::has_effects(layer);
-    let shapeless_blend = photocraft_compose::psblend::fill_is_special(layer.blend) && !matches!(layer.content, LayerContent::Adjustment(_));
     if a.blend_interior && fx {
         Some("Blend Interior Effects as Group")
-    } else if !a.transparency_shapes && fx {
-        Some("Transparency Shapes Layer off with layer effects")
-    } else if !a.transparency_shapes && shapeless_blend {
-        Some("Transparency Shapes Layer off with a Color Dodge, Hard Mix or similar blend mode")
     } else if photocraft_compose::advanced::hides_effects(layer) {
         Some("Layer / Vector Mask Hides Effects")
+    } else {
+        None
+    }
+}
+
+/// Whether `layer` blends with the special eight taking its own alpha as Fill: Transparency
+/// Shapes Layer off on a non-adjustment layer in one of those modes (`F_SHAPELESS`).
+pub(super) fn shapeless_blend(layer: &Layer) -> bool {
+    !layer.advanced.transparency_shapes && photocraft_compose::psblend::fill_is_special(layer.blend) && !matches!(layer.content, LayerContent::Adjustment(_))
+}
+
+/// The Transparency Shapes Layer off case that keeps a layer clipped to a base on the CPU
+/// compositor (`composite_atop_any`, whose behaviour for it is changing separately), if any.
+pub(super) fn clipped_on_cpu(layer: &Layer) -> Option<&'static str> {
+    if layer.advanced.transparency_shapes {
+        None
+    } else if photocraft_compose::effects::has_effects(layer) {
+        Some("Transparency Shapes Layer off with layer effects on a clipped layer")
+    } else if shapeless_blend(layer) {
+        Some("Transparency Shapes Layer off with a Color Dodge, Hard Mix or similar blend mode on a clipped layer")
     } else {
         None
     }

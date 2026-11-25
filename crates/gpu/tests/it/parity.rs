@@ -631,10 +631,10 @@ fn prefix_partial_damage_context_occlusion_and_budget_are_conservative() {
     check(&mut g, &doc, "bounded admission");
     assert!(g.comp.composite_cache_bytes() <= 1 << 20);
     assert!(diff_rect(&mut g, &doc, doc.bounds(), "bounded cache keeps its hits").unwrap().prefix_hits > 0);
-    // Transparency Shapes Layer off with a special-eight blend still composites on the CPU
-    // (knockout and clipped layers blended individually no longer do).
-    doc.layers[2].advanced.transparency_shapes = false;
-    doc.layers[2].blend = BlendMode::ColorDodge;
+    // Blend Interior Effects as Group with effects still composites on the CPU (knockout, clipped
+    // layers blended individually and Transparency Shapes Layer off no longer do).
+    doc.layers[2].advanced.blend_interior = true;
+    doc.layers[2].effects.items.push(Effect::default_drop_shadow());
     assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_err());
     assert_eq!(g.comp.composite_cache_bytes(), 0);
 }
@@ -3504,10 +3504,10 @@ fn dissolve_adjustments_and_effects_match_cpu_in_offset_regions() {
 }
 
 /// Transparency Shapes Layer off changes the special eight's blend (the layer's alpha blends as
-/// Fill, #5692); the GPU has no pass for it and leaves such documents to the CPU. Other modes look
-/// the same either way and stay on the GPU.
+/// Fill, #5692) and the shape effects take; the GPU runs both for a layer that isn't clipped to a
+/// base. Clipped with either, the layer still composites on the CPU.
 #[test]
-fn transparency_shapes_off_special_blend_falls_back_to_the_cpu() {
+fn transparency_shapes_off_runs_on_the_gpu_unless_clipped() {
     let Some(mut g) = gpu() else { return };
     let mut d = base_doc(64, 48);
     let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
@@ -3515,11 +3515,17 @@ fn transparency_shapes_off_special_blend_falls_back_to_the_cpu() {
     l.opacity = 0.53;
     l.advanced.transparency_shapes = false;
     d.layers.push(l);
-    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "Color Dodge with Transparency Shapes Layer off");
+    check(&mut g, &d, "Color Dodge with Transparency Shapes Layer off");
     if let Some(l) = d.layers.last_mut() {
         l.blend = BlendMode::Multiply;
     }
     check(&mut g, &d, "Multiply with Transparency Shapes Layer off");
+    let mut c = noise_layer("clipped", PixelFormat::RGBA8, Rect::new(8, 8, 50, 40), 3, 0.2);
+    c.clipped = true;
+    c.blend = BlendMode::ColorDodge;
+    c.advanced.transparency_shapes = false;
+    d.layers.push(c);
+    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "a clipped Color Dodge layer with Transparency Shapes Layer off");
 }
 
 /// #5846: a shape's Density and Feather soften its fill (its own rendered pixels), with and

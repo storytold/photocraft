@@ -538,6 +538,8 @@ pub(crate) fn shape_key(layer: &Layer, canvas: Rect) -> u64 {
         (m.enabled, m.density.to_bits(), m.feather.to_bits()).hash(&mut h);
     }
     format!("{:?}", layer.vector_mask).hash(&mut h);
+    // Without Transparency Shapes Layer the shape is the masks alone.
+    layer.advanced.transparency_shapes.hash(&mut h);
     h.finish()
 }
 
@@ -595,6 +597,7 @@ pub(crate) fn group_key(layer: &Layer, light: &GlobalLight, pin: &mut dyn FnMut(
                 surface_fp(&m.surface, &mut h, pin);
             }
             format!("{:?}", layer.vector_mask).hash(&mut h);
+            layer.advanced.transparency_shapes.hash(&mut h);
         }
         _ => walk(layer, &mut h, pin),
     }
