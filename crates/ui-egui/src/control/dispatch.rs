@@ -55,7 +55,7 @@ fn engine_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
         "jobs.cancel" => jobs_cancel(app, &req.params),
         "ui.menu.list" => {
             // Report the same enablement the native menu shows, so a listed item is invokable.
-            let rows = crate::menus::model(app, ctx).rows.clone();
+            let rows = crate::menus::model(app, ctx).rows().to_vec();
             ok(menu_list(app, &rows))
         }
         "ui.inspect" => ok(inspect(app, ctx)),
@@ -290,7 +290,9 @@ fn screenshot(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Reply 
     // (modals, popups) have settled (craft-automation's screenshot queue).
     let token = app.ui.alloc_id();
     ctx.request_repaint();
-    Reply::screenshot(token, path, viewport)
+    let mut params = craft::automation::screenshot::ScreenshotParams::default();
+    params.path = path;
+    Reply::screenshot(token, params, viewport)
 }
 
 /// `ui.notice.post {title, lines?, tone?}`: shows a notice in the named tone and replies its id.
@@ -399,6 +401,7 @@ fn theme_param(app: &PhotocraftApp, p: &Value) -> std::result::Result<Option<(cr
 // -- tools: stroke, tool, gradient, eyedropper, Content-Aware Move, tile grid, layer filter, marquee --
 
 struct ToolSet {
+    use_aligned_rendering: Option<bool>,
     gradient_blend: Option<photocraft_color::BlendMode>,
     shape_stroke: Option<Option<photocraft_doc::ShapeStroke>>,
     frame_shape: Option<String>,
@@ -425,6 +428,7 @@ impl ToolSet {
     fn parse(app: &PhotocraftApp, p: &Value) -> std::result::Result<Self, String> {
         let (marquee_style, marquee_size) = marquee_params(app, p)?;
         Ok(Self {
+            use_aligned_rendering: bool_field(p, "useAlignedRendering")?,
             gradient_blend: gradient_blend_param(p)?,
             shape_stroke: shape_stroke_param(app, p)?,
             frame_shape: frame_shape_param(p)?,
@@ -483,6 +487,9 @@ impl ToolSet {
             // Each tool keeps its own brush (#218), so switch it in before `brushSize`
             // sets the new tool's size.
             crate::paint_mouse::sync_tool_brush(app);
+        }
+        if let Some(value) = self.use_aligned_rendering {
+            app.ui.tool_options.align_edges = value;
         }
         self.apply_gradient_and_trace(app);
         let eyedropper = &mut app.ui.tool_options.eyedropper;
@@ -992,7 +999,7 @@ impl ViewSet {
         }
         if let Some(z) = self.zoom {
             let size = app.session.documents().get(i).map_or(Size::ZERO, |st| Size::new(f64::from(st.doc.size.width), f64::from(st.doc.size.height)));
-            app.ui.views[i].zoom = craft::behavior::canvas::ZoomLadder::clamp(z, size) as f32;
+            app.ui.views[i].zoom = craft::behavior::canvas::ZoomScheme::PHOTOSHOP.clamp(z, size) as f32;
             app.ui.views[i].clear_pending();
         }
         if let Some(c) = self.center {
@@ -1362,7 +1369,8 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Reply {
         let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
-            app.opened_from(path);
+            let recent = automation_location(app, path);
+            app.opened_from_listed(path, recent.as_deref());
             if let Some(state) = app.session.active_mut()
                 && state.path.is_some()
             {
@@ -1371,6 +1379,13 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Reply {
         }
         Ok(json!({"path": path, "name": name, "warnings": warnings}))
     }))
+}
+
+/// Where the file an automation open read is on disk, for Open Recent. The request path is
+/// relative to an automation root, so it names nothing when the person reopens it from Open
+/// Recent or Home; without a location the open is not listed there.
+fn automation_location(app: &PhotocraftApp, path: &str) -> Option<String> {
+    app.services.automation_locate.as_ref().and_then(|locate| locate(path))
 }
 
 /// Directory .pcraft (the native on-disk form) loads through a capability-scoped
@@ -1386,7 +1401,9 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Reply> {
             app.session.add_document(doc, None);
             // Recent files, but no save-back target: the capability writer
             // replaces files, never directories.
-            app.push_recent(path);
+            if let Some(recent) = automation_location(app, path) {
+                app.push_recent(&recent);
+            }
             app.sync_views();
             app.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", &name)]);
             app.ui.status_error = false;

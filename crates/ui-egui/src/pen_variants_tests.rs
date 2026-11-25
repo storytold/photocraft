@@ -503,6 +503,10 @@ fn the_pen_does_not_carry_on_a_work_path_hidden_by_make_selection() {
 fn shape_mode_carries_on_the_selected_shapes_open_path() {
     let mut app = app(Tool::Pen);
     app.ui.tool_options.vector_mode = VectorMode::Shape;
+    // This is about carrying the path on. With Align Edges (on by default) the stroked layer's
+    // pixels move half a pixel down to 20..81, and View > Snap To pulls the press at y = 80 onto
+    // that layer edge, so the layer is made without it here.
+    app.ui.tool_options.align_edges = false;
     let layers = |app: &PhotocraftApp| app.session.active().unwrap().doc.layers.len();
     let shape = |app: &PhotocraftApp| {
         let st = app.session.active().unwrap();

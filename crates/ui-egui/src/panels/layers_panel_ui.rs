@@ -165,6 +165,27 @@ pub(crate) fn command_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandSta
     states
 }
 
+/// What [`command_states`] reads: the rules (the document's selection among them), the filter bar, the clip
+/// preference's value and the UI language, which Duplicate Layers…' title is translated into.
+#[derive(craft::ui::contract::MemoProps)]
+struct StatesFacts<'a> {
+    rules: crate::menus::facts::RuleFacts<'a>,
+    language: &'static str,
+    show_filters: bool,
+    clip: bool,
+}
+
+/// [`command_states`], derived from [`StatesFacts`].
+pub(crate) fn source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
+    let facts = StatesFacts {
+        rules: crate::menus::facts::RuleFacts::of(app),
+        language: crate::i18n::current().code(),
+        show_filters: app.ui.layers_settings.show_filters,
+        clip: app.session.prefs().interface.clip_thumbnails_to_layer_bounds,
+    };
+    crate::app::framework::derived_states(app, name, &facts, || command_states(app))
+}
+
 /// Runs a fired settings command of the panel menu. `false` for every other command: PhotoCraft's `layer.arrange.*`
 /// bindings stay the one path of the stacking keys, and the catalogue commands run through the menus.
 pub(crate) fn run_fired(app: &mut PhotocraftApp, _ctx: &egui::Context, command: &CommandRef) -> bool {
