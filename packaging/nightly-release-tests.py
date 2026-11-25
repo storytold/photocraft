@@ -240,7 +240,7 @@ class DispatchBoundary(unittest.TestCase):
         self.assertEqual(request.full_url,
                          "https://api.github.com/repos/storytold/photocraft/actions/workflows/nightly-sign.yml/dispatches")
         self.assertEqual(request.get_method(), "POST")
-        self.assertEqual(json.loads(request.data), {"ref": "release", "inputs": {
+        self.assertEqual(json.loads(request.data), {"ref": "refs/heads/nightly-signer", "inputs": {
             "producer_run_id": "71", "producer_run_attempt": "1"}})
         self.assertGreater(opener.return_value.open.call_args.kwargs["timeout"], 0)
 
@@ -531,7 +531,7 @@ class NightlyEnabledCallers(unittest.TestCase):
                        "github.ref_type == 'branch' && (github.event_name == 'schedule' || "
                        "github.event_name == 'workflow_dispatch')",
         "nightly-sign.yml": "github.repository == 'storytold/photocraft' && github.event_name == 'workflow_dispatch' && "
-                            "github.ref == 'refs/heads/release' && github.ref_type == 'branch'",
+                            "github.ref == 'refs/heads/nightly-signer' && github.ref_type == 'branch'",
     }
 
     def test_enabled_jobs_keep_exact_context_guards(self):
@@ -610,7 +610,7 @@ class NightlyInstalledPolicy(unittest.TestCase):
         self.assertEqual(set(self.policy), set(example))
         self.assertEqual(self.policy["schema"], "craft-nightly-release-policy/v3")
         self.assertEqual(self.policy["repository"], "storytold/photocraft")
-        self.assertEqual(self.policy["release_branch"], "release")
+        self.assertEqual(self.policy["release_branch"], SIGNER_BRANCH, "the signer runs on its dedicated branch")
         # Both read from the GitHub API (the repository and nightly.yml's registration on main).
         for key in ("repository_id", "producer_workflow_id"):
             with self.subTest(key=key):
@@ -687,6 +687,70 @@ class NightlyInstalledPolicy(unittest.TestCase):
                 self.assertTrue(item["component"].startswith(sonar["project"] + ":"))
                 self.assertIn(item["type"], sonar["issue_types"])
                 self.assertRegex(item["hash"], r"^[0-9a-f]{32}$")
+
+
+SIGNER_BRANCH = "nightly-signer"
+SHARED = "storytold/craft-common-actions/.github/workflows/"
+# App workflows reviewed to call the shared stable release.yml. That callee must carry the
+# stable-only environment guard (dry runs and non-release refs bind no environment); the
+# nightly-signer settings scan checks the resolved callee before creating or advancing the branch.
+REVIEWED_STABLE_RELEASE_CALLERS = {"release.yml"}
+
+
+def app_workflows():
+    return {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.y*ml"))}
+
+
+def trust_closure_problems(workflows):
+    """The nightly-signer trust-closure scan over app workflow sources; empty when the tree is safe."""
+    problems, stable_callers = [], set()
+    for name, source in workflows.items():
+        if re.search(r"(?m)^\s*environment\s*:", source):
+            problems.append(name + " binds an environment directly")
+        for callee, ref in re.findall(r"uses:\s*" + re.escape(SHARED) + r"([\w.-]+\.ya?ml)@(\S+)", source):
+            if callee == "nightly-release.yml" and (name != "nightly-sign.yml" or not re.fullmatch(r"[0-9a-f]{40}", ref)):
+                problems.append(name + " calls nightly-release.yml@" + ref)
+            if callee == "release.yml":
+                stable_callers.add(name)
+                if ref != "main" and not re.fullmatch(r"[0-9a-f]{40}", ref):
+                    problems.append(name + " calls release.yml@" + ref + "; use @main or a reviewed full SHA")
+    if stable_callers != REVIEWED_STABLE_RELEASE_CALLERS:
+        problems.append("shared release.yml callers are " + ", ".join(sorted(stable_callers)))
+    signer = re.findall(r"uses:\s*" + re.escape(SHARED) + r"nightly-release\.ya?ml@", workflows.get("nightly-sign.yml", ""))
+    if len(signer) != 1:
+        problems.append("nightly-sign.yml must call nightly-release.yml exactly once")
+    return problems
+
+
+class NightlySignerBranchTrustClosure(unittest.TestCase):
+    """On refs/heads/nightly-signer, only the pinned signer caller may reach an environment."""
+
+    def test_trust_closure_scan_passes_on_this_tree(self):
+        self.assertEqual(trust_closure_problems(app_workflows()), [])
+
+    def test_trust_closure_scan_refuses_each_route_into_an_environment(self):
+        tree = app_workflows()
+        bad = {
+            "a workflow binds an environment": {**tree, "extra.yml": "jobs:\n  x:\n    runs-on: ubuntu-latest\n    environment: release\n"},
+            "another caller of the signer": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "nightly-release.yml@" + "a" * 40 + "\n"},
+            "a mutable signer pin": {**tree, "nightly-sign.yml": re.sub(r"nightly-release\.yml@[0-9a-f]{40}", "nightly-release.yml@main", tree["nightly-sign.yml"])},
+            "a new stable release caller": {**tree, "extra.yml": "jobs:\n  x:\n    uses: " + SHARED + "release.yml@main\n"},
+            "a stable caller on a branch or tag ref": {**tree, "release.yml": tree["release.yml"].replace(SHARED + "release.yml@main", SHARED + "release.yml@v1")},
+        }
+        for label, workflows in bad.items():
+            with self.subTest(case=label):
+                self.assertTrue(trust_closure_problems(workflows))
+
+    def test_signer_dispatch_guard_and_policy_name_the_same_branch(self):
+        sign = (ROOT / ".github/workflows/nightly-sign.yml").read_text()
+        (_, guard), = job_conditions(sign.split("\njobs:\n", 1)[1])
+        self.assertIn("github.ref == 'refs/heads/" + SIGNER_BRANCH + "'", guard)
+        self.assertNotIn("refs/heads/release", sign, "the signer no longer runs on the stable branch")
+        dispatch = inline_scripts(DISPATCHER)[0]
+        self.assertEqual(re.findall(r"'ref': '([^']+)'", dispatch), ["refs/heads/" + SIGNER_BRANCH])
+        self.assertEqual(json.loads(INSTALLED_POLICY.read_text())["release_branch"], SIGNER_BRANCH)
+        self.assertEqual(json.loads((ROOT / "docs/nightly-signing-policy.example.json").read_text())["release_branch"],
+                         SIGNER_BRANCH)
 
 
 if __name__ == "__main__":

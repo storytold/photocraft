@@ -37,8 +37,9 @@ changes are required: publishing a newer stable GitHub Release makes it discover
 2. **Review the release trust boundary, then merge `main` into `release`** (or fast-forward it)
    and push. The stable workflow starts by itself. Compare the proposed tree with the
    **previous trusted release**, not a manifest from main. Review and preserve:
-   - `.github/workflows/nightly-sign.yml`, `.github/nightly-signing-policy.json`, and
-     every transitive reusable workflow/action pin;
+   - every transitive reusable workflow/action pin. The nightly signer no longer rides this sync:
+     it runs on the dedicated `nightly-signer` branch (see below), but the `release` environment
+     trusts both branches, so this review still covers everything that can reach it;
    - `packaging/windows/sign.ps1`, its signing configuration, tool installers and imports;
    - the macOS nightly signing scripts (`packaging/macos/nightly-sign.sh`, `nightly-verify.sh`,
      `nightly-lib.sh`, `import-cert.sh`) and entitlements, and the Linux public key
@@ -47,9 +48,8 @@ changes are required: publishing a newer stable GitHub Release makes it discover
      callees, dynamic environment selection and changed executable dependencies. A new
      workflow outside the named nightly paths is not exempt.
 
-   Stop the sync if that closure is unreviewed. The intended signer-owned files are identical
-   on main and release after promotion; actual top-level repository/event/branch checks and
-   the existing environment restrictions provide authority, not permanent branch divergence.
+   Stop the sync if that closure is unreviewed. Actual top-level repository/event/branch checks
+   and the existing environment restrictions provide authority, not permanent branch divergence.
    Main CI changes do not need a separate blanket review gate. This procedure does not repair
    the stable workflow's existing mutable dependencies, builds or caches.
 3. **Wait for the draft.** After about 30 to 45 minutes (notarization is the slow part), the
@@ -82,14 +82,18 @@ The Windows, Linux and macOS source preparation is documented in
 signing or publication pipeline. Stable `release.yml`, its schedule, tags, concurrency,
 environment values and environment rules are unchanged.
 
-Initial installation **and later signer/policy updates** ride an already-intended reviewed
-stable release sync, with an appropriate version/build state. Every release-branch push may
-rebuild/update a stable draft or refuse an already-published version. An urgent change that
-cannot wait means pause/cancel nightlies using existing workflow controls, then request one
-bounded maintenance push with its exact stable consequences understood. Pausing must never
-require a release push. Do not bypass CI, overwrite a stable release or make a dummy version
-bump. Verify the actual environment permits only the release **branch**, excludes main and
-same-name tags, and introduces no per-run approval requirement before activation; unresolved
+Stable releases still come only from `refs/heads/release`. The nightly signer runs on
+`refs/heads/nightly-signer` instead, so signer and policy
+updates never need a stable release sync or a release-branch push. That branch is created once at
+a reviewed main commit and later only fast-forwards to main commits, by a release manager running
+the nightly-signer settings script's `advance`: it refuses while a `nightly-sign` run is queued or
+running, scans the tree so only the pinned `nightly-sign.yml` caller can reach an environment, and
+prints the full diff of `.github/` and `packaging/` for review before `--apply`. That diff is the
+trust closure, including `packaging/env.sh`, which `import-cert.sh` sources with the Apple keys.
+Org rulesets let only release managers create or update the branch and forbid force-pushes and
+deletion. Pausing never requires a push: cancel or disable the nightly workflows. Verify the
+actual environment permits only the `release` and `nightly-signer` **branches**, excludes main
+and same-name tags, and introduces no per-run approval requirement before activation; unresolved
 protection or secret-scope collisions are blockers, not permission to change settings.
 
 Nightlies share the existing Windows signing identity with stable. A suspected key or signing
@@ -439,9 +443,11 @@ caching, the iframe snippet and the `?webgl` / `?cpu` flags.
 ## Secrets
 
 All secrets live in the repository's **`release` environment** (*Settings → Environments →
-release*). Restrict its deployment branches to `release`. Every job in `release.yml` that
-signs or publishes declares `environment: release` (the Flatpak and FreeBSD jobs sign nothing
-and don't), so only pushes to that branch, or manual runs on it, can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
+release*). Restrict its deployment branches to `release` and the nightly signer's
+`nightly-signer`. Every job in the shared stable `release.yml` that signs or publishes binds the
+environment only for a non-dry run on `refs/heads/release` (the Flatpak and FreeBSD jobs sign
+nothing and don't), so only stable runs on that branch, or the pinned nightly signer on
+`nightly-signer`, can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
 the run shows a `::warning::`.
 
 | Secret | Used for |
