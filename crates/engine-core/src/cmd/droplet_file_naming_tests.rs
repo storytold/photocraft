@@ -11,7 +11,7 @@ fn tmp(name: &str) -> String {
 }
 
 fn small_image(path: &str) {
-    let mut s = Session::new();
+    let mut s = crate::session();
     s.execute("file.new", json!({"width": 4, "height": 3, "background": "#808080"})).unwrap();
     crate::file_cmds::save_doc(&s.active().unwrap().doc, path, None).unwrap();
 }
@@ -34,7 +34,7 @@ fn droplet(dir: &str, extra: &Value) -> String {
             p[k] = v.clone();
         }
     }
-    let r = Session::new().execute("file.automate.createDroplet", p).unwrap();
+    let r = crate::session().execute("file.automate.createDroplet", p).unwrap();
     r["path"].as_str().unwrap().to_string()
 }
 
@@ -43,7 +43,7 @@ fn run_on_inputs(dp: &str, dir: &str) -> Value {
     let (a, b) = (format!("{dir}/a.png"), format!("{dir}/b.jpg"));
     small_image(&a);
     small_image(&b);
-    Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap()
+    crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]})).unwrap()
 }
 
 /// `createDroplet` stores the naming rows, the starting serial and the compatibility flags in the droplet.
@@ -130,7 +130,7 @@ fn a_stored_zero_serial_runs_batch_to_its_range_error() {
     let (a, b) = (format!("{dir}/a.png"), format!("{dir}/b.jpg"));
     small_image(&a);
     small_image(&b);
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]}));
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]}));
     let e = r.expect_err("the batch range error surfaces");
     assert!(e.to_string().contains("startingSerial"), "{e}");
 }
@@ -144,7 +144,7 @@ fn compatibility_flags_reach_batch_and_refuse_a_mac_incompatible_name() {
     let (a, b) = (format!("{dir}/a.png"), format!("{dir}/b.jpg"));
     small_image(&a);
     small_image(&b);
-    let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]}));
+    let r = crate::session().execute("file.automate.runDroplet", json!({"droplet": dp, "input": [a, b]}));
     let e = r.expect_err("the naming plan refuses the name before any file is written");
     assert!(e.to_string().contains("incompatible with the requested platform"), "{e}");
 }
