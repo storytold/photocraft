@@ -342,6 +342,11 @@ fn view_switches_invalidate_mask_samples_and_presets_do_not_store_samples() {
     assert!(colors(plugin_fields(&app), POSITIVE).is_empty());
     app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Composite;
     tick(&mut app);
+    let sample = [0.2, 0.4, 0.8];
+    field(&mut app, NEGATIVE, json!([sample]));
+    field(&mut app, "__skinMask", json!(true));
+    assert_eq!(colors(plugin_fields(&app), NEGATIVE), [sample]);
+    assert_eq!(plugin_fields(&app)["__skinMask"], json!(true));
     app.run("file.new", json!({"width":8,"height":8})).unwrap();
     tick(&mut app);
     assert!(colors(plugin_fields(&app), NEGATIVE).is_empty());
@@ -362,6 +367,10 @@ fn mask_is_independent_of_preview_and_ok_only_applies_smoothing_with_undo() {
         field(&mut app, "__skinMask", json!(false));
         assert!(overlay(&mut app, &ctx, doc.id, doc.bounds()).is_none());
         field(&mut app, "__skinMask", json!(true));
+        field(&mut app, "__skinTool", json!("sample"));
+        let sample = <[f32; 3]>::try_from(&doc.layers[0].surface().unwrap().pixel(1, 1)[..3]).unwrap();
+        assert!(pick(&mut app, [1.0, 1.0], Mods::default()));
+        assert_eq!(colors(plugin_fields(&app), POSITIVE), [sample]);
         let d = craft::ui::dialog::dialog_id("plugin.run");
         crate::dialogs::testing::confirm(&mut app, d).unwrap();
         tick(&mut app);
@@ -554,7 +563,7 @@ fn latest_pick_replaces_conflicting_ranges_and_preserves_unrelated_samples() {
     }
 }
 
-/// A blocked replacement keeps the current mask, but cannot reuse it for another source or view.
+/// A superseded mask cannot overwrite the displayed texture, which belongs to its source and viewport.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn pending_mask_keeps_its_texture_only_for_the_same_source_and_viewport() {
@@ -565,22 +574,46 @@ fn pending_mask_keeps_its_texture_only_for_the_same_source_and_viewport() {
     let original = overlay(&mut app, &ctx, doc.id, doc.bounds()).unwrap();
     app.background_jobs = true;
     let (release, wait) = std::sync::mpsc::channel();
+    let original_fields = plugin_fields(&app).clone();
+    let stale_mask = photocraft_compose::Buffer::filled(doc.bounds(), [0.25, 0.25, 0.25, 1.0]);
+    let stale_doc = doc.clone();
     let preview = app.skin_smooth_mask.as_mut().unwrap();
-    preview
-        .worker
-        .start(preview.key.clone().unwrap(), ctx.clone(), move |_| {
-            let _ = wait.recv();
-            super::super::filter_preview_worker::Computed { result: None, ms: 0.0 }
-        })
-        .unwrap();
+    let original_key = preview.key.clone().unwrap();
+    let mut stale_key = original_key.clone();
+    stale_key.params["values"]["tolerance"] = json!(20);
+    assert_ne!(stale_key, original_key);
+    assert!(
+        preview
+            .worker
+            .start(stale_key, ctx.clone(), move |_| {
+                wait.recv().unwrap();
+                super::super::filter_preview_worker::Computed { result: Some((stale_doc, stale_mask)), ms: 0.0 }
+            })
+            .unwrap()
+    );
     for (key, value) in [("tolerance", json!(80)), (POSITIVE, json!([[0.7, 0.5, 0.4]])), (NEGATIVE, json!([[0.2, 0.4, 0.8]]))] {
         field(&mut app, key, value);
         assert_eq!(overlay(&mut app, &ctx, doc.id, doc.bounds()).unwrap(), original);
     }
+    // Return to the displayed request, so only the stale worker can produce a new texture upload.
+    *plugin_fields_mut(&mut app) = original_fields;
+    assert_eq!(overlay(&mut app, &ctx, doc.id, doc.bounds()), Some(original));
+    ctx.tex_manager().write().take_delta().clear();
+    release.send(()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.skin_smooth_mask.as_ref().unwrap().worker.busy() {
+        assert_eq!(overlay(&mut app, &ctx, doc.id, doc.bounds()), Some(original));
+        assert_eq!(app.skin_smooth_mask.as_ref().unwrap().key.as_ref(), Some(&original_key), "a completed stale request must not be displayed");
+        assert!(std::time::Instant::now() < deadline, "stale mask worker did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let mut updates = ctx.tex_manager().write().take_delta();
+    let uploaded = updates.set.contains_key(&original.0);
+    updates.clear();
+    assert!(!uploaded, "a stale result must not upload pixels to the displayed texture");
     assert!(overlay(&mut app, &ctx, doc.id, Rect::new(0, 0, 16, 12)).is_none(), "do not reuse a mask from another viewport");
     app.session.active_mut().unwrap().revision += 1;
     assert!(overlay(&mut app, &ctx, doc.id, doc.bounds()).is_none(), "do not reuse a mask from another source revision");
-    release.send(()).unwrap();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
