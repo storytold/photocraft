@@ -113,3 +113,47 @@ fn a_bad_value_is_an_error_and_writes_nothing() {
     }
     assert_eq!(s.active().unwrap().doc.icc_profile, None, "the document is untouched");
 }
+
+/// The pixels of each written file, decoded (RGBA, 0..1), and whether it carries a profile.
+fn pixels(s: &mut Session, format: &str, extra: Value) -> Vec<(Vec<[f32; 4]>, bool)> {
+    let dir = tempfile::tempdir().unwrap();
+    let mut p = json!({"dir": dir.path().to_string_lossy(), "prefix": "t", "format": format});
+    for (k, v) in extra.as_object().unwrap() {
+        p[k] = v.clone();
+    }
+    let r = s.execute("file.export.layersToFiles", p).unwrap();
+    r["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            let path = f.as_str().unwrap();
+            let doc = photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document;
+            let icc = doc.icc_profile.is_some();
+            (photocraft_compose::flatten(&doc).px.to_vec(), icc)
+        })
+        .collect()
+}
+
+#[test]
+fn off_keeps_a_cmyk_documents_own_profile_for_its_colours() {
+    // A CMYK document tagged with a profile other than the built-in coated one, whose layer
+    // needs compositing (50 % opacity): its colours are converted through its own profile
+    // whether or not the file carries it (CodeRabbit on #16653).
+    for depth in [8, 16] {
+        let mut s = session("cmyk", depth);
+        s.execute("edit.assignProfile", json!({"profile": "coated-fogra39"})).unwrap();
+        s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+        let on = pixels(&mut s, "png", json!({"iccProfile": true}));
+        let off = pixels(&mut s, "png", json!({"iccProfile": false}));
+        let unset = pixels(&mut s, "png", json!({}));
+        assert_eq!(off[0].0, on[0].0, "cmyk{depth}: the same pixels with iccProfile false and true");
+        assert_eq!(off[0].0, unset[0].0, "cmyk{depth}: the same pixels with iccProfile false and unset");
+        for format in FORMATS {
+            assert!(pixels(&mut s, format, json!({"iccProfile": false})).iter().all(|(_, icc)| !icc), "cmyk{depth} {format}: no profile");
+        }
+        let layered = pixels(&mut s, "tif", json!({"iccProfile": false, "tiffLayers": true}));
+        assert!(layered.iter().all(|(_, icc)| !icc), "cmyk{depth} layered tif: no profile");
+        assert!(s.active().unwrap().doc.icc_profile.is_some(), "the document keeps its profile");
+    }
+}

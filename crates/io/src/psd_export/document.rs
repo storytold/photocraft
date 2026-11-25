@@ -148,7 +148,7 @@ fn export_supported_document(
         ImageResource::new(ids::GLOBAL_ANGLE, (doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),
         ImageResource::new(ids::GLOBAL_ALTITUDE, (doc.global_light.altitude.round() as i32).to_be_bytes().to_vec()),
     ];
-    if let Some(icc) = &doc.icc_profile {
+    if let Some(icc) = doc.icc_profile.as_ref().filter(|_| opts.embed_icc) {
         resources.push(ImageResource::new(ids::ICC_PROFILE, icc.to_vec()));
     }
     if !doc.guides.horizontal.is_empty() || !doc.guides.vertical.is_empty() {

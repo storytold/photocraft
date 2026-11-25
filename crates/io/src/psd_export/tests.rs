@@ -862,3 +862,16 @@ fn a_type_layer_without_a_writable_tysh_drops_its_imported_block() {
     assert!(!written.blocks.iter().any(|b| b.key == *b"TySh"), "the stale imported TySh is dropped");
     assert!(warnings.iter().any(|w| w.contains("no TySh data")), "{warnings:?}");
 }
+
+/// `embed_icc: false` leaves the ICC profile resource out of the file (the document keeps it);
+/// on (the default), the file carries it.
+#[test]
+fn embed_icc_off_writes_no_profile_resource() {
+    let mut doc = Document::new("icc", photocraft_geom::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::raster("Layer 1", doc.pixel_format()));
+    doc.icc_profile = Some(std::sync::Arc::new(craft_cms::Builtin::Srgb.profile().to_bytes().to_vec()));
+    let has = |opts: &PsdExportOptions| document_to_psd_with(&doc, opts).unwrap().0.resources.iter().any(|r| r.id == ids::ICC_PROFILE);
+    assert!(has(&PsdExportOptions::default()));
+    assert!(!has(&PsdExportOptions { embed_icc: false, ..Default::default() }));
+    assert!(doc.icc_profile.is_some());
+}

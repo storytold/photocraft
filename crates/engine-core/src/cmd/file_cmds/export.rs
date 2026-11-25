@@ -114,10 +114,11 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
 
 /// Include ICC Profile for one layer file: off, no profile; on, the document's profile, or the one
 /// its colours are taken to be in when it has none (PSD included), except that a CMYK document's
-/// PNG (written as RGB) carries none, as measured. Unset changes nothing.
+/// PNG (written as RGB) carries none, as measured. Unset changes nothing. Off only leaves the
+/// profile out of the file (`save.embed_icc`): the document keeps it, since its colours (a CMYK
+/// document's conversion to RGB) are read through it.
 fn include_icc(one: &mut Document, format: &str, icc: Option<bool>, mut save: SaveOpts) -> SaveOpts {
     match icc {
-        Some(false) => one.icc_profile = None,
         Some(true) if format == "png" && one.mode == ColorMode::Cmyk => save.embed_icc = Some(false),
         Some(true) if one.icc_profile.is_none() => one.icc_profile = Some(crate::color_cmds::working_profile(one.mode).to_bytes()),
         _ => {}
