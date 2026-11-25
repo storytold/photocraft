@@ -64,7 +64,7 @@ fn benchmark_large_group_merge() {
     let reference_time = start.elapsed();
 
     let start = Instant::now();
-    let optimized = composite_layers(&doc, fmt, None);
+    let optimized = composite_layers(&doc, fmt, None).unwrap();
     let optimized_time = start.elapsed();
     assert_eq!(reference_surface.read_region(expected_area), optimized.read_region(expected_area));
     println!("#1561 5000x7073, 4x 1000x1000 layers: full-canvas {:?}, bounded/banded {:?}", reference_time, optimized_time);

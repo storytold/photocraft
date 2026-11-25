@@ -830,6 +830,9 @@ pub fn print_pdf(page: &PrintPage) -> Vec<u8> {
 
 /// The flattened, colour-handled document as 8-bit samples in its print colour space.
 fn print_image(doc: &Document, p: &Value, cmd: &str) -> Result<(PrintImage, Value)> {
+    // The composite (16 B a pixel) and the 8-bit print image (up to 4 B) over the whole canvas:
+    // refused past the working budget before anything is rendered.
+    crate::allocation::check_dense(doc.bounds(), 20, "printing")?;
     let mut t = Session::new();
     t.add_document(doc.clone(), None);
     let handling = p.get("colorHandling").and_then(Value::as_str).unwrap_or("printerManages");

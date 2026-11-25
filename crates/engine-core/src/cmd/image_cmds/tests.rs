@@ -336,6 +336,41 @@ fn image_size_reports_the_size_it_applied() {
     }
 }
 
+/// The largest canvas extends the Background without reading the whole new area: only where
+/// the Background has tiles is it blended, the rest is filled (a 300000 px square read whole
+/// was hundreds of gigabytes, and the allocation aborted the app).
+#[test]
+fn the_largest_canvas_extends_the_background_without_reading_it_whole() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 100, "height": 100, "resolution": 72})).unwrap();
+    s.execute("image.canvasSize", json!({"width": 300000, "height": 300000, "anchor": "center", "extensionColor": "#00ff00"})).unwrap();
+    let d = doc(&s);
+    assert_eq!(d.size, Size::new(300000, 300000));
+    let bg = d.layers[0].surface().unwrap();
+    assert_eq!(bg.pixel(0, 0), vec![0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(bg.pixel(299_999, 299_999), vec![0.0, 1.0, 0.0, 1.0]);
+    // The old canvas, and the part of its tiles outside it, as before.
+    assert_eq!(bg.pixel(150_000, 150_000), vec![1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(bg.pixel(149_950 + 101, 150_000), vec![0.0, 1.0, 0.0, 1.0]);
+}
+
+/// A Background whose tiles still cover the largest canvas after it was made small again (its
+/// pixels outside the canvas are kept, as after a crop that keeps them) is blended tile by tile
+/// when the canvas grows back, not read as one box, and shows its own pixels there again.
+#[test]
+fn a_background_shrunk_and_grown_back_to_the_largest_canvas_is_blended_tile_by_tile() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 300000, "height": 300000, "resolution": 72})).unwrap();
+    s.execute("image.canvasSize", json!({"width": 10, "height": 10, "anchor": "topLeft"})).unwrap();
+    s.execute("image.canvasSize", json!({"width": 300000, "height": 300000, "anchor": "topLeft", "extensionColor": "#00ff00"})).unwrap();
+    let d = doc(&s);
+    let bg = d.layers[0].surface().unwrap();
+    // The hidden white shows again over the extension colour, at the edges and inside.
+    for (x, y) in [(5, 5), (20, 5), (150_000, 150_000), (299_999, 299_999)] {
+        assert_eq!(bg.pixel(x, y), vec![1.0, 1.0, 1.0, 1.0], "({x}, {y})");
+    }
+}
+
 #[test]
 fn canvas_size_anchors_and_extends_background() {
     let mut s = session();

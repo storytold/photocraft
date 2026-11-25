@@ -208,6 +208,7 @@ mod vector_in_type_spell_cmds;
 mod vector_in_type_vertical_history_name;
 mod vector_paste_options;
 mod wand_transparent_copy;
+mod whole_canvas_limits;
 mod working_rgb_profile;
 mod xmp_charref;
 

@@ -84,12 +84,29 @@ pub fn read_region(surface: &photocraft_raster::Surface, area: photocraft_geom::
 /// content bounds would need far more than any machine has.
 pub const MAX_DENSE_BYTES: u64 = crate::image_cmds::MAX_RESAMPLE_BYTES;
 
+/// Most bytes of one new layer a command may fill over its whole area (a flatten, stamp or merge
+/// result, rendered in bands into tiles): one more layer the size of the document's largest,
+/// which the machine holding that document can hold too. Far above [`MAX_DENSE_BYTES`] on 64-bit
+/// targets, so a large 16- or 32-bit document still flattens; the largest canvas's (300000 px a
+/// side, hundreds of gigabytes) is refused.
+pub const MAX_LAYER_BYTES: u64 = if cfg!(target_pointer_width = "64") { 32 << 30 } else { 2 << 30 };
+
 /// Refuses, before anything is allocated, an operation that would hold `bytes_per_px` bytes of
 /// dense buffers for every pixel of `area` at once.
 pub fn check_dense(area: photocraft_geom::Rect, bytes_per_px: u64, purpose: &str) -> Result<()> {
+    check_budget(area, bytes_per_px, MAX_DENSE_BYTES, purpose)
+}
+
+/// Refuses, before anything is rendered, a new layer of `bytes_per_px` bytes a pixel filling
+/// `area` past [`MAX_LAYER_BYTES`].
+pub fn check_layer(area: photocraft_geom::Rect, bytes_per_px: u64, purpose: &str) -> Result<()> {
+    check_budget(area, bytes_per_px, MAX_LAYER_BYTES, purpose)
+}
+
+fn check_budget(area: photocraft_geom::Rect, bytes_per_px: u64, limit: u64, purpose: &str) -> Result<()> {
     let px = u64::from(area.width()).saturating_mul(u64::from(area.height()));
     let bytes = px.saturating_mul(bytes_per_px);
-    if bytes <= MAX_DENSE_BYTES {
+    if bytes <= limit {
         return Ok(());
     }
     Err(EngineError::Other(format!(
@@ -97,7 +114,7 @@ pub fn check_dense(area: photocraft_geom::Rect, bytes_per_px: u64, purpose: &str
         bytes >> 20,
         area.width(),
         area.height(),
-        MAX_DENSE_BYTES >> 20
+        limit >> 20
     )))
 }
 
@@ -152,6 +169,8 @@ mod tests {
         assert!(check_dense(far, 16, "test").is_err_and(|e| e.to_string().contains("working memory")));
         // Overflowing sizes saturate instead of wrapping into a small number.
         assert!(check_dense(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), u64::MAX, "test").is_err());
+        // The largest canvas's composite doesn't fit, even as a layer.
+        assert!(check_layer(Rect::from_xywh(0, 0, 300_000, 300_000), 4, "test").is_err());
     }
 
     #[test]

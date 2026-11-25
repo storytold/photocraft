@@ -578,6 +578,10 @@ type Sample = (Vec<[f32; 4]>, Option<Vec<f32>>);
 
 fn stats_pixels(doc: &Document, layer: Option<u64>, use_selection: bool) -> Result<Sample> {
     let area = doc.bounds();
+    // Straight RGBA (16 B a pixel), and with the selection a coverage mask (4 B), over the whole
+    // canvas: refused past the working budget before anything is rendered.
+    let mask_bytes = if use_selection && doc.selection.is_some() { 4 } else { 0 };
+    crate::allocation::check_dense(area, 16 + mask_bytes, "reading the image's colours")?;
     let px: Vec<[f32; 4]> = match layer {
         Some(id) => {
             let l = doc.layer(photocraft_doc::LayerId(id)).ok_or(EngineError::NoLayer(photocraft_doc::LayerId(id)))?;
