@@ -154,7 +154,6 @@ pub const PASTEBOARD_MENU: &[Row] = &[
     Some(("Medium Gray", "pasteboard.mediumGray")),
     Some(("Light Gray", "pasteboard.lightGray")),
     Some(("Custom", "pasteboard.custom")),
-    None,
     Some(("Select Custom Color…", PASTEBOARD_PICK)),
 ];
 
