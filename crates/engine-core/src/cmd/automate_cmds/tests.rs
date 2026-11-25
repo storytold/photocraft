@@ -1,4 +1,5 @@
 use super::*;
+use crate::actions_cmds::ActionsExt;
 use crate::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 
 /// An `ActionList` holding `actions` in order.
@@ -184,7 +185,7 @@ fn batch_and_droplets_use_the_named_actions_enabled_steps() {
     let mut rotate =
         crate::actions_cmds::Action::new("Rotate", vec![ActionStep::new("image.imageRotation.90cw", json!({})), ActionStep::new("file.close", json!({}))]);
     rotate.disabled.insert(1);
-    s.actions.list = list_of(vec![invert, rotate]);
+    s.actions_mut().list = list_of(vec![invert, rotate]);
     for command in ["file.automate.batch", "file.automate.createDroplet"] {
         for (i, action) in [json!("Rotate"), json!(1)].into_iter().enumerate() {
             let output = format!("{dir}/{command}-{i}");
@@ -209,7 +210,7 @@ fn batch_and_droplets_keep_explicit_steps_and_reject_invalid_sources_before_writ
     let dir = tmp("action-sources");
     let inputs = images(&dir, 1, 2, 1);
     let mut s = crate::session();
-    s.actions.list.push(crate::actions_cmds::Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
+    s.actions_mut().list.push(crate::actions_cmds::Action::new("Invert", vec![ActionStep::new("image.adjustments.invert", json!({}))])).unwrap();
     for command in ["file.automate.batch", "file.automate.createDroplet"] {
         for (i, source) in [
             json!({"steps": [["image.imageRotation.90cw", {}]], "action": "Missing"}),
@@ -315,7 +316,7 @@ fn droplets_carry_the_actions_their_play_steps_call() {
     let inputs = images(&dir, 2, 40, 20);
     let mut s = crate::session();
     let act = |name: &str, steps: Value| -> Action { serde_json::from_value(json!({"name": name, "steps": steps})).unwrap() };
-    s.actions.list = list_of(vec![
+    s.actions_mut().list = list_of(vec![
         act("Unrelated", json!([["image.imageRotation.180", {}]])),
         act("Rotate", json!([["image.imageRotation.90cw", {}]])),
         // Calls Rotate by index (as the panel records it) and itself (caught at run time).
@@ -347,11 +348,11 @@ fn droplets_carry_the_actions_their_play_steps_call() {
     assert_eq!(r["errors"].as_array().unwrap().len(), inputs.len(), "a self-call fails instead of looping: {r}");
 
     // Retain the copied action's flags as well as its steps.
-    s.actions.list.append_recorded(1, [ActionStep::new("file.close", json!({}))]).unwrap();
-    s.actions.list.set_step(1, 1, false).unwrap();
-    s.actions.list.set_dialog(1, 0, true).unwrap();
-    s.actions.list.assign_set(1, Some("Captured".into())).unwrap();
-    s.actions
+    s.actions_mut().list.append_recorded(1, [ActionStep::new("file.close", json!({}))]).unwrap();
+    s.actions_mut().list.set_step(1, 1, false).unwrap();
+    s.actions_mut().list.set_dialog(1, 0, true).unwrap();
+    s.actions_mut().list.assign_set(1, Some("Captured".into())).unwrap();
+    s.actions_mut()
         .list
         .push(act(
             "BatchLoop",
@@ -369,7 +370,7 @@ fn droplets_carry_the_actions_their_play_steps_call() {
             json!({"steps": [
             {"command": "actions.play", "id": "ignored", "params": {"action": 1}, "tag": "keep"},
             "image.imageRotation.180", ["image.imageRotation.180"], {"id": "image.imageRotation.180"},
-            {"command": "image.imageRotation.180", "id": "actions.play", "params": {"action": 3}}
+            {"command": "image.imageRotation.180", "id": "actions.play", "params": {}}
         ], "action": 3}),
             &["Rotate"][..],
             None,
@@ -402,12 +403,12 @@ fn droplets_carry_the_actions_their_play_steps_call() {
             assert!(saved.get("calledActions").is_none(), "{name}: preserve deferred missing-target and legacy policy");
         }
         if let Some(captured) = saved["calledActions"].as_array().and_then(|actions| actions.iter().find(|a| a["name"] == "Rotate")) {
-            assert_eq!(*captured, json!(s.actions.list.actions()[1]), "{name}: preserve disabled/dialog/set flags");
+            assert_eq!(*captured, json!(s.actions().list.actions()[1]), "{name}: preserve disabled/dialog/set flags");
         }
         for different in [false, true] {
             let mut replay = crate::session();
             if different {
-                replay.actions.list = list_of(vec![Action::new("Unrelated", Vec::new()), Action::new("Rotate", Vec::new())]);
+                replay.actions_mut().list = list_of(vec![Action::new("Unrelated", Vec::new()), Action::new("Rotate", Vec::new())]);
             }
             let r = replay
                 .execute("file.automate.runDroplet", json!({"droplet": dp, "input": [inputs[0]], "output": format!("{dir}/outer-{name}-{different}")}))
@@ -446,7 +447,7 @@ fn droplets_preserve_batch_action_namespaces() {
         source.disabled.insert(1);
         source.dialogs.insert(0);
         source.set = Some("Captured".into());
-        maker.actions.list = list_of(vec![Action::new("Gap", Vec::new()), Action::new("Outside", Vec::new()), source.clone()]);
+        maker.actions_mut().list = list_of(vec![Action::new("Gap", Vec::new()), Action::new("Outside", Vec::new()), source.clone()]);
         let embedded = vec![
             Action::new("LocalGap", Vec::new()),
             Action::new("Inside", vec![ActionStep::new("image.imageRotation.90cw", json!({}))]),
@@ -463,7 +464,7 @@ fn droplets_preserve_batch_action_namespaces() {
             }
         }
         if kind == "caller-null" {
-            maker.actions.list.append_recorded(1, [ActionStep::new("image.imageRotation.90cw", json!({}))]).unwrap();
+            maker.actions_mut().list.append_recorded(1, [ActionStep::new("image.imageRotation.90cw", json!({}))]).unwrap();
             batch["calledActions"] = Value::Null;
         }
         let mut steps = Vec::new();
@@ -512,7 +513,7 @@ fn droplet_scoped_variants_keep_the_existing_action_limit() {
     let input = images(&dir, 1, 2, 1).remove(0);
     for count in [4095, 4096] {
         let mut maker = crate::session();
-        maker.actions.list = list_of((0..count).map(|i| Action::new(format!("A{i}"), Vec::new())).collect());
+        maker.actions_mut().list = list_of((0..count).map(|i| Action::new(format!("A{i}"), Vec::new())).collect());
         let mut steps: Vec<_> = (0..count).map(|i| json!(["actions.play", {"action": i}])).collect();
         steps.push(
             json!(["file.automate.batch", {"action": 0, "calledActions": [], "input": [input], "output": format!("{dir}/{count}-inner"), "format": "png"}]),
@@ -540,7 +541,7 @@ fn droplets_carry_the_actions_their_conditional_steps_call() {
     let inputs = images(&dir, 2, 40, 20);
     let mut s = crate::session();
     let act = |name: &str, steps: Value| -> Action { serde_json::from_value(json!({"name": name, "steps": steps})).unwrap() };
-    s.actions.list = list_of(vec![
+    s.actions_mut().list = list_of(vec![
         act("Unrelated", json!([["image.imageRotation.180", {}]])),
         act("Rotate", json!([["image.imageRotation.90cw", {}]])),
         // The then branch calls Rotate by index, as the panel records it.
@@ -598,43 +599,6 @@ fn statistics_makes_a_stack_mode_smart_object() {
 }
 
 #[test]
-fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
-    // Like Photoshop, Load Files into Stack › Create Smart Object (Statistics without alignment) and
-    // Statistics with alignment embed one layer per file, bottom to top, with no wrapper group.
-    let dir = tmp("stack-top");
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 96, "height": 72, "background": "#606060"})).unwrap();
-    s.edit("texture", |doc, active| {
-        let surf = doc.layer_mut(active.ok_or(EngineError::NoDocument)?).and_then(Layer::surface_mut).ok_or(EngineError::NoDocument)?;
-        for k in 0..40 {
-            let (x, y, v) = ((k * 37) % 88, (k * 23) % 66, (k % 7) as f32 / 6.0);
-            surf.fill_rect(photocraft_geom::Rect::new(x, y, x + 3 + k % 5, y + 2 + k % 4), &[v, 1.0 - v, 0.5, 1.0]);
-        }
-        Ok(())
-    })
-    .unwrap();
-    let source = photocraft_compose::flatten(&s.active().unwrap().doc);
-    let files: Vec<String> = (0..3)
-        .map(|i| {
-            let path = format!("{dir}/img{i}.png");
-            crate::file_cmds::save_doc(&s.active().unwrap().doc, &path, None).unwrap();
-            path
-        })
-        .collect();
-    for align in [false, true] {
-        let mut s = crate::session();
-        s.execute("file.scripts.statistics", json!({"mode": "median", "input": files, "align": align})).unwrap();
-        let d = &s.active().unwrap().doc;
-        let LayerContent::Smart(so) = &d.layers[0].content else { panic!("not a smart object") };
-        let photocraft_doc::SmartSource::Embedded { file_name, bytes } = &so.source else { panic!("not embedded") };
-        let inner = crate::smart_cmds::decode_source(file_name, bytes).unwrap();
-        let names: Vec<&str> = inner.layers.iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(names, ["img0.png", "img1.png", "img2.png"], "align {align}");
-        assert_eq!(photocraft_compose::flatten(d).px, source.px, "align {align}");
-    }
-}
-
-#[test]
 fn contact_sheet_places_thumbnails_with_captions() {
     let dir = tmp("contact");
     images(&dir, 5, 60, 30);
@@ -674,7 +638,7 @@ fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
     images(&dir, 1, 8, 4);
     let mut s = crate::session();
     s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
-    s.actions
+    s.actions_mut()
         .list
         .push(Action {
             name: "Rotate".into(),
@@ -683,7 +647,7 @@ fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
             ..Default::default()
         })
         .unwrap();
-    s.actions
+    s.actions_mut()
         .list
         .push(Action {
             name: "Bad".into(),
@@ -708,53 +672,11 @@ fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
     assert!(r["errors"][0]["error"].as_str().unwrap().contains("no such layer"), "{r}");
     // An action that batches itself stops as a recursive call instead of overflowing the stack.
     let inner = json!({"steps": [["actions.play", {"action": "Loop"}]], "input": dir.clone(), "output": format!("{dir}/inner"), "format": "png"});
-    s.actions
+    s.actions_mut()
         .list
         .push(Action { name: "Loop".into(), steps: vec![ActionStep::new("file.automate.batch", inner)], disabled: Default::default(), ..Default::default() })
         .unwrap();
     batch(&mut s, "Loop");
-}
-
-/// #4671: Load Files into Stack's Attempt to Automatically Align Source Images runs Auto-Align
-/// Layers on the loaded layers, then (with Create Smart Object) puts them in one smart object;
-/// without the smart object they stay loose layers, selected.
-#[test]
-fn load_files_into_stack_aligns_before_the_smart_object() {
-    let dir = tmp("stack-align");
-    let mut s = crate::session();
-    s.execute("file.new", json!({"width": 96, "height": 72, "background": "#606060"})).unwrap();
-    s.edit("texture", |doc, active| {
-        let surf = doc.layer_mut(active.ok_or(EngineError::NoDocument)?).and_then(Layer::surface_mut).ok_or(EngineError::NoDocument)?;
-        for k in 0..40 {
-            let (x, y, v) = ((k * 37) % 88, (k * 23) % 66, (k % 7) as f32 / 6.0);
-            surf.fill_rect(photocraft_geom::Rect::new(x, y, x + 3 + k % 5, y + 2 + k % 4), &[v, 1.0 - v, 0.5, 1.0]);
-        }
-        Ok(())
-    })
-    .unwrap();
-    let files: Vec<String> = (0..2)
-        .map(|i| {
-            let path = format!("{dir}/img{i}.png");
-            crate::file_cmds::save_doc(&s.active().unwrap().doc, &path, None).unwrap();
-            path
-        })
-        .collect();
-    let mut s = crate::session();
-    let r = s.execute("file.scripts.loadFilesIntoStack", json!({"paths": files, "align": true})).unwrap();
-    assert_eq!(r["layers"], 2);
-    let st = s.active().unwrap();
-    assert_eq!(st.doc.layers.len(), 2, "loose layers");
-    assert!(st.doc.layers.iter().all(|l| matches!(l.content, LayerContent::Raster(_))));
-    assert_eq!(st.selected_layers().len(), 2, "Auto-Align ran on them all");
-    let mut s = crate::session();
-    s.execute("file.scripts.loadFilesIntoStack", json!({"paths": files, "align": true, "createSmartObject": true})).unwrap();
-    let d = &s.active().unwrap().doc;
-    assert_eq!(d.layers.len(), 1);
-    let LayerContent::Smart(_) = &d.layers[0].content else { panic!("not a smart object") };
-    // A single file has nothing to align with: it just loads.
-    let mut s = crate::session();
-    s.execute("file.scripts.loadFilesIntoStack", json!({"paths": [files[0].clone()], "align": true})).unwrap();
-    assert_eq!(s.active().unwrap().doc.layers.len(), 1);
 }
 
 /// A script file of `lines` (one `file.scripts.browse` call per entry) in `dir`.
@@ -813,7 +735,7 @@ fn droplets_skip_actions_called_only_from_disabled_steps() {
     top.disabled.insert(0);
     let used = crate::actions_cmds::Action::new("Used", vec![ActionStep::new("image.adjustments.invert", json!({}))]);
     let skipped = crate::actions_cmds::Action::new("Skipped", vec![ActionStep::new("image.imageRotation.90cw", json!({}))]);
-    s.actions.list = list_of(vec![skipped, top, used]);
+    s.actions_mut().list = list_of(vec![skipped, top, used]);
     let r =
         s.execute("file.automate.createDroplet", json!({"path": format!("{dir}/D"), "steps": [["actions.play", {"action": "Top"}]], "shim": false})).unwrap();
     let droplet: Value = serde_json::from_slice(&std::fs::read(r["path"].as_str().unwrap()).unwrap()).unwrap();

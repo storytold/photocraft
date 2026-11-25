@@ -8,7 +8,7 @@
 //! the pointer is a small square there, and a press centres the pane on that document point ([`centre_on`], #9648).
 
 use craft::ui::dialog::{DialogId, StackDialog as _};
-use craft::ui::patterns::form_dialogs::HostedParamDialog;
+use craft::ui::patterns::form_dialogs::{HostedParamDialog, PreviewState};
 use egui::load::SizedTexture;
 use egui::{Pos2, pos2};
 use photocraft_doc::Document;
@@ -77,7 +77,7 @@ pub(crate) fn feed(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for id in ids {
         let Some(picture) = picture(app, ctx, id) else { continue };
         if let Some(dialog) = app.framework.dialogs.get_mut_by_id::<HostedParamDialog>(id) {
-            dialog.set_preview(picture);
+            dialog.set_preview(picture.map(PreviewState::Ready));
         }
     }
 }

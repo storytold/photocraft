@@ -2,6 +2,7 @@
 //! framework's `PresetBrowser` and `PresetPicker`. Rows come from a panel's groups in the panel's folder order; the
 //! browser's events run as the panel's engine commands, through one mapping for every preset panel (`events`).
 
+use craft::behavior::Selection;
 use craft::color_ui::ui::gradient::GradientRamp;
 use craft::keymap::CommandRef;
 use craft::theme::Srgba;
@@ -13,13 +14,14 @@ use craft::ui::patterns::presets::{
     CellShape, DefaultOpen, PresetBrowser, PresetCommands, PresetEvent, PresetExport, PresetFileRequest, PresetFiles, PresetFns, PresetFooterEvent,
     PresetFooterOptions, PresetMenuAction, PresetPanelMenu, PresetPicker, PresetReorder, PresetRow, PresetSource, PresetState, PresetView, ThumbFn, ThumbInfo,
 };
-use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::TextureCache;
+use craft::ui::primitives::{ContentPainterCx, FacePaint};
 use craft::ui::runtime::commands::{CommandSet as _, CommandState};
 use craft::ui::runtime::env::Env;
 use craft::ui::tile_grid::TileZoom;
 use egui::{Color32, ColorImage, Pos2, Rect, TextureId, pos2};
 use photocraft_engine::pattern_cmds::PatternLibrary;
+use photocraft_engine::presets::PresetsExt;
 use photocraft_engine::presets::shapes::ShapePreset;
 use photocraft_engine::presets::styles::StylePreset;
 use serde::{Deserialize, Serialize};
@@ -141,6 +143,14 @@ impl Swatch {
     fn paint(&self, cx: &ContentPainterCx, rect: Rect) {
         paint_texture(cx, rect, self.texture(cx.painter.ctx()));
     }
+
+    /// The swatch's picture as a face keyed by its texture key, inset by `inset` points on every side.
+    fn face(&self, inset: f32) -> FacePaint {
+        let mut key = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&self.picture, &mut key);
+        let swatch = self.clone();
+        FacePaint::new(std::hash::Hasher::finish(&key), move |cx, rect| swatch.paint(cx, rect.shrink(inset)))
+    }
 }
 
 /// The patterns and styles the preset views draw from, held while the library and the presets are unchanged, so a
@@ -246,7 +256,7 @@ fn show(
     }
     let mut browser = PresetBrowser::new(tl!(panel.label), Bind::bound(&mut state), source);
     if let Some(key) = selected.clone() {
-        browser = browser.selected(key);
+        browser = browser.selection(Bind::given(Selection::single(key)));
     }
     if let Some(height) = look.room_height {
         browser = browser.room_height(height);
@@ -348,7 +358,7 @@ fn paint_gradient(cx: &ContentPainterCx, rect: Rect, stops: &[(f32, [f32; 4])]) 
 /// applies it.
 pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
-    let groups = &app.session.presets.gradients;
+    let groups = &app.session.presets().gradients;
     // PLAN: the current-gradient strip above the browser needs a painter component; the browser's selected row shows it.
     let folders: Vec<Folder> = groups
         .iter()
@@ -388,7 +398,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let library = held_patterns(app);
     let folders: Vec<Folder> = app
         .session
-        .presets
+        .presets()
         .pattern_groups
         .iter()
         .map(|group| Folder {
@@ -447,14 +457,14 @@ impl StyleLibrary {
     /// views keyed by it settle.
     pub(crate) fn held(app: &mut PhotocraftApp) -> Arc<Tracked<Self>> {
         let patterns = patterns_stamp(&app.session.patterns);
-        let stamp = (app.session.presets.revision(), patterns);
+        let stamp = (app.session.presets().revision(), patterns);
         if let Some((held, library)) = &app.preset_art.styles
             && *held == stamp
         {
             return Arc::clone(library);
         }
         let styles =
-            app.session.presets.styles.iter().flat_map(|group| group.items.iter()).map(|style| (style_stamp(style, patterns), style.clone())).collect();
+            app.session.presets().styles.iter().flat_map(|group| group.items.iter()).map(|style| (style_stamp(style, patterns), style.clone())).collect();
         let library = Arc::new(Tracked::new(StyleLibrary { styles, patterns: app.session.patterns.clone() }));
         app.preset_art.styles = Some((stamp, Arc::clone(&library)));
         library
@@ -494,7 +504,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The Styles folders: each style group with its styles, keyed and named by the style's name.
 fn style_folders(app: &PhotocraftApp) -> Vec<Folder> {
-    let groups = &app.session.presets.styles;
+    let groups = &app.session.presets().styles;
     groups
         .iter()
         .map(|group| Folder { name: group.name.clone(), items: group.items.iter().map(|style| (style.name.clone(), style.name.clone())).collect() })
@@ -511,7 +521,7 @@ fn style_files(any: bool, export: Option<PresetExport>) -> PresetFiles<'static, 
 
 /// What the Styles panel menu is built from: whether any style exists, the selected style and the browser's view.
 fn styles_menu_facts(app: &PhotocraftApp) -> (bool, Option<PresetKey>, PresetView) {
-    let any = app.session.presets.styles.iter().any(|group| !group.items.is_empty());
+    let any = app.session.presets().styles.iter().any(|group| !group.items.is_empty());
     let selected = app.ui.presets_ui.selected.get(STYLES.id).cloned().map(PresetKey::Item);
     let view = app.ui.presets_ui.browsers.get(STYLES.id).map_or(PresetView::Grid, |state| state.view);
     (any, selected, view)
@@ -548,7 +558,7 @@ pub(crate) fn styles_states(app: &PhotocraftApp) -> Vec<(CommandRef, CommandStat
 /// view.
 pub(crate) fn styles_source_states(app: &PhotocraftApp, name: &'static str) -> std::sync::Arc<crate::app::framework::SourceStates> {
     let view = app.ui.presets_ui.browsers.get(STYLES.id).map_or(PresetView::Grid, |state| state.view);
-    let facts = (app.session.presets.revision(), app.ui.presets_ui.selected.get(STYLES.id), view);
+    let facts = (app.session.presets().revision(), app.ui.presets_ui.selected.get(STYLES.id), view);
     crate::app::framework::derived_states(app, name, &facts, || styles_states(app))
 }
 
@@ -688,7 +698,7 @@ fn shape_fill(app: &PhotocraftApp) -> Value {
 /// The `shape.presets.place` params of `key`: at its default place, or in a square centred on the document point under
 /// the drop at `at`.
 fn shape_place(app: &PhotocraftApp, key: &str, at: Option<Pos2>) -> Value {
-    let mut params = json!({"preset": key, "fill": shape_fill(app)});
+    let mut params = json!({"preset": key, "fill": shape_fill(app), "useAlignedRendering": app.ui.tool_options.align_edges});
     if let Some(pos) = at
         && let (Some(c), Some(d)) = (crate::canvas::document_display::doc_point_at(app, pos), app.session.active())
     {
@@ -745,10 +755,7 @@ fn shape_rows(groups: &Vec<(String, Vec<Swatch>)>, _: &Env) -> Vec<PresetRow<Str
     for (group, shapes) in groups {
         rows.push(PresetRow::group(format!("{SHAPE_GROUP}{group}"), group.clone(), 0));
         for shape in shapes {
-            let swatch = shape.clone();
-            rows.push(PresetRow::item(shape.key.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview(ThumbAspect::SQUARE, move |cx, rect| {
-                swatch.paint(cx, rect.shrink(2.0));
-            }));
+            rows.push(PresetRow::item(shape.key.clone(), shape.name.clone(), 1).tooltip(shape.name.clone()).preview_face(ThumbAspect::SQUARE, shape.face(2.0)));
         }
     }
     rows
@@ -757,7 +764,11 @@ fn shape_rows(groups: &Vec<(String, Vec<Swatch>)>, _: &Env) -> Vec<PresetRow<Str
 /// Custom Shape tool drag: places the selected shape in the dragged rect (⇧ keeps proportions).
 pub fn finish_custom_shape(app: &mut PhotocraftApp, rect: [f64; 4], keep: bool, fill: Value, stroke: Value) {
     let name = app.ui.presets_ui.shape().to_string();
-    let r = run(app, "shape.presets.place", json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke}));
+    let r = run(
+        app,
+        "shape.presets.place",
+        json!({"preset": name, "rect": rect, "keepAspect": keep, "fill": fill, "stroke": stroke, "useAlignedRendering": app.ui.tool_options.align_edges}),
+    );
     if r.is_none() && !photocraft_engine::presets::shapes::all_groups(&app.session).iter().any(|g| g.items.iter().any(|s| s.name == name)) {
         let template = "No custom shape \"{name}\": pick one in the options bar or Window › Shapes";
         app.ui.status = crate::i18n::fmt(tl!(template), &[("name", &name)]);
@@ -773,7 +784,7 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let current = app.ui.tool;
     let presets: Vec<(String, String)> = app
         .session
-        .presets
+        .presets()
         .tool_presets
         .iter()
         .filter(|preset| !only || Tool::from_name(&preset.tool) == Some(current))
@@ -977,10 +988,7 @@ fn swatch_rows(swatches: &[Swatch], _: &Env) -> Vec<PresetRow<String>> {
     swatches
         .iter()
         .map(|swatch| {
-            let picture = swatch.clone();
-            PresetRow::item(swatch.key.clone(), swatch.name.clone(), 0)
-                .tooltip(swatch.name.clone())
-                .preview(ThumbAspect::SQUARE, move |cx, rect| picture.paint(cx, rect))
+            PresetRow::item(swatch.key.clone(), swatch.name.clone(), 0).tooltip(swatch.name.clone()).preview_face(ThumbAspect::SQUARE, swatch.face(0.0))
         })
         .collect()
 }

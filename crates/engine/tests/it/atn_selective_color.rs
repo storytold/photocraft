@@ -1,4 +1,5 @@
 //! #7672: strict ATN export must preserve both accepted Selective Color parameter forms.
+use photocraft_engine::actions_cmds::ActionsExt;
 use photocraft_engine::actions_cmds::{Action, ActionList, ActionStep, ActionsFile};
 use photocraft_engine::{Session, atn_cmds};
 use serde_json::{Value, json};
@@ -54,7 +55,7 @@ fn check_cases(id: &str, cases: &[Value], require_effect: bool) {
             }
 
             let mut native = fixture(depth);
-            native.actions.list.push(action.clone()).unwrap();
+            native.actions_mut().list.push(action.clone()).unwrap();
             native.execute("actions.play", json!({"action": action.name})).unwrap();
             assert_eq!(pixels(&native), expected, "native replay: {id}, depth {depth}, {params}");
 
@@ -68,7 +69,7 @@ fn check_cases(id: &str, cases: &[Value], require_effect: bool) {
             assert_eq!(imported.actions[0].steps[0].command, id);
 
             let mut replay = fixture(depth);
-            replay.actions.list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
+            replay.actions_mut().list = ActionList::from_file(ActionsFile::new(imported.actions, Vec::new()));
             replay.execute("actions.play", json!({"action": action.name})).unwrap();
             if pixels(&replay) != expected {
                 failures.push(format!("{id}, depth {depth}, {params}"));

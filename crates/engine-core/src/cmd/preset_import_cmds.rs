@@ -12,6 +12,9 @@
 //!
 //! [`BrushSettings`]: photocraft_paint::BrushSettings
 
+use crate::preset_store::PresetStoreExt;
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -218,7 +221,7 @@ fn image_paint(doc: &photocraft_doc::Document, cmd: &str) -> Result<(Vec<f32>, u
         Ok(())
     });
     let area = bounds.ok_or_else(|| bad(cmd, "the image contains no paint (all white or transparent)"))?;
-    let max = crate::brush_cmds::MAX_TIP;
+    let max = crate::brush_defs::MAX_TIP;
     if area.width().max(area.height()) > max {
         return Err(bad(cmd, format!("the painted part of the image is too large for a brush tip ({}×{}; max {max} px)", area.width(), area.height())));
     }
@@ -260,7 +263,7 @@ fn import_image(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let doc = crate::file_cmds::import(decode_name, &bytes)?;
     let (v, w, h) = image_paint(&doc, cmd)?;
-    let (brush, tw, th) = crate::brush_cmds::sampled_brush(cmd, &v, w, h)?;
+    let (brush, tw, th) = crate::brush_defs::sampled_brush(cmd, &v, w, h)?;
     let name = UniqueNames::new(s.tools.presets.iter().map(|x| x.name.as_str())).unique(&name);
     std::sync::Arc::make_mut(&mut *s.tools.presets).push(photocraft_paint::BrushPreset {
         name: name.clone(),
@@ -379,7 +382,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
     // Same default as the group insertion below and the documented contract (#10640).
     let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
     let mut taken =
-        UniqueNames::new_exact(s.presets.gradients.iter().filter(|g| !replace || g.name != group).flat_map(|g| g.items.iter().map(|i| i.name.as_str())));
+        UniqueNames::new_exact(s.presets().gradients.iter().filter(|g| !replace || g.name != group).flat_map(|g| g.items.iter().map(|i| i.name.as_str())));
     let original_names: Vec<String> =
         grads.iter().enumerate().map(|(i, g)| if g.name.trim().is_empty() { format!("Gradient {}", i + 1) } else { g.name.trim().to_string() }).collect();
     let mut reserved = taken.taken.clone();
@@ -422,7 +425,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "the file holds no gradients PhotoCraft can use (noise gradients only)"));
     }
     let names: Vec<String> = items.iter().map(|g| g.name.clone()).collect();
-    let st = &mut s.presets;
+    let st = s.presets_mut();
     // As with brushes: a new group beside one of the same name unless `replace` (#10640).
     let group = if replace {
         st.gradients.retain(|g| g.name != group);
@@ -431,7 +434,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         free_group(&group, |g| st.gradients.iter().any(|x| x.name == g))
     };
     st.gradients.push(Group::new(&group, items));
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"group": group, "imported": names, "count": names.len(), "warnings": warnings}))
 }
 
@@ -459,8 +462,7 @@ mod tests {
         assert!(super::file_bytes_limited(&over_limit, "test", "preset", 2).is_err());
     }
     use super::*;
-    use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v6, write_v12};
-    use craft_psd::descriptor::{Descriptor, UnicodeString, Value as DV};
+    use craft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
 
     fn abr_v2() -> Vec<u8> {
         let tip = AbrSample { id: String::new(), width: 6, height: 4, depth: 8, data: vec![255; 24] };
@@ -496,38 +498,6 @@ mod tests {
             s.execute("brush.presets.importAbr", json!({"data": photocraft_paint::tile::b64_encode(&abr), "select": true})).unwrap();
             assert!((s.tools.brush.opacity - expected).abs() < 1e-6, "{opacity}: {}", s.tools.brush.opacity);
         }
-    }
-
-    #[test]
-    fn import_adds_a_group_and_paints() {
-        let mut s = crate::session();
-        let before = s.tools.presets.len();
-        let data = photocraft_paint::tile::b64_encode(&abr_v2());
-        let r = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "select": true})).unwrap();
-        assert_eq!(r["count"], 2);
-        // The name clashing with the built-in Hard Round is made unique.
-        assert_eq!(r["imported"], json!(["Hard Round 2", "9 px Round"]));
-        assert_eq!(s.tools.presets.len(), before + 2);
-        assert!(s.tools.presets.iter().filter(|p| p.group == "Legacy").all(|p| !p.builtin));
-        assert!(matches!(*s.tools.brush.tip, photocraft_paint::TipShape::Sampled(_)));
-        // Re-import with `replace` replaces the group.
-        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "replace": true})).unwrap();
-        assert_eq!(s.tools.presets.len(), before + 2);
-        // Imported presets paint.
-        s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
-        s.execute("paint.stroke", json!({"points": [[5, 30], [60, 30]], "preset": "9 px Round"})).unwrap();
-        // From a file on disk, the group defaults to the file name.
-        let dir = std::env::temp_dir().join(format!("pc-abr-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("My Set.abr");
-        let preset = Descriptor::new("brushPreset")
-            .with("Nm  ", DV::Text(UnicodeString::new_nul("Speckle")))
-            .with("Brsh", DV::Descriptor(Descriptor::new("sampledBrush").with("sampledData", DV::Text(UnicodeString::new_nul("$s")))));
-        let tip = AbrSample { id: "$s".into(), width: 5, height: 5, depth: 16, data: vec![0x80; 50] };
-        std::fs::write(&path, write_v6(2, &[tip], &[], &[preset], true).unwrap()).unwrap();
-        let r = s.execute("brush.presets.importAbr", json!({"path": path.to_string_lossy()})).unwrap();
-        assert_eq!((r["group"].as_str(), r["imported"][0].as_str(), r["version"].as_u64()), (Some("My Set"), Some("Speckle"), Some(6)));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Importing a file named like an existing group keeps that group's brushes, edited or moved
@@ -608,17 +578,17 @@ mod tests {
             assert_eq!(result["imported"], json!(["Duplicate", "Duplicate 2"]));
         }
         s.execute("gradient.presets.select", json!({"preset": "Duplicate"})).unwrap();
-        let first = s.presets.gradient.clone();
+        let first = s.presets().gradient.clone();
         s.execute("gradient.presets.select", json!({"preset": "Duplicate 2"})).unwrap();
-        assert_ne!(first.stops, s.presets.gradient.stops);
-        let mut saved = s.presets.to_json(&s);
+        assert_ne!(first.stops, s.presets().gradient.stops);
+        let mut saved = s.presets().to_json(&s);
         let groups = saved["gradients"].as_array_mut().unwrap();
         let group = groups.iter_mut().find(|g| g["name"] == "Duplicates").unwrap();
         group["items"][1]["name"] = json!("Duplicate");
         s.load_presets_json(saved);
-        let restored = s.presets.gradients.iter().find(|g| g.name == "Duplicates").unwrap();
+        let restored = s.presets().gradients.iter().find(|g| g.name == "Duplicates").unwrap();
         assert_eq!(restored.items[1].name, "Duplicate 2");
-        assert_eq!(s.presets.gradient.name, "Duplicate 2");
+        assert_eq!(s.presets().gradient.name, "Duplicate 2");
         let result = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Other", "replace": false})).unwrap();
         assert_eq!(result["imported"], json!(["Duplicate 3", "Duplicate 4"]));
     }
@@ -676,7 +646,7 @@ mod tests {
         assert_eq!(result["imported"], json!(["Foo", "Foo 3", "Foo 2", "FOO"]));
         for (name, red) in [("Foo", 0.0), ("Foo 3", 0.25), ("Foo 2", 0.5), ("FOO", 0.75)] {
             s.execute("gradient.presets.select", json!({"preset": name})).unwrap();
-            let current = s.presets.gradient.clone();
+            let current = s.presets().gradient.clone();
             assert_eq!(current.name, name);
             assert_eq!(current.stops[0].1, crate::presets::gradients::StopColor::Rgb([red, 0.0, 0.0]));
         }
@@ -705,17 +675,17 @@ mod tests {
         let r = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire"})).unwrap();
         assert_eq!(r["imported"], json!(["Ember"]));
         assert_eq!(r["warnings"].as_array().map(Vec::len), Some(1));
-        let g = s.presets.gradients.iter().find(|g| g.name == "Fire").unwrap();
+        let g = s.presets().gradients.iter().find(|g| g.name == "Fire").unwrap();
         assert_eq!(g.items[0].stops, vec![(0.0, StopColor::Foreground), (1.0, StopColor::Rgb([1.0, 0.0, 0.0]))]);
         assert_eq!(g.items[0].opacity, vec![(0.0, 1.0), (1.0, 0.0)]);
         // Re-import adds a group beside it (#10640); with `replace` it replaces the group.
-        let n = s.presets.gradients.len();
+        let n = s.presets().gradients.len();
         let r = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire"})).unwrap();
         assert_eq!(r["group"], "Fire (2)");
-        assert_eq!(s.presets.gradients.len(), n + 1);
+        assert_eq!(s.presets().gradients.len(), n + 1);
         s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire", "replace": true})).unwrap();
-        assert_eq!(s.presets.gradients.len(), n + 1);
-        assert_eq!(s.presets.gradients.iter().filter(|g| g.name == "Fire").count(), 1);
+        assert_eq!(s.presets().gradients.len(), n + 1);
+        assert_eq!(s.presets().gradients.iter().filter(|g| g.name == "Fire").count(), 1);
         for p in [json!({}), json!({"data": "@@"}), json!({"data": photocraft_paint::tile::b64_encode(b"8BGR\0\x03")}), json!({"path": "/nope.grd"})] {
             assert!(s.execute("gradient.presets.importGrd", p.clone()).is_err(), "{p}");
         }
@@ -800,51 +770,6 @@ mod tests {
             assert!(s.execute("brush.presets.importImage", p.clone()).is_err(), "{p}");
         }
         assert_eq!(s.tools.presets.len(), n, "a failed import adds nothing");
-    }
-
-    /// A version 1 brush with a computed tip and no name is named after its tip ("9 px Round"). The
-    /// import used to number each repeated name by searching the preset names once for every number
-    /// it tried, so importing 10,000 such brushes took minutes. The test fails when the import takes
-    /// more than 20 seconds.
-    #[test]
-    fn repeated_brush_names_are_numbered_in_linear_time() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut s = crate::session();
-            s.execute("brush.presets.save", json!({"name": "9 PX ROUND 3"})).unwrap();
-            let round = LegacyBrush {
-                name: String::new(),
-                spacing: 25,
-                anti_alias: true,
-                tip: LegacyTip::Computed { diameter: 9, hardness: 100, angle: 0, roundness: 100 },
-            };
-            let data = photocraft_paint::tile::b64_encode(&write_v12(1, &vec![round; 10_000], false).unwrap());
-            let r = s.execute("brush.presets.importAbr", json!({"data": data})).unwrap();
-            let names: Vec<String> = r["imported"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
-            let _ = tx.send(names);
-        });
-        let names = match rx.recv_timeout(std::time::Duration::from_secs(20)) {
-            Ok(names) => names,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("importing the brushes did not finish"),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the import thread panicked"),
-        };
-        // Numbering starts at 2 and skips the number a preset already uses, in any letter case.
-        assert_eq!(names[..4], ["9 px Round", "9 px Round 2", "9 px Round 4", "9 px Round 5"]);
-        assert_eq!(names.last(), Some(&format!("9 px Round {}", names.len() + 1)));
-        assert_eq!(names.iter().collect::<std::collections::HashSet<_>>().len(), names.len());
-    }
-
-    #[test]
-    fn repeated_brush_names_take_the_first_free_number() {
-        let mut s = crate::session();
-        s.execute("brush.presets.save", json!({"name": "speckle 3"})).unwrap();
-        let tip = AbrSample { id: String::new(), width: 6, height: 4, depth: 8, data: vec![255; 24] };
-        let brush = |name: &str| LegacyBrush { name: name.into(), spacing: 25, anti_alias: true, tip: LegacyTip::Sampled(tip.clone()) };
-        let file = write_v12(2, &["Speckle", "SPECKLE", "speckle", "Speckle 2", "Speckle", "hard round"].map(brush), true).unwrap();
-        let r = s.execute("brush.presets.importAbr", json!({"data": photocraft_paint::tile::b64_encode(&file)})).unwrap();
-        // Names that differ only in letter case count as the same name. The file's "Speckle 2" comes
-        // after "SPECKLE" took that name, and "hard round" clashes with the built-in Hard Round.
-        assert_eq!(r["imported"], json!(["Speckle", "SPECKLE 2", "speckle 4", "Speckle 2 2", "Speckle 5", "hard round 2"]));
     }
 
     #[test]

@@ -9,11 +9,15 @@
 //! across all groups, in panel order). Like the other preset commands they change the
 //! preferences document, not a document's history.
 
+use crate::presets::PresetsExt;
+use crate::presets::presets_changed;
 use craft::color_ui::palette::{SwatchFormat, SwatchNote, default_swatches, read_swatches, write_swatches};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::presets::swatches::{SwatchColor, SwatchConv, SwatchEntry, SwatchGroup, SwatchKind, color_from_param, color_json, hex, kind_id, parse_kind};
+use crate::presets::swatches::{
+    SwatchColor, SwatchConv, SwatchEntry, SwatchGroup, SwatchKind, SwatchPaint, color_from_param, color_json, hex, kind_id, parse_kind,
+};
 use crate::presets::{bad, str_param};
 use crate::{Result, Session};
 
@@ -51,11 +55,11 @@ fn always(_: &Session) -> std::result::Result<(), String> {
 }
 
 fn has_swatches(s: &Session) -> std::result::Result<(), String> {
-    if total(&s.presets.swatches) > 0 { Ok(()) } else { Err("the Swatches panel is empty".into()) }
+    if total(&s.presets().swatches) > 0 { Ok(()) } else { Err("the Swatches panel is empty".into()) }
 }
 
 fn has_groups(s: &Session) -> std::result::Result<(), String> {
-    if s.presets.swatches.is_empty() { Err("there are no swatch groups".into()) } else { Ok(()) }
+    if s.presets().swatches.is_empty() { Err("there are no swatch groups".into()) } else { Ok(()) }
 }
 
 fn name_param(p: &Value, k: &str, cmd: &str) -> Result<Option<String>> {
@@ -83,7 +87,7 @@ fn unique_group(groups: &[SwatchGroup], base: &str) -> String {
 
 /// The swatch a command names: `"swatch"` (name, narrowed by `"group"`) or `"index"`.
 fn locate(s: &Session, p: &Value, cmd: &str) -> Result<(usize, usize)> {
-    let groups = &s.presets.swatches;
+    let groups = &s.presets().swatches;
     if let Some(name) = str_param(p, "swatch") {
         return locate_swatch(groups, name, str_param(p, "group")).ok_or_else(|| bad(cmd, format!("no swatch \"{name}\" (see swatches.list)")));
     }
@@ -114,13 +118,21 @@ fn index_by_name<'a>(groups: &'a [SwatchGroup], group: Option<&str>) -> std::col
 }
 
 fn group_of(s: &Session, name: &str, cmd: &str) -> Result<usize> {
-    s.presets.swatches.iter().position(|g| g.name == name).ok_or_else(|| bad(cmd, format!("no swatch group \"{name}\"")))
+    s.presets().swatches.iter().position(|g| g.name == name).ok_or_else(|| bad(cmd, format!("no swatch group \"{name}\"")))
 }
 
+/// A swatch's name and kind, and its colour fields when it holds a colour (gradient, pattern and None swatches
+/// hold none).
 fn swatch_json(conv: &SwatchConv, sw: &SwatchEntry) -> Value {
-    let mut v = color_json(&sw.color);
+    let mut v = match sw.color() {
+        Some(color) => {
+            let mut v = color_json(color);
+            v["hex"] = json!(hex(conv.rgb(color)));
+            v
+        }
+        None => json!({}),
+    };
     v["name"] = json!(sw.name);
-    v["hex"] = json!(hex(conv.rgb(&sw.color)));
     if sw.kind != SwatchKind::Process {
         v["kind"] = json!(kind_id(sw.kind));
     }
@@ -131,9 +143,13 @@ fn swatch_json(conv: &SwatchConv, sw: &SwatchEntry) -> Value {
 
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     let conv = SwatchConv::new(s);
-    let groups: Vec<Value> =
-        s.presets.swatches.iter().map(|g| json!({"name": g.name, "swatches": g.entries.iter().map(|sw| swatch_json(&conv, sw)).collect::<Vec<_>>()})).collect();
-    Ok(json!({"groups": groups, "count": total(&s.presets.swatches)}))
+    let groups: Vec<Value> = s
+        .presets()
+        .swatches
+        .iter()
+        .map(|g| json!({"name": g.name, "swatches": g.entries.iter().map(|sw| swatch_json(&conv, sw)).collect::<Vec<_>>()}))
+        .collect();
+    Ok(json!({"groups": groups, "count": total(&s.presets().swatches)}))
 }
 
 fn add(s: &mut Session, p: &Value) -> Result<Value> {
@@ -149,12 +165,12 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         None => SwatchKind::Process,
         Some(k) => parse_kind(k).ok_or_else(|| bad(CMD, format!("unknown kind `{k}` (process|global|spot)")))?,
     };
-    if total(&s.presets.swatches) >= MAX_SWATCHES {
+    if total(&s.presets().swatches) >= MAX_SWATCHES {
         return Err(bad(CMD, format!("the Swatches panel is full ({MAX_SWATCHES} swatches)")));
     }
     let group = name_param(p, "group", CMD)?;
     let explicit = name_param(p, "name", CMD)?;
-    let groups = &mut s.presets.swatches;
+    let groups = &mut s.presets_mut().swatches;
     let name = match explicit {
         Some(n) => unique_swatch_name(groups, &n),
         // Photoshop's default: "Color Swatch 1", "Color Swatch 2"…
@@ -186,9 +202,9 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => entries.len(),
         Some(v) => usize::try_from(v.as_u64().ok_or_else(|| bad(CMD, "`index` must be a non-negative integer"))?).unwrap_or(usize::MAX).min(entries.len()),
     };
-    entries.insert(at, SwatchEntry { name: name.clone(), color, kind });
+    entries.insert(at, SwatchEntry { name: name.clone(), paint: SwatchPaint::Color(color), kind });
     let gname = groups[gi].name.clone();
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"name": name, "group": gname, "index": at}))
 }
 
@@ -196,7 +212,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.delete";
     let mut targets: Vec<(usize, usize)> = match p.get("swatch") {
         Some(Value::Array(a)) => {
-            let ix = index_by_name(&s.presets.swatches, str_param(p, "group"));
+            let ix = index_by_name(&s.presets().swatches, str_param(p, "group"));
             let mut v = Vec::with_capacity(a.len().min(MAX_SWATCHES));
             for n in a {
                 let name = n.as_str().ok_or_else(|| bad(CMD, "`swatch` names must be strings"))?;
@@ -209,7 +225,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     // Remove from the back so earlier positions stay valid; duplicates count once.
     targets.sort_unstable();
     targets.dedup();
-    let groups = &mut s.presets.swatches;
+    let groups = &mut s.presets_mut().swatches;
     let mut names = Vec::with_capacity(targets.len());
     for (gi, ii) in targets.into_iter().rev() {
         if let Some(g) = groups.get_mut(gi)
@@ -219,7 +235,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     names.reverse();
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"deleted": names}))
 }
 
@@ -227,12 +243,12 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.rename";
     let (gi, ii) = locate(s, p, CMD)?;
     let to = name_param(p, "name", CMD)?.ok_or_else(|| bad(CMD, "missing `name`"))?;
-    let groups = &mut s.presets.swatches;
+    let groups = &mut s.presets_mut().swatches;
     if groups[gi].entries[ii].name != to && locate_swatch(groups, &to, None).is_some() {
         return Err(bad(CMD, format!("a swatch named \"{to}\" already exists")));
     }
     groups[gi].entries[ii].name = to.clone();
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"name": to}))
 }
 
@@ -247,13 +263,13 @@ fn move_swatch(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(v) => Some(usize::try_from(v.as_u64().ok_or_else(|| bad(CMD, "`position` must be a non-negative integer"))?).unwrap_or(usize::MAX)),
     };
-    let groups = &mut s.presets.swatches;
+    let groups = &mut s.presets_mut().swatches;
     let item = groups[gi].entries.remove(ii);
     let entries = &mut groups[ti].entries;
     let at = at.unwrap_or(entries.len()).min(entries.len());
     entries.insert(at, item);
     let gname = groups[ti].name.clone();
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"group": gname, "position": at}))
 }
 
@@ -263,17 +279,17 @@ fn move_group(s: &mut Session, p: &Value) -> Result<Value> {
     let g = name_param(p, "group", CMD)?.ok_or_else(|| bad(CMD, "missing `group`"))?;
     let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(CMD, "`to` must be a non-negative integer"))?;
     let from = group_of(s, &g, CMD)?;
-    let groups = &mut s.presets.swatches;
+    let groups = &mut s.presets_mut().swatches;
     let at = usize::try_from(to).unwrap_or(usize::MAX).min(groups.len() - 1);
     let group = groups.remove(from);
     groups.insert(at, group);
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"group": g, "position": at}))
 }
 
 fn new_group(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.newGroup";
-    if s.presets.swatches.len() >= MAX_GROUPS {
+    if s.presets().swatches.len() >= MAX_GROUPS {
         return Err(bad(CMD, "too many swatch groups"));
     }
     let base = name_param(p, "name", CMD)?.unwrap_or_else(|| "Group".into());
@@ -281,7 +297,7 @@ fn new_group(s: &mut Session, p: &Value) -> Result<Value> {
     let mut moving: Vec<(usize, usize)> = Vec::new();
     if let Some(a) = p.get("swatches") {
         let a = a.as_array().ok_or_else(|| bad(CMD, "`swatches` must be a list of names"))?;
-        let ix = index_by_name(&s.presets.swatches, None);
+        let ix = index_by_name(&s.presets().swatches, None);
         for n in a {
             let name = n.as_str().ok_or_else(|| bad(CMD, "`swatches` names must be strings"))?;
             moving.push(*ix.get(name).ok_or_else(|| bad(CMD, format!("no swatch \"{name}\"")))?);
@@ -289,7 +305,7 @@ fn new_group(s: &mut Session, p: &Value) -> Result<Value> {
     }
     moving.sort_unstable();
     moving.dedup();
-    let groups = &mut s.presets.swatches;
+    let groups = &mut s.presets_mut().swatches;
     let name = unique_group(groups, &base);
     let mut entries: Vec<SwatchEntry> = Vec::with_capacity(moving.len());
     for (gi, ii) in moving.into_iter().rev() {
@@ -298,7 +314,7 @@ fn new_group(s: &mut Session, p: &Value) -> Result<Value> {
     entries.reverse();
     let n = entries.len();
     groups.push(SwatchGroup { name: name.clone(), entries });
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"group": name, "moved": n}))
 }
 
@@ -307,11 +323,11 @@ fn rename_group(s: &mut Session, p: &Value) -> Result<Value> {
     let g = name_param(p, "group", CMD)?.ok_or_else(|| bad(CMD, "missing `group`"))?;
     let to = name_param(p, "name", CMD)?.ok_or_else(|| bad(CMD, "missing `name`"))?;
     let i = group_of(s, &g, CMD)?;
-    if g != to && s.presets.swatches.iter().any(|x| x.name == to) {
+    if g != to && s.presets().swatches.iter().any(|x| x.name == to) {
         return Err(bad(CMD, format!("a group named \"{to}\" already exists")));
     }
-    s.presets.swatches[i].name = to.clone();
-    s.presets_changed();
+    s.presets_mut().swatches[i].name = to.clone();
+    presets_changed(s);
     Ok(json!({"group": to}))
 }
 
@@ -323,7 +339,7 @@ fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => v.as_bool().ok_or_else(|| bad(CMD, "`keepSwatches` must be true or false"))?,
     };
     let i = group_of(s, &g, CMD)?;
-    let groups = &mut s.presets.swatches;
+    let groups = &mut s.presets_mut().swatches;
     if keep && groups.len() < 2 {
         return Err(bad(CMD, "there is no other group to keep the swatches in"));
     }
@@ -336,7 +352,7 @@ fn delete_group(s: &mut Session, p: &Value) -> Result<Value> {
             t.entries.extend(removed.entries);
         }
     }
-    s.presets_changed();
+    presets_changed(s);
     Ok(json!({"group": g, if keep { "kept" } else { "deleted" }: n}))
 }
 
@@ -344,8 +360,11 @@ fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "swatches.use";
     let (gi, ii) = locate(s, p, CMD)?;
     let target = str_param(p, "target").unwrap_or("foreground");
-    let sw = s.presets.swatches[gi].entries[ii].clone();
-    let rgb = SwatchConv::new(s).rgb(&sw.color);
+    let sw = s.presets().swatches[gi].entries[ii].clone();
+    let Some(&color) = sw.color() else {
+        return Err(bad(CMD, format!("swatch \"{}\" holds no colour", sw.name)));
+    };
+    let rgb = SwatchConv::new(s).rgb(&color);
     let c = [rgb[0], rgb[1], rgb[2], 1.0];
     match target {
         "foreground" => s.tools.foreground = c,
@@ -354,10 +373,14 @@ fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // A CMYK swatch keeps its inks (as a colour picked in CMYK does, #4196): the Color Picker
     // shows them and a CMYK document is painted with them, not with the sRGB round trip (#7474).
-    if let SwatchColor::Cmyk(inks) = sw.color
+    let role = if target == "background" { 1 } else { 0 };
+    s.tools.clear_role_cmyk(role);
+    if let SwatchColor::Cmyk(inks) = color
         && inks.iter().all(|v| v.is_finite())
     {
-        s.tools.remember_cmyk(rgb, inks.map(|v| v.clamp(0.0, 1.0)));
+        let inks = inks.map(|v| v.clamp(0.0, 1.0));
+        s.tools.remember_role_cmyk(role, inks);
+        s.tools.remember_cmyk(rgb, inks);
     }
     Ok(json!({"swatch": sw.name, "target": target, "hex": hex(rgb)}))
 }
@@ -370,21 +393,21 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let mut b = default_swatches();
     if append {
-        if total(&s.presets.swatches) + total(&b) > MAX_SWATCHES || s.presets.swatches.len() + b.len() > MAX_GROUPS {
+        if total(&s.presets().swatches) + total(&b) > MAX_SWATCHES || s.presets().swatches.len() + b.len() > MAX_GROUPS {
             return Err(bad(CMD, "the Swatches panel is full"));
         }
         for g in &mut b {
-            g.name = unique_group(&s.presets.swatches, &g.name);
+            g.name = unique_group(&s.presets().swatches, &g.name);
             for sw in &mut g.entries {
-                sw.name = unique_swatch_name(&s.presets.swatches, &sw.name);
+                sw.name = unique_swatch_name(&s.presets().swatches, &sw.name);
             }
-            s.presets.swatches.push(g.clone());
+            s.presets_mut().swatches.push(g.clone());
         }
     } else {
-        s.presets.swatches = b;
+        s.presets_mut().swatches = b;
     }
-    s.presets_changed();
-    Ok(json!({"groups": s.presets.swatches.len(), "count": total(&s.presets.swatches)}))
+    presets_changed(s);
+    Ok(json!({"groups": s.presets().swatches.len(), "count": total(&s.presets().swatches)}))
 }
 
 // ------------------------------------------------------------------ files
@@ -469,7 +492,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     // The group name is the file stem: craft-color names ungrouped colours after it.
     let (groups, report) = read_swatches(&bytes, &format!("{group}.{}", format.extension())).map_err(|e| bad(CMD, e.to_string()))?;
     let warnings: Vec<String> = report.notes.iter().map(|n| word_note(n, format, false)).collect();
-    let base: Vec<SwatchGroup> = if replace { Vec::new() } else { s.presets.swatches.clone() };
+    let base: Vec<SwatchGroup> = if replace { Vec::new() } else { s.presets().swatches.clone() };
     if total(&base) + total(&groups) > MAX_SWATCHES || base.len() + groups.len() > MAX_GROUPS {
         return Err(bad(CMD, format!("too many swatches: the panel holds at most {MAX_SWATCHES} in {MAX_GROUPS} groups")));
     }
@@ -506,8 +529,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         names.push(g.name.clone());
         lib.push(g);
     }
-    s.presets.swatches = lib;
-    s.presets_changed();
+    s.presets_mut().swatches = lib;
+    presets_changed(s);
     Ok(json!({"format": format.extension(), "mode": mode, "groups": names, "count": count, "warnings": warnings}))
 }
 
@@ -519,8 +542,8 @@ fn export(s: &mut Session, p: &Value) -> Result<Value> {
         None => path.and_then(SwatchFormat::from_name).unwrap_or(SwatchFormat::Aco),
     };
     let mut groups: Vec<SwatchGroup> = match name_param(p, "group", CMD)? {
-        Some(g) => vec![s.presets.swatches[group_of(s, &g, CMD)?].clone()],
-        None => s.presets.swatches.clone(),
+        Some(g) => vec![s.presets().swatches[group_of(s, &g, CMD)?].clone()],
+        None => s.presets().swatches.clone(),
     };
     // Only some swatches (Photoshop: Export Selected Swatches).
     if let Some(a) = p.get("swatches") {

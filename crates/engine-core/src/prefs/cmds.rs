@@ -1,6 +1,7 @@
 use super::customize::{keyboard_shortcuts, menus};
 use super::validate::{SECTIONS, get_path, keyed};
 use super::{CommandSpec, EngineError, Map, Result, Session, ToolbarCustomization, Value, json};
+use crate::color_cmds::ColorExt;
 
 // ------------------------------------------------------------------ commands
 
@@ -14,7 +15,7 @@ pub(super) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 
 fn prefs_get(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p.get("path").and_then(Value::as_str).unwrap_or("");
-    let v = s.prefs_view();
+    let v = super::saved::prefs_view(s);
     get_path(&v, path).cloned().ok_or_else(|| bad("prefs.get", format!("unknown preference `{path}`")))
 }
 
@@ -31,32 +32,32 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "give `path` and `value`, or `values: {path: value, …}`"));
     }
     // All or nothing: validate against a scratch copy first.
-    let (saved_prefs, saved_color) = (s.prefs().clone(), s.color.settings.clone());
+    let (saved_prefs, saved_color) = (s.prefs().clone(), s.color().settings.clone());
     let mut color_changed = false;
     for (path, v) in &changes {
-        match s.set_pref(path, v.clone(), false) {
+        match super::saved::set_pref(s, path, v.clone(), false) {
             Ok(touched) => color_changed |= touched,
             Err(e) => {
                 s.prefs.edit(|p| *p = saved_prefs);
-                s.color.settings = saved_color;
+                s.color_mut().settings = saved_color;
                 return Err(bad(cmd, e));
             }
         }
     }
-    if color_changed && let Err(e) = crate::color_cmds::validate_settings(&s.color.settings) {
+    if color_changed && let Err(e) = crate::color_cmds::validate_settings(&s.color().settings) {
         s.prefs.edit(|p| *p = saved_prefs);
-        s.color.settings = saved_color;
+        s.color_mut().settings = saved_color;
         return Err(bad(cmd, e));
     }
     // `colorSettings.blendTextGamma` and `spotDotGain` live in the compositor too, as
     // `edit.colorSettings` sets them. Process-wide: only a colour change moves them, so another
     // session's values survive this one's unrelated preferences.
     if color_changed {
-        photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
-        photocraft_compose::multichannel::set_spot_dot_gain(s.color.settings.spot_dot_gain);
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
     }
     s.apply_prefs();
-    let view = s.prefs_view();
+    let view = super::saved::prefs_view(s);
     let out: Map<String, Value> = changes.iter().map(|(k, _)| (k.clone(), get_path(&view, k).cloned().unwrap_or(Value::Null))).collect();
     Ok(Value::Object(out))
 }
@@ -72,17 +73,17 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     match path {
-        Some("colorSettings") => s.color.settings = Default::default(),
+        Some("colorSettings") => s.color_mut().settings = Default::default(),
         // One colour setting: `Preferences` has no `colorSettings`, so take the default
         // from `ColorSettings` and route it like `prefs.set` does.
         Some(path) if path.starts_with("colorSettings.") => {
             let defaults = serde_json::to_value(crate::color_cmds::ColorSettings::default()).map_err(|e| bad("prefs.reset", e.to_string()))?;
             let key = path.strip_prefix("colorSettings.").unwrap_or(path);
             let def = get_path(&defaults, key).cloned().ok_or_else(|| bad("prefs.reset", format!("unknown preference `{path}`")))?;
-            s.set_pref(path, def, true).map_err(|e| bad("prefs.reset", e))?;
+            super::saved::set_pref(s, path, def, true).map_err(|e| bad("prefs.reset", e))?;
         }
         None => {
-            s.color.settings = Default::default();
+            s.color_mut().settings = Default::default();
             s.edit_prefs(|p| p.reset(None)).map_err(|e| bad("prefs.reset", e))?;
         }
         Some(path) => {
@@ -93,8 +94,8 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.prefs.edit(|_| ());
     if path.is_none_or(|path| path == "colorSettings" || path.starts_with("colorSettings.")) {
-        photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
-        photocraft_compose::multichannel::set_spot_dot_gain(s.color.settings.spot_dot_gain);
+        photocraft_compose::psblend::set_text_gamma(s.color().settings.blend_text_gamma);
+        photocraft_compose::multichannel::set_spot_dot_gain(s.color().settings.spot_dot_gain);
     }
     s.apply_prefs();
     if path.is_some_and(|path| keyed(path).is_some()) {
@@ -219,7 +220,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Keyboard Shortcuts…",
             ["Edit"],
             Some("Cmd+Alt+Shift+K"),
-            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"alternates":{"<command id>":["F3",…]|[](none)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false,"importKys":"<.kys XML>"|{"path":".kys"}?,"useSet":"<name>"|""(defaults)?,"saveSet":"<name>"?,"deleteSet":"<name>"?,"sets":{"<name>":{"shortcuts":{…},"alternateShortcuts":{…}}}?,"activeSet":"<name>"|""?,"exportKys":true|{"path":".kys"}?,"summarize":true|{"mac":bool,"path":".html"}?} (with a path the file is written and the reply has kysPath/htmlPath instead of kys/html)"##,
+            r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"alternates":{"<command id>":["F3",…]|[](none)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"allowUnknown":bool=false (bind ids that are not registered commands, such as actions.play:<name>),"filter":str?,"list":bool=false,"importKys":"<.kys XML>"|{"path":".kys"}?,"useSet":"<name>"|""(defaults)?,"saveSet":"<name>"?,"deleteSet":"<name>"?,"sets":{"<name>":{"shortcuts":{…},"alternateShortcuts":{…}}}?,"activeSet":"<name>"|""?,"exportKys":true|{"path":".kys"}?,"summarize":true|{"mac":bool,"path":".html"}?} (with a path the file is written and the reply has kysPath/htmlPath instead of kys/html)"##,
             keyboard_shortcuts,
             true
         ),

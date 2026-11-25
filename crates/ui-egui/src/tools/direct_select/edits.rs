@@ -209,13 +209,13 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
                 // default "Drag Anchor Points", as in Photoshop (#13205).
                 params["stepName"] = json!("Drag Anchor Point");
             }
-            command(app, r, "path.moveAnchors", params);
+            command_ask(app, r, tool, "path.moveAnchors", params);
         }
         // Direct Selection's ⌥ drag on a segment: a copy of the subpath moves, the source stays (#13211).
         PathEdit::DuplicateSubpath { subpath, by, .. } if moved(by.x, by.y) => {
             let knots = super::path_of(app, &r).and_then(|path| path.subpaths.get(*subpath).map(|sub| sub.knots.len())).unwrap_or(0);
             let anchors: Vec<[usize; 2]> = (0..knots).map(|k| [*subpath, k]).collect();
-            command(app, r, "path.moveAnchors", json!({"anchors": anchors, "move": [by.x, by.y], "duplicate": true, "stepName": "Drag Path"}));
+            command_ask(app, r, tool, "path.moveAnchors", json!({"anchors": anchors, "move": [by.x, by.y], "duplicate": true, "stepName": "Drag Path"}));
         }
         PathEdit::MoveCurvature { anchors, by, .. } if moved(by.x, by.y) => {
             command(app, r, "path.moveAnchors", json!({"anchors": ids(anchors), "move": [by.x, by.y], "curvature": true}));
@@ -225,10 +225,10 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
             if convert_tool && *alone {
                 params["stepName"] = json!("Corner Drag");
             }
-            command(app, r, "path.moveHandle", params);
+            command_ask(app, r, tool, "path.moveHandle", params);
         }
         PathEdit::BendSegment { segment, t, by, .. } if moved(by.x, by.y) => {
-            command(app, r, "path.bendSegment", json!({"subpath": segment.subpath, "knot": segment.knot, "t": t, "move": [by.x, by.y]}));
+            command_ask(app, r, tool, "path.bendSegment", json!({"subpath": segment.subpath, "knot": segment.knot, "t": t, "move": [by.x, by.y]}));
         }
         PathEdit::Convert { knot, out, .. } => {
             let mut params = json!({"subpath": knot.subpath, "knot": knot.knot});
@@ -342,9 +342,19 @@ fn fail(app: &mut PhotocraftApp, error: String) {
     app.ui.status_error = true;
 }
 
+/// `command`, but a Direct Selection edit of a live shape asks first (#13216): while the live-shape
+/// question waits, nothing runs; its Yes runs this command with these params
+/// (`dialogs::live_shape_prompt`).
+fn command_ask(app: &mut PhotocraftApp, r: PathRef, tool: Tool, id: &'static str, params: Value) -> Option<Value> {
+    if tool == Tool::DirectSelection && crate::dialogs::live_shape_prompt::ask_edit(app, r, id, &params) {
+        return None;
+    }
+    command(app, r, id, params)
+}
+
 /// Runs `id` on `r`. The selection stays off the live UI while its own command runs (`sync_views`
 /// checks ownership then) and is bound to the revision the command made.
-fn command(app: &mut PhotocraftApp, r: PathRef, id: &str, params: Value) -> Option<Value> {
+pub(crate) fn command(app: &mut PhotocraftApp, r: PathRef, id: &str, params: Value) -> Option<Value> {
     let params = with_target(app, r, params);
     let selection = std::mem::take(&mut app.ui.direct_selection);
     match app.run(id, params) {

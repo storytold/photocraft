@@ -73,7 +73,7 @@ fn has_defaults(s: &Session) -> std::result::Result<(), String> {
 
 /// Edits a type layer as one history step and re-renders it. `f` gets the document's resolution
 /// (dpi).
-pub(crate) fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
+pub fn with_text<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32) -> Result<R>) -> Result<R> {
     let id = layer_param(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     let typed = typed_name(s, id);
@@ -431,7 +431,7 @@ pub fn type_path(t: &TextLayer) -> Option<Path> {
 
 /// Puts an edited [`type_path`] back into `t` (its text space), keeping where the type starts and
 /// which side it runs on. It must still be one subpath with two or more points.
-pub(crate) fn set_type_path(t: &mut TextLayer, edited: &Path) -> Result<()> {
+pub fn set_type_path(t: &mut TextLayer, edited: &Path) -> Result<()> {
     let TextShape::Path { start, end, flip, .. } = &t.shape else { return Err(EngineError::Other("the type layer is not on a path".into())) };
     let (start, end, flip) = (*start, *end, *flip);
     let [sub] = edited.subpaths.as_slice() else { return Err(EngineError::Other("type on a path follows one path".into())) };
@@ -985,7 +985,8 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     const LP: &str = r##"{"layer":id?}"##;
-    const FP: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers)}"##;
+    const FP: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (an inline edit's selection; the setting applies to the whole layer)}"##;
+    const NP: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (single layer; default all)}"##;
     const OT: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"on":bool? (default: toggle representative),"range":[startChar,endChar]? (single layer; default all)}"##;
     // One toggle per stylistic set; a run fn can't capture, so each indexes the tag table itself.
     macro_rules! stylistic_sets {
@@ -1022,37 +1023,37 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("type.openType.ornaments", "Ornaments", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "ornm")),
         spec!("type.openType.ordinals", "Ordinals", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "ordn")),
         spec!("type.openType.fractions", "Fractions", &["Type", "OpenType"], OT, has_format_target, |s, p| toggle_opentype(s, p, "frac")),
-        spec!("type.openType.numerals.default", "Default", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+        spec!("type.openType.numerals.default", "Default", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| set_numerals(
             s,
             p,
             NumeralsStyle::Default
         )),
-        spec!("type.openType.numerals.lining", "Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+        spec!("type.openType.numerals.lining", "Lining", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| {
             set_numerals(s, p, NumeralsStyle::Lining)
         }),
-        spec!("type.openType.numerals.oldstyle", "Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+        spec!("type.openType.numerals.oldstyle", "Oldstyle", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| {
             set_numerals(s, p, NumeralsStyle::Oldstyle)
         }),
-        spec!("type.openType.numerals.proportional", "Proportional", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+        spec!("type.openType.numerals.proportional", "Proportional", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| set_numerals(
             s,
             p,
             NumeralsStyle::Proportional
         )),
-        spec!("type.openType.numerals.tabular", "Tabular", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+        spec!("type.openType.numerals.tabular", "Tabular", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| {
             set_numerals(s, p, NumeralsStyle::Tabular)
         }),
-        spec!("type.openType.numerals.proportionalLining", "Proportional Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+        spec!("type.openType.numerals.proportionalLining", "Proportional Lining", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| {
             set_numerals(s, p, NumeralsStyle::ProportionalLining)
         }),
-        spec!("type.openType.numerals.tabularLining", "Tabular Lining", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+        spec!("type.openType.numerals.tabularLining", "Tabular Lining", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| set_numerals(
             s,
             p,
             NumeralsStyle::TabularLining
         )),
-        spec!("type.openType.numerals.proportionalOldstyle", "Proportional Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| {
+        spec!("type.openType.numerals.proportionalOldstyle", "Proportional Oldstyle", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| {
             set_numerals(s, p, NumeralsStyle::ProportionalOldstyle)
         }),
-        spec!("type.openType.numerals.tabularOldstyle", "Tabular Oldstyle", &["Type", "OpenType", "Numerals"], FP, has_format_target, |s, p| set_numerals(
+        spec!("type.openType.numerals.tabularOldstyle", "Tabular Oldstyle", &["Type", "OpenType", "Numerals"], NP, has_format_target, |s, p| set_numerals(
             s,
             p,
             NumeralsStyle::TabularOldstyle
@@ -1066,7 +1067,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "type.warpText",
             "Warp Text…",
             &["Type"],
-            r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"style":"none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist"="arc","orientation":"horizontal|vertical"="horizontal","bend":-100..100=50,"horizontalDistortion":-100..100=0,"verticalDistortion":-100..100=0}"##,
+            r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"range":[startChar,endChar]? (an inline edit's selection; the warp applies to the whole layer),"style":"none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist"="arc","orientation":"horizontal|vertical"="horizontal","bend":-100..100=50,"horizontalDistortion":-100..100=0,"verticalDistortion":-100..100=0}"##,
             has_format_target,
             warp_text
         ),

@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::actions_cmds::ActionStep;
+use crate::actions_cmds::ActionsExt;
 
 fn action(items: Vec<AtnItem>) -> Vec<u8> {
     atn::write(&AtnFile {
@@ -68,9 +69,9 @@ fn gradient_tool_steps_load_play_and_save_back() {
     let mut s = crate::session();
     let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&action(items))})).unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    let ids: Vec<&str> = s.actions.list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
+    let ids: Vec<&str> = s.actions().list.actions()[0].steps.iter().map(|st| st.command.as_str()).collect();
     assert_eq!(ids, ["layer.newFillLayer.gradient", "gradient.fill.set"]);
-    let set_params = &s.actions.list.actions()[0].steps[1].params;
+    let set_params = &s.actions().list.actions()[0].steps[1].params;
     assert_eq!(
         (set_params["angle"].as_f64(), set_params["scale"].as_f64(), set_params["align"].as_bool()),
         (Some(-35.0), Some(140.0), Some(false)),
@@ -117,13 +118,13 @@ fn create_droplet_step_loads_plays_and_saves_back() {
     let recorded = droplet(&file, &out, &[("OvrO", D::Boolean(true))]);
     let mut s = crate::session();
     // The action the droplet runs.
-    s.actions.list.push(crate::actions_cmds::Action::new("Sharpen", vec![ActionStep::new("filter.sharpen.sharpen", json!({}))])).unwrap();
-    s.actions.list.assign_set(0, Some("Tools".into())).unwrap();
+    s.actions_mut().list.push(crate::actions_cmds::Action::new("Sharpen", vec![ActionStep::new("filter.sharpen.sharpen", json!({}))])).unwrap();
+    s.actions_mut().list.assign_set(0, Some("Tools".into())).unwrap();
     let loaded = s
         .execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&action(vec![step(b"CrtD", "Create Droplet", recorded.clone())]))}))
         .unwrap();
     assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
-    let a = s.actions.list.actions().iter().find(|a| a.name == "A").unwrap();
+    let a = s.actions().list.actions().iter().find(|a| a.name == "A").unwrap();
     assert_eq!(
         a.steps,
         [ActionStep::new("file.automate.createDroplet", json!({"path": file, "action": "Sharpen", "set": "Tools", "output": out, "overrideOpen": true}))]
@@ -205,11 +206,11 @@ fn create_droplet_steps_follow_a_renamed_loaded_action() {
     })
     .unwrap();
     let mut s = crate::session();
-    s.actions.list.push(crate::actions_cmds::Action::new("Sharpen", vec![])).unwrap();
-    s.actions.list.assign_set(0, Some("Tools".into())).unwrap();
+    s.actions_mut().list.push(crate::actions_cmds::Action::new("Sharpen", vec![])).unwrap();
+    s.actions_mut().list.assign_set(0, Some("Tools".into())).unwrap();
     let r = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&file), "set": "Loaded"})).unwrap();
     assert_eq!(r["actions"], json!(["Sharpen 2", "A"]), "{r}");
-    let a = s.actions.list.actions().iter().find(|a| a.name == "A").unwrap();
+    let a = s.actions().list.actions().iter().find(|a| a.name == "A").unwrap();
     assert_eq!(a.steps[0].params["action"], "Sharpen 2", "{:?}", a.steps[0]);
     assert_eq!((&a.steps[1].params["action"], &a.steps[1].params["set"]), (&json!("Sharpen 2"), &json!("Loaded")), "{:?}", a.steps[1]);
 }
