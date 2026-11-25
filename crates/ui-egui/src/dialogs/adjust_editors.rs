@@ -13,7 +13,7 @@
 use photocraft_engine::presets::PresetsExt;
 use std::sync::Arc;
 
-use craft::behavior::{EditEvent, EditEvents, Mixed};
+use craft::behavior::{EditEvent, EditEvents, IconId, Mixed};
 use craft::color_ui::ui::gradient::{ColorStop, GradientStops};
 use craft::draw::ui::gradient::{GradientGroup, GradientItem, GradientMap, GradientMapEditor, GradientMapOutput};
 use craft::imaging::ui::adjust::{
@@ -23,8 +23,11 @@ use craft::imaging::ui::adjust::{
 };
 use craft::imaging::ui::histogram::{ChannelColor, HistogramData};
 use craft::theme::Srgba;
-use craft::ui::contract::Bind;
-use craft::ui::runtime::env::Env;
+use craft::ui::buttons::{IconButton, PopupMark};
+use craft::ui::contract::{Bind, Entry, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger};
+use craft::ui::layout_components::Row;
+use craft::ui::menu::Menu;
+use craft::ui::runtime::env::{Env, Label};
 use craft::ui::runtime::requests::ColorRequest;
 use egui::Ui;
 use photocraft_doc::LayerId;
@@ -37,6 +40,9 @@ use crate::PhotocraftApp;
 
 mod session;
 pub mod values;
+
+#[cfg(test)]
+mod curves_preset_menu_tests;
 
 pub(crate) use session::PropertiesAdjust;
 pub use session::{layer_editor, layer_reset};
@@ -165,6 +171,30 @@ pub enum AdjustAsk {
     /// A colour well was clicked: the host opens the colour picker with the request and writes the answer with
     /// [`answer_color`].
     PickColor(ColorRequest),
+    /// The Curves gear menu's row the app must answer (#14379): the host runs the preset command.
+    CurvesPreset(CurvesPresetAsk),
+}
+
+/// Which row of the Curves dialog's gear menu was picked (#14379).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CurvesPresetAsk {
+    /// Save Preset…: write the dialog's curves to a file the host asks for.
+    Save,
+    /// Load Preset…: read a file the host asks for and write its curves into the dialog.
+    Load,
+    /// Delete Current Preset: drop the current preset from the user list.
+    Delete,
+}
+
+/// The Curves gear menu's rows (#14379): which row, its label, and whether it runs, top to bottom;
+/// the menu draws a separator after the second row. Delete is greyed while no user preset is the
+/// current one — the Default curve, or a built-in preset, which the Preset dropdown (#9221) adds.
+pub fn preset_menu_rows(current: Option<&str>) -> [(CurvesPresetAsk, &'static str, bool); 3] {
+    [
+        (CurvesPresetAsk::Save, "Save Preset…", true),
+        (CurvesPresetAsk::Load, "Load Preset…", true),
+        (CurvesPresetAsk::Delete, "Delete Current Preset", current.is_some()),
+    ]
 }
 
 /// What one pass of an editor reports.
@@ -196,6 +226,8 @@ pub struct EditorSetup {
     /// The clipping display the Levels editor reported on the pass before: the dialog's display changes when the editor's
     /// report does (an Alt-held thumb), so a display set from outside (automation) stays until the editor next reports.
     pub reported_clipping: std::cell::Cell<Option<craft::imaging::ui::adjust::LevelsClip>>,
+    /// The curve preset the Curves dialog has selected (#14379); `None` is the Default curve, with no preset to delete.
+    pub curves_current: Option<String>,
 }
 
 impl Default for EditorSetup {
@@ -209,6 +241,7 @@ impl Default for EditorSetup {
             tone: None,
             stale: false,
             reported_clipping: Default::default(),
+            curves_current: None,
         }
     }
 }
@@ -216,6 +249,39 @@ impl Default for EditorSetup {
 /// The edit events of one editor lifted onto the value.
 fn lifted<T>(events: EditEvents<T>, wrap: impl Fn(T) -> AdjustValue) -> AdjustOut {
     AdjustOut { ask: None, edit: events.map(wrap) }
+}
+
+/// A button or menu label from a translated string.
+fn word(text: &str) -> Label {
+    Label::from(text.to_string())
+}
+
+/// The Curves dialog's Preset gear (#14379): the button with the small arrow and its menu of
+/// [`preset_menu_rows`], with the separator before the last row. It only reports the row picked;
+/// the host answers it through the `curves.presets.*` commands, which the CLI, the control channel
+/// and MCP run the same way.
+fn curves_preset_menu(ui: &mut Ui, setup: &EditorSetup) -> Option<CurvesPresetAsk> {
+    let name = word(tl!("Preset options"));
+    let rows = preset_menu_rows(setup.curves_current.as_deref());
+    let mut entries: Vec<Entry<CurvesPresetAsk>> = Vec::with_capacity(rows.len() + 1);
+    for (at, (row, text, enabled)) in rows.into_iter().enumerate() {
+        if at == 2 {
+            entries.push(Entry::separator());
+        }
+        entries.push(Entry::new(row, word(tl!(text))).enabled(enabled));
+    }
+    let mut picked = None;
+    Row::new().show(ui, |ui, _| {
+        let button = IconButton::new(IconId::new("settings"))
+            .label(name.clone())
+            .tooltip(name.clone())
+            .popup(PopupKind::Menu)
+            .popup_mark(PopupMark::Menu)
+            .show(ui)
+            .response;
+        picked = Menu::new(name.clone()).opened_by(&button, Trigger::Click).pick(ui, &entries).picked;
+    });
+    picked
 }
 
 fn reset_legacy_toggle(value: BrightnessContrast, previous_legacy: bool, reset: bool) -> BrightnessContrast {
@@ -252,6 +318,9 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
             lifted(out.edit, |levels| AdjustValue::Levels { levels })
         }
         ("curves", AdjustValue::Curves { curves }) => {
+            // The Preset gear at the top of the dialog, where the reference puts it right of the
+            // Preset dropdown (#9221 adds that row); the Properties panel has no preset menu.
+            let preset = context.is_dialog().then(|| curves_preset_menu(ui, setup)).flatten();
             let mut panel = CurvesPanel::new("Curves", Bind::bound(&mut *curves), setup.channels.clone())
                 .histograms(&setup.histograms)
                 .sampler(values::curve_sampler)
@@ -277,7 +346,7 @@ fn show(kind: &str, setup: &EditorSetup, ui: &mut Ui, value: &mut AdjustValue, c
                 *curves = converted.clone();
                 edit.push(EditEvent::set(Mixed::Same(from), AdjustValue::Curves { curves: converted }, Arc::from("Curves Mode"), None));
             }
-            AdjustOut { ask: None, edit }
+            AdjustOut { ask: preset.map(AdjustAsk::CurvesPreset), edit }
         }
         ("exposure", AdjustValue::Exposure { values }) => {
             let fields = AdjustField::exposure(&Env::of(ui).words::<AdjustWords>());

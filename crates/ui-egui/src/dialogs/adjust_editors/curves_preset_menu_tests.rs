@@ -1,0 +1,312 @@
+//! The Curves dialog's gear menu (#14379): Save Preset…, Load Preset… and Delete Current Preset,
+//! the separator between them, the greyed Delete row, and the engine commands behind the three
+//! rows. The app is driven through its own dialog host with real clicks; its file dialogs are
+//! scripted (`craft::host::ScriptedFiles`), as the file-dialog tests do.
+
+use craft::host::{FileFilter, PickKind, PickRequest, Picked, ScriptedFiles};
+use craft::ui::dialog::DialogId;
+use egui::Vec2;
+use egui::accesskit::Role;
+use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
+use photocraft_engine::presets::PresetsExt;
+use photocraft_engine::presets::curves::{self, CurvePreset};
+use serde_json::{Value, json};
+use std::sync::Arc;
+
+use crate::adjust_editors::preset_menu_rows;
+use crate::dialogs::adjust_dialog::{self, open_params};
+use crate::{PhotocraftApp, Services};
+
+/// The gear button's accessible name.
+const GEAR: &str = "Preset options";
+/// The menu's three rows, in the reference application's order.
+const SAVE: &str = "Save Preset…";
+const LOAD: &str = "Load Preset…";
+const DELETE: &str = "Delete Current Preset";
+
+type H = Harness<'static, Box<PhotocraftApp>>;
+
+/// A temp folder one test owns, named after the test and this process.
+fn dir(name: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("photocraft-curves-gear-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).expect("temp folder");
+    d
+}
+
+/// The curves a test puts in the dialog: a lifted midtone plus a red curve, so a channel lost
+/// between the dialog and the file shows up.
+fn lifted() -> Value {
+    json!({"points": [[0.0, 0.0], [100.0, 150.0], [255.0, 255.0]], "red": [[0.0, 20.0], [255.0, 235.0]]})
+}
+
+/// `lifted()` as the engine writes the same curves back, which is what a preset file holds.
+fn stored_curves() -> Value {
+    photocraft_engine::adjust_params::to_params(
+        &photocraft_engine::adjust_params::from_params("curves", &lifted(), None, photocraft_doc::ColorMode::Rgb).expect("the parameters parse"),
+    )
+}
+
+/// An app with a document, a scripted file service, and a writer that really writes.
+fn app(files: Arc<ScriptedFiles>) -> Box<PhotocraftApp> {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).expect("a document");
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).expect("a selection");
+    s.execute("edit.fill", json!({"color": "#b04020"})).expect("a fill");
+    s.execute("select.deselect", json!({})).expect("deselect");
+    let services = Services {
+        files: Some(files),
+        write: Some(Box::new(|path: &str, bytes: &[u8]| std::fs::write(path, bytes).map_err(|e| e.to_string()))),
+        ..Default::default()
+    };
+    PhotocraftApp::new(s, services)
+}
+
+/// A harness over `app(files)`, running the app's dialogs.
+fn harness(app: Box<PhotocraftApp>) -> H {
+    let mut h = Harness::builder()
+        .with_context(app.ctx().clone())
+        .with_size(Vec2::new(1200.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(|ui, app| crate::dialogs::run(app, ui), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::AppTheme::pro());
+    h
+}
+
+/// The Curves dialog of `image.adjustments.curves`, open in a harness.
+fn curves_dialog(files: Arc<ScriptedFiles>) -> (H, DialogId) {
+    let mut h = harness(app(files));
+    let id = adjust_dialog::open(h.state_mut(), "image.adjustments.curves").expect("the Curves dialog opens");
+    h.run_steps(4);
+    (h, id)
+}
+
+/// The newest request the file service was given.
+fn last_request(files: &ScriptedFiles) -> PickRequest {
+    files.requests().pop().expect("a file dialog was asked")
+}
+
+/// The user answers the newest open dialog with `picked`; the app polls it on the next pass.
+fn answer(h: &mut H, files: &ScriptedFiles, picked: Picked) {
+    files.answer(picked).expect("a dialog is open");
+    h.state_mut().poll_file_dialog();
+    h.run_steps(3);
+}
+
+/// Opens the gear's menu, leaving it alone when it is already open (the open menu answers to the
+/// same name, so the button and the menu are then two nodes).
+fn open_gear(h: &mut H) {
+    if h.query_all_by_label(GEAR).count() > 1 {
+        h.run_steps(1);
+        return;
+    }
+    h.get_by_label(GEAR).click();
+    h.run_steps(3);
+}
+
+/// The open menu's rows, top to bottom: (label, enabled).
+fn menu_rows(h: &H) -> Vec<(String, bool)> {
+    h.query_all_by_role(Role::MenuItem).map(|n| (n.accesskit_node().label().unwrap_or_default().to_string(), !n.accesskit_node().is_disabled())).collect()
+}
+
+/// The enabled flag of each open menu row, top to bottom.
+fn rows_enabled(h: &H) -> Vec<bool> {
+    menu_rows(h).iter().map(|(.., on)| *on).collect()
+}
+
+/// Picks one row of the open menu.
+fn pick(h: &mut H, label: &str) {
+    h.get_by_role_and_label(Role::MenuItem, label).click();
+    h.run_steps(2);
+}
+
+/// The dialog's engine parameters now (`open_params` reads the one adjustment dialog that is open).
+fn params(h: &H, _id: DialogId) -> Value {
+    open_params(h.state()).expect("the Curves dialog is open")
+}
+
+/// A preset file for `name` written into `dir(test)`, with its bytes.
+fn preset_file(test: &str, name: &str) -> (std::path::PathBuf, Vec<u8>) {
+    let path = dir(test).join(format!("{name}.pcrv"));
+    let bytes = curves::to_bytes(&CurvePreset { name: name.into(), curves: stored_curves() }).expect("a preset writes");
+    std::fs::write(&path, &bytes).expect("the test can write");
+    (path, bytes)
+}
+
+/// Answers the open Load dialog with the file `path` holding `bytes`.
+fn choose_file(h: &mut H, files: &ScriptedFiles, path: &std::path::Path, bytes: &[u8]) {
+    answer(h, files, Picked::Contents(vec![(path.to_string_lossy().to_string(), bytes.to_vec())]));
+}
+
+// -------------------------------------------------------------------------------- the menu itself
+
+#[test]
+fn the_gear_lists_save_load_and_delete_in_that_order() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, _id) = curves_dialog(files);
+    assert_eq!(h.get_by_label(GEAR).accesskit_node().role(), Role::Button, "the gear is a button");
+    let rows: Vec<(&str, bool)> = preset_menu_rows(None).iter().map(|(.., label, on)| (*label, *on)).collect();
+    assert_eq!(rows, [(SAVE, true), (LOAD, true), (DELETE, false)], "the three rows in order, Delete greyed with Default current");
+    open_gear(&mut h);
+    let shown = menu_rows(&h);
+    assert_eq!(shown.iter().map(|(label, ..)| label.as_str()).collect::<Vec<_>>(), [SAVE, LOAD, DELETE], "the menu lists exactly the three rows, in order");
+    assert_eq!(rows_enabled(&h), vec![true, true, false], "Delete is greyed while Default is current");
+}
+
+#[test]
+fn a_current_user_preset_makes_the_delete_row_live() {
+    let rows: Vec<(&str, bool)> = preset_menu_rows(Some("My Curve")).iter().map(|(.., label, on)| (*label, *on)).collect();
+    assert_eq!(rows, [(SAVE, true), (LOAD, true), (DELETE, true)], "with a user preset current, all three rows run");
+}
+
+#[test]
+fn the_other_adjustment_dialogs_have_no_gear() {
+    for command in ["image.adjustments.levels", "image.adjustments.exposure", "image.adjustments.hueSaturation"] {
+        let files = Arc::new(ScriptedFiles::held());
+        let mut h = harness(app(files));
+        adjust_dialog::open(h.state_mut(), command).expect("the dialog opens");
+        h.run_steps(4);
+        assert!(h.query_all_by_label(GEAR).next().is_none(), "{command} shows no preset gear");
+    }
+}
+
+// ---------------------------------------------------------------------------- save, load and delete
+
+#[test]
+fn save_preset_asks_for_a_preset_file_and_writes_every_channel() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    let path = dir("save").join("My Curve.pcrv");
+    adjust_dialog::apply_params(h.state_mut(), id, &lifted());
+    h.run_steps(2);
+    assert_eq!(params(&h, id)["points"], stored_curves()["points"], "the dialog holds the lifted curve");
+
+    open_gear(&mut h);
+    pick(&mut h, SAVE);
+    let asked = last_request(&files);
+    assert_eq!(asked.kind, PickKind::Save, "Save Preset… asks where to save");
+    let suggested = asked.file_name.clone().unwrap_or_default();
+    assert!(suggested.ends_with("Curves.pcrv"), "Save Preset… suggests a curve preset file: {suggested}");
+    answer(&mut h, &files, Picked::Paths(vec![path.clone()]));
+
+    let bytes = std::fs::read(&path).expect("the preset file was written");
+    let preset = curves::from_bytes(&bytes).expect("the file is a curve preset");
+    assert_eq!(preset.name, "My Curve", "the preset is named after the file");
+    assert_eq!(preset.curves, stored_curves(), "every channel of the dialog's curve is in the file");
+    let state = h.state();
+    assert_eq!(state.session.presets().curves_preset.as_deref(), Some("My Curve"), "the saved preset is selected");
+    assert_eq!(state.session.presets().curves_presets.len(), 1, "and it is in the user list");
+}
+
+#[test]
+fn load_preset_applies_the_file_and_makes_it_the_current_one() {
+    let (path, bytes) = preset_file("load", "Bright");
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    let before = params(&h, id);
+    assert_ne!(before["points"], stored_curves()["points"], "the dialog starts on the default curve");
+
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    let asked = last_request(&files);
+    assert_eq!(asked.kind, PickKind::Open, "Load Preset… asks for a file");
+    assert_eq!(asked.filters, [FileFilter::new("Supported Files", &[curves::EXT])], "the picker offers curve preset files");
+    choose_file(&mut h, &files, &path, &bytes);
+
+    let now = params(&h, id);
+    for key in ["points", "red", "blue"] {
+        assert_eq!(now[key], stored_curves()[key], "{key} of the preset is in the dialog");
+    }
+    assert_eq!(h.state().session.presets().curves_preset.as_deref(), Some("Bright"), "the loaded preset is selected");
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, true], "with a user preset current, all three rows run");
+}
+
+#[test]
+fn a_bad_preset_file_shows_an_error_and_changes_nothing() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    let before = params(&h, id);
+    for bytes in [b"{ not json".to_vec(), Vec::new(), vec![b'{' as u8; 4096], br#"{"photoCraftCurvePreset":1,"curves":{"points":[[0,0]]}}"#.to_vec()] {
+        open_gear(&mut h);
+        pick(&mut h, LOAD);
+        last_request(&files);
+        answer(&mut h, &files, Picked::Contents(vec![("Broken.pcrv".into(), bytes)]));
+        assert!(h.state().ui.status_error, "the bad file is reported");
+        assert_eq!(params(&h, id), before, "the dialog keeps its curves");
+        assert!(h.state().session.presets().curves_presets.is_empty(), "and the user list stays empty");
+        open_gear(&mut h);
+        assert_eq!(rows_enabled(&h), vec![true, true, false], "Delete stays greyed after a refused load");
+    }
+}
+
+#[test]
+fn delete_current_preset_drops_it_and_greys_the_row_again() {
+    let (path, bytes) = preset_file("delete", "Bright");
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, _id) = curves_dialog(files.clone());
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, &path, &bytes);
+    assert_eq!(h.state().session.presets().curves_presets.len(), 1, "the loaded preset is in the list");
+
+    open_gear(&mut h);
+    pick(&mut h, DELETE);
+    let state = h.state();
+    assert!(state.session.presets().curves_presets.is_empty(), "the preset left the user list");
+    assert!(state.session.presets().curves_preset.is_none(), "and nothing is current again");
+    assert!(std::fs::metadata(&path).is_ok(), "the user's file stays on disk");
+    drop(state);
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, false], "Delete is greyed again");
+}
+
+#[test]
+fn a_greyed_delete_row_runs_nothing() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, _id) = curves_dialog(files.clone());
+    open_gear(&mut h);
+    pick(&mut h, DELETE);
+    let state = h.state();
+    assert!(state.session.presets().curves_presets.is_empty(), "the greyed row deletes nothing");
+    assert_eq!(files.open(), 0, "and it opens no file dialog");
+}
+
+#[test]
+fn a_preset_loaded_once_is_still_current_when_the_dialog_opens_again() {
+    let (path, bytes) = preset_file("reopen", "Kept");
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    open_gear(&mut h);
+    pick(&mut h, LOAD);
+    choose_file(&mut h, &files, &path, &bytes);
+    let ctx = h.ctx.clone();
+    crate::dialogs::cancel(h.state_mut(), &ctx, id).expect("the dialog cancels");
+    h.run_steps(3);
+
+    adjust_dialog::open(h.state_mut(), "image.adjustments.curves").expect("the dialog opens again");
+    h.run_steps(4);
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, true], "the preset loaded before is still current");
+    assert_eq!(h.state().session.presets().curves_preset.as_deref(), Some("Kept"));
+}
+
+#[test]
+fn a_cancelled_save_writes_nothing() {
+    let files = Arc::new(ScriptedFiles::held());
+    let (mut h, id) = curves_dialog(files.clone());
+    adjust_dialog::apply_params(h.state_mut(), id, &lifted());
+    h.run_steps(2);
+    open_gear(&mut h);
+    pick(&mut h, SAVE);
+    let asked = last_request(&files);
+    assert_eq!(asked.kind, PickKind::Save);
+    answer(&mut h, &files, Picked::Cancelled);
+    let state = h.state();
+    assert!(state.session.presets().curves_presets.is_empty(), "a cancelled Save adds no preset");
+    assert!(!state.ui.status_error, "cancelling the file dialog is not reported as an error");
+    drop(state);
+    open_gear(&mut h);
+    assert_eq!(rows_enabled(&h), vec![true, true, false], "and Delete stays greyed");
+}
