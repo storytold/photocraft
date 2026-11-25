@@ -8,6 +8,7 @@ use craft::imaging::trace::{MaskSource, outline};
 use craft::imaging::ui::warp::{CylinderValues, WarpMesh, WarpSplit};
 use photocraft_engine::color_cmds::ColorExt;
 
+use super::commit::SAVE_FOR_WEB;
 use super::preview::AbovePlan;
 use super::warp::{cylinder_edit, cylinder_values, grid_edit};
 use crate::state::{FreeTransform, SessionWarp};
@@ -470,6 +471,68 @@ fn save_for_web_is_off_under_a_pending_transform() {
     assert!(app.ui.transform.is_some(), "the box stays open");
     cancel(&mut app);
     assert!(crate::menus::is_enabled(&app, SAVE_FOR_WEB), "back after the box closes");
+}
+
+/// Gives `app` an exporter, and a writer that records the paths it writes, as the desktop app's
+/// services do; returns the record.
+fn record_writes(app: &mut PhotocraftApp) -> std::rc::Rc<std::cell::RefCell<Vec<String>>> {
+    let writes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = writes.clone();
+    app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+    app.services.write = Some(Box::new(move |path: &str, _: &[u8]| {
+        seen.borrow_mut().push(path.to_owned());
+        Ok(())
+    }));
+    writes
+}
+
+/// #16953: Save, Save As and Save a Copy write the committed document, so, as Save for Web
+/// (#6737), they are off while a box is pending: a save never writes the layer from before the
+/// move. After the commit they write it.
+#[test]
+fn saves_are_off_under_a_pending_transform() {
+    for id in ["file.save", "file.saveAs", "file.saveACopy"] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let writes = record_writes(&mut app);
+        let ctx = app.ctx().clone();
+        assert!(crate::menus::is_enabled(&app, id), "{id}: enabled with no box");
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+        move_box(&mut app, 16.0, 0.0);
+        assert!(!crate::menus::is_enabled(&app, id), "{id}: off under the box");
+        assert!(crate::menus::invoke(&mut app, &ctx, id, json!({"path": "/pics/under.psd"})).is_err(), "{id}: refused under the box");
+        assert!(app.run(id, json!({"path": "/pics/under.psd"})).is_err(), "{id}: refused through run (automation, action steps)");
+        land_jobs(&mut app);
+        assert!(writes.borrow().is_empty(), "{id}: nothing is written");
+        assert!(app.ui.transform.is_some(), "{id}: the box stays open");
+        commit(&mut app);
+        assert!(crate::menus::is_enabled(&app, id), "{id}: back after the commit");
+        // Save a Copy makes the folder itself, so the path must be writable.
+        let after = std::env::temp_dir().join(format!("pc-16953-{}", std::process::id())).join(format!("{id}.psd"));
+        crate::menus::invoke(&mut app, &ctx, id, json!({"path": after.to_string_lossy()})).unwrap();
+        land_jobs(&mut app);
+        assert!(!writes.borrow().is_empty() || after.exists(), "{id}: saves after the commit");
+        if let Some(dir) = after.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// #16953: while a commit still runs in the background the document doesn't hold the move yet,
+/// so a save is refused until it lands.
+#[test]
+fn saves_wait_for_a_transform_committed_in_the_background() {
+    for id in ["file.save", "file.saveAs", "file.saveACopy"] {
+        let (mut app, _, _, _) = moved_place();
+        let writes = record_writes(&mut app);
+        let ctx = app.ctx().clone();
+        commit(&mut app);
+        assert!(committing(&app).is_some(), "the commit runs in the background");
+        assert!(!crate::menus::is_enabled(&app, id), "{id}: off while the commit runs");
+        assert!(crate::menus::invoke(&mut app, &ctx, id, json!({"path": "/pics/early.psd"})).is_err(), "{id}: refused while the commit runs");
+        land_jobs(&mut app);
+        assert!(writes.borrow().is_empty(), "{id}: nothing is written");
+        assert!(crate::menus::is_enabled(&app, id), "{id}: back once the commit lands");
+    }
 }
 
 /// Layer › Copy CSS reads the committed document, so, as Save for Web (#6737), it is off while a

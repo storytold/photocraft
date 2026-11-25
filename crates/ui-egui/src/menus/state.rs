@@ -45,6 +45,13 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if crate::analysis::handles(id) {
         return true;
     }
+    // Save a Copy and the export dialogs are view commands, but under an open Free Transform
+    // they would write the document from before the box (#16953).
+    if crate::transform_tool::writes_document(id)
+        && let Some(e) = crate::transform_tool::is_enabled(app, id)
+    {
+        return e;
+    }
     if let Some(e) = crate::view_cmds::is_enabled(app, id) {
         return e;
     }
