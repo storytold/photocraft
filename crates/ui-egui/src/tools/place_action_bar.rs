@@ -135,7 +135,7 @@ pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, area: egui::Rect) {
     let ctx = ui.ctx().clone();
     let mut place = app.ui.panels.task_bar;
     let shown = TaskBar::new(tl!("Contextual Task Bar"), &corners, Bind::bound(&mut place))
-        .more_rows(vec![PanelRow::Command(CommandRef::new("window.panel.properties"))])
+        .more_rows(vec![PanelRow::Command(CommandRef::with_params("window.panel.properties", json!({"show": true})))])
         .show(ui, area, |ui, cx| {
             contents(app, ui, cx, &ctx);
         });
@@ -378,5 +378,17 @@ mod tests {
         let doc = std::sync::Arc::make_mut(d.doc_mut());
         doc.mode = photocraft_doc::ColorMode::Indexed;
         assert!(eligible(&app), "indexed color image layer is eligible for task bar");
+    }
+
+    #[test]
+    fn more_properties_shows_properties_panel() {
+        let mut app = app_with_doc();
+        let ctx = egui::Context::default();
+        crate::panel_docking::show_panel(&mut app, "properties", Some(true)).unwrap();
+        assert!(crate::panel_docking::is_front(&app, "properties"));
+
+        // Running window.panel.properties with show: true keeps it open and front
+        crate::menus::invoke(&mut app, &ctx, "window.panel.properties", json!({"show": true})).unwrap();
+        assert!(crate::panel_docking::is_front(&app, "properties"));
     }
 }
