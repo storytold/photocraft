@@ -826,3 +826,39 @@ fn marquee_drag_after_hiding_extras_restores_selection_visibility() {
     h.state_mut().run("edit.fill", json!({"color": "#22cc44"})).unwrap();
     assert!(!h.state().ui.view.extras, "painting an existing selection must preserve the user's hide choice");
 }
+
+/// Clone Stamp through the real canvas: ⇧⌥→ moves the source overlay one pixel and ⇧⌥Enter lines
+/// the source up with the canvas (offset 0), with the pointer over the canvas.
+#[test]
+fn clone_stamp_shift_alt_keys_move_and_line_up_the_source() {
+    use photocraft_engine::presets::PresetsExt as _;
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::CloneStamp;
+    // ⌥-click sets the source, as the artist does; then the pointer moves elsewhere.
+    let r = h.state().last_canvas_rect;
+    let source = r.center();
+    let alt_button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::ALT };
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.hover_at(source);
+    h.run_steps(2);
+    h.event(alt_button(source, true));
+    h.run_steps(1);
+    h.event(alt_button(source, false));
+    h.run_steps(2);
+    assert!(h.state().session.presets().clone.active().source.is_some(), "⌥-click set the source");
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.hover_at(source + vec2(40.0, 20.0));
+    h.run_steps(2);
+    let readout = |h: &Harness<'static, Box<PhotocraftApp>>| crate::preset_panels::clone_offset_readout(h.state()).unwrap();
+    let start = readout(&h);
+    assert_ne!(start, [0.0, 0.0]);
+    // ⇧⌥ held: the arrows and Enter reach the ⌥ stand-in.
+    h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT | Modifiers::ALT));
+    h.run_steps(2);
+    h.key_press_modifiers(Modifiers::SHIFT | Modifiers::ALT, Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(readout(&h), [start[0] - 1.0, start[1]], "⇧⌥→ nudges the source");
+    h.key_press_modifiers(Modifiers::SHIFT | Modifiers::ALT, Key::Enter);
+    h.run_steps(2);
+    assert_eq!(readout(&h), [0.0, 0.0], "⇧⌥Enter lines the source up; status: {}", h.state().ui.status);
+}

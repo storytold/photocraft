@@ -10,7 +10,7 @@ use craft::behavior::kurbo::Point;
 use craft::behavior::value::CancelReason;
 use craft::imaging::ui::select::{DragKind, LassoTool, PressRule, SelectEvent, SelectionProbe, SelectionShape, drag_kind};
 use craft::keymap::Mods;
-use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolHostResponse, ToolPath, ToolPointer};
+use craft::ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolHostResponse, ToolKey, ToolPath, ToolPointer};
 use craft::ui::primitives::Draw;
 
 use super::dialog::doc_point;
@@ -328,6 +328,20 @@ impl CanvasTool for SourceTool<'_> {
     fn takes(&self, button: PointerButton, mods: Mods) -> bool {
         // Control+Alt is the brush-resize drag, which the painting tool takes (`cursor_policy::alt_samples`).
         button == PointerButton::Primary && mods.alt && !mods.ctrl
+    }
+
+    /// ⇧⌥ shows the source overlay while this stand-in holds the canvas: an arrow nudges the source one pixel and
+    /// Enter lines it up with the canvas (`clone_overlay_key`).
+    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
+        let (direction, mods) = match key {
+            ToolKey::Nudge { direction, mods, .. } => (Some([f64::from(direction.x), f64::from(direction.y)]), *mods),
+            ToolKey::Submit => (None, cx.mods),
+            _ => return false,
+        };
+        if cx.gesture_id().is_some() {
+            return false;
+        }
+        self.scope.with_app(|app| crate::preset_panels::clone_overlay_key(app, direction, mods))
     }
 
     fn paint(&self, _draw: &Draw<'_>, _cx: &ToolContext<'_>) {}
