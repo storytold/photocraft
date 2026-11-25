@@ -295,6 +295,33 @@ fn knockout_layer_with_a_drop_shadow_matches_the_cpu() {
     }
 }
 
+/// The resident cache keeps a stroked shape's fill apart from its full content: a knockout shape
+/// (the full content) and the split fill under a visible clipped layer live in one plan.
+#[test]
+fn knockout_on_a_stroked_shape_with_a_clipped_layer_matches_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    use photocraft_doc::vector::{Path, ShapeLayer, ShapeStroke, Subpath};
+    for knockout in KNOCKOUTS {
+        for fill in [0.0, 0.5] {
+            let mut d = doc(SampleType::U8, true);
+            d.layers.push(underlay(&d, 2));
+            let path = Path::new(vec![Subpath::polygon(&[(8.3, 6.6), (40.2, 9.1), (36.7, 33.4), (11.9, 30.2)])]);
+            let stroke = ShapeStroke { width: 4.0, paint: Fill::Solid(Color::rgb(0.9, 0.9, 0.1)), ..ShapeStroke::default() };
+            let mut sh = ShapeLayer { path, fill: Some(Fill::Solid(Color::rgb(0.2, 0.3, 0.8))), stroke: Some(stroke), ..ShapeLayer::default() };
+            sh.cache = Some(photocraft_vector::render_shape(&sh, d.pixel_format(), d.bounds()));
+            let mut l = Layer::new("shape", LayerContent::Shape(sh));
+            l.advanced.knockout = knockout;
+            l.fill_opacity = fill;
+            let mut c = noise_layer("clip", d.pixel_format(), Rect::new(4, 4, 44, 36), 42, 0.5);
+            c.clipped = true;
+            d.layers.extend([l, c]);
+            let st = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds());
+            assert!(st.is_ok(), "planned on the GPU");
+            run(&mut g, &d, &format!("stroked shape, fill opacity {fill}, clipped layer"), knockout);
+        }
+    }
+}
+
 /// The options that stay on the CPU still make the GPU refuse the document.
 #[test]
 fn the_remaining_advanced_blending_options_are_refused() {

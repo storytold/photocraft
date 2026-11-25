@@ -644,7 +644,7 @@ impl<'a> Planner<'a> {
             // The vector stroke goes above the clipped layers: the fill is the clipping base,
             // the stroke is laid over the clipped result, then the masks apply to both
             // (compose::shape_parts).
-            let content = self.shape_part(layer, Role::Content, fill);
+            let content = self.shape_part(layer, Role::Fill, fill);
             let content = self.clip_onto(&visible_clipped, content)?;
             let stroke = self.shape_part(layer, Role::Stroke, stroke);
             let mut p = Pass::new(Kernel::Blend, 0);
@@ -954,7 +954,7 @@ impl<'a> Planner<'a> {
         };
         let (mut content, vstroke) = match split {
             Some((fill, stroke)) => {
-                let f = self.shape_part(layer, Role::Content, fill);
+                let f = self.shape_part(layer, Role::Fill, fill);
                 let s = self.shape_part(layer, Role::Stroke, stroke);
                 (f, Some(s))
             }
