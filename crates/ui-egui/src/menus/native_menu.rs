@@ -30,7 +30,7 @@ pub(crate) fn laid_out(app: &mut PhotocraftApp, ctx: &egui::Context) -> Layout {
     // The system items give way to the command the keymap gives a key to, in a menu or not (tool keys, canvas keys).
     let keys = |chord: &craft::keymap::Chord| holder(ctx, chord);
     let options = LayoutOptions::new(APP_NAME).label(&label).keys(&keys);
-    mac_layout(&items::model(app, ctx).bar, &options)
+    mac_layout(items::model(app, ctx).source(), &options)
 }
 
 /// Installs the macOS menu bar; `None` where there is none (every other platform).

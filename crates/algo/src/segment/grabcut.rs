@@ -84,6 +84,12 @@ pub fn grabcut_with(img: &RgbImage, trimap: &mut [u8], iters: usize, ctl: &Inter
     Ok(models)
 }
 
+/// Pass cap for [`object_select`]. Only the ring outside the rectangle seeds the background
+/// model, so on a backdrop lit brighter towards the subject each pass gives up just the next
+/// brightness band of it; a cap of 8 stopped half way and selected a straight-edged patch of
+/// backdrop (#6975). Cuts that settle earlier stop at `grabcut_with`'s change check.
+const OBJECT_SELECT_ITERS: usize = 30;
+
 /// Object Selection (rectangle mode): GrabCut initialised from `rect` (outside = background,
 /// inside = probable foreground). Runs on a working copy of about `work_px` pixels, then re-cuts
 /// the boundary at full resolution. `canvas` bounds the analysis.
@@ -124,7 +130,7 @@ pub fn object_select(sampler: &dyn Sampler, canvas: Rect, rect: Rect, work_px: u
             }
         }
     }
-    let (fg, bg) = grabcut(&img, &mut trimap, 8)?;
+    let (fg, bg) = grabcut(&img, &mut trimap, OBJECT_SELECT_ITERS)?;
     let low: Vec<bool> = trimap.iter().map(|t| is_fg(*t)).collect();
     let low = super::clean_mask(&low, lw, lh, 0.1, 0.0);
     // Every enclosed hole, however small, fills only when it looks like the object, so background seen through it stays open.

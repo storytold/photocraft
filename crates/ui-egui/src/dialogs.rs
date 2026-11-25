@@ -30,7 +30,7 @@ pub(crate) mod params {
     use super::{
         PhotocraftApp, alerts, brush_preset_dialog, canvas_input, channel_options_ui, color_picker_ui, color_table_ui, count_group_name_ui, duplicate_layer_ui,
         equalize_ui, file_forms, fill_ui, filter_dialog, history_options_ui, image_processor_ui, merge_channels_ui, new_group_ui, new_layer_ui,
-        smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
+        paragraph_text_size, smart_filter_dialog, snapshot_dialog, stack_dialog, stroke_ui,
     };
     use crate::canvas::document_display::CanvasHost;
 
@@ -82,6 +82,7 @@ pub(crate) mod params {
         ParamFamily::new(history_options_ui::owns, history_options_ui::run),
         ParamFamily::new(brush_preset_dialog::owns, brush_preset_dialog::run),
         ParamFamily { check: Some(equalize_ui::check), ..ParamFamily::new(equalize_ui::owns, equalize_ui::run) },
+        ParamFamily::new(paragraph_text_size::owns, paragraph_text_size::run),
         ParamFamily::new(channel_options_ui::owns, channel_options_ui::run),
         ParamFamily { check: Some(merge_channels_ui::check), ..ParamFamily::new(merge_channels_ui::owns, merge_channels_ui::run) },
         ParamFamily {
@@ -270,11 +271,11 @@ pub(crate) mod params {
             let key = key_of(app, id);
             let Some(dialog) = dialog_mut(app, id) else { continue };
             let (colour, path, dropper, listing, footer, range) = (
-                dialog.pick_color(),
+                dialog.take_color_request(),
                 dialog.pick_path(),
                 dialog.take_eyedropper(),
                 dialog.take_listing(),
-                dialog.take_footer_action(),
+                dialog.take_action(),
                 dialog.take_range_alert(),
             );
             if let Some(alert) = range {
@@ -286,7 +287,7 @@ pub(crate) mod params {
             if let Some((row, colour)) = color_picker_ui::answer_for(app, id)
                 && let Some(dialog) = dialog_mut(app, id)
             {
-                dialog.answer_color(row, colour);
+                dialog.answer_color(&row, colour);
             }
             if let Some(request) = path {
                 start_pick(app, ctx, id, request);
@@ -414,6 +415,7 @@ pub(crate) const PROMPTS: &[PromptRow] = &[
     disk_change_prompt::answer,
     rasterize_prompt::answer,
     live_shape_prompt::answer,
+    assign_profile_layers_alert::answer,
     preset_group_prompt::answer,
     open_prompt::answer_prompt,
     alerts::answer,
@@ -632,8 +634,14 @@ const ENGINE_READ: &[&str] = &["ui.layersPanelOptions", "file.print", "file.expo
 
 /// The "Don't show again" entries (`{"skip": true}`), by key, as their prompt modules read them. Told apart by key, not
 /// by the shape of the value.
-fn dont_show_again_keys() -> [&'static str; 4] {
-    [delete_layer_prompt::PREF, live_shape_prompt::PREF, crate::analysis::note_alerts::DELETE_NOTE_PREF, crate::retouch_ui::CAM_NO_PIXELS_PREF]
+fn dont_show_again_keys() -> [&'static str; 5] {
+    [
+        delete_layer_prompt::PREF,
+        live_shape_prompt::PREF,
+        assign_profile_layers_alert::PREF,
+        crate::analysis::note_alerts::DELETE_NOTE_PREF,
+        crate::retouch_ui::CAM_NO_PIXELS_PREF,
+    ]
 }
 
 /// Where the remembered value of the preference entry `key` goes: `None` keeps it in `Preferences.dialogs`, else the
@@ -697,6 +705,9 @@ pub mod adjust_preview;
 pub mod alerts;
 #[cfg(test)]
 mod arbitrary_ruler_prefill_tests;
+pub mod assign_profile_layers_alert;
+#[cfg(test)]
+mod assign_profile_layers_alert_tests;
 pub(crate) mod bitmap_dialog;
 pub mod blend_options;
 pub mod blur_pins;
@@ -753,6 +764,7 @@ pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
+pub mod paragraph_text_size;
 #[cfg(test)]
 mod paths_export_default_tests;
 #[cfg(test)]

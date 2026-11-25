@@ -43,6 +43,8 @@ fn mode_tool_name(tool: Tool) -> Option<&'static str> {
 pub fn tool_name(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Brush => Some(tl!("brush tool")),
+        // The Magic Eraser's click (#12020).
+        Tool::MagicEraser => Some(tl!("magic eraser")),
         Tool::Sharpen => Some(tl!("sharpen tool")),
         Tool::Sponge => Some(tl!("sponge tool")),
         Tool::Smudge => Some(tl!("smudge tool")),
@@ -121,8 +123,12 @@ fn layer_refusal(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
 /// Art History Brush Lock Image Pixels as well (measured for them; the Brush keeps today's
 /// behaviour there).
 fn locked(locks: photocraft_doc::Locks, tool: Tool) -> bool {
-    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush) && locks.pixels)
+    locks.all || (matches!(tool, Tool::Sharpen | Tool::Sponge | Tool::Smudge | Tool::ArtHistoryBrush | Tool::MagicEraser) && locks.pixels)
 }
+
+#[cfg(test)]
+#[path = "../magic_eraser_refusal_alerts_tests.rs"]
+mod magic_eraser_refusal_alerts_tests;
 
 #[cfg(test)]
 #[path = "../brush_refusal_alert_tests.rs"]

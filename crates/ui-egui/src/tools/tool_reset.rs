@@ -182,10 +182,19 @@ pub fn sample_all_key(tool: Tool) -> Option<String> {
 /// (less [`kept_by_reset_tool`]) and what a tool preset made with + stores (#7356).
 pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     // `reset!` names each field once; one that is misspelt or gone fails to compile.
+    macro_rules! serialized_key {
+        // The one Align Edges checkbox goes by the reference application's script name.
+        (align_edges) => {
+            "useAlignedRendering"
+        };
+        ($f:ident) => {
+            stringify!($f)
+        };
+    }
     macro_rules! reset {
         ($($f:ident),* $(,)?) => {{
             let _ = |o: &ToolOptions| { $(let _ = &o.$f;)* };
-            &[$(stringify!($f)),*]
+            &[$(serialized_key!($f)),*]
         }};
     }
     match tool {
@@ -237,13 +246,14 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, sponge_flow, vibrance),
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
-        Tool::Pen => reset!(vector_mode, pen_path_op, pen_auto_add_delete, path_options),
-        Tool::CurvaturePen => reset!(vector_mode, pen_path_op),
-        Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit),
+        Tool::Pen => reset!(vector_mode, align_edges, pen_path_op, pen_auto_add_delete, path_options),
+        Tool::CurvaturePen => reset!(vector_mode, align_edges, pen_path_op),
+        Tool::FreeformPen => reset!(vector_mode, align_edges, pen_path_op, curve_fit),
         Tool::Line => reset!(
             shape_mode,
             shape_path_op,
             shape_fill,
+            align_edges,
             stroke_width,
             shape_stroke,
             shape_fill_gradient,

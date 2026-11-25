@@ -10,8 +10,8 @@ use craft::draw::ui::brush_presets::{BrushCardParts, BrushPick, BrushRowPaint, B
 use craft::keymap::Mods;
 use craft::ui::contract::{Bind, MemoProps, MemoView, Outbox, PlainData, ReorderMove, Tracked, bind_tracked};
 use craft::ui::patterns::presets::{PresetEvent, PresetFns, PresetRow, PresetSource, PresetState, PresetView};
-use craft::ui::primitives::ContentPainterCx;
 use craft::ui::primitives::textures::TextureCache;
+use craft::ui::primitives::{ContentPainterCx, FacePaint};
 use craft::ui::runtime::env::Env;
 use egui::{ColorImage, Pos2, Rect, pos2};
 use photocraft_engine::BrushSettings;
@@ -89,22 +89,23 @@ fn picture(cx: &ContentPainterCx, rect: Rect, key: impl Hash + 'static, image: i
 fn paint_of(b: &BrushSettings) -> BrushRowPaint {
     let brush = b.clone();
     let stroke_sig = brush_preview::preview_sig(b);
-    BrushRowPaint::new(tip_paint(&b.tip, (b.hardness, b.angle, b.roundness)), move |cx, rect| {
+    let stroke = FacePaint::new(stroke_sig, move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
         let size = [rect.width().round().clamp(1.0, 1024.0) as usize, rect.height().round().clamp(1.0, 1024.0) as usize];
         picture(cx, rect, ("brushes-stroke", stroke_sig, size, color), || brush_preview::stroke_image(&brush, size, color));
-    })
+    });
+    BrushRowPaint::new(tip_paint(&b.tip, (b.hardness, b.angle, b.roundness)), stroke)
 }
 
 /// How the engine draws `tip` with the falloff, angle and roundness `shape` (a sampled tip's shape) in the theme's text
 /// colour: a preset's thumbnail and the Brush Preset chip's current tip.
-pub(crate) fn tip_paint(tip: &TipShape, shape: (f32, f32, f32)) -> impl Fn(&ContentPainterCx, Rect) + Send + Sync + 'static {
+pub(crate) fn tip_paint(tip: &TipShape, shape: (f32, f32, f32)) -> FacePaint {
     let tip = tip.clone();
     let tip_key = brush_preview::tip_sig(&tip, shape.0, shape.1, shape.2, (false, false));
-    move |cx, rect| {
+    FacePaint::new(tip_key, move |cx, rect| {
         let color = Tokens::get(cx.painter.ctx()).text;
         picture(cx, rect, ("brushes-tip", tip_key, color), || brush_preview::tip_image(&tip, shape, 36, color));
-    }
+    })
 }
 
 /// The presets of the brush lists: every preset of `presets` in the engine's panel order, each row showing the card

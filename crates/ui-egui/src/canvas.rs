@@ -67,6 +67,7 @@ pub mod tool_feedback;
 pub(crate) mod tools;
 mod transform_controls;
 pub(crate) mod viewport_pages;
+mod window_drop;
 
 pub(crate) use cursor_policy::alt_samples;
 pub(crate) use display::GPU_OUTPUT;
