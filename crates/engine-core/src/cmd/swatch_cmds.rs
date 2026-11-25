@@ -436,40 +436,13 @@ pub fn color_table_file(name: &str, bytes: &[u8]) -> std::result::Result<(Vec<St
             };
             groups.iter().flat_map(|g| &g.entries).filter_map(rgb).take(ACT_COLORS).collect()
         }
-        Some("pal") => riff_palette(bytes)?.iter().take(ACT_COLORS).map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")).collect(),
+        Some("pal") => craft::palette::parse_riff_pal(bytes)?.iter().take(ACT_COLORS).map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")).collect(),
         _ => return act_table(bytes),
     };
     if colors.is_empty() {
         return Err("the file holds no RGB colors".into());
     }
     Ok((colors, None))
-}
-
-/// The colors of a RIFF palette (`.pal`): a `RIFF` file of form `PAL ` whose `data` chunk holds
-/// a version word, an entry count and four bytes per entry (red, green, blue, flags), all
-/// little-endian. Chunks before `data` are skipped; only the chunks inside the form's declared
-/// size count.
-fn riff_palette(bytes: &[u8]) -> std::result::Result<Vec<[u8; 3]>, String> {
-    let cut_short = || String::from("the palette is cut short");
-    if bytes.get(..4) != Some(b"RIFF".as_slice()) || bytes.get(8..12) != Some(b"PAL ".as_slice()) {
-        return Err("not a RIFF palette (.pal) file".into());
-    }
-    let le32 = |b: &[u8]| b.first_chunk::<4>().map(|w| u32::from_le_bytes(*w) as usize);
-    // The form's size counts its `PAL ` type and its chunks.
-    let size = bytes.get(4..8).and_then(le32).ok_or_else(cut_short)?;
-    let mut rest = 8usize.checked_add(size).and_then(|end| bytes.get(12..end)).ok_or_else(cut_short)?;
-    while let (Some(id), Some(len)) = (rest.get(..4), rest.get(4..8).and_then(le32)) {
-        let body = 8usize.checked_add(len).and_then(|end| rest.get(8..end)).ok_or_else(cut_short)?;
-        if id == b"data" {
-            let [_, _, lo, hi, entries @ ..] = body else { return Err(cut_short()) };
-            let count = usize::from(u16::from_le_bytes([*lo, *hi]));
-            let colors: Vec<[u8; 3]> = entries.as_chunks::<4>().0.iter().take(count).map(|&[r, g, b, _]| [r, g, b]).collect();
-            return if colors.len() < count { Err(cut_short()) } else { Ok(colors) };
-        }
-        // Chunks are padded to an even length.
-        rest = rest.get(8 + len + (len & 1)..).unwrap_or_default();
-    }
-    Err("the palette has no color data".into())
 }
 
 /// `.act` bytes as `#rrggbb` colors plus the transparent index, for the Color Table dialog.

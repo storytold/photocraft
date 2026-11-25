@@ -17,18 +17,14 @@ fn aco(colors: &[[u8; 3]]) -> Vec<u8> {
     write_swatches(&[SwatchGroup { name: "t".into(), entries }], SwatchFormat::Aco).unwrap().0
 }
 
-/// A RIFF palette declaring `count` entries and holding `colors`, with an unrelated chunk of odd
-/// length (so padded) before `data`.
-fn pal(colors: &[[u8; 3]], count: u16) -> Vec<u8> {
+/// A RIFF palette of `colors`. Its format rules are tested with the reader in craft-palette.
+fn pal(colors: &[[u8; 3]]) -> Vec<u8> {
     let mut data = vec![0x00, 0x03];
-    data.extend_from_slice(&count.to_le_bytes());
+    data.extend_from_slice(&(colors.len() as u16).to_le_bytes());
     for c in colors {
         data.extend_from_slice(&[c[0], c[1], c[2], 0]);
     }
     let mut body = b"PAL ".to_vec();
-    body.extend_from_slice(b"note");
-    body.extend_from_slice(&3u32.to_le_bytes());
-    body.extend_from_slice(b"abc\0");
     body.extend_from_slice(b"data");
     body.extend_from_slice(&(data.len() as u32).to_le_bytes());
     body.extend_from_slice(&data);
@@ -41,13 +37,9 @@ fn pal(colors: &[[u8; 3]], count: u16) -> Vec<u8> {
 #[test]
 fn aco_and_pal_files_load_their_colors_in_file_order() {
     let want = colors(3);
-    for (name, bytes) in [("swatches.aco", aco(&want)), ("SWATCHES.ACO", aco(&want)), ("palette.pal", pal(&want, 3)), ("Palette.PAL", pal(&want, 3))] {
+    for (name, bytes) in [("swatches.aco", aco(&want)), ("SWATCHES.ACO", aco(&want)), ("palette.pal", pal(&want)), ("Palette.PAL", pal(&want))] {
         assert_eq!(color_table_file(name, &bytes), Ok((hexes(&want), None)), "{name}");
     }
-    // Bytes after the form don't count.
-    let mut trailing = pal(&want, 3);
-    trailing.extend_from_slice(b"junk after the form");
-    assert_eq!(color_table_file("trailing.pal", &trailing), Ok((hexes(&want), None)));
     // An `.act` still loads as before, transparent index included.
     let mut act = act_bytes(&want, Some(1)).unwrap();
     assert_eq!(color_table_file("table.act", &act), act_table(&act));
@@ -59,7 +51,7 @@ fn aco_and_pal_files_load_their_colors_in_file_order() {
 fn colors_past_256_are_dropped() {
     let all = colors(300);
     let first = hexes(&all[..ACT_COLORS]);
-    for (name, bytes) in [("big.aco", aco(&all)), ("big.pal", pal(&all, 300))] {
+    for (name, bytes) in [("big.aco", aco(&all)), ("big.pal", pal(&all))] {
         let (got, transparent) = color_table_file(name, &bytes).unwrap();
         assert_eq!((got, transparent), (first.clone(), None), "{name}");
     }
@@ -68,27 +60,16 @@ fn colors_past_256_are_dropped() {
 #[test]
 fn unreadable_or_empty_files_are_refused() {
     let three = colors(3);
-    let mut no_data = pal(&three, 3);
-    let at = no_data.windows(4).position(|w| w == b"data").unwrap();
-    no_data[at..at + 4].copy_from_slice(b"junk");
-    // A form declared as only its `PAL ` type, with the color data after it, outside the form.
-    let mut empty_form = pal(&three, 3);
-    empty_form[4..8].copy_from_slice(&4u32.to_le_bytes());
-    // A form declared one byte longer than the file.
-    let mut past_end = pal(&three, 3);
-    let size = past_end.len() as u32 - 7;
-    past_end[4..8].copy_from_slice(&size.to_le_bytes());
-    let cases: [(&str, Vec<u8>); 11] = [
+    let mut short = pal(&three);
+    short.truncate(short.len() - 1);
+    let cases: [(&str, Vec<u8>); 8] = [
         ("empty.aco", Vec::new()),
         ("none.aco", vec![0, 1, 0, 0]),
         ("text.aco", b"GIMP Palette\nName: x\n#\n255 0 0 red\n".to_vec()),
         ("act.aco", act_bytes(&three, None).unwrap()),
         ("empty.pal", Vec::new()),
-        ("none.pal", pal(&[], 0)),
-        ("short.pal", pal(&three[..2], 3)),
-        ("nodata.pal", no_data),
-        ("form.pal", empty_form),
-        ("past_end.pal", past_end),
+        ("none.pal", pal(&[])),
+        ("short.pal", short),
         ("act.pal", act_bytes(&three, None).unwrap()),
     ];
     for (name, bytes) in cases {
