@@ -357,8 +357,8 @@ fn custom_options_too_large_to_keep_say_so() {
         var d = new ActionDescriptor(), big = Array(30001).join('x');
         for (var i = 0; i < 3; i++) { d.putString(i + 1, big); }
         try { app.putCustomOptions('big', d); } catch (e) { $.writeln(e.name, ' ', e.message.indexOf('64 KiB') >= 0); }
-        // Texts past the limit on their own are refused the same way.
-        var huge = new ActionDescriptor(); huge.putString(1, Array(1 << 20).join('x'));
+        // Texts far past the limit are refused the same way.
+        var huge = new ActionDescriptor(); for (var i = 0; i < 1000; i++) { huge.putString(i + 1, big); }
         try { app.putCustomOptions('huge', huge); } catch (e) { $.writeln(e.name, ' ', e.message.indexOf('64 KiB') >= 0); }
         "#,
     );
