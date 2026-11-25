@@ -37,7 +37,7 @@ fn main() {
         app
     });
     text.run_steps(8);
-    text.get_by_label("Set the text color").click();
+    text.get_all_by_role_and_label(egui::accesskit::Role::ColorWell, "Text color").next().expect("the text swatch").click();
     text.run_steps(6);
     text.render().unwrap().save(format!("{output}/text-color-picker.png")).unwrap();
 
