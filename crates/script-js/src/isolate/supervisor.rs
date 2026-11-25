@@ -737,7 +737,8 @@ impl IsolatedJob {
 
     /// Whether the host's requests are void now: its output ended, it sent its result, it
     /// exited, or the app is stopping it. A request [`Self::poll`] has not handed out by then
-    /// never is.
+    /// never is. For tests that must not race the reader.
+    #[doc(hidden)]
     pub fn requests_void(&self) -> bool {
         self.shared.dead()
     }

@@ -718,8 +718,8 @@ fn a_run_stopped_while_a_duplicate_is_placed_leaves_no_copy() {
     assert_eq!(layer_names(&s), before);
 }
 
-/// A group copied into itself is made where it goes in one edit: wherever the run is stopped,
-/// the copy is inside the group or not made, never left beside it.
+/// A group copied into itself is made and placed with no budget charge between the two: wherever
+/// the run's budget stops it, the copy is inside the group or not made, never left beside it.
 #[test]
 fn a_run_stopped_while_a_group_is_copied_into_itself_leaves_no_copy_beside_it() {
     let mut landed = false;
@@ -732,7 +732,11 @@ fn a_run_stopped_while_a_group_is_copied_into_itself_leaves_no_copy_beside_it() 
         let mut r = Runner::new(src, Box::new(host), Box::new(crate::run::Countdown(charges)), RunOptions::default()).unwrap();
         let step = r.step();
         assert_eq!(layer_names(&s), before, "{charges} charges ({step:?}): nothing beside the group");
-        landed |= step == Step::Done;
+        if step == Step::Done {
+            let d = s.borrow_mut().execute("document.inspect", json!({})).unwrap();
+            assert_eq!(d["layers"][0]["children"].as_array().map(Vec::len), Some(1), "{charges}: the copy is inside the group");
+            landed = true;
+        }
     }
     assert!(landed, "with enough charges the copy is made");
 }

@@ -404,7 +404,7 @@ fn an_action_waits_for_its_script_step_and_goes_on_after_it() {
 #[test]
 fn step_by_step_waits_after_a_script_step() {
     let log = Log::default();
-    let mut app = app(vec![vec![Act::Run("layer.new.layer", json!({"name": "from the script"}))], vec![]], &log);
+    let mut app = app(vec![vec![Act::Run("layer.new.layer", json!({"name": "from the script"}))], vec![], vec![]], &log);
     app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
     app.run("prefs.set", json!({"path": "actions.performance", "value": "step"})).unwrap();
     app.session
@@ -430,6 +430,19 @@ fn step_by_step_waits_after_a_script_step() {
     settle(&mut app);
     assert!(!crate::actions::playback::pending(&app));
     assert_eq!(app.session.recording.playing, 0, "the playback ended");
+    // Last in an action that another calls, with a step after the call: that step waits too.
+    app.session
+        .actions_mut()
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new(
+            "Calls",
+            vec![ActionStep::new("actions.play", json!({"action": "Last"})), ActionStep::new("layer.new.layer", json!({"name": "after the call"}))],
+        ))
+        .unwrap();
+    crate::actions::play(&mut app, &json!({"action": "Calls"})).unwrap();
+    settle(&mut app);
+    assert!(crate::actions::playback::pending(&app), "the caller's next step waits");
+    assert!(!layer_names(&app).contains(&"after the call".to_string()));
 }
 
 /// A playback a person started goes on after its script step as the person's, even when the
