@@ -29,14 +29,15 @@ const CANVAS: Rect = Rect::new(0.0, 0.0, 1000.0, 800.0);
 #[test]
 fn command_over_the_selected_layer_shows_nothing() {
     let mut app = app();
-    assert_eq!(current(&mut app, Some([675.0, 460.0]), true, false), None, "over B, B selected");
-    // Empty canvas (the Background) still measures to the canvas edges, and another layer to it.
     let b = Rect::new(600.0, 400.0, 750.0, 520.0);
-    assert_eq!(current(&mut app, Some([900.0, 100.0]), true, false), Some((b, CANVAS)));
-    assert_eq!(current(&mut app, Some([450.0, 150.0]), true, false), Some((b, Rect::new(400.0, 100.0, 500.0, 200.0))));
+    assert_eq!(current(&mut app, Some([675.0, 460.0]), true, false), None, "over B, B selected");
     // The cached answer for the same pixel doesn't outlive a selection change.
     app.run("layer.select", json!({"name": "A"})).unwrap();
     assert_eq!(current(&mut app, Some([675.0, 460.0]), true, false).map(|(_, to)| to), Some(b), "B is another layer now");
+    // Empty canvas (the Background) still measures to the canvas edges, and another layer to it.
+    app.run("layer.select", json!({"name": "B"})).unwrap();
+    assert_eq!(current(&mut app, Some([900.0, 100.0]), true, false), Some((b, CANVAS)));
+    assert_eq!(current(&mut app, Some([450.0, 150.0]), true, false), Some((b, Rect::new(400.0, 100.0, 500.0, 200.0))));
 }
 
 #[test]
