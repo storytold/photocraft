@@ -180,3 +180,66 @@ fn load(app: &mut PhotocraftApp, id: DialogId, lut: &craft::cms::lutfile::LutFil
         dialog.set_field(key, value.clone());
     }
 }
+
+/// An explicit LUT Format decides whether the LUT is a `.cube`, as it does for the command: `swap2.cube` text named
+/// `swap2.txt` and read as Cube shows the orders and OK applies them (CodeRabbit on #16628).
+#[test]
+fn an_explicit_cube_format_shows_and_applies_the_orders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let txt = tmp.path().join("swap2.txt");
+    std::fs::write(&txt, SWAP2).unwrap();
+    for (source, data_order, want) in
+        [("file", "rgb", [50, 50, 200]), ("file", "bgr", [200, 50, 50]), ("data", "rgb", [50, 50, 200]), ("data", "bgr", [200, 50, 50])]
+    {
+        let mut app = app_with_doc();
+        let id = open(&mut app, COLOR_LOOKUP).unwrap();
+        passes(&mut app, 2);
+        if source == "file" {
+            try_set(&mut app, id, "file", json!(txt.to_str().unwrap())).unwrap();
+        } else {
+            try_set(&mut app, id, "data", json!(SWAP2)).unwrap();
+            try_set(&mut app, id, "fileName", json!("swap2.txt")).unwrap();
+        }
+        try_set(&mut app, id, "lutFormat", json!("cube")).unwrap();
+        passes(&mut app, 2);
+        assert!(shown(&app, id), "{source}: a .txt read as Cube");
+        try_set(&mut app, id, "dataOrder", json!(data_order)).unwrap();
+        try_set(&mut app, id, "dither", json!(false)).unwrap();
+        ok(&mut app, id);
+        assert_eq!(pixel(&app), want, "{source}: data order {data_order}");
+    }
+}
+
+/// An explicit `.3dl` or `.look` format is no `.cube`, whatever the file is named: `swap2` in those formats, saved
+/// as `swap2.cube`, hides the orders and ignores those left from a real `.cube`.
+#[test]
+fn an_explicit_other_format_hides_the_orders_of_a_cube_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cube = tmp.path().join("real.cube");
+    std::fs::write(&cube, SWAP2).unwrap();
+    for (name, text) in swap2_other_formats() {
+        let format = name.rsplit('.').next().unwrap();
+        let named_cube = tmp.path().join(format!("{format}.cube"));
+        std::fs::write(&named_cube, &text).unwrap();
+        for source in ["file", "data"] {
+            let mut app = app_with_doc();
+            let id = open(&mut app, COLOR_LOOKUP).unwrap();
+            try_set(&mut app, id, "file", json!(cube.to_str().unwrap())).unwrap();
+            passes(&mut app, 2);
+            try_set(&mut app, id, "dataOrder", json!("bgr")).unwrap();
+            try_set(&mut app, id, "lutFormat", json!(format)).unwrap();
+            if source == "file" {
+                try_set(&mut app, id, "file", json!(named_cube.to_str().unwrap())).unwrap();
+            } else {
+                try_set(&mut app, id, "file", json!("")).unwrap();
+                try_set(&mut app, id, "data", json!(text)).unwrap();
+                try_set(&mut app, id, "fileName", json!("swap2.cube")).unwrap();
+            }
+            passes(&mut app, 2);
+            assert!(!shown(&app, id), "{format} named .cube, from {source}");
+            try_set(&mut app, id, "dither", json!(false)).unwrap();
+            ok(&mut app, id);
+            assert_eq!(pixel(&app), [50, 50, 200], "{format} named .cube, from {source}");
+        }
+    }
+}

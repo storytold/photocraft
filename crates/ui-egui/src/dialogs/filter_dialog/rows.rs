@@ -300,15 +300,19 @@ fn lut_choice(fields: &DialogFields) -> LutChoice {
     photocraft_engine::adjust_cmds::LOOKS.iter().find(|(known, _)| *known == look).map_or(LutChoice::None, |(known, _)| LutChoice::Builtin(known))
 }
 
-/// Whether the chosen LUT is a `.cube` file, which Data Order and Table Order apply to: a LUT folder file named
-/// `.cube`, or `.cube` text given with a `.cube` file name. Built-in looks are no files and have no orders, and a
-/// LUT Load 3D LUT… read has no known format ([`LUT_PICKED`]).
+/// Whether the chosen LUT is a `.cube` file, which Data Order and Table Order apply to: a LUT folder file or given
+/// text that the command reads as Cube. An explicit LUT Format decides that, as it does for the command; under Auto
+/// the file name does. Built-in looks are no files and have no orders, and a LUT Load 3D LUT… read has no known
+/// format ([`LUT_PICKED`]).
 pub(crate) fn lut_is_cube(fields: &DialogFields) -> bool {
+    let named_cube = |name: &str| match fields.text("lutFormat") {
+        Some("cube") => true,
+        Some("3dl" | "look") => false,
+        _ => std::path::Path::new(name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cube")),
+    };
     match lut_choice(fields) {
-        LutChoice::Loaded { .. } => {
-            fields.bool(LUT_PICKED) != Some(true) && fields.text("fileName").is_some_and(|name| name.to_ascii_lowercase().ends_with(".cube"))
-        }
-        LutChoice::Folder(path) => path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cube")),
+        LutChoice::Loaded { .. } => fields.bool(LUT_PICKED) != Some(true) && fields.text("fileName").is_some_and(named_cube),
+        LutChoice::Folder(path) => named_cube(&path.to_string_lossy()),
         _ => false,
     }
 }
