@@ -6,7 +6,7 @@ use photocraft_doc::Layer;
 fn source(raw: &str) -> TextSource<'_> {
     let mut scan = craft_xcf::records::text::gimp(raw.as_bytes(), 0, Default::default(), &mut Budget::default(), &|| true).unwrap();
     assert!(scan.stopped.is_none());
-    TextSource::Configuration(scan.records.remove(0))
+    TextSource::Configuration { record: scan.records.remove(0), keep_layer_name: true }
 }
 
 fn saved(format: PixelFormat) -> Layer {
@@ -297,7 +297,7 @@ fn source_vertical_columns_preserve_qualified_orientation_and_roman_rotation_wit
         for auto in ["no", "yes"] {
             let raw = format!("(text \"Vertical ABC אב\") (box-mode fixed) (box-width 40) (box-height 20) (base-direction {direction}) (base-dir-auto {auto})");
             let evidence = source(&raw);
-            let TextSource::Configuration(record) = &evidence else { panic!("typed source text") };
+            let TextSource::Configuration { record, .. } = &evidence else { panic!("typed source text") };
             // Auto paragraph direction must not erase the independent writing mode.
             assert_eq!(record.base_direction, Some(base));
             assert_eq!(record.automatic_direction, Some(auto == "yes"));
@@ -340,7 +340,7 @@ fn owned_legacy_latin1_fields_keep_editable_text_font_request_and_saved_pixels()
     let before = layer.surface().unwrap().pixel(5, 6);
     let mapped = map_layer(
         &mut layer,
-        &TextSource::Configuration(record),
+        &TextSource::Configuration { record, keep_layer_name: true },
         NativeOptions { resolution: (72., 72.), offset: (5, 6), colors: Some(&colors) },
         &mut NativeBudget::default(),
         &mut Budget::default(),

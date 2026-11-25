@@ -133,7 +133,9 @@ fn archived_legacy_numeric_color_text_stays_editable_with_its_saved_appearance()
         .find(|layer| matches!(&layer.content, LayerContent::Text(text) if text.text == "Legacy XCF"))
         .expect("portable producer text remains editable");
     let LayerContent::Text(text) = &layer.content else { panic!("editable legacy text") };
-    assert!(text.keep_layer_name && text.cache_uses_raster_blending);
+    // This historical file has no fixed-name flag.
+    assert!(!text.keep_layer_name);
+    assert!(text.cache_uses_raster_blending);
     assert!(text.cache.as_ref().is_some_and(|cache| cache.tiles().next().is_some()));
     assert_eq!(text.color.alpha, 1.);
     assert!(text.color.c.iter().take(3).all(|sample| sample.abs() < 0.001));

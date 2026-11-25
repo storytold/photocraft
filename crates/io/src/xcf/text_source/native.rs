@@ -145,7 +145,7 @@ pub(in crate::xcf) fn map_layer(
     ctl: &Interrupt<'_>,
 ) -> Result<Mapping> {
     ctl.check().map_err(|_| crate::IoError::Cancelled)?;
-    let record = match source {
+    let (record, keep_layer_name) = match source {
         TextSource::Missing => return Ok(Mapping::Missing),
         TextSource::ModifiedPixels { .. } => {
             return Ok(Mapping::Preserved { reason: "source text pixels were modified independently; saved pixels retained".into(), source_reason: None });
@@ -156,7 +156,7 @@ pub(in crate::xcf) fn map_layer(
                 source_reason: Some(*reason),
             });
         }
-        TextSource::Configuration(record) => record,
+        TextSource::Configuration { record, keep_layer_name } => (record, *keep_layer_name),
     };
     if !matches!(layer.content, LayerContent::Raster(_)) {
         return Ok(Mapping::Preserved { reason: "the source text has no authoritative raster layer".into(), source_reason: None });
@@ -165,7 +165,10 @@ pub(in crate::xcf) fn map_layer(
     native.limit_reason = None;
     let prepared = prepare(record, options, native, source_budget, ctl);
     let (text, notes) = match prepared {
-        Ok(prepared) => prepared,
+        Ok((mut text, notes)) => {
+            text.keep_layer_name = keep_layer_name;
+            (text, notes)
+        }
         Err(crate::IoError::Cancelled) => return Err(crate::IoError::Cancelled),
         Err(error) => {
             native.storage_left = storage;
@@ -252,7 +255,6 @@ fn prepare(
         ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         anchor_bounds(&mut layer, bounds)?;
     }
-    layer.keep_layer_name = true;
     layer.cache_uses_raster_blending = true;
     note(&mut notes, "saved source text appearance is preserved; native font matching and layout apply after edits");
     Ok((layer, notes))
