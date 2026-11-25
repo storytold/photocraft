@@ -160,6 +160,8 @@ pub struct Baked {
     /// Any other document state the step changed (imported data sets, converted text styles, a
     /// palette): the document after it, without layers, and the names of the fields it changed.
     pub state: Option<(Arc<Document>, Vec<String>)>,
+    /// The root stack bottom to top when the step reordered it (no layer records a root move).
+    pub root: Option<Vec<LayerId>>,
 }
 
 /// The document fields a baked step's `state` restores: all but those it keeps apart (`layers`,
@@ -236,7 +238,11 @@ impl Baked {
             .then(|| (after.mode, after.depth, after.icc_profile.clone()));
         let fields = changed_state(before, after);
         let state = (!fields.is_empty()).then(|| (Arc::new(Document { layers: Default::default(), design_timeline: None, ..after.clone() }), fields));
-        Baked { layers, placed, selection, color, state }
+        // Only the layers in the root both before and after: a created or removed one moves the
+        // others without reordering them.
+        let ids = |d: &Document, other: &Document| d.layers.iter().map(|l| l.id).filter(|id| other.layers.iter().any(|o| o.id == *id)).collect::<Vec<_>>();
+        let root = (ids(before, after) != ids(after, before)).then(|| after.layers.iter().map(|l| l.id).collect());
+        Baked { layers, placed, selection, color, state, root }
     }
 
     /// Put the stored layers (and selection and colour state) into `doc` in place of the step's.
@@ -252,11 +258,15 @@ impl Baked {
                 copy_state(doc, src, f);
             }
         }
+        // The document before any of this step's layers go in: a changed group keeps the children it
+        // has here (a replay may have changed them) unless the step itself changed them.
+        let current = doc.clone();
         for id in changed {
             match self.layers.iter().find(|l| l.id == *id) {
                 Some(l) => {
+                    let merged = self.merged(l, &current, created, changed);
                     if let Some(slot) = doc.layer_mut(*id) {
-                        *slot = l.clone();
+                        *slot = merged;
                     }
                 }
                 None => {
@@ -264,14 +274,58 @@ impl Baked {
                 }
             }
         }
-        for (id, below, above) in &self.placed {
-            let Some(l) = self.layers.iter().find(|l| l.id == *id).filter(|_| created.contains(id) && doc.layer(*id).is_none()) else { continue };
-            match (below.filter(|b| doc.layer(*b).is_some()), above.filter(|a| doc.layer(*a).is_some())) {
-                (Some(b), _) => doc.insert_above(Some(b), l.clone()),
-                (None, Some(a)) => doc.insert_below(Some(a), l.clone()),
-                (None, None) => doc.insert_above(None, l.clone()),
-            };
+        // Each created layer goes beside a recorded neighbour; one whose neighbours are themselves
+        // still to come waits for them, so the stack comes out as recorded whatever the id order.
+        let mut pending: Vec<&(LayerId, Option<LayerId>, Option<LayerId>)> =
+            self.placed.iter().filter(|(id, _, _)| created.contains(id) && doc.layer(*id).is_none()).collect();
+        let mut fallback = false;
+        while !pending.is_empty() {
+            let before = pending.len();
+            pending.retain(|(id, below, above)| {
+                let Some(l) = self.layers.iter().find(|l| l.id == *id) else { return false };
+                let l = self.merged(l, &current, created, changed);
+                match (below.filter(|b| doc.layer(*b).is_some()), above.filter(|a| doc.layer(*a).is_some())) {
+                    (Some(b), _) => doc.insert_above(Some(b), l),
+                    (None, Some(a)) => doc.insert_below(Some(a), l),
+                    // No neighbour left at all: the top of the stack.
+                    (None, None) if fallback => doc.insert_above(None, l),
+                    (None, None) => return true,
+                };
+                false
+            });
+            fallback = pending.len() == before;
         }
+        if let Some(order) = &self.root {
+            reorder_root(doc, order);
+        }
+    }
+
+    /// The stored layer `l` with its children as the replayed document has them: a child the step
+    /// created or changed comes from the stored result, any other from `current`.
+    fn merged(&self, l: &crate::Layer, current: &Document, created: &[LayerId], changed: &[LayerId]) -> crate::Layer {
+        let mut l = l.clone();
+        if let Some(children) = l.children_mut() {
+            for c in children.iter_mut() {
+                *c = if created.contains(&c.id) || changed.contains(&c.id) {
+                    self.merged(c, current, created, changed)
+                } else {
+                    current.layer(c.id).cloned().unwrap_or_else(|| self.merged(c, current, created, changed))
+                };
+            }
+        }
+        l
+    }
+}
+
+/// Put the root layers named in `order` back in that order, in the places they hold; any other
+/// root layer stays where it is.
+fn reorder_root(doc: &mut Document, order: &[LayerId]) {
+    let slots: Vec<usize> = doc.layers.iter().enumerate().filter(|(_, l)| order.contains(&l.id)).map(|(i, _)| i).collect();
+    let mut moved: Vec<crate::Layer> = slots.iter().map(|i| doc.layers[*i].clone()).collect();
+    moved.sort_by_key(|l| order.iter().position(|id| *id == l.id));
+    let layers = &mut *doc.layers;
+    for (slot, l) in slots.into_iter().zip(moved) {
+        layers[slot] = l;
     }
 }
 
@@ -360,6 +414,63 @@ mod tests {
         baked.apply(&mut doc, &[mid_id], &[hid]);
         assert_eq!(doc, after);
         assert_eq!(baked.selection, None, "the selection didn't change");
+    }
+
+    /// A step that changed only a group's own properties leaves its children as the replay has them.
+    #[test]
+    fn a_baked_group_change_keeps_the_replayed_children() {
+        let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let child = Layer::raster("c", PixelFormat::RGBA8);
+        let cid = child.id;
+        let group = Layer::group("g", vec![child]);
+        let gid = group.id;
+        before.layers = vec![group].into();
+        let mut after = before.clone();
+        after.layer_mut(gid).unwrap().opacity = 0.5;
+        let (created, changed) = layer_changes(&before, &after);
+        assert_eq!(changed, vec![gid]);
+        let baked = Baked::capture(&before, &after, &created, &changed);
+        // The replay reaches the step with the child changed by an earlier step.
+        let mut doc = before.clone();
+        doc.layer_mut(cid).unwrap().opacity = 0.25;
+        baked.apply(&mut doc, &created, &changed);
+        assert_eq!(doc.layer(gid).unwrap().opacity, 0.5, "the group's own change");
+        assert_eq!(doc.layer(cid).unwrap().opacity, 0.25, "the child as the replay has it");
+    }
+
+    /// Created layers go back below a surviving layer as recorded, whatever order their ids are in.
+    #[test]
+    fn baked_layers_created_below_a_surviving_one_stay_below_it() {
+        let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let (a, b, x) = (Layer::raster("A", PixelFormat::RGBA8), Layer::raster("B", PixelFormat::RGBA8), Layer::raster("X", PixelFormat::RGBA8));
+        let (aid, bid, xid) = (a.id, b.id, x.id);
+        before.layers = vec![x.clone()].into();
+        let mut after = before.clone();
+        after.layers = vec![a, b, x].into();
+        let (created, changed) = layer_changes(&before, &after);
+        assert!(aid < bid, "A has the lower id");
+        let baked = Baked::capture(&before, &after, &created, &changed);
+        let mut doc = before.clone();
+        baked.apply(&mut doc, &created, &changed);
+        assert_eq!(doc.layers.iter().map(|l| l.id).collect::<Vec<_>>(), [aid, bid, xid]);
+    }
+
+    /// A step that only reorders root layers replays the order.
+    #[test]
+    fn a_baked_root_reorder_replays() {
+        let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let (a, b) = (Layer::raster("A", PixelFormat::RGBA8), Layer::raster("B", PixelFormat::RGBA8));
+        let (aid, bid) = (a.id, b.id);
+        before.layers = vec![a.clone(), b.clone()].into();
+        let mut after = before.clone();
+        after.layers = vec![b, a].into();
+        let (created, changed) = layer_changes(&before, &after);
+        assert!(created.is_empty() && changed.is_empty(), "no layer records a root move");
+        let baked = Baked::capture(&before, &after, &created, &changed);
+        let mut doc = before.clone();
+        baked.apply(&mut doc, &created, &changed);
+        assert_eq!(doc.layers.iter().map(|l| l.id).collect::<Vec<_>>(), [bid, aid]);
+        assert!(Baked::capture(&before, &before, &[], &[]).root.is_none());
     }
 
     #[test]

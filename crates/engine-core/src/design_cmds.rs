@@ -40,6 +40,15 @@ fn start(s: &mut Session, _: &Value) -> Result<Value> {
 /// `design.stop`: drop the timeline and its steps, as one undoable edit.
 fn stop(s: &mut Session, _: &Value) -> Result<Value> {
     timeline_of(s).map_err(EngineError::Other)?;
+    // Only the timeline's pixels unreadable (its base or a baked result on a failed scratch disk):
+    // every edit refuses the document, so this one detaches the timeline without that check.
+    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    let without = Document { design_timeline: None, ..(*st.doc).clone() };
+    if st.doc.scratch_health().is_err() && without.scratch_health().is_ok() {
+        *st.doc_mut() = Arc::new(without);
+        st.bump_revision(false);
+        return Ok(json!({"stopped": true}));
+    }
     s.edit("Stop Design Timeline", |doc, _| {
         doc.design_timeline = None;
         Ok(())

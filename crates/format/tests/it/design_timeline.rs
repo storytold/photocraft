@@ -173,8 +173,14 @@ fn with_baked_canvas(size: Size) -> Document {
     let mut state = Document::new("s", size, ColorMode::Rgb, SampleType::U8);
     // A constructed state with a timeline of its own saves without it.
     state.design_timeline = Some(Arc::new(DesignTimeline::new(Arc::new(Document::new("n", size, ColorMode::Rgb, SampleType::U8)))));
-    tl.steps[0].baked =
-        Some(Arc::new(Baked { layers: Vec::new(), placed: Vec::new(), selection: None, color: None, state: Some((Arc::new(state), vec!["size".into()])) }));
+    tl.steps[0].baked = Some(Arc::new(Baked {
+        layers: Vec::new(),
+        placed: Vec::new(),
+        selection: None,
+        color: None,
+        state: Some((Arc::new(state), vec!["size".into()])),
+        root: None,
+    }));
     doc
 }
 

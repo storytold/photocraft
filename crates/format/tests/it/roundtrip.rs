@@ -503,6 +503,7 @@ fn deeply_nested_groups_in_a_design_timeline_roundtrip() {
             selection: None,
             color: None,
             state: None,
+            root: None,
         }));
         doc.design_timeline =
             Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline { base: std::sync::Arc::new(base), steps: vec![step], marker: None }));
@@ -528,7 +529,14 @@ fn nesting_beyond_the_load_limit_is_refused_at_save() {
         let mut doc = shallow.clone();
         let base = if in_base { deep.clone() } else { shallow.clone() };
         step.baked = (!in_base).then(|| {
-            std::sync::Arc::new(photocraft_doc::design::Baked { layers: deep.layers.to_vec(), placed: Vec::new(), selection: None, color: None, state: None })
+            std::sync::Arc::new(photocraft_doc::design::Baked {
+                layers: deep.layers.to_vec(),
+                placed: Vec::new(),
+                selection: None,
+                color: None,
+                state: None,
+                root: None,
+            })
         });
         doc.design_timeline =
             Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline { base: std::sync::Arc::new(base), steps: vec![step.clone()], marker: None }));

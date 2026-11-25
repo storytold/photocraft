@@ -144,6 +144,9 @@ pub struct BakedM {
     /// Other document state the step changed: the document after it (no layers) and the fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<(Box<DocM>, Vec<String>)>,
+    /// The root stack (bottom to top) when the step reordered it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

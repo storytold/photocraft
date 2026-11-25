@@ -344,6 +344,7 @@ fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn 
                     Some((doc, fields)) => Some((Box::new(doc_m(&Document { design_timeline: None, ..(**doc).clone() }, sink)?), fields.clone())),
                     None => None,
                 },
+                root: b.root.as_ref().map(|ids| ids.iter().map(|id| id.0).collect()),
             }),
             None => None,
         };
@@ -739,6 +740,7 @@ impl Loader<'_> {
                         Some((d, fields)) => Some((Arc::new(self.document_only(d)?), fields.clone())),
                         None => None,
                     },
+                    root: b.root.as_ref().map(|ids| ids.iter().map(|id| LayerId(*id)).collect()),
                 })),
                 None => None,
             };

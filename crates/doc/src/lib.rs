@@ -1308,18 +1308,22 @@ impl Document {
         if !photocraft_raster::spill::any_failed() {
             return Ok(());
         }
-        let mut health = Ok(());
-        let mut visit = |surface: &Surface| {
-            if health.is_ok() {
-                health = surface.scratch_health();
-            }
-        };
-        self.for_each_surface(&mut visit);
-        // A save writes the design timeline's base and baked results too.
-        if let Some(t) = &self.design_timeline {
-            t.for_each_surface(&mut visit);
+        fn check(f: impl FnOnce(&mut dyn FnMut(&Surface))) -> Result<(), String> {
+            let mut health = Ok(());
+            f(&mut |surface: &Surface| {
+                if health.is_ok() {
+                    health = surface.scratch_health();
+                }
+            });
+            health
         }
-        health
+        check(|visit| self.for_each_surface(visit))?;
+        // A save writes the design timeline's base and baked results too. Only the timeline's
+        // pixels unreadable: stopping it keeps the image editable.
+        match &self.design_timeline {
+            Some(t) => check(|visit| t.for_each_surface(visit)).map_err(|e| format!("{e} (in the design timeline; stop it to keep editing the image)")),
+            None => Ok(()),
+        }
     }
 
     /// Depth-first walk yielding `(path, depth, layer)` bottom-to-top. Each call counts in
@@ -1910,7 +1914,7 @@ mod id_tests {
         };
         let mut base = new_doc();
         base.layers.push(layer_in(7));
-        let baked = Baked { layers: vec![layer_in(12)], placed: vec![], selection: None, color: None, state: None };
+        let baked = Baked { layers: vec![layer_in(12)], placed: vec![], selection: None, color: None, state: None, root: None };
         let step = DesignStep {
             step: 3,
             command: "x".into(),
