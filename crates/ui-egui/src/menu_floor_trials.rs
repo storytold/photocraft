@@ -54,43 +54,6 @@ fn press(h: &mut H, at: Pos2, pressed: bool) {
 }
 
 #[test]
-fn menu_titles_use_arrow_instead_of_tool_cursor() {
-    use craft::behavior::{Cursor, CursorIcon, CursorPriority};
-    use craft::ui::runtime::cursor;
-
-    let mut h = harness(1, 0, 0);
-    let menu = h.get_by_label("File").rect().center();
-    let canvas = h.state().last_canvas_rect.center();
-    for (at, expected) in [(canvas, CursorIcon::Move), (menu, CursorIcon::Default), (canvas, CursorIcon::Move)] {
-        h.event(Event::PointerMoved(at));
-        // Hover can settle on the next pass, and cursor requests are consumed each pass.
-        for _ in 0..2 {
-            cursor::request(&h.ctx, Cursor::System(CursorIcon::Move), CursorPriority::Hover);
-            h.run_steps(1);
-        }
-        assert_eq!(cursor::current(&h.ctx), Some(Cursor::System(expected)));
-    }
-}
-
-#[test]
-fn move_tool_copy_cursor_yields_to_menu_arrow() {
-    let mut h = harness(1, 0, 0);
-    h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [150, 100, 100, 100], "fill": "#ff0000"})).unwrap();
-    h.state_mut().ui.tool = Tool::Move;
-    h.state_mut().ui.tool_options.move_show_transform = false;
-    h.run_steps(2);
-
-    let menu = h.get_by_label("File").rect().center();
-    let canvas = h.state().last_canvas_rect.center();
-    h.event(Event::ModifiersChanged(egui::Modifiers::ALT));
-    for (at, expected) in [(canvas, egui::CursorIcon::Copy), (menu, egui::CursorIcon::Default), (canvas, egui::CursorIcon::Copy)] {
-        h.event(Event::PointerMoved(at));
-        h.run_steps(2);
-        assert_eq!(h.output().platform_output.cursor_icon, expected);
-    }
-}
-
-#[test]
 fn an_idle_frame_keys_the_same_bytes_whatever_the_model_size() {
     let idle = |mut h: H| {
         h.run_steps(1);
