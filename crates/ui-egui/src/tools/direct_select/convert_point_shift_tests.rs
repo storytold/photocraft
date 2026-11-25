@@ -7,7 +7,9 @@
 //! then on, released during it the drag ends as today. Without ⇧, with other tools, and for
 //! the vertical band whose component choice was not measured, the behaviour stays today's. The
 //! lock is a rule of the pointer gesture only: an arrow-key nudge of a focused handle arrives
-//! as a `Set` with nothing dragged, and ⇧ there stays the larger step (`NUDGE_FAR`).
+//! as a `Set` with nothing dragged, and ⇧ there stays the larger step (`NUDGE_FAR`). The
+//! framework turns every ⇧ handle drag itself (a diagonal keeping the SHORTER offset), so the
+//! Convert Point handle lock reads the pointer's own move instead of the turned handle.
 
 use egui::Modifiers;
 use photocraft_geom::Point;
@@ -125,6 +127,17 @@ fn shift_drag_of_the_tables_second_handle_row_lands_on_the_diagonal_step_keeping
 }
 
 #[test]
+fn shift_drag_grabbing_a_handle_off_its_centre_moves_it_by_the_pointers_own_move() {
+    // The second row again, the handle grabbed 2 px right and 1 px below its end: the lock works
+    // on the handle as the pointer moved it, (500,200) + (+160,−75), not on the release point.
+    let mut app = app(Tool::ConvertPoint);
+    testing::click(&mut app, [600.0, 100.0], Modifiers::COMMAND);
+    drag(&mut app, [502.0, 201.0], [662.0, 126.0], Modifiers::SHIFT);
+    let k = knot(&app, 2, 1);
+    assert!(close(k.in_ctrl, p(660.0, 160.0)), "the handle moves by the pointer's move, then locks: {k:?}");
+}
+
+#[test]
 fn shift_going_down_mid_drag_constrains_from_then_on() {
     let mut app = app(Tool::ConvertPoint);
     testing::press(&mut app, [300.0, 300.0], Modifiers::NONE);
@@ -225,14 +238,15 @@ fn a_shift_arrow_nudge_of_a_convert_point_handle_keeps_todays_axis_move() {
 
 #[test]
 fn direct_selection_shift_handle_drag_keeps_todays_turn() {
-    // A Direct Selection handle drag with ⇧: not measured for #12739, stays today's free turn
-    // (the dragged end follows the pointer; the anchor's retracted other handle has no length to
-    // turn, so it stays at the anchor and the point stays smooth).
+    // A Direct Selection handle drag with ⇧ is not the Convert Point lock of #12739: it keeps the
+    // framework's own turn (craft-libs 45c8a4a3f, the nearest 45° about the anchor, a diagonal
+    // keeping the shorter offset: (−78,+140) gives (−78,+78)). The anchor's retracted other
+    // handle has no length to turn, so it stays at the anchor and the point stays smooth.
     let mut app = app(Tool::DirectSelection);
     testing::click(&mut app, [700.0, 450.0], Modifiers::NONE);
     drag(&mut app, [600.0, 550.0], [622.0, 590.0], Modifiers::SHIFT);
     let k = knot(&app, 1, 1);
-    assert!(close(k.in_ctrl, p(622.0, 590.0)), "the dragged handle follows the pointer: {k:?}");
+    assert!(close(k.in_ctrl, p(622.0, 528.0)), "the dragged handle takes the framework's turn: {k:?}");
     assert!(close(k.out_ctrl, p(700.0, 450.0)), "the retracted other handle stays put: {k:?}");
     assert!(k.smooth, "and the point stays smooth: {k:?}");
 }

@@ -6,7 +6,8 @@
 //! A pass applies only its own output, so a second pass of a frame applies nothing twice.
 
 use craft::behavior::EditEvent;
-use craft::behavior::kurbo::Point;
+use craft::behavior::kurbo::{Point, Vec2};
+use craft::behavior::{CanvasView, PointerButton};
 use craft::draw::ui::pen::{BezierHit, BezierOutput, EditPath, HandleSide, KnotRef, PathEdit, PathSelection};
 use craft::keymap::Mods;
 use egui::Pos2;
@@ -16,11 +17,30 @@ use super::{DirectSelection, Owner, PathRef, keep_after_command};
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
+/// The pointer of one overlay pass in document pixels: where a primary press of the pass went
+/// down on this canvas, and where the pass's release went up (the latest position without one).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PassPointer {
+    pub(crate) press: Option<Point>,
+    pub(crate) release: Option<Point>,
+}
+
+impl PassPointer {
+    /// The pointer of `frame` on the canvas of `view`; a press elsewhere is none of this canvas's.
+    pub(crate) fn of(frame: &craft::ui::runtime::pointer::PointerFrame, view: &CanvasView) -> Self {
+        let press = frame.press.filter(|p| p.button == PointerButton::Primary && view.rect.contains(p.origin)).map(|p| view.to_doc(p.origin));
+        Self { press, release: frame.pick_pos.map(|p| view.to_doc(p)) }
+    }
+}
+
 /// Applies the reports of one overlay pass. `refs` are the refs of the `EditPath`s the pass showed
 /// (`edit_paths`); a report names its path by key, and only a key of `refs` is applied.
-pub(crate) fn apply(app: &mut PhotocraftApp, output: &BezierOutput, refs: &[PathRef], tool: Tool, mods: Mods) {
+pub(crate) fn apply(app: &mut PhotocraftApp, output: &BezierOutput, refs: &[PathRef], tool: Tool, mods: Mods, pointer: PassPointer) {
     if let Some(selection) = &output.select {
         select(app, selection);
+    }
+    if pointer.press.is_some() {
+        app.ui.direct_selection.press_at = pointer.press;
     }
     let mut commit = false;
     let mut dragged = false;
@@ -45,7 +65,8 @@ pub(crate) fn apply(app: &mut PhotocraftApp, output: &BezierOutput, refs: &[Path
         }
     }
     if commit && let Some(change) = &output.change {
-        change_path(app, change, refs, tool, named_mods, dragged, mods.shift);
+        let pointer_move = app.ui.direct_selection.press_at.zip(pointer.release).map(|(press, release)| release - press);
+        change_path(app, change, refs, tool, named_mods, dragged, Release { shift: mods.shift, pointer_move });
     }
     if let Some(delete) = &output.delete
         && let Some(r) = known(delete.path, refs)
@@ -160,6 +181,7 @@ fn select(app: &mut PhotocraftApp, selection: &PathSelection) {
     let editing = ds.editing.take();
     let editing_mods = ds.editing_mods;
     let editing_overlay = ds.editing_overlay;
+    let press_at = ds.press_at;
     *ds = DirectSelection {
         target: selection.path.and_then(PathRef::from_key),
         anchors: selection.anchors.iter().map(|k| [k.subpath, k.knot]).collect(),
@@ -169,6 +191,7 @@ fn select(app: &mut PhotocraftApp, selection: &PathSelection) {
         editing,
         editing_mods,
         editing_overlay,
+        press_at,
         ..Default::default()
     };
 }
@@ -189,26 +212,53 @@ fn moved(x: f64, y: f64) -> bool {
     x != 0.0 || y != 0.0
 }
 
-/// The ⇧ Convert Point lock (#12739): the handle end or out-point `p` of `knot` on `r` moved
-/// onto a 45° step about the anchor; `step` is the rule of the gesture measured — a handle-END
-/// drag takes the nearest band ([`crate::stroke_constraint::handle_step_nearest_band`], whose
-/// (+60,+25) gives (+60,+60)), a drag from the ANCHOR the step keeping the x component
-/// ([`crate::stroke_constraint::handle_step_keep_x`], whose (+60,+25) gives (+60,0)). `p` stays
-/// put when the helper declines the lock (the unmeasured vertical band, a zero or non-finite
-/// offset) and when the path, subpath or anchor is gone.
-fn shift_lock(app: &PhotocraftApp, r: PathRef, knot: KnotRef, p: Point, step: fn(f64, f64) -> Option<[f64; 2]>) -> Point {
-    let Some(anchor) = super::path_of(app, &r).and_then(|path| path.subpaths.get(knot.subpath)?.knots.get(knot.knot).map(|k| k.anchor)) else { return p };
-    match step(p.x - anchor.x, p.y - anchor.y) {
-        Some([dx, dy]) => Point::new(anchor.x + dx, anchor.y + dy),
-        None => p,
-    }
+/// The knot `knot` of `r` as the document has it: before the edit being committed.
+fn doc_knot(app: &PhotocraftApp, r: PathRef, knot: KnotRef) -> Option<photocraft_doc::Knot> {
+    super::path_of(app, &r).and_then(|path| path.subpaths.get(knot.subpath)?.knots.get(knot.knot).copied())
+}
+
+/// The ⇧ Convert Point lock (#12739): the point `p` of `knot` on `r` moved onto a 45° step about
+/// the anchor; `step` is the rule of the gesture measured — a handle-END drag takes the nearest
+/// band ([`crate::stroke_constraint::handle_step_nearest_band`], whose (+60,+25) gives
+/// (+60,+60)), a drag from the ANCHOR the step keeping the x component
+/// ([`crate::stroke_constraint::handle_step_keep_x`], whose (+60,+25) gives (+60,0)). `None` when
+/// the helper declines the lock (the unmeasured vertical band, a zero or non-finite offset) and
+/// when the path, subpath or anchor is gone.
+fn shift_lock(app: &PhotocraftApp, r: PathRef, knot: KnotRef, p: Point, step: fn(f64, f64) -> Option<[f64; 2]>) -> Option<Point> {
+    let anchor = doc_knot(app, r, knot)?.anchor;
+    let [dx, dy] = step(p.x - anchor.x, p.y - anchor.y)?;
+    Some(Point::new(anchor.x + dx, anchor.y + dy))
+}
+
+/// Where the Convert Point tool's ⇧ handle-end drag lands (#12739). The overlay has already
+/// turned `turned` to its own nearest 45° (craft-libs: on a diagonal the SHORTER offset on both
+/// axes), which loses the pointer's x component the measured rows keep, so the lock starts again
+/// from the handle as the pointer itself moved it: the handle's start plus `pointer_move`. Without
+/// that move, or where the measured rule declines, the overlay's turn stands.
+fn convert_handle_lock(app: &PhotocraftApp, r: PathRef, knot: KnotRef, side: HandleSide, turned: Point, pointer_move: Option<Vec2>) -> Point {
+    let raw = pointer_move.and_then(|by| {
+        let k = doc_knot(app, r, knot)?;
+        let from = if matches!(side, HandleSide::In) { k.in_ctrl } else { k.out_ctrl };
+        Some(Point::new(from.x + by.x, from.y + by.y))
+    });
+    raw.and_then(|raw| shift_lock(app, r, knot, raw, crate::stroke_constraint::handle_step_nearest_band)).unwrap_or(turned)
+}
+
+/// How the pass that ends an edit left the pointer, for the Convert Point ⇧ lock (#12739).
+#[derive(Clone, Copy)]
+struct Release {
+    /// ⇧ held at the gesture's end.
+    shift: bool,
+    /// The pointer's own move of the gesture, press to release, in document pixels, when both
+    /// ends are known.
+    pointer_move: Option<Vec2>,
 }
 
 /// Runs the command a finished edit stands for. `dragged` is whether a pointer gesture made it:
-/// an arrow-key nudge (`Set`) keeps the command's own step name, and no ⇧ handle lock. `shift` is
-/// ⇧ held at the gesture's end: the Convert Point tool's drags take its handle lock (#12739),
-/// every other edit is committed as it came.
-fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], tool: Tool, mods: Mods, dragged: bool, shift: bool) {
+/// an arrow-key nudge (`Set`) keeps the command's own step name, and no ⇧ handle lock. With ⇧
+/// held at the gesture's end (`release`) the Convert Point tool's drags take its handle lock
+/// (#12739); every other edit is committed as it came.
+fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], tool: Tool, mods: Mods, dragged: bool, release: Release) {
     let Some(r) = known(change.path(), refs) else { return };
     if r == PathRef::Pen {
         edit_draft(app, |path| change.apply(path));
@@ -222,7 +272,7 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
     // The lock is a rule of the pointer gesture, so it needs `dragged`: an arrow-key nudge of a
     // handle reaches here as a `Set` with ⇧ held, and ⇧ there only picks the larger step
     // (craft-libs `NUDGE_FAR`). Locking that would cancel the nudge and still record a step.
-    let lock = convert_tool && shift && dragged;
+    let lock = convert_tool && release.shift && dragged;
     match change {
         PathEdit::MoveAnchors { anchors, by, .. } if moved(by.x, by.y) => {
             let mut params = json!({"anchors": ids(anchors), "move": [by.x, by.y]});
@@ -245,7 +295,7 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
             command(app, r, "path.moveAnchors", json!({"anchors": ids(anchors), "move": [by.x, by.y], "curvature": true}));
         }
         PathEdit::MoveHandle { knot, side, to, alone, .. } => {
-            let to = if lock { shift_lock(app, r, *knot, *to, crate::stroke_constraint::handle_step_nearest_band) } else { *to };
+            let to = if lock { convert_handle_lock(app, r, *knot, *side, *to, release.pointer_move) } else { *to };
             let mut params = json!({"subpath": knot.subpath, "knot": knot.knot, "handle": side_name(*side), "to": [to.x, to.y], "independent": alone});
             if convert_tool && *alone {
                 params["stepName"] = json!("Corner Drag");
@@ -258,7 +308,7 @@ fn change_path(app: &mut PhotocraftApp, change: &PathEdit, refs: &[PathRef], too
         PathEdit::Convert { knot, out, .. } => {
             let mut params = json!({"subpath": knot.subpath, "knot": knot.knot});
             if let Some(out) = out {
-                let out = if lock { shift_lock(app, r, *knot, *out, crate::stroke_constraint::handle_step_keep_x) } else { *out };
+                let out = if lock { shift_lock(app, r, *knot, *out, crate::stroke_constraint::handle_step_keep_x).unwrap_or(*out) } else { *out };
                 params["out"] = json!([out.x, out.y]);
             }
             if convert_tool {
