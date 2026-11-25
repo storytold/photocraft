@@ -898,14 +898,14 @@ fn stale_pen_commits_to_its_owner_across_document_changes() {
                     .map(|d| d.doc.work_path.as_ref().map_or(0, |p| p.subpaths.iter().map(|s| s.knots.len()).sum::<usize>()))
                     .collect()
             };
-            // #12890: a press in another document starts a Work Path there at once, so that document holds the one
-            // anchor the new draft has; nothing else goes there.
-            let allowed = usize::from(action == "pen");
-            assert!(
-                others(&app).iter().all(|n| *n <= allowed),
-                "{tool:?} {action}: other documents hold no more than a new press's first anchor: {:?}",
-                others(&app)
-            );
+            // #12890: a press in another document writes its Work Path there with its first anchor, so that document
+            // holds exactly that one anchor; every other document stays empty.
+            let counts = others(&app);
+            if action == "pen" {
+                assert_eq!(counts.as_slice(), &[1], "{tool:?} {action}: the receiving document has the press's one-anchor Work Path");
+            } else {
+                assert!(counts.iter().all(|n| *n == 0), "{tool:?} {action}: no other document takes the draft: {counts:?}");
+            }
             if action != "closeOther" {
                 assert_ne!(app.session.active().unwrap().doc.id, owner, "the active document is restored");
             }
