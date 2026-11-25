@@ -358,6 +358,7 @@ pub(super) fn selected_shape(session: &photocraft_engine::Session) -> Option<pho
 // ---------------------------------------------------------------------------------------------
 // Properties (shape layers)
 
+#[cfg(test)]
 pub(super) fn solid_paint(c: [f32; 4]) -> photocraft_doc::Fill {
     photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(c[0], c[1], c[2], c[3]))
 }

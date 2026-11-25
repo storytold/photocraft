@@ -453,6 +453,10 @@ pub(crate) fn pen_paint_swatches(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
 pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: PaintChange) -> Result<(), String> {
+    set_tool_paint_with_inks(app, stroke, change, None)
+}
+
+pub(crate) fn set_tool_paint_with_inks(app: &mut PhotocraftApp, stroke: bool, change: PaintChange, inks: Option<[f32; 4]>) -> Result<(), String> {
     // A colour takes the place of a gradient; No Color keeps it for when the paint comes back.
     let o = &mut app.ui.tool_options;
     let gradient = if stroke { &mut o.shape_stroke_gradient } else { &mut o.shape_fill_gradient };
@@ -462,7 +466,12 @@ pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: Pain
         PaintChange::None => {}
     }
     if let PaintChange::Color(color) = change {
-        app.run("tools.setColors", if stroke { json!({"background": color}) } else { json!({"foreground": color}) })?;
+        let role = if stroke { "background" } else { "foreground" };
+        let mut params = json!({role: color});
+        if let Some(inks) = inks {
+            params[format!("{role}Cmyk")] = json!(inks);
+        }
+        app.run("tools.setColors", params)?;
     }
     if stroke {
         app.ui.tool_options.stroke_width = if change == PaintChange::None { 0.0 } else { enabled_stroke_width(app.ui.tool_options.stroke_width) };
