@@ -31,18 +31,18 @@ fn place_embedded_asks_for_a_picker_titled_place_embedded() {
     let (mut app, files) = app();
     menus::invoke(&mut app, &egui::Context::default(), "file.placeEmbedded", json!({})).unwrap();
     let request = last_request(&files);
-    assert_eq!(request.kind, PickKind::Open);
+    assert_eq!(request.kind, PickKind::OpenMany);
     assert_eq!(request.title.as_deref(), Some("Place Embedded"));
 }
 
 #[test]
 fn place_embedded_keeps_the_pickers_other_settings() {
-    // Only the title is new: still one file, with no extension filter, from the last-used folder.
+    // Only the title is new: several files, with no extension filter, from the last-used folder.
     let (mut app, files) = app();
     menus::invoke(&mut app, &egui::Context::default(), "file.placeEmbedded", json!({})).unwrap();
     let titled = last_request(&files);
     cancel(&mut app, &files);
-    app.pick_file_bytes(|_, _, _| Ok(Value::Null)).unwrap();
+    app.pick_files_bytes(None, |_, _| Ok(Value::Null)).unwrap();
     let plain = last_request(&files);
     assert_eq!(PickRequest { title: None, ..titled }, plain);
 }
@@ -69,5 +69,9 @@ fn the_other_open_pickers_keep_the_system_title() {
     cancel(&mut app, &files);
 
     app.pick_file_bytes(|_, _, _| Ok(Value::Null)).unwrap();
-    assert_eq!(last_request(&files).title, None, "the plain picker");
+    assert_eq!(last_request(&files).title, None, "the plain single-file picker");
+    cancel(&mut app, &files);
+
+    app.pick_files_bytes(None, |_, _| Ok(Value::Null)).unwrap();
+    assert_eq!(last_request(&files).title, None, "the untitled multi-file picker");
 }

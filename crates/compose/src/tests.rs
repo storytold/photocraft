@@ -2936,15 +2936,16 @@ fn blend_if_gray_follows_photoshops_weights_and_rounding() {
 
 #[test]
 fn blend_if_split_point_fades_like_opacity() {
-    // A split black point (Alt-drag) at 50/150 shows a value-100 layer at half strength, which
-    // is exactly the layer at 50% opacity, also over a semi-transparent backdrop.
+    // A split black point (Alt-drag) at 50/150 shows a value-100 layer at (100 − 50 + 1) /
+    // (150 − 50 + 1) in an 8-bit document (#14855), which is exactly the layer at that opacity,
+    // also over a semi-transparent backdrop.
     let v = 100.0 / 255.0;
     let mut d = doc_white(4, 4);
     d.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.2, 1.0, 0.5]);
     let mut l = solid_layer("v", Rect::new(0, 0, 4, 4), [v, v, v, 1.0]);
     l.blend = BlendMode::Multiply;
     let mut half = l.clone();
-    half.opacity = 0.5;
+    half.opacity = 51.0 / 101.0;
     l.blend_if.set(0, [range([50, 150], [255, 255]), FULL]);
     let mut d2 = d.clone();
     d.layers.push(l);
@@ -4920,4 +4921,39 @@ fn softer_outer_glow_fades_out_before_its_size() {
             assert!((v - want).abs() <= tolerance, "range {range}, {dist} px: {v} vs the reference application's {want} ({got:?})");
         }
     }
+}
+
+/// Align Edges on a shape with a layer effect (the compositor's fill/stroke split and the effect
+/// cache): toggling the flag alone re-renders, and the stroke and the fill move together. A 1 px
+/// stroke on 10..30 moves to columns 10 and 30 (reference measurement), the fill with it.
+#[test]
+fn align_edges_toggle_rerenders_a_shape_under_a_layer_effect() {
+    use photocraft_doc::{ShapeLayer, ShapeStroke};
+    let shape = |aligned| ShapeLayer {
+        path: photocraft_vector::shapes::rect(10.0, 10.0, 20.0, 20.0),
+        fill: Some(Fill::Solid(Color::rgb(1.0, 0.0, 0.0))),
+        stroke: Some(ShapeStroke { width: 1.0, paint: Fill::Solid(Color::BLACK), ..Default::default() }),
+        use_aligned_rendering: aligned,
+        ..Default::default()
+    };
+    let doc = |aligned| {
+        let mut d = doc_white(48, 48);
+        let mut l = Layer::new("shape", LayerContent::Shape(shape(aligned)));
+        l.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(photocraft_color::BlendMode::Normal, 0.5), color: Color::rgb(0.0, 0.0, 1.0) });
+        d.layers.push(l);
+        d
+    };
+    let mut d = doc(false);
+    let off = flatten(&d).px.clone();
+    let LayerContent::Shape(sh) = &mut d.layers.last_mut().unwrap().content else { panic!("shape") };
+    sh.use_aligned_rendering = true;
+    let on = flatten(&d).px.clone();
+    assert_ne!(on, off, "the flag alone must not hit a stale cache");
+    assert_eq!(on, flatten(&doc(true)).px, "same as a fresh aligned layer");
+    // Row 20: column 9 white, 10 the stroke's colour under the overlay, 11 the fill's.
+    let at = |px: &[[f32; 4]], x: usize| px[20 * 48 + x];
+    assert!(close4(at(&on, 9), [1.0; 4]));
+    assert!(close4(at(&on, 10), at(&on, 30)), "both stroke columns alike");
+    assert!(!close4(at(&on, 10), at(&on, 11)), "stroke, then fill");
+    assert!(!close4(at(&off, 9), [1.0; 4]), "unaligned the stroke covers half of column 9");
 }

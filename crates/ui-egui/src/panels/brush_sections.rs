@@ -5,7 +5,7 @@
 
 use std::ops::RangeInclusive;
 
-use craft::behavior::EditEvents;
+use craft::behavior::{EditEvents, Selection};
 use craft::draw::ui::brush_presets::{BrushCardPart, BrushCardParts};
 use craft::draw::ui::brush_settings::{BrushSizeField, DynamicControl, DynamicControlRow, TipAngle, TipEllipse};
 use craft::ui::choice::Checkbox;
@@ -15,12 +15,12 @@ use craft::ui::form::{Field, SliderField, SliderFieldLayout};
 use craft::ui::layout_components::{Row, Stack};
 use craft::ui::patterns::presets::{PresetBrowser, PresetEvent, PresetState, PresetView};
 use craft::ui::pickers::Select;
-use craft::ui::runtime::env::{Env, UnitKind};
+use craft::ui::runtime::env::UnitKind;
 use egui::Ui;
 use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{self, BrushPreset, Control, Dynamic, MAX_BRUSH_SIZE, MaskMode, Pattern, PatternStyle, TipShape};
 
-use super::brush_panel::brushes::{BrushKey, preset_rows};
+use super::brush_panel::brushes::{BrushKey, brush_source};
 use super::preset_browser::pattern_picker;
 use crate::PhotocraftApp;
 use crate::history_keys;
@@ -194,15 +194,15 @@ impl Pane<'_> {
     /// name.
     fn tip_grid(&mut self, ui: &mut Ui, id: &'static str, selected: Option<BrushKey>) -> Option<String> {
         let parts = BrushCardParts::ALL.set(BrushCardPart::Name, false).set(BrushCardPart::Stroke, false);
-        let rows = preset_rows(self.app, &Env::of(ui), parts);
+        let source = brush_source(&self.app.session.tools.presets, parts);
         let mut state = PresetState::<BrushKey>::new();
-        let mut browser = PresetBrowser::new(tl!("Brush tips"), Bind::bound(&mut state), &rows)
+        let mut browser = PresetBrowser::new(tl!("Brush tips"), Bind::bound(&mut state), &source)
             .browser_id(egui::Id::unique(id))
             .view_lock(PresetView::Grid)
             .toolbar(false)
             .room_height(GRID_HEIGHT);
         if let Some(key) = selected {
-            browser = browser.selected(key);
+            browser = browser.selection(Bind::given(Selection::single(key)));
         }
         browser.show(ui).events.into_iter().find_map(|event| match event {
             PresetEvent::Select { key: BrushKey::Preset(name), .. } => Some(name),
@@ -320,7 +320,7 @@ impl Pane<'_> {
         if let Some(name) = self.tip_grid(ui, "brush-tip-grid", selected)
             && let Some((tip, size, hardness, angle, roundness, spacing)) = self.preset_tip(&name)
         {
-            (b.tip, b.size, b.hardness, b.angle, b.roundness, b.spacing) = (tip, size, hardness, angle, roundness, spacing);
+            (b.tip, b.size, b.hardness, b.angle, b.roundness, b.spacing) = (tip.into(), size, hardness, angle, roundness, spacing);
             self.out.picked = Some(name);
             return;
         }
@@ -338,7 +338,7 @@ impl Pane<'_> {
             b.angle = tip.degrees as f32;
             b.roundness = tip.roundness as f32;
         }
-        let round = matches!(b.tip, TipShape::Round);
+        let round = matches!(*b.tip, TipShape::Round);
         self.field(ui, tl!("Hardness"), &mut b.hardness, d.hardness, AMOUNT, round);
         self.spacing(ui, b, d.spacing);
     }

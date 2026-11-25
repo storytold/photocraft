@@ -100,7 +100,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     }
     // Last frame's task bar rect, unless the bar can't show now (hidden by `ui.set` before the
     // next draw).
-    let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app));
+    let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app)).or_else(|| crate::transform_task_bar::shown_rect(app, app.ctx()));
     // The one open canvas context menu, told apart by its kind.
     let menu = app.ui.canvas_tool_menu.as_ref();
     let kind = menu.map(|menu| &menu.kind);
@@ -167,6 +167,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             "rect": task_bar_rect,
             "pinned": app.ui.panels.task_bar.pinned,
             "at": app.ui.panels.task_bar.at,
+            "offset": app.ui.panels.task_bar.offset,
         }),
         "dockTabs": legacy.get("dockTabs").cloned().unwrap_or(Value::Null),
         "docking": app.ui.docking,

@@ -481,7 +481,7 @@ mod tests {
             for y in 0..5 {
                 surface.fill_rect(Rect::new(0, y, 3, y + 1), &[y as f32 / 4., 0.25, 0.75, 0.5]);
             }
-            let p = Pattern { id: "bands".into(), name: "bands".into(), width: 3, height: 5, surface };
+            let p = Pattern { id: "bands".into(), name: "bands".into(), width: 3, height: 5, source_mode: None, surface };
             let budget = 3 * 2 * 16;
             let mut oversized = Vec::new();
             assert!(pattern_rgba_rows_in(&p, ColorMode::Rgb, 0, p.height, &mut oversized, budget).is_none());
@@ -513,7 +513,8 @@ mod tests {
     #[test]
     /// Reject dense paint expansion of a retained oversized pattern without materializing sparse source tiles.
     fn stored_900_megapixel_pattern_is_not_expanded_for_painting() {
-        let pattern = Pattern { id: "large".into(), name: "large".into(), width: 30_000, height: 30_000, surface: Surface::new(PixelFormat::RGBA8) };
+        let pattern =
+            Pattern { id: "large".into(), name: "large".into(), width: 30_000, height: 30_000, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         assert!(pattern_rgba(&pattern, ColorMode::Rgb).is_empty());
         let mut rows = Vec::new();
         assert!(pattern_rgba_rows(&pattern, ColorMode::Rgb, 0, pattern.height, &mut rows).is_none());
@@ -550,7 +551,7 @@ mod tests {
     #[test]
     fn patterns_too_large_to_paint_are_skipped_without_allocating() {
         // Only the size is declared (no tiles): a hostile file can claim any size.
-        let p = Pattern { id: "big".into(), name: "Big".into(), width: 9000, height: 8000, surface: Surface::new(PixelFormat::RGBA8) };
+        let p = Pattern { id: "big".into(), name: "Big".into(), width: 9000, height: 8000, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         assert!(!p.is_paintable());
         assert!(Tile::new(&p).is_none());
         assert!(pattern_rgba(&p, ColorMode::Rgb).is_empty());
@@ -568,6 +569,7 @@ mod tests {
             name: name.into(),
             width,
             height,
+            source_mode: None,
             surface: Surface::new(format),
         };
         let float = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
@@ -595,7 +597,14 @@ mod tests {
     /// does not fit is converted when asked for (correct, just not kept).
     #[test]
     fn two_large_patterns_are_each_converted_once_per_call() {
-        let sparse = |name: &str| Pattern { id: name.into(), name: name.into(), width: 5000, height: 5000, surface: Surface::new(PixelFormat::RGBA8) };
+        let sparse = |name: &str| Pattern {
+            id: name.into(),
+            name: name.into(),
+            width: 5000,
+            height: 5000,
+            source_mode: None,
+            surface: Surface::new(PixelFormat::RGBA8),
+        };
         let list = [sparse("a"), sparse("b"), sparse("c")];
         assert!(list.iter().all(|p| p.working_bytes() == 100_000_000));
         let prepared = PreparedPatterns::new(&list, 250_000_000);
@@ -655,13 +664,14 @@ mod tests {
     /// declared size past what any allocation could be) gives `None`, never an aborted allocation.
     #[test]
     fn rows_that_cannot_be_allocated_give_none() {
-        let huge = Pattern { id: "huge".into(), name: "huge".into(), width: u32::MAX, height: u32::MAX, surface: Surface::new(PixelFormat::RGBA8) };
+        let huge =
+            Pattern { id: "huge".into(), name: "huge".into(), width: u32::MAX, height: u32::MAX, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         let mut out = Vec::new();
         assert!(pattern_rgba_rows(&huge, ColorMode::Rgb, 0, u32::MAX, &mut out).is_none());
         assert!(quantized_rgba(&huge, ColorMode::Rgb, |v| v as u8).is_none());
         assert!(pattern_rgba(&huge, ColorMode::Rgb).is_empty());
         assert!(Tile::new(&huge).is_none());
-        let small = Pattern { id: "small".into(), name: "small".into(), width: 3, height: 2, surface: Surface::new(PixelFormat::RGBA8) };
+        let small = Pattern { id: "small".into(), name: "small".into(), width: 3, height: 2, source_mode: None, surface: Surface::new(PixelFormat::RGBA8) };
         assert_eq!(pattern_rgba_rows(&small, ColorMode::Rgb, 0, 2, &mut out), Some(()));
         assert_eq!(out.len(), 6);
     }

@@ -1,6 +1,7 @@
 use super::strokes::live_stroke;
 use super::{Document, PhotocraftApp};
 use photocraft_doc::LayerContent;
+use photocraft_engine::color_cmds::ColorExt;
 
 /// The gradient a tool proposes this pass, shown over the document before it is committed: the layer it fills and the
 /// fill (`gradient_ui::live_overlay::show`'s answer).
@@ -64,7 +65,7 @@ pub(crate) fn canvas_display(
     doc: &Document,
     display: Option<u32>,
 ) -> (Option<std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>>, u64) {
-    match app.session.color.canvas_display_for(doc, display.or(app.session.color.main_display)) {
+    match app.session.color().canvas_display_for(doc, display.or(app.session.color().main_display)) {
         Ok(d) => {
             let k = d.key ^ ink_preview_key(doc);
             (Some(d), k)
@@ -254,7 +255,7 @@ pub(super) fn sync_display_lut(app: &mut PhotocraftApp, doc: &photocraft_doc::Do
     let Some(gpu) = app.gpu.clone() else { return 0 };
     let output = display.unwrap_or(0);
     // Rebuild only when anything feeding the LUT changes.
-    let sig = app.session.color.display_signature_for(doc, display);
+    let sig = app.session.color().display_signature_for(doc, display);
     if let Some((s, mode)) = gpu.display_lut_signature(key, output)
         && s == sig
     {
@@ -262,13 +263,13 @@ pub(super) fn sync_display_lut(app: &mut PhotocraftApp, doc: &photocraft_doc::Do
     }
     // Keep the curve/matrix/curve stages separate: interpolating a finished display
     // transform on a 33³ lattice crushes shadows when the monitor curve is steep near zero.
-    if let Ok(Some(shaper)) = app.session.color.gpu_canvas_matrix_shaper_for(doc, display) {
+    if let Ok(Some(shaper)) = app.session.color().gpu_canvas_matrix_shaper_for(doc, display) {
         gpu.set_display_matrix_shaper(key, output, &shaper);
         gpu.cache_display_lut_signature(key, output, sig, 3);
         return 3;
     }
-    let gamut = app.session.color.proof(doc.id).gamut_warning;
-    let mode = match app.session.color.gpu_canvas_lut_for(doc, DISPLAY_LUT, display) {
+    let gamut = app.session.color().proof(doc.id).gamut_warning;
+    let mode = match app.session.color().gpu_canvas_lut_for(doc, DISPLAY_LUT, display) {
         Ok(Some(bytes)) => {
             gpu.set_display_lut(key, output, DISPLAY_LUT as u32, Some(&bytes));
             if gamut { 2 } else { 1 }
@@ -290,5 +291,5 @@ pub(super) fn sync_display_lut(app: &mut PhotocraftApp, doc: &photocraft_doc::Do
 
 /// View › 32-bit Preview Options for the GPU canvas shader: (exposure, gamma) when active.
 pub(super) fn hdr_preview(app: &PhotocraftApp, doc: &photocraft_doc::Document) -> Option<[f32; 2]> {
-    app.session.color.hdr_preview(doc).map(|h| [h.exposure, h.gamma])
+    app.session.color().hdr_preview(doc).map(|h| [h.exposure, h.gamma])
 }

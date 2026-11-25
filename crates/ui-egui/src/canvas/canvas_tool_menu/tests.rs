@@ -156,7 +156,7 @@ pub(super) fn screen_of(app: &PhotocraftApp, doc: [f32; 2]) -> Pos2 {
 fn document_state(app: &PhotocraftApp) -> impl PartialEq + use<> {
     let state = app.session.active().unwrap();
     let strokes = app.session.journal.iter().filter(|(id, _)| id == "paint.stroke").count();
-    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers(), strokes)
+    (state.doc.clone(), state.revision, state.history.past_len(), state.active_layer, state.selected_layers().to_vec(), strokes)
 }
 
 fn view_of(app: &PhotocraftApp) -> Option<(craft::behavior::kurbo::Point, f64)> {
@@ -513,8 +513,9 @@ fn type_layer_menu_targets_the_type_under_the_pointer() {
     let ctx = app.ctx().clone();
     let active = |app: &PhotocraftApp| app.session.active().unwrap().active_layer.map(|l| l.0);
     assert_ne!(active(&app), Some(id));
-    // Away from the type, or with a Type Mask tool, nothing opens and nothing is selected.
-    assert!(!open_here(&mut app, Tool::Type, [30.0, 2.0]));
+    // Away from the type the Type tool opens the generic layer menu but selects nothing (#12042);
+    // with a Type Mask tool, nothing opens.
+    assert!(open_here(&mut app, Tool::Type, [30.0, 2.0]));
     assert!(!open_here(&mut app, Tool::HorizontalTypeMask, [16.0, 16.0]));
     assert!(!open_here(&mut app, Tool::Type, [f64::NAN, 16.0]));
     assert_ne!(active(&app), Some(id));
