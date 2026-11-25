@@ -55,6 +55,7 @@ pub mod shortcut_sets;
 mod slots;
 pub mod snap;
 mod state;
+pub mod subject_model;
 pub use variables_cmds::{DATA_SET_FILE_MISSING, DATA_SET_LAYER_LOCKED, data_set_preview, export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
@@ -143,6 +144,7 @@ pub use cmd::smart_cmds;
 pub use cmd::smartselect_cmds;
 pub use cmd::solid_fill_cmds;
 pub use cmd::style_asl_cmds;
+pub use cmd::subject_model_cmds;
 pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
 pub use cmd::timeline_cmds;
@@ -297,6 +299,9 @@ pub struct Session {
     /// Each open document's linked smart objects' files that were not there when last looked at
     /// ([`LinkWatchExt::missing_links`](crate::link_watch::LinkWatchExt::missing_links)). Written only when the set changes, so its revision says when the list did.
     link_missing: craft_tracked::Tracked<std::collections::HashSet<(u64, String)>>,
+    /// The subject model the app installed (see [`subject_model`]); `None` keeps Select Subject
+    /// and Remove Background on their built-in method.
+    subject_model: Option<subject_model::SharedSubjectModel>,
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// (`photocraft_engine_paint::brush_cmds::LiveStrokeExt` and `retouch_cmds::LiveRetouchExt` offer it).
     pub live_commit: Option<state::LiveCommit>,

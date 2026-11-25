@@ -515,6 +515,8 @@ pub type TabletPollFn = Box<dyn FnMut(bool)>;
 /// I/O dependencies.
 #[derive(Default)]
 pub struct Services {
+    /// The model behind Select Subject and Remove Background; `None` keeps their built-in method.
+    pub subject_model: Option<photocraft_engine::subject_model::SharedSubjectModel>,
     /// Explicit interactive SVG smart-object editing; unavailable in browser and automation.
     pub open_external_svg: Option<OpenExternalSvgFn>,
     /// A capture source for the screen picker; `None` uses the platform capture (`ScreenPick::tick`).

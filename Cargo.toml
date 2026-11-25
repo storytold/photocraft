@@ -108,6 +108,14 @@ getrandom = "0.3"
 # Monotonic clock on native and wasm (screenshot deadlines: a wall clock can jump).
 web-time = "1"
 
+# The Craft suite's shared AI layer (connections, models, jobs). Native only: the desktop app
+# holds the client (apps/photocraft/src/subject_ai.rs); the engine and UI reach it through
+# `photocraft_engine::subject_model`. One revision for all of them.
+craft-ai-client = { git = "https://github.com/storytold/craft-ai-integrations", rev = "9baaaa79b3c09368b7104b8a935c5e16e1c70317", features = ["burn"] }
+craft-ai-core = { git = "https://github.com/storytold/craft-ai-integrations", rev = "9baaaa79b3c09368b7104b8a935c5e16e1c70317" }
+craft-ai-features = { git = "https://github.com/storytold/craft-ai-integrations", rev = "9baaaa79b3c09368b7104b8a935c5e16e1c70317" }
+craft-ai-native = { git = "https://github.com/storytold/craft-ai-integrations", rev = "9baaaa79b3c09368b7104b8a935c5e16e1c70317" }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

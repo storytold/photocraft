@@ -45,6 +45,7 @@ const TABLES: &[Table] = &[
     ("vector_cmds", crate::vector_cmds::specs),
     ("smartselect_cmds", crate::smartselect_cmds::specs),
     ("cutout_cmds", crate::cutout_cmds::specs),
+    ("subject_model_cmds", crate::subject_model_cmds::specs),
     ("symmetry_cmds", crate::symmetry_cmds::specs),
     ("edit_cmds", crate::edit_cmds::specs),
     ("color_cmds", crate::color_cmds::specs),

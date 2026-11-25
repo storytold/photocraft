@@ -60,6 +60,7 @@ mod presentation;
 #[cfg(any(target_os = "linux", test))]
 mod print_portal;
 mod services;
+mod subject_ai;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
 #[cfg(any(not(target_os = "macos"), test))]
 mod single_instance;
