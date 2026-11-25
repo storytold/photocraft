@@ -21,8 +21,7 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
 
 /// Whether a brush-tip circle draws its centre mark.
 /// Clone Stamp and Healing Brush stay an empty circle until Option is held, the source-point
-/// cursor (the Healing Brush's ⌥ with Normal Brush Tip shows the sample target instead,
-/// [`source_target`]). Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as
+/// cursor (their ⌥ with Normal Brush Tip shows the sample target instead, [`source_target`]). Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as
 /// in Photoshop; the Background Eraser and the Color Replacement tool (#11934) always show their
 /// sampling hotspot, and the Remove tool its centre + (#12550).
 pub(crate) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
@@ -36,11 +35,18 @@ pub(crate) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -
 }
 
 /// Whether the brush cursor is the reference's fixed sample target (a small circle with a cross
-/// through the hotspot) at any tip size: the Healing Brush's ⌥, the source point, with Painting
-/// Cursors = Normal Brush Tip (#12113). The other Painting Cursors settings were not measured and
-/// keep the tip with its centre mark ([`brush_tip_centre`]); Caps Lock keeps the precise crosshair.
-pub(crate) fn source_target(tool: Tool, option: bool, painting: PaintingPref, caps_lock: bool) -> bool {
-    tool == Tool::Healing && option && painting == PaintingPref::NormalTip && !caps_lock
+/// through the hotspot) at any tip size: ⌥ with Painting Cursors = Normal Brush Tip, for the Healing
+/// Brush (#12113), the Clone Stamp (#12610) and the Spot Healing Brush (#12561, whose ⌥-click only
+/// alerts). `resize` is Ctrl+⌥, the brush resize drag's chord: the Clone Stamp and the Spot Healing
+/// Brush keep their tip for it. The other Painting Cursors settings were not measured and keep the
+/// tip with its centre mark ([`brush_tip_centre`]); Caps Lock keeps the precise crosshair.
+pub(crate) fn source_target(tool: Tool, option: bool, resize: bool, painting: PaintingPref, caps_lock: bool) -> bool {
+    let sampler = match tool {
+        Tool::Healing => true,
+        Tool::CloneStamp | Tool::SpotHealing => !resize,
+        _ => false,
+    };
+    sampler && option && painting == PaintingPref::NormalTip && !caps_lock
 }
 
 /// The sample target [`source_target`] and the Mixer Brush's ⌥ load show.
@@ -152,12 +158,20 @@ mod tests {
 mod color_replacement_cursor_tests;
 
 #[cfg(test)]
+#[path = "../clone_stamp_alt_cursor_tests.rs"]
+mod clone_stamp_alt_cursor_tests;
+
+#[cfg(test)]
 #[path = "../healing_alt_cursor_tests.rs"]
 mod healing_alt_cursor_tests;
 
 #[cfg(test)]
 #[path = "paint_bucket_cursor_tests.rs"]
 mod paint_bucket_cursor_tests;
+
+#[cfg(test)]
+#[path = "../spot_healing_alt_cursor_tests.rs"]
+mod spot_healing_alt_cursor_tests;
 
 #[cfg(test)]
 #[path = "triangle_alt_eyedropper_tests.rs"]

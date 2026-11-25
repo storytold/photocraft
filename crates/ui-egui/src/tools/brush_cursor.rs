@@ -138,7 +138,8 @@ pub(crate) fn cursor(app: &PhotocraftApp, cx: &ToolContext<'_>) -> Cursor {
         .show_only_crosshair_while_painting(prefs.show_only_crosshair_while_painting)
         .caps_lock_precise(true);
     let option = cx.mods.alt || app.ui.shell.latched.alt;
-    if crate::canvas::cursor_policy::source_target(tool, option, prefs.painting, cx.caps_lock) {
+    let resize = super::brush_resize::PaintResize::chord(tool, craft::behavior::PointerButton::Primary, cx.mods);
+    if crate::canvas::cursor_policy::source_target(tool, option, resize, prefs.painting, cx.caps_lock) {
         return crate::canvas::cursor_policy::sample_target();
     }
     let centre = crate::canvas::cursor_policy::brush_tip_centre(tool, option, prefs.show_crosshair_in_brush_tip);
