@@ -662,6 +662,25 @@ fn text_moves_only_within_the_supported_positions() {
     assert_eq!(lines, ["RangeError", "-300000"]);
 }
 
+/// Reading a large document's layers again and again records each unchanged inspection briefly,
+/// so a script that only reads does not run into the bound on recorded host calls; an edit
+/// between reads is still seen.
+#[test]
+fn reading_an_unchanged_document_again_records_little() {
+    let s = session(16, 16);
+    for i in 0..700 {
+        s.borrow_mut().execute("layer.new.layer", json!({"name": format!("L{i}")})).unwrap();
+    }
+    let lines = run(
+        &s,
+        "var doc = app.activeDocument, n = 0;
+         for (var i = 0; i < doc.layers.length; i++) n += doc.layers[i].name.length > 0 ? 1 : 0;
+         doc.layers[0].name = 'Renamed';
+         $.writeln(n, ' ', doc.layers[0].name);",
+    );
+    assert_eq!(lines, ["701 Renamed"]);
+}
+
 /// Saved key names are checked all together before any is kept: a set refused at the run's
 /// count of names leaves none of them taking a place.
 #[test]

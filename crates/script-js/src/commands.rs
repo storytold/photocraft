@@ -106,7 +106,7 @@ type Spec = (&'static str, &'static [(&'static str, Param, Need)]);
 /// The commands, with every parameter each may take.
 pub const COMMANDS: &[Spec] = &[
     ("session.inspect", &[]),
-    ("document.inspect", &[("document", Index, Optional), ("serial", Index, Optional), ("history", Bool, Optional), ("layers", Bool, Optional)]),
+    ("document.inspect", &[("document", Index, Optional), ("serial", Index, Optional), ("history", Bool, Optional), ("layers", Bool, Optional), ("unlessRevision", Json, Optional)]),
     ("document.activate", &[("document", Index, Optional), ("serial", Index, Optional)]),
     (
         "file.new",

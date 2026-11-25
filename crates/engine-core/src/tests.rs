@@ -1700,3 +1700,20 @@ fn merge_down_reports_the_merged_layer() {
     let upper = s.execute("layer.new.layer", json!({"name": "Upper"})).unwrap()["layer"].as_u64().unwrap();
     assert_eq!(s.execute("layer.mergeDown", json!({"layer": upper})).unwrap(), json!({"layer": lower}));
 }
+
+/// `document.inspect` with the revision it last returned answers briefly while the document is
+/// unchanged, and in full once anything about it changed.
+#[test]
+fn inspect_answers_briefly_while_the_document_is_unchanged() {
+    let mut s = session_with_doc();
+    let full = s.execute("document.inspect", json!({})).unwrap();
+    let revision = full["stateRevision"].clone();
+    assert!(revision.is_object(), "{full}");
+    let again = s.execute("document.inspect", json!({"unlessRevision": revision})).unwrap();
+    assert_eq!(again["unchanged"], true);
+    assert!(again.get("layers").is_none(), "no layer tree while unchanged");
+    s.execute("layer.new.layer", json!({"name": "New"})).unwrap();
+    let after = s.execute("document.inspect", json!({"unlessRevision": revision})).unwrap();
+    assert!(after.get("unchanged").is_none() && after["layers"].is_array(), "{after}");
+    assert_ne!(after["stateRevision"], revision);
+}

@@ -380,8 +380,45 @@ fn this_doc(this: &JsValue, ctx: &mut Context) -> JsResult<Value> {
 
 /// `document.inspect` of document `id`, by its serial: one call, so a tab closed or moved in the
 /// meantime can't make it read another document.
+/// The last full inspection of each document this attempt read, by serial and whether it holds
+/// the History rows, with the `stateRevision` it had. Bounded by [`MAX_KEPT_INSPECTIONS`].
+#[derive(Default, Trace, Finalize, JsData)]
+// Sound: JSON values and integers only, no GC pointers.
+#[boa_gc(unsafe_empty_trace)]
+struct Inspections(HashMap<(u64, bool), Value>);
+
+/// Most inspections kept: past it they are dropped and read whole again.
+const MAX_KEPT_INSPECTIONS: usize = 128;
+
+/// The document, read from the host. Every property read of the document model inspects it, so a
+/// script reading a large document's layers one by one would record the whole tree each time:
+/// the last answer is kept, and asked for again only by its revision, which the host answers
+/// briefly while the document is unchanged.
 pub(crate) fn inspect_document(id: DocKey, history: bool, ctx: &mut Context) -> JsResult<Value> {
-    query_document(id, json!({ "serial": id.serial, "history": history }), ctx)
+    let kept = ctx.realm().host_defined().get::<Inspections>().and_then(|k| k.0.get(&(id.serial, history)).cloned());
+    let mut params = json!({ "serial": id.serial, "history": history });
+    if let Some(revision) = kept.as_ref().and_then(|d| d.get("stateRevision")).filter(|r| r.is_object()) {
+        params["unlessRevision"] = revision.clone();
+    }
+    let d = query_document(id, params, ctx)?;
+    if d.get("unchanged").and_then(Value::as_bool) == Some(true)
+        && let Some(kept) = kept
+        && kept.get("stateRevision") == d.get("stateRevision")
+    {
+        return Ok(kept);
+    }
+    let realm = ctx.realm().clone();
+    let mut data = realm.host_defined_mut();
+    if data.get::<Inspections>().is_none() {
+        data.insert(Inspections::default());
+    }
+    if let Some(k) = data.get_mut::<Inspections>() {
+        if k.0.len() >= MAX_KEPT_INSPECTIONS && !k.0.contains_key(&(id.serial, history)) {
+            k.0.clear();
+        }
+        k.0.insert((id.serial, history), d.clone());
+    }
+    Ok(d)
 }
 
 fn query_document(id: DocKey, params: Value, ctx: &mut Context) -> JsResult<Value> {

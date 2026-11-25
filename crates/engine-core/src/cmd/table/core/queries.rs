@@ -18,7 +18,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Inspect Document",
             menu: &[],
             shortcut: None,
-            params: r##"{"document":index?,"serial":n? (the document's never-reused serial from session.inspect; not with document),"history":bool=true (false: without the History panel's rows),"layers":bool=true (false: without the layer tree; neither is built)}"##,
+            params: r##"{"document":index?,"serial":n? (the document's never-reused serial from session.inspect; not with document),"history":bool=true (false: without the History panel's rows),"layers":bool=true (false: without the layer tree; neither is built),"unlessRevision":json? (a stateRevision this call returned before: while the document is unchanged since, the answer is just {unchanged: true, id, stateRevision})} → the document, with its stateRevision"##,
             enabled: has_doc,
             run: |s, p| {
                 let flag = |k: &str| match p.get(k).filter(|v| !v.is_null()) {
@@ -38,10 +38,19 @@ pub fn specs() -> Vec<CommandSpec> {
                             let i = v.as_u64().and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("document.inspect", "`document` must be an index"))?;
                             s.documents().get(i).ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
                         }
-                        None => s.active().ok_or(EngineError::NoDocument)?,
+                        None => s.active_tracked().ok_or(EngineError::NoDocument)?,
                     }
                 };
-                Ok(inspect::document_parts(d, inspect::Parts { history, layers }))
+                // Moves with every write to the document's state, view state included: a caller
+                // that keeps an answer asks again with it and gets a short one while it holds.
+                let revision = d.revision();
+                let state_revision = json!({ "source": revision.source, "count": revision.count });
+                if p.get("unlessRevision") == Some(&state_revision) {
+                    return Ok(json!({ "unchanged": true, "id": d.doc.id.0, "stateRevision": state_revision }));
+                }
+                let mut out = inspect::document_parts(d, inspect::Parts { history, layers });
+                out["stateRevision"] = state_revision;
+                Ok(out)
             },
             journal: false,
         },
