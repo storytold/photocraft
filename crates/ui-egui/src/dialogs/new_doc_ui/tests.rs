@@ -1,7 +1,6 @@
 use super::*;
 use crate::new_doc_remember_tests::{app, fields, harness, open, press_create};
 use egui_kittest::kittest::{NodeT, Queryable};
-use egui_kittest::kittest::Queryable;
 use photocraft_engine::color_cmds::ColorExt;
 use photocraft_engine::prefs::SavedPrefsExt;
 use photocraft_engine::presets::PresetsExt;
