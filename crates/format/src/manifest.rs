@@ -178,6 +178,19 @@ pub struct VideoDataM {
     pub fps: f32,
     #[serde(default)]
     pub show_altered: bool,
+    /// The movie file unpainted frames are decoded from; `frames` holds only placeholders for them.
+    /// Missing in older files = none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footage: Option<FootageFramesM>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FootageFramesM {
+    pub link: photocraft_doc::FootageLink,
+    /// The footage frame each layer frame shows (`null` for a frame inserted blank).
+    pub origin: Vec<Option<usize>>,
+    /// Whether each layer frame was painted on (its pixels are then in `frames`).
+    pub altered: Vec<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

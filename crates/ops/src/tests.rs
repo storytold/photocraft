@@ -943,9 +943,9 @@ fn video_memory_counts_originals_and_deduplicates_displayed_frames() {
         let mut doc = video_document(depth, 3);
         let tile = doc.layers[0].surface().unwrap().tiles().next().unwrap().1.bytes().len();
         let video = doc.layers[0].video.as_mut().unwrap();
-        video.original_frames = Some(video.frames.clone());
+        video.original_frames = Some(video.frames.to_vec());
         // Original footage and the displayed frame alias the stack, except this painted frame.
-        video.frames[2].write_pixel(1, 1, &[0.0, 1.0, 0.0, 1.0]);
+        std::sync::Arc::make_mut(&mut video.frames)[2].write_pixel(1, 1, &[0.0, 1.0, 0.0, 1.0]);
         let mut cur = Arc::new(doc);
         let mut h = History { max_bytes: usize::MAX, ..History::default() };
         assert_eq!(h.pixel_bytes(&cur), 4 * tile);
@@ -980,7 +980,7 @@ fn video_memory_budget_evicts_deleted_off_playhead_frames() {
         let mut h = History::default();
         for _ in 0..4 {
             edit(&mut h, &mut cur, "Delete Frame", |doc| {
-                doc.layers[0].video.as_mut().unwrap().frames.remove(1);
+                std::sync::Arc::make_mut(&mut doc.layers[0].video.as_mut().unwrap().frames).remove(1);
             });
         }
         assert_eq!(h.pixel_bytes(&cur), 6 * tile);
