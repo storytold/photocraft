@@ -340,6 +340,7 @@ pub(crate) fn tool_history_name(kind: ShapeKind) -> Option<&'static str> {
         ShapeKind::Line => Some("Line Tool"),
         ShapeKind::Triangle => Some("Triangle Tool"),
         ShapeKind::Ellipse => Some("Ellipse Tool"),
+        ShapeKind::Star => Some("Star Tool"),
         _ => None,
     }
 }
