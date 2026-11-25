@@ -243,6 +243,9 @@ pub(super) fn asset_output_path(dir: &str, relative: &str) -> Result<(String, St
 /// A layer is trimmed to its visible pixels; an artboard keeps its whole board, transparent edges
 /// included, as File › Export › Artboards to Files writes it (Photoshop's Generator exports an
 /// artboard asset at the board's bounds).
+///
+/// An asset whose pixels could not be read from the scratch disk is reported in `errors` and not
+/// written; the check is per asset, so one written before the failure stands.
 pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
     let dpi = f64::from(doc.resolution_dpi.max(1.0));
     let mut defaults: Option<Vec<AssetDefault>> = None;
@@ -275,6 +278,9 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
                 if written.contains(&key) {
                     return Err(other(format!("{rel}: another layer already writes this file; rename one of the layers")));
                 }
+                // A tile that fails to read gives placeholder pixels, and the asset is built from a copy of the
+                // document, so neither the edit nor the export guard sees it (#15259): check before each write.
+                let scratch = crate::artboard_cmds::ScratchGuard::new(doc)?;
                 let mut one = match crate::artboard_cmds::artboard_document(doc, *id)? {
                     // Like Photoshop's Generator, a board with nothing on it is refused rather
                     // than written as a blank file.
@@ -306,6 +312,8 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
                 let p = json!({"width": tw.round().max(1.0), "height": th.round().max(1.0)});
                 let (wdoc, _, _) = web_document(&one, &p, &WebSettings { convert_to_srgb: true, ..st.clone() })?;
                 if spec.format == "webp" {
+                    // Encoding reads only `wdoc`, which the export pipeline checks itself.
+                    scratch.check()?;
                     let (out, reported) = asset_output_path(dir, &rel)?;
                     crate::file_cmds::save_doc(&wdoc, &out, None)?;
                     written.insert(key);
@@ -313,6 +321,7 @@ pub fn generate_assets(doc: &Document, dir: &str) -> (Vec<String>, Vec<Value>) {
                 }
                 let buf = photocraft_compose::flatten(&wdoc);
                 let o = optimize(&buf.px, wdoc.size.width as usize, wdoc.bounds(), &st, None, None, None, wdoc.resolution_dpi, false)?;
+                scratch.check()?;
                 let (out, reported) = asset_output_path(dir, &rel)?;
                 write_file(&out, &o.bytes)?;
                 written.insert(key);
