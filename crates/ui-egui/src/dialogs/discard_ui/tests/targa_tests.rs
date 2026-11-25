@@ -16,6 +16,18 @@ fn asked(bits: Option<u8>) -> Vec<u8> {
     serde_json::to_vec(&bits).unwrap()
 }
 
+/// Records the Targa options on each write without encoding or touching the filesystem.
+fn targa_writes(app: &mut PhotocraftApp) -> Writes {
+    let writes: Writes = Rc::default();
+    let written = writes.clone();
+    app.services.export = Some(Box::new(|_, _, settings| Ok((asked(settings.tga_bits.map(TgaBits::bits)), Vec::new()))));
+    app.services.write = Some(Box::new(move |path, bytes| {
+        written.borrow_mut().push((path.to_string(), bytes.to_vec()));
+        Ok(())
+    }));
+    writes
+}
+
 /// One 8×8 RGB document (with an "Alpha 1" channel when `alpha_channel`) whose exports record
 /// their Targa bits, in a harness running the dialogs and answering a save dialog with `to`.
 fn targa_app(alpha_channel: bool, to: &str) -> (Prompted, Writes) {
@@ -24,13 +36,7 @@ fn targa_app(alpha_channel: bool, to: &str) -> (Prompted, Writes) {
         app.run("select.all", json!({})).unwrap();
         app.run("select.saveSelection", json!({})).unwrap();
     }
-    let writes: Writes = Rc::default();
-    let written = writes.clone();
-    app.services.export = Some(Box::new(|_, _, settings| Ok((asked(settings.tga_bits.map(TgaBits::bits)), Vec::new()))));
-    app.services.write = Some(Box::new(move |path, bytes| {
-        written.borrow_mut().push((path.to_string(), bytes.to_vec()));
-        Ok(())
-    }));
+    let writes = targa_writes(&mut app);
     let h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).with_context(app.ctx().clone()).build_ui_state(
         |ui, app| {
             crate::dialogs::run(app, ui);
@@ -74,6 +80,43 @@ fn targa_options_writes_the_choice_or_cancels() {
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(writes.borrow().as_slice(), &[("t.tga".to_string(), asked(Some(24)))]);
+}
+
+/// With the real window key handling running, Targa Options owns the first Escape.
+#[test]
+fn escape_cancels_targa_options_before_deselecting() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::AppTheme::pro());
+        let mut app = PhotocraftApp::with_context(cc.egui_ctx.clone(), photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app
+    });
+    let writes = targa_writes(h.state_mut());
+    h.run_steps(4);
+    h.state_mut().run("select.all", json!({})).unwrap();
+    let st = h.state().session.active().unwrap();
+    let (selection, history) = (st.doc.selection.clone().expect("Select All created a selection"), st.history.past_len());
+
+    h.state_mut().save_as(Some("t.tga".into())).unwrap();
+    h.run_steps(2);
+    assert_eq!(parked(&h), Some(("t.tga".to_string(), false)));
+    let dialog = h.state().framework.dialogs.open_dialogs().last().expect("Targa Options is open").id;
+
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    assert!(h.state().framework.dialogs.get_dyn(dialog).is_none(), "Escape closes Targa Options");
+    assert!(parked(&h).is_none(), "Escape cancels the parked save");
+    assert!(writes.borrow().is_empty(), "the cancelled save writes nothing");
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.path, None, "the cancelled save leaves the document unsaved");
+    assert_eq!(st.doc.selection.as_ref(), Some(&selection), "the dialog's Escape leaves the selection intact");
+    assert_eq!(st.history.past_len(), history, "the dialog's Escape leaves document history intact");
+
+    h.key_press(Key::Escape);
+    h.run_steps(4);
+    let st = h.state().session.active().unwrap();
+    assert!(st.doc.selection.is_none(), "once the dialog is gone, Escape reaches the window and deselects");
+    assert_eq!(st.history.past_len(), history + 1, "only the second Escape edits the document");
 }
 
 /// Scripts choose with `tgaBits` and are never asked; a grayscale Targa (8-bit, nothing to choose)

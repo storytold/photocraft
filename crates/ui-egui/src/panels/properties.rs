@@ -58,6 +58,15 @@ fn kind_label(layer: &Layer) -> String {
 /// mask targets, the layer the panel was opened for) keys the inspector, so a field's typing or
 /// scrub state stays with its layer.
 pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // A run that shows no adjustment session ends the one kept (`PhotocraftApp::properties_hidden`).
+    app.properties_tracked = false;
+    body(app, ui);
+    if !app.properties_tracked {
+        app.properties_hidden = app.properties_hidden.saturating_add(2);
+    }
+}
+
+fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let inspector = Inspector::new(tl!("Properties")).empty(tl!("No properties"));
     let Some(st) = app.session.active() else {
         inspector.show(ui, |_, _| {});
