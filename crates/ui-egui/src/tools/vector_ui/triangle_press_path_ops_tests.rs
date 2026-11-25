@@ -46,6 +46,21 @@ fn shape_layers(app: &PhotocraftApp) -> usize {
     app.session.active().unwrap().doc.layers.iter().filter(|l| matches!(l.content, LayerContent::Shape(_))).count()
 }
 
+/// The path of every shape layer, in the order the document lists them.
+fn shape_paths(app: &PhotocraftApp) -> Vec<Path> {
+    app.session
+        .active()
+        .unwrap()
+        .doc
+        .layers
+        .iter()
+        .filter_map(|l| match &l.content {
+            LayerContent::Shape(sh) => Some(sh.path.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The path of the shape layer named `name`.
 fn shape_named(app: &PhotocraftApp, name: &str) -> Path {
     let st = app.session.active().unwrap();
@@ -260,9 +275,9 @@ fn pixels_mode_changes_nothing_for_a_press_holding_shift() {
 #[test]
 fn a_press_also_holding_ctrl_or_cmd_keeps_the_options_bar_rule() {
     // The issue measures Shift, Alt and Shift+Alt only, so a press that also holds Ctrl or Cmd keeps
-    // today's rule. The app's own pointer harness loses the Ctrl of an injected press (a drag with
-    // Shift+Ctrl reaches the tool as Shift alone), so this pins the rule where the app decides it -
-    // `finish_drag_with_press`, which is what `host::drain` calls with the press's modifiers.
+    // today's rule. Pinned where the app decides it - `finish_drag_with_press`, which is what
+    // `host::drain` calls with the press's modifiers; the same case as a gesture is pinned by
+    // `a_press_holding_the_command_modifier_keeps_the_options_bar_rule`.
     let mut app = app();
     base_triangle(&mut app);
     let (before, layers) = (history_len(&app), shape_layers(&app));
@@ -318,4 +333,111 @@ fn a_press_holding_shift_over_a_pixel_layer_makes_a_new_layer() {
     assert_eq!(shape_layers(&app), layers + 1, "a pixel layer is not a shape layer: a new layer is made");
     assert_eq!(shape_named(&app, "Triangle 1").subpaths.len(), 1, "with its own single component");
     one_step(&app, before, "Triangle Tool");
+}
+
+#[test]
+fn a_press_holding_alt_over_no_shape_layer_is_the_colour_sample_and_draws_no_layer() {
+    // Not measured by this issue and unchanged by it: with no shape layer active an Alt press is the
+    // colour sample (#13364), which the tool host takes before the Shape tool sees the press, so no
+    // shape layer is made at all - while the same drag with Shift, or with nothing held, makes one.
+    let mut app = app();
+    let layers = shape_layers(&app);
+    drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::ALT, Modifiers::ALT);
+    assert_eq!(shape_layers(&app), layers, "no shape layer, as today");
+}
+
+#[test]
+fn a_press_holding_alt_over_a_pixel_layer_is_the_colour_sample_and_draws_no_layer() {
+    let mut app = app();
+    app.run("layer.new.layer", json!({"name": "Pixels"})).unwrap();
+    app.sync_views();
+    let layers = shape_layers(&app);
+    drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::ALT, Modifiers::ALT);
+    assert_eq!(shape_layers(&app), layers, "a pixel layer is not a shape layer, so Alt samples instead");
+}
+
+#[test]
+fn shift_at_the_press_with_the_modifier_released_before_the_release_still_combines() {
+    // The press asks for the operation; the shape follows the modifiers held during the drag. Shift
+    // comes down at the press and goes up before the first move, so the component combines into
+    // Triangle 1 and the triangle fills the dragged box instead of the inscribed equilateral.
+    let mut app = app();
+    base_triangle(&mut app);
+    let (before, layers) = (history_len(&app), shape_layers(&app));
+    drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::SHIFT, Modifiers::NONE);
+    assert_eq!(shape_layers(&app), layers, "no new layer");
+    let path = shape_named(&app, "Triangle 1");
+    assert_eq!(path.subpaths.len(), 2, "the drag joined Triangle 1");
+    assert_eq!(path.subpaths[1].op, PathOp::Combine, "Shift at the press asked for Combine Shapes");
+    let a = anchors(&path.subpaths[1]);
+    assert!(near(box_of(&a), (450.0, 450.0, 550.0, 550.0), 2.0), "the shape takes the dragged box, got {:?}", box_of(&a));
+    let s = sides(&a);
+    assert!((s[2] - s[0]).abs() > 5.0, "and is not equilateral: {s:?}");
+    one_step(&app, before, "Add Shape");
+}
+
+#[test]
+fn the_press_of_the_last_gesture_does_not_carry_into_the_next_one() {
+    // A Shift press that found no shape layer made its own layer; the next, plain press must not read
+    // that old press: it starts a layer of its own too.
+    let mut app = app();
+    drag(&mut app, [400.0, 300.0], [600.0, 400.0], Modifiers::SHIFT, Modifiers::SHIFT);
+    let (before, layers) = (history_len(&app), shape_layers(&app));
+    assert_eq!(
+        (layers, shape_paths(&app).iter().map(|p| p.subpaths.len()).collect::<Vec<_>>()),
+        (1, vec![1]),
+        "the first press made one layer with one component"
+    );
+    drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::NONE, Modifiers::NONE);
+    assert_eq!(shape_layers(&app), layers + 1, "the plain press made its own layer");
+    assert_eq!(shape_paths(&app).iter().map(|p| p.subpaths.len()).collect::<Vec<_>>(), vec![1, 1], "and neither holds a second component");
+    one_step(&app, before, "Triangle Tool");
+}
+
+#[test]
+fn a_press_holding_the_command_modifier_keeps_the_options_bar_rule() {
+    // Off macOS a held Ctrl reaches the framework as the command modifier (the injected `ctrl` flag is
+    // the macOS Control key and arrives as nothing), so this is how a real Ctrl press on Windows or
+    // Linux asks for the drag: the press reports Cmd, the rule fails closed, and the drag starts a
+    // layer of its own as it does today.
+    let mut app = app();
+    base_triangle(&mut app);
+    let (before, layers) = (history_len(&app), shape_layers(&app));
+    let mods = Modifiers { shift: true, command: true, ..Modifiers::NONE };
+    drag(&mut app, [450.0, 450.0], [550.0, 550.0], mods, mods);
+    assert_eq!(shape_layers(&app), layers + 1, "a new layer, as today");
+    assert_eq!(shape_named(&app, "Triangle 1").subpaths.len(), 1, "and nothing added to the active layer");
+    one_step(&app, before, "Triangle Tool");
+}
+
+#[test]
+fn a_press_holding_shift_with_the_rectangle_tool_still_makes_a_new_layer() {
+    // The Rectangle row of the epic (#13335) is open, so the Rectangle tool keeps today's rule:
+    // Shift at the press constrains the box and starts a layer of its own.
+    let mut app = app();
+    app.ui.tool = Tool::Rectangle;
+    drag(&mut app, [300.0, 200.0], [500.0, 300.0], Modifiers::NONE, Modifiers::NONE);
+    let (before, layers) = (history_len(&app), shape_layers(&app));
+    drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::SHIFT, Modifiers::SHIFT);
+    assert_eq!(shape_layers(&app), layers + 1, "a new shape layer, not a component of the active one");
+    assert_eq!(shape_paths(&app).iter().map(|p| p.subpaths.len()).collect::<Vec<_>>(), vec![1, 1], "each layer keeps one component");
+    one_step(&app, before, "New Shape Layer");
+}
+
+#[test]
+fn a_press_holding_shift_with_the_ellipse_tool_still_makes_a_new_layer() {
+    // Same for the open Ellipse row (#13227): Shift at the press still starts a new layer, and the
+    // shape is the constrained circle it always was.
+    let mut app = app();
+    app.ui.tool = Tool::EllipseShape;
+    drag(&mut app, [300.0, 200.0], [500.0, 300.0], Modifiers::NONE, Modifiers::NONE);
+    let (before, layers) = (history_len(&app), shape_layers(&app));
+    drag(&mut app, [450.0, 450.0], [550.0, 550.0], Modifiers::SHIFT, Modifiers::SHIFT);
+    assert_eq!(shape_layers(&app), layers + 1, "a new shape layer, not a component of the active one");
+    let paths = shape_paths(&app);
+    assert_eq!(paths.iter().map(|p| p.subpaths.len()).collect::<Vec<_>>(), vec![1, 1], "each layer keeps one component");
+    // One of the two layers is the second drag: an ellipse filling the 100 x 100 box ⇧ asks for.
+    let squared = paths.iter().any(|p| near(box_of(&anchors(&p.subpaths[0])), (450.0, 450.0, 550.0, 550.0), 2.0));
+    assert!(squared, "Shift still squares the drag: {:?}", paths.iter().map(|p| box_of(&anchors(&p.subpaths[0]))).collect::<Vec<_>>());
+    one_step(&app, before, "Ellipse Tool");
 }

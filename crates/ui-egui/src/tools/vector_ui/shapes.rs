@@ -260,8 +260,8 @@ pub fn finish_drag(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeo
 /// Finish a Shape-tool drag with the geometry the framework tool committed (⇧ and ⌥ are already in
 /// it): Path mode adds the outline to the Work Path, Custom Shape places the preset, the others
 /// make a shape layer. A geometry too small to draw changes nothing. `press_mods`, the modifiers held
-/// when the button went down, choose the path operation of a shape-layer drag (#13366); a caller that
-/// has none passes `Mods::default()`.
+/// when the button went down, choose the path operation of a Triangle-tool drag that joins a shape
+/// layer (#13366); a caller that has none, or a drag of another Shape tool, passes `Mods::default()`.
 pub fn finish_drag_with_press(app: &mut PhotocraftApp, kind: ShapeKind, geometry: &ShapeGeometry, mods: Mods, press_mods: Mods) {
     let Some(geometry) = snapped(geometry, mods.shift, snaps_to_pixels(app, kind)) else { return };
     if draws_path(&app.ui.tool_options) {
@@ -330,10 +330,10 @@ pub fn finish_drag_with_press(app: &mut PhotocraftApp, kind: ShapeKind, geometry
         Err(e) => return report(app, e),
     };
     p["historyName"] = json!(tool_history_name(kind));
-    // With an operation other than New Layer the drag joins the active shape layer; the modifiers held
-    // at the press ask for the operation (#13366). Shape mode only: the other modes keep the options
-    // bar's rule, and the options bar offers the Shape tools Shape and Path only.
-    let at_press = if app.ui.tool_options.shape_mode == super::VectorMode::Shape { press_mods } else { Mods::default() };
+    // With an operation other than New Layer the drag joins the active shape layer. The modifiers held
+    // at the press ask for that operation for the Triangle tool in Shape mode only (#13366): the other
+    // Shape tools' rows in the same epic are open, and Path and Pixels mode keep the options bar's rule.
+    let at_press = if kind == ShapeKind::Triangle && app.ui.tool_options.shape_mode == super::VectorMode::Shape { press_mods } else { Mods::default() };
     if let Some(op) = drag_path_op(app, at_press)
         && let Some(id) = super::options::selected_shape(&app.session)
     {
@@ -347,8 +347,9 @@ pub fn finish_drag_with_press(app: &mut PhotocraftApp, kind: ShapeKind, geometry
 
 /// The operation the next Shape-tool drag is added with (the options bar's Path operations);
 /// None for a new shape layer. The one place press modifiers can override it (#13227).
-/// `press_mods` are the modifiers held when the button went down: Shift asks for Combine Shapes, Alt for
-/// Subtract Front Shape, both for Intersect Shape Areas (#13366). A press that held neither keeps the
+/// `press_mods` are the modifiers held when the button went down: for the Triangle tool Shift asks for
+/// Combine Shapes, Alt for Subtract Front Shape, both for Intersect Shape Areas (#13366), and the
+/// caller hands them over for that tool in Shape mode only. A press that held neither keeps the
 /// options bar's rule, and so does one that also held Ctrl or Cmd (not measured).
 fn drag_path_op(app: &PhotocraftApp, press_mods: Mods) -> Option<&'static str> {
     let pressed = if press_mods.ctrl || press_mods.cmd {
