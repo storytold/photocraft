@@ -255,6 +255,10 @@ mod transform_controls_tests;
 mod layer_edges_tests;
 
 #[cfg(test)]
+#[path = "canvas/move_readout_arrows_tests.rs"]
+mod move_readout_arrows_tests;
+
+#[cfg(test)]
 mod live_frame_tests;
 
 #[cfg(test)]

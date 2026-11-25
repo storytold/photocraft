@@ -114,7 +114,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 "blackWhite" => Some("Cmd+Alt+Shift+B"),
                 _ => None,
             },
-            params,
+            params: match kind {
+                "colorLookup" => Box::leak(params.replace(LOOKUP_LAYER_DEFAULTS, LOOKUP_IMAGE_DEFAULTS).into_boxed_str()),
+                _ => params,
+            },
             // Brightness/Contrast also refuses a hidden pixel layer (#14359).
             enabled: match kind {
                 "brightnessContrast" => crate::adjust_cmds::brightness_contrast_enabled,
@@ -125,6 +128,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 if kind == "brightnessContrast" {
                     crate::adjust_cmds::brightness_contrast_empty_refusal(s, p)?;
                 }
+                let filled;
+                let p = if kind == "colorLookup" {
+                    filled = image_lookup_defaults(p);
+                    &filled
+                } else {
+                    p
+                };
                 if matches!(kind.as_str(), "levels" | "curves") {
                     crate::channel_cmds::resolve_tone_target(s, false, p)?;
                 }
@@ -171,4 +181,29 @@ pub fn specs() -> Vec<CommandSpec> {
         });
     }
     v
+}
+
+/// The interpolation and dither defaults the shared Color Lookup line documents, which the adjustment layer keeps,
+/// and the ones Image › Adjustments › Color Lookup documents in their place (#14419).
+const LOOKUP_LAYER_DEFAULTS: &str = r#""interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false"#;
+const LOOKUP_IMAGE_DEFAULTS: &str = r#""interpolation":"trilinear|tetrahedral"="tetrahedral","dither":bool=true"#;
+
+/// `p` with Image › Adjustments › Color Lookup's own defaults: tetrahedral interpolation and dither on, as the
+/// reference application applies the adjustment (#14419). A call that gives `interpolation` (or the `tetrahedral`
+/// flag) or `dither` keeps its value; a null counts as not given, as in `lookup_from_params`. The defaults
+/// go into the params rather than into `lookup_from_params`, so the adjustment layer, its `layer.setAdjustment` edits
+/// and Color Lookup layers read from PSD files keep trilinear and no dither, and a smart filter records the values it
+/// ran with.
+fn image_lookup_defaults(p: &Value) -> Value {
+    let mut p = p.clone();
+    if let Value::Object(map) = &mut p {
+        let given = |map: &serde_json::Map<String, Value>, key: &str| map.get(key).is_some_and(|v| !v.is_null());
+        if !given(map, "interpolation") && !given(map, "tetrahedral") {
+            map.insert("interpolation".into(), Value::from("tetrahedral"));
+        }
+        if !given(map, "dither") {
+            map.insert("dither".into(), Value::Bool(true));
+        }
+    }
+    p
 }

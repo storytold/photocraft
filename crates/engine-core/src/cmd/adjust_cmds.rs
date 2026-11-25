@@ -187,6 +187,29 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
     Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source })
 }
 
+/// A Color Lookup smart filter's `recorded` params with the interpolation and dither it renders with written out:
+/// a key it never recorded runs as trilinear without dither (`lookup_from_params` with no base), and the legacy
+/// `tetrahedral` flag, which wins over `interpolation`, becomes `interpolation`. Its editor opens on these rather than
+/// on Image › Adjustments' tetrahedral-and-dither defaults, so OK without an edit keeps the filter's look (#14419).
+/// Params `lookup_from_params` would refuse come back unchanged.
+pub fn lookup_filter_params(recorded: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+    const CMD: &str = "colorLookup";
+    let p = Value::Object(recorded.clone());
+    let (Ok(flag), Ok(named), Ok(dither)) = (opt_bool(CMD, &p, "tetrahedral"), opt_str(CMD, &p, "interpolation"), opt_bool(CMD, &p, "dither")) else {
+        return recorded.clone();
+    };
+    // `lookup_from_params` refuses an unknown name even when the flag overrides it, so check the name first.
+    let tetrahedral = match named {
+        None | Some("trilinear" | "tetrahedral") => flag.unwrap_or(named == Some("tetrahedral")),
+        Some(_) => return recorded.clone(),
+    };
+    let mut out = recorded.clone();
+    out.remove("tetrahedral");
+    out.insert("interpolation".into(), json!(if tetrahedral { "tetrahedral" } else { "trilinear" }));
+    out.insert("dither".into(), json!(dither.unwrap_or(false)));
+    out
+}
+
 /// A loaded LUT file, tagged with the format [`craft_cms::lutfile::parse`] read it as.
 fn lut_source(format: craft_cms::lutfile::Format, bytes: Vec<u8>) -> LutSource {
     let format = match format {
@@ -903,3 +926,7 @@ fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "color_lookup_defaults_tests.rs"]
+mod color_lookup_defaults_tests;

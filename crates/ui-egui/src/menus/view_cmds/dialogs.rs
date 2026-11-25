@@ -855,20 +855,22 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             if linked {
                 return Some(app.pick_file_bytes(place));
             }
-            // Place Embedded takes several files (#14107); one file is placed as before.
-            Some(app.pick_files_bytes(move |app, files| match <[crate::file_dialog::PickedFile; 1]>::try_from(files) {
-                Ok([file]) => {
-                    let (name, bytes) = file.read()?;
-                    place(app, name, bytes)
-                }
-                Err(files) => {
-                    if app.ui.transform.is_some() {
-                        return Err("Commit or cancel the transform first".into());
+            // Place Embedded takes several files (#14107) and names its picker (#14110); one file is placed as before.
+            Some(app.pick_files_bytes(Some(tl!("Place Embedded").to_string()), move |app, files| {
+                match <[crate::file_dialog::PickedFile; 1]>::try_from(files) {
+                    Ok([file]) => {
+                        let (name, bytes) = file.read()?;
+                        place(app, name, bytes)
                     }
-                    app.refocus(doc)?;
-                    let count = files.len();
-                    app.place_picked(&queue_ctx, doc, files);
-                    Ok(json!({ "files": count }))
+                    Err(files) => {
+                        if app.ui.transform.is_some() {
+                            return Err("Commit or cancel the transform first".into());
+                        }
+                        app.refocus(doc)?;
+                        let count = files.len();
+                        app.place_picked(&queue_ctx, doc, files);
+                        Ok(json!({ "files": count }))
+                    }
                 }
             }))
         }
