@@ -307,6 +307,23 @@ fn wide_high_pass_stays_close_to_the_gaussian_residual_at_an_edge() {
 }
 
 #[test]
+fn wide_high_pass_discards_the_last_band_on_cancel() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let src = flat(SampleType::F32, R, [0.9, 0.1, 0.4, 1.0]);
+    let cancelled = AtomicBool::new(false);
+    let cancel = || cancelled.load(Ordering::Relaxed);
+    // This small image fits in one band. Cancel when its writeback reports progress.
+    let progress = |fraction| {
+        if fraction > 0.0 && fraction < 1.0 {
+            cancelled.store(true, Ordering::Relaxed);
+        }
+    };
+    let ctl = photocraft_raster::Interrupt::new(&cancel, &progress);
+    assert!(apply_tiled_with(&src, &FilterParams::HighPass { radius: 64.0 }, R, R, None, 64, Some(R), &ctl).is_none());
+}
+
+#[test]
 fn maximum_high_pass_radius_preserves_alpha_and_mixes_the_residual() {
     let area = Rect::new(7, 9, 10, 10);
     let params = FilterParams::HighPass { radius: 1000.0 };

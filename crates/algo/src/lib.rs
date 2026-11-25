@@ -1662,6 +1662,9 @@ fn apply_box_blur(
         ctl.progress(0.98 * (i + 1) as f32 / bands.len() as f32);
     }
     out.prune();
+    if ctl.cancelled() {
+        return None;
+    }
     ctl.progress(1.0);
     Some(out)
 }
