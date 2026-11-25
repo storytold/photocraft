@@ -131,7 +131,7 @@ impl FontSourceState {
     /// The picker's source over this state.
     pub(crate) fn source(&mut self) -> FontPickerSource<'_> {
         let catalog = photocraft_text::fonts::catalog();
-        let mut source = FontPickerSource::new(catalog, Bind::bound(&mut self.settings), Bind::bound(&mut self.filters)).served(&self.served);
+        let mut source = FontPickerSource::new(catalog).settings(Bind::bound(&mut self.settings)).filters(Bind::bound(&mut self.filters)).served(&self.served);
         if let Some(text) = self.preview_text.as_deref() {
             source = source.preview_text(text);
         }

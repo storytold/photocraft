@@ -1728,10 +1728,10 @@ fn choose_eyedropper(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMe
         return Ok(());
     }
     let rgb = menu.color.ok_or("No colour under the pointer")?;
-    use craft::color_ui::ui::{ColorPanelCommand, ColorPanelMenu, ColorPanelState};
+    use craft::color_ui::ui::{ColorPanelAction, ColorPanelCommand, ColorPanelMenu, ColorPanelState};
     let copy = if command == EYEDROPPER_COPY_HTML { ColorPanelCommand::CopyHtml } else { ColorPanelCommand::CopyHex };
     let color = craft::theme::Srgba::rgb(rgb[0], rgb[1], rgb[2]);
-    if let Some(text) = ColorPanelMenu::run_command(&mut ColorPanelState::default(), copy, color) {
+    if let Some(ColorPanelAction::Copy(text)) = ColorPanelMenu::run_command(&mut ColorPanelState::default(), copy, color) {
         ctx.copy_text(text);
     }
     Ok(())
