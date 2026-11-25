@@ -372,8 +372,11 @@ pub(crate) fn confirm_edit(app: &mut PhotocraftApp, dialog: DialogId, params: Va
         (r, app.session.active().is_some_and(|st| app.session.job_on(st.doc.id).is_some()))
     });
     let (r, running) = r.unwrap_or_else(|e| (Err(e), false));
-    // A cancelled or failed replay puts the marker back (`on_job_event`), as Cancel would.
-    if running && let Some(job) = r.as_ref().ok().and_then(|v| v["job"].as_u64()) {
+    if r.is_err() {
+        // Still an edit: OK again retries it, and a dialog that closes now puts the marker back (`poll`).
+        app.design_edit = Some((dialog, e));
+    } else if running && let Some(job) = r.as_ref().ok().and_then(|v| v["job"].as_u64()) {
+        // A cancelled or failed replay puts the marker back (`on_job_event`), as Cancel would.
         app.jobs.edit_steps.push((photocraft_engine::jobs::JobId(job), e));
     }
     Some(r)

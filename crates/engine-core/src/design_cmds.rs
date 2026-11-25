@@ -93,9 +93,20 @@ fn same_content(a: &Document, b: &Document) -> bool {
 
 /// Change the active document's timeline with `f` (which returns the first step it affects),
 /// replay from there and commit the result as one undo step named `label`.
-/// `f` returns the first step to replay from and whether that step itself changed (so baked steps
-/// after it may be out of date).
-fn change(s: &mut Session, cmd: &str, label: &str, f: impl FnOnce(&mut DesignTimeline) -> Result<(usize, bool)>) -> Result<Value> {
+/// `f` returns the first step to replay from and the first step its change may have made out of
+/// date (baked steps from there on are marked stale).
+fn change(s: &mut Session, cmd: &str, label: &str, f: impl FnOnce(&mut DesignTimeline) -> Result<(usize, Option<usize>)>) -> Result<Value> {
+    change_then(s, cmd, label, f, |_| {})
+}
+
+/// [`change`], running `after` once the replay's result is in place (not when it fails or is cancelled).
+fn change_then(
+    s: &mut Session,
+    cmd: &str,
+    label: &str,
+    f: impl FnOnce(&mut DesignTimeline) -> Result<(usize, Option<usize>)>,
+    after: impl FnOnce(&mut Session) + Send + 'static,
+) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let tl = st.doc.design_timeline.clone().ok_or_else(|| EngineError::Other("the design timeline is off".into()))?;
     // Replay rebuilds the document from recorded steps: a change made around them would be lost.
@@ -109,12 +120,16 @@ fn change(s: &mut Session, cmd: &str, label: &str, f: impl FnOnce(&mut DesignTim
         )));
     }
     let mut next = (*tl).clone();
-    let (from, changed) = f(&mut next)?;
+    let (from, stale_from) = f(&mut next)?;
     let steps = crate::timeline::steps_to_run(&next, from);
     let seed = crate::timeline::Seed::of(s);
-    let work = move |ctx: &crate::jobs::JobCtx| crate::timeline::replay(seed, &next, from, changed.then_some(from), ctx);
+    let work = move |ctx: &crate::jobs::JobCtx| crate::timeline::replay(seed, &next, from, stale_from, ctx);
     let label_owned = label.to_string();
-    let apply = move |s: &mut Session, replayed| commit(s, &label_owned, replayed);
+    let apply = move |s: &mut Session, replayed| {
+        let r = commit(s, &label_owned, replayed)?;
+        after(s);
+        Ok(r)
+    };
     // Replaying steps can take seconds: a background start runs it as a job (progress, Cancel).
     // Restoring a checkpoint runs none, so it lands at once, before a dialog opens on it.
     if steps == 0 {
@@ -154,7 +169,7 @@ fn suppress(s: &mut Session, p: &Value, on: bool) -> Result<Value> {
         if let Some(st) = tl.steps.get_mut(i) {
             st.suppressed = on;
         }
-        Ok((i, true))
+        Ok((i, Some(i + 1)))
     })
 }
 
@@ -166,26 +181,35 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         (i + 1 == tl.steps.len()).then(|| tl.steps.get(i).map(|st| st.prelude.clone())).flatten()
     });
     let doc = s.active().map(|st| st.doc.id);
-    let r = change(s, "design.delete", "Delete Step", |tl| {
-        let i = step_index("design.delete", tl, p)?;
-        let removed = tl.steps.remove(i);
-        // Its tool settings and pattern versions still feed the steps after it.
-        if let Some(next) = tl.steps.get_mut(i) {
-            next.prelude.splice(0..0, removed.prelude);
-            let own: Vec<String> = next.patterns.iter().map(|p| p.id.clone()).collect();
-            next.patterns.splice(0..0, removed.patterns.into_iter().filter(|p| !own.contains(&p.id)));
+    // Only once the delete lands: a cancelled or failed replay leaves the step, and its settings, in place.
+    let hand_over = move |s: &mut Session| {
+        if let (Some(prelude), Some(doc)) = (tail, doc) {
+            s.timeline_prelude.entry(doc).or_default().splice(0..0, prelude);
         }
-        if let Some(m) = tl.marker.as_mut()
-            && i < *m
-        {
-            *m -= 1;
-        }
-        Ok((i, true))
-    })?;
-    if let (Some(prelude), Some(doc)) = (tail, doc) {
-        s.timeline_prelude.entry(doc).or_default().splice(0..0, prelude);
-    }
-    Ok(r)
+    };
+    change_then(
+        s,
+        "design.delete",
+        "Delete Step",
+        |tl| {
+            let i = step_index("design.delete", tl, p)?;
+            let removed = tl.steps.remove(i);
+            // Its tool settings and pattern versions still feed the steps after it.
+            if let Some(next) = tl.steps.get_mut(i) {
+                next.prelude.splice(0..0, removed.prelude);
+                let own: Vec<String> = next.patterns.iter().map(|p| p.id.clone()).collect();
+                next.patterns.splice(0..0, removed.patterns.into_iter().filter(|p| !own.contains(&p.id)));
+            }
+            if let Some(m) = tl.marker.as_mut()
+                && i < *m
+            {
+                *m -= 1;
+            }
+            // The step that moves into its place may have depended on it too.
+            Ok((i, Some(i)))
+        },
+        hand_over,
+    )
 }
 
 /// `design.rollTo`: move the marker (`at` steps in effect, null = all) and rebuild the document there.
@@ -202,7 +226,7 @@ fn roll_to(s: &mut Session, p: &Value) -> Result<Value> {
             ),
         };
         tl.marker = at.filter(|n| *n < tl.steps.len());
-        Ok((was.min(tl.in_effect()), false))
+        Ok((was.min(tl.in_effect()), None))
     })
 }
 
@@ -228,13 +252,13 @@ fn edit_step(s: &mut Session, p: &Value) -> Result<Value> {
             }
             .filter(|n| *n < tl.steps.len());
         }
-        Ok((i, true))
+        Ok((i, Some(i + 1)))
     })
 }
 
 /// `design.replay`: rebuild the document from the base through every step in effect.
 fn replay_all(s: &mut Session, _: &Value) -> Result<Value> {
-    change(s, "design.replay", "Replay Timeline", |_| Ok((0, false)))
+    change(s, "design.replay", "Replay Timeline", |_| Ok((0, None)))
 }
 
 /// The step commands' precondition: the timeline is on.

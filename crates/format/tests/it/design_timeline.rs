@@ -72,6 +72,19 @@ fn a_timeline_round_trips_and_marks_the_file_format_2() {
     assert!(tl.steps[0].checkpoint.0.is_some(), "replay resumes from the saved document");
 }
 
+/// A stale baked result is still stale after a save and reopen; other replay outcomes are not saved.
+#[test]
+fn a_stale_warning_survives_a_save() {
+    let mut doc = with_timeline();
+    let mut tl = (**doc.design_timeline.as_ref().unwrap()).clone();
+    tl.steps[0].state = StepState::Error { message: "found again by the next replay".into() };
+    tl.steps[1].state = StepState::Stale;
+    doc.design_timeline = Some(Arc::new(tl));
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    let states: Vec<StepState> = back.design_timeline.unwrap().steps.iter().map(|st| st.state.clone()).collect();
+    assert_eq!(states, [StepState::Ok, StepState::Stale]);
+}
+
 #[test]
 fn a_file_without_a_timeline_stays_format_1() {
     let mut doc = with_timeline();

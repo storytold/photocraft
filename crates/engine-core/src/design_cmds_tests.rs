@@ -603,6 +603,32 @@ fn deleting_the_last_step_keeps_its_tool_settings_for_the_next() {
     assert!(last_prelude(&s).contains(&"tools.swapColors".to_string()), "{:?}", last_prelude(&s));
 }
 
+/// A delete of the last step that is cancelled keeps the step's tool settings with it only: the next
+/// step recorded doesn't take them too.
+#[test]
+fn a_cancelled_delete_of_the_last_step_hands_over_no_tool_settings() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("tools.swapColors", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    // No checkpoints (as in a reopened file): the delete replays as a job.
+    let st = s.active_mut().unwrap();
+    let mut d = (*st.doc).clone();
+    let mut tl = (*d.design_timeline.clone().unwrap()).clone();
+    for step in &mut tl.steps {
+        step.checkpoint = photocraft_doc::design::Checkpoint(None);
+    }
+    d.design_timeline = Some(std::sync::Arc::new(tl));
+    *st.doc_mut() = std::sync::Arc::new(d);
+    let last = step_id(&mut s, 1);
+    let crate::jobs::Started::Job(id) = s.start("design.delete", json!({"step": last})).unwrap() else { panic!("a replay is a job") };
+    assert!(s.cancel_job(id));
+    assert!(s.wait_job(id).is_err());
+    assert_eq!(steps(&mut s).len(), 2, "the step stays");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(!last_prelude(&s).contains(&"tools.swapColors".to_string()), "{:?}", last_prelude(&s));
+}
+
 /// An explicit working-space alias is recorded as the working space it resolved to.
 #[test]
 fn a_working_profile_alias_is_recorded_as_the_working_space() {
@@ -613,6 +639,20 @@ fn a_working_profile_alias_is_recorded_as_the_working_space() {
     s.execute("file.automate.conditionalModeChange", json!({"to": "rgb", "profile": "working"})).unwrap();
     let step = s.active().unwrap().doc.design_timeline.as_ref().unwrap().steps.last().unwrap().clone();
     assert_eq!(step.params["profile"], "rec2020", "{}", step.params);
+}
+
+/// A working space that no longer resolves (its .icc file gone) falls back to the built-in default;
+/// the step records that default, so replay doesn't follow later Color Settings.
+#[test]
+fn an_unresolved_working_profile_records_the_built_in_fallback() {
+    use crate::cmd::color_cmds::ColorExt as _;
+    let mut s = crate::session();
+    s.color_mut().settings.working_rgb = "/no/such/profile.icc".into();
+    s.execute("file.new", json!({"width": 8, "height": 8, "mode": "gray", "depth": 8, "background": "white"})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("file.automate.conditionalModeChange", json!({"to": "rgb", "profile": "working"})).unwrap();
+    let step = s.active().unwrap().doc.design_timeline.as_ref().unwrap().steps.last().unwrap().clone();
+    assert_eq!(step.params["profile"], craft_cms::Builtin::Srgb.id(), "{}", step.params);
 }
 
 /// A timeline doesn't start while a job runs: one started before it could edit the document

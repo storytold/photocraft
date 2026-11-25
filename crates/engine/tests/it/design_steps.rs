@@ -151,10 +151,9 @@ fn a_hidden_second_target_is_caught() {
 #[test]
 fn every_step_has_its_own_id() {
     let mut s = script();
-    let mut ids: Vec<u64> = steps(&mut s).iter().map(|x| x["step"].as_u64().unwrap()).collect();
-    let n = ids.len();
-    ids.dedup();
-    assert_eq!(ids.len(), n, "steps that mint no layer still get their own id");
+    let ids: Vec<u64> = steps(&mut s).iter().map(|x| x["step"].as_u64().unwrap()).collect();
+    let unique: std::collections::HashSet<u64> = ids.iter().copied().collect();
+    assert_eq!(unique.len(), ids.len(), "steps that mint no layer still get their own id: {ids:?}");
 }
 
 #[test]
@@ -264,6 +263,26 @@ fn clipboard_and_fade_steps_replay_their_result() {
     s.execute("design.replay", json!({})).unwrap();
     assert!(steps(&mut s).iter().all(|x| x["state"]["state"] == "ok"), "{:?}", steps(&mut s));
     assert_eq!(doc(&s), before);
+}
+
+/// Deleting the selection a baked Paste Into was made in moves the paste into its place: its stored
+/// result may depend on the deleted selection, so it is marked stale like the steps after a change.
+#[test]
+fn a_baked_step_moving_into_a_deleted_steps_place_is_stale() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "A"})).unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 6})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 6, "height": 6})).unwrap();
+    s.execute("edit.pasteSpecial.pasteInto", json!({})).unwrap();
+    assert_eq!(commands(&mut s), ["select.rect", "edit.pasteSpecial.pasteInto"]);
+    assert_eq!(steps(&mut s)[1]["baked"], true, "the clipboard is gone on replay");
+    let select = step_id(&mut s, 0);
+    s.execute("design.delete", json!({"step": select})).unwrap();
+    assert_eq!(state(&mut s, 0), "stale");
 }
 
 #[test]

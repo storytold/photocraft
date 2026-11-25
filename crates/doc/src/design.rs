@@ -95,8 +95,9 @@ pub struct DesignStep {
     /// instead of checking them.
     #[serde(default, skip)]
     pub rerecord: bool,
-    /// Outcome of the last replay (Ok when recorded).
-    #[serde(default, skip)]
+    /// Outcome of the last replay (Ok when recorded). Only a stale warning is saved: the other
+    /// outcomes are the next replay's to find again, while a stale result stays stale.
+    #[serde(default, skip_serializing_if = "StepState::is_transient", deserialize_with = "stale_only")]
     pub state: StepState,
     /// The document right after this step, to resume replay from. Not saved.
     #[serde(default, skip)]
@@ -129,6 +130,17 @@ impl StepState {
     pub fn is_failure(&self) -> bool {
         matches!(self, StepState::Error { .. } | StepState::MissingReference { .. } | StepState::Retargeted { .. })
     }
+
+    /// An outcome the next replay finds again, so a save leaves it out: all but [`StepState::Stale`].
+    pub fn is_transient(&self) -> bool {
+        *self != StepState::Stale
+    }
+}
+
+/// A saved step state: a stale warning is kept, anything else reads as Ok (the next replay finds it).
+fn stale_only<'de, D: serde::Deserializer<'de>>(d: D) -> Result<StepState, D::Error> {
+    let state = StepState::deserialize(d)?;
+    Ok(if state.is_transient() { StepState::Ok } else { state })
 }
 
 /// A document's mode, depth and ICC profile.

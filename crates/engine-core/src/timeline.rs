@@ -445,12 +445,20 @@ fn pin_color_settings(s: &Session, id: &str, params: &Value) -> Option<Value> {
         Some(Some("working-gray" | "workingGray")) => Some(ColorMode::Grayscale),
         Some(_) => None,
     };
-    if let Some(working) = working
-        && let Some((spec, _)) = s.color().working_setting(working)
-    {
-        // A built-in named another way ("Adobe RGB (1998)") is kept by its id, as every version reads it.
-        let spec = craft_cms::Builtin::from_id(spec).map_or(spec, |b| b.id());
-        p.insert("profile".into(), spec.into());
+    if let Some(working) = working {
+        let spec = match s.color().working_setting(working) {
+            // A built-in named another way ("Adobe RGB (1998)") is kept by its id, as every version reads it.
+            Some((spec, _)) => Some(craft_cms::Builtin::from_id(spec).map_or(spec, |b| b.id())),
+            // Color Settings that don't resolve fall back to the built-in default: pin that, not
+            // whatever the settings resolve to at replay.
+            None => {
+                let fallback = craft_cms::builtin::default_for(crate::color_cmds::mode_space(working));
+                craft_cms::Builtin::ALL.into_iter().find(|b| fallback.is_some_and(|f| std::ptr::eq(b.profile(), f))).map(craft_cms::Builtin::id)
+            }
+        };
+        if let Some(spec) = spec {
+            p.insert("profile".into(), spec.into());
+        }
     }
     p.entry("intent").or_insert_with(|| s.color().settings.intent().id().into());
     p.entry("bpc").or_insert_with(|| s.color().settings.bpc.into());
@@ -551,13 +559,13 @@ pub(crate) fn steps_to_run(tl: &photocraft_doc::design::DesignTimeline, from: us
 
 /// The document `tl` produces from the first step at or before `from` with a checkpoint to the
 /// marker, with every replayed step's outcome and checkpoint updated.
-/// Baked steps after `changed` (the step the change was made at) are marked stale.
+/// Baked steps from `stale_from` on (the first step a change may have made out of date) are marked stale.
 /// Reports progress per step on `ctx` and stops when it is cancelled.
 pub(crate) fn replay(
     seed: Seed,
     tl: &photocraft_doc::design::DesignTimeline,
     from: usize,
-    changed: Option<usize>,
+    stale_from: Option<usize>,
     ctx: &crate::jobs::JobCtx,
 ) -> crate::Result<Replayed> {
     let mut tl = tl.clone();
@@ -585,7 +593,7 @@ pub(crate) fn replay(
     for (i, step) in tl.steps.iter_mut().enumerate().take(end).skip(start) {
         ctx.check()?;
         ctx.progress((i - start) as f32 / (end - start) as f32, &format!("Step {} of {end}", i + 1));
-        let stale = can_go_stale(step) && (step.state == StepState::Stale || changed.is_some_and(|c| i > c));
+        let stale = can_go_stale(step) && (step.state == StepState::Stale || stale_from.is_some_and(|c| i >= c));
         run_step(&mut r, step, &mut versions);
         if stale && !step.state.is_failure() {
             step.state = StepState::Stale;
@@ -636,7 +644,8 @@ fn run_step(r: &mut Session, step: &mut DesignStep, versions: &mut Vec<photocraf
     }
     let missing: Vec<LayerId> = step.changed.iter().copied().filter(|id| pre.layer(*id).is_none()).collect();
     // A step whose params were edited to name another layer acts on that one, if it exists.
-    let named = step.params.get("layer").and_then(|v| v.as_u64().map(LayerId).or_else(|| v.as_str().and_then(|n| crate::commands::layer_named(&pre, n))));
+    // Resolved as the command will resolve it: an id, a name or any other selector.
+    let named = crate::commands::explicit_layer(r, &step.params).ok().flatten();
     let replaced = step.rerecord && named.is_some_and(|l| pre.layer(l).is_some());
     if !missing.is_empty() && !replaced {
         return finish(r, step, StepState::MissingReference { layers: missing });
