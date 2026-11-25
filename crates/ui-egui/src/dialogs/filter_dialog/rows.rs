@@ -6,7 +6,7 @@
 //! blur row.
 //!
 //! These rows keep values under keys no command parameter has (`matteColor`, `sampleTool`, `resultPicked`,
-//! `lutSize`, `lutError`, `lutCube`) and Lens Blur's `channel:N` sources and Match Color's textual
+//! `lutSize`, `lutError`, `lutCube`, `lutPicked`) and Lens Blur's `channel:N` sources and Match Color's textual
 //! `source`; the family's `command_params` (dialogs-w24) maps them back and leaves the private ones out.
 
 use photocraft_engine::color_cmds::ColorExt;
@@ -57,6 +57,9 @@ const LUT_SIZE: &str = "lutSize";
 const LUT_ERROR: &str = "lutError";
 /// Whether the chosen LUT is a `.cube` table: Data Order and Table Order show only then (#14423).
 const LUT_CUBE: &str = "lutCube";
+/// A LUT Load 3D LUT… read. The picker hands over the parsed table, not the file's format, so the row can't tell a
+/// `.cube` from a `.3dl` or `.look`: such a LUT takes no Data Order or Table Order, as before #14423.
+const LUT_PICKED: &str = "lutPicked";
 
 /// Builds the rows `command`'s dialog shows from the rows `params` the spec parser made.
 pub(crate) fn custom_rows(app: &mut PhotocraftApp, command: &str, params: &mut Vec<Param>) {
@@ -298,10 +301,13 @@ fn lut_choice(fields: &DialogFields) -> LutChoice {
 }
 
 /// Whether the chosen LUT is a `.cube` file, which Data Order and Table Order apply to: a LUT folder file named
-/// `.cube`, or a loaded LUT the row holds as `.cube` text. Built-in looks are no files and have no orders.
-fn lut_is_cube(fields: &DialogFields) -> bool {
+/// `.cube`, or `.cube` text given with a `.cube` file name. Built-in looks are no files and have no orders, and a
+/// LUT Load 3D LUT… read has no known format ([`LUT_PICKED`]).
+pub(crate) fn lut_is_cube(fields: &DialogFields) -> bool {
     match lut_choice(fields) {
-        LutChoice::Loaded { .. } => fields.text("fileName").is_some_and(|name| name.to_ascii_lowercase().ends_with(".cube")),
+        LutChoice::Loaded { .. } => {
+            fields.bool(LUT_PICKED) != Some(true) && fields.text("fileName").is_some_and(|name| name.to_ascii_lowercase().ends_with(".cube"))
+        }
         LutChoice::Folder(path) => path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cube")),
         _ => false,
     }
@@ -329,19 +335,29 @@ fn set_lut_choice(fields: &mut DialogFields, choice: &LutChoice) {
     match choice {
         LutChoice::None => {
             fields.set("lut", "none");
-            clear(fields, &["file", "data", "fileName", LUT_SIZE]);
+            clear(fields, &["file", "data", "fileName", LUT_SIZE, LUT_PICKED]);
         }
         LutChoice::Builtin(id) => {
             fields.set("lut", *id);
-            clear(fields, &["file", "data", "fileName", LUT_SIZE]);
+            clear(fields, &["file", "data", "fileName", LUT_SIZE, LUT_PICKED]);
         }
         LutChoice::Folder(path) => {
             fields.set("lut", "none");
             fields.set("file", path.to_string_lossy().into_owned());
-            clear(fields, &["data", "fileName", LUT_SIZE]);
+            clear(fields, &["data", "fileName", LUT_SIZE, LUT_PICKED]);
         }
         _ => {}
     }
+}
+
+/// Holds the LUT Load 3D LUT… read as the row's loaded LUT: its table as `.cube` text, which the command embeds,
+/// marked [`LUT_PICKED`] because the file's own format is not known.
+pub(crate) fn take_loaded_lut(fields: &mut DialogFields, lut: &craft::cms::lutfile::LutFile) {
+    set_lut_choice(fields, &LutChoice::None);
+    fields.set("data", write_cube(lut));
+    fields.set("fileName", format!("{}.cube", lut.title));
+    fields.set(LUT_SIZE, i64::try_from(lut.size).unwrap_or(0));
+    fields.set(LUT_PICKED, true);
 }
 
 /// Color Lookup's 3D LUT menu lists the LUT folder's files after the built-in looks (#9754), as the adjustment
@@ -369,12 +385,7 @@ fn color_lookup(app: &PhotocraftApp, params: &mut Vec<Param>) {
             }
         }
         match out.loaded {
-            Some(Ok(lut)) => {
-                set_lut_choice(fields, &LutChoice::None);
-                fields.set("data", write_cube(&lut));
-                fields.set("fileName", format!("{}.cube", lut.title));
-                fields.set(LUT_SIZE, i64::try_from(lut.size).unwrap_or(0));
-            }
+            Some(Ok(lut)) => take_loaded_lut(fields, &lut),
             Some(Err(error)) => fields.set(LUT_ERROR, error.0),
             None => {}
         }
