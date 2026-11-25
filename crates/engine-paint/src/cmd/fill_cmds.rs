@@ -104,7 +104,11 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         "pattern" => {
             let pat = crate::pattern_cmds::resolve_param(s, CMD, p)?;
             let (scale, angle, _, phase) = crate::pattern_cmds::placement(CMD, p)?;
-            let tile = photocraft_compose::pattern::Tile::new(&pat).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
+            // Where a pattern fill layer and a Pattern Overlay paint the pattern through the grey
+            // profile (an 8- or 16-bit Grayscale document in the default grey space), so does
+            // Edit › Fill (#14975).
+            let space = photocraft_compose::pattern::PatternSpace::of_pixels(&st.doc);
+            let tile = photocraft_compose::pattern::Tile::new_in(&pat, space).ok_or_else(|| bad("the pattern is empty or too large to paint"))?;
             // Photoshop's Fill uses the canvas origin.
             let place = photocraft_compose::pattern::Placement::new(Rect::EMPTY, false, phase, scale, angle);
             out["pattern"] = json!(pat.id);
