@@ -284,7 +284,7 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     let layers = reader.layers(&image.layers, 1, 0, 0)?;
     ctl.progress(0.9);
     let mut document = Document::new(name, Size::new(image.width, image.height), mode, depth);
-    document.layers = layers;
+    document.layers = layers.into();
     if let Some(profile) = reader.archive.icc_profile().map_err(map_error)? {
         document.icc_profile = Some(std::sync::Arc::new(profile));
     }

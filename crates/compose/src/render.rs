@@ -1,7 +1,10 @@
-use super::composite::composite_stack_at;
+use super::composite::{composite_stack_at, composite_stack_at_with};
 use super::content::RENDER_TILE;
-use super::ctx::{Ctx, RenderVectorMasks, prepare_effects, prepare_tones};
-use super::{Buffer, Document, Layer, Rect, Surface, adjust, advanced, cmyk, multichannel, native, native_lab, pattern, psblend};
+use super::ctx::{Ctx, RenderVectorMasks, prepare_effects_with, prepare_tones};
+use super::{
+    Buffer, BufferAlloc, Document, FallibleBufferAlloc, InfallibleBufferAlloc, Layer, Rect, Surface, adjust, advanced, cmyk, multichannel, native, native_lab,
+    pattern, psblend,
+};
 
 /// Every layer the compositor draws, groups before their children: hidden layers and everything
 /// inside hidden groups are left out.
@@ -38,6 +41,13 @@ pub fn render_tiled(doc: &Document, rect: Rect, tile: i32) -> Buffer {
 }
 
 pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx) -> Buffer {
+    match render_tiled_with_alloc(doc, rect, tile, cx, &InfallibleBufferAlloc) {
+        Ok(buffer) => buffer,
+        Err(never) => match never {},
+    }
+}
+
+fn render_tiled_with_alloc<A: BufferAlloc + Sync>(doc: &Document, rect: Rect, tile: i32, cx: &Ctx, alloc: &A) -> Result<Buffer, A::Error> {
     let tile = tile.max(1);
     // Lab documents mix Normal blending in CIELAB, as Photoshop does (psblend::LAB_MIX); 32-bit
     // documents don't clip Add / Divide or Hue / Saturation / Color / Luminosity at 1 (psblend::HDR).
@@ -47,43 +57,41 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
     let cmyk = cmyk_space(doc);
     let cmyk = cmyk.as_ref();
     if rect.is_empty() {
-        return Buffer::transparent(rect);
+        return alloc.filled(rect, [0.0; 4]);
     }
     // Refuse rects too large to hold: an empty buffer, not an allocation failure.
     if u64::from(rect.width()) * u64::from(rect.height()) > MAX_RENDER_PIXELS {
-        return Buffer::transparent(Rect::EMPTY);
+        return alloc.filled(Rect::EMPTY, [0.0; 4]);
     }
-    // A CMYK stack with adjustment layers the inks carry exactly composites on its inks.
-    if let Some(buf) = native::render_cmyk(doc, rect, tile) {
-        return buf;
+    // A CMYK stack with adjustment layers the inks carry exactly composites on the inks.
+    if let Some(buf) = native::render_cmyk_with(doc, rect, tile, alloc)? {
+        return Ok(buf);
     }
     // A Lab stack with adjustment layers that work on L, a and b composites on its stored values.
-    if let Some(buf) = native_lab::render_lab(doc, rect, tile) {
-        return buf;
+    if let Some(buf) = native_lab::render_lab_with(doc, rect, tile, alloc)? {
+        return Ok(buf);
     }
     cx.set_fx_clip(rect);
     if i64::from(rect.width()) <= i64::from(tile) && i64::from(rect.height()) <= i64::from(tile) {
-        return photocraft_color::convert::with_cmyk_space(cmyk, || {
-            let mut buf = multichannel::backdrop(doc, rect);
-            in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut buf, cx, advanced::Scope::ROOT));
-            buf
+        return photocraft_color::convert::with_cmyk_space(cmyk, || -> Result<_, A::Error> {
+            let mut buf = multichannel::backdrop_with(doc, rect, alloc)?;
+            in_blend_space(lab, hdr, || composite_stack_at_with(&doc.layers, &mut buf, cx, advanced::Scope::ROOT, alloc))?;
+            Ok(buf)
         });
     }
     // Effect maps are built once, here, before any tile needs them (#276).
-    prepare_effects(&doc.layers, rect, cx, |f| {
-        photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f));
-    });
+    prepare_effects_with(&doc.layers, rect, cx, alloc, |f| photocraft_color::convert::with_cmyk_space(cmyk, || in_blend_space(lab, hdr, f)))?;
     let run = |t: Rect| {
-        photocraft_color::convert::with_cmyk_space(cmyk, || {
-            let mut b = multichannel::backdrop(doc, t);
-            in_blend_space(lab, hdr, || composite_stack_at(&doc.layers, &mut b, cx, advanced::Scope::ROOT));
-            b
+        photocraft_color::convert::with_cmyk_space(cmyk, || -> Result<_, A::Error> {
+            let mut b = multichannel::backdrop_with(doc, t, alloc)?;
+            in_blend_space(lab, hdr, || composite_stack_at_with(&doc.layers, &mut b, cx, advanced::Scope::ROOT, alloc))?;
+            Ok(b)
         })
     };
     // Tiles are written straight into the output, one row of tiles (a band) at a time, so the
     // peak is the output plus the tiles in flight, not a second full-size copy.
     let w = rect.width() as usize;
-    let mut out = Buffer::transparent(rect);
+    let mut out = alloc.filled(rect, [0.0; 4])?;
     let band_tiles = |y0: i32| {
         let y1 = y0.saturating_add(tile).min(rect.y1);
         let mut v = Vec::new();
@@ -102,42 +110,46 @@ pub(crate) fn render_tiled_with(doc: &Document, rect: Rect, tile: i32, cx: &Ctx)
             band[o..o + pw].copy_from_slice(src);
         }
     };
-    let band_len = w * tile as usize;
+    let band_len = w.saturating_mul(tile as usize).min(out.px.len()).max(1);
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         let bands = rect.height().div_ceil(tile as u32) as usize;
         if bands >= 2 * rayon::current_num_threads() {
             // Enough bands to keep every core busy: one band per task, its tiles in turn.
-            out.px.par_chunks_mut(band_len).enumerate().for_each(|(i, band)| {
+            out.px.par_chunks_mut(band_len).enumerate().try_for_each(|(i, band)| {
                 let y0 = rect.y0 + i as i32 * tile;
                 for t in band_tiles(y0) {
-                    put(band, y0, &run(t));
+                    let part = run(t)?;
+                    put(band, y0, &part);
                 }
-            });
+                Ok::<(), A::Error>(())
+            })?;
         } else {
             // Few, wide bands: the tiles of each band in parallel, and the bands too, so a band's
             // slowest tile doesn't leave the other cores idle until the next band starts. Each
             // tile is written as soon as it is done, so only the tiles in flight are held.
-            out.px.par_chunks_mut(band_len).enumerate().for_each(|(i, band)| {
+            out.px.par_chunks_mut(band_len).enumerate().try_for_each(|(i, band)| {
                 let y0 = rect.y0 + i as i32 * tile;
                 let band = std::sync::Mutex::new(band);
-                band_tiles(y0).into_par_iter().for_each(|t| {
-                    let part = run(t);
+                band_tiles(y0).into_par_iter().try_for_each(|t| {
+                    let part = run(t)?;
                     let mut band = band.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     put(&mut band, y0, &part);
-                });
-            });
+                    Ok::<(), A::Error>(())
+                })
+            })?;
         }
     }
     #[cfg(target_arch = "wasm32")]
     for (i, band) in out.px.chunks_mut(band_len).enumerate() {
         let y0 = rect.y0 + i as i32 * tile;
         for t in band_tiles(y0) {
-            put(band, y0, &run(t));
+            let part = run(t)?;
+            put(band, y0, &part);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Runs `f` with this thread's document blend flags set ([`psblend::LAB_MIX`], [`psblend::HDR`]),
@@ -160,11 +172,51 @@ pub fn cmyk_space(doc: &Document) -> Option<std::sync::Arc<photocraft_color::con
 /// Pixels per band of [`render_bands`] (a 14000 px wide band is ~600 rows, ~130 MB of f32).
 pub const BAND_PIXELS: u64 = 8 << 20;
 
+/// Errors reported by [`try_render_bands`]. Allocation errors cover RGBA `Buffer` storage used by
+/// compositing and effect-shape construction; non-Buffer temporaries such as masks and effect-map
+/// arrays remain infallible.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RenderBandsError<E> {
+    /// The compositor could not reserve or size one of its RGBA buffers. Earlier complete bands
+    /// may already have been delivered to the sink.
+    Allocation(photocraft_raster::AllocationError),
+    /// The caller's sink rejected a completed band.
+    Sink(E),
+}
+
+enum RenderBandsCoreError<E, A> {
+    Allocation(A),
+    Sink(E),
+}
+
 /// Composite `rect` in horizontal bands, top to bottom, handing each band to `sink` (tiles inside
 /// a band render in parallel). Peak memory is one band instead of the whole composite, so huge
 /// documents can be exported or displayed without a full-size float copy. `band_rows` of 0 picks
 /// about [`BAND_PIXELS`] per band; bands are whole multiples of [`RENDER_TILE`] rows.
 pub fn render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: impl FnMut(Buffer) -> Result<(), E>) -> Result<(), E> {
+    match render_bands_with_alloc(doc, rect, band_rows, &InfallibleBufferAlloc, &mut sink) {
+        Ok(()) => Ok(()),
+        Err(RenderBandsCoreError::Sink(error)) => Err(error),
+        Err(RenderBandsCoreError::Allocation(never)) => match never {},
+    }
+}
+
+/// Fallible `render_bands` variant that reports compositor-owned RGBA buffer allocation failures.
+pub fn try_render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: impl FnMut(Buffer) -> Result<(), E>) -> Result<(), RenderBandsError<E>> {
+    match render_bands_with_alloc(doc, rect, band_rows, &FallibleBufferAlloc, &mut sink) {
+        Ok(()) => Ok(()),
+        Err(RenderBandsCoreError::Allocation(error)) => Err(RenderBandsError::Allocation(error)),
+        Err(RenderBandsCoreError::Sink(error)) => Err(RenderBandsError::Sink(error)),
+    }
+}
+
+fn render_bands_with_alloc<A: BufferAlloc + Sync, E>(
+    doc: &Document,
+    rect: Rect,
+    band_rows: i32,
+    alloc: &A,
+    sink: &mut impl FnMut(Buffer) -> Result<(), E>,
+) -> Result<(), RenderBandsCoreError<E, A::Error>> {
     if rect.is_empty() {
         return Ok(());
     }
@@ -175,7 +227,8 @@ pub fn render_bands<E>(doc: &Document, rect: Rect, band_rows: i32, mut sink: imp
     let mut y = rect.y0;
     while y < rect.y1 {
         let y1 = y.saturating_add(rows).min(rect.y1);
-        sink(render_tiled_with(doc, Rect::new(rect.x0, y, rect.x1, y1), RENDER_TILE, &cx))?;
+        let band = render_tiled_with_alloc(doc, Rect::new(rect.x0, y, rect.x1, y1), RENDER_TILE, &cx, alloc).map_err(RenderBandsCoreError::Allocation)?;
+        sink(band).map_err(RenderBandsCoreError::Sink)?;
         y = y1;
     }
     Ok(())
@@ -325,6 +378,7 @@ pub fn render_layer(layer: &Layer, rect: Rect) -> Buffer {
             fx_clip: Default::default(),
             fx_over_budget: false,
             tone_luts: prepare_tones(std::slice::from_ref(layer), 0),
+            curve_levels: true,
             doc: None,
             layer_keys: Default::default(),
         },
@@ -383,4 +437,179 @@ pub fn composite_to_surface_with_interrupt(
     }
     out.prune();
     Ok(out)
+}
+
+#[cfg(test)]
+mod fallible_bands_tests {
+    use super::*;
+    use photocraft_color::{Color, ColorMode, SampleType};
+    use photocraft_doc::{Document, Fill, Knockout, Layer, LayerContent};
+    use photocraft_geom::Size;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct FailBufferAt {
+        fail_at: usize,
+        attempts: AtomicUsize,
+    }
+
+    impl FailBufferAt {
+        fn attempt(&self) -> Result<(), usize> {
+            let n = self.attempts.fetch_add(1, Ordering::Relaxed) + 1;
+            if n == self.fail_at { Err(n) } else { Ok(()) }
+        }
+    }
+
+    impl BufferAlloc for FailBufferAt {
+        type Error = usize;
+
+        fn filled(&self, rect: Rect, color: [f32; 4]) -> Result<Buffer, Self::Error> {
+            self.attempt()?;
+            Buffer::try_filled(rect, color).map_err(|_| usize::MAX)
+        }
+
+        fn clone(&self, buffer: &Buffer) -> Result<Buffer, Self::Error> {
+            self.attempt()?;
+            buffer.try_clone().map_err(|_| usize::MAX)
+        }
+
+        fn scalar_filled(&self, rect: Rect, value: f32) -> Result<Vec<f32>, Self::Error> {
+            self.attempt()?;
+            let len = (rect.width() as usize).checked_mul(rect.height() as usize).ok_or(usize::MAX)?;
+            photocraft_raster::scratch::try_take(len, value).ok_or(usize::MAX)
+        }
+    }
+
+    fn nested_document() -> Document {
+        let mut doc = Document::new("fallible bands", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+        let mut fill = Layer::new("fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        fill.advanced.knockout = Knockout::Shallow;
+        doc.layers.push(Layer::group("nested", vec![fill]));
+        doc
+    }
+
+    fn outlined_effect_document() -> Document {
+        let mut doc = Document::new("fallible outlined effect", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
+        let path = photocraft_doc::vector::Path {
+            subpaths: vec![photocraft_doc::vector::Subpath::polygon(&[(12.0, 12.0), (60.0, 12.0), (60.0, 60.0), (12.0, 60.0)])],
+            ..Default::default()
+        };
+        let mut cache = photocraft_doc::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        cache.fill_rect(Rect::new(12, 12, 60, 60), &[0.0, 0.0, 0.0, 1.0]);
+        let shape = photocraft_doc::vector::ShapeLayer { path, fill: Some(Fill::Solid(Color::BLACK)), cache: Some(cache), ..Default::default() };
+        let mut layer = Layer::new("outlined shape", LayerContent::Shape(shape));
+        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layers.push(layer);
+        doc
+    }
+
+    #[test]
+    fn fail_nth_buffer_constructor_propagates_through_nested_rendering() {
+        let doc = nested_document();
+        let rect = doc.bounds();
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let ctx = Ctx::for_doc(&doc, &patterns);
+        let count = {
+            let mut backdrop = Buffer::filled(rect, [0.0; 4]);
+            let alloc = FailBufferAt { fail_at: usize::MAX, attempts: AtomicUsize::new(0) };
+            composite_stack_at_with(&doc.layers, &mut backdrop, &ctx, advanced::Scope::ROOT, &alloc).unwrap();
+            alloc.attempts.load(Ordering::Relaxed)
+        };
+        assert!(count >= 4, "nested shallow knockout exercises buffers and clones");
+        for fail_at in 1..=count {
+            let mut backdrop = Buffer::filled(rect, [0.0; 4]);
+            let alloc = FailBufferAt { fail_at, attempts: AtomicUsize::new(0) };
+            assert!(composite_stack_at_with(&doc.layers, &mut backdrop, &ctx, advanced::Scope::ROOT, &alloc).is_err());
+            assert_eq!(alloc.attempts.load(Ordering::Relaxed), fail_at);
+        }
+        let regular = render_tiled(&doc, rect, 8);
+        let mut composited = Buffer::filled(rect, [0.0; 4]);
+        composite_stack_at_with(&doc.layers, &mut composited, &ctx, advanced::Scope::ROOT, &InfallibleBufferAlloc).unwrap();
+        assert_eq!(composited, regular);
+        let alloc = FallibleBufferAlloc;
+        assert_eq!(render_tiled_with_alloc(&doc, rect, 8, &ctx, &alloc).unwrap(), regular);
+    }
+
+    #[test]
+    fn render_bands_with_alloc_reports_outer_and_tile_allocations_before_the_sink() {
+        let doc = Document::new("fallible tile", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
+        for fail_at in [1, 2] {
+            let alloc = FailBufferAt { fail_at, attempts: AtomicUsize::new(0) };
+            let mut delivered = 0;
+            let result = render_bands_with_alloc(&doc, doc.bounds(), RENDER_TILE, &alloc, &mut |_| {
+                delivered += 1;
+                Ok::<(), ()>(())
+            });
+            assert!(matches!(result, Err(RenderBandsCoreError::Allocation(error)) if error == fail_at));
+            assert_eq!(delivered, 0, "failed output or tile allocation must not deliver a partial band");
+            if fail_at == 1 {
+                assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1, "the output allocation is sequential");
+            } else {
+                assert!(alloc.attempts.load(Ordering::Relaxed) >= 2, "parallel tile allocation may have other in-flight attempts");
+            }
+        }
+    }
+
+    #[test]
+    fn effect_shape_buffer_failure_is_not_cached_and_retry_uses_the_successful_cache() {
+        let mut doc = Document::new("fallible effect shape", Size::new(512, 256), ColorMode::Rgb, SampleType::U8);
+        let fill = Layer::new("group fill", LayerContent::Fill(Fill::Solid(Color::BLACK)));
+        let mut layer = Layer::group("styled group", vec![fill]);
+        layer.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+        doc.layers.push(layer);
+        let patterns = pattern::PreparedPatterns::new(&doc.patterns, pattern::PREPARED_PATTERN_BYTES).in_mode(doc.pixel_format().mode);
+        let cx = Ctx::for_doc(&doc, &patterns);
+
+        for _ in 0..2 {
+            let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
+            let mut delivered = 0;
+            let result = render_bands_with_alloc(&doc, doc.bounds(), RENDER_TILE, &alloc, &mut |_| {
+                delivered += 1;
+                Ok::<(), ()>(())
+            });
+            assert!(matches!(result, Err(RenderBandsCoreError::Allocation(1))));
+            assert_eq!(delivered, 0, "failed effect-shape allocation must happen before the sink");
+            assert_eq!(alloc.attempts.load(Ordering::Relaxed), 1, "the cold effect shape requests an RGBA buffer before output");
+        }
+
+        let alloc = FallibleBufferAlloc;
+        render_tiled_with_alloc(&doc, doc.bounds(), RENDER_TILE, &cx, &alloc).unwrap();
+        let cache_hit_alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
+        crate::fx_cache::effect_maps_with(&doc.layers[0], doc.bounds(), &cx, &cache_hit_alloc).unwrap();
+        assert_eq!(cache_hit_alloc.attempts.load(Ordering::Relaxed), 0, "the successful render-context cache avoids rebuilding its RGBA shape");
+
+        let outlined = outlined_effect_document();
+        let alloc = FailBufferAt { fail_at: 1, attempts: AtomicUsize::new(0) };
+        let mut delivered = 0;
+        let result = render_bands_with_alloc(&outlined, outlined.bounds(), RENDER_TILE, &alloc, &mut |_| {
+            delivered += 1;
+            Ok::<(), ()>(())
+        });
+        assert!(matches!(result, Err(RenderBandsCoreError::Allocation(1))));
+        assert_eq!(delivered, 0, "outline alpha extraction must use the fallible surface buffer path");
+    }
+
+    #[test]
+    fn fallible_bands_preserves_sink_errors_as_a_separate_variant() {
+        let doc = nested_document();
+        let result = try_render_bands(&doc, doc.bounds(), 4, |_| Err::<(), _>("sink stopped"));
+        assert_eq!(result, Err(RenderBandsError::Sink("sink stopped")));
+    }
+
+    #[test]
+    fn legacy_and_fallible_band_apis_deliver_the_same_pixels() {
+        let doc = nested_document();
+        let mut legacy = Vec::new();
+        render_bands(&doc, doc.bounds(), 8, |band| {
+            legacy.push(band);
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+        let mut fallible = Vec::new();
+        try_render_bands(&doc, doc.bounds(), 8, |band| {
+            fallible.push(band);
+            Ok::<(), ()>(())
+        })
+        .unwrap();
+        assert_eq!(legacy, fallible);
+    }
 }

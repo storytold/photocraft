@@ -382,15 +382,15 @@ zip_cases! {
 
 #[test]
 fn directory_bundle_roundtrip_all_modes() {
-    for mode in MODES {
-        for depth in SampleType::ALL {
-            let doc = rich_doc(mode, depth);
-            let dir = temp_dir("dir");
-            PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
-            assert!(dir.join("manifest.json").is_file());
-            assert_eq!(load_path(&dir).unwrap(), doc, "{mode:?} {depth:?}");
-            std::fs::remove_dir_all(dir).unwrap();
-        }
+    // The directory bundle runs the zip save's `prepare` and object encoding and differs only in the container, which
+    // does not depend on mode or depth: every mode x depth is `zip_cases!` above (#15652).
+    for (mode, depth) in [(ColorMode::Rgb, SampleType::U8), (ColorMode::Lab, SampleType::F32)] {
+        let doc = rich_doc(mode, depth);
+        let dir = temp_dir("dir");
+        PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+        assert!(dir.join("manifest.json").is_file());
+        assert_eq!(load_path(&dir).unwrap(), doc, "{mode:?} {depth:?}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
 
@@ -461,11 +461,11 @@ fn group_depth(layers: &[Layer]) -> usize {
 /// [`rich_doc`] with its layers wrapped in groups until they are nested `levels` deep.
 fn nested_doc(levels: usize, depth: SampleType) -> Document {
     let mut doc = rich_doc(ColorMode::Rgb, depth);
-    let mut layers = std::mem::take(&mut doc.layers);
+    let mut layers = std::mem::take(&mut *doc.layers);
     for i in group_depth(&layers)..levels {
         layers = vec![Layer::group(format!("Level {i}"), layers)];
     }
-    doc.layers = layers;
+    doc.layers = layers.into();
     assert_eq!(group_depth(&doc.layers), levels);
     doc
 }
@@ -688,6 +688,9 @@ fn directory_save_rejects_manifest_symlink_without_overwriting_target() {
 
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("symlink-manifest");
+    // The fixture inspects this directory even when preflight refuses the save before any
+    // object is written; empty bundles no longer create object directories eagerly.
+    std::fs::create_dir(dir.join("tiles")).unwrap();
     let outside = temp_dir("symlink-manifest-outside");
     let external_manifest = outside.join("external.json");
     std::fs::write(&external_manifest, b"keep manifest").unwrap();
@@ -695,7 +698,8 @@ fn directory_save_rejects_manifest_symlink_without_overwriting_target() {
 
     assert!(PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).is_err());
     assert_eq!(std::fs::read(&external_manifest).unwrap(), b"keep manifest");
-    assert_eq!(std::fs::read_dir(dir.join("tiles")).unwrap().count(), 0);
+    // Refused before any object is written: `tiles/` is missing or empty.
+    assert_eq!(std::fs::read_dir(dir.join("tiles")).map_or(0, |entries| entries.count()), 0);
 
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_dir_all(outside).unwrap();
@@ -805,7 +809,8 @@ fn bundles_without_the_full_composite_still_open() {
     }
     let older = z.finish().unwrap();
     assert_eq!(read_full_composite(&older).unwrap(), None);
-    // A member that names any other entry is refused, and the document still opens.
+    // A member that names any other entry is refused, and so is the bundle: craft-pcraft-format
+    // treats it like a `thumbnail` or `composite` that names another entry. No writer does that.
     manifest["full_composite"] = serde_json::Value::from("thumb.png");
     let mut z = zip::ZipWriter::new();
     z.add("manifest.json", &serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
@@ -814,7 +819,7 @@ fn bundles_without_the_full_composite_still_open() {
     }
     let other = z.finish().unwrap();
     assert!(read_full_composite(&other).is_err());
-    assert_eq!(load_from_bytes(&other).unwrap(), doc);
+    assert!(matches!(load_from_bytes(&other), Err(FormatError::Corrupt(_))));
     assert_eq!(load_from_bytes(&older).unwrap(), load_from_bytes(&bytes).unwrap());
     assert_eq!(load_from_bytes(&older).unwrap(), doc);
     // A save without it writes no member at all, as older writers did.
@@ -1365,6 +1370,51 @@ fn arrow_document_is_backward_compatible() {
     // The new reader restores full parametric editability.
     let loaded = load_from_bytes(&bytes).unwrap();
     assert_eq!(loaded, doc);
+}
+/// Native files keep enabled alignment; missing or disabled fields preserve legacy rendering.
+#[test]
+fn use_aligned_rendering_roundtrips_and_defaults_for_legacy_files() {
+    use photocraft_doc::{ShapeLayer, ShapeStroke};
+    use photocraft_format::manifest::ContentM;
+
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+
+    doc.layers.push(Layer::new(
+        "Pixel aligned rectangle",
+        LayerContent::Shape(ShapeLayer {
+            path: photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(10.0, 10.0), (70.0, 10.0), (70.0, 70.0), (10.0, 70.0)])]),
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            use_aligned_rendering: true,
+            ..Default::default()
+        }),
+    ));
+
+    // The enabled option survives a complete save/load cycle.
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let reopened = load_from_bytes(&bytes).unwrap();
+    assert_eq!(reopened, doc);
+
+    let manifest = read_manifest(&bytes).unwrap();
+    let layer = manifest.document.layers.iter().find(|l| l.name == "Pixel aligned rectangle").unwrap();
+
+    let stored = serde_json::to_value(&layer.content).unwrap();
+    assert_eq!(stored["use_aligned_rendering"], true);
+
+    // A legacy manifest without the new property defaults to false.
+    let mut legacy = stored.clone();
+    legacy.as_object_mut().unwrap().remove("use_aligned_rendering");
+
+    let old_content: ContentM = serde_json::from_value(legacy).unwrap();
+    assert!(matches!(old_content, ContentM::Shape { use_aligned_rendering: false, .. }));
+
+    // Disabled alignment must not add a new field to legacy-style manifests.
+    let mut disabled = layer.content.clone();
+    if let ContentM::Shape { use_aligned_rendering, .. } = &mut disabled {
+        *use_aligned_rendering = false;
+    }
+
+    let disabled_json = serde_json::to_value(disabled).unwrap();
+    assert!(disabled_json.get("use_aligned_rendering").is_none());
 }
 
 /// `FileEncoding::source_images` is kept in `.pcraft` with the other encoder settings (#5733):
