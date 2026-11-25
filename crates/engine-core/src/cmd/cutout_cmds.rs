@@ -410,4 +410,30 @@ mod tests {
 
         assert!(s.execute(CMD, json!({})).is_err());
     }
+
+    #[test]
+    fn remove_background_fails_when_smart_object_has_no_cache_and_unsupported_filter() {
+        let (mut s, _) = disc(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let id = active_id(&s);
+
+        s.edit("unsupported filter", |doc, _| {
+            let l = doc.layer_mut(id).unwrap();
+            let LayerContent::Smart(sm) = &mut l.content else { panic!("not smart") };
+            sm.cache = None;
+            sm.smart_filters.push(photocraft_doc::SmartFilter {
+                command: "unsupported.filter".into(),
+                params: json!({"name": "Unsupported Filter"}),
+                blend: photocraft_doc::BlendMode::Normal,
+                opacity: 1.0,
+                visible: true,
+            });
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(layer(&s, id).surface(), None);
+        assert!(s.execute(CMD, json!({})).is_err());
+        assert_eq!(layer(&s, id).surface(), None);
+    }
 }
