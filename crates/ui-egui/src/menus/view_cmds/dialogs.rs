@@ -422,7 +422,7 @@ pub(super) fn params_for(app: &mut PhotocraftApp, id: &str) -> Option<(Vec<Param
             Param::new("tiff/height", tl!("H"), ParamKind::int(Some(1), Some(30_000), 1)).enabled_when("tiff/resize", true),
         ]),
         "file.automate.batch" => batch_form(app, &dir),
-        "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => channel_form(app, id),
+        "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => channel_form(app, id, None),
         _ => None,
     }
 }
@@ -515,9 +515,20 @@ fn batch_form(app: &PhotocraftApp, dir: &str) -> Option<(Vec<Param>, DialogField
 // different channel. The label remains the saved channel's own name.
 pub(crate) const APPLY_IMAGE_ALPHA_PREFIX: &str = "@alpha:";
 
+/// Open the Apply Image form with an indexed source available to the recorded step's editor.
+pub(crate) fn open_recorded_apply_image(app: &mut PhotocraftApp, title: &str, index: usize) -> Option<DialogId> {
+    app.session.active()?.doc.channels.get(index)?;
+    let command = "image.applyImage";
+    let (rows, fields) = channel_form(app, command, Some(index))?;
+    let title = crate::dialogs::filter_dialog::title_of(title);
+    Some(crate::dialogs::params::open_param_unsaved(app, command, fields, Value::Null, move |fields| {
+        ParamDialog::command(command, title.clone(), rows.clone()).values(Bind::bound(fields))
+    }))
+}
+
 /// The channel workflow forms (see channels_panel.rs for the channel references): Save and Load Selection, Apply
 /// Image and Calculations.
-fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFields)> {
+fn channel_form(app: &PhotocraftApp, id: &str, recorded_alpha: Option<usize>) -> Option<(Vec<Param>, DialogFields)> {
     let st = app.session.active()?;
     let d = &st.doc;
     let mode = d.pixel_format().mode;
@@ -582,6 +593,7 @@ fn channel_form(app: &PhotocraftApp, id: &str) -> Option<(Vec<Param>, DialogFiel
             masks.extend(sources.iter().cloned());
             for (index, (key, label)) in sources.iter_mut().skip(alpha_offset).take(d.channels.len()).enumerate() {
                 if key.starts_with(APPLY_IMAGE_ALPHA_PREFIX)
+                    || recorded_alpha == Some(index)
                     || (target == Some(alpha_offset + index) && (key.is_empty() || channel_cmds::parse_ref(&json!(key), d) != Some(ChanRef::Alpha(index))))
                 {
                     *label = Label::from(key.clone());
