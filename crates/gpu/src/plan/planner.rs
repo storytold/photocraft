@@ -1085,7 +1085,7 @@ impl<'a> Planner<'a> {
     /// the layer's content and effects are planned without those masks (`unhid`; the effect maps
     /// are built from `effects_source`), then the finished result is mixed back towards the
     /// backdrop by them (`advanced::apply_hiding_mask`: `mix(before, after, k)`, B untouched where
-    /// `k >= 1`, `p0.z`). Drawn atop a clipping base the same mix works on the base's own alpha, which
+    /// `k >= 1` and A where `k <= 0`, so HDR values survive: `p0.z` and `p0.w`). Drawn atop a clipping base the same mix works on the base's own alpha, which
     /// both sides share: the CPU's opaque copies of the base give the same colours. Consumes `backdrop`.
     fn effects_hiding(&mut self, layer: &'a Layer, clipped: &[&'a Layer], backdrop: Slot, atop: bool) -> Result<Slot, Unsupported> {
         if !photocraft_compose::advanced::hides_effects(layer) {
@@ -1109,7 +1109,7 @@ impl<'a> Planner<'a> {
         p.b = Some(after);
         p.c = Some(shape);
         p.flags = F_MIX_C;
-        p.params[0] = [0.0, 0.0, 1.0, 0.0];
+        p.params[0] = [0.0, 0.0, 1.0, 1.0];
         p.opacity = 1.0;
         Ok(self.emit(p))
     }

@@ -318,10 +318,15 @@ pub(crate) fn hiding_mask(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Vec<f32
 }
 
 /// Mix `out` back towards `before` where `mask` hides the layer: `out ← mix(before, out, mask)`.
+/// Where the mask is fully hiding (≤ 0) `before` is copied as it was and where it lets everything
+/// through (≥ 1) `out` stays, so HDR values survive both whether or not a tile skips the layer
+/// (`content::empty_in`); only the partial mix clamps.
 pub(crate) fn apply_hiding_mask(out: &mut Buffer, before: &Buffer, mask: &[f32]) {
     for ((p, b), k) in out.px.iter_mut().zip(&before.px).zip(mask) {
-        if *k < 1.0 {
-            *p = mix(*b, *p, k.max(0.0));
+        if *k <= 0.0 {
+            *p = *b;
+        } else if *k < 1.0 {
+            *p = mix(*b, *p, *k);
         }
     }
 }
