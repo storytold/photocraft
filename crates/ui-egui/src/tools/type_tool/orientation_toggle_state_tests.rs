@@ -106,6 +106,19 @@ fn an_open_text_edit_keeps_the_toggle_live() {
     }
 }
 
+/// Not measured by the ticket: with several text layers selected the bar still has a text layer in hand, so the
+/// button keeps today's behaviour and stays live.
+#[test]
+fn several_selected_text_layers_keep_the_toggle_live() {
+    let mut app = new_app(Tool::Type);
+    let first = select_text(&mut app, Orientation::Horizontal);
+    let made = app.run("type.create", json!({"text": "Second", "x": 300, "y": 300})).unwrap();
+    let second = LayerId(made["layer"].as_u64().unwrap());
+    app.run("layer.select", json!({"layer": second.0, "mode": "add"})).unwrap();
+    let h = bar(app);
+    assert!(!greyed(&h), "{first:?} and {second:?} are both text layers to convert");
+}
+
 /// Not measured by the ticket: a text layer under Lock All keeps today's behaviour and stays clickable, since the
 /// command itself answers a locked target.
 #[test]
