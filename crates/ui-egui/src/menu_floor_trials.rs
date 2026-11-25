@@ -73,6 +73,24 @@ fn menu_titles_use_arrow_instead_of_tool_cursor() {
 }
 
 #[test]
+fn move_tool_copy_cursor_yields_to_menu_arrow() {
+    let mut h = harness(1, 0, 0);
+    h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [150, 100, 100, 100], "fill": "#ff0000"})).unwrap();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().ui.tool_options.move_show_transform = false;
+    h.run_steps(2);
+
+    let menu = h.get_by_label("File").rect().center();
+    let canvas = h.state().last_canvas_rect.center();
+    h.event(Event::ModifiersChanged(egui::Modifiers::ALT));
+    for (at, expected) in [(canvas, egui::CursorIcon::Copy), (menu, egui::CursorIcon::Default), (canvas, egui::CursorIcon::Copy)] {
+        h.event(Event::PointerMoved(at));
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, expected);
+    }
+}
+
+#[test]
 fn an_idle_frame_keys_the_same_bytes_whatever_the_model_size() {
     let idle = |mut h: H| {
         h.run_steps(1);
