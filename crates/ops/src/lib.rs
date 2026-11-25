@@ -41,6 +41,16 @@ pub struct HistoryState {
     pub id: u64,
 }
 
+/// `doc` as a history state keeps it: with only its own design-timeline checkpoint. The others
+/// hold pixels that no budget here counts, and the current timeline's budget may already have let
+/// them go.
+fn lean(doc: Arc<Document>) -> Arc<Document> {
+    match doc.design_timeline.as_deref().and_then(photocraft_doc::design::DesignTimeline::without_spare_checkpoints) {
+        Some(t) => Arc::new(Document { design_timeline: Some(Arc::new(t)), ..(*doc).clone() }),
+        None => doc,
+    }
+}
+
 /// The context in which a selected action row must remain available after it is folded away.
 #[derive(Clone, Debug, craft_ui_macros::PlainData)]
 pub enum ActionBrushSource {
@@ -176,12 +186,7 @@ impl History {
     /// reads `…, before, the former redo states (oldest first), the new step`, so the new step is
     /// appended at the end and every earlier state can still be stepped to.
     pub fn record(&mut self, label: impl Into<String>, before: Arc<Document>, layers: LayerTarget) {
-        // An undo state keeps only its own design-timeline checkpoint: the others hold pixels that no
-        // budget here counts, and the current timeline's budget may already have let them go.
-        let before = match before.design_timeline.as_deref().and_then(photocraft_doc::design::DesignTimeline::without_spare_checkpoints) {
-            Some(t) => Arc::new(Document { design_timeline: Some(Arc::new(t)), ..(*before).clone() }),
-            None => before,
-        };
+        let before = lean(before);
         self.changed();
         if self.max_bytes == 0 {
             self.tiles = None;
@@ -368,7 +373,7 @@ impl History {
             merge_ids(Arc::make_mut(capture), &visibility);
         }
         let id = std::mem::replace(&mut self.current_id, prev.id);
-        self.redo.push(HistoryState { label, doc: current, layers, visibility, id });
+        self.redo.push(HistoryState { label, doc: lean(current), layers, visibility, id });
         Some((prev.doc, prev.layers))
     }
 
@@ -388,7 +393,7 @@ impl History {
             merge_ids(Arc::make_mut(capture), &self.current_visibility);
         }
         let id = std::mem::replace(&mut self.current_id, next.id);
-        self.undo.push_back(HistoryState { label, doc: current, layers, visibility, id });
+        self.undo.push_back(HistoryState { label, doc: lean(current), layers, visibility, id });
         Some((next.doc, next.layers))
     }
 

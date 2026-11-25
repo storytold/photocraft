@@ -1299,4 +1299,14 @@ fn an_undo_state_keeps_only_its_own_timeline_checkpoint() {
     let (undone, _) = h.undo(cur).unwrap();
     let kept: Vec<bool> = undone.design_timeline.as_ref().unwrap().steps.iter().map(|st| st.checkpoint.0.is_some()).collect();
     assert_eq!(kept, [false, false, true], "only the last step in effect: the document itself");
+    // The document undone from is a redo state now; non-linear history moves it into the undo list
+    // with the next edit. Neither keeps spare checkpoints.
+    h.non_linear = true;
+    let mut cur = undone;
+    edit(&mut h, &mut cur, "Other", |d| d.resolution_dpi = 150.0);
+    while let Some((prev, _)) = h.undo(cur.clone()) {
+        let spare = prev.design_timeline.as_ref().is_some_and(|t| t.steps.iter().filter(|st| st.checkpoint.0.is_some()).count() > 1);
+        assert!(!spare, "a history state keeps only its own checkpoint");
+        cur = prev;
+    }
 }

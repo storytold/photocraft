@@ -319,19 +319,44 @@ impl Baked {
     }
 
     /// The stored layer `l` with its children as the replayed document has them: a child the step
-    /// created or changed comes from the stored result, any other from `current`.
+    /// created or changed comes from the stored result, any other from `current`. A stored child
+    /// the replay lacks comes back only if this step created it (an earlier step that made it may
+    /// be suppressed), and a child the replay has there stays unless this step removed it or moved
+    /// it into another stored layer.
     fn merged(&self, l: &crate::Layer, current: &Document, created: &[LayerId], changed: &[LayerId]) -> crate::Layer {
         let mut l = l.clone();
-        if let Some(children) = l.children_mut() {
-            for c in children.iter_mut() {
-                *c = if created.contains(&c.id) || changed.contains(&c.id) {
-                    self.merged(c, current, created, changed)
-                } else {
-                    current.layer(c.id).cloned().unwrap_or_else(|| self.merged(c, current, created, changed))
-                };
+        let id = l.id;
+        let Some(children) = l.children_mut() else { return l };
+        let mut kept: Vec<crate::Layer> = Vec::with_capacity(children.len());
+        for c in children.iter() {
+            if created.contains(&c.id) || changed.contains(&c.id) {
+                kept.push(self.merged(c, current, created, changed));
+            } else if let Some(now) = current.layer(c.id) {
+                kept.push(now.clone());
             }
         }
+        // The replayed group's own children this step left alone, each after the one it follows there.
+        if let Some(replayed) = current.layer(id).and_then(crate::Layer::children) {
+            let mut after: Option<LayerId> = None;
+            for c in replayed {
+                let placed = kept.iter().any(|k| k.id == c.id);
+                if !placed && !changed.contains(&c.id) && !self.holds(c.id) {
+                    let at = after.and_then(|a| kept.iter().position(|k| k.id == a)).map_or(0, |i| i + 1);
+                    kept.insert(at, c.clone());
+                }
+                after = Some(c.id);
+            }
+        }
+        *children = kept;
         l
+    }
+
+    /// Whether a stored layer is `id` or holds it.
+    fn holds(&self, id: LayerId) -> bool {
+        fn within(l: &crate::Layer, id: LayerId) -> bool {
+            l.id == id || l.children().is_some_and(|c| c.iter().any(|c| within(c, id)))
+        }
+        self.layers.iter().any(|l| within(l, id))
     }
 }
 
@@ -454,6 +479,30 @@ mod tests {
         baked.apply(&mut doc, &created, &changed);
         assert_eq!(doc.layer(gid).unwrap().opacity, 0.5, "the group's own change");
         assert_eq!(doc.layer(cid).unwrap().opacity, 0.25, "the child as the replay has it");
+    }
+
+    /// A child an earlier step created, suppressed since, doesn't come back through a later baked
+    /// change to its group's own properties.
+    #[test]
+    fn a_baked_group_change_brings_back_no_child_of_a_suppressed_step() {
+        let mut before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let (a, b) = (Layer::raster("A", PixelFormat::RGBA8), Layer::raster("B", PixelFormat::RGBA8));
+        let aid = a.id;
+        let group = Layer::group("g", vec![a.clone(), b]);
+        let gid = group.id;
+        // As recorded: B (made by an earlier step) is in the group when this step changes it.
+        before.layers = vec![group].into();
+        let mut after = before.clone();
+        after.layer_mut(gid).unwrap().opacity = 0.5;
+        let (created, changed) = layer_changes(&before, &after);
+        let baked = Baked::capture(&before, &after, &created, &changed);
+        // The replay, with the step that made B suppressed.
+        let mut doc = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        doc.layers = vec![Layer { id: gid, ..Layer::group("g", vec![a]) }].into();
+        baked.apply(&mut doc, &created, &changed);
+        let ids: Vec<LayerId> = doc.layer(gid).unwrap().children().unwrap().iter().map(|l| l.id).collect();
+        assert_eq!(ids, [aid]);
+        assert_eq!(doc.layer(gid).unwrap().opacity, 0.5);
     }
 
     /// Created layers go back below a surviving layer as recorded, whatever order their ids are in.
