@@ -15,7 +15,9 @@ use craft::color_ui::palette::{SwatchFormat, SwatchNote, default_swatches, read_
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::presets::swatches::{SwatchColor, SwatchConv, SwatchEntry, SwatchGroup, SwatchKind, color_from_param, color_json, hex, kind_id, parse_kind};
+use crate::presets::swatches::{
+    SwatchColor, SwatchConv, SwatchEntry, SwatchGroup, SwatchKind, SwatchPaint, color_from_param, color_json, hex, kind_id, parse_kind,
+};
 use crate::presets::{bad, str_param};
 use crate::{Result, Session};
 
@@ -119,10 +121,18 @@ fn group_of(s: &Session, name: &str, cmd: &str) -> Result<usize> {
     s.presets().swatches.iter().position(|g| g.name == name).ok_or_else(|| bad(cmd, format!("no swatch group \"{name}\"")))
 }
 
+/// A swatch's name and kind, and its colour fields when it holds a colour (gradient, pattern and None swatches
+/// hold none).
 fn swatch_json(conv: &SwatchConv, sw: &SwatchEntry) -> Value {
-    let mut v = color_json(&sw.color);
+    let mut v = match sw.color() {
+        Some(color) => {
+            let mut v = color_json(color);
+            v["hex"] = json!(hex(conv.rgb(color)));
+            v
+        }
+        None => json!({}),
+    };
     v["name"] = json!(sw.name);
-    v["hex"] = json!(hex(conv.rgb(&sw.color)));
     if sw.kind != SwatchKind::Process {
         v["kind"] = json!(kind_id(sw.kind));
     }
@@ -192,7 +202,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => entries.len(),
         Some(v) => usize::try_from(v.as_u64().ok_or_else(|| bad(CMD, "`index` must be a non-negative integer"))?).unwrap_or(usize::MAX).min(entries.len()),
     };
-    entries.insert(at, SwatchEntry { name: name.clone(), color, kind });
+    entries.insert(at, SwatchEntry { name: name.clone(), paint: SwatchPaint::Color(color), kind });
     let gname = groups[gi].name.clone();
     presets_changed(s);
     Ok(json!({"name": name, "group": gname, "index": at}))
@@ -351,7 +361,10 @@ fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
     let (gi, ii) = locate(s, p, CMD)?;
     let target = str_param(p, "target").unwrap_or("foreground");
     let sw = s.presets().swatches[gi].entries[ii].clone();
-    let rgb = SwatchConv::new(s).rgb(&sw.color);
+    let Some(&color) = sw.color() else {
+        return Err(bad(CMD, format!("swatch \"{}\" holds no colour", sw.name)));
+    };
+    let rgb = SwatchConv::new(s).rgb(&color);
     let c = [rgb[0], rgb[1], rgb[2], 1.0];
     match target {
         "foreground" => s.tools.foreground = c,
@@ -362,7 +375,7 @@ fn use_swatch(s: &mut Session, p: &Value) -> Result<Value> {
     // shows them and a CMYK document is painted with them, not with the sRGB round trip (#7474).
     let role = if target == "background" { 1 } else { 0 };
     s.tools.clear_role_cmyk(role);
-    if let SwatchColor::Cmyk(inks) = sw.color
+    if let SwatchColor::Cmyk(inks) = color
         && inks.iter().all(|v| v.is_finite())
     {
         let inks = inks.map(|v| v.clamp(0.0, 1.0));

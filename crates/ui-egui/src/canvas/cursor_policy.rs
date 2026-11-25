@@ -94,11 +94,11 @@ pub(crate) fn alt_eyedropper(tool: Tool) -> bool {
 
 /// Shape tools whose Alt Eyedropper also updates the tool's Fill.
 pub(super) fn shape_alt_sets_fill(tool: Tool) -> bool {
-    matches!(tool, Tool::Triangle | Tool::CustomShape)
+    matches!(tool, Tool::Triangle | Tool::CustomShape | Tool::Rectangle | Tool::EllipseShape | Tool::Polygon)
 }
 
-/// Whether an Alt or Shift+Alt press samples the Triangle or Custom Shape foreground and Fill
-/// (#13364, #15856). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
+/// Whether an Alt or Shift+Alt press samples the foreground and Fill for the Triangle, Custom Shape,
+/// Rectangle, Ellipse and Polygon tools (#13364, #15856, #13333, #13224, #13317). Sampling requires Shape mode, no active shape layer, and a sampleable pixel.
 /// Control+Alt is excluded here, as in [`alt_samples`].
 pub(crate) fn shape_alt_samples(app: &mut PhotocraftApp, mods: Mods, x: f64, y: f64) -> bool {
     mods.alt
@@ -158,6 +158,18 @@ mod healing_alt_cursor_tests;
 #[cfg(test)]
 #[path = "paint_bucket_cursor_tests.rs"]
 mod paint_bucket_cursor_tests;
+
+#[cfg(test)]
+#[path = "rectangle_alt_eyedropper_tests.rs"]
+mod rectangle_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "ellipse_alt_eyedropper_tests.rs"]
+mod ellipse_alt_eyedropper_tests;
+
+#[cfg(test)]
+#[path = "polygon_alt_eyedropper_tests.rs"]
+mod polygon_alt_eyedropper_tests;
 
 #[cfg(test)]
 #[path = "triangle_alt_eyedropper_tests.rs"]

@@ -32,7 +32,11 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: ShapeKind, at: Point) -> Optio
     if kind == ShapeKind::Ellipse {
         options = ellipse_prefill(app, options);
     }
-    Some(app.framework.dialogs.open(CreateShapeDialog::new(options).alert_title(tl!("PhotoCraft"))))
+    let dialog = CreateShapeDialog::new(options);
+    // Create Ellipse's range alert carries the dialog's own title, "Create Ellipse", as the reference's does (#13230).
+    // The other kinds' alerts weren't measured and keep the app's name.
+    let dialog = if kind == ShapeKind::Ellipse { dialog } else { dialog.alert_title(tl!("PhotoCraft")) };
+    Some(app.framework.dialogs.open(dialog))
 }
 
 /// Create Ellipse opens as Photoshop's does (#13229): with the active ellipse layer's size, or 100 × 100 with a pixel
@@ -98,3 +102,7 @@ mod tests;
 #[cfg(test)]
 #[path = "shape_dialog/create_ellipse_prefill_tests.rs"]
 mod create_ellipse_prefill_tests;
+
+#[cfg(test)]
+#[path = "shape_dialog/create_ellipse_range_alert_tests.rs"]
+mod create_ellipse_range_alert_tests;

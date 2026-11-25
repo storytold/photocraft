@@ -498,7 +498,7 @@ fn assert_black_white_preset(h: &Harness<'_, Box<PhotocraftApp>>, name: &str) {
 }
 
 #[test]
-fn black_white_presets_each_set_a_distinct_mix_and_keep_tint() {
+fn black_white_presets_apply_the_requested_weights_and_keep_tint() {
     let mut h = app_harness("blackWhite", "rgb", 8);
     // Leave enough vertical space for the complete dropdown to be visible at once.
     h.set_size(vec2(1440.0, 1350.0));
@@ -508,21 +508,20 @@ fn black_white_presets_each_set_a_distinct_mix_and_keep_tint() {
     let (_, original) = layer(&h);
     let Adjustment::BlackWhite { tint: original_tint, .. } = &original else { panic!("{original:?}") };
 
-    let mut seen = Vec::new();
-    for name in [
-        "Darker",
-        "Lighter",
-        "Deep Shadows",
-        "Bright Highlights",
-        "Even Color Weights",
-        "Red Filter",
-        "Yellow Filter",
-        "Green Filter",
-        "Blue Filter",
-        "Strong Red Filter",
-        "Strong Blue Filter",
-        "Infrared Foliage",
-        "Default",
+    for (name, expected) in [
+        ("Blue Filter", [0.0, 0.0, 0.0, 110.0, 110.0, 110.0]),
+        ("Darker", [30.0, 50.0, 30.0, 50.0, 10.0, 70.0]),
+        ("Green Filter", [50.0, 120.0, 90.0, 50.0, 0.0, 0.0]),
+        ("High Contrast Blue Filter", [-50.0, -50.0, -50.0, 150.0, 150.0, 150.0]),
+        ("High Contrast Red Filter", [120.0, 120.0, -10.0, -50.0, -50.0, 120.0]),
+        ("Infrared", [-40.0, 235.0, 144.0, -68.0, -3.0, -107.0]),
+        ("Lighter", [50.0, 70.0, 50.0, 70.0, 30.0, 90.0]),
+        ("Maximum Black", [0.0; 6]),
+        ("Maximum White", [100.0; 6]),
+        ("Neutral Density", [128.0, 128.0, 100.0, 100.0, 128.0, 100.0]),
+        ("Red Filter", [120.0, 110.0, -10.0, -50.0, 0.0, 120.0]),
+        ("Yellow Filter", [120.0, 110.0, 40.0, -30.0, 0.0, 70.0]),
+        ("Default", [40.0, 60.0, 40.0, 60.0, 20.0, 80.0]),
     ] {
         let history = history_len(&h);
         h.get_by_role_and_label(Role::ComboBox, "Preset").click();
@@ -532,8 +531,7 @@ fn black_white_presets_each_set_a_distinct_mix_and_keep_tint() {
 
         let (_, applied) = layer(&h);
         let Adjustment::BlackWhite { weights, tint } = applied else { panic!("{applied:?}") };
-        assert!(!seen.contains(&weights), "{name} must set a distinct mix");
-        seen.push(weights);
+        assert_eq!(weights, expected, "{name} applies the requested mix");
         assert_black_white_preset(&h, name);
         assert_eq!(&tint, original_tint, "{name} preserves Tint");
         assert_eq!(history_len(&h), history + 1, "{name} is one history step");

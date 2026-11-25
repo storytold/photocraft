@@ -1,4 +1,4 @@
-//! Original Black & White recipes for tonal shifts and the effect of color filters.
+//! Preset grayscale mixes for the Black & White adjustment.
 
 use std::sync::Arc;
 
@@ -19,18 +19,18 @@ fn entries() -> [Entry<Option<Mix>>; 16] {
     [
         Entry::new(Some(BlackWhite::DEFAULT_WEIGHTS), tl!("Default")),
         Entry::separator(),
-        Entry::new(Some([22.0, 38.0, 25.0, 36.0, 10.0, 50.0]), tl!("Darker")),
-        Entry::new(Some([60.0, 77.0, 64.0, 78.0, 47.0, 92.0]), tl!("Lighter")),
-        Entry::new(Some([8.0; 6]), tl!("Deep Shadows")),
-        Entry::new(Some([92.0; 6]), tl!("Bright Highlights")),
-        Entry::new(Some([48.0; 6]), tl!("Even Color Weights")),
-        Entry::new(Some([86.0, 65.0, 33.0, 23.0, 15.0, 72.0]), tl!("Red Filter")),
-        Entry::new(Some([64.0, 91.0, 64.0, 41.0, 13.0, 53.0]), tl!("Yellow Filter")),
-        Entry::new(Some([28.0, 67.0, 91.0, 74.0, 17.0, 45.0]), tl!("Green Filter")),
-        Entry::new(Some([24.0, 35.0, 45.0, 77.0, 92.0, 53.0]), tl!("Blue Filter")),
-        Entry::new(Some([100.0, 73.0, 24.0, 7.0, 5.0, 64.0]), tl!("Strong Red Filter")),
-        Entry::new(Some([4.0, 12.0, 27.0, 71.0, 100.0, 44.0]), tl!("Strong Blue Filter")),
-        Entry::new(Some([58.0, 89.0, 97.0, 38.0, 8.0, 33.0]), tl!("Infrared Foliage")),
+        Entry::new(Some([0.0, 0.0, 0.0, 110.0, 110.0, 110.0]), tl!("Blue Filter")),
+        Entry::new(Some([30.0, 50.0, 30.0, 50.0, 10.0, 70.0]), tl!("Darker")),
+        Entry::new(Some([50.0, 120.0, 90.0, 50.0, 0.0, 0.0]), tl!("Green Filter")),
+        Entry::new(Some([-50.0, -50.0, -50.0, 150.0, 150.0, 150.0]), tl!("High Contrast Blue Filter")),
+        Entry::new(Some([120.0, 120.0, -10.0, -50.0, -50.0, 120.0]), tl!("High Contrast Red Filter")),
+        Entry::new(Some([-40.0, 235.0, 144.0, -68.0, -3.0, -107.0]), tl!("Infrared")),
+        Entry::new(Some([50.0, 70.0, 50.0, 70.0, 30.0, 90.0]), tl!("Lighter")),
+        Entry::new(Some([0.0; 6]), tl!("Maximum Black")),
+        Entry::new(Some([100.0; 6]), tl!("Maximum White")),
+        Entry::new(Some([128.0, 128.0, 100.0, 100.0, 128.0, 100.0]), tl!("Neutral Density")),
+        Entry::new(Some([120.0, 110.0, -10.0, -50.0, 0.0, 120.0]), tl!("Red Filter")),
+        Entry::new(Some([120.0, 110.0, 40.0, -30.0, 0.0, 70.0]), tl!("Yellow Filter")),
         Entry::separator(),
         Entry::new(None, tl!("Custom")),
     ]
