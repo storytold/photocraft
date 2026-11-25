@@ -1655,7 +1655,7 @@ fn package(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let out = join(&folder, &format!("{}.{ext}", crate::file_cmds::sanitize(&name)));
     let pdoc = t.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    warnings.extend(crate::file_cmds::save_doc(&pdoc, &out, None)?);
+    warnings.extend(crate::file_cmds::save_doc(&pdoc, &out, crate::file_cmds::SaveOpts::from_params(s, p, cmd)?)?);
     Ok(json!({"folder": folder, "document": out, "links": copied.iter().map(|(_, t)| t).collect::<Vec<_>>(), "missing": missing, "warnings": warnings}))
 }
 
@@ -1825,7 +1825,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Package…",
             &["File"],
             None,
-            r##"{"dir":folder,"format":"pcraft|psd|psb"? (omit to use the document's native format; PSD/PSB fall back to .pcraft with a warning until linked-resource writing is supported)} → {folder, document, links, missing, warnings} (copies the document and its linked files into <dir>/<name>/, relinked to Links/)"##,
+            r##"{"dir":folder,"format":"pcraft|psd|psb"? (omit to use the document's native format; PSD/PSB fall back to .pcraft with a warning until linked-resource writing is supported),"tiffCompression":"none|lzw|zip"?,"tiffTransparency":bool?,"tiffPyramid":bool?,"tiffLayers":bool?} → {folder, document, links, missing, warnings} (copies the document and its linked files into <dir>/<name>/, relinked to Links/)"##,
             native_doc,
             package
         ),
