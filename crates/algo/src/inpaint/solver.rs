@@ -31,6 +31,7 @@ pub(super) struct Solver<'a> {
     /// patch (source pixels never change within a level). Empty otherwise.
     pub(super) smom: Vec<[f32; 2]>,
     pub(super) adapt: Adapt,
+    pub(super) unadapted_channel: Option<usize>,
     /// Cancellation: checked per row band; a cancelled solve's output is discarded.
     pub(super) ctl: photocraft_raster::Interrupt<'a>,
 }
@@ -263,7 +264,7 @@ impl Solver<'_> {
         if n == 0 {
             return f32::INFINITY;
         }
-        adapted_cost(self.adapt, n as f32, &m[..ch])
+        adapted_cost(self.adapt, self.unadapted_channel, n as f32, &m[..ch])
     }
 
     pub(super) fn dist_adapted_full(&self, k: usize, t: (i32, i32), s: (i32, i32)) -> f32 {
@@ -271,7 +272,7 @@ impl Solver<'_> {
         let ch = self.ch.min(MOM_CH);
         self.moments_full(k, t, s, &mut m[..ch]);
         let side = (2 * self.r + 1) as usize;
-        adapted_cost(self.adapt, (side * side) as f32, &m[..ch])
+        adapted_cost(self.adapt, self.unadapted_channel, (side * side) as f32, &m[..ch])
     }
 
     /// Gain and bias per channel for the match `t → s` (identity without adaptation).
@@ -290,7 +291,8 @@ impl Solver<'_> {
             self.moments(t, s, &mut m[..ch])
         };
         for (c, o) in out.iter_mut().enumerate() {
-            *o = if n == 0 || c >= ch { (1.0, 0.0) } else { fit(self.adapt, n as f32, m[c][0], m[c][1], m[c][2], m[c][3]) };
+            *o =
+                if n == 0 || c >= ch || self.unadapted_channel == Some(c) { (1.0, 0.0) } else { fit(self.adapt, n as f32, m[c][0], m[c][1], m[c][2], m[c][3]) };
         }
     }
 
@@ -766,10 +768,10 @@ fn patch_moments(img: &[f32], w: usize, ch: usize, c8: usize, side: usize, x0: u
 /// The adapted distance from the moments `[Σt, Σt², Σs, Σs², Σts]` of each channel over `n`
 /// samples: what is left of the target after the source is fitted to it, per sample.
 #[inline]
-fn adapted_cost(a: Adapt, nf: f32, m: &[[f32; 5]]) -> f32 {
+fn adapted_cost(a: Adapt, unadapted_channel: Option<usize>, nf: f32, m: &[[f32; 5]]) -> f32 {
     let mut sum = 0.0f32;
-    for mc in m {
-        let (g, b) = fit(a, nf, mc[0], mc[1], mc[2], mc[3]);
+    for (channel, mc) in m.iter().enumerate() {
+        let (g, b) = if unadapted_channel == Some(channel) { (1.0, 0.0) } else { fit(a, nf, mc[0], mc[1], mc[2], mc[3]) };
         // Σ (t − g s − b)², expanded.
         sum += mc[1] + g * g * mc[3] + nf * b * b - 2.0 * g * mc[4] - 2.0 * b * mc[0] + 2.0 * g * b * mc[2];
     }

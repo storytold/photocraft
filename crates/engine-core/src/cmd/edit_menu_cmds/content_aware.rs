@@ -70,8 +70,9 @@ pub struct CafPlan {
     /// The fill area (selection coverage, after the workspace's lasso edits) over `rect`.
     pub cover: Vec<f32>,
     pub hole: Vec<bool>,
-    /// What may be copied from: the sampling option's area before the brush strokes, and after.
+    /// The sampling option's area before the brush strokes.
     pub base: Vec<bool>,
+    /// What may be copied from, after brush strokes and excluding fully transparent pixels.
     pub source: Vec<bool>,
     pub opts: photocraft_algo::content_aware::FillOptions,
     pub output: String,
@@ -219,6 +220,7 @@ fn caf_params<'a>(doc: &'a Document, id: LayerId, p: &Value, cmd: &str) -> Resul
         rotations: rotation_level(str_or(p, "rotationAdaptation", "none")),
         scale: bool_or(p, "scale", false),
         mirror: bool_or(p, "mirror", false),
+        alpha_channel: None,
         seed: p.get("seed").and_then(Value::as_u64).unwrap_or(1),
     };
     let output = str_or(p, "output", "current").to_string();
@@ -240,7 +242,7 @@ pub fn content_aware_plan_with(doc: &Document, id: LayerId, p: &Value, cmd: &str
     use rayon::prelude::*;
 
     use crate::content_sampling::{read_window, read_window_mask};
-    let CafParams { sel, sb, edits, strokes, sampling, custom_mask, custom_rect, opts, output, surf } = caf_params(doc, id, p, cmd)?;
+    let CafParams { sel, sb, edits, strokes, sampling, custom_mask, custom_rect, mut opts, output, surf } = caf_params(doc, id, p, cmd)?;
     let canvas = doc.bounds();
     let cancel = || ctl.cancelled();
     let stop = || if ctl.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) };
@@ -375,7 +377,17 @@ pub fn content_aware_plan_with(doc: &Document, id: LayerId, p: &Value, cmd: &str
     base.par_iter_mut().zip(&hole).for_each(|(b, h)| *b &= !*h);
     let mut source = base.clone();
     paint_strokes(&mut source, rect, &strokes);
-    source.par_iter_mut().zip(&hole).for_each(|(s, h)| *s &= !*h);
+    opts.alpha_channel = fmt.alpha.then(|| n - 1);
+    // Use the alpha of the image actually sampled, including the visible composite when
+    // requested. Apply this after brush strokes so an Add stroke cannot make transparency a donor.
+    if let Some(alpha) = opts.alpha_channel {
+        source.par_iter_mut().zip(&hole).zip(img.par_chunks_exact(n)).for_each(|((s, h), px)| {
+            *s = *s && !*h && px[alpha] > 0.0 && px[alpha].is_finite();
+        });
+    } else {
+        source.par_iter_mut().zip(&hole).for_each(|(s, h)| *s &= !*h);
+    }
+    stop()?;
     Ok(CafPlan { layer: id, rect, window, fmt, img, layer_px, cover, hole, base, source, opts, output })
 }
 
@@ -407,11 +419,11 @@ fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &
             let plan = content_aware_plan_with(&doc, id, &p, cmd, &photocraft_raster::Interrupt::cancel_only(&cancel))?;
             let CafPlan { layer, rect, fmt, img, layer_px, cover, hole, source, opts, output, .. } = plan;
             // Patches come only from the sampling area outside the fill area. With none (a
-            // Rectangular `margin` of 0, a Custom area inside the selection or off the canvas)
+            // Rectangular `margin` of 0, a Custom area inside the selection or only transparency)
             // the fill would be black (#6532), so refuse instead. The workspace's preview builds
             // the same plan and may show an empty area while the Sampling Brush adds to it.
             if !source.iter().any(|s| *s) {
-                return Err(bad(cmd, "nothing to sample from: the sampling area has no pixels outside the fill area"));
+                return Err(bad(cmd, "nothing to sample from: the sampling area has no usable pixels outside the fill area"));
             }
             let (w, h) = (rect.width() as usize, rect.height() as usize);
             let n = fmt.channels();

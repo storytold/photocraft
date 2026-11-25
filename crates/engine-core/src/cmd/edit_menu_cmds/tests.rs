@@ -12,6 +12,10 @@ fn px(s: &Session, x: i32, y: i32) -> Vec<f32> {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y)
 }
 
+fn px_rgba(s: &Session, x: i32, y: i32) -> [f32; 4] {
+    active(s).surface().unwrap().rgba(x, y)
+}
+
 fn active(s: &Session) -> &Layer {
     let st = s.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap()
@@ -286,9 +290,11 @@ fn content_aware_fill_on_an_empty_layer_samples_the_composite() {
     assert_eq!(s.active().unwrap().active_layer, Some(empty));
     assert!(px(&s, 30, 20)[3] > 0.5, "the hole is filled from the layers underneath");
     s.undo();
-    let missed = s.execute("edit.contentAwareFill", json!({"sampleAllLayers": false, "colorAdaptation": "none"})).unwrap();
-    assert!(missed["filled"].as_u64().unwrap() > 0);
-    assert!(px(&s, 30, 20)[3] < 0.05, "sampling only the empty layer leaves it empty");
+    let steps = s.active().unwrap().history.past_len();
+    let missed = s.execute("edit.contentAwareFill", json!({"sampleAllLayers": false, "colorAdaptation": "none"})).unwrap_err();
+    assert!(missed.to_string().contains("nothing to sample from"), "{missed}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    assert_eq!(px(&s, 30, 20)[3], 0.0, "sampling an empty layer leaves it untouched");
 }
 
 #[test]
@@ -305,6 +311,101 @@ fn content_aware_fill_on_an_empty_cmyk_layer_uses_the_layer_format() {
     // White in the layer's CMYK is near zero ink with a covered alpha, not the compositor's RGBA.
     assert!(v[..4].iter().all(|c| *c < 0.15), "CMYK ink stayed low: {v:?}");
     assert!(v.last().copied().unwrap_or(0.0) > 0.5, "the hole is covered: {v:?}");
+}
+
+fn transparency_fill_session(depth: u32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 96, "height": 64, "depth": depth, "background": "transparent"})).unwrap();
+    s.edit("paint", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        surf.fill_rect(Rect::new(0, 0, 46, 64), &[0.16, 0.51, 0.78, 1.0]);
+        surf.fill_rect(Rect::new(33, 24, 46, 40), &[0.0; 4]);
+        surf.fill_rect(Rect::new(65, 22, 73, 30), &[0.16, 0.51, 0.78, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.lasso", json!({"points": [[33, 24], [46, 24], [46, 40], [33, 40]], "antiAlias": false})).unwrap();
+    s
+}
+
+/// #15005: a hole in an opaque cutout is filled without sampling the transparent side.
+#[test]
+fn content_aware_fill_ignores_transparent_samples() {
+    for depth in [8, 16, 32] {
+        for p in [
+            json!({"sampling": "custom", "area": [20, 12, 60, 40], "mirror": true, "scale": true, "rotationAdaptation": "low"}),
+            json!({"sampling": "rectangular"}),
+            json!({"sampling": "auto"}),
+            // A small opaque patch competes with a wide expanse of transparent patches.
+            json!({"sampling": "custom", "area": [30, 21, 50, 22], "colorAdaptation": "veryHigh"}),
+            // A three-pixel rim is the only opaque donor; it cannot supply a full patch.
+            json!({"sampling": "custom", "area": [30, 21, 30, 22]}),
+            json!({"sampling": "custom", "area": [30, 21, 30, 22], "mirror": true}),
+        ] {
+            let mut s = transparency_fill_session(depth);
+            let st = s.active().unwrap();
+            let plan = content_aware_plan(&st.doc, st.active_layer.unwrap(), &p, "edit.contentAwareFill").unwrap();
+            assert!(plan.source.iter().any(|s| *s));
+            assert!(plan.source.iter().zip(plan.img.as_chunks::<4>().0).all(|(s, px)| !s || px[3] > 0.0), "depth {depth}, {p}");
+            assert_eq!(s.execute("edit.contentAwareFill", p.clone()).unwrap()["filled"], 208);
+            let surf = active(&s).surface().unwrap();
+            for y in 24..40 {
+                for x in 33..46 {
+                    let v = surf.rgba(x, y);
+                    assert_eq!(v[3], 1.0, "depth {depth}, {p}: ({x},{y}) {v:?}");
+                    assert!(v[2] > 0.5 && v[2] > v[0], "depth {depth}, {p}: ({x},{y}) {v:?}");
+                }
+            }
+            assert_eq!(surf.rgba(46, 30)[3], 0.0, "outside the selection");
+            assert_eq!(surf.rgba(32, 30)[3], 1.0, "original opaque pixels");
+            s.undo();
+            assert_eq!(px_rgba(&s, 45, 30)[3], 0.0);
+        }
+    }
+}
+
+/// A brush-only transparent sampling area cannot supply pixels or alter undo history.
+#[test]
+fn content_aware_fill_rejects_transparent_brush_samples() {
+    let mut s = transparency_fill_session(8);
+    let st = s.active().unwrap();
+    let before = (st.doc.clone(), st.history.past_len());
+    let p = json!({"sampling": "custom", "samplingStrokes": [{"mode": "add", "size": 10, "points": [[83, 30]]}]});
+    let err = s.execute("edit.contentAwareFill", p).unwrap_err().to_string();
+    assert!(err.contains("nothing to sample from"), "{err}");
+    let st = s.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&st.doc, &before.0));
+    assert_eq!(st.history.past_len(), before.1);
+}
+
+/// A single selected sample, even when translucent, is sufficient for the fallback.
+#[test]
+fn content_aware_fill_keeps_translucent_samples() {
+    let mut s = transparency_fill_session(32);
+    s.edit("paint donor", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        surf.fill_rect(Rect::new(50, 30, 51, 31), &[0.2, 0.4, 0.6, 0.01]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("edit.contentAwareFill", json!({"sampling": "custom", "area": [50, 30, 2, 1]})).unwrap();
+    assert_eq!(px_rgba(&s, 39, 30), [0.2, 0.4, 0.6, 0.01]);
+    assert_eq!(px_rgba(&s, 51, 30)[3], 0.0);
+}
+
+/// The last channel of an RGB layer without alpha is blue, and zero blue is still a donor.
+#[test]
+fn content_aware_fill_respects_formats_without_alpha() {
+    let mut s = transparency_fill_session(8);
+    s.edit("paint opaque RGB", |doc, active| {
+        let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+        *surf = surf.convert(PixelFormat { alpha: false, ..surf.format() });
+        surf.fill_rect(Rect::new(0, 0, 96, 64), &[1.0, 0.0, 0.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("edit.contentAwareFill", json!({"sampling": "custom", "area": [0, 0, 20, 20]})).unwrap();
+    assert_eq!(px_rgba(&s, 39, 30), [1.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]

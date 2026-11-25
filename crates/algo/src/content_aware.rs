@@ -49,12 +49,14 @@ pub struct FillOptions {
     pub scale: bool,
     /// Add a horizontally mirrored source copy.
     pub mirror: bool,
+    /// Channel containing coverage, if the caller is excluding transparent pixels from the source.
+    pub alpha_channel: Option<usize>,
     pub seed: u64,
 }
 
 impl Default for FillOptions {
     fn default() -> Self {
-        Self { color_adaptation: color_level("default"), rotations: Vec::new(), scale: false, mirror: false, seed: 1 }
+        Self { color_adaptation: color_level("default"), rotations: Vec::new(), scale: false, mirror: false, alpha_channel: None, seed: 1 }
     }
 }
 
@@ -463,7 +465,12 @@ fn fill_cow(
     if !hole.iter().any(|h| *h) {
         return Ok(img.into_owned());
     }
-    let mut params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, ..Default::default() };
+    let mut params = CompleteParams { seed: opts.seed, adapt: opts.color_adaptation, unadapted_channel: opts.alpha_channel, ..Default::default() };
+    // #14191's measured 11x11 patch is only validated for the Rectangular sampling area. When
+    // transparent samples are excluded (#15005), a half-transparent layer's `source` drops those
+    // pixels, so `rectangular_area` is false and the fill deliberately stays on the general path at
+    // the default 7x7 patch. That is intended: the measured radius was never measured against a
+    // transparency-excluded area, and the fast path must not pull the excluded pixels back in.
     if structure_measured(opts) && rectangular_area(hole, source) {
         params.patch_radius = MEASURED_STRUCTURE_PATCH_RADIUS;
     }
@@ -482,8 +489,8 @@ fn fill_cow(
         let out = if attempt.mosaic.is_empty() {
             match complete_masked_owned(w, h, ch, pixels, &attempt.roles, &params, &inner)? {
                 Ok(f) => f,
-                // Nothing to copy from: the membrane, as today.
-                Err(v) => membrane_fill_with(w, h, ch, &v, hole, ctl)?,
+                // Nothing to copy from: the eligible-sample mean (see `fallback`), or the membrane.
+                Err(v) => fallback(w, h, ch, Cow::Owned(v), hole, source, opts.alpha_channel, ctl)?,
             }
         } else {
             match complete_masked(attempt.mw, attempt.mh, ch, &attempt.mosaic, &attempt.roles, &params, &inner)? {
@@ -498,16 +505,73 @@ fn fill_cow(
                     }
                     pixels
                 }
-                None => membrane_fill_with(w, h, ch, &pixels, hole, ctl)?,
+                None => fallback(w, h, ch, Cow::Owned(pixels), hole, source, opts.alpha_channel, ctl)?,
             }
         };
         ctl.check()?;
         ctl.progress(1.0);
         return Ok(out);
     }
-    let out = fill_cow_measured(w, h, ch, img.as_ref(), hole, &ok, &specs, &mut params, &inner, ctl)?;
+    let out = fill_cow_measured(w, h, ch, img.as_ref(), hole, source, &ok, &specs, &mut params, opts.alpha_channel, &inner, ctl)?;
     ctl.check()?;
     ctl.progress(1.0);
+    Ok(out)
+}
+
+/// With too few samples for a full patch, the membrane normally interpolates the hole's
+/// surroundings. If those include transparent pixels, use the mean of the eligible samples
+/// instead, so the fallback cannot mix excluded pixels back into the fill.
+#[allow(clippy::too_many_arguments)]
+fn fallback(
+    w: usize,
+    h: usize,
+    ch: usize,
+    img: Cow<[f32]>,
+    hole: &[bool],
+    source: &[bool],
+    alpha_channel: Option<usize>,
+    ctl: &Interrupt,
+) -> Result<Vec<f32>, Cancelled> {
+    let Some(alpha) = alpha_channel.filter(|&i| i < ch) else {
+        return membrane_fill_with(w, h, ch, &img, hole, ctl);
+    };
+    let mut has_transparency = false;
+    let mut sum = vec![0.0f64; ch];
+    let mut count = 0usize;
+    for (y, (row, (holes, sources))) in img.chunks_exact(w * ch).zip(hole.chunks_exact(w).zip(source.chunks_exact(w))).enumerate() {
+        if y.is_multiple_of(32) {
+            ctl.check()?;
+        }
+        for (px, (&is_hole, &is_source)) in row.chunks_exact(ch).zip(holes.iter().zip(sources)) {
+            if is_hole {
+                continue;
+            }
+            let visible = px[alpha] > 0.0 && px[alpha].is_finite();
+            has_transparency |= !visible;
+            if is_source && visible {
+                for (total, &value) in sum.iter_mut().zip(px) {
+                    *total += f64::from(value);
+                }
+                count += 1;
+            }
+        }
+    }
+    if !has_transparency || count == 0 {
+        return membrane_fill_with(w, h, ch, &img, hole, ctl);
+    }
+    let mean: Vec<f32> = sum.iter().map(|&total| (total / count as f64) as f32).collect();
+    let mut out = img.into_owned();
+    par::chunks_mut(&mut out, w * ch, true, |y, row| {
+        if ctl.cancelled() {
+            return;
+        }
+        for (pixel, &is_hole) in row.chunks_exact_mut(ch).zip(&hole[y * w..(y + 1) * w]) {
+            if is_hole {
+                pixel.copy_from_slice(&mean);
+            }
+        }
+    });
+    ctl.check()?;
     Ok(out)
 }
 
@@ -521,16 +585,20 @@ fn fill_cow_measured(
     ch: usize,
     img: &[f32],
     hole: &[bool],
+    source: &[bool],
     ok: &[bool],
     specs: &[(f32, f32, bool)],
     params: &mut CompleteParams,
+    alpha_channel: Option<usize>,
     inner: &Interrupt,
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<Vec<f32>, Cancelled> {
     match fill_retry(w, h, ch, img, hole, ok, specs, params, inner, ctl)? {
         Some(f) => Ok(f),
-        // Nothing to copy from at either radius: the membrane, as today.
-        None => membrane_fill_with(w, h, ch, img, hole, ctl),
+        // Nothing to copy from at either radius: the eligible-sample mean (see `fallback`), or the
+        // membrane. The measured path only runs for a Rectangular area, so `fallback` finds no
+        // excluded pixels and takes the membrane; routing it here keeps every fallback site uniform.
+        None => fallback(w, h, ch, Cow::Borrowed(img), hole, source, alpha_channel, ctl),
     }
 }
 /// Box mean of radius `r` over a `w × h` plane (edge-clamped), by summed areas.

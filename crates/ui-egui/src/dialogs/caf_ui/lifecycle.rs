@@ -9,7 +9,7 @@ use photocraft_engine::edit_menu_cmds::{MAX_CAF_EDITS, MAX_CAF_POINTS};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
-use super::preview::{Base, compute_base, plan_params};
+use super::preview::{Base, Proxy, compute_base, plan_params};
 use super::{CMD, CafApp, Hosted, PROXY_SIDE, PhotocraftApp, REMEMBERED};
 use crate::dialogs::shared_picture::SharedPicture;
 
@@ -30,7 +30,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
     // The workspace reads its remembered settings itself; the plan is made for what it opens with.
     let open = FillOpen::new([canvas.width(), canvas.height()], name, FillLimits::new(MAX_CAF_EDITS, MAX_CAF_POINTS));
     let mut workspace = craft::imaging::ui::fill::ContentAwareFillWorkspace::new(open).remember(REMEMBERED);
-    let base = compute_base(&doc, layer, &workspace.command())?;
+    let base = compute_base(&doc, layer, &workspace.command(), &Proxy { pw, ph, k, canvas }, workspace.settings().sample_all_layers)?;
     workspace.set_brush(photocraft_algo::content_aware::default_brush_size(bounds(&base)));
 
     let picture_size = PixelSize::new(canvas.width(), canvas.height());
@@ -44,7 +44,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<DialogId, String> {
         k,
         pw,
         ph,
-        base: Base { window: Rect::EMPTY, rect: Rect::EMPTY, hole: Vec::new(), base: Vec::new() },
+        base: Base { window: Rect::EMPTY, rect: Rect::EMPTY, hole: Vec::new(), base: Vec::new(), eligible_px: Vec::new() },
         base_px: vec![false; pw * ph],
         hole_px: vec![false; pw * ph],
         mask: vec![false; pw * ph],
@@ -94,7 +94,9 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Option<Value> {
     let c = app.caf.as_ref()?;
     let host = app.framework.dialogs.get_by_id::<Hosted>(c.id)?;
     let workspace = host.workspace();
-    let sampled = c.mask.iter().zip(&c.hole_px).filter(|(m, h)| **m && !**h).count();
+    // A sampled proxy pixel is in the sampling area, outside the fill area, and opaque in the image:
+    // transparent samples are left out here as the engine leaves them out of the fill.
+    let sampled = c.mask.iter().zip(&c.hole_px).zip(&c.base.eligible_px).filter(|((m, h), e)| **m && !**h && **e).count();
     let w = c.base.window;
     let mut d = json!({
         "layer": c.layer.0,
@@ -299,7 +301,7 @@ fn reconcile(app: &mut PhotocraftApp, id: DialogId, replan: bool, rebased: bool,
         c.known = session;
         return;
     }
-    match compute_base(&c.doc, c.layer, &command) {
+    match compute_base(&c.doc, c.layer, &command, &Proxy { pw: c.pw, ph: c.ph, k: c.k, canvas: c.canvas }, c.sample_all) {
         Ok(base) => {
             c.set_base(base, &session.strokes);
             if rebased || session != c.known {

@@ -13,6 +13,8 @@ pub(super) struct Base {
     pub(super) rect: Rect,
     pub(super) hole: Vec<bool>,
     pub(super) base: Vec<bool>,
+    /// Whether each overlay proxy pixel has coverage in the sampled image; `pw * ph` long.
+    pub(super) eligible_px: Vec<bool>,
 }
 
 impl Base {
@@ -23,9 +25,17 @@ impl Base {
     }
 }
 
-/// The preview's error when the sampling area has no pixels outside the fill area (the engine's
+/// The proxy the overlay planes live in: `pw * ph` pixels, each `k` document px wide, over `canvas`.
+pub(super) struct Proxy {
+    pub(super) pw: usize,
+    pub(super) ph: usize,
+    pub(super) k: usize,
+    pub(super) canvas: Rect,
+}
+
+/// The preview's error when the sampling area has no usable pixels outside the fill area (the engine's
 /// fill refuses that case with the same words).
-pub(super) const NOTHING_TO_SAMPLE: &str = "nothing to sample from: the sampling area has no pixels outside the fill area";
+pub(super) const NOTHING_TO_SAMPLE: &str = "nothing to sample from: the sampling area has no usable pixels outside the fill area";
 
 /// `edit.contentAwareFill`'s parameters for `command` on `layer`: the command's own serialisation plus the layer.
 pub(super) fn plan_params(command: &FillCommand, layer: LayerId) -> Value {
@@ -35,8 +45,11 @@ pub(super) fn plan_params(command: &FillCommand, layer: LayerId) -> Value {
 }
 
 /// The plan without strokes: the window, fill area and the option's area. Custom starts empty
-/// (the window and fill area are those of Rectangular).
-pub(super) fn compute_base(doc: &Document, layer: LayerId, command: &FillCommand) -> Result<Base, String> {
+/// (the window and fill area are those of Rectangular). `eligible_px` marks, at proxy resolution,
+/// which pixels the image actually covers, so `describe()`'s sampled-pixel count leaves transparent
+/// samples out the same way the engine leaves them out of the fill. The sampling overlay itself is
+/// engine-driven (via `source()`), so `eligible_px` does not feed it.
+pub(super) fn compute_base(doc: &Document, layer: LayerId, command: &FillCommand, proxy: &Proxy, sample_all: bool) -> Result<Base, String> {
     let mut p = plan_params(command, layer);
     if let Some(map) = p.as_object_mut() {
         map.remove("samplingStrokes");
@@ -46,8 +59,48 @@ pub(super) fn compute_base(doc: &Document, layer: LayerId, command: &FillCommand
         p["sampling"] = json!("rectangular");
     }
     let plan = photocraft_engine::edit_menu_cmds::content_aware_plan(doc, layer, &p, CMD).map_err(|e| e.to_string())?;
+    let eligible_px = sampling_coverage(doc, layer, &plan, proxy, sample_all)?;
     let base = if custom { vec![false; plan.base.len()] } else { plan.base };
-    Ok(Base { window: plan.window, rect: plan.rect, hole: plan.hole, base })
+    Ok(Base { window: plan.window, rect: plan.rect, hole: plan.hole, base, eligible_px })
+}
+
+/// Coverage at proxy resolution: whether each proxy pixel's document point has an opaque sample.
+/// Brush strokes can reach beyond the plan's window, so pixels outside `rect` are read from the
+/// composite (Sample All Layers) or the layer itself.
+fn sampling_coverage(
+    doc: &Document,
+    layer: LayerId,
+    plan: &photocraft_engine::edit_menu_cmds::CafPlan,
+    proxy: &Proxy,
+    sample_all: bool,
+) -> Result<Vec<bool>, String> {
+    let Some(alpha) = plan.opts.alpha_channel else { return Ok(vec![true; proxy.pw * proxy.ph]) };
+    let surface = doc.layer(layer).and_then(|l| l.surface()).ok_or("no pixel layer")?;
+    let composite = (sample_all && plan.rect != proxy.canvas).then(|| photocraft_compose::render_reduced(doc, proxy.pw as u32, proxy.ph as u32));
+    let n = plan.fmt.channels();
+    let stride = plan.rect.width() as usize;
+    let k = proxy.k as f64;
+    let mut coverage = vec![false; proxy.pw * proxy.ph];
+    for (i, eligible) in coverage.iter_mut().enumerate() {
+        let (px, py) = (i % proxy.pw, i / proxy.pw);
+        let (x, y) = (f64::from(proxy.canvas.x0) + (px as f64 + 0.5) * k, f64::from(proxy.canvas.y0) + (py as f64 + 0.5) * k);
+        let (x, y) = (x.floor() as i32, y.floor() as i32);
+        if !proxy.canvas.contains(x, y) {
+            continue;
+        }
+        let value = if plan.rect.contains(x, y) {
+            let sample = (y - plan.rect.y0) as usize * stride + (x - plan.rect.x0) as usize;
+            plan.img[sample * n + alpha]
+        } else if let Some(composite) = &composite {
+            composite.get(px as i32, py as i32)[3]
+        } else {
+            let mut pixel = [0.0f32; 8];
+            surface.read_pixel(x, y, &mut pixel);
+            pixel[alpha]
+        };
+        *eligible = value > 0.0 && value.is_finite();
+    }
+    Ok(coverage)
 }
 
 /// The filled rectangle as an image (what Apply would write there), as a texture no wider than

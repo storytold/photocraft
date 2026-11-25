@@ -293,6 +293,39 @@ fn strokes_are_painted_once_and_the_overlay_is_the_engines_sampling_area() {
     assert!(sampled(&app) > 1000);
 }
 
+/// Transparent samples are left out of the sampled area the workspace reports, so what the user sees
+/// as sampled matches the pixels the engine's fill can actually use (#15005).
+#[test]
+fn transparent_samples_are_excluded_from_the_sampled_area() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 160, "depth": 8})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            // Opaque on the left, transparent on the right: half the sampling area is unusable.
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 100, 160), &[0.2, 0.6, 0.4, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("select.rect", json!({"x": 40, "y": 70, "width": 20, "height": 20})).unwrap();
+    app.sync_views();
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"sampling": "rectangular"})).unwrap();
+
+    let (rect, source, hole) = engine_source(&app);
+    let c = app.caf.as_ref().unwrap();
+    assert_eq!(rect, c.canvas, "Rectangular's window is the whole 200 × 160 canvas");
+    assert_eq!(c.k, 1, "one proxy px per document px, so the planes line up with the engine's source");
+    // The eligible-aware sampled area is exactly the set of pixels the engine samples from.
+    let differ = (0..source.len()).filter(|&i| (c.mask[i] && !c.hole_px[i] && c.base.eligible_px[i]) != (source[i] && !hole[i])).count();
+    assert_eq!(differ, 0, "the reported sampled area drops the transparent pixels the engine drops");
+    // Without the transparency exclusion the count would also claim the transparent right half.
+    let naive = (0..source.len()).filter(|&i| c.mask[i] && !c.hole_px[i]).count();
+    let eligible = sampled(&app) as usize;
+    assert!(eligible > 0, "the opaque half is still sampled");
+    assert!(eligible < naive, "transparent samples are counted out ({eligible} eligible of {naive} selected)");
+}
+
 /// `edit.contentAwareFill {"ui": …}` addresses the workspace: with it closed that is an error, not a fill with the
 /// default settings (an agent polling the state after an Esc used to add a fill per poll).
 #[test]
