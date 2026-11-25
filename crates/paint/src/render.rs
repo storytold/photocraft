@@ -455,7 +455,45 @@ impl BrushContext {
         let rect = self.dab_rect(d, false);
         let mut cov = Vec::new();
         self.rasterize(d, false, rect, &mut cov);
-        Footprint { dab: *d, index, rect, cov }
+        let mods = self.dab_modulations(d, rect);
+        Footprint { dab: *d, index, rect, cov, mods }
+    }
+
+    /// The dab's strength at each pixel it covers once its own tip edge is forced to full coverage
+    /// (the `mods` map of [`Footprint`], #13160): the per-tip Texture combine and the Wet Edges
+    /// factor at the dab's depth, times the dab's alpha. `None` when the brush carries neither
+    /// modulation — then the value the dab leaves at a fully covered pixel is just its alpha.
+    fn dab_modulations(&self, d: &Dab, rect: Rect) -> Option<Vec<f32>> {
+        let b = &self.brush;
+        let wet = b.wet_edges;
+        let tex_tip = b.texture.enabled && b.texture.each_tip && self.texture.is_some();
+        if !wet && !tex_tip {
+            return None;
+        }
+        // With `depth` the rasteriser leaves Wet Edges out of the coverage and reports each painted
+        // pixel's depth (1 − rn) inside the dab, which is exactly the rn the wet factor takes. A
+        // brush carrying one of the modulations takes the general loop either way.
+        let mut scratch = Vec::new();
+        let mut depth = Vec::new();
+        self.rasterize_into(d, false, rect, &mut scratch, Some(&mut depth));
+        let w = rect.width() as usize;
+        let mut mods = vec![0.0f32; scratch.len()];
+        for (i, m) in mods.iter_mut().enumerate() {
+            if scratch[i] <= 0.0 {
+                continue;
+            }
+            let mut val = 1.0f32;
+            if tex_tip {
+                // The same combine the row applies, at full tip coverage; `d.depth` is the dab's
+                // own texture depth, what the combine takes there too.
+                val = texture_combine(b.texture.mode, 1.0, self.texture_at(rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32), d.depth);
+            }
+            if wet {
+                val *= wet_factor(1.0 - depth[i]);
+            }
+            *m = val * d.alpha;
+        }
+        Some(mods)
     }
 
     /// Stroke-level masks applied to accumulated coverage `c` at a pixel.

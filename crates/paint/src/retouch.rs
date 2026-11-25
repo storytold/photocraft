@@ -86,12 +86,27 @@ pub struct Footprint {
     pub rect: Rect,
     /// `rect.width() × rect.height()` coverage values in 0..1 (already multiplied by flow/pressure).
     pub cov: Vec<f32>,
+    /// `cov` with the tip's own edge forced to full coverage: the dab's non-edge modulation (per-tip
+    /// Texture combine × Wet Edges at the dab's depth) times flow/pressure, per pixel (#13160).
+    /// `None` when the brush carries neither: the modulation is then 1 and the value is the dab's
+    /// alpha.
+    pub mods: Option<Vec<f32>>,
 }
 
 impl Footprint {
     #[inline]
     pub fn at(&self, x: i32, y: i32) -> f32 {
         self.cov[(y - self.rect.y0) as usize * self.rect.width() as usize + (x - self.rect.x0) as usize]
+    }
+
+    /// The dab's strength at (x, y) with the tip's edge fully covering the pixel, modulations kept
+    /// (#13160; see [`Footprint::mods`]).
+    #[inline]
+    pub fn modulated_at(&self, x: i32, y: i32) -> f32 {
+        match &self.mods {
+            Some(m) => m[(y - self.rect.y0) as usize * self.rect.width() as usize + (x - self.rect.x0) as usize],
+            None => self.dab.alpha,
+        }
     }
 }
 
@@ -112,7 +127,7 @@ pub fn footprint(d: &Dab, index: usize, hardness: f32) -> Footprint {
             cov.push(dab_coverage(dist, d.radius, hardness) * d.alpha);
         }
     }
-    Footprint { dab: *d, index, rect, cov }
+    Footprint { dab: *d, index, rect, cov, mods: None }
 }
 
 /// Union of the dabs' rectangles.

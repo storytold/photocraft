@@ -7,7 +7,7 @@
 use photocraft_color::PixelFormat;
 
 use super::*;
-use crate::{BrushSettings, StrokePoint};
+use crate::{BrushSettings, Pattern, StrokePoint, Texture};
 
 fn target() -> Surface {
     let fmt = PixelFormat::RGBA8;
@@ -42,6 +42,47 @@ fn click_with(anti_alias: bool, flow: f32, hardness: f32) -> Surface {
     };
     apply_color_replacement(&mut s, &stroke, &rs, None, false).unwrap();
     s
+}
+
+/// The same click with a modulating brush: Wet Edges and/or a per-tip Texture with a flat mid-grey
+/// tile (pattern value 0.5), hardness 1. #13160.
+fn click_modulated(anti_alias: bool, wet: bool, texture: bool) -> Surface {
+    click_modulated_with(anti_alias, wet, texture, 1.0)
+}
+
+fn click_modulated_with(anti_alias: bool, wet: bool, texture: bool, hardness: f32) -> Surface {
+    let mut s = target();
+    let brush = BrushSettings {
+        size: 80.0,
+        hardness,
+        spacing: 0.25,
+        wet_edges: wet,
+        texture: Texture { enabled: texture, pattern: Pattern::Tile(crate::tile::GrayTile::from_fn(8, 8, |_, _| 0.5)), each_tip: true, ..Default::default() },
+        pressure_size: false,
+        ..Default::default()
+    };
+    let stroke = Stroke { brush, points: vec![StrokePoint::new(100.0, 120.0, 1.0)] };
+    let rs = ReplaceSettings {
+        mode: ReplaceMode::Color,
+        sampling: Sampling::Continuous,
+        limits: Limits::Contiguous,
+        tolerance: 0.3,
+        anti_alias,
+        color: [0.0, 0.0, 1.0, 1.0],
+        ..Default::default()
+    };
+    apply_color_replacement(&mut s, &stroke, &rs, None, false).unwrap();
+    s
+}
+
+/// The red pixel recoloured at strength `k`, stored in 8 bits (the same mix the dab runs).
+fn blend_at(k: f32) -> [i32; 3] {
+    let mut s = target();
+    let b = blend_rgb(BlendMode::Color, [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0], [0.0, 0.0, 1.0]);
+    let g = [220.0 / 255.0, 30.0 / 255.0, 30.0 / 255.0];
+    let c = [g[0] + (b[0] - g[0]) * k, g[1] + (b[1] - g[1]) * k, g[2] + (b[2] - g[2]) * k];
+    s.fill_rect(Rect::new(0, 0, 1, 1), &photocraft_raster::from_rgba(&PixelFormat::RGBA8, [c[0], c[1], c[2], 1.0]));
+    px(&s, 0, 0)
 }
 
 fn px(s: &Surface, x: i32, y: i32) -> [i32; 3] {
@@ -136,5 +177,54 @@ fn a_soft_tip_with_anti_alias_off_replaces_fully_over_the_same_reach() {
             }
         }
         assert!(partial_on > 0, "hardness {hardness}: Anti-alias on keeps the falloff");
+    }
+}
+
+// #13160: the hardening with Anti-alias off is the tip's edge only. What is not the tip edge —
+// Wet Edges and per-tip Texture modulation — keeps its partial-strength effect. The expected
+// values are the same brush's own Anti-alias-on values at the dab centre: a hard tip covers the
+// centre pixel fully there, so the strength that shows is the modulation alone.
+
+#[test]
+fn anti_alias_off_keeps_wet_edges() {
+    let (on, off) = (click_modulated(true, true, false), click_modulated(false, true, false));
+    // Wet Edges keeps half the paint at a dab's centre: the dab's centre pixel is at half strength
+    // with Anti-alias on, and with it off too — not the full replacement.
+    assert_eq!(px(&on, 100, 120), blend_at(0.5), "Anti-alias on: the wet edge keeps the centre at half strength");
+    assert_eq!(px(&off, 100, 120), px(&on, 100, 120), "Anti-alias off keeps the wet-edge strength");
+    assert_ne!(px(&off, 100, 120), full(), "the centre is not flattened to the dab's strength");
+    // The edge stays hard: rim pixels near the wet rim value are fully replaced, pixels are never
+    // a partial mix of its own.
+    assert!(px(&off, 58, 120).iter().zip(&blend_at(1.0)).all(|(a, b)| (a - b).abs() <= 3), "the wet rim still reaches fully: {:?}", px(&off, 58, 120));
+}
+
+#[test]
+fn anti_alias_off_keeps_per_tip_texture() {
+    // A mid-grey tile at full depth: the texture halves the coverage over the whole tip, so the
+    // centre is a half-strength replacement whichever way Anti-alias sits.
+    let (on, off) = (click_modulated(true, false, true), click_modulated(false, false, true));
+    assert_eq!(px(&off, 100, 120), px(&on, 100, 120), "Anti-alias off keeps the per-tip texture strength");
+    assert_ne!(px(&off, 100, 120), full(), "the centre is not flattened to the dab's strength");
+    assert_ne!(px(&off, 100, 120), RED, "the centre is replaced");
+}
+
+#[test]
+fn a_soft_tip_with_anti_alias_off_keeps_its_wet_edges_and_texture() {
+    // The issue's title case: a soft tip (hardness 50 %) with Anti-alias off keeps its wet edges
+    // and texture. The centre pixel is inside the tip's core, so the full-tip coverage and the
+    // modulation are the same as with Anti-alias on.
+    let (on, off) = (click_modulated_with(true, true, true, 0.5), click_modulated_with(false, true, true, 0.5));
+    assert_eq!(px(&off, 100, 120), px(&on, 100, 120), "the soft tip keeps the wet-and-texture strength at its centre");
+    assert_ne!(px(&off, 100, 120), full(), "the centre is not flattened to the dab's strength");
+    // Hardened edge and reach as before: the same pixels change with it on and off, and no pixel
+    // sits outside the levels the modulated tip produces.
+    for y in (60..180).step_by(3) {
+        for x in (20..180).step_by(3) {
+            let (a, b) = (px(&on, x, y), px(&off, x, y));
+            if (140..160).contains(&y) {
+                continue;
+            }
+            assert_eq!(a != RED, b != RED, "{x},{y}: the reach differs (on {a:?}, off {b:?})");
+        }
     }
 }

@@ -267,7 +267,9 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                 // With Anti-alias off the tip has a hard edge (#11917): a pixel it reaches takes
                 // the dab's full strength (its flow and pressure), not its partial coverage. A soft
                 // tip too, over the same reach as with Anti-alias on: the pixels its blended edge
-                // would change as stored, not its faint tail past them.
+                // would change as stored, not its faint tail past them. Only the tip's edge is
+                // hardened that way (#13160): modulations that are not the edge — Wet Edges and
+                // per-tip Texture — keep scaling the strength the dab leaves on the pixel.
                 let k = if rs.anti_alias {
                     k
                 } else {
@@ -275,7 +277,7 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
                     if enc[..n].iter().zip(px.iter()).all(|(a, b)| stored(*a) == stored(*b)) {
                         continue;
                     }
-                    fp.dab.alpha * wt
+                    fp.modulated_at(x, y) * wt
                 };
                 recolor(px, k, &mut enc);
                 px.copy_from_slice(&enc[..n]);
