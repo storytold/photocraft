@@ -25,11 +25,11 @@ use crate::psd_import::psd_to_document_owned;
 use crate::{ExportOptions, ExportResult, ImportResult, IoError};
 
 /// `true` when saving `doc` as TIFF writes layer data: anything beyond a single Background
-/// layer (one plain, transparency-locked raster layer), which a flat TIFF already represents
-/// exactly. A lone unlocked layer keeps its layer data, as in Photoshop, so it reopens as that
-/// layer rather than as a Background.
+/// layer (one plain, raster Background layer), which a flat TIFF already represents
+/// exactly. A lone non-Background layer keeps its layer data, as in Photoshop, so it reopens
+/// as that layer rather than as a Background.
 pub fn would_write_layers(doc: &Document) -> bool {
-    !(single_layer(doc).is_some() && doc.layers.first().is_some_and(|l| l.locks.transparency))
+    !(single_layer(doc).is_some() && doc.background().is_some())
 }
 
 /// Documents a layered TIFF can hold: the TIFF composite must be in the document's model so
