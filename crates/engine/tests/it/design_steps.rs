@@ -649,6 +649,33 @@ fn a_replayed_pattern_delete_leaves_the_version_a_step_paints_with() {
     assert_eq!(doc(&s), want);
 }
 
+/// A stroke painted with a pattern as its brush texture replays with that texture after the pattern
+/// left the library: the texture setting finds the step's own version of it.
+#[test]
+fn a_brush_texture_deleted_from_the_library_still_replays() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    // Half black, half white: a texture that shows in the stroke.
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#000000"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    let id = s.execute("edit.definePattern", json!({"name": "Grain"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.definePattern", json!({"name": "Plain"})).unwrap();
+    s.set_active(0);
+    s.execute("brush.texturePattern", json!({"pattern": id})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[1, 8], [15, 8]], "size": 8, "color": "#00ff00"})).unwrap();
+    let want = doc(&s);
+    // The brush has another texture by now: a replay that can't set Grain paints with that one.
+    s.execute("brush.texturePattern", json!({"pattern": "Plain"})).unwrap();
+    s.execute("pattern.delete", json!({"pattern": id})).unwrap();
+    s.execute("design.replay", json!({})).unwrap();
+    let last = steps(&mut s).len() - 1;
+    assert_eq!(state(&mut s, last), "ok");
+    assert_eq!(doc(&s), want, "painted with the texture it was recorded with");
+}
+
 /// A step edited to paint with another pattern keeps that pattern's version: a replay after it
 /// is deleted, and after a save and load, paints with it.
 #[test]

@@ -584,6 +584,8 @@ pub(crate) fn replay(
     // base has them.
     let mut versions = Vec::new();
     for st in tl.steps.iter().take(start) {
+        // A prelude may name a step's own pattern version (a brush texture): it goes in first.
+        install(&mut r, &st.patterns);
         for p in &st.prelude {
             let _ = r.execute(&p.command, p.params.clone());
         }
@@ -616,6 +618,9 @@ fn run_step(r: &mut Session, step: &mut DesignStep, versions: &mut Vec<photocraf
         step.checkpoint = Checkpoint(r.active().map(|st| st.doc.clone()));
     };
     // Tool settings and patterns feed the later steps too, so they go in even when the step doesn't.
+    // The step's own pattern versions first: a prelude may name one (a brush texture whose pattern
+    // has left the library since).
+    install(r, &step.patterns);
     for p in &step.prelude {
         // A tool setting that no longer applies leaves the tool as it is.
         let _ = r.execute(&p.command, p.params.clone());

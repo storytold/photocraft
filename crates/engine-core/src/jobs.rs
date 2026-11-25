@@ -535,8 +535,8 @@ struct Running {
     stepper: Option<Stepper>,
     apply: Option<Apply>,
     /// Design timelines to record the step into once applied: (documents before, step, params,
-    /// force bake).
-    timeline: Option<(Vec<crate::timeline::Before>, u64, Value, bool)>,
+    /// force bake, whether the command dropped a floating selection as it started).
+    timeline: Option<(Vec<crate::timeline::Before>, u64, Value, bool, bool)>,
     #[cfg(not(target_arch = "wasm32"))]
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -1610,7 +1610,8 @@ impl Session {
         if !self.jobs.running[i].ctx.try_cancel() {
             return Err(CancelRefused::Committing);
         }
-        let job = self.jobs.running.remove(i);
+        let mut job = self.jobs.running.remove(i);
+        self.record_unlanded_drop(job.timeline.take());
         self.end_job(&job, JobOutcome::Cancelled);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(handle) = job.handle {
@@ -1784,6 +1785,8 @@ impl Session {
         let recorded =
             crate::timeline::tracks(&before).then(|| crate::timeline::pin_patterns(self, id, crate::channel_cmds::inject_target(self, id, params.clone())));
         let timed = recorded.is_some();
+        // A floating piece drops as the command starts, before any job it runs.
+        let drops = timed && crate::float_cmds::drops_for(self, id);
         let r = {
             let _g = scope.enter();
             f(self, params)
@@ -1794,7 +1797,7 @@ impl Session {
                 let mut before = before;
                 crate::timeline::job_started(self, &mut before);
                 if let Some(job) = self.jobs.running.iter_mut().find(|job| job.id == *j) {
-                    job.timeline = Some((before, scope.step(), p, force_bake));
+                    job.timeline = Some((before, scope.step(), p, force_bake, drops));
                 }
             }
             _ => {}
@@ -2103,6 +2106,16 @@ impl Session {
         self.note_layer_change(before);
     }
 
+    /// A job that ends without landing (cancelled, failed): the floating selection its command
+    /// dropped as it started stays dropped, so that drop is a design-timeline step of its own, kept
+    /// as it came out (a replay has no floating piece to drop).
+    fn record_unlanded_drop(&mut self, timeline: Option<(Vec<crate::timeline::Before>, u64, Value, bool, bool)>) {
+        if let Some((mut before, step, _, _, true)) = timeline {
+            crate::timeline::job_applying(self, &mut before);
+            crate::timeline::record(self, before, step, "select.drop", &json!({}), true);
+        }
+    }
+
     fn finish_job_step(&mut self, mut job: Running, r: Result<Payload>) {
         let apply = job.apply.take();
         let mut timeline = job.timeline.take();
@@ -2131,8 +2144,11 @@ impl Session {
                 Err(e) => (JobOutcome::Failed(e.to_string()), Some(e)),
             },
         };
-        if let (JobOutcome::Done(_), Some((before, step, params, force_bake))) = (&outcome, timeline) {
-            crate::timeline::record(self, before, step, &job.command, &params, force_bake);
+        match (&outcome, timeline) {
+            (JobOutcome::Done(_), Some((before, step, params, force_bake, _))) => {
+                crate::timeline::record(self, before, step, &job.command, &params, force_bake)
+            }
+            (_, timeline) => self.record_unlanded_drop(timeline),
         }
         self.end_job_with_error(&job, outcome, error);
     }

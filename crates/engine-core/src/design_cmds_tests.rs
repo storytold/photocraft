@@ -438,6 +438,48 @@ fn a_job_records_only_its_own_changes() {
     assert_eq!(commands(&s, 0), ["file.placeEmbedded"]);
 }
 
+/// A job that starts from a floating selection drops it first; cancelled, the job leaves the drop
+/// in the document, so the drop is a step of its own and the timeline stays editable.
+#[test]
+fn a_cancelled_job_records_the_floating_selection_it_dropped() {
+    let mut s = crate::session();
+    s.execute("file.new", json!({"width": 80, "height": 60, "background": "transparent"})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("paint", |doc, _| {
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(10, 10, 30, 30), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    s.execute("select.float", json!({"dx": 15, "dy": 0})).unwrap();
+    let crate::jobs::Started::Job(job) = s.start("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap() else { panic!("a filter runs as a job") };
+    assert!(s.cancel_job(job));
+    assert!(s.wait_job(job).is_err());
+    assert_eq!(commands(&mut s), ["select.rect", "select.drop"]);
+    s.execute("design.rollTo", json!({"at": 1})).unwrap();
+    s.execute("design.rollTo", json!({"at": null})).unwrap();
+    assert_eq!(state(&mut s, 1), "ok");
+}
+
+/// Collapsing a group in the Layers panel is no step and doesn't stop the timeline changing; the
+/// group stays collapsed through the replay.
+#[test]
+fn collapsing_a_group_leaves_the_timeline_editable() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let group = s.execute("layer.groupLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("layer.setExpanded", json!({"layer": group, "expanded": false})).unwrap();
+    s.execute("design.rollTo", json!({"at": 2})).unwrap();
+    s.execute("design.rollTo", json!({"at": null})).unwrap();
+    let expanded = |s: &Session| match &s.active().unwrap().doc.layer(photocraft_doc::LayerId(group)).unwrap().content {
+        photocraft_doc::LayerContent::Group(g) => g.expanded,
+        _ => panic!("not a group"),
+    };
+    assert!(!expanded(&s), "still collapsed");
+}
+
 /// Revert loads whatever the file holds now, maybe saved by another session with later steps:
 /// steps made afterwards reuse none of its step numbers or layer ids.
 #[test]

@@ -95,9 +95,25 @@ fn step_index(cmd: &str, tl: &DesignTimeline, p: &Value) -> Result<usize> {
 
 /// `a` and `b` are the same document, whatever their timelines hold.
 fn same_content(a: &Document, b: &Document) -> bool {
-    // The name is file identity (a save renames the document), never a recorded step.
-    let strip = |d: &Document| Document { design_timeline: None, name: String::new(), ..d.clone() };
+    // The name is file identity (a save renames the document), never a recorded step; a group
+    // shown open or closed in the Layers panel is view state (`layer.setExpanded` records none).
+    let strip = |d: &Document| {
+        let mut d = Document { design_timeline: None, name: String::new(), ..d.clone() };
+        each_group(&mut d.layers, &mut |_, expanded| *expanded = false);
+        d
+    };
     strip(a) == strip(b)
+}
+
+/// Call `f` with every group's id and its open-or-closed flag in `layers`, nested ones included.
+fn each_group(layers: &mut [photocraft_doc::Layer], f: &mut impl FnMut(photocraft_doc::LayerId, &mut bool)) {
+    for l in layers {
+        let id = l.id;
+        if let photocraft_doc::LayerContent::Group(g) = &mut l.content {
+            f(id, &mut g.expanded);
+            each_group(&mut g.children, f);
+        }
+    }
 }
 
 /// Change the active document's timeline with `f` (which returns the first step it affects),
@@ -155,7 +171,17 @@ fn commit(s: &mut Session, label: &str, mut replayed: crate::timeline::Replayed)
     let crate::timeline::Replayed { doc: result, timeline, active, selected } = replayed;
     s.edit(label, |doc, act| {
         let (id, name) = (doc.id, std::mem::take(&mut doc.name));
+        // Groups stay open or closed as the Layers panel shows them, not as when their step ran.
+        let mut open = std::collections::HashMap::new();
+        each_group(&mut doc.layers, &mut |id, expanded| {
+            open.insert(id, *expanded);
+        });
         *doc = result;
+        each_group(&mut doc.layers, &mut |id, expanded| {
+            if let Some(o) = open.get(&id) {
+                *expanded = *o;
+            }
+        });
         doc.id = id;
         // The replayed checkpoint may predate a save that renamed the document.
         doc.name = name;
