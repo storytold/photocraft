@@ -57,7 +57,7 @@ pub mod select_mask_view;
 pub mod snap_ui;
 pub(crate) mod start_screen;
 pub(crate) mod strokes;
-pub(crate) use strokes::ClonePreviewCache;
+pub(crate) use strokes::{ClonePreviewCache, CloneWholeCache};
 pub(crate) mod tabs;
 #[cfg(test)]
 pub(crate) mod testing;

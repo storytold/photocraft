@@ -143,6 +143,23 @@ pub fn healing_preview_periodic(
     preview_periodic(s, rect, map, sample_layer, wrap, PreviewSource::Healing)
 }
 
+/// The whole image the active Clone Source slot samples, reduced to at most `max_side` pixels on
+/// its longer side (straight alpha): the source document's composite as it shows the slot's
+/// source frame (its frame offset or held frame), for an overlay that shows all of it rather than
+/// the area under the brush. With the source document's bounds, the area the pixels cover.
+pub fn clone_source_image(s: &Session, map: &crate::presets::clone_source::Mapping, max_side: u32) -> Result<(Rect, photocraft_compose::Buffer)> {
+    const CMD: &str = "clone.sourceImage";
+    let active = s.active().ok_or(EngineError::NoDocument)?;
+    let params = crate::channel_cmds::inject_target(s, "paint.cloneStamp", json!({"sampleLayer": "all"}));
+    let from = clone_sampling::resolve_preview(s, &params, map, CMD)?;
+    let doc = from.document().unwrap_or_else(|| std::sync::Arc::clone(&active.doc));
+    let bounds = doc.bounds();
+    if bounds.is_empty() {
+        return Err(bad(CMD, "the clone source has no pixels"));
+    }
+    Ok((bounds, photocraft_compose::thumbnail_buffer(&doc, max_side.clamp(1, 4096))))
+}
+
 /// The image beneath a clone overlay, always from the document being painted.
 pub fn clone_destination_preview(s: &Session, rect: Rect, wrap: bool) -> Result<photocraft_compose::Buffer> {
     let map = crate::presets::clone_source::Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0], document: None };

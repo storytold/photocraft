@@ -257,6 +257,82 @@ pub(crate) fn clone_source(app: &mut PhotocraftApp, at: [f64; 2], held: bool) ->
     Some(CloneSource { corners: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], pixels: Arc::clone(&cache.pixels), revision: Revision::of(&cache.revision) })
 }
 
+/// The whole Clone Source image for [`clone_source_whole`]: its pixels and the source document
+/// area they cover, kept while the key (source document and frame, display, overlay settings)
+/// holds, since the pixels don't move with the brush; only their place does.
+pub(crate) struct CloneWholeCache {
+    key: String,
+    bounds: DRect,
+    pixels: Arc<ColorImage>,
+    revision: u64,
+}
+
+/// The longer side of the whole Clone Source image, in pixels: enough to line up a frame on a
+/// fitted view without a full-size composite.
+const WHOLE_SOURCE_SIDE: u32 = 2048;
+
+/// The whole image the Clone Source samples, shown over the canvas while Shift+Alt is held so the
+/// source (another frame, with Frame Offset or Hold Source Frame) can be lined up: placed where
+/// the clone mapping takes it for the hover point `at`, at the overlay's opacity, inverted with
+/// Invert. `None` without a source, or with a mapping that has no inverse.
+pub(crate) fn clone_source_whole(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<CloneSource> {
+    if !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
+        return None;
+    }
+    let overlay = app.session.presets().clone.overlay.clone();
+    let slot = app.session.presets().clone.active().clone();
+    let map = crate::preset_panels::clone_mapping_at(app, Some(at))?;
+    let m = map.m;
+    let det = m[0] * m[3] - m[1] * m[2];
+    if !det.is_finite() || det.abs() < 1e-9 {
+        return None;
+    }
+    let inv = [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det];
+    // The destination point a source point is cloned to: the mapping run backwards.
+    let place = |x: f64, y: f64| {
+        let (dx, dy) = (x - map.source.0, y - map.source.1);
+        [map.anchor.0 + inv[0] * dx + inv[1] * dy, map.anchor.1 + inv[2] * dx + inv[3] * dy]
+    };
+    let st = app.session.active()?;
+    let source_revision =
+        slot.document.and_then(|id| app.session.documents().iter().find(|st| st.doc.id == id)).map(|st| (st.doc.id, st.revision, st.active_layer));
+    let (display, display_key) = canvas_display(app, &st.doc, None);
+    let frame = (slot.frame_offset, slot.hold_frame, slot.frame, st.doc.timeline.as_ref().map(|t| t.current));
+    let key = format!(
+        "{source_revision:?}:{frame:?}:{:?}:{}:{:?}:{display_key}:{}:{}",
+        st.doc.id,
+        st.revision,
+        map.document.map(|d| d.id),
+        overlay.invert,
+        overlay.opacity.to_bits()
+    );
+    if app.clone_whole_preview.as_ref().is_none_or(|c| c.key != key) {
+        let (bounds, mut buf) = photocraft_engine::retouch_cmds::clone_source_image(&app.session, &map, WHOLE_SOURCE_SIDE).ok()?;
+        if overlay.invert {
+            for px in &mut buf.px {
+                for c in px.iter_mut().take(3) {
+                    *c = 1.0 - *c;
+                }
+            }
+        }
+        let mut image = display_image(display.as_deref(), &buf);
+        let alpha = f32::from((overlay.opacity.clamp(0.0, 100.0) * 2.55).round() as u8) / 255.0;
+        for px in &mut image.pixels {
+            *px = px.gamma_multiply(alpha);
+        }
+        let revision = app.clone_whole_preview.as_ref().map_or(0, |c| c.revision + 1);
+        app.clone_whole_preview = Some(CloneWholeCache { key, bounds, pixels: Arc::new(image), revision });
+    }
+    let cache = app.clone_whole_preview.as_ref()?;
+    let b = cache.bounds;
+    let (x0, y0, x1, y1) = (f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1));
+    Some(CloneSource {
+        corners: [place(x0, y0), place(x1, y0), place(x1, y1), place(x0, y1)],
+        pixels: Arc::clone(&cache.pixels),
+        revision: Revision::of(&cache.revision),
+    })
+}
+
 /// The engine's live stroke of a tool: the Brush, Pencil and Eraser paint dabs; the Clone Stamp,
 /// Healing Brush and History Brush composite their source.
 pub(super) enum EngineStroke {

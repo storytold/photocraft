@@ -41,6 +41,12 @@ impl CloneFrom {
         document && self.layer == other.layer && colors && self.pixels == other.pixels && frame
     }
 
+    /// The document this source samples when it isn't the painted one as it shows now: the
+    /// source frame's, else another open document.
+    pub(super) fn document(&self) -> Option<Arc<Document>> {
+        self.frame.as_ref().map(|f| Arc::clone(&f.0)).or_else(|| self.other.as_ref().map(|o| Arc::clone(&o.0)))
+    }
+
     /// The timeline frame this source samples, when it isn't the one on screen.
     pub(super) fn frame(&self) -> Option<usize> {
         self.frame.as_ref().map(|f| f.1)

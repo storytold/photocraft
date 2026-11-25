@@ -163,6 +163,7 @@ impl PhotocraftApp {
             find_layers_focus: false,
             canvas_hover_layer: None,
             clone_preview: None,
+            clone_whole_preview: None,
             info_sample: None,
             os_clip_sig: None,
             os_clip_svg: None,

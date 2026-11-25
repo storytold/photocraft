@@ -1115,3 +1115,18 @@ fn a_live_clone_stroke_samples_the_offset_frame() {
     s.execute("paint.cloneStamp", p).unwrap();
     assert!((shown - red(&s, id)).abs() < 1e-3 && red(&s, id) < 0.01, "live {shown} and commit {} both from frame 0", red(&s, id));
 }
+
+/// The whole source image follows the slot's frame: on frame 2 with offset −1 it shows frame 1,
+/// darker than what is on screen, over the whole document.
+#[test]
+fn the_whole_source_image_shows_the_offset_frame() {
+    let (mut s, _) = video_doc(2);
+    s.execute("cloneSource.set", json!({"source": [16, 16]})).unwrap();
+    let map = Mapping { source: (16.0, 16.0), anchor: (16.0, 16.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
+    let (bounds, on_screen) = clone_source_image(&s, &map, 8).unwrap();
+    assert_eq!(bounds, s.active().unwrap().doc.bounds());
+    assert!(on_screen.rect.width() <= 8 && on_screen.rect.height() <= 8, "reduced: {:?}", on_screen.rect);
+    s.execute("cloneSource.set", json!({"frameOffset": -1})).unwrap();
+    let (_, previous) = clone_source_image(&s, &map, 8).unwrap();
+    assert!(previous.px[0][0] < on_screen.px[0][0], "frame 1 is darker: {:?} vs {:?}", previous.px[0], on_screen.px[0]);
+}

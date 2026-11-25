@@ -1207,3 +1207,16 @@ fn shift_alt_shows_the_overlay_and_a_new_frame_offset_rebuilds_it() {
     assert!(super::strokes::clone_source(&mut app, [32.0, 32.0], true).is_some(), "the previous frame shows");
     assert_ne!(app.clone_preview.as_ref().map(|c| c.revision), before, "the overlay was rebuilt for the other frame");
 }
+
+/// Shift+Alt's whole source image covers the source document, moved by the clone offset: a source
+/// set at (16, 16) and shown at (32, 32) lands 16 px right and down, full size.
+#[test]
+fn the_whole_source_image_covers_the_source_document_where_it_clones_to() {
+    let mut app = clone_overlay_app(10.0);
+    let whole = super::strokes::clone_source_whole(&mut app, [32.0, 32.0]).expect("the whole source image");
+    let [top_left, top_right, bottom_right, _] = whole.corners;
+    assert!(((top_right[0] - top_left[0]) - 64.0).abs() < 1e-6 && ((bottom_right[1] - top_left[1]) - 64.0).abs() < 1e-6, "{:?}", whole.corners);
+    assert!(top_left[0] > 0.0 && top_left[1] > 0.0, "moved toward where it clones to: {:?}", whole.corners);
+    let size = whole.size();
+    assert!(size.width >= 1 && size.width <= 2048, "{size:?}");
+}

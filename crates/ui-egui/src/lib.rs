@@ -610,6 +610,8 @@ pub struct PhotocraftApp {
     /// Layer hovered on the canvas, highlighted in the Layers panel.
     pub(crate) canvas_hover_layer: Option<photocraft_doc::LayerId>,
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
+    /// The whole Clone Source image Shift+Alt shows ([`crate::canvas::strokes::clone_source_whole`]).
+    pub(crate) clone_whole_preview: Option<crate::canvas::CloneWholeCache>,
     /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
     /// Move tool marquee selecting layers (`move_box`).

@@ -239,7 +239,7 @@ mod heal;
 mod sampling;
 
 pub(crate) use crate::content_sampling::{SampleLayers, composite_region};
-pub use clone::{LiveRetouch, clone_destination_preview, clone_preview, clone_preview_periodic, healing_preview, healing_preview_periodic};
+pub use clone::{LiveRetouch, clone_destination_preview, clone_preview, clone_preview_periodic, clone_source_image, healing_preview, healing_preview_periodic};
 use clone::{blend_param, clamp_samples, clone_stamp};
 pub(crate) use dab::DabEffect;
 #[cfg(test)]
